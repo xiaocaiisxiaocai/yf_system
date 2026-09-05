@@ -1,0 +1,49 @@
+# Local runtime and acceptance artifacts
+.runlogs/
+.acceptance-backups/
+.repair-backups/
+.playwright-cli/
+
+# Frontend dependencies and builds
+web/node_modules/
+web/dist/
+web/dist-ssr/
+web/output/
+web/.playwright-cli/
+web/*.log
+web/*.local
+
+# Rust build output and local config
+yf_server/target/
+yf_server/config.local.toml
+yf_server/server_run.log
+yf_server/__pycache__/
+yf_server/**/__pycache__/
+
+# Generated local test artifacts
+e2e_chunk_*.zip
+e2e_resume_*.zip
+e2e_invalid_*.exe
+real_test.pdf
+real_test.xlsx
+*_legacy_backup_*.sql
+
+# Editor and OS files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

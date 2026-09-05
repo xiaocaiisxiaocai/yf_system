@@ -1,0 +1,18 @@
+async(page)=>{
+  await page.goto('http://127.0.0.1:5173/suppliers');
+  await page.getByRole('row').filter({hasText:'FULL1843'}).getByRole('button',{name:'账号管理',exact:true}).waitFor();
+  let release, capturedResolve;
+  const hold=new Promise(resolve=>release=resolve),captured=new Promise(resolve=>capturedResolve=resolve);
+  const handler=async route=>{const response=await route.fetch();capturedResolve();await hold;await route.fulfill({response});};
+  await page.route('**/api/v1/admin/suppliers/8/accounts',handler);
+  try{
+    await page.getByRole('row').filter({hasText:'FULL1843'}).getByRole('button',{name:'账号管理',exact:true}).click();
+    await Promise.race([captured,page.waitForTimeout(10000).then(()=>{throw Error('missing capture')})]);
+    await page.locator('.arco-drawer-close-icon').click();
+    await page.getByRole('row').filter({hasText:'LIVE0905165733supplier'}).getByRole('button',{name:'账号管理',exact:true}).click();
+    await page.locator('.arco-drawer').getByText('LIVE0905165733supplier',{exact:true}).waitFor();
+    release();await page.waitForLoadState('networkidle');
+    if(await page.locator('.arco-drawer').getByText('LIVE0905165733供应商账号已改',{exact:true}).count())throw Error('old supplier account leaked');
+    return {lateAccountResponseIgnored:true,targetSupplier:6};
+  }finally{release();await page.unroute('**/api/v1/admin/suppliers/8/accounts',handler);}
+}

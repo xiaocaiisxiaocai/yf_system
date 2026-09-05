@@ -1,0 +1,22 @@
+async (page) => {
+  const results=[]
+  const errors=[]
+  page.on('pageerror',e=>errors.push(e.message))
+  for(const route of ['/', '/projects', '/projects/36?tab=files', '/suppliers', '/org/users', '/org/depts', '/rbac/roles', '/logs', '/system/config', '/change-password', '/missing-full-acceptance']) {
+    await page.goto('http://127.0.0.1:5173'+route)
+    await page.waitForLoadState('networkidle')
+    await page.waitForFunction(()=>document.querySelector('main,.login-card,.login-bg .arco-card'))
+    if(!route.includes('change-password')) await page.locator('main').waitFor()
+    for(const [width,height] of [[1920,1080],[1366,768],[768,1024],[390,844],[360,800],[844,390]]) {
+      await page.setViewportSize({width,height})
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
+      const result=await page.evaluate(()=>{
+        const target=document.querySelector('.layout-main')||document.body
+        const auth=document.querySelector('.login-bg .arco-card,.login-card')?.getBoundingClientRect()
+        return {client:target.clientWidth,scroll:target.scrollWidth,authOverflow:auth ? auth.left<0||auth.right>innerWidth : false}
+      })
+      results.push({route,width,height,...result,passed:result.scroll<=result.client+1&&!result.authOverflow})
+    }
+  }
+  return {checks:results.length,failures:results.filter(r=>!r.passed),pageErrors:errors,passed:results.every(r=>r.passed)&&!errors.length}
+}

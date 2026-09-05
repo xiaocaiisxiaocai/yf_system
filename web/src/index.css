@@ -1,0 +1,237 @@
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--color-fill-1);
+}
+
+/* 登录页 */
+.login-bg {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #165dff 0%, #0e42b8 55%, #072a80 100%);
+}
+.login-card {
+  box-sizing: border-box;
+  width: 472px;
+  max-width: calc(100vw - 32px);
+  padding: 36px 36px 28px;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(7, 42, 128, 0.35);
+}
+.login-logo { text-align: center; margin-bottom: 6px; font-size: 22px; font-weight: 600; color: #1d2129; }
+.login-sub { text-align: center; color: #86909c; font-size: 13px; margin-bottom: 24px; }
+
+/* 布局 */
+.layout-shell { height: 100vh; min-width: 0; }
+.layout-main { min-width: 0; }
+.layout-header { flex: 0 0 56px; }
+.layout-content { min-width: 0; padding: 16px; overflow: auto; }
+.mobile-menu-trigger { display: none; }
+.layout-sider .arco-menu { height: calc(100% - 56px); }
+.layout-logo {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.page-card { background: #fff; border-radius: 6px; padding: 16px 20px; }
+/* page-card 的 padding 已在外层定义，去掉 Card body 的默认内边距，避免双层 padding 挤压表格 */
+.page-card > .arco-card-body { padding: 0; }
+
+/* 表格全局：表头加粗浅底、单元格不换行、数字等宽（时间/大小列对齐） */
+.arco-table-th {
+  font-weight: 600;
+  background: var(--color-fill-1);
+}
+.arco-table .arco-table-cell {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 工具栏与控件节奏统一 */
+.page-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  gap: 12px;
+}
+
+/* 用户表操作保持固定槽位；管理员缺少“禁用”按钮时，前两项也不横向漂移。 */
+.user-row-actions {
+  display: grid;
+  grid-template-columns: 48px 72px 48px;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 操作日志：高密度筛选 + 可扫描的结构化记录。 */
+.audit-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.audit-heading > div { display: flex; flex-direction: column; gap: 3px; }
+.audit-filter-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) 140px minmax(220px, 1.2fr) 130px minmax(310px, 1.6fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+  background: var(--color-fill-1);
+}
+.audit-result-bar { display: flex; justify-content: flex-end; padding: 10px 2px 8px; }
+.audit-actor { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.audit-actor > span:last-child,
+.audit-action,
+.audit-target { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+.audit-actor b,
+.audit-action small,
+.audit-target span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-actor small,
+.audit-action small,
+.audit-target small { color: var(--color-text-3); font-size: 11px; line-height: 16px; }
+.audit-avatar {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: rgb(var(--primary-6));
+  background: rgb(var(--primary-1));
+  font-size: 12px;
+  font-weight: 600;
+}
+.audit-detail-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.audit-detail-grid {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+}
+.audit-detail-grid > span,
+.audit-detail-grid > b,
+.audit-detail-grid > code {
+  min-width: 0;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--color-border-2);
+  line-height: 20px;
+  word-break: break-word;
+}
+.audit-detail-grid > span { color: var(--color-text-3); background: var(--color-fill-1); font-weight: 400; }
+.audit-detail-grid > b,
+.audit-detail-grid > code { color: var(--color-text-1); font-weight: 500; }
+.audit-detail-grid > :nth-last-child(-n + 2) { border-bottom: none; }
+.audit-json-label { display: block; margin: 18px 0 8px; font-weight: 500; }
+.audit-json {
+  max-height: 360px;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+  background: var(--color-fill-1);
+  color: var(--color-text-2);
+  font: 12px/1.65 Consolas, 'Courier New', monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 1500px) {
+  .audit-filter-panel { grid-template-columns: minmax(220px, 1fr) 140px minmax(220px, 1fr) 130px; }
+  .audit-filter-panel > :nth-child(5) { grid-column: span 2; }
+}
+
+@media (max-width: 1200px) {
+  .audit-filter-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .audit-filter-panel > :nth-child(5) { grid-column: auto; }
+}
+
+/* 预览容器 */
+.excel-preview-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
+.excel-preview-toolbar > * { flex-shrink: 0; }
+.excel-preview-wrap { width: 100%; height: 62vh; border: 1px solid var(--color-border-2); border-radius: 4px; overflow: auto; background: #fff; }
+.excel-preview-table { border-collapse: separate; border-spacing: 0; table-layout: fixed; width: max-content; min-width: 100%; color: var(--color-text-1); font-size: 13px; }
+.excel-preview-table th, .excel-preview-table td { height: 28px; padding: 0 8px; border-right: 1px solid var(--color-border-2); border-bottom: 1px solid var(--color-border-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #fff; }
+.excel-preview-table thead th { position: sticky; top: 0; z-index: 2; text-align: center; background: var(--color-fill-2); font-weight: 500; }
+.excel-preview-table tbody th { position: sticky; left: 0; z-index: 1; text-align: center; background: var(--color-fill-2); color: var(--color-text-3); font-weight: 400; }
+.excel-preview-table .excel-preview-corner { left: 0; z-index: 3; }
+.excel-preview-note { display: block; margin-top: 8px; }
+.pdf-frame { width: 100%; height: 70vh; border: none; }
+
+/* 留言流 */
+.msg-item { padding: 10px 0; border-bottom: 1px dashed var(--color-border-2); overflow-wrap: anywhere; }
+.msg-item:last-child { border-bottom: none; }
+.msg-item > .arco-space { display: flex; width: 100%; }
+.msg-item > .arco-space > .arco-space-item:last-child { flex: 1; min-width: 0; }
+.msg-item .arco-space .arco-space { flex-wrap: wrap; }
+.message-read-marker { height: 1px; }
+
+@media (max-width: 720px) {
+  .message-composer { flex-wrap: wrap; }
+  .message-composer > .arco-textarea-wrapper { flex-basis: 100% !important; order: 2; }
+  .message-composer > button { margin-left: auto; }
+  .login-bg > .arco-card { max-width: calc(100vw - 32px); }
+  .arco-modal { max-width: calc(100vw - 24px); }
+  .arco-drawer { max-width: 100vw; }
+  .responsive-toolbar,
+  .responsive-toolbar .arco-space { display: flex; flex-wrap: wrap; gap: 8px; }
+  .responsive-toolbar > .arco-space-item,
+  .responsive-toolbar .arco-space-item { min-width: 0; max-width: 100%; margin-right: 0 !important; }
+  .responsive-toolbar > .arco-space-item:first-child { flex: 1 0 100%; }
+  .responsive-toolbar .arco-input-search,
+  .responsive-toolbar .arco-select { max-width: 100%; }
+  .arco-pagination { flex-wrap: wrap; gap: 8px; }
+  .arco-pagination-total-text { white-space: nowrap; }
+  .arco-table-pagination { flex-wrap: wrap; }
+  .audit-filter-panel { min-width: 0; }
+  .audit-filter-panel > * { min-width: 0; max-width: 100%; }
+  .layout-sider { display: none; }
+  .layout-header {
+    justify-content: space-between !important;
+    padding: 0 12px !important;
+  }
+  .mobile-menu-trigger { display: inline-flex; }
+  .layout-content { padding: 10px; }
+  .page-card { padding: 12px; }
+  .mobile-nav-drawer .arco-drawer-body {
+    padding: 0;
+    background: #232324;
+  }
+  .mobile-nav-drawer .arco-menu { min-height: 100%; }
+  .dashboard-latest .arco-list-item {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .dashboard-latest .arco-list-item-main {
+    flex: 1 0 100%;
+    width: 100%;
+    min-width: 0;
+  }
+  .dashboard-latest .arco-list-item-extra-content {
+    flex: 1 0 100%;
+    width: 100%;
+    margin: 4px 0 0;
+  }
+  .audit-heading { align-items: flex-start; }
+  .audit-filter-panel { grid-template-columns: 1fr; }
+  .audit-filter-panel > :nth-child(5) { grid-column: auto; }
+}

@@ -1,0 +1,26 @@
+async (page) => {
+  await page.goto('http://127.0.0.1:5173/projects');
+  await page.getByRole('row').filter({hasText:'FULL_UI1900'}).getByRole('button',{name:'进入',exact:true}).waitFor();
+  let release, capturedResolve;
+  const captured = new Promise(resolve => capturedResolve=resolve);
+  const hold = new Promise(resolve => release=resolve);
+  const handler = async route => {
+    const response=await route.fetch();
+    capturedResolve();
+    await hold;
+    await route.fulfill({response});
+  };
+  await page.route('**/api/v1/projects/37',handler);
+  try {
+    await page.getByRole('row').filter({hasText:'FULL_UI1900'}).getByRole('button',{name:'进入',exact:true}).click();
+    await Promise.race([captured,page.waitForTimeout(10000).then(()=>{throw Error('project response was not captured')})]);
+    await page.goBack();
+    await page.getByRole('row').filter({hasText:'LIVE0905165733完整验收486ceb'}).getByRole('button',{name:'进入',exact:true}).click();
+    await page.getByText('LIVE0905165733完整验收',{exact:true}).waitFor();
+    release();
+    await page.waitForLoadState('networkidle');
+    if(!page.url().includes('/projects/36')) throw Error('late project replaced target URL');
+    if(await page.getByText('FULL1900项目已编辑',{exact:true}).count()) throw Error('late project replaced target content');
+    return {lateProjectResponseIgnored:true, targetProject:36, navigation:'enter A / back / enter B'};
+  } finally { release(); await page.unroute('**/api/v1/projects/37',handler); }
+}

@@ -1,0 +1,23 @@
+async(page)=>{
+ const results=[];
+ const cases=[
+  ['/projects',async()=>page.getByRole('button',{name:'新建项目',exact:true}).click(),'.arco-modal'],
+  ['/org/users',async()=>page.getByRole('button',{name:'新增用户',exact:true}).click(),'.arco-modal'],
+  ['/suppliers',async()=>page.getByRole('button',{name:'新增供应商',exact:true}).click(),'.arco-modal'],
+  ['/suppliers',async()=>page.getByRole('row').filter({hasText:'FULL1843'}).getByRole('button',{name:'账号管理',exact:true}).click(),'.arco-drawer'],
+  ['/rbac/roles',async()=>page.getByRole('row').filter({hasText:'FULL1657'}).getByRole('button',{name:'分配权限',exact:true}).click(),'.arco-drawer'],
+  ['/projects/37?tab=rounds',async()=>page.getByTitle('历史',{exact:true}).first().click(),'.arco-drawer'],
+  ['/projects/36?tab=messages',async()=>page.getByRole('button',{name:'回执详情',exact:true}).first().click(),'.arco-drawer'],
+  ['/projects/36?tab=files',async()=>page.getByRole('button',{name:'上传文件',exact:true}).click(),'.arco-modal'],
+ ];
+ for(const width of [360,390])for(const [route,open,selector] of cases){
+  await page.setViewportSize({width,height:844});await page.goto('http://127.0.0.1:5173'+route);
+  await page.waitForLoadState('networkidle');await open();await page.locator(selector).last().waitFor();
+  await page.locator(selector).last().locator('[class*=close-icon],button[aria-label=Close]').first().waitFor();
+  await page.waitForTimeout(250);
+  const bounds=await page.locator(selector).last().evaluate(x=>{const r=x.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width,viewport:innerWidth}});
+  results.push({route,width,...bounds,passed:bounds.left>=-1&&bounds.right<=width+1});
+  await page.keyboard.press('Escape');
+ }
+ return {checks:results.length,results,passed:results.every(x=>x.passed)};
+}

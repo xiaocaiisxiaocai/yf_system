@@ -1,0 +1,54 @@
+mod config;
+mod dto;
+mod entity;
+mod error;
+mod handler;
+mod middleware;
+mod notify;
+mod service;
+mod state;
+mod storage;
+mod util;
+
+#[cfg(test)]
+mod regression;
+
+use migration::MigratorTrait;
+use state::AppState;
+use std::net::SocketAddr;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,sea_orm=warn,sqlx=warn".into()),
+        )
+        .init();
+
+    let cfg = config::Config::load()?;
+    let addr: SocketAddr = cfg.server.addr.parse()?;
+
+    let db = sea_orm::Database::connect(&cfg.database.url).await?;
+    if cfg.database.auto_migrate {
+        migration::Migrator::up(&db, None).await?;
+        tracing::info!("数据库迁移完成（含种子数据）");
+    }
+
+    let state = AppState::new(db, cfg);
+    tokio::spawn(notify::worker::run(state.clone()));
+
+    let app = handler::router(state);
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!("HTTP 服务监听于 http://{addr}");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("收到退出信号，正在关闭");
+    })
+    .await?;
+    Ok(())
+}
