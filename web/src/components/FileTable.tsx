@@ -6,6 +6,7 @@ import { IconDownload, IconEye, IconUpload, IconDelete } from '@arco-design/web-
 import http from '../api/client'
 import { useAuth } from '../store/auth'
 import { type FileItem, type PageResp, type Round, fmtSize, fmtTime } from '../api/types'
+import { actionSlots } from './ActionSlots'
 import ChunkUploader from './ChunkUploader'
 import PdfPreview from './PdfPreview'
 
@@ -228,20 +229,18 @@ export default function FileTable({ projectId, projectStatus, rounds }: Props) {
             title: '操作',
             width: 150,
             align: 'center' as const,
-            render: (_: unknown, r: FileItem) => (
-              <Space>
-                {hasPerm('file:download') && (
-                  <Button size="mini" type="text" icon={<IconDownload />} onClick={() => downloadAuthed(r.id, r.originalName)}>
-                    下载
-                  </Button>
-                )}
-                {r.canDelete && (
-                  <Popconfirm title={`删除文件「${r.originalName}」？`} onOk={() => remove(r)}>
-                    <Button size="mini" type="text" status="danger" icon={<IconDelete />} />
-                  </Popconfirm>
-                )}
-              </Space>
-            ),
+            render: (_: unknown, r: FileItem) => actionSlots([
+              hasPerm('file:download') && (
+                <Button key="download" size="mini" type="text" icon={<IconDownload />} onClick={() => downloadAuthed(r.id, r.originalName)}>
+                  下载
+                </Button>
+              ),
+              r.canDelete && (
+                <Popconfirm key="delete" title={`删除文件「${r.originalName}」？`} onOk={() => remove(r)}>
+                  <Button size="mini" type="text" status="danger" icon={<IconDelete />} title="删除" />
+                </Popconfirm>
+              ),
+            ], 'file'),
           },
         ]}
         pagination={{

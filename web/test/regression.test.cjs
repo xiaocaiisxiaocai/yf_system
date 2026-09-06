@@ -21,6 +21,46 @@ const arco = new Proxy({
   Message: { error() {}, warning() {}, success() {}, info() {} },
 }, { get: (obj, key) => obj[key] ?? component(key) })
 
+const actionSlotsModule = {
+  actionSlots: (slots, variant) => React.createElement(
+    'div',
+    { className: `action-slots action-slots--${variant}` },
+    slots.map((slot, index) => React.createElement(
+      'span',
+      { key: index, className: slot ? 'action-slot' : 'action-slot action-slot--empty' },
+      slot || null,
+    )),
+  ),
+}
+
+function findElement(node, predicate) {
+  if (!React.isValidElement(node)) return undefined
+  if (predicate(node)) return node
+  for (const child of React.Children.toArray(node.props.children)) {
+    const found = findElement(child, predicate)
+    if (found) return found
+  }
+  return undefined
+}
+
+function findActionButton(node, text) {
+  return findElement(node, (item) => item.props.children === text)
+}
+
+test('table action slots keep empty action positions for row alignment', () => {
+  const { actionSlots } = loadTs('src/components/ActionSlots.tsx', {})
+  const node = actionSlots([
+    React.createElement('Button', null, '进入'),
+    false,
+    React.createElement('Button', null, '状态'),
+  ], 'project')
+  const slots = React.Children.toArray(node.props.children)
+  assert.equal(slots.length, 3)
+  assert.match(slots[0].props.className, /action-slot/)
+  assert.match(slots[1].props.className, /action-slot--empty/)
+  assert.equal(slots[2].props.children.props.children, '状态')
+})
+
 function loadTs(relativePath, mocks, globals = {}) {
   const filename = path.resolve(__dirname, '..', relativePath)
   const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
@@ -29,7 +69,11 @@ function loadTs(relativePath, mocks, globals = {}) {
   const exports = {}
   vm.runInNewContext(source, {
     exports, module: { exports }, console, setTimeout, clearTimeout, URL, AbortController, ...globals,
-    require: (name) => name in mocks ? mocks[name] : require(name),
+    require: (name) => {
+      if (name in mocks) return mocks[name]
+      if (name.endsWith('/ActionSlots')) return actionSlotsModule
+      return require(name)
+    },
   }, { filename })
   return exports
 }
@@ -87,7 +131,7 @@ test('supplier account permission revocation removes the open account drawer', a
   await act(async()=>{renderer=create(React.createElement(Page))})
   const accountAction=()=>{
     const actions=renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null,supplier)
-    return React.Children.toArray(actions.props.children).find(n=>n.props.children==='账号管理')
+    return findActionButton(actions, '账号管理')
   }
   assert.equal(accountAction(),undefined)
   assert.equal(renderer.root.findAllByType('Drawer').length,0)
@@ -116,7 +160,7 @@ test('round cancellation is shown only to its creator or a viewer of all project
     let renderer
     await act(async()=>{renderer=create(React.createElement(Page,{projectId:1,projectStatus:'IN_PROGRESS',onChanged(){}}))})
     const actions=renderer.root.findByType('Table').props.columns.at(-1).render(null,round)
-    const allowed=React.Children.toArray(actions.props.children).some(n=>n.props?.title==='撤销该轮次？关联文件将一并锁定')
+    const allowed=!!findElement(actions, (node) => node.props.title === '撤销该轮次？关联文件将一并锁定')
     assert.equal(allowed,expected,`user ${userId}, viewAll ${viewAll}`)
     await act(async()=>renderer.unmount())
   }
@@ -136,7 +180,7 @@ test('supplier account loading failures stop spinning and can retry', async () =
   let renderer
   await act(async()=>{renderer=create(React.createElement(Page))})
   const actions=renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null,supplier)
-  await act(async()=>React.Children.toArray(actions.props.children).find(n=>n.props.children==='账号管理').props.onClick())
+  await act(async()=>findActionButton(actions, '账号管理').props.onClick())
   assert.equal(renderer.root.findByType('Drawer').findByType('Table').props.loading,false)
   fail=false
   await act(async()=>renderer.root.findAllByType('Button').find(n=>n.props.children==='重试').props.onClick())
@@ -420,7 +464,7 @@ test('menu-only role grants remain selected when another permission is edited', 
   let renderer
   await act(async()=>{renderer=create(React.createElement(Page))})
   const actions=renderer.root.findByType('Table').props.columns.at(-1).render(null,role)
-  const assign=React.Children.toArray(actions.props.children).find(n=>n.props.children==='分配权限')
+  const assign=findActionButton(actions, '分配权限')
   await act(async()=>assign.props.onClick())
   const tree=renderer.root.findByType('Tree')
   assert.ok(tree.props.checkedKeys.includes('5'),'standalone menu must visibly remain granted')

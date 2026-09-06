@@ -4,6 +4,7 @@ import {
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
+import { actionSlots } from '../../components/ActionSlots'
 import { type PageResp } from '../../api/types'
 
 interface Role {
@@ -159,48 +160,49 @@ export default function RoleList() {
             title: '操作',
             width: 210,
             align: 'center' as const,
-            render: (_: unknown, r: Role) => (
-              <Space>
-                <Button
-                  size="mini"
-                  type="text"
-                  disabled={r.permissionsLocked}
-                  onClick={() => {
-                    setPermTarget(r)
-                    setChecked(r.permissionIds.map(String))
-                  }}
+            render: (_: unknown, r: Role) => actionSlots([
+              <Button
+                key="permissions"
+                size="mini"
+                type="text"
+                disabled={r.permissionsLocked}
+                onClick={() => {
+                  setPermTarget(r)
+                  setChecked(r.permissionIds.map(String))
+                }}
+              >
+                分配权限
+              </Button>,
+              <Button
+                key="edit"
+                size="mini"
+                type="text"
+                onClick={() => {
+                  setEditing(r)
+                  form.setFieldsValue({ code: r.code, name: r.name, description: r.description })
+                  setEditOpen(true)
+                }}
+              >
+                编辑
+              </Button>,
+              !['ADMIN', 'SUPPLIER'].includes(r.code) && (
+                <Popconfirm
+                  key="status"
+                  title={
+                    r.status === 'ACTIVE'
+                      ? r.assignedUserCount > 0
+                        ? `该角色绑定 ${r.assignedUserCount} 个用户；启用用户未更换角色前不能禁用。`
+                        : '确认禁用该角色？'
+                      : '确认启用该角色？'
+                  }
+                  onOk={() => toggle(r)}
                 >
-                  分配权限
-                </Button>
-                <Button
-                  size="mini"
-                  type="text"
-                  onClick={() => {
-                    setEditing(r)
-                    form.setFieldsValue({ code: r.code, name: r.name, description: r.description })
-                    setEditOpen(true)
-                  }}
-                >
-                  编辑
-                </Button>
-                {!['ADMIN', 'SUPPLIER'].includes(r.code) && (
-                  <Popconfirm
-                    title={
-                      r.status === 'ACTIVE'
-                        ? r.assignedUserCount > 0
-                          ? `该角色绑定 ${r.assignedUserCount} 个用户；启用用户未更换角色前不能禁用。`
-                          : '确认禁用该角色？'
-                        : '确认启用该角色？'
-                    }
-                    onOk={() => toggle(r)}
-                  >
-                    <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
-                      {r.status === 'ACTIVE' ? '禁用' : '启用'}
-                    </Button>
-                  </Popconfirm>
-                )}
-              </Space>
-            ),
+                  <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
+                    {r.status === 'ACTIVE' ? '禁用' : '启用'}
+                  </Button>
+                </Popconfirm>
+              ),
+            ], 'role'),
           },
         ]}
         pagination={{

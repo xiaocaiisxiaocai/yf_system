@@ -4,6 +4,7 @@ import {
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
+import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
 
@@ -157,32 +158,32 @@ export default function SupplierList() {
             title: '操作',
             width: 210,
             align: 'center' as const,
-            render: (_: unknown, r: Supplier) => (
-              <Space>
-                {canManageAccounts && <Button size="mini" type="text" onClick={() => setAccTarget(r)}>
-                  账号管理
-                </Button>}
-                <Button
-                  size="mini"
-                  type="text"
-                  onClick={() => {
-                    setEditing(r)
-                    form.setFieldsValue(r)
-                    setEditOpen(true)
-                  }}
-                >
-                  编辑
+            render: (_: unknown, r: Supplier) => actionSlots([
+              canManageAccounts && <Button key="accounts" size="mini" type="text" onClick={() => setAccTarget(r)}>
+                账号管理
+              </Button>,
+              <Button
+                key="edit"
+                size="mini"
+                type="text"
+                onClick={() => {
+                  setEditing(r)
+                  form.setFieldsValue(r)
+                  setEditOpen(true)
+                }}
+              >
+                编辑
+              </Button>,
+              <Popconfirm
+                key="status"
+                title={r.status === 'ACTIVE' ? '禁用后其所有账号无法登录，确认？' : '确认启用？'}
+                onOk={() => toggleStatus(r)}
+              >
+                <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
+                  {r.status === 'ACTIVE' ? '禁用' : '启用'}
                 </Button>
-                <Popconfirm
-                  title={r.status === 'ACTIVE' ? '禁用后其所有账号无法登录，确认？' : '确认启用？'}
-                  onOk={() => toggleStatus(r)}
-                >
-                  <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
-                    {r.status === 'ACTIVE' ? '禁用' : '启用'}
-                  </Button>
-                </Popconfirm>
-              </Space>
-            ),
+              </Popconfirm>,
+            ], 'supplier'),
           },
         ]}
         pagination={{
@@ -356,27 +357,26 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
             title: '操作',
             width: 210,
             align: 'center' as const,
-            render: (_: unknown, r: Account) => (
-              <Space>
-                <Button
-                  size="mini"
-                  type="text"
-                  onClick={() => {
-                    setEditing(r)
-                    form.setFieldsValue(r)
-                    setEditOpen(true)
-                  }}
-                >
-                  编辑
-                </Button>
-                <Button size="mini" type="text" onClick={() => setResetTarget(r)}>
-                  重置密码
-                </Button>
-                <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'} onClick={() => toggle(r)}>
-                  {r.status === 'ACTIVE' ? '禁用' : '启用'}
-                </Button>
-              </Space>
-            ),
+            render: (_: unknown, r: Account) => actionSlots([
+              <Button
+                key="edit"
+                size="mini"
+                type="text"
+                onClick={() => {
+                  setEditing(r)
+                  form.setFieldsValue(r)
+                  setEditOpen(true)
+                }}
+              >
+                编辑
+              </Button>,
+              <Button key="reset-password" size="mini" type="text" onClick={() => setResetTarget(r)}>
+                重置密码
+              </Button>,
+              <Button key="status" size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'} onClick={() => toggle(r)}>
+                {r.status === 'ACTIVE' ? '禁用' : '启用'}
+              </Button>,
+            ], 'account'),
           },
         ]}
       />

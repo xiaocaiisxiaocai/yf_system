@@ -66,14 +66,37 @@ html, body, #root {
   gap: 12px;
 }
 
-/* 用户表操作保持固定槽位；管理员缺少“禁用”按钮时，前两项也不横向漂移。 */
-.user-row-actions {
+/* 表格操作列保持固定槽位；同名操作在所有行同一位置，缺失权限或状态动作时保留空槽。 */
+.action-slots {
   display: grid;
-  grid-template-columns: 48px 72px 48px;
+  width: 100%;
+  min-width: 0;
   justify-content: center;
   align-items: center;
-  gap: 8px;
+  column-gap: 8px;
 }
+.action-slot {
+  min-width: 0;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.action-slot > .arco-btn {
+  min-width: 0;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.action-slot > .arco-select { width: 100%; }
+.action-slot--empty { visibility: hidden; }
+.action-slots--project { grid-template-columns: 44px 44px 92px; }
+.action-slots--supplier { grid-template-columns: 76px 44px 44px; }
+.action-slots--account { grid-template-columns: 44px 72px 44px; }
+.action-slots--user { grid-template-columns: 48px 72px 48px; }
+.action-slots--role { grid-template-columns: 76px 44px 44px; }
+.action-slots--file { grid-template-columns: 58px 36px; }
+.action-slots--round { grid-template-columns: 64px 64px 32px 32px; }
+.action-slots--single { grid-template-columns: 48px; }
 
 /* 操作日志：高密度筛选 + 可扫描的结构化记录。 */
 .audit-heading {
