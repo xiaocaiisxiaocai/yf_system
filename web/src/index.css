@@ -46,6 +46,49 @@ html, body, #root {
 .page-card { background: #fff; border-radius: 6px; padding: 16px 20px; }
 /* page-card 的 padding 已在外层定义，去掉 Card body 的默认内边距，避免双层 padding 挤压表格 */
 .page-card > .arco-card-body { padding: 0; }
+.page-card--table {
+  --page-table-scroll-y: calc(100vh - 246px);
+  height: calc(100vh - 88px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.page-card--table > .arco-card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.page-card--table .responsive-toolbar,
+.page-card--table .audit-heading,
+.page-card--table .audit-filter-panel,
+.page-card--table .audit-result-bar {
+  flex: 0 0 auto;
+}
+.page-table {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.page-table > .arco-spin,
+.page-table > .arco-spin > .arco-spin-children {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.page-table .arco-table-container {
+  flex: 1;
+  min-height: 0;
+}
+.page-table .arco-table-pagination {
+  flex: 0 0 auto;
+}
+.audit-page {
+  --page-table-scroll-y: calc(100vh - 390px);
+}
 
 /* 表格全局：表头加粗浅底、单元格不换行、数字等宽（时间/大小列对齐） */
 .arco-table-th {

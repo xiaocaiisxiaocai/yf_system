@@ -94,7 +94,7 @@ export default function SupplierList() {
   }
 
   return (
-    <Card className="page-card">
+    <Card className="page-card page-card--table">
       <Space className="responsive-toolbar" style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
         <Space>
           <Input.Search
@@ -136,10 +136,11 @@ export default function SupplierList() {
         </Button>
       </Space>
       <Table
+        className="page-table"
         rowKey="id"
         loading={loading}
         data={data.list}
-        scroll={{ x: 1010 }}
+        scroll={{ x: 1010, y: 'var(--page-table-scroll-y)' }}
         columns={[
           { title: '编码', dataIndex: 'code', width: 80, align: 'center' as const },
           { title: '名称', dataIndex: 'name', width: 140, ellipsis: true },

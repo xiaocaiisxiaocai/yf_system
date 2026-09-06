@@ -168,7 +168,7 @@ export default function ProjectList() {
     ]
 
   return (
-    <Card className="page-card">
+    <Card className="page-card page-card--table">
       <Space className="responsive-toolbar" style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
         <Space>
           <Input.Search
@@ -222,11 +222,12 @@ export default function ProjectList() {
         )}
       </Space>
       <Table
+        className="page-table"
         rowKey="id"
         loading={loading}
         columns={columns}
         data={data.list}
-        scroll={{ x: 1005 }}
+        scroll={{ x: 1005, y: 'var(--page-table-scroll-y)' }}
         pagination={{
           total: data.total,
           current: page,

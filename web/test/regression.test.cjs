@@ -61,6 +61,78 @@ test('table action slots keep empty action positions for row alignment', () => {
   assert.equal(slots[2].props.children.props.children, '状态')
 })
 
+test('paginated list pages constrain table body scrolling to keep pagination visible', async () => {
+  const pageData = { list: [], total: 0, page: 1, pageSize: 10 }
+  const iconMock = new Proxy({}, { get: (_, name) => component(name) })
+  const auth = { useAuth: () => ({ hasPerm: () => true, user: { id: 1, userType: 'INTERNAL' } }) }
+  const cases = [
+    {
+      page: 'src/pages/project/ProjectList.tsx',
+      cardClass: 'page-card page-card--table',
+      mocks: {
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        'react-router-dom': { useNavigate: () => () => {} },
+        '../../api/client': { get: async (url) => ({ data: url === '/supplier-options' ? [] : pageData }) },
+        '../../store/auth': auth,
+        '../../api/types': { PROJECT_STATUS: {}, fmtTime: String },
+      },
+    },
+    {
+      page: 'src/pages/supplier/SupplierList.tsx',
+      cardClass: 'page-card page-card--table',
+      mocks: {
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        '../../api/client': { get: async () => ({ data: pageData }) },
+        '../../store/auth': auth,
+        '../../api/types': { fmtTime: String },
+      },
+    },
+    {
+      page: 'src/pages/org/UserList.tsx',
+      cardClass: 'page-card page-card--table',
+      mocks: {
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        '../../api/client': { get: async (url) => ({ data: url === '/departments' || url === '/admin/user-role-options' ? [] : pageData }) },
+        '../../api/types': { fmtTime: String },
+      },
+    },
+    {
+      page: 'src/pages/rbac/RoleList.tsx',
+      cardClass: 'page-card page-card--table',
+      mocks: {
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        '../../api/client': { get: async (url) => ({ data: url === '/permissions' ? [] : { ...pageData, pageSize: 20 } }) },
+        '../../api/types': { PageResp: {} },
+      },
+    },
+    {
+      page: 'src/pages/system/AuditLog.tsx',
+      cardClass: 'page-card page-card--table audit-page',
+      mocks: {
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        '../../api/client': { get: async () => ({ data: { ...pageData, pageSize: 20 } }) },
+        '../../api/types': { fmtTime: String },
+      },
+    },
+  ]
+
+  for (const item of cases) {
+    const Page = loadTs(item.page, item.mocks).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)) })
+    assert.ok(renderer.root.findByProps({ className: item.cardClass }))
+    const table = renderer.root.findAllByType('Table')[0]
+    assert.equal(table.props.className, 'page-table', item.page)
+    assert.equal(table.props.scroll.y, 'var(--page-table-scroll-y)', item.page)
+    await act(async () => renderer.unmount())
+  }
+})
+
 function loadTs(relativePath, mocks, globals = {}) {
   const filename = path.resolve(__dirname, '..', relativePath)
   const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {

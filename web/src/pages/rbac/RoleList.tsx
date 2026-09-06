@@ -116,7 +116,7 @@ export default function RoleList() {
   }
 
   return (
-    <Card className="page-card">
+    <Card className="page-card page-card--table">
       <Space className="responsive-toolbar" style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
         <Typography.Text type="secondary">角色绑定权限点，用户绑定角色；内置角色不可删除</Typography.Text>
         <Button
@@ -132,10 +132,11 @@ export default function RoleList() {
         </Button>
       </Space>
       <Table
+        className="page-table"
         rowKey="id"
         loading={loading}
         data={data.list}
-        scroll={{ x: 1020 }}
+        scroll={{ x: 1020, y: 'var(--page-table-scroll-y)' }}
         columns={[
           { title: '编码', dataIndex: 'code', width: 160, align: 'center' as const },
           { title: '名称', dataIndex: 'name', width: 140, align: 'center' as const },

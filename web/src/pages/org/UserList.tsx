@@ -139,7 +139,7 @@ export default function UserList() {
   }
 
   return (
-    <Card className="page-card">
+    <Card className="page-card page-card--table">
       <Space className="responsive-toolbar" style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
         <Space wrap>
           <Input.Search
@@ -189,10 +189,11 @@ export default function UserList() {
         </Button>
       </Space>
       <Table
+        className="page-table"
         rowKey="id"
         loading={loading}
         data={data.list}
-        scroll={{ x: 1015 }}
+        scroll={{ x: 1015, y: 'var(--page-table-scroll-y)' }}
         columns={[
           { title: '用户名', dataIndex: 'username', width: 110, align: 'center' as const, ellipsis: true },
           { title: '姓名', dataIndex: 'realName', width: 100, align: 'center' as const, ellipsis: true },

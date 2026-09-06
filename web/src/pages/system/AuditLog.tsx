@@ -162,7 +162,7 @@ export default function AuditLog() {
   const resetFilters = () => { setLoading(true); setDraft(emptyFilters); setFilters(emptyFilters); setPage(1) }
 
   return (
-    <Card className="page-card audit-page">
+    <Card className="page-card page-card--table audit-page">
       <div className="audit-heading">
         <div>
           <Typography.Title heading={5} style={{ margin: 0 }}>操作日志</Typography.Title>
@@ -189,10 +189,11 @@ export default function AuditLog() {
       <div className="audit-result-bar"><Typography.Text type="secondary">共 {data.total} 条记录</Typography.Text></div>
 
       <Table
+        className="page-table"
         rowKey="id"
         loading={loading}
         data={data.list}
-        scroll={{ x: 910 }}
+        scroll={{ x: 910, y: 'var(--page-table-scroll-y)' }}
         columns={[
           { title: '时间', dataIndex: 'createdAt', width: 160, render: fmtTime },
           {
