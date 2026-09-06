@@ -133,6 +133,34 @@ test('paginated list pages constrain table body scrolling to keep pagination vis
   }
 })
 
+test('department management uses a split tree and detail workspace', async () => {
+  const departments = [{
+    id: 1,
+    name: '总部',
+    sortNo: 1,
+    status: 'ACTIVE',
+    children: [{ id: 2, name: '研发部', parentId: 1, sortNo: 3, status: 'DISABLED' }],
+  }]
+  const Page = loadTs('src/pages/org/DeptManage.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../../api/client': { get: async () => ({ data: departments }) },
+    '../../store/auth': { useAuth: (selector) => selector({ hasPerm: () => true }) },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  assert.ok(renderer.root.findByProps({ className: 'page-card dept-page' }))
+  assert.ok(renderer.root.findByProps({ className: 'dept-workspace' }))
+  const tree = renderer.root.findByType('Tree')
+  assert.equal(tree.props.blockNode, true)
+  assert.equal(tree.props.showLine, true)
+  await act(async () => tree.props.onSelect(['2']))
+  assert.ok(renderer.root.findAll((node) => node.props.children === '研发部').length > 0)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '层级路径').length > 0)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '编辑部门').length > 0)
+  await act(async () => renderer.unmount())
+})
+
 function loadTs(relativePath, mocks, globals = {}) {
   const filename = path.resolve(__dirname, '..', relativePath)
   const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {

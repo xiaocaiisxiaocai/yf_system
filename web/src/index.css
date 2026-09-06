@@ -90,6 +90,189 @@ html, body, #root {
   --page-table-scroll-y: calc(100vh - 390px);
 }
 
+/* 部门管理：左侧组织树 + 右侧详情，减少大面积空白并让操作跟随选中对象。 */
+.dept-page {
+  height: calc(100vh - 88px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dept-page > .arco-card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.dept-page-header {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) auto auto;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgb(var(--primary-1)), #fff 48%);
+}
+.dept-page-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.dept-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 76px);
+  gap: 8px;
+}
+.dept-summary > div {
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.76);
+  text-align: center;
+}
+.dept-summary b {
+  display: block;
+  color: var(--color-text-1);
+  font-size: 18px;
+  line-height: 22px;
+}
+.dept-summary span {
+  display: block;
+  margin-top: 2px;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.dept-workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(320px, 38%) minmax(360px, 1fr);
+  gap: 16px;
+}
+.dept-tree-panel,
+.dept-detail-panel {
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+.dept-tree-panel {
+  display: flex;
+  flex-direction: column;
+}
+.dept-panel-head {
+  flex: 0 0 auto;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--color-border-2);
+  background: var(--color-fill-1);
+}
+.dept-panel-head > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.dept-tree-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 10px;
+  overflow: auto;
+}
+.dept-tree-node {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+.dept-tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dept-page .arco-tree-node-title {
+  border-radius: 6px;
+}
+.dept-page .arco-tree-node-title:hover {
+  background: rgb(var(--primary-1));
+}
+.dept-page .arco-tree-node-selected .arco-tree-node-title {
+  color: rgb(var(--primary-6));
+  background: rgb(var(--primary-1));
+  font-weight: 500;
+}
+.dept-detail-panel {
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+  background:
+    radial-gradient(circle at right top, rgba(var(--primary-6), 0.08), transparent 34%),
+    #fff;
+}
+.dept-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--color-border-2);
+}
+.dept-detail-grid {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: #fff;
+}
+.dept-detail-grid > span,
+.dept-detail-grid > b {
+  min-width: 0;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--color-border-2);
+  line-height: 20px;
+}
+.dept-detail-grid > span {
+  color: var(--color-text-3);
+  background: var(--color-fill-1);
+  font-weight: 400;
+}
+.dept-detail-grid > b {
+  color: var(--color-text-1);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dept-detail-grid > :nth-last-child(-n + 2) {
+  border-bottom: none;
+}
+.dept-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 18px;
+}
+.dept-empty-detail {
+  flex: 1;
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--color-text-2);
+  text-align: center;
+}
+
 /* 表格全局：表头加粗浅底、单元格不换行、数字等宽（时间/大小列对齐） */
 .arco-table-th {
   font-weight: 600;
@@ -278,6 +461,13 @@ html, body, #root {
   .mobile-menu-trigger { display: inline-flex; }
   .layout-content { padding: 10px; }
   .page-card { padding: 12px; }
+  .dept-page { min-height: calc(100vh - 76px); height: auto; overflow: visible; }
+  .dept-page-header { grid-template-columns: 1fr; align-items: stretch; padding: 12px; }
+  .dept-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .dept-workspace { grid-template-columns: 1fr; }
+  .dept-tree-scroll { max-height: 42vh; }
+  .dept-detail-panel { padding: 14px; }
+  .dept-detail-grid { grid-template-columns: 82px minmax(0, 1fr); }
   .mobile-nav-drawer .arco-drawer-body {
     padding: 0;
     background: #232324;
