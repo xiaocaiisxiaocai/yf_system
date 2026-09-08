@@ -78,7 +78,9 @@ export default function AdminLayout() {
   return (
     <Layout className="layout-shell">
       <Sider className="layout-sider" width={180} theme="dark">
-        <div className="layout-logo">供应商协作平台</div>
+        <div className="layout-logo">
+          <img src="/saa-logo.png" alt="SAA" />
+        </div>
         {menu()}
       </Sider>
       <Layout className="layout-main">
@@ -135,7 +137,7 @@ export default function AdminLayout() {
       </Layout>
       <Drawer
         className="mobile-nav-drawer"
-        title="供应商协作平台"
+        title={<img className="drawer-logo" src="/saa-logo.png" alt="SAA" />}
         placement="left"
         width={240}
         visible={mobileMenuOpen}

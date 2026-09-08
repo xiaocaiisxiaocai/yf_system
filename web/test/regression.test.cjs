@@ -47,6 +47,19 @@ function findActionButton(node, text) {
   return findElement(node, (item) => item.props.children === text)
 }
 
+test('SAA branding is wired to the application logo and favicon', () => {
+  const root = path.resolve(__dirname, '..')
+  const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8')
+  const layout = fs.readFileSync(path.join(root, 'src/layouts/AdminLayout.tsx'), 'utf8')
+  const login = fs.readFileSync(path.join(root, 'src/pages/Login.tsx'), 'utf8')
+
+  assert.match(index, /rel="icon"[^>]+href="\/favicon\.ico"/)
+  assert.match(layout, /src="\/saa-logo\.png"/)
+  assert.match(login, /src="\/saa-logo\.png"/)
+  assert.ok(fs.statSync(path.join(root, 'public/saa-logo.png')).size > 0)
+  assert.ok(fs.statSync(path.join(root, 'public/favicon.ico')).size > 0)
+})
+
 test('table action slots keep empty action positions for row alignment', () => {
   const { actionSlots } = loadTs('src/components/ActionSlots.tsx', {})
   const node = actionSlots([

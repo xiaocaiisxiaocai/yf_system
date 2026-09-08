@@ -75,7 +75,9 @@ export default function Login() {
   return (
     <div className="login-bg">
       <div className="login-card">
-        <div className="login-logo">供应商协作平台</div>
+        <div className="login-logo">
+          <img src="/saa-logo.png" alt="SAA" />
+        </div>
         <div className="login-sub">公司内部 × 外部供应商 · 项目文件协作</div>
         <Form form={form} layout="vertical" onSubmit={submit} autoComplete="off">
           <Form.Item field="employeeNo" rules={[{ required: true, message: '请输入工号' }]}>
