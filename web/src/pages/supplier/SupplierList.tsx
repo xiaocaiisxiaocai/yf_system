@@ -140,10 +140,10 @@ export default function SupplierList() {
         rowKey="id"
         loading={loading}
         data={data.list}
-        scroll={{ x: 1010, y: 'var(--page-table-scroll-y)' }}
+        scroll={{ x: 1190, y: 'var(--page-table-scroll-y)' }}
         columns={[
-          { title: '编码', dataIndex: 'code', width: 80, align: 'center' as const },
-          { title: '名称', dataIndex: 'name', width: 140, ellipsis: true },
+          { title: '编码', dataIndex: 'code', width: 180, align: 'center' as const, ellipsis: true },
+          { title: '名称', dataIndex: 'name', width: 220, ellipsis: true },
           { title: '联系人', dataIndex: 'contactName', width: 80, align: 'center' as const, ellipsis: true, render: (v?: string) => v || '-' },
           { title: '联系电话', dataIndex: 'contactPhone', width: 110, align: 'center' as const, render: (v?: string) => v || '-' },
           { title: '邮箱', dataIndex: 'contactEmail', width: 140, ellipsis: true, render: (v?: string) => v || '-' },
