@@ -7,12 +7,10 @@ export interface PageResp<T> {
 
 export interface Project {
   id: number
-  code: string
   name: string
   description?: string
   supplierId: number
   supplierName?: string
-  supplierCode?: string
   status: 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED' | 'TERMINATED'
   createdBy: number
   createdByName?: string
@@ -80,7 +78,7 @@ export interface Message {
 
 export interface Member {
   userId: number
-  username: string
+  employeeNo: string
   realName: string
   deptName?: string | null
   createdAt: string

@@ -9,7 +9,6 @@ import { type PageResp } from '../../api/types'
 
 interface Role {
   id: number
-  code: string
   name: string
   description?: string
   isBuiltIn: boolean
@@ -21,7 +20,6 @@ interface Role {
 
 interface Perm {
   id: number
-  code: string
   name: string
   type: 'MENU' | 'ACTION'
   parentId: number | null
@@ -81,10 +79,10 @@ export default function RoleList() {
     const menus = perms.filter((p) => p.type === 'MENU')
     return menus.map((m) => ({
       key: String(m.id),
-      title: `${m.name}（${m.code}）`,
+      title: m.name,
       children: perms
         .filter((p) => p.parentId === m.id)
-        .map((p) => ({ key: String(p.id), title: `${p.name}（${p.code}）` })),
+        .map((p) => ({ key: String(p.id), title: p.name })),
     }))
   }, [perms])
 
@@ -136,9 +134,8 @@ export default function RoleList() {
         rowKey="id"
         loading={loading}
         data={data.list}
-        scroll={{ x: 1190, y: 'var(--page-table-scroll-y)' }}
+        scroll={{ x: 1010, y: 'var(--page-table-scroll-y)' }}
         columns={[
-          { title: '编码', dataIndex: 'code', width: 180, align: 'center' as const, ellipsis: true },
           { title: '名称', dataIndex: 'name', width: 220, align: 'center' as const, ellipsis: true },
           { title: '说明', dataIndex: 'description', width: 230, ellipsis: true, render: (v?: string) => v || '-' },
           { title: '权限点数', dataIndex: 'permissionIds', width: 90, align: 'center' as const, render: (v: number[]) => v.length },
@@ -180,13 +177,13 @@ export default function RoleList() {
                 type="text"
                 onClick={() => {
                   setEditing(r)
-                  form.setFieldsValue({ code: r.code, name: r.name, description: r.description })
+                  form.setFieldsValue({ name: r.name, description: r.description })
                   setEditOpen(true)
                 }}
               >
                 编辑
               </Button>,
-              !['ADMIN', 'SUPPLIER'].includes(r.code) && (
+              !r.permissionsLocked && (
                 <Popconfirm
                   key="status"
                   title={
@@ -220,9 +217,6 @@ export default function RoleList() {
 
       <Modal title={editing ? '编辑角色' : '新增角色'} visible={editOpen} onOk={submit} onCancel={() => setEditOpen(false)}>
         <Form form={form} layout="vertical">
-          <Form.Item label="角色编码" field="code" rules={[{ required: true, message: '请输入编码' }, { match: /^[A-Za-z0-9_]{2,32}$/, message: '字母/数字/下划线' }]}>
-            <Input placeholder="如 QC_REVIEWER" disabled={!!editing} />
-          </Form.Item>
           <Form.Item label="角色名称" field="name" rules={[{ required: true, message: '请输入名称' }]}>
             <Input />
           </Form.Item>

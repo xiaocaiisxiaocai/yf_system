@@ -12,7 +12,7 @@ type AuditDetail = Record<string, unknown>
 interface LogRow {
   id: number
   userId?: number | null
-  username?: string | null
+  employeeNo?: string | null
   action: string
   targetType?: string | null
   targetId?: string | null
@@ -96,18 +96,20 @@ function displayValue(value: unknown): string {
 
 function detailSummary(row: LogRow): string {
   const detail = row.detail || {}
+  // 兼容迁移前已落库的结构化日志详情；新的日志统一写 employeeNo。
+  const actor = detail.employeeNo ?? detail.username
   if (row.action === 'USER_ASSIGN_ROLE' || row.action === 'USER_ASSIGN_ROLES') {
-    return `${displayValue(detail.username)}：角色 ${displayValue(detail.oldRoleId)} → ${displayValue(detail.newRoleName ?? detail.newRoleId)}`
+    return `${displayValue(actor)}：角色 ${displayValue(detail.oldRoleId)} → ${displayValue(detail.newRoleName ?? detail.newRoleId)}`
   }
   if (row.action === 'USER_UPDATE') {
     const fields = Array.isArray(detail.changedFields)
       ? detail.changedFields.map((field) => FIELD_LABELS[String(field)] || String(field)).join('、')
       : ''
-    if (!detail.username && !fields) return '历史记录未包含变更字段'
-    return `${displayValue(detail.username)}${fields ? `；修改 ${fields}` : ''}`
+    if (!actor && !fields) return '历史记录未包含变更字段'
+    return `${displayValue(actor)}${fields ? `；修改 ${fields}` : ''}`
   }
   if (row.action.endsWith('_STATUS')) {
-    const subject = detail.name ?? detail.username ?? detail.code ?? `${TARGET_LABELS[row.targetType || ''] || row.targetType || '对象'} ${row.targetId || ''}`
+    const subject = detail.name ?? actor ?? detail.code ?? `${TARGET_LABELS[row.targetType || ''] || row.targetType || '对象'} ${row.targetId || ''}`
     const nextStatus = detail.newStatus ?? detail.status ?? detail.to
     if (detail.oldStatus == null) return `${displayValue(subject)}：状态变更为 ${displayValue(nextStatus)}`
     return `${displayValue(subject)}：${displayValue(detail.oldStatus)} → ${displayValue(nextStatus)}`
@@ -115,7 +117,7 @@ function detailSummary(row: LogRow): string {
   if (row.action === 'ROLE_ASSIGN_PERMS') {
     return `${displayValue(detail.code)}：权限点 ${displayValue(detail.oldPermissionCount)} → ${displayValue(detail.newPermissionCount)}`
   }
-  const parts = [detail.username, detail.name, detail.code, detail.fileName, detail.projectId, detail.roundNo]
+  const parts = [actor, detail.name, detail.code, detail.fileName, detail.projectId, detail.roundNo]
     .filter((value) => value != null && value !== '')
     .map(displayValue)
   return parts.join(' · ') || (row.detail ? '查看结构化详情' : '未记录补充信息')
@@ -197,7 +199,7 @@ export default function AuditLog() {
         columns={[
           { title: '时间', dataIndex: 'createdAt', width: 160, render: fmtTime },
           {
-            title: '操作人', dataIndex: 'username', width: 125,
+            title: '操作人', dataIndex: 'employeeNo', width: 125,
             render: (value?: string, row?: LogRow) => <div className="audit-actor"><span className="audit-avatar">{(value || '系').slice(0, 1).toUpperCase()}</span><span><b>{value || '系统'}</b><small>{row?.userId ? `ID ${row.userId}` : '系统事件'}</small></span></div>,
           },
           {
@@ -223,7 +225,7 @@ export default function AuditLog() {
             <div className="audit-detail-title"><Tag color={(ACTIONS[selected.action] || { color: 'gray' }).color}>{ACTIONS[selected.action]?.label || selected.action}</Tag><Typography.Text type="secondary">日志 #{selected.id}</Typography.Text></div>
             <div className="audit-detail-grid">
               <span>发生时间</span><b>{fmtTime(selected.createdAt)}</b>
-              <span>操作人</span><b>{selected.username || '系统'}{selected.userId ? `（ID ${selected.userId}）` : ''}</b>
+              <span>操作人</span><b>{selected.employeeNo || '系统'}{selected.userId ? `（ID ${selected.userId}）` : ''}</b>
               <span>动作编码</span><code>{selected.action}</code>
               <span>操作对象</span><b>{selected.targetType ? `${TARGET_LABELS[selected.targetType] || selected.targetType}${selected.targetId ? ` #${selected.targetId}` : ''}` : '-'}</b>
               <span>IP 地址</span><b>{selected.ip || '-'}</b>

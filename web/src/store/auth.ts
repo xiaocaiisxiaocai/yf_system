@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware'
 
 export interface UserBrief {
   id: number
-  username: string
+  employeeNo: string
   realName: string
   userType: 'INTERNAL' | 'SUPPLIER'
   supplierId?: number | null

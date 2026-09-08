@@ -31,7 +31,6 @@ pub struct SupplierListQuery {
 #[serde(rename_all = "camelCase")]
 pub struct SupplierUpsert {
     pub name: String,
-    pub code: String,
     pub contact_name: Option<String>,
     pub contact_phone: Option<String>,
     pub contact_email: Option<String>,
@@ -42,7 +41,7 @@ pub struct SupplierUpsert {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountCreate {
-    pub username: String,
+    pub employee_no: String,
     pub password: String,
     pub real_name: String,
     pub email: String,
@@ -59,7 +58,7 @@ pub struct AccountUpdate {
 
 fn supplier_json(s: &suppliers::Model) -> Value {
     json!({
-        "id": s.id, "name": s.name, "code": s.code,
+        "id": s.id, "name": s.name,
         "contactName": s.contact_name, "contactPhone": s.contact_phone,
         "contactEmail": s.contact_email, "address": s.address, "remark": s.remark,
         "status": if s.status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
@@ -69,7 +68,7 @@ fn supplier_json(s: &suppliers::Model) -> Value {
 
 fn account_json(u: &users::Model) -> Value {
     json!({
-        "id": u.id, "username": u.username, "realName": u.real_name, "email": u.email,
+        "id": u.id, "employeeNo": u.employee_no, "realName": u.real_name, "email": u.email,
         "phone": u.phone, "supplierId": u.supplier_id,
         "status": if u.status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
         "lastLoginAt": u.last_login_at, "createdAt": u.created_at,
@@ -84,11 +83,11 @@ fn validate_supplier(req: &SupplierUpsert) -> ApiResult<()> {
     {
         crate::util::validation::email(value)?;
     }
-    if req.name.trim().is_empty() || req.code.trim().is_empty() {
-        return Err(AppError::BadRequest("供应商名称和编码不能为空".into()));
+    if req.name.trim().is_empty() {
+        return Err(AppError::BadRequest("供应商名称不能为空".into()));
     }
-    if req.name.trim().chars().count() > 64 || req.code.trim().chars().count() > 32 {
-        return Err(AppError::BadRequest("供应商名称/编码过长".into()));
+    if req.name.trim().chars().count() > 64 {
+        return Err(AppError::BadRequest("供应商名称过长".into()));
     }
     let opt_len = |v: &Option<String>| v.as_deref().map(|s| s.chars().count()).unwrap_or(0);
     if opt_len(&req.contact_name) > 32
@@ -107,11 +106,7 @@ pub async fn list(db: &DatabaseConnection, q: &SupplierListQuery) -> ApiResult<P
     let (page, size) = crate::dto::clamp_page(q.page, q.page_size);
     let mut cond = Condition::all();
     if let Some(kw) = q.keyword.as_ref().filter(|k| !k.trim().is_empty()) {
-        cond = cond.add(
-            Condition::any()
-                .add(suppliers::Column::Name.contains(kw.trim()))
-                .add(suppliers::Column::Code.contains(kw.trim())),
-        );
+        cond = cond.add(Condition::any().add(suppliers::Column::Name.contains(kw.trim())));
     }
     if let Some(s) = &q.status {
         cond = cond.add(suppliers::Column::Status.eq(s.as_str()));
@@ -136,20 +131,10 @@ pub async fn create(
     req: &SupplierUpsert,
 ) -> ApiResult<Value> {
     validate_supplier(req)?;
-    let code = req.code.trim();
-    if suppliers::Entity::find()
-        .filter(suppliers::Column::Code.eq(code))
-        .one(db)
-        .await?
-        .is_some()
-    {
-        return Err(AppError::BadRequest("供应商编码已存在".into()));
-    }
     let now = Utc::now();
     let txn = db.begin().await?;
     let model = suppliers::ActiveModel {
         name: Set(req.name.trim().to_string()),
-        code: Set(code.to_string()),
         contact_name: Set(req.contact_name.clone()),
         contact_phone: Set(req.contact_phone.clone()),
         contact_email: Set(req.contact_email.clone()),
@@ -166,13 +151,12 @@ pub async fn create(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "SUPPLIER_CREATE",
         Some("supplier"),
         Some(model.id.to_string()),
         Some(json!({
             "name": model.name,
-            "code": model.code,
             "status": "ACTIVE",
         })),
         None,
@@ -201,21 +185,10 @@ pub async fn update(
         .await?
         .ok_or(AppError::NotFound)?;
     validate_supplier(req)?;
-    let code = req.code.trim();
-    if let Some(other) = suppliers::Entity::find()
-        .filter(suppliers::Column::Code.eq(code))
-        .one(db)
-        .await?
-    {
-        if other.id != id {
-            return Err(AppError::BadRequest("供应商编码已存在".into()));
-        }
-    }
     let old_name = s.name.clone();
     let txn = db.begin().await?;
     let mut am: suppliers::ActiveModel = s.into();
     am.name = Set(req.name.trim().to_string());
-    am.code = Set(code.to_string());
     am.contact_name = Set(req.contact_name.clone());
     am.contact_phone = Set(req.contact_phone.clone());
     am.contact_email = Set(req.contact_email.clone());
@@ -226,15 +199,14 @@ pub async fn update(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "SUPPLIER_UPDATE",
         Some("supplier"),
         Some(id.to_string()),
         Some(json!({
-            "code": model.code,
             "oldName": old_name,
             "newName": model.name,
-            "changedFields": ["name", "code", "contact", "address", "remark"],
+            "changedFields": ["name", "contact", "address", "remark"],
         })),
         None,
     )
@@ -268,7 +240,7 @@ pub async fn set_status(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "SUPPLIER_STATUS",
         Some("supplier"),
         Some(id.to_string()),
@@ -321,19 +293,19 @@ pub async fn create_account(
     req: &AccountCreate,
 ) -> ApiResult<Value> {
     ensure_supplier_active(db, supplier_id).await?;
-    let username = req.username.trim();
-    crate::util::validation::username(username)?;
+    let employee_no = req.employee_no.trim();
+    crate::util::validation::employee_no(employee_no)?;
     crate::util::validation::phone(req.phone.as_deref())?;
     if req.real_name.trim().is_empty() || req.real_name.trim().chars().count() > 32 {
         return Err(AppError::BadRequest("姓名需为 1~32 个字符".into()));
     }
     if users::Entity::find()
-        .filter(users::Column::Username.eq(username))
+        .filter(users::Column::EmployeeNo.eq(employee_no))
         .one(db)
         .await?
         .is_some()
     {
-        return Err(AppError::BadRequest("用户名已存在".into()));
+        return Err(AppError::BadRequest("工号已存在".into()));
     }
     if !password::strong_enough(&req.password) {
         return Err(AppError::BadRequest(
@@ -345,7 +317,7 @@ pub async fn create_account(
     // 账号与内置角色绑定同事务
     let txn = db.begin().await?;
     let model = users::ActiveModel {
-        username: Set(username.to_string()),
+        employee_no: Set(employee_no.to_string()),
         password_hash: Set(password::hash(&req.password)?),
         real_name: Set(req.real_name.trim().to_string()),
         email: Set(req.email.trim().to_string()),
@@ -368,7 +340,8 @@ pub async fn create_account(
     .await?;
     // 绑定内置供应商角色（固定权限集）
     let role = roles::Entity::find()
-        .filter(roles::Column::Code.eq("SUPPLIER"))
+        .filter(roles::Column::IsBuiltIn.eq(true))
+        .filter(roles::Column::Name.eq("供应商人员"))
         .one(&txn)
         .await?;
     let role = role.ok_or(AppError::Internal("内置供应商角色缺失".into()))?;
@@ -381,12 +354,12 @@ pub async fn create_account(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "SUPPLIER_ACCOUNT_CREATE",
         Some("user"),
         Some(model.id.to_string()),
         Some(json!({
-            "username": username,
+            "employeeNo": employee_no,
             "supplierId": supplier_id,
             "roleId": role.id,
             "roleName": role.name,
@@ -425,7 +398,7 @@ pub async fn update_account(
         crate::util::validation::email(v)?;
     }
     crate::util::validation::phone(req.phone.as_deref())?;
-    let username = u.username.clone();
+    let employee_no = u.employee_no.clone();
     let txn = db.begin().await?;
     let mut am: users::ActiveModel = u.into();
     if let Some(v) = &req.real_name {
@@ -452,12 +425,12 @@ pub async fn update_account(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "SUPPLIER_ACCOUNT_UPDATE",
         Some("user"),
         Some(id.to_string()),
         Some(json!({
-            "username": username,
+            "employeeNo": employee_no,
             "changedFields": changed_fields,
         })),
         None,
@@ -480,7 +453,7 @@ pub async fn set_account_status(
         _ => return Err(AppError::BadRequest("非法状态".into())),
     };
     let old_status = u.status;
-    let username = u.username.clone();
+    let employee_no = u.employee_no.clone();
     let txn = db.begin().await?;
     let mut am: users::ActiveModel = u.into();
     am.status = Set(st);
@@ -492,12 +465,12 @@ pub async fn set_account_status(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "SUPPLIER_ACCOUNT_STATUS",
         Some("user"),
         Some(id.to_string()),
         Some(json!({
-            "username": username,
+            "employeeNo": employee_no,
             "oldStatus": if old_status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
             "newStatus": status,
             "sessionsRevoked": st == CommonStatus::Disabled,
@@ -521,7 +494,7 @@ pub async fn reset_account_password(
             "新密码需至少 8 位、包含字母和数字，且不超过 128 字节".into(),
         ));
     }
-    let username = u.username.clone();
+    let employee_no = u.employee_no.clone();
     let txn = db.begin().await?;
     let mut am: users::ActiveModel = u.into();
     am.password_hash = Set(password::hash(new_password)?);
@@ -534,12 +507,12 @@ pub async fn reset_account_password(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "SUPPLIER_ACCOUNT_RESET_PASSWORD",
         Some("user"),
         Some(id.to_string()),
         Some(json!({
-            "username": username,
+            "employeeNo": employee_no,
             "sessionsRevoked": true,
             "mustChangePassword": true,
         })),

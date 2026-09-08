@@ -96,7 +96,7 @@ pub async fn create(
     audit::insert(
         &txn,
         Some(user.id),
-        Some(user.username.clone()),
+        Some(user.employee_no.clone()),
         "DEPT_CREATE",
         Some("department"),
         Some(model.id.to_string()),
@@ -179,7 +179,7 @@ pub async fn update(
     audit::insert(
         &txn,
         Some(user.id),
-        Some(user.username.clone()),
+        Some(user.employee_no.clone()),
         "DEPT_UPDATE",
         Some("department"),
         Some(id.to_string()),
@@ -224,7 +224,7 @@ pub async fn set_status(
     audit::insert(
         &txn,
         Some(user.id),
-        Some(user.username.clone()),
+        Some(user.employee_no.clone()),
         "DEPT_STATUS",
         Some("department"),
         Some(id.to_string()),

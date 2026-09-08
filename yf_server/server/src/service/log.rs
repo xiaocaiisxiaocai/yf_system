@@ -19,7 +19,7 @@ pub struct LogQuery {
     pub page_size: u64,
     pub keyword: Option<String>,
     pub category: Option<String>,
-    pub username: Option<String>,
+    pub employee_no: Option<String>,
     pub action: Option<String>,
     pub target_type: Option<String>,
     pub target_id: Option<String>,
@@ -94,7 +94,7 @@ pub async fn list(db: &DatabaseConnection, q: &LogQuery) -> ApiResult<PageResp<V
     {
         cond = cond.add(
             Condition::any()
-                .add(audit_logs::Column::Username.contains(keyword))
+                .add(audit_logs::Column::EmployeeNo.contains(keyword))
                 .add(audit_logs::Column::Action.contains(keyword))
                 .add(audit_logs::Column::TargetType.contains(keyword))
                 .add(audit_logs::Column::TargetId.contains(keyword)),
@@ -103,8 +103,8 @@ pub async fn list(db: &DatabaseConnection, q: &LogQuery) -> ApiResult<PageResp<V
     if let Some(actions) = q.category.as_deref().and_then(actions_for_category) {
         cond = cond.add(audit_logs::Column::Action.is_in(actions.iter().copied()));
     }
-    if let Some(u) = q.username.as_ref().filter(|s| !s.trim().is_empty()) {
-        cond = cond.add(audit_logs::Column::Username.contains(u.trim()));
+    if let Some(u) = q.employee_no.as_ref().filter(|s| !s.trim().is_empty()) {
+        cond = cond.add(audit_logs::Column::EmployeeNo.contains(u.trim()));
     }
     if let Some(a) = q.action.as_ref().filter(|s| !s.trim().is_empty()) {
         cond = cond.add(audit_logs::Column::Action.eq(a.trim()));
@@ -131,7 +131,7 @@ pub async fn list(db: &DatabaseConnection, q: &LogQuery) -> ApiResult<PageResp<V
         .iter()
         .map(|l| {
             json!({
-                "id": l.id, "userId": l.user_id, "username": l.username,
+                "id": l.id, "userId": l.user_id, "employeeNo": l.employee_no,
                 "action": l.action, "targetType": l.target_type, "targetId": l.target_id,
                 "detail": l.detail, "ip": l.ip, "createdAt": l.created_at,
             })

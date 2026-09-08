@@ -8,7 +8,7 @@ use crate::error::ApiResult;
 pub async fn insert(
     db: &impl ConnectionTrait,
     user_id: Option<u64>,
-    username: Option<String>,
+    employee_no: Option<String>,
     action: &str,
     target_type: Option<&str>,
     target_id: Option<String>,
@@ -17,7 +17,7 @@ pub async fn insert(
 ) -> ApiResult<()> {
     audit_logs::ActiveModel {
         user_id: Set(user_id),
-        username: Set(username),
+        employee_no: Set(employee_no),
         action: Set(action.to_string()),
         target_type: Set(target_type.map(str::to_string)),
         target_id: Set(target_id),
@@ -35,7 +35,7 @@ pub async fn insert(
 pub async fn log(
     db: &DatabaseConnection,
     user_id: Option<u64>,
-    username: Option<String>,
+    employee_no: Option<String>,
     action: &str,
     target_type: Option<&str>,
     target_id: Option<String>,
@@ -45,7 +45,7 @@ pub async fn log(
     if let Err(e) = insert(
         db,
         user_id,
-        username,
+        employee_no,
         action,
         target_type,
         target_id,

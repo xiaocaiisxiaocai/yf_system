@@ -1,8 +1,8 @@
 //! 项目管理（关联单一供应商，数据范围见 scope）
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -30,7 +30,6 @@ pub struct ProjectListQuery {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectUpsert {
-    pub code: String,
     pub name: String,
     pub description: Option<String>,
     pub supplier_id: u64,
@@ -78,10 +77,9 @@ pub async fn project_json(db: &DatabaseConnection, p: &projects::Model) -> Value
         .ok()
         .flatten();
     json!({
-        "id": p.id, "code": p.code, "name": p.name, "description": p.description,
+        "id": p.id, "name": p.name, "description": p.description,
         "supplierId": p.supplier_id,
         "supplierName": supplier.as_ref().map(|s| s.name.clone()),
-        "supplierCode": supplier.as_ref().map(|s| s.code.clone()),
         "status": status_str(&p.status),
         "createdBy": p.created_by,
         "createdByName": creator.map(|u| u.real_name),
@@ -97,11 +95,7 @@ pub async fn list(
     let (page, size) = crate::dto::clamp_page(q.page, q.page_size);
     let mut cond = scope::project_condition(db, user).await?;
     if let Some(kw) = q.keyword.as_ref().filter(|k| !k.trim().is_empty()) {
-        cond = cond.add(
-            Condition::any()
-                .add(projects::Column::Name.contains(kw.trim()))
-                .add(projects::Column::Code.contains(kw.trim())),
-        );
+        cond = cond.add(projects::Column::Name.contains(kw.trim()));
     }
     if let Some(s) = &q.status {
         cond = cond.add(projects::Column::Status.eq(s.as_str()));
@@ -118,12 +112,12 @@ pub async fn list(
     // 批量预取供应商/创建人，避免每行 2 次查询的 N+1
     let supplier_ids: Vec<u64> = items.iter().map(|p| p.supplier_id).collect();
     let creator_ids: Vec<u64> = items.iter().map(|p| p.created_by).collect();
-    let supplier_map: std::collections::HashMap<u64, (String, String)> = suppliers::Entity::find()
+    let supplier_map: std::collections::HashMap<u64, String> = suppliers::Entity::find()
         .filter(suppliers::Column::Id.is_in(supplier_ids))
         .all(db)
         .await?
         .into_iter()
-        .map(|s| (s.id, (s.name, s.code)))
+        .map(|s| (s.id, s.name))
         .collect();
     let creator_map: std::collections::HashMap<u64, String> = users::Entity::find()
         .filter(users::Column::Id.is_in(creator_ids))
@@ -136,10 +130,9 @@ pub async fn list(
     for p in &items {
         let sup = supplier_map.get(&p.supplier_id);
         list.push(json!({
-            "id": p.id, "code": p.code, "name": p.name, "description": p.description,
+            "id": p.id, "name": p.name, "description": p.description,
             "supplierId": p.supplier_id,
-            "supplierName": sup.map(|t| &t.0),
-            "supplierCode": sup.map(|t| &t.1),
+            "supplierName": sup,
             "status": status_str(&p.status),
             "createdBy": p.created_by,
             "createdByName": creator_map.get(&p.created_by),
@@ -164,22 +157,14 @@ pub async fn create(
     if !me.is_internal() {
         return Err(AppError::Forbidden);
     }
-    let code = req.code.trim();
-    if req.name.trim().is_empty() || code.is_empty() {
-        return Err(AppError::BadRequest("项目编号和名称不能为空".into()));
+    let name = req.name.trim();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("项目名称不能为空".into()));
     }
-    if code.chars().count() > 64 || req.name.trim().chars().count() > 128 {
-        return Err(AppError::BadRequest("项目编号/名称过长".into()));
+    if name.chars().count() > 128 {
+        return Err(AppError::BadRequest("项目名称过长".into()));
     }
     validate_description(req.description.as_deref())?;
-    if projects::Entity::find()
-        .filter(projects::Column::Code.eq(code))
-        .one(db)
-        .await?
-        .is_some()
-    {
-        return Err(AppError::BadRequest("项目编号已存在".into()));
-    }
     let supplier = suppliers::Entity::find_by_id(req.supplier_id)
         .one(db)
         .await?
@@ -191,8 +176,7 @@ pub async fn create(
     // 项目与创建人成员记录同事务，避免半成功状态
     let txn = db.begin().await?;
     let model = projects::ActiveModel {
-        code: Set(code.to_string()),
-        name: Set(req.name.trim().to_string()),
+        name: Set(name.to_string()),
         description: Set(req.description.clone()),
         supplier_id: Set(req.supplier_id),
         status: Set(ProjectStatus::Draft),
@@ -215,7 +199,7 @@ pub async fn create(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "PROJECT_CREATE",
         Some("project"),
         Some(model.id.to_string()),
@@ -242,24 +226,11 @@ pub async fn update(
     req: &ProjectUpsert,
 ) -> ApiResult<Value> {
     scope::ensure_project_access(db, me, id).await?;
-    let code = req.code.trim();
     let name = req.name.trim();
-    if code.is_empty() || code.chars().count() > 64 {
-        return Err(AppError::BadRequest("项目编码需为 1~64 个字符".into()));
-    }
     if name.is_empty() || name.chars().count() > 128 {
         return Err(AppError::BadRequest("项目名称需为 1~128 个字符".into()));
     }
     validate_description(req.description.as_deref())?;
-    if let Some(other) = projects::Entity::find()
-        .filter(projects::Column::Code.eq(code))
-        .one(db)
-        .await?
-    {
-        if other.id != id {
-            return Err(AppError::BadRequest("项目编号已存在".into()));
-        }
-    }
     let p = projects::Entity::find_by_id(id)
         .one(db)
         .await?
@@ -271,7 +242,6 @@ pub async fn update(
     }
     let txn = db.begin().await?;
     let mut am: projects::ActiveModel = p.into();
-    am.code = Set(code.to_string());
     am.name = Set(name.to_string());
     am.description = Set(req.description.clone());
     am.supplier_id = Set(req.supplier_id);
@@ -280,7 +250,7 @@ pub async fn update(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "PROJECT_UPDATE",
         Some("project"),
         Some(id.to_string()),
@@ -336,7 +306,7 @@ pub async fn set_status(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "PROJECT_STATUS",
         Some("project"),
         Some(id.to_string()),
@@ -369,7 +339,7 @@ pub async fn list_members(db: &DatabaseConnection, project_id: u64) -> ApiResult
     for m in rows {
         if let Some(u) = user_map.get(&m.user_id) {
             list.push(json!({
-                "userId": u.id, "username": u.username, "realName": u.real_name,
+                "userId": u.id, "employeeNo": u.employee_no, "realName": u.real_name,
                 "departmentId": u.department_id,
                 "status": if u.status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
                 "createdAt": m.created_at,
@@ -416,7 +386,7 @@ pub async fn set_members(
         if u.user_type != UserType::Internal || u.status != CommonStatus::Active {
             return Err(AppError::BadRequest(format!(
                 "用户 {} 不是启用的内部账号",
-                u.username
+                u.employee_no
             )));
         }
     }
@@ -438,7 +408,7 @@ pub async fn set_members(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "PROJECT_MEMBERS",
         Some("project"),
         Some(project_id.to_string()),
@@ -483,7 +453,7 @@ pub async fn supplier_options(db: &DatabaseConnection, user: &CurrentUser) -> Ap
         .await?;
     Ok(json!(rows
         .iter()
-        .map(|s| json!({ "id": s.id, "name": s.name, "code": s.code }))
+        .map(|s| json!({ "id": s.id, "name": s.name }))
         .collect::<Vec<_>>()))
 }
 
@@ -518,7 +488,7 @@ pub async fn internal_user_options(
     let mut out = Vec::with_capacity(rows.len());
     for u in &rows {
         out.push(json!({
-            "id": u.id, "username": u.username, "realName": u.real_name,
+            "id": u.id, "employeeNo": u.employee_no, "realName": u.real_name,
             "deptName": u.department_id.and_then(|d| dept_map.get(&d)),
         }));
     }

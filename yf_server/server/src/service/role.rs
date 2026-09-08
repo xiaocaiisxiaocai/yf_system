@@ -18,7 +18,6 @@ use super::audit;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoleUpsert {
-    pub code: String,
     pub name: String,
     pub description: Option<String>,
 }
@@ -29,8 +28,8 @@ pub struct PermAssign {
     pub permission_ids: Vec<u64>,
 }
 
-fn permissions_locked(code: &str) -> bool {
-    matches!(code, "ADMIN" | "SUPPLIER")
+fn protected_role(is_built_in: bool, name: &str) -> bool {
+    is_built_in && matches!(name, "系统管理员" | "供应商人员")
 }
 
 fn validate_details(req: &RoleUpsert) -> ApiResult<()> {
@@ -76,9 +75,9 @@ async fn role_json(db: &DatabaseConnection, r: &roles::Model) -> Value {
         .await
         .unwrap_or(0);
     json!({
-        "id": r.id, "code": r.code, "name": r.name, "description": r.description,
+        "id": r.id, "name": r.name, "description": r.description,
         "isBuiltIn": r.is_built_in,
-        "permissionsLocked": permissions_locked(&r.code),
+        "permissionsLocked": protected_role(r.is_built_in, &r.name),
         "status": if r.status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
         "permissionIds": perm_ids,
         "assignedUserCount": assigned_user_count,
@@ -105,27 +104,10 @@ pub async fn create(
     me: &CurrentUser,
     req: &RoleUpsert,
 ) -> ApiResult<Value> {
-    let code = req.code.trim();
     validate_details(req)?;
-    if !(2..=32).contains(&code.len())
-        || !code.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
-        return Err(AppError::BadRequest(
-            "角色编码需为 2~32 位字母/数字/下划线".into(),
-        ));
-    }
-    if roles::Entity::find()
-        .filter(roles::Column::Code.eq(code))
-        .one(db)
-        .await?
-        .is_some()
-    {
-        return Err(AppError::BadRequest("角色编码已存在".into()));
-    }
     let now = Utc::now();
     let txn = db.begin().await?;
     let model = roles::ActiveModel {
-        code: Set(code.to_string()),
         name: Set(req.name.trim().to_string()),
         description: Set(req.description.clone()),
         is_built_in: Set(false),
@@ -139,12 +121,11 @@ pub async fn create(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "ROLE_CREATE",
         Some("role"),
         Some(model.id.to_string()),
         Some(json!({
-            "code": code,
             "name": model.name,
             "status": "ACTIVE",
         })),
@@ -166,6 +147,9 @@ pub async fn update(
         .one(db)
         .await?
         .ok_or(AppError::NotFound)?;
+    if role.is_built_in && req.name.trim() != role.name {
+        return Err(AppError::BadRequest("内置角色名称不可修改".into()));
+    }
     let old_name = role.name.clone();
     let old_description = role.description.clone();
     let txn = db.begin().await?;
@@ -177,12 +161,11 @@ pub async fn update(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "ROLE_UPDATE",
         Some("role"),
         Some(id.to_string()),
         Some(json!({
-            "code": model.code,
             "oldName": old_name,
             "newName": model.name,
             "descriptionChanged": old_description != model.description,
@@ -207,7 +190,7 @@ pub async fn set_status(
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
-    if matches!(role.code.as_str(), "ADMIN" | "SUPPLIER") && status == "DISABLED" {
+    if protected_role(role.is_built_in, &role.name) && status == "DISABLED" {
         return Err(AppError::BadRequest(
             "管理员和供应商内置角色不可禁用".into(),
         ));
@@ -249,12 +232,11 @@ pub async fn set_status(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "ROLE_STATUS",
         Some("role"),
         Some(id.to_string()),
         Some(json!({
-            "code": model.code,
             "name": model.name,
             "oldStatus": if old_status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
             "newStatus": status,
@@ -279,7 +261,7 @@ pub async fn assign_permissions(
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
-    if permissions_locked(&role.code) {
+    if protected_role(role.is_built_in, &role.name) {
         return Err(AppError::BadRequest(
             "管理员和供应商内置角色权限固定，不可编辑".into(),
         ));
@@ -325,12 +307,11 @@ pub async fn assign_permissions(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "ROLE_ASSIGN_PERMS",
         Some("role"),
         Some(id.to_string()),
         Some(json!({
-            "code": role.code,
             "oldPermissionCount": old_permission_ids.len(),
             "newPermissionCount": permission_ids.len(),
             "oldPermissionIds": old_permission_ids,
@@ -345,12 +326,13 @@ pub async fn assign_permissions(
 
 #[cfg(test)]
 mod tests {
-    use super::permissions_locked;
+    use super::protected_role;
 
     #[test]
     fn security_roles_keep_fixed_permissions() {
-        assert!(permissions_locked("ADMIN"));
-        assert!(permissions_locked("SUPPLIER"));
-        assert!(!permissions_locked("PROJECT_MANAGER"));
+        assert!(protected_role(true, "系统管理员"));
+        assert!(protected_role(true, "供应商人员"));
+        assert!(!protected_role(true, "项目管理员"));
+        assert!(!protected_role(false, "系统管理员"));
     }
 }

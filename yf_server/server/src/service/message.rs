@@ -252,7 +252,7 @@ pub async fn create(
     audit::insert(
         &txn,
         Some(user.id),
-        Some(user.username.clone()),
+        Some(user.employee_no.clone()),
         "MESSAGE_CREATE",
         Some("message"),
         Some(model.id.to_string()),
@@ -375,7 +375,7 @@ pub async fn delete(db: &DatabaseConnection, user: &CurrentUser, message_id: u64
     audit::insert(
         &txn,
         Some(user.id),
-        Some(user.username.clone()),
+        Some(user.employee_no.clone()),
         "MESSAGE_DELETE",
         Some("message"),
         Some(message_id.to_string()),

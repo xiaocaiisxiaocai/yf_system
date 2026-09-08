@@ -154,7 +154,7 @@ pub async fn stream_file(
         audit::log(
             db,
             Some(user.id),
-            Some(user.username.clone()),
+            Some(user.employee_no.clone()),
             "FILE_DOWNLOAD",
             Some("file"),
             Some(id.to_string()),
@@ -187,7 +187,7 @@ pub async fn delete(state: &AppState, user: &CurrentUser, id: u64) -> ApiResult<
     audit::insert(
         &txn,
         Some(user.id),
-        Some(user.username.clone()),
+        Some(user.employee_no.clone()),
         "FILE_DELETE",
         Some("file"),
         Some(id.to_string()),
@@ -308,7 +308,7 @@ pub async fn batch_download(
     audit::log(
         db,
         Some(user.id),
-        Some(user.username.clone()),
+        Some(user.employee_no.clone()),
         "FILE_BATCH_DOWNLOAD",
         Some("file"),
         None,

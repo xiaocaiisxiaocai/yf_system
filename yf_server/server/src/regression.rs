@@ -35,7 +35,7 @@ async fn full_disabled_supplier_accounts_remain_manageable_but_cannot_login() {
             &f.admin,
             sid,
             &service::supplier::AccountCreate {
-                username: format!("{}s{n}", f.member.username),
+                employee_no: format!("{}s{n}", f.member.employee_no),
                 password: "Regression123".into(),
                 real_name: format!("账号{n}"),
                 email: format!("account{n}@example.invalid"),
@@ -69,7 +69,7 @@ async fn full_disabled_supplier_accounts_remain_manageable_but_cannot_login() {
         &f.admin,
         sid,
         &service::supplier::AccountCreate {
-            username: format!("{}new", f.member.username),
+            employee_no: format!("{}new", f.member.employee_no),
             password: "Regression123".into(),
             real_name: "禁止新增".into(),
             email: "new@example.invalid".into(),
@@ -94,7 +94,7 @@ async fn full_disabled_supplier_accounts_remain_manageable_but_cannot_login() {
         .await
         .unwrap();
     let req = crate::dto::LoginRequest {
-        username: format!("{}s1", f.member.username),
+        employee_no: format!("{}s1", f.member.employee_no),
         password: "Regression123".into(),
         captcha_id: None,
         captcha_code: None,
@@ -125,9 +125,9 @@ async fn full_disabled_supplier_accounts_remain_manageable_but_cannot_login() {
 async fn full_builtin_role_policies_are_enforced_by_services() {
     use crate::entity::role_permissions;
     let f = Fixture::new().await;
-    for code in ["ADMIN", "SUPPLIER", "PROJECT_MANAGER", "STAFF"] {
+    for name in ["系统管理员", "供应商人员", "项目管理员", "内部成员"] {
         let role = roles::Entity::find()
-            .filter(roles::Column::Code.eq(code))
+            .filter(roles::Column::Name.eq(name))
             .one(&f.state.db)
             .await
             .unwrap()
@@ -141,7 +141,7 @@ async fn full_builtin_role_policies_are_enforced_by_services() {
             permission_ids: before.iter().map(|p| p.permission_id).collect(),
         };
         let result = service::role::assign_permissions(&f.state.db, &f.admin, role.id, &req).await;
-        if matches!(code, "ADMIN" | "SUPPLIER") {
+        if matches!(name, "系统管理员" | "供应商人员") {
             assert!(result.is_err());
             assert!(
                 service::role::set_status(&f.state.db, &f.admin, role.id, "DISABLED")
@@ -184,7 +184,6 @@ async fn member_validity_barrier(action: &str) {
         &f.state.db,
         &f.admin,
         &service::role::RoleUpsert {
-            code: format!("R{}", &uuid::Uuid::new_v4().simple().to_string()[..20]),
             name: "成员并发角色".into(),
             description: None,
         },
@@ -491,7 +490,7 @@ async fn full_configuration_applies_to_new_uploads_and_preserves_existing_sessio
 async fn full_message_receipts_follow_membership_and_ignore_view_all_readers() {
     let f = Fixture::new().await;
     let manager = roles::Entity::find()
-        .filter(roles::Column::Code.eq("PROJECT_MANAGER"))
+        .filter(roles::Column::Name.eq("项目管理员"))
         .one(&f.state.db)
         .await
         .unwrap()
@@ -617,7 +616,6 @@ async fn full_message_mark_read_mixed_ids_only_records_eligible_messages() {
         &f.admin,
         &service::supplier::SupplierUpsert {
             name: "外部回执供应商".into(),
-            code: format!("S{}", &uuid::Uuid::new_v4().simple().to_string()[..20]),
             contact_name: None,
             contact_phone: None,
             contact_email: None,
@@ -631,7 +629,6 @@ async fn full_message_mark_read_mixed_ids_only_records_eligible_messages() {
         &f.state.db,
         &f.admin,
         &service::project::ProjectUpsert {
-            code: format!("P{}", &uuid::Uuid::new_v4().simple().to_string()[..20]),
             name: "外部回执项目".into(),
             description: None,
             supplier_id: supplier["id"].as_u64().unwrap(),
@@ -904,7 +901,7 @@ async fn notification_recipients_exclude_disabled_users_and_dedupe_emails() {
         &f.admin,
         project.supplier_id,
         &service::supplier::AccountCreate {
-            username: format!("{}s", f.member.username),
+            employee_no: format!("{}s", f.member.employee_no),
             password: "Regression123".into(),
             real_name: "duplicate recipient".into(),
             email: "member@example.invalid".into(),
@@ -1015,7 +1012,6 @@ async fn deleted_message_receipts_are_not_accessible() {
 async fn full_role_description_boundaries_preserve_existing_data() {
     let f = Fixture::new().await;
     let mut req = service::role::RoleUpsert {
-        code: format!("{}r", f.member.username),
         name: "角色说明边界".into(),
         description: Some("文".repeat(256)),
     };
@@ -1054,7 +1050,7 @@ async fn full_auth_failure_threshold_lock_expiry_and_reset() {
     use sea_orm::{ActiveModelTrait, Set};
     let f = Fixture::new().await;
     let mut req = LoginRequest {
-        username: format!(" {} ", f.member.username),
+        employee_no: format!(" {} ", f.member.employee_no),
         password: "Wrong123".into(),
         captcha_id: None,
         captcha_code: None,
@@ -1189,29 +1185,29 @@ impl Fixture {
             .into_owned();
         let state = AppState::new(db, cfg);
         let admin_row = users::Entity::find()
-            .filter(users::Column::Username.eq("admin"))
+            .filter(users::Column::EmployeeNo.eq("admin"))
             .one(&state.db)
             .await
             .unwrap()
             .unwrap();
         let admin = CurrentUser {
             id: admin_row.id,
-            username: admin_row.username,
+            employee_no: admin_row.employee_no,
             user_type: UserType::Internal,
             supplier_id: None,
         };
         let role = roles::Entity::find()
-            .filter(roles::Column::Code.eq("STAFF"))
+            .filter(roles::Column::Name.eq("内部成员"))
             .one(&state.db)
             .await
             .unwrap()
             .unwrap();
-        let username = format!("t{}", &uuid::Uuid::new_v4().simple().to_string()[..24]);
+        let employee_no = format!("t{}", &uuid::Uuid::new_v4().simple().to_string()[..24]);
         let member_row = service::user::create(
             &state.db,
             &admin,
             &service::user::UserCreate {
-                username: username.clone(),
+                employee_no: employee_no.clone(),
                 password: "Regression123".into(),
                 real_name: "测试成员".into(),
                 email: "member@example.invalid".into(),
@@ -1225,7 +1221,7 @@ impl Fixture {
         .unwrap();
         let member = CurrentUser {
             id: member_row["id"].as_u64().unwrap(),
-            username: username.clone(),
+            employee_no: employee_no.clone(),
             user_type: UserType::Internal,
             supplier_id: None,
         };
@@ -1234,7 +1230,6 @@ impl Fixture {
             &admin,
             &service::supplier::SupplierUpsert {
                 name: "回归供应商".into(),
-                code: username.clone(),
                 contact_name: None,
                 contact_phone: None,
                 contact_email: None,
@@ -1248,7 +1243,6 @@ impl Fixture {
             &state.db,
             &admin,
             &service::project::ProjectUpsert {
-                code: username,
                 name: "回归项目".into(),
                 description: None,
                 supplier_id: supplier["id"].as_u64().unwrap(),
@@ -1449,31 +1443,34 @@ async fn batch_download_preserves_same_named_files() {
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn sixty_four_character_project_code_remains_editable() {
+async fn project_creation_and_update_do_not_require_legacy_code() {
     let f = Fixture::new().await;
     let project = service::project::detail(&f.state.db, &f.admin, f.project_id)
         .await
         .unwrap();
-    let mut input = service::project::ProjectUpsert {
-        code: format!("{}{}", uuid::Uuid::new_v4().simple(), "0".repeat(32)),
-        name: "长编码项目".into(),
+    assert!(project.get("code").is_none());
+    let input = service::project::ProjectUpsert {
+        name: "无编码项目".into(),
         description: None,
         supplier_id: project["supplierId"].as_u64().unwrap(),
     };
-    assert_eq!(input.code.chars().count(), 64);
     let created = service::project::create(&f.state.db, &f.admin, &input)
         .await
         .unwrap();
-    input.name = "修改名称".into();
     let updated = service::project::update(
         &f.state.db,
         &f.admin,
         created["id"].as_u64().unwrap(),
-        &input,
+        &service::project::ProjectUpsert {
+            name: "修改名称".into(),
+            description: None,
+            supplier_id: project["supplierId"].as_u64().unwrap(),
+        },
     )
     .await
-    .expect("创建支持的编码必须可编辑");
+    .expect("项目不应要求历史编码");
     assert_eq!(updated["name"], "修改名称");
+    assert!(updated.get("code").is_none());
 }
 
 #[tokio::test]
@@ -1499,22 +1496,19 @@ async fn full_validation_rejects_missing_department_parent() {
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn full_validation_rejects_oversized_role_code() {
+async fn role_creation_does_not_require_legacy_code() {
     let f = Fixture::new().await;
     let result = service::role::create(
         &f.state.db,
         &f.admin,
         &service::role::RoleUpsert {
-            code: "R".repeat(33),
-            name: "长编码".into(),
+            name: "无编码角色".into(),
             description: None,
         },
     )
     .await;
-    assert!(
-        matches!(result, Err(crate::error::AppError::BadRequest(_))),
-        "oversized code must be rejected before SQL: {result:?}"
-    );
+    let role = result.expect("角色创建不应要求历史编码");
+    assert!(role.get("code").is_none());
 }
 
 #[tokio::test]
@@ -1529,7 +1523,6 @@ async fn full_validation_project_description_limit_matches_create() {
         &f.admin,
         f.project_id,
         &service::project::ProjectUpsert {
-            code: p["code"].as_str().unwrap().into(),
             name: "更新".into(),
             description: Some("文".repeat(501)),
             supplier_id: p["supplierId"].as_u64().unwrap(),
@@ -1663,7 +1656,6 @@ async fn full_rbac_role_disable_cannot_race_user_enable() {
         &f.state.db,
         &f.admin,
         &service::role::RoleUpsert {
-            code: format!("R{}", &uuid::Uuid::new_v4().simple().to_string()[..20]),
             name: "并发角色".into(),
             description: None,
         },
@@ -1744,7 +1736,6 @@ async fn full_user_role_assignment_rechecks_role_disabled_after_wait() {
         &f.state.db,
         &f.admin,
         &service::role::RoleUpsert {
-            code: format!("R{}", &uuid::Uuid::new_v4().simple().to_string()[..20]),
             name: "等待后禁用角色".into(),
             description: None,
         },
@@ -1918,13 +1909,13 @@ async fn last_admin_barrier(demote: bool) {
     use sea_orm::{ConnectionTrait, DbBackend, QuerySelect, Statement, TransactionTrait};
     let f = Fixture::new().await;
     let admin_role = roles::Entity::find()
-        .filter(roles::Column::Code.eq("ADMIN"))
+        .filter(roles::Column::Name.eq("系统管理员"))
         .one(&f.state.db)
         .await
         .unwrap()
         .unwrap();
     let staff_role = roles::Entity::find()
-        .filter(roles::Column::Code.eq("STAFF"))
+        .filter(roles::Column::Name.eq("内部成员"))
         .one(&f.state.db)
         .await
         .unwrap()
@@ -2010,7 +2001,7 @@ async fn last_admin_barrier(demote: bool) {
         Ok(r) => r.unwrap(),
         Err(_) => second.await.unwrap(),
     };
-    let n: i64 = f.state.db.query_one(Statement::from_string(DbBackend::MySql, "SELECT COUNT(*) n FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id WHERE r.code='ADMIN' AND u.status='ACTIVE'")).await.unwrap().unwrap().try_get("", "n").unwrap();
+    let n: i64 = f.state.db.query_one(Statement::from_string(DbBackend::MySql, "SELECT COUNT(*) n FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id WHERE r.is_built_in=1 AND r.name='系统管理员' AND u.status='ACTIVE'")).await.unwrap().unwrap().try_get("", "n").unwrap();
     // Restore the shared isolated fixture administrator before assertions/next test.
     f.state
         .db
@@ -2112,13 +2103,13 @@ async fn full_auth_login_rechecks_locked_account() {
         .unwrap()
         .try_get("", "id")
         .unwrap();
-    let (state, username) = (f.state.clone(), f.member.username.clone());
+    let (state, employee_no) = (f.state.clone(), f.member.employee_no.clone());
     let pending = tokio::spawn(async move {
         service::auth::login(
             &state.db,
             &state.cfg,
             &crate::dto::LoginRequest {
-                username,
+                employee_no,
                 password: "Regression123".into(),
                 captcha_id: None,
                 captcha_code: None,
@@ -2153,7 +2144,7 @@ async fn full_auth_unknown_user_does_not_exhaust_pool() {
             &db,
             &f.state.cfg,
             &crate::dto::LoginRequest {
-                username: "no_such_regression_user".into(),
+                employee_no: "no_such_regression_user".into(),
                 password: "irrelevant".into(),
                 captcha_id: None,
                 captcha_code: None,
@@ -2176,7 +2167,7 @@ async fn auth_change_barrier(refresh: bool) {
         &f.state.db,
         &f.state.cfg,
         &crate::dto::LoginRequest {
-            username: f.member.username.clone(),
+            employee_no: f.member.employee_no.clone(),
             password: "Regression123".into(),
             captcha_id: None,
             captcha_code: None,
@@ -2263,7 +2254,7 @@ async fn full_auth_refresh_rechecks_disabled_user() {
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn full_account_contact_and_username_validation() {
+async fn full_account_contact_and_employee_no_validation() {
     let f = Fixture::new().await;
     for payload in [
         serde_json::json!({"email":"not-an-email"}),
@@ -2276,13 +2267,13 @@ async fn full_account_contact_and_username_validation() {
         ));
     }
     let role = roles::Entity::find()
-        .filter(roles::Column::Code.eq("STAFF"))
+        .filter(roles::Column::Name.eq("内部成员"))
         .one(&f.state.db)
         .await
         .unwrap()
         .unwrap();
     let bad = service::user::UserCreate {
-        username: "bad username".into(),
+        employee_no: "bad employee no".into(),
         password: "Regression123".into(),
         real_name: "测试".into(),
         email: "test@example.invalid".into(),

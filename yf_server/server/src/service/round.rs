@@ -201,7 +201,7 @@ pub async fn create(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "ROUND_CREATE",
         Some("round"),
         Some(model.id.to_string()),
@@ -210,7 +210,7 @@ pub async fn create(
     )
     .await?;
     txn.commit().await?;
-    Ok(round_json(&model, Some(me.username.clone()), None))
+    Ok(round_json(&model, Some(me.employee_no.clone()), None))
 }
 
 pub async fn detail(db: &DatabaseConnection, user: &CurrentUser, id: u64) -> ApiResult<Value> {
@@ -224,7 +224,7 @@ pub async fn detail(db: &DatabaseConnection, user: &CurrentUser, id: u64) -> Api
         .order_by_asc(round_status_logs::Column::Id)
         .all(db)
         .await?;
-    // 批量取相关用户名（发起人/确认人/各日志操作人）
+    // 批量取相关工号（发起人/确认人/各日志操作人）
     let ids: Vec<u64> = std::iter::once(r.created_by)
         .chain(r.decided_by)
         .chain(logs.iter().map(|l| l.operator_id))
@@ -379,7 +379,7 @@ async fn transit(
     audit::insert(
         &txn,
         Some(user.id),
-        Some(user.username.clone()),
+        Some(user.employee_no.clone()),
         action,
         Some("round"),
         Some(id.to_string()),

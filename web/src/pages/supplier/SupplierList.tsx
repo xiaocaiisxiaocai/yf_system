@@ -11,7 +11,6 @@ import { type PageResp, fmtTime } from '../../api/types'
 interface Supplier {
   id: number
   name: string
-  code: string
   contactName?: string
   contactPhone?: string
   contactEmail?: string
@@ -21,7 +20,7 @@ interface Supplier {
 
 interface Account {
   id: number
-  username: string
+  employeeNo: string
   realName: string
   email: string
   phone?: string
@@ -99,7 +98,7 @@ export default function SupplierList() {
         <Space>
           <Input.Search
           allowClear
-          placeholder="名称 / 编码"
+          placeholder="供应商名称"
           style={{ width: 260 }}
           onSearch={(v) => {
             setLoading(true); setReloadKey((value) => value + 1)
@@ -140,9 +139,8 @@ export default function SupplierList() {
         rowKey="id"
         loading={loading}
         data={data.list}
-        scroll={{ x: 1190, y: 'var(--page-table-scroll-y)' }}
+        scroll={{ x: 1010, y: 'var(--page-table-scroll-y)' }}
         columns={[
-          { title: '编码', dataIndex: 'code', width: 180, align: 'center' as const, ellipsis: true },
           { title: '名称', dataIndex: 'name', width: 220, ellipsis: true },
           { title: '联系人', dataIndex: 'contactName', width: 80, align: 'center' as const, ellipsis: true, render: (v?: string) => v || '-' },
           { title: '联系电话', dataIndex: 'contactPhone', width: 110, align: 'center' as const, ellipsis: true, render: (v?: string) => v || '-' },
@@ -208,9 +206,6 @@ export default function SupplierList() {
         onCancel={() => setEditOpen(false)}
       >
         <Form form={form} layout="vertical">
-          <Form.Item label="供应商编码" field="code" rules={[{ required: true, message: '请输入编码' }]}>
-            <Input placeholder="如 SUP-HY" disabled={!!editing} />
-          </Form.Item>
           <Form.Item label="供应商名称" field="name" rules={[{ required: true, message: '请输入名称' }]}>
             <Input placeholder="公司全称" />
           </Form.Item>
@@ -343,7 +338,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
         data={accounts}
         pagination={false}
         columns={[
-          { title: '用户名', dataIndex: 'username', width: 120, align: 'center' as const, ellipsis: true },
+          { title: '工号', dataIndex: 'employeeNo', width: 120, align: 'center' as const, ellipsis: true },
           { title: '姓名', dataIndex: 'realName', width: 110, align: 'center' as const, ellipsis: true },
           { title: '邮箱', dataIndex: 'email', width: 190, ellipsis: true },
           {
@@ -365,7 +360,12 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
                 type="text"
                 onClick={() => {
                   setEditing(r)
-                  form.setFieldsValue(r)
+                  form.setFieldsValue({
+                    employeeNo: r.employeeNo,
+                    realName: r.realName,
+                    email: r.email,
+                    phone: r.phone,
+                  })
                   setEditOpen(true)
                 }}
               >
@@ -386,7 +386,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
         <Form form={form} layout="vertical">
           {!editing && (
             <>
-              <Form.Item label="用户名" field="username" rules={[{ required: true, message: '请输入用户名' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
+              <Form.Item label="工号" field="employeeNo" rules={[{ required: true, message: '请输入工号' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
                 <Input />
               </Form.Item>
               <Form.Item
@@ -410,7 +410,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
         </Form>
       </Modal>
 
-      <Modal title={`重置密码 · ${resetTarget?.username ?? ''}`} visible={!!resetTarget} onOk={resetPwd} onCancel={() => setResetTarget(null)}>
+      <Modal title={`重置密码 · ${resetTarget?.employeeNo ?? ''}`} visible={!!resetTarget} onOk={resetPwd} onCancel={() => setResetTarget(null)}>
         <Form form={pwdForm} layout="vertical">
           <Form.Item
             label="新密码"

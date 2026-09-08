@@ -5,7 +5,7 @@ use crate::error::AppError;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-    /// username
+    /// employee number
     pub sub: String,
     pub uid: u64,
     pub jti: String,
@@ -16,13 +16,13 @@ pub struct Claims {
 pub fn issue_access(
     secret: &str,
     uid: u64,
-    username: &str,
+    employee_no: &str,
     ttl_minutes: i64,
 ) -> Result<(String, usize), AppError> {
     let now = chrono::Utc::now();
     let exp = (now + chrono::Duration::minutes(ttl_minutes)).timestamp() as usize;
     let claims = Claims {
-        sub: username.to_string(),
+        sub: employee_no.to_string(),
         uid,
         jti: uuid::Uuid::new_v4().to_string(),
         iat: now.timestamp() as usize,

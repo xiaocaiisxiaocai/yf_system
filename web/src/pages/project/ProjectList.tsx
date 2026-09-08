@@ -12,7 +12,6 @@ import { type PageResp, type Project, PROJECT_STATUS, fmtTime } from '../../api/
 interface SupplierOpt {
   id: number
   name: string
-  code: string
 }
 
 export default function ProjectList() {
@@ -73,7 +72,7 @@ export default function ProjectList() {
   }
   const openEdit = (p: Project) => {
     setEditing(p)
-    form.setFieldsValue({ code: p.code, name: p.name, description: p.description, supplierId: p.supplierId })
+    form.setFieldsValue({ name: p.name, description: p.description, supplierId: p.supplierId })
     setModalOpen(true)
   }
 
@@ -110,17 +109,16 @@ export default function ProjectList() {
   // 不做 useMemo：列里的操作回调引用 load/changeStatus 等每次渲染更新的闭包，
   // memo 化会捕获过期闭包，导致状态变更后用旧筛选条件刷新列表
   const columns = [
-      { title: '项目编码', dataIndex: 'code', width: 105, ellipsis: true, align: 'center' as const },
       {
         title: '项目名称',
         dataIndex: 'name',
-        width: 162,
+        width: 220,
         ellipsis: true,
         render: (v: string, r: Project) => (
           <a onClick={() => nav(`/projects/${r.id}`)}>{v}</a>
         ),
       },
-      { title: '供应商', dataIndex: 'supplierName', width: 140, ellipsis: true },
+      { title: '供应商', dataIndex: 'supplierName', width: 180, ellipsis: true },
       {
         title: '状态',
         dataIndex: 'status',
@@ -128,7 +126,7 @@ export default function ProjectList() {
         align: 'center' as const,
         render: (v: string) => <Tag color={PROJECT_STATUS[v]?.color}>{PROJECT_STATUS[v]?.text || v}</Tag>,
       },
-      { title: '创建人', dataIndex: 'createdByName', width: 110, align: 'center' as const, ellipsis: true },
+      { title: '创建人', dataIndex: 'createdByName', width: 120, align: 'center' as const, ellipsis: true },
       { title: '更新时间', dataIndex: 'updatedAt', width: 180, align: 'center' as const, render: fmtTime },
       {
         title: '操作',
@@ -173,7 +171,7 @@ export default function ProjectList() {
         <Space>
           <Input.Search
             allowClear
-            placeholder="项目名 / 编码"
+            placeholder="项目名称"
             style={{ width: 260 }}
             onSearch={(v) => {
               setLoading(true); setReloadKey((value) => value + 1)
@@ -227,7 +225,7 @@ export default function ProjectList() {
         loading={loading}
         columns={columns}
         data={data.list}
-        scroll={{ x: 1005, y: 'var(--page-table-scroll-y)' }}
+        scroll={{ x: 1028, y: 'var(--page-table-scroll-y)' }}
         pagination={{
           total: data.total,
           current: page,
@@ -250,9 +248,6 @@ export default function ProjectList() {
         autoFocus={false}
       >
         <Form form={form} layout="vertical">
-          <Form.Item label="项目编码" field="code" rules={[{ required: true, message: '请输入项目编码' }]}>
-            <Input placeholder="如 PRJ-HX2600" disabled={!!editing} />
-          </Form.Item>
           <Form.Item label="项目名称" field="name" rules={[{ required: true, message: '请输入项目名称' }]}>
             <Input placeholder="项目名称" />
           </Form.Item>
@@ -267,7 +262,7 @@ export default function ProjectList() {
             >
               {suppliers.map((s) => (
                 <Select.Option key={s.id} value={s.id}>
-                  {s.name}（{s.code}）
+                  {s.name}
                 </Select.Option>
               ))}
             </Select>

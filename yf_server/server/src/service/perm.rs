@@ -10,7 +10,8 @@ use crate::error::{ApiResult, AppError};
 /// Call immediately after BEGIN, before any snapshot reads (MySQL REPEATABLE READ).
 pub async fn lock_management_state(db: &impl ConnectionTrait) -> ApiResult<()> {
     crate::entity::roles::Entity::find()
-        .filter(crate::entity::roles::Column::Code.eq("ADMIN"))
+        .filter(crate::entity::roles::Column::IsBuiltIn.eq(true))
+        .filter(crate::entity::roles::Column::Name.eq("系统管理员"))
         .lock_exclusive()
         .one(db)
         .await?

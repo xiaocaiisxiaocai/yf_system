@@ -40,8 +40,8 @@ def check(name, cond, extra=""):
     if cond: PASS += 1; print(f"  [PASS] {name}")
     else: FAIL += 1; print(f"  [FAIL] {name} :: {extra}")
 
-def login(username, password, captcha_id=None, captcha_code=None):
-    body = {"username": username, "password": password}
+def login(employee_no, password, captcha_id=None, captcha_code=None):
+    body = {"employeeNo": employee_no, "password": password}
     if captcha_id: body["captchaId"] = captcha_id; body["captchaCode"] = captcha_code
     return req("POST", "/auth/login", body)[:2]
 
@@ -68,7 +68,7 @@ else:
 check("登录返回权限码", "user:manage" in r.get("permissions", []), str(r.get("permissions")))
 check("登录返回菜单", "project:list" in r.get("menus", []), str(r.get("menus")))
 s, r, _ = req("GET", "/auth/profile", token=ADMIN)
-check("profile 返回用户+权限", s == 200 and r.get("user", {}).get("username") == "admin" and "role:manage" in r.get("permissions", []), f"got {s} {r}")
+check("profile 返回用户+权限", s == 200 and r.get("user", {}).get("employeeNo") == "admin" and "role:manage" in r.get("permissions", []), f"got {s} {r}")
 
 # 弱密码拒绝
 s, r, _ = req("PUT", "/auth/password", {"oldPassword": active_admin_password, "newPassword": "short"}, ADMIN)
@@ -96,22 +96,22 @@ check("部门树结构", bool(tree_ok), f"got {s} {json.dumps(r, ensure_ascii=Fa
 
 s, r, _ = req("GET", "/admin/roles?page=1&pageSize=50", token=ADMIN)
 check("角色列表", s == 200 and r.get("list"), f"got {s} {r}")
-roles = {x["code"]: x for x in r["list"]}
-PM_ROLE = roles.get("PROJECT_MANAGER", {}).get("id")
-STAFF_ROLE = roles.get("STAFF", {}).get("id")
-SUPPLIER_ROLE = roles.get("SUPPLIER", {}).get("id")
-check("预置4角色", all(k in roles for k in ("ADMIN", "PROJECT_MANAGER", "STAFF", "SUPPLIER")), str(list(roles)))
-check("角色含permissionIds", isinstance(roles.get("ADMIN", {}).get("permissionIds"), list), str(roles.get("ADMIN")))
+roles = {x["name"]: x for x in r["list"]}
+PM_ROLE = roles.get("项目管理员", {}).get("id")
+STAFF_ROLE = roles.get("内部成员", {}).get("id")
+SUPPLIER_ROLE = roles.get("供应商人员", {}).get("id")
+check("预置4角色", all(k in roles for k in ("系统管理员", "项目管理员", "内部成员", "供应商人员")), str(list(roles)))
+check("角色含permissionIds", isinstance(roles.get("系统管理员", {}).get("permissionIds"), list), str(roles.get("系统管理员")))
 s, r, _ = req("GET", "/admin/user-role-options", token=ADMIN)
-check("内部用户角色选项排除供应商角色", s == 200 and all(x.get("code") != "SUPPLIER" for x in r), f"got {s} {r}")
+check("内部用户角色选项排除供应商角色", s == 200 and all(x.get("name") != "供应商人员" for x in r), f"got {s} {r}")
 
 s, r, _ = req("POST", "/admin/users", {
-    "username": "pm_zhang", "password": "Pm@123456", "realName": "张项目",
+    "employeeNo": "pm_zhang", "password": "Pm@123456", "realName": "张项目",
     "email": "pm_zhang@example.com", "departmentId": DEPT_ID, "roleId": PM_ROLE}, ADMIN)
 check("创建内部用户并保存部门/单角色", s == 200 and r.get("id") and r.get("departmentId") == DEPT_ID and r.get("roleId") == PM_ROLE, f"got {s} {r}")
 PM_ID = r.get("id")
 s, r, _ = req("POST", "/admin/users", {
-    "username": "pm_zhang", "password": "Pm@123456", "realName": "重复", "email": "x@x.com"}, ADMIN)
+    "employeeNo": "pm_zhang", "password": "Pm@123456", "realName": "重复", "email": "x@x.com"}, ADMIN)
 check("重名用户被拒", s in (400, 409), f"got {s} {r}")
 
 s, r, _ = req("PUT", f"/admin/users/{PM_ID}/roles", {"roleIds": [PM_ROLE, STAFF_ROLE]}, ADMIN)
@@ -131,14 +131,14 @@ s, r, _ = req("GET", "/permissions", token=ADMIN)
 check("权限树(8菜单+20操作)", s == 200 and isinstance(r, list) and len(r) == 28, f"got {s} len={len(r) if isinstance(r,list) else r}")
 PERMS = {p["code"]: p["id"] for p in r}
 
-s, r, _ = req("POST", "/admin/roles", {"code": "VIEWER", "name": "只读角色", "description": "仅查看项目"}, ADMIN)
+s, r, _ = req("POST", "/admin/roles", {"name": "只读角色", "description": "仅查看项目"}, ADMIN)
 check("创建自定义角色", s == 200 and r.get("id"), f"got {s} {r}")
 VIEWER_ROLE = r.get("id")
 s, r, _ = req("PUT", f"/admin/roles/{VIEWER_ROLE}/permissions",
           {"permissionIds": [PERMS["dashboard"], PERMS["project:list"], PERMS["file:download"], PERMS["file:preview"]]}, ADMIN)
 check("角色授权", s == 200, f"got {s} {r}")
 s, r, _ = req("GET", "/admin/roles?page=1&pageSize=50", token=ADMIN)
-viewer = [x for x in r["list"] if x["code"] == "VIEWER"]
+viewer = [x for x in r["list"] if x["name"] == "只读角色"]
 check("授权回读", viewer and set(viewer[0]["permissionIds"]) == {PERMS["dashboard"], PERMS["project:list"], PERMS["file:download"], PERMS["file:preview"]}, str(viewer))
 
 s, pm_login = login("pm_zhang", "Pm@123456")
@@ -157,46 +157,44 @@ s, r, _ = req("GET", "/admin/users?page=1&pageSize=10", token=PM)
 check("PM 访问用户管理被拒(403)", s == 403, f"got {s} {r}")
 
 print("== 3. 供应商与账号（M1） ==")
-s, r, _ = req("GET", "/admin/suppliers?page=1&pageSize=50&keyword=SUP-HY", token=ADMIN)
-exist = [x for x in r.get("list", []) if x["code"] == "SUP-HY"]
+s, r, _ = req("GET", "/admin/suppliers?page=1&pageSize=50&keyword=宏远精密制造有限公司", token=ADMIN)
+exist = [x for x in r.get("list", []) if x["name"] == "宏远精密制造有限公司"]
 if exist:
     SUP_ID = exist[0]["id"]
     check("创建供应商(复用已有)", True, "reuse SUP-HY")
 else:
-    s, r, _ = req("POST", "/admin/suppliers", {"name": "宏远精密制造有限公司", "code": "SUP-HY", "contactName": "李工", "contactPhone": "13800000001", "contactEmail": "hongyuan@supplier.com"}, ADMIN)
-    check("创建供应商", s == 200 and r.get("id"), f"got {s} {r}")
+    s, r, _ = req("POST", "/admin/suppliers", {"name": "宏远精密制造有限公司", "contactName": "李工", "contactPhone": "13800000001", "contactEmail": "hongyuan@supplier.com"}, ADMIN)
+    check("创建供应商且不再返回历史编码", s == 200 and r.get("id") and "code" not in r, f"got {s} {r}")
     SUP_ID = r.get("id")
-s, r, _ = req("POST", "/admin/suppliers", {"name": "宏远精密制造有限公司", "code": "SUP-HY"}, ADMIN)
-check("供应商编码重复被拒", s in (400, 409), f"got {s} {r}")
 s, r, _ = req("GET", f"/admin/suppliers/{SUP_ID}/accounts", token=ADMIN)
-acct = [x for x in (r if isinstance(r, list) else r.get("list", [])) if x["username"] == "hy_li"]
+acct = [x for x in (r if isinstance(r, list) else r.get("list", [])) if x["employeeNo"] == "hy_li"]
 if acct:
     SUP_UID = acct[0]["id"]
     check("创建供应商账号(复用已有)", True, "reuse hy_li")
 else:
     s, r, _ = req("POST", f"/admin/suppliers/{SUP_ID}/accounts", {
-        "username": "hy_li", "password": "Hy@123456", "realName": "李工", "email": "li@hongyuan.com"}, ADMIN)
+        "employeeNo": "hy_li", "password": "Hy@123456", "realName": "李工", "email": "li@hongyuan.com"}, ADMIN)
     check("创建供应商账号", s == 200 and r.get("id"), f"got {s} {r}")
     SUP_UID = r.get("id")
 
-s, r, _ = req("GET", "/admin/suppliers?page=1&pageSize=50&keyword=SUP-LH", token=ADMIN)
-exist2 = [x for x in r.get("list", []) if x["code"] == "SUP-LH"]
+s, r, _ = req("GET", "/admin/suppliers?page=1&pageSize=50&keyword=蓝海电子科技", token=ADMIN)
+exist2 = [x for x in r.get("list", []) if x["name"] == "蓝海电子科技"]
 if exist2:
     SUP2_ID = exist2[0]["id"]
 else:
-    s, r, _ = req("POST", "/admin/suppliers", {"name": "蓝海电子科技", "code": "SUP-LH", "contactName": "王经理"}, ADMIN)
+    s, r, _ = req("POST", "/admin/suppliers", {"name": "蓝海电子科技", "contactName": "王经理"}, ADMIN)
     SUP2_ID = r.get("id")
 s, r, _ = req("GET", f"/admin/suppliers/{SUP2_ID}/accounts", token=ADMIN)
-acct2 = [x for x in (r if isinstance(r, list) else r.get("list", [])) if x["username"] == "lh_wang"]
+acct2 = [x for x in (r if isinstance(r, list) else r.get("list", [])) if x["employeeNo"] == "lh_wang"]
 if not acct2:
     s, r, _ = req("POST", f"/admin/suppliers/{SUP2_ID}/accounts", {
-        "username": "lh_wang", "password": "Lh@123456", "realName": "王经理", "email": "wang@lanhai.com"}, ADMIN)
+        "employeeNo": "lh_wang", "password": "Lh@123456", "realName": "王经理", "email": "wang@lanhai.com"}, ADMIN)
     check("创建第二供应商+账号", s == 200 and r.get("id"), f"got {s} {r}")
 else:
     check("创建第二供应商+账号(复用)", True, "reuse lh_wang")
 
 s, r, _ = req("GET", f"/admin/suppliers/{SUP_ID}/accounts", token=ADMIN)
-check("供应商账号列表", s == 200 and isinstance(r, list) and r[0].get("username") == "hy_li", f"got {s} {r}")
+check("供应商账号列表", s == 200 and isinstance(r, list) and any(x.get("employeeNo") == "hy_li" for x in r), f"got {s} {r}")
 
 s, sup_login = login("hy_li", "Hy@654321")
 if s != 200 or not sup_login.get("accessToken"):
@@ -218,7 +216,7 @@ check("供应商类型 SUPPLIER", sup_login["user"]["userType"] == "SUPPLIER", s
 check("供应商菜单仅基础项", set(sup_login.get("menus", [])) == {"dashboard", "project:list"}, str(sup_login.get("menus")))
 # 前一轮运行可能已触发验证码门槛：管理员重置密码会清零失败计数（同时验证该接口）
 s, r, _ = req("GET", f"/admin/suppliers/{SUP2_ID}/accounts", token=ADMIN)
-LH_UID = [x for x in (r if isinstance(r, list) else r.get("list", [])) if x["username"] == "lh_wang"][0]["id"]
+LH_UID = [x for x in (r if isinstance(r, list) else r.get("list", [])) if x["employeeNo"] == "lh_wang"][0]["id"]
 s, r, _ = req("PUT", f"/admin/supplier-accounts/{LH_UID}/password", {"newPassword": "Lh@123456"}, ADMIN)
 check("重置供应商账号密码(清除验证码状态)", s == 200, f"got {s} {r}")
 s, sup2_login = login("lh_wang", "Lh@123456")
@@ -233,16 +231,13 @@ if sup2_login.get("mustChangePassword"):
     LH_PW = "Lh@654321"
 
 print("== 4. 项目 / 轮次（M2） ==")
-s, r, _ = req("POST", "/projects", {"code": "PRJ-HX2600", "name": "HX-2600 壳体打样", "supplierId": SUP_ID, "description": "铝合金壳体 CNC 打样"}, PM)
-check("PM 创建项目", s == 200 and r.get("id"), f"got {s} {r}")
+s, r, _ = req("POST", "/projects", {"name": "HX-2600 壳体打样", "supplierId": SUP_ID, "description": "铝合金壳体 CNC 打样"}, PM)
+check("PM 创建项目且不再返回历史编码", s == 200 and r.get("id") and "code" not in r, f"got {s} {r}")
 PROJ_ID = r.get("id")
 check("新项目为草稿", r.get("status") == "DRAFT", str(r))
-s, r, _ = req("POST", "/projects", {"code": "PRJ-LD100", "name": "LD-100 电源适配", "supplierId": SUP2_ID}, PM)
+s, r, _ = req("POST", "/projects", {"name": "LD-100 电源适配", "supplierId": SUP2_ID}, PM)
 PROJ2_ID = r.get("id")
 check("创建第二项目", s == 200 and PROJ2_ID, f"got {s} {r}")
-s, r, _ = req("POST", "/projects", {"code": "PRJ-HX2600", "name": "重复编码", "supplierId": SUP_ID}, PM)
-check("项目编码重复被拒", s in (400, 409), f"got {s} {r}")
-
 s, r, _ = req("GET", f"/projects/{PROJ_ID}/members", token=PM)
 pm_uid = pm_login["user"]["id"]
 check("创建者自动成为成员", s == 200 and any(m.get("userId") == pm_uid or m.get("id") == pm_uid for m in (r if isinstance(r, list) else [])), f"got {s} {r}")
@@ -413,7 +408,7 @@ check("供应商2留言流被拒(40302)", s == 403 and r.get("code") == 40302, f
 print("== 7. 日志 / 系统参数 / 工作台（M4） ==")
 s, r, _ = req("GET", "/admin/audit-logs?page=1&pageSize=50&action=FILE_DOWNLOAD", token=ADMIN)
 check("日志按动作过滤", s == 200 and r.get("total", 0) >= 2, f"got {s} {r}")
-s, r, _ = req("GET", "/admin/audit-logs?page=1&pageSize=50&username=hy_li", token=ADMIN)
+s, r, _ = req("GET", "/admin/audit-logs?page=1&pageSize=50&employeeNo=hy_li", token=ADMIN)
 check("日志按用户过滤", s == 200 and r.get("total", 0) >= 1, f"got {s} {r}")
 check("日志含关键动作", any(l.get("action") == "ROUND_REJECT" for l in r.get("list", [])), str(r.get("list", [])))
 s, r, _ = req("GET", "/admin/audit-logs?page=1&pageSize=50", token=ADMIN)

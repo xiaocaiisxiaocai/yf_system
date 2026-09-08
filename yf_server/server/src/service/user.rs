@@ -37,7 +37,7 @@ pub struct RoleOptionQuery {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserCreate {
-    pub username: String,
+    pub employee_no: String,
     pub password: String,
     pub real_name: String,
     pub email: String,
@@ -128,7 +128,7 @@ pub async fn to_json(db: &DatabaseConnection, u: &users::Model) -> Value {
     let role_id = role_ids.first().copied();
     let role_name = role_id.and_then(|rid| role_map.get(&rid).cloned());
     json!({
-        "id": u.id, "username": u.username, "realName": u.real_name, "email": u.email,
+        "id": u.id, "employeeNo": u.employee_no, "realName": u.real_name, "email": u.email,
         "phone": u.phone, "userType": u.user_type.as_str(), "supplierId": u.supplier_id,
         "departmentId": u.department_id, "departmentName": dept_name,
         "status": if u.status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
@@ -162,7 +162,7 @@ pub async fn list(db: &DatabaseConnection, q: &UserListQuery) -> ApiResult<PageR
     if let Some(kw) = q.keyword.as_ref().filter(|k| !k.trim().is_empty()) {
         cond = cond.add(
             Condition::any()
-                .add(users::Column::Username.contains(kw.trim()))
+                .add(users::Column::EmployeeNo.contains(kw.trim()))
                 .add(users::Column::RealName.contains(kw.trim()))
                 .add(users::Column::Email.contains(kw.trim())),
         );
@@ -215,7 +215,7 @@ pub async fn list(db: &DatabaseConnection, q: &UserListQuery) -> ApiResult<PageR
         let role_id = role_ids.first().copied();
         let role_name = role_id.and_then(|rid| role_map.get(&rid).cloned());
         list.push(json!({
-            "id": u.id, "username": u.username, "realName": u.real_name, "email": u.email,
+            "id": u.id, "employeeNo": u.employee_no, "realName": u.real_name, "email": u.email,
             "phone": u.phone, "userType": u.user_type.as_str(), "supplierId": u.supplier_id,
             "departmentId": u.department_id,
             "departmentName": u.department_id.and_then(|d| dept_map.get(&d)),
@@ -232,18 +232,14 @@ pub async fn list(db: &DatabaseConnection, q: &UserListQuery) -> ApiResult<PageR
 pub async fn role_options(db: &DatabaseConnection, q: &RoleOptionQuery) -> ApiResult<Value> {
     let mut cond = Condition::all()
         .add(roles::Column::Status.eq(CommonStatus::Active))
-        .add(roles::Column::Code.ne("SUPPLIER"));
+        .add(roles::Column::Name.ne("供应商人员"));
     if let Some(keyword) = q
         .keyword
         .as_ref()
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
     {
-        cond = cond.add(
-            Condition::any()
-                .add(roles::Column::Name.contains(keyword))
-                .add(roles::Column::Code.contains(keyword)),
-        );
+        cond = cond.add(roles::Column::Name.contains(keyword));
     }
     let items = roles::Entity::find()
         .filter(cond)
@@ -252,7 +248,7 @@ pub async fn role_options(db: &DatabaseConnection, q: &RoleOptionQuery) -> ApiRe
         .await?;
     Ok(json!(items
         .into_iter()
-        .map(|role| json!({ "id": role.id, "name": role.name, "code": role.code }))
+        .map(|role| json!({ "id": role.id, "name": role.name }))
         .collect::<Vec<_>>()))
 }
 
@@ -264,19 +260,19 @@ pub async fn create(
     let txn = db.begin().await?;
     super::perm::lock_management_state(&txn).await?;
     super::perm::recheck_manager(&txn, me.id, "user:manage").await?;
-    let username = req.username.trim();
-    crate::util::validation::username(username)?;
+    let employee_no = req.employee_no.trim();
+    crate::util::validation::employee_no(employee_no)?;
     crate::util::validation::phone(req.phone.as_deref())?;
     if req.real_name.trim().is_empty() || req.real_name.trim().chars().count() > 32 {
         return Err(AppError::BadRequest("姓名需为 1~32 个字符".into()));
     }
     if users::Entity::find()
-        .filter(users::Column::Username.eq(username))
+        .filter(users::Column::EmployeeNo.eq(employee_no))
         .one(&txn)
         .await?
         .is_some()
     {
-        return Err(AppError::BadRequest("用户名已存在".into()));
+        return Err(AppError::BadRequest("工号已存在".into()));
     }
     if !password::strong_enough(&req.password) {
         return Err(AppError::BadRequest(
@@ -292,7 +288,7 @@ pub async fn create(
     let now = Utc::now();
     // 用户与角色绑定同事务，避免半成功状态
     let model = users::ActiveModel {
-        username: Set(username.to_string()),
+        employee_no: Set(employee_no.to_string()),
         password_hash: Set(password::hash(&req.password)?),
         real_name: Set(req.real_name.trim().to_string()),
         email: Set(req.email.trim().to_string()),
@@ -317,12 +313,12 @@ pub async fn create(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "USER_CREATE",
         Some("user"),
         Some(model.id.to_string()),
         Some(json!({
-            "username": username,
+            "employeeNo": employee_no,
             "departmentId": req.department_id,
             "roleId": role.id,
             "roleName": role.name,
@@ -345,7 +341,7 @@ async fn ensure_internal_role_assignable(
     if role.status != CommonStatus::Active {
         return Err(AppError::BadRequest("不能绑定已禁用的角色".into()));
     }
-    if role.code == "SUPPLIER" {
+    if role.is_built_in && role.name == "供应商人员" {
         return Err(AppError::BadRequest(
             "供应商角色只能由供应商账号使用".into(),
         ));
@@ -376,7 +372,8 @@ async fn ensure_admin_role_change_safe(
     new_role_ids: &[u64],
 ) -> ApiResult<()> {
     let Some(admin_role) = roles::Entity::find()
-        .filter(roles::Column::Code.eq("ADMIN"))
+        .filter(roles::Column::IsBuiltIn.eq(true))
+        .filter(roles::Column::Name.eq("系统管理员"))
         .one(db)
         .await?
     else {
@@ -506,12 +503,12 @@ pub async fn update(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "USER_UPDATE",
         Some("user"),
         Some(id.to_string()),
         Some(json!({
-            "username": model.username,
+            "employeeNo": model.employee_no,
             "changedFields": changed_fields,
             "oldDepartmentId": old_department_id,
             "newDepartmentId": model.department_id,
@@ -562,7 +559,7 @@ pub async fn set_status(
         ensure_internal_role_assignable(&txn, role_ids[0]).await?;
     }
     let old_status = user.status;
-    let username = user.username.clone();
+    let employee_no = user.employee_no.clone();
     let mut am: users::ActiveModel = user.into();
     am.status = Set(st);
     am.updated_at = Set(Utc::now());
@@ -573,12 +570,12 @@ pub async fn set_status(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "USER_STATUS",
         Some("user"),
         Some(id.to_string()),
         Some(json!({
-            "username": username,
+            "employeeNo": employee_no,
             "oldStatus": if old_status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
             "newStatus": status,
         })),
@@ -604,7 +601,7 @@ pub async fn reset_password(
         .one(db)
         .await?
         .ok_or(AppError::NotFound)?;
-    let username = user.username.clone();
+    let employee_no = user.employee_no.clone();
     let txn = db.begin().await?;
     let mut am: users::ActiveModel = user.into();
     am.password_hash = Set(password::hash(&req.new_password)?);
@@ -617,12 +614,12 @@ pub async fn reset_password(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "USER_RESET_PASSWORD",
         Some("user"),
         Some(id.to_string()),
         Some(json!({
-            "username": username,
+            "employeeNo": employee_no,
             "sessionsRevoked": true,
             "mustChangePassword": true,
         })),
@@ -664,12 +661,12 @@ pub async fn assign_roles(
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "USER_ASSIGN_ROLE",
         Some("user"),
         Some(id.to_string()),
         Some(json!({
-            "username": user.username,
+            "employeeNo": user.employee_no,
             "oldRoleId": old_role_id,
             "newRoleId": role.id,
             "newRoleName": role.name,

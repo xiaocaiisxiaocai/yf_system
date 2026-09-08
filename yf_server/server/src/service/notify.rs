@@ -111,8 +111,8 @@ pub async fn enqueue_storage_warning(state: &AppState) -> ApiResult<()> {
     }
 
     let Some(admin_role) = roles::Entity::find()
-        .filter(roles::Column::Code.eq("ADMIN"))
         .filter(roles::Column::IsBuiltIn.eq(true))
+        .filter(roles::Column::Name.eq("系统管理员"))
         .filter(roles::Column::Status.eq(CommonStatus::Active))
         .one(&state.db)
         .await?
@@ -193,8 +193,8 @@ pub async fn enqueue_file_notice(
 ) -> ApiResult<()> {
     let subject = format!("[协作平台] 项目「{}」有新文件上传", project.name);
     let body = format!(
-        "项目：{}（{}）\n轮次：第 {} 轮\n文件：{}\n上传人：{}\n\n请登录平台查看并下载：{}\n\n（本邮件由系统自动发送，附件请登录平台获取）",
-        project.name, project.code, round_no, file_name, uploader.username, base_url
+        "项目：{}\n轮次：第 {} 轮\n文件：{}\n上传人：工号 {}\n\n请登录平台查看并下载：{}\n\n（本邮件由系统自动发送，附件请登录平台获取）",
+        project.name, round_no, file_name, uploader.employee_no, base_url
     );
     enqueue(
         db,
@@ -220,10 +220,9 @@ pub async fn enqueue_message_notice(
     let subject = format!("[协作平台] 项目「{}」有新留言", project.name);
     let body =
         format!(
-        "项目：{}（{}）\n留言人：{}\n内容：{}{}\n\n请登录平台查看：{}\n\n（本邮件由系统自动发送）",
+        "项目：{}\n留言人：工号 {}\n内容：{}{}\n\n请登录平台查看：{}\n\n（本邮件由系统自动发送）",
         project.name,
-        project.code,
-        sender.username,
+        sender.employee_no,
         preview,
         if message.content.chars().count() > 80 { "…" } else { "" },
         base_url
@@ -289,8 +288,8 @@ pub async fn enqueue_round_notice(
         .map(|r| format!("\n驳回原因：{r}"))
         .unwrap_or_default();
     let body = format!(
-        "项目：{}（{}）\n轮次：第 {} 轮\n结果：{}\n操作人：{}{}\n\n请登录平台查看：{}\n\n（本邮件由系统自动发送）",
-        project.name, project.code, round_no, action, operator.username, reason_line, base_url
+        "项目：{}\n轮次：第 {} 轮\n结果：{}\n操作人：工号 {}{}\n\n请登录平台查看：{}\n\n（本邮件由系统自动发送）",
+        project.name, round_no, action, operator.employee_no, reason_line, base_url
     );
     enqueue(
         db,

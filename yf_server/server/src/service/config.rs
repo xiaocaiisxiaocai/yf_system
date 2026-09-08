@@ -118,7 +118,7 @@ pub async fn update(db: &DatabaseConnection, me: &CurrentUser, req: &ConfigBatch
     audit::insert(
         &txn,
         Some(me.id),
-        Some(me.username.clone()),
+        Some(me.employee_no.clone()),
         "CONFIG_UPDATE",
         Some("system_config"),
         None,

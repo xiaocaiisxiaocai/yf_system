@@ -6,7 +6,8 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: u64,
-    pub username: String,
+    /// 登录工号
+    pub employee_no: String,
     /// Argon2id 散列
     pub password_hash: String,
     pub real_name: String,

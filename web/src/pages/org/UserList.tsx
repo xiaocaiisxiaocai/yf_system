@@ -9,7 +9,7 @@ import { type PageResp, fmtTime } from '../../api/types'
 
 interface UserRow {
   id: number
-  username: string
+  employeeNo: string
   realName: string
   email: string
   phone?: string
@@ -28,7 +28,6 @@ interface UserRow {
 interface RoleOpt {
   id: number
   name: string
-  code: string
 }
 
 interface DeptNode {
@@ -144,7 +143,7 @@ export default function UserList() {
         <Space wrap>
           <Input.Search
           allowClear
-          placeholder="用户名 / 姓名 / 邮箱"
+          placeholder="工号 / 姓名 / 邮箱"
           style={{ width: 260 }}
           onSearch={(v) => {
             setLoading(true); setReloadKey((value) => value + 1)
@@ -193,9 +192,9 @@ export default function UserList() {
         rowKey="id"
         loading={loading}
         data={data.list}
-        scroll={{ x: 1075, y: 'var(--page-table-scroll-y)' }}
+        scroll={{ x: 1095, y: 'var(--page-table-scroll-y)' }}
         columns={[
-          { title: '用户名', dataIndex: 'username', width: 110, align: 'center' as const, ellipsis: true },
+          { title: '工号', dataIndex: 'employeeNo', width: 130, align: 'center' as const, ellipsis: true },
           { title: '姓名', dataIndex: 'realName', width: 100, align: 'center' as const, ellipsis: true },
           { title: '部门', dataIndex: 'departmentName', width: 85, align: 'center' as const, ellipsis: true, render: (v?: string) => v || '-' },
           {
@@ -241,7 +240,7 @@ export default function UserList() {
                 <Button key="reset-password" size="mini" type="text" onClick={() => setResetTarget(r)}>
                   重置密码
                 </Button>,
-                r.username !== 'admin' && (
+                r.employeeNo !== 'admin' && (
                   <Popconfirm key="status" title={r.status === 'ACTIVE' ? '禁用后立即无法登录，确认？' : '确认启用？'} onOk={() => toggle(r)}>
                     <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
                       {r.status === 'ACTIVE' ? '禁用' : '启用'}
@@ -269,7 +268,7 @@ export default function UserList() {
         <Form form={form} layout="vertical">
           {!editing && (
             <>
-              <Form.Item label="用户名" field="username" rules={[{ required: true, message: '请输入用户名' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
+              <Form.Item label="工号" field="employeeNo" rules={[{ required: true, message: '请输入工号' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
                 <Input />
               </Form.Item>
               <Form.Item
@@ -297,7 +296,7 @@ export default function UserList() {
             <Select showSearch placeholder="搜索并选择一个启用角色">
               {roles.map((r) => (
                 <Select.Option key={r.id} value={r.id}>
-                  {r.name}（{r.code}）
+                  {r.name}
                 </Select.Option>
               ))}
             </Select>
@@ -305,7 +304,7 @@ export default function UserList() {
         </Form>
       </Modal>
 
-      <Modal title={`重置密码 · ${resetTarget?.username ?? ''}`} visible={!!resetTarget} onOk={resetPwd} onCancel={() => setResetTarget(null)}>
+      <Modal title={`重置密码 · ${resetTarget?.employeeNo ?? ''}`} visible={!!resetTarget} onOk={resetPwd} onCancel={() => setResetTarget(null)}>
         <Form form={pwdForm} layout="vertical">
           <Form.Item
             label="新密码"

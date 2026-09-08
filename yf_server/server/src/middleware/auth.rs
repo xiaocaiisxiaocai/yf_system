@@ -16,7 +16,7 @@ use crate::util::jwt;
 #[derive(Debug, Clone)]
 pub struct CurrentUser {
     pub id: u64,
-    pub username: String,
+    pub employee_no: String,
     pub user_type: UserType,
     pub supplier_id: Option<u64>,
 }
@@ -73,7 +73,7 @@ pub async fn middleware(
 
     req.extensions_mut().insert(CurrentUser {
         id: user.id,
-        username: user.username,
+        employee_no: user.employee_no,
         user_type: user.user_type,
         supplier_id: user.supplier_id,
     });

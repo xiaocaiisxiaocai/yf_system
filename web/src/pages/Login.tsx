@@ -24,10 +24,10 @@ export default function Login() {
     setCaptcha(r.data)
   }
 
-  const submit = async (v: { username: string; password: string; captchaCode?: string }) => {
+  const submit = async (v: { employeeNo: string; password: string; captchaCode?: string }) => {
     setLoading(true)
     try {
-      const body: Record<string, string> = { username: v.username.trim(), password: v.password }
+      const body: Record<string, string> = { employeeNo: v.employeeNo.trim(), password: v.password }
       if (captcha) {
         body.captchaId = captcha.captchaId
         body.captchaCode = v.captchaCode || ''
@@ -78,8 +78,8 @@ export default function Login() {
         <div className="login-logo">供应商协作平台</div>
         <div className="login-sub">公司内部 × 外部供应商 · 项目文件协作</div>
         <Form form={form} layout="vertical" onSubmit={submit} autoComplete="off">
-          <Form.Item field="username" rules={[{ required: true, message: '请输入用户名' }]}>
-            <Input size="large" prefix={<IconUser />} placeholder="用户名" />
+          <Form.Item field="employeeNo" rules={[{ required: true, message: '请输入工号' }]}>
+            <Input size="large" prefix={<IconUser />} placeholder="工号" />
           </Form.Item>
           <Form.Item field="password" rules={[{ required: true, message: '请输入密码' }]}>
             <Input.Password size="large" placeholder="密码" onPressEnter={() => form.submit()} />

@@ -1,13 +1,13 @@
 //! Shared input contracts for internal and supplier accounts.
 use crate::error::{ApiResult, AppError};
 
-pub fn username(value: &str) -> ApiResult<()> {
+pub fn employee_no(value: &str) -> ApiResult<()> {
     let value = value.trim();
     if !(3..=32).contains(&value.len())
         || !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
     {
         return Err(AppError::BadRequest(
-            "用户名需为 3~32 位字母/数字/下划线".into(),
+            "工号需为 3~32 位字母/数字/下划线".into(),
         ));
     }
     Ok(())

@@ -35,19 +35,19 @@ pub async fn login(
     jar: CookieJar,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<(CookieJar, Json<LoginResponse>)> {
-    if req.username.trim().is_empty() || req.password.is_empty() {
-        return Err(AppError::BadRequest("用户名和密码不能为空".into()));
+    if req.employee_no.trim().is_empty() || req.password.is_empty() {
+        return Err(AppError::BadRequest("工号和密码不能为空".into()));
     }
-    if req.username.chars().count() > 64
+    if req.employee_no.chars().count() > 64
         || req.password.len() > crate::util::password::MAX_PASSWORD_BYTES
     {
-        return Err(AppError::BadRequest("用户名或密码错误".into()));
+        return Err(AppError::BadRequest("工号或密码错误".into()));
     }
     // 登录限流：同账号同 IP 每分钟 10 次（防单账号爆破）；单 IP 每分钟 60 次（防批量扫号）。
     // 账号级连续失败锁定/验证码策略在 service 层兜底。
     let minute = std::time::Duration::from_secs(60);
     let client_ip = ip.ip();
-    let per_account = format!("login:{client_ip}:{}", req.username.trim());
+    let per_account = format!("login:{client_ip}:{}", req.employee_no.trim());
     let per_ip = format!("login:{client_ip}");
     if !state.rate_allow(&per_account, 10, minute) || !state.rate_allow(&per_ip, 60, minute) {
         return Err(AppError::BadRequest("请求过于频繁，请稍后再试".into()));

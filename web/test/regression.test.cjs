@@ -217,7 +217,7 @@ for (const [page, api, props] of [
 
 test('supplier account permission revocation removes the open account drawer', async () => {
   let allowed=false, accountRequests=0
-  const supplier={id:8,name:'fixture',code:'FIXTURE',status:'ACTIVE'}
+  const supplier={id:8,name:'fixture',status:'ACTIVE'}
   const Page=loadTs('src/pages/supplier/SupplierList.tsx',{
     '@arco-design/web-react':arco,'@arco-design/web-react/icon':new Proxy({},{get:(_,n)=>component(n)}),
     '../../store/auth':{useAuth:()=>({hasPerm:()=>allowed})},
@@ -268,12 +268,12 @@ test('round cancellation is shown only to its creator or a viewer of all project
 
 test('supplier account loading failures stop spinning and can retry', async () => {
   let fail=true
-  const supplier={id:8,name:'fixture',code:'FIXTURE',status:'ACTIVE'}
+  const supplier={id:8,name:'fixture',status:'ACTIVE'}
   const Page=loadTs('src/pages/supplier/SupplierList.tsx',{
     '@arco-design/web-react':arco,'@arco-design/web-react/icon':new Proxy({},{get:(_,n)=>component(n)}),
     '../../store/auth':{useAuth:()=>({hasPerm:()=>true})},'../../api/types':{fmtTime:String},
     '../../api/client':{get:async url=>{
-      if(url.endsWith('/accounts')){if(fail)throw Error('simulated failure');return {data:[{id:16,username:'fixture-account'}]}}
+      if(url.endsWith('/accounts')){if(fail)throw Error('simulated failure');return {data:[{id:16,employeeNo:'fixture-account'}]}}
       return {data:{list:[supplier],total:1}}
     }},
   }).default
@@ -555,7 +555,7 @@ test('a failed second message page can be retried without losing or duplicating 
 })
 
 test('menu-only role grants remain selected when another permission is edited', async () => {
-  const role={id:7,code:'TEST',name:'测试',permissionIds:[5],assignedUserCount:0,status:'ACTIVE'}
+  const role={id:7,name:'测试',permissionIds:[5],assignedUserCount:0,status:'ACTIVE'}
   const perms=[{id:1,code:'dashboard',name:'工作台',type:'MENU',parentId:null},{id:5,code:'org:dept',name:'部门',type:'MENU',parentId:null},{id:24,code:'dept:manage',name:'管理部门',type:'ACTION',parentId:5}]
   const Page=loadTs('src/pages/rbac/RoleList.tsx',{
     '@arco-design/web-react':arco,'@arco-design/web-react/icon':new Proxy({},{get:(_,n)=>component(n)}),

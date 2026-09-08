@@ -17,8 +17,8 @@ pub async fn can_view_all(db: &impl ConnectionTrait, user_id: u64) -> ApiResult<
 /// 系统管理员身份不可由普通可配置权限点替代，用于文件删除等不可恢复的高风险操作。
 pub async fn is_system_admin(db: &impl ConnectionTrait, user_id: u64) -> ApiResult<bool> {
     let admin_role = roles::Entity::find()
-        .filter(roles::Column::Code.eq("ADMIN"))
         .filter(roles::Column::IsBuiltIn.eq(true))
+        .filter(roles::Column::Name.eq("系统管理员"))
         .filter(roles::Column::Status.eq(CommonStatus::Active))
         .one(db)
         .await?;

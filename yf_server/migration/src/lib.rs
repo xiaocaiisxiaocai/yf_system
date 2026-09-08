@@ -5,6 +5,8 @@ mod m20260903_000002_seed;
 mod m20260904_000003_integrity_hardening;
 mod m20260904_000004_storage_warning;
 mod m20260904_000005_single_user_role;
+mod m20260908_000006_identity_fields_cleanup;
+mod m20260908_000007_identity_index_cleanup;
 
 pub struct Migrator;
 
@@ -17,6 +19,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260904_000003_integrity_hardening::Migration),
             Box::new(m20260904_000004_storage_warning::Migration),
             Box::new(m20260904_000005_single_user_role::Migration),
+            Box::new(m20260908_000006_identity_fields_cleanup::Migration),
+            Box::new(m20260908_000007_identity_index_cleanup::Migration),
         ]
     }
 }

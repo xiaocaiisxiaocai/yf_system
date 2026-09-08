@@ -6,8 +6,6 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: u64,
-    /// 项目编号
-    pub code: String,
     pub name: String,
     pub description: Option<String>,
     /// 一对一关联供应商

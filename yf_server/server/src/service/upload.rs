@@ -393,7 +393,7 @@ pub async fn abort(state: &AppState, user: &CurrentUser, sid: &str) -> ApiResult
     audit::insert(
         &txn,
         Some(user.id),
-        Some(user.username.clone()),
+        Some(user.employee_no.clone()),
         "UPLOAD_ABORT",
         Some("upload_session"),
         Some(sid.to_string()),
@@ -641,7 +641,7 @@ async fn do_merge(
         audit::insert(
             &txn,
             Some(user.id),
-            Some(user.username.clone()),
+            Some(user.employee_no.clone()),
             "FILE_UPLOAD",
             Some("file"),
             Some(model.id.to_string()),

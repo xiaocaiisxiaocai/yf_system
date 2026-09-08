@@ -34,18 +34,18 @@ pub async fn login(
 ) -> ApiResult<(LoginResponse, String)> {
     let txn = db.begin().await?;
     let user = users::Entity::find()
-        .filter(users::Column::Username.eq(req.username.trim()))
+        .filter(users::Column::EmployeeNo.eq(req.employee_no.trim()))
         .lock_exclusive()
         .one(&txn)
         .await?;
 
-    // 统一报错文案，避免用户名枚举
+    // 统一报错文案，避免工号枚举
     let Some(user) = user else {
         txn.rollback().await?;
         audit::log(
             db,
             None,
-            Some(req.username.clone()),
+            Some(req.employee_no.clone()),
             "LOGIN_FAILED",
             None,
             None,
@@ -53,7 +53,7 @@ pub async fn login(
             ip,
         )
         .await;
-        return Err(AppError::Unauthorized("用户名或密码错误".into()));
+        return Err(AppError::Unauthorized("工号或密码错误".into()));
     };
 
     let now = Utc::now();
@@ -118,7 +118,7 @@ pub async fn login(
             audit::log(
                 db,
                 Some(user.id),
-                Some(user.username.clone()),
+                Some(user.employee_no.clone()),
                 "LOGIN_LOCKED",
                 None,
                 None,
@@ -132,7 +132,7 @@ pub async fn login(
         audit::log(
             db,
             Some(user.id),
-            Some(user.username.clone()),
+            Some(user.employee_no.clone()),
             "LOGIN_FAILED",
             None,
             None,
@@ -144,7 +144,7 @@ pub async fn login(
             return Err(AppError::CaptchaRequired);
         }
         return Err(AppError::Unauthorized(format!(
-            "用户名或密码错误（剩余尝试次数 {}）",
+            "工号或密码错误（剩余尝试次数 {}）",
             MAX_FAILED - attempts
         )));
     }
@@ -159,7 +159,7 @@ pub async fn login(
     let (access_token, expires_at) = jwt::issue_access(
         &cfg.jwt.secret,
         user.id,
-        &user.username,
+        &user.employee_no,
         cfg.jwt.access_ttl_minutes,
     )?;
     let refresh = issue_refresh(&txn, user.id, cfg.jwt.refresh_ttl_days, ip.clone()).await?;
@@ -167,7 +167,7 @@ pub async fn login(
     audit::log(
         db,
         Some(user.id),
-        Some(user.username.clone()),
+        Some(user.employee_no.clone()),
         "LOGIN",
         None,
         None,
@@ -299,7 +299,7 @@ pub async fn refresh(
     let (access_token, expires_at) = jwt::issue_access(
         &cfg.jwt.secret,
         user.id,
-        &user.username,
+        &user.employee_no,
         cfg.jwt.access_ttl_minutes,
     )?;
     let new_refresh = issue_refresh(&txn, user.id, cfg.jwt.refresh_ttl_days, ip).await?;
@@ -355,7 +355,7 @@ pub async fn change_password(
     audit::insert(
         &txn,
         Some(current.id),
-        Some(current.username.clone()),
+        Some(current.employee_no.clone()),
         "PASSWORD_CHANGE",
         None,
         None,
@@ -394,7 +394,7 @@ pub async fn profile(db: &DatabaseConnection, current: &CurrentUser) -> ApiResul
 fn brief(user: &users::Model) -> UserBrief {
     UserBrief {
         id: user.id,
-        username: user.username.clone(),
+        employee_no: user.employee_no.clone(),
         real_name: user.real_name.clone(),
         user_type: user.user_type.as_str().to_string(),
         supplier_id: user.supplier_id,

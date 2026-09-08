@@ -8,7 +8,7 @@ import { type Member, fmtTime } from '../api/types'
 interface UserOpt {
   id: number
   realName: string
-  username: string
+  employeeNo: string
   deptName?: string | null
 }
 
@@ -76,7 +76,7 @@ export default function MemberPanel({ projectId, supplierName }: { projectId: nu
               title={
                 <Space>
                   {m.realName}
-                  <Typography.Text type="secondary">@{m.username}</Typography.Text>
+                  <Typography.Text type="secondary">工号 {m.employeeNo}</Typography.Text>
                   {m.deptName && <Tag size="small">{m.deptName}</Tag>}
                 </Space>
               }
@@ -100,7 +100,7 @@ export default function MemberPanel({ projectId, supplierName }: { projectId: nu
         >
           {options.map((o) => (
             <Select.Option key={o.id} value={o.id}>
-              {o.realName}（@{o.username}{o.deptName ? ` · ${o.deptName}` : ''}）
+              {o.realName}（工号 {o.employeeNo}{o.deptName ? ` · ${o.deptName}` : ''}）
             </Select.Option>
           ))}
         </Select>

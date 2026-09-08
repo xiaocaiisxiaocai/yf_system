@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginRequest {
-    pub username: String,
+    #[serde(default)]
+    pub employee_no: String,
     pub password: String,
     /// M1 验证码：连续失败 3 次后由前端携带
     pub captcha_id: Option<String>,
@@ -14,7 +15,7 @@ pub struct LoginRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UserBrief {
     pub id: u64,
-    pub username: String,
+    pub employee_no: String,
     pub real_name: String,
     pub user_type: String,
     pub supplier_id: Option<u64>,
@@ -65,7 +66,7 @@ mod profile_response_tests {
         let value = serde_json::to_value(ProfileResponse {
             user: UserBrief {
                 id: 1,
-                username: "tester".into(),
+                employee_no: "tester".into(),
                 real_name: "Tester".into(),
                 user_type: "INTERNAL".into(),
                 supplier_id: None,

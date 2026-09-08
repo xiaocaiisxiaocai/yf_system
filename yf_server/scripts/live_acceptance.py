@@ -41,27 +41,27 @@ def ok(method, path, body=None, token=None, raw=None):
     return value
 
 def login(user):
-    return ok('POST', '/auth/login', {'username': user['username'], 'password': user['password']})['accessToken']
+    return ok('POST', '/auth/login', {'employeeNo': user['employeeNo'], 'password': user['password']})['accessToken']
 
 def setup():
-    admin = {'username': 'admin', 'password': os.environ['YF_E2E_ADMIN_PASSWORD']}
+    admin = {'employeeNo': 'admin', 'password': os.environ['YF_E2E_ADMIN_PASSWORD']}
     token = login(admin)
     marker = 'LIVE' + time.strftime('%m%d%H%M%S')
     sink = os.environ['YF_E2E_RECIPIENT']
     state = {'marker': marker, 'admin': admin, 'users': {}, 'projects': [], 'supplier_ids': []}
-    roles = {row['code']: row['id'] for row in ok('GET', '/admin/roles?pageSize=100', token=token)['list']}
-    for role, suffix in [('PROJECT_MANAGER', 'pm'), ('STAFF', 'member')]:
-        user = {'username': marker.lower() + suffix, 'password': secrets.token_urlsafe(18) + 'A9!', 'realName': marker + suffix, 'email': sink, 'roleId': roles[role]}
+    roles = {row['name']: row['id'] for row in ok('GET', '/admin/roles?pageSize=100', token=token)['list']}
+    for role, suffix in [('项目管理员', 'pm'), ('内部成员', 'member')]:
+        user = {'employeeNo': marker.lower() + suffix, 'password': secrets.token_urlsafe(18) + 'A9!', 'realName': marker + suffix, 'email': sink, 'roleId': roles[role]}
         user['id'] = ok('POST', '/admin/users', user, token)['id']
         state['users'][suffix] = user
     for suffix in ['supplier', 'outside']:
-        supplier = ok('POST', '/admin/suppliers', {'name': marker + suffix, 'code': marker + suffix}, token)
+        supplier = ok('POST', '/admin/suppliers', {'name': marker + suffix}, token)
         state['supplier_ids'].append(supplier['id'])
-        user = {'username': marker.lower() + suffix, 'password': secrets.token_urlsafe(18) + 'A9!', 'realName': marker + suffix, 'email': sink}
+        user = {'employeeNo': marker.lower() + suffix, 'password': secrets.token_urlsafe(18) + 'A9!', 'realName': marker + suffix, 'email': sink}
         user['id'] = ok('POST', f"/admin/suppliers/{supplier['id']}/accounts", user, token)['id']
         state['users'][suffix] = user
     for user in state['users'].values():
-        auth = ok('POST', '/auth/login', {'username': user['username'], 'password': user['password']})
+        auth = ok('POST', '/auth/login', {'employeeNo': user['employeeNo'], 'password': user['password']})
         if auth.get('mustChangePassword'):
             password = secrets.token_urlsafe(18) + 'A9!'
             ok('PUT', '/auth/password', {'oldPassword': user['password'], 'newPassword': password}, auth['accessToken'])
@@ -71,7 +71,7 @@ def setup():
     return state
 
 def project(state, token, label):
-    p = ok('POST', '/projects', {'code': state['marker'] + label + secrets.token_hex(3), 'name': state['marker'] + label, 'supplierId': state['supplier_ids'][0]}, token)
+    p = ok('POST', '/projects', {'name': state['marker'] + label, 'supplierId': state['supplier_ids'][0]}, token)
     ok('PUT', f"/projects/{p['id']}/status", {'status': 'IN_PROGRESS'}, token)
     ok('PUT', f"/projects/{p['id']}/members", {'userIds': [state['users']['pm']['id'], state['users']['member']['id']]}, token)
     state['projects'].append(p['id']); STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -193,10 +193,9 @@ def business(state):
     pid = project(state, pm, '业务验收'); state['browser_project'] = pid
     rid = round_create(pid, pm, '浏览器交付轮次', 'SUPPLIER'); state['browser_round'] = rid
     STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
-    code = (state['marker'] + secrets.token_hex(3)).ljust(64, 'X')
-    p = ok('POST','/projects',{'code':code,'name':state['marker']+'长编码','supplierId':state['supplier_ids'][0]},pm)
-    updated = ok('PUT',f"/projects/{p['id']}",{'code':code,'name':state['marker']+'长编码已更新','supplierId':state['supplier_ids'][0]},pm)
-    check('64 字符项目编码创建后可编辑',updated['name'].endswith('已更新'))
+    p = ok('POST','/projects',{'name':state['marker']+'项目创建','supplierId':state['supplier_ids'][0]},pm)
+    updated = ok('PUT',f"/projects/{p['id']}",{'name':state['marker']+'项目创建已更新','supplierId':state['supplier_ids'][0]},pm)
+    check('项目不再依赖历史编码且创建后可编辑',updated['name'].endswith('已更新') and 'code' not in updated)
     for token in [member,supplier]: check('授权角色可读取测试项目',request('GET',f'/projects/{pid}',token=token)[0]==200)
     check('其他供应商无权读取项目',request('GET',f'/projects/{pid}',token=outside)[0]==403)
 
@@ -289,7 +288,7 @@ def smtp_acceptance(state):
     check('非法地址终止发送且不回退其他收件人',len(invalid)==1 and invalid[0]['status']=='FAILED' and invalid[0]['retry_count']==1 and invalid[0]['sent_at'] is None and invalid[0]['last_error']=='发件/收件地址配置无效')
     check('真实 SMTP 驳回、撤销、留言通知全部发送成功且 worker 保持运行',len(valid)==3 and all(row['status']=='SENT' and row['sent_at'] and row['retry_count']==0 for row in valid),{'statuses':[row['status'] for row in valid]})
     with db() as connection,connection.cursor() as cursor:
-        cursor.execute("SELECT e.event_type,COUNT(*) AS n FROM email_outbox e JOIN projects p ON p.id=e.project_id WHERE p.code LIKE %s AND e.status='SENT' GROUP BY e.event_type",(state['marker']+'%',));types={row['event_type']:row['n'] for row in cursor.fetchall()}
+        cursor.execute("SELECT e.event_type,COUNT(*) AS n FROM email_outbox e JOIN projects p ON p.id=e.project_id WHERE p.name LIKE %s AND e.status='SENT' GROUP BY e.event_type",(state['marker']+'%',));types={row['event_type']:row['n'] for row in cursor.fetchall()}
     check('五类业务通知均有真实 SMTP 成功记录',set(types)=={'FILE_UPLOADED','MESSAGE_CREATED','ROUND_CONFIRMED','ROUND_REJECTED','ROUND_CANCELLED'},types)
     state['smtp_invalid_id']=invalid_id
     STATE.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding='utf8')

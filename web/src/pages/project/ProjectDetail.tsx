@@ -151,7 +151,6 @@ function ProjectDetailContent({ id }: { id?: string }) {
                 <Typography.Title heading={5} style={{ margin: 0 }}>
                   {project.name}
                 </Typography.Title>
-                <Tag>{project.code}</Tag>
                 <Tag color={PROJECT_STATUS[project.status]?.color}>
                   {PROJECT_STATUS[project.status]?.text || project.status}
                 </Tag>
