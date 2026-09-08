@@ -146,9 +146,10 @@ export default function SysConfig() {
         <Table
           rowKey="key"
           data={configs}
+          scroll={{ x: 940 }}
           pagination={false}
           columns={[
-            { title: '参数键', dataIndex: 'key', width: 220, align: 'center' as const, render: (v: string) => <Tag>{v}</Tag> },
+            { title: '参数键', dataIndex: 'key', width: 220, align: 'center' as const, ellipsis: true, render: (v: string) => <Tag className="table-cell-tag-ellipsis" title={v}>{v}</Tag> },
             {
               title: '值',
               dataIndex: 'value',

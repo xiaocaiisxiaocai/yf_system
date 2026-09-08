@@ -145,7 +145,7 @@ export default function SupplierList() {
           { title: '编码', dataIndex: 'code', width: 180, align: 'center' as const, ellipsis: true },
           { title: '名称', dataIndex: 'name', width: 220, ellipsis: true },
           { title: '联系人', dataIndex: 'contactName', width: 80, align: 'center' as const, ellipsis: true, render: (v?: string) => v || '-' },
-          { title: '联系电话', dataIndex: 'contactPhone', width: 110, align: 'center' as const, render: (v?: string) => v || '-' },
+          { title: '联系电话', dataIndex: 'contactPhone', width: 110, align: 'center' as const, ellipsis: true, render: (v?: string) => v || '-' },
           { title: '邮箱', dataIndex: 'contactEmail', width: 140, ellipsis: true, render: (v?: string) => v || '-' },
           {
             title: '状态',
@@ -343,8 +343,8 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
         data={accounts}
         pagination={false}
         columns={[
-          { title: '用户名', dataIndex: 'username', width: 110, align: 'center' as const },
-          { title: '姓名', dataIndex: 'realName', width: 100, align: 'center' as const },
+          { title: '用户名', dataIndex: 'username', width: 120, align: 'center' as const, ellipsis: true },
+          { title: '姓名', dataIndex: 'realName', width: 110, align: 'center' as const, ellipsis: true },
           { title: '邮箱', dataIndex: 'email', width: 190, ellipsis: true },
           {
             title: '状态',

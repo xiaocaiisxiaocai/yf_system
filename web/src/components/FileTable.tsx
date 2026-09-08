@@ -203,8 +203,8 @@ export default function FileTable({ projectId, projectStatus, rounds }: Props) {
             width: 220,
             ellipsis: true,
             render: (v: string, r: FileItem) => (
-              <Space size={4}>
-                <span>{v}</span>
+              <Space size={4} className="file-name-cell">
+                <span className="table-cell-text" title={v}>{v}</span>
                 {previewKind(r.ext, r.sizeBytes) !== 'none' && hasPerm('file:preview') && (
                   <Tooltip content="在线预览">
                     <Button size="mini" type="text" icon={<IconEye />} onClick={() => setPreview(r)} />

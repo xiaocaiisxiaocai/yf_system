@@ -136,11 +136,11 @@ export default function RoleList() {
         rowKey="id"
         loading={loading}
         data={data.list}
-        scroll={{ x: 1020, y: 'var(--page-table-scroll-y)' }}
+        scroll={{ x: 1190, y: 'var(--page-table-scroll-y)' }}
         columns={[
-          { title: '编码', dataIndex: 'code', width: 160, align: 'center' as const },
-          { title: '名称', dataIndex: 'name', width: 140, align: 'center' as const },
-          { title: '说明', dataIndex: 'description', width: 200, ellipsis: true, render: (v?: string) => v || '-' },
+          { title: '编码', dataIndex: 'code', width: 180, align: 'center' as const, ellipsis: true },
+          { title: '名称', dataIndex: 'name', width: 220, align: 'center' as const, ellipsis: true },
+          { title: '说明', dataIndex: 'description', width: 230, ellipsis: true, render: (v?: string) => v || '-' },
           { title: '权限点数', dataIndex: 'permissionIds', width: 90, align: 'center' as const, render: (v: number[]) => v.length },
           { title: '绑定用户', dataIndex: 'assignedUserCount', width: 90, align: 'center' as const },
           {

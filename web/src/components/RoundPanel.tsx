@@ -126,12 +126,12 @@ export default function RoundPanel({ projectId, projectStatus, onChanged }: Prop
             dataIndex: 'title',
             width: 130,
             render: (v: string | undefined, r: Round) => (
-              <div style={{ textAlign: 'left' }}>
-                <Typography.Text ellipsis={{ showTooltip: true }} style={{ display: 'block', maxWidth: 98 }}>
+              <div className="table-cell-stack table-cell-stack--left">
+                <Typography.Text className="table-cell-text" ellipsis={{ showTooltip: true }} style={{ width: 98 }}>
                   {v || '-'}
                 </Typography.Text>
                 {r.status === 'REJECTED' && r.rejectReason && (
-                  <Typography.Text type="secondary" ellipsis={{ showTooltip: true }} style={{ display: 'block', maxWidth: 98, fontSize: 12 }}>
+                  <Typography.Text className="table-cell-text" type="secondary" ellipsis={{ showTooltip: true }} style={{ width: 98, fontSize: 12 }}>
                     驳回：{r.rejectReason}
                   </Typography.Text>
                 )}
@@ -158,8 +158,8 @@ export default function RoundPanel({ projectId, projectStatus, onChanged }: Prop
             width: 180,
             align: 'center' as const,
             render: (v: string, r: Round) => (
-              <div>
-                <div>{v || '-'}</div>
+              <div className="table-cell-stack">
+                <Typography.Text className="table-cell-text" ellipsis={{ showTooltip: true }}>{v || '-'}</Typography.Text>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   {fmtTime(r.createdAt)}
                 </Typography.Text>
@@ -171,8 +171,8 @@ export default function RoundPanel({ projectId, projectStatus, onChanged }: Prop
             width: 180,
             align: 'center' as const,
             render: (_: unknown, r: Round) => (
-              <div>
-                <div>{r.decidedByName || '-'}</div>
+              <div className="table-cell-stack">
+                <Typography.Text className="table-cell-text" ellipsis={{ showTooltip: true }}>{r.decidedByName || '-'}</Typography.Text>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   {r.decidedAt ? fmtTime(r.decidedAt) : '-'}
                 </Typography.Text>

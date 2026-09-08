@@ -87,7 +87,12 @@ html, body, #root {
   flex: 0 0 auto;
 }
 .audit-page {
-  --page-table-scroll-y: calc(100vh - 390px);
+  /* 短屏时给表头与分页预留完整空间，避免表体最后一行被分页栏覆盖。 */
+  --page-table-scroll-y: max(220px, calc(100vh - 415px));
+}
+@media (max-width: 1100px) {
+  /* 窄屏筛选区会多占一行，表体同步缩短，分页保持在卡片底部。 */
+  .audit-page { --page-table-scroll-y: max(180px, calc(100vh - 457px)); }
 }
 
 /* 部门管理：左侧组织树 + 右侧详情，减少大面积空白并让操作跟随选中对象。 */
@@ -273,15 +278,50 @@ html, body, #root {
   text-align: center;
 }
 
-/* 表格全局：表头加粗浅底、单元格不换行、数字等宽（时间/大小列对齐） */
+/* 表格全局：表头加粗浅底、单元格不换行、数字等宽（时间/大小列对齐）。
+ * 所有单元格统一建立裁剪边界，避免未显式 ellipsis 的自定义内容绘制到下一列。 */
 .arco-table-th {
   font-weight: 600;
   background: var(--color-fill-1);
 }
 .arco-table .arco-table-cell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+.table-cell-text {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.table-cell-tag-ellipsis {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.table-cell-tag-ellipsis .arco-tag-content {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.table-cell-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+.table-cell-stack > .table-cell-text { width: 100%; }
+.table-cell-stack--left { align-items: flex-start; }
 
 /* 工具栏与控件节奏统一 */
 .page-toolbar {
@@ -324,6 +364,22 @@ html, body, #root {
 .action-slots--round { grid-template-columns: 64px 64px 32px 32px; }
 .action-slots--single { grid-template-columns: 48px; }
 
+/* 带预览按钮的文件名单元格：文本占据剩余空间，按钮始终不被长文件名挤走。 */
+.file-name-cell {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+}
+.file-name-cell > .arco-space-item:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+.file-name-cell > .arco-space-item:first-child > .table-cell-text {
+  max-width: 100%;
+}
+
 /* 操作日志：高密度筛选 + 可扫描的结构化记录。 */
 .audit-heading {
   display: flex;
@@ -351,6 +407,12 @@ html, body, #root {
 .audit-actor b,
 .audit-action small,
 .audit-target span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-action > .arco-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .audit-actor small,
 .audit-action small,
 .audit-target small { color: var(--color-text-3); font-size: 11px; line-height: 16px; }

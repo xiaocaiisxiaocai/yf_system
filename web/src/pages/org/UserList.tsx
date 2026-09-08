@@ -193,7 +193,7 @@ export default function UserList() {
         rowKey="id"
         loading={loading}
         data={data.list}
-        scroll={{ x: 1015, y: 'var(--page-table-scroll-y)' }}
+        scroll={{ x: 1075, y: 'var(--page-table-scroll-y)' }}
         columns={[
           { title: '用户名', dataIndex: 'username', width: 110, align: 'center' as const, ellipsis: true },
           { title: '姓名', dataIndex: 'realName', width: 100, align: 'center' as const, ellipsis: true },
@@ -201,9 +201,10 @@ export default function UserList() {
           {
             title: '角色',
             dataIndex: 'roleName',
-            width: 120,
+            width: 180,
             align: 'center' as const,
-            render: (v?: string) => (v ? <Tag size="small">{v}</Tag> : '-'),
+            ellipsis: true,
+            render: (v?: string) => (v ? <Tag size="small" className="table-cell-tag-ellipsis" title={v}>{v}</Tag> : '-'),
           },
           { title: '邮箱', dataIndex: 'email', width: 130, ellipsis: true },
           {
