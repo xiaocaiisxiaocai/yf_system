@@ -342,9 +342,7 @@ pub async fn change_password(
         return Err(AppError::BadRequest("原密码错误".into()));
     }
     if !password::strong_enough(&req.new_password) {
-        return Err(AppError::BadRequest(
-            "新密码需至少 8 位、包含字母和数字，且不超过 128 字节".into(),
-        ));
+        return Err(AppError::BadRequest("新密码需 6-20 位".into()));
     }
     let mut am: users::ActiveModel = user.into();
     am.password_hash = Set(password::hash(&req.new_password)?);

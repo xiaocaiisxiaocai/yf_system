@@ -60,10 +60,10 @@ export default function ChangePassword() {
             field="newPassword"
             rules={[
               { required: true, message: '请输入新密码' },
-              { match: /^(?=.*[A-Za-z])(?=.*\d).{8,}$/, message: '至少 8 位，且包含字母和数字' },
+              { match: /^.{6,20}$/, message: '密码需 6-20 位' },
             ]}
           >
-            <Input.Password placeholder="至少 8 位，包含字母和数字" />
+            <Input.Password placeholder="6-20 位" />
           </Form.Item>
           <Form.Item label="确认新密码" field="confirm" rules={[{ required: true, message: '请再次输入新密码' }]}>
             <Input.Password placeholder="再次输入新密码" />

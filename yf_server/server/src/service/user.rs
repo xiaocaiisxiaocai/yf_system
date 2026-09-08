@@ -275,9 +275,7 @@ pub async fn create(
         return Err(AppError::BadRequest("工号已存在".into()));
     }
     if !password::strong_enough(&req.password) {
-        return Err(AppError::BadRequest(
-            "初始密码需至少 8 位、包含字母和数字，且不超过 128 字节".into(),
-        ));
+        return Err(AppError::BadRequest("初始密码需 6-20 位".into()));
     }
     crate::util::validation::email(&req.email)?;
     if let Some(d) = req.department_id {
@@ -593,9 +591,7 @@ pub async fn reset_password(
     req: &PasswordReset,
 ) -> ApiResult<()> {
     if !password::strong_enough(&req.new_password) {
-        return Err(AppError::BadRequest(
-            "新密码需至少 8 位、包含字母和数字，且不超过 128 字节".into(),
-        ));
+        return Err(AppError::BadRequest("新密码需 6-20 位".into()));
     }
     let user = users::Entity::find_by_id(id)
         .one(db)

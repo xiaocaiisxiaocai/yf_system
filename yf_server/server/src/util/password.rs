@@ -4,6 +4,8 @@ use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use crate::error::AppError;
 
 pub const MAX_PASSWORD_BYTES: usize = 128;
+pub const MIN_PASSWORD_CHARS: usize = 6;
+pub const MAX_PASSWORD_CHARS: usize = 20;
 
 pub fn hash(password: &str) -> Result<String, AppError> {
     let salt = SaltString::generate(&mut OsRng);
@@ -22,20 +24,21 @@ pub fn verify(password: &str, hash: &str) -> bool {
     }
 }
 
-/// 密码策略：≥8 位且同时包含字母与数字；UTF-8 字节数与登录入口上限一致。
+/// 密码策略：6–20 个字符；登录入口另有 UTF-8 字节数上限，避免超大请求。
 pub fn strong_enough(password: &str) -> bool {
-    password.chars().count() >= 8
+    password.chars().count() >= MIN_PASSWORD_CHARS
+        && password.chars().count() <= MAX_PASSWORD_CHARS
         && password.len() <= MAX_PASSWORD_BYTES
-        && password.chars().any(|c| c.is_ascii_alphabetic())
-        && password.chars().any(|c| c.is_ascii_digit())
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn passwords_must_fit_the_login_byte_limit() {
-        assert!(super::strong_enough(&format!("A1{}", "a".repeat(126))));
-        assert!(!super::strong_enough(&format!("A1{}", "a".repeat(127))));
-        assert!(!super::strong_enough(&format!("A1{}", "中".repeat(43))));
+    fn passwords_follow_the_six_to_twenty_character_policy() {
+        assert!(super::strong_enough("123456"));
+        assert!(super::strong_enough("纯中文密码啊"));
+        assert!(super::strong_enough(&"a".repeat(20)));
+        assert!(!super::strong_enough("12345"));
+        assert!(!super::strong_enough(&"a".repeat(21)));
     }
 }

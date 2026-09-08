@@ -308,9 +308,7 @@ pub async fn create_account(
         return Err(AppError::BadRequest("工号已存在".into()));
     }
     if !password::strong_enough(&req.password) {
-        return Err(AppError::BadRequest(
-            "初始密码需至少 8 位、包含字母和数字，且不超过 128 字节".into(),
-        ));
+        return Err(AppError::BadRequest("初始密码需 6-20 位".into()));
     }
     crate::util::validation::email(&req.email)?;
     let now = Utc::now();
@@ -490,9 +488,7 @@ pub async fn reset_account_password(
 ) -> ApiResult<()> {
     let u = load_supplier_account(db, id).await?;
     if !password::strong_enough(new_password) {
-        return Err(AppError::BadRequest(
-            "新密码需至少 8 位、包含字母和数字，且不超过 128 字节".into(),
-        ));
+        return Err(AppError::BadRequest("新密码需 6-20 位".into()));
     }
     let employee_no = u.employee_no.clone();
     let txn = db.begin().await?;

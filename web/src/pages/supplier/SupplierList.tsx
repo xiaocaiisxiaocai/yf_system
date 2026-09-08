@@ -392,7 +392,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
               <Form.Item
                 label="初始密码"
                 field="password"
-                rules={[{ required: true, message: '请输入初始密码' }, { match: /^(?=.*[A-Za-z])(?=.*\d).{8,}$/, message: '至少 8 位，含字母和数字' }]}
+                rules={[{ required: true, message: '请输入初始密码' }, { match: /^.{6,20}$/, message: '密码需 6-20 位' }]}
               >
                 <Input.Password />
               </Form.Item>
@@ -415,7 +415,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
           <Form.Item
             label="新密码"
             field="newPassword"
-            rules={[{ required: true, message: '请输入新密码' }, { match: /^(?=.*[A-Za-z])(?=.*\d).{8,}$/, message: '至少 8 位，含字母和数字' }]}
+                rules={[{ required: true, message: '请输入新密码' }, { match: /^.{6,20}$/, message: '密码需 6-20 位' }]}
           >
             <Input.Password />
           </Form.Item>
