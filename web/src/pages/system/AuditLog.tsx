@@ -4,6 +4,7 @@ import {
 } from '@arco-design/web-react'
 import { IconEye, IconRefresh, IconSearch } from '@arco-design/web-react/icon'
 import http from '../../api/client'
+import { actionSlots } from '../../components/ActionSlots'
 import { type PageResp, fmtTime } from '../../api/types'
 
 type AuditDetail = Record<string, unknown>
@@ -161,7 +162,7 @@ export default function AuditLog() {
   const resetFilters = () => { setLoading(true); setDraft(emptyFilters); setFilters(emptyFilters); setPage(1) }
 
   return (
-    <Card className="page-card audit-page">
+    <Card className="page-card page-card--table audit-page">
       <div className="audit-heading">
         <div>
           <Typography.Title heading={5} style={{ margin: 0 }}>操作日志</Typography.Title>
@@ -188,10 +189,11 @@ export default function AuditLog() {
       <div className="audit-result-bar"><Typography.Text type="secondary">共 {data.total} 条记录</Typography.Text></div>
 
       <Table
+        className="page-table"
         rowKey="id"
         loading={loading}
         data={data.list}
-        scroll={{ x: 910 }}
+        scroll={{ x: 910, y: 'var(--page-table-scroll-y)' }}
         columns={[
           { title: '时间', dataIndex: 'createdAt', width: 160, render: fmtTime },
           {
@@ -210,7 +212,7 @@ export default function AuditLog() {
             title: '对象', width: 110,
             render: (_: unknown, row?: LogRow) => row?.targetType ? <div className="audit-target"><span>{TARGET_LABELS[row.targetType] || row.targetType}</span><small>{row.targetId ? `#${row.targetId}` : '未指定 ID'}</small></div> : '-',
           },
-          { title: '详情', width: 75, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row?: LogRow) => row ? <Button size="mini" type="text" icon={<IconEye />} onClick={() => setSelected(row)}>查看</Button> : null },
+          { title: '详情', width: 75, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row?: LogRow) => row ? actionSlots([<Button key="view" size="mini" type="text" icon={<IconEye />} onClick={() => setSelected(row)}>查看</Button>], 'single') : null },
         ]}
         pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setLoading(true); setPage(nextPage); setPageSize(nextSize) } }}
       />

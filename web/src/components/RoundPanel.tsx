@@ -6,6 +6,7 @@ import { IconCheckCircle, IconCloseCircle, IconMinusCircle, IconPlus, IconClockC
 import http from '../api/client'
 import { useAuth } from '../store/auth'
 import { type Round, type RoundLog, ROUND_STATUS, fmtTime } from '../api/types'
+import { actionSlots } from './ActionSlots'
 
 interface Props {
   projectId: number
@@ -182,29 +183,27 @@ export default function RoundPanel({ projectId, projectStatus, onChanged }: Prop
             title: '操作',
             width: 228,
             align: 'center' as const,
-            render: (_: unknown, r: Round) => (
-              <Space>
-                {myTurn(r) && (
-                  <>
-                    <Popconfirm title={`确认通过第 ${r.roundNo} 轮？`} onOk={() => confirm(r)}>
-                      <Button size="mini" type="primary" status="success" icon={<IconCheckCircle />}>
-                        确认
-                      </Button>
-                    </Popconfirm>
-                    <Button size="mini" status="danger" icon={<IconCloseCircle />} onClick={() => setRejectTarget(r)}>
-                      驳回
-                    </Button>
-                  </>
-                )}
-                {isInternal && hasPerm('round:cancel') && r.status === 'PENDING'
-                  && (r.createdBy === user?.id || hasPerm('project:view_all')) && (
-                  <Popconfirm title="撤销该轮次？关联文件将一并锁定" onOk={() => cancel(r)}>
-                    <Button size="mini" type="text" icon={<IconMinusCircle />} title="撤销" />
-                  </Popconfirm>
-                )}
-                <Button size="mini" type="text" icon={<IconClockCircle />} title="历史" onClick={() => openHistory(r)} />
-              </Space>
-            ),
+            render: (_: unknown, r: Round) => actionSlots([
+              myTurn(r) && (
+                <Popconfirm key="confirm" title={`确认通过第 ${r.roundNo} 轮？`} onOk={() => confirm(r)}>
+                  <Button size="mini" type="primary" status="success" icon={<IconCheckCircle />}>
+                    确认
+                  </Button>
+                </Popconfirm>
+              ),
+              myTurn(r) && (
+                <Button key="reject" size="mini" status="danger" icon={<IconCloseCircle />} onClick={() => setRejectTarget(r)}>
+                  驳回
+                </Button>
+              ),
+              isInternal && hasPerm('round:cancel') && r.status === 'PENDING'
+                && (r.createdBy === user?.id || hasPerm('project:view_all')) && (
+                <Popconfirm key="cancel" title="撤销该轮次？关联文件将一并锁定" onOk={() => cancel(r)}>
+                  <Button size="mini" type="text" icon={<IconMinusCircle />} title="撤销" />
+                </Popconfirm>
+              ),
+              <Button key="history" size="mini" type="text" icon={<IconClockCircle />} title="历史" onClick={() => openHistory(r)} />,
+            ], 'round'),
           },
         ]}
       />

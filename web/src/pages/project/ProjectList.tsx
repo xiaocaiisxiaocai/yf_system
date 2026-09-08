@@ -5,6 +5,7 @@ import {
 import { IconPlus } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import http from '../../api/client'
+import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import { type PageResp, type Project, PROJECT_STATUS, fmtTime } from '../../api/types'
 
@@ -133,18 +134,20 @@ export default function ProjectList() {
         title: '操作',
         width: 228,
         align: 'center' as const,
-        render: (_: unknown, r: Project) => (
-          <Space>
-            <Button size="mini" type="text" onClick={() => nav(`/projects/${r.id}`)}>
+        render: (_: unknown, r: Project) => {
+          const nextStatuses = statusActions(r)
+          return actionSlots([
+            <Button key="enter" size="mini" type="text" onClick={() => nav(`/projects/${r.id}`)}>
               进入
-            </Button>
-            {isInternal && hasPerm('project:update') && (
-              <Button size="mini" type="text" onClick={() => openEdit(r)}>
+            </Button>,
+            isInternal && hasPerm('project:update') && (
+              <Button key="edit" size="mini" type="text" onClick={() => openEdit(r)}>
                 编辑
               </Button>
-            )}
-            {isInternal && hasPerm('project:status') && statusActions(r).length > 0 && (
+            ),
+            isInternal && hasPerm('project:status') && nextStatuses.length > 0 && (
               <Select
+                key="status"
                 size="mini"
                 placeholder="状态"
                 style={{ width: 92 }}
@@ -152,20 +155,20 @@ export default function ProjectList() {
                 onChange={(v) => changeStatus(r, v as string)}
                 triggerProps={{ autoAlignPopupWidth: false }}
               >
-                {statusActions(r).map((o) => (
+                {nextStatuses.map((o) => (
                   <Select.Option key={o.key} value={o.key}>
                     {o.text}
                   </Select.Option>
                 ))}
               </Select>
-            )}
-          </Space>
-        ),
+            ),
+          ], 'project')
+        },
       },
     ]
 
   return (
-    <Card className="page-card">
+    <Card className="page-card page-card--table">
       <Space className="responsive-toolbar" style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
         <Space>
           <Input.Search
@@ -219,11 +222,12 @@ export default function ProjectList() {
         )}
       </Space>
       <Table
+        className="page-table"
         rowKey="id"
         loading={loading}
         columns={columns}
         data={data.list}
-        scroll={{ x: 1005 }}
+        scroll={{ x: 1005, y: 'var(--page-table-scroll-y)' }}
         pagination={{
           total: data.total,
           current: page,

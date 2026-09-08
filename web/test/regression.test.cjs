@@ -21,6 +21,146 @@ const arco = new Proxy({
   Message: { error() {}, warning() {}, success() {}, info() {} },
 }, { get: (obj, key) => obj[key] ?? component(key) })
 
+const actionSlotsModule = {
+  actionSlots: (slots, variant) => React.createElement(
+    'div',
+    { className: `action-slots action-slots--${variant}` },
+    slots.map((slot, index) => React.createElement(
+      'span',
+      { key: index, className: slot ? 'action-slot' : 'action-slot action-slot--empty' },
+      slot || null,
+    )),
+  ),
+}
+
+function findElement(node, predicate) {
+  if (!React.isValidElement(node)) return undefined
+  if (predicate(node)) return node
+  for (const child of React.Children.toArray(node.props.children)) {
+    const found = findElement(child, predicate)
+    if (found) return found
+  }
+  return undefined
+}
+
+function findActionButton(node, text) {
+  return findElement(node, (item) => item.props.children === text)
+}
+
+test('table action slots keep empty action positions for row alignment', () => {
+  const { actionSlots } = loadTs('src/components/ActionSlots.tsx', {})
+  const node = actionSlots([
+    React.createElement('Button', null, '进入'),
+    false,
+    React.createElement('Button', null, '状态'),
+  ], 'project')
+  const slots = React.Children.toArray(node.props.children)
+  assert.equal(slots.length, 3)
+  assert.match(slots[0].props.className, /action-slot/)
+  assert.match(slots[1].props.className, /action-slot--empty/)
+  assert.equal(slots[2].props.children.props.children, '状态')
+})
+
+test('paginated list pages constrain table body scrolling to keep pagination visible', async () => {
+  const pageData = { list: [], total: 0, page: 1, pageSize: 10 }
+  const iconMock = new Proxy({}, { get: (_, name) => component(name) })
+  const auth = { useAuth: () => ({ hasPerm: () => true, user: { id: 1, userType: 'INTERNAL' } }) }
+  const cases = [
+    {
+      page: 'src/pages/project/ProjectList.tsx',
+      cardClass: 'page-card page-card--table',
+      mocks: {
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        'react-router-dom': { useNavigate: () => () => {} },
+        '../../api/client': { get: async (url) => ({ data: url === '/supplier-options' ? [] : pageData }) },
+        '../../store/auth': auth,
+        '../../api/types': { PROJECT_STATUS: {}, fmtTime: String },
+      },
+    },
+    {
+      page: 'src/pages/supplier/SupplierList.tsx',
+      cardClass: 'page-card page-card--table',
+      mocks: {
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        '../../api/client': { get: async () => ({ data: pageData }) },
+        '../../store/auth': auth,
+        '../../api/types': { fmtTime: String },
+      },
+    },
+    {
+      page: 'src/pages/org/UserList.tsx',
+      cardClass: 'page-card page-card--table',
+      mocks: {
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        '../../api/client': { get: async (url) => ({ data: url === '/departments' || url === '/admin/user-role-options' ? [] : pageData }) },
+        '../../api/types': { fmtTime: String },
+      },
+    },
+    {
+      page: 'src/pages/rbac/RoleList.tsx',
+      cardClass: 'page-card page-card--table',
+      mocks: {
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        '../../api/client': { get: async (url) => ({ data: url === '/permissions' ? [] : { ...pageData, pageSize: 20 } }) },
+        '../../api/types': { PageResp: {} },
+      },
+    },
+    {
+      page: 'src/pages/system/AuditLog.tsx',
+      cardClass: 'page-card page-card--table audit-page',
+      mocks: {
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        '../../api/client': { get: async () => ({ data: { ...pageData, pageSize: 20 } }) },
+        '../../api/types': { fmtTime: String },
+      },
+    },
+  ]
+
+  for (const item of cases) {
+    const Page = loadTs(item.page, item.mocks).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)) })
+    assert.ok(renderer.root.findByProps({ className: item.cardClass }))
+    const table = renderer.root.findAllByType('Table')[0]
+    assert.equal(table.props.className, 'page-table', item.page)
+    assert.equal(table.props.scroll.y, 'var(--page-table-scroll-y)', item.page)
+    await act(async () => renderer.unmount())
+  }
+})
+
+test('department management uses a split tree and detail workspace', async () => {
+  const departments = [{
+    id: 1,
+    name: '总部',
+    sortNo: 1,
+    status: 'ACTIVE',
+    children: [{ id: 2, name: '研发部', parentId: 1, sortNo: 3, status: 'DISABLED' }],
+  }]
+  const Page = loadTs('src/pages/org/DeptManage.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../../api/client': { get: async () => ({ data: departments }) },
+    '../../store/auth': { useAuth: (selector) => selector({ hasPerm: () => true }) },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  assert.ok(renderer.root.findByProps({ className: 'page-card dept-page' }))
+  assert.ok(renderer.root.findByProps({ className: 'dept-workspace' }))
+  const tree = renderer.root.findByType('Tree')
+  assert.equal(tree.props.blockNode, true)
+  assert.equal(tree.props.showLine, true)
+  await act(async () => tree.props.onSelect(['2']))
+  assert.ok(renderer.root.findAll((node) => node.props.children === '研发部').length > 0)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '层级路径').length > 0)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '编辑部门').length > 0)
+  await act(async () => renderer.unmount())
+})
+
 function loadTs(relativePath, mocks, globals = {}) {
   const filename = path.resolve(__dirname, '..', relativePath)
   const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
@@ -29,7 +169,11 @@ function loadTs(relativePath, mocks, globals = {}) {
   const exports = {}
   vm.runInNewContext(source, {
     exports, module: { exports }, console, setTimeout, clearTimeout, URL, AbortController, ...globals,
-    require: (name) => name in mocks ? mocks[name] : require(name),
+    require: (name) => {
+      if (name in mocks) return mocks[name]
+      if (name.endsWith('/ActionSlots')) return actionSlotsModule
+      return require(name)
+    },
   }, { filename })
   return exports
 }
@@ -87,7 +231,7 @@ test('supplier account permission revocation removes the open account drawer', a
   await act(async()=>{renderer=create(React.createElement(Page))})
   const accountAction=()=>{
     const actions=renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null,supplier)
-    return React.Children.toArray(actions.props.children).find(n=>n.props.children==='账号管理')
+    return findActionButton(actions, '账号管理')
   }
   assert.equal(accountAction(),undefined)
   assert.equal(renderer.root.findAllByType('Drawer').length,0)
@@ -116,7 +260,7 @@ test('round cancellation is shown only to its creator or a viewer of all project
     let renderer
     await act(async()=>{renderer=create(React.createElement(Page,{projectId:1,projectStatus:'IN_PROGRESS',onChanged(){}}))})
     const actions=renderer.root.findByType('Table').props.columns.at(-1).render(null,round)
-    const allowed=React.Children.toArray(actions.props.children).some(n=>n.props?.title==='撤销该轮次？关联文件将一并锁定')
+    const allowed=!!findElement(actions, (node) => node.props.title === '撤销该轮次？关联文件将一并锁定')
     assert.equal(allowed,expected,`user ${userId}, viewAll ${viewAll}`)
     await act(async()=>renderer.unmount())
   }
@@ -136,7 +280,7 @@ test('supplier account loading failures stop spinning and can retry', async () =
   let renderer
   await act(async()=>{renderer=create(React.createElement(Page))})
   const actions=renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null,supplier)
-  await act(async()=>React.Children.toArray(actions.props.children).find(n=>n.props.children==='账号管理').props.onClick())
+  await act(async()=>findActionButton(actions, '账号管理').props.onClick())
   assert.equal(renderer.root.findByType('Drawer').findByType('Table').props.loading,false)
   fail=false
   await act(async()=>renderer.root.findAllByType('Button').find(n=>n.props.children==='重试').props.onClick())
@@ -420,7 +564,7 @@ test('menu-only role grants remain selected when another permission is edited', 
   let renderer
   await act(async()=>{renderer=create(React.createElement(Page))})
   const actions=renderer.root.findByType('Table').props.columns.at(-1).render(null,role)
-  const assign=React.Children.toArray(actions.props.children).find(n=>n.props.children==='分配权限')
+  const assign=findActionButton(actions, '分配权限')
   await act(async()=>assign.props.onClick())
   const tree=renderer.root.findByType('Tree')
   assert.ok(tree.props.checkedKeys.includes('5'),'standalone menu must visibly remain granted')

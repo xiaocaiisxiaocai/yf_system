@@ -4,6 +4,7 @@ import {
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
+import { actionSlots } from '../../components/ActionSlots'
 import { type PageResp, fmtTime } from '../../api/types'
 
 interface UserRow {
@@ -138,7 +139,7 @@ export default function UserList() {
   }
 
   return (
-    <Card className="page-card">
+    <Card className="page-card page-card--table">
       <Space className="responsive-toolbar" style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
         <Space wrap>
           <Input.Search
@@ -188,10 +189,11 @@ export default function UserList() {
         </Button>
       </Space>
       <Table
+        className="page-table"
         rowKey="id"
         loading={loading}
         data={data.list}
-        scroll={{ x: 1015 }}
+        scroll={{ x: 1015, y: 'var(--page-table-scroll-y)' }}
         columns={[
           { title: '用户名', dataIndex: 'username', width: 110, align: 'center' as const, ellipsis: true },
           { title: '姓名', dataIndex: 'realName', width: 100, align: 'center' as const, ellipsis: true },
@@ -216,9 +218,9 @@ export default function UserList() {
             title: '操作',
             width: 220,
             align: 'center' as const,
-            render: (_: unknown, r: UserRow) => (
-              <div className="user-row-actions">
+            render: (_: unknown, r: UserRow) => actionSlots([
                 <Button
+                  key="edit"
                   size="mini"
                   type="text"
                   onClick={() => {
@@ -234,19 +236,18 @@ export default function UserList() {
                   }}
                 >
                   编辑
-                </Button>
-                <Button size="mini" type="text" onClick={() => setResetTarget(r)}>
+                </Button>,
+                <Button key="reset-password" size="mini" type="text" onClick={() => setResetTarget(r)}>
                   重置密码
-                </Button>
-                {r.username !== 'admin' && (
-                  <Popconfirm title={r.status === 'ACTIVE' ? '禁用后立即无法登录，确认？' : '确认启用？'} onOk={() => toggle(r)}>
+                </Button>,
+                r.username !== 'admin' && (
+                  <Popconfirm key="status" title={r.status === 'ACTIVE' ? '禁用后立即无法登录，确认？' : '确认启用？'} onOk={() => toggle(r)}>
                     <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
                       {r.status === 'ACTIVE' ? '禁用' : '启用'}
                     </Button>
                   </Popconfirm>
-                )}
-              </div>
-            ),
+                ),
+              ], 'user'),
           },
         ]}
         pagination={{
