@@ -12,6 +12,7 @@ interface Props {
   projectStatus: string
   rounds: Round[]
   onRead?: () => void
+  targetId?: number
 }
 
 interface Reader {
@@ -21,7 +22,7 @@ interface Reader {
   readAt?: string | null
 }
 
-export default function MessagePanel({ projectId, projectStatus, rounds, onRead }: Props) {
+export default function MessagePanel({ projectId, projectStatus, rounds, onRead, targetId }: Props) {
   const [list, setList] = useState<Msg[]>([])
   const [total, setTotal] = useState(0)
   const [hasMore, setHasMore] = useState(false)
@@ -43,7 +44,7 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead 
 
   const roundMap = new Map(rounds.map((r) => [r.id, r.roundNo]))
   const pendingRounds = rounds.filter((r) => r.status === 'PENDING')
-  const canWrite = hasPerm('message:create') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
+  const canWrite = !targetId && hasPerm('message:create') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
 
   const load = useCallback(
     async (p: number, append: boolean) => {
@@ -53,7 +54,7 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead 
       else setLoadError(false)
       try {
         const r = await http.get(`/projects/${projectId}/messages`, {
-          params: { page: p, pageSize: 20, roundId: filterRound, beforeId: append ? cursor.current : undefined },
+          params: { page: p, pageSize: 20, roundId: filterRound, beforeId: append ? cursor.current : undefined, targetId },
         })
         if (seq !== loadSeq.current) return // 已有更新的请求在途，丢弃旧响应
         setTotal(r.data.total)
@@ -73,13 +74,13 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead 
         if (seq === loadSeq.current) setLoading(false)
       }
     },
-    [projectId, filterRound]
+    [projectId, filterRound, targetId]
   )
 
   useEffect(() => {
     load(1, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterRound, projectId])
+  }, [filterRound, projectId, targetId])
 
   // 只有留言实际进入可视区域后才上报已读，避免“加载第一页=全部已读”。
   useEffect(() => {

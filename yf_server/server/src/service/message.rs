@@ -27,6 +27,8 @@ pub struct MessageListQuery {
     pub round_id: Option<u64>,
     /// Stable continuation when earlier messages are inserted or deleted.
     pub before_id: Option<u64>,
+    /// 精确定位项目动态中的留言，不放宽项目范围或删除状态。
+    pub target_id: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,6 +111,9 @@ pub async fn list(
     let mut cond = Condition::all()
         .add(messages::Column::ProjectId.eq(project_id))
         .add(messages::Column::Status.eq(MessageStatus::Normal));
+    if let Some(id) = q.target_id {
+        cond = cond.add(messages::Column::Id.eq(id));
+    }
     if let Some(rid) = q.round_id {
         cond = if rid == 0 {
             cond.add(messages::Column::RoundId.is_null())

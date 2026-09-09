@@ -143,6 +143,12 @@ async fn write_permission_round_create_rechecks_after_lock_wait() {
 #[ignore = "isolated MySQL required"]
 async fn write_permission_message_create_rechecks_before_message_outbox_and_audit() {
     let f = Fixture::new().await;
+    let audit_before = audit_logs::Entity::find()
+        .filter(audit_logs::Column::Action.eq("MESSAGE_CREATE"))
+        .filter(audit_logs::Column::TargetType.eq("message"))
+        .count(&f.state.db)
+        .await
+        .unwrap();
     let role = grant_only(&f, "message:create").await;
     let (txn, blocker) = gate_and_project(&f).await;
     let (db, actor, project_id, round_id) = (
@@ -190,7 +196,7 @@ async fn write_permission_message_create_rechecks_before_message_outbox_and_audi
             .count(&f.state.db)
             .await
             .unwrap(),
-        0
+        audit_before
     );
 }
 

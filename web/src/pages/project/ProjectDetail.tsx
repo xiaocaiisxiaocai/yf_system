@@ -7,6 +7,7 @@ import RoundPanel from '../../components/RoundPanel'
 import FileTable from '../../components/FileTable'
 import MessagePanel from '../../components/MessagePanel'
 import MemberPanel from '../../components/MemberPanel'
+import ProjectActivityPanel from '../../components/ProjectActivityPanel'
 
 interface Summary {
   unreadMessages: number
@@ -30,9 +31,15 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const loadingProjectId = useRef<number | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
-  const tab = requestedTab === 'rounds' || requestedTab === 'files' || requestedTab === 'messages' || requestedTab === 'members'
+  const tab = requestedTab === 'rounds' || requestedTab === 'files' || requestedTab === 'messages' || requestedTab === 'members' || requestedTab === 'activity'
     ? requestedTab
     : 'rounds'
+  const rawTargetId = searchParams.get('target')
+  const parsedTargetId = rawTargetId ? Number(rawTargetId) : NaN
+  const targetId = Number.isSafeInteger(parsedTargetId) && parsedTargetId > 0 ? parsedTargetId : undefined
+  const roundsTargetId = tab === 'rounds' ? targetId : undefined
+  const filesTargetId = tab === 'files' ? targetId : undefined
+  const messagesTargetId = tab === 'messages' ? targetId : undefined
 
   const fetchProject = useCallback(async () => {
     const r = await http.get(`/projects/${pid}`)
@@ -78,6 +85,30 @@ function ProjectDetailContent({ id }: { id?: string }) {
       /* 拦截器已提示 */
     }
   }, [fetchSummary])
+
+  const handleActivityNavigate = useCallback((type: string, target: number) => {
+    if (!Number.isSafeInteger(target) || target <= 0) return
+    const nextTab = type === 'ROUND' ? 'rounds' : type === 'FILE' ? 'files' : type === 'MESSAGE' ? 'messages' : null
+    if (!nextTab) return
+    const next = new URLSearchParams(searchParams)
+    next.set('tab', nextTab)
+    next.set('target', String(target))
+    setSearchParams(next)
+  }, [searchParams, setSearchParams])
+
+  const handleTabChange = useCallback((nextTab: string) => {
+    const next = new URLSearchParams(searchParams)
+    next.set('tab', nextTab)
+    next.delete('target')
+    setSearchParams(next)
+  }, [searchParams, setSearchParams])
+
+  const clearTarget = useCallback(() => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('target')
+    next.set('tab', tab)
+    setSearchParams(next)
+  }, [searchParams, setSearchParams, tab])
 
   useEffect(() => {
     if (!validProjectId) return
@@ -187,7 +218,13 @@ function ProjectDetailContent({ id }: { id?: string }) {
       </Card>
 
       <Card className="page-card">
-        <Tabs activeTab={tab} onChange={(k) => setSearchParams({ tab: k })}>
+        {targetId && (tab === 'rounds' || tab === 'files' || tab === 'messages') && (
+          <div className="project-target-notice">
+            <Typography.Text type="secondary">已定位到目标内容</Typography.Text>
+            <Button type="text" size="small" onClick={clearTarget}>显示全部</Button>
+          </div>
+        )}
+        <Tabs activeTab={tab} onChange={handleTabChange}>
           <Tabs.TabPane
             key="rounds"
             title={
@@ -201,8 +238,10 @@ function ProjectDetailContent({ id }: { id?: string }) {
             }
           >
             <RoundPanel
+              key={`${pid}:${targetId ?? 'all'}`}
               projectId={pid}
               projectStatus={project.status}
+              targetId={roundsTargetId}
               onChanged={() => {
                 loadRounds()
                 loadSummary()
@@ -211,7 +250,13 @@ function ProjectDetailContent({ id }: { id?: string }) {
             />
           </Tabs.TabPane>
           <Tabs.TabPane key="files" title="文件">
-            <FileTable projectId={pid} projectStatus={project.status} rounds={rounds} />
+            <FileTable
+              key={`${pid}:${targetId ?? 'all'}`}
+              projectId={pid}
+              projectStatus={project.status}
+              rounds={rounds}
+              targetId={filesTargetId}
+            />
           </Tabs.TabPane>
           <Tabs.TabPane
             key="messages"
@@ -226,10 +271,19 @@ function ProjectDetailContent({ id }: { id?: string }) {
             }
           >
             <MessagePanel
+              key={`${pid}:${targetId ?? 'all'}`}
               projectId={pid}
               projectStatus={project.status}
               rounds={rounds}
+              targetId={messagesTargetId}
               onRead={loadSummary}
+            />
+          </Tabs.TabPane>
+          <Tabs.TabPane key="activity" title="项目动态">
+            <ProjectActivityPanel
+              projectId={pid}
+              active={tab === 'activity'}
+              onNavigate={handleActivityNavigate}
             />
           </Tabs.TabPane>
           <Tabs.TabPane key="members" title="成员">

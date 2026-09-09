@@ -17,6 +17,7 @@ interface Props {
   projectId: number
   projectStatus: string
   rounds: Round[]
+  targetId?: number
 }
 
 /** 依据扩展名判定预览能力：Excel→只读表格，PDF→内联，其余仅下载 */
@@ -38,7 +39,7 @@ async function downloadAuthed(id: number, name: string) {
   URL.revokeObjectURL(url)
 }
 
-export default function FileTable({ projectId, projectStatus, rounds }: Props) {
+export default function FileTable({ projectId, projectStatus, rounds, targetId }: Props) {
   const [data, setData] = useState<PageResp<FileItem>>({ list: [], total: 0, page: 1, pageSize: 10 })
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)
@@ -62,10 +63,10 @@ export default function FileTable({ projectId, projectStatus, rounds }: Props) {
 
   const fetchFiles = useCallback(async () => {
     const r = await http.get(`/projects/${projectId}/files`, {
-      params: { page, pageSize, roundId, direction, keyword: keyword || undefined },
+      params: { page, pageSize, roundId, direction, keyword: keyword || undefined, targetId },
     })
     return r.data as PageResp<FileItem>
-  }, [projectId, page, pageSize, roundId, direction, keyword])
+  }, [projectId, page, pageSize, roundId, direction, keyword, targetId])
 
   const load = useCallback(() => {
     setLoading(true)
@@ -179,7 +180,7 @@ export default function FileTable({ projectId, projectStatus, rounds }: Props) {
               打包下载（{selected.length}）
             </Button>
           )}
-          {hasPerm('file:upload') && projectStatus === 'IN_PROGRESS' && (
+          {!targetId && hasPerm('file:upload') && projectStatus === 'IN_PROGRESS' && (
             <Button type="primary" icon={<IconUpload />} onClick={startUpload}>
               上传文件
             </Button>

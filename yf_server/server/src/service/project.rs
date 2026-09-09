@@ -10,8 +10,8 @@ use serde_json::{json, Value};
 use crate::dto::PageResp;
 use crate::entity::enums::{CommonStatus, ProjectStatus, RoundStatus, UserType};
 use crate::entity::{
-    email_outbox, files, messages, project_members, projects, rounds, suppliers, upload_sessions,
-    users,
+    email_outbox, files, messages, project_activities, project_members, projects, rounds,
+    suppliers, upload_sessions, users,
 };
 use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
@@ -577,6 +577,11 @@ pub async fn delete(state: &AppState, user: &CurrentUser, id: u64) -> ApiResult<
         None,
     )
     .await?;
+    // PROJECT_DELETE 审计仍独立保留；项目本身硬删除前移除时间线以满足 FK 与空项目删除契约。
+    project_activities::Entity::delete_many()
+        .filter(project_activities::Column::ProjectId.eq(id))
+        .exec(&txn)
+        .await?;
     let deleted = projects::Entity::delete_by_id(id).exec(&txn).await?;
     if deleted.rows_affected != 1 {
         return Err(AppError::Conflict("项目已被删除，请刷新后重试".into()));

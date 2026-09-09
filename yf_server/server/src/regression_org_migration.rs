@@ -12,8 +12,19 @@ async fn isolated_db() -> sea_orm::DatabaseConnection {
 }
 
 async fn reset_before_010(db: &sea_orm::DatabaseConnection) {
+    reset_before(db, "m20260909_000010_org_structure_kinds").await;
+}
+
+async fn reset_before(db: &sea_orm::DatabaseConnection, migration_name: &str) {
     migration::Migrator::fresh(db).await.unwrap();
-    migration::Migrator::down(db, Some(2)).await.unwrap();
+    let migrations = migration::Migrator::migrations();
+    let target = migrations
+        .iter()
+        .position(|migration| migration.name() == migration_name)
+        .expect("target migration must remain registered");
+    migration::Migrator::down(db, Some((migrations.len() - target) as u32))
+        .await
+        .unwrap();
 }
 
 async fn kind_column_count(db: &sea_orm::DatabaseConnection) -> i64 {
@@ -113,8 +124,7 @@ async fn delete_safety_org_010_migrates_valid_three_levels() {
 #[ignore = "isolated MySQL required"]
 async fn delete_safety_org_011_detects_invalid_data_after_010() {
     let db = isolated_db().await;
-    migration::Migrator::fresh(&db).await.unwrap();
-    migration::Migrator::down(&db, Some(1)).await.unwrap();
+    reset_before(&db, "m20260909_000011_validate_org_structure_kinds").await;
     db.execute(Statement::from_string(
         DbBackend::MySql,
         "INSERT INTO departments (id, name, parent_id, kind) VALUES \

@@ -12,9 +12,10 @@ interface Props {
   projectId: number
   projectStatus: string
   onChanged: () => void
+  targetId?: number
 }
 
-export default function RoundPanel({ projectId, projectStatus, onChanged }: Props) {
+export default function RoundPanel({ projectId, projectStatus, onChanged, targetId }: Props) {
   const [rounds, setRounds] = useState<Round[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
@@ -143,7 +144,7 @@ export default function RoundPanel({ projectId, projectStatus, onChanged }: Prop
         <Table
           rowKey="id"
           loading={loading}
-          data={rounds}
+          data={targetId ? rounds.filter((round) => round.id === targetId) : rounds}
           pagination={false}
           scroll={{ x: 958 }}
           columns={[

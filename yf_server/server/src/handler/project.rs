@@ -93,6 +93,16 @@ pub async fn project_summary(
 ) -> ApiResult<Json<Value>> {
     Ok(Json(service::project::summary(&s.db, &u, id).await?))
 }
+pub async fn list_project_activities(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Path(id): Path<u64>,
+    Query(q): Query<service::project_activity::ActivityQuery>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        service::project_activity::list(&s.db, &u, id, &q).await?,
+    ))
+}
 
 // ---------- 轮次 ----------
 

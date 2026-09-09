@@ -58,6 +58,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/projects/{id}/summary", get(project::project_summary))
         .route(
+            "/projects/{id}/activities",
+            get(project::list_project_activities),
+        )
+        .route(
             "/projects/{id}/rounds",
             get(project::list_rounds).post(project::create_round),
         )

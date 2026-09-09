@@ -28,6 +28,8 @@ pub struct FileListQuery {
     pub round_id: Option<u64>,
     pub direction: Option<String>,
     pub keyword: Option<String>,
+    /// 精确定位项目动态中的文件，仍叠加项目范围及可用状态。
+    pub target_id: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,6 +60,9 @@ pub async fn list(
     let mut cond = Condition::all()
         .add(files::Column::ProjectId.eq(project_id))
         .add(files::Column::Status.eq(FileStatus::Available));
+    if let Some(id) = q.target_id {
+        cond = cond.add(files::Column::Id.eq(id));
+    }
     if let Some(rid) = q.round_id {
         cond = cond.add(files::Column::RoundId.eq(rid));
     }

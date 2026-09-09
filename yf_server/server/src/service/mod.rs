@@ -12,6 +12,7 @@ pub mod notify;
 pub mod participants;
 pub mod perm;
 pub mod project;
+pub mod project_activity;
 pub mod role;
 pub mod round;
 pub mod scope;

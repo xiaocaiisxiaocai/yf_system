@@ -21,6 +21,8 @@ mod regression_identity_review;
 #[cfg(test)]
 mod regression_org_migration;
 #[cfg(test)]
+mod regression_project_activity;
+#[cfg(test)]
 mod regression_write_permissions;
 
 use migration::MigratorTrait;

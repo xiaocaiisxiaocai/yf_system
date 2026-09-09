@@ -9,6 +9,7 @@ pub mod files;
 pub mod message_reads;
 pub mod messages;
 pub mod permissions;
+pub mod project_activities;
 pub mod project_members;
 pub mod projects;
 pub mod refresh_tokens;

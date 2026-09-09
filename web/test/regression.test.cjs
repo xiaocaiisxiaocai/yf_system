@@ -315,7 +315,7 @@ function loadTs(relativePath, mocks, globals = {}) {
   }).outputText
   const exports = {}
   vm.runInNewContext(source, {
-    exports, module: { exports }, console, setTimeout, clearTimeout, URL, AbortController, ...globals,
+    exports, module: { exports }, console, setTimeout, clearTimeout, URL, URLSearchParams, AbortController, ...globals,
     require: (name) => {
       if (typeof name === 'string' && name in mocks) return mocks[name]
       if (typeof name === 'string' && name.replace(/\\/g, '/').endsWith('/ActionSlots')) return actionSlotsModule
@@ -1149,6 +1149,7 @@ test('invalid project route identifiers render a recoverable error without API c
       '../../api/types':{PROJECT_STATUS:{},fmtTime:String},
       '../../components/RoundPanel':component('Rounds'),'../../components/FileTable':component('Files'),
       '../../components/MessagePanel':component('Messages'),'../../components/MemberPanel':component('Members'),
+      '../../components/ProjectActivityPanel':component('Activities'),
     }).default
     let renderer
     await act(async()=>{renderer=create(React.createElement(Page))})
@@ -1169,6 +1170,7 @@ test('project navigation ignores late responses across valid and invalid routes'
     '../../api/types':{PROJECT_STATUS:{IN_PROGRESS:{text:'进行中'}},fmtTime:String},
     '../../components/RoundPanel':component('Rounds'),'../../components/FileTable':component('Files'),
     '../../components/MessagePanel':component('Messages'),'../../components/MemberPanel':component('Members'),
+    '../../components/ProjectActivityPanel':component('Activities'),
   }).default
   let renderer
   await act(async()=>{renderer=create(React.createElement(Page))})
@@ -1214,6 +1216,7 @@ test('unknown project tab query falls back to rounds and keeps description expan
     '../../components/FileTable': component('Files'),
     '../../components/MessagePanel': component('Messages'),
     '../../components/MemberPanel': component('Members'),
+    '../../components/ProjectActivityPanel': component('Activities'),
   }).default
   let renderer
   await act(async () => { renderer = create(React.createElement(Page)) })
@@ -1224,6 +1227,211 @@ test('unknown project tab query falls back to rounds and keeps description expan
   const expand = ellipsis.props.expandRender(false)
   assert.equal(expand.props['aria-expanded'], false)
   assert.equal(expand.props.children, '展开')
+  await act(async () => renderer.unmount())
+})
+
+function activityRow(id, type = 'ROUND', overrides = {}) {
+  return {
+    id,
+    type,
+    action: 'CREATED',
+    actorName: `操作人${id}`,
+    occurredAt: `2026-09-09T00:00:${String(id).padStart(2, '0')}Z`,
+    title: type === 'ROUND' ? '发起轮次' : `${type}动作`,
+    summary: type === 'PROJECT' ? '项目摘要' : `${type}对象`,
+    roundId: type === 'ROUND' ? id : null,
+    roundNo: type === 'ROUND' ? id : null,
+    targetId: id,
+    targetAvailable: type === 'ROUND',
+    ...overrides,
+  }
+}
+
+function activityArco() {
+  const timeline = Object.assign(component('Timeline'), { Item: component('Timeline.Item') })
+  return new Proxy({ Timeline: timeline }, { get: (obj, key) => obj[key] ?? arco[key] })
+}
+
+test('project activity waits for its tab, filters, refreshes and ignores late responses', async () => {
+  const pending = []
+  const http = {
+    get: async (_url, config) => new Promise((resolve) => pending.push({ params: config.params, resolve })),
+  }
+  const Page = loadTs('src/components/ProjectActivityPanel.tsx', {
+    '@arco-design/web-react': activityArco(),
+    '../api/client': http,
+    '../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中' } }, fmtTime: String },
+  }).default
+  const response = (list, nextCursor = null) => ({
+    data: {
+      list,
+      nextCursor,
+      summary: { status: 'IN_PROGRESS', pendingRounds: 2, lastActivityAt: '2026-09-09T00:00:01Z' },
+    },
+  })
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, active: false })) })
+  assert.equal(pending.length, 0, 'inactive activity tab must not request')
+  await act(async () => { renderer.update(React.createElement(Page, { projectId: 1, active: true })) })
+  assert.deepEqual(JSON.parse(JSON.stringify(pending[0].params)), { pageSize: 20 })
+
+  const first = activityRow(1)
+  const filtered = activityRow(2, 'ROUND', { summary: '<驳回原因>', title: '<发起轮次>' })
+  await act(async () => {
+    renderer.root.findByType('Select').props.onChange('ROUND')
+    await Promise.resolve()
+  })
+  assert.deepEqual(JSON.parse(JSON.stringify(pending[1].params)), { pageSize: 20, type: 'ROUND' })
+  await act(async () => pending[1].resolve(response([filtered])))
+  await act(async () => pending[0].resolve(response([first], 'late-cursor')))
+  const renderedRows = renderer.root.findAll((node) => node.props['data-activity-type'] !== undefined)
+  assert.deepEqual(renderedRows.map((node) => node.props['data-activity-type']), ['ROUND'])
+  assert.equal(renderer.root.findAll((node) => node.props.dangerouslySetInnerHTML !== undefined).length, 0)
+  assert.ok(JSON.stringify(renderer.toJSON()).includes('<驳回原因>'), 'server text must remain text content')
+  assert.ok(renderer.root.findAll((node) => node.props['data-activity-id'] === 2)[0])
+  assert.ok(renderer.root.findAll((node) => node.props.label === filtered.occurredAt).length > 0, 'each event must expose its occurrence time')
+
+  await act(async () => {
+    const refresh = renderer.root.findAllByType('Button').find((node) => node.props.children === '刷新')
+    refresh.props.onClick()
+    refresh.props.onClick()
+    await Promise.resolve()
+  })
+  assert.equal(pending.length, 3)
+  await act(async () => pending[2].resolve(response([activityRow(3, 'PROJECT', { summary: null })])))
+  assert.equal(renderer.root.findAll((node) => node.props['data-activity-id'] === 3).length, 1)
+  assert.equal(renderer.root.findAll((node) => node.props.className === 'project-activity-target').length, 0, 'empty project summary omits the object row')
+  await act(async () => renderer.update(React.createElement(Page, { projectId: 2, active: true })))
+  assert.equal(pending.length, 4, 'switching projects must issue a fresh request')
+  await act(async () => pending[3].resolve(response([activityRow(4)])))
+  assert.equal(renderer.root.findAll((node) => node.props['data-activity-id'] === 4).length, 1)
+  await act(async () => renderer.unmount())
+})
+
+test('project activity exposes malformed initial responses as a retryable failure', async () => {
+  let attempts = 0
+  const http = {
+    get: async () => {
+      attempts += 1
+      if (attempts === 1) return { data: { list: [] } }
+      return {
+        data: {
+          list: [activityRow(6)],
+          nextCursor: null,
+          summary: { status: 'IN_PROGRESS', pendingRounds: 0, lastActivityAt: null },
+        },
+      }
+    },
+  }
+  const Page = loadTs('src/components/ProjectActivityPanel.tsx', {
+    '@arco-design/web-react': activityArco(),
+    '../api/client': http,
+    '../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中' } }, fmtTime: String },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1 })) })
+  assert.ok(renderer.root.findAll((node) => node.props.children === '项目动态加载失败').length > 0)
+  const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试')
+  await act(async () => retry.props.onClick())
+  assert.equal(attempts, 2)
+  assert.equal(renderer.root.findAll((node) => node.props['data-activity-id'] === 6).length, 1)
+  await act(async () => renderer.unmount())
+})
+
+test('project activity keeps loaded rows when an append fails, retries the cursor and exposes target navigation', async () => {
+  const calls = []
+  let appendFailures = 1
+  const http = {
+    get: async (_url, config) => {
+      calls.push(config.params)
+      if (config.params.cursor && appendFailures > 0) {
+        appendFailures -= 1
+        throw Error('temporary activity failure')
+      }
+      return {
+        data: {
+          list: config.params.cursor
+            ? [
+              activityRow(2, 'FILE', { targetAvailable: false, summary: '图纸.pdf' }),
+              activityRow(3, 'PROJECT', { summary: null }),
+              activityRow(4, 'MESSAGE', { targetAvailable: true, summary: '留言内容' }),
+            ]
+            : [activityRow(1, 'ROUND', { summary: '驳回原因：需要补充资料' })],
+          nextCursor: config.params.cursor ? null : 'cursor-1',
+          summary: { status: 'IN_PROGRESS', pendingRounds: 1, lastActivityAt: '2026-09-09T00:00:01Z' },
+        },
+      }
+    },
+  }
+  const Page = loadTs('src/components/ProjectActivityPanel.tsx', {
+    '@arco-design/web-react': activityArco(),
+    '../api/client': http,
+    '../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中' } }, fmtTime: String },
+  }).default
+  const navigated = []
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, onNavigate: (...args) => navigated.push(args) })) })
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), { pageSize: 20 })
+  let more = renderer.root.findAllByType('Button').find((node) => node.props.children === '加载更多')
+  assert.ok(more)
+  await act(async () => { await more.props.onClick() })
+  assert.ok(renderer.root.findAll((node) => node.props.children === '加载失败').length > 0, 'append failure must expose a retry state')
+  assert.equal(renderer.root.findAll((node) => node.props['data-activity-id'] === 1).length, 1)
+  const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试')
+  assert.ok(retry)
+  await act(async () => retry.props.onClick())
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[1])), { pageSize: 20, cursor: 'cursor-1' })
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[2])), { pageSize: 20, cursor: 'cursor-1' })
+  const ids = renderer.root.findAll((node) => node.props['data-activity-id'] !== undefined).map((node) => node.props['data-activity-id'])
+  assert.deepEqual(ids, [1, 2, 3, 4])
+  const roundTargetLinks = renderer.root.findAllByProps({ 'aria-label': '查看第 1 轮 · 驳回原因：需要补充资料' })
+  assert.ok(roundTargetLinks.length > 0)
+  await act(async () => roundTargetLinks[0].props.onClick())
+  assert.deepEqual(navigated, [['ROUND', 1, 1]])
+  assert.equal(renderer.root.findAllByProps({ 'aria-label': '查看图纸.pdf' }).length, 0, 'unavailable file target must not be a link')
+  assert.equal(renderer.root.findAllByProps({ 'aria-label': '查看项目摘要' }).length, 0, 'project target must never be a link')
+  const messageTargetLinks = renderer.root.findAllByProps({ 'aria-label': '查看留言内容' })
+  assert.ok(messageTargetLinks.length > 0, 'available message target should be a link')
+  await act(async () => messageTargetLinks[0].props.onClick())
+  assert.deepEqual(navigated, [['ROUND', 1, 1], ['MESSAGE', 4, null]])
+  await act(async () => renderer.unmount())
+})
+
+test('project detail activity URL tab and target navigation preserve valid tab state', async () => {
+  let query = new URLSearchParams('tab=activity')
+  const updates = []
+  const project = { id: 1, name: '项目 1', status: 'IN_PROGRESS', supplierName: '供应商', updatedAt: '2026-09-09T00:00:00Z' }
+  const Page = loadTs('src/pages/project/ProjectDetail.tsx', {
+    '@arco-design/web-react': arco,
+    'react-router-dom': {
+      useParams: () => ({ id: '1' }),
+      useSearchParams: () => [query, (next) => { updates.push(next); query = new URLSearchParams(next) }],
+      useNavigate: () => () => {},
+    },
+    '../../api/client': { get: async (url) => ({ data: url.endsWith('/rounds') ? [] : url.endsWith('/summary') ? { unreadMessages: 0, pendingRounds: 0 } : project }) },
+    '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中', color: 'blue' } }, fmtTime: String },
+    '../../components/RoundPanel': component('Rounds'),
+    '../../components/FileTable': component('Files'),
+    '../../components/MessagePanel': component('Messages'),
+    '../../components/MemberPanel': component('Members'),
+    '../../components/ProjectActivityPanel': component('Activities'),
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  assert.equal(renderer.root.findByType('Tabs').props.activeTab, 'activity')
+  const activities = renderer.root.findByType('Activities')
+  assert.equal(activities.props.active, true)
+  await act(async () => activities.props.onNavigate('ROUND', 7, 7))
+  assert.equal(updates.at(-1).get('tab'), 'rounds')
+  assert.equal(updates.at(-1).get('target'), '7')
+
+  await act(async () => renderer.update(React.createElement(Page)))
+  assert.equal(renderer.root.findByType('Tabs').props.activeTab, 'rounds')
+  assert.equal(renderer.root.findByType('Rounds').props.targetId, 7)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '显示全部').length > 0)
+  await act(async () => renderer.root.findAllByType('Tabs')[0].props.onChange('files'))
+  assert.equal(updates.at(-1).get('tab'), 'files')
+  assert.equal(updates.at(-1).get('target'), null)
   await act(async () => renderer.unmount())
 })
 

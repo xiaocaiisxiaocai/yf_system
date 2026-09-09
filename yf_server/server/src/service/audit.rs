@@ -15,7 +15,7 @@ pub async fn insert(
     detail: Option<serde_json::Value>,
     ip: Option<String>,
 ) -> ApiResult<()> {
-    audit_logs::ActiveModel {
+    let model = audit_logs::ActiveModel {
         user_id: Set(user_id),
         employee_no: Set(employee_no),
         action: Set(action.to_string()),
@@ -28,6 +28,7 @@ pub async fn insert(
     }
     .insert(db)
     .await?;
+    super::project_activity::capture_audit(db, &model).await?;
     Ok(())
 }
 
