@@ -27,55 +27,90 @@ html, body, #root {
 .app-boot img { width: 72px; height: 34px; object-fit: contain; }
 .page-loader { min-height: 240px; }
 
-/* 登录与改密页：低对比度协作网络背景，突出表单而不引入外部资源。 */
+/* 登录与改密页：品牌与科技场景在左，表单保持简洁地落在右侧。 */
 .auth-page {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   position: relative;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
   box-sizing: border-box;
-  padding: 48px 24px 28px;
+  padding: clamp(32px, 6vw, 96px);
   overflow: hidden;
-  background-color: #041733;
-  background-image: radial-gradient(circle at 50% 42%, rgba(34, 123, 255, .28), transparent 36%), linear-gradient(135deg, rgba(5, 35, 78, .84) 0%, rgba(5, 49, 112, .72) 48%, rgba(3, 23, 57, .9) 100%), url('/auth-background.svg');
+  background-color: #031631;
+  background-image: linear-gradient(90deg, rgba(1, 14, 34, .04) 0%, rgba(1, 15, 39, .02) 54%, rgba(2, 18, 48, .3) 100%), url('/auth-scene.webp');
   background-position: center;
   background-repeat: no-repeat;
   background-size: cover;
 }
-.auth-glow { position: absolute; border-radius: 999px; filter: blur(2px); pointer-events: none; }
-.auth-glow--top { width: 360px; height: 360px; top: -245px; right: -70px; background: rgba(30, 162, 255, .2); box-shadow: 0 0 100px rgba(42, 172, 255, .28); }
-.auth-glow--bottom { width: 320px; height: 320px; bottom: -225px; left: -70px; background: rgba(26, 111, 255, .18); box-shadow: 0 0 100px rgba(26, 111, 255, .24); }
+.auth-page::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent 0 58%, rgba(1, 17, 46, .1) 72%, rgba(2, 18, 47, .22) 100%);
+}
+.auth-page-brand {
+  position: absolute;
+  z-index: 1;
+  top: clamp(30px, 6vh, 64px);
+  left: clamp(32px, 6vw, 96px);
+  display: inline-flex;
+  align-items: center;
+  gap: 18px;
+  color: #f5f9ff;
+}
+.auth-page-brand img { display: block; width: 108px; height: 48px; object-fit: contain; filter: brightness(0) invert(1); }
+.auth-page-brand span { padding-left: 18px; border-left: 1px solid rgba(152, 203, 255, .58); font-size: 22px; font-weight: 600; line-height: 30px; letter-spacing: .04em; text-shadow: 0 2px 18px rgba(0, 16, 50, .65); }
 .auth-card {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   box-sizing: border-box;
-  width: 440px;
+  width: 430px;
   max-width: calc(100vw - 32px);
-  padding: 30px 36px 34px;
-  background: rgba(250, 252, 255, .975);
-  border: 1px solid rgba(153, 211, 255, .52);
-  border-top: 2px solid #44bcff;
-  border-radius: 12px;
-  box-shadow: 0 28px 80px rgba(0, 10, 32, .5), 0 0 0 1px rgba(68, 188, 255, .05);
+  padding: 46px 44px;
+  background: rgba(250, 252, 255, .97);
+  border: 1px solid rgba(194, 220, 248, .72);
+  border-radius: 14px;
+  box-shadow: 0 30px 90px rgba(0, 9, 31, .48), inset 0 1px 0 rgba(255, 255, 255, .8);
+  backdrop-filter: blur(14px);
 }
-.auth-brand { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 26px; }
-.auth-brand img { display: block; width: 68px; height: 30px; object-fit: contain; }
-.auth-brand span { padding-left: 11px; border-left: 1px solid #d8dee9; color: #17243a; font-size: 15px; font-weight: 600; line-height: 22px; }
 .auth-heading { margin: 0 0 20px; color: #17243a; font-size: 20px; font-weight: 600; line-height: 30px; text-align: center; }
-.auth-form .arco-form-item { margin-bottom: 18px; }
+.auth-form .arco-form-item { margin-bottom: 20px; }
 .auth-form .arco-form-label-item { margin-bottom: 6px; }
-.auth-form .arco-input-inner-wrapper { height: 42px; }
-.auth-form .arco-btn-size-large { height: 42px; }
+.auth-form .arco-input-inner-wrapper { height: 50px; border-radius: 7px; background: #fff; border-color: #d9e1ec; box-shadow: 0 8px 24px rgba(27, 64, 114, .05); }
+.auth-form .arco-input-inner-wrapper:hover { border-color: #93b9eb; }
+.auth-form .arco-input-inner-wrapper:focus-within { border-color: rgb(var(--primary-6)); box-shadow: 0 0 0 3px rgba(22, 93, 255, .1); }
+.auth-form .arco-input-prefix { margin-right: 12px; color: #6680a3; font-size: 17px; }
+.auth-form .arco-input { font-size: 14px; }
+.auth-form .arco-btn-size-large { height: 50px; border-radius: 7px; font-size: 15px; font-weight: 600; }
+.auth-form > .arco-btn-primary { margin-top: 4px; box-shadow: 0 10px 26px rgba(22, 93, 255, .25); }
 .auth-notice { margin: -6px 0 20px; padding: 9px 12px; border: 1px solid #ffe0b3; border-radius: 6px; background: #fff7e8; color: #a86200; font-size: 13px; line-height: 20px; text-align: center; }
 .auth-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding-top: 2px; }
 .captcha-refresh { display: inline-flex; align-items: center; justify-content: center; height: 34px; padding: 0 2px; border: 0; background: transparent; cursor: pointer; }
 .captcha-refresh img { display: block; width: auto; max-width: 116px; height: 32px; }
+@media (max-width: 900px) {
+  .auth-page { justify-content: center; padding: 92px 24px 32px; background-position: 38% center; }
+  .auth-page::after { background: rgba(1, 14, 36, .42); }
+  .auth-page-brand { top: 24px; left: 50%; gap: 12px; transform: translateX(-50%); white-space: nowrap; }
+  .auth-page-brand img { width: 76px; height: 34px; }
+  .auth-page-brand span { padding-left: 12px; font-size: 16px; line-height: 24px; }
+}
 @media (max-width: 600px) {
-  .auth-page { justify-content: flex-start; padding: 11vh 16px 24px; overflow: auto; }
-  .auth-card { width: 100%; max-width: 440px; padding: 28px 24px 30px; }
-  .auth-brand { margin-bottom: 24px; }
+  .auth-page { padding: 78px 16px 24px; }
+  .auth-card { width: 100%; max-width: 430px; padding: 32px 24px; }
+}
+@media (max-height: 620px) {
+  .auth-page { justify-content: flex-end; padding: 16px 28px; background-position: center; }
+  .auth-page-brand { top: 16px; left: 28px; gap: 10px; transform: none; }
+  .auth-page-brand img { width: 68px; height: 30px; }
+  .auth-page-brand span { padding-left: 10px; font-size: 14px; line-height: 22px; }
+  .auth-card { padding: 24px 30px; }
+  .auth-form .arco-form-item { margin-bottom: 12px; }
+  .auth-form .arco-input-inner-wrapper,
+  .auth-form .arco-btn-size-large { height: 42px; }
+  .auth-notice { margin: 0 0 12px; padding: 6px 10px; }
 }
 
 /* 布局 */
