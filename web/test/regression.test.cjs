@@ -62,6 +62,13 @@ test('SAA branding is wired to the application logo and favicon', () => {
   assert.ok(fs.statSync(path.join(root, 'public/favicon.ico')).size > 0)
 })
 
+test('sidebar keeps overflow inside the menu instead of the sider shell', () => {
+  const css = fs.readFileSync(path.resolve(__dirname, '..', 'src/index.css'), 'utf8')
+  assert.match(css, /\.layout-sider > \.arco-layout-sider-children\s*\{[\s\S]*?overflow: hidden;/)
+  assert.match(css, /\.layout-sider \.arco-menu\s*\{[\s\S]*?flex: 1;[\s\S]*?height: auto;/)
+  assert.match(css, /\.layout-logo\s*\{[\s\S]*?box-sizing: border-box;/)
+})
+
 test('table action slots keep empty action positions for row alignment', () => {
   const { actionSlots } = loadTs('src/components/ActionSlots.tsx', {})
   const node = actionSlots([
