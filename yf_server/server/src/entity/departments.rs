@@ -1,4 +1,4 @@
-use super::enums::CommonStatus;
+use super::enums::{CommonStatus, DeptKind};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -7,8 +7,10 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: u64,
     pub name: String,
-    /// 父部门，不建 FK，应用层维护树并防循环
+    /// 父级组织，不建 FK，应用层维护树并防循环
     pub parent_id: Option<u64>,
+    /// DIVISION / DEPARTMENT / SECTION，由父级推导
+    pub kind: DeptKind,
     pub sort_no: i32,
     pub status: CommonStatus,
     pub created_at: DateTimeUtc,

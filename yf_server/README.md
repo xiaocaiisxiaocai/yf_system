@@ -15,7 +15,8 @@ mysql -uroot -p -e "CREATE DATABASE IF NOT EXISTS yf_system DEFAULT CHARACTER SE
 cd yf_server
 cargo run -p server
 
-# 或手工执行迁移
+# 或手工执行迁移（先显式设置 DATABASE_URL；CLI 不读取 config.local.toml）
+# 完整环境变量检查及恢复步骤见 DEPLOYMENT.md
 cargo run -p migration -- up
 ```
 
@@ -24,6 +25,22 @@ cargo run -p migration -- up
 - SMTP 凭据可通过 `YF_SMTP_HOST`、`YF_SMTP_PORT`、`YF_SMTP_USERNAME`、`YF_SMTP_PASSWORD`、`YF_SMTP_FROM` 进程级注入，避免写入配置文件；邮件中的登录地址使用前端 `web.base_url`，部署时可通过 `YF_WEB_BASE_URL` 覆盖。
 - 首次初始化会创建 `admin`，随机初始密码仅写入当次后端启动日志；首次登录强制改密。不要把初始密码写入源码、文档或长期日志。
 - Windows/IIS 发布、迁移、备份与恢复流程见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+
+## 删除操作
+
+物理删除同时要求启用的内部系统管理员身份和对应管理权限。系统管理员身份来自启用的内置角色，不能用用户名或可配置权限点代替。登录和个人资料响应的 `user.isSystemAdmin` 供前端控制入口，后端在删除事务内重新验证。
+
+| 对象 | 删除条件与保留规则 |
+|---|---|
+| 项目 | 非进行中，且无轮次、文件、留言、上传记录；锁定项目后重新校验，不级联删除业务内容 |
+| 用户、供应商账号 | 无业务历史或引用；有关联记录时使用禁用，保留创建人、确认人和已读凭证 |
+| 供应商 | 无项目且无账号；不级联删除账号 |
+| 组织、角色 | 保留子组织、用户引用和内置角色保护；不因管理员身份跳过关联校验 |
+| 操作日志 | 清理与 `AUDIT_LOG_DELETE` 留痕同事务，记录实际删除 ID 和数量；清理记录本身不可删除 |
+
+数据库迁移 008/009 会删除电话及供应商联系字段，回退迁移只恢复空列，不恢复旧数据。组织固定为三级的迁移会拒绝超过三级的旧数据；需先明确组织调整方案，再重试迁移。
+
+删除回归测试使用 `python scripts/test-isolated.py delete_safety_`，脚本只允许本机 MySQL，创建并清理临时测试库，不使用业务库运行删除测试。
 
 ## 结构
 

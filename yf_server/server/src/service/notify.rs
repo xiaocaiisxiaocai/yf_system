@@ -4,9 +4,7 @@ use sea_orm::sea_query::OnConflict;
 use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, Set};
 
 use crate::entity::enums::{CommonStatus, OutboxEventType, OutboxStatus, RoundStatus};
-use crate::entity::{
-    email_outbox, messages, project_members, projects, roles, system_configs, user_roles, users,
-};
+use crate::entity::{email_outbox, messages, projects, roles, system_configs, user_roles, users};
 use crate::error::ApiResult;
 use crate::middleware::auth::CurrentUser;
 use crate::state::AppState;
@@ -23,30 +21,13 @@ pub async fn enabled(db: &impl ConnectionTrait) -> bool {
         .unwrap_or(true)
 }
 
-/// 收件人：项目内部成员 + 该供应商启用账号（排除操作者），按邮箱去重
+/// 收件人：启用创建人、内部成员和供应商账号，排除操作者并按邮箱去重。
 async fn recipients(
     db: &impl ConnectionTrait,
     project: &projects::Model,
     exclude_user: u64,
 ) -> ApiResult<Vec<(u64, String)>> {
-    let member_ids: Vec<u64> = project_members::Entity::find()
-        .filter(project_members::Column::ProjectId.eq(project.id))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|m| m.user_id)
-        .collect();
-    let mut accounts = users::Entity::find()
-        .filter(users::Column::Id.is_in(member_ids))
-        .filter(users::Column::Status.eq(CommonStatus::Active))
-        .all(db)
-        .await?;
-    let supplier_accounts = users::Entity::find()
-        .filter(users::Column::SupplierId.eq(project.supplier_id))
-        .filter(users::Column::Status.eq(CommonStatus::Active))
-        .all(db)
-        .await?;
-    accounts.extend(supplier_accounts);
+    let accounts = super::participants::accounts(db, project).await?;
 
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();

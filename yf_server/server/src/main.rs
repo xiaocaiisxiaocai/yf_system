@@ -12,6 +12,16 @@ mod util;
 
 #[cfg(test)]
 mod regression;
+#[cfg(test)]
+mod regression_delete_accounts;
+#[cfg(test)]
+mod regression_delete_project;
+#[cfg(test)]
+mod regression_identity_review;
+#[cfg(test)]
+mod regression_org_migration;
+#[cfg(test)]
+mod regression_write_permissions;
 
 use migration::MigratorTrait;
 use state::AppState;

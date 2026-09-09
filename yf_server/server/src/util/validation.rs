@@ -20,10 +20,3 @@ pub fn email(value: &str) -> ApiResult<()> {
     }
     Ok(())
 }
-
-pub fn phone(value: Option<&str>) -> ApiResult<()> {
-    if value.is_some_and(|v| v.chars().count() > 32) {
-        return Err(AppError::BadRequest("电话不能超过 32 个字符".into()));
-    }
-    Ok(())
-}

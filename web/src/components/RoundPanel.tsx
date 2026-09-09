@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Timeline, Typography,
+  Button, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Table, Tag, Timeline, Typography,
 } from '@arco-design/web-react'
 import { IconCheckCircle, IconCloseCircle, IconMinusCircle, IconPlus, IconClockCircle } from '@arco-design/web-react/icon'
 import http from '../api/client'
@@ -17,9 +17,12 @@ interface Props {
 export default function RoundPanel({ projectId, projectStatus, onChanged }: Props) {
   const [rounds, setRounds] = useState<Round[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   const [createOpen, setCreateOpen] = useState(false)
   const [rejectTarget, setRejectTarget] = useState<Round | null>(null)
   const [history, setHistory] = useState<{ round: Round; logs: RoundLog[] } | null>(null)
+  const historyRequestId = useRef(0)
   const [form] = Form.useForm()
   const [rejectForm] = Form.useForm()
   const { hasPerm, user } = useAuth()
@@ -31,20 +34,23 @@ export default function RoundPanel({ projectId, projectStatus, onChanged }: Prop
     return r.data as Round[]
   }, [projectId])
 
-  const load = useCallback(async () => {
+  const load = useCallback(() => {
     setLoading(true)
-    try {
-      setRounds(await fetchRounds())
-    } finally {
-      setLoading(false)
-    }
-  }, [fetchRounds])
+    setLoadError(false)
+    setReloadKey((value) => value + 1)
+  }, [])
 
   useEffect(() => {
     let active = true
     fetchRounds()
       .then((next) => {
-        if (active) setRounds(next)
+        if (active) {
+          setRounds(next)
+          setLoadError(false)
+        }
+      })
+      .catch(() => {
+        if (active) setLoadError(true)
       })
       .finally(() => {
         if (active) setLoading(false)
@@ -52,7 +58,14 @@ export default function RoundPanel({ projectId, projectStatus, onChanged }: Prop
     return () => {
       active = false
     }
-  }, [fetchRounds])
+  }, [fetchRounds, reloadKey])
+
+  useEffect(() => {
+    historyRequestId.current += 1
+    return () => {
+      historyRequestId.current += 1
+    }
+  }, [projectId])
 
   const createRound = async () => {
     const v = await form.validate().catch(() => null)
@@ -91,8 +104,16 @@ export default function RoundPanel({ projectId, projectStatus, onChanged }: Prop
   }
 
   const openHistory = async (r: Round) => {
+    const requestId = historyRequestId.current + 1
+    historyRequestId.current = requestId
     const resp = await http.get(`/rounds/${r.id}`)
+    if (historyRequestId.current !== requestId) return
     setHistory({ round: resp.data, logs: resp.data.logs || [] })
+  }
+
+  const closeHistory = () => {
+    historyRequestId.current += 1
+    setHistory(null)
   }
 
   /** 当前用户是否为该轮确认方 */
@@ -103,23 +124,29 @@ export default function RoundPanel({ projectId, projectStatus, onChanged }: Prop
 
   return (
     <div>
-      <Space style={{ marginBottom: 12, width: '100%', justifyContent: 'space-between' }}>
-        <Typography.Text type="secondary">
-          共 {rounds.length} 轮；进行中项目可自由创建轮次，确认/驳回后锁定
-        </Typography.Text>
+      <div className="section-heading">
+        <div>
+          <h2>确认轮次（{rounds.length}）</h2>
+        </div>
         {isInternal && hasPerm('round:create') && projectStatus === 'IN_PROGRESS' && (
           <Button type="primary" icon={<IconPlus />} onClick={() => setCreateOpen(true)}>
             发起新一轮
           </Button>
         )}
-      </Space>
-      <Table
-        rowKey="id"
-        loading={loading}
-        data={rounds}
-        pagination={false}
-        scroll={{ x: 958 }}
-        columns={[
+      </div>
+      {loadError ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
+          <Typography.Text type="error">加载失败</Typography.Text>
+          <Button size="small" onClick={() => { setLoadError(false); setLoading(true); load() }}>重试</Button>
+        </div>
+      ) : (
+        <Table
+          rowKey="id"
+          loading={loading}
+          data={rounds}
+          pagination={false}
+          scroll={{ x: 958 }}
+          columns={[
           { title: '轮次', dataIndex: 'roundNo', width: 70, align: 'center' as const, render: (v: number) => `第 ${v} 轮` },
           {
             title: '标题',
@@ -205,11 +232,21 @@ export default function RoundPanel({ projectId, projectStatus, onChanged }: Prop
               <Button key="history" size="mini" type="text" icon={<IconClockCircle />} title="历史" onClick={() => openHistory(r)} />,
             ], 'round'),
           },
-        ]}
-      />
+          ]}
+        />
+      )}
 
-      <Modal title="发起新一轮" visible={createOpen} onOk={createRound} onCancel={() => setCreateOpen(false)}>
-        <Form form={form} layout="vertical">
+      <Modal
+        className="form-dialog"
+        style={{ width: 640 }}
+        title="发起新一轮"
+        visible={createOpen}
+        onOk={createRound}
+        onCancel={() => setCreateOpen(false)}
+        okText="创建轮次"
+        cancelText="取消"
+      >
+        <Form className="form-grid" form={form} layout="vertical">
           <Form.Item label="标题" field="title" rules={[{ required: true, message: '请输入轮次标题' }]}>
             <Input placeholder="如：首版图纸评审" maxLength={100} />
           </Form.Item>
@@ -219,17 +256,20 @@ export default function RoundPanel({ projectId, projectStatus, onChanged }: Prop
               <Select.Option value="COMPANY">公司确认</Select.Option>
             </Select>
           </Form.Item>
-          <Form.Item label="备注" field="remark">
-            <Input.TextArea rows={3} maxLength={500} showWordLimit />
+          <Form.Item className="form-grid-full" label="备注" field="remark">
+            <Input.TextArea rows={3} maxLength={500} showWordLimit placeholder="选填" />
           </Form.Item>
         </Form>
       </Modal>
 
       <Modal
+        className="form-dialog"
         title={`驳回第 ${rejectTarget?.roundNo ?? ''} 轮`}
         visible={!!rejectTarget}
         onOk={reject}
         onCancel={() => setRejectTarget(null)}
+        okText="确认驳回"
+        cancelText="取消"
         okButtonProps={{ status: 'danger' }}
       >
         <Form form={rejectForm} layout="vertical">
@@ -243,7 +283,7 @@ export default function RoundPanel({ projectId, projectStatus, onChanged }: Prop
         width={480}
         title={history ? `第 ${history.round.roundNo} 轮 · 状态历史` : ''}
         visible={!!history}
-        onCancel={() => setHistory(null)}
+        onCancel={closeHistory}
         footer={null}
       >
         {history && (

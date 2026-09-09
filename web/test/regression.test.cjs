@@ -17,7 +17,7 @@ const component = (name) => Object.assign((props) => React.createElement(name, p
 })
 const arco = new Proxy({
   Form: Object.assign(component('Form'), { useForm: () => [{}], Item: component('Form.Item') }),
-  Typography: { Text: component('Text'), Title: component('Title') },
+  Typography: { Text: component('Text'), Title: component('Title'), Ellipsis: component('Ellipsis') },
   Message: { error() {}, warning() {}, success() {}, info() {} },
 }, { get: (obj, key) => obj[key] ?? component(key) })
 
@@ -45,6 +45,11 @@ function findElement(node, predicate) {
 
 function findActionButton(node, text) {
   return findElement(node, (item) => item.props.children === text)
+}
+
+function authModule(user, permissions = []) {
+  const state = { user, hasPerm: (code) => permissions.includes(code) }
+  return { useAuth: (selector) => selector ? selector(state) : state }
 }
 
 test('SAA branding is wired to the application logo and favicon', () => {
@@ -118,6 +123,7 @@ test('paginated list pages constrain table body scrolling to keep pagination vis
         '@arco-design/web-react': arco,
         '@arco-design/web-react/icon': iconMock,
         '../../api/client': { get: async (url) => ({ data: url === '/departments' || url === '/admin/user-role-options' ? [] : pageData }) },
+        '../../store/auth': auth,
         '../../api/types': { fmtTime: String },
       },
     },
@@ -128,6 +134,7 @@ test('paginated list pages constrain table body scrolling to keep pagination vis
         '@arco-design/web-react': arco,
         '@arco-design/web-react/icon': iconMock,
         '../../api/client': { get: async (url) => ({ data: url === '/permissions' ? [] : { ...pageData, pageSize: 20 } }) },
+        '../../store/auth': auth,
         '../../api/types': { PageResp: {} },
       },
     },
@@ -138,6 +145,7 @@ test('paginated list pages constrain table body scrolling to keep pagination vis
         '@arco-design/web-react': arco,
         '@arco-design/web-react/icon': iconMock,
         '../../api/client': { get: async () => ({ data: { ...pageData, pageSize: 20 } }) },
+        '../../store/auth': auth,
         '../../api/types': { fmtTime: String },
       },
     },
@@ -155,32 +163,149 @@ test('paginated list pages constrain table body scrolling to keep pagination vis
   }
 })
 
-test('department management uses a split tree and detail workspace', async () => {
+test('organization structure uses division, department and section levels', async () => {
+  const layout = fs.readFileSync(path.resolve(__dirname, '..', 'src/layouts/AdminLayout.tsx'), 'utf8')
+  assert.match(layout, /label: '组织架构'/)
   const departments = [{
     id: 1,
-    name: '总部',
+    name: '事业一部',
+    kind: 'DIVISION',
     sortNo: 1,
     status: 'ACTIVE',
-    children: [{ id: 2, name: '研发部', parentId: 1, sortNo: 3, status: 'DISABLED' }],
+    children: [{
+      id: 2,
+      name: '研发部',
+      kind: 'DEPARTMENT',
+      parentId: 1,
+      sortNo: 3,
+      status: 'DISABLED',
+      children: [{ id: 3, name: '开发课', kind: 'SECTION', parentId: 2, sortNo: 1, status: 'ACTIVE' }],
+    }],
   }]
   const Page = loadTs('src/pages/org/DeptManage.tsx', {
     '@arco-design/web-react': arco,
     '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
     '../../api/client': { get: async () => ({ data: departments }) },
-    '../../store/auth': { useAuth: (selector) => selector({ hasPerm: () => true }) },
+    '../../store/auth': authModule({ id: 1, userType: 'INTERNAL', isSystemAdmin: true }, ['dept:manage']),
   }).default
   let renderer
   await act(async () => { renderer = create(React.createElement(Page)) })
-  assert.ok(renderer.root.findByProps({ className: 'page-card dept-page' }))
-  assert.ok(renderer.root.findByProps({ className: 'dept-workspace' }))
+  assert.ok(renderer.root.findAll((node) => node.props.children === '组织架构').length > 0)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '新增事业部').length > 0)
   const tree = renderer.root.findByType('Tree')
   assert.equal(tree.props.blockNode, true)
   assert.equal(tree.props.showLine, true)
-  await act(async () => tree.props.onSelect(['2']))
+  await act(async () => renderer.root.findByType('Tree').props.onSelect(['1']))
+  assert.ok(renderer.root.findAll((node) => node.props.children === '新增部门').length > 0)
+  await act(async () => renderer.root.findByType('Tree').props.onSelect(['2']))
   assert.ok(renderer.root.findAll((node) => node.props.children === '研发部').length > 0)
   assert.ok(renderer.root.findAll((node) => node.props.children === '层级路径').length > 0)
   assert.ok(renderer.root.findAll((node) => node.props.children === '编辑部门').length > 0)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '新增课别').length > 0)
+  assert.equal(renderer.root.findAll((node) => node.props.children === '新增子部门').length, 0)
+  await act(async () => renderer.root.findByType('Tree').props.onSelect(['3']))
+  assert.ok(renderer.root.findAll((node) => node.props.children === '编辑课别').length > 0)
+  assert.equal(renderer.root.findAll((node) => node.props.children === '新增课别').length, 0)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '事业一部 > 研发部 > 开发课').length > 0)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '删除课别').length > 0)
   await act(async () => renderer.unmount())
+})
+
+test('hard delete actions require both system-admin identity and the page management permission', async () => {
+  const iconMock = new Proxy({}, { get: (_, name) => component(name) })
+  const pageData = { list: [], total: 0, page: 1, pageSize: 10 }
+  const cases = [
+    {
+      page: 'src/pages/project/ProjectList.tsx',
+      permission: 'project:update',
+      row: { id: 1, name: 'p', status: 'DRAFT' },
+      mocks: (auth) => ({
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        'react-router-dom': { useNavigate: () => () => {} },
+        '../../api/client': { get: async (url) => ({ data: url === '/supplier-options' ? [] : pageData }) },
+        '../../store/auth': auth,
+        '../../api/types': { PROJECT_STATUS: {}, fmtTime: String },
+      }),
+    },
+    {
+      page: 'src/pages/supplier/SupplierList.tsx',
+      permission: 'supplier:manage',
+      row: { id: 8, name: 's', status: 'ACTIVE' },
+      mocks: (auth) => ({
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        '../../api/client': { get: async () => ({ data: pageData }) },
+        '../../store/auth': auth,
+        '../../api/types': { fmtTime: String },
+      }),
+    },
+    {
+      page: 'src/pages/org/UserList.tsx',
+      permission: 'user:manage',
+      row: { id: 2, employeeNo: 'staff', status: 'ACTIVE' },
+      mocks: (auth) => ({
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        '../../api/client': { get: async (url) => ({ data: url === '/departments' || url === '/admin/user-role-options' ? [] : pageData }) },
+        '../../store/auth': auth,
+        '../../api/types': { fmtTime: String },
+      }),
+    },
+    {
+      page: 'src/pages/rbac/RoleList.tsx',
+      permission: 'role:manage',
+      row: { id: 9, name: '自定义', isBuiltIn: false, permissionIds: [], assignedUserCount: 0, status: 'ACTIVE' },
+      mocks: (auth) => ({
+        '@arco-design/web-react': arco,
+        '@arco-design/web-react/icon': iconMock,
+        '../../api/client': { get: async (url) => ({ data: url === '/permissions' ? [] : { list: [], total: 0, page: 1, pageSize: 20 } }) },
+        '../../store/auth': auth,
+        '../../api/types': { PageResp: {} },
+      }),
+    },
+  ]
+  for (const item of cases) {
+    for (const [label, user, permissions, expected] of [
+      ['ordinary manager', { id: 1, userType: 'INTERNAL', isSystemAdmin: false }, [item.permission], false],
+      ['admin without page permission', { id: 1, userType: 'INTERNAL', isSystemAdmin: true }, [], false],
+      ['system admin manager', { id: 1, userType: 'INTERNAL', isSystemAdmin: true }, [item.permission], true],
+    ]) {
+      const Page = loadTs(item.page, item.mocks(authModule(user, permissions))).default
+      let renderer
+      await act(async () => { renderer = create(React.createElement(Page)) })
+      const actions = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, item.row)
+      assert.equal(!!findActionButton(actions, '删除'), expected, `${item.page}: ${label}`)
+      await act(async () => renderer.unmount())
+    }
+  }
+
+  const Project = loadTs('src/pages/project/ProjectList.tsx', cases[0].mocks(authModule(
+    { id: 1, userType: 'INTERNAL', isSystemAdmin: true },
+    ['project:update'],
+  ))).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Project)) })
+  const busy = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, { id: 2, name: 'busy', status: 'IN_PROGRESS' })
+  assert.equal(findActionButton(busy, '删除'), undefined, 'in-progress projects must not offer delete')
+  await act(async () => renderer.unmount())
+})
+
+test('department hard delete is hidden from ordinary department managers', async () => {
+  const departments = [{ id: 3, name: '开发课', kind: 'SECTION', parentId: 2, sortNo: 1, status: 'ACTIVE' }]
+  for (const [isSystemAdmin, expected] of [[false, false], [true, true]]) {
+    const Page = loadTs('src/pages/org/DeptManage.tsx', {
+      '@arco-design/web-react': arco,
+      '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+      '../../api/client': { get: async () => ({ data: departments }) },
+      '../../store/auth': authModule({ id: 1, userType: 'INTERNAL', isSystemAdmin }, ['dept:manage']),
+    }).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)) })
+    await act(async () => renderer.root.findByType('Tree').props.onSelect(['3']))
+    assert.equal(renderer.root.findAll((node) => node.props.children === '删除课别').length > 0, expected)
+    await act(async () => renderer.unmount())
+  }
 })
 
 function loadTs(relativePath, mocks, globals = {}) {
@@ -192,8 +317,8 @@ function loadTs(relativePath, mocks, globals = {}) {
   vm.runInNewContext(source, {
     exports, module: { exports }, console, setTimeout, clearTimeout, URL, AbortController, ...globals,
     require: (name) => {
-      if (name in mocks) return mocks[name]
-      if (name.endsWith('/ActionSlots')) return actionSlotsModule
+      if (typeof name === 'string' && name in mocks) return mocks[name]
+      if (typeof name === 'string' && name.replace(/\\/g, '/').endsWith('/ActionSlots')) return actionSlotsModule
       return require(name)
     },
   }, { filename })
@@ -288,6 +413,154 @@ test('round cancellation is shown only to its creator or a viewer of all project
   }
 })
 
+test('round history requests ignore late responses and closing invalidates them', async () => {
+  const rounds = [
+    { id: 1, roundNo: 1, status: 'CONFIRMED', confirmSide: 'COMPANY', createdBy: 1, createdAt: '' },
+    { id: 2, roundNo: 2, status: 'CONFIRMED', confirmSide: 'COMPANY', createdBy: 1, createdAt: '' },
+  ]
+  const pending = new Map()
+  const http = {
+    get: async (url) => {
+      if (url === '/projects/1/rounds') return { data: rounds }
+      const id = Number(url.match(/rounds\/(\d+)$/)[1])
+      return new Promise((resolve) => {
+        const queue = pending.get(id) || []
+        queue.push(resolve)
+        pending.set(id, queue)
+      })
+    },
+  }
+  const timeline = Object.assign(component('Timeline'), { Item: component('Timeline.Item') })
+  const roundArco = new Proxy({}, { get: (_, key) => key === 'Timeline' ? timeline : arco[key] })
+  const Page = loadTs('src/components/RoundPanel.tsx', {
+    '@arco-design/web-react': roundArco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../api/client': http,
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }),
+    '../api/types': { ROUND_STATUS: {}, fmtTime: String },
+  }).default
+  const historyData = (round) => ({ ...round, logs: [{ id: round.id, toStatus: 'CONFIRMED', operatorName: `操作人${round.id}`, createdAt: '' }] })
+  const release = async (id, round) => {
+    const queue = pending.get(id)
+    assert.ok(queue && queue.length > 0, `history request ${id} must be pending`)
+    queue.shift()({ data: historyData(round) })
+  }
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', onChanged() {} })) })
+  const historyButton = (round) => {
+    const actions = renderer.root.findByType('Table').props.columns.at(-1).render(null, round)
+    return findElement(actions, (node) => node.props.title === '历史')
+  }
+
+  let firstRequest
+  let secondRequest
+  await act(async () => {
+    firstRequest = historyButton(rounds[0]).props.onClick()
+    secondRequest = historyButton(rounds[1]).props.onClick()
+    await Promise.resolve()
+  })
+  await act(async () => { await release(2, rounds[1]); await secondRequest })
+  await act(async () => { await release(1, rounds[0]); await firstRequest })
+  let drawer = renderer.root.findByType('Drawer')
+  assert.equal(drawer.props.visible, true)
+  assert.match(drawer.props.title, /第 2 轮/)
+  assert.equal(drawer.findByType('Timeline').props.children[0].props.children[0].props.children[1].props.children, '操作人2')
+
+  let lateRequest
+  await act(async () => {
+    lateRequest = historyButton(rounds[0]).props.onClick()
+    await Promise.resolve()
+  })
+  drawer = renderer.root.findByType('Drawer')
+  await act(async () => drawer.props.onCancel())
+  await act(async () => { await release(1, rounds[0]); await lateRequest })
+  assert.equal(renderer.root.findByType('Drawer').props.visible, false, 'closing must invalidate a late history response')
+
+  let unmountedRequest
+  await act(async () => {
+    unmountedRequest = historyButton(rounds[1]).props.onClick()
+    await Promise.resolve()
+  })
+  await act(async () => renderer.unmount())
+  await act(async () => { await release(2, rounds[1]); await unmountedRequest })
+})
+
+test('member picker waits for a successful member load and guards loading/error handlers', async () => {
+  const memberRequests = []
+  let optionCalls = 0
+  let releaseOptions
+  let saved
+  const existing = { userId: 42, employeeNo: 'E42', realName: '已有成员', createdAt: '' }
+  const options = [{ id: 7, employeeNo: 'E7', realName: '当前用户' }]
+  const http = {
+    get: async (url) => {
+      if (url === '/projects/1/members') {
+        return new Promise((resolve, reject) => memberRequests.push({ resolve, reject }))
+      }
+      if (url === '/internal-user-options') {
+        optionCalls++
+        return new Promise((resolve) => { releaseOptions = resolve })
+      }
+      throw new Error(`unexpected GET ${url}`)
+    },
+    put: async (_url, body) => { saved = body }
+  }
+  const Page = loadTs('src/components/MemberPanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../api/client': http,
+    '../store/auth': authModule({ id: 7, userType: 'INTERNAL' }, ['project:member']),
+    '../api/types': { fmtTime: String },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, supplierName: '供应商' })) })
+  assert.equal(memberRequests.length, 1)
+  let picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置成员')
+  assert.equal(picker.props.disabled, true, 'picker must stay disabled before members load')
+  await act(async () => { await picker.props.onClick() })
+  assert.equal(optionCalls, 0, 'the handler must reject calls while the member list is loading')
+
+  await act(async () => { memberRequests.shift().reject(new Error('members unavailable')); await Promise.resolve() })
+  picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置成员')
+  assert.equal(picker.props.disabled, true, 'picker must stay disabled after a member load error')
+  await act(async () => { await picker.props.onClick() })
+  assert.equal(optionCalls, 0, 'the handler must reject calls while the member list is in an error state')
+
+  const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试')
+  await act(async () => { retry.props.onClick(); await Promise.resolve() })
+  assert.equal(memberRequests.length, 1)
+  await act(async () => { memberRequests.shift().resolve({ data: [existing] }); await Promise.resolve() })
+  picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置成员')
+  assert.equal(picker.props.disabled, false, 'picker should enable after a successful member load')
+  let openRequest
+  let duplicateOpen
+  await act(async () => {
+    openRequest = picker.props.onClick()
+    duplicateOpen = picker.props.onClick()
+    await Promise.resolve()
+  })
+  assert.equal(optionCalls, 1, 'double clicking the picker must issue one options request')
+  await act(async () => renderer.root.findByType('Modal').props.onCancel())
+  await act(async () => { releaseOptions({ data: options }); await openRequest; await duplicateOpen })
+  assert.equal(renderer.root.findByType('Modal').props.visible, false, 'closing must invalidate a late options response')
+
+  picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置成员')
+  await act(async () => { openRequest = picker.props.onClick(); await Promise.resolve() })
+  assert.equal(optionCalls, 2)
+  await act(async () => { releaseOptions({ data: options }); await openRequest })
+  const modal = renderer.root.findByType('Modal')
+  assert.equal(modal.props.visible, true)
+  const select = renderer.root.findByType('Select')
+  assert.deepEqual(select.props.value, [42])
+  assert.deepEqual(select.props.children.map((option) => option.props.value), [7], 'missing existing members must not become new candidates')
+  const existingTag = select.props.renderTag({ value: 42, label: 42, closable: true, onClose() {} }, 0, [42])
+  assert.match(String(existingTag.props.children), /已有成员（工号 E42）/)
+  assert.equal(existingTag.props.closable, true, 'existing members must remain removable')
+  await act(async () => modal.props.onOk())
+  assert.deepEqual(Array.from(saved.userIds), [42, 7], 'saving must preserve the loaded members and the operator')
+  await act(async () => renderer.unmount())
+})
+
 test('supplier account loading failures stop spinning and can retry', async () => {
   let fail=true
   const supplier={id:8,name:'fixture',status:'ACTIVE'}
@@ -308,6 +581,504 @@ test('supplier account loading failures stop spinning and can retry', async () =
   await act(async()=>renderer.root.findAllByType('Button').find(n=>n.props.children==='重试').props.onClick())
   assert.equal(renderer.root.findByType('Drawer').findByType('Table').props.data[0].id,16)
   await act(async()=>renderer.unmount())
+})
+
+test('disabled supplier account drawer disables new account creation and rejects stale submit', async () => {
+  let createCalls = 0
+  const supplier = { id: 8, name: 'FULL_PAGE_SUP00', status: 'DISABLED', createdAt: '' }
+  const form = {
+    validate: async () => ({ employeeNo: 'new-account', password: 'secret1', realName: '新账号', email: 'new@example.invalid' }),
+    resetFields() {},
+    setFieldsValue() {},
+  }
+  const testArco = new Proxy({
+    Form: Object.assign(component('Form'), { useForm: () => [form], Item: component('Form.Item') }),
+    Typography: arco.Typography,
+    Message: arco.Message,
+  }, { get: (obj, key) => obj[key] ?? component(key) })
+  const Page = loadTs('src/pages/supplier/SupplierList.tsx', {
+    '@arco-design/web-react': testArco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../../store/auth': { useAuth: () => ({ hasPerm: () => true, user: { id: 1, userType: 'INTERNAL', isSystemAdmin: true } }) },
+    '../../api/types': { fmtTime: String },
+    '../../api/client': {
+      get: async (url) => url.endsWith('/accounts') ? { data: [] } : { data: { list: [supplier], total: 1, page: 1, pageSize: 10 } },
+      post: async (url) => { if (url.endsWith('/accounts')) createCalls++ ; return { data: {} } },
+    },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const actions = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, supplier)
+  await act(async () => findActionButton(actions, '账号管理').props.onClick())
+  const add = renderer.root.findAllByType('Button').find((node) => node.props.children === '新增账号')
+  assert.ok(add, 'the account entry remains discoverable so the disabled state is explicit')
+  assert.equal(add.props.disabled, true)
+  // Even if a stale UI event reaches the handler, the submit path must enforce the same contract.
+  await act(async () => add.props.onClick())
+  const modal = renderer.root.findAllByType('Modal').find((node) => node.props.visible)
+  await act(async () => modal.props.onOk())
+  assert.equal(createCalls, 0)
+  await act(async () => renderer.unmount())
+})
+
+test('paginated lists and file table expose a retry state after the main GET fails', async () => {
+  const iconMock = new Proxy({}, { get: (_, name) => component(name) })
+  const auth = authModule({ id: 1, userType: 'INTERNAL', isSystemAdmin: true }, [
+    'project:update', 'supplier:account', 'user:manage', 'role:manage', 'file:download',
+  ])
+  const cases = [
+    {
+      file: 'src/pages/project/ProjectList.tsx', api: '/projects', props: {},
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        'react-router-dom': { useNavigate: () => () => {} }, '../../api/client': http,
+        '../../store/auth': auth, '../../api/types': { PROJECT_STATUS: {}, fmtTime: String },
+      }),
+    },
+    {
+      file: 'src/pages/supplier/SupplierList.tsx', api: '/admin/suppliers', props: {},
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../../api/client': http, '../../store/auth': auth, '../../api/types': { fmtTime: String },
+      }),
+    },
+    {
+      file: 'src/pages/org/UserList.tsx', api: '/admin/users', props: {},
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../../api/client': http, '../../store/auth': auth, '../../api/types': { fmtTime: String },
+      }),
+    },
+    {
+      file: 'src/pages/rbac/RoleList.tsx', api: '/admin/roles', props: {},
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../../api/client': http, '../../store/auth': auth, '../../api/types': { PageResp: {} },
+      }),
+    },
+    {
+      file: 'src/pages/system/AuditLog.tsx', api: '/admin/audit-logs', props: {},
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../../api/client': http, '../../store/auth': auth, '../../api/types': { fmtTime: String },
+      }),
+    },
+    {
+      file: 'src/components/FileTable.tsx', api: '/projects/1/files', props: { projectId: 1, projectStatus: 'IN_PROGRESS', rounds: [] },
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../api/client': http, '../store/auth': auth, '../api/types': { fmtTime: String, fmtSize: String },
+        './ChunkUploader': component('Uploader'), './PdfPreview': component('PDF'),
+      }),
+    },
+  ]
+
+  for (const item of cases) {
+    let fail = true
+    const http = {
+      get: async (url) => {
+        if (url === item.api) {
+          if (fail) throw new Error('simulated list failure')
+          return { data: { list: [{ id: 1 }], total: 1, page: 1, pageSize: 10 } }
+        }
+        return { data: url === '/permissions' || url === '/departments' || url === '/admin/user-role-options' || url === '/supplier-options' ? [] : { list: [], total: 0 } }
+      },
+    }
+    const Page = loadTs(item.file, item.mocks(http)).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page, item.props)) })
+    assert.ok(renderer.root.findAll((node) => node.props && node.props.children === '加载失败').length > 0, item.file)
+    const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试')
+    assert.ok(retry, `${item.file} must offer retry`)
+    fail = false
+    await act(async () => retry.props.onClick())
+    assert.equal(renderer.root.findAll((node) => node.props && node.props.children === '加载失败').length, 0, item.file)
+    await act(async () => renderer.unmount())
+  }
+})
+
+test('list actions cannot let an old refresh overwrite a newer filter result', async () => {
+  const iconMock = new Proxy({}, { get: (_, name) => component(name) })
+  const auth = authModule({ id: 1, userType: 'INTERNAL', isSystemAdmin: true }, [
+    'project:status', 'project:update', 'supplier:account', 'supplier:manage', 'user:manage', 'role:manage',
+  ])
+  const cases = [
+    {
+      file: 'src/pages/project/ProjectList.tsx', api: '/projects',
+      row: { id: 1, name: '旧项目', status: 'DRAFT', supplierId: 1 },
+      action: (actions) => findElement(actions, (node) => node.props.placeholder === '状态' && typeof node.props.onChange === 'function'),
+      invoke: (node) => node.props.onChange('IN_PROGRESS'),
+      filter: (renderer) => renderer.root.findByType('Input.Search').props.onSearch('new-filter'),
+      matches: (request) => request.params.keyword === 'new-filter',
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        'react-router-dom': { useNavigate: () => () => {} }, '../../api/client': http,
+        '../../store/auth': auth, '../../api/types': { PROJECT_STATUS: {}, fmtTime: String },
+      }),
+    },
+    {
+      file: 'src/pages/supplier/SupplierList.tsx', api: '/admin/suppliers',
+      row: { id: 1, name: '旧供应商', status: 'ACTIVE', createdAt: '' },
+      action: (actions) => findElement(actions, (node) => node.props.title === '禁用后其所有账号无法登录，确认？'),
+      invoke: (node) => node.props.onOk(),
+      filter: (renderer) => renderer.root.findByType('Input.Search').props.onSearch('new-filter'),
+      matches: (request) => request.params.keyword === 'new-filter',
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../../api/client': http, '../../store/auth': auth, '../../api/types': { fmtTime: String },
+      }),
+    },
+    {
+      file: 'src/pages/org/UserList.tsx', api: '/admin/users',
+      row: { id: 1, employeeNo: 'u1', realName: '旧用户', email: '', status: 'ACTIVE', createdAt: '' },
+      action: (actions) => findElement(actions, (node) => node.props.title === '禁用后立即无法登录，确认？'),
+      invoke: (node) => node.props.onOk(),
+      filter: (renderer) => renderer.root.findByType('Input.Search').props.onSearch('new-filter'),
+      matches: (request) => request.params.keyword === 'new-filter',
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../../api/client': http, '../../store/auth': auth, '../../api/types': { fmtTime: String },
+      }),
+    },
+    {
+      file: 'src/pages/rbac/RoleList.tsx', api: '/admin/roles',
+      row: { id: 1, name: '旧角色', status: 'ACTIVE', isBuiltIn: false, permissionsLocked: false, permissionIds: [], assignedUserCount: 0 },
+      action: (actions) => findElement(actions, (node) => node.props.title === '确认禁用该角色？'),
+      invoke: (node) => node.props.onOk(),
+      filter: (renderer) => renderer.root.findAllByType('Table').find((node) => String(node.props.className || '').includes('page-table')).props.pagination.onChange(2, 20),
+      matches: (request) => request.params.page === 2,
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../../api/client': http, '../../store/auth': auth, '../../api/types': { PageResp: {} },
+      }),
+    },
+  ]
+
+  for (const item of cases) {
+    const requests = []
+    const http = {
+      get: async (url, config = {}) => {
+        if (url !== item.api) return { data: [] }
+        return new Promise((resolve) => requests.push({ params: config.params || {}, resolve }))
+      },
+      put: async () => ({}),
+    }
+    const Page = loadTs(item.file, item.mocks(http)).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)) })
+    const first = requests.shift()
+    await act(async () => first.resolve({ data: { list: [item.row], total: 1, page: 1, pageSize: 10 } }))
+    const mainTable = () => renderer.root.findAllByType('Table').find((node) => String(node.props.className || '').includes('page-table')) || renderer.root.findAllByType('Table')[0]
+    const actions = mainTable().props.columns.at(-1).render(null, item.row)
+    const action = item.action(actions)
+    assert.ok(action, `${item.file} must expose a refreshable action`)
+    await act(async () => { await item.invoke(action) })
+    const stale = requests.shift()
+    assert.ok(stale, `${item.file} must start an action refresh`)
+    await act(async () => item.filter(renderer))
+    const filtered = requests.find(item.matches)
+    assert.ok(filtered, `${item.file} must fetch the newer filter`)
+    await act(async () => filtered.resolve({ data: { list: [{ ...item.row, id: 2, name: '新筛选结果' }], total: 1, page: 1, pageSize: 10 } }))
+    await act(async () => stale.resolve({ data: { list: [item.row], total: 1, page: 1, pageSize: 10 } }))
+    assert.equal(mainTable().props.data[0].id, 2, item.file)
+    await act(async () => renderer.unmount())
+  }
+})
+
+test('dashboard and project detail panels expose retry instead of a false empty state', async () => {
+  const iconMock = new Proxy({}, { get: (_, name) => component(name) })
+  const state = { user: { id: 1, realName: '管理员', userType: 'INTERNAL' }, hasPerm: () => false }
+  const auth = { useAuth: (selector) => selector ? selector(state) : state }
+  const cases = [
+    {
+      file: 'src/components/RoundPanel.tsx', api: '/projects/1/rounds', props: { projectId: 1, projectStatus: 'IN_PROGRESS', onChanged() {} },
+      data: [{ id: 1, roundNo: 1, status: 'CONFIRMED', confirmSide: 'COMPANY', createdBy: 1, createdAt: '' }],
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../api/client': http, '../store/auth': auth, '../api/types': { ROUND_STATUS: {}, fmtTime: String },
+      }),
+    },
+    {
+      file: 'src/components/MemberPanel.tsx', api: '/projects/1/members', props: { projectId: 1, supplierName: '供应商' },
+      data: [{ userId: 1, employeeNo: 'A1', realName: '管理员', createdAt: '' }],
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../api/client': http, '../store/auth': auth, '../api/types': { fmtTime: String },
+      }),
+    },
+    {
+      file: 'src/components/MessagePanel.tsx', api: '/projects/1/messages', props: { projectId: 1, projectStatus: 'IN_PROGRESS', rounds: [] },
+      data: { list: [{ id: 1, senderId: 2, senderName: '成员', senderType: 'INTERNAL', content: '消息', readByMe: true, readCount: 1, totalCount: 1, createdAt: '' }], total: 1 },
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../api/client': http, '../store/auth': auth, '../api/types': { fmtTime: String },
+      }),
+    },
+    {
+      file: 'src/pages/org/DeptManage.tsx', api: '/departments', props: {},
+      data: [{ id: 1, name: '事业部', kind: 'DIVISION', sortNo: 1, status: 'ACTIVE', children: [] }],
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../../api/client': http, '../../store/auth': auth,
+      }),
+    },
+    {
+      file: 'src/pages/system/SysConfig.tsx', api: '/admin/system/configs', props: {}, data: [],
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../../api/client': http, '../../api/types': { fmtTime: String, fmtSize: String },
+      }),
+    },
+    {
+      file: 'src/pages/Dashboard.tsx', api: '/dashboard/summary', props: {},
+      data: { projectCount: 1, activeProjectCount: 1, pendingRounds: 0, unreadMessages: 0, recentMessages: [] },
+      mocks: (http) => ({
+        '@arco-design/web-react': new Proxy({
+          Grid: Object.assign(component('Grid'), { Row: component('Grid.Row'), Col: component('Grid.Col') }),
+          List: Object.assign(component('List'), { Item: Object.assign(component('List.Item'), { Meta: component('List.Item.Meta') }) }),
+          Typography: arco.Typography,
+          Message: arco.Message,
+        }, { get: (obj, key) => obj[key] ?? component(key) }),
+        '@arco-design/web-react/icon': iconMock,
+        '../api/client': http, '../store/auth': auth, '../api/types': { fmtTime: String },
+        'react-router-dom': { useNavigate: () => () => {} },
+      }),
+    },
+  ]
+
+  for (const item of cases) {
+    let fail = true
+    const http = {
+      get: async (url) => {
+        if (url === item.api) {
+          if (fail) throw new Error('simulated panel failure')
+          return { data: item.data }
+        }
+        if (url.endsWith('/messages')) return { data: { list: [], total: 0 } }
+        if (url === '/admin/system/storage') return { data: { totalBytes: 1, availableBytes: 1, usedPercent: 0, warnPercent: 80, warning: false, root: '/' } }
+        return { data: [] }
+      },
+    }
+    const Page = loadTs(item.file, item.mocks(http)).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page, item.props)) })
+    assert.ok(renderer.root.findAll((node) => node.props && node.props.children === '加载失败').length > 0, item.file)
+    const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试')
+    assert.ok(retry, `${item.file} must offer retry`)
+    fail = false
+    await act(async () => retry.props.onClick())
+    assert.equal(renderer.root.findAll((node) => node.props && node.props.children === '加载失败').length, 0, item.file)
+    await act(async () => renderer.unmount())
+  }
+})
+
+test('message receipt requests ignore late responses and closing invalidates them', async () => {
+  const pending = new Map()
+  const messages = [
+    { id: 1, projectId: 1, senderId: 1, senderName: '我', senderType: 'INTERNAL', content: '一', readCount: 0, totalCount: 1, readByMe: true, createdAt: '' },
+    { id: 2, projectId: 1, senderId: 1, senderName: '我', senderType: 'INTERNAL', content: '二', readCount: 0, totalCount: 1, readByMe: true, createdAt: '' },
+  ]
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../store/auth': { useAuth: () => ({ user: { id: 1 }, hasPerm: () => false }) },
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async (url) => {
+        if (url === '/projects/1/messages') return { data: { list: messages, total: messages.length } }
+        const id = Number(url.match(/messages\/(\d+)\/reads$/)[1])
+        return new Promise((resolve) => pending.set(id, resolve))
+      },
+    },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'COMPLETED', rounds: [] })) })
+  const receiptButtons = renderer.root.findAllByType('Button').filter((node) => node.props.children === '回执详情')
+  assert.equal(receiptButtons.length, 2)
+  await act(async () => {
+    receiptButtons[0].props.onClick()
+    receiptButtons[1].props.onClick()
+    await Promise.resolve()
+  })
+  await act(async () => pending.get(2)({ data: { readers: [{ userId: 2, realName: '读者二', userType: 'INTERNAL' }], unread: [] } }))
+  await act(async () => pending.get(1)({ data: { readers: [{ userId: 3, realName: '读者一', userType: 'INTERNAL' }], unread: [] } }))
+  let drawer = renderer.root.findByType('Drawer')
+  assert.equal(drawer.findAllByType('List')[0].props.dataSource[0].userId, 2)
+  let oldRequest
+  await act(async () => {
+    oldRequest = renderer.root.findAllByType('Button').find((node) => node.props.children === '回执详情').props.onClick()
+    await Promise.resolve()
+  })
+  const releaseOld = pending.get(1)
+  drawer = renderer.root.findByType('Drawer')
+  await act(async () => drawer.props.onCancel())
+  await act(async () => { releaseOld({ data: { readers: [{ userId: 4, realName: '关闭后返回', userType: 'INTERNAL' }], unread: [] } }); await oldRequest })
+  assert.equal(renderer.root.findByType('Drawer').props.visible, false)
+  await act(async () => renderer.unmount())
+})
+
+test('lost upload merge response retries only merge on the same session', async () => {
+  let initCalls = 0
+  let chunkCalls = 0
+  let mergeCalls = 0
+  let deleteCalls = 0
+  let done = 0
+  let closed = 0
+  const Uploader = loadTs('src/components/ChunkUploader.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../api/types': { fmtSize: String },
+    '../api/file-hash': { fileMd5: async () => 'test-hash' },
+    '../api/client': {
+      post: async (url) => {
+        if (url === '/uploads/init') {
+          initCalls++
+          return { data: { sessionId: 'same-session', chunkSize: 1, totalChunks: 1, uploadedChunks: [] } }
+        }
+        mergeCalls++
+        if (mergeCalls === 1) throw new Error('response lost after commit')
+        return { data: { id: 99 } }
+      },
+      put: async () => { chunkCalls++ },
+      delete: async () => { deleteCalls++ },
+    },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Uploader, { projectId: 1, roundId: 1, visible: true, onClose: () => { closed++ }, onDone: () => { done++ } })) })
+  await act(async () => renderer.root.findByType('input').props.onChange({ target: { files: [{ name: 'sample.pdf', size: 1, slice: () => new Blob(['x']) }] } }))
+  let footer
+  await act(async () => {
+    footer = renderer.root.findByType('Modal').props.footer
+    await footer.props.children[1].props.onClick()
+  })
+  const retry = findActionButton(renderer.root.findByType('Modal').props.footer, '重试确认')
+  assert.ok(retry, 'an uncertain merge must offer an explicit confirmation retry')
+  await act(async () => retry.props.onClick())
+  assert.equal(initCalls, 1)
+  assert.equal(chunkCalls, 1)
+  assert.equal(mergeCalls, 2)
+  assert.equal(deleteCalls, 0)
+  assert.equal(done, 1)
+  assert.equal(closed, 1)
+  await act(async () => renderer.unmount())
+})
+
+test('concurrent merge confirmation clicks issue only one retry request', async () => {
+  let mergeCalls = 0
+  let initCalls = 0
+  let chunkCalls = 0
+  let done = 0
+  let closed = 0
+  let releaseRetry
+  const retryMerge = new Promise((resolve) => { releaseRetry = resolve })
+  const Uploader = loadTs('src/components/ChunkUploader.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../api/types': { fmtSize: String },
+    '../api/file-hash': { fileMd5: async () => 'test-hash' },
+    '../api/client': {
+      post: async (url) => {
+        if (url === '/uploads/init') {
+          initCalls++
+          return { data: { sessionId: 'same-session', chunkSize: 1, totalChunks: 1, uploadedChunks: [] } }
+        }
+        mergeCalls++
+        if (mergeCalls === 1) throw new Error('response lost after commit')
+        return retryMerge
+      },
+      put: async () => { chunkCalls++ },
+      delete: async () => { throw new Error('retry must not cancel a committed upload') },
+    },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Uploader, { projectId: 1, roundId: 1, visible: true, onClose: () => { closed++ }, onDone: () => { done++ } })) })
+  await act(async () => renderer.root.findByType('input').props.onChange({ target: { files: [{ name: 'sample.pdf', size: 1, slice: () => new Blob(['x']) }] } }))
+  await act(async () => {
+    const start = renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick()
+    await start
+  })
+  const retry = findActionButton(renderer.root.findByType('Modal').props.footer, '重试确认')
+  assert.ok(retry)
+  let firstRetry
+  let secondRetry
+  await act(async () => {
+    firstRetry = retry.props.onClick()
+    secondRetry = retry.props.onClick()
+    await Promise.resolve()
+  })
+  assert.equal(mergeCalls, 2, 'double clicking confirmation must keep one merge retry in flight')
+  releaseRetry({ data: { id: 99 } })
+  await act(async () => { await Promise.all([firstRetry, secondRetry]) })
+  assert.equal(initCalls, 1)
+  assert.equal(chunkCalls, 1)
+  assert.equal(done, 1)
+  assert.equal(closed, 1)
+  await act(async () => renderer.unmount())
+})
+
+test('supplier account drawer fits on desktop and keeps columns reachable on narrow screens without phone fields', async () => {
+  const css = fs.readFileSync(path.resolve(__dirname, '..', 'src/index.css'), 'utf8')
+  assert.doesNotMatch(css, /\.account-drawer[^{}]*\{[^}]*overflow-x:\s*hidden/)
+
+  const supplier = { id: 8, name: 'fixture', status: 'ACTIVE' }
+  const Page = loadTs('src/pages/supplier/SupplierList.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../../store/auth': { useAuth: () => ({ hasPerm: () => true }) },
+    '../../api/types': { fmtTime: String },
+    '../../api/client': { get: async (url) => {
+      if (url.endsWith('/accounts')) return { data: [] }
+      return { data: { list: [supplier], total: 1 } }
+    } },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const actions = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, supplier)
+  await act(async () => findActionButton(actions, '账号管理').props.onClick())
+  const drawer = renderer.root.findByType('Drawer')
+  assert.equal(drawer.props.className, 'account-drawer')
+  const table = drawer.findByType('Table')
+  assert.equal(table.props.className, 'account-table')
+  assert.equal(table.props.scroll.x, 840)
+  const widthSum = table.props.columns.reduce((sum, col) => sum + (col.width || 0), 0)
+  assert.ok(widthSum <= table.props.scroll.x, `account column widths ${widthSum} must fit the scrollable table`)
+  assert.ok(table.props.scroll.x <= drawer.props.width - 48, 'desktop table must fit inside the drawer padding')
+  assert.equal(table.props.columns.some((col) => col.dataIndex === 'phone' || col.title === '电话'), false)
+  const phoneField = renderer.root.findAll((node) => node.props && node.props.field === 'phone')
+  assert.equal(phoneField.length, 0, 'account form must not collect phone')
+  await act(async () => renderer.unmount())
+
+  const userSrc = fs.readFileSync(path.resolve(__dirname, '..', 'src/pages/org/UserList.tsx'), 'utf8')
+  assert.doesNotMatch(userSrc, /field="phone"/)
+})
+
+test('supplier form and table drop contact address and email fields', async () => {
+  const gone = ['contactName', 'contactPhone', 'contactEmail', 'address']
+  const supplier = { id: 8, name: 'fixture', status: 'ACTIVE' }
+  const Page = loadTs('src/pages/supplier/SupplierList.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../../store/auth': { useAuth: () => ({ hasPerm: () => true }) },
+    '../../api/types': { fmtTime: String },
+    '../../api/client': { get: async (url) => {
+      if (url.endsWith('/accounts')) return { data: [] }
+      return { data: { list: [supplier], total: 1 } }
+    } },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const table = renderer.root.findAllByType('Table')[0]
+  const dataIndexes = table.props.columns.map((col) => col.dataIndex)
+  for (const field of gone) {
+    assert.equal(dataIndexes.includes(field), false, `table must not show ${field}`)
+  }
+  const formFields = renderer.root.findAll((node) => node.props && typeof node.props.field === 'string').map((node) => node.props.field)
+  for (const field of gone) {
+    assert.equal(formFields.includes(field), false, `form must not collect ${field}`)
+  }
+  assert.ok(formFields.includes('name'))
+  assert.ok(formFields.includes('remark'))
+  await act(async () => renderer.unmount())
 })
 
 test('closing or switching PDF previews before download completion does not leak blob URLs', async () => {
@@ -341,6 +1112,31 @@ test('file filtering clears a selection that is no longer visible', async () => 
   await act(async()=>renderer.root.findByType('Input.Search').props.onSearch('different-file'))
   assert.equal(renderer.root.findByType('Table').props.rowSelection.selectedRowKeys.length,0,'hidden selected files must not remain in the download batch')
   await act(async()=>renderer.unmount())
+})
+
+test('file preview, download and delete icon actions expose accessible names', async () => {
+  const row = {
+    id: 1, originalName: '图纸.pdf', ext: 'pdf', sizeBytes: 1, roundId: 2, direction: 'C2S',
+    createdAt: '', canDelete: true,
+  }
+  const Page = loadTs('src/components/FileTable.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': { get: async () => ({ data: { list: [row], total: 1 } }) },
+    '../store/auth': { useAuth: () => ({ hasPerm: (permission) => ['file:preview', 'file:download'].includes(permission) }) },
+    '../api/types': { fmtSize: String, fmtTime: String },
+    './ChunkUploader': component('Uploader'), './PdfPreview': component('PDF'),
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', rounds: [] })) })
+  const table = renderer.root.findByType('Table')
+  const columns = table.props.columns
+  const nameCell = columns[0].render(row.originalName, row)
+  const actions = columns.at(-1).render(null, row)
+  assert.equal(findElement(nameCell, (node) => node.props['aria-label'] === '预览文件').props['aria-label'], '预览文件')
+  assert.equal(findElement(actions, (node) => node.props['aria-label'] === '下载文件').props['aria-label'], '下载文件')
+  assert.equal(findElement(actions, (node) => node.props['aria-label'] === '删除文件').props['aria-label'], '删除文件')
+  await act(async () => renderer.unmount())
 })
 
 test('invalid project route identifiers render a recoverable error without API calls', async () => {
@@ -392,6 +1188,43 @@ test('project navigation ignores late responses across valid and invalid routes'
   await act(async()=>pending.get('/projects/2')({data:project(2)}))
   assert.equal(renderer.root.findByType('Rounds').props.projectId,3,'a late refresh after a round operation must not replace the new project')
   await act(async()=>renderer.unmount())
+})
+
+test('unknown project tab query falls back to rounds and keeps description expansion keyboard accessible', async () => {
+  const project = {
+    id: 1,
+    name: '项目 1',
+    description: '一段较长的项目说明',
+    status: 'IN_PROGRESS',
+    supplierName: '供应商',
+    updatedAt: '2026-09-09T00:00:00Z',
+  }
+  const Page = loadTs('src/pages/project/ProjectDetail.tsx', {
+    '@arco-design/web-react': arco,
+    'react-router-dom': {
+      useParams: () => ({ id: '1' }),
+      useSearchParams: () => [new URLSearchParams('tab=unknown'), () => {}],
+      useNavigate: () => () => {},
+    },
+    '../../api/client': {
+      get: async (url) => ({ data: url.endsWith('/rounds') ? [] : url.endsWith('/summary') ? { unreadMessages: 0, pendingRounds: 0 } : project }),
+    },
+    '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中', color: 'blue' } }, fmtTime: String },
+    '../../components/RoundPanel': component('Rounds'),
+    '../../components/FileTable': component('Files'),
+    '../../components/MessagePanel': component('Messages'),
+    '../../components/MemberPanel': component('Members'),
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const tabs = renderer.root.findByType('Tabs')
+  assert.equal(tabs.props.activeTab, 'rounds')
+  assert.ok(renderer.root.findByType('Rounds'))
+  const ellipsis = renderer.root.findByType('Descriptions').props.data.find((item) => item.label === '项目说明').value
+  const expand = ellipsis.props.expandRender(false)
+  assert.equal(expand.props['aria-expanded'], false)
+  assert.equal(expand.props.children, '展开')
+  await act(async () => renderer.unmount())
 })
 
 test('two tabs can restore a shared rotating refresh cookie', async () => {
@@ -582,6 +1415,7 @@ test('menu-only role grants remain selected when another permission is edited', 
   const Page=loadTs('src/pages/rbac/RoleList.tsx',{
     '@arco-design/web-react':arco,'@arco-design/web-react/icon':new Proxy({},{get:(_,n)=>component(n)}),
     '../../api/client':{get:async url=>({data:url==='/permissions'?perms:{list:[role],total:1}})},
+    '../../store/auth':authModule({id:1,userType:'INTERNAL',isSystemAdmin:false},['role:manage']),
   }).default
   let renderer
   await act(async()=>{renderer=create(React.createElement(Page))})
@@ -605,7 +1439,8 @@ test('audit time filtering preserves an explicitly selected midnight endpoint', 
   let query
   const Page=loadTs('src/pages/system/AuditLog.tsx',{
     '@arco-design/web-react':arco,'@arco-design/web-react/icon':new Proxy({},{get:(_,n)=>component(n)}),
-    '../../api/client':{get:async(_url,{params})=>{query=params;return {data:{list:[],total:0,page:1,pageSize:20}}}},'../../api/types':{fmtTime:String},
+    '../../api/client':{get:async(_url,{params})=>{query=params;return {data:{list:[],total:0,page:1,pageSize:20}}}},
+    '../../store/auth':authModule({id:1,userType:'INTERNAL',isSystemAdmin:false},['log:view']),'../../api/types':{fmtTime:String},
   }).default
   let renderer
   await act(async()=>{renderer=create(React.createElement(Page))})
@@ -613,6 +1448,130 @@ test('audit time filtering preserves an explicitly selected midnight endpoint', 
   await act(async()=>renderer.root.findAllByType('Button').find(n=>n.props.children==='查询').props.onClick())
   assert.equal(query.end,new Date('2026-09-05 00:00:00').toISOString(),'midnight must not silently include the following entire day')
   await act(async()=>renderer.unmount())
+})
+
+test('audit hard-delete controls require a system administrator with log access', async () => {
+  const row = { id: 101, action: 'LOGIN', createdAt: '2026-09-09T00:00:00Z' }
+  const cleanupAudit = { id: 102, action: 'AUDIT_LOG_DELETE', createdAt: '2026-09-09T00:00:01Z' }
+  for (const [label, user, permissions, expected] of [
+    ['ordinary log viewer', { id: 1, userType: 'INTERNAL', isSystemAdmin: false }, ['log:view'], false],
+    ['admin without log access', { id: 1, userType: 'INTERNAL', isSystemAdmin: true }, [], false],
+    ['system admin log viewer', { id: 1, userType: 'INTERNAL', isSystemAdmin: true }, ['log:view'], true],
+  ]) {
+    const Page = loadTs('src/pages/system/AuditLog.tsx', {
+      '@arco-design/web-react': arco,
+      '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+      '../../api/client': { get: async () => ({ data: { list: [row, cleanupAudit], total: 2, page: 1, pageSize: 20 } }) },
+      '../../store/auth': authModule(user, permissions),
+      '../../api/types': { fmtTime: String },
+    }).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)) })
+    const table = renderer.root.findByType('Table')
+    const ordinaryActions = table.props.columns.at(-1).render(null, row)
+    assert.equal(!!findActionButton(ordinaryActions, '删除'), expected, label)
+    assert.equal(renderer.root.findAllByType('Button').some((node) => node.props.children === '删除所选'), expected, label)
+    if (expected) {
+      const cleanupActions = table.props.columns.at(-1).render(null, cleanupAudit)
+      assert.equal(findActionButton(cleanupActions, '删除'), undefined, 'cleanup audit must remain immutable')
+      assert.equal(table.props.rowSelection.checkboxProps(cleanupAudit).disabled, true)
+    }
+    await act(async () => renderer.unmount())
+  }
+})
+
+test('audit selection is cleared across filtering, paging and refresh, and reports the returned delete count', async () => {
+  const rows = {
+    initial: [{ id: 101, action: 'LOGIN', createdAt: '2026-09-09T00:00:00Z' }],
+    filtered: [{ id: 202, action: 'LOGIN_FAILED', createdAt: '2026-09-09T00:01:00Z' }],
+    page2: [
+      { id: 301, action: 'LOGIN', createdAt: '2026-09-09T00:02:00Z' },
+      { id: 302, action: 'LOGIN_FAILED', createdAt: '2026-09-09T00:03:00Z' },
+      { id: 303, action: 'AUDIT_LOG_DELETE', createdAt: '2026-09-09T00:04:00Z' },
+    ],
+  }
+  let holdNext = false
+  let releaseFetch
+  const postCalls = []
+  const deleteCalls = []
+  const successes = []
+  const pageData = (params) => params.page === 2 ? rows.page2 : params.keyword === 'next' ? rows.filtered : rows.initial
+  const http = {
+    get: async (_url, { params }) => {
+      const response = { data: { list: pageData(params), total: pageData(params).length, page: params.page, pageSize: params.pageSize } }
+      if (!holdNext) return response
+      holdNext = false
+      return new Promise((resolve) => { releaseFetch = () => resolve(response) })
+    },
+    post: async (url, body) => { postCalls.push({ url, body }); return { data: { deleted: 1 } } },
+    delete: async (url) => { deleteCalls.push(url); return { data: { deleted: 1 } } },
+  }
+  const auditArco = new Proxy({}, {
+    get: (_, key) => key === 'Message' ? { ...arco.Message, success: (message) => successes.push(message) } : arco[key],
+  })
+  const Page = loadTs('src/pages/system/AuditLog.tsx', {
+    '@arco-design/web-react': auditArco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../../api/client': http,
+    '../../store/auth': authModule({ id: 1, userType: 'INTERNAL', isSystemAdmin: true }, ['log:view']),
+    '../../api/types': { fmtTime: String },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+
+  let table = renderer.root.findByType('Table')
+  await act(async () => table.props.rowSelection.onChange([101]))
+  const staleBatchOk = renderer.root.findAllByType('Popconfirm').find((node) => String(node.props.title).includes('选中的')).props.onOk
+  await act(async () => renderer.root.findByProps({ placeholder: '操作人 / 动作编码 / 对象' }).props.onChange('next'))
+  await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '查询').props.onClick())
+  table = renderer.root.findByType('Table')
+  assert.deepEqual(Array.from(table.props.rowSelection.selectedRowKeys), [])
+  assert.deepEqual(table.props.data.map((row) => row.id), [202])
+  await act(async () => staleBatchOk())
+  assert.equal(postCalls.length, 0, 'a stale selection must not submit hidden log 101')
+
+  table = renderer.root.findByType('Table')
+  await act(async () => table.props.rowSelection.onChange([202]))
+  table = renderer.root.findByType('Table')
+  await act(async () => table.props.pagination.onChange(2, 20))
+  table = renderer.root.findByType('Table')
+  assert.deepEqual(Array.from(table.props.rowSelection.selectedRowKeys), [])
+  assert.deepEqual(table.props.data.map((row) => row.id), [301, 302, 303])
+
+  await act(async () => table.props.rowSelection.onChange([301, 302, 303]))
+  table = renderer.root.findByType('Table')
+  assert.deepEqual(Array.from(table.props.rowSelection.selectedRowKeys), [301, 302], 'cleanup audits must be excluded from batch selection')
+  const preRefreshBatchOk = renderer.root.findAllByType('Popconfirm').find((node) => String(node.props.title).includes('选中的')).props.onOk
+  holdNext = true
+  act(() => renderer.root.findAllByType('Button').find((node) => node.props.children === '刷新').props.onClick())
+  table = renderer.root.findByType('Table')
+  assert.deepEqual(Array.from(table.props.rowSelection.selectedRowKeys), [])
+  assert.equal(renderer.root.findAllByType('Button').find((node) => node.props.children === '删除所选').props.disabled, true)
+  const loadingActions = table.props.columns.at(-1).render(null, rows.page2[0])
+  assert.equal(findActionButton(loadingActions, '删除').props.disabled, true)
+  await act(async () => preRefreshBatchOk())
+  assert.equal(postCalls.length, 0, 'refresh must invalidate the previous batch callback')
+  await act(async () => releaseFetch())
+
+  table = renderer.root.findByType('Table')
+  let rowActions = table.props.columns.at(-1).render(null, rows.page2[0])
+  await act(async () => findActionButton(rowActions, '查看').props.onClick())
+  assert.equal(renderer.root.findByType('Drawer').props.visible, true)
+  table = renderer.root.findByType('Table')
+  rowActions = table.props.columns.at(-1).render(null, rows.page2[0])
+  const deleteOneOk = findElement(rowActions, (node) => node.props.title === '确认删除这条日志？').props.onOk
+  await act(async () => deleteOneOk())
+  assert.deepEqual(deleteCalls, ['/admin/audit-logs/301'])
+  assert.equal(renderer.root.findByType('Drawer').props.visible, false, 'deleting the open detail row must close its stale drawer')
+
+  table = renderer.root.findByType('Table')
+  await act(async () => table.props.rowSelection.onChange([301, 302, 303]))
+  const batchOk = renderer.root.findAllByType('Popconfirm').find((node) => String(node.props.title).includes('选中的')).props.onOk
+  const successCountBeforeBatch = successes.length
+  await act(async () => batchOk())
+  assert.deepEqual(postCalls[0].body.ids, [301, 302])
+  assert.equal(successes[successCountBeforeBatch], '已删除 1 条', 'batch success must use the server-reported count instead of the two requested ids')
+  await act(async () => renderer.unmount())
 })
 
 test('workbook parser retains merged cells and Chinese text', () => {

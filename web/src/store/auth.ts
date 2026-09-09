@@ -7,6 +7,7 @@ export interface UserBrief {
   realName: string
   userType: 'INTERNAL' | 'SUPPLIER'
   supplierId?: number | null
+  isSystemAdmin?: boolean
 }
 
 interface AuthState {

@@ -4,14 +4,14 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, Set, TransactionTrait,
+    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::dto::PageResp;
 use crate::entity::enums::FileStatus;
-use crate::entity::{files, rounds, users};
+use crate::entity::{files, projects, rounds, users};
 use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
 use crate::state::AppState;
@@ -172,14 +172,23 @@ pub async fn delete(state: &AppState, user: &CurrentUser, id: u64) -> ApiResult<
         .one(db)
         .await?
         .ok_or(AppError::NotFound)?;
-    scope::ensure_project_access(db, user, f.project_id).await?;
-    if !scope::is_system_admin(db, user.id).await? {
-        return Err(AppError::Forbidden);
-    }
+    let txn = db.begin().await?;
+    super::perm::lock_business_state(&txn).await?;
+    projects::Entity::find_by_id(f.project_id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let f = files::Entity::find_by_id(id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    scope::require_system_admin(&txn, user.id).await?;
+    scope::ensure_project_access(&txn, user, f.project_id).await?;
     if f.status != FileStatus::Available {
         return Err(AppError::NotFound);
     }
-    let txn = db.begin().await?;
     let mut am: files::ActiveModel = f.clone().into();
     am.status = Set(FileStatus::Deleted);
     am.deleted_at = Set(Some(chrono::Utc::now()));

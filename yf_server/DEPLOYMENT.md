@@ -37,13 +37,32 @@ Remove-Item Env:\YF_BACKUP_DB_PASSWORD
 
 1. 停止 WinSW（或现有服务管理器）中的后端服务，确认 `127.0.0.1:8080` 已无旧进程监听。
 2. 完成上一步备份并记录旧版程序目录，保留其作为程序回退包。
-3. 使用与生产相同的安全配置运行 `cargo run --locked -p migration -- up`，确认退出码为 0。
+3. 按下方命令显式指定与生产服务相同的数据库并执行迁移，确认退出码为 0。
 4. 替换 Rust release 程序和 IIS 静态目录，启动后端服务。
 5. 依次验证 `GET /health`、登录、项目列表、文件上传/下载、留言、权限隔离和审计记录。
+
+迁移 CLI 只读取 `DATABASE_URL`，不会读取服务端的 `config.local.toml`、`YF_CONFIG` 或 `YF_DATABASE_URL`。升级前将已核对的目标连接串放入进程级 `YF_DATABASE_URL`；以下命令拒绝缺失目标，避免误用环境中残留的 `DATABASE_URL`，并在结束后恢复原值：
+
+```powershell
+if ([string]::IsNullOrWhiteSpace($env:YF_DATABASE_URL)) {
+    throw '请先设置与生产服务一致的进程级 YF_DATABASE_URL，再执行迁移。'
+}
+$previousMigrationUrl = $env:DATABASE_URL
+try {
+    $env:DATABASE_URL = $env:YF_DATABASE_URL
+    cargo run --locked -p migration -- up
+    if ($LASTEXITCODE -ne 0) { throw '数据库迁移失败，停止升级。' }
+}
+finally {
+    $env:DATABASE_URL = $previousMigrationUrl
+}
+```
 
 Rust 程序不是原生 Windows Service，需由 WinSW 等服务包装器托管，并把工作目录设置为后端发布目录；不要用开发用的 Vite 服务器承载生产前端。后端应保持 `127.0.0.1:8080`，外部只暴露 IIS HTTPS。
 
 IIS 需要 URL Rewrite 和 ARR 反向代理：`/api/*` 原样代理到 `http://127.0.0.1:8080`，其他不存在的静态路径重写到 `/index.html`。同时设置请求体上限不小于系统允许的单个上传分片大小。
+
+若要让登录限流和审计记录使用 IIS 前的客户端 IP，在后端 `[server]` 中显式设置 `trust_loopback_proxy = true`，并在 IIS 入站反向代理规则中允许服务器变量 `HTTP_X_FORWARDED_FOR`，把它覆盖为 `{REMOTE_ADDR}`。不要追加或透传客户端提交的同名头。后端仅在 TCP 对端为回环地址且该头恰好是一个规范 IP 字面量时采用它；缺失、转发链或非法值都会退回 TCP 对端。未完成此 IIS 配置时保持默认值 `false`。
 
 ## 4. 回退与恢复
 

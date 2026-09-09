@@ -5,6 +5,7 @@ import {
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
+import { useAuth } from '../../store/auth'
 import { type PageResp } from '../../api/types'
 
 interface Role {
@@ -26,8 +27,13 @@ interface Perm {
 }
 
 export default function RoleList() {
+  const user = useAuth((state) => state.user)
+  const canManage = useAuth((state) => state.hasPerm('role:manage'))
+  const canDelete = user?.isSystemAdmin === true && canManage
   const [data, setData] = useState<PageResp<Role>>({ list: [], total: 0, page: 1, pageSize: 20 })
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   const [page, setPage] = useState(1)
   const [perms, setPerms] = useState<Perm[]>([])
   const [editOpen, setEditOpen] = useState(false)
@@ -42,20 +48,23 @@ export default function RoleList() {
     return r.data as PageResp<Role>
   }, [page])
 
-  const load = useCallback(async () => {
+  const load = useCallback(() => {
     setLoading(true)
-    try {
-      setData(await fetchRoles())
-    } finally {
-      setLoading(false)
-    }
-  }, [fetchRoles])
+    setLoadError(false)
+    setReloadKey((value) => value + 1)
+  }, [])
 
   useEffect(() => {
     let active = true
     fetchRoles()
       .then((next) => {
-        if (active) setData(next)
+        if (active) {
+          setData(next)
+          setLoadError(false)
+        }
+      })
+      .catch(() => {
+        if (active) setLoadError(true)
       })
       .finally(() => {
         if (active) setLoading(false)
@@ -63,7 +72,7 @@ export default function RoleList() {
     return () => {
       active = false
     }
-  }, [fetchRoles])
+  }, [fetchRoles, reloadKey])
 
   useEffect(() => {
     let active = true
@@ -113,10 +122,21 @@ export default function RoleList() {
     load()
   }
 
+  const remove = async (r: Role) => {
+    await http.delete(`/admin/roles/${r.id}`)
+    Message.success('角色已删除')
+    load()
+  }
+
   return (
     <Card className="page-card page-card--table">
-      <Space className="responsive-toolbar" style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
-        <Typography.Text type="secondary">角色绑定权限点，用户绑定角色；内置角色不可删除</Typography.Text>
+      <div className="page-heading">
+        <div>
+          <h1>角色与权限</h1>
+        </div>
+      </div>
+      <div className="page-toolbar responsive-toolbar">
+        <Typography.Text type="secondary">共 {data.total} 个角色</Typography.Text>
         <Button
           type="primary"
           icon={<IconPlus />}
@@ -128,16 +148,32 @@ export default function RoleList() {
         >
           新增角色
         </Button>
-      </Space>
-      <Table
-        className="page-table"
-        rowKey="id"
-        loading={loading}
-        data={data.list}
-        scroll={{ x: 1010, y: 'var(--page-table-scroll-y)' }}
-        columns={[
-          { title: '名称', dataIndex: 'name', width: 220, align: 'center' as const, ellipsis: true },
-          { title: '说明', dataIndex: 'description', width: 230, ellipsis: true, render: (v?: string) => v || '-' },
+      </div>
+      {loadError ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
+          <Typography.Text type="error">加载失败</Typography.Text>
+          <Button size="small" onClick={load}>重试</Button>
+        </div>
+      ) : (
+        <Table
+          className="page-table"
+          rowKey="id"
+          loading={loading}
+          data={data.list}
+          scroll={{ x: 1010, y: 'var(--page-table-scroll-y)' }}
+          columns={[
+          {
+            title: '名称',
+            dataIndex: 'name',
+            width: 220,
+            render: (v: string) => <span style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '20px' }}>{v}</span>,
+          },
+          {
+            title: '说明',
+            dataIndex: 'description',
+            width: 230,
+            render: (v?: string) => <span style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '20px' }}>{v || '-'}</span>,
+          },
           { title: '权限点数', dataIndex: 'permissionIds', width: 90, align: 'center' as const, render: (v: number[]) => v.length },
           { title: '绑定用户', dataIndex: 'assignedUserCount', width: 90, align: 'center' as const },
           {
@@ -156,7 +192,7 @@ export default function RoleList() {
           },
           {
             title: '操作',
-            width: 210,
+            width: 254,
             align: 'center' as const,
             render: (_: unknown, r: Role) => actionSlots([
               <Button
@@ -200,28 +236,42 @@ export default function RoleList() {
                   </Button>
                 </Popconfirm>
               ),
+              canDelete && !r.isBuiltIn && (
+                <Popconfirm key="delete" title="删除后不可恢复，仍绑定用户时无法删除。确认？" onOk={() => remove(r)}>
+                  <Button size="mini" type="text" status="danger">删除</Button>
+                </Popconfirm>
+              ),
             ], 'role'),
           },
-        ]}
-        pagination={{
-          total: data.total,
-          current: page,
-          pageSize: 20,
-          showTotal: true,
-          onChange: (nextPage) => {
-            setLoading(true)
-            setPage(nextPage)
-          },
-        }}
-      />
+          ]}
+          pagination={{
+            total: data.total,
+            current: page,
+            pageSize: 20,
+            showTotal: true,
+            onChange: (nextPage) => {
+              setLoading(true)
+              setLoadError(false)
+              setPage(nextPage)
+            },
+          }}
+        />
+      )}
 
-      <Modal title={editing ? '编辑角色' : '新增角色'} visible={editOpen} onOk={submit} onCancel={() => setEditOpen(false)}>
+      <Modal
+        className="form-dialog"
+        title={editing ? '编辑角色' : '新增角色'}
+        visible={editOpen}
+        okText={editing ? '保存角色' : '创建角色'}
+        onOk={submit}
+        onCancel={() => setEditOpen(false)}
+      >
         <Form form={form} layout="vertical">
           <Form.Item label="角色名称" field="name" rules={[{ required: true, message: '请输入名称' }]}>
-            <Input />
+            <Input placeholder="角色名称" />
           </Form.Item>
-          <Form.Item label="说明" field="description">
-            <Input.TextArea rows={2} maxLength={200} />
+          <Form.Item label="角色说明" field="description">
+            <Input.TextArea rows={3} maxLength={200} placeholder="选填" />
           </Form.Item>
         </Form>
       </Modal>
@@ -235,11 +285,12 @@ export default function RoleList() {
           <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
             <Button onClick={() => setPermTarget(null)}>取消</Button>
             <Button type="primary" onClick={savePerms}>
-              保存
+              保存权限
             </Button>
           </Space>
         }
       >
+        <div className="section-heading">权限范围</div>
         <Tree
           checkable
           checkStrictly
@@ -255,9 +306,7 @@ export default function RoleList() {
             setChecked(Array.from(new Set(next)))
           }}
         />
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          菜单与操作可独立勾选；选择操作时会勾选对应菜单，勾选菜单不会授予其下全部操作。
-        </Typography.Text>
+        <div className="dialog-note">勾选操作会关联菜单；仅勾选菜单不授予操作权限。</div>
       </Drawer>
     </Card>
   )

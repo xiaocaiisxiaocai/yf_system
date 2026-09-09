@@ -14,6 +14,8 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerCfg {
     pub addr: String,
+    #[serde(default)]
+    pub trust_loopback_proxy: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -128,5 +130,16 @@ impl Config {
             return Err("web.base_url 必须是 http:// 或 https:// 开头的前端地址".into());
         }
         Ok(cfg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ServerCfg;
+
+    #[test]
+    fn loopback_proxy_trust_is_disabled_when_omitted() {
+        let cfg: ServerCfg = toml::from_str("addr = \"127.0.0.1:8080\"").unwrap();
+        assert!(!cfg.trust_loopback_proxy);
     }
 }

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Button, Card, DatePicker, Drawer, Input, Select, Space, Table, Tag, Typography,
+  Button, Card, DatePicker, Drawer, Input, Message, Popconfirm, Select, Space, Table, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconEye, IconRefresh, IconSearch } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
+import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
 
 type AuditDetail = Record<string, unknown>
@@ -38,6 +39,7 @@ const ACTIONS: Record<string, { label: string; category: string; color: string }
   PROJECT_CREATE: { label: '创建项目', category: '项目协作', color: 'arcoblue' },
   PROJECT_UPDATE: { label: '更新项目', category: '项目协作', color: 'arcoblue' },
   PROJECT_STATUS: { label: '变更项目状态', category: '项目协作', color: 'orange' },
+  PROJECT_DELETE: { label: '删除项目', category: '项目协作', color: 'red' },
   PROJECT_MEMBERS: { label: '调整项目成员', category: '项目协作', color: 'purple' },
   ROUND_CREATE: { label: '创建确认轮次', category: '项目协作', color: 'arcoblue' },
   ROUND_CONFIRM: { label: '确认轮次', category: '项目协作', color: 'green' },
@@ -53,23 +55,29 @@ const ACTIONS: Record<string, { label: string; category: string; color: string }
   USER_CREATE: { label: '创建用户', category: '组织权限', color: 'arcoblue' },
   USER_UPDATE: { label: '更新用户', category: '组织权限', color: 'purple' },
   USER_STATUS: { label: '变更用户状态', category: '组织权限', color: 'orange' },
+  USER_DELETE: { label: '删除用户', category: '组织权限', color: 'red' },
   USER_RESET_PASSWORD: { label: '重置用户密码', category: '组织权限', color: 'orange' },
   USER_ASSIGN_ROLE: { label: '调整用户角色', category: '组织权限', color: 'purple' },
   USER_ASSIGN_ROLES: { label: '调整用户角色（旧）', category: '组织权限', color: 'purple' },
-  DEPT_CREATE: { label: '创建部门', category: '组织权限', color: 'arcoblue' },
-  DEPT_UPDATE: { label: '更新部门', category: '组织权限', color: 'purple' },
-  DEPT_STATUS: { label: '变更部门状态', category: '组织权限', color: 'orange' },
+  DEPT_CREATE: { label: '创建组织', category: '组织权限', color: 'arcoblue' },
+  DEPT_UPDATE: { label: '更新组织', category: '组织权限', color: 'purple' },
+  DEPT_STATUS: { label: '变更组织状态', category: '组织权限', color: 'orange' },
+  DEPT_DELETE: { label: '删除组织', category: '组织权限', color: 'red' },
   ROLE_CREATE: { label: '创建角色', category: '组织权限', color: 'arcoblue' },
   ROLE_UPDATE: { label: '更新角色', category: '组织权限', color: 'purple' },
   ROLE_STATUS: { label: '变更角色状态', category: '组织权限', color: 'orange' },
+  ROLE_DELETE: { label: '删除角色', category: '组织权限', color: 'red' },
   ROLE_ASSIGN_PERMS: { label: '调整角色权限', category: '组织权限', color: 'purple' },
   SUPPLIER_CREATE: { label: '创建供应商', category: '供应商', color: 'arcoblue' },
   SUPPLIER_UPDATE: { label: '更新供应商', category: '供应商', color: 'purple' },
   SUPPLIER_STATUS: { label: '变更供应商状态', category: '供应商', color: 'orange' },
+  SUPPLIER_DELETE: { label: '删除供应商', category: '供应商', color: 'red' },
   SUPPLIER_ACCOUNT_CREATE: { label: '创建供应商账号', category: '供应商', color: 'arcoblue' },
   SUPPLIER_ACCOUNT_UPDATE: { label: '更新供应商账号', category: '供应商', color: 'purple' },
   SUPPLIER_ACCOUNT_STATUS: { label: '变更供应商账号状态', category: '供应商', color: 'orange' },
   SUPPLIER_ACCOUNT_RESET_PASSWORD: { label: '重置供应商密码', category: '供应商', color: 'orange' },
+  SUPPLIER_ACCOUNT_DELETE: { label: '删除供应商账号', category: '供应商', color: 'red' },
+  AUDIT_LOG_DELETE: { label: '删除操作日志', category: '系统', color: 'red' },
   CONFIG_UPDATE: { label: '更新系统参数', category: '系统', color: 'orange' },
 }
 
@@ -78,12 +86,12 @@ const CATEGORY_OPTIONS = [
 ]
 
 const TARGET_LABELS: Record<string, string> = {
-  user: '用户', role: '角色', department: '部门', supplier: '供应商', project: '项目',
-  round: '轮次', file: '文件', message: '留言', upload_session: '上传任务', system_config: '系统参数',
+  user: '用户', role: '角色', department: '组织', supplier: '供应商', project: '项目',
+  round: '轮次', file: '文件', message: '留言', upload_session: '上传任务', audit_log: '操作日志', system_config: '系统参数',
 }
 
 const FIELD_LABELS: Record<string, string> = {
-  realName: '姓名', email: '邮箱', phone: '电话', departmentId: '部门', roleId: '角色',
+  realName: '姓名', email: '邮箱', phone: '电话', departmentId: '组织', roleId: '角色',
 }
 
 function displayValue(value: unknown): string {
@@ -124,15 +132,30 @@ function detailSummary(row: LogRow): string {
 }
 
 export default function AuditLog() {
+  const user = useAuth((state) => state.user)
+  const canView = useAuth((state) => state.hasPerm('log:view'))
+  const canDelete = user?.isSystemAdmin === true && canView
   const emptyFilters: Filters = { keyword: '', range: [] }
   const [draft, setDraft] = useState<Filters>(emptyFilters)
   const [filters, setFilters] = useState<Filters>(emptyFilters)
   const [data, setData] = useState<PageResp<LogRow>>({ list: [], total: 0, page: 1, pageSize: 20 })
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [selected, setSelected] = useState<LogRow | null>(null)
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [deleting, setDeleting] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [reloadKey, setReloadKey] = useState(0)
+  const deleteState = useRef({ ids: [] as number[], busy: true, allowed: false })
+  const visibleRows = useRef<LogRow[]>([])
+  const deleteBusy = loading || deleting
+
+  useEffect(() => {
+    deleteState.current.busy = deleteBusy
+    deleteState.current.allowed = canDelete
+    visibleRows.current = data.list
+  }, [canDelete, data.list, deleteBusy])
 
   const fetchLogs = useCallback(async () => {
     void reloadKey
@@ -154,23 +177,80 @@ export default function AuditLog() {
   useEffect(() => {
     let active = true
     fetchLogs()
-      .then((next) => { if (active) setData(next) })
+      .then((next) => {
+        if (active) {
+          setData(next)
+          setLoadError(false)
+        }
+      })
+      .catch(() => { if (active) setLoadError(true) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [fetchLogs])
 
   const actionOptions = useMemo(() => Object.entries(ACTIONS).sort((a, b) => a[1].label.localeCompare(b[1].label, 'zh-CN')), [])
-  const applyFilters = () => { setLoading(true); setPage(1); setFilters({ ...draft }) }
-  const resetFilters = () => { setLoading(true); setDraft(emptyFilters); setFilters(emptyFilters); setPage(1) }
+  const clearSelection = () => {
+    deleteState.current.ids = []
+    setSelectedIds([])
+  }
+  const beginReload = () => {
+    clearSelection()
+    deleteState.current.busy = true
+    setLoading(true)
+    setLoadError(false)
+  }
+  const applyFilters = () => { beginReload(); setPage(1); setFilters({ ...draft }) }
+  const resetFilters = () => { beginReload(); setDraft(emptyFilters); setFilters(emptyFilters); setPage(1) }
+
+  const removeOne = async (row: LogRow) => {
+    const isCurrentDeletableRow = visibleRows.current.some((current) => current.id === row.id && current.action !== 'AUDIT_LOG_DELETE')
+    if (!deleteState.current.allowed || deleteState.current.busy || !isCurrentDeletableRow) return
+    deleteState.current.busy = true
+    setDeleting(true)
+    let reload = false
+    try {
+      const response = await http.delete(`/admin/audit-logs/${row.id}`)
+      Message.success(`已删除 ${Number(response.data?.deleted ?? 0)} 条`)
+      if (selected?.id === row.id) setSelected(null)
+      beginReload()
+      setReloadKey((value) => value + 1)
+      reload = true
+    } finally {
+      setDeleting(false)
+      if (!reload) deleteState.current.busy = false
+    }
+  }
+
+  const removeSelected = async () => {
+    const selectableIds = new Set(visibleRows.current.filter((row) => row.action !== 'AUDIT_LOG_DELETE').map((row) => row.id))
+    const ids = deleteState.current.ids.slice()
+    if (!deleteState.current.allowed || deleteState.current.busy || ids.length === 0 || ids.some((id) => !selectableIds.has(id))) {
+      clearSelection()
+      return
+    }
+    deleteState.current.busy = true
+    setDeleting(true)
+    let reload = false
+    try {
+      const response = await http.post('/admin/audit-logs/batch-delete', { ids })
+      Message.success(`已删除 ${Number(response.data?.deleted ?? 0)} 条`)
+      setSelected(null)
+      beginReload()
+      setReloadKey((value) => value + 1)
+      reload = true
+    } finally {
+      setDeleting(false)
+      if (!reload) deleteState.current.busy = false
+    }
+  }
 
   return (
     <Card className="page-card page-card--table audit-page">
-      <div className="audit-heading">
+      <div className="audit-heading page-heading">
         <div>
-          <Typography.Title heading={5} style={{ margin: 0 }}>操作日志</Typography.Title>
-          <Typography.Text type="secondary">记录关键业务与权限变更；敏感密码不会写入日志</Typography.Text>
+          <h1>操作日志</h1>
         </div>
-        <Button icon={<IconRefresh />} onClick={() => { setLoading(true); setReloadKey((value) => value + 1) }}>刷新</Button>
+        <Button icon={<IconRefresh />} onClick={() => { beginReload(); setReloadKey((value) => value + 1) }}>刷新</Button>
       </div>
 
       <div className="audit-filter-panel">
@@ -188,15 +268,38 @@ export default function AuditLog() {
         <Space><Button type="primary" onClick={applyFilters}>查询</Button><Button onClick={resetFilters}>重置</Button></Space>
       </div>
 
-      <div className="audit-result-bar"><Typography.Text type="secondary">共 {data.total} 条记录</Typography.Text></div>
+      <div className="audit-result-bar">
+        <Typography.Text type="secondary">共 {data.total} 条记录</Typography.Text>
+        {canDelete && (
+          <Popconfirm title={`确认删除选中的 ${selectedIds.length} 条日志？`} disabled={selectedIds.length === 0 || deleteBusy} onOk={removeSelected}>
+            <Button status="danger" disabled={selectedIds.length === 0 || deleteBusy}>删除所选</Button>
+          </Popconfirm>
+        )}
+      </div>
 
-      <Table
-        className="page-table"
-        rowKey="id"
-        loading={loading}
-        data={data.list}
-        scroll={{ x: 910, y: 'var(--page-table-scroll-y)' }}
-        columns={[
+      {loadError ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
+          <Typography.Text type="error">加载失败</Typography.Text>
+          <Button size="small" onClick={() => { beginReload(); setReloadKey((value) => value + 1) }}>重试</Button>
+        </div>
+      ) : (
+        <Table
+          className="page-table"
+          rowKey="id"
+          loading={loading}
+          data={data.list}
+          scroll={{ x: 960, y: 'var(--page-table-scroll-y)' }}
+          rowSelection={canDelete ? {
+          selectedRowKeys: selectedIds,
+          checkboxProps: (row?: LogRow) => ({ disabled: deleteBusy || row?.action === 'AUDIT_LOG_DELETE' }),
+          onChange: (keys) => {
+            const selectableIds = new Set(data.list.filter((row) => row.action !== 'AUDIT_LOG_DELETE').map((row) => row.id))
+            const ids = keys.map(Number).filter((id) => selectableIds.has(id))
+            deleteState.current.ids = ids
+            setSelectedIds(ids)
+          },
+          } : undefined}
+          columns={[
           { title: '时间', dataIndex: 'createdAt', width: 160, render: fmtTime },
           {
             title: '操作人', dataIndex: 'employeeNo', width: 125,
@@ -214,10 +317,18 @@ export default function AuditLog() {
             title: '对象', width: 110,
             render: (_: unknown, row?: LogRow) => row?.targetType ? <div className="audit-target"><span>{TARGET_LABELS[row.targetType] || row.targetType}</span><small>{row.targetId ? `#${row.targetId}` : '未指定 ID'}</small></div> : '-',
           },
-          { title: '详情', width: 75, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row?: LogRow) => row ? actionSlots([<Button key="view" size="mini" type="text" icon={<IconEye />} onClick={() => setSelected(row)}>查看</Button>], 'single') : null },
-        ]}
-        pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setLoading(true); setPage(nextPage); setPageSize(nextSize) } }}
-      />
+          { title: '详情', width: 120, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row?: LogRow) => row ? actionSlots([
+            <Button key="view" size="mini" type="text" icon={<IconEye />} onClick={() => setSelected(row)}>查看</Button>,
+            canDelete && row.action !== 'AUDIT_LOG_DELETE' && (
+              <Popconfirm key="delete" title="确认删除这条日志？" disabled={deleteBusy} onOk={() => removeOne(row)}>
+                <Button size="mini" type="text" status="danger" disabled={deleteBusy}>删除</Button>
+              </Popconfirm>
+            ),
+          ], 'single') : null },
+          ]}
+          pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { beginReload(); setPage(nextPage); setPageSize(nextSize) } }}
+        />
+      )}
 
       <Drawer width={520} title="操作日志详情" visible={!!selected} onCancel={() => setSelected(null)} footer={null}>
         {selected && (

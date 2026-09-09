@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Card, Grid, List, Statistic, Tag, Typography, Empty } from '@arco-design/web-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Button, Card, Grid, List, Spin, Statistic, Tag, Typography, Empty } from '@arco-design/web-react'
 import { useNavigate } from 'react-router-dom'
 import http from '../api/client'
 import { useAuth } from '../store/auth'
@@ -22,12 +22,39 @@ interface Summary {
 
 export default function Dashboard() {
   const [data, setData] = useState<Summary | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  const loadSeq = useRef(0)
   const user = useAuth((s) => s.user)
   const nav = useNavigate()
 
-  useEffect(() => {
-    http.get('/dashboard/summary').then((r) => setData(r.data))
+  const load = useCallback(() => {
+    setLoading(true)
+    setLoadError(false)
+    setReloadKey((value) => value + 1)
   }, [])
+
+  useEffect(() => {
+    const seq = ++loadSeq.current
+    let active = true
+    http.get('/dashboard/summary')
+      .then((r) => {
+        if (active && seq === loadSeq.current) {
+          setData(r.data)
+          setLoadError(false)
+        }
+      })
+      .catch(() => {
+        if (active && seq === loadSeq.current) setLoadError(true)
+      })
+      .finally(() => {
+        if (active && seq === loadSeq.current) setLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [reloadKey])
 
   const cards = [
     { title: '可见项目', value: data?.projectCount },
@@ -38,20 +65,39 @@ export default function Dashboard() {
 
   return (
     <div>
-      <Typography.Title heading={5} style={{ marginTop: 0 }}>
-        工作台{user ? ` · ${user.realName}` : ''}
-      </Typography.Title>
-      <Grid.Row gutter={[16, 16]}>
+      <div className="page-heading">
+        <div>
+          <h1>工作台{user ? ` · ${user.realName}` : ''}</h1>
+        </div>
+      </div>
+      <Grid.Row className="dashboard-stats" gutter={[16, 16]}>
         {cards.map((c) => (
-          <Grid.Col xs={12} md={6} key={c.title}>
-            <Card>
+          <Grid.Col xs={24} sm={12} md={6} key={c.title}>
+            <Card className="dashboard-stat-card">
               <Statistic title={c.title} value={c.value ?? '-'} />
             </Card>
           </Grid.Col>
         ))}
       </Grid.Row>
-      <Card className="dashboard-latest" title="最新留言" style={{ marginTop: 16 }}>
-        {data && data.recentMessages.length > 0 ? (
+      <Card
+        className="dashboard-latest"
+        style={{ marginTop: 16 }}
+        title={
+          <div className="section-heading">
+            <div>
+              <h2>最新留言</h2>
+            </div>
+          </div>
+        }
+      >
+        {loading ? (
+          <Spin loading style={{ width: '100%', minHeight: 80 }} />
+        ) : loadError ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
+            <Typography.Text type="error">加载失败</Typography.Text>
+            <Button size="small" onClick={load}>重试</Button>
+          </div>
+        ) : data && data.recentMessages.length > 0 ? (
           <List
             dataSource={data.recentMessages}
             render={(m) => (

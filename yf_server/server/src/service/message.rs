@@ -9,8 +9,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::dto::PageResp;
-use crate::entity::enums::{CommonStatus, MessageStatus, ProjectStatus, RoundStatus};
-use crate::entity::{message_reads, messages, project_members, projects, rounds, users};
+use crate::entity::enums::{MessageStatus, ProjectStatus, RoundStatus};
+use crate::entity::{message_reads, messages, projects, rounds, users};
 use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
 
@@ -42,31 +42,16 @@ pub struct MarkRead {
     pub ids: Vec<u64>,
 }
 
-/// 项目可见用户数（不含发送者）：内部成员 + 该供应商启用账号
+/// Active creator, internal members and supplier accounts; sender is excluded by the caller.
 async fn visible_user_ids(
-    db: &DatabaseConnection,
-    project_id: u64,
-    supplier_id: u64,
+    db: &impl ConnectionTrait,
+    project: &projects::Model,
 ) -> ApiResult<Vec<u64>> {
-    let mut ids: Vec<u64> = project_members::Entity::find()
-        .filter(project_members::Column::ProjectId.eq(project_id))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|m| m.user_id)
-        .collect();
-    let supplier_users: Vec<u64> = users::Entity::find()
-        .filter(users::Column::SupplierId.eq(supplier_id))
-        .filter(users::Column::Status.eq(CommonStatus::Active))
-        .all(db)
+    Ok(super::participants::accounts(db, project)
         .await?
         .into_iter()
         .map(|u| u.id)
-        .collect();
-    ids.extend(supplier_users);
-    ids.sort_unstable();
-    ids.dedup();
-    Ok(ids)
+        .collect())
 }
 
 fn message_value(
@@ -97,7 +82,7 @@ fn message_value(
 }
 
 async fn message_json(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     m: &messages::Model,
     visible: &[u64],
     viewer_id: u64,
@@ -146,7 +131,7 @@ pub async fn list(
         .fetch_page(if q.before_id.is_some() { 0 } else { page - 1 })
         .await?;
 
-    let visible = visible_user_ids(db, project_id, project.supplier_id).await?;
+    let visible = visible_user_ids(db, &project).await?;
     let sender_map: std::collections::HashMap<u64, users::Model> = users::Entity::find()
         .filter(users::Column::Id.is_in(items.iter().map(|m| m.sender_id).collect::<Vec<_>>()))
         .all(db)
@@ -226,12 +211,14 @@ pub async fn create(
     }
     // 留言与通知入队同事务
     let txn = db.begin().await?;
+    super::perm::lock_business_state(&txn).await?;
     // 与轮次、成员调整和文件提交使用同一锁顺序，锁内复查最新状态与授权。
     let project = projects::Entity::find_by_id(project_id)
         .lock_exclusive()
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
+    super::perm::recheck_manager(&txn, user.id, "message:create").await?;
     scope::ensure_project_access(&txn, user, project_id).await?;
     ensure_writable(&txn, &project, req.round_id).await?;
     let model = messages::ActiveModel {
@@ -260,10 +247,10 @@ pub async fn create(
         None,
     )
     .await?;
+    let visible = visible_user_ids(&txn, &project).await?;
+    let response = message_json(&txn, &model, &visible, user.id).await?;
     txn.commit().await?;
-
-    let visible = visible_user_ids(db, project_id, project.supplier_id).await?;
-    message_json(db, &model, &visible, user.id).await
+    Ok(response)
 }
 
 /// 批量已读（幂等）
@@ -275,17 +262,18 @@ pub async fn mark_read(
     if req.ids.len() > 500 {
         return Err(AppError::BadRequest("单次标记数量超过上限".into()));
     }
+    let txn = db.begin().await?;
+    super::perm::lock_business_state(&txn).await?;
     // 批量取消息，按项目分组做权限校验，避免逐条 2 次查询
     let msgs = messages::Entity::find()
         .filter(messages::Column::Id.is_in(req.ids.clone()))
         .filter(messages::Column::SenderId.ne(user.id))
-        .all(db)
+        .all(&txn)
         .await?;
     let mut checked_projects: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    let txn = db.begin().await?;
     for m in &msgs {
         if !checked_projects.contains(&m.project_id) {
-            if scope::ensure_project_access(db, user, m.project_id)
+            if scope::ensure_project_access(&txn, user, m.project_id)
                 .await
                 .is_err()
             {
@@ -324,7 +312,7 @@ pub async fn reads(
         .await?
         .ok_or(AppError::NotFound)?;
     let project = scope::ensure_project_access(db, user, m.project_id).await?;
-    let visible = visible_user_ids(db, m.project_id, project.supplier_id).await?;
+    let visible = visible_user_ids(db, &project).await?;
     let reads = message_reads::Entity::find()
         .filter(message_reads::Column::MessageId.eq(message_id))
         .all(db)
@@ -362,11 +350,23 @@ pub async fn delete(db: &DatabaseConnection, user: &CurrentUser, message_id: u64
         .one(db)
         .await?
         .ok_or(AppError::NotFound)?;
-    scope::ensure_project_access(db, user, m.project_id).await?;
+    let txn = db.begin().await?;
+    super::perm::lock_business_state(&txn).await?;
+    projects::Entity::find_by_id(m.project_id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let m = messages::Entity::find_by_id(message_id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    super::perm::recheck_manager(&txn, user.id, "message:delete_any").await?;
+    scope::ensure_project_access(&txn, user, m.project_id).await?;
     if m.status != MessageStatus::Normal {
         return Err(AppError::NotFound);
     }
-    let txn = db.begin().await?;
     let mut am: messages::ActiveModel = m.into();
     am.status = Set(MessageStatus::Deleted);
     am.deleted_by = Set(Some(user.id));

@@ -9,6 +9,7 @@ pub mod gc;
 pub mod log;
 pub mod message;
 pub mod notify;
+pub mod participants;
 pub mod perm;
 pub mod project;
 pub mod role;

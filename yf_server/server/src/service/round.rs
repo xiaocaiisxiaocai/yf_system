@@ -1,8 +1,8 @@
 //! 轮次：自由创建 + 确认/驳回/撤销，状态机与历史（《02-数据库设计》§4.3）
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -63,7 +63,7 @@ pub fn round_json(
     })
 }
 
-async fn name_of(db: &DatabaseConnection, id: Option<u64>) -> Option<String> {
+async fn name_of(db: &impl ConnectionTrait, id: Option<u64>) -> Option<String> {
     match id {
         Some(id) => users::Entity::find_by_id(id)
             .one(db)
@@ -148,11 +148,13 @@ pub async fn create(
         return Err(AppError::BadRequest("轮次备注过长（最多 500 字）".into()));
     }
     let txn = db.begin().await?;
+    super::perm::lock_business_state(&txn).await?;
     let project = projects::Entity::find_by_id(project_id)
         .lock_exclusive()
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
+    super::perm::recheck_manager(&txn, me.id, "round:create").await?;
     scope::ensure_project_access(&txn, me, project_id).await?;
     if project.status != ProjectStatus::InProgress {
         return Err(AppError::Conflict(
@@ -287,6 +289,7 @@ async fn transit(
         .ok_or(AppError::NotFound)?;
     // 所有写路径统一项目 → 轮次，避免通知外键检查与上传形成反向锁依赖。
     let txn = db.begin().await?;
+    super::perm::lock_business_state(&txn).await?;
     let project = projects::Entity::find_by_id(r.project_id)
         .lock_exclusive()
         .one(&txn)
@@ -297,6 +300,14 @@ async fn transit(
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
+    if user.is_internal() {
+        let permission = if to == RoundStatus::Cancelled {
+            "round:cancel"
+        } else {
+            "round:confirm"
+        };
+        super::perm::recheck_manager(&txn, user.id, permission).await?;
+    }
     scope::ensure_project_access(&txn, user, r.project_id).await?;
     if r.status != RoundStatus::Pending {
         return Err(AppError::Conflict("轮次当前状态不可操作".into()));
@@ -387,16 +398,17 @@ async fn transit(
         None,
     )
     .await?;
-    txn.commit().await?;
     let model = rounds::Entity::find_by_id(id)
-        .one(db)
+        .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
-    Ok(round_json(
+    let response = round_json(
         &model,
-        name_of(db, Some(model.created_by)).await,
-        name_of(db, model.decided_by).await,
-    ))
+        name_of(&txn, Some(model.created_by)).await,
+        name_of(&txn, model.decided_by).await,
+    );
+    txn.commit().await?;
+    Ok(response)
 }
 
 pub async fn confirm(

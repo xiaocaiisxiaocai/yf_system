@@ -1,15 +1,15 @@
 //! 供应商及其人员账号
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::dto::PageResp;
 use crate::entity::enums::{CommonStatus, UserType};
-use crate::entity::{roles, suppliers, user_roles, users};
+use crate::entity::{projects, roles, suppliers, user_roles, users};
 use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
 use crate::util::password;
@@ -31,10 +31,6 @@ pub struct SupplierListQuery {
 #[serde(rename_all = "camelCase")]
 pub struct SupplierUpsert {
     pub name: String,
-    pub contact_name: Option<String>,
-    pub contact_phone: Option<String>,
-    pub contact_email: Option<String>,
-    pub address: Option<String>,
     pub remark: Option<String>,
 }
 
@@ -45,7 +41,6 @@ pub struct AccountCreate {
     pub password: String,
     pub real_name: String,
     pub email: String,
-    pub phone: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,14 +48,11 @@ pub struct AccountCreate {
 pub struct AccountUpdate {
     pub real_name: Option<String>,
     pub email: Option<String>,
-    pub phone: Option<String>,
 }
 
 fn supplier_json(s: &suppliers::Model) -> Value {
     json!({
-        "id": s.id, "name": s.name,
-        "contactName": s.contact_name, "contactPhone": s.contact_phone,
-        "contactEmail": s.contact_email, "address": s.address, "remark": s.remark,
+        "id": s.id, "name": s.name, "remark": s.remark,
         "status": if s.status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
         "createdAt": s.created_at,
     })
@@ -69,35 +61,26 @@ fn supplier_json(s: &suppliers::Model) -> Value {
 fn account_json(u: &users::Model) -> Value {
     json!({
         "id": u.id, "employeeNo": u.employee_no, "realName": u.real_name, "email": u.email,
-        "phone": u.phone, "supplierId": u.supplier_id,
+        "supplierId": u.supplier_id,
         "status": if u.status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
         "lastLoginAt": u.last_login_at, "createdAt": u.created_at,
     })
 }
 
 fn validate_supplier(req: &SupplierUpsert) -> ApiResult<()> {
-    if let Some(value) = req
-        .contact_email
-        .as_deref()
-        .filter(|v| !v.trim().is_empty())
-    {
-        crate::util::validation::email(value)?;
-    }
     if req.name.trim().is_empty() {
         return Err(AppError::BadRequest("供应商名称不能为空".into()));
     }
     if req.name.trim().chars().count() > 64 {
         return Err(AppError::BadRequest("供应商名称过长".into()));
     }
-    let opt_len = |v: &Option<String>| v.as_deref().map(|s| s.chars().count()).unwrap_or(0);
-    if opt_len(&req.contact_name) > 32
-        || opt_len(&req.contact_phone) > 32
-        || opt_len(&req.contact_email) > 128
-    {
-        return Err(AppError::BadRequest("联系方式字段过长".into()));
-    }
-    if opt_len(&req.address) > 256 || opt_len(&req.remark) > 500 {
-        return Err(AppError::BadRequest("地址/备注过长".into()));
+    let remark_len = req
+        .remark
+        .as_deref()
+        .map(|s| s.chars().count())
+        .unwrap_or(0);
+    if remark_len > 500 {
+        return Err(AppError::BadRequest("备注过长".into()));
     }
     Ok(())
 }
@@ -135,10 +118,6 @@ pub async fn create(
     let txn = db.begin().await?;
     let model = suppliers::ActiveModel {
         name: Set(req.name.trim().to_string()),
-        contact_name: Set(req.contact_name.clone()),
-        contact_phone: Set(req.contact_phone.clone()),
-        contact_email: Set(req.contact_email.clone()),
-        address: Set(req.address.clone()),
         remark: Set(req.remark.clone()),
         status: Set(CommonStatus::Active),
         created_by: Set(Some(me.id)),
@@ -189,10 +168,6 @@ pub async fn update(
     let txn = db.begin().await?;
     let mut am: suppliers::ActiveModel = s.into();
     am.name = Set(req.name.trim().to_string());
-    am.contact_name = Set(req.contact_name.clone());
-    am.contact_phone = Set(req.contact_phone.clone());
-    am.contact_email = Set(req.contact_email.clone());
-    am.address = Set(req.address.clone());
     am.remark = Set(req.remark.clone());
     am.updated_at = Set(Utc::now());
     let model = am.update(&txn).await?;
@@ -206,7 +181,7 @@ pub async fn update(
         Some(json!({
             "oldName": old_name,
             "newName": model.name,
-            "changedFields": ["name", "contact", "address", "remark"],
+            "changedFields": ["name", "remark"],
         })),
         None,
     )
@@ -221,18 +196,21 @@ pub async fn set_status(
     id: u64,
     status: &str,
 ) -> ApiResult<Value> {
-    let s = suppliers::Entity::find_by_id(id)
-        .one(db)
-        .await?
-        .ok_or(AppError::NotFound)?;
     let st = match status {
         "ACTIVE" => CommonStatus::Active,
         "DISABLED" => CommonStatus::Disabled,
         _ => return Err(AppError::BadRequest("非法状态".into())),
     };
+    let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    let s = suppliers::Entity::find_by_id(id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    super::perm::recheck_manager(&txn, me.id, "supplier:manage").await?;
     let old_status = s.status;
     let name = s.name.clone();
-    let txn = db.begin().await?;
     let mut am: suppliers::ActiveModel = s.into();
     am.status = Set(st);
     am.updated_at = Set(Utc::now());
@@ -295,7 +273,6 @@ pub async fn create_account(
     ensure_supplier_active(db, supplier_id).await?;
     let employee_no = req.employee_no.trim();
     crate::util::validation::employee_no(employee_no)?;
-    crate::util::validation::phone(req.phone.as_deref())?;
     if req.real_name.trim().is_empty() || req.real_name.trim().chars().count() > 32 {
         return Err(AppError::BadRequest("姓名需为 1~32 个字符".into()));
     }
@@ -319,7 +296,6 @@ pub async fn create_account(
         password_hash: Set(password::hash(&req.password)?),
         real_name: Set(req.real_name.trim().to_string()),
         email: Set(req.email.trim().to_string()),
-        phone: Set(req.phone.clone()),
         user_type: Set(UserType::Supplier),
         supplier_id: Set(Some(supplier_id)),
         department_id: Set(None),
@@ -369,7 +345,7 @@ pub async fn create_account(
     Ok(account_json(&model))
 }
 
-async fn load_supplier_account(db: &DatabaseConnection, id: u64) -> ApiResult<users::Model> {
+async fn load_supplier_account(db: &impl ConnectionTrait, id: u64) -> ApiResult<users::Model> {
     let u = users::Entity::find_by_id(id)
         .one(db)
         .await?
@@ -395,7 +371,6 @@ pub async fn update_account(
     if let Some(v) = &req.email {
         crate::util::validation::email(v)?;
     }
-    crate::util::validation::phone(req.phone.as_deref())?;
     let employee_no = u.employee_no.clone();
     let txn = db.begin().await?;
     let mut am: users::ActiveModel = u.into();
@@ -405,9 +380,6 @@ pub async fn update_account(
     if let Some(v) = &req.email {
         am.email = Set(v.trim().to_string());
     }
-    if let Some(v) = &req.phone {
-        am.phone = Set(Some(v.clone()));
-    }
     am.updated_at = Set(Utc::now());
     let model = am.update(&txn).await?;
     let mut changed_fields = Vec::new();
@@ -416,9 +388,6 @@ pub async fn update_account(
     }
     if req.email.is_some() {
         changed_fields.push("email");
-    }
-    if req.phone.is_some() {
-        changed_fields.push("phone");
     }
     audit::insert(
         &txn,
@@ -444,15 +413,24 @@ pub async fn set_account_status(
     id: u64,
     status: &str,
 ) -> ApiResult<Value> {
-    let u = load_supplier_account(db, id).await?;
     let st = match status {
         "ACTIVE" => CommonStatus::Active,
         "DISABLED" => CommonStatus::Disabled,
         _ => return Err(AppError::BadRequest("非法状态".into())),
     };
+    let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    let u = users::Entity::find_by_id(id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if u.user_type != UserType::Supplier {
+        return Err(AppError::BadRequest("该账号不是供应商人员".into()));
+    }
+    super::perm::recheck_manager(&txn, me.id, "supplier:account").await?;
     let old_status = u.status;
     let employee_no = u.employee_no.clone();
-    let txn = db.begin().await?;
     let mut am: users::ActiveModel = u.into();
     am.status = Set(st);
     am.updated_at = Set(Utc::now());
@@ -515,6 +493,84 @@ pub async fn reset_account_password(
         None,
     )
     .await?;
+    txn.commit().await?;
+    Ok(())
+}
+
+pub async fn delete(db: &DatabaseConnection, me: &CurrentUser, id: u64) -> ApiResult<()> {
+    let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    super::perm::recheck_manager(&txn, me.id, "supplier:manage").await?;
+    super::scope::require_system_admin(&txn, me.id).await?;
+    let supplier = suppliers::Entity::find_by_id(id)
+        .one(&txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let project_count = projects::Entity::find()
+        .filter(projects::Column::SupplierId.eq(id))
+        .count(&txn)
+        .await?;
+    if project_count > 0 {
+        return Err(AppError::BadRequest(
+            "该供应商仍有关联项目，请先删除项目".into(),
+        ));
+    }
+    let account_count = users::Entity::find()
+        .filter(users::Column::UserType.eq(UserType::Supplier))
+        .filter(users::Column::SupplierId.eq(id))
+        .count(&txn)
+        .await?;
+    if account_count > 0 {
+        return Err(AppError::BadRequest(format!(
+            "该供应商仍有 {account_count} 个账号，请先逐个处理账号"
+        )));
+    }
+    audit::insert(
+        &txn,
+        Some(me.id),
+        Some(me.employee_no.clone()),
+        "SUPPLIER_DELETE",
+        Some("supplier"),
+        Some(id.to_string()),
+        Some(json!({
+            "name": supplier.name,
+            "accountCount": 0,
+        })),
+        None,
+    )
+    .await?;
+    suppliers::Entity::delete_by_id(id).exec(&txn).await?;
+    txn.commit().await?;
+    Ok(())
+}
+
+pub async fn delete_account(db: &DatabaseConnection, me: &CurrentUser, id: u64) -> ApiResult<()> {
+    let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    let account = users::Entity::find_by_id(id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    super::perm::recheck_manager(&txn, me.id, "supplier:account").await?;
+    super::scope::require_system_admin(&txn, me.id).await?;
+    if account.user_type != UserType::Supplier {
+        return Err(AppError::BadRequest("该账号不是供应商人员".into()));
+    }
+    super::user::ensure_no_owned_content(&txn, id).await?;
+    let employee_no = account.employee_no.clone();
+    audit::insert(
+        &txn,
+        Some(me.id),
+        Some(me.employee_no.clone()),
+        "SUPPLIER_ACCOUNT_DELETE",
+        Some("user"),
+        Some(id.to_string()),
+        Some(json!({ "employeeNo": employee_no })),
+        None,
+    )
+    .await?;
+    super::user::remove_login_bindings(&txn, id).await?;
     txn.commit().await?;
     Ok(())
 }

@@ -1,13 +1,19 @@
 //! 日志查询 / 系统参数 / 存储容量 handler
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::Json;
 use axum_extra::extract::Query;
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::ApiResult;
 use crate::middleware::auth::CurrentUser;
 use crate::service;
 use crate::state::AppState;
+
+#[derive(Deserialize)]
+pub struct AuditIdList {
+    ids: Vec<u64>,
+}
 
 pub async fn list_audit_logs(
     State(s): State<AppState>,
@@ -17,6 +23,22 @@ pub async fn list_audit_logs(
     Ok(Json(
         serde_json::to_value(service::log::list(&s.db, &q).await?).unwrap(),
     ))
+}
+pub async fn delete_audit_log(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<Value>> {
+    let deleted = service::log::delete_ids(&s.db, &u, &[id]).await?;
+    Ok(Json(serde_json::json!({ "deleted": deleted })))
+}
+pub async fn batch_delete_audit_logs(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Json(req): Json<AuditIdList>,
+) -> ApiResult<Json<Value>> {
+    let deleted = service::log::delete_ids(&s.db, &u, &req.ids).await?;
+    Ok(Json(serde_json::json!({ "deleted": deleted })))
 }
 
 pub async fn get_configs(State(s): State<AppState>, _u: CurrentUser) -> ApiResult<Json<Value>> {

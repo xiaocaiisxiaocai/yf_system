@@ -9,9 +9,13 @@ use serde_json::{json, Value};
 
 use crate::dto::PageResp;
 use crate::entity::enums::{CommonStatus, ProjectStatus, RoundStatus, UserType};
-use crate::entity::{project_members, projects, suppliers, users};
+use crate::entity::{
+    email_outbox, files, messages, project_members, projects, rounds, suppliers, upload_sessions,
+    users,
+};
 use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
+use crate::state::AppState;
 
 use super::{audit, scope};
 
@@ -225,22 +229,25 @@ pub async fn update(
     id: u64,
     req: &ProjectUpsert,
 ) -> ApiResult<Value> {
-    scope::ensure_project_access(db, me, id).await?;
     let name = req.name.trim();
     if name.is_empty() || name.chars().count() > 128 {
         return Err(AppError::BadRequest("项目名称需为 1~128 个字符".into()));
     }
     validate_description(req.description.as_deref())?;
+    let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
     let p = projects::Entity::find_by_id(id)
-        .one(db)
+        .lock_exclusive()
+        .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
+    super::perm::recheck_manager(&txn, me.id, "project:update").await?;
+    scope::ensure_project_access(&txn, me, id).await?;
     if p.supplier_id != req.supplier_id {
         return Err(AppError::BadRequest(
             "项目创建后不可更换供应商；请新建项目以避免历史数据越权".into(),
         ));
     }
-    let txn = db.begin().await?;
     let mut am: projects::ActiveModel = p.into();
     am.name = Set(name.to_string());
     am.description = Set(req.description.clone());
@@ -269,8 +276,6 @@ pub async fn set_status(
     id: u64,
     req: &StatusChange,
 ) -> ApiResult<Value> {
-    let p = scope::ensure_project_access(db, me, id).await?;
-    let from = p.status;
     let to = match req.status.as_str() {
         "DRAFT" => ProjectStatus::Draft,
         "IN_PROGRESS" => ProjectStatus::InProgress,
@@ -278,6 +283,16 @@ pub async fn set_status(
         "TERMINATED" => ProjectStatus::Terminated,
         _ => return Err(AppError::BadRequest("非法项目状态".into())),
     };
+    let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    let p = projects::Entity::find_by_id(id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    super::perm::recheck_manager(&txn, me.id, "project:status").await?;
+    scope::ensure_project_access(&txn, me, id).await?;
+    let from = p.status;
     let allowed = transition_allowed(from, to);
     if !allowed {
         return Err(AppError::Conflict(format!(
@@ -290,7 +305,6 @@ pub async fn set_status(
     am.status = Set(to);
     am.updated_at = Set(Utc::now());
     // CAS：仅当状态仍为原值时流转，防并发重复变更
-    let txn = db.begin().await?;
     let upd = projects::Entity::update_many()
         .set(am)
         .filter(projects::Column::Id.eq(id))
@@ -495,10 +509,104 @@ pub async fn internal_user_options(
     Ok(json!(out))
 }
 
+fn delete_refused_reason(status: ProjectStatus, has_content: bool) -> Option<&'static str> {
+    if status == ProjectStatus::InProgress {
+        return Some("进行中的项目不能删除");
+    }
+    if has_content {
+        return Some("项目内仍有轮次、文件或留言，不能直接删除");
+    }
+    None
+}
+
+pub async fn delete(state: &AppState, user: &CurrentUser, id: u64) -> ApiResult<()> {
+    let txn = state.db.begin().await?;
+    // Same order as member management: management gate -> project row -> authorization.
+    // Acquire the project lock before snapshot reads, so a concurrent start cannot pass a stale DRAFT check.
+    super::perm::lock_management_state(&txn).await?;
+    let project = projects::Entity::find_by_id(id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    scope::require_system_admin(&txn, user.id).await?;
+    super::perm::recheck_manager(&txn, user.id, "project:update").await?;
+    scope::ensure_project_access(&txn, user, id).await?;
+    let round_count = rounds::Entity::find()
+        .filter(rounds::Column::ProjectId.eq(id))
+        .count(&txn)
+        .await?;
+    let file_count = files::Entity::find()
+        .filter(files::Column::ProjectId.eq(id))
+        .count(&txn)
+        .await?;
+    let message_count = messages::Entity::find()
+        .filter(messages::Column::ProjectId.eq(id))
+        .count(&txn)
+        .await?;
+    if let Some(reason) =
+        delete_refused_reason(project.status, round_count + file_count + message_count > 0)
+    {
+        return Err(AppError::BadRequest(reason.into()));
+    }
+    if upload_sessions::Entity::find()
+        .filter(upload_sessions::Column::ProjectId.eq(id))
+        .count(&txn)
+        .await?
+        > 0
+    {
+        return Err(AppError::BadRequest("项目仍有上传记录，不能删除".into()));
+    }
+    // A project with business content is refused above, never cascaded into file/round/message deletion.
+    project_members::Entity::delete_many()
+        .filter(project_members::Column::ProjectId.eq(id))
+        .exec(&txn)
+        .await?;
+    email_outbox::Entity::delete_many()
+        .filter(email_outbox::Column::ProjectId.eq(id))
+        .exec(&txn)
+        .await?;
+    audit::insert(
+        &txn,
+        Some(user.id),
+        Some(user.employee_no.clone()),
+        "PROJECT_DELETE",
+        Some("project"),
+        Some(id.to_string()),
+        Some(json!({ "name": project.name })),
+        None,
+    )
+    .await?;
+    let deleted = projects::Entity::delete_by_id(id).exec(&txn).await?;
+    if deleted.rows_affected != 1 {
+        return Err(AppError::Conflict("项目已被删除，请刷新后重试".into()));
+    }
+    txn.commit().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::transition_allowed;
     use crate::entity::enums::ProjectStatus;
+
+    #[test]
+    fn in_progress_or_contentful_projects_cannot_be_deleted() {
+        use super::delete_refused_reason;
+        assert_eq!(
+            delete_refused_reason(ProjectStatus::InProgress, false),
+            Some("进行中的项目不能删除")
+        );
+        assert_eq!(
+            delete_refused_reason(ProjectStatus::Draft, true),
+            Some("项目内仍有轮次、文件或留言，不能直接删除")
+        );
+        assert_eq!(delete_refused_reason(ProjectStatus::Draft, false), None);
+        assert_eq!(
+            delete_refused_reason(ProjectStatus::Terminated, false),
+            None
+        );
+    }
 
     #[test]
     fn completed_and_terminated_projects_are_terminal() {

@@ -2,14 +2,18 @@
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::dto::PageResp;
 use crate::entity::enums::{CommonStatus, UserType};
-use crate::entity::{departments, roles, user_roles, users};
+use crate::entity::{
+    audit_logs, departments, email_outbox, files, message_reads, messages, project_members,
+    projects, refresh_tokens, roles, round_status_logs, rounds, suppliers, upload_sessions,
+    user_roles, users,
+};
 use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
 use crate::util::password;
@@ -41,7 +45,6 @@ pub struct UserCreate {
     pub password: String,
     pub real_name: String,
     pub email: String,
-    pub phone: Option<String>,
     pub department_id: Option<u64>,
     /// 单角色契约；role_ids 仅用于兼容旧客户端。
     pub role_id: Option<u64>,
@@ -53,7 +56,6 @@ pub struct UserCreate {
 pub struct UserUpdate {
     pub real_name: Option<String>,
     pub email: Option<String>,
-    pub phone: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_department")]
     pub department_id: Option<Option<u64>>,
     /// 传了就在同一事务里重建角色绑定，避免用户资料/角色两次 PUT 的半失败
@@ -129,7 +131,7 @@ pub async fn to_json(db: &DatabaseConnection, u: &users::Model) -> Value {
     let role_name = role_id.and_then(|rid| role_map.get(&rid).cloned());
     json!({
         "id": u.id, "employeeNo": u.employee_no, "realName": u.real_name, "email": u.email,
-        "phone": u.phone, "userType": u.user_type.as_str(), "supplierId": u.supplier_id,
+        "userType": u.user_type.as_str(), "supplierId": u.supplier_id,
         "departmentId": u.department_id, "departmentName": dept_name,
         "status": if u.status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
         "mustChangePassword": u.must_change_password,
@@ -216,7 +218,7 @@ pub async fn list(db: &DatabaseConnection, q: &UserListQuery) -> ApiResult<PageR
         let role_name = role_id.and_then(|rid| role_map.get(&rid).cloned());
         list.push(json!({
             "id": u.id, "employeeNo": u.employee_no, "realName": u.real_name, "email": u.email,
-            "phone": u.phone, "userType": u.user_type.as_str(), "supplierId": u.supplier_id,
+            "userType": u.user_type.as_str(), "supplierId": u.supplier_id,
             "departmentId": u.department_id,
             "departmentName": u.department_id.and_then(|d| dept_map.get(&d)),
             "status": if u.status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
@@ -262,7 +264,6 @@ pub async fn create(
     super::perm::recheck_manager(&txn, me.id, "user:manage").await?;
     let employee_no = req.employee_no.trim();
     crate::util::validation::employee_no(employee_no)?;
-    crate::util::validation::phone(req.phone.as_deref())?;
     if req.real_name.trim().is_empty() || req.real_name.trim().chars().count() > 32 {
         return Err(AppError::BadRequest("姓名需为 1~32 个字符".into()));
     }
@@ -290,7 +291,6 @@ pub async fn create(
         password_hash: Set(password::hash(&req.password)?),
         real_name: Set(req.real_name.trim().to_string()),
         email: Set(req.email.trim().to_string()),
-        phone: Set(req.phone.clone()),
         user_type: Set(UserType::Internal),
         supplier_id: Set(None),
         department_id: Set(req.department_id),
@@ -437,7 +437,6 @@ pub async fn update(
     if let Some(v) = &req.email {
         crate::util::validation::email(v)?;
     }
-    crate::util::validation::phone(req.phone.as_deref())?;
     if let Some(Some(d)) = req.department_id {
         dept::ensure_active(&txn, d).await?;
     }
@@ -466,9 +465,6 @@ pub async fn update(
     if let Some(v) = &req.email {
         am.email = Set(v.trim().to_string());
     }
-    if let Some(v) = &req.phone {
-        am.phone = Set(Some(v.clone()));
-    }
     if let Some(department_id) = req.department_id {
         am.department_id = Set(department_id);
     }
@@ -488,9 +484,6 @@ pub async fn update(
     }
     if req.email.is_some() {
         changed_fields.push("email");
-    }
-    if req.phone.is_some() {
-        changed_fields.push("phone");
     }
     if req.department_id.is_some() {
         changed_fields.push("departmentId");
@@ -537,6 +530,9 @@ pub async fn set_status(
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
+    if user.user_type != UserType::Internal {
+        return Err(AppError::BadRequest("供应商人员请在供应商模块维护".into()));
+    }
     if status == "DISABLED" {
         ensure_admin_role_change_safe(&txn, me.id, id, &[]).await?;
     }
@@ -597,6 +593,9 @@ pub async fn reset_password(
         .one(db)
         .await?
         .ok_or(AppError::NotFound)?;
+    if user.user_type != UserType::Internal {
+        return Err(AppError::BadRequest("供应商人员请在供应商模块维护".into()));
+    }
     let employee_no = user.employee_no.clone();
     let txn = db.begin().await?;
     let mut am: users::ActiveModel = user.into();
@@ -670,6 +669,138 @@ pub async fn assign_roles(
         None,
     )
     .await?;
+    txn.commit().await?;
+    Ok(())
+}
+
+pub(super) async fn ensure_no_owned_content(db: &impl ConnectionTrait, id: u64) -> ApiResult<()> {
+    let has_file = files::Entity::find()
+        .filter(files::Column::UploaderId.eq(id))
+        .one(db)
+        .await?
+        .is_some();
+    let has_message_history = messages::Entity::find()
+        .filter(
+            Condition::any()
+                .add(messages::Column::SenderId.eq(id))
+                .add(messages::Column::DeletedBy.eq(id)),
+        )
+        .one(db)
+        .await?
+        .is_some();
+    let has_upload = upload_sessions::Entity::find()
+        .filter(upload_sessions::Column::UploaderId.eq(id))
+        .one(db)
+        .await?
+        .is_some();
+    let has_history = projects::Entity::find()
+        .filter(projects::Column::CreatedBy.eq(id))
+        .one(db)
+        .await?
+        .is_some()
+        || rounds::Entity::find()
+            .filter(
+                Condition::any()
+                    .add(rounds::Column::CreatedBy.eq(id))
+                    .add(rounds::Column::DecidedBy.eq(id)),
+            )
+            .one(db)
+            .await?
+            .is_some()
+        || round_status_logs::Entity::find()
+            .filter(round_status_logs::Column::OperatorId.eq(id))
+            .one(db)
+            .await?
+            .is_some()
+        || project_members::Entity::find()
+            .filter(project_members::Column::CreatedBy.eq(id))
+            .one(db)
+            .await?
+            .is_some()
+        || message_reads::Entity::find()
+            .filter(message_reads::Column::UserId.eq(id))
+            .one(db)
+            .await?
+            .is_some()
+        || suppliers::Entity::find()
+            .filter(suppliers::Column::CreatedBy.eq(id))
+            .one(db)
+            .await?
+            .is_some()
+        || users::Entity::find()
+            .filter(users::Column::CreatedBy.eq(id))
+            .one(db)
+            .await?
+            .is_some()
+        || email_outbox::Entity::find()
+            .filter(email_outbox::Column::RecipientUserId.eq(id))
+            .one(db)
+            .await?
+            .is_some()
+        || audit_logs::Entity::find()
+            .filter(audit_logs::Column::UserId.eq(id))
+            .one(db)
+            .await?
+            .is_some();
+    if has_file || has_message_history || has_upload || has_history {
+        return Err(AppError::BadRequest(
+            "该账号仍有业务或历史记录，请禁用账号，不要删除".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) async fn remove_login_bindings(db: &impl ConnectionTrait, id: u64) -> ApiResult<()> {
+    user_roles::Entity::delete_many()
+        .filter(user_roles::Column::UserId.eq(id))
+        .exec(db)
+        .await?;
+    refresh_tokens::Entity::delete_many()
+        .filter(refresh_tokens::Column::UserId.eq(id))
+        .exec(db)
+        .await?;
+    project_members::Entity::delete_many()
+        .filter(project_members::Column::UserId.eq(id))
+        .exec(db)
+        .await?;
+    users::Entity::delete_by_id(id).exec(db).await?;
+    Ok(())
+}
+
+pub async fn delete(db: &DatabaseConnection, me: &CurrentUser, id: u64) -> ApiResult<()> {
+    let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    let user = users::Entity::find_by_id(id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    super::perm::recheck_manager(&txn, me.id, "user:manage").await?;
+    super::scope::require_system_admin(&txn, me.id).await?;
+    if id == me.id {
+        return Err(AppError::BadRequest("不能删除自己的账号".into()));
+    }
+    if user.user_type != UserType::Internal {
+        return Err(AppError::BadRequest("供应商人员请在供应商模块删除".into()));
+    }
+    if user.employee_no == "admin" {
+        return Err(AppError::BadRequest("系统管理员账号不可删除".into()));
+    }
+    ensure_admin_role_change_safe(&txn, me.id, id, &[]).await?;
+    ensure_no_owned_content(&txn, id).await?;
+    let employee_no = user.employee_no.clone();
+    audit::insert(
+        &txn,
+        Some(me.id),
+        Some(me.employee_no.clone()),
+        "USER_DELETE",
+        Some("user"),
+        Some(id.to_string()),
+        Some(json!({ "employeeNo": employee_no })),
+        None,
+    )
+    .await?;
+    remove_login_bindings(&txn, id).await?;
     txn.commit().await?;
     Ok(())
 }

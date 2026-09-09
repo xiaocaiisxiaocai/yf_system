@@ -26,7 +26,9 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead 
   const [total, setTotal] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [appendError, setAppendError] = useState(false)
   const [content, setContent] = useState('')
   const [roundId, setRoundId] = useState<number | undefined>()
   const [filterRound, setFilterRound] = useState<number | undefined>()
@@ -34,6 +36,7 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead 
   const { hasPerm, user } = useAuth()
   const listRef = useRef<HTMLDivElement>(null)
   const loadSeq = useRef(0)
+  const receiptSeq = useRef(0)
   const cursor = useRef<number | undefined>()
   const markingRead = useRef(new Set<number>())
   const [sending, setSending] = useState(false)
@@ -46,6 +49,8 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead 
     async (p: number, append: boolean) => {
       const seq = ++loadSeq.current
       setLoading(true)
+      if (append) setAppendError(false)
+      else setLoadError(false)
       try {
         const r = await http.get(`/projects/${projectId}/messages`, {
           params: { page: p, pageSize: 20, roundId: filterRound, beforeId: append ? cursor.current : undefined },
@@ -56,6 +61,14 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead 
         setHasMore(r.data.list.length === 20)
         setList((current) => append ? [...current, ...r.data.list.filter((m: Msg) => !current.some((old) => old.id === m.id))] : r.data.list)
         setPage(p)
+        setLoadError(false)
+        setAppendError(false)
+      } catch (error) {
+        if (seq === loadSeq.current) {
+          if (append) setAppendError(true)
+          else setLoadError(true)
+          if (append) throw error
+        }
       } finally {
         if (seq === loadSeq.current) setLoading(false)
       }
@@ -108,8 +121,13 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead 
   }
 
   const openReceipt = async (id: number) => {
-    const r = await http.get(`/messages/${id}/reads`)
-    setReceipt({ id, readers: r.data.readers, unread: r.data.unread })
+    const seq = ++receiptSeq.current
+    try {
+      const r = await http.get(`/messages/${id}/reads`)
+      if (seq === receiptSeq.current) setReceipt({ id, readers: r.data.readers, unread: r.data.unread })
+    } catch {
+      // 请求失败时保持当前回执，避免错误响应清空正在查看的留言。
+    }
   }
 
   const remove = async (id: number) => {
@@ -120,8 +138,10 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead 
 
   return (
     <div>
-      <Space style={{ marginBottom: 12 }}>
-        <Typography.Text type="secondary">按轮次筛选：</Typography.Text>
+      <div className="section-heading">
+        <div>
+          <h2>协作留言（{total}）</h2>
+        </div>
         <Select
           allowClear
           placeholder="全部留言"
@@ -136,7 +156,7 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead 
             </Select.Option>
           ))}
         </Select>
-      </Space>
+      </div>
 
       {canWrite && (
         <div className="message-composer" style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
@@ -170,12 +190,18 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead 
         </div>
       )}
 
-      <Spin loading={loading && page === 1} style={{ width: '100%' }}>
-        {list.length === 0 && !loading && !hasMore ? (
-          <Empty description="暂无留言" />
-        ) : (
-          <div ref={listRef}>
-            {list.map((m) => (
+      {loadError ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
+          <Typography.Text type="error">加载失败</Typography.Text>
+          <Button size="small" onClick={() => load(1, false)}>重试</Button>
+        </div>
+      ) : (
+        <Spin loading={loading && page === 1} style={{ width: '100%' }}>
+          {list.length === 0 && !loading && !hasMore ? (
+            <Empty description="暂无留言" />
+          ) : (
+            <div ref={listRef}>
+              {list.map((m) => (
               <div
                 className="msg-item"
                 key={m.id}
@@ -241,23 +267,33 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead 
                   </div>
                 </Space>
               </div>
-            ))}
-            {hasMore && (
-              <div style={{ textAlign: 'center', padding: 12 }}>
-                <Button onClick={() => load(page + 1, true)} loading={loading}>
-                  加载更多（{list.length}/{total}）
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-      </Spin>
+              ))}
+              {appendError && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 12 }}>
+                  <Typography.Text type="error">加载失败</Typography.Text>
+                  <Button size="small" onClick={() => load(page + 1, true)}>重试</Button>
+                </div>
+              )}
+              {hasMore && (
+                <div style={{ textAlign: 'center', padding: 12 }}>
+                  <Button onClick={() => load(page + 1, true)} loading={loading}>
+                    加载更多（{list.length}/{total}）
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </Spin>
+      )}
 
       <Drawer
         width={420}
         title="已读回执"
         visible={!!receipt}
-        onCancel={() => setReceipt(null)}
+        onCancel={() => {
+          receiptSeq.current += 1
+          setReceipt(null)
+        }}
         footer={null}
       >
         {receipt && (

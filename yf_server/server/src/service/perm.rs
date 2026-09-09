@@ -19,6 +19,22 @@ pub async fn lock_management_state(db: &impl ConnectionTrait) -> ApiResult<()> {
     Ok(())
 }
 
+/// Business writes share the same stable gate while management changes keep
+/// taking it exclusively. MySQL 5.7 requires `LOCK IN SHARE MODE` rather than
+/// the `FOR SHARE` emitted by the current SeaORM/sea-query versions.
+pub async fn lock_business_state(db: &impl ConnectionTrait) -> ApiResult<()> {
+    crate::entity::roles::Entity::find()
+        .from_raw_sql(Statement::from_sql_and_values(
+            DatabaseBackend::MySql,
+            "SELECT * FROM roles WHERE is_built_in = TRUE AND name = ? LOCK IN SHARE MODE",
+            ["系统管理员".into()],
+        ))
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::Internal("系统管理员角色缺失".into()))?;
+    Ok(())
+}
+
 /// A request waiting for the gate may have lost its account or action permission.
 pub async fn recheck_manager(
     db: &impl ConnectionTrait,

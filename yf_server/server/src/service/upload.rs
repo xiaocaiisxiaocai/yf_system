@@ -20,6 +20,28 @@ use crate::storage;
 
 use super::{audit, notify, scope};
 
+#[cfg(test)]
+tokio::task_local! {
+    static LOSE_UPLOAD_COMMIT_CONFIRMATION: bool;
+}
+
+/// A COMMIT error is an unknown outcome: the server may have committed before
+/// the connection lost its confirmation. Callers must reconcile fresh state
+/// before removing files created ahead of the transaction.
+async fn commit_upload_transaction(txn: DatabaseTransaction) -> ApiResult<()> {
+    txn.commit().await?;
+    #[cfg(test)]
+    if LOSE_UPLOAD_COMMIT_CONFIRMATION
+        .try_with(|enabled| *enabled)
+        .unwrap_or(false)
+    {
+        return Err(AppError::Internal(
+            "simulated lost upload commit confirmation".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitReq {
@@ -118,12 +140,21 @@ async fn lock_writable_target(
     user: &CurrentUser,
     session: &upload_sessions::Model,
 ) -> ApiResult<(projects::Model, rounds::Model)> {
-    let project = projects::Entity::find_by_id(session.project_id)
+    lock_writable_ids(txn, user, session.project_id, session.round_id).await
+}
+
+async fn lock_writable_ids(
+    txn: &DatabaseTransaction,
+    user: &CurrentUser,
+    project_id: u64,
+    round_id: u64,
+) -> ApiResult<(projects::Model, rounds::Model)> {
+    let project = projects::Entity::find_by_id(project_id)
         .lock_exclusive()
         .one(txn)
         .await?
         .ok_or(AppError::NotFound)?;
-    let round = rounds::Entity::find_by_id(session.round_id)
+    let round = rounds::Entity::find_by_id(round_id)
         .lock_exclusive()
         .one(txn)
         .await?
@@ -204,6 +235,19 @@ pub async fn init(state: &AppState, user: &CurrentUser, req: &InitReq) -> ApiRes
                 return Err(AppError::Conflict("该文件正在合并，请稍候".into()));
             }
             // 上次进程若在合并期间退出，正式完成状态会与文件记录同事务提交；无结果的旧 MERGING 可安全重试。
+            let txn = db.begin().await?;
+            super::perm::lock_business_state(&txn).await?;
+            lock_writable_target(&txn, user, &existing).await?;
+            let current = upload_sessions::Entity::find_by_id(existing.id.clone())
+                .lock_exclusive()
+                .one(&txn)
+                .await?
+                .ok_or(AppError::NotFound)?;
+            super::perm::recheck_manager(&txn, user.id, "file:upload").await?;
+            if current.status != UploadStatus::Merging || current.updated_at != existing.updated_at
+            {
+                return Err(AppError::Conflict("会话已变更，请重试".into()));
+            }
             let reset = upload_sessions::ActiveModel {
                 status: Set(UploadStatus::Uploading),
                 updated_at: Set(Utc::now()),
@@ -214,11 +258,12 @@ pub async fn init(state: &AppState, user: &CurrentUser, req: &InitReq) -> ApiRes
                 .filter(upload_sessions::Column::Id.eq(&existing.id))
                 .filter(upload_sessions::Column::Status.eq(UploadStatus::Merging))
                 .filter(upload_sessions::Column::UpdatedAt.eq(existing.updated_at))
-                .exec(db)
+                .exec(&txn)
                 .await?;
             if result.rows_affected != 1 {
                 return Err(AppError::Conflict("会话已变更，请重试".into()));
             }
+            txn.commit().await?;
             existing = load_session(db, &existing.id).await?;
         }
         let uploaded = uploaded_chunks(
@@ -244,25 +289,58 @@ pub async fn init(state: &AppState, user: &CurrentUser, req: &InitReq) -> ApiRes
         .map_err(|e| AppError::Internal(format!("创建临时目录失败: {e}")))?;
 
     let now = Utc::now();
-    upload_sessions::ActiveModel {
-        id: Set(sid.clone()),
-        project_id: Set(req.project_id),
-        round_id: Set(req.round_id),
-        uploader_id: Set(user.id),
-        file_name: Set(req.file_name.clone()),
-        file_size: Set(req.file_size),
-        file_md5: Set(req.file_md5.clone()),
-        chunk_size: Set(chunk_size),
-        total_chunks: Set(total_chunks),
-        temp_dir: Set(tmp_dir.to_string_lossy().to_string()),
-        status: Set(UploadStatus::Uploading),
-        result_file_id: Set(None),
-        expires_at: Set(now + Duration::hours(24)),
-        created_at: Set(now),
-        updated_at: Set(now),
+    let prepared: ApiResult<DatabaseTransaction> = async {
+        let txn = db.begin().await?;
+        super::perm::lock_business_state(&txn).await?;
+        lock_writable_ids(&txn, user, req.project_id, req.round_id).await?;
+        super::perm::recheck_manager(&txn, user.id, "file:upload").await?;
+        upload_sessions::ActiveModel {
+            id: Set(sid.clone()),
+            project_id: Set(req.project_id),
+            round_id: Set(req.round_id),
+            uploader_id: Set(user.id),
+            file_name: Set(req.file_name.clone()),
+            file_size: Set(req.file_size),
+            file_md5: Set(req.file_md5.clone()),
+            chunk_size: Set(chunk_size),
+            total_chunks: Set(total_chunks),
+            temp_dir: Set(tmp_dir.to_string_lossy().to_string()),
+            status: Set(UploadStatus::Uploading),
+            result_file_id: Set(None),
+            expires_at: Set(now + Duration::hours(24)),
+            created_at: Set(now),
+            updated_at: Set(now),
+        }
+        .insert(&txn)
+        .await?;
+        Ok(txn)
     }
-    .insert(db)
-    .await?;
+    .await;
+    let txn = match prepared {
+        Ok(txn) => txn,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+            return Err(e);
+        }
+    };
+    if let Err(commit_error) = commit_upload_transaction(txn).await {
+        match upload_sessions::Entity::find_by_id(sid.clone())
+            .one(db)
+            .await
+        {
+            Ok(Some(_)) => {
+                tracing::warn!(session_id = %sid, error = ?commit_error, "上传会话提交确认丢失，已按会话记录确认成功");
+            }
+            Ok(None) => {
+                tracing::warn!(session_id = %sid, error = ?commit_error, "上传会话提交结果未知，保留临时目录待核对");
+                return Err(commit_error);
+            }
+            Err(confirm_error) => {
+                tracing::warn!(session_id = %sid, error = ?commit_error, confirmation_error = ?confirm_error, "无法确认上传会话提交结果，保留临时目录待核对");
+                return Err(commit_error);
+            }
+        }
+    }
     let _ = ext;
 
     Ok(json!({
@@ -296,6 +374,7 @@ pub async fn put_chunk(
         return Err(AppError::Forbidden);
     }
     let txn = state.db.begin().await?;
+    super::perm::lock_business_state(&txn).await?;
     lock_writable_target(&txn, user, &s).await?;
     let s = upload_sessions::Entity::find_by_id(sid.to_string())
         .lock_exclusive()
@@ -306,6 +385,10 @@ pub async fn put_chunk(
         return Err(AppError::Conflict(
             "会话不可上传（可能已合并或放弃）".into(),
         ));
+    }
+    super::perm::recheck_manager(&txn, user.id, "file:upload").await?;
+    if s.expires_at < Utc::now() {
+        return Err(AppError::Conflict("上传会话已过期，请重新发起".into()));
     }
     if index >= s.total_chunks {
         return Err(AppError::BadRequest("分片序号越界".into()));
@@ -375,6 +458,7 @@ pub async fn status(state: &AppState, user: &CurrentUser, sid: &str) -> ApiResul
 pub async fn abort(state: &AppState, user: &CurrentUser, sid: &str) -> ApiResult<()> {
     let db = &state.db;
     let txn = db.begin().await?;
+    super::perm::lock_business_state(&txn).await?;
     let s = upload_sessions::Entity::find_by_id(sid.to_string())
         .lock_exclusive()
         .one(&txn)
@@ -383,6 +467,7 @@ pub async fn abort(state: &AppState, user: &CurrentUser, sid: &str) -> ApiResult
     if s.uploader_id != user.id {
         return Err(AppError::Forbidden);
     }
+    super::perm::recheck_manager(&txn, user.id, "file:upload").await?;
     if matches!(s.status, UploadStatus::Completed | UploadStatus::Merging) {
         return Err(AppError::Conflict("会话已完成，不可放弃".into()));
     }
@@ -596,9 +681,10 @@ async fn do_merge(
         .to_string_lossy()
         .replace('\\', "/");
 
-    // 文件记录、通知、审计和会话完成状态必须同事务提交；失败时删除已 rename 的孤儿文件。
-    let db_result: ApiResult<files::Model> = async {
+    // 文件记录、通知、审计和会话完成状态必须同事务提交；提交前失败才可删除已 rename 的文件。
+    let prepared: ApiResult<(DatabaseTransaction, files::Model)> = async {
         let txn = db.begin().await?;
+        super::perm::lock_business_state(&txn).await?;
         let (project, round) = lock_writable_target(&txn, user, s).await?;
         let session = upload_sessions::Entity::find_by_id(s.id.clone())
             .lock_exclusive()
@@ -608,6 +694,7 @@ async fn do_merge(
         if session.status != UploadStatus::Merging || session.updated_at != s.updated_at {
             return Err(AppError::Conflict("上传会话状态已变化，请重新查询".into()));
         }
+        super::perm::recheck_manager(&txn, user.id, "file:upload").await?;
         let model = files::ActiveModel {
             project_id: Set(s.project_id),
             round_id: Set(s.round_id),
@@ -664,15 +751,49 @@ async fn do_merge(
         if completed.rows_affected != 1 {
             return Err(AppError::Conflict("上传会话已被其他请求变更".into()));
         }
-        txn.commit().await?;
-        Ok(model)
+        Ok((txn, model))
     }
     .await;
-    match db_result {
-        Ok(model) => Ok(super::file::file_json(&model)),
+    let (txn, model) = match prepared {
+        Ok(prepared) => prepared,
         Err(e) => {
             let _ = tokio::fs::remove_file(&final_path).await;
-            Err(e)
+            return Err(e);
+        }
+    };
+    match commit_upload_transaction(txn).await {
+        Ok(()) => Ok(super::file::file_json(&model)),
+        Err(commit_error) => {
+            let confirmed: Result<Option<files::Model>, sea_orm::DbErr> = async {
+                let session = upload_sessions::Entity::find_by_id(s.id.clone())
+                    .one(db)
+                    .await?;
+                let Some(session) = session else {
+                    return Ok(None);
+                };
+                if session.status != UploadStatus::Completed {
+                    return Ok(None);
+                }
+                let Some(file_id) = session.result_file_id else {
+                    return Ok(None);
+                };
+                files::Entity::find_by_id(file_id).one(db).await
+            }
+            .await;
+            match confirmed {
+                Ok(Some(committed)) => {
+                    tracing::warn!(session_id = %s.id, file_id = committed.id, error = ?commit_error, "文件提交确认丢失，已按完成会话确认成功");
+                    Ok(super::file::file_json(&committed))
+                }
+                Ok(None) => {
+                    tracing::warn!(session_id = %s.id, path = %final_path.display(), error = ?commit_error, "文件提交结果未知，保留正式文件待重试或人工核对");
+                    Err(commit_error)
+                }
+                Err(confirm_error) => {
+                    tracing::warn!(session_id = %s.id, path = %final_path.display(), error = ?commit_error, confirmation_error = ?confirm_error, "无法确认文件提交结果，保留正式文件待重试或人工核对");
+                    Err(commit_error)
+                }
+            }
         }
     }
 }
@@ -687,12 +808,31 @@ pub async fn gc_expired(state: &AppState) {
         .await;
     let Ok(expired) = expired else { return };
     for s in expired {
-        let _ = tokio::fs::remove_dir_all(&s.temp_dir).await;
-        let mut am: upload_sessions::ActiveModel = s.into();
-        am.status = Set(UploadStatus::Expired);
-        am.updated_at = Set(Utc::now());
-        if let Err(e) = am.update(db).await {
-            tracing::warn!(error = ?e, "过期上传会话标记失败");
+        let now = Utc::now();
+        let expired_update = upload_sessions::ActiveModel {
+            status: Set(UploadStatus::Expired),
+            updated_at: Set(now),
+            ..Default::default()
+        };
+        let claimed = upload_sessions::Entity::update_many()
+            .set(expired_update)
+            .filter(upload_sessions::Column::Id.eq(&s.id))
+            .filter(upload_sessions::Column::Status.eq(UploadStatus::Uploading))
+            .filter(upload_sessions::Column::ExpiresAt.lt(now))
+            .exec(db)
+            .await;
+        match claimed {
+            Ok(result) if result.rows_affected == 1 => {
+                if let Err(e) = tokio::fs::remove_dir_all(&s.temp_dir).await {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(error = ?e, session_id = %s.id, "清理过期上传目录失败");
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = ?e, session_id = %s.id, "过期上传会话认领失败");
+            }
         }
     }
 }
@@ -700,6 +840,212 @@ pub async fn gc_expired(state: &AppState) {
 #[cfg(test)]
 mod regression_tests {
     use super::*;
+
+    async fn await_waiting_on(db: &DatabaseConnection, blocker: u64) {
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let row = db.query_one(Statement::from_string(DbBackend::MySql, format!("SELECT COUNT(*) AS n FROM information_schema.INNODB_LOCK_WAITS w JOIN information_schema.INNODB_TRX b ON b.trx_id=w.blocking_trx_id WHERE b.trx_mysql_thread_id={blocker}"))).await.unwrap().unwrap();
+                if row.try_get::<i64>("", "n").unwrap() > 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("upload operation never reached the owned lock barrier");
+    }
+
+    #[tokio::test]
+    #[ignore = "isolated MySQL required"]
+    async fn init_commit_confirmation_loss_keeps_committed_session_directory() {
+        let f = crate::regression::Fixture::new().await;
+        let result = LOSE_UPLOAD_COMMIT_CONFIRMATION
+            .scope(
+                true,
+                init(
+                    &f.state,
+                    &f.member,
+                    &InitReq {
+                        project_id: f.project_id,
+                        round_id: f.round_id,
+                        file_name: "init-commit-confirmation.pdf".into(),
+                        file_size: 4,
+                        file_md5: None,
+                    },
+                ),
+            )
+            .await
+            .unwrap();
+        let sid = result["sessionId"].as_str().unwrap();
+        let session = upload_sessions::Entity::find_by_id(sid)
+            .one(&f.state.db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.status, UploadStatus::Uploading);
+        assert!(
+            storage::tmp_dir(&f.state.cfg.storage.root, sid).is_dir(),
+            "a committed upload session must keep its temporary directory"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "isolated MySQL required"]
+    async fn merge_commit_confirmation_loss_returns_the_single_committed_file() {
+        use sea_orm::PaginatorTrait;
+
+        let f = crate::regression::Fixture::new().await;
+        let sid = f.init("merge-commit-confirmation.pdf").await;
+        put_chunk(&f.state, &f.member, &sid, 0, b"test")
+            .await
+            .unwrap();
+
+        let merged = LOSE_UPLOAD_COMMIT_CONFIRMATION
+            .scope(true, merge(&f.state, &f.member, &sid))
+            .await
+            .unwrap();
+        let session = upload_sessions::Entity::find_by_id(sid.clone())
+            .one(&f.state.db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.status, UploadStatus::Completed);
+        let file_id = session.result_file_id.unwrap();
+        assert_eq!(merged["id"], file_id);
+        let file = files::Entity::find_by_id(file_id)
+            .one(&f.state.db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            std::path::Path::new(&f.state.cfg.storage.root)
+                .join(&file.storage_path)
+                .is_file(),
+            "a confirmed committed file must not be removed"
+        );
+        assert_eq!(merge(&f.state, &f.member, &sid).await.unwrap(), merged);
+        assert_eq!(
+            files::Entity::find()
+                .filter(files::Column::ProjectId.eq(f.project_id))
+                .count(&f.state.db)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "isolated MySQL required"]
+    async fn chunk_waiting_on_locks_rechecks_session_expiry_before_writing() {
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+
+        let f = crate::regression::Fixture::new().await;
+        let sid = f.init("expires-while-waiting.pdf").await;
+        let txn = f.state.db.begin().await.unwrap();
+        crate::service::perm::lock_management_state(&txn)
+            .await
+            .unwrap();
+        projects::Entity::find_by_id(f.project_id)
+            .lock_exclusive()
+            .one(&txn)
+            .await
+            .unwrap()
+            .unwrap();
+        rounds::Entity::find_by_id(f.round_id)
+            .lock_exclusive()
+            .one(&txn)
+            .await
+            .unwrap()
+            .unwrap();
+        let locked = upload_sessions::Entity::find_by_id(sid.clone())
+            .lock_exclusive()
+            .one(&txn)
+            .await
+            .unwrap()
+            .unwrap();
+        let blocker = txn
+            .query_one(Statement::from_string(
+                DbBackend::MySql,
+                "SELECT CONNECTION_ID() AS id".to_owned(),
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get("", "id")
+            .unwrap();
+
+        let (state, actor, pending_sid) = (f.state.clone(), f.member.clone(), sid.clone());
+        let pending =
+            tokio::spawn(async move { put_chunk(&state, &actor, &pending_sid, 0, b"test").await });
+        await_waiting_on(&f.state.db, blocker).await;
+
+        let mut expired: upload_sessions::ActiveModel = locked.into();
+        expired.expires_at = Set(Utc::now() - Duration::seconds(1));
+        expired.update(&txn).await.unwrap();
+        txn.commit().await.unwrap();
+
+        assert!(matches!(pending.await.unwrap(), Err(AppError::Conflict(_))));
+        assert!(
+            !storage::chunk_path(&f.state.cfg.storage.root, &sid, 0).exists(),
+            "an expired session must not accept a chunk after lock wait"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "isolated MySQL required"]
+    async fn expired_gc_cannot_delete_or_expire_a_session_that_started_merging() {
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+
+        let f = crate::regression::Fixture::new().await;
+        let sid = f.init("gc-merge-race.pdf").await;
+        put_chunk(&f.state, &f.member, &sid, 0, b"test")
+            .await
+            .unwrap();
+        let session = load_session(&f.state.db, &sid).await.unwrap();
+        let mut expired: upload_sessions::ActiveModel = session.into();
+        expired.expires_at = Set(Utc::now() - Duration::seconds(1));
+        expired.update(&f.state.db).await.unwrap();
+
+        let txn = f.state.db.begin().await.unwrap();
+        let locked = upload_sessions::Entity::find_by_id(sid.clone())
+            .lock_exclusive()
+            .one(&txn)
+            .await
+            .unwrap()
+            .unwrap();
+        let blocker = txn
+            .query_one(Statement::from_string(
+                DbBackend::MySql,
+                "SELECT CONNECTION_ID() AS id".to_owned(),
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get("", "id")
+            .unwrap();
+        let state = f.state.clone();
+        let gc = tokio::spawn(async move { gc_expired(&state).await });
+        await_waiting_on(&f.state.db, blocker).await;
+
+        let mut merging: upload_sessions::ActiveModel = locked.into();
+        merging.status = Set(UploadStatus::Merging);
+        merging.updated_at = Set(Utc::now());
+        merging.update(&txn).await.unwrap();
+        txn.commit().await.unwrap();
+        gc.await.unwrap();
+
+        let current = upload_sessions::Entity::find_by_id(sid.clone())
+            .one(&f.state.db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.status, UploadStatus::Merging);
+        assert!(
+            storage::chunk_path(&f.state.cfg.storage.root, &sid, 0).exists(),
+            "GC must not delete chunks after another transaction starts merging"
+        );
+    }
 
     #[tokio::test]
     #[ignore = "isolated MySQL required"]

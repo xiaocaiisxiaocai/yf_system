@@ -43,6 +43,14 @@ pub async fn update_department_status(
         service::dept::set_status(&s.db, &u, id, &req.status).await?,
     ))
 }
+pub async fn delete_department(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<Value>> {
+    service::dept::delete(&s.db, &u, id).await?;
+    Ok(Json(serde_json::json!({})))
+}
 
 // ---------- 用户 ----------
 
@@ -113,6 +121,14 @@ pub async fn assign_user_roles(
     service::user::assign_roles(&s.db, &u, id, &req).await?;
     Ok(Json(serde_json::json!({})))
 }
+pub async fn delete_user(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<Value>> {
+    service::user::delete(&s.db, &u, id).await?;
+    Ok(Json(serde_json::json!({})))
+}
 
 // ---------- 角色与权限 ----------
 
@@ -165,6 +181,14 @@ pub async fn list_permissions(
 ) -> ApiResult<Json<Value>> {
     Ok(Json(service::role::perm_tree(&s.db).await?))
 }
+pub async fn delete_role(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<Value>> {
+    service::role::delete(&s.db, &u, id).await?;
+    Ok(Json(serde_json::json!({})))
+}
 
 // ---------- 供应商 ----------
 
@@ -208,6 +232,14 @@ pub async fn update_supplier_status(
     Ok(Json(
         service::supplier::set_status(&s.db, &u, id, &req.status).await?,
     ))
+}
+pub async fn delete_supplier(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<Value>> {
+    service::supplier::delete(&s.db, &u, id).await?;
+    Ok(Json(serde_json::json!({})))
 }
 pub async fn list_supplier_accounts(
     State(s): State<AppState>,
@@ -253,5 +285,13 @@ pub async fn reset_supplier_account_password(
     Json(req): Json<PasswordReq>,
 ) -> ApiResult<Json<Value>> {
     service::supplier::reset_account_password(&s.db, &u, id, &req.new_password).await?;
+    Ok(Json(serde_json::json!({})))
+}
+pub async fn delete_supplier_account(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<Value>> {
+    service::supplier::delete_account(&s.db, &u, id).await?;
     Ok(Json(serde_json::json!({})))
 }

@@ -21,6 +21,18 @@ pub struct CurrentUser {
     pub supplier_id: Option<u64>,
 }
 
+pub(crate) fn supplier_id_for_auth(
+    user_type: UserType,
+    supplier_id: Option<u64>,
+) -> ApiResult<Option<u64>> {
+    match user_type {
+        UserType::Internal => Ok(None),
+        UserType::Supplier => supplier_id
+            .map(Some)
+            .ok_or_else(|| AppError::Unauthorized("所属供应商已被禁用".into())),
+    }
+}
+
 impl CurrentUser {
     pub fn is_internal(&self) -> bool {
         self.user_type == UserType::Internal
@@ -62,12 +74,10 @@ pub async fn middleware(
         }
     }
     // 供应商被禁用时，其全部人员拒绝访问
-    if user.user_type == UserType::Supplier {
-        if let Some(sid) = user.supplier_id {
-            let supplier = suppliers::Entity::find_by_id(sid).one(&state.db).await?;
-            if supplier.map(|s| s.status) != Some(CommonStatus::Active) {
-                return Err(AppError::Unauthorized("所属供应商已被禁用".into()));
-            }
+    if let Some(sid) = supplier_id_for_auth(user.user_type, user.supplier_id)? {
+        let supplier = suppliers::Entity::find_by_id(sid).one(&state.db).await?;
+        if supplier.map(|s| s.status) != Some(CommonStatus::Active) {
+            return Err(AppError::Unauthorized("所属供应商已被禁用".into()));
         }
     }
 
@@ -93,5 +103,19 @@ impl axum::extract::FromRequestParts<AppState> for CurrentUser {
             .get::<CurrentUser>()
             .cloned()
             .ok_or_else(|| AppError::Unauthorized("缺少登录凭证".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::supplier_id_for_auth;
+    use crate::{entity::enums::UserType, error::AppError};
+
+    #[test]
+    fn supplier_without_owner_is_rejected() {
+        assert!(matches!(
+            supplier_id_for_auth(UserType::Supplier, None),
+            Err(AppError::Unauthorized(_))
+        ));
     }
 }

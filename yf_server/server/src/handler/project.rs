@@ -48,6 +48,15 @@ pub async fn update_project(
     require(&s, &u, "project:update").await?;
     Ok(Json(service::project::update(&s.db, &u, id, &req).await?))
 }
+pub async fn delete_project(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<Value>> {
+    require(&s, &u, "project:update").await?;
+    service::project::delete(&s, &u, id).await?;
+    Ok(Json(serde_json::json!({})))
+}
 pub async fn update_project_status(
     State(s): State<AppState>,
     u: CurrentUser,

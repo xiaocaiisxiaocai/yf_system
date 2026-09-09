@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use crate::state::CaptchaStore;
 
 const TTL: Duration = Duration::from_secs(300);
+const MAX_CHALLENGES: usize = 4096;
 
 pub fn issue(store: &CaptchaStore) -> (String, String) {
     const CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -17,6 +18,16 @@ pub fn issue(store: &CaptchaStore) -> (String, String) {
 
     let mut map = store.lock().unwrap();
     map.retain(|_, (_, exp)| *exp > Instant::now());
+    if map.len() >= MAX_CHALLENGES {
+        // Public issuance cannot grow memory without bound; evict the oldest challenge.
+        if let Some(oldest) = map
+            .iter()
+            .min_by_key(|(_, (_, expiry))| *expiry)
+            .map(|(key, _)| key.clone())
+        {
+            map.remove(&oldest);
+        }
+    }
     map.insert(id.clone(), (code.clone(), Instant::now() + TTL));
     drop(map);
 
@@ -66,6 +77,22 @@ fn render_svg(code: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn captcha_store_has_a_fixed_capacity_and_keeps_the_new_challenge() {
+        let store = CaptchaStore::default();
+        let expiry = Instant::now() + TTL;
+        for index in 0..4096 {
+            store
+                .lock()
+                .unwrap()
+                .insert(format!("old-{index}"), ("ABCD".into(), expiry));
+        }
+        let (id, _) = issue(&store);
+        assert_eq!(store.lock().unwrap().len(), 4096);
+        let code = store.lock().unwrap()[&id].0.clone();
+        assert!(verify(&store, &id, &code));
+    }
+
     #[test]
     fn captcha_is_single_use_case_insensitive_and_expires() {
         let store = CaptchaStore::default();

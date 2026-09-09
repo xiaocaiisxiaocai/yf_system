@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Button, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip,
+  Button, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconUpload, IconDelete } from '@arco-design/web-react/icon'
 import http from '../api/client'
@@ -47,6 +47,7 @@ export default function FileTable({ projectId, projectStatus, rounds }: Props) {
   const [keyword, setKeyword] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
+  const [loadError, setLoadError] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploadRound, setUploadRound] = useState<number>()
   const [preview, setPreview] = useState<FileItem | null>(null)
@@ -66,17 +67,12 @@ export default function FileTable({ projectId, projectStatus, rounds }: Props) {
     return r.data as PageResp<FileItem>
   }, [projectId, page, pageSize, roundId, direction, keyword])
 
-  const load = useCallback(async () => {
-    const seq = ++loadSeq.current
+  const load = useCallback(() => {
     setLoading(true)
     setSelected([])
-    try {
-      const next = await fetchFiles()
-      if (seq === loadSeq.current) setData(next)
-    } finally {
-      if (seq === loadSeq.current) setLoading(false)
-    }
-  }, [fetchFiles])
+    setLoadError(false)
+    setReloadKey((value) => value + 1)
+  }, [])
 
   useEffect(() => {
     const seq = ++loadSeq.current
@@ -86,7 +82,11 @@ export default function FileTable({ projectId, projectStatus, rounds }: Props) {
         if (active && seq === loadSeq.current) {
           setData(next)
           setSelected([])
+          setLoadError(false)
         }
+      })
+      .catch(() => {
+        if (active && seq === loadSeq.current) setLoadError(true)
       })
       .finally(() => {
         if (active && seq === loadSeq.current) setLoading(false)
@@ -133,7 +133,7 @@ export default function FileTable({ projectId, projectStatus, rounds }: Props) {
             placeholder="轮次"
             style={{ width: 130 }}
             onChange={(v) => {
-              setLoading(true); setReloadKey((value) => value + 1)
+              setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
               setPage(1)
               setRoundId(v as number | undefined)
             }}
@@ -149,7 +149,7 @@ export default function FileTable({ projectId, projectStatus, rounds }: Props) {
             placeholder="方向"
             style={{ width: 150 }}
             onChange={(v) => {
-              setLoading(true); setReloadKey((value) => value + 1)
+              setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
               setPage(1)
               setDirection(v as string | undefined)
             }}
@@ -162,12 +162,12 @@ export default function FileTable({ projectId, projectStatus, rounds }: Props) {
             placeholder="文件名"
             style={{ width: 200 }}
             onSearch={(v) => {
-              setLoading(true); setReloadKey((value) => value + 1)
+              setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
               setPage(1)
               setKeyword(v)
             }}
             onClear={() => {
-              setLoading(true); setReloadKey((value) => value + 1)
+              setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
               setPage(1)
               setKeyword('')
             }}
@@ -187,16 +187,22 @@ export default function FileTable({ projectId, projectStatus, rounds }: Props) {
         </Space>
       </Space>
 
-      <Table
-        rowKey="id"
-        loading={loading}
-        data={data.list}
-        rowSelection={hasPerm('file:download') ? {
-          selectedRowKeys: selected,
-          onChange: (keys) => setSelected(keys as number[]),
-        } : undefined}
-        scroll={{ x: 1000 }}
-        columns={[
+      {loadError ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
+          <Typography.Text type="error">加载失败</Typography.Text>
+          <Button size="small" onClick={load}>重试</Button>
+        </div>
+      ) : (
+        <Table
+          rowKey="id"
+          loading={loading}
+          data={data.list}
+          rowSelection={hasPerm('file:download') ? {
+            selectedRowKeys: selected,
+            onChange: (keys) => setSelected(keys as number[]),
+          } : undefined}
+          scroll={{ x: 1000 }}
+          columns={[
           {
             title: '文件名',
             dataIndex: 'originalName',
@@ -207,7 +213,7 @@ export default function FileTable({ projectId, projectStatus, rounds }: Props) {
                 <span className="table-cell-text" title={v}>{v}</span>
                 {previewKind(r.ext, r.sizeBytes) !== 'none' && hasPerm('file:preview') && (
                   <Tooltip content="在线预览">
-                    <Button size="mini" type="text" icon={<IconEye />} onClick={() => setPreview(r)} />
+                    <Button size="mini" type="text" icon={<IconEye />} aria-label="预览文件" onClick={() => setPreview(r)} />
                   </Tooltip>
                 )}
               </Space>
@@ -231,30 +237,31 @@ export default function FileTable({ projectId, projectStatus, rounds }: Props) {
             align: 'center' as const,
             render: (_: unknown, r: FileItem) => actionSlots([
               hasPerm('file:download') && (
-                <Button key="download" size="mini" type="text" icon={<IconDownload />} onClick={() => downloadAuthed(r.id, r.originalName)}>
+                <Button key="download" size="mini" type="text" icon={<IconDownload />} aria-label="下载文件" onClick={() => downloadAuthed(r.id, r.originalName)}>
                   下载
                 </Button>
               ),
               r.canDelete && (
                 <Popconfirm key="delete" title={`删除文件「${r.originalName}」？`} onOk={() => remove(r)}>
-                  <Button size="mini" type="text" status="danger" icon={<IconDelete />} title="删除" />
+                  <Button size="mini" type="text" status="danger" icon={<IconDelete />} title="删除" aria-label="删除文件" />
                 </Popconfirm>
               ),
             ], 'file'),
           },
-        ]}
-        pagination={{
-          total: data.total,
-          current: page,
-          pageSize,
-          showTotal: true,
-          onChange: (p, ps) => {
-            setLoading(true); setReloadKey((value) => value + 1)
-            setPage(p)
-            setPageSize(ps)
-          },
-        }}
-      />
+          ]}
+          pagination={{
+            total: data.total,
+            current: page,
+            pageSize,
+            showTotal: true,
+            onChange: (p, ps) => {
+              setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
+              setPage(p)
+              setPageSize(ps)
+            },
+          }}
+        />
+      )}
 
       {uploadOpen && uploadRound && (
         <ChunkUploader

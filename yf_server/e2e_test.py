@@ -163,7 +163,7 @@ if exist:
     SUP_ID = exist[0]["id"]
     check("创建供应商(复用已有)", True, "reuse SUP-HY")
 else:
-    s, r, _ = req("POST", "/admin/suppliers", {"name": "宏远精密制造有限公司", "contactName": "李工", "contactPhone": "13800000001", "contactEmail": "hongyuan@supplier.com"}, ADMIN)
+    s, r, _ = req("POST", "/admin/suppliers", {"name": "宏远精密制造有限公司"}, ADMIN)
     check("创建供应商且不再返回历史编码", s == 200 and r.get("id") and "code" not in r, f"got {s} {r}")
     SUP_ID = r.get("id")
 s, r, _ = req("GET", f"/admin/suppliers/{SUP_ID}/accounts", token=ADMIN)
@@ -182,7 +182,7 @@ exist2 = [x for x in r.get("list", []) if x["name"] == "蓝海电子科技"]
 if exist2:
     SUP2_ID = exist2[0]["id"]
 else:
-    s, r, _ = req("POST", "/admin/suppliers", {"name": "蓝海电子科技", "contactName": "王经理"}, ADMIN)
+    s, r, _ = req("POST", "/admin/suppliers", {"name": "蓝海电子科技"}, ADMIN)
     SUP2_ID = r.get("id")
 s, r, _ = req("GET", f"/admin/suppliers/{SUP2_ID}/accounts", token=ADMIN)
 acct2 = [x for x in (r if isinstance(r, list) else r.get("list", [])) if x["employeeNo"] == "lh_wang"]

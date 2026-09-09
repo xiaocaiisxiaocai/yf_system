@@ -39,7 +39,6 @@ async fn full_disabled_supplier_accounts_remain_manageable_but_cannot_login() {
                 password: "Regression123".into(),
                 real_name: format!("账号{n}"),
                 email: format!("account{n}@example.invalid"),
-                phone: None,
             },
         )
         .await
@@ -73,7 +72,6 @@ async fn full_disabled_supplier_accounts_remain_manageable_but_cannot_login() {
             password: "Regression123".into(),
             real_name: "禁止新增".into(),
             email: "new@example.invalid".into(),
-            phone: None
         }
     )
     .await
@@ -85,7 +83,6 @@ async fn full_disabled_supplier_accounts_remain_manageable_but_cannot_login() {
         &service::supplier::AccountUpdate {
             real_name: Some("禁用组织仍可维护资料".into()),
             email: None,
-            phone: None,
         },
     )
     .await
@@ -488,7 +485,18 @@ async fn full_configuration_applies_to_new_uploads_and_preserves_existing_sessio
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
 async fn full_message_receipts_follow_membership_and_ignore_view_all_readers() {
+    use sea_orm::{ActiveModelTrait, Set};
     let f = Fixture::new().await;
+    // The administrator in this test is a view_all outsider, not the creator.
+    let mut project: crate::entity::projects::ActiveModel =
+        crate::entity::projects::Entity::find_by_id(f.project_id)
+            .one(&f.state.db)
+            .await
+            .unwrap()
+            .unwrap()
+            .into();
+    project.created_by = Set(f.member.id);
+    project.update(&f.state.db).await.unwrap();
     let manager = roles::Entity::find()
         .filter(roles::Column::Name.eq("项目管理员"))
         .one(&f.state.db)
@@ -580,6 +588,87 @@ async fn full_message_receipts_follow_membership_and_ignore_view_all_readers() {
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
+async fn review_participants_include_creator_and_exclude_disabled_accounts() {
+    use crate::entity::{email_outbox, project_members, projects};
+    use sea_orm::{ActiveModelTrait, Set};
+    let f = Fixture::new().await;
+    let mut project: projects::ActiveModel = projects::Entity::find_by_id(f.project_id)
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .unwrap()
+        .into();
+    project.created_by = Set(f.member.id);
+    project.update(&f.state.db).await.unwrap();
+    project_members::Entity::delete_by_id((f.project_id, f.member.id))
+        .exec(&f.state.db)
+        .await
+        .unwrap();
+    let msg = service::message::create(
+        &f.state.db,
+        &f.admin,
+        f.project_id,
+        &service::message::MessageCreate {
+            content: "creator is still a participant".into(),
+            round_id: None,
+        },
+        "http://localhost",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        msg["totalCount"], 1,
+        "active creator counts even without member binding"
+    );
+    let queued = email_outbox::Entity::find()
+        .filter(email_outbox::Column::ProjectId.eq(f.project_id))
+        .all(&f.state.db)
+        .await
+        .unwrap();
+    assert!(
+        queued
+            .iter()
+            .any(|row| row.recipient_user_id == Some(f.member.id)),
+        "creator receives the notification"
+    );
+    service::message::mark_read(
+        &f.state.db,
+        &f.member,
+        &service::message::MarkRead {
+            ids: vec![msg["id"].as_u64().unwrap()],
+        },
+    )
+    .await
+    .unwrap();
+    let receipt = service::message::reads(&f.state.db, &f.admin, msg["id"].as_u64().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(receipt["readers"][0]["userId"], f.member.id);
+    service::project::set_members(
+        &f.state.db,
+        &f.admin,
+        f.project_id,
+        &service::project::MembersSet {
+            user_ids: vec![f.member.id],
+        },
+    )
+    .await
+    .unwrap();
+    service::user::set_status(&f.state.db, &f.admin, f.member.id, "DISABLED")
+        .await
+        .unwrap();
+    let receipt = service::message::reads(&f.state.db, &f.admin, msg["id"].as_u64().unwrap())
+        .await
+        .unwrap();
+    assert!(
+        receipt["readers"].as_array().unwrap().is_empty(),
+        "disabled creator/member is no longer a reader"
+    );
+    assert!(receipt["unread"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+#[ignore = "isolated MySQL required"]
 async fn full_message_mark_read_mixed_ids_only_records_eligible_messages() {
     use crate::entity::{message_reads, projects};
     let f = Fixture::new().await;
@@ -616,10 +705,6 @@ async fn full_message_mark_read_mixed_ids_only_records_eligible_messages() {
         &f.admin,
         &service::supplier::SupplierUpsert {
             name: "外部回执供应商".into(),
-            contact_name: None,
-            contact_phone: None,
-            contact_email: None,
-            address: None,
             remark: None,
         },
     )
@@ -762,7 +847,6 @@ async fn full_user_invalid_binding_rolls_back_profile_and_audit() {
         let req = service::user::UserUpdate {
             real_name: Some("不应被写入".into()),
             email: Some("changed@example.invalid".into()),
-            phone: Some("123".into()),
             department_id: if invalid_department {
                 Some(Some(u64::MAX))
             } else {
@@ -905,7 +989,6 @@ async fn notification_recipients_exclude_disabled_users_and_dedupe_emails() {
             password: "Regression123".into(),
             real_name: "duplicate recipient".into(),
             email: "member@example.invalid".into(),
-            phone: None,
         },
     )
     .await
@@ -1211,7 +1294,6 @@ impl Fixture {
                 password: "Regression123".into(),
                 real_name: "测试成员".into(),
                 email: "member@example.invalid".into(),
-                phone: None,
                 department_id: None,
                 role_id: Some(role.id),
                 role_ids: None,
@@ -1230,10 +1312,6 @@ impl Fixture {
             &admin,
             &service::supplier::SupplierUpsert {
                 name: "回归供应商".into(),
-                contact_name: None,
-                contact_phone: None,
-                contact_email: None,
-                address: None,
                 remark: None,
             },
         )
@@ -2256,10 +2334,7 @@ async fn full_auth_refresh_rechecks_disabled_user() {
 #[ignore = "isolated MySQL required"]
 async fn full_account_contact_and_employee_no_validation() {
     let f = Fixture::new().await;
-    for payload in [
-        serde_json::json!({"email":"not-an-email"}),
-        serde_json::json!({"phone":"1".repeat(33)}),
-    ] {
+    for payload in [serde_json::json!({"email":"not-an-email"})] {
         let req = serde_json::from_value(payload).unwrap();
         assert!(matches!(
             service::user::update(&f.state.db, &f.admin, f.member.id, &req).await,
@@ -2277,7 +2352,6 @@ async fn full_account_contact_and_employee_no_validation() {
         password: "Regression123".into(),
         real_name: "测试".into(),
         email: "test@example.invalid".into(),
-        phone: None,
         department_id: None,
         role_id: Some(role.id),
         role_ids: None,

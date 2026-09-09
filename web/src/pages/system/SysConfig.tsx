@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Card, Descriptions, Input, InputNumber, Message, Progress, Select, Space, Table, Tag, Typography } from '@arco-design/web-react'
+import { Button, Card, Descriptions, Input, InputNumber, Message, Progress, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
 import http from '../../api/client'
 import { fmtSize, fmtTime } from '../../api/types'
 
@@ -25,6 +25,9 @@ export default function SysConfig() {
   const [storage, setStorage] = useState<Storage | null>(null)
   const [editing, setEditing] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
 
   const fetchSnapshot = useCallback(async () => {
     const [configsResponse, storageResponse] = await Promise.all([
@@ -40,19 +43,28 @@ export default function SysConfig() {
     setEditing({})
   }, [])
 
-  const load = useCallback(async () => {
-    applySnapshot(await fetchSnapshot())
-  }, [applySnapshot, fetchSnapshot])
+  const load = useCallback(() => {
+    setLoading(true)
+    setLoadError(false)
+    setReloadKey((value) => value + 1)
+  }, [])
 
   useEffect(() => {
     let active = true
     fetchSnapshot().then((next) => {
-      if (active) applySnapshot(next)
+      if (active) {
+        applySnapshot(next)
+        setLoadError(false)
+      }
+    }).catch(() => {
+      if (active) setLoadError(true)
+    }).finally(() => {
+      if (active) setLoading(false)
     })
     return () => {
       active = false
     }
-  }, [applySnapshot, fetchSnapshot])
+  }, [applySnapshot, fetchSnapshot, reloadKey])
 
   const dirty = Object.entries(editing).filter(([k, v]) => configs.find((c) => c.key === k)?.value !== v)
 
@@ -109,61 +121,73 @@ export default function SysConfig() {
   }
 
   return (
-    <div>
-      <Card className="page-card" title="存储状态" style={{ marginBottom: 16 }}>
-        {storage && (
-          <Space size={40} align="start">
-            <Descriptions
-              column={1}
-              data={[
-                { label: '存储根目录', value: storage.root },
-                { label: '挂载点', value: storage.mountPoint || '-' },
+    <div className="system-page">
+      <div className="page-heading"><div><h1>系统参数</h1></div></div>
+      {loadError ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
+          <Typography.Text type="error">加载失败</Typography.Text>
+          <Button size="small" onClick={load}>重试</Button>
+        </div>
+      ) : loading ? (
+        <Spin loading style={{ width: '100%', minHeight: 120 }} />
+      ) : (
+        <>
+          <Card className="page-card" title="存储状态" style={{ marginBottom: 16 }}>
+            {storage && (
+              <Space className="storage-overview" size={40} align="start" wrap>
+                <Descriptions
+                  column={1}
+                  data={[
+                    { label: '存储根目录', value: storage.root },
+                    { label: '挂载点', value: storage.mountPoint || '-' },
+                    {
+                      label: '容量',
+                      value: `${fmtSize(storage.totalBytes - storage.availableBytes)} / ${fmtSize(storage.totalBytes)} 已用`,
+                    },
+                    {
+                      label: '告警阈值',
+                      value: storage.warning
+                        ? <Tag color="red">已超过 {storage.warnPercent}% 阈值</Tag>
+                        : <Tag color="green">正常（阈值 {storage.warnPercent}%）</Tag>,
+                    },
+                  ]}
+                />
+                <Progress type="circle" percent={usedPct} color={storage.warning ? '#f53f3f' : '#165dff'} />
+              </Space>
+            )}
+          </Card>
+          <Card
+            className="page-card"
+            title="系统参数"
+            extra={
+              <Button type="primary" disabled={dirty.length === 0} loading={saving} onClick={save}>
+                保存修改（{dirty.length}）
+              </Button>
+            }
+          >
+            <Table
+              rowKey="key"
+              data={configs}
+              scroll={{ x: 940 }}
+              pagination={false}
+              columns={[
+                { title: '参数键', dataIndex: 'key', width: 220, align: 'center' as const, ellipsis: true, render: (v: string) => <Tag className="table-cell-tag-ellipsis" title={v}>{v}</Tag> },
                 {
-                  label: '容量',
-                  value: `${fmtSize(storage.totalBytes - storage.availableBytes)} / ${fmtSize(storage.totalBytes)} 已用`,
+                  title: '值',
+                  dataIndex: 'value',
+                  width: 300,
+                  render: (_v: string, r: Cfg) => editor(r),
                 },
-                {
-                  label: '告警阈值',
-                  value: storage.warning
-                    ? <Tag color="red">已超过 {storage.warnPercent}% 阈值</Tag>
-                    : <Tag color="green">正常（阈值 {storage.warnPercent}%）</Tag>,
-                },
+                { title: '说明', dataIndex: 'description', width: 240, ellipsis: true },
+                { title: '更新时间', dataIndex: 'updatedAt', width: 180, align: 'center' as const, render: fmtTime },
               ]}
             />
-            <Progress type="circle" percent={usedPct} color={storage.warning ? '#f53f3f' : '#165dff'} />
-          </Space>
-        )}
-      </Card>
-      <Card
-        className="page-card"
-        title="系统参数"
-        extra={
-          <Button type="primary" disabled={dirty.length === 0} loading={saving} onClick={save}>
-            保存修改（{dirty.length}）
-          </Button>
-        }
-      >
-        <Table
-          rowKey="key"
-          data={configs}
-          scroll={{ x: 940 }}
-          pagination={false}
-          columns={[
-            { title: '参数键', dataIndex: 'key', width: 220, align: 'center' as const, ellipsis: true, render: (v: string) => <Tag className="table-cell-tag-ellipsis" title={v}>{v}</Tag> },
-            {
-              title: '值',
-              dataIndex: 'value',
-              width: 300,
-              render: (_v: string, r: Cfg) => editor(r),
-            },
-            { title: '说明', dataIndex: 'description', width: 240, ellipsis: true },
-            { title: '更新时间', dataIndex: 'updatedAt', width: 180, align: 'center' as const, render: fmtTime },
-          ]}
-        />
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          文件上限/分片大小单位为字节；扩展名白名单不可为空；所有修改经后端校验并在同一事务提交。
-        </Typography.Text>
-      </Card>
+            <Typography.Text className="dialog-note" type="secondary">
+              大小单位：字节。扩展名白名单不能为空。
+            </Typography.Text>
+          </Card>
+        </>
+      )}
     </div>
   )
 }

@@ -47,7 +47,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/projects/{id}",
-            get(project::get_project).put(project::update_project),
+            get(project::get_project)
+                .put(project::update_project)
+                .delete(project::delete_project),
         )
         .route("/projects/{id}/status", put(project::update_project_status))
         .route(
@@ -91,7 +93,10 @@ pub fn router(state: AppState) -> Router {
     let admin_users = Router::new()
         .route("/users", get(admin::list_users).post(admin::create_user))
         .route("/user-role-options", get(admin::list_user_role_options))
-        .route("/users/{id}", put(admin::update_user))
+        .route(
+            "/users/{id}",
+            put(admin::update_user).delete(admin::delete_user),
+        )
         .route("/users/{id}/status", put(admin::update_user_status))
         .route("/users/{id}/password", put(admin::reset_user_password))
         .route("/users/{id}/roles", put(admin::assign_user_roles))
@@ -102,7 +107,10 @@ pub fn router(state: AppState) -> Router {
 
     let admin_depts = Router::new()
         .route("/departments", post(admin::create_department))
-        .route("/departments/{id}", put(admin::update_department))
+        .route(
+            "/departments/{id}",
+            put(admin::update_department).delete(admin::delete_department),
+        )
         .route(
             "/departments/{id}/status",
             put(admin::update_department_status),
@@ -114,7 +122,10 @@ pub fn router(state: AppState) -> Router {
 
     let admin_roles = Router::new()
         .route("/roles", get(admin::list_roles).post(admin::create_role))
-        .route("/roles/{id}", put(admin::update_role))
+        .route(
+            "/roles/{id}",
+            put(admin::update_role).delete(admin::delete_role),
+        )
         .route("/roles/{id}/status", put(admin::update_role_status))
         .route(
             "/roles/{id}/permissions",
@@ -132,7 +143,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/suppliers/{id}",
-            get(admin::get_supplier).put(admin::update_supplier),
+            get(admin::get_supplier)
+                .put(admin::update_supplier)
+                .delete(admin::delete_supplier),
         )
         .route("/suppliers/{id}/status", put(admin::update_supplier_status))
         .layer(from_fn_with_state(
@@ -147,7 +160,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/supplier-accounts/{id}",
-            put(admin::update_supplier_account),
+            put(admin::update_supplier_account).delete(admin::delete_supplier_account),
         )
         .route(
             "/supplier-accounts/{id}/status",
@@ -164,6 +177,11 @@ pub fn router(state: AppState) -> Router {
 
     let admin_logs = Router::new()
         .route("/audit-logs", get(system::list_audit_logs))
+        .route(
+            "/audit-logs/batch-delete",
+            post(system::batch_delete_audit_logs),
+        )
+        .route("/audit-logs/{id}", delete(system::delete_audit_log))
         .layer(from_fn_with_state((state.clone(), "log:view"), perm::guard));
 
     let admin_system = Router::new()

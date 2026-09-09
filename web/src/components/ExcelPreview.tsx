@@ -163,7 +163,7 @@ export default function ExcelPreview({ fileId }: Props) {
         <Typography.Text type="secondary">工作表</Typography.Text>
         <Select
           value={current.activeSheet}
-          style={{ minWidth: 180 }}
+          style={{ width: 220, maxWidth: '100%' }}
           onChange={(value) => setResult((previous) => (
             previous.fileId === fileId ? { ...previous, activeSheet: value as string } : previous
           ))}

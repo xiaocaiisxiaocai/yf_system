@@ -101,15 +101,18 @@ async fn purge_orphan_upload_dirs(state: &AppState) {
     let db = &state.db;
     let tmp = std::path::Path::new(&state.cfg.storage.root).join("tmp");
     let cutoff = std::time::SystemTime::now() - Duration::hours(24).to_std().unwrap_or_default();
-    // 活跃会话 id 集合（上传中）
-    let active: Vec<String> = upload_sessions::Entity::find()
-        .filter(upload_sessions::Column::Status.eq(UploadStatus::Uploading))
+    // 上传或合并中的会话目录仍可能被请求使用，不能按孤儿目录清理。
+    let active = upload_sessions::Entity::find()
+        .filter(
+            upload_sessions::Column::Status.is_in([UploadStatus::Uploading, UploadStatus::Merging]),
+        )
         .all(db)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|s| s.id)
-        .collect();
+        .await;
+    let Ok(active) = active else {
+        tracing::warn!("查询活跃上传会话失败，跳过孤儿目录清理");
+        return;
+    };
+    let active: Vec<String> = active.into_iter().map(|s| s.id).collect();
     let mut rd = match tokio::fs::read_dir(&tmp).await {
         Ok(r) => r,
         Err(_) => return,

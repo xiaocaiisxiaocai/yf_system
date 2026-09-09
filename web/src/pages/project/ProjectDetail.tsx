@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Badge, Button, Card, Descriptions, Empty, Space, Spin, Tabs, Tag, Typography } from '@arco-design/web-react'
+import { Badge, Button, Card, Descriptions, Empty, Spin, Tabs, Tag, Typography } from '@arco-design/web-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import http from '../../api/client'
 import { type Project, type Round, PROJECT_STATUS, fmtTime } from '../../api/types'
@@ -29,7 +29,10 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const [loadErrorFor, setLoadErrorFor] = useState<number | null>(null)
   const loadingProjectId = useRef<number | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
-  const tab = searchParams.get('tab') || 'rounds'
+  const requestedTab = searchParams.get('tab')
+  const tab = requestedTab === 'rounds' || requestedTab === 'files' || requestedTab === 'messages' || requestedTab === 'members'
+    ? requestedTab
+    : 'rounds'
 
   const fetchProject = useCallback(async () => {
     const r = await http.get(`/projects/${pid}`)
@@ -143,27 +146,44 @@ function ProjectDetailContent({ id }: { id?: string }) {
   return (
     <div>
       <Card className="page-card" style={{ marginBottom: 16 }}>
-        <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Descriptions
-            column={3}
-            title={
-              <Space>
-                <Typography.Title heading={5} style={{ margin: 0 }}>
-                  {project.name}
-                </Typography.Title>
-                <Tag color={PROJECT_STATUS[project.status]?.color}>
-                  {PROJECT_STATUS[project.status]?.text || project.status}
-                </Tag>
-              </Space>
-            }
-            data={[
-              { label: '供应商', value: project.supplierName || '-' },
-              { label: '创建人', value: project.createdByName || '-' },
-              { label: '更新时间', value: fmtTime(project.updatedAt) },
-              { label: '项目说明', value: project.description || '-', span: 3 },
-            ]}
-          />
-        </Space>
+        <div className="detail-heading">
+          <div>
+            <h1>{project.name}</h1>
+          </div>
+          <div className="detail-actions">
+            <Tag color={PROJECT_STATUS[project.status]?.color}>
+              {PROJECT_STATUS[project.status]?.text || project.status}
+            </Tag>
+            <Button onClick={() => navigate('/projects')}>返回项目列表</Button>
+          </div>
+        </div>
+        <Descriptions
+          column={{ xs: 1, sm: 1, md: 2, lg: 3 }}
+          data={[
+            { label: '供应商', value: project.supplierName || '-' },
+            { label: '创建人', value: project.createdByName || '-' },
+            { label: '更新时间', value: fmtTime(project.updatedAt) },
+            {
+              label: '项目说明',
+              value: project.description ? (
+                <Typography.Ellipsis className="project-description" rows={3} expandable
+                  expandRender={(expanded) => (
+                    <Button
+                      type="text"
+                      size="mini"
+                      aria-expanded={expanded}
+                      aria-label={expanded ? '收起项目说明' : '展开项目说明'}
+                    >
+                      {expanded ? '收起' : '展开'}
+                    </Button>
+                  )}>
+                  {project.description}
+                </Typography.Ellipsis>
+              ) : '-',
+              span: 3,
+            },
+          ]}
+        />
       </Card>
 
       <Card className="page-card">

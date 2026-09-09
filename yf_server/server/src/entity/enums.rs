@@ -30,6 +30,35 @@ impl UserType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::N(16))")]
+pub enum DeptKind {
+    #[sea_orm(string_value = "DIVISION")]
+    Division,
+    #[sea_orm(string_value = "DEPARTMENT")]
+    Department,
+    #[sea_orm(string_value = "SECTION")]
+    Section,
+}
+
+impl DeptKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Division => "DIVISION",
+            Self::Department => "DEPARTMENT",
+            Self::Section => "SECTION",
+        }
+    }
+
+    pub fn child(self) -> Option<Self> {
+        match self {
+            Self::Division => Some(Self::Department),
+            Self::Department => Some(Self::Section),
+            Self::Section => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::N(16))")]
 pub enum ProjectStatus {
     #[sea_orm(string_value = "DRAFT")]
     Draft,

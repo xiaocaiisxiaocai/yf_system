@@ -1,14 +1,15 @@
 //! 操作日志查询
 use sea_orm::{
     ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder,
+    QueryOrder, QuerySelect, TransactionTrait,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::dto::PageResp;
 use crate::entity::audit_logs;
-use crate::error::ApiResult;
+use crate::error::{ApiResult, AppError};
+use crate::middleware::auth::CurrentUser;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,6 +42,7 @@ fn actions_for_category(category: &str) -> Option<&'static [&'static str]> {
             "PROJECT_UPDATE",
             "PROJECT_STATUS",
             "PROJECT_MEMBERS",
+            "PROJECT_DELETE",
             "ROUND_CREATE",
             "ROUND_CONFIRM",
             "ROUND_REJECT",
@@ -64,21 +66,26 @@ fn actions_for_category(category: &str) -> Option<&'static [&'static str]> {
             "DEPT_CREATE",
             "DEPT_UPDATE",
             "DEPT_STATUS",
+            "DEPT_DELETE",
+            "USER_DELETE",
             "ROLE_CREATE",
             "ROLE_UPDATE",
             "ROLE_STATUS",
             "ROLE_ASSIGN_PERMS",
+            "ROLE_DELETE",
         ]),
         "SUPPLIER" => Some(&[
             "SUPPLIER_CREATE",
             "SUPPLIER_UPDATE",
             "SUPPLIER_STATUS",
+            "SUPPLIER_DELETE",
             "SUPPLIER_ACCOUNT_CREATE",
             "SUPPLIER_ACCOUNT_UPDATE",
             "SUPPLIER_ACCOUNT_STATUS",
             "SUPPLIER_ACCOUNT_RESET_PASSWORD",
+            "SUPPLIER_ACCOUNT_DELETE",
         ]),
-        "SYSTEM" => Some(&["CONFIG_UPDATE"]),
+        "SYSTEM" => Some(&["CONFIG_UPDATE", "AUDIT_LOG_DELETE"]),
         _ => None,
     }
 }
@@ -138,6 +145,55 @@ pub async fn list(db: &DatabaseConnection, q: &LogQuery) -> ApiResult<PageResp<V
         })
         .collect();
     Ok(PageResp::new(list, total, page, size))
+}
+
+pub async fn delete_ids(
+    db: &DatabaseConnection,
+    user: &CurrentUser,
+    ids: &[u64],
+) -> ApiResult<u64> {
+    if ids.is_empty() || ids.len() > 500 {
+        return Err(crate::error::AppError::BadRequest(
+            "请选择 1~500 条日志".into(),
+        ));
+    }
+    let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    super::scope::require_system_admin(&txn, user.id).await?;
+    super::perm::recheck_manager(&txn, user.id, "log:view").await?;
+    let rows = audit_logs::Entity::find()
+        .filter(audit_logs::Column::Id.is_in(ids.to_vec()))
+        .order_by_asc(audit_logs::Column::Id)
+        .lock_exclusive()
+        .all(&txn)
+        .await?;
+    if rows.iter().any(|row| row.action == "AUDIT_LOG_DELETE") {
+        return Err(AppError::BadRequest(
+            "日志清理记录必须保留，不能删除".into(),
+        ));
+    }
+    let actual_ids: Vec<u64> = rows.iter().map(|row| row.id).collect();
+    if actual_ids.is_empty() {
+        txn.commit().await?;
+        return Ok(0);
+    }
+    let result = audit_logs::Entity::delete_many()
+        .filter(audit_logs::Column::Id.is_in(actual_ids.clone()))
+        .exec(&txn)
+        .await?;
+    super::audit::insert(
+        &txn,
+        Some(user.id),
+        Some(user.employee_no.clone()),
+        "AUDIT_LOG_DELETE",
+        Some("audit_log"),
+        None,
+        Some(json!({ "ids": actual_ids, "deleted": result.rows_affected })),
+        None,
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(result.rows_affected)
 }
 
 #[cfg(test)]

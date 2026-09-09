@@ -19,6 +19,8 @@ pub struct UserBrief {
     pub real_name: String,
     pub user_type: String,
     pub supplier_id: Option<u64>,
+    /// 内置且启用的系统管理员角色；前端展示用途，写操作仍在服务端重验。
+    pub is_system_admin: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -70,6 +72,7 @@ mod profile_response_tests {
                 real_name: "Tester".into(),
                 user_type: "INTERNAL".into(),
                 supplier_id: None,
+                is_system_admin: false,
             },
             must_change_password: true,
             permissions: vec![],

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Layout, Menu, Dropdown, Avatar, Space, Button, Drawer } from '@arco-design/web-react'
+import { Layout, Menu, Dropdown, Avatar, Button, Drawer } from '@arco-design/web-react'
 import {
   IconHome,
   IconFile,
@@ -25,7 +25,7 @@ const MENU_ITEMS = [
   { code: 'project:list', path: '/projects', label: '项目协作', icon: <IconFile /> },
   { code: 'supplier:list', path: '/suppliers', label: '供应商管理', icon: <IconUserGroup /> },
   { code: 'org:user', path: '/org/users', label: '用户管理', icon: <IconUser /> },
-  { code: 'org:dept', path: '/org/depts', label: '部门管理', icon: <IconMindMapping /> },
+  { code: 'org:dept', path: '/org/depts', label: '组织架构', icon: <IconMindMapping /> },
   { code: 'rbac:role', path: '/rbac/roles', label: '角色权限', icon: <IconSafe /> },
   { code: 'log:audit', path: '/logs', label: '操作日志', icon: <IconHistory /> },
   { code: 'system:config', path: '/system/config', label: '系统参数', icon: <IconSettings /> },
@@ -77,7 +77,7 @@ export default function AdminLayout() {
 
   return (
     <Layout className="layout-shell">
-      <Sider className="layout-sider" width={180} theme="dark">
+      <Sider className="layout-sider" width={200} theme="dark">
         <div className="layout-logo">
           <img src="/saa-logo.svg" alt="SAA" />
         </div>
@@ -86,15 +86,6 @@ export default function AdminLayout() {
       <Layout className="layout-main">
         <Header
           className="layout-header"
-          style={{
-            height: 56,
-            background: '#fff',
-            borderBottom: '1px solid var(--color-border-2)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'flex-end',
-            padding: '0 20px',
-          }}
         >
           <Button
             className="mobile-menu-trigger"
@@ -103,7 +94,13 @@ export default function AdminLayout() {
             icon={<IconMenu />}
             onClick={() => setMobileMenuOpen(true)}
           />
+          <div className="layout-context">
+            <span>供应商协作平台</span>
+            <span className="layout-context-divider">/</span>
+            <span className="layout-context-current">{items.find((item) => item.path === selected[0])?.label || '项目协作'}</span>
+          </div>
           <Dropdown
+            trigger={['hover', 'click']}
             droplist={
               <Menu
                 onClickMenuItem={(k) => {
@@ -122,13 +119,13 @@ export default function AdminLayout() {
               </Menu>
             }
           >
-            <Space style={{ cursor: 'pointer' }}>
-              <Avatar size={28} style={{ background: '#165dff' }}>
+            <button className="layout-profile" type="button" aria-label={`账号菜单：${user?.realName || '当前用户'}`}>
+              <Avatar size={30} style={{ background: 'rgb(var(--primary-6))' }}>
                 {user?.realName?.slice(0, 1)}
               </Avatar>
               <span>{user?.realName}</span>
               <IconDown />
-            </Space>
+            </button>
           </Dropdown>
         </Header>
         <Content className="layout-content">

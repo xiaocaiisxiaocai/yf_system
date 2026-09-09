@@ -12,7 +12,6 @@ pub struct Model {
     pub password_hash: String,
     pub real_name: String,
     pub email: String,
-    pub phone: Option<String>,
     pub user_type: UserType,
     /// user_type=SUPPLIER 时必填
     pub supplier_id: Option<u64>,

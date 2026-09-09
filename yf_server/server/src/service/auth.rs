@@ -74,12 +74,12 @@ pub async fn login(
     if user.status != CommonStatus::Active {
         return Err(AppError::Unauthorized("账号已被禁用".into()));
     }
-    if user.user_type == UserType::Supplier {
-        if let Some(sid) = user.supplier_id {
-            let supplier = suppliers::Entity::find_by_id(sid).one(&txn).await?;
-            if supplier.map(|s| s.status) != Some(CommonStatus::Active) {
-                return Err(AppError::Unauthorized("所属供应商已被禁用".into()));
-            }
+    if let Some(sid) =
+        crate::middleware::auth::supplier_id_for_auth(user.user_type, user.supplier_id)?
+    {
+        let supplier = suppliers::Entity::find_by_id(sid).one(&txn).await?;
+        if supplier.map(|s| s.status) != Some(CommonStatus::Active) {
+            return Err(AppError::Unauthorized("所属供应商已被禁用".into()));
         }
     }
 
@@ -184,7 +184,7 @@ pub async fn login(
             must_change_password: user.must_change_password,
             permissions: perms,
             menus,
-            user: brief(&user),
+            user: brief(db, &user).await?,
         },
         refresh,
     ))
@@ -275,11 +275,10 @@ pub async fn refresh(
     if user.status != CommonStatus::Active {
         return Err(AppError::Unauthorized("账号已被禁用".into()));
     }
-    if user.user_type == UserType::Supplier {
-        let supplier = match user.supplier_id {
-            Some(id) => suppliers::Entity::find_by_id(id).one(&txn).await?,
-            None => None,
-        };
+    if let Some(sid) =
+        crate::middleware::auth::supplier_id_for_auth(user.user_type, user.supplier_id)?
+    {
+        let supplier = suppliers::Entity::find_by_id(sid).one(&txn).await?;
         if supplier.map(|s| s.status) != Some(CommonStatus::Active) {
             return Err(AppError::Unauthorized("所属供应商已被禁用".into()));
         }
@@ -382,21 +381,24 @@ pub async fn profile(db: &DatabaseConnection, current: &CurrentUser) -> ApiResul
         .ok_or(AppError::NotFound)?;
     let (perms, menus) = perms_and_menus(db, user.id).await?;
     Ok(ProfileResponse {
-        user: brief(&user),
+        user: brief(db, &user).await?,
         must_change_password: user.must_change_password,
         permissions: perms,
         menus,
     })
 }
 
-fn brief(user: &users::Model) -> UserBrief {
-    UserBrief {
+async fn brief(db: &DatabaseConnection, user: &users::Model) -> ApiResult<UserBrief> {
+    Ok(UserBrief {
         id: user.id,
         employee_no: user.employee_no.clone(),
         real_name: user.real_name.clone(),
         user_type: user.user_type.as_str().to_string(),
         supplier_id: user.supplier_id,
-    }
+        is_system_admin: user.status == CommonStatus::Active
+            && user.user_type == UserType::Internal
+            && super::scope::is_system_admin(db, user.id).await?,
+    })
 }
 
 #[cfg(test)]

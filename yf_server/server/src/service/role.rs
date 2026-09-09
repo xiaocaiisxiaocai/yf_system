@@ -324,6 +324,47 @@ pub async fn assign_permissions(
     Ok(())
 }
 
+pub async fn delete(db: &DatabaseConnection, me: &CurrentUser, id: u64) -> ApiResult<()> {
+    let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    super::perm::recheck_manager(&txn, me.id, "role:manage").await?;
+    super::scope::require_system_admin(&txn, me.id).await?;
+    let role = roles::Entity::find_by_id(id)
+        .one(&txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if role.is_built_in {
+        return Err(AppError::BadRequest("内置角色不可删除".into()));
+    }
+    let assigned = user_roles::Entity::find()
+        .filter(user_roles::Column::RoleId.eq(id))
+        .count(&txn)
+        .await?;
+    if assigned > 0 {
+        return Err(AppError::BadRequest(format!(
+            "该角色仍绑定 {assigned} 个用户，请先为这些用户更换角色"
+        )));
+    }
+    role_permissions::Entity::delete_many()
+        .filter(role_permissions::Column::RoleId.eq(id))
+        .exec(&txn)
+        .await?;
+    audit::insert(
+        &txn,
+        Some(me.id),
+        Some(me.employee_no.clone()),
+        "ROLE_DELETE",
+        Some("role"),
+        Some(id.to_string()),
+        Some(json!({ "name": role.name })),
+        None,
+    )
+    .await?;
+    roles::Entity::delete_by_id(id).exec(&txn).await?;
+    txn.commit().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::protected_role;

@@ -15,11 +15,12 @@ interface Props {
   onDone: () => void
 }
 
-type Phase = 'pick' | 'hashing' | 'uploading' | 'merging' | 'cancelling' | 'cancel-failed' | 'done'
+type Phase = 'pick' | 'hashing' | 'uploading' | 'merging' | 'merge-uncertain' | 'cancelling' | 'cancel-failed' | 'done'
 interface Attempt {
   cancelled: boolean
   cancelling: boolean
   merging: boolean
+  mergePending?: boolean
   sessionId?: string
   controller: AbortController
   finished: Promise<void>
@@ -58,6 +59,13 @@ export default function ChunkUploader({ projectId, roundId, rounds, onRoundChang
       return
     }
     if (attempt.merging || attempt.cancelling) return
+    if (attempt.mergePending) {
+      // The server may have committed already. Leaving must never abort that session.
+      reset()
+      onDone()
+      onClose()
+      return
+    }
     attempt.cancelled = true
     attempt.cancelling = true
     attempt.controller.abort()
@@ -83,6 +91,29 @@ export default function ChunkUploader({ projectId, roundId, rounds, onRoundChang
   const finishAndClose = () => {
     reset()
     onClose()
+  }
+
+  const confirmMerge = async (attempt: Attempt) => {
+    if (attemptRef.current !== attempt || attempt.cancelled || attempt.merging || !attempt.sessionId) return
+    attempt.merging = true
+    attempt.mergePending = true
+    setPhase('merging')
+    try {
+      await http.post(`/uploads/${attempt.sessionId}/merge`)
+      if (attemptRef.current !== attempt || attempt.cancelled) return
+      attempt.mergePending = false
+      setPhase('done')
+      Message.success('上传完成')
+      onDone()
+      finishAndClose()
+    } catch {
+      if (attemptRef.current === attempt && !attempt.cancelled) {
+        setPhase('merge-uncertain')
+        Message.warning('上传结果待确认，请重试确认')
+      }
+    } finally {
+      attempt.merging = false
+    }
   }
 
   const start = async () => {
@@ -137,14 +168,7 @@ export default function ChunkUploader({ projectId, roundId, rounds, onRoundChang
       if (!isCurrent()) return
       const failure = results.find((result) => result.status === 'rejected')
       if (failure?.status === 'rejected') throw failure.reason
-      attempt.merging = true
-      setPhase('merging')
-      await http.post(`/uploads/${sid}/merge`)
-      if (!isCurrent()) return
-      setPhase('done')
-      Message.success('上传完成')
-      onDone()
-      finishAndClose()
+      await confirmMerge(attempt)
     } catch {
       if (isCurrent()) {
         // 错误信息由拦截器提示；保留进度便于重试
@@ -153,13 +177,13 @@ export default function ChunkUploader({ projectId, roundId, rounds, onRoundChang
       }
     } finally {
       attempt.finish()
-      if (attemptRef.current === attempt && !attempt.cancelled) attemptRef.current = null
+      if (attemptRef.current === attempt && !attempt.cancelled && !attempt.mergePending) attemptRef.current = null
     }
   }
 
   return (
     <Modal
-      title="上传文件（分片）"
+      title="上传文件"
       visible={visible}
       onCancel={close}
       closable={phase !== 'merging' && phase !== 'cancelling'}
@@ -168,6 +192,13 @@ export default function ChunkUploader({ projectId, roundId, rounds, onRoundChang
       footer={
         phase === 'merging' || phase === 'cancelling' ? (
           <Button disabled>{phase === 'merging' ? '合并校验中，请稍候' : '正在取消上传…'}</Button>
+        ) : phase === 'merge-uncertain' ? (
+          <>
+            <Button onClick={close}>关闭</Button>
+            <Button type="primary" onClick={() => {
+              if (attemptRef.current) return confirmMerge(attemptRef.current)
+            }}>重试确认</Button>
+          </>
         ) : busy ? (
           <Button status="danger" onClick={close}>
             {phase === 'cancel-failed' ? '重试取消' : '取消上传'}
@@ -201,6 +232,9 @@ export default function ChunkUploader({ projectId, roundId, rounds, onRoundChang
       )}
       <input
         type="file"
+        className="upload-file-input"
+        aria-label="选择上传文件"
+        style={{ maxWidth: '100%' }}
         disabled={busy}
         onChange={(e) => {
           setFile(e.target.files?.[0] || null)
@@ -208,7 +242,7 @@ export default function ChunkUploader({ projectId, roundId, rounds, onRoundChang
         }}
       />
       {file && (
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 16, overflowWrap: 'anywhere' }}>
           <Typography.Text>
             {file.name}（{fmtSize(file.size)}）
           </Typography.Text>
@@ -229,6 +263,7 @@ export default function ChunkUploader({ projectId, roundId, rounds, onRoundChang
                 {phase === 'hashing' && '正在校验文件内容…'}
                 {phase === 'uploading' && `分片上传中 ${percent}%（中断后可续传）`}
                 {phase === 'merging' && '服务端合并校验中…'}
+                {phase === 'merge-uncertain' && '结果待确认，重试不会重复上传。'}
                 {phase === 'done' && '完成'}
               </Typography.Text>
             </>
