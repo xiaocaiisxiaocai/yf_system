@@ -51,7 +51,7 @@ html, body, #root {
 
 /* 布局 */
 .layout-shell { height: 100vh; min-width: 0; }
-.layout-main { min-width: 0; }
+.layout-main { flex: 1; min-width: 0; min-height: 0; }
 .layout-header {
   flex: 0 0 56px;
   display: flex;
@@ -73,21 +73,15 @@ html, body, #root {
   overflow: hidden;
 }
 .layout-logo {
-  height: 56px;
-  box-sizing: border-box;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 9px;
-  padding: 0 14px;
-  background: #fff;
-  border-bottom: 1px solid var(--color-border-2);
   overflow: hidden;
   white-space: nowrap;
 }
 .layout-logo img { display: block; width: 52px; height: 28px; flex: 0 0 52px; object-fit: contain; }
 .layout-logo > span { color: #17243a; font-size: 14px; font-weight: 600; letter-spacing: 0.01em; }
-.layout-logo--collapsed { justify-content: center; padding: 0; }
-.layout-logo--collapsed img { width: 40px; height: 24px; flex-basis: 40px; }
 .layout-sider .arco-menu { flex: 1; min-height: 0; height: auto; }
 .layout-sider .arco-menu-dark,
 .mobile-nav-drawer .arco-menu-dark { background: #17243a; padding: 12px 8px; box-sizing: border-box; }

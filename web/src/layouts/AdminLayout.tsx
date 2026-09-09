@@ -99,70 +99,68 @@ export default function AdminLayout() {
 
   return (
     <Layout className="layout-shell">
-      <Sider
-        className={`layout-sider${siderCollapsed ? ' layout-sider--collapsed' : ''}`}
-        width={200}
-        collapsedWidth={64}
-        collapsed={siderCollapsed}
-        collapsible
-        trigger={null}
-        theme="dark"
-      >
-        <div className={`layout-logo${siderCollapsed ? ' layout-logo--collapsed' : ''}`} title="供应商协作平台">
+      <Header className="layout-header">
+        <Button
+          className="mobile-menu-trigger"
+          type="text"
+          aria-label="打开导航菜单"
+          icon={<IconMenu />}
+          onClick={() => setMobileMenuOpen(true)}
+        />
+        <div className="layout-logo" title="供应商协作平台">
           <img src="/saa-logo.svg" alt="SAA" />
-          {!siderCollapsed && <span>供应商协作平台</span>}
+          <span>供应商协作平台</span>
         </div>
-        {menu(false, siderCollapsed)}
-        <button
-          className="layout-sider-toggle"
-          type="button"
-          aria-label={siderCollapsed ? '展开侧边栏' : '折叠侧边栏'}
-          title={siderCollapsed ? '展开侧边栏' : '折叠侧边栏'}
-          onClick={toggleSider}
+        <Dropdown
+          trigger={['hover', 'click']}
+          droplist={
+            <Menu
+              onClickMenuItem={(k) => {
+                if (k === 'pwd') nav('/change-password')
+                if (k === 'logout') doLogout()
+              }}
+            >
+              <Menu.Item key="pwd">
+                <IconLock style={{ marginRight: 8 }} />
+                修改密码
+              </Menu.Item>
+              <Menu.Item key="logout">
+                <IconPoweroff style={{ marginRight: 8 }} />
+                退出登录
+              </Menu.Item>
+            </Menu>
+          }
         >
-          {siderCollapsed ? <IconMenuUnfold /> : <><IconMenuFold /><span>收起导航</span></>}
-        </button>
-      </Sider>
+          <button className="layout-profile" type="button" aria-label={`账号菜单：${user?.realName || '当前用户'}`}>
+            <Avatar size={30} style={{ background: 'rgb(var(--primary-6))' }}>
+              {user?.realName?.slice(0, 1)}
+            </Avatar>
+            <span>{user?.realName}</span>
+            <IconDown />
+          </button>
+        </Dropdown>
+      </Header>
       <Layout className="layout-main">
-        <Header
-          className="layout-header"
+        <Sider
+          className={`layout-sider${siderCollapsed ? ' layout-sider--collapsed' : ''}`}
+          width={200}
+          collapsedWidth={64}
+          collapsed={siderCollapsed}
+          collapsible
+          trigger={null}
+          theme="dark"
         >
-          <Button
-            className="mobile-menu-trigger"
-            type="text"
-            aria-label="打开导航菜单"
-            icon={<IconMenu />}
-            onClick={() => setMobileMenuOpen(true)}
-          />
-          <Dropdown
-            trigger={['hover', 'click']}
-            droplist={
-              <Menu
-                onClickMenuItem={(k) => {
-                  if (k === 'pwd') nav('/change-password')
-                  if (k === 'logout') doLogout()
-                }}
-              >
-                <Menu.Item key="pwd">
-                  <IconLock style={{ marginRight: 8 }} />
-                  修改密码
-                </Menu.Item>
-                <Menu.Item key="logout">
-                  <IconPoweroff style={{ marginRight: 8 }} />
-                  退出登录
-                </Menu.Item>
-              </Menu>
-            }
+          {menu(false, siderCollapsed)}
+          <button
+            className="layout-sider-toggle"
+            type="button"
+            aria-label={siderCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+            title={siderCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+            onClick={toggleSider}
           >
-            <button className="layout-profile" type="button" aria-label={`账号菜单：${user?.realName || '当前用户'}`}>
-              <Avatar size={30} style={{ background: 'rgb(var(--primary-6))' }}>
-                {user?.realName?.slice(0, 1)}
-              </Avatar>
-              <span>{user?.realName}</span>
-              <IconDown />
-            </button>
-          </Dropdown>
-        </Header>
+            {siderCollapsed ? <IconMenuUnfold /> : <><IconMenuFold /><span>收起导航</span></>}
+          </button>
+        </Sider>
         <Content className="layout-content">
           <Outlet />
         </Content>
