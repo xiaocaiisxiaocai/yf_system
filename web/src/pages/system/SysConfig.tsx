@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Card, Descriptions, Input, InputNumber, Message, Progress, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
+import { Button, Card, Input, InputNumber, Message, Progress, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
 import http from '../../api/client'
 import { fmtSize, fmtTime } from '../../api/types'
+
+const MB = 1024 * 1024
+
+const CONFIG_META: Record<string, { name: string; description: string; hint?: string }> = {
+  'notify.enabled': { name: '邮件通知', description: '邮件通知总开关' },
+  'storage.warn_percent': { name: '存储告警阈值', description: '达到该使用率时告警' },
+  'upload.allowed_exts': { name: '允许上传类型', description: '允许上传的文件扩展名', hint: '使用英文逗号分隔' },
+  'upload.chunk_size': { name: '上传分片大小', description: '每个上传分片的大小' },
+  'upload.max_file_size': { name: '单文件大小上限', description: '单个文件允许的最大大小' },
+}
 
 interface Cfg {
   key: string
@@ -67,6 +77,11 @@ export default function SysConfig() {
   }, [applySnapshot, fetchSnapshot, reloadKey])
 
   const dirty = Object.entries(editing).filter(([k, v]) => configs.find((c) => c.key === k)?.value !== v)
+  const dirtyKeys = new Set(dirty.map(([key]) => key))
+
+  const setValue = (key: string, value: string) => {
+    setEditing((current) => ({ ...current, [key]: value }))
+  }
 
   const save = async () => {
     if (dirty.length === 0) return
@@ -82,26 +97,44 @@ export default function SysConfig() {
     }
   }
 
-  const usedPct = storage && storage.totalBytes > 0 ? Math.round(((storage.totalBytes - storage.availableBytes) / storage.totalBytes) * 100) : 0
+  const usedPct = storage
+    ? Math.min(100, Math.max(0, Math.round(
+      Number.isFinite(storage.usedPercent)
+        ? storage.usedPercent
+        : storage.totalBytes > 0
+          ? ((storage.totalBytes - storage.availableBytes) / storage.totalBytes) * 100
+          : 0,
+    )))
+    : 0
 
   const editor = (cfg: Cfg) => {
     const value = editing[cfg.key] ?? cfg.value
     if (cfg.key === 'notify.enabled') {
       return (
-        <Select value={value} onChange={(v) => setEditing((e) => ({ ...e, [cfg.key]: String(v) }))}>
+        <Select value={value} onChange={(v) => setValue(cfg.key, String(v))}>
           <Select.Option value="true">启用</Select.Option>
           <Select.Option value="false">关闭</Select.Option>
         </Select>
       )
     }
     if (cfg.key === 'upload.max_file_size' || cfg.key === 'upload.chunk_size') {
+      const isChunkSize = cfg.key === 'upload.chunk_size'
+      const numericValue = Number(value)
       return (
         <InputNumber
-          min={cfg.key === 'upload.chunk_size' ? 256 * 1024 : 1024 * 1024}
-          max={cfg.key === 'upload.chunk_size' ? 64 * 1024 * 1024 : 20 * 1024 * 1024 * 1024}
-          precision={0}
-          value={Number(value)}
-          onChange={(v) => setEditing((e) => ({ ...e, [cfg.key]: String(v) }))}
+          min={isChunkSize ? 0.25 : 1}
+          max={isChunkSize ? 64 : 20 * 1024}
+          precision={isChunkSize ? 2 : 0}
+          step={isChunkSize ? 0.25 : 1}
+          suffix="MB"
+          value={Number.isFinite(numericValue) ? numericValue / MB : undefined}
+          onChange={(next) => {
+            if (typeof next === 'number' && Number.isFinite(next)) {
+              setValue(cfg.key, String(Math.round(next * MB)))
+            } else {
+              setValue(cfg.key, '')
+            }
+          }}
         />
       )
     }
@@ -113,11 +146,11 @@ export default function SysConfig() {
           precision={0}
           suffix="%"
           value={Number(value)}
-          onChange={(v) => setEditing((e) => ({ ...e, [cfg.key]: String(v) }))}
+          onChange={(next) => setValue(cfg.key, typeof next === 'number' ? String(next) : '')}
         />
       )
     }
-    return <Input value={value} onChange={(v) => setEditing((e) => ({ ...e, [cfg.key]: v }))} />
+    return <Input value={value} onChange={(next) => setValue(cfg.key, next)} />
   }
 
   return (
@@ -132,59 +165,105 @@ export default function SysConfig() {
         <Spin loading style={{ width: '100%', minHeight: 120 }} />
       ) : (
         <>
-          <Card className="page-card" title="存储状态" style={{ marginBottom: 16 }}>
+          <Card
+            className="page-card system-storage-card"
+            title="存储状态"
+            extra={storage && (
+              <Tag color={storage.warning ? 'red' : 'green'}>
+                {storage.warning ? '容量告警' : '运行正常'}
+              </Tag>
+            )}
+          >
             {storage && (
-              <Space className="storage-overview" size={40} align="start" wrap>
-                <Descriptions
-                  column={1}
-                  data={[
-                    { label: '存储根目录', value: storage.root },
-                    { label: '挂载点', value: storage.mountPoint || '-' },
-                    {
-                      label: '容量',
-                      value: `${fmtSize(storage.totalBytes - storage.availableBytes)} / ${fmtSize(storage.totalBytes)} 已用`,
-                    },
-                    {
-                      label: '告警阈值',
-                      value: storage.warning
-                        ? <Tag color="red">已超过 {storage.warnPercent}% 阈值</Tag>
-                        : <Tag color="green">正常（阈值 {storage.warnPercent}%）</Tag>,
-                    },
-                  ]}
-                />
-                <Progress type="circle" percent={usedPct} color={storage.warning ? '#f53f3f' : '#165dff'} />
-              </Space>
+              <div className="system-storage-summary">
+                <div className="system-storage-progress">
+                  <Progress
+                    type="circle"
+                    width={96}
+                    percent={usedPct}
+                    color={storage.warning ? '#f53f3f' : '#165dff'}
+                  />
+                  <span>空间使用率</span>
+                </div>
+                <div className="system-storage-capacity">
+                  <span className="system-storage-label">已用空间</span>
+                  <strong>{fmtSize(storage.totalBytes - storage.availableBytes)}</strong>
+                  <span>共 {fmtSize(storage.totalBytes)}</span>
+                </div>
+                <div className="system-storage-metrics">
+                  <div className="system-storage-metric system-storage-metric--wide">
+                    <span>存储目录</span>
+                    <strong title={storage.root}>{storage.root}</strong>
+                  </div>
+                  <div className="system-storage-metric">
+                    <span>可用空间</span>
+                    <strong>{fmtSize(storage.availableBytes)}</strong>
+                  </div>
+                  <div className="system-storage-metric">
+                    <span>告警阈值</span>
+                    <strong className={storage.warning ? 'is-warning' : ''}>{storage.warnPercent}%</strong>
+                  </div>
+                  <div className="system-storage-metric system-storage-metric--wide">
+                    <span>挂载点</span>
+                    <strong title={storage.mountPoint || '-'}>{storage.mountPoint || '-'}</strong>
+                  </div>
+                </div>
+              </div>
             )}
           </Card>
           <Card
-            className="page-card"
+            className="page-card system-config-card"
             title="系统参数"
             extra={
-              <Button type="primary" disabled={dirty.length === 0} loading={saving} onClick={save}>
-                保存修改（{dirty.length}）
-              </Button>
+              <Space size={8}>
+                {dirty.length > 0 && <span className="system-config-dirty">已修改 {dirty.length} 项</span>}
+                <Button disabled={dirty.length === 0 || saving} onClick={() => setEditing({})}>重置</Button>
+                <Button type="primary" disabled={dirty.length === 0} loading={saving} onClick={save}>保存</Button>
+              </Space>
             }
           >
             <Table
               rowKey="key"
               data={configs}
-              scroll={{ x: 940 }}
+              scroll={{ x: 860 }}
               pagination={false}
+              rowClassName={(record) => dirtyKeys.has(record.key) ? 'system-config-row--dirty' : ''}
               columns={[
-                { title: '参数键', dataIndex: 'key', width: 220, align: 'center' as const, ellipsis: true, render: (v: string) => <Tag className="table-cell-tag-ellipsis" title={v}>{v}</Tag> },
                 {
-                  title: '值',
-                  dataIndex: 'value',
-                  width: 300,
-                  render: (_v: string, r: Cfg) => editor(r),
+                  title: '参数',
+                  dataIndex: 'key',
+                  width: 250,
+                  render: (key: string) => (
+                    <div className="system-config-param">
+                      <strong>{CONFIG_META[key]?.name || key}</strong>
+                      <code title={key}>{key}</code>
+                    </div>
+                  ),
                 },
-                { title: '说明', dataIndex: 'description', width: 240, ellipsis: true },
-                { title: '更新时间', dataIndex: 'updatedAt', width: 180, align: 'center' as const, render: fmtTime },
+                {
+                  title: '设置',
+                  dataIndex: 'value',
+                  width: 340,
+                  render: (_v: string, record: Cfg) => (
+                    <div className="system-config-editor">
+                      {editor(record)}
+                      {CONFIG_META[record.key]?.hint && <span>{CONFIG_META[record.key].hint}</span>}
+                    </div>
+                  ),
+                },
+                {
+                  title: '说明',
+                  dataIndex: 'description',
+                  width: 270,
+                  render: (description: string, record: Cfg) => (
+                    <div className="system-config-description">
+                      <span>{CONFIG_META[record.key]?.description || description || '-'}</span>
+                      {record.updatedAt && <small>更新于 {fmtTime(record.updatedAt)}</small>}
+                    </div>
+                  ),
+                },
               ]}
             />
-            <Typography.Text className="dialog-note" type="secondary">
-              大小单位：字节。扩展名白名单不能为空。
-            </Typography.Text>
           </Card>
         </>
       )}

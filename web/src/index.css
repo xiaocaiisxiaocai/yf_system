@@ -546,8 +546,40 @@ html, body, #root {
 .dashboard-latest > .arco-card-header { height: auto; padding: 20px; }
 .dashboard-latest .section-heading { margin: 0; }
 .dashboard-latest .arco-list-item-meta-description { overflow-wrap: anywhere; }
-.storage-overview { width: 100%; }
-.storage-overview .arco-descriptions-item-value { overflow-wrap: anywhere; }
+.system-storage-card { margin-bottom: 16px; }
+.system-storage-summary {
+  display: grid;
+  grid-template-columns: 112px minmax(180px, 0.65fr) minmax(420px, 1.6fr);
+  align-items: center;
+  gap: 28px;
+}
+.system-storage-progress { display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--app-text-muted); font-size: 12px; }
+.system-storage-capacity { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.system-storage-label, .system-storage-metric > span { color: var(--app-text-muted); font-size: 12px; line-height: 20px; }
+.system-storage-capacity > strong { color: var(--app-text); font-size: 24px; line-height: 32px; font-weight: 600; }
+.system-storage-capacity > span:last-child { color: var(--app-text-muted); font-size: 13px; }
+.system-storage-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.system-storage-metric { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 10px 12px; border-radius: 6px; background: #f7f8fa; }
+.system-storage-metric--wide { grid-column: 1 / -1; }
+.system-storage-metric > strong { min-width: 0; overflow: hidden; color: var(--app-text); font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.system-storage-metric > strong.is-warning { color: #d92d20; }
+.system-config-dirty { color: #165dff; font-size: 13px; white-space: nowrap; }
+.system-config-param { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.system-config-param > strong { color: var(--app-text); font-size: 14px; font-weight: 500; }
+.system-config-param > code { overflow: hidden; color: var(--app-text-muted); font-family: Consolas, 'SFMono-Regular', monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.system-config-editor { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.system-config-editor > .arco-select,
+.system-config-editor > .arco-input-number,
+.system-config-editor > .arco-input-wrapper { width: 100%; }
+.system-config-editor > span { color: var(--app-text-muted); font-size: 12px; line-height: 18px; }
+.system-config-description { display: flex; flex-direction: column; gap: 4px; color: var(--app-text); font-size: 13px; line-height: 20px; }
+.system-config-description > small { color: var(--app-text-muted); font-size: 12px; }
+.system-config-row--dirty > td { background: #f2f7ff !important; }
+
+@media (max-width: 1200px) {
+  .system-storage-summary { grid-template-columns: 112px minmax(0, 1fr); }
+  .system-storage-metrics { grid-column: 1 / -1; }
+}
 
 /* 表格操作列保持固定槽位；同名操作在所有行同一位置，缺失权限或状态动作时保留空槽。 */
 .action-slots {
@@ -743,6 +775,11 @@ html, body, #root {
   .mobile-menu-trigger { display: inline-flex; }
   .layout-content { padding: 10px; }
   .page-card { padding: 12px; }
+  .system-storage-summary { grid-template-columns: 96px minmax(0, 1fr); gap: 16px; }
+  .system-storage-metrics { grid-column: 1 / -1; grid-template-columns: 1fr; }
+  .system-storage-metric--wide { grid-column: auto; }
+  .system-storage-capacity > strong { font-size: 20px; line-height: 28px; }
+  .system-config-card > .arco-card-header { align-items: flex-start; }
   .page-heading { gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
   .page-heading h1 { font-size: 18px; line-height: 28px; }
   .page-card--table { height: auto; min-height: calc(100dvh - 76px); overflow: visible; }
