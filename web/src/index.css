@@ -58,9 +58,6 @@ html, body, #root {
   background: #fff;
   border-bottom: 1px solid var(--app-border);
 }
-.layout-context { display: flex; align-items: center; gap: 12px; min-width: 0; color: var(--app-text-muted); font-size: 13px; }
-.layout-context-divider { color: #c5ccd8; }
-.layout-context-current { color: var(--color-text-1); font-weight: 600; }
 .layout-profile { display: inline-flex; align-items: center; gap: 10px; margin-left: auto; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--color-text-1); cursor: pointer; font-size: 13px; white-space: nowrap; }
 .layout-profile:hover { background: var(--color-fill-1); }
 .layout-content { min-width: 0; padding: 16px; overflow: auto; }
@@ -77,11 +74,17 @@ html, body, #root {
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 9px;
+  padding: 0 14px;
   background: #fff;
   border-bottom: 1px solid var(--color-border-2);
+  overflow: hidden;
+  white-space: nowrap;
 }
-.layout-logo img { display: block; width: 92px; height: 36px; object-fit: contain; }
+.layout-logo img { display: block; width: 52px; height: 28px; flex: 0 0 52px; object-fit: contain; }
+.layout-logo > span { color: #17243a; font-size: 14px; font-weight: 600; letter-spacing: 0.01em; }
+.layout-logo--collapsed { justify-content: center; padding: 0; }
+.layout-logo--collapsed img { width: 40px; height: 24px; flex-basis: 40px; }
 .layout-sider .arco-menu { flex: 1; min-height: 0; height: auto; }
 .layout-sider .arco-menu-dark,
 .mobile-nav-drawer .arco-menu-dark { background: #17243a; padding: 12px 8px; box-sizing: border-box; }
@@ -95,7 +98,12 @@ html, body, #root {
 .mobile-nav-drawer .arco-menu-dark .arco-menu-item.arco-menu-selected { background: rgb(var(--primary-6)); color: #fff; font-weight: 600; }
 .layout-sider .arco-menu-dark .arco-menu-item .arco-icon,
 .mobile-nav-drawer .arco-menu-dark .arco-menu-item .arco-icon { color: inherit; font-size: 17px; }
-.drawer-logo { display: block; width: 96px; height: 36px; object-fit: contain; }
+.layout-sider-toggle { height: 44px; display: flex; flex: 0 0 44px; align-items: center; justify-content: center; gap: 9px; width: 100%; padding: 0 12px; border: 0; border-top: 1px solid rgb(255 255 255 / 8%); background: transparent; color: #9eacc0; cursor: pointer; font: inherit; }
+.layout-sider-toggle:hover { background: #23344e; color: #fff; }
+.layout-sider-toggle .arco-icon { font-size: 17px; }
+.layout-sider--collapsed .layout-sider-toggle { padding: 0; }
+.drawer-brand { display: flex; align-items: center; gap: 10px; color: #17243a; font-size: 14px; font-weight: 600; }
+.drawer-logo { display: block; width: 54px; height: 28px; object-fit: contain; }
 /* 抽屉内的宽表交给 Table 自身滚动，保留窄屏操作列的可达性。 */
 .account-drawer .arco-table { min-width: 0; }
 .page-card { background: #fff; border: 1px solid var(--app-border); border-radius: var(--app-radius); padding: 20px; box-shadow: 0 2px 8px rgb(25 42 70 / 3%); }
@@ -779,8 +787,6 @@ html, body, #root {
   .layout-header {
     padding: 0 12px;
   }
-  .layout-context > :not(.layout-context-current) { display: none; }
-  .layout-context { font-size: 14px; }
   .layout-profile { gap: 6px; padding: 4px; }
   .layout-profile > span:not(.arco-avatar) { max-width: 98px; overflow: hidden; text-overflow: ellipsis; }
   .mobile-menu-trigger { display: inline-flex; }

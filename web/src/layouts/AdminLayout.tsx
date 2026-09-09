@@ -13,6 +13,8 @@ import {
   IconPoweroff,
   IconLock,
   IconMenu,
+  IconMenuFold,
+  IconMenuUnfold,
 } from '@arco-design/web-react/icon'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../store/auth'
@@ -36,6 +38,13 @@ export default function AdminLayout() {
   const nav = useNavigate()
   const loc = useLocation()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [siderCollapsed, setSiderCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem('yf:sider-collapsed') === 'true'
+    } catch {
+      return false
+    }
+  })
 
   const items = MENU_ITEMS.filter((m) => menus.includes(m.code))
   const selected =
@@ -56,9 +65,22 @@ export default function AdminLayout() {
     nav('/login')
   }
 
-  const menu = (closeAfterNavigate = false) => (
+  const toggleSider = () => {
+    setSiderCollapsed((current) => {
+      const next = !current
+      try {
+        window.localStorage.setItem('yf:sider-collapsed', String(next))
+      } catch {
+        /* 本地存储不可用时仍保留当前会话状态 */
+      }
+      return next
+    })
+  }
+
+  const menu = (closeAfterNavigate = false, collapsed = false) => (
     <Menu
       theme="dark"
+      collapse={collapsed}
       selectedKeys={selected}
       onClickMenuItem={(key) => {
         nav(key)
@@ -77,11 +99,29 @@ export default function AdminLayout() {
 
   return (
     <Layout className="layout-shell">
-      <Sider className="layout-sider" width={200} theme="dark">
-        <div className="layout-logo">
+      <Sider
+        className={`layout-sider${siderCollapsed ? ' layout-sider--collapsed' : ''}`}
+        width={200}
+        collapsedWidth={64}
+        collapsed={siderCollapsed}
+        collapsible
+        trigger={null}
+        theme="dark"
+      >
+        <div className={`layout-logo${siderCollapsed ? ' layout-logo--collapsed' : ''}`} title="供应商协作平台">
           <img src="/saa-logo.svg" alt="SAA" />
+          {!siderCollapsed && <span>供应商协作平台</span>}
         </div>
-        {menu()}
+        {menu(false, siderCollapsed)}
+        <button
+          className="layout-sider-toggle"
+          type="button"
+          aria-label={siderCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+          title={siderCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+          onClick={toggleSider}
+        >
+          {siderCollapsed ? <IconMenuUnfold /> : <><IconMenuFold /><span>收起导航</span></>}
+        </button>
       </Sider>
       <Layout className="layout-main">
         <Header
@@ -94,11 +134,6 @@ export default function AdminLayout() {
             icon={<IconMenu />}
             onClick={() => setMobileMenuOpen(true)}
           />
-          <div className="layout-context">
-            <span>供应商协作平台</span>
-            <span className="layout-context-divider">/</span>
-            <span className="layout-context-current">{items.find((item) => item.path === selected[0])?.label || '项目协作'}</span>
-          </div>
           <Dropdown
             trigger={['hover', 'click']}
             droplist={
@@ -134,7 +169,12 @@ export default function AdminLayout() {
       </Layout>
       <Drawer
         className="mobile-nav-drawer"
-        title={<img className="drawer-logo" src="/saa-logo.svg" alt="SAA" />}
+        title={(
+          <div className="drawer-brand">
+            <img className="drawer-logo" src="/saa-logo.svg" alt="SAA" />
+            <span>供应商协作平台</span>
+          </div>
+        )}
         placement="left"
         width={240}
         visible={mobileMenuOpen}
