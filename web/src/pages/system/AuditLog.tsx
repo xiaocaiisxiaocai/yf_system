@@ -79,6 +79,10 @@ const ACTIONS: Record<string, { label: string; category: string; color: string }
   SUPPLIER_ACCOUNT_DELETE: { label: '删除供应商账号', category: '供应商', color: 'red' },
   AUDIT_LOG_DELETE: { label: '删除操作日志', category: '系统', color: 'red' },
   CONFIG_UPDATE: { label: '更新系统参数', category: '系统', color: 'orange' },
+  EMAIL_SENT: { label: '邮件发送成功', category: '系统', color: 'green' },
+  EMAIL_FAILED: { label: '邮件发送失败', category: '系统', color: 'red' },
+  EMAIL_RETRY: { label: '邮件发送重试', category: '系统', color: 'orange' },
+  EMAIL_SKIPPED_MISSING_EMAIL: { label: '邮件未入队（缺少邮箱）', category: '系统', color: 'orange' },
 }
 
 const CATEGORY_OPTIONS = [
@@ -88,6 +92,7 @@ const CATEGORY_OPTIONS = [
 const TARGET_LABELS: Record<string, string> = {
   user: '用户', role: '角色', department: '组织', supplier: '供应商', project: '项目',
   round: '轮次', file: '文件', message: '留言', upload_session: '上传任务', audit_log: '操作日志', system_config: '系统参数',
+  email_outbox: '邮件队列',
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -133,6 +138,18 @@ function detailSummary(row: LogRow): string {
   }
   if (row.action === 'ROLE_ASSIGN_PERMS') {
     return `${displayValue(detail.code)}：权限点 ${displayValue(detail.oldPermissionCount)} → ${displayValue(detail.newPermissionCount)}`
+  }
+  if (row.action === 'EMAIL_SKIPPED_MISSING_EMAIL') {
+    return `${displayValue(detail.realName)}（${displayValue(detail.employeeNo)}）：未填写邮箱，通知未入队`
+  }
+  if (row.action === 'EMAIL_FAILED') {
+    return `${displayValue(detail.error)}${detail.retryCount ? `，第 ${displayValue(detail.retryCount)} 次` : ''}`
+  }
+  if (row.action === 'EMAIL_RETRY') {
+    return `${displayValue(detail.error)}，已安排第 ${displayValue(detail.retryCount)} 次重试`
+  }
+  if (row.action === 'EMAIL_SENT') {
+    return detail.recipient ? `收件人 ${displayValue(detail.recipient)}` : '邮件已发送'
   }
   const parts = [actor, detail.name, detail.code, detail.fileName, detail.projectId, detail.roundNo]
     .filter((value) => value != null && value !== '')

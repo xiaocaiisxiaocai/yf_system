@@ -1,5 +1,5 @@
 //! 操作日志。关键业务使用 `insert` 放进同一事务；仅登录失败等无业务事务场景使用 best-effort `log`。
-use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, EntityTrait, Set};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, EntityTrait, Set};
 
 use crate::entity::{audit_logs, users};
 use crate::error::ApiResult;
@@ -46,7 +46,7 @@ pub async fn insert(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn log(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     user_id: Option<u64>,
     employee_no: Option<String>,
     action: &str,

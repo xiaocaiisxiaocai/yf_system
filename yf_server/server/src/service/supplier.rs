@@ -85,6 +85,21 @@ fn validate_supplier(req: &SupplierUpsert) -> ApiResult<()> {
     Ok(())
 }
 
+async fn ensure_name_unique(
+    db: &impl ConnectionTrait,
+    name: &str,
+    exclude_id: Option<u64>,
+) -> ApiResult<()> {
+    let mut query = suppliers::Entity::find().filter(suppliers::Column::Name.eq(name));
+    if let Some(id) = exclude_id {
+        query = query.filter(suppliers::Column::Id.ne(id));
+    }
+    if query.one(db).await?.is_some() {
+        return Err(AppError::Conflict("供应商名称已存在".into()));
+    }
+    Ok(())
+}
+
 pub async fn list(db: &DatabaseConnection, q: &SupplierListQuery) -> ApiResult<PageResp<Value>> {
     let (page, size) = crate::dto::clamp_page(q.page, q.page_size);
     let mut cond = Condition::all();
@@ -114,10 +129,12 @@ pub async fn create(
     req: &SupplierUpsert,
 ) -> ApiResult<Value> {
     validate_supplier(req)?;
+    let name = req.name.trim();
     let now = Utc::now();
     let txn = db.begin().await?;
+    ensure_name_unique(&txn, name, None).await?;
     let model = suppliers::ActiveModel {
-        name: Set(req.name.trim().to_string()),
+        name: Set(name.to_string()),
         remark: Set(req.remark.clone()),
         status: Set(CommonStatus::Active),
         created_by: Set(Some(me.id)),
@@ -126,7 +143,8 @@ pub async fn create(
         ..Default::default()
     }
     .insert(&txn)
-    .await?;
+    .await
+    .map_err(|error| crate::error::unique_conflict(error, "供应商名称已存在"))?;
     audit::insert(
         &txn,
         Some(me.id),
@@ -164,13 +182,18 @@ pub async fn update(
         .await?
         .ok_or(AppError::NotFound)?;
     validate_supplier(req)?;
+    let name = req.name.trim();
     let old_name = s.name.clone();
     let txn = db.begin().await?;
+    ensure_name_unique(&txn, name, Some(id)).await?;
     let mut am: suppliers::ActiveModel = s.into();
-    am.name = Set(req.name.trim().to_string());
+    am.name = Set(name.to_string());
     am.remark = Set(req.remark.clone());
     am.updated_at = Set(Utc::now());
-    let model = am.update(&txn).await?;
+    let model = am
+        .update(&txn)
+        .await
+        .map_err(|error| crate::error::unique_conflict(error, "供应商名称已存在"))?;
     audit::insert(
         &txn,
         Some(me.id),
@@ -237,7 +260,7 @@ pub async fn set_status(
 // ---------- 供应商人员账号 ----------
 
 async fn ensure_supplier_active(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     supplier_id: u64,
 ) -> ApiResult<suppliers::Model> {
     let s = suppliers::Entity::find_by_id(supplier_id)
@@ -250,7 +273,21 @@ async fn ensure_supplier_active(
     Ok(s)
 }
 
-pub async fn list_accounts(db: &DatabaseConnection, supplier_id: u64) -> ApiResult<Value> {
+fn ensure_internal_account_manager(me: &CurrentUser) -> ApiResult<()> {
+    if me.is_internal() {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
+
+pub async fn list_accounts(
+    db: &DatabaseConnection,
+    me: &CurrentUser,
+    supplier_id: u64,
+) -> ApiResult<Value> {
+    ensure_internal_account_manager(me)?;
+    super::perm::check_perm(db, me.id, "supplier:account").await?;
     suppliers::Entity::find_by_id(supplier_id)
         .one(db)
         .await?
@@ -270,27 +307,30 @@ pub async fn create_account(
     supplier_id: u64,
     req: &AccountCreate,
 ) -> ApiResult<Value> {
-    ensure_supplier_active(db, supplier_id).await?;
+    ensure_internal_account_manager(me)?;
     let employee_no = req.employee_no.trim();
     crate::util::validation::employee_no(employee_no)?;
     if req.real_name.trim().is_empty() || req.real_name.trim().chars().count() > 32 {
         return Err(AppError::BadRequest("姓名需为 1~32 个字符".into()));
-    }
-    if users::Entity::find()
-        .filter(users::Column::EmployeeNo.eq(employee_no))
-        .one(db)
-        .await?
-        .is_some()
-    {
-        return Err(AppError::BadRequest("工号已存在".into()));
     }
     if !password::strong_enough(&req.password) {
         return Err(AppError::BadRequest("初始密码需 6-20 位".into()));
     }
     crate::util::validation::email(&req.email)?;
     let now = Utc::now();
-    // 账号与内置角色绑定同事务
+    // 账号与内置角色绑定同事务；事务内复核权限，避免权限撤销与写入竞态。
     let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    super::perm::recheck_manager(&txn, me.id, "supplier:account").await?;
+    ensure_supplier_active(&txn, supplier_id).await?;
+    if users::Entity::find()
+        .filter(users::Column::EmployeeNo.eq(employee_no))
+        .one(&txn)
+        .await?
+        .is_some()
+    {
+        return Err(AppError::Conflict("工号已存在".into()));
+    }
     let model = users::ActiveModel {
         employee_no: Set(employee_no.to_string()),
         password_hash: Set(password::hash(&req.password)?),
@@ -311,7 +351,8 @@ pub async fn create_account(
         ..Default::default()
     }
     .insert(&txn)
-    .await?;
+    .await
+    .map_err(|error| crate::error::unique_conflict(error, "工号已存在"))?;
     // 绑定内置供应商角色（固定权限集）
     let role = roles::Entity::find()
         .filter(roles::Column::IsBuiltIn.eq(true))
@@ -362,7 +403,7 @@ pub async fn update_account(
     id: u64,
     req: &AccountUpdate,
 ) -> ApiResult<Value> {
-    let u = load_supplier_account(db, id).await?;
+    ensure_internal_account_manager(me)?;
     if let Some(v) = &req.real_name {
         if v.trim().is_empty() || v.trim().chars().count() > 32 {
             return Err(AppError::BadRequest("姓名需为 1~32 个字符".into()));
@@ -371,8 +412,11 @@ pub async fn update_account(
     if let Some(v) = &req.email {
         crate::util::validation::email(v)?;
     }
-    let employee_no = u.employee_no.clone();
     let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    super::perm::recheck_manager(&txn, me.id, "supplier:account").await?;
+    let u = load_supplier_account(&txn, id).await?;
+    let employee_no = u.employee_no.clone();
     let mut am: users::ActiveModel = u.into();
     if let Some(v) = &req.real_name {
         am.real_name = Set(v.trim().to_string());
@@ -413,6 +457,7 @@ pub async fn set_account_status(
     id: u64,
     status: &str,
 ) -> ApiResult<Value> {
+    ensure_internal_account_manager(me)?;
     let st = match status {
         "ACTIVE" => CommonStatus::Active,
         "DISABLED" => CommonStatus::Disabled,
@@ -464,12 +509,15 @@ pub async fn reset_account_password(
     id: u64,
     new_password: &str,
 ) -> ApiResult<()> {
-    let u = load_supplier_account(db, id).await?;
+    ensure_internal_account_manager(me)?;
     if !password::strong_enough(new_password) {
         return Err(AppError::BadRequest("新密码需 6-20 位".into()));
     }
-    let employee_no = u.employee_no.clone();
     let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    super::perm::recheck_manager(&txn, me.id, "supplier:account").await?;
+    let u = load_supplier_account(&txn, id).await?;
+    let employee_no = u.employee_no.clone();
     let mut am: users::ActiveModel = u.into();
     am.password_hash = Set(password::hash(new_password)?);
     am.must_change_password = Set(true);
@@ -544,6 +592,7 @@ pub async fn delete(db: &DatabaseConnection, me: &CurrentUser, id: u64) -> ApiRe
 }
 
 pub async fn delete_account(db: &DatabaseConnection, me: &CurrentUser, id: u64) -> ApiResult<()> {
+    ensure_internal_account_manager(me)?;
     let txn = db.begin().await?;
     super::perm::lock_management_state(&txn).await?;
     let account = users::Entity::find_by_id(id)

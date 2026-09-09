@@ -755,7 +755,12 @@ async fn project_activity_012_backfill_is_idempotent_and_does_not_invent_round_t
         .next()
         .unwrap_or_default()
         .starts_with("yf_test_"));
-    migration::Migrator::down(&f.state.db, Some(1))
+    let migrations = migration::Migrator::migrations();
+    let target = migrations
+        .iter()
+        .position(|item| item.name() == "m20260909_000012_project_activities")
+        .expect("project activity migration must remain registered");
+    migration::Migrator::down(&f.state.db, Some((migrations.len() - target) as u32))
         .await
         .unwrap();
 

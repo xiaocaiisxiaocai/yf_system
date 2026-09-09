@@ -273,7 +273,7 @@ pub async fn create(
         .await?
         .is_some()
     {
-        return Err(AppError::BadRequest("工号已存在".into()));
+        return Err(AppError::Conflict("工号已存在".into()));
     }
     if !password::strong_enough(&req.password) {
         return Err(AppError::BadRequest("初始密码需 6-20 位".into()));
@@ -306,7 +306,8 @@ pub async fn create(
         ..Default::default()
     }
     .insert(&txn)
-    .await?;
+    .await
+    .map_err(|error| crate::error::unique_conflict(error, "工号已存在"))?;
     let role = bind_internal_role(&txn, model.id, role_ids[0]).await?;
     audit::insert(
         &txn,

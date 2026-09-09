@@ -41,6 +41,29 @@ fn kind_for_parent(parent: Option<DeptKind>) -> ApiResult<DeptKind> {
     }
 }
 
+async fn ensure_name_unique(
+    db: &impl ConnectionTrait,
+    parent_id: Option<u64>,
+    kind: DeptKind,
+    name: &str,
+    exclude_id: Option<u64>,
+) -> ApiResult<()> {
+    let mut query = departments::Entity::find()
+        .filter(departments::Column::Kind.eq(kind))
+        .filter(departments::Column::Name.eq(name));
+    query = match parent_id {
+        Some(parent_id) => query.filter(departments::Column::ParentId.eq(parent_id)),
+        None => query.filter(departments::Column::ParentId.is_null()),
+    };
+    if let Some(id) = exclude_id {
+        query = query.filter(departments::Column::Id.ne(id));
+    }
+    if query.one(db).await?.is_some() {
+        return Err(AppError::Conflict("同一上级和层级下组织名称已存在".into()));
+    }
+    Ok(())
+}
+
 fn to_json(d: &departments::Model) -> Value {
     json!({
         "id": d.id, "name": d.name, "parentId": d.parent_id, "kind": d.kind.as_str(),
@@ -145,6 +168,7 @@ pub async fn create(
     super::perm::recheck_manager(&txn, user.id, "dept:manage").await?;
     let name = req.name.trim();
     let kind = kind_for_parent(load_parent_kind(&txn, req.parent_id).await?)?;
+    ensure_name_unique(&txn, req.parent_id, kind, name, None).await?;
     let now = Utc::now();
     let model = departments::ActiveModel {
         name: Set(name.to_string()),
@@ -157,7 +181,8 @@ pub async fn create(
         ..Default::default()
     }
     .insert(&txn)
-    .await?;
+    .await
+    .map_err(|error| crate::error::unique_conflict(error, "同一上级和层级下组织名称已存在"))?;
     audit::insert(
         &txn,
         Some(user.id),
@@ -227,19 +252,22 @@ pub async fn update(
             "超出 事业部 > 部门 > 课别 三级".into(),
         ));
     }
+    let name = req.name.trim();
+    ensure_name_unique(&txn, req.parent_id, kind, name, Some(id)).await?;
     let old_name = dept.name.clone();
     let old_parent_id = dept.parent_id;
     let mut am: departments::ActiveModel = dept.into();
-    if !req.name.trim().is_empty() {
-        am.name = Set(req.name.trim().to_string());
-    }
+    am.name = Set(name.to_string());
     am.parent_id = Set(req.parent_id);
     am.kind = Set(kind);
     if let Some(s) = req.sort_no {
         am.sort_no = Set(s);
     }
     am.updated_at = Set(Utc::now());
-    let model = am.update(&txn).await?;
+    let model = am
+        .update(&txn)
+        .await
+        .map_err(|error| crate::error::unique_conflict(error, "同一上级和层级下组织名称已存在"))?;
     recompute_descendants(&txn, model.id, model.kind).await?;
     audit::insert(
         &txn,

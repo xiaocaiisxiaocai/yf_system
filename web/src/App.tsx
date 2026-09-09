@@ -7,6 +7,7 @@ import { bootAuth } from './api/client'
 const AdminLayout = lazy(() => import('./layouts/AdminLayout'))
 const Login = lazy(() => import('./pages/Login'))
 const ChangePassword = lazy(() => import('./pages/ChangePassword'))
+const Profile = lazy(() => import('./pages/Profile'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const NotFound = lazy(() => import('./pages/NotFound'))
 const ProjectList = lazy(() => import('./pages/project/ProjectList'))
@@ -103,6 +104,7 @@ export default function App() {
           }
         >
           <Route index element={<Dashboard />} />
+          <Route path="profile" element={<Profile />} />
           <Route path="projects" element={<Guard menu="project:list"><ProjectList /></Guard>} />
           <Route path="projects/:id" element={<Guard menu="project:list"><ProjectDetail /></Guard>} />
           <Route path="suppliers" element={<Guard menu="supplier:list" permission="supplier:manage"><SupplierList /></Guard>} />

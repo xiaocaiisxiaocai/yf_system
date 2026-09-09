@@ -136,6 +136,16 @@ pub async fn profile(
     Ok(Json(service::auth::profile(&state.db, &current).await?))
 }
 
+pub async fn update_profile(
+    State(state): State<AppState>,
+    current: CurrentUser,
+    Json(req): Json<UpdateProfileRequest>,
+) -> ApiResult<Json<ProfileResponse>> {
+    Ok(Json(
+        service::auth::update_profile(&state.db, &current, &req).await?,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::resolve_client_ip;

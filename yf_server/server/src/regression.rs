@@ -45,7 +45,7 @@ async fn full_disabled_supplier_accounts_remain_manageable_but_cannot_login() {
         .unwrap();
         ids.push(account["id"].as_u64().unwrap());
     }
-    let listed = service::supplier::list_accounts(&f.state.db, sid)
+    let listed = service::supplier::list_accounts(&f.state.db, &f.admin, sid)
         .await
         .unwrap();
     assert_eq!(
@@ -281,7 +281,7 @@ async fn member_validity_barrier(action: &str) {
         &f.state.db,
         &f.admin,
         &service::role::RoleUpsert {
-            name: "成员并发角色".into(),
+            name: format!("成员并发角色-{action}"),
             description: None,
         },
     )
@@ -461,6 +461,7 @@ async fn full_configuration_applies_to_new_uploads_and_preserves_existing_sessio
     use service::config::{ConfigBatch, ConfigUpdate};
     let f = Fixture::new().await;
     let original = system_configs::Entity::find()
+        .filter(system_configs::Column::CfgKey.ne("security.management_lock"))
         .all(&f.state.db)
         .await
         .unwrap();
@@ -1407,11 +1408,12 @@ impl Fixture {
             user_type: UserType::Internal,
             supplier_id: None,
         };
+        let fixture_suffix = &uuid::Uuid::new_v4().simple().to_string()[..12];
         let supplier = service::supplier::create(
             &state.db,
             &admin,
             &service::supplier::SupplierUpsert {
-                name: "回归供应商".into(),
+                name: format!("回归供应商-{fixture_suffix}"),
                 remark: None,
             },
         )
@@ -1421,7 +1423,7 @@ impl Fixture {
             &state.db,
             &admin,
             &service::project::ProjectUpsert {
-                name: "回归项目".into(),
+                name: format!("回归项目-{fixture_suffix}"),
                 description: None,
                 supplier_id: supplier["id"].as_u64().unwrap(),
             },
@@ -1656,7 +1658,7 @@ async fn project_creation_and_update_do_not_require_legacy_code() {
 async fn full_validation_rejects_missing_department_parent() {
     let f = Fixture::new().await;
     let mut req = service::dept::DeptUpsert {
-        name: "有效部门".into(),
+        name: format!("有效部门-{}", uuid::Uuid::new_v4().simple()),
         parent_id: None,
         sort_no: Some(0),
     };
@@ -2010,9 +2012,17 @@ async fn full_department_concurrent_moves_cannot_form_cycle() {
         .unwrap()["id"]
         .as_u64()
         .unwrap();
-    let b = service::dept::create(&f.state.db, &f.admin, &req)
-        .await
-        .unwrap()["id"]
+    let b = service::dept::create(
+        &f.state.db,
+        &f.admin,
+        &service::dept::DeptUpsert {
+            name: "并发部门B".into(),
+            parent_id: None,
+            sort_no: Some(0),
+        },
+    )
+    .await
+    .unwrap()["id"]
         .as_u64()
         .unwrap();
     let txn = f.state.db.begin().await.unwrap();

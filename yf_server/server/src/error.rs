@@ -82,6 +82,20 @@ impl From<sea_orm::DbErr> for AppError {
     }
 }
 
+/// 将数据库唯一约束竞争翻译为稳定业务冲突，不向客户端暴露索引或 SQL 细节。
+pub fn unique_conflict(error: sea_orm::DbErr, message: &'static str) -> AppError {
+    let is_unique = matches!(
+        error.sql_err(),
+        Some(sea_orm::SqlErr::UniqueConstraintViolation(_))
+    );
+    if is_unique {
+        tracing::warn!(error = ?error, "业务唯一性冲突");
+        AppError::Conflict(message.into())
+    } else {
+        AppError::from(error)
+    }
+}
+
 impl From<jsonwebtoken::errors::Error> for AppError {
     fn from(e: jsonwebtoken::errors::Error) -> Self {
         use jsonwebtoken::errors::ErrorKind;

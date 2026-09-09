@@ -57,3 +57,7 @@ pub async fn update_configs(
 pub async fn storage_status(State(s): State<AppState>, _u: CurrentUser) -> ApiResult<Json<Value>> {
     Ok(Json(service::config::storage_status(&s).await?))
 }
+
+pub async fn mail_status(State(s): State<AppState>, _u: CurrentUser) -> ApiResult<Json<Value>> {
+    Ok(Json(service::notify::mail_status(&s).await?))
+}

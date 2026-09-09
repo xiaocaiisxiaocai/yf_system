@@ -20,7 +20,7 @@ async fn draft(f: &Fixture) -> u64 {
         &f.state.db,
         &f.admin,
         &service::project::ProjectUpsert {
-            name: "删除安全草稿".into(),
+            name: format!("删除安全草稿-{}", uuid::Uuid::new_v4().simple()),
             description: None,
             supplier_id: existing.supplier_id,
         },

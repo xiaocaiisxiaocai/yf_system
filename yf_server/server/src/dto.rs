@@ -17,6 +17,7 @@ pub struct UserBrief {
     pub id: u64,
     pub employee_no: String,
     pub real_name: String,
+    pub email: String,
     pub user_type: String,
     pub supplier_id: Option<u64>,
     /// 内置且启用的系统管理员角色；前端展示用途，写操作仍在服务端重验。
@@ -49,6 +50,12 @@ pub struct ChangePasswordRequest {
     pub new_password: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateProfileRequest {
+    pub email: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileResponse {
@@ -61,7 +68,7 @@ pub struct ProfileResponse {
 
 #[cfg(test)]
 mod profile_response_tests {
-    use super::{ProfileResponse, UserBrief};
+    use super::{ProfileResponse, UpdateProfileRequest, UserBrief};
 
     #[test]
     fn profile_serializes_must_change_password_in_camel_case() {
@@ -70,6 +77,7 @@ mod profile_response_tests {
                 id: 1,
                 employee_no: "tester".into(),
                 real_name: "Tester".into(),
+                email: "tester@example.invalid".into(),
                 user_type: "INTERNAL".into(),
                 supplier_id: None,
                 is_system_admin: false,
@@ -81,6 +89,17 @@ mod profile_response_tests {
         .unwrap();
 
         assert_eq!(value["mustChangePassword"], true);
+    }
+
+    #[test]
+    fn profile_update_rejects_identity_and_target_fields() {
+        for unexpected in [
+            serde_json::json!({ "email": "self@example.invalid", "id": 2 }),
+            serde_json::json!({ "email": "self@example.invalid", "realName": "越权改名" }),
+            serde_json::json!({ "email": "self@example.invalid", "supplierId": 9 }),
+        ] {
+            assert!(serde_json::from_value::<UpdateProfileRequest>(unexpected).is_err());
+        }
     }
 }
 

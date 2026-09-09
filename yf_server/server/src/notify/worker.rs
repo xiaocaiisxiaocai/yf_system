@@ -157,6 +157,10 @@ async fn flush_pending(state: &AppState) -> Result<(), crate::error::AppError> {
         let Some(lease) = claim_mail(db, &mail, Utc::now()).await? else {
             continue;
         };
+        let mail_id = mail.id;
+        let event_type = mail.event_type;
+        let recipient = mail.recipient_email.clone();
+        let original_retry_count = mail.retry_count;
         // 地址解析失败按发送失败处理（记 last_error 走重试），不能 unwrap——panic 会杀掉 worker 协程
         let from: Result<lettre::message::Mailbox, _> =
             cfg.from.parse().or_else(|_| cfg.username.parse());
@@ -183,22 +187,31 @@ async fn flush_pending(state: &AppState) -> Result<(), crate::error::AppError> {
             }),
         };
         let mut am: email_outbox::ActiveModel = mail.into();
+        let final_status;
+        let mut final_retry_count = original_retry_count;
+        let mut safe_error = None;
         match result {
             Ok(()) => {
+                final_status = OutboxStatus::Sent;
                 am.status = Set(OutboxStatus::Sent);
+                am.last_error = Set(None);
                 am.sent_at = Set(Some(chrono::Utc::now()));
                 am.next_attempt_at = Set(None);
             }
             Err(e) => {
                 let retries = am.retry_count.unwrap() + 1;
                 let terminal = failure_is_terminal(retries, e.retryable);
+                let error = crate::service::notify::sanitize_mail_error(&e.message);
+                final_retry_count = retries;
                 am.retry_count = Set(retries);
-                am.last_error = Set(Some(e.message));
-                am.status = Set(if terminal {
+                am.last_error = Set(Some(error.clone()));
+                final_status = if terminal {
                     OutboxStatus::Failed
                 } else {
                     OutboxStatus::Pending
-                });
+                };
+                safe_error = Some(error);
+                am.status = Set(final_status);
                 am.next_attempt_at = Set(if terminal {
                     None
                 } else {
@@ -206,7 +219,36 @@ async fn flush_pending(state: &AppState) -> Result<(), crate::error::AppError> {
                 });
             }
         }
-        finish_mail(db, am, lease).await?;
+        if finish_mail(db, am, lease).await? {
+            let status = match final_status {
+                OutboxStatus::Sent => "SENT",
+                OutboxStatus::Pending => "PENDING",
+                OutboxStatus::Failed => "FAILED",
+                OutboxStatus::Sending => "SENDING",
+            };
+            let detail = serde_json::json!({
+                "eventType": crate::service::notify::event_type_name(event_type),
+                "recipient": crate::service::notify::mask_email(&recipient),
+                "status": status,
+                "retryCount": final_retry_count,
+                "error": safe_error,
+            });
+            crate::service::audit::log(
+                db,
+                None,
+                None,
+                match final_status {
+                    OutboxStatus::Sent => "EMAIL_SENT",
+                    OutboxStatus::Failed => "EMAIL_FAILED",
+                    OutboxStatus::Pending | OutboxStatus::Sending => "EMAIL_RETRY",
+                },
+                Some("email_outbox"),
+                Some(mail_id.to_string()),
+                Some(detail),
+                None,
+            )
+            .await;
+        }
     }
     Ok(())
 }

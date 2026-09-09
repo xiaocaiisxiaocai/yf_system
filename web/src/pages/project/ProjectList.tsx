@@ -27,6 +27,9 @@ export default function ProjectList() {
   const [modalOpen, setModalOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<Project | null>(null)
+  const [compactTable, setCompactTable] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 1100px)').matches,
+  )
   const [suppliers, setSuppliers] = useState<SupplierOpt[]>([])
   const [form] = Form.useForm()
   const nav = useNavigate()
@@ -70,6 +73,14 @@ export default function ProjectList() {
       http.get('/supplier-options').then((r) => setSuppliers(r.data)).catch(() => setSuppliers([]))
     }
   }, [isInternal])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const query = window.matchMedia('(max-width: 1100px)')
+    const sync = () => setCompactTable(query.matches)
+    query.addEventListener('change', sync)
+    return () => query.removeEventListener('change', sync)
+  }, [])
 
   const openCreate = () => {
     setEditing(null)
@@ -130,13 +141,13 @@ export default function ProjectList() {
       {
         title: '项目名称',
         dataIndex: 'name',
-        width: 200,
+        width: compactTable ? 180 : 200,
         ellipsis: true,
         render: (v: string, r: Project) => (
           <a onClick={() => nav(`/projects/${r.id}`)}>{v}</a>
         ),
       },
-      { title: '供应商', dataIndex: 'supplierName', width: 160, ellipsis: true },
+      { title: '供应商', dataIndex: 'supplierName', width: compactTable ? 140 : 160, ellipsis: true },
       {
         title: '状态',
         dataIndex: 'status',
@@ -144,12 +155,14 @@ export default function ProjectList() {
         align: 'center' as const,
         render: (v: string) => <Tag color={PROJECT_STATUS[v]?.color}>{PROJECT_STATUS[v]?.text || v}</Tag>,
       },
-      { title: '创建人', dataIndex: 'createdByName', width: 100, align: 'center' as const, ellipsis: true },
-      { title: '更新时间', dataIndex: 'updatedAt', width: 170, align: 'center' as const, render: fmtTime },
+      ...(!compactTable ? [
+        { title: '创建人', dataIndex: 'createdByName', width: 100, align: 'center' as const, ellipsis: true },
+        { title: '更新时间', dataIndex: 'updatedAt', width: 170, align: 'center' as const, render: fmtTime },
+      ] : []),
       {
         title: '操作',
-        width: 272,
-        fixed: 'right' as const,
+        width: compactTable ? 252 : 272,
+        fixed: compactTable ? undefined : 'right' as const,
         align: 'center' as const,
         render: (_: unknown, r: Project) => {
           const nextStatuses = statusActions(r)
@@ -261,7 +274,9 @@ export default function ProjectList() {
           loading={loading}
           columns={columns}
           data={data.list}
-          scroll={{ x: 978, y: 'var(--page-table-scroll-y)' }}
+          scroll={compactTable
+            ? { y: 'var(--page-table-scroll-y)' }
+            : { x: 978, y: 'var(--page-table-scroll-y)' }}
           pagination={{
             total: data.total,
             current: page,

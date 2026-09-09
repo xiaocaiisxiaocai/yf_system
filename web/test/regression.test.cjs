@@ -52,6 +52,73 @@ function authModule(user, permissions = []) {
   return { useAuth: (selector) => selector ? selector(state) : state }
 }
 
+test('account menu opens personal profile maintenance inside the authenticated layout', () => {
+  const root = path.resolve(__dirname, '..')
+  const layout = fs.readFileSync(path.join(root, 'src/layouts/AdminLayout.tsx'), 'utf8')
+  const app = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8')
+
+  assert.match(layout, /<Menu\.Item key="profile">[\s\S]*?个人资料维护/)
+  assert.match(layout, /nav\('\/profile'\)/)
+  assert.doesNotMatch(layout, /<Menu\.Item key="pwd">/)
+  assert.match(app, /<Route path="profile" element=\{<Profile \/>\}/)
+})
+
+test('personal profile submits only own email and keeps password change in the same page', async () => {
+  const calls = []
+  let savedUser
+  let loggedOut = false
+  let navigated
+  const profileForm = { setFieldsValue() {} }
+  const passwordForm = {}
+  let formIndex = 0
+  const profileArco = new Proxy({
+    ...arco,
+    Form: Object.assign(component('Form'), {
+      useForm: () => [formIndex++ === 0 ? profileForm : passwordForm],
+      Item: component('Form.Item'),
+    }),
+  }, { get: (obj, key) => obj[key] ?? component(key) })
+  const http = {
+    put: async (url, body) => {
+      calls.push({ url, body })
+      if (url === '/auth/profile') {
+        return { data: { user: { id: 8, employeeNo: 'supplier8', realName: '供应商人员', email: body.email, userType: 'SUPPLIER', supplierId: 3 } } }
+      }
+      return { data: {} }
+    },
+  }
+  const Page = loadTs('src/pages/Profile.tsx', {
+    '@arco-design/web-react': profileArco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    'react-router-dom': { useNavigate: () => (path) => { navigated = path } },
+    '../api/client': { __esModule: true, default: http, withAuthLock: async (action) => action() },
+    '../store/auth': {
+      useAuth: () => ({
+        user: { id: 8, employeeNo: 'supplier8', realName: '供应商人员', email: 'before@example.invalid', userType: 'SUPPLIER', supplierId: 3 },
+        setUser: (user) => { savedUser = user },
+        logout: () => { loggedOut = true },
+      }),
+    },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  let forms = renderer.root.findAllByType('Form')
+
+  await act(async () => forms[0].props.onSubmit({ email: 'after@example.invalid', id: 999 }))
+  assert.equal(calls[0].url, '/auth/profile')
+  assert.deepEqual({ ...calls[0].body }, { email: 'after@example.invalid' })
+  assert.equal(savedUser.id, 8)
+  assert.equal(savedUser.email, 'after@example.invalid')
+
+  forms = renderer.root.findAllByType('Form')
+  await act(async () => forms[1].props.onSubmit({ oldPassword: 'old123', newPassword: 'new123', confirm: 'new123' }))
+  assert.equal(calls[1].url, '/auth/password')
+  assert.deepEqual({ ...calls[1].body }, { oldPassword: 'old123', newPassword: 'new123' })
+  assert.equal(loggedOut, true)
+  assert.equal(navigated, '/login')
+  await act(async () => renderer.unmount())
+})
+
 test('SAA branding is wired to the application logo and favicon', () => {
   const root = path.resolve(__dirname, '..')
   const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8')
@@ -855,6 +922,7 @@ test('dashboard and project detail panels expose retry instead of a false empty 
       mocks: (http) => ({
         '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
         '../../api/client': http, '../../api/types': { fmtTime: String, fmtSize: String },
+        'react-router-dom': { useNavigate: () => () => {} },
       }),
     },
     {
@@ -884,6 +952,7 @@ test('dashboard and project detail panels expose retry instead of a false empty 
         }
         if (url.endsWith('/messages')) return { data: { list: [], total: 0 } }
         if (url === '/admin/system/storage') return { data: { totalBytes: 1, availableBytes: 1, usedPercent: 0, warnPercent: 80, warning: false, root: '/' } }
+        if (url === '/admin/system/mail-status') return { data: { configured: false, notificationsEnabled: true, queue: { pending: 0, sending: 0, sent: 0, failed: 0 }, missingEmailCount: 0, missingEmailAccounts: [], recent: [] } }
         return { data: [] }
       },
     }
@@ -898,6 +967,41 @@ test('dashboard and project detail panels expose retry instead of a false empty 
     assert.equal(renderer.root.findAll((node) => node.props && node.props.children === '加载失败').length, 0, item.file)
     await act(async () => renderer.unmount())
   }
+})
+
+test('system config exposes mail configuration, queue outcomes and missing mailbox hints', async () => {
+  const calls = []
+  const Page = loadTs('src/pages/system/SysConfig.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../../api/client': {
+      get: async (url) => {
+        calls.push(url)
+        if (url === '/admin/system/configs') return { data: [] }
+        if (url === '/admin/system/storage') return { data: { totalBytes: 100, availableBytes: 40, usedPercent: 60, warnPercent: 80, warning: false, root: '/' } }
+        return { data: {
+          configured: false,
+          notificationsEnabled: true,
+          queue: { pending: 2, sending: 1, sent: 8, failed: 3 },
+          latestSentAt: '2026-09-09T01:00:00Z',
+          latestFailedAt: '2026-09-09T02:00:00Z',
+          missingEmailCount: 1,
+          missingEmailAccounts: [{ userId: 7, employeeNo: 'E7', realName: '未填邮箱', userType: 'INTERNAL', status: 'ACTIVE' }],
+          recent: [{ id: 11, action: 'EMAIL_FAILED', targetType: 'email_outbox', targetId: '11', detail: { error: 'SMTP 连接失败' }, createdAt: '2026-09-09T02:00:00Z' }],
+        } }
+      },
+    },
+    '../../api/types': { fmtTime: String, fmtSize: String },
+    'react-router-dom': { useNavigate: () => () => {} },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+  assert.ok(calls.includes('/admin/system/mail-status'))
+  assert.ok(renderer.root.findAll((node) => node.props.title === '邮件发送').length > 0)
+  const tables = renderer.root.findAllByType('Table')
+  assert.ok(tables.some((table) => table.props.data?.some((row) => row.action === 'EMAIL_FAILED')))
+  await act(async () => renderer.unmount())
 })
 
 test('message receipt requests ignore late responses and closing invalidates them', async () => {

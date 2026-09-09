@@ -243,10 +243,10 @@ pub async fn delete_supplier(
 }
 pub async fn list_supplier_accounts(
     State(s): State<AppState>,
-    _u: CurrentUser,
+    u: CurrentUser,
     Path(id): Path<u64>,
 ) -> ApiResult<Json<Value>> {
-    Ok(Json(service::supplier::list_accounts(&s.db, id).await?))
+    Ok(Json(service::supplier::list_accounts(&s.db, &u, id).await?))
 }
 pub async fn create_supplier_account(
     State(s): State<AppState>,

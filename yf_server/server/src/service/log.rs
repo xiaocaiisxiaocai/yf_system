@@ -85,7 +85,14 @@ fn actions_for_category(category: &str) -> Option<&'static [&'static str]> {
             "SUPPLIER_ACCOUNT_RESET_PASSWORD",
             "SUPPLIER_ACCOUNT_DELETE",
         ]),
-        "SYSTEM" => Some(&["CONFIG_UPDATE", "AUDIT_LOG_DELETE"]),
+        "SYSTEM" => Some(&[
+            "CONFIG_UPDATE",
+            "AUDIT_LOG_DELETE",
+            "EMAIL_SENT",
+            "EMAIL_FAILED",
+            "EMAIL_RETRY",
+            "EMAIL_SKIPPED_MISSING_EMAIL",
+        ]),
         _ => None,
     }
 }
@@ -221,6 +228,11 @@ mod tests {
         assert!(org.contains(&"USER_ASSIGN_ROLE"));
         let supplier = actions_for_category("SUPPLIER").expect("供应商分类应存在");
         assert!(supplier.contains(&"SUPPLIER_ACCOUNT_STATUS"));
+        let system = actions_for_category("SYSTEM").expect("系统分类应存在");
+        assert!(system.contains(&"EMAIL_SENT"));
+        assert!(system.contains(&"EMAIL_FAILED"));
+        assert!(system.contains(&"EMAIL_RETRY"));
+        assert!(system.contains(&"EMAIL_SKIPPED_MISSING_EMAIL"));
         assert!(actions_for_category("UNKNOWN").is_none());
     }
 }

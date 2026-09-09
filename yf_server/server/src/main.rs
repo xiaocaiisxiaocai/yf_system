@@ -13,6 +13,8 @@ mod util;
 #[cfg(test)]
 mod regression;
 #[cfg(test)]
+mod regression_business_uniqueness;
+#[cfg(test)]
 mod regression_delete_accounts;
 #[cfg(test)]
 mod regression_delete_project;
@@ -20,6 +22,8 @@ mod regression_delete_project;
 mod regression_identity_review;
 #[cfg(test)]
 mod regression_org_migration;
+#[cfg(test)]
+mod regression_profile;
 #[cfg(test)]
 mod regression_project_activity;
 #[cfg(test)]

@@ -11,7 +11,6 @@ import {
   IconSettings,
   IconDown,
   IconPoweroff,
-  IconLock,
   IconMenu,
   IconMenuFold,
   IconMenuUnfold,
@@ -120,13 +119,13 @@ export default function AdminLayout() {
           droplist={
             <Menu
               onClickMenuItem={(k) => {
-                if (k === 'pwd') nav('/change-password')
+                if (k === 'profile') nav('/profile')
                 if (k === 'logout') doLogout()
               }}
             >
-              <Menu.Item key="pwd">
-                <IconLock style={{ marginRight: 8 }} />
-                修改密码
+              <Menu.Item key="profile">
+                <IconUser style={{ marginRight: 8 }} />
+                个人资料维护
               </Menu.Item>
               <Menu.Item key="logout">
                 <IconPoweroff style={{ marginRight: 8 }} />

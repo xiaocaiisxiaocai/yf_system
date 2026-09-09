@@ -388,11 +388,50 @@ pub async fn profile(db: &DatabaseConnection, current: &CurrentUser) -> ApiResul
     })
 }
 
+pub async fn update_profile(
+    db: &DatabaseConnection,
+    current: &CurrentUser,
+    req: &UpdateProfileRequest,
+) -> ApiResult<ProfileResponse> {
+    crate::util::validation::email(&req.email)?;
+    let email = req.email.trim().to_string();
+    let txn = db.begin().await?;
+    let user = users::Entity::find_by_id(current.id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if user.status != CommonStatus::Active {
+        return Err(AppError::Forbidden);
+    }
+    let changed = user.email != email;
+    if changed {
+        let mut am: users::ActiveModel = user.into();
+        am.email = Set(email);
+        am.updated_at = Set(Utc::now());
+        am.update(&txn).await?;
+        audit::insert(
+            &txn,
+            Some(current.id),
+            Some(current.employee_no.clone()),
+            "PROFILE_UPDATE",
+            Some("user"),
+            Some(current.id.to_string()),
+            Some(json!({ "changedFields": ["email"] })),
+            None,
+        )
+        .await?;
+    }
+    txn.commit().await?;
+    profile(db, current).await
+}
+
 async fn brief(db: &DatabaseConnection, user: &users::Model) -> ApiResult<UserBrief> {
     Ok(UserBrief {
         id: user.id,
         employee_no: user.employee_no.clone(),
         real_name: user.real_name.clone(),
+        email: user.email.clone(),
         user_type: user.user_type.as_str().to_string(),
         supplier_id: user.supplier_id,
         is_system_admin: user.status == CommonStatus::Active

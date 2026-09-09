@@ -181,6 +181,17 @@ html, body, #root {
 .page-card > .arco-card-header { height: auto; min-height: 40px; padding: 0 0 16px; margin-bottom: 16px; border-color: var(--app-border); }
 /* page-card 的 padding 已在外层定义，去掉 Card body 的默认内边距，避免双层 padding 挤压表格 */
 .page-card > .arco-card-body { padding: 0; }
+.profile-page { max-width: 980px; margin: 0 auto; }
+.profile-heading { margin-bottom: 16px; }
+.profile-heading .arco-typography { margin: 0; }
+.profile-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.profile-card > .arco-card-header { margin-bottom: 4px; }
+.profile-readonly-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.profile-readonly-item { min-width: 0; padding: 10px 12px; border-radius: 8px; background: var(--color-fill-1); }
+.profile-readonly-item span { display: block; margin-bottom: 4px; color: var(--color-text-3); font-size: 12px; }
+.profile-readonly-item strong { display: block; overflow: hidden; color: var(--color-text-1); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.profile-boundary-note { margin: 0 0 16px; padding: 9px 12px; border-radius: 8px; background: rgb(var(--primary-1)); color: rgb(var(--primary-7)); font-size: 12px; line-height: 1.6; }
+.profile-card-tip { display: block; margin-bottom: 16px; line-height: 1.6; }
 .page-card--table {
   --page-table-scroll-y: max(180px, calc(100vh - 326px));
   height: calc(100vh - 88px);
@@ -638,6 +649,7 @@ html, body, #root {
 .dashboard-message-extra { display: flex; align-items: center; gap: 12px; color: var(--app-text-muted); white-space: nowrap; }
 .dashboard-message-extra > svg { color: #98a2b3; }
 .system-storage-card { margin-bottom: 16px; }
+.system-mail-card { margin-bottom: 16px; }
 .system-storage-summary {
   display: grid;
   grid-template-columns: 112px minmax(180px, 0.65fr) minmax(420px, 1.6fr);
@@ -863,6 +875,8 @@ html, body, #root {
   .mobile-menu-trigger { display: inline-flex; }
   .layout-content { padding: 10px; }
   .page-card { padding: 12px; }
+  .profile-grid { grid-template-columns: 1fr; }
+  .profile-readonly-grid { grid-template-columns: 1fr; }
   .system-storage-summary { grid-template-columns: 96px minmax(0, 1fr); gap: 16px; }
   .system-storage-metrics { grid-column: 1 / -1; grid-template-columns: 1fr; }
   .system-storage-metric--wide { grid-column: auto; }

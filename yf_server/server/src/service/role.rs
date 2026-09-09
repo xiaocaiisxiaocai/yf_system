@@ -1,8 +1,8 @@
 //! 角色与权限点
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -38,6 +38,21 @@ fn validate_details(req: &RoleUpsert) -> ApiResult<()> {
         .is_some_and(|v| v.chars().count() > 255)
     {
         return Err(AppError::BadRequest("角色说明不能超过 255 个字符".into()));
+    }
+    Ok(())
+}
+
+async fn ensure_name_unique(
+    db: &impl ConnectionTrait,
+    name: &str,
+    exclude_id: Option<u64>,
+) -> ApiResult<()> {
+    let mut query = roles::Entity::find().filter(roles::Column::Name.eq(name));
+    if let Some(id) = exclude_id {
+        query = query.filter(roles::Column::Id.ne(id));
+    }
+    if query.one(db).await?.is_some() {
+        return Err(AppError::Conflict("角色名称已存在".into()));
     }
     Ok(())
 }
@@ -100,10 +115,12 @@ pub async fn create(
     req: &RoleUpsert,
 ) -> ApiResult<Value> {
     validate_details(req)?;
+    let name = req.name.trim();
     let now = Utc::now();
     let txn = db.begin().await?;
+    ensure_name_unique(&txn, name, None).await?;
     let model = roles::ActiveModel {
-        name: Set(req.name.trim().to_string()),
+        name: Set(name.to_string()),
         description: Set(req.description.clone()),
         is_built_in: Set(false),
         status: Set(CommonStatus::Active),
@@ -112,7 +129,8 @@ pub async fn create(
         ..Default::default()
     }
     .insert(&txn)
-    .await?;
+    .await
+    .map_err(|error| crate::error::unique_conflict(error, "角色名称已存在"))?;
     audit::insert(
         &txn,
         Some(me.id),
@@ -148,11 +166,16 @@ pub async fn update(
     let old_name = role.name.clone();
     let old_description = role.description.clone();
     let txn = db.begin().await?;
+    let name = req.name.trim();
+    ensure_name_unique(&txn, name, Some(id)).await?;
     let mut am: roles::ActiveModel = role.into();
-    am.name = Set(req.name.trim().to_string());
+    am.name = Set(name.to_string());
     am.description = Set(req.description.clone());
     am.updated_at = Set(Utc::now());
-    let model = am.update(&txn).await?;
+    let model = am
+        .update(&txn)
+        .await
+        .map_err(|error| crate::error::unique_conflict(error, "角色名称已存在"))?;
     audit::insert(
         &txn,
         Some(me.id),

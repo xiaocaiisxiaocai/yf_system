@@ -28,7 +28,10 @@ pub fn router(state: AppState) -> Router {
     // ---- 受保护路由（仅登录，数据范围由 service 层强制）----
     let authed = Router::new()
         .route("/auth/logout", post(auth::logout))
-        .route("/auth/profile", get(auth::profile))
+        .route(
+            "/auth/profile",
+            get(auth::profile).put(auth::update_profile),
+        )
         .route("/auth/password", put(auth::change_password))
         .route("/dashboard/summary", get(project::dashboard_summary))
         // 部门树供用户表单使用，读取不卡权限点
@@ -198,6 +201,7 @@ pub fn router(state: AppState) -> Router {
             get(system::get_configs).put(system::update_configs),
         )
         .route("/system/storage", get(system::storage_status))
+        .route("/system/mail-status", get(system::mail_status))
         .layer(from_fn_with_state(
             (state.clone(), "config:manage"),
             perm::guard,

@@ -1,8 +1,8 @@
 //! 项目管理（关联单一供应商，数据范围见 scope）
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -153,6 +153,21 @@ fn validate_description(description: Option<&str>) -> ApiResult<()> {
     Ok(())
 }
 
+async fn ensure_name_unique(
+    db: &impl ConnectionTrait,
+    name: &str,
+    exclude_id: Option<u64>,
+) -> ApiResult<()> {
+    let mut query = projects::Entity::find().filter(projects::Column::Name.eq(name));
+    if let Some(id) = exclude_id {
+        query = query.filter(projects::Column::Id.ne(id));
+    }
+    if query.one(db).await?.is_some() {
+        return Err(AppError::Conflict("项目名称已存在".into()));
+    }
+    Ok(())
+}
+
 pub async fn create(
     db: &DatabaseConnection,
     me: &CurrentUser,
@@ -179,6 +194,7 @@ pub async fn create(
     let now = Utc::now();
     // 项目与创建人成员记录同事务，避免半成功状态
     let txn = db.begin().await?;
+    ensure_name_unique(&txn, name, None).await?;
     let model = projects::ActiveModel {
         name: Set(name.to_string()),
         description: Set(req.description.clone()),
@@ -190,7 +206,8 @@ pub async fn create(
         ..Default::default()
     }
     .insert(&txn)
-    .await?;
+    .await
+    .map_err(|error| crate::error::unique_conflict(error, "项目名称已存在"))?;
     // 创建人自动加入项目成员，保证数据范围一致
     project_members::ActiveModel {
         project_id: Set(model.id),
@@ -248,12 +265,16 @@ pub async fn update(
             "项目创建后不可更换供应商；请新建项目以避免历史数据越权".into(),
         ));
     }
+    ensure_name_unique(&txn, name, Some(id)).await?;
     let mut am: projects::ActiveModel = p.into();
     am.name = Set(name.to_string());
     am.description = Set(req.description.clone());
     am.supplier_id = Set(req.supplier_id);
     am.updated_at = Set(Utc::now());
-    let model = am.update(&txn).await?;
+    let model = am
+        .update(&txn)
+        .await
+        .map_err(|error| crate::error::unique_conflict(error, "项目名称已存在"))?;
     audit::insert(
         &txn,
         Some(me.id),

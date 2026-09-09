@@ -5,6 +5,7 @@ export interface UserBrief {
   id: number
   employeeNo: string
   realName: string
+  email: string
   userType: 'INTERNAL' | 'SUPPLIER'
   supplierId?: number | null
   isSystemAdmin?: boolean
@@ -22,6 +23,7 @@ interface AuthState {
   generation: number
   setToken: (t: string) => void
   setBooted: (v: boolean) => void
+  setUser: (user: UserBrief) => void
   setLogin: (payload: {
     accessToken: string
     user: UserBrief
@@ -46,6 +48,7 @@ export const useAuth = create<AuthState>()(
       generation: 0,
       setToken: (t) => set({ token: t }),
       setBooted: (v) => set({ booted: v }),
+      setUser: (user) => set({ user }),
       setLogin: (p, replaceSession = true) =>
         set({
           token: p.accessToken,
