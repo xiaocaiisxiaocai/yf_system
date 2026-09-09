@@ -177,8 +177,8 @@ function ProjectDetailContent({ id }: { id?: string }) {
     )
 
   return (
-    <div>
-      <Card className="page-card" style={{ marginBottom: 16 }}>
+    <div className={`project-detail-page${tab === 'activity' ? ' project-detail-page--activity' : ''}`}>
+      <Card className="page-card project-detail-summary-card" style={{ marginBottom: 16 }}>
         <div className="detail-heading">
           <div>
             <h1>{project.name}</h1>
@@ -219,7 +219,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
         />
       </Card>
 
-      <Card className="page-card">
+      <Card className={`page-card project-detail-tabs-card${tab === 'activity' ? ' project-detail-tabs-card--activity' : ''}`}>
         {targetId && (tab === 'rounds' || tab === 'files' || tab === 'messages') && (
           <div className="project-target-notice">
             <Typography.Text type="secondary">已定位到目标内容</Typography.Text>

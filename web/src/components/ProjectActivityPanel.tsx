@@ -119,6 +119,20 @@ function displaySummary(summary: string | null): string {
   return characters.length > 160 ? `${characters.slice(0, 160).join('')}…` : summary
 }
 
+function displayTitle(item: ProjectActivity): string {
+  if (item.type !== 'ROUND' || item.roundNo === null) return item.title || item.action || '项目动态'
+  const verb = item.action === 'CONFIRM'
+    ? '通过'
+    : item.action === 'REJECT'
+      ? '驳回'
+      : item.action === 'CANCEL'
+        ? '撤销'
+        : item.action === 'CREATE'
+          ? '创建'
+          : null
+  return verb ? `${verb}第${item.roundNo}轮` : item.title || item.action || '项目动态'
+}
+
 export default function ProjectActivityPanel({ projectId, active = true, onNavigate }: Props) {
   const [filter, setFilter] = useState<ActivityType | undefined>()
   const [list, setList] = useState<ProjectActivity[]>([])
@@ -266,53 +280,56 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
         </div>
       </div>
 
-      {loadError ? (
-        <div className="project-activity-error">
-          <Typography.Text type="error">项目动态加载失败</Typography.Text>
-          <Button size="small" onClick={() => load(false)}>重试</Button>
-        </div>
-      ) : (
-        <Spin loading={loading && list.length === 0}>
-          {list.length === 0 && !loading ? (
-            <Empty description="暂无项目动态" />
-          ) : (
-            <>
-              <Timeline className="project-activity-timeline">
-                {list.map((item) => (
-                  <Timeline.Item key={item.id} label={fmtTime(item.occurredAt)}>
-                    <div className="project-activity-item" data-activity-id={item.id} data-activity-type={item.type}>
-                      <div className="project-activity-meta">
-                        <Tag size="small" color={item.type === 'ROUND' ? 'arcoblue' : item.type === 'FILE' ? 'green' : item.type === 'MESSAGE' ? 'purple' : 'gray'}>
-                          {ACTIVITY_TYPE_LABEL[item.type]}
-                        </Tag>
-                        <Typography.Text className="project-activity-actor">{item.actorName}</Typography.Text>
-                      </div>
-                      <div className="project-activity-title">{item.title || item.action || '项目动态'}</div>
-                      {!(item.type === 'PROJECT' && !item.summary) && (
-                        <div className="project-activity-target">
-                          <span className="project-activity-target-label">对象：</span>
-                          {renderTarget(item)}
+      <div className="project-activity-feed">
+        {loadError ? (
+          <div className="project-activity-error">
+            <Typography.Text type="error">项目动态加载失败</Typography.Text>
+            <Button size="small" onClick={() => load(false)}>重试</Button>
+          </div>
+        ) : (
+          <Spin loading={loading && list.length === 0}>
+            {list.length === 0 && !loading ? (
+              <Empty description="暂无项目动态" />
+            ) : (
+              <>
+                <Timeline className="project-activity-timeline">
+                  {list.map((item) => (
+                    <Timeline.Item key={item.id}>
+                      <div className="project-activity-item" data-activity-id={item.id} data-activity-type={item.type}>
+                        <div className="project-activity-meta">
+                          <Tag size="small" color={item.type === 'ROUND' ? 'arcoblue' : item.type === 'FILE' ? 'green' : item.type === 'MESSAGE' ? 'purple' : 'gray'}>
+                            {ACTIVITY_TYPE_LABEL[item.type]}
+                          </Tag>
+                          <Typography.Text className="project-activity-actor">{item.actorName}</Typography.Text>
+                          <time className="project-activity-time" dateTime={item.occurredAt}>{fmtTime(item.occurredAt)}</time>
                         </div>
-                      )}
-                    </div>
-                  </Timeline.Item>
-                ))}
-              </Timeline>
-              {appendError && (
-                <div className="project-activity-error project-activity-append-error">
-                  <Typography.Text type="error">加载失败</Typography.Text>
-                  <Button size="small" onClick={() => load(true)}>重试</Button>
-                </div>
-              )}
-              {nextCursor && !appendError && (
-                <div className="project-activity-more">
-                  <Button onClick={() => load(true)} loading={appending}>加载更多</Button>
-                </div>
-              )}
-            </>
-          )}
-        </Spin>
-      )}
+                        <div className="project-activity-title">{displayTitle(item)}</div>
+                        {!(item.type === 'PROJECT' && !item.summary) && (
+                          <div className="project-activity-target">
+                            <span className="project-activity-target-label">对象：</span>
+                            {renderTarget(item)}
+                          </div>
+                        )}
+                      </div>
+                    </Timeline.Item>
+                  ))}
+                </Timeline>
+                {appendError && (
+                  <div className="project-activity-error project-activity-append-error">
+                    <Typography.Text type="error">加载失败</Typography.Text>
+                    <Button size="small" onClick={() => load(true)}>重试</Button>
+                  </div>
+                )}
+                {nextCursor && !appendError && (
+                  <div className="project-activity-more">
+                    <Button onClick={() => load(true)} loading={appending}>加载更多</Button>
+                  </div>
+                )}
+              </>
+            )}
+          </Spin>
+        )}
+      </div>
     </div>
   )
 }
