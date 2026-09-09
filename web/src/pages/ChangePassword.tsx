@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import { Button, Card, Form, Input, Message, Typography } from '@arco-design/web-react'
+import { Button, Form, Input, Message } from '@arco-design/web-react'
+import { IconLock } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import http, { withAuthLock } from '../api/client'
 import { useAuth } from '../store/auth'
+import AuthShell from '../components/AuthShell'
 
 export default function ChangePassword() {
   const [form] = Form.useForm()
@@ -43,43 +45,33 @@ export default function ChangePassword() {
   }
 
   return (
-    <div className="login-bg">
-      <Card className="change-password-card" style={{ width: 420 }}>
-        <div className="login-logo login-logo--compact">
-          <img src="/saa-logo.svg" alt="SAA" />
-        </div>
-        <div className="change-password-brand">供应商协作平台</div>
-        <Typography.Title heading={5} style={{ marginTop: 0 }}>
-          修改密码
-        </Typography.Title>
+    <AuthShell>
         {mustChangePassword && (
-          <Typography.Text type="warning">首次登录需修改初始密码后才能继续使用系统。</Typography.Text>
+          <div className="auth-notice" role="status">首次登录，请先修改初始密码</div>
         )}
-        <Form form={form} layout="vertical" onSubmit={submit} style={{ marginTop: 16 }}>
-          <Form.Item label="原密码" field="oldPassword" rules={[{ required: true, message: '请输入原密码' }]}>
-            <Input.Password placeholder="原密码" />
+        <Form className="auth-form" form={form} layout="vertical" onSubmit={submit}>
+          <Form.Item field="oldPassword" rules={[{ required: true, message: '请输入原密码' }]}>
+            <Input.Password size="large" prefix={<IconLock />} placeholder="请输入原密码" aria-label="原密码" autoComplete="current-password" />
           </Form.Item>
           <Form.Item
-            label="新密码"
             field="newPassword"
             rules={[
               { required: true, message: '请输入新密码' },
               { match: /^.{6,20}$/, message: '密码需 6-20 位' },
             ]}
           >
-            <Input.Password placeholder="6-20 位" />
+            <Input.Password size="large" prefix={<IconLock />} placeholder="请输入新密码（6–20 位）" aria-label="新密码" autoComplete="new-password" />
           </Form.Item>
-          <Form.Item label="确认新密码" field="confirm" rules={[{ required: true, message: '请再次输入新密码' }]}>
-            <Input.Password placeholder="再次输入新密码" />
+          <Form.Item field="confirm" rules={[{ required: true, message: '请再次输入新密码' }]}>
+            <Input.Password size="large" prefix={<IconLock />} placeholder="请再次输入新密码" aria-label="确认新密码" autoComplete="new-password" />
           </Form.Item>
-          <Button type="primary" long htmlType="submit" loading={loading}>
-            确认修改
-          </Button>
-          <Button style={{ marginTop: 8 }} long onClick={mustChangePassword ? exitLogin : () => nav(-1)}>
-            {mustChangePassword ? '退出登录' : '返回'}
-          </Button>
+          <div className="auth-actions">
+            <Button long onClick={mustChangePassword ? exitLogin : () => nav(-1)}>
+              {mustChangePassword ? '退出登录' : '返回'}
+            </Button>
+            <Button type="primary" long htmlType="submit" loading={loading}>确认修改</Button>
+          </div>
         </Form>
-      </Card>
-    </div>
+    </AuthShell>
   )
 }

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Button, Form, Input, Message } from '@arco-design/web-react'
-import { IconSafe, IconUser } from '@arco-design/web-react/icon'
+import { IconLock, IconSafe, IconUser } from '@arco-design/web-react/icon'
 import { useLocation, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { useAuth } from '../store/auth'
 import { withAuthLock } from '../api/client'
+import AuthShell from '../components/AuthShell'
 
 interface Captcha {
   captchaId: string
@@ -19,9 +20,14 @@ export default function Login() {
   const nav = useNavigate()
   const loc = useLocation() as { state?: { from?: string } }
 
-  const loadCaptcha = async () => {
-    const r = await axios.get('/api/v1/auth/captcha')
-    setCaptcha(r.data)
+  const loadCaptcha = async (silent = false) => {
+    try {
+      const r = await axios.get('/api/v1/auth/captcha')
+      setCaptcha(r.data)
+      form.setFieldValue('captchaCode', '')
+    } catch {
+      if (!silent) Message.error('验证码刷新失败')
+    }
   }
 
   const submit = async (v: { employeeNo: string; password: string; captchaCode?: string }) => {
@@ -49,11 +55,11 @@ export default function Login() {
         const msg = e.response?.data?.message
         if (status === 428) {
           // 需要验证码：拉取并展示
-          await loadCaptcha()
+          await loadCaptcha(true)
           Message.info(msg || '请输入图形验证码')
         } else {
           Message.error(msg || '登录失败')
-          if (captcha) loadCaptcha()
+          if (captcha) void loadCaptcha(true)
         }
       } else {
         Message.error('网络错误')
@@ -73,18 +79,13 @@ export default function Login() {
   }, [])
 
   return (
-    <div className="login-bg">
-      <div className="login-card">
-        <div className="login-logo">
-          <img src="/saa-logo.svg" alt="SAA" />
-        </div>
-        <h1 className="login-title">供应商协作平台</h1>
-        <Form form={form} layout="vertical" onSubmit={submit} autoComplete="off">
+    <AuthShell>
+        <Form className="auth-form" form={form} layout="vertical" onSubmit={submit} autoComplete="on">
           <Form.Item field="employeeNo" rules={[{ required: true, message: '请输入工号' }]}>
-            <Input size="large" prefix={<IconUser />} placeholder="工号" />
+            <Input size="large" prefix={<IconUser />} placeholder="请输入工号" aria-label="工号" autoComplete="username" />
           </Form.Item>
           <Form.Item field="password" rules={[{ required: true, message: '请输入密码' }]}>
-            <Input.Password size="large" placeholder="密码" onPressEnter={() => form.submit()} />
+            <Input.Password size="large" prefix={<IconLock />} placeholder="请输入密码" aria-label="密码" autoComplete="current-password" onPressEnter={() => form.submit()} />
           </Form.Item>
           {captcha && (
             <Form.Item field="captchaCode" rules={[{ required: true, message: '请输入验证码' }]}>
@@ -92,23 +93,19 @@ export default function Login() {
                 size="large"
                 prefix={<IconSafe />}
                 placeholder="验证码"
+                aria-label="验证码"
                 suffix={
-                  <img
-                    src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(captcha.svg)}`}
-                    alt="验证码"
-                    title="点击刷新"
-                    style={{ cursor: 'pointer', height: 32, display: 'inline-block' }}
-                    onClick={loadCaptcha}
-                  />
+                  <button className="captcha-refresh" type="button" aria-label="刷新验证码" title="点击刷新" onClick={() => void loadCaptcha()}>
+                    <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(captcha.svg)}`} alt="验证码" />
+                  </button>
                 }
               />
             </Form.Item>
           )}
           <Button type="primary" size="large" long htmlType="submit" loading={loading}>
-            登 录
+            登录
           </Button>
         </Form>
-      </div>
-    </div>
+    </AuthShell>
   )
 }

@@ -34,6 +34,8 @@ export default function RoleList() {
   const [page, setPage] = useState(1)
   const [perms, setPerms] = useState<Perm[]>([])
   const [editOpen, setEditOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [savingPerms, setSavingPerms] = useState(false)
   const [editing, setEditing] = useState<Role | null>(null)
   const [permTarget, setPermTarget] = useState<Role | null>(null)
   // 菜单与操作独立保存，避免修改其他节点时丢失单独授予的菜单。
@@ -93,25 +95,37 @@ export default function RoleList() {
   }, [perms])
 
   const submit = async () => {
+    if (saving) return
     const v = await form.validate().catch(() => null)
     if (!v) return
-    if (editing) {
-      await http.put(`/admin/roles/${editing.id}`, v)
-      Message.success('角色已更新')
-    } else {
-      await http.post('/admin/roles', v)
-      Message.success('角色已创建')
+    setSaving(true)
+    try {
+      if (editing) {
+        await http.put(`/admin/roles/${editing.id}`, v)
+        Message.success('角色已更新')
+      } else {
+        await http.post('/admin/roles', v)
+        Message.success('角色已创建')
+      }
+      setEditOpen(false)
+      load()
+    } finally {
+      setSaving(false)
     }
-    setEditOpen(false)
-    load()
   }
 
   const savePerms = async () => {
+    if (savingPerms) return
     const ids = Array.from(new Set(checked)).map(Number)
-    await http.put(`/admin/roles/${permTarget!.id}/permissions`, { permissionIds: ids })
-    Message.success('权限已保存')
-    setPermTarget(null)
-    load()
+    setSavingPerms(true)
+    try {
+      await http.put(`/admin/roles/${permTarget!.id}/permissions`, { permissionIds: ids })
+      Message.success('权限已保存')
+      setPermTarget(null)
+      load()
+    } finally {
+      setSavingPerms(false)
+    }
   }
 
   const toggle = async (r: Role) => {
@@ -257,9 +271,14 @@ export default function RoleList() {
         className="form-dialog"
         title={editing ? '编辑角色' : '新增角色'}
         visible={editOpen}
+        confirmLoading={saving}
+        closable={!saving}
+        maskClosable={!saving}
+        escToExit={!saving}
+        cancelButtonProps={{ disabled: saving }}
         okText={editing ? '保存角色' : '创建角色'}
         onOk={submit}
-        onCancel={() => setEditOpen(false)}
+        onCancel={() => { if (!saving) setEditOpen(false) }}
       >
         <Form form={form} layout="vertical">
           <Form.Item label="角色名称" field="name" rules={[{ required: true, message: '请输入名称' }]}>
@@ -275,11 +294,13 @@ export default function RoleList() {
         width={440}
         title={permTarget ? `分配权限 · ${permTarget.name}` : ''}
         visible={!!permTarget}
-        onCancel={() => setPermTarget(null)}
+        onCancel={() => { if (!savingPerms) setPermTarget(null) }}
+        closable={!savingPerms}
+        maskClosable={!savingPerms}
         footer={
           <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
-            <Button onClick={() => setPermTarget(null)}>取消</Button>
-            <Button type="primary" onClick={savePerms}>
+            <Button disabled={savingPerms} onClick={() => setPermTarget(null)}>取消</Button>
+            <Button type="primary" loading={savingPerms} onClick={savePerms}>
               保存权限
             </Button>
           </Space>

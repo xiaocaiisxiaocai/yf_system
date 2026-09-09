@@ -91,6 +91,7 @@ export default function DeptManage() {
   const [reloadKey, setReloadKey] = useState(0)
   const [selected, setSelected] = useState<DeptNode | null>(null)
   const [editOpen, setEditOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<DeptNode | null>(null)
   const [parentForNew, setParentForNew] = useState<DeptNode | null>(null)
   const [form] = Form.useForm()
@@ -144,18 +145,24 @@ export default function DeptManage() {
   }
 
   const submit = async () => {
+    if (saving) return
     const v = await form.validate().catch(() => null)
     if (!v) return
-    if (editing) {
-      await http.put(`/admin/departments/${editing.id}`, { name: v.name, parentId: editing.parentId ?? null, sortNo: v.sortNo ?? 0 })
-      Message.success(`${ORG_KIND[nodeKind(editing)].label}已更新`)
-    } else {
-      await http.post('/admin/departments', { name: v.name, parentId: parentForNew?.id ?? null, sortNo: v.sortNo ?? 0 })
-      Message.success(`${ORG_KIND[creatingKind].label}已创建`)
+    setSaving(true)
+    try {
+      if (editing) {
+        await http.put(`/admin/departments/${editing.id}`, { name: v.name, parentId: editing.parentId ?? null, sortNo: v.sortNo ?? 0 })
+        Message.success(`${ORG_KIND[nodeKind(editing)].label}已更新`)
+      } else {
+        await http.post('/admin/departments', { name: v.name, parentId: parentForNew?.id ?? null, sortNo: v.sortNo ?? 0 })
+        Message.success(`${ORG_KIND[creatingKind].label}已创建`)
+      }
+      setEditOpen(false)
+      form.resetFields()
+      load()
+    } finally {
+      setSaving(false)
     }
-    setEditOpen(false)
-    form.resetFields()
-    load()
   }
 
   const toggle = async (d: DeptNode) => {
@@ -290,11 +297,18 @@ export default function DeptManage() {
         title={editing ? `编辑${modalKindMeta.label}` : `新增${modalKindMeta.label}`}
         visible={editOpen}
         unmountOnExit
+        confirmLoading={saving}
+        closable={!saving}
+        maskClosable={!saving}
+        escToExit={!saving}
+        cancelButtonProps={{ disabled: saving }}
         okText={editing ? `保存${modalKindMeta.label}` : `创建${modalKindMeta.label}`}
         onOk={submit}
         onCancel={() => {
-          setEditOpen(false)
-          form.resetFields()
+          if (!saving) {
+            setEditOpen(false)
+            form.resetFields()
+          }
         }}
       >
         <Form form={form} layout="vertical">

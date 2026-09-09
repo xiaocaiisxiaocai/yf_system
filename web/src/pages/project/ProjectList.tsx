@@ -25,6 +25,7 @@ export default function ProjectList() {
   const [pageSize, setPageSize] = useState(10)
   const [loadError, setLoadError] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<Project | null>(null)
   const [suppliers, setSuppliers] = useState<SupplierOpt[]>([])
   const [form] = Form.useForm()
@@ -82,17 +83,23 @@ export default function ProjectList() {
   }
 
   const submit = async () => {
+    if (saving) return
     const v = await form.validate().catch(() => null)
     if (!v) return
-    if (editing) {
-      await http.put(`/projects/${editing.id}`, v)
-      Message.success('项目已更新')
-    } else {
-      await http.post('/projects', v)
-      Message.success('项目已创建')
+    setSaving(true)
+    try {
+      if (editing) {
+        await http.put(`/projects/${editing.id}`, v)
+        Message.success('项目已更新')
+      } else {
+        await http.post('/projects', v)
+        Message.success('项目已创建')
+      }
+      setModalOpen(false)
+      load()
+    } finally {
+      setSaving(false)
     }
-    setModalOpen(false)
-    load()
   }
 
   const changeStatus = async (p: Project, next: string) => {
@@ -276,7 +283,12 @@ export default function ProjectList() {
         title={editing ? '编辑项目' : '新建项目'}
         visible={modalOpen}
         onOk={submit}
-        onCancel={() => setModalOpen(false)}
+        onCancel={() => { if (!saving) setModalOpen(false) }}
+        confirmLoading={saving}
+        closable={!saving}
+        maskClosable={!saving}
+        escToExit={!saving}
+        cancelButtonProps={{ disabled: saving }}
         okText={editing ? '保存修改' : '创建项目'}
         cancelText="取消"
         autoFocus={false}

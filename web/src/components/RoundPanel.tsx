@@ -21,7 +21,9 @@ export default function RoundPanel({ projectId, projectStatus, onChanged, target
   const [loadError, setLoadError] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const [createOpen, setCreateOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
   const [rejectTarget, setRejectTarget] = useState<Round | null>(null)
+  const [rejecting, setRejecting] = useState(false)
   const [history, setHistory] = useState<{ round: Round; logs: RoundLog[] } | null>(null)
   const historyRequestId = useRef(0)
   const [form] = Form.useForm()
@@ -69,14 +71,20 @@ export default function RoundPanel({ projectId, projectStatus, onChanged, target
   }, [projectId])
 
   const createRound = async () => {
+    if (creating) return
     const v = await form.validate().catch(() => null)
     if (!v) return
-    await http.post(`/projects/${projectId}/rounds`, v)
-    Message.success('轮次已创建')
-    setCreateOpen(false)
-    form.resetFields()
-    load()
-    onChanged()
+    setCreating(true)
+    try {
+      await http.post(`/projects/${projectId}/rounds`, v)
+      Message.success('轮次已创建')
+      setCreateOpen(false)
+      form.resetFields()
+      load()
+      onChanged()
+    } finally {
+      setCreating(false)
+    }
   }
 
   const confirm = async (r: Round) => {
@@ -87,14 +95,20 @@ export default function RoundPanel({ projectId, projectStatus, onChanged, target
   }
 
   const reject = async () => {
+    if (rejecting) return
     const v = await rejectForm.validate().catch(() => null)
     if (!v) return
-    await http.post(`/rounds/${rejectTarget!.id}/reject`, { reason: v.reason })
-    Message.success('已驳回')
-    setRejectTarget(null)
-    rejectForm.resetFields()
-    load()
-    onChanged()
+    setRejecting(true)
+    try {
+      await http.post(`/rounds/${rejectTarget!.id}/reject`, { reason: v.reason })
+      Message.success('已驳回')
+      setRejectTarget(null)
+      rejectForm.resetFields()
+      load()
+      onChanged()
+    } finally {
+      setRejecting(false)
+    }
   }
 
   const cancel = async (r: Round) => {
@@ -243,8 +257,13 @@ export default function RoundPanel({ projectId, projectStatus, onChanged, target
         style={{ width: 640 }}
         title="发起新一轮"
         visible={createOpen}
+        confirmLoading={creating}
+        closable={!creating}
+        maskClosable={!creating}
+        escToExit={!creating}
+        cancelButtonProps={{ disabled: creating }}
         onOk={createRound}
-        onCancel={() => setCreateOpen(false)}
+        onCancel={() => { if (!creating) setCreateOpen(false) }}
         okText="创建轮次"
         cancelText="取消"
       >
@@ -268,8 +287,13 @@ export default function RoundPanel({ projectId, projectStatus, onChanged, target
         className="form-dialog"
         title={`驳回第 ${rejectTarget?.roundNo ?? ''} 轮`}
         visible={!!rejectTarget}
+        confirmLoading={rejecting}
+        closable={!rejecting}
+        maskClosable={!rejecting}
+        escToExit={!rejecting}
+        cancelButtonProps={{ disabled: rejecting }}
         onOk={reject}
-        onCancel={() => setRejectTarget(null)}
+        onCancel={() => { if (!rejecting) setRejectTarget(null) }}
         okText="确认驳回"
         cancelText="取消"
         okButtonProps={{ status: 'danger' }}

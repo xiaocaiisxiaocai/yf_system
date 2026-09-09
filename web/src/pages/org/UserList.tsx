@@ -62,6 +62,8 @@ export default function UserList() {
   const [pageSize, setPageSize] = useState(10)
   const [loadError, setLoadError] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [resettingPassword, setResettingPassword] = useState(false)
   const [editing, setEditing] = useState<UserRow | null>(null)
   const [resetTarget, setResetTarget] = useState<UserRow | null>(null)
   const [depts, setDepts] = useState<DeptNode[]>([])
@@ -106,6 +108,7 @@ export default function UserList() {
   }, [])
 
   const submit = async () => {
+    if (saving) return
     const v = await form.validate().catch(() => null)
     if (!v) return
     const { roleId, ...values } = v
@@ -114,21 +117,26 @@ export default function UserList() {
       departmentId: v.departmentId ? Number(v.departmentId) : null,
       roleId: Number(roleId),
     }
-    if (editing) {
-      // 资料与角色同一接口事务提交，避免两次 PUT 的半失败
-      await http.put(`/admin/users/${editing.id}`, {
-        realName: payload.realName,
-        email: payload.email,
-        departmentId: payload.departmentId,
-        roleId: payload.roleId,
-      })
-      Message.success('用户已更新')
-    } else {
-      await http.post('/admin/users', payload)
-      Message.success('用户已创建（首次登录需改密）')
+    setSaving(true)
+    try {
+      if (editing) {
+        // 资料与角色同一接口事务提交，避免两次 PUT 的半失败
+        await http.put(`/admin/users/${editing.id}`, {
+          realName: payload.realName,
+          email: payload.email,
+          departmentId: payload.departmentId,
+          roleId: payload.roleId,
+        })
+        Message.success('用户已更新')
+      } else {
+        await http.post('/admin/users', payload)
+        Message.success('用户已创建（首次登录需改密）')
+      }
+      setEditOpen(false)
+      load()
+    } finally {
+      setSaving(false)
     }
-    setEditOpen(false)
-    load()
   }
 
   const toggle = async (u: UserRow) => {
@@ -143,12 +151,18 @@ export default function UserList() {
   }
 
   const resetPwd = async () => {
+    if (resettingPassword) return
     const v = await pwdForm.validate().catch(() => null)
     if (!v) return
-    await http.put(`/admin/users/${resetTarget!.id}/password`, { newPassword: v.newPassword })
-    Message.success('密码已重置，该用户所有登录态已失效')
-    setResetTarget(null)
-    pwdForm.resetFields()
+    setResettingPassword(true)
+    try {
+      await http.put(`/admin/users/${resetTarget!.id}/password`, { newPassword: v.newPassword })
+      Message.success('密码已重置，该用户所有登录态已失效')
+      setResetTarget(null)
+      pwdForm.resetFields()
+    } finally {
+      setResettingPassword(false)
+    }
   }
 
   return (
@@ -302,9 +316,14 @@ export default function UserList() {
         className="form-dialog"
         title={editing ? '编辑用户' : '新增用户'}
         visible={editOpen}
+        confirmLoading={saving}
+        closable={!saving}
+        maskClosable={!saving}
+        escToExit={!saving}
+        cancelButtonProps={{ disabled: saving }}
         okText={editing ? '保存用户' : '创建用户'}
         onOk={submit}
-        onCancel={() => setEditOpen(false)}
+        onCancel={() => { if (!saving) setEditOpen(false) }}
       >
         <Form form={form} layout="vertical">
           <div className="form-grid">
@@ -349,9 +368,14 @@ export default function UserList() {
         className="form-dialog"
         title={`重置密码 · ${resetTarget?.employeeNo ?? ''}`}
         visible={!!resetTarget}
+        confirmLoading={resettingPassword}
+        closable={!resettingPassword}
+        maskClosable={!resettingPassword}
+        escToExit={!resettingPassword}
+        cancelButtonProps={{ disabled: resettingPassword }}
         okText="确认重置"
         onOk={resetPwd}
-        onCancel={() => setResetTarget(null)}
+        onCancel={() => { if (!resettingPassword) setResetTarget(null) }}
       >
         <Form form={pwdForm} layout="vertical">
           <Form.Item

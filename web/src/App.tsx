@@ -20,16 +20,22 @@ const SysConfig = lazy(() => import('./pages/system/SysConfig'))
 
 function PageLoader() {
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 240 }}>
+    <div className="page-loader">
       <Spin size={36} tip="正在加载页面…" />
     </div>
   )
 }
 
+function Authenticated({ children }: { children: JSX.Element }) {
+  const token = useAuth((state) => state.token)
+  const loc = useLocation()
+  return token ? children : <Navigate to="/login" state={{ from: `${loc.pathname}${loc.search}` }} replace />
+}
+
 function Guard({ children, menu, permission }: { children: JSX.Element; menu?: string; permission?: string }) {
   const { token, mustChangePassword, menus, permissions } = useAuth()
   const loc = useLocation()
-  if (!token) return <Navigate to="/login" state={{ from: loc.pathname }} replace />
+  if (!token) return <Navigate to="/login" state={{ from: `${loc.pathname}${loc.search}` }} replace />
   if (mustChangePassword) return <Navigate to="/change-password" replace />
   if (menu && !menus.includes(menu)) return <Navigate to="/" replace />
   if (permission && !permissions.includes(permission)) {
@@ -76,7 +82,8 @@ export default function App() {
 
   if (!booted) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+      <div className="app-boot">
+        <img src="/saa-logo.svg" alt="SAA" />
         <Spin size={40} tip="正在恢复登录状态…" />
       </div>
     )
@@ -86,7 +93,7 @@ export default function App() {
     <Suspense fallback={<PageLoader />}>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/change-password" element={<ChangePassword />} />
+        <Route path="/change-password" element={<Authenticated><ChangePassword /></Authenticated>} />
         <Route
           path="/"
           element={

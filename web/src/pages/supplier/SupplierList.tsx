@@ -39,6 +39,7 @@ export default function SupplierList() {
   const [pageSize, setPageSize] = useState(10)
   const [loadError, setLoadError] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<Supplier | null>(null)
   const [accTarget, setAccTarget] = useState<Supplier | null>(null)
   const [form] = Form.useForm()
@@ -75,17 +76,23 @@ export default function SupplierList() {
   }, [fetchSuppliers, reloadKey])
 
   const submit = async () => {
+    if (saving) return
     const v = await form.validate().catch(() => null)
     if (!v) return
-    if (editing) {
-      await http.put(`/admin/suppliers/${editing.id}`, v)
-      Message.success('供应商已更新')
-    } else {
-      await http.post('/admin/suppliers', v)
-      Message.success('供应商已创建')
+    setSaving(true)
+    try {
+      if (editing) {
+        await http.put(`/admin/suppliers/${editing.id}`, v)
+        Message.success('供应商已更新')
+      } else {
+        await http.post('/admin/suppliers', v)
+        Message.success('供应商已创建')
+      }
+      setEditOpen(false)
+      load()
+    } finally {
+      setSaving(false)
     }
-    setEditOpen(false)
-    load()
   }
 
   const toggleStatus = async (s: Supplier) => {
@@ -231,9 +238,14 @@ export default function SupplierList() {
         className="form-dialog"
         title={editing ? '编辑供应商' : '新增供应商'}
         visible={editOpen}
+        confirmLoading={saving}
+        closable={!saving}
+        maskClosable={!saving}
+        escToExit={!saving}
+        cancelButtonProps={{ disabled: saving }}
         okText={editing ? '保存修改' : '创建供应商'}
         onOk={submit}
-        onCancel={() => setEditOpen(false)}
+        onCancel={() => { if (!saving) setEditOpen(false) }}
       >
         <Form form={form} layout="vertical">
           <Form.Item label="供应商名称" field="name" rules={[{ required: true, message: '请输入名称' }]}>
@@ -255,6 +267,8 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
   const [accountsState, setAccountsState] = useState<{ supplierId: number | null; list: Account[]; error?: boolean }>({ supplierId: null, list: [] })
   const [refreshing, setRefreshing] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [resettingPassword, setResettingPassword] = useState(false)
   const [editing, setEditing] = useState<Account | null>(null)
   const [resetTarget, setResetTarget] = useState<Account | null>(null)
   const [form] = Form.useForm()
@@ -294,21 +308,27 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
   const loading = refreshing || (!!supplier && accountsState.supplierId !== supplier.id)
 
   const submit = async () => {
+    if (saving) return
     if (!editing && supplier?.status === 'DISABLED') {
       Message.warning('供应商已禁用，不能新增账号')
       return
     }
     const v = await form.validate().catch(() => null)
     if (!v) return
-    if (editing) {
-      await http.put(`/admin/supplier-accounts/${editing.id}`, v)
-      Message.success('账号已更新')
-    } else {
-      await http.post(`/admin/suppliers/${supplier!.id}/accounts`, v)
-      Message.success('账号已创建（首次登录需改密）')
+    setSaving(true)
+    try {
+      if (editing) {
+        await http.put(`/admin/supplier-accounts/${editing.id}`, v)
+        Message.success('账号已更新')
+      } else {
+        await http.post(`/admin/suppliers/${supplier!.id}/accounts`, v)
+        Message.success('账号已创建（首次登录需改密）')
+      }
+      setEditOpen(false)
+      load()
+    } finally {
+      setSaving(false)
     }
-    setEditOpen(false)
-    load()
   }
 
   const toggle = async (a: Account) => {
@@ -323,12 +343,18 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
   }
 
   const resetPwd = async () => {
+    if (resettingPassword) return
     const v = await pwdForm.validate().catch(() => null)
     if (!v) return
-    await http.put(`/admin/supplier-accounts/${resetTarget!.id}/password`, { newPassword: v.newPassword })
-    Message.success('密码已重置，下次登录需修改')
-    setResetTarget(null)
-    pwdForm.resetFields()
+    setResettingPassword(true)
+    try {
+      await http.put(`/admin/supplier-accounts/${resetTarget!.id}/password`, { newPassword: v.newPassword })
+      Message.success('密码已重置，下次登录需修改')
+      setResetTarget(null)
+      pwdForm.resetFields()
+    } finally {
+      setResettingPassword(false)
+    }
   }
 
   return (
@@ -424,9 +450,14 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
         className="form-dialog"
         title={editing ? '编辑供应商账号' : '新增供应商账号'}
         visible={editOpen}
+        confirmLoading={saving}
+        closable={!saving}
+        maskClosable={!saving}
+        escToExit={!saving}
+        cancelButtonProps={{ disabled: saving }}
         okText={editing ? '保存账号' : '创建账号'}
         onOk={submit}
-        onCancel={() => setEditOpen(false)}
+        onCancel={() => { if (!saving) setEditOpen(false) }}
       >
         <Form form={form} layout="vertical">
           <div className="form-grid">
@@ -459,9 +490,14 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
         className="form-dialog"
         title={`重置密码 · ${resetTarget?.employeeNo ?? ''}`}
         visible={!!resetTarget}
+        confirmLoading={resettingPassword}
+        closable={!resettingPassword}
+        maskClosable={!resettingPassword}
+        escToExit={!resettingPassword}
+        cancelButtonProps={{ disabled: resettingPassword }}
         okText="确认重置"
         onOk={resetPwd}
-        onCancel={() => setResetTarget(null)}
+        onCancel={() => { if (!resettingPassword) setResetTarget(null) }}
       >
         <Form form={pwdForm} layout="vertical">
           <Form.Item

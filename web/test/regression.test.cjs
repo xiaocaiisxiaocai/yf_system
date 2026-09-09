@@ -57,11 +57,13 @@ test('SAA branding is wired to the application logo and favicon', () => {
   const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8')
   const layout = fs.readFileSync(path.join(root, 'src/layouts/AdminLayout.tsx'), 'utf8')
   const login = fs.readFileSync(path.join(root, 'src/pages/Login.tsx'), 'utf8')
+  const authShell = fs.readFileSync(path.join(root, 'src/components/AuthShell.tsx'), 'utf8')
 
   assert.match(index, /rel="icon"[^>]+href="\/saa-logo\.svg"/)
   assert.match(index, /rel="alternate icon"[^>]+href="\/favicon\.ico"/)
   assert.match(layout, /src="\/saa-logo\.svg"/)
-  assert.match(login, /src="\/saa-logo\.svg"/)
+  assert.match(login, /<AuthShell/)
+  assert.match(authShell, /src="\/saa-logo\.svg"/)
   assert.ok(fs.statSync(path.join(root, 'public/saa-logo.svg')).size > 0)
   assert.ok(fs.statSync(path.join(root, 'public/saa-logo.png')).size > 0)
   assert.ok(fs.statSync(path.join(root, 'public/favicon.ico')).size > 0)
@@ -186,7 +188,7 @@ test('organization structure uses division, department and section levels', asyn
     '@arco-design/web-react': arco,
     '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
     '../../api/client': { get: async () => ({ data: departments }) },
-    '../../store/auth': authModule({ id: 1, userType: 'INTERNAL', isSystemAdmin: true }, ['dept:manage']),
+    '../../store/auth': authModule({ id: 1, userType: 'INTERNAL', isSystemAdmin: true }, ['dept:manage', 'dept:delete']),
   }).default
   let renderer
   await act(async () => { renderer = create(React.createElement(Page)) })
@@ -211,13 +213,14 @@ test('organization structure uses division, department and section levels', asyn
   await act(async () => renderer.unmount())
 })
 
-test('hard delete actions require both system-admin identity and the page management permission', async () => {
+test('hard delete actions require their dedicated delete permission', async () => {
   const iconMock = new Proxy({}, { get: (_, name) => component(name) })
   const pageData = { list: [], total: 0, page: 1, pageSize: 10 }
   const cases = [
     {
       page: 'src/pages/project/ProjectList.tsx',
-      permission: 'project:update',
+      pagePermission: 'project:update',
+      deletePermission: 'project:delete',
       row: { id: 1, name: 'p', status: 'DRAFT' },
       mocks: (auth) => ({
         '@arco-design/web-react': arco,
@@ -230,7 +233,8 @@ test('hard delete actions require both system-admin identity and the page manage
     },
     {
       page: 'src/pages/supplier/SupplierList.tsx',
-      permission: 'supplier:manage',
+      pagePermission: 'supplier:manage',
+      deletePermission: 'supplier:delete',
       row: { id: 8, name: 's', status: 'ACTIVE' },
       mocks: (auth) => ({
         '@arco-design/web-react': arco,
@@ -242,7 +246,8 @@ test('hard delete actions require both system-admin identity and the page manage
     },
     {
       page: 'src/pages/org/UserList.tsx',
-      permission: 'user:manage',
+      pagePermission: 'user:manage',
+      deletePermission: 'user:delete',
       row: { id: 2, employeeNo: 'staff', status: 'ACTIVE' },
       mocks: (auth) => ({
         '@arco-design/web-react': arco,
@@ -254,7 +259,8 @@ test('hard delete actions require both system-admin identity and the page manage
     },
     {
       page: 'src/pages/rbac/RoleList.tsx',
-      permission: 'role:manage',
+      pagePermission: 'role:manage',
+      deletePermission: 'role:delete',
       row: { id: 9, name: '自定义', isBuiltIn: false, permissionIds: [], assignedUserCount: 0, status: 'ACTIVE' },
       mocks: (auth) => ({
         '@arco-design/web-react': arco,
@@ -267,9 +273,9 @@ test('hard delete actions require both system-admin identity and the page manage
   ]
   for (const item of cases) {
     for (const [label, user, permissions, expected] of [
-      ['ordinary manager', { id: 1, userType: 'INTERNAL', isSystemAdmin: false }, [item.permission], false],
-      ['admin without page permission', { id: 1, userType: 'INTERNAL', isSystemAdmin: true }, [], false],
-      ['system admin manager', { id: 1, userType: 'INTERNAL', isSystemAdmin: true }, [item.permission], true],
+      ['manager without delete permission', { id: 1, userType: 'INTERNAL', isSystemAdmin: false }, [item.pagePermission], false],
+      ['system admin without delete permission', { id: 1, userType: 'INTERNAL', isSystemAdmin: true }, [item.pagePermission], false],
+      ['delegated delete permission', { id: 1, userType: 'INTERNAL', isSystemAdmin: false }, [item.pagePermission, item.deletePermission], true],
     ]) {
       const Page = loadTs(item.page, item.mocks(authModule(user, permissions))).default
       let renderer
@@ -282,7 +288,7 @@ test('hard delete actions require both system-admin identity and the page manage
 
   const Project = loadTs('src/pages/project/ProjectList.tsx', cases[0].mocks(authModule(
     { id: 1, userType: 'INTERNAL', isSystemAdmin: true },
-    ['project:update'],
+    ['project:update', 'project:delete'],
   ))).default
   let renderer
   await act(async () => { renderer = create(React.createElement(Project)) })
@@ -291,14 +297,14 @@ test('hard delete actions require both system-admin identity and the page manage
   await act(async () => renderer.unmount())
 })
 
-test('department hard delete is hidden from ordinary department managers', async () => {
+test('department hard delete requires the dedicated delete permission', async () => {
   const departments = [{ id: 3, name: '开发课', kind: 'SECTION', parentId: 2, sortNo: 1, status: 'ACTIVE' }]
-  for (const [isSystemAdmin, expected] of [[false, false], [true, true]]) {
+  for (const [permissions, expected] of [[['dept:manage'], false], [['dept:manage', 'dept:delete'], true]]) {
     const Page = loadTs('src/pages/org/DeptManage.tsx', {
       '@arco-design/web-react': arco,
       '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
       '../../api/client': { get: async () => ({ data: departments }) },
-      '../../store/auth': authModule({ id: 1, userType: 'INTERNAL', isSystemAdmin }, ['dept:manage']),
+      '../../store/auth': authModule({ id: 1, userType: 'INTERNAL', isSystemAdmin: false }, permissions),
     }).default
     let renderer
     await act(async () => { renderer = create(React.createElement(Page)) })
@@ -449,7 +455,7 @@ test('round history requests ignore late responses and closing invalidates them'
   await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', onChanged() {} })) })
   const historyButton = (round) => {
     const actions = renderer.root.findByType('Table').props.columns.at(-1).render(null, round)
-    return findElement(actions, (node) => node.props.title === '历史')
+    return findActionButton(actions, '历史')
   }
 
   let firstRequest
@@ -1305,7 +1311,7 @@ test('project activity waits for its tab, filters, refreshes and ignores late re
   assert.equal(renderer.root.findAll((node) => node.props.dangerouslySetInnerHTML !== undefined).length, 0)
   assert.ok(JSON.stringify(renderer.toJSON()).includes('<驳回原因>'), 'server text must remain text content')
   assert.ok(renderer.root.findAll((node) => node.props['data-activity-id'] === 2)[0])
-  assert.ok(renderer.root.findAll((node) => node.props.label === filtered.occurredAt).length > 0, 'each event must expose its occurrence time')
+  assert.ok(renderer.root.findAll((node) => node.props.dateTime === filtered.occurredAt).length > 0, 'each event must expose its occurrence time')
 
   await act(async () => {
     const refresh = renderer.root.findAllByType('Button').find((node) => node.props.children === '刷新')
@@ -1674,13 +1680,13 @@ test('audit time filtering preserves an explicitly selected midnight endpoint', 
   await act(async()=>renderer.unmount())
 })
 
-test('audit hard-delete controls require a system administrator with log access', async () => {
+test('audit hard-delete controls require the dedicated delete permission', async () => {
   const row = { id: 101, action: 'LOGIN', createdAt: '2026-09-09T00:00:00Z' }
   const cleanupAudit = { id: 102, action: 'AUDIT_LOG_DELETE', createdAt: '2026-09-09T00:00:01Z' }
   for (const [label, user, permissions, expected] of [
     ['ordinary log viewer', { id: 1, userType: 'INTERNAL', isSystemAdmin: false }, ['log:view'], false],
-    ['admin without log access', { id: 1, userType: 'INTERNAL', isSystemAdmin: true }, [], false],
-    ['system admin log viewer', { id: 1, userType: 'INTERNAL', isSystemAdmin: true }, ['log:view'], true],
+    ['system admin without delete permission', { id: 1, userType: 'INTERNAL', isSystemAdmin: true }, ['log:view'], false],
+    ['delegated delete permission', { id: 1, userType: 'INTERNAL', isSystemAdmin: false }, ['log:view', 'log:delete'], true],
   ]) {
     const Page = loadTs('src/pages/system/AuditLog.tsx', {
       '@arco-design/web-react': arco,
@@ -1737,7 +1743,7 @@ test('audit selection is cleared across filtering, paging and refresh, and repor
     '@arco-design/web-react': auditArco,
     '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
     '../../api/client': http,
-    '../../store/auth': authModule({ id: 1, userType: 'INTERNAL', isSystemAdmin: true }, ['log:view']),
+    '../../store/auth': authModule({ id: 1, userType: 'INTERNAL', isSystemAdmin: true }, ['log:view', 'log:delete']),
     '../../api/types': { fmtTime: String },
   }).default
   let renderer
