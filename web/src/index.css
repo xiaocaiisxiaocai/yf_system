@@ -545,7 +545,18 @@ html, body, #root {
 .dashboard-latest { border-radius: var(--app-radius); border-color: var(--app-border); }
 .dashboard-latest > .arco-card-header { height: auto; padding: 20px; }
 .dashboard-latest .section-heading { margin: 0; }
-.dashboard-latest .arco-list-item-meta-description { overflow-wrap: anywhere; }
+.dashboard-latest-limit { color: var(--app-text-muted); font-size: 12px; }
+.dashboard-message-item { cursor: pointer; transition: background-color 0.15s ease; }
+.dashboard-message-item:hover, .dashboard-message-item:focus-visible { background: #f7f9fc; outline: none; }
+.dashboard-message-item--unread { background: #f2f7ff; }
+.dashboard-message-item--unread:hover, .dashboard-message-item--unread:focus-visible { background: #eaf2ff; }
+.dashboard-message-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dashboard-message-title .arco-tag { max-width: min(360px, 45vw); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-message-unread { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #165dff; box-shadow: 0 0 0 3px #dbeafe; }
+.dashboard-message-sender { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-latest .arco-list-item-meta-description { display: -webkit-box; overflow: hidden; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.dashboard-message-extra { display: flex; align-items: center; gap: 12px; color: var(--app-text-muted); white-space: nowrap; }
+.dashboard-message-extra > svg { color: #98a2b3; }
 .system-storage-card { margin-bottom: 16px; }
 .system-storage-summary {
   display: grid;

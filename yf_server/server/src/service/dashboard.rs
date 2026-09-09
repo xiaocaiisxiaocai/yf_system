@@ -90,6 +90,21 @@ pub async fn summary(db: &DatabaseConnection, user: &CurrentUser) -> ApiResult<V
                 .into_iter()
                 .map(|u| (u.id, u.real_name))
                 .collect();
+        let recent_read_ids: std::collections::HashSet<u64> = if msgs.is_empty() {
+            std::collections::HashSet::new()
+        } else {
+            message_reads::Entity::find()
+                .filter(message_reads::Column::UserId.eq(user.id))
+                .filter(
+                    message_reads::Column::MessageId
+                        .is_in(msgs.iter().map(|m| m.id).collect::<Vec<_>>()),
+                )
+                .all(db)
+                .await?
+                .into_iter()
+                .map(|r| r.message_id)
+                .collect()
+        };
         msgs.iter()
             .map(|m| {
                 let project = visible.iter().find(|p| p.id == m.project_id);
@@ -99,6 +114,7 @@ pub async fn summary(db: &DatabaseConnection, user: &CurrentUser) -> ApiResult<V
                     "content": m.content.chars().take(60).collect::<String>(),
                     "senderName": sender_map.get(&m.sender_id),
                     "createdAt": m.created_at,
+                    "unread": m.sender_id != user.id && !recent_read_ids.contains(&m.id),
                 })
             })
             .collect()

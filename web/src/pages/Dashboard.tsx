@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Card, Grid, List, Spin, Statistic, Tag, Typography, Empty } from '@arco-design/web-react'
+import { IconRight } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import http from '../api/client'
 import { useAuth } from '../store/auth'
@@ -17,6 +18,7 @@ interface Summary {
     content: string
     senderName?: string
     createdAt: string
+    unread: boolean
   }[]
 }
 
@@ -89,6 +91,7 @@ export default function Dashboard() {
             </div>
           </div>
         }
+        extra={<span className="dashboard-latest-limit">近 5 条</span>}
       >
         {loading ? (
           <Spin loading style={{ width: '100%', minHeight: 80 }} />
@@ -103,17 +106,31 @@ export default function Dashboard() {
             render={(m) => (
               <List.Item
                 key={m.id}
-                style={{ cursor: 'pointer' }}
+                className={`dashboard-message-item${m.unread ? ' dashboard-message-item--unread' : ''}`}
+                role="link"
+                tabIndex={0}
                 onClick={() => nav(`/projects/${m.projectId}?tab=messages`)}
-                extra={<Typography.Text type="secondary">{fmtTime(m.createdAt)}</Typography.Text>}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    nav(`/projects/${m.projectId}?tab=messages`)
+                  }
+                }}
+                extra={(
+                  <div className="dashboard-message-extra">
+                    <Typography.Text type="secondary">{fmtTime(m.createdAt)}</Typography.Text>
+                    <IconRight />
+                  </div>
+                )}
               >
                 <List.Item.Meta
                   title={
-                    <span>
-                      <Tag color="arcoblue" style={{ marginRight: 8 }}>
+                    <span className="dashboard-message-title">
+                      {m.unread && <span className="dashboard-message-unread" aria-label="未读" title="未读" />}
+                      <Tag color="arcoblue">
                         {m.projectName || `项目#${m.projectId}`}
                       </Tag>
-                      {m.senderName}
+                      <span className="dashboard-message-sender">{m.senderName || '未知用户'}</span>
                     </span>
                   }
                   description={m.content}
