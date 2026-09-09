@@ -79,7 +79,7 @@ export default function AdminLayout() {
     <Layout className="layout-shell">
       <Sider className="layout-sider" width={180} theme="dark">
         <div className="layout-logo">
-          <img src="/saa-logo.png" alt="SAA" />
+          <img src="/saa-logo.svg" alt="SAA" />
         </div>
         {menu()}
       </Sider>
@@ -137,7 +137,7 @@ export default function AdminLayout() {
       </Layout>
       <Drawer
         className="mobile-nav-drawer"
-        title={<img className="drawer-logo" src="/saa-logo.png" alt="SAA" />}
+        title={<img className="drawer-logo" src="/saa-logo.svg" alt="SAA" />}
         placement="left"
         width={240}
         visible={mobileMenuOpen}

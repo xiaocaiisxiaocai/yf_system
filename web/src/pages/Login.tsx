@@ -76,7 +76,7 @@ export default function Login() {
     <div className="login-bg">
       <div className="login-card">
         <div className="login-logo">
-          <img src="/saa-logo.png" alt="SAA" />
+          <img src="/saa-logo.svg" alt="SAA" />
         </div>
         <div className="login-sub">公司内部 × 外部供应商 · 项目文件协作</div>
         <Form form={form} layout="vertical" onSubmit={submit} autoComplete="off">
