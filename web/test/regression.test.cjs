@@ -76,6 +76,12 @@ test('sidebar keeps overflow inside the menu instead of the sider shell', () => 
   assert.match(css, /\.layout-logo\s*\{[\s\S]*?box-sizing: border-box;/)
 })
 
+test('collapsed sidebar tooltip renders the menu label instead of duplicating its icon', () => {
+  const layout = fs.readFileSync(path.resolve(__dirname, '..', 'src/layouts/AdminLayout.tsx'), 'utf8')
+  assert.match(layout, /renderItemInTooltip=\{\(\) => m\.label\}/)
+  assert.doesNotMatch(layout, /title=\{collapsed \? m\.label/)
+})
+
 test('table action slots keep empty action positions for row alignment', () => {
   const { actionSlots } = loadTs('src/components/ActionSlots.tsx', {})
   const node = actionSlots([

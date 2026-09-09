@@ -202,12 +202,12 @@ export default function FileTable({ projectId, projectStatus, rounds, targetId }
             selectedRowKeys: selected,
             onChange: (keys) => setSelected(keys as number[]),
           } : undefined}
-          scroll={{ x: 1000 }}
+          scroll={{ x: 960 }}
           columns={[
           {
             title: '文件名',
             dataIndex: 'originalName',
-            width: 220,
+            width: 200,
             ellipsis: true,
             render: (v: string, r: FileItem) => (
               <Space size={4} className="file-name-cell">
@@ -224,17 +224,17 @@ export default function FileTable({ projectId, projectStatus, rounds, targetId }
           {
             title: '方向',
             dataIndex: 'direction',
-            width: 140,
+            width: 130,
             align: 'center' as const,
             render: (v: string) =>
               v === 'C2S' ? <Tag color="arcoblue">公司 → 供应商</Tag> : <Tag color="purple">供应商 → 公司</Tag>,
           },
           { title: '大小', dataIndex: 'sizeBytes', width: 90, align: 'center' as const, render: fmtSize },
-          { title: '上传人', dataIndex: 'uploaderName', width: 100, align: 'center' as const, ellipsis: true },
+          { title: '上传人', dataIndex: 'uploaderName', width: 90, align: 'center' as const, ellipsis: true },
           { title: '上传时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
           {
             title: '操作',
-            width: 150,
+            width: 140,
             fixed: 'right' as const,
             align: 'center' as const,
             render: (_: unknown, r: FileItem) => actionSlots([

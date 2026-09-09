@@ -89,7 +89,11 @@ export default function AdminLayout() {
       style={{ width: '100%' }}
     >
       {items.map((m) => (
-        <Menu.Item key={m.path} title={collapsed ? m.label : undefined}>
+        <Menu.Item
+          key={m.path}
+          aria-label={collapsed ? m.label : undefined}
+          renderItemInTooltip={() => m.label}
+        >
           {m.icon}
           {!collapsed && m.label}
         </Menu.Item>
@@ -155,7 +159,6 @@ export default function AdminLayout() {
             className="layout-sider-toggle"
             type="button"
             aria-label={siderCollapsed ? '展开侧边栏' : '折叠侧边栏'}
-            title={siderCollapsed ? '展开侧边栏' : '折叠侧边栏'}
             onClick={toggleSider}
           >
             {siderCollapsed ? <IconMenuUnfold /> : <><IconMenuFold /><span>收起导航</span></>}

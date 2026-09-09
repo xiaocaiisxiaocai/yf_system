@@ -4,6 +4,7 @@
   --app-canvas: #f3f5f9;
   --app-border: #e5e9f0;
   --app-radius: 10px;
+  --app-text: #1d2939;
   --app-text-muted: #667085;
 }
 body {
@@ -72,7 +73,7 @@ html, body, #root {
   padding: 46px 44px;
   background: rgba(250, 252, 255, .97);
   border: 1px solid rgba(194, 220, 248, .72);
-  border-radius: 14px;
+  border-radius: var(--app-radius);
   box-shadow: 0 30px 90px rgba(0, 9, 31, .48), inset 0 1px 0 rgba(255, 255, 255, .8);
   backdrop-filter: blur(14px);
 }
@@ -596,6 +597,7 @@ html, body, #root {
 .arco-drawer-header-title { padding-right: 24px; font-size: 17px; font-weight: 600; line-height: 24px; overflow-wrap: anywhere; }
 .arco-drawer-content { padding: 24px; }
 .arco-drawer-footer { border-color: var(--app-border); padding: 16px 24px; }
+.arco-drawer-footer .arco-btn { min-width: 80px; }
 .drawer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
 .arco-popconfirm-content {
   max-width: min(320px, calc(100vw - 32px));
@@ -699,7 +701,7 @@ html, body, #root {
 .action-slots--user { grid-template-columns: 48px 72px 48px 44px; }
 .action-slots--role { grid-template-columns: 76px 44px 44px 44px; }
 .action-slots--file { grid-template-columns: 58px 44px; }
-.action-slots--round { grid-template-columns: 64px 64px 56px 56px; }
+.action-slots--round { grid-template-columns: 60px 60px 50px 50px; column-gap: 4px; }
 .action-slots--single { grid-template-columns: 48px 44px; }
 
 /* 带预览按钮的文件名单元格：文本占据剩余空间，按钮始终不被长文件名挤走。 */
