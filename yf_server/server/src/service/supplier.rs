@@ -500,8 +500,7 @@ pub async fn reset_account_password(
 pub async fn delete(db: &DatabaseConnection, me: &CurrentUser, id: u64) -> ApiResult<()> {
     let txn = db.begin().await?;
     super::perm::lock_management_state(&txn).await?;
-    super::perm::recheck_manager(&txn, me.id, "supplier:manage").await?;
-    super::scope::require_system_admin(&txn, me.id).await?;
+    super::perm::recheck_manager(&txn, me.id, "supplier:delete").await?;
     let supplier = suppliers::Entity::find_by_id(id)
         .one(&txn)
         .await?
@@ -552,8 +551,7 @@ pub async fn delete_account(db: &DatabaseConnection, me: &CurrentUser, id: u64) 
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
-    super::perm::recheck_manager(&txn, me.id, "supplier:account").await?;
-    super::scope::require_system_admin(&txn, me.id).await?;
+    super::perm::recheck_manager(&txn, me.id, "supplier:account_delete").await?;
     if account.user_type != UserType::Supplier {
         return Err(AppError::BadRequest("该账号不是供应商人员".into()));
     }

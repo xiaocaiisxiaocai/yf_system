@@ -159,8 +159,7 @@ pub async fn delete_ids(
     }
     let txn = db.begin().await?;
     super::perm::lock_management_state(&txn).await?;
-    super::scope::require_system_admin(&txn, user.id).await?;
-    super::perm::recheck_manager(&txn, user.id, "log:view").await?;
+    super::perm::recheck_manager(&txn, user.id, "log:delete").await?;
     let rows = audit_logs::Entity::find()
         .filter(audit_logs::Column::Id.is_in(ids.to_vec()))
         .order_by_asc(audit_logs::Column::Id)

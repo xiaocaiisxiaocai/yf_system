@@ -114,7 +114,7 @@ async fn grant_permissions(f: &Fixture, codes: &[&str]) {
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn delete_safety_requires_system_admin_for_all_physical_deletes() {
+async fn delete_safety_requires_explicit_delete_permissions() {
     let f = Fixture::new().await;
     grant_permissions(
         &f,
@@ -205,6 +205,33 @@ async fn delete_safety_requires_system_admin_for_all_physical_deletes() {
         service::dept::delete(&f.state.db, &f.member, dept["id"].as_u64().unwrap()).await,
         Err(AppError::Forbidden)
     ));
+
+    grant_permissions(
+        &f,
+        &[
+            "user:delete",
+            "supplier:delete",
+            "supplier:account_delete",
+            "role:delete",
+            "dept:delete",
+        ],
+    )
+    .await;
+    service::user::delete(&f.state.db, &f.member, target_user.id)
+        .await
+        .unwrap();
+    service::supplier::delete(&f.state.db, &f.member, supplier["id"].as_u64().unwrap())
+        .await
+        .unwrap();
+    service::supplier::delete_account(&f.state.db, &f.member, account["id"].as_u64().unwrap())
+        .await
+        .unwrap();
+    service::role::delete(&f.state.db, &f.member, role["id"].as_u64().unwrap())
+        .await
+        .unwrap();
+    service::dept::delete(&f.state.db, &f.member, dept["id"].as_u64().unwrap())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -408,7 +435,7 @@ async fn delete_safety_waits_for_business_history_commit_before_deciding() {
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn delete_safety_system_admin_can_delete_unreferenced_records() {
+async fn delete_safety_seeded_admin_can_delete_unreferenced_records() {
     let f = Fixture::new().await;
     let target_user = create_internal_user(&f, "可删除用户").await;
     let supplier = service::supplier::create(

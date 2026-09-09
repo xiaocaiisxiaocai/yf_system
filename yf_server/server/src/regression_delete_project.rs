@@ -33,7 +33,7 @@ async fn draft(f: &Fixture) -> u64 {
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn delete_safety_project_rejects_non_admin_with_project_access() {
+async fn delete_safety_project_requires_delete_permission_and_accepts_assigned_role() {
     let f = Fixture::new().await;
     let id = draft(&f).await;
     let manager = crate::entity::roles::Entity::find()
@@ -72,6 +72,33 @@ async fn delete_safety_project_rejects_non_admin_with_project_access() {
         .await
         .unwrap()
         .is_some());
+
+    let permission = crate::entity::permissions::Entity::find()
+        .filter(crate::entity::permissions::Column::Code.eq("project:delete"))
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut permission_ids: Vec<u64> = crate::entity::role_permissions::Entity::find()
+        .filter(crate::entity::role_permissions::Column::RoleId.eq(manager.id))
+        .all(&f.state.db)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|binding| binding.permission_id)
+        .collect();
+    permission_ids.push(permission.id);
+    service::role::assign_permissions(
+        &f.state.db,
+        &f.admin,
+        manager.id,
+        &service::role::PermAssign { permission_ids },
+    )
+    .await
+    .unwrap();
+    service::project::delete(&f.state, &f.member, id)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -253,11 +280,33 @@ async fn delete_safety_log_view_permission_cannot_delete() {
         .await
         .unwrap()
         .is_some());
+    let delete_permission = permissions::Entity::find()
+        .filter(permissions::Column::Code.eq("log:delete"))
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    service::role::assign_permissions(
+        &f.state.db,
+        &f.admin,
+        role_id,
+        &service::role::PermAssign {
+            permission_ids: vec![permission.id, delete_permission.id],
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        service::log::delete_ids(&f.state.db, &f.member, &[row.id])
+            .await
+            .unwrap(),
+        1
+    );
 }
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn delete_safety_project_empty_success_content_refused_and_profile_capability() {
+async fn delete_safety_project_empty_success_content_refused_and_profile_identity() {
     let f = Fixture::new().await;
     let admin_profile =
         serde_json::to_value(service::auth::profile(&f.state.db, &f.admin).await.unwrap()).unwrap();

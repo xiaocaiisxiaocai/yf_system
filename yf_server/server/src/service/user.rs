@@ -375,7 +375,7 @@ async fn ensure_admin_role_change_safe(
         .one(db)
         .await?
     else {
-        return Err(AppError::Internal("系统管理员角色缺失".into()));
+        return Ok(());
     };
     let currently_admin = user_roles::Entity::find_by_id((target_id, admin_role.id))
         .one(db)
@@ -775,8 +775,7 @@ pub async fn delete(db: &DatabaseConnection, me: &CurrentUser, id: u64) -> ApiRe
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
-    super::perm::recheck_manager(&txn, me.id, "user:manage").await?;
-    super::scope::require_system_admin(&txn, me.id).await?;
+    super::perm::recheck_manager(&txn, me.id, "user:delete").await?;
     if id == me.id {
         return Err(AppError::BadRequest("不能删除自己的账号".into()));
     }

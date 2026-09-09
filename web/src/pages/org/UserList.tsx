@@ -51,8 +51,7 @@ function toTreeData(nodes: DeptNode[]): DeptTreeData[] {
 
 export default function UserList() {
   const me = useAuth((s) => s.user)
-  const canManage = useAuth((s) => s.hasPerm('user:manage'))
-  const canDelete = me?.isSystemAdmin === true && canManage
+  const canDelete = useAuth((s) => s.hasPerm('user:delete'))
   const [data, setData] = useState<PageResp<UserRow>>({ list: [], total: 0, page: 1, pageSize: 10 })
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)

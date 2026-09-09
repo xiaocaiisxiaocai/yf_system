@@ -310,8 +310,7 @@ pub async fn set_status(
 pub async fn delete(db: &DatabaseConnection, user: &CurrentUser, id: u64) -> ApiResult<()> {
     let txn = db.begin().await?;
     super::perm::lock_management_state(&txn).await?;
-    super::perm::recheck_manager(&txn, user.id, "dept:manage").await?;
-    super::scope::require_system_admin(&txn, user.id).await?;
+    super::perm::recheck_manager(&txn, user.id, "dept:delete").await?;
     let dept = departments::Entity::find_by_id(id)
         .one(&txn)
         .await?

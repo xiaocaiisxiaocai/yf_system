@@ -51,7 +51,7 @@ pub async fn can_view_all(db: &impl ConnectionTrait, user_id: u64) -> ApiResult<
         .any(|c| c == "project:view_all"))
 }
 
-/// 系统管理员身份不可由普通可配置权限点替代，用于文件删除等不可恢复的高风险操作。
+/// 内置系统管理员身份仅用于展示和最后管理员保护；业务授权统一使用权限点。
 pub async fn is_system_admin(db: &impl ConnectionTrait, user_id: u64) -> ApiResult<bool> {
     let admin_role = roles::Entity::find()
         .filter(roles::Column::IsBuiltIn.eq(true))
@@ -66,18 +66,6 @@ pub async fn is_system_admin(db: &impl ConnectionTrait, user_id: u64) -> ApiResu
         .one(db)
         .await?
         .is_some())
-}
-
-/// 不可恢复操作必须由当前仍有效的内部系统管理员执行。
-pub async fn require_system_admin(db: &impl ConnectionTrait, user_id: u64) -> ApiResult<()> {
-    let user = lock_user_shared(db, user_id).await?;
-    if user.status != CommonStatus::Active
-        || user.user_type != UserType::Internal
-        || !is_system_admin(db, user_id).await?
-    {
-        return Err(AppError::Forbidden);
-    }
-    Ok(())
 }
 
 /// 当前用户可见的项目 id 集合；None 表示"全部可见"（view_all）

@@ -8,7 +8,7 @@ pub struct Model {
     pub id: u64,
     pub name: String,
     pub description: Option<String>,
-    /// 内置角色不可删除
+    /// 内置角色用于初始配置与身份识别，名称不可修改
     pub is_built_in: bool,
     pub status: CommonStatus,
     pub created_at: DateTimeUtc,

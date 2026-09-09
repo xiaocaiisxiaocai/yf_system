@@ -27,9 +27,9 @@ interface Account {
 }
 
 export default function SupplierList() {
-  const { hasPerm, user } = useAuth()
+  const { hasPerm } = useAuth()
   const canManageAccounts = hasPerm('supplier:account')
-  const canDelete = user?.isSystemAdmin === true && hasPerm('supplier:manage')
+  const canDelete = hasPerm('supplier:delete')
   const [data, setData] = useState<PageResp<Supplier>>({ list: [], total: 0, page: 1, pageSize: 10 })
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)
@@ -250,6 +250,7 @@ export default function SupplierList() {
 }
 
 function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onClose: () => void }) {
+  const canDelete = useAuth((state) => state.hasPerm('supplier:account_delete'))
   const [accountsState, setAccountsState] = useState<{ supplierId: number | null; list: Account[]; error?: boolean }>({ supplierId: null, list: [] })
   const [refreshing, setRefreshing] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -407,9 +408,11 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
               <Button key="status" size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'} onClick={() => toggle(r)}>
                 {r.status === 'ACTIVE' ? '禁用' : '启用'}
               </Button>,
-              <Popconfirm key="delete" title="删除后不可恢复，确认删除该账号？" onOk={() => removeAccount(r)}>
-                <Button size="mini" type="text" status="danger">删除</Button>
-              </Popconfirm>,
+              canDelete && (
+                <Popconfirm key="delete" title="删除后不可恢复，确认删除该账号？" onOk={() => removeAccount(r)}>
+                  <Button size="mini" type="text" status="danger">删除</Button>
+                </Popconfirm>
+              ),
             ], 'account'),
           },
         ]}

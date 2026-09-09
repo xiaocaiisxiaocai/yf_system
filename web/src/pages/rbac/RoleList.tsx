@@ -13,7 +13,6 @@ interface Role {
   name: string
   description?: string
   isBuiltIn: boolean
-  permissionsLocked?: boolean
   status: 'ACTIVE' | 'DISABLED'
   permissionIds: number[]
   assignedUserCount: number
@@ -27,9 +26,7 @@ interface Perm {
 }
 
 export default function RoleList() {
-  const user = useAuth((state) => state.user)
-  const canManage = useAuth((state) => state.hasPerm('role:manage'))
-  const canDelete = user?.isSystemAdmin === true && canManage
+  const canDelete = useAuth((state) => state.hasPerm('role:delete'))
   const [data, setData] = useState<PageResp<Role>>({ list: [], total: 0, page: 1, pageSize: 20 })
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
@@ -199,7 +196,6 @@ export default function RoleList() {
                 key="permissions"
                 size="mini"
                 type="text"
-                disabled={r.permissionsLocked}
                 onClick={() => {
                   setPermTarget(r)
                   setChecked(r.permissionIds.map(String))
@@ -219,24 +215,22 @@ export default function RoleList() {
               >
                 编辑
               </Button>,
-              !r.permissionsLocked && (
-                <Popconfirm
-                  key="status"
-                  title={
-                    r.status === 'ACTIVE'
-                      ? r.assignedUserCount > 0
-                        ? `该角色绑定 ${r.assignedUserCount} 个用户；启用用户未更换角色前不能禁用。`
-                        : '确认禁用该角色？'
-                      : '确认启用该角色？'
-                  }
-                  onOk={() => toggle(r)}
-                >
-                  <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
-                    {r.status === 'ACTIVE' ? '禁用' : '启用'}
-                  </Button>
-                </Popconfirm>
-              ),
-              canDelete && !r.isBuiltIn && (
+              <Popconfirm
+                key="status"
+                title={
+                  r.status === 'ACTIVE'
+                    ? r.assignedUserCount > 0
+                      ? `该角色绑定 ${r.assignedUserCount} 个用户；启用用户未更换角色前不能禁用。`
+                      : '确认禁用该角色？'
+                    : '确认启用该角色？'
+                }
+                onOk={() => toggle(r)}
+              >
+                <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
+                  {r.status === 'ACTIVE' ? '禁用' : '启用'}
+                </Button>
+              </Popconfirm>,
+              canDelete && (
                 <Popconfirm key="delete" title="删除后不可恢复，仍绑定用户时无法删除。确认？" onOk={() => remove(r)}>
                   <Button size="mini" type="text" status="danger">删除</Button>
                 </Popconfirm>
@@ -268,7 +262,7 @@ export default function RoleList() {
       >
         <Form form={form} layout="vertical">
           <Form.Item label="角色名称" field="name" rules={[{ required: true, message: '请输入名称' }]}>
-            <Input placeholder="角色名称" />
+            <Input placeholder="角色名称" disabled={editing?.isBuiltIn} />
           </Form.Item>
           <Form.Item label="角色说明" field="description">
             <Input.TextArea rows={3} maxLength={200} placeholder="选填" />

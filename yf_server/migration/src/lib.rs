@@ -12,6 +12,7 @@ mod m20260909_000009_drop_supplier_contact_fields;
 mod m20260909_000010_org_structure_kinds;
 mod m20260909_000011_validate_org_structure_kinds;
 mod m20260909_000012_project_activities;
+mod m20260909_000013_delete_permissions;
 
 pub struct Migrator;
 
@@ -31,6 +32,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260909_000010_org_structure_kinds::Migration),
             Box::new(m20260909_000011_validate_org_structure_kinds::Migration),
             Box::new(m20260909_000012_project_activities::Migration),
+            Box::new(m20260909_000013_delete_permissions::Migration),
         ]
     }
 }

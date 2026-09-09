@@ -78,7 +78,10 @@ pub async fn list(
         .paginate(db, size);
     let total = paginator.num_items().await?;
     let items = paginator.fetch_page(page - 1).await?;
-    let can_delete = scope::is_system_admin(db, user.id).await?;
+    let can_delete = super::perm::permission_codes(db, user.id)
+        .await?
+        .iter()
+        .any(|code| code == "file:delete");
     let uploader_map: std::collections::HashMap<u64, String> = users::Entity::find()
         .filter(users::Column::Id.is_in(items.iter().map(|f| f.uploader_id).collect::<Vec<_>>()))
         .all(db)
@@ -189,7 +192,7 @@ pub async fn delete(state: &AppState, user: &CurrentUser, id: u64) -> ApiResult<
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
-    scope::require_system_admin(&txn, user.id).await?;
+    super::perm::recheck_manager(&txn, user.id, "file:delete").await?;
     scope::ensure_project_access(&txn, user, f.project_id).await?;
     if f.status != FileStatus::Available {
         return Err(AppError::NotFound);

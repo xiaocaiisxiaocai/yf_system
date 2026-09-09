@@ -119,8 +119,9 @@ async fn full_disabled_supplier_accounts_remain_manageable_but_cannot_login() {
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn full_builtin_role_policies_are_enforced_by_services() {
+async fn full_builtin_roles_are_manageable_with_lockout_guards() {
     use crate::entity::role_permissions;
+    use sea_orm::{ActiveModelTrait, Set};
     let f = Fixture::new().await;
     for name in ["系统管理员", "供应商人员", "项目管理员", "内部成员"] {
         let role = roles::Entity::find()
@@ -138,16 +139,7 @@ async fn full_builtin_role_policies_are_enforced_by_services() {
             permission_ids: before.iter().map(|p| p.permission_id).collect(),
         };
         let result = service::role::assign_permissions(&f.state.db, &f.admin, role.id, &req).await;
-        if matches!(name, "系统管理员" | "供应商人员") {
-            assert!(result.is_err());
-            assert!(
-                service::role::set_status(&f.state.db, &f.admin, role.id, "DISABLED")
-                    .await
-                    .is_err()
-            );
-        } else {
-            result.unwrap();
-        }
+        result.unwrap();
         let after = role_permissions::Entity::find()
             .filter(role_permissions::Column::RoleId.eq(role.id))
             .all(&f.state.db)
@@ -164,6 +156,60 @@ async fn full_builtin_role_policies_are_enforced_by_services() {
             CommonStatus::Active
         );
     }
+
+    let admin_role = roles::Entity::find()
+        .filter(roles::Column::Name.eq("系统管理员"))
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        service::role::assign_permissions(
+            &f.state.db,
+            &f.admin,
+            admin_role.id,
+            &service::role::PermAssign {
+                permission_ids: vec![],
+            },
+        )
+        .await
+        .is_err(),
+        "active administrators must retain the recovery permissions"
+    );
+
+    let created = service::role::create(
+        &f.state.db,
+        &f.admin,
+        &service::role::RoleUpsert {
+            name: format!("可删除内置角色-{}", uuid::Uuid::new_v4()),
+            description: None,
+        },
+    )
+    .await
+    .unwrap();
+    let id = created["id"].as_u64().unwrap();
+    let mut built_in: roles::ActiveModel = roles::Entity::find_by_id(id)
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .unwrap()
+        .into();
+    built_in.is_built_in = Set(true);
+    built_in.update(&f.state.db).await.unwrap();
+    service::role::set_status(&f.state.db, &f.admin, id, "DISABLED")
+        .await
+        .unwrap();
+    service::role::set_status(&f.state.db, &f.admin, id, "ACTIVE")
+        .await
+        .unwrap();
+    service::role::delete(&f.state.db, &f.admin, id)
+        .await
+        .unwrap();
+    assert!(roles::Entity::find_by_id(id)
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 async fn member_validity_barrier(action: &str) {

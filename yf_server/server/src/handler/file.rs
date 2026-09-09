@@ -101,6 +101,7 @@ pub async fn delete_file(
     u: CurrentUser,
     Path(id): Path<u64>,
 ) -> ApiResult<Json<Value>> {
+    require(&s, &u, "file:delete").await?;
     service::file::delete(&s, &u, id).await?;
     Ok(Json(serde_json::json!({})))
 }

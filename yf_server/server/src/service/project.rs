@@ -575,8 +575,7 @@ pub async fn delete(state: &AppState, user: &CurrentUser, id: u64) -> ApiResult<
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
-    scope::require_system_admin(&txn, user.id).await?;
-    super::perm::recheck_manager(&txn, user.id, "project:update").await?;
+    super::perm::recheck_manager(&txn, user.id, "project:delete").await?;
     scope::ensure_project_access(&txn, user, id).await?;
     let round_count = rounds::Entity::find()
         .filter(rounds::Column::ProjectId.eq(id))

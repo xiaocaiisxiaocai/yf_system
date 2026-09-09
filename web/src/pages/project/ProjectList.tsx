@@ -31,7 +31,7 @@ export default function ProjectList() {
   const nav = useNavigate()
   const { hasPerm, user } = useAuth()
   const isInternal = user?.userType === 'INTERNAL'
-  const canDelete = isInternal && user?.isSystemAdmin === true && hasPerm('project:update')
+  const canDelete = isInternal && hasPerm('project:delete')
 
   const fetchProjects = useCallback(async () => {
     const r = await http.get('/projects', { params: { page, pageSize, keyword: keyword || undefined, status, supplierId } })

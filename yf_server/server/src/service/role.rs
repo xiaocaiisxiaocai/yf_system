@@ -28,10 +28,6 @@ pub struct PermAssign {
     pub permission_ids: Vec<u64>,
 }
 
-fn protected_role(is_built_in: bool, name: &str) -> bool {
-    is_built_in && matches!(name, "系统管理员" | "供应商人员")
-}
-
 fn validate_details(req: &RoleUpsert) -> ApiResult<()> {
     if req.name.trim().is_empty() || req.name.trim().chars().count() > 64 {
         return Err(AppError::BadRequest("角色名称需为 1~64 个字符".into()));
@@ -77,7 +73,6 @@ async fn role_json(db: &DatabaseConnection, r: &roles::Model) -> Value {
     json!({
         "id": r.id, "name": r.name, "description": r.description,
         "isBuiltIn": r.is_built_in,
-        "permissionsLocked": protected_role(r.is_built_in, &r.name),
         "status": if r.status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
         "permissionIds": perm_ids,
         "assignedUserCount": assigned_user_count,
@@ -190,11 +185,6 @@ pub async fn set_status(
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
-    if protected_role(role.is_built_in, &role.name) && status == "DISABLED" {
-        return Err(AppError::BadRequest(
-            "管理员和供应商内置角色不可禁用".into(),
-        ));
-    }
     let st = match status {
         "ACTIVE" => CommonStatus::Active,
         "DISABLED" => CommonStatus::Disabled,
@@ -261,11 +251,6 @@ pub async fn assign_permissions(
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
-    if protected_role(role.is_built_in, &role.name) {
-        return Err(AppError::BadRequest(
-            "管理员和供应商内置角色权限固定，不可编辑".into(),
-        ));
-    }
     if req.permission_ids.len() > 500 {
         return Err(AppError::BadRequest("权限点数量超过上限".into()));
     }
@@ -283,6 +268,51 @@ pub async fn assign_permissions(
     for pid in &permission_ids {
         if !valid.contains(pid) {
             return Err(AppError::BadRequest(format!("权限点不存在: {pid}")));
+        }
+    }
+    if role.is_built_in && role.name == "系统管理员" {
+        let bound_user_ids: Vec<u64> = user_roles::Entity::find()
+            .filter(user_roles::Column::RoleId.eq(id))
+            .all(&txn)
+            .await?
+            .into_iter()
+            .map(|binding| binding.user_id)
+            .collect();
+        let active_users = if bound_user_ids.is_empty() {
+            0
+        } else {
+            users::Entity::find()
+                .filter(users::Column::Id.is_in(bound_user_ids))
+                .filter(users::Column::UserType.eq(UserType::Internal))
+                .filter(users::Column::Status.eq(CommonStatus::Active))
+                .count(&txn)
+                .await?
+        };
+        if active_users > 0 {
+            let required: std::collections::HashMap<String, u64> = permissions::Entity::find()
+                .filter(permissions::Column::Code.is_in([
+                    "rbac:role",
+                    "role:manage",
+                    "org:user",
+                    "user:manage",
+                ]))
+                .all(&txn)
+                .await?
+                .into_iter()
+                .map(|permission| (permission.code, permission.id))
+                .collect();
+            let missing = ["rbac:role", "role:manage", "org:user", "user:manage"]
+                .iter()
+                .any(|code| {
+                    required
+                        .get(*code)
+                        .is_none_or(|id| !permission_ids.contains(id))
+                });
+            if missing {
+                return Err(AppError::BadRequest(
+                    "系统管理员角色绑定启用用户时，必须保留用户管理和角色管理权限".into(),
+                ));
+            }
         }
     }
     let old_permission_ids: Vec<u64> = role_permissions::Entity::find()
@@ -327,15 +357,11 @@ pub async fn assign_permissions(
 pub async fn delete(db: &DatabaseConnection, me: &CurrentUser, id: u64) -> ApiResult<()> {
     let txn = db.begin().await?;
     super::perm::lock_management_state(&txn).await?;
-    super::perm::recheck_manager(&txn, me.id, "role:manage").await?;
-    super::scope::require_system_admin(&txn, me.id).await?;
+    super::perm::recheck_manager(&txn, me.id, "role:delete").await?;
     let role = roles::Entity::find_by_id(id)
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
-    if role.is_built_in {
-        return Err(AppError::BadRequest("内置角色不可删除".into()));
-    }
     let assigned = user_roles::Entity::find()
         .filter(user_roles::Column::RoleId.eq(id))
         .count(&txn)
@@ -363,17 +389,4 @@ pub async fn delete(db: &DatabaseConnection, me: &CurrentUser, id: u64) -> ApiRe
     roles::Entity::delete_by_id(id).exec(&txn).await?;
     txn.commit().await?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::protected_role;
-
-    #[test]
-    fn security_roles_keep_fixed_permissions() {
-        assert!(protected_role(true, "系统管理员"));
-        assert!(protected_role(true, "供应商人员"));
-        assert!(!protected_role(true, "项目管理员"));
-        assert!(!protected_role(false, "系统管理员"));
-    }
 }

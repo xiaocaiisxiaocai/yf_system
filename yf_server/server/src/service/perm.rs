@@ -9,13 +9,12 @@ use crate::error::{ApiResult, AppError};
 /// Low-frequency account/role/department changes share one stable transaction gate.
 /// Call immediately after BEGIN, before any snapshot reads (MySQL REPEATABLE READ).
 pub async fn lock_management_state(db: &impl ConnectionTrait) -> ApiResult<()> {
-    crate::entity::roles::Entity::find()
-        .filter(crate::entity::roles::Column::IsBuiltIn.eq(true))
-        .filter(crate::entity::roles::Column::Name.eq("系统管理员"))
+    crate::entity::system_configs::Entity::find()
+        .filter(crate::entity::system_configs::Column::CfgKey.eq("security.management_lock"))
         .lock_exclusive()
         .one(db)
         .await?
-        .ok_or_else(|| AppError::Internal("系统管理员角色缺失".into()))?;
+        .ok_or_else(|| AppError::Internal("权限事务锁配置缺失".into()))?;
     Ok(())
 }
 
@@ -23,15 +22,15 @@ pub async fn lock_management_state(db: &impl ConnectionTrait) -> ApiResult<()> {
 /// taking it exclusively. MySQL 5.7 requires `LOCK IN SHARE MODE` rather than
 /// the `FOR SHARE` emitted by the current SeaORM/sea-query versions.
 pub async fn lock_business_state(db: &impl ConnectionTrait) -> ApiResult<()> {
-    crate::entity::roles::Entity::find()
+    crate::entity::system_configs::Entity::find()
         .from_raw_sql(Statement::from_sql_and_values(
             DatabaseBackend::MySql,
-            "SELECT * FROM roles WHERE is_built_in = TRUE AND name = ? LOCK IN SHARE MODE",
-            ["系统管理员".into()],
+            "SELECT * FROM system_configs WHERE cfg_key = ? LOCK IN SHARE MODE",
+            ["security.management_lock".into()],
         ))
         .one(db)
         .await?
-        .ok_or_else(|| AppError::Internal("系统管理员角色缺失".into()))?;
+        .ok_or_else(|| AppError::Internal("权限事务锁配置缺失".into()))?;
     Ok(())
 }
 

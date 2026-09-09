@@ -84,7 +84,7 @@ function findNode(nodes: DeptNode[], id: number): DeptNode | null {
 
 export default function DeptManage() {
   const canManage = useAuth((s) => s.hasPerm('dept:manage'))
-  const isSystemAdmin = useAuth((s) => s.user?.isSystemAdmin === true)
+  const canDelete = useAuth((s) => s.hasPerm('dept:delete'))
   const [tree, setTree] = useState<DeptNode[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
@@ -269,7 +269,7 @@ export default function DeptManage() {
                       {selected.status === 'ACTIVE' ? `禁用${selectedMeta.label}` : `启用${selectedMeta.label}`}
                     </Button>
                   </Popconfirm>
-                  {isSystemAdmin && (
+                  {canDelete && (
                     <Popconfirm title={`删除后不可恢复；有下级或关联用户时无法删除。确认删除该${selectedMeta.label}？`} onOk={() => remove(selected)}>
                       <Button status="danger">{`删除${selectedMeta.label}`}</Button>
                     </Popconfirm>

@@ -53,7 +53,7 @@ pub async fn delete_project(
     u: CurrentUser,
     Path(id): Path<u64>,
 ) -> ApiResult<Json<Value>> {
-    require(&s, &u, "project:update").await?;
+    require(&s, &u, "project:delete").await?;
     service::project::delete(&s, &u, id).await?;
     Ok(Json(serde_json::json!({})))
 }

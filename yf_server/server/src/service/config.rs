@@ -1,5 +1,8 @@
 //! 系统参数 + 存储容量
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set, TransactionTrait};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    TransactionTrait,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sysinfo::Disks;
@@ -81,7 +84,10 @@ fn validated_value(key: &str, value: &str) -> ApiResult<String> {
 }
 
 pub async fn list(db: &DatabaseConnection) -> ApiResult<Value> {
-    let all = system_configs::Entity::find().all(db).await?;
+    let all = system_configs::Entity::find()
+        .filter(system_configs::Column::CfgKey.ne("security.management_lock"))
+        .all(db)
+        .await?;
     Ok(json!(all
         .iter()
         .map(|c| json!({
@@ -97,6 +103,9 @@ pub async fn update(db: &DatabaseConnection, me: &CurrentUser, req: &ConfigBatch
     let mut seen = std::collections::HashSet::new();
     let mut validated = Vec::with_capacity(req.items.len());
     for item in &req.items {
+        if item.key == "security.management_lock" {
+            return Err(AppError::BadRequest("该参数不可修改".into()));
+        }
         if !seen.insert(item.key.clone()) {
             return Err(AppError::BadRequest(format!("参数重复: {}", item.key)));
         }

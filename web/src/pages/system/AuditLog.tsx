@@ -132,9 +132,7 @@ function detailSummary(row: LogRow): string {
 }
 
 export default function AuditLog() {
-  const user = useAuth((state) => state.user)
-  const canView = useAuth((state) => state.hasPerm('log:view'))
-  const canDelete = user?.isSystemAdmin === true && canView
+  const canDelete = useAuth((state) => state.hasPerm('log:delete'))
   const emptyFilters: Filters = { keyword: '', range: [] }
   const [draft, setDraft] = useState<Filters>(emptyFilters)
   const [filters, setFilters] = useState<Filters>(emptyFilters)
