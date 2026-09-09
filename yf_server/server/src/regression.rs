@@ -212,6 +212,60 @@ async fn full_builtin_roles_are_manageable_with_lockout_guards() {
         .is_none());
 }
 
+#[tokio::test]
+#[ignore = "isolated MySQL required"]
+async fn full_audit_actor_identity_uses_user_id_without_calling_it_system() {
+    use crate::entity::audit_logs;
+    use sea_orm::{ActiveModelTrait, Set};
+
+    let f = Fixture::new().await;
+    let action = format!("ACTOR_IDENTITY_{}", uuid::Uuid::new_v4().simple());
+    service::audit::insert(
+        &f.state.db,
+        Some(f.admin.id),
+        None,
+        &action,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let stored = audit_logs::Entity::find()
+        .filter(audit_logs::Column::Action.eq(&action))
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.employee_no.as_deref(), Some("admin"));
+
+    // Simulate an old row written before actor snapshots were normalized.
+    let mut legacy: audit_logs::ActiveModel = stored.into();
+    legacy.employee_no = Set(None);
+    legacy.update(&f.state.db).await.unwrap();
+    let page = service::log::list(
+        &f.state.db,
+        &service::log::LogQuery {
+            page: 1,
+            page_size: 20,
+            keyword: None,
+            category: None,
+            employee_no: None,
+            action: Some(action),
+            target_type: None,
+            target_id: None,
+            start: None,
+            end: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.list.len(), 1);
+    assert_eq!(page.list[0]["userId"], f.admin.id);
+    assert_eq!(page.list[0]["employeeNo"], "admin");
+}
+
 async fn member_validity_barrier(action: &str) {
     use crate::entity::{audit_logs, permissions, project_members, projects, role_permissions};
     use sea_orm::{ConnectionTrait, DbBackend, QuerySelect, Statement, TransactionTrait};

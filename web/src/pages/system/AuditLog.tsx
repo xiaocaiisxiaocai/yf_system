@@ -102,6 +102,15 @@ function displayValue(value: unknown): string {
   return String(value)
 }
 
+function actorIdentity(row: LogRow) {
+  const employeeNo = row.employeeNo?.trim()
+  if (row.userId != null) {
+    return { label: employeeNo || `用户 #${row.userId}`, meta: `ID ${row.userId}` }
+  }
+  if (employeeNo) return { label: employeeNo, meta: '未识别账号' }
+  return { label: '系统', meta: '系统事件' }
+}
+
 function detailSummary(row: LogRow): string {
   const detail = row.detail || {}
   // 兼容迁移前已落库的结构化日志详情；新的日志统一写 employeeNo。
@@ -301,7 +310,11 @@ export default function AuditLog() {
           { title: '时间', dataIndex: 'createdAt', width: 160, render: fmtTime },
           {
             title: '操作人', dataIndex: 'employeeNo', width: 125,
-            render: (value?: string, row?: LogRow) => <div className="audit-actor"><span className="audit-avatar">{(value || '系').slice(0, 1).toUpperCase()}</span><span><b>{value || '系统'}</b><small>{row?.userId ? `ID ${row.userId}` : '系统事件'}</small></span></div>,
+            render: (_: unknown, row?: LogRow) => {
+              if (!row) return '-'
+              const actor = actorIdentity(row)
+              return <div className="audit-actor"><span className="audit-avatar">{actor.label.slice(0, 1).toUpperCase()}</span><span><b>{actor.label}</b><small>{actor.meta}</small></span></div>
+            },
           },
           {
             title: '操作', dataIndex: 'action', width: 180,
@@ -334,7 +347,7 @@ export default function AuditLog() {
             <div className="audit-detail-title"><Tag color={(ACTIONS[selected.action] || { color: 'gray' }).color}>{ACTIONS[selected.action]?.label || selected.action}</Tag><Typography.Text type="secondary">日志 #{selected.id}</Typography.Text></div>
             <div className="audit-detail-grid">
               <span>发生时间</span><b>{fmtTime(selected.createdAt)}</b>
-              <span>操作人</span><b>{selected.employeeNo || '系统'}{selected.userId ? `（ID ${selected.userId}）` : ''}</b>
+              <span>操作人</span><b>{actorIdentity(selected).label}{selected.userId != null ? `（ID ${selected.userId}）` : ''}</b>
               <span>动作编码</span><code>{selected.action}</code>
               <span>操作对象</span><b>{selected.targetType ? `${TARGET_LABELS[selected.targetType] || selected.targetType}${selected.targetId ? ` #${selected.targetId}` : ''}` : '-'}</b>
               <span>IP 地址</span><b>{selected.ip || '-'}</b>

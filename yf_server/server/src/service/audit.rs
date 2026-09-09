@@ -1,7 +1,7 @@
 //! 操作日志。关键业务使用 `insert` 放进同一事务；仅登录失败等无业务事务场景使用 best-effort `log`。
-use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, Set};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, EntityTrait, Set};
 
-use crate::entity::audit_logs;
+use crate::entity::{audit_logs, users};
 use crate::error::ApiResult;
 
 #[allow(clippy::too_many_arguments)]
@@ -15,6 +15,18 @@ pub async fn insert(
     detail: Option<serde_json::Value>,
     ip: Option<String>,
 ) -> ApiResult<()> {
+    // user_id is authoritative. Resolve a missing snapshot here so every caller
+    // follows the same actor-display contract, including refresh-token failures.
+    let employee_no = match employee_no.filter(|value| !value.trim().is_empty()) {
+        Some(value) => Some(value),
+        None => match user_id {
+            Some(id) => users::Entity::find_by_id(id)
+                .one(db)
+                .await?
+                .map(|user| user.employee_no),
+            None => None,
+        },
+    };
     let model = audit_logs::ActiveModel {
         user_id: Set(user_id),
         employee_no: Set(employee_no),

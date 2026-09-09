@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::dto::PageResp;
-use crate::entity::audit_logs;
+use crate::entity::{audit_logs, users};
 use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
 
@@ -134,11 +134,27 @@ pub async fn list(db: &DatabaseConnection, q: &LogQuery) -> ApiResult<PageResp<V
         .paginate(db, size);
     let total = paginator.num_items().await?;
     let items = paginator.fetch_page(page - 1).await?;
+    let user_ids: Vec<u64> = items.iter().filter_map(|item| item.user_id).collect();
+    let current_employee_nos: std::collections::HashMap<u64, String> = if user_ids.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        users::Entity::find()
+            .filter(users::Column::Id.is_in(user_ids))
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|user| (user.id, user.employee_no))
+            .collect()
+    };
     let list = items
         .iter()
         .map(|l| {
+            let employee_no = l.employee_no.clone().or_else(|| {
+                l.user_id
+                    .and_then(|id| current_employee_nos.get(&id).cloned())
+            });
             json!({
-                "id": l.id, "userId": l.user_id, "employeeNo": l.employee_no,
+                "id": l.id, "userId": l.user_id, "employeeNo": employee_no,
                 "action": l.action, "targetType": l.target_type, "targetId": l.target_id,
                 "detail": l.detail, "ip": l.ip, "createdAt": l.created_at,
             })
