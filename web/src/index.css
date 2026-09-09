@@ -465,6 +465,49 @@ html, body, #root {
 .arco-modal .arco-form-item { margin-bottom: 20px; }
 .arco-modal .arco-form-item:last-child { margin-bottom: 0; }
 .form-dialog { width: 520px; }
+.member-picker-dialog { width: 640px; }
+.member-picker-dialog .arco-modal-content {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: min(460px, calc(100dvh - 190px));
+  max-height: calc(100dvh - 190px);
+  min-height: 0;
+  overflow: hidden;
+}
+.member-picker { display: flex; flex: 1; flex-direction: column; gap: 12px; min-height: 0; min-width: 0; }
+.member-picker-search, .member-picker-toolbar { flex-shrink: 0; }
+.member-picker-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
+.member-picker-list { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--app-border); border-radius: 6px; }
+.member-picker-option.arco-checkbox { display: flex; align-items: center; width: 100%; min-height: 58px; margin: 0; padding: 10px 12px; }
+.member-picker-option + .member-picker-option { border-top: 1px solid var(--app-border); }
+.member-picker-option:hover { background: var(--color-fill-1); }
+.member-picker-option.arco-checkbox-checked { background: rgb(var(--primary-1)); }
+.member-picker-option .arco-checkbox-text { flex: 1; min-width: 0; }
+.member-picker-option .arco-checkbox-mask-wrapper { flex-shrink: 0; }
+.member-picker-option-info { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; min-width: 0; overflow-wrap: anywhere; }
+.member-picker-option-info .member-row-meta { flex-basis: 100%; order: 1; }
+.member-group + .member-group { margin-top: 24px; }
+.member-group-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 10px; }
+.member-group-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 22px; }
+.member-group-note { font-size: 12px; line-height: 20px; }
+.member-group .arco-spin { width: 100%; }
+.member-group .arco-list-item { padding: 10px 12px; }
+.member-group .arco-list-item-meta { padding: 0; }
+.member-row { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; }
+.member-row .arco-list-item-main { min-width: 0; }
+.member-row .arco-list-item-extra-content { flex-shrink: 0; }
+.member-row-info { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.member-row-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; color: var(--color-text-3); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
+.member-row-info .member-row-meta { flex-basis: 100%; order: 1; }
+.member-row-time { flex-shrink: 0; color: var(--color-text-3); font-size: 12px; line-height: 20px; }
+@media (max-width: 600px) {
+  .member-row { flex-wrap: wrap; gap: 4px; }
+  .member-row-info { flex-basis: 100%; }
+  .member-row .arco-list-item-main { flex-basis: 100%; }
+  .member-row-time { width: 100%; }
+  .member-picker-option.arco-checkbox { padding: 10px; }
+}
 .dialog-note { display: block; margin: 0 0 20px; color: var(--app-text-muted); font-size: 13px; line-height: 1.65; }
 .arco-form > .dialog-note:last-child { margin-bottom: 0; }
 .system-page .dialog-note { margin: 16px 0 0; }

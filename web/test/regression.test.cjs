@@ -490,13 +490,16 @@ test('member picker waits for a successful member load and guards loading/error 
   let optionCalls = 0
   let releaseOptions
   let saved
-  const existing = { userId: 42, employeeNo: 'E42', realName: '已有成员', createdAt: '' }
-  const options = [{ id: 7, employeeNo: 'E7', realName: '当前用户' }]
+  const existing = { userId: 42, employeeNo: 'E42', realName: '已有成员', deptName: '研发部', status: 'ACTIVE', createdAt: '' }
+  const disabled = { userId: 99, employeeNo: 'E99', realName: '停用成员', deptName: '旧部门', status: 'DISABLED', createdAt: '' }
+  const options = [{ id: 7, employeeNo: 'E7', realName: '当前用户', deptName: '管理部' }]
+  const supplierMembers = [{ userId: 88, employeeNo: 'S88', realName: '供应商成员', status: 'ACTIVE' }]
   const http = {
     get: async (url) => {
       if (url === '/projects/1/members') {
         return new Promise((resolve, reject) => memberRequests.push({ resolve, reject }))
       }
+      if (url === '/projects/1/supplier-members') return { data: supplierMembers }
       if (url === '/internal-user-options') {
         optionCalls++
         return new Promise((resolve) => { releaseOptions = resolve })
@@ -515,13 +518,13 @@ test('member picker waits for a successful member load and guards loading/error 
   let renderer
   await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, supplierName: '供应商' })) })
   assert.equal(memberRequests.length, 1)
-  let picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置成员')
+  let picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置公司成员')
   assert.equal(picker.props.disabled, true, 'picker must stay disabled before members load')
   await act(async () => { await picker.props.onClick() })
   assert.equal(optionCalls, 0, 'the handler must reject calls while the member list is loading')
 
   await act(async () => { memberRequests.shift().reject(new Error('members unavailable')); await Promise.resolve() })
-  picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置成员')
+  picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置公司成员')
   assert.equal(picker.props.disabled, true, 'picker must stay disabled after a member load error')
   await act(async () => { await picker.props.onClick() })
   assert.equal(optionCalls, 0, 'the handler must reject calls while the member list is in an error state')
@@ -529,9 +532,12 @@ test('member picker waits for a successful member load and guards loading/error 
   const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试')
   await act(async () => { retry.props.onClick(); await Promise.resolve() })
   assert.equal(memberRequests.length, 1)
-  await act(async () => { memberRequests.shift().resolve({ data: [existing] }); await Promise.resolve() })
-  picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置成员')
+  await act(async () => { memberRequests.shift().resolve({ data: [existing, disabled] }); await Promise.resolve() })
+  picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置公司成员')
   assert.equal(picker.props.disabled, false, 'picker should enable after a successful member load')
+  const headings = renderer.root.findAllByType('h3').map((node) => node.props.children)
+  assert.deepEqual(headings.map((children) => Array.isArray(children) ? children.join('') : String(children)), ['公司成员 2', '供应商成员 1'])
+  assert.equal(renderer.root.findAllByType('Text').some((node) => node.props.children === '关联供应商的启用账号自动参与'), true)
   let openRequest
   let duplicateOpen
   await act(async () => {
@@ -544,19 +550,29 @@ test('member picker waits for a successful member load and guards loading/error 
   await act(async () => { releaseOptions({ data: options }); await openRequest; await duplicateOpen })
   assert.equal(renderer.root.findByType('Modal').props.visible, false, 'closing must invalidate a late options response')
 
-  picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置成员')
+  picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置公司成员')
   await act(async () => { openRequest = picker.props.onClick(); await Promise.resolve() })
   assert.equal(optionCalls, 2)
   await act(async () => { releaseOptions({ data: options }); await openRequest })
   const modal = renderer.root.findByType('Modal')
   assert.equal(modal.props.visible, true)
-  const select = renderer.root.findByType('Select')
-  assert.deepEqual(select.props.value, [42])
-  assert.deepEqual(select.props.children.map((option) => option.props.value), [7], 'missing existing members must not become new candidates')
-  const existingTag = select.props.renderTag({ value: 42, label: 42, closable: true, onClose() {} }, 0, [42])
-  assert.match(String(existingTag.props.children), /已有成员（工号 E42）/)
-  assert.equal(existingTag.props.closable, true, 'existing members must remain removable')
-  await act(async () => modal.props.onOk())
+  assert.equal(modal.props.className, 'form-dialog member-picker-dialog')
+  assert.equal(renderer.root.findByType('Input.Search').props.placeholder, '搜索姓名、工号或部门')
+  let checkboxes = renderer.root.findAllByType('Checkbox')
+  assert.equal(checkboxes.length, 3, 'current members must remain visible in the fixed picker list')
+  assert.equal(checkboxes.filter((checkbox) => checkbox.props.checked).length, 2)
+  const disabledCheckbox = checkboxes.find((checkbox) => findElement(checkbox.props.children, (node) => node.props.children === '停用成员'))
+  assert.ok(disabledCheckbox)
+  assert.equal(disabledCheckbox.props.disabled, false, 'disabled members require an explicit user deselection')
+  await act(async () => renderer.root.findByType('Input.Search').props.onChange('E99'))
+  assert.equal(renderer.root.findAllByType('Checkbox').length, 1, 'search must match employee number')
+  await act(async () => renderer.root.findByType('Input.Search').props.onChange(''))
+  checkboxes = renderer.root.findAllByType('Checkbox')
+  await act(async () => renderer.root.findByType('Modal').props.onOk())
+  assert.equal(saved, undefined, 'saving with a disabled member must require explicit deselection')
+  const currentDisabledCheckbox = renderer.root.findAllByType('Checkbox').find((checkbox) => findElement(checkbox.props.children, (node) => node.props.children === '停用成员'))
+  await act(async () => currentDisabledCheckbox.props.onChange(false))
+  await act(async () => renderer.root.findByType('Modal').props.onOk())
   assert.deepEqual(Array.from(saved.userIds), [42, 7], 'saving must preserve the loaded members and the operator')
   await act(async () => renderer.unmount())
 })

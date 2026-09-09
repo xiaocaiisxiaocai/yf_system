@@ -76,6 +76,15 @@ pub async fn list_project_members(
     service::scope::ensure_project_access(&s.db, &u, id).await?;
     Ok(Json(service::project::list_members(&s.db, id).await?))
 }
+pub async fn list_project_supplier_members(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        service::project::list_supplier_members(&s.db, &u, id).await?,
+    ))
+}
 pub async fn set_project_members(
     State(s): State<AppState>,
     u: CurrentUser,

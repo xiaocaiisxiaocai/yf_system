@@ -10,8 +10,8 @@ use serde_json::{json, Value};
 use crate::dto::PageResp;
 use crate::entity::enums::{CommonStatus, ProjectStatus, RoundStatus, UserType};
 use crate::entity::{
-    email_outbox, files, messages, project_activities, project_members, projects, rounds,
-    suppliers, upload_sessions, users,
+    departments, email_outbox, files, messages, project_activities, project_members, projects,
+    rounds, suppliers, upload_sessions, users,
 };
 use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
@@ -349,18 +349,64 @@ pub async fn list_members(db: &DatabaseConnection, project_id: u64) -> ApiResult
         .into_iter()
         .map(|u| (u.id, u))
         .collect();
+    let department_ids: Vec<u64> = user_map.values().filter_map(|u| u.department_id).collect();
+    let department_map: std::collections::HashMap<u64, String> = if department_ids.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        departments::Entity::find()
+            .filter(departments::Column::Id.is_in(department_ids))
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|d| (d.id, d.name))
+            .collect()
+    };
     let mut list = Vec::with_capacity(rows.len());
     for m in rows {
         if let Some(u) = user_map.get(&m.user_id) {
             list.push(json!({
                 "userId": u.id, "employeeNo": u.employee_no, "realName": u.real_name,
                 "departmentId": u.department_id,
+                "deptName": u.department_id.and_then(|d| department_map.get(&d)),
                 "status": if u.status == CommonStatus::Active { "ACTIVE" } else { "DISABLED" },
                 "createdAt": m.created_at,
             }));
         }
     }
     Ok(json!(list))
+}
+
+/// 项目关联供应商成员：仅展示启用供应商下的启用供应商账号。
+pub async fn list_supplier_members(
+    db: &DatabaseConnection,
+    user: &CurrentUser,
+    project_id: u64,
+) -> ApiResult<Value> {
+    let project = scope::ensure_project_access(db, user, project_id).await?;
+    let supplier_active = suppliers::Entity::find_by_id(project.supplier_id)
+        .filter(suppliers::Column::Status.eq(CommonStatus::Active))
+        .one(db)
+        .await?
+        .is_some();
+    if !supplier_active {
+        return Ok(json!([]));
+    }
+    let rows = users::Entity::find()
+        .filter(users::Column::UserType.eq(UserType::Supplier))
+        .filter(users::Column::SupplierId.eq(project.supplier_id))
+        .filter(users::Column::Status.eq(CommonStatus::Active))
+        .order_by_asc(users::Column::Id)
+        .all(db)
+        .await?;
+    Ok(json!(rows
+        .iter()
+        .map(|u| json!({
+            "userId": u.id,
+            "employeeNo": u.employee_no,
+            "realName": u.real_name,
+            "status": "ACTIVE",
+        }))
+        .collect::<Vec<_>>()))
 }
 
 pub async fn set_members(

@@ -81,7 +81,15 @@ export interface Member {
   employeeNo: string
   realName: string
   deptName?: string | null
+  status: 'ACTIVE' | 'DISABLED'
   createdAt: string
+}
+
+export interface SupplierMember {
+  userId: number
+  employeeNo: string
+  realName: string
+  status: 'ACTIVE'
 }
 
 export const PROJECT_STATUS: Record<string, { text: string; color: string }> = {

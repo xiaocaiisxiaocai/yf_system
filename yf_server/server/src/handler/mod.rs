@@ -56,6 +56,10 @@ pub fn router(state: AppState) -> Router {
             "/projects/{id}/members",
             get(project::list_project_members).put(project::set_project_members),
         )
+        .route(
+            "/projects/{id}/supplier-members",
+            get(project::list_project_supplier_members),
+        )
         .route("/projects/{id}/summary", get(project::project_summary))
         .route(
             "/projects/{id}/activities",
