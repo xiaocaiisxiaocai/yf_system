@@ -40,9 +40,12 @@ html, body, #root {
   border-radius: 10px;
   box-shadow: 0 12px 40px rgba(7, 42, 128, 0.35);
 }
-.login-logo { height: 48px; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; }
-.login-logo img { display: block; width: 130px; height: 48px; object-fit: contain; }
-.login-sub { text-align: center; color: #86909c; font-size: 13px; margin-bottom: 24px; }
+.login-logo { height: 42px; display: flex; align-items: center; justify-content: center; margin-bottom: 8px; }
+.login-logo img { display: block; width: 108px; height: 40px; object-fit: contain; }
+.login-title { margin: 0 0 24px; color: #17243a; font-size: 20px; font-weight: 600; line-height: 30px; text-align: center; }
+.login-logo--compact { height: 30px; justify-content: flex-start; margin-bottom: 2px; }
+.login-logo--compact img { width: 68px; height: 28px; }
+.change-password-brand { margin-bottom: 18px; color: var(--app-text-muted); font-size: 13px; }
 .login-bg > .arco-card { border-radius: var(--app-radius); box-shadow: 0 12px 40px rgba(7, 42, 128, 0.25); }
 .login-bg > .arco-card > .arco-card-body { padding: 24px; }
 
@@ -628,8 +631,8 @@ html, body, #root {
 .action-slots--account { grid-template-columns: 44px 72px 44px 44px; }
 .action-slots--user { grid-template-columns: 48px 72px 48px 44px; }
 .action-slots--role { grid-template-columns: 76px 44px 44px 44px; }
-.action-slots--file { grid-template-columns: 58px 36px; }
-.action-slots--round { grid-template-columns: 64px 64px 32px 32px; }
+.action-slots--file { grid-template-columns: 58px 44px; }
+.action-slots--round { grid-template-columns: 64px 64px 56px 56px; }
 .action-slots--single { grid-template-columns: 48px 44px; }
 
 /* 带预览按钮的文件名单元格：文本占据剩余空间，按钮始终不被长文件名挤走。 */

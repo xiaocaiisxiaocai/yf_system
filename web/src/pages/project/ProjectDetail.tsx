@@ -41,8 +41,8 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const filesTargetId = tab === 'files' ? targetId : undefined
   const messagesTargetId = tab === 'messages' ? targetId : undefined
 
-  const fetchProject = useCallback(async () => {
-    const r = await http.get(`/projects/${pid}`)
+  const fetchProject = useCallback(async (signal?: AbortSignal) => {
+    const r = await http.get(`/projects/${pid}`, { signal })
     return r.data as Project
   }, [pid])
 
@@ -113,8 +113,9 @@ function ProjectDetailContent({ id }: { id?: string }) {
   useEffect(() => {
     if (!validProjectId) return
     let active = true
+    const controller = new AbortController()
     loadingProjectId.current = pid
-    fetchProject()
+    fetchProject(controller.signal)
       .then((next) => {
         if (!active) return
         setProject(next)
@@ -128,6 +129,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
       })
     return () => {
       active = false
+      controller.abort()
     }
   }, [fetchProject, pid, validProjectId])
 

@@ -146,7 +146,7 @@ export default function RoundPanel({ projectId, projectStatus, onChanged, target
           loading={loading}
           data={targetId ? rounds.filter((round) => round.id === targetId) : rounds}
           pagination={false}
-          scroll={{ x: 958 }}
+          scroll={{ x: 994 }}
           columns={[
           { title: '轮次', dataIndex: 'roundNo', width: 70, align: 'center' as const, render: (v: number) => `第 ${v} 轮` },
           {
@@ -209,7 +209,8 @@ export default function RoundPanel({ projectId, projectStatus, onChanged, target
           },
           {
             title: '操作',
-            width: 228,
+            width: 264,
+            fixed: 'right' as const,
             align: 'center' as const,
             render: (_: unknown, r: Round) => actionSlots([
               myTurn(r) && (
@@ -227,10 +228,10 @@ export default function RoundPanel({ projectId, projectStatus, onChanged, target
               isInternal && hasPerm('round:cancel') && r.status === 'PENDING'
                 && (r.createdBy === user?.id || hasPerm('project:view_all')) && (
                 <Popconfirm key="cancel" title="撤销该轮次？关联文件将一并锁定" onOk={() => cancel(r)}>
-                  <Button size="mini" type="text" icon={<IconMinusCircle />} title="撤销" />
+                  <Button size="mini" type="text" icon={<IconMinusCircle />}>撤销</Button>
                 </Popconfirm>
               ),
-              <Button key="history" size="mini" type="text" icon={<IconClockCircle />} title="历史" onClick={() => openHistory(r)} />,
+              <Button key="history" size="mini" type="text" icon={<IconClockCircle />} onClick={() => openHistory(r)}>历史</Button>,
             ], 'round'),
           },
           ]}

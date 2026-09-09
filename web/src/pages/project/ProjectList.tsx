@@ -123,25 +123,26 @@ export default function ProjectList() {
       {
         title: '项目名称',
         dataIndex: 'name',
-        width: 220,
+        width: 200,
         ellipsis: true,
         render: (v: string, r: Project) => (
           <a onClick={() => nav(`/projects/${r.id}`)}>{v}</a>
         ),
       },
-      { title: '供应商', dataIndex: 'supplierName', width: 180, ellipsis: true },
+      { title: '供应商', dataIndex: 'supplierName', width: 160, ellipsis: true },
       {
         title: '状态',
         dataIndex: 'status',
-        width: 80,
+        width: 76,
         align: 'center' as const,
         render: (v: string) => <Tag color={PROJECT_STATUS[v]?.color}>{PROJECT_STATUS[v]?.text || v}</Tag>,
       },
-      { title: '创建人', dataIndex: 'createdByName', width: 120, align: 'center' as const, ellipsis: true },
-      { title: '更新时间', dataIndex: 'updatedAt', width: 180, align: 'center' as const, render: fmtTime },
+      { title: '创建人', dataIndex: 'createdByName', width: 100, align: 'center' as const, ellipsis: true },
+      { title: '更新时间', dataIndex: 'updatedAt', width: 170, align: 'center' as const, render: fmtTime },
       {
         title: '操作',
         width: 272,
+        fixed: 'right' as const,
         align: 'center' as const,
         render: (_: unknown, r: Project) => {
           const nextStatuses = statusActions(r)
@@ -253,7 +254,7 @@ export default function ProjectList() {
           loading={loading}
           columns={columns}
           data={data.list}
-          scroll={{ x: 1028, y: 'var(--page-table-scroll-y)' }}
+          scroll={{ x: 978, y: 'var(--page-table-scroll-y)' }}
           pagination={{
             total: data.total,
             current: page,

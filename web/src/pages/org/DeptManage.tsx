@@ -279,8 +279,7 @@ export default function DeptManage() {
             </>
           ) : (
             <div className="dept-empty-detail">
-              <Typography.Title heading={5} style={{ margin: 0 }}>请选择一个组织节点</Typography.Title>
-              {canManage && <Button type="primary" icon={<IconPlus />} onClick={() => openCreate(null)}>新增事业部</Button>}
+              <Typography.Title heading={5} style={{ margin: 0 }}>请选择左侧组织节点</Typography.Title>
             </div>
           )}
         </section>

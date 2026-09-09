@@ -217,7 +217,7 @@ export default function UserList() {
           rowKey="id"
           loading={loading}
           data={data.list}
-          scroll={{ x: 1160, y: 'var(--page-table-scroll-y)' }}
+          scroll={{ x: 1204, y: 'var(--page-table-scroll-y)' }}
           columns={[
           { title: '工号', dataIndex: 'employeeNo', width: 130, align: 'center' as const, ellipsis: true },
           { title: '姓名', dataIndex: 'realName', width: 100, align: 'center' as const, ellipsis: true },
@@ -245,6 +245,7 @@ export default function UserList() {
           {
             title: '操作',
             width: 264,
+            fixed: 'right' as const,
             align: 'center' as const,
             render: (_: unknown, r: UserRow) => actionSlots([
                 <Button

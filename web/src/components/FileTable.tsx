@@ -235,6 +235,7 @@ export default function FileTable({ projectId, projectStatus, rounds, targetId }
           {
             title: '操作',
             width: 150,
+            fixed: 'right' as const,
             align: 'center' as const,
             render: (_: unknown, r: FileItem) => actionSlots([
               hasPerm('file:download') && (
@@ -244,7 +245,7 @@ export default function FileTable({ projectId, projectStatus, rounds, targetId }
               ),
               r.canDelete && (
                 <Popconfirm key="delete" title={`删除文件「${r.originalName}」？`} onOk={() => remove(r)}>
-                  <Button size="mini" type="text" status="danger" icon={<IconDelete />} title="删除" aria-label="删除文件" />
+                  <Button size="mini" type="text" status="danger" icon={<IconDelete />} aria-label="删除文件">删除</Button>
                 </Popconfirm>
               ),
             ], 'file'),

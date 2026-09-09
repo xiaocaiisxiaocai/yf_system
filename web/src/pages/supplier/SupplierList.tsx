@@ -173,6 +173,7 @@ export default function SupplierList() {
           {
             title: '操作',
             width: 254,
+            fixed: 'right' as const,
             align: 'center' as const,
             render: (_: unknown, r: Supplier) => actionSlots([
               canManageAccounts && <Button key="accounts" size="mini" type="text" onClick={() => setAccTarget(r)}>
@@ -384,6 +385,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
           {
             title: '操作',
             width: 244,
+            fixed: 'right' as const,
             align: 'center' as const,
             render: (_: unknown, r: Account) => actionSlots([
               <Button

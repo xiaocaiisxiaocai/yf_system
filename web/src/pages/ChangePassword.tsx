@@ -44,7 +44,11 @@ export default function ChangePassword() {
 
   return (
     <div className="login-bg">
-      <Card style={{ width: 420 }}>
+      <Card className="change-password-card" style={{ width: 420 }}>
+        <div className="login-logo login-logo--compact">
+          <img src="/saa-logo.svg" alt="SAA" />
+        </div>
+        <div className="change-password-brand">供应商协作平台</div>
         <Typography.Title heading={5} style={{ marginTop: 0 }}>
           修改密码
         </Typography.Title>

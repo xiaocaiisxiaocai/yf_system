@@ -157,39 +157,40 @@ export default function RoleList() {
           rowKey="id"
           loading={loading}
           data={data.list}
-          scroll={{ x: 1010, y: 'var(--page-table-scroll-y)' }}
+          scroll={{ x: 972, y: 'var(--page-table-scroll-y)' }}
           columns={[
           {
             title: '名称',
             dataIndex: 'name',
-            width: 220,
+            width: 190,
             render: (v: string) => <span style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '20px' }}>{v}</span>,
           },
           {
             title: '说明',
             dataIndex: 'description',
-            width: 230,
+            width: 200,
             render: (v?: string) => <span style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '20px' }}>{v || '-'}</span>,
           },
-          { title: '权限点数', dataIndex: 'permissionIds', width: 90, align: 'center' as const, render: (v: number[]) => v.length },
-          { title: '绑定用户', dataIndex: 'assignedUserCount', width: 90, align: 'center' as const },
+          { title: '权限点数', dataIndex: 'permissionIds', width: 84, align: 'center' as const, render: (v: number[]) => v.length },
+          { title: '绑定用户', dataIndex: 'assignedUserCount', width: 84, align: 'center' as const },
           {
             title: '类型',
             dataIndex: 'isBuiltIn',
-            width: 90,
+            width: 80,
             align: 'center' as const,
             render: (v: boolean) => (v ? <Tag>内置</Tag> : <Tag color="arcoblue">自定义</Tag>),
           },
           {
             title: '状态',
             dataIndex: 'status',
-            width: 80,
+            width: 70,
             align: 'center' as const,
             render: (v: string) => (v === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="red">禁用</Tag>),
           },
           {
             title: '操作',
-            width: 254,
+            width: 264,
+            fixed: 'right' as const,
             align: 'center' as const,
             render: (_: unknown, r: Role) => actionSlots([
               <Button
