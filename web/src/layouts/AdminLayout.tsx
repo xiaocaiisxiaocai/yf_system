@@ -89,9 +89,9 @@ export default function AdminLayout() {
       style={{ width: '100%' }}
     >
       {items.map((m) => (
-        <Menu.Item key={m.path}>
+        <Menu.Item key={m.path} title={collapsed ? m.label : undefined}>
           {m.icon}
-          {m.label}
+          {!collapsed && m.label}
         </Menu.Item>
       ))}
     </Menu>
