@@ -7,7 +7,8 @@ export const http = axios.create({ baseURL: '/api/v1', timeout: 60000 })
 
 let refreshing: Promise<boolean> | null = null
 let refreshingGeneration: number | undefined
-let refreshingProfile: Promise<void> | null = null
+type ProfileRefresh = { generation: number; token: string; promise: Promise<void> }
+let refreshingProfile: ProfileRefresh | null = null
 type SessionConfig = AxiosRequestConfig & { _retried?: boolean; authGeneration?: number }
 const isCurrentSession = (config?: SessionConfig) => !config || config.authGeneration === useAuth.getState().generation
 
@@ -21,12 +22,15 @@ export function withAuthLock<T>(operation: () => Promise<T>): Promise<T> {
 
 /** 权限被管理员调整后，403 会触发一次资料刷新，让菜单和按钮及时收敛到服务端状态。 */
 async function refreshProfileAfterForbidden(): Promise<void> {
-  const token = useAuth.getState().token
-  const generation = useAuth.getState().generation
+  const { token, generation } = useAuth.getState()
   if (!token) return
-  if (!refreshingProfile) {
-    refreshingProfile = axios
-      .get('/api/v1/auth/profile', { headers: { Authorization: `Bearer ${token}` } })
+  const pending = refreshingProfile
+  let promise: Promise<void>
+  if (pending && pending.generation === generation && pending.token === token) {
+    promise = pending.promise
+  } else {
+    promise = axios
+      .get('/api/v1/auth/profile', { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 })
       .then((response) => {
         if (useAuth.getState().generation === generation && useAuth.getState().token === token) {
           useAuth.getState().setLogin({ ...response.data, accessToken: token }, false)
@@ -34,10 +38,13 @@ async function refreshProfileAfterForbidden(): Promise<void> {
       })
       .catch(() => undefined)
       .finally(() => {
-        setTimeout(() => (refreshingProfile = null), 0)
+        setTimeout(() => {
+          if (refreshingProfile?.promise === promise) refreshingProfile = null
+        }, 0)
       })
+    refreshingProfile = { generation, token, promise }
   }
-  await refreshingProfile
+  await promise
 }
 
 /** 单飞刷新：并发 401 共享同一次请求 */
