@@ -1617,6 +1617,108 @@ test('project submission sends only the opposite organization as confirmer', asy
   }
 })
 
+test('project rejection discards a cancelled reason but retains it after a failed submit', async () => {
+  let reason = ''
+  const form = {
+    resetFields() { reason = '' },
+    validate: async () => ({ reason }),
+  }
+  const localArco = new Proxy({
+    ...arco,
+    Form: Object.assign(component('Form'), { useForm: () => [form], Item: component('Form.Item') }),
+  }, { get: (obj, key) => obj[key] ?? component(key) })
+  const calls = []
+  const Page = loadTs('src/components/ProjectWorkflowPanel.tsx', {
+    '@arco-design/web-react': localArco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': { post: async (url, body) => { calls.push({ url, body }); throw new Error('offline') } },
+    '../api/types': { PROJECT_STATUS: { PENDING_CONFIRMATION: { text: '待确认' } } },
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:confirm']),
+  }).default
+  let renderer
+  await act(async () => {
+    renderer = create(React.createElement(Page, {
+      project: { id: 17, status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY' },
+      onChanged() { assert.fail('a cancelled or failed rejection must not report success') },
+    }))
+  })
+  const open = () => renderer.root.findAllByType('Button').find((node) => node.props.children === '驳回').props.onClick()
+  const modal = () => renderer.root.findByType('Modal')
+  await act(async () => open())
+  reason = 'cancelled draft'
+  await act(async () => modal().props.onCancel())
+  assert.equal(modal().props.visible, false)
+  await act(async () => open())
+  assert.equal(reason, '', 'reopening must not reuse a cancelled rejection reason')
+  assert.equal(calls.length, 0)
+  reason = 'keep this reason while retrying'
+  await act(async () => assert.rejects(modal().props.onOk(), /offline/))
+  assert.equal(modal().props.visible, true)
+  assert.equal(reason, 'keep this reason while retrying')
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, '/projects/17/reject')
+  assert.equal(calls[0].body.reason, reason)
+  await act(async () => modal().props.onCancel())
+  assert.equal(reason, '')
+  await act(async () => renderer.unmount())
+})
+
+test('workflow actions ignore duplicate invocations while validation or the request is pending', async () => {
+  for (const action of ['start', 'submit', 'confirm', 'reject', 'withdraw']) {
+    const calls = []
+    let settle
+    let validate
+    let resets = 0
+    const form = {
+      resetFields() { resets += 1 },
+      validate: () => new Promise((resolve) => { validate = resolve }),
+    }
+    const localArco = new Proxy({
+      ...arco,
+      Form: Object.assign(component('Form'), { useForm: () => [form], Item: component('Form.Item') }),
+    }, { get: (obj, key) => obj[key] ?? component(key) })
+    const request = (url) => { calls.push(url); return new Promise((resolve) => { settle = resolve }) }
+    const Page = loadTs('src/components/ProjectWorkflowPanel.tsx', {
+      '@arco-design/web-react': localArco,
+      '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+      '../api/client': { post: request, put: request },
+      '../api/types': { PROJECT_STATUS: {} },
+      '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:status', 'project:submit', 'project:confirm', 'project:withdraw']),
+    }).default
+    let renderer
+    let changed = 0
+    await act(async () => {
+      renderer = create(React.createElement(Page, {
+        project: { id: 17, status: action === 'start' ? 'DRAFT' : action === 'submit' ? 'IN_PROGRESS' : 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 1 },
+        onChanged() { changed += 1 },
+      }))
+    })
+    const modal = () => renderer.root.findByType('Modal')
+    let invoke
+    if (action === 'start') invoke = renderer.root.findAllByType('Button').find((node) => node.props.children === '开始').props.onClick
+    else if (action === 'reject') {
+      await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '驳回').props.onClick())
+      invoke = modal().props.onOk
+    } else {
+      const prefix = { submit: '提交给', confirm: '确认通过', withdraw: '撤回本次' }[action]
+      invoke = renderer.root.findAllByType('Popconfirm').find((node) => String(node.props.title).startsWith(prefix)).props.onOk
+    }
+    let first
+    let second
+    await act(async () => { first = invoke(); second = invoke(); await Promise.resolve() })
+    if (action === 'reject') {
+      await act(async () => modal().props.onCancel())
+      assert.equal(modal().props.visible, true, 'cancel must not close a rejection while validation is in flight')
+      assert.equal(resets, 0, 'pending validation must retain the submitted draft')
+      await act(async () => { validate({ reason: 'review reason' }); await Promise.resolve() })
+    }
+    assert.equal(calls.length, 1, `${action} must send only one request`)
+    await act(async () => { settle({ data: {} }); await Promise.all([first, second]) })
+    assert.equal(changed, 1)
+    await act(async () => renderer.unmount())
+  }
+})
+
 test('project pages contain no round entry points or project round selectors', () => {
   const root = path.resolve(__dirname, '..')
   const files = [

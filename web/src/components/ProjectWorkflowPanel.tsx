@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   Button, Form, Input, Message, Modal, Popconfirm, Space, Tag, Typography,
 } from '@arco-design/web-react'
@@ -21,7 +21,19 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
   const { hasPerm, user } = useAuth()
   const [rejectOpen, setRejectOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
   const [rejectForm] = Form.useForm()
+
+  const beginAction = () => {
+    if (busyRef.current) return false
+    busyRef.current = true
+    setBusy(true)
+    return true
+  }
+  const finishAction = () => {
+    busyRef.current = false
+    setBusy(false)
+  }
 
   const isInternal = user?.userType === 'INTERNAL'
   const isConfirmSide = project.confirmSide === (isInternal ? 'COMPANY' : 'SUPPLIER')
@@ -32,8 +44,7 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
     && (project.latestSubmitterId === user?.id || (isInternal && hasPerm('project:view_all')))
 
   const changeStatus = async (status: 'IN_PROGRESS' | 'TERMINATED') => {
-    if (busy) return
-    setBusy(true)
+    if (!beginAction()) return
     try {
       await http.put(`/projects/${project.id}/status`, { status })
       Message.success(status === 'IN_PROGRESS'
@@ -41,59 +52,55 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
         : '项目已终止')
       onChanged()
     } finally {
-      setBusy(false)
+      finishAction()
     }
   }
 
   const submitConfirmation = async () => {
-    if (busy) return
-    setBusy(true)
+    if (!beginAction()) return
     try {
       await http.post(`/projects/${project.id}/submit`, { confirmSide: isInternal ? 'SUPPLIER' : 'COMPANY' })
       Message.success('项目已提交确认')
       onChanged()
     } finally {
-      setBusy(false)
+      finishAction()
     }
   }
 
   const confirmProject = async () => {
-    if (busy) return
-    setBusy(true)
+    if (!beginAction()) return
     try {
       await http.post(`/projects/${project.id}/confirm`)
       Message.success('项目已确认完成')
       onChanged()
     } finally {
-      setBusy(false)
+      finishAction()
     }
   }
 
   const rejectProject = async () => {
-    if (busy) return
-    const values = await rejectForm.validate().catch(() => null)
-    if (!values) return
-    setBusy(true)
+    if (!beginAction()) return
     try {
+      const values = await rejectForm.validate().catch(() => null)
+      if (!values) return
       await http.post(`/projects/${project.id}/reject`, { reason: values.reason.trim() })
       Message.success('项目已驳回')
       rejectForm.resetFields()
       setRejectOpen(false)
       onChanged()
     } finally {
-      setBusy(false)
+      finishAction()
     }
   }
 
   const withdraw = async () => {
-    if (busy) return
-    setBusy(true)
+    if (!beginAction()) return
     try {
       await http.post(`/projects/${project.id}/withdraw`)
       Message.success('已撤回确认')
       onChanged()
     } finally {
-      setBusy(false)
+      finishAction()
     }
   }
 
@@ -175,7 +182,11 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
         escToExit={!busy}
         cancelButtonProps={{ disabled: busy }}
         onOk={rejectProject}
-        onCancel={() => { if (!busy) setRejectOpen(false) }}
+        onCancel={() => {
+          if (busyRef.current) return
+          rejectForm.resetFields()
+          setRejectOpen(false)
+        }}
         okText="确认驳回"
         cancelText="取消"
         okButtonProps={{ status: 'danger' }}
