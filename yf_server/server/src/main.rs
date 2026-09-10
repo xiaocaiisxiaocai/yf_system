@@ -15,6 +15,8 @@ mod regression;
 #[cfg(test)]
 mod regression_business_uniqueness;
 #[cfg(test)]
+mod regression_dashboard;
+#[cfg(test)]
 mod regression_delete_accounts;
 #[cfg(test)]
 mod regression_delete_project;
@@ -30,6 +32,8 @@ mod regression_project_activity;
 mod regression_project_members;
 #[cfg(test)]
 mod regression_project_workflow_migration;
+#[cfg(test)]
+mod regression_workflow_contract;
 #[cfg(test)]
 mod regression_write_permissions;
 

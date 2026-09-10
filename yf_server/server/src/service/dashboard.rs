@@ -1,6 +1,7 @@
 //! 工作台汇总：可见项目数、待我方确认项目、未读留言
 use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect,
 };
 use serde_json::{json, Value};
 
@@ -11,29 +12,61 @@ use crate::middleware::auth::CurrentUser;
 
 use super::scope;
 
+pub async fn pending_projects(
+    db: &DatabaseConnection,
+    user: &CurrentUser,
+    q: &crate::dto::PageQuery,
+) -> ApiResult<crate::dto::PageResp<Value>> {
+    let (page, size) = q.clamped();
+    if !can_confirm(db, user).await? {
+        return Ok(crate::dto::PageResp::new(vec![], 0, page, size));
+    }
+    let cond = scope::project_condition(db, user).await?;
+    let paginator = projects::Entity::find()
+        .filter(cond)
+        .filter(projects::Column::Status.eq(ProjectStatus::PendingConfirmation))
+        .filter(projects::Column::ConfirmSide.eq(confirmation_side(user)))
+        .order_by_desc(projects::Column::UpdatedAt)
+        .order_by_desc(projects::Column::Id)
+        .paginate(db, size);
+    let total = paginator.num_items().await?;
+    let rows = paginator.fetch_page(page - 1).await?;
+    let list = rows.iter().map(|project| json!({
+        "id": project.id,
+        "name": project.name,
+        "status": "PENDING_CONFIRMATION",
+        "confirmSide": if project.confirm_side == Some(ConfirmSide::Company) { "COMPANY" } else { "SUPPLIER" },
+        "updatedAt": project.updated_at,
+    })).collect();
+    Ok(crate::dto::PageResp::new(list, total, page, size))
+}
+
+fn confirmation_side(user: &CurrentUser) -> ConfirmSide {
+    if user.user_type == UserType::Supplier {
+        ConfirmSide::Supplier
+    } else {
+        ConfirmSide::Company
+    }
+}
+
+async fn can_confirm(db: &DatabaseConnection, user: &CurrentUser) -> ApiResult<bool> {
+    Ok(super::perm::permission_codes(db, user.id)
+        .await?
+        .iter()
+        .any(|code| code == "project:confirm"))
+}
+
 pub async fn summary(db: &DatabaseConnection, user: &CurrentUser) -> ApiResult<Value> {
     let cond = scope::project_condition(db, user).await?;
     let visible = projects::Entity::find().filter(cond).all(db).await?;
     let project_ids: Vec<u64> = visible.iter().map(|p| p.id).collect();
     let active_count = visible
         .iter()
-        .filter(|p| {
-            matches!(
-                p.status,
-                ProjectStatus::InProgress | ProjectStatus::PendingConfirmation
-            )
-        })
+        .filter(|p| p.status == ProjectStatus::InProgress)
         .count();
 
-    let my_side = if user.user_type == UserType::Supplier {
-        ConfirmSide::Supplier
-    } else {
-        ConfirmSide::Company
-    };
-    let can_confirm = super::perm::check_perm(db, user.id, "project:confirm")
-        .await
-        .is_ok();
-    let pending_confirmations = if can_confirm {
+    let my_side = confirmation_side(user);
+    let pending_confirmations = if can_confirm(db, user).await? {
         visible
             .iter()
             .filter(|project| {

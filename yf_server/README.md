@@ -44,6 +44,8 @@ cargo run -p migration -- up
 
 删除回归测试使用 `python scripts/test-isolated.py delete_safety_`，脚本只允许本机 MySQL，创建并清理临时测试库，不使用业务库运行删除测试。
 
+完整 HTTP 链路测试使用 `python scripts/test-http-isolated.py`。先运行 `cargo build -p server --locked --offline` 更新测试二进制；Windows 下若该二进制正在运行，需先核实并停止本项目对应进程，构建后恢复。运行器从本地配置读取 MySQL 连接，创建临时数据库、随机端口服务和临时存储，禁用 SMTP；在结束时清理自己创建的资源，不停止已有应用。它调用 `e2e_test.py` 验证认证、Cookie 旋转/退出、权限、组织、项目审批、上传下载、留言、审计及工作台接口。`e2e_test.py` 不再默认连接业务端口，不能用业务库运行此套写入测试。
+
 系统管理员角色绑定启用用户时必须保留用户管理和角色管理入口，避免管理员在权限分配时锁死系统；角色禁用和删除仍受绑定用户校验约束。
 
 ## 项目动态

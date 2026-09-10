@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
 """后端全链路 E2E 测试：认证/组织/用户/角色/供应商/项目审批/上传/文件/留言/日志/工作台"""
 import json, os, urllib.request, urllib.error, urllib.parse, uuid, sys
+from http.cookies import SimpleCookie
 
-BASE = "http://127.0.0.1:8080/api/v1"
+BASE = os.environ.get("YF_E2E_BASE_URL", "")
+target = urllib.parse.urlsplit(BASE)
+if os.environ.get("YF_E2E_ISOLATED") != "1" or target.scheme != "http" or target.hostname != "127.0.0.1" or target.path != "/api/v1":
+    raise SystemExit("请使用 python scripts/test-http-isolated.py；此脚本仅允许隔离运行，不默认写入业务环境。")
 PASS, FAIL = 0, 0
 ADMIN_PASSWORD = os.environ.get("YF_E2E_ADMIN_PASSWORD")
 ADMIN_INITIAL_PASSWORD = os.environ.get("YF_E2E_ADMIN_INITIAL_PASSWORD")
@@ -12,10 +16,11 @@ if not ADMIN_PASSWORD:
     print("缺少 YF_E2E_ADMIN_PASSWORD；测试不会读取或内置管理员密码。", file=sys.stderr)
     sys.exit(2)
 
-def req(method, path, body=None, token=None, raw=None):
-    url = BASE + path
+def req(method, path, body=None, token=None, raw=None, cookie=None):
+    url = BASE + urllib.parse.quote(path, safe="/?=&%:+,")
     h = {"Content-Type": "application/json"}
     if token: h["Authorization"] = "Bearer " + token
+    if cookie: h["Cookie"] = cookie
     data = None
     if raw is not None:
         data = raw
@@ -24,7 +29,7 @@ def req(method, path, body=None, token=None, raw=None):
         data = json.dumps(body).encode()
     r = urllib.request.Request(url, data=data, headers=h, method=method)
     try:
-        with urllib.request.urlopen(r) as resp:
+        with urllib.request.urlopen(r, timeout=30) as resp:
             ct = resp.headers.get("Content-Type", "")
             payload = resp.read()
             if "application/json" in ct:
@@ -38,7 +43,8 @@ def req(method, path, body=None, token=None, raw=None):
 def check(name, cond, extra=""):
     global PASS, FAIL
     if cond: PASS += 1; print(f"  [PASS] {name}")
-    else: FAIL += 1; print(f"  [FAIL] {name} :: {extra}")
+    # Responses may contain temporary access tokens; never print complete payloads.
+    else: FAIL += 1; print(f"  [FAIL] {name}")
 
 def login(employee_no, password, captcha_id=None, captcha_code=None):
     body = {"employeeNo": employee_no, "password": password}
@@ -128,7 +134,18 @@ s, r, _ = req("PUT", f"/admin/users/{PM_ID}", {"departmentId": DEPT_ID, "roleId"
 check("用户部门可以恢复", s == 200 and r.get("departmentId") == DEPT_ID, f"got {s} {r}")
 
 s, r, _ = req("GET", "/permissions", token=ADMIN)
-check("权限树(8菜单+20操作)", s == 200 and isinstance(r, list) and len(r) == 28, f"got {s} len={len(r) if isinstance(r,list) else r}")
+expected_menus = {"dashboard", "project:list", "supplier:list", "org:user", "org:dept", "rbac:role", "log:audit", "system:config"}
+expected_actions = {
+    "project:create", "project:update", "project:delete", "project:status", "project:member", "project:view_all",
+    "project:submit", "project:confirm", "project:withdraw",
+    "file:upload", "file:download", "file:preview", "file:delete", "message:create", "message:delete_any",
+    "supplier:manage", "supplier:delete", "supplier:account", "supplier:account_delete",
+    "user:manage", "user:delete", "dept:manage", "dept:delete", "role:manage", "role:delete", "log:view", "log:delete", "config:manage",
+}
+check("权限树包含完整菜单、独立项目审批和删除权限", s == 200 and isinstance(r, list)
+      and {p["code"] for p in r if p["type"] == "MENU"} == expected_menus
+      and {p["code"] for p in r if p["type"] == "ACTION"} == expected_actions
+      and len({p["id"] for p in r}) == len(expected_menus | expected_actions))
 PERMS = {p["code"]: p["id"] for p in r}
 
 s, r, _ = req("POST", "/admin/roles", {"name": "只读角色", "description": "仅查看项目"}, ADMIN)
@@ -384,6 +401,10 @@ s, r, _ = req("POST", f"/projects/{PROJ_ID}/submit", {"confirmSide": "SUPPLIER"}
 check("PM SUBMIT 给供应商确认", s == 200 and r.get("status") == "PENDING_CONFIRMATION" and r.get("confirmSide") == "SUPPLIER", f"got {s} {r}")
 s, r, _ = req("GET", "/dashboard/summary", token=SUP)
 check("供应商工作台有 1 个待确认项目", s == 200 and r.get("pendingConfirmations") == 1, f"got {s} {r}")
+s, r, _ = req("GET", "/dashboard/pending-projects?page=1&pageSize=10", token=SUP)
+check("供应商待办清单包含待本方确认的项目", s == 200 and r.get("total") == 1 and [p.get("id") for p in r.get("list", [])] == [PROJ_ID] and r["list"][0].get("confirmSide") == "SUPPLIER")
+s, r, _ = req("GET", "/dashboard/pending-projects?page=1&pageSize=10", token=SUP2)
+check("其他供应商看不到该待办", s == 200 and r.get("total") == 0 and r.get("list") == [])
 s, r, _ = req("POST", f"/projects/{PROJ_ID}/confirm", {}, PM)
 check("非确认方确认被拒(403)", s == 403, f"got {s} {r}")
 s, r, _ = req("POST", f"/projects/{PROJ_ID}/withdraw", {}, PM)
@@ -402,12 +423,18 @@ s, r, _ = req("POST", f"/projects/{PROJ_ID}/submit", {"confirmSide": "COMPANY"},
 check("供应商 SUBMIT 给公司确认", s == 200 and r.get("status") == "PENDING_CONFIRMATION" and r.get("confirmSide") == "COMPANY", f"got {s} {r}")
 s, r, _ = req("GET", "/dashboard/summary", token=PM)
 check("PM 工作台有 1 个待确认项目", s == 200 and r.get("pendingConfirmations") == 1, f"got {s} {r}")
+s, r, _ = req("GET", "/dashboard/pending-projects?page=1&pageSize=10", token=PM)
+check("公司待办清单随确认方变化", s == 200 and r.get("total") == 1 and [p.get("id") for p in r.get("list", [])] == [PROJ_ID] and r["list"][0].get("confirmSide") == "COMPANY")
+s, r, _ = req("GET", "/dashboard/pending-projects", token=SUP)
+check("供应商清单移除待公司确认的项目", s == 200 and r.get("total") == 0 and r.get("list") == [])
 s, r, _ = req("GET", "/dashboard/summary", token=SUP)
 check("供应商工作台不把待公司确认计入本人待办", s == 200 and r.get("pendingConfirmations") == 0, f"got {s} {r}")
 s, r, _ = req("POST", f"/projects/{PROJ_ID}/confirm", {}, SUP)
 check("提交方不能代确认(403)", s == 403, f"got {s} {r}")
 s, r, _ = req("POST", f"/projects/{PROJ_ID}/confirm", {}, PM)
 check("公司 CONFIRM 完成项目", s == 200 and r.get("status") == "COMPLETED" and r.get("confirmSide") is None, f"got {s} {r}")
+s, r, _ = req("GET", "/dashboard/pending-projects", token=PM)
+check("确认完成后公司待办清空", s == 200 and r.get("total") == 0 and r.get("list") == [])
 s, r, _ = req("POST", f"/projects/{PROJ_ID}/confirm", {}, PM)
 check("完成项目不可再次确认(409)", s == 409, f"got {s} {r}")
 s, r, _ = req("POST", "/uploads/init", {"projectId": PROJ_ID, "fileName": "迟到.txt", "fileSize": 10}, PM)
@@ -453,7 +480,31 @@ check("供应商工作台(1项目/0待确认)", s == 200 and r.get("projectCount
 s, r, _ = req("GET", "/dashboard/summary", token=SUP2)
 check("供应商2工作台(1项目0待办)", s == 200 and r.get("projectCount") == 1 and r.get("pendingConfirmations") == 0, f"got {s} {r}")
 
-print("== 9. 禁用 / 验证码 / 锁定 ==")
+print("== 9. Refresh Cookie 旋转与退出 ==")
+def refresh_cookie(headers):
+    parsed = SimpleCookie()
+    parsed.load(next((v for k, v in headers.items() if k.lower() == "set-cookie"), ""))
+    return parsed.get("refresh_token")
+
+s, r, headers = req("POST", "/auth/login", {"employeeNo": "admin", "password": active_admin_password})
+first_cookie = refresh_cookie(headers)
+check("登录设置HttpOnly同源路径Cookie", s == 200 and first_cookie is not None and bool(first_cookie["httponly"]) and first_cookie["samesite"].lower() == "lax" and first_cookie["path"] == "/api/v1/auth")
+if first_cookie is not None:
+    s, refreshed, headers = req("POST", "/auth/refresh", cookie=first_cookie.OutputString(attrs=[]))
+    second_cookie = refresh_cookie(headers)
+    check("refresh返回访问令牌并旋转Cookie", s == 200 and bool(refreshed.get("accessToken")) and second_cookie is not None and second_cookie.value != first_cookie.value)
+    s, _, _ = req("POST", "/auth/refresh", cookie=first_cookie.OutputString(attrs=[]))
+    check("旧refresh Cookie不可重放", s == 401)
+    if second_cookie is not None:
+        s, _, headers = req("POST", "/auth/logout", token=refreshed.get("accessToken"), cookie=second_cookie.OutputString(attrs=[]))
+        cleared_cookie = refresh_cookie(headers)
+        check("退出清除Cookie", s == 200 and cleared_cookie is not None and cleared_cookie["max-age"] == "0")
+        s, _, _ = req("POST", "/auth/refresh", cookie=second_cookie.OutputString(attrs=[]))
+        check("退出后refresh Cookie失效", s == 401)
+s, _, _ = req("POST", "/auth/refresh")
+check("缺少refresh Cookie被拒", s == 401)
+
+print("== 10. 禁用 / 验证码 / 锁定 ==")
 s, r, _ = req("PUT", f"/admin/supplier-accounts/{SUP_UID}/status", {"status": "DISABLED"}, ADMIN)
 check("禁用供应商账号", s == 200, f"got {s} {r}")
 s, r = login("hy_li", HY_PW)

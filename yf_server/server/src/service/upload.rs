@@ -445,6 +445,13 @@ pub async fn abort(state: &AppState, user: &CurrentUser, sid: &str) -> ApiResult
     if matches!(s.status, UploadStatus::Completed | UploadStatus::Merging) {
         return Err(AppError::Conflict("会话已完成，不可放弃".into()));
     }
+    // A lost cancellation response may be retried after the project was submitted.
+    // Repeat only temporary-file cleanup, preserving the original state and audit.
+    if s.status == UploadStatus::Aborted {
+        txn.commit().await?;
+        let _ = tokio::fs::remove_dir_all(&s.temp_dir).await;
+        return Ok(());
+    }
     let mut am: upload_sessions::ActiveModel = s.clone().into();
     am.status = Set(UploadStatus::Aborted);
     am.updated_at = Set(Utc::now());

@@ -212,6 +212,16 @@ pub async fn dashboard_summary(
     Ok(Json(service::dashboard::summary(&s.db, &u).await?))
 }
 
+pub async fn dashboard_pending_projects(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Query(q): Query<crate::dto::PageQuery>,
+) -> ApiResult<Json<crate::dto::PageResp<Value>>> {
+    Ok(Json(
+        service::dashboard::pending_projects(&s.db, &u, &q).await?,
+    ))
+}
+
 // ---------- 下拉选项（内部用户） ----------
 
 pub async fn supplier_options(State(s): State<AppState>, u: CurrentUser) -> ApiResult<Json<Value>> {

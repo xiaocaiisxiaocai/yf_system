@@ -34,6 +34,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/auth/password", put(auth::change_password))
         .route("/dashboard/summary", get(project::dashboard_summary))
+        .route(
+            "/dashboard/pending-projects",
+            get(project::dashboard_pending_projects),
+        )
         // 部门树供用户表单使用，读取不卡权限点
         .route("/departments", get(admin::list_departments))
         .route("/permissions", get(admin::list_permissions))
