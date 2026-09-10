@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Typography,
 } from '@arco-design/web-react'
@@ -7,6 +7,7 @@ import http from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
+import { passwordRule } from '../../utils/password'
 
 interface Supplier {
   id: number
@@ -42,6 +43,8 @@ export default function SupplierList() {
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<Supplier | null>(null)
   const [accTarget, setAccTarget] = useState<Supplier | null>(null)
+  const togglingSupplierIdsRef = useRef(new Set<number>())
+  const [togglingSupplierIds, setTogglingSupplierIds] = useState<ReadonlySet<number>>(new Set())
   const [form] = Form.useForm()
 
   const fetchSuppliers = useCallback(async () => {
@@ -62,6 +65,8 @@ export default function SupplierList() {
         if (active) {
           setData(next)
           setLoadError(false)
+          const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || pageSize)))
+          if (page > lastPage) setPage(lastPage)
         }
       })
       .catch(() => {
@@ -73,7 +78,7 @@ export default function SupplierList() {
     return () => {
       active = false
     }
-  }, [fetchSuppliers, reloadKey])
+  }, [fetchSuppliers, page, pageSize, reloadKey])
 
   const submit = async () => {
     if (saving) return
@@ -96,9 +101,20 @@ export default function SupplierList() {
   }
 
   const toggleStatus = async (s: Supplier) => {
-    await http.put(`/admin/suppliers/${s.id}/status`, { status: s.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
-    Message.success(s.status === 'ACTIVE' ? '已禁用（其账号将全部无法登录）' : '已启用')
-    load()
+    if (togglingSupplierIdsRef.current.has(s.id)) return
+    const activeIds = new Set(togglingSupplierIdsRef.current).add(s.id)
+    togglingSupplierIdsRef.current = activeIds
+    setTogglingSupplierIds(activeIds)
+    try {
+      await http.put(`/admin/suppliers/${s.id}/status`, { status: s.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
+      Message.success(s.status === 'ACTIVE' ? '已禁用（其账号将全部无法登录）' : '已启用')
+      load()
+    } finally {
+      const remainingIds = new Set(togglingSupplierIdsRef.current)
+      remainingIds.delete(s.id)
+      togglingSupplierIdsRef.current = remainingIds
+      setTogglingSupplierIds(remainingIds)
+    }
   }
 
   const remove = async (s: Supplier) => {
@@ -203,7 +219,13 @@ export default function SupplierList() {
                 title={r.status === 'ACTIVE' ? '禁用后其所有账号无法登录，确认？' : '确认启用？'}
                 onOk={() => toggleStatus(r)}
               >
-                <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
+                <Button
+                  size="mini"
+                  type="text"
+                  status={r.status === 'ACTIVE' ? 'danger' : 'success'}
+                  loading={togglingSupplierIds.has(r.id)}
+                  disabled={togglingSupplierIds.has(r.id)}
+                >
                   {r.status === 'ACTIVE' ? '禁用' : '启用'}
                 </Button>
               </Popconfirm>,
@@ -252,7 +274,7 @@ export default function SupplierList() {
             <Input placeholder="公司全称" />
           </Form.Item>
           <Form.Item label="备注" field="remark">
-            <Input.TextArea rows={3} maxLength={300} placeholder="选填" />
+            <Input.TextArea rows={3} maxLength={500} placeholder="选填" />
           </Form.Item>
         </Form>
       </Modal>
@@ -271,6 +293,8 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
   const [resettingPassword, setResettingPassword] = useState(false)
   const [editing, setEditing] = useState<Account | null>(null)
   const [resetTarget, setResetTarget] = useState<Account | null>(null)
+  const togglingAccountIdsRef = useRef(new Set<number>())
+  const [togglingAccountIds, setTogglingAccountIds] = useState<ReadonlySet<number>>(new Set())
   const [form] = Form.useForm()
   const [pwdForm] = Form.useForm()
 
@@ -332,8 +356,19 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
   }
 
   const toggle = async (a: Account) => {
-    await http.put(`/admin/supplier-accounts/${a.id}/status`, { status: a.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
-    load()
+    if (togglingAccountIdsRef.current.has(a.id)) return
+    const activeIds = new Set(togglingAccountIdsRef.current).add(a.id)
+    togglingAccountIdsRef.current = activeIds
+    setTogglingAccountIds(activeIds)
+    try {
+      await http.put(`/admin/supplier-accounts/${a.id}/status`, { status: a.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
+      load()
+    } finally {
+      const remainingIds = new Set(togglingAccountIdsRef.current)
+      remainingIds.delete(a.id)
+      togglingAccountIdsRef.current = remainingIds
+      setTogglingAccountIds(remainingIds)
+    }
   }
 
   const removeAccount = async (a: Account) => {
@@ -355,6 +390,17 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
     } finally {
       setResettingPassword(false)
     }
+  }
+
+  const openPasswordReset = (account: Account) => {
+    pwdForm.resetFields()
+    setResetTarget(account)
+  }
+
+  const closePasswordReset = () => {
+    if (resettingPassword) return
+    pwdForm.resetFields()
+    setResetTarget(null)
   }
 
   return (
@@ -430,10 +476,18 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
               >
                 编辑
               </Button>,
-              <Button key="reset-password" size="mini" type="text" onClick={() => setResetTarget(r)}>
+              <Button key="reset-password" size="mini" type="text" onClick={() => openPasswordReset(r)}>
                 重置密码
               </Button>,
-              <Button key="status" size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'} onClick={() => toggle(r)}>
+              <Button
+                key="status"
+                size="mini"
+                type="text"
+                status={r.status === 'ACTIVE' ? 'danger' : 'success'}
+                loading={togglingAccountIds.has(r.id)}
+                disabled={togglingAccountIds.has(r.id)}
+                onClick={() => toggle(r)}
+              >
                 {r.status === 'ACTIVE' ? '禁用' : '启用'}
               </Button>,
               canDelete && (
@@ -469,7 +523,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
                 <Form.Item
                   label="初始密码"
                   field="password"
-                  rules={[{ required: true, message: '请输入初始密码' }, { match: /^.{6,20}$/, message: '密码需 6-20 位' }]}
+                  rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}
                 >
                   <Input.Password placeholder="6-20 位" />
                 </Form.Item>
@@ -497,13 +551,13 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
         cancelButtonProps={{ disabled: resettingPassword }}
         okText="确认重置"
         onOk={resetPwd}
-        onCancel={() => { if (!resettingPassword) setResetTarget(null) }}
+        onCancel={closePasswordReset}
       >
         <Form form={pwdForm} layout="vertical">
           <Form.Item
             label="新密码"
             field="newPassword"
-                rules={[{ required: true, message: '请输入新密码' }, { match: /^.{6,20}$/, message: '密码需 6-20 位' }]}
+                rules={[{ required: true, message: '请输入新密码' }, passwordRule]}
           >
             <Input.Password placeholder="6-20 位" />
           </Form.Item>

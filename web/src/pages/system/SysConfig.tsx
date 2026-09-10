@@ -200,9 +200,10 @@ export default function SysConfig() {
 
   const editor = (cfg: Cfg) => {
     const value = editing[cfg.key] ?? cfg.value
+    const label = CONFIG_META[cfg.key]?.name || cfg.key
     if (cfg.key === 'notify.enabled') {
       return (
-        <Select value={value} onChange={(v) => setValue(cfg.key, String(v))}>
+        <Select aria-label={label} value={value} onChange={(v) => setValue(cfg.key, String(v))}>
           <Select.Option value="true">启用</Select.Option>
           <Select.Option value="false">关闭</Select.Option>
         </Select>
@@ -213,6 +214,7 @@ export default function SysConfig() {
       const numericValue = Number(value)
       return (
         <InputNumber
+          aria-label={label}
           min={isChunkSize ? 0.25 : 1}
           max={isChunkSize ? 64 : 20 * 1024}
           precision={isChunkSize ? 2 : 0}
@@ -232,6 +234,7 @@ export default function SysConfig() {
     if (cfg.key === 'storage.warn_percent') {
       return (
         <InputNumber
+          aria-label={label}
           min={1}
           max={99}
           precision={0}
@@ -241,7 +244,7 @@ export default function SysConfig() {
         />
       )
     }
-    return <Input value={value} onChange={(next) => setValue(cfg.key, next)} />
+    return <Input aria-label={label} value={value} onChange={(next) => setValue(cfg.key, next)} />
   }
 
   return (

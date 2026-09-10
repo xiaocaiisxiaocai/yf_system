@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Button, Card, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, TreeSelect, Typography,
 } from '@arco-design/web-react'
@@ -7,6 +7,7 @@ import http from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
+import { passwordRule } from '../../utils/password'
 
 interface UserRow {
   id: number
@@ -68,8 +69,16 @@ export default function UserList() {
   const [resetTarget, setResetTarget] = useState<UserRow | null>(null)
   const [depts, setDepts] = useState<DeptNode[]>([])
   const [roles, setRoles] = useState<RoleOpt[]>([])
+  const [optionsLoading, setOptionsLoading] = useState(true)
+  const [optionsError, setOptionsError] = useState(false)
+  const optionsSeq = useRef(0)
   const [form] = Form.useForm()
   const [pwdForm] = Form.useForm()
+  const editingRoleId = editing?.roleId ?? editing?.roleIds?.[0]
+  const editingRoleUnavailable = editingRoleId != null
+    && !optionsLoading
+    && !optionsError
+    && !roles.some((role) => role.id === editingRoleId)
 
   const fetchUsers = useCallback(async () => {
     const r = await http.get('/admin/users', { params: { page, pageSize, keyword: keyword || undefined, departmentId, status } })
@@ -89,6 +98,8 @@ export default function UserList() {
         if (active) {
           setData(next)
           setLoadError(false)
+          const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || pageSize)))
+          if (page > lastPage) setPage(lastPage)
         }
       })
       .catch(() => {
@@ -100,17 +111,63 @@ export default function UserList() {
     return () => {
       active = false
     }
-  }, [fetchUsers, reloadKey])
+  }, [fetchUsers, page, pageSize, reloadKey])
+
+  const retryOptions = () => {
+    setOptionsLoading(true)
+    setOptionsError(false)
+    const seq = ++optionsSeq.current
+    Promise.all([
+      http.get('/departments'),
+      http.get('/admin/user-role-options'),
+    ])
+      .then(([departmentsResponse, rolesResponse]) => {
+        if (seq !== optionsSeq.current) return
+        setDepts(departmentsResponse.data)
+        setRoles(rolesResponse.data)
+      })
+      .catch(() => {
+        if (seq === optionsSeq.current) setOptionsError(true)
+      })
+      .finally(() => {
+        if (seq === optionsSeq.current) setOptionsLoading(false)
+      })
+  }
 
   useEffect(() => {
-    http.get('/departments').then((r) => setDepts(r.data))
-    http.get('/admin/user-role-options').then((r) => setRoles(r.data))
+    const seq = ++optionsSeq.current
+    Promise.all([
+        http.get('/departments'),
+        http.get('/admin/user-role-options'),
+      ])
+      .then(([departmentsResponse, rolesResponse]) => {
+        if (seq !== optionsSeq.current) return
+        setDepts(departmentsResponse.data)
+        setRoles(rolesResponse.data)
+      })
+      .catch(() => {
+        if (seq === optionsSeq.current) setOptionsError(true)
+      })
+      .finally(() => {
+        if (seq === optionsSeq.current) setOptionsLoading(false)
+      })
+    return () => {
+      optionsSeq.current += 1
+    }
   }, [])
 
   const submit = async () => {
     if (saving) return
     const v = await form.validate().catch(() => null)
     if (!v) return
+    const selectedRoleId = Number(v.roleId)
+    const keepsUnavailableRole = editing?.status === 'DISABLED'
+      && editingRoleUnavailable
+      && selectedRoleId === editingRoleId
+    if (optionsLoading || optionsError || (!roles.some((role) => role.id === selectedRoleId) && !keepsUnavailableRole)) {
+      Message.error('组织和角色选项尚未就绪，请重试加载')
+      return
+    }
     const { roleId, ...values } = v
     const payload = {
       ...values,
@@ -165,6 +222,17 @@ export default function UserList() {
     }
   }
 
+  const openPasswordReset = (user: UserRow) => {
+    pwdForm.resetFields()
+    setResetTarget(user)
+  }
+
+  const closePasswordReset = () => {
+    if (resettingPassword) return
+    pwdForm.resetFields()
+    setResetTarget(null)
+  }
+
   return (
     <Card className="page-card page-card--table">
       <div className="page-heading">
@@ -194,6 +262,8 @@ export default function UserList() {
             placeholder="全部组织"
             style={{ width: 180 }}
             treeData={toTreeData(depts)}
+            loading={optionsLoading}
+            disabled={optionsError}
             value={departmentId ? String(departmentId) : undefined}
             onChange={(v) => { setLoading(true); setLoadError(false); setReloadKey((value) => value + 1); setPage(1); setDepartmentId(v ? Number(v) : undefined) }}
           />
@@ -208,17 +278,22 @@ export default function UserList() {
             <Select.Option value="DISABLED">禁用</Select.Option>
           </Select>
         </Space>
-        <Button
-          type="primary"
-          icon={<IconPlus />}
-          onClick={() => {
-            setEditing(null)
-            form.resetFields()
-            setEditOpen(true)
-          }}
-        >
-          新增用户
-        </Button>
+        <Space>
+          {optionsError && <Button size="small" onClick={retryOptions}>重试加载组织和角色</Button>}
+          {!optionsLoading && !optionsError && roles.length === 0 && <Typography.Text type="warning">暂无启用的角色</Typography.Text>}
+          <Button
+            type="primary"
+            icon={<IconPlus />}
+            disabled={optionsLoading || optionsError || roles.length === 0}
+            onClick={() => {
+              setEditing(null)
+              form.resetFields()
+              setEditOpen(true)
+            }}
+          >
+            新增用户
+          </Button>
+        </Space>
       </div>
       {loadError ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
@@ -279,7 +354,7 @@ export default function UserList() {
                 >
                   编辑
                 </Button>,
-                <Button key="reset-password" size="mini" type="text" onClick={() => setResetTarget(r)}>
+                <Button key="reset-password" size="mini" type="text" onClick={() => openPasswordReset(r)}>
                   重置密码
                 </Button>,
                 r.employeeNo !== 'admin' && (
@@ -335,7 +410,7 @@ export default function UserList() {
                 <Form.Item
                   label="初始密码"
                   field="password"
-                  rules={[{ required: true, message: '请输入初始密码' }, { match: /^.{6,20}$/, message: '密码需 6-20 位' }]}
+                  rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}
                 >
                   <Input.Password placeholder="6-20 位" />
                 </Form.Item>
@@ -348,10 +423,15 @@ export default function UserList() {
               <Input placeholder="name@example.com" />
             </Form.Item>
             <Form.Item label="所属组织" field="departmentId">
-              <TreeSelect allowClear placeholder="选择组织" treeData={toTreeData(depts)} />
+              <TreeSelect allowClear placeholder="选择组织" treeData={toTreeData(depts)} loading={optionsLoading} disabled={optionsError} />
             </Form.Item>
             <Form.Item label="角色" field="roleId" rules={[{ required: true, message: '请选择角色' }]}>
-              <Select showSearch placeholder="选择角色">
+              <Select showSearch placeholder="选择角色" loading={optionsLoading} disabled={optionsError}>
+                {editingRoleUnavailable && (
+                  <Select.Option key={editingRoleId} value={editingRoleId} disabled>
+                    {editing?.roleName || `角色 #${editingRoleId}`}（已禁用）
+                  </Select.Option>
+                )}
                 {roles.map((r) => (
                   <Select.Option key={r.id} value={r.id}>
                     {r.name}
@@ -375,13 +455,13 @@ export default function UserList() {
         cancelButtonProps={{ disabled: resettingPassword }}
         okText="确认重置"
         onOk={resetPwd}
-        onCancel={() => { if (!resettingPassword) setResetTarget(null) }}
+        onCancel={closePasswordReset}
       >
         <Form form={pwdForm} layout="vertical">
           <Form.Item
             label="新密码"
             field="newPassword"
-                rules={[{ required: true, message: '请输入新密码' }, { match: /^.{6,20}$/, message: '密码需 6-20 位' }]}
+                rules={[{ required: true, message: '请输入新密码' }, passwordRule]}
           >
             <Input.Password placeholder="6-20 位" />
           </Form.Item>

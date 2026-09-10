@@ -42,5 +42,12 @@ export default function PdfPreview({ fileId }: { fileId: number }) {
         <Spin size={32} />
       </div>
     )
-  return <iframe className="pdf-frame" src={current.url} title="PDF 预览" />
+  return (
+    <>
+      <div role="note" style={{ padding: '8px 16px', color: 'var(--color-text-2)' }}>
+        PDF 由浏览器预览；若预览区域为空白，请使用下方「下载原文件」查看。
+      </div>
+      <iframe className="pdf-frame" src={current.url} title="PDF 预览" />
+    </>
+  )
 }

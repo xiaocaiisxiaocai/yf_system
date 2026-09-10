@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card, Grid, List, Spin, Statistic, Tag, Typography, Empty } from '@arco-design/web-react'
+import { Button, Card, Empty, Grid, List, Pagination, Spin, Statistic, Tag, Typography } from '@arco-design/web-react'
 import { IconRight } from '@arco-design/web-react/icon'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import http from '../api/client'
 import { useAuth } from '../store/auth'
 import { fmtTime } from '../api/types'
@@ -22,12 +22,33 @@ interface Summary {
   }[]
 }
 
+interface PendingProject {
+  id: number
+  name: string
+  status: 'PENDING_CONFIRMATION'
+  confirmSide: 'COMPANY' | 'SUPPLIER'
+  updatedAt: string
+}
+
+interface PendingProjectPage {
+  list: PendingProject[]
+  total: number
+  page: number
+  pageSize: number
+}
+
 export default function Dashboard() {
   const [data, setData] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const loadSeq = useRef(0)
+  const [pendingData, setPendingData] = useState<PendingProjectPage>({ list: [], total: 0, page: 1, pageSize: 10 })
+  const [pendingPage, setPendingPage] = useState(1)
+  const [pendingLoading, setPendingLoading] = useState(true)
+  const [pendingError, setPendingError] = useState(false)
+  const [pendingReloadKey, setPendingReloadKey] = useState(0)
+  const pendingSeq = useRef(0)
   const user = useAuth((s) => s.user)
   const nav = useNavigate()
 
@@ -58,6 +79,44 @@ export default function Dashboard() {
     }
   }, [reloadKey])
 
+  const reloadPending = useCallback(() => {
+    setPendingLoading(true)
+    setPendingError(false)
+    setPendingReloadKey((value) => value + 1)
+  }, [])
+
+  const refreshDashboard = () => {
+    load()
+    reloadPending()
+  }
+
+  useEffect(() => {
+    const seq = ++pendingSeq.current
+    let correctingPage = false
+    http.get('/dashboard/pending-projects', { params: { page: pendingPage, pageSize: 10 } })
+      .then((r) => {
+        if (seq !== pendingSeq.current) return
+        const next = r.data as PendingProjectPage
+        const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || 10)))
+        if (pendingPage > lastPage) {
+          correctingPage = true
+          setPendingPage(lastPage)
+          return
+        }
+        setPendingData(next)
+        setPendingError(false)
+      })
+      .catch(() => {
+        if (seq === pendingSeq.current) setPendingError(true)
+      })
+      .finally(() => {
+        if (seq === pendingSeq.current && !correctingPage) setPendingLoading(false)
+      })
+    return () => {
+      pendingSeq.current += 1
+    }
+  }, [pendingPage, pendingReloadKey])
+
   const cards = [
     { title: '可见项目', value: data?.projectCount },
     { title: '进行中项目', value: data?.activeProjectCount },
@@ -81,6 +140,65 @@ export default function Dashboard() {
           </Grid.Col>
         ))}
       </Grid.Row>
+      <Card
+        className="dashboard-pending"
+        style={{ marginTop: 16 }}
+        title={
+          <div className="section-heading">
+            <div>
+              <h2>待我方确认的项目</h2>
+            </div>
+          </div>
+        }
+        extra={<Button size="small" loading={pendingLoading} onClick={refreshDashboard}>刷新</Button>}
+      >
+        {pendingLoading ? (
+          <Spin loading style={{ width: '100%', minHeight: 80 }} />
+        ) : pendingError ? (
+          <div className="dashboard-pending-feedback">
+            <Typography.Text type="error">待确认项目加载失败</Typography.Text>
+            <Button size="small" onClick={reloadPending}>重试</Button>
+          </div>
+        ) : pendingData.list.length > 0 ? (
+          <>
+            <List
+              className="dashboard-pending-list"
+              dataSource={pendingData.list}
+              render={(project) => (
+                <List.Item
+                  key={project.id}
+                  extra={<Typography.Text type="secondary">更新于 {fmtTime(project.updatedAt)}</Typography.Text>}
+                >
+                  <List.Item.Meta
+                    title={<Link className="dashboard-pending-link" to={`/projects/${project.id}`}>{project.name}</Link>}
+                    description={(
+                      <Tag color="orange">
+                        {project.confirmSide === 'COMPANY' ? '待公司确认' : '待供应商确认'}
+                      </Tag>
+                    )}
+                  />
+                </List.Item>
+              )}
+            />
+            {pendingData.total > 10 && (
+              <div className="dashboard-pending-pagination">
+                <Pagination
+                  current={pendingPage}
+                  pageSize={10}
+                  total={pendingData.total}
+                  onChange={(page) => {
+                    setPendingLoading(true)
+                    setPendingError(false)
+                    setPendingPage(page)
+                  }}
+                />
+              </div>
+            )}
+          </>
+        ) : (
+          <Empty description="暂无待确认项目" />
+        )}
+      </Card>
       <Card
         className="dashboard-latest"
         style={{ marginTop: 16 }}

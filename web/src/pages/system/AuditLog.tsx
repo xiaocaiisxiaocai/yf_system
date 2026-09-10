@@ -230,6 +230,8 @@ export default function AuditLog() {
         if (active) {
           setData(next)
           setLoadError(false)
+          const lastPage = Math.max(1, Math.ceil(next.total / next.pageSize))
+          setPage((currentPage) => currentPage > lastPage ? lastPage : currentPage)
         }
       })
       .catch(() => { if (active) setLoadError(true) })

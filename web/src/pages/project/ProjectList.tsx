@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Button, Card, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import http from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
@@ -31,6 +31,11 @@ export default function ProjectList() {
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 1100px)').matches,
   )
   const [suppliers, setSuppliers] = useState<SupplierOpt[]>([])
+  const [supplierOptionsLoading, setSupplierOptionsLoading] = useState(true)
+  const [supplierOptionsError, setSupplierOptionsError] = useState(false)
+  const supplierOptionsSeq = useRef(0)
+  const statusUpdatesInFlight = useRef(new Set<number>())
+  const [statusUpdatingIds, setStatusUpdatingIds] = useState<Set<number>>(() => new Set())
   const [form] = Form.useForm()
   const nav = useNavigate()
   const { hasPerm, user } = useAuth()
@@ -55,6 +60,8 @@ export default function ProjectList() {
         if (active) {
           setData(next)
           setLoadError(false)
+          const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || pageSize)))
+          if (page > lastPage) setPage(lastPage)
         }
       })
       .catch(() => {
@@ -66,11 +73,41 @@ export default function ProjectList() {
     return () => {
       active = false
     }
-  }, [fetchProjects, reloadKey])
+  }, [fetchProjects, page, pageSize, reloadKey])
+
+  const retrySupplierOptions = () => {
+    setSupplierOptionsLoading(true)
+    setSupplierOptionsError(false)
+    const seq = ++supplierOptionsSeq.current
+    if (!isInternal) return
+    http.get('/supplier-options')
+      .then((r) => {
+        if (seq === supplierOptionsSeq.current) setSuppliers(r.data)
+      })
+      .catch(() => {
+        if (seq === supplierOptionsSeq.current) setSupplierOptionsError(true)
+      })
+      .finally(() => {
+        if (seq === supplierOptionsSeq.current) setSupplierOptionsLoading(false)
+      })
+  }
 
   useEffect(() => {
+    const seq = ++supplierOptionsSeq.current
     if (isInternal) {
-      http.get('/supplier-options').then((r) => setSuppliers(r.data)).catch(() => setSuppliers([]))
+      http.get('/supplier-options')
+        .then((r) => {
+          if (seq === supplierOptionsSeq.current) setSuppliers(r.data)
+        })
+        .catch(() => {
+          if (seq === supplierOptionsSeq.current) setSupplierOptionsError(true)
+        })
+        .finally(() => {
+          if (seq === supplierOptionsSeq.current) setSupplierOptionsLoading(false)
+        })
+    }
+    return () => {
+      supplierOptionsSeq.current += 1
     }
   }, [isInternal])
 
@@ -83,6 +120,7 @@ export default function ProjectList() {
   }, [])
 
   const openCreate = () => {
+    if (supplierOptionsLoading || supplierOptionsError || suppliers.length === 0) return
     setEditing(null)
     form.resetFields()
     setModalOpen(true)
@@ -97,6 +135,10 @@ export default function ProjectList() {
     if (saving) return
     const v = await form.validate().catch(() => null)
     if (!v) return
+    if (!editing && (supplierOptionsLoading || supplierOptionsError || !suppliers.some((supplier) => supplier.id === Number(v.supplierId)))) {
+      Message.error('供应商选项尚未就绪，请重试加载')
+      return
+    }
     setSaving(true)
     try {
       if (editing) {
@@ -114,9 +156,17 @@ export default function ProjectList() {
   }
 
   const changeStatus = async (p: Project, next: string) => {
-    await http.put(`/projects/${p.id}/status`, { status: next })
-    Message.success('状态已更新')
-    load()
+    if (statusUpdatesInFlight.current.has(p.id)) return
+    statusUpdatesInFlight.current.add(p.id)
+    setStatusUpdatingIds(new Set(statusUpdatesInFlight.current))
+    try {
+      await http.put(`/projects/${p.id}/status`, { status: next })
+      Message.success('状态已更新')
+      load()
+    } finally {
+      statusUpdatesInFlight.current.delete(p.id)
+      setStatusUpdatingIds(new Set(statusUpdatesInFlight.current))
+    }
   }
 
   const remove = async (p: Project) => {
@@ -142,7 +192,7 @@ export default function ProjectList() {
         width: compactTable ? 180 : 200,
         ellipsis: true,
         render: (v: string, r: Project) => (
-          <a onClick={() => nav(`/projects/${r.id}`)}>{v}</a>
+          <Link to={`/projects/${r.id}`}>{v}</Link>
         ),
       },
       { title: '供应商', dataIndex: 'supplierName', width: compactTable ? 140 : 160, ellipsis: true },
@@ -180,6 +230,8 @@ export default function ProjectList() {
                 placeholder="状态"
                 style={{ width: 92 }}
                 value={undefined}
+                disabled={statusUpdatingIds.has(r.id)}
+                loading={statusUpdatingIds.has(r.id)}
                 onChange={(v) => changeStatus(r, v as string)}
                 triggerProps={{ autoAlignPopupWidth: false }}
               >
@@ -248,17 +300,25 @@ export default function ProjectList() {
               placeholder="供应商"
               style={{ width: 180 }}
               value={supplierId}
+              loading={supplierOptionsLoading}
+              disabled={supplierOptionsError}
               onChange={(v) => { setLoading(true); setLoadError(false); setReloadKey((value) => value + 1); setPage(1); setSupplierId(v as number | undefined) }}
             >
               {suppliers.map((s) => <Select.Option key={s.id} value={s.id}>{s.name}</Select.Option>)}
             </Select>
           )}
         </Space>
-        {isInternal && hasPerm('project:create') && (
-          <Button type="primary" icon={<IconPlus />} onClick={openCreate}>
-            新建项目
-          </Button>
-        )}
+        <Space>
+          {isInternal && supplierOptionsError && <Button size="small" onClick={retrySupplierOptions}>重试加载供应商</Button>}
+          {isInternal && !supplierOptionsLoading && !supplierOptionsError && suppliers.length === 0 && (
+            <Typography.Text type="warning">暂无启用的供应商</Typography.Text>
+          )}
+          {isInternal && hasPerm('project:create') && (
+            <Button type="primary" icon={<IconPlus />} onClick={openCreate} disabled={supplierOptionsLoading || supplierOptionsError || suppliers.length === 0}>
+              新建项目
+            </Button>
+          )}
+        </Space>
       </div>
       {loadError ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>

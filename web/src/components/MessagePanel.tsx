@@ -31,11 +31,14 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
   const [appendError, setAppendError] = useState(false)
   const [content, setContent] = useState('')
   const [receipt, setReceipt] = useState<{ id: number; readers: Reader[]; unread: Reader[] } | null>(null)
+  const [receiptRequest, setReceiptRequest] = useState<{ id: number; loading: boolean; error: boolean } | null>(null)
   const { hasPerm, user } = useAuth()
   const listRef = useRef<HTMLDivElement>(null)
   const loadSeq = useRef(0)
   const receiptSeq = useRef(0)
   const cursor = useRef<number | undefined>()
+  const cursorStartTotal = useRef<number | null>(null)
+  const loadedMessages = useRef<Msg[]>([])
   const markingRead = useRef(new Set<number>())
   const [sending, setSending] = useState(false)
 
@@ -55,8 +58,14 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
         if (seq !== loadSeq.current) return // 已有更新的请求在途，丢弃旧响应
         setTotal(r.data.total)
         cursor.current = r.data.list.at(-1)?.id
-        setHasMore(r.data.list.length === 20)
-        setList((current) => append ? [...current, ...r.data.list.filter((m: Msg) => !current.some((old) => old.id === m.id))] : r.data.list)
+        const nextList = append
+          ? [...loadedMessages.current, ...r.data.list.filter((m: Msg) => !loadedMessages.current.some((old) => old.id === m.id))]
+          : r.data.list
+        if (!append) cursorStartTotal.current = r.data.total
+        const totalChangedDuringCursor = append && cursorStartTotal.current !== null && r.data.total !== cursorStartTotal.current
+        loadedMessages.current = nextList
+        setHasMore(r.data.list.length === 20 && (totalChangedDuringCursor || nextList.length < r.data.total))
+        setList(nextList)
         setPage(p)
         setLoadError(false)
         setAppendError(false)
@@ -91,7 +100,8 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
         if (!ids.length) return
         ids.forEach((id) => markingRead.current.add(id))
         void http.post('/messages/read', { ids }).then(() => {
-          setList((current) => current.map((m) => (ids.includes(m.id) ? { ...m, readByMe: true } : m)))
+          loadedMessages.current = loadedMessages.current.map((m) => (ids.includes(m.id) ? { ...m, readByMe: true } : m))
+          setList(loadedMessages.current)
           onRead?.()
         }).catch(() => {
           ids.forEach((id) => markingRead.current.delete(id))
@@ -119,17 +129,24 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
 
   const openReceipt = async (id: number) => {
     const seq = ++receiptSeq.current
+    setReceipt(null)
+    setReceiptRequest({ id, loading: true, error: false })
     try {
       const r = await http.get(`/messages/${id}/reads`)
-      if (seq === receiptSeq.current) setReceipt({ id, readers: r.data.readers, unread: r.data.unread })
+      if (seq === receiptSeq.current) {
+        setReceipt({ id, readers: r.data.readers, unread: r.data.unread })
+        setReceiptRequest(null)
+      }
     } catch {
-      // 请求失败时保持当前回执，避免错误响应清空正在查看的留言。
+      if (seq !== receiptSeq.current) return
+      setReceiptRequest({ id, loading: false, error: true })
     }
   }
 
   const remove = async (id: number) => {
     await http.delete(`/messages/${id}`)
-    setList((current) => current.filter((m) => m.id !== id))
+    loadedMessages.current = loadedMessages.current.filter((m) => m.id !== id)
+    setList(loadedMessages.current)
     setTotal((current) => Math.max(0, current - 1))
   }
 
@@ -253,13 +270,21 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
       <Drawer
         width={420}
         title="已读回执"
-        visible={!!receipt}
+        visible={!!receipt || !!receiptRequest}
         onCancel={() => {
           receiptSeq.current += 1
           setReceipt(null)
+          setReceiptRequest(null)
         }}
         footer={null}
       >
+        {receiptRequest?.loading && !receipt && <Typography.Text type="secondary">回执加载中…</Typography.Text>}
+        {receiptRequest?.error && !receipt && (
+          <Space>
+            <Typography.Text type="error">回执加载失败</Typography.Text>
+            <Button size="small" onClick={() => openReceipt(receiptRequest.id)}>重试</Button>
+          </Space>
+        )}
         {receipt && (
           <>
             <Typography.Text bold>已读（{receipt.readers.length}）</Typography.Text>
@@ -299,9 +324,68 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
 
 /** 气泡内联的已读名单（轻量版） */
 function ReceiptBody({ id }: { id: number }) {
-  const [names, setNames] = useState<string[]>([])
+  const [receipt, setReceipt] = useState<{
+    id: number
+    names: string[]
+    loading: boolean
+    error: boolean
+  }>(() => ({ id, names: [], loading: true, error: false }))
+  const requestSeq = useRef(0)
+
+  const retry = () => {
+    setReceipt({ id, names: [], loading: true, error: false })
+    const seq = ++requestSeq.current
+    http.get(`/messages/${id}/reads`)
+      .then((r) => {
+        if (seq !== requestSeq.current) return
+        setReceipt({
+          id,
+          names: r.data.readers.map((x: Reader) => x.realName),
+          loading: false,
+          error: false,
+        })
+      })
+      .catch(() => {
+        if (seq === requestSeq.current) {
+          setReceipt({ id, names: [], loading: false, error: true })
+        }
+      })
+  }
+
   useEffect(() => {
-    http.get(`/messages/${id}/reads`).then((r) => setNames(r.data.readers.map((x: Reader) => x.realName)))
+    const seq = ++requestSeq.current
+    http.get(`/messages/${id}/reads`)
+      .then((r) => {
+        if (seq !== requestSeq.current) return
+        setReceipt({
+          id,
+          names: r.data.readers.map((x: Reader) => x.realName),
+          loading: false,
+          error: false,
+        })
+      })
+      .catch(() => {
+        if (seq === requestSeq.current) {
+          setReceipt({ id, names: [], loading: false, error: true })
+        }
+      })
+    return () => {
+      requestSeq.current += 1
+    }
   }, [id])
-  return <div style={{ fontSize: 12 }}>{names.length ? names.join('、') : '暂无'}</div>
+
+  const current = receipt.id === id
+    ? receipt
+    : { id, names: [], loading: true, error: false }
+
+  if (current.loading) return <div style={{ fontSize: 12 }}>回执加载中…</div>
+  if (current.error) {
+    return (
+      <div style={{ fontSize: 12 }}>
+        <Typography.Text type="error">回执加载失败</Typography.Text>
+        <Button size="mini" type="text" onClick={retry}>重试</Button>
+      </div>
+    )
+  }
+  return <div style={{ fontSize: 12 }}>{current.names.length ? current.names.join('、') : '暂无'}</div>
 }

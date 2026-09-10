@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { ConfigProvider } from '@arco-design/web-react'
+import { IconClose } from '@arco-design/web-react/icon'
 import '@arco-design/web-react/dist/css/arco.css'
 import './index.css'
 import App from './App'
@@ -9,6 +10,12 @@ import App from './App'
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ConfigProvider componentConfig={{
+      Drawer: {
+        closeIcon: <button type="button" className="drawer-close-button" aria-label="关闭抽屉"><IconClose /></button>,
+      },
+      Modal: {
+        closeIcon: <button type="button" className="drawer-close-button" aria-label="关闭弹窗"><IconClose /></button>,
+      },
       Popconfirm: {
         position: 'tr',
         triggerProps: {

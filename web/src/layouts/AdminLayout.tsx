@@ -115,7 +115,7 @@ export default function AdminLayout() {
           <span>供应商协作平台</span>
         </div>
         <Dropdown
-          trigger={['hover', 'click']}
+          trigger="click"
           droplist={
             <Menu
               onClickMenuItem={(k) => {

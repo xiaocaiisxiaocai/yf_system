@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import http, { withAuthLock } from '../api/client'
 import { useAuth } from '../store/auth'
 import AuthShell from '../components/AuthShell'
+import { passwordRule } from '../utils/password'
 
 export default function ChangePassword() {
   const [form] = Form.useForm()
@@ -45,7 +46,7 @@ export default function ChangePassword() {
   }
 
   return (
-    <AuthShell>
+    <AuthShell title="修改密码">
         {mustChangePassword && (
           <div className="auth-notice" role="status">首次登录，请先修改初始密码</div>
         )}
@@ -57,7 +58,7 @@ export default function ChangePassword() {
             field="newPassword"
             rules={[
               { required: true, message: '请输入新密码' },
-              { match: /^.{6,20}$/, message: '密码需 6-20 位' },
+              passwordRule,
             ]}
           >
             <Input.Password size="large" prefix={<IconLock />} placeholder="请输入新密码（6–20 位）" aria-label="新密码" autoComplete="new-password" />

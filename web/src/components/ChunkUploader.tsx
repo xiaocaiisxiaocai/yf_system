@@ -12,16 +12,25 @@ interface Props {
   onDone: () => void
 }
 
-type Phase = 'pick' | 'hashing' | 'uploading' | 'merging' | 'merge-uncertain' | 'cancelling' | 'cancel-failed' | 'done'
+type Phase = 'pick' | 'hashing' | 'uploading' | 'merging' | 'merge-uncertain' | 'merge-invalid' | 'cancelling' | 'cancel-failed' | 'done'
 interface Attempt {
   cancelled: boolean
   cancelling: boolean
   merging: boolean
   mergePending?: boolean
+  mergeInvalid?: boolean
   sessionId?: string
   controller: AbortController
   finished: Promise<void>
   finish: () => void
+}
+
+function isDefinitiveIntegrityFailure(error: unknown): boolean {
+  const response = (error as { response?: { status?: number; data?: { message?: unknown } } })?.response
+  const message = response?.data?.message
+  return response?.status === 400
+    && typeof message === 'string'
+    && /^(合并文件大小不符|文件 MD5 校验失败)/.test(message)
 }
 
 export default function ChunkUploader({ projectId, visible, onClose, onDone }: Props) {
@@ -94,6 +103,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone }: P
     if (attemptRef.current !== attempt || attempt.cancelled || attempt.merging || !attempt.sessionId) return
     attempt.merging = true
     attempt.mergePending = true
+    attempt.mergeInvalid = false
     setPhase('merging')
     try {
       await http.post(`/uploads/${attempt.sessionId}/merge`)
@@ -103,13 +113,43 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone }: P
       Message.success('上传完成')
       onDone()
       finishAndClose()
-    } catch {
+    } catch (error) {
       if (attemptRef.current === attempt && !attempt.cancelled) {
-        setPhase('merge-uncertain')
-        Message.warning('上传结果待确认，请重试确认')
+        if (isDefinitiveIntegrityFailure(error)) {
+          attempt.mergePending = false
+          attempt.mergeInvalid = true
+          setPhase('merge-invalid')
+          Message.warning('文件完整性校验失败，请清理后重新上传')
+        } else {
+          setPhase('merge-uncertain')
+          Message.warning('上传结果待确认，请重试确认')
+        }
       }
     } finally {
       attempt.merging = false
+    }
+  }
+
+  const discardInvalid = async () => {
+    const attempt = attemptRef.current
+    if (!attempt || !attempt.mergeInvalid || attempt.merging || attempt.cancelling || !attempt.sessionId) return
+    attempt.cancelled = true
+    attempt.cancelling = true
+    attempt.controller.abort()
+    setPhase('cancelling')
+    await attempt.finished
+    if (attemptRef.current !== attempt) return
+    try {
+      await http.delete(`/uploads/${attempt.sessionId}`)
+      if (attemptRef.current !== attempt) return
+      Message.info('损坏的上传会话已清理，请重新选择文件')
+      reset()
+    } catch {
+      if (attemptRef.current === attempt) {
+        attempt.cancelling = false
+        setPhase('merge-invalid')
+        Message.warning('清理失败，请重试')
+      }
     }
   }
 
@@ -173,7 +213,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone }: P
       }
     } finally {
       attempt.finish()
-      if (attemptRef.current === attempt && !attempt.cancelled && !attempt.mergePending) attemptRef.current = null
+      if (attemptRef.current === attempt && !attempt.cancelled && !attempt.mergePending && !attempt.mergeInvalid) attemptRef.current = null
     }
   }
 
@@ -194,6 +234,11 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone }: P
             <Button type="primary" onClick={() => {
               if (attemptRef.current) return confirmMerge(attemptRef.current)
             }}>重试确认</Button>
+          </>
+        ) : phase === 'merge-invalid' ? (
+          <>
+            <Button onClick={close}>关闭</Button>
+            <Button type="primary" status="danger" onClick={discardInvalid}>清理并重新选择</Button>
           </>
         ) : busy ? (
           <Button status="danger" onClick={close}>
@@ -243,6 +288,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone }: P
                 {phase === 'uploading' && `分片上传中 ${percent}%（中断后可续传）`}
                 {phase === 'merging' && '服务端合并校验中…'}
                 {phase === 'merge-uncertain' && '结果待确认，重试不会重复上传。'}
+                {phase === 'merge-invalid' && '文件完整性校验失败，需清理当前会话后重新上传。'}
                 {phase === 'done' && '完成'}
               </Typography.Text>
             </>

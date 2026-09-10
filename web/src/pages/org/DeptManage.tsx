@@ -314,7 +314,7 @@ export default function DeptManage() {
         <Form form={form} layout="vertical">
           <div className="form-grid">
             <Form.Item label={`${modalKindMeta.label}名称`} field="name" rules={[{ required: true, message: `请输入${modalKindMeta.label}名称` }]}>
-              <Input maxLength={50} placeholder={`请输入${modalKindMeta.label}名称`} />
+              <Input maxLength={64} placeholder={`请输入${modalKindMeta.label}名称`} />
             </Form.Item>
             <Form.Item label="排序号" field="sortNo">
               <InputNumber min={0} defaultValue={0} placeholder="数字越小越靠前" style={{ width: '100%' }} />

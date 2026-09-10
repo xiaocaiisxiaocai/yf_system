@@ -15,6 +15,8 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 button, input, select, textarea { font-family: inherit; }
+.drawer-close-button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; }
+.drawer-close-button:hover { background: var(--color-fill-2); }
 :where(button, a, [tabindex]):focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: 3px; }
 
 html, body, #root {
@@ -183,7 +185,6 @@ html, body, #root {
 .page-card > .arco-card-body { padding: 0; }
 .profile-page { max-width: 980px; margin: 0 auto; }
 .profile-heading { margin-bottom: 16px; }
-.profile-heading .arco-typography { margin: 0; }
 .profile-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 .profile-card > .arco-card-header { margin-bottom: 4px; }
 .profile-readonly-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
@@ -653,6 +654,14 @@ html, body, #root {
 .dashboard-stat-card { border-radius: var(--app-radius); border-color: var(--app-border); box-shadow: 0 2px 8px rgb(25 42 70 / 3%); }
 .dashboard-stat-card .arco-statistic-title { color: var(--app-text-muted); font-size: 13px; margin-bottom: 12px; }
 .dashboard-stat-card .arco-statistic-value { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.dashboard-pending { border-radius: var(--app-radius); border-color: var(--app-border); }
+.dashboard-pending > .arco-card-header { height: auto; padding: 20px; }
+.dashboard-pending .section-heading { margin: 0; }
+.dashboard-pending-feedback { display: flex; align-items: center; gap: 8px; padding: 24px 0; }
+.dashboard-pending-list, .dashboard-pending-list .arco-list-item-main, .dashboard-pending-list .arco-list-item-meta { min-width: 0; }
+.dashboard-pending-link { display: inline-block; max-width: 100%; overflow: hidden; color: rgb(var(--primary-6)); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.dashboard-pending-link:hover { text-decoration: underline; }
+.dashboard-pending-pagination { display: flex; justify-content: flex-end; margin-top: 16px; overflow-x: auto; }
 .dashboard-latest { border-radius: var(--app-radius); border-color: var(--app-border); }
 .dashboard-latest > .arco-card-header { height: auto; padding: 20px; }
 .dashboard-latest .section-heading { margin: 0; }
@@ -868,6 +877,11 @@ html, body, #root {
 .message-read-marker { height: 1px; }
 
 @media (max-width: 720px) {
+  /* 窄屏保留完整表格横向滚动，避免固定操作列遮住名称和数据列。 */
+  .layout-content .arco-table-col-fixed-right,
+  .arco-drawer .arco-table-col-fixed-right { position: static; }
+  .layout-content .arco-table-col-fixed-right-first::after,
+  .arco-drawer .arco-table-col-fixed-right-first::after { display: none; }
   .message-composer { flex-wrap: wrap; }
   .message-composer > .arco-textarea-wrapper { flex-basis: 100% !important; order: 2; }
   .message-composer > button { margin-left: auto; }
@@ -939,6 +953,10 @@ html, body, #root {
     width: 100%;
     margin: 4px 0 0;
   }
+  .dashboard-pending .arco-list-item { align-items: flex-start; flex-wrap: wrap; }
+  .dashboard-pending .arco-list-item-main, .dashboard-pending .arco-list-item-extra-content { flex: 1 0 100%; width: 100%; min-width: 0; }
+  .dashboard-pending .arco-list-item-extra-content { margin: 4px 0 0; }
+  .dashboard-pending-pagination { justify-content: flex-start; }
   .audit-heading { align-items: flex-start; }
   .audit-filter-panel { grid-template-columns: 1fr; }
   .audit-filter-panel > :nth-child(5) { grid-column: auto; }

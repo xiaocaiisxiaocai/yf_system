@@ -4,8 +4,9 @@ import { IconEmail, IconLock, IconSave } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import http, { withAuthLock } from '../api/client'
 import { useAuth } from '../store/auth'
+import { passwordRule } from '../utils/password'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 export default function Profile() {
   const [profileForm] = Form.useForm()
@@ -56,7 +57,7 @@ export default function Profile() {
     <div className="profile-page">
       <div className="page-heading profile-heading">
         <div>
-          <Title heading={5}>个人资料</Title>
+          <h1>个人资料</h1>
         </div>
       </div>
 
@@ -116,7 +117,7 @@ export default function Profile() {
               field="newPassword"
               rules={[
                 { required: true, message: '请输入新密码' },
-                { match: /^.{6,20}$/, message: '密码需 6-20 位' },
+                passwordRule,
               ]}
             >
               <Input.Password prefix={<IconLock />} autoComplete="new-password" />

@@ -50,10 +50,12 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [preview, setPreview] = useState<FileItem | null>(null)
   const [selected, setSelected] = useState<number[]>([])
+  const [batchDownloading, setBatchDownloading] = useState(false)
   const { hasPerm } = useAuth()
 
   // 递增序号防止并发加载乱序：快速切换筛选时只允许最后一次请求落地
   const loadSeq = useRef(0)
+  const batchDownloadInFlight = useRef(false)
 
   const fetchFiles = useCallback(async () => {
     const r = await http.get(`/projects/${projectId}/files`, {
@@ -78,6 +80,8 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
           setData(next)
           setSelected([])
           setLoadError(false)
+          const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || pageSize)))
+          if (page > lastPage) setPage(lastPage)
         }
       })
       .catch(() => {
@@ -89,7 +93,7 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
     return () => {
       active = false
     }
-  }, [fetchFiles, reloadKey])
+  }, [fetchFiles, page, pageSize, reloadKey])
 
   useEffect(() => {
     // The upload dialog is owned by this component and must close when the project becomes read-only.
@@ -103,14 +107,22 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
   }
 
   const batchDownload = async () => {
-    const r = await http.post('/files/batch-download', { ids: selected }, { responseType: 'blob' })
-    const url = URL.createObjectURL(r.data as Blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `项目文件打包_${Date.now()}.zip`
-    a.click()
-    URL.revokeObjectURL(url)
-    setSelected([])
+    if (batchDownloadInFlight.current) return
+    batchDownloadInFlight.current = true
+    setBatchDownloading(true)
+    try {
+      const r = await http.post('/files/batch-download', { ids: selected }, { responseType: 'blob' })
+      const url = URL.createObjectURL(r.data as Blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `项目文件打包_${Date.now()}.zip`
+      a.click()
+      URL.revokeObjectURL(url)
+      setSelected([])
+    } finally {
+      batchDownloadInFlight.current = false
+      setBatchDownloading(false)
+    }
   }
 
   const remove = async (f: FileItem) => {
@@ -154,7 +166,7 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
         </Space>
         <Space>
           {selected.length > 0 && hasPerm('file:download') && (
-            <Button icon={<IconDownload />} onClick={batchDownload} disabled={loading}>
+            <Button icon={<IconDownload />} onClick={batchDownload} disabled={loading || batchDownloading} loading={batchDownloading}>
               打包下载（{selected.length}）
             </Button>
           )}

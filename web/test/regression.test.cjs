@@ -400,6 +400,9 @@ function loadTs(relativePath, mocks, globals = {}) {
     require: (name) => {
       if (typeof name === 'string' && name in mocks) return mocks[name]
       if (typeof name === 'string' && name.replace(/\\/g, '/').endsWith('/ActionSlots')) return actionSlotsModule
+      if (typeof name === 'string' && name.startsWith('.') && name.replace(/\\/g, '/').endsWith('/utils/password')) {
+        return loadTs('src/utils/password.ts', {})
+      }
       return require(name)
     },
   }, { filename })
@@ -588,6 +591,93 @@ test('supplier account loading failures stop spinning and can retry', async () =
   await act(async()=>renderer.root.findAllByType('Button').find(n=>n.props.children==='重试').props.onClick())
   assert.equal(renderer.root.findByType('Drawer').findByType('Table').props.data[0].id,16)
   await act(async()=>renderer.unmount())
+})
+
+test('password reset dialogs discard a cancelled password before another account opens', async () => {
+  const iconMock = new Proxy({}, { get: (_, name) => component(name) })
+
+  {
+    let resetCalls = 0
+    const form = {
+      resetFields() { resetCalls++ },
+      setFieldsValue() {},
+      validate: async () => ({ newPassword: 'unused' }),
+    }
+    const testArco = new Proxy({
+      Form: Object.assign(component('Form'), { useForm: () => [form], Item: component('Form.Item') }),
+      Typography: arco.Typography,
+      Message: arco.Message,
+    }, { get: (obj, key) => obj[key] ?? component(key) })
+    const rows = [
+      { id: 11, employeeNo: 'user-a', realName: '甲', email: 'a@example.invalid', status: 'ACTIVE', createdAt: '' },
+      { id: 12, employeeNo: 'user-b', realName: '乙', email: 'b@example.invalid', status: 'ACTIVE', createdAt: '' },
+    ]
+    const Page = loadTs('src/pages/org/UserList.tsx', {
+      '@arco-design/web-react': testArco,
+      '@arco-design/web-react/icon': iconMock,
+      '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['user:manage']),
+      '../../api/types': { fmtTime: String },
+      '../../components/ActionSlots': actionSlotsModule,
+      '../../api/client': {
+        get: async (url) => ({ data: url === '/admin/users' ? { list: rows, total: rows.length, page: 1, pageSize: 10 } : [] }),
+      },
+    }).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)) })
+    const actionsFor = (row) => renderer.root.findByType('Table').props.columns.at(-1).render(null, row)
+
+    await act(async () => findActionButton(actionsFor(rows[0]), '重置密码').props.onClick())
+    assert.equal(resetCalls, 1, 'opening a user password reset must start with an empty form')
+    await act(async () => renderer.root.findAllByType('Modal').find((node) => node.props.visible).props.onCancel())
+    assert.equal(resetCalls, 2, 'cancelling a user password reset must discard the entered password')
+    await act(async () => findActionButton(actionsFor(rows[1]), '重置密码').props.onClick())
+    assert.equal(resetCalls, 3, 'opening another user cannot reuse the previous password draft')
+    await act(async () => renderer.unmount())
+  }
+
+  {
+    let resetCalls = 0
+    const form = {
+      resetFields() { resetCalls++ },
+      setFieldsValue() {},
+      validate: async () => ({ newPassword: 'unused' }),
+    }
+    const testArco = new Proxy({
+      Form: Object.assign(component('Form'), { useForm: () => [form], Item: component('Form.Item') }),
+      Typography: arco.Typography,
+      Message: arco.Message,
+    }, { get: (obj, key) => obj[key] ?? component(key) })
+    const supplier = { id: 8, name: 'fixture', status: 'ACTIVE', createdAt: '' }
+    const accounts = [
+      { id: 21, employeeNo: 'supplier-a', realName: '甲', email: 'a@example.invalid', status: 'ACTIVE', createdAt: '' },
+      { id: 22, employeeNo: 'supplier-b', realName: '乙', email: 'b@example.invalid', status: 'ACTIVE', createdAt: '' },
+    ]
+    const Page = loadTs('src/pages/supplier/SupplierList.tsx', {
+      '@arco-design/web-react': testArco,
+      '@arco-design/web-react/icon': iconMock,
+      '../../store/auth': { useAuth: () => ({ hasPerm: () => true }) },
+      '../../api/types': { fmtTime: String },
+      '../../components/ActionSlots': actionSlotsModule,
+      '../../api/client': {
+        get: async (url) => url.endsWith('/accounts')
+          ? { data: accounts }
+          : { data: { list: [supplier], total: 1, page: 1, pageSize: 10 } },
+      },
+    }).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)) })
+    const supplierActions = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, supplier)
+    await act(async () => findActionButton(supplierActions, '账号管理').props.onClick())
+    const accountActionsFor = (row) => renderer.root.findAllByType('Table')[1].props.columns.at(-1).render(null, row)
+
+    await act(async () => findActionButton(accountActionsFor(accounts[0]), '重置密码').props.onClick())
+    assert.equal(resetCalls, 1, 'opening a supplier password reset must start with an empty form')
+    await act(async () => renderer.root.findAllByType('Modal').find((node) => node.props.visible).props.onCancel())
+    assert.equal(resetCalls, 2, 'cancelling a supplier password reset must discard the entered password')
+    await act(async () => findActionButton(accountActionsFor(accounts[1]), '重置密码').props.onClick())
+    assert.equal(resetCalls, 3, 'opening another supplier account cannot reuse the previous password draft')
+    await act(async () => renderer.unmount())
+  }
 })
 
 test('disabled supplier account drawer disables new account creation and rejects stale submit', async () => {
@@ -855,6 +945,7 @@ test('dashboard and project detail panels expose retry instead of a false empty 
           return { data: item.data }
         }
         if (url.endsWith('/messages')) return { data: { list: [], total: 0 } }
+        if (url === '/dashboard/pending-projects') return { data: { list: [], total: 0, page: 1, pageSize: 10 } }
         if (url === '/admin/system/storage') return { data: { totalBytes: 1, availableBytes: 1, usedPercent: 0, warnPercent: 80, warning: false, root: '/' } }
         if (url === '/admin/system/mail-status') return { data: { configured: false, notificationsEnabled: true, queue: { pending: 0, sending: 0, sent: 0, failed: 0 }, missingEmailCount: 0, missingEmailAccounts: [], recent: [] } }
         return { data: [] }
@@ -871,6 +962,75 @@ test('dashboard and project detail panels expose retry instead of a false empty 
     assert.equal(renderer.root.findAll((node) => node.props && node.props.children === '加载失败').length, 0, item.file)
     await act(async () => renderer.unmount())
   }
+})
+
+test('dashboard pending projects can retry, navigate, refresh, and recover from an expired last page', async () => {
+  const iconMock = new Proxy({}, { get: (_, name) => component(name) })
+  const pendingRequests = []
+  const summary = {
+    projectCount: 12,
+    activeProjectCount: 3,
+    pendingConfirmations: 11,
+    unreadMessages: 0,
+    recentMessages: [],
+  }
+  const http = {
+    get: async (url, config = {}) => {
+      if (url === '/dashboard/summary') return { data: summary }
+      if (url === '/dashboard/pending-projects') {
+        return new Promise((resolve, reject) => pendingRequests.push({ params: config.params, resolve, reject }))
+      }
+      throw new Error(`unexpected request ${url}`)
+    },
+  }
+  const Page = loadTs('src/pages/Dashboard.tsx', {
+    '@arco-design/web-react': new Proxy({
+      Grid: Object.assign(component('Grid'), { Row: component('Grid.Row'), Col: component('Grid.Col') }),
+      List: Object.assign(component('List'), { Item: Object.assign(component('List.Item'), { Meta: component('List.Item.Meta') }) }),
+      Typography: arco.Typography,
+      Message: arco.Message,
+    }, { get: (obj, key) => obj[key] ?? component(key) }),
+    '@arco-design/web-react/icon': iconMock,
+    '../api/client': http,
+    '../store/auth': authModule({ id: 1, realName: '管理员', userType: 'INTERNAL' }, ['project:confirm']),
+    '../api/types': { fmtTime: String },
+    'react-router-dom': { Link: component('Link'), useNavigate: () => () => {} },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+
+  assert.deepEqual(JSON.parse(JSON.stringify(pendingRequests[0].params)), { page: 1, pageSize: 10 })
+  await act(async () => pendingRequests[0].reject(new Error('pending projects unavailable')))
+  assert.ok(renderer.root.findAll((node) => node.props.children === '待确认项目加载失败').length > 0)
+  const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试')
+  assert.ok(retry)
+  await act(async () => retry.props.onClick())
+  const firstPage = [{ id: 11, name: '待确认项目 A', status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', updatedAt: '2026-09-10T01:00:00Z' }]
+  await act(async () => pendingRequests[1].resolve({ data: { list: firstPage, total: 11, page: 1, pageSize: 10 } }))
+
+  const pendingList = renderer.root.findAllByType('List').find((node) => node.props.dataSource?.[0]?.id === 11)
+  assert.ok(pendingList)
+  const pendingRow = pendingList.props.render(firstPage[0])
+  const projectLink = pendingRow.props.children.props.title
+  assert.equal(projectLink.props.to, '/projects/11')
+  assert.equal(projectLink.props.children, '待确认项目 A')
+  const pagination = renderer.root.findByType('Pagination')
+  assert.equal(pagination.props.current, 1)
+  assert.equal(pagination.props.total, 11)
+
+  await act(async () => pagination.props.onChange(2, 10))
+  assert.deepEqual(JSON.parse(JSON.stringify(pendingRequests[2].params)), { page: 2, pageSize: 10 })
+  await act(async () => pendingRequests[2].resolve({ data: { list: [], total: 10, page: 2, pageSize: 10 } }))
+  assert.deepEqual(JSON.parse(JSON.stringify(pendingRequests[3].params)), { page: 1, pageSize: 10 })
+  await act(async () => pendingRequests[3].resolve({ data: { list: firstPage, total: 10, page: 1, pageSize: 10 } }))
+  assert.equal(renderer.root.findAllByType('Pagination').length, 0, 'a single valid page must not retain a stale page-two control')
+
+  const refresh = renderer.root.findAllByType('Card').find((node) => node.props.className === 'dashboard-pending').props.extra
+  assert.ok(refresh, 'a workflow status change must have a reachable list refresh')
+  await act(async () => refresh.props.onClick())
+  await act(async () => pendingRequests[4].resolve({ data: { list: [], total: 0, page: 1, pageSize: 10 } }))
+  assert.ok(renderer.root.findAllByType('Empty').some((node) => node.props.description === '暂无待确认项目'))
+  await act(async () => renderer.unmount())
 })
 
 test('system config exposes mail configuration, queue outcomes and missing mailbox hints', async () => {
@@ -1019,6 +1179,62 @@ test('lost upload merge response retries only merge on the same session', async 
   assert.equal(chunkCalls, 1)
   assert.equal(mergeCalls, 2)
   assert.equal(deleteCalls, 0)
+  assert.equal(done, 1)
+  assert.equal(closed, 1)
+  await act(async () => renderer.unmount())
+})
+
+test('a definitive upload integrity failure can discard the damaged session and retry cleanup', async () => {
+  let initCalls = 0
+  const merges = []
+  const deletes = []
+  let deleteFailures = 1
+  let done = 0
+  let closed = 0
+  const file = { name: 'damaged.pdf', size: 1, slice: () => new Blob(['x']) }
+  const Uploader = loadTs('src/components/ChunkUploader.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/types': { fmtSize: String },
+    '../api/file-hash': { fileMd5: async () => 'test-hash' },
+    '../api/client': {
+      post: async (url) => {
+        if (url === '/uploads/init') {
+          initCalls++
+          return { data: { sessionId: initCalls === 1 ? 'damaged-session' : 'fresh-session', chunkSize: 1, totalChunks: 1, uploadedChunks: [] } }
+        }
+        const sid = url.split('/')[2]
+        merges.push(sid)
+        if (sid === 'damaged-session') {
+          throw { response: { status: 400, data: { message: '文件 MD5 校验失败，请重新上传' } } }
+        }
+        return { data: { id: 99 } }
+      },
+      put: async () => {},
+      delete: async (url) => {
+        deletes.push(url)
+        if (deleteFailures-- > 0) throw new Error('temporary cleanup failure')
+        return { data: {} }
+      },
+    },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Uploader, { projectId: 1, visible: true, onClose: () => { closed++ }, onDone: () => { done++ } })) })
+  await act(async () => renderer.root.findByType('input').props.onChange({ target: { files: [file] } }))
+  await act(async () => renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick())
+  let discard = findActionButton(renderer.root.findByType('Modal').props.footer, '清理并重新选择')
+  assert.ok(discard, 'an explicit integrity failure must not be mislabeled as an uncertain commit')
+  await act(async () => discard.props.onClick())
+  assert.deepEqual(deletes, ['/uploads/damaged-session'])
+  discard = findActionButton(renderer.root.findByType('Modal').props.footer, '清理并重新选择')
+  assert.ok(discard, 'failed cleanup must retain the damaged session for retry')
+  await act(async () => discard.props.onClick())
+  assert.deepEqual(deletes, ['/uploads/damaged-session', '/uploads/damaged-session'])
+  assert.equal(renderer.root.findByType('input').props.disabled, false)
+  await act(async () => renderer.root.findByType('input').props.onChange({ target: { files: [file] } }))
+  await act(async () => renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick())
+  assert.deepEqual(merges, ['damaged-session', 'fresh-session'])
+  assert.equal(initCalls, 2, 'an aborted damaged session must restart through init')
   assert.equal(done, 1)
   assert.equal(closed, 1)
   await act(async () => renderer.unmount())
@@ -1819,6 +2035,243 @@ test('menu-only role grants remain selected when another permission is edited', 
   await act(async()=>renderer.unmount())
 })
 
+test('deleting the only row on a controlled last page reloads the last page allowed by the response total', async () => {
+  const iconMock = new Proxy({}, { get: (_, name) => component(name) })
+  const cases = [
+    {
+      label: 'projects', page: 'src/pages/project/ProjectList.tsx', pageSize: 10,
+      row: { id: 91, name: '末页项目', status: 'DRAFT' },
+      props: {},
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        'react-router-dom': { Link: component('Link'), useNavigate: () => () => {} },
+        '../../api/client': http,
+        '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:update', 'project:delete']),
+        '../../api/types': { PROJECT_STATUS: { DRAFT: { text: '草稿' } }, fmtTime: String },
+        '../../components/ActionSlots': actionSlotsModule,
+      }),
+    },
+    {
+      label: 'users', page: 'src/pages/org/UserList.tsx', pageSize: 10,
+      row: { id: 91, employeeNo: 'last-user', realName: '末页用户', email: 'last@example.invalid', status: 'ACTIVE', createdAt: '' },
+      props: {},
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../../api/client': http,
+        '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['user:manage', 'user:delete']),
+        '../../api/types': { fmtTime: String }, '../../components/ActionSlots': actionSlotsModule,
+      }),
+    },
+    {
+      label: 'suppliers', page: 'src/pages/supplier/SupplierList.tsx', pageSize: 10,
+      row: { id: 91, name: '末页供应商', status: 'ACTIVE', createdAt: '' },
+      props: {},
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../../api/client': http,
+        '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['supplier:manage', 'supplier:delete']),
+        '../../api/types': { fmtTime: String }, '../../components/ActionSlots': actionSlotsModule,
+      }),
+    },
+    {
+      label: 'roles', page: 'src/pages/rbac/RoleList.tsx', pageSize: 20,
+      row: { id: 91, name: '末页角色', isBuiltIn: false, permissionIds: [], assignedUserCount: 0, status: 'ACTIVE' },
+      props: {},
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../../api/client': http,
+        '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['role:manage', 'role:delete']),
+        '../../api/types': { PageResp: {} }, '../../components/ActionSlots': actionSlotsModule,
+      }),
+    },
+    {
+      label: 'files', page: 'src/components/FileTable.tsx', pageSize: 10,
+      row: { id: 91, originalName: '末页文件.pdf', ext: 'pdf', sizeBytes: 1, direction: 'C2S', createdAt: '', canDelete: true },
+      props: { projectId: 1, projectStatus: 'IN_PROGRESS' },
+      mocks: (http) => ({
+        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+        '../api/client': http, '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['file:delete']),
+        '../api/types': { fmtSize: String, fmtTime: String }, '../components/ActionSlots': actionSlotsModule,
+        './ActionSlots': actionSlotsModule, './ChunkUploader': component('Uploader'), './PdfPreview': component('PDF'),
+      }),
+    },
+  ]
+
+  for (const item of cases) {
+    let deleted = false
+    const pages = []
+    const http = {
+      get: async (url, config = {}) => {
+        if (url === '/supplier-options' || url === '/departments' || url === '/admin/user-role-options' || url === '/permissions') return { data: [] }
+        const requested = Number(config.params?.page || 1)
+        pages.push(requested)
+        const total = deleted ? item.pageSize : item.pageSize + 1
+        const list = requested === 2 ? (deleted ? [] : [item.row]) : [item.row]
+        return { data: { list, total, page: requested, pageSize: item.pageSize } }
+      },
+      delete: async () => { deleted = true; return { data: {} } },
+    }
+    const Page = loadTs(item.page, item.mocks(http)).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page, item.props)) })
+    await act(async () => renderer.root.findByType('Table').props.pagination.onChange(2, item.pageSize))
+    const table = renderer.root.findByType('Table')
+    const actions = table.props.columns.at(-1).render(null, item.row)
+    const confirm = findElement(actions, (node) => typeof node.props.onOk === 'function' && String(node.props.title).includes('删除'))
+    assert.ok(confirm, `${item.label} must expose the fixture delete action`)
+    await act(async () => confirm.props.onOk())
+    assert.equal(renderer.root.findByType('Table').props.pagination.current, 1, `${item.label} must correct controlled current`)
+    assert.equal(pages.at(-1), 1, `${item.label} must fetch the valid page after observing the new total`)
+    await act(async () => renderer.unmount())
+  }
+})
+
+test('message receipt popover distinguishes failure, retries, and ignores an older response', async () => {
+  const pending = []
+  const message = { id: 7, senderId: 2, senderName: '留言人', senderType: 'INTERNAL', content: '测试', createdAt: '', readCount: 0, totalCount: 1, readByMe: true }
+  const http = { get: async (url) => {
+    if (url.includes('/projects/')) return { data: { list: [message], total: 1 } }
+    return new Promise((resolve, reject) => pending.push({ url, resolve, reject }))
+  } }
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco, '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': http, '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []), '../api/types': { fmtTime: String },
+  }).default
+  let pageRenderer
+  await act(async () => { pageRenderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
+  const receiptElement = React.Children.toArray(pageRenderer.root.findByType('Popover').props.content.props.children)[1]
+  const Receipt = receiptElement.type
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Receipt, { id: 7 })) })
+  await act(async () => { pending[0].reject(new Error('reads unavailable')); await Promise.resolve() })
+  assert.match(JSON.stringify(renderer.toJSON()), /回执加载失败/)
+  assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /暂无/)
+  const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试')
+  assert.ok(retry)
+  await act(async () => { retry.props.onClick(); await Promise.resolve() })
+  await act(async () => { renderer.update(React.createElement(Receipt, { id: 8 })); await Promise.resolve() })
+  await act(async () => pending[1].resolve({ data: { readers: [{ realName: '旧回执' }] } }))
+  assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /旧回执/)
+  await act(async () => pending[2].resolve({ data: { readers: [{ realName: '新回执' }] } }))
+  assert.match(JSON.stringify(renderer.toJSON()), /新回执/)
+  await act(async () => renderer.unmount())
+  await act(async () => pageRenderer.unmount())
+})
+
+test('required option sources expose loading and retry states and block submits until ready', async () => {
+  const iconMock = new Proxy({}, { get: (_, name) => component(name) })
+
+  {
+    let posted = 0
+    let optionAttempt = 0
+    let rejectFirst
+    const form = { resetFields() {}, validate: async () => ({ name: '项目', supplierId: 8 }) }
+    const testArco = new Proxy({
+      Form: Object.assign(component('Form'), { useForm: () => [form], Item: component('Form.Item') }),
+      Typography: arco.Typography, Message: arco.Message,
+    }, { get: (obj, key) => obj[key] ?? component(key) })
+    const http = {
+      get: async (url) => {
+        if (url === '/projects') return { data: { list: [], total: 0, page: 1, pageSize: 10 } }
+        optionAttempt++
+        if (optionAttempt === 1) return new Promise((_resolve, reject) => { rejectFirst = reject })
+        return { data: [{ id: 8, name: '可用供应商' }] }
+      },
+      post: async () => { posted++ },
+    }
+    const Page = loadTs('src/pages/project/ProjectList.tsx', {
+      '@arco-design/web-react': testArco, '@arco-design/web-react/icon': iconMock,
+      'react-router-dom': { Link: component('Link'), useNavigate: () => () => {} },
+      '../../api/client': http, '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:create']),
+      '../../api/types': { PROJECT_STATUS: {}, fmtTime: String }, '../../components/ActionSlots': actionSlotsModule,
+    }).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)) })
+    const createButton = renderer.root.findAllByType('Button').find((node) => node.props.children === '新建项目')
+    assert.equal(createButton.props.disabled, true, 'project creation must wait for supplier options')
+    await act(async () => { rejectFirst(new Error('supplier options unavailable')); await Promise.resolve() })
+    assert.ok(renderer.root.findAllByType('Button').some((node) => String(node.props.children).includes('重试')))
+    const retry = renderer.root.findAllByType('Button').find((node) => String(node.props.children).includes('重试'))
+    await act(async () => retry.props.onClick())
+    assert.equal(optionAttempt, 2)
+    assert.equal(renderer.root.findAllByType('Button').find((node) => node.props.children === '新建项目').props.disabled, false)
+    await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '新建项目').props.onClick())
+    await act(async () => renderer.root.findByType('Modal').props.onOk())
+    assert.equal(posted, 1)
+    await act(async () => renderer.unmount())
+  }
+
+  {
+    let posted = 0
+    let optionRound = 0
+    const first = []
+    const form = { resetFields() {}, setFieldsValue() {}, validate: async () => ({ employeeNo: 'new_user', password: '123456', realName: '新用户', email: 'new@example.invalid', roleId: 3 }) }
+    const pwdForm = { resetFields() {}, validate: async () => ({ newPassword: '123456' }) }
+    let formIndex = 0
+    const testArco = new Proxy({
+      Form: Object.assign(component('Form'), { useForm: () => [formIndex++ % 2 === 0 ? form : pwdForm], Item: component('Form.Item') }),
+      Typography: arco.Typography, Message: arco.Message,
+    }, { get: (obj, key) => obj[key] ?? component(key) })
+    const http = {
+      get: async (url) => {
+        if (url === '/admin/users') return { data: { list: [], total: 0, page: 1, pageSize: 10 } }
+        if (optionRound === 0) return new Promise((resolve, reject) => first.push({ resolve, reject }))
+        return { data: url === '/departments' ? [] : [{ id: 3, name: '可用角色' }] }
+      },
+      post: async () => { posted++ },
+    }
+    const Page = loadTs('src/pages/org/UserList.tsx', {
+      '@arco-design/web-react': testArco, '@arco-design/web-react/icon': iconMock,
+      '../../api/client': http, '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['user:manage']),
+      '../../api/types': { fmtTime: String }, '../../components/ActionSlots': actionSlotsModule,
+    }).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)) })
+    const createButton = renderer.root.findAllByType('Button').find((node) => node.props.children === '新增用户')
+    assert.equal(createButton.props.disabled, true, 'user creation must wait for role options')
+    optionRound = 1
+    await act(async () => { first.forEach((request) => request.reject(new Error('user options unavailable'))); await Promise.resolve() })
+    const retry = renderer.root.findAllByType('Button').find((node) => String(node.props.children).includes('重试'))
+    assert.ok(retry)
+    await act(async () => retry.props.onClick())
+    assert.equal(renderer.root.findAllByType('Button').find((node) => node.props.children === '新增用户').props.disabled, false)
+    await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '新增用户').props.onClick())
+    await act(async () => renderer.root.findAllByType('Modal').find((node) => node.props.visible).props.onOk())
+    assert.equal(posted, 1)
+    await act(async () => renderer.unmount())
+  }
+
+  {
+    const role = { id: 7, name: '测试角色', permissionIds: [1], assignedUserCount: 0, isBuiltIn: false, status: 'ACTIVE' }
+    let permissionRound = 0
+    let rejectPermissions
+    const http = { get: async (url) => {
+      if (url === '/admin/roles') return { data: { list: [role], total: 1, page: 1, pageSize: 20 } }
+      permissionRound++
+      if (permissionRound === 1) return new Promise((_resolve, reject) => { rejectPermissions = reject })
+      return { data: [{ id: 1, name: '菜单', type: 'MENU', parentId: null }] }
+    } }
+    const Page = loadTs('src/pages/rbac/RoleList.tsx', {
+      '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
+      '../../api/client': http, '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['role:manage']),
+      '../../api/types': { PageResp: {} }, '../../components/ActionSlots': actionSlotsModule,
+    }).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)) })
+    const actions = renderer.root.findByType('Table').props.columns.at(-1).render(null, role)
+    await act(async () => findActionButton(actions, '分配权限').props.onClick())
+    const savePermissions = () => findActionButton(renderer.root.findByType('Drawer').props.footer, '保存权限')
+    assert.equal(savePermissions().props.disabled, true)
+    await act(async () => { rejectPermissions(new Error('permissions unavailable')); await Promise.resolve() })
+    const retry = renderer.root.findAllByType('Button').find((node) => String(node.props.children).includes('重试'))
+    assert.ok(retry)
+    await act(async () => retry.props.onClick())
+    assert.equal(permissionRound, 2)
+    assert.equal(savePermissions().props.disabled, false)
+    await act(async () => renderer.unmount())
+  }
+})
+
 test('workbook parser version includes published security fixes', () => {
   const version = require('xlsx').version.split('.').map(Number)
   assert.ok(version[0] > 0 || version[1] > 20 || (version[1] === 20 && version[2] >= 2), 'xlsx must be at least 0.20.2')
@@ -1922,7 +2375,7 @@ test('audit selection is cleared across filtering, paging and refresh, and repor
   const pageData = (params) => params.page === 2 ? rows.page2 : params.keyword === 'next' ? rows.filtered : rows.initial
   const http = {
     get: async (_url, { params }) => {
-      const response = { data: { list: pageData(params), total: pageData(params).length, page: params.page, pageSize: params.pageSize } }
+      const response = { data: { list: pageData(params), total: params.page === 2 ? 23 : pageData(params).length, page: params.page, pageSize: params.pageSize } }
       if (!holdNext) return response
       holdNext = false
       return new Promise((resolve) => { releaseFetch = () => resolve(response) })
@@ -2123,4 +2576,249 @@ test('late initialization settles and cancels before reopening can reuse its ses
   await act(async()=>renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick())
   assert.deepEqual(events,['init','delete','init','merge'],'old cleanup must finish before new init')
   await act(async()=>renderer.unmount())
+})
+
+test('message detail replaces stale content with loading, failure and retry states for the requested message', async () => {
+  const messages = [
+    { id: 1, senderId: 1, senderName: '我', senderType: 'INTERNAL', content: 'A', readCount: 1, totalCount: 1, readByMe: true, createdAt: '' },
+    { id: 2, senderId: 1, senderName: '我', senderType: 'INTERNAL', content: 'B', readCount: 1, totalCount: 1, readByMe: true, createdAt: '' },
+  ]
+  let bAttempts = 0
+  let rejectFirstB
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': {
+      get: async (url) => {
+        if (url === '/projects/1/messages') return { data: { list: messages, total: messages.length } }
+        if (url === '/messages/1/reads') {
+          return { data: { readers: [{ userId: 11, realName: '读者 A', userType: 'INTERNAL' }], unread: [] } }
+        }
+        bAttempts++
+        if (bAttempts === 1) return new Promise((_resolve, reject) => { rejectFirstB = reject })
+        return { data: { readers: [{ userId: 22, realName: '读者 B', userType: 'INTERNAL' }], unread: [] } }
+      },
+    },
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []),
+    '../api/types': { fmtTime: String },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
+  const detailButtons = () => renderer.root.findAllByType('Button').filter((node) => node.props.children === '回执详情')
+
+  await act(async () => detailButtons()[0].props.onClick())
+  let drawer = renderer.root.findByType('Drawer')
+  assert.equal(drawer.findAllByType('List')[0].props.dataSource[0].realName, '读者 A')
+
+  let firstB
+  await act(async () => {
+    firstB = detailButtons()[1].props.onClick()
+    await Promise.resolve()
+  })
+  drawer = renderer.root.findByType('Drawer')
+  assert.equal(drawer.findAllByType('List').length, 0, 'requesting B must immediately remove A receipt content')
+  assert.ok(drawer.findAllByType('Text').some((node) => node.props.children === '回执加载中…'))
+  await act(async () => { rejectFirstB(new Error('receipt unavailable')); await firstB })
+  drawer = renderer.root.findByType('Drawer')
+  assert.equal(drawer.props.visible, true)
+  assert.equal(drawer.findAllByType('List').length, 0, 'B failure must not restore A receipt content')
+  assert.ok(drawer.findAllByType('Text').some((node) => node.props.children === '回执加载失败'))
+  assert.equal(drawer.findAllByType('Text').some((node) => node.props.children === '回执加载中…'), false)
+  const retry = drawer.findAllByType('Button').find((node) => node.props.children === '重试')
+  assert.ok(retry)
+  await act(async () => retry.props.onClick())
+  assert.equal(renderer.root.findByType('Drawer').findAllByType('List')[0].props.dataSource[0].realName, '读者 B')
+  await act(async () => renderer.unmount())
+})
+
+test('message detail ignores an older rejection and never reopens after close', async () => {
+  const messages = [
+    { id: 1, senderId: 1, senderName: '我', senderType: 'INTERNAL', content: 'A', readCount: 1, totalCount: 1, readByMe: true, createdAt: '' },
+    { id: 2, senderId: 1, senderName: '我', senderType: 'INTERNAL', content: 'B', readCount: 1, totalCount: 1, readByMe: true, createdAt: '' },
+  ]
+  const pending = []
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': { get: async (url) => {
+      if (url === '/projects/1/messages') return { data: { list: messages, total: messages.length } }
+      return new Promise((resolve, reject) => pending.push({ url, resolve, reject }))
+    } },
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []),
+    '../api/types': { fmtTime: String },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
+  const detailButtons = () => renderer.root.findAllByType('Button').filter((node) => node.props.children === '回执详情')
+  let oldA
+  let currentB
+  await act(async () => {
+    oldA = detailButtons()[0].props.onClick()
+    currentB = detailButtons()[1].props.onClick()
+    await Promise.resolve()
+  })
+  await act(async () => { pending[1].resolve({ data: { readers: [{ userId: 22, realName: '读者 B', userType: 'INTERNAL' }], unread: [] } }); await currentB })
+  await act(async () => { pending[0].reject(new Error('late A failure')); await oldA })
+  let drawer = renderer.root.findByType('Drawer')
+  assert.equal(drawer.findAllByType('List')[0].props.dataSource[0].realName, '读者 B')
+
+  let closingRequest
+  await act(async () => { closingRequest = detailButtons()[0].props.onClick(); await Promise.resolve() })
+  drawer = renderer.root.findByType('Drawer')
+  await act(async () => drawer.props.onCancel())
+  await act(async () => { pending[2].reject(new Error('failure after close')); await closingRequest })
+  assert.equal(renderer.root.findByType('Drawer').props.visible, false)
+  await act(async () => renderer.unmount())
+})
+
+test('message pagination stops at the response total for exact 20 and 40 item totals', async () => {
+  const makeMessages = (start, count) => Array.from({ length: count }, (_, offset) => ({
+    id: start + offset, senderId: 2, senderName: '成员', senderType: 'INTERNAL', content: '留言', readCount: 0, totalCount: 1, readByMe: true, createdAt: '',
+  }))
+  for (const total of [20, 40]) {
+    let calls = 0
+    const Page = loadTs('src/components/MessagePanel.tsx', {
+      '@arco-design/web-react': arco,
+      '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+      '../api/client': { get: async () => {
+        calls++
+        return { data: { list: makeMessages((calls - 1) * 20 + 1, 20), total } }
+      } },
+      '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []),
+      '../api/types': { fmtTime: String },
+    }).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
+    const loadMore = () => renderer.root.findAllByType('Button').find((node) => String(node.props.children).startsWith('加载更多'))
+    if (total === 20) {
+      assert.equal(loadMore(), undefined, 'a full first page equal to total must not advertise another page')
+    } else {
+      assert.ok(loadMore(), 'a 40-item total needs one additional page after the first 20')
+      await act(async () => loadMore().props.onClick())
+      assert.equal(loadMore(), undefined, 'two full pages equal to total must not advertise a third page')
+    }
+    await act(async () => renderer.unmount())
+  }
+})
+
+test('message cursor pagination keeps loading after concurrent deletion shrinks total', async () => {
+  const makeMessages = (start, count) => Array.from({ length: count }, (_, offset) => ({
+    id: start + offset, senderId: 2, senderName: '成员', senderType: 'INTERNAL', content: '历史留言', readCount: 0, totalCount: 1, readByMe: true, createdAt: '',
+  }))
+  const pages = [
+    { list: makeMessages(1, 20), total: 41 },
+    { list: makeMessages(21, 20), total: 31 },
+    { list: makeMessages(41, 1), total: 31 },
+  ]
+  let call = 0
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': { get: async () => ({ data: pages[call++] }) },
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []),
+    '../api/types': { fmtTime: String },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
+  const loadMore = () => renderer.root.findAllByType('Button').find((node) => String(node.props.children).startsWith('加载更多'))
+  await act(async () => loadMore().props.onClick())
+  assert.ok(loadMore(), 'a full cursor page must remain loadable when the server total changed during pagination')
+  await act(async () => loadMore().props.onClick())
+  assert.equal(renderer.root.findAll((node) => node.props.className === 'msg-item').length, 41)
+  assert.equal(loadMore(), undefined, 'the final short cursor page must terminate pagination')
+  await act(async () => renderer.unmount())
+})
+
+test('audit deletion from the only row on the last page corrects the controlled page', async () => {
+  const row = { id: 21, action: 'LOGIN', createdAt: '' }
+  let deleted = false
+  const pages = []
+  const Page = loadTs('src/pages/system/AuditLog.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../../api/client': {
+      get: async (_url, { params }) => {
+        pages.push(params.page)
+        return { data: { list: params.page === 2 && !deleted ? [row] : [], total: deleted ? 20 : 21, page: params.page, pageSize: 20 } }
+      },
+      delete: async () => { deleted = true; return { data: { deleted: 1 } } },
+    },
+    '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['log:view', 'log:delete']),
+    '../../api/types': { fmtTime: String },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  await act(async () => renderer.root.findByType('Table').props.pagination.onChange(2, 20))
+  const actions = renderer.root.findByType('Table').props.columns.at(-1).render(null, row)
+  const confirm = findElement(actions, (node) => node.props.title === '确认删除这条日志？')
+  await act(async () => confirm.props.onOk())
+  assert.equal(renderer.root.findByType('Table').props.pagination.current, 1)
+  assert.deepEqual(pages.slice(-2), [2, 1], 'the invalid page response must trigger a fetch for the remaining last page')
+  await act(async () => renderer.unmount())
+})
+
+test('batch download uses a synchronous in-flight latch against repeated clicks', async () => {
+  let posts = 0
+  let release
+  const response = new Promise((resolve) => { release = resolve })
+  const Page = loadTs('src/components/FileTable.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': {
+      get: async () => ({ data: { list: [{ id: 7, originalName: 'a.pdf', ext: 'pdf', sizeBytes: 1, direction: 'C2S', createdAt: '', canDelete: false }], total: 1, page: 1, pageSize: 10 } }),
+      post: async () => { posts++; return response },
+    },
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['file:download']),
+    '../api/types': { fmtSize: String, fmtTime: String },
+    './ChunkUploader': component('Uploader'), './PdfPreview': component('PDF'),
+  }, {
+    URL: { createObjectURL: () => 'blob:test', revokeObjectURL() {} },
+    document: { createElement: () => ({ click() {} }) },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
+  await act(async () => renderer.root.findByType('Table').props.rowSelection.onChange([7]))
+  const button = renderer.root.findAllByType('Button').find((node) => String(node.props.children).startsWith('打包下载'))
+  let first
+  let second
+  await act(async () => {
+    first = button.props.onClick()
+    second = button.props.onClick()
+    await Promise.resolve()
+  })
+  assert.equal(posts, 1)
+  await act(async () => { release({ data: new Blob(['zip']) }); await first; await second })
+  await act(async () => renderer.unmount())
+})
+
+test('project status update uses a per-project synchronous in-flight latch', async () => {
+  const project = { id: 9, name: '项目', supplierName: '供应商', status: 'DRAFT', updatedAt: '' }
+  let puts = 0
+  let release
+  const response = new Promise((resolve) => { release = resolve })
+  const Page = loadTs('src/pages/project/ProjectList.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    'react-router-dom': { Link: component('Link'), useNavigate: () => () => {} },
+    '../../api/client': {
+      get: async (url) => url === '/supplier-options' ? { data: [] } : { data: { list: [project], total: 1, page: 1, pageSize: 10 } },
+      put: async () => { puts++; return response },
+    },
+    '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:status']),
+    '../../api/types': { PROJECT_STATUS: { DRAFT: { text: '草稿' } }, fmtTime: String },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const actions = renderer.root.findByType('Table').props.columns.at(-1).render(null, project)
+  const statusSelect = findElement(actions, (node) => node.props.placeholder === '状态')
+  let first
+  let second
+  await act(async () => {
+    first = statusSelect.props.onChange('IN_PROGRESS')
+    second = statusSelect.props.onChange('IN_PROGRESS')
+    await Promise.resolve()
+  })
+  assert.equal(puts, 1)
+  await act(async () => { release({ data: {} }); await first; await second })
+  await act(async () => renderer.unmount())
 })

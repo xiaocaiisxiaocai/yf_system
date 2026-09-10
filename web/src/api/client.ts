@@ -129,7 +129,10 @@ http.interceptors.response.use(
     if (status === 403 && biz !== 40303 && !cfg?.url?.includes('/auth/profile')) {
       await refreshProfileAfterForbidden()
     }
-    const msg = error.response?.data?.message || error.message || '网络错误'
+    const connectionMessage = error.code === 'ERR_NETWORK'
+      ? '网络连接失败，请稍后重试'
+      : error.code === 'ECONNABORTED' ? '请求超时，请稍后重试' : undefined
+    const msg = error.response?.data?.message || connectionMessage || error.message || '网络错误'
     // 428 需要验证码由登录页自行处理，不全局提示；40303 由跳转承载
     if (status !== 428 && biz !== 40303) Message.error(msg)
     return Promise.reject(error)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Space, Table, Tag, Tree, Typography,
 } from '@arco-design/web-react'
@@ -33,6 +33,9 @@ export default function RoleList() {
   const [reloadKey, setReloadKey] = useState(0)
   const [page, setPage] = useState(1)
   const [perms, setPerms] = useState<Perm[]>([])
+  const [permsLoading, setPermsLoading] = useState(true)
+  const [permsError, setPermsError] = useState(false)
+  const permsSeq = useRef(0)
   const [editOpen, setEditOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [savingPerms, setSavingPerms] = useState(false)
@@ -60,6 +63,8 @@ export default function RoleList() {
         if (active) {
           setData(next)
           setLoadError(false)
+          const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || 20)))
+          if (page > lastPage) setPage(lastPage)
         }
       })
       .catch(() => {
@@ -71,15 +76,38 @@ export default function RoleList() {
     return () => {
       active = false
     }
-  }, [fetchRoles, reloadKey])
+  }, [fetchRoles, page, reloadKey])
+
+  const retryPermissions = () => {
+    setPermsLoading(true)
+    setPermsError(false)
+    const seq = ++permsSeq.current
+    http.get('/permissions')
+      .then((r) => {
+        if (seq === permsSeq.current) setPerms(r.data)
+      })
+      .catch(() => {
+        if (seq === permsSeq.current) setPermsError(true)
+      })
+      .finally(() => {
+        if (seq === permsSeq.current) setPermsLoading(false)
+      })
+  }
 
   useEffect(() => {
-    let active = true
-    http.get('/permissions').then((r) => {
-      if (active) setPerms(r.data)
-    })
+    const seq = ++permsSeq.current
+    http.get('/permissions')
+      .then((r) => {
+        if (seq === permsSeq.current) setPerms(r.data)
+      })
+      .catch(() => {
+        if (seq === permsSeq.current) setPermsError(true)
+      })
+      .finally(() => {
+        if (seq === permsSeq.current) setPermsLoading(false)
+      })
     return () => {
-      active = false
+      permsSeq.current += 1
     }
   }, [])
 
@@ -115,7 +143,7 @@ export default function RoleList() {
   }
 
   const savePerms = async () => {
-    if (savingPerms) return
+    if (savingPerms || permsLoading || permsError) return
     const ids = Array.from(new Set(checked)).map(Number)
     setSavingPerms(true)
     try {
@@ -171,7 +199,7 @@ export default function RoleList() {
           rowKey="id"
           loading={loading}
           data={data.list}
-          scroll={{ x: 972, y: 'var(--page-table-scroll-y)' }}
+          scroll={{ x: 996, y: 'var(--page-table-scroll-y)' }}
           columns={[
           {
             title: '名称',
@@ -185,8 +213,8 @@ export default function RoleList() {
             width: 200,
             render: (v?: string) => <span style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '20px' }}>{v || '-'}</span>,
           },
-          { title: '权限点数', dataIndex: 'permissionIds', width: 84, align: 'center' as const, render: (v: number[]) => v.length },
-          { title: '绑定用户', dataIndex: 'assignedUserCount', width: 84, align: 'center' as const },
+          { title: '权限点数', dataIndex: 'permissionIds', width: 96, align: 'center' as const, render: (v: number[]) => v.length },
+          { title: '绑定用户', dataIndex: 'assignedUserCount', width: 96, align: 'center' as const },
           {
             title: '类型',
             dataIndex: 'isBuiltIn',
@@ -285,7 +313,7 @@ export default function RoleList() {
             <Input placeholder="角色名称" disabled={editing?.isBuiltIn} />
           </Form.Item>
           <Form.Item label="角色说明" field="description">
-            <Input.TextArea rows={3} maxLength={200} placeholder="选填" />
+            <Input.TextArea rows={3} maxLength={255} placeholder="选填" />
           </Form.Item>
         </Form>
       </Modal>
@@ -300,28 +328,48 @@ export default function RoleList() {
         footer={
           <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
             <Button disabled={savingPerms} onClick={() => setPermTarget(null)}>取消</Button>
-            <Button type="primary" loading={savingPerms} onClick={savePerms}>
+            <Button type="primary" loading={savingPerms} disabled={permsLoading || permsError} onClick={savePerms}>
               保存权限
             </Button>
           </Space>
         }
       >
         <div className="section-heading">权限范围</div>
-        <Tree
-          checkable
-          checkStrictly
-          defaultExpandedKeys={permTree.map((g) => g.key)}
-          treeData={permTree}
-          checkedKeys={checked}
-          onCheck={(keys, extra) => {
-            const next = keys.map(String)
-            if (extra.checked) {
-              const permission = perms.find((p) => String(p.id) === String(extra.node.key))
-              if (permission?.parentId) next.push(String(permission.parentId))
-            }
-            setChecked(Array.from(new Set(next)))
-          }}
-        />
+        {permsError && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <Typography.Text type="error">权限点加载失败</Typography.Text>
+            <Button size="small" onClick={retryPermissions}>重试加载权限点</Button>
+          </div>
+        )}
+        {permsLoading && <Typography.Text type="secondary">权限点加载中…</Typography.Text>}
+        {!permsLoading && !permsError && perms.length === 0 && <Typography.Text type="secondary">暂无权限点</Typography.Text>}
+        {!permsLoading && !permsError && (
+          <Tree
+            checkable
+            checkStrictly
+            defaultExpandedKeys={permTree.map((g) => g.key)}
+            treeData={permTree}
+            checkedKeys={checked}
+            onCheck={(keys, extra) => {
+              const next = keys.map(String)
+              if (extra.checked) {
+                const permission = perms.find((p) => String(p.id) === String(extra.node.key))
+                if (permission?.parentId) next.push(String(permission.parentId))
+              } else {
+                const permission = perms.find((p) => String(p.id) === String(extra.node.key))
+                if (permission?.type === 'MENU') {
+                  const actionIds = new Set(
+                    perms.filter((p) => p.type === 'ACTION' && p.parentId === permission.id).map((p) => String(p.id)),
+                  )
+                  for (let index = next.length - 1; index >= 0; index -= 1) {
+                    if (actionIds.has(next[index])) next.splice(index, 1)
+                  }
+                }
+              }
+              setChecked(Array.from(new Set(next)))
+            }}
+          />
+        )}
         <div className="dialog-note">勾选操作会关联菜单；仅勾选菜单不授予操作权限。</div>
       </Drawer>
     </Card>
