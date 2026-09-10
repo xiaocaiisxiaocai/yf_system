@@ -37,14 +37,19 @@ async fn purge_deleted_files(state: &AppState) {
     let Ok(doomed) = doomed else { return };
     for f in doomed {
         let abs = std::path::Path::new(&state.cfg.storage.root).join(&f.storage_path);
-        if crate::storage::ensure_within_root(&state.cfg.storage.root, &abs).is_err() {
-            tracing::warn!(path = %abs.display(), "拒绝清理存储根目录之外的文件");
-            continue;
-        }
-        if let Err(e) = tokio::fs::remove_file(&abs).await {
-            // 文件已不存在是正常情况，其他错误跳过该行下次再试
-            if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(error = ?e, path = %abs.display(), "清理软删文件失败");
+        match crate::storage::canonical_existing_path(&state.cfg.storage.root, &abs).await {
+            Ok(canonical_path) => {
+                if let Err(e) = tokio::fs::remove_file(&canonical_path).await {
+                    // 文件已不存在是正常情况，其他错误跳过该行下次再试
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(error = ?e, path = %canonical_path.display(), "清理软删文件失败");
+                        continue;
+                    }
+                }
+            }
+            Err(crate::error::AppError::NotFound) => {}
+            Err(e) => {
+                tracing::warn!(error = ?e, path = %abs.display(), "拒绝清理存储根目录之外的文件");
                 continue;
             }
         }

@@ -112,8 +112,9 @@ pub async fn stream_file(
     }
     scope::ensure_project_access(db, user, f.project_id).await?;
 
-    let abs = std::path::Path::new(&state.cfg.storage.root).join(&f.storage_path);
-    crate::storage::ensure_within_root(&state.cfg.storage.root, &abs)?;
+    let stored_path = std::path::Path::new(&state.cfg.storage.root).join(&f.storage_path);
+    let abs =
+        crate::storage::canonical_existing_path(&state.cfg.storage.root, &stored_path).await?;
     let file = tokio::fs::File::open(&abs)
         .await
         .map_err(|_| AppError::NotFound)?;
@@ -240,15 +241,12 @@ pub async fn batch_download(
         .await
         .ok();
 
-    let files_for_zip: Vec<(std::path::PathBuf, String)> = files
-        .iter()
-        .map(|f| {
-            (
-                std::path::Path::new(&root).join(&f.storage_path),
-                f.original_name.clone(),
-            )
-        })
-        .collect();
+    let mut files_for_zip = Vec::with_capacity(files.len());
+    for file in &files {
+        let stored_path = std::path::Path::new(&root).join(&file.storage_path);
+        let canonical_path = crate::storage::canonical_existing_path(&root, &stored_path).await?;
+        files_for_zip.push((canonical_path, file.original_name.clone()));
+    }
     let zip_path_clone = zip_path.clone();
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
         let file = std::fs::File::create(&zip_path_clone)

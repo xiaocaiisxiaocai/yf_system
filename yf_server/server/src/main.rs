@@ -13,6 +13,8 @@ mod util;
 #[cfg(test)]
 mod regression;
 #[cfg(test)]
+mod regression_batch_path;
+#[cfg(test)]
 mod regression_business_uniqueness;
 #[cfg(test)]
 mod regression_dashboard;
