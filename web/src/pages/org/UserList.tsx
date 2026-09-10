@@ -5,6 +5,7 @@ import {
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
+import PasswordInput from '../../components/PasswordInput'
 import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
 import { passwordRule } from '../../utils/password'
@@ -412,7 +413,7 @@ export default function UserList() {
                   field="password"
                   rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}
                 >
-                  <Input.Password placeholder="6-20 位" />
+                  <PasswordInput placeholder="6-20 位" />
                 </Form.Item>
               </>
             )}
@@ -463,7 +464,7 @@ export default function UserList() {
             field="newPassword"
                 rules={[{ required: true, message: '请输入新密码' }, passwordRule]}
           >
-            <Input.Password placeholder="6-20 位" />
+            <PasswordInput placeholder="6-20 位" />
           </Form.Item>
           <div className="dialog-note">重置后将退出当前登录</div>
         </Form>

@@ -47,6 +47,7 @@ function loadTs(relativePath, mocks = {}) {
     require: (name) => {
       if (name in mocks) return mocks[name]
       if (name.replace(/\\/g, '/').endsWith('/ActionSlots')) return actionSlots
+      if (name.replace(/\\/g, '/').endsWith('/PasswordInput')) return component('PasswordInput')
       return require(name)
     },
   }, { filename })

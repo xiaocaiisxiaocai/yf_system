@@ -400,6 +400,7 @@ function loadTs(relativePath, mocks, globals = {}) {
     require: (name) => {
       if (typeof name === 'string' && name in mocks) return mocks[name]
       if (typeof name === 'string' && name.replace(/\\/g, '/').endsWith('/ActionSlots')) return actionSlotsModule
+      if (typeof name === 'string' && name.replace(/\\/g, '/').endsWith('/PasswordInput')) return component('PasswordInput')
       if (typeof name === 'string' && name.startsWith('.') && name.replace(/\\/g, '/').endsWith('/utils/password')) {
         return loadTs('src/utils/password.ts', {})
       }

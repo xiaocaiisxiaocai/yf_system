@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import http, { withAuthLock } from '../api/client'
 import { useAuth } from '../store/auth'
 import { passwordRule } from '../utils/password'
+import PasswordInput from '../components/PasswordInput'
 
 const { Text } = Typography
 
@@ -110,7 +111,7 @@ export default function Profile() {
           </Text>
           <Form form={passwordForm} layout="vertical" onSubmit={changePassword}>
             <Form.Item label="当前密码" field="oldPassword" rules={[{ required: true, message: '请输入当前密码' }]}>
-              <Input.Password prefix={<IconLock />} autoComplete="current-password" />
+              <PasswordInput prefix={<IconLock />} autoComplete="current-password" />
             </Form.Item>
             <Form.Item
               label="新密码"
@@ -120,10 +121,10 @@ export default function Profile() {
                 passwordRule,
               ]}
             >
-              <Input.Password prefix={<IconLock />} autoComplete="new-password" />
+              <PasswordInput prefix={<IconLock />} autoComplete="new-password" />
             </Form.Item>
             <Form.Item label="确认新密码" field="confirm" rules={[{ required: true, message: '请再次输入新密码' }]}>
-              <Input.Password prefix={<IconLock />} autoComplete="new-password" />
+              <PasswordInput prefix={<IconLock />} autoComplete="new-password" />
             </Form.Item>
             <Button type="primary" htmlType="submit" loading={passwordLoading}>
               修改密码

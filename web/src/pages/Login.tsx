@@ -6,6 +6,7 @@ import axios from 'axios'
 import { useAuth } from '../store/auth'
 import { withAuthLock } from '../api/client'
 import AuthShell from '../components/AuthShell'
+import PasswordInput from '../components/PasswordInput'
 
 interface Captcha {
   captchaId: string
@@ -85,7 +86,7 @@ export default function Login() {
             <Input size="large" prefix={<IconUser />} placeholder="请输入工号" aria-label="工号" autoComplete="username" />
           </Form.Item>
           <Form.Item field="password" rules={[{ required: true, message: '请输入密码' }]}>
-            <Input.Password size="large" prefix={<IconLock />} placeholder="请输入密码" aria-label="密码" autoComplete="current-password" onPressEnter={() => form.submit()} />
+            <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入密码" aria-label="密码" autoComplete="current-password" onPressEnter={() => form.submit()} />
           </Form.Item>
           {captcha && (
             <Form.Item field="captchaCode" rules={[{ required: true, message: '请输入验证码' }]}>

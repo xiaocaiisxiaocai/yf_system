@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Button, Form, Input, Message } from '@arco-design/web-react'
+import { Button, Form, Message } from '@arco-design/web-react'
 import { IconLock } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import http, { withAuthLock } from '../api/client'
 import { useAuth } from '../store/auth'
 import AuthShell from '../components/AuthShell'
+import PasswordInput from '../components/PasswordInput'
 import { passwordRule } from '../utils/password'
 
 export default function ChangePassword() {
@@ -52,7 +53,7 @@ export default function ChangePassword() {
         )}
         <Form className="auth-form" form={form} layout="vertical" onSubmit={submit}>
           <Form.Item field="oldPassword" rules={[{ required: true, message: '请输入原密码' }]}>
-            <Input.Password size="large" prefix={<IconLock />} placeholder="请输入原密码" aria-label="原密码" autoComplete="current-password" />
+            <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入原密码" aria-label="原密码" autoComplete="current-password" />
           </Form.Item>
           <Form.Item
             field="newPassword"
@@ -61,10 +62,10 @@ export default function ChangePassword() {
               passwordRule,
             ]}
           >
-            <Input.Password size="large" prefix={<IconLock />} placeholder="请输入新密码（6–20 位）" aria-label="新密码" autoComplete="new-password" />
+            <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入新密码（6–20 位）" aria-label="新密码" autoComplete="new-password" />
           </Form.Item>
           <Form.Item field="confirm" rules={[{ required: true, message: '请再次输入新密码' }]}>
-            <Input.Password size="large" prefix={<IconLock />} placeholder="请再次输入新密码" aria-label="确认新密码" autoComplete="new-password" />
+            <PasswordInput size="large" prefix={<IconLock />} placeholder="请再次输入新密码" aria-label="确认新密码" autoComplete="new-password" />
           </Form.Item>
           <div className="auth-actions">
             <Button long onClick={mustChangePassword ? exitLogin : () => nav(-1)}>
