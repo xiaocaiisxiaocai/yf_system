@@ -10,8 +10,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::dto::PageResp;
-use crate::entity::enums::FileStatus;
-use crate::entity::{files, projects, rounds, users};
+use crate::entity::enums::{FileStatus, ProjectStatus};
+use crate::entity::{files, projects, users};
 use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
 use crate::state::AppState;
@@ -25,7 +25,6 @@ pub struct FileListQuery {
     pub page: u64,
     #[serde(default = "crate::dto::default_page_size")]
     pub page_size: u64,
-    pub round_id: Option<u64>,
     pub direction: Option<String>,
     pub keyword: Option<String>,
     /// 精确定位项目动态中的文件，仍叠加项目范围及可用状态。
@@ -40,7 +39,7 @@ pub struct BatchDownloadReq {
 
 pub fn file_json(f: &files::Model) -> Value {
     json!({
-        "id": f.id, "projectId": f.project_id, "roundId": f.round_id,
+        "id": f.id, "projectId": f.project_id,
         "uploaderId": f.uploader_id,
         "direction": if f.direction == crate::entity::enums::FileDirection::C2s { "C2S" } else { "S2C" },
         "originalName": f.original_name, "ext": f.ext,
@@ -62,9 +61,6 @@ pub async fn list(
         .add(files::Column::Status.eq(FileStatus::Available));
     if let Some(id) = q.target_id {
         cond = cond.add(files::Column::Id.eq(id));
-    }
-    if let Some(rid) = q.round_id {
-        cond = cond.add(files::Column::RoundId.eq(rid));
     }
     if let Some(d) = &q.direction {
         cond = cond.add(files::Column::Direction.eq(d.as_str()));
@@ -89,18 +85,10 @@ pub async fn list(
         .into_iter()
         .map(|u| (u.id, u.real_name))
         .collect();
-    let round_map: std::collections::HashMap<u64, i32> = rounds::Entity::find()
-        .filter(rounds::Column::Id.is_in(items.iter().map(|f| f.round_id).collect::<Vec<_>>()))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|r| (r.id, r.round_no))
-        .collect();
     let mut list = Vec::with_capacity(items.len());
     for f in &items {
         let mut value = file_json(f);
         value["uploaderName"] = json!(uploader_map.get(&f.uploader_id));
-        value["roundNo"] = json!(round_map.get(&f.round_id));
         value["canDelete"] = json!(can_delete);
         list.push(value);
     }
@@ -182,7 +170,7 @@ pub async fn delete(state: &AppState, user: &CurrentUser, id: u64) -> ApiResult<
         .ok_or(AppError::NotFound)?;
     let txn = db.begin().await?;
     super::perm::lock_business_state(&txn).await?;
-    projects::Entity::find_by_id(f.project_id)
+    let project = projects::Entity::find_by_id(f.project_id)
         .lock_exclusive()
         .one(&txn)
         .await?
@@ -194,6 +182,9 @@ pub async fn delete(state: &AppState, user: &CurrentUser, id: u64) -> ApiResult<
         .ok_or(AppError::NotFound)?;
     super::perm::recheck_manager(&txn, user.id, "file:delete").await?;
     scope::ensure_project_access(&txn, user, f.project_id).await?;
+    if project.status != ProjectStatus::InProgress {
+        return Err(AppError::Conflict("项目当前不可删除文件".into()));
+    }
     if f.status != FileStatus::Available {
         return Err(AppError::NotFound);
     }

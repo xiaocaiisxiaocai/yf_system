@@ -40,13 +40,15 @@ fn actions_for_category(category: &str) -> Option<&'static [&'static str]> {
         "PROJECT" => Some(&[
             "PROJECT_CREATE",
             "PROJECT_UPDATE",
-            "PROJECT_STATUS",
+            "PROJECT_START",
+            "PROJECT_SUBMIT",
+            "PROJECT_CONFIRM",
+            "PROJECT_REJECT",
+            "PROJECT_WITHDRAW",
+            "PROJECT_TERMINATE",
+            "PROJECT_RESTART",
             "PROJECT_MEMBERS",
             "PROJECT_DELETE",
-            "ROUND_CREATE",
-            "ROUND_CONFIRM",
-            "ROUND_REJECT",
-            "ROUND_CANCEL",
         ]),
         "FILE" => Some(&[
             "FILE_UPLOAD",
@@ -224,6 +226,19 @@ mod tests {
 
     #[test]
     fn audit_categories_cover_role_assignment_and_reject_unknown_values() {
+        let project = actions_for_category("PROJECT").expect("项目分类应存在");
+        for action in [
+            "PROJECT_START",
+            "PROJECT_SUBMIT",
+            "PROJECT_CONFIRM",
+            "PROJECT_REJECT",
+            "PROJECT_WITHDRAW",
+            "PROJECT_TERMINATE",
+            "PROJECT_RESTART",
+        ] {
+            assert!(project.contains(&action), "项目分类缺少 {action}");
+        }
+        assert!(!project.contains(&"PROJECT_STATUS"));
         let org = actions_for_category("ORG").expect("组织分类应存在");
         assert!(org.contains(&"USER_ASSIGN_ROLE"));
         let supplier = actions_for_category("SUPPLIER").expect("供应商分类应存在");

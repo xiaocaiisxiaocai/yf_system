@@ -1,11 +1,11 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import {
   Button, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconUpload, IconDelete } from '@arco-design/web-react/icon'
 import http from '../api/client'
 import { useAuth } from '../store/auth'
-import { type FileItem, type PageResp, type Round, fmtSize, fmtTime } from '../api/types'
+import { type FileItem, type PageResp, fmtSize, fmtTime } from '../api/types'
 import { actionSlots } from './ActionSlots'
 import ChunkUploader from './ChunkUploader'
 import PdfPreview from './PdfPreview'
@@ -16,7 +16,6 @@ const ExcelPreview = lazy(() => import('./ExcelPreview'))
 interface Props {
   projectId: number
   projectStatus: string
-  rounds: Round[]
   targetId?: number
 }
 
@@ -39,34 +38,29 @@ async function downloadAuthed(id: number, name: string) {
   URL.revokeObjectURL(url)
 }
 
-export default function FileTable({ projectId, projectStatus, rounds, targetId }: Props) {
+export default function FileTable({ projectId, projectStatus, targetId }: Props) {
   const [data, setData] = useState<PageResp<FileItem>>({ list: [], total: 0, page: 1, pageSize: 10 })
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)
-  const [roundId, setRoundId] = useState<number>()
   const [direction, setDirection] = useState<string>()
   const [keyword, setKeyword] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [loadError, setLoadError] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
-  const [uploadRound, setUploadRound] = useState<number>()
   const [preview, setPreview] = useState<FileItem | null>(null)
   const [selected, setSelected] = useState<number[]>([])
   const { hasPerm } = useAuth()
-
-  const pendingRounds = useMemo(() => rounds.filter((r) => r.status === 'PENDING'), [rounds])
-  const roundMap = useMemo(() => new Map(rounds.map((r) => [r.id, r.roundNo])), [rounds])
 
   // 递增序号防止并发加载乱序：快速切换筛选时只允许最后一次请求落地
   const loadSeq = useRef(0)
 
   const fetchFiles = useCallback(async () => {
     const r = await http.get(`/projects/${projectId}/files`, {
-      params: { page, pageSize, roundId, direction, keyword: keyword || undefined, targetId },
+      params: { page, pageSize, direction, keyword: keyword || undefined, targetId },
     })
     return r.data as PageResp<FileItem>
-  }, [projectId, page, pageSize, roundId, direction, keyword, targetId])
+  }, [projectId, page, pageSize, direction, keyword, targetId])
 
   const load = useCallback(() => {
     setLoading(true)
@@ -97,16 +91,16 @@ export default function FileTable({ projectId, projectStatus, rounds, targetId }
     }
   }, [fetchFiles, reloadKey])
 
+  useEffect(() => {
+    // The upload dialog is owned by this component and must close when the project becomes read-only.
+    // eslint-disable-next-line react/set-state-in-effect
+    if (projectStatus !== 'IN_PROGRESS') setUploadOpen(false)
+  }, [projectStatus])
+
   const startUpload = () => {
-    if (pendingRounds.length === 0) {
-      Message.warning('当前没有待确认的轮次，请先发起新一轮')
-      return
-    }
-    setUploadRound(pendingRounds[pendingRounds.length - 1].id)
+    if (projectStatus !== 'IN_PROGRESS') return
     setUploadOpen(true)
   }
-
-  const roundOptions = pendingRounds.map((r) => ({ id: r.id, roundNo: r.roundNo }))
 
   const batchDownload = async () => {
     const r = await http.post('/files/batch-download', { ids: selected }, { responseType: 'blob' })
@@ -129,22 +123,6 @@ export default function FileTable({ projectId, projectStatus, rounds, targetId }
     <div>
       <Space className="responsive-toolbar" style={{ marginBottom: 12, width: '100%', justifyContent: 'space-between' }}>
         <Space>
-          <Select
-            allowClear
-            placeholder="轮次"
-            style={{ width: 130 }}
-            onChange={(v) => {
-              setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
-              setPage(1)
-              setRoundId(v as number | undefined)
-            }}
-          >
-            {rounds.map((r) => (
-              <Select.Option key={r.id} value={r.id}>
-                第 {r.roundNo} 轮
-              </Select.Option>
-            ))}
-          </Select>
           <Select
             allowClear
             placeholder="方向"
@@ -220,7 +198,6 @@ export default function FileTable({ projectId, projectStatus, rounds, targetId }
               </Space>
             ),
           },
-          { title: '轮次', width: 70, align: 'center' as const, render: (_: unknown, r: FileItem) => `第 ${r.roundNo ?? roundMap.get(r.roundId) ?? '-'} 轮` },
           {
             title: '方向',
             dataIndex: 'direction',
@@ -243,7 +220,7 @@ export default function FileTable({ projectId, projectStatus, rounds, targetId }
                   下载
                 </Button>
               ),
-              r.canDelete && (
+              r.canDelete && projectStatus === 'IN_PROGRESS' && (
                 <Popconfirm key="delete" title={`删除文件「${r.originalName}」？`} onOk={() => remove(r)}>
                   <Button size="mini" type="text" status="danger" icon={<IconDelete />} aria-label="删除文件">删除</Button>
                 </Popconfirm>
@@ -265,12 +242,9 @@ export default function FileTable({ projectId, projectStatus, rounds, targetId }
         />
       )}
 
-      {uploadOpen && uploadRound && (
+      {uploadOpen && (
         <ChunkUploader
           projectId={projectId}
-          roundId={uploadRound}
-          rounds={roundOptions}
-          onRoundChange={setUploadRound}
           visible={uploadOpen}
           onClose={() => setUploadOpen(false)}
           onDone={load}

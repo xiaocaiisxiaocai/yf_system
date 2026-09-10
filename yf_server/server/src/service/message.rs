@@ -9,8 +9,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::dto::PageResp;
-use crate::entity::enums::{MessageStatus, ProjectStatus, RoundStatus};
-use crate::entity::{message_reads, messages, projects, rounds, users};
+use crate::entity::enums::{MessageStatus, ProjectStatus};
+use crate::entity::{message_reads, messages, projects, users};
 use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
 
@@ -23,8 +23,6 @@ pub struct MessageListQuery {
     pub page: u64,
     #[serde(default = "crate::dto::default_page_size")]
     pub page_size: u64,
-    /// 不传=全部；传 0=仅项目级；传 id=该轮次
-    pub round_id: Option<u64>,
     /// Stable continuation when earlier messages are inserted or deleted.
     pub before_id: Option<u64>,
     /// 精确定位项目动态中的留言，不放宽项目范围或删除状态。
@@ -35,7 +33,6 @@ pub struct MessageListQuery {
 #[serde(rename_all = "camelCase")]
 pub struct MessageCreate {
     pub content: String,
-    pub round_id: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,7 +68,7 @@ fn message_value(
         .filter(|r| r.user_id != m.sender_id && visible.contains(&r.user_id))
         .count();
     json!({
-        "id": m.id, "projectId": m.project_id, "roundId": m.round_id,
+        "id": m.id, "projectId": m.project_id,
         "content": m.content,
         "status": if m.status == MessageStatus::Normal { "NORMAL" } else { "DELETED" },
         "senderId": m.sender_id, "senderName": sender.real_name,
@@ -113,13 +110,6 @@ pub async fn list(
         .add(messages::Column::Status.eq(MessageStatus::Normal));
     if let Some(id) = q.target_id {
         cond = cond.add(messages::Column::Id.eq(id));
-    }
-    if let Some(rid) = q.round_id {
-        cond = if rid == 0 {
-            cond.add(messages::Column::RoundId.is_null())
-        } else {
-            cond.add(messages::Column::RoundId.eq(rid))
-        };
     }
     let total = messages::Entity::find()
         .filter(cond.clone())
@@ -170,32 +160,16 @@ pub async fn list(
     Ok(PageResp::new(list, total, page, size))
 }
 
-/// 留言可写规则：项目级要求项目未完结；轮级要求轮次 PENDING
+/// 留言是沟通流，草稿、协作和待确认阶段均可继续；完成或终止后关闭。
 async fn ensure_writable(
-    db: &impl ConnectionTrait,
+    _db: &impl ConnectionTrait,
     project: &crate::entity::projects::Model,
-    round_id: Option<u64>,
 ) -> ApiResult<()> {
     if matches!(
         project.status,
         ProjectStatus::Completed | ProjectStatus::Terminated
     ) {
-        return Err(AppError::Conflict("项目已完结，不可留言".into()));
-    }
-    if let Some(rid) = round_id {
-        let r = rounds::Entity::find_by_id(rid)
-            .lock_exclusive()
-            .one(db)
-            .await?
-            .ok_or(AppError::BadRequest("轮次不存在".into()))?;
-        if r.project_id != project.id {
-            return Err(AppError::BadRequest("轮次不属于该项目".into()));
-        }
-        if r.status != RoundStatus::Pending {
-            return Err(AppError::Conflict(
-                "该轮次已关闭，请在项目级留言或另开新轮".into(),
-            ));
-        }
+        return Err(AppError::Conflict("项目当前不可留言".into()));
     }
     Ok(())
 }
@@ -217,7 +191,7 @@ pub async fn create(
     // 留言与通知入队同事务
     let txn = db.begin().await?;
     super::perm::lock_business_state(&txn).await?;
-    // 与轮次、成员调整和文件提交使用同一锁顺序，锁内复查最新状态与授权。
+    // 与项目状态、成员调整和文件提交使用同一锁顺序，锁内复查最新状态与授权。
     let project = projects::Entity::find_by_id(project_id)
         .lock_exclusive()
         .one(&txn)
@@ -225,10 +199,9 @@ pub async fn create(
         .ok_or(AppError::NotFound)?;
     super::perm::recheck_manager(&txn, user.id, "message:create").await?;
     scope::ensure_project_access(&txn, user, project_id).await?;
-    ensure_writable(&txn, &project, req.round_id).await?;
+    ensure_writable(&txn, &project).await?;
     let model = messages::ActiveModel {
         project_id: Set(project_id),
-        round_id: Set(req.round_id),
         sender_id: Set(user.id),
         content: Set(content.to_string()),
         status: Set(MessageStatus::Normal),
@@ -248,7 +221,7 @@ pub async fn create(
         "MESSAGE_CREATE",
         Some("message"),
         Some(model.id.to_string()),
-        Some(json!({"projectId": project_id, "roundId": req.round_id})),
+        Some(json!({"projectId": project_id})),
         None,
     )
     .await?;
@@ -357,7 +330,7 @@ pub async fn delete(db: &DatabaseConnection, user: &CurrentUser, message_id: u64
         .ok_or(AppError::NotFound)?;
     let txn = db.begin().await?;
     super::perm::lock_business_state(&txn).await?;
-    projects::Entity::find_by_id(m.project_id)
+    let project = projects::Entity::find_by_id(m.project_id)
         .lock_exclusive()
         .one(&txn)
         .await?
@@ -369,6 +342,7 @@ pub async fn delete(db: &DatabaseConnection, user: &CurrentUser, message_id: u64
         .ok_or(AppError::NotFound)?;
     super::perm::recheck_manager(&txn, user.id, "message:delete_any").await?;
     scope::ensure_project_access(&txn, user, m.project_id).await?;
+    ensure_writable(&txn, &project).await?;
     if m.status != MessageStatus::Normal {
         return Err(AppError::NotFound);
     }

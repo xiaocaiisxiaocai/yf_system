@@ -249,7 +249,6 @@ async fn identity_review_mark_read_rechecks_supplier_after_management_change() {
         f.project_id,
         &service::message::MessageCreate {
             content: "供应商状态变更期间的已读".into(),
-            round_id: None,
         },
         "http://localhost",
     )

@@ -12,7 +12,6 @@ pub struct Model {
     pub project_id: Option<u64>,
     /// 幂等键；业务通知为空，周期性系统通知使用唯一键防止多实例重复入队。
     pub dedupe_key: Option<String>,
-    pub round_id: Option<u64>,
     pub recipient_user_id: Option<u64>,
     pub recipient_email: String,
     pub subject: String,

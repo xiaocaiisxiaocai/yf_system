@@ -308,7 +308,6 @@ async fn delete_safety_message_read_history_blocks_user_deletion_and_is_preserve
         f.project_id,
         &service::message::MessageCreate {
             content: "删除账号不能抹除的已读凭证".into(),
-            round_id: None,
         },
         "http://localhost",
     )

@@ -14,8 +14,6 @@ pub struct Model {
     pub occurred_at: DateTimeUtc,
     pub title: String,
     pub summary: Option<String>,
-    pub round_id: Option<u64>,
-    pub round_no: Option<i32>,
     pub target_id: Option<u64>,
     /// 来自业务记录或审计记录的稳定去重键。
     pub source_key: String,

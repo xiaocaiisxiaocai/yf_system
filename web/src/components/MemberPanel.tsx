@@ -14,7 +14,7 @@ interface UserOpt {
   existingOnly?: boolean
 }
 
-export default function MemberPanel({ projectId }: { projectId: number; supplierName?: string }) {
+export default function MemberPanel({ projectId, projectStatus = 'IN_PROGRESS' }: { projectId: number; supplierName?: string; projectStatus?: string }) {
   const [members, setMembers] = useState<Member[]>([])
   const [supplierMembers, setSupplierMembers] = useState<SupplierMember[]>([])
   const [loading, setLoading] = useState(true)
@@ -35,7 +35,7 @@ export default function MemberPanel({ projectId }: { projectId: number; supplier
   const savingRef = useRef(false)
   const { hasPerm, user } = useAuth()
   const isInternal = user?.userType === 'INTERNAL'
-  const canManage = isInternal && hasPerm('project:member')
+  const canManage = isInternal && hasPerm('project:member') && ['DRAFT', 'IN_PROGRESS'].includes(projectStatus)
 
   const fetchMemberGroups = useCallback(async () => {
     const [companyResponse, supplierResponse] = await Promise.all([

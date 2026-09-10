@@ -1,14 +1,48 @@
 use migration::MigratorTrait;
 use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
 
-async fn isolated_db() -> sea_orm::DatabaseConnection {
+struct IsolatedDatabase {
+    db: sea_orm::DatabaseConnection,
+    admin: sea_orm::DatabaseConnection,
+    name: String,
+}
+
+async fn isolated_db() -> IsolatedDatabase {
     let url = std::env::var("YF_TEST_DATABASE_URL").expect("请使用隔离测试脚本");
     let database_name = url.rsplit('/').next().unwrap_or_default();
     assert!(
         database_name.starts_with("yf_test_"),
         "组织迁移测试只能使用 yf_test_ 隔离库"
     );
-    Database::connect(url).await.unwrap()
+    let admin = Database::connect(&url).await.unwrap();
+    let name = format!("yf_test_org_{}", uuid::Uuid::new_v4().simple());
+    admin
+        .execute(Statement::from_string(
+            DbBackend::MySql,
+            format!("CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"),
+        ))
+        .await
+        .unwrap();
+    let (without_query, query) = url
+        .split_once('?')
+        .map_or((url.as_str(), None), |(head, tail)| (head, Some(tail)));
+    let slash = without_query.rfind('/').unwrap();
+    let suffix = query.map_or_else(String::new, |value| format!("?{value}"));
+    let database_url = format!("{}/{name}{suffix}", &without_query[..slash]);
+    let db = Database::connect(database_url).await.unwrap();
+    IsolatedDatabase { db, admin, name }
+}
+
+async fn cleanup(test_db: IsolatedDatabase) {
+    test_db.db.close().await.unwrap();
+    test_db
+        .admin
+        .execute(Statement::from_string(
+            DbBackend::MySql,
+            format!("DROP DATABASE `{}`", test_db.name),
+        ))
+        .await
+        .unwrap();
 }
 
 async fn reset_before_010(db: &sea_orm::DatabaseConnection) {
@@ -16,13 +50,12 @@ async fn reset_before_010(db: &sea_orm::DatabaseConnection) {
 }
 
 async fn reset_before(db: &sea_orm::DatabaseConnection, migration_name: &str) {
-    migration::Migrator::fresh(db).await.unwrap();
     let migrations = migration::Migrator::migrations();
     let target = migrations
         .iter()
         .position(|migration| migration.name() == migration_name)
         .expect("target migration must remain registered");
-    migration::Migrator::down(db, Some((migrations.len() - target) as u32))
+    migration::Migrator::up(db, Some(target as u32))
         .await
         .unwrap();
 }
@@ -44,8 +77,9 @@ async fn kind_column_count(db: &sea_orm::DatabaseConnection) -> i64 {
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
 async fn delete_safety_org_010_rejects_four_levels_before_ddl() {
-    let db = isolated_db().await;
-    reset_before_010(&db).await;
+    let test_db = isolated_db().await;
+    let db = &test_db.db;
+    reset_before_010(db).await;
     db.execute(Statement::from_string(
         DbBackend::MySql,
         "INSERT INTO departments (id, name, parent_id) VALUES \
@@ -56,12 +90,12 @@ async fn delete_safety_org_010_rejects_four_levels_before_ddl() {
     .await
     .unwrap();
 
-    let err = migration::Migrator::up(&db, Some(1))
+    let err = migration::Migrator::up(db, Some(1))
         .await
         .expect_err("四层旧组织必须阻止 010");
     let error_text = err.to_string();
-    let kind_columns = kind_column_count(&db).await;
-    migration::Migrator::fresh(&db).await.unwrap();
+    let kind_columns = kind_column_count(db).await;
+    cleanup(test_db).await;
 
     assert!(error_text.contains("超过三级"));
     assert_eq!(kind_columns, 0, "失败前不得开始 DDL");
@@ -70,8 +104,9 @@ async fn delete_safety_org_010_rejects_four_levels_before_ddl() {
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
 async fn delete_safety_org_010_migrates_valid_three_levels() {
-    let db = isolated_db().await;
-    reset_before_010(&db).await;
+    let test_db = isolated_db().await;
+    let db = &test_db.db;
+    reset_before_010(db).await;
     db.execute(Statement::from_string(
         DbBackend::MySql,
         "INSERT INTO departments (id, name, parent_id) VALUES \
@@ -81,7 +116,7 @@ async fn delete_safety_org_010_migrates_valid_three_levels() {
     .await
     .unwrap();
 
-    migration::Migrator::up(&db, Some(1)).await.unwrap();
+    migration::Migrator::up(db, Some(1)).await.unwrap();
     let rows = db
         .query_all(Statement::from_string(
             DbBackend::MySql,
@@ -103,7 +138,7 @@ async fn delete_safety_org_010_migrates_valid_three_levels() {
     ))
     .await
     .unwrap();
-    migration::Migrator::up(&db, Some(1)).await.unwrap();
+    migration::Migrator::up(db, Some(1)).await.unwrap();
     let corrected = db
         .query_all(Statement::from_string(
             DbBackend::MySql,
@@ -114,7 +149,7 @@ async fn delete_safety_org_010_migrates_valid_three_levels() {
         .iter()
         .map(|row| row.try_get::<String>("", "kind").unwrap())
         .collect::<Vec<_>>();
-    migration::Migrator::fresh(&db).await.unwrap();
+    cleanup(test_db).await;
 
     assert_eq!(kinds, ["DIVISION", "DEPARTMENT", "SECTION"]);
     assert_eq!(corrected, ["DIVISION", "DEPARTMENT", "SECTION"]);
@@ -123,8 +158,9 @@ async fn delete_safety_org_010_migrates_valid_three_levels() {
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
 async fn delete_safety_org_011_detects_invalid_data_after_010() {
-    let db = isolated_db().await;
-    reset_before(&db, "m20260909_000011_validate_org_structure_kinds").await;
+    let test_db = isolated_db().await;
+    let db = &test_db.db;
+    reset_before(db, "m20260909_000011_validate_org_structure_kinds").await;
     db.execute(Statement::from_string(
         DbBackend::MySql,
         "INSERT INTO departments (id, name, parent_id, kind) VALUES \
@@ -135,7 +171,7 @@ async fn delete_safety_org_011_detects_invalid_data_after_010() {
     .await
     .unwrap();
 
-    let err = migration::Migrator::up(&db, Some(1))
+    let err = migration::Migrator::up(db, Some(1))
         .await
         .expect_err("011 必须阻止已应用 010 后的非法层级");
     let error_text = err.to_string();
@@ -149,7 +185,7 @@ async fn delete_safety_org_011_detects_invalid_data_after_010() {
         .unwrap()
         .try_get("", "kind")
         .unwrap();
-    migration::Migrator::fresh(&db).await.unwrap();
+    cleanup(test_db).await;
 
     assert!(error_text.contains("超过三级"));
     assert_eq!(kind, "DIVISION", "校验失败时不得先改写 kind");

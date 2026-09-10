@@ -1,12 +1,11 @@
-//! 工作台汇总：可见项目数、待我方确认轮次、未读留言
+//! 工作台汇总：可见项目数、待我方确认项目、未读留言
 use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde_json::{json, Value};
 
-use crate::entity::enums::{ConfirmSide, MessageStatus, ProjectStatus, RoundStatus, UserType};
-use crate::entity::{message_reads, messages, projects, rounds};
+use crate::entity::enums::{ConfirmSide, MessageStatus, ProjectStatus, UserType};
+use crate::entity::{message_reads, messages, projects};
 use crate::error::ApiResult;
 use crate::middleware::auth::CurrentUser;
 
@@ -18,7 +17,12 @@ pub async fn summary(db: &DatabaseConnection, user: &CurrentUser) -> ApiResult<V
     let project_ids: Vec<u64> = visible.iter().map(|p| p.id).collect();
     let active_count = visible
         .iter()
-        .filter(|p| p.status == ProjectStatus::InProgress)
+        .filter(|p| {
+            matches!(
+                p.status,
+                ProjectStatus::InProgress | ProjectStatus::PendingConfirmation
+            )
+        })
         .count();
 
     let my_side = if user.user_type == UserType::Supplier {
@@ -26,15 +30,19 @@ pub async fn summary(db: &DatabaseConnection, user: &CurrentUser) -> ApiResult<V
     } else {
         ConfirmSide::Company
     };
-    let pending_rounds = if project_ids.is_empty() {
-        0
+    let can_confirm = super::perm::check_perm(db, user.id, "project:confirm")
+        .await
+        .is_ok();
+    let pending_confirmations = if can_confirm {
+        visible
+            .iter()
+            .filter(|project| {
+                project.status == ProjectStatus::PendingConfirmation
+                    && project.confirm_side == Some(my_side)
+            })
+            .count()
     } else {
-        rounds::Entity::find()
-            .filter(rounds::Column::ProjectId.is_in(project_ids.clone()))
-            .filter(rounds::Column::Status.eq(RoundStatus::Pending))
-            .filter(rounds::Column::ConfirmSide.eq(my_side))
-            .count(db)
-            .await?
+        0
     };
 
     // 未读数：2 次查询代替逐项目循环——先取可见项目的他人留言 id，再减去我已读的
@@ -123,7 +131,7 @@ pub async fn summary(db: &DatabaseConnection, user: &CurrentUser) -> ApiResult<V
     Ok(json!({
         "projectCount": project_ids.len(),
         "activeProjectCount": active_count,
-        "pendingRounds": pending_rounds,
+        "pendingConfirmations": pending_confirmations,
         "unreadMessages": unread,
         "recentMessages": recent_messages,
     }))

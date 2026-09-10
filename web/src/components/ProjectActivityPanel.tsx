@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Empty, Select, Spin, Tag, Timeline, Typography } from '@arco-design/web-react'
 import http from '../api/client'
-import { PROJECT_STATUS, fmtTime } from '../api/types'
+import { type ConfirmSide, PROJECT_STATUS, fmtTime } from '../api/types'
 
-type ActivityType = 'PROJECT' | 'ROUND' | 'FILE' | 'MESSAGE'
+type ActivityType = 'PROJECT' | 'FILE' | 'MESSAGE'
 
 export interface ProjectActivity {
   id: number
@@ -13,15 +13,14 @@ export interface ProjectActivity {
   occurredAt: string
   title: string
   summary: string | null
-  roundId: number | null
-  roundNo: number | null
   targetId: number | null
   targetAvailable: boolean
 }
 
 interface ActivitySummary {
   status: string
-  pendingRounds: number
+  pendingConfirmation: boolean
+  confirmSide: ConfirmSide | null
   lastActivityAt: string | null
 }
 
@@ -34,27 +33,39 @@ interface ActivityResponse {
 interface Props {
   projectId: number
   active?: boolean
-  onNavigate?: (type: ActivityType, targetId: number, roundId: number | null) => void
+  onNavigate?: (type: ActivityType, targetId: number) => void
 }
 
 const EMPTY_SUMMARY: ActivitySummary = {
   status: '',
-  pendingRounds: 0,
+  pendingConfirmation: false,
+  confirmSide: null,
   lastActivityAt: null,
 }
 
 const ACTIVITY_TYPES: Array<{ label: string; value: ActivityType }> = [
   { label: '项目', value: 'PROJECT' },
-  { label: '轮次', value: 'ROUND' },
   { label: '文件', value: 'FILE' },
   { label: '留言', value: 'MESSAGE' },
 ]
 
 const ACTIVITY_TYPE_LABEL: Record<ActivityType, string> = {
   PROJECT: '项目',
-  ROUND: '轮次',
   FILE: '文件',
   MESSAGE: '留言',
+}
+
+const PROJECT_ACTION_LABEL: Record<string, string> = {
+  CREATE: '创建项目',
+  CREATED: '创建项目',
+  START: '开始项目',
+  RESTART: '重新开始项目',
+  SUBMIT: '提交确认',
+  CONFIRM: '确认项目',
+  REJECT: '驳回项目',
+  WITHDRAW: '撤回确认',
+  TERMINATE: '终止项目',
+  UPDATE: '更新项目',
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -69,10 +80,9 @@ function parseActivity(value: unknown): ProjectActivity | null {
   if (!isRecord(value)) return null
   const type = value.type
   if (typeof value.id !== 'number' || !Number.isSafeInteger(value.id) || value.id <= 0 || typeof type !== 'string') return null
-  if (type !== 'PROJECT' && type !== 'ROUND' && type !== 'FILE' && type !== 'MESSAGE') return null
+  if (type !== 'PROJECT' && type !== 'FILE' && type !== 'MESSAGE') return null
   if (typeof value.action !== 'string' || typeof value.actorName !== 'string' || typeof value.occurredAt !== 'string') return null
-  if (typeof value.title !== 'string' || !isNullablePositiveNumber(value.roundId) || !isNullablePositiveNumber(value.roundNo)
-    || !isNullablePositiveNumber(value.targetId) || typeof value.targetAvailable !== 'boolean') return null
+  if (typeof value.title !== 'string' || !isNullablePositiveNumber(value.targetId) || typeof value.targetAvailable !== 'boolean') return null
   if (value.summary !== null && typeof value.summary !== 'string') return null
   return {
     id: value.id,
@@ -82,8 +92,6 @@ function parseActivity(value: unknown): ProjectActivity | null {
     occurredAt: value.occurredAt,
     title: value.title,
     summary: value.summary,
-    roundId: value.roundId,
-    roundNo: value.roundNo,
     targetId: value.targetId,
     targetAvailable: value.targetAvailable,
   }
@@ -97,8 +105,8 @@ function parseResponse(value: unknown): ActivityResponse {
   if (parsedList.some((item) => item === null)) throw new Error('项目动态条目格式错误')
   const list = parsedList.filter((item): item is ProjectActivity => item !== null)
   const rawSummary = value.summary
-  if (typeof rawSummary.status !== 'string' || typeof rawSummary.pendingRounds !== 'number'
-    || !Number.isFinite(rawSummary.pendingRounds)
+  if (typeof rawSummary.status !== 'string' || typeof rawSummary.pendingConfirmation !== 'boolean'
+    || (rawSummary.confirmSide !== null && rawSummary.confirmSide !== 'COMPANY' && rawSummary.confirmSide !== 'SUPPLIER')
     || (rawSummary.lastActivityAt !== null && typeof rawSummary.lastActivityAt !== 'string')) {
     throw new Error('项目动态概览格式错误')
   }
@@ -107,7 +115,8 @@ function parseResponse(value: unknown): ActivityResponse {
     nextCursor: value.nextCursor && value.nextCursor.length > 0 ? value.nextCursor : null,
     summary: {
       status: rawSummary.status,
-      pendingRounds: Math.max(0, Math.floor(rawSummary.pendingRounds)),
+      pendingConfirmation: rawSummary.pendingConfirmation,
+      confirmSide: rawSummary.confirmSide as ConfirmSide | null,
       lastActivityAt: rawSummary.lastActivityAt,
     },
   }
@@ -120,17 +129,8 @@ function displaySummary(summary: string | null): string {
 }
 
 function displayTitle(item: ProjectActivity): string {
-  if (item.type !== 'ROUND' || item.roundNo === null) return item.title || item.action || '项目动态'
-  const verb = item.action === 'CONFIRM'
-    ? '通过'
-    : item.action === 'REJECT'
-      ? '驳回'
-      : item.action === 'CANCEL'
-        ? '撤销'
-        : item.action === 'CREATE'
-          ? '创建'
-          : null
-  return verb ? `${verb}第${item.roundNo}轮` : item.title || item.action || '项目动态'
+  if (item.type === 'PROJECT') return PROJECT_ACTION_LABEL[item.action] || item.title || item.action || '项目动态'
+  return item.title || item.action || '项目动态'
 }
 
 export default function ProjectActivityPanel({ projectId, active = true, onNavigate }: Props) {
@@ -222,8 +222,7 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
   const statusText = PROJECT_STATUS[summary.status]?.text || summary.status || '-'
   const targetLabel = (item: ProjectActivity) => {
     const objectSummary = displaySummary(item.summary) || `${ACTIVITY_TYPE_LABEL[item.type]}${item.targetAvailable ? '' : '已不可用'}`
-    if (item.type !== 'ROUND' || item.roundNo === null) return objectSummary
-    return item.summary ? `第 ${item.roundNo} 轮 · ${objectSummary}` : `第 ${item.roundNo} 轮`
+    return objectSummary
   }
 
   const renderTarget = (item: ProjectActivity) => {
@@ -236,7 +235,7 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
           size="mini"
           className="project-activity-target-link"
           aria-label={`查看${label}`}
-          onClick={() => onNavigate(item.type, item.targetId!, item.roundId)}
+          onClick={() => onNavigate(item.type, item.targetId!)}
         >
           {label}
         </Button>
@@ -253,8 +252,10 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
           <strong className="project-activity-summary-value">{statusText}</strong>
         </div>
         <div className="project-activity-summary-item">
-          <span className="project-activity-summary-label">待确认轮次</span>
-          <strong className="project-activity-summary-value">{summary.pendingRounds}</strong>
+          <span className="project-activity-summary-label">待确认</span>
+          <strong className="project-activity-summary-value">
+            {summary.pendingConfirmation ? `是${summary.confirmSide === 'COMPANY' ? '（公司）' : summary.confirmSide === 'SUPPLIER' ? '（供应商）' : ''}` : '否'}
+          </strong>
         </div>
         <div className="project-activity-summary-item">
           <span className="project-activity-summary-label">最近动态</span>
@@ -297,7 +298,7 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
                     <Timeline.Item key={item.id}>
                       <div className="project-activity-item" data-activity-id={item.id} data-activity-type={item.type}>
                         <div className="project-activity-meta">
-                          <Tag size="small" color={item.type === 'ROUND' ? 'arcoblue' : item.type === 'FILE' ? 'green' : item.type === 'MESSAGE' ? 'purple' : 'gray'}>
+                          <Tag size="small" color={item.type === 'FILE' ? 'green' : item.type === 'MESSAGE' ? 'purple' : 'gray'}>
                             {ACTIVITY_TYPE_LABEL[item.type]}
                           </Tag>
                           <Typography.Text className="project-activity-actor">{item.actorName}</Typography.Text>

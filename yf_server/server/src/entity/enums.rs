@@ -58,12 +58,14 @@ impl DeptKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
-#[sea_orm(rs_type = "String", db_type = "String(StringLen::N(16))")]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::N(24))")]
 pub enum ProjectStatus {
     #[sea_orm(string_value = "DRAFT")]
     Draft,
     #[sea_orm(string_value = "IN_PROGRESS")]
     InProgress,
+    #[sea_orm(string_value = "PENDING_CONFIRMATION")]
+    PendingConfirmation,
     #[sea_orm(string_value = "COMPLETED")]
     Completed,
     #[sea_orm(string_value = "TERMINATED")]
@@ -77,19 +79,6 @@ pub enum ConfirmSide {
     Company,
     #[sea_orm(string_value = "SUPPLIER")]
     Supplier,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
-#[sea_orm(rs_type = "String", db_type = "String(StringLen::N(16))")]
-pub enum RoundStatus {
-    #[sea_orm(string_value = "PENDING")]
-    Pending,
-    #[sea_orm(string_value = "CONFIRMED")]
-    Confirmed,
-    #[sea_orm(string_value = "REJECTED")]
-    Rejected,
-    #[sea_orm(string_value = "CANCELLED")]
-    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
@@ -143,12 +132,14 @@ pub enum OutboxEventType {
     FileUploaded,
     #[sea_orm(string_value = "MESSAGE_CREATED")]
     MessageCreated,
-    #[sea_orm(string_value = "ROUND_CONFIRMED")]
-    RoundConfirmed,
-    #[sea_orm(string_value = "ROUND_REJECTED")]
-    RoundRejected,
-    #[sea_orm(string_value = "ROUND_CANCELLED")]
-    RoundCancelled,
+    #[sea_orm(string_value = "PROJECT_SUBMITTED")]
+    ProjectSubmitted,
+    #[sea_orm(string_value = "PROJECT_CONFIRMED")]
+    ProjectConfirmed,
+    #[sea_orm(string_value = "PROJECT_REJECTED")]
+    ProjectRejected,
+    #[sea_orm(string_value = "PROJECT_WITHDRAWN")]
+    ProjectWithdrawn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum)]

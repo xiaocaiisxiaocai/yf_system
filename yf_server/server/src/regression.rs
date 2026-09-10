@@ -14,7 +14,6 @@ pub struct Fixture {
     pub admin: CurrentUser,
     pub member: CurrentUser,
     pub project_id: u64,
-    pub round_id: u64,
 }
 
 #[tokio::test]
@@ -476,7 +475,6 @@ async fn full_configuration_applies_to_new_uploads_and_preserves_existing_sessio
     };
     let request = service::upload::InitReq {
         project_id: f.project_id,
-        round_id: f.round_id,
         file_name: "config.pdf".into(),
         file_size: 1024 * 1024,
         file_md5: Some(format!("{:x}", md5::Md5::digest(b"config fixture"))),
@@ -521,7 +519,6 @@ async fn full_configuration_applies_to_new_uploads_and_preserves_existing_sessio
         &f.member,
         &service::upload::InitReq {
             project_id: f.project_id,
-            round_id: f.round_id,
             file_name: "over.pdf".into(),
             file_size: 1024 * 1024 + 1,
             file_md5: None,
@@ -533,7 +530,6 @@ async fn full_configuration_applies_to_new_uploads_and_preserves_existing_sessio
         &f.member,
         &service::upload::InitReq {
             project_id: f.project_id,
-            round_id: f.round_id,
             file_name: "blocked.xlsx".into(),
             file_size: 4,
             file_md5: None,
@@ -630,7 +626,6 @@ async fn full_message_receipts_follow_membership_and_ignore_view_all_readers() {
         f.project_id,
         &service::message::MessageCreate {
             content: "dynamic receipt".into(),
-            round_id: None,
         },
         "http://localhost",
     )
@@ -701,6 +696,25 @@ async fn review_participants_include_creator_and_exclude_disabled_accounts() {
         .into();
     project.created_by = Set(f.member.id);
     project.update(&f.state.db).await.unwrap();
+    let project = projects::Entity::find_by_id(f.project_id)
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    let supplier_account = service::supplier::create_account(
+        &f.state.db,
+        &f.admin,
+        project.supplier_id,
+        &service::supplier::AccountCreate {
+            employee_no: format!("{}notice", f.member.employee_no),
+            password: "Regression123".into(),
+            real_name: "对侧通知人".into(),
+            email: "opposite-side@example.invalid".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let supplier_account_id = supplier_account["id"].as_u64().unwrap();
     project_members::Entity::delete_by_id((f.project_id, f.member.id))
         .exec(&f.state.db)
         .await
@@ -711,26 +725,25 @@ async fn review_participants_include_creator_and_exclude_disabled_accounts() {
         f.project_id,
         &service::message::MessageCreate {
             content: "creator is still a participant".into(),
-            round_id: None,
         },
         "http://localhost",
     )
     .await
     .unwrap();
     assert_eq!(
-        msg["totalCount"], 1,
-        "active creator counts even without member binding"
+        msg["totalCount"], 2,
+        "active creator and opposite-side participant count without member binding"
     );
     let queued = email_outbox::Entity::find()
         .filter(email_outbox::Column::ProjectId.eq(f.project_id))
         .all(&f.state.db)
         .await
         .unwrap();
-    assert!(
-        queued
-            .iter()
-            .any(|row| row.recipient_user_id == Some(f.member.id)),
-        "creator receives the notification"
+    assert_eq!(queued.len(), 1, "留言只通知项目另一侧");
+    assert_eq!(
+        queued[0].recipient_user_id,
+        Some(supplier_account_id),
+        "同侧创建人不应收到留言通知"
     );
     service::message::mark_read(
         &f.state.db,
@@ -765,7 +778,8 @@ async fn review_participants_include_creator_and_exclude_disabled_accounts() {
         receipt["readers"].as_array().unwrap().is_empty(),
         "disabled creator/member is no longer a reader"
     );
-    assert!(receipt["unread"].as_array().unwrap().is_empty());
+    assert_eq!(receipt["unread"].as_array().unwrap().len(), 1);
+    assert_eq!(receipt["unread"][0]["userId"], supplier_account_id);
 }
 
 #[tokio::test]
@@ -779,7 +793,6 @@ async fn full_message_mark_read_mixed_ids_only_records_eligible_messages() {
         f.project_id,
         &service::message::MessageCreate {
             content: "eligible read".into(),
-            round_id: None,
         },
         "",
     )
@@ -793,7 +806,6 @@ async fn full_message_mark_read_mixed_ids_only_records_eligible_messages() {
         f.project_id,
         &service::message::MessageCreate {
             content: "self message ignored".into(),
-            round_id: None,
         },
         "",
     )
@@ -840,7 +852,6 @@ async fn full_message_mark_read_mixed_ids_only_records_eligible_messages() {
         foreign,
         &service::message::MessageCreate {
             content: "foreign ignored".into(),
-            round_id: None,
         },
         "",
     )
@@ -879,16 +890,90 @@ async fn full_message_mark_read_mixed_ids_only_records_eligible_messages() {
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn full_round_three_way_decision_commits_exactly_once() {
-    use crate::entity::{audit_logs, email_outbox, round_status_logs, rounds};
+async fn full_project_three_way_decision_commits_exactly_once() {
+    use crate::entity::{audit_logs, email_outbox, project_status_logs, projects};
+    use chrono::Utc;
+    use sea_orm::{ActiveModelTrait, Set};
     let f = Fixture::new().await;
-    let reason = service::round::RejectReq {
-        reason: Some("尺寸不符".into()),
+    let project = projects::Entity::find_by_id(f.project_id)
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    let supplier_account = service::supplier::create_account(
+        &f.state.db,
+        &f.admin,
+        project.supplier_id,
+        &service::supplier::AccountCreate {
+            employee_no: format!("s{}", &uuid::Uuid::new_v4().simple().to_string()[..20]),
+            password: "Regression123".into(),
+            real_name: "并发确认供应商".into(),
+            email: "supplier-decision@example.invalid".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let supplier = CurrentUser {
+        id: supplier_account["id"].as_u64().unwrap(),
+        employee_no: supplier_account["employeeNo"].as_str().unwrap().into(),
+        user_type: UserType::Supplier,
+        supplier_id: Some(project.supplier_id),
+    };
+    crate::entity::files::ActiveModel {
+        project_id: Set(f.project_id),
+        uploader_id: Set(f.member.id),
+        direction: Set(FileDirection::C2s),
+        original_name: Set("decision.pdf".into()),
+        stored_name: Set(uuid::Uuid::new_v4().to_string()),
+        ext: Set("pdf".into()),
+        size_bytes: Set(1),
+        mime_type: Set(Some("application/pdf".into())),
+        sha256: Set(None),
+        storage_path: Set("regression/decision.pdf".into()),
+        status: Set(FileStatus::Available),
+        deleted_at: Set(None),
+        created_at: Set(Utc::now()),
+        ..Default::default()
+    }
+    .insert(&f.state.db)
+    .await
+    .unwrap();
+    service::project::submit(
+        &f.state.db,
+        "http://localhost",
+        &f.admin,
+        f.project_id,
+        &service::project::SubmitReq {
+            confirm_side: "SUPPLIER".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let submitted_notices = email_outbox::Entity::find()
+        .filter(email_outbox::Column::ProjectId.eq(f.project_id))
+        .filter(email_outbox::Column::EventType.eq(OutboxEventType::ProjectSubmitted))
+        .all(&f.state.db)
+        .await
+        .unwrap();
+    assert_eq!(submitted_notices.len(), 1);
+    assert_eq!(
+        submitted_notices[0].recipient_user_id,
+        Some(supplier.id),
+        "提交通知只能发给有确认权限的待确认侧"
+    );
+    let reason = service::project::RejectReq {
+        reason: "尺寸不符".into(),
     };
     let (a, b, c) = tokio::join!(
-        service::round::confirm(&f.state.db, &f.state.cfg, &f.admin, f.round_id),
-        service::round::reject(&f.state.db, &f.state.cfg, &f.admin, f.round_id, &reason),
-        service::round::cancel(&f.state.db, &f.state.cfg, &f.admin, f.round_id)
+        service::project::confirm(&f.state.db, "http://localhost", &supplier, f.project_id),
+        service::project::reject(
+            &f.state.db,
+            "http://localhost",
+            &supplier,
+            f.project_id,
+            &reason,
+        ),
+        service::project::withdraw(&f.state.db, "http://localhost", &f.admin, f.project_id)
     );
     let results = [a, b, c];
     assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
@@ -896,31 +981,65 @@ async fn full_round_three_way_decision_commits_exactly_once() {
         .iter()
         .filter_map(|r| r.as_ref().err())
         .all(|e| matches!(e, crate::error::AppError::Conflict(_))));
-    let round = rounds::Entity::find_by_id(f.round_id)
+    let project = projects::Entity::find_by_id(f.project_id)
         .one(&f.state.db)
         .await
         .unwrap()
         .unwrap();
-    assert_ne!(round.status, RoundStatus::Pending);
-    let logs = round_status_logs::Entity::find()
-        .filter(round_status_logs::Column::RoundId.eq(f.round_id))
+    assert_ne!(project.status, ProjectStatus::PendingConfirmation);
+    let logs = project_status_logs::Entity::find()
+        .filter(project_status_logs::Column::ProjectId.eq(f.project_id))
         .all(&f.state.db)
         .await
         .unwrap();
-    assert_eq!(logs.len(), 2, "创建和唯一决定各一条历史");
+    assert_eq!(logs.len(), 4, "创建、开始、提交和唯一决定各一条历史");
     let audits = audit_logs::Entity::find()
-        .filter(audit_logs::Column::TargetId.eq(f.round_id.to_string()))
-        .filter(audit_logs::Column::Action.is_in(["ROUND_CONFIRM", "ROUND_REJECT", "ROUND_CANCEL"]))
+        .filter(audit_logs::Column::TargetId.eq(f.project_id.to_string()))
+        .filter(audit_logs::Column::Action.is_in([
+            "PROJECT_CONFIRM",
+            "PROJECT_REJECT",
+            "PROJECT_WITHDRAW",
+        ]))
         .all(&f.state.db)
         .await
         .unwrap();
     assert_eq!(audits.len(), 1);
     let notices = email_outbox::Entity::find()
-        .filter(email_outbox::Column::RoundId.eq(f.round_id))
+        .filter(email_outbox::Column::ProjectId.eq(f.project_id))
         .all(&f.state.db)
         .await
         .unwrap();
-    assert_eq!(notices.len(), 1, "唯一决定只给唯一其他参与者入队一封通知");
+    let expected_event = match audits[0].action.as_str() {
+        "PROJECT_CONFIRM" => OutboxEventType::ProjectConfirmed,
+        "PROJECT_REJECT" => OutboxEventType::ProjectRejected,
+        "PROJECT_WITHDRAW" => OutboxEventType::ProjectWithdrawn,
+        action => panic!("unexpected decision audit: {action}"),
+    };
+    let decision_notices = notices
+        .iter()
+        .filter(|notice| notice.event_type != OutboxEventType::ProjectSubmitted)
+        .collect::<Vec<_>>();
+    let mut actual_recipient_ids = decision_notices
+        .iter()
+        .map(|notice| notice.recipient_user_id.unwrap())
+        .collect::<Vec<_>>();
+    actual_recipient_ids.sort_unstable();
+    let mut expected_recipient_ids = if expected_event == OutboxEventType::ProjectWithdrawn {
+        vec![f.admin.id, supplier.id]
+    } else {
+        vec![f.admin.id]
+    };
+    expected_recipient_ids.sort_unstable();
+    assert_eq!(
+        actual_recipient_ids, expected_recipient_ids,
+        "确认/驳回只通知最近提交者；撤回通知待确认侧与最近提交者"
+    );
+    assert!(
+        decision_notices
+            .iter()
+            .all(|notice| notice.event_type == expected_event),
+        "并发失败分支不应生成通知"
+    );
 }
 
 #[tokio::test]
@@ -1131,7 +1250,6 @@ async fn notification_recipients_exclude_disabled_users_and_dedupe_emails() {
         service::notify::enqueue_file_notice(
             &f.state.db,
             &project,
-            1,
             "fixture.pdf",
             &f.admin,
             "http://localhost",
@@ -1172,7 +1290,6 @@ async fn deleted_message_receipts_are_not_accessible() {
         f.project_id,
         &service::message::MessageCreate {
             content: "receipt deletion regression".into(),
-            round_id: None,
         },
         "http://localhost",
     )
@@ -1451,24 +1568,11 @@ impl Fixture {
         )
         .await
         .unwrap();
-        let r = service::round::create(
-            &state.db,
-            &admin,
-            project_id,
-            &service::round::RoundCreate {
-                title: Some("回归轮次".into()),
-                remark: None,
-                confirm_side: "COMPANY".into(),
-            },
-        )
-        .await
-        .unwrap();
         Self {
             state,
             admin,
             member,
             project_id,
-            round_id: r["id"].as_u64().unwrap(),
         }
     }
 
@@ -1478,7 +1582,6 @@ impl Fixture {
             &self.member,
             &service::upload::InitReq {
                 project_id: self.project_id,
-                round_id: self.round_id,
                 file_name: name.into(),
                 file_size: 4,
                 file_md5: None,
@@ -1498,7 +1601,6 @@ async fn upload_resumes_with_matching_content_md5() {
     let f = Fixture::new().await;
     let input = service::upload::InitReq {
         project_id: f.project_id,
-        round_id: f.round_id,
         file_name: "resume.pdf".into(),
         file_size: 4,
         file_md5: Some("098f6bcd4621d373cade4e832627b4f6".into()),
@@ -1739,14 +1841,12 @@ async fn message_commit_barrier(action: &str) {
     let state = f.state.clone();
     let user = f.member.clone();
     let pid = f.project_id;
-    let rid = f.round_id;
     let pending = tokio::spawn(async move {
         service::message::create(
             &state.db,
             &user,
             pid,
             &service::message::MessageCreate {
-                round_id: Some(rid),
                 content: "锁屏障留言".into(),
             },
             "http://localhost",
@@ -1767,7 +1867,6 @@ async fn message_commit_barrier(action: &str) {
     }
     let sql = match action {
         "project" => format!("UPDATE projects SET status='COMPLETED' WHERE id={pid}"),
-        "round" => format!("UPDATE rounds SET status='CONFIRMED' WHERE id={rid}"),
         _ => format!(
             "DELETE FROM project_members WHERE project_id={pid} AND user_id={}",
             f.member.id
@@ -1804,11 +1903,6 @@ async fn message_commit_barrier(action: &str) {
 #[ignore = "isolated MySQL required"]
 async fn full_message_rechecks_completed_project() {
     message_commit_barrier("project").await;
-}
-#[tokio::test]
-#[ignore = "isolated MySQL required"]
-async fn full_message_rechecks_closed_round() {
-    message_commit_barrier("round").await;
 }
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
@@ -2486,7 +2580,6 @@ async fn full_upload_filename_validation() {
             &f.member,
             &service::upload::InitReq {
                 project_id: f.project_id,
-                round_id: f.round_id,
                 file_name: name,
                 file_size: 4,
                 file_md5: None,
@@ -2508,7 +2601,6 @@ async fn full_messages_cursor_survives_earlier_deletion() {
             f.project_id,
             &service::message::MessageCreate {
                 content: format!("分页 {i}"),
-                round_id: None,
             },
             "http://localhost",
         )
@@ -2539,4 +2631,217 @@ async fn full_messages_cursor_survives_earlier_deletion() {
         5,
         "deletion before cursor must not skip an older message"
     );
+}
+
+#[tokio::test]
+#[ignore = "isolated MySQL required"]
+async fn full_project_acceptance_is_cross_side_and_history_is_authoritative() {
+    use crate::entity::{audit_logs, project_status_logs, projects};
+    use sea_orm::QueryOrder;
+
+    let f = Fixture::new().await;
+    let project = projects::Entity::find_by_id(f.project_id)
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    let supplier_account = service::supplier::create_account(
+        &f.state.db,
+        &f.admin,
+        project.supplier_id,
+        &service::supplier::AccountCreate {
+            employee_no: format!("s{}", &uuid::Uuid::new_v4().simple().to_string()[..20]),
+            password: "Regression123".into(),
+            real_name: "供应商确认人".into(),
+            email: "supplier-confirm@example.invalid".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let supplier = CurrentUser {
+        id: supplier_account["id"].as_u64().unwrap(),
+        employee_no: supplier_account["employeeNo"].as_str().unwrap().into(),
+        user_type: UserType::Supplier,
+        supplier_id: Some(project.supplier_id),
+    };
+    let sid = f.init("acceptance.pdf").await;
+    service::upload::put_chunk(&f.state, &f.member, &sid, 0, b"test")
+        .await
+        .unwrap();
+    service::upload::merge(&f.state, &f.member, &sid)
+        .await
+        .unwrap();
+
+    let same_side = service::project::submit(
+        &f.state.db,
+        "http://localhost",
+        &f.admin,
+        f.project_id,
+        &service::project::SubmitReq {
+            confirm_side: "COMPANY".into(),
+        },
+    )
+    .await;
+    assert!(matches!(
+        same_side,
+        Err(crate::error::AppError::BadRequest(_))
+    ));
+    service::project::submit(
+        &f.state.db,
+        "http://localhost",
+        &f.admin,
+        f.project_id,
+        &service::project::SubmitReq {
+            confirm_side: "SUPPLIER".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        service::project::confirm(&f.state.db, "http://localhost", &f.member, f.project_id).await,
+        Err(crate::error::AppError::Forbidden)
+    ));
+    service::project::confirm(&f.state.db, "http://localhost", &supplier, f.project_id)
+        .await
+        .unwrap();
+
+    let stored = projects::Entity::find_by_id(f.project_id)
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, ProjectStatus::Completed);
+    assert_eq!(stored.confirm_side, None);
+    let history = project_status_logs::Entity::find()
+        .filter(project_status_logs::Column::ProjectId.eq(f.project_id))
+        .order_by_asc(project_status_logs::Column::Id)
+        .all(&f.state.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .map(|row| row.action.as_str())
+            .collect::<Vec<_>>(),
+        ["CREATE", "START", "SUBMIT", "CONFIRM"]
+    );
+    assert_eq!(history[2].confirm_side, Some(ConfirmSide::Supplier));
+    assert_eq!(history[3].confirm_side, Some(ConfirmSide::Supplier));
+
+    let audit_actions = audit_logs::Entity::find()
+        .filter(audit_logs::Column::TargetId.eq(f.project_id.to_string()))
+        .all(&f.state.db)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.action)
+        .collect::<Vec<_>>();
+    for action in ["PROJECT_START", "PROJECT_SUBMIT", "PROJECT_CONFIRM"] {
+        assert!(audit_actions.iter().any(|value| value == action));
+    }
+    assert!(!audit_actions.iter().any(|value| value == "PROJECT_STATUS"));
+}
+
+#[tokio::test]
+#[ignore = "isolated MySQL required"]
+async fn full_terminated_project_can_restart_but_cannot_complete_directly() {
+    use crate::entity::{project_status_logs, projects};
+    use sea_orm::QueryOrder;
+
+    let f = Fixture::new().await;
+    service::project::set_status(
+        &f.state.db,
+        &f.admin,
+        f.project_id,
+        &service::project::StatusChange {
+            status: "TERMINATED".into(),
+        },
+    )
+    .await
+    .unwrap();
+    service::project::set_status(
+        &f.state.db,
+        &f.admin,
+        f.project_id,
+        &service::project::StatusChange {
+            status: "IN_PROGRESS".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        service::project::set_status(
+            &f.state.db,
+            &f.admin,
+            f.project_id,
+            &service::project::StatusChange {
+                status: "COMPLETED".into()
+            }
+        )
+        .await,
+        Err(crate::error::AppError::BadRequest(_))
+    ));
+    assert_eq!(
+        projects::Entity::find_by_id(f.project_id)
+            .one(&f.state.db)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ProjectStatus::InProgress
+    );
+    let history = project_status_logs::Entity::find()
+        .filter(project_status_logs::Column::ProjectId.eq(f.project_id))
+        .order_by_asc(project_status_logs::Column::Id)
+        .all(&f.state.db)
+        .await
+        .unwrap();
+    assert_eq!(history[history.len() - 2].action, "TERMINATE");
+    assert_eq!(history.last().unwrap().action, "RESTART");
+}
+
+#[tokio::test]
+#[ignore = "isolated MySQL required"]
+async fn full_completed_and_terminated_projects_freeze_message_deletion() {
+    use crate::entity::{messages, projects};
+    use sea_orm::{ActiveModelTrait, Set};
+
+    for status in [ProjectStatus::Completed, ProjectStatus::Terminated] {
+        let f = Fixture::new().await;
+        let message_id = service::message::create(
+            &f.state.db,
+            &f.member,
+            f.project_id,
+            &service::message::MessageCreate {
+                content: "冻结后不可删除".into(),
+            },
+            "http://localhost",
+        )
+        .await
+        .unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        let mut project: projects::ActiveModel = projects::Entity::find_by_id(f.project_id)
+            .one(&f.state.db)
+            .await
+            .unwrap()
+            .unwrap()
+            .into();
+        project.status = Set(status);
+        project.update(&f.state.db).await.unwrap();
+
+        assert!(matches!(
+            service::message::delete(&f.state.db, &f.admin, message_id).await,
+            Err(crate::error::AppError::Conflict(_))
+        ));
+        assert_eq!(
+            messages::Entity::find_by_id(message_id)
+                .one(&f.state.db)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            MessageStatus::Normal
+        );
+    }
 }

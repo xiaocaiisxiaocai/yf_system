@@ -38,13 +38,15 @@ const ACTIONS: Record<string, { label: string; category: string; color: string }
   PASSWORD_CHANGE: { label: '修改密码', category: '认证安全', color: 'orange' },
   PROJECT_CREATE: { label: '创建项目', category: '项目协作', color: 'arcoblue' },
   PROJECT_UPDATE: { label: '更新项目', category: '项目协作', color: 'arcoblue' },
-  PROJECT_STATUS: { label: '变更项目状态', category: '项目协作', color: 'orange' },
+  PROJECT_START: { label: '开始项目', category: '项目协作', color: 'arcoblue' },
+  PROJECT_SUBMIT: { label: '提交项目确认', category: '项目协作', color: 'arcoblue' },
+  PROJECT_CONFIRM: { label: '确认项目', category: '项目协作', color: 'green' },
+  PROJECT_REJECT: { label: '驳回项目', category: '项目协作', color: 'red' },
+  PROJECT_WITHDRAW: { label: '撤回项目确认', category: '项目协作', color: 'orange' },
+  PROJECT_TERMINATE: { label: '终止项目', category: '项目协作', color: 'red' },
+  PROJECT_RESTART: { label: '重新开始项目', category: '项目协作', color: 'arcoblue' },
   PROJECT_DELETE: { label: '删除项目', category: '项目协作', color: 'red' },
   PROJECT_MEMBERS: { label: '调整项目成员', category: '项目协作', color: 'purple' },
-  ROUND_CREATE: { label: '创建确认轮次', category: '项目协作', color: 'arcoblue' },
-  ROUND_CONFIRM: { label: '确认轮次', category: '项目协作', color: 'green' },
-  ROUND_REJECT: { label: '驳回轮次', category: '项目协作', color: 'red' },
-  ROUND_CANCEL: { label: '取消轮次', category: '项目协作', color: 'orange' },
   FILE_UPLOAD: { label: '上传文件', category: '文件', color: 'arcoblue' },
   FILE_DOWNLOAD: { label: '下载文件', category: '文件', color: 'cyan' },
   FILE_BATCH_DOWNLOAD: { label: '批量下载', category: '文件', color: 'cyan' },
@@ -91,13 +93,22 @@ const CATEGORY_OPTIONS = [
 
 const TARGET_LABELS: Record<string, string> = {
   user: '用户', role: '角色', department: '组织', supplier: '供应商', project: '项目',
-  round: '轮次', file: '文件', message: '留言', upload_session: '上传任务', audit_log: '操作日志', system_config: '系统参数',
+  file: '文件', message: '留言', upload_session: '上传任务', audit_log: '操作日志', system_config: '系统参数',
   email_outbox: '邮件队列',
 }
 
 const FIELD_LABELS: Record<string, string> = {
   realName: '姓名', email: '邮箱', phone: '电话', departmentId: '组织', roleId: '角色',
 }
+
+const PROJECT_STATUS_LABELS: Record<string, string> = {
+  DRAFT: '草稿', IN_PROGRESS: '进行中', PENDING_CONFIRMATION: '待确认', COMPLETED: '已完成', TERMINATED: '已终止',
+}
+
+const PROJECT_WORKFLOW_ACTIONS = new Set([
+  'PROJECT_START', 'PROJECT_SUBMIT', 'PROJECT_CONFIRM', 'PROJECT_REJECT',
+  'PROJECT_WITHDRAW', 'PROJECT_TERMINATE', 'PROJECT_RESTART',
+])
 
 function displayValue(value: unknown): string {
   if (value == null || value === '') return '无'
@@ -116,6 +127,11 @@ function actorIdentity(row: LogRow) {
   return { label: '系统', meta: '系统事件' }
 }
 
+function projectStatusLabel(value: unknown): string {
+  if (value == null || value === '') return '未知'
+  return PROJECT_STATUS_LABELS[String(value)] || displayValue(value)
+}
+
 function detailSummary(row: LogRow): string {
   const detail = row.detail || {}
   // 兼容迁移前已落库的结构化日志详情；新的日志统一写 employeeNo。
@@ -129,6 +145,15 @@ function detailSummary(row: LogRow): string {
       : ''
     if (!actor && !fields) return '历史记录未包含变更字段'
     return `${displayValue(actor)}${fields ? `；修改 ${fields}` : ''}`
+  }
+  if (PROJECT_WORKFLOW_ACTIONS.has(row.action)) {
+    const stateChange = detail.from != null || detail.to != null
+      ? `状态：${projectStatusLabel(detail.from)} → ${projectStatusLabel(detail.to)}`
+      : ''
+    const reason = typeof detail.reason === 'string' && detail.reason.trim()
+      ? `；驳回原因：${displayValue(detail.reason)}`
+      : ''
+    return `${stateChange}${reason}` || (row.detail ? '查看结构化详情' : '未记录补充信息')
   }
   if (row.action.endsWith('_STATUS')) {
     const subject = detail.name ?? actor ?? detail.code ?? `${TARGET_LABELS[row.targetType || ''] || row.targetType || '对象'} ${row.targetId || ''}`
@@ -151,7 +176,7 @@ function detailSummary(row: LogRow): string {
   if (row.action === 'EMAIL_SENT') {
     return detail.recipient ? `收件人 ${displayValue(detail.recipient)}` : '邮件已发送'
   }
-  const parts = [actor, detail.name, detail.code, detail.fileName, detail.projectId, detail.roundNo]
+  const parts = [actor, detail.name, detail.code, detail.fileName, detail.projectId]
     .filter((value) => value != null && value !== '')
     .map(displayValue)
   return parts.join(' · ') || (row.detail ? '查看结构化详情' : '未记录补充信息')

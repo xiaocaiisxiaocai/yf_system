@@ -192,8 +192,8 @@ async fn delete_safety_log_cleanup_preserves_an_audit_record() {
     assert_eq!(event.user_id, Some(f.admin.id));
     assert_eq!(event.detail.as_ref().unwrap()["deleted"], 1);
     let kept = audit_logs::Entity::find()
-        .filter(audit_logs::Column::Action.eq("ROUND_CREATE"))
-        .filter(audit_logs::Column::TargetId.eq(f.round_id.to_string()))
+        .filter(audit_logs::Column::Action.eq("PROJECT_START"))
+        .filter(audit_logs::Column::TargetId.eq(f.project_id.to_string()))
         .one(&f.state.db)
         .await
         .unwrap()
@@ -343,7 +343,7 @@ async fn delete_safety_project_empty_success_content_refused_and_profile_identit
         service::project::delete(&f.state, &f.admin, f.project_id).await,
         Err(AppError::BadRequest(_))
     ));
-    assert!(crate::entity::rounds::Entity::find_by_id(f.round_id)
+    assert!(projects::Entity::find_by_id(f.project_id)
         .one(&f.state.db)
         .await
         .unwrap()

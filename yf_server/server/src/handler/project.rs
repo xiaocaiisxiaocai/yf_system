@@ -1,4 +1,4 @@
-//! 项目 / 轮次 / 留言 / 工作台 handler。数据范围由 service::scope 在内部强制。
+//! 项目 / 留言 / 工作台 handler。数据范围由 service::scope 在内部强制。
 use axum::extract::{Path, State};
 use axum::Json;
 use axum_extra::extract::Query;
@@ -68,6 +68,48 @@ pub async fn update_project_status(
         service::project::set_status(&s.db, &u, id, &req).await?,
     ))
 }
+pub async fn submit_project(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Path(id): Path<u64>,
+    Json(req): Json<service::project::SubmitReq>,
+) -> ApiResult<Json<Value>> {
+    require(&s, &u, "project:submit").await?;
+    Ok(Json(
+        service::project::submit(&s.db, &s.cfg.web.base_url, &u, id, &req).await?,
+    ))
+}
+pub async fn confirm_project(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<Value>> {
+    require(&s, &u, "project:confirm").await?;
+    Ok(Json(
+        service::project::confirm(&s.db, &s.cfg.web.base_url, &u, id).await?,
+    ))
+}
+pub async fn reject_project(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Path(id): Path<u64>,
+    Json(req): Json<service::project::RejectReq>,
+) -> ApiResult<Json<Value>> {
+    require(&s, &u, "project:confirm").await?;
+    Ok(Json(
+        service::project::reject(&s.db, &s.cfg.web.base_url, &u, id, &req).await?,
+    ))
+}
+pub async fn withdraw_project(
+    State(s): State<AppState>,
+    u: CurrentUser,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<Value>> {
+    require(&s, &u, "project:withdraw").await?;
+    Ok(Json(
+        service::project::withdraw(&s.db, &s.cfg.web.base_url, &u, id).await?,
+    ))
+}
 pub async fn list_project_members(
     State(s): State<AppState>,
     u: CurrentUser,
@@ -111,67 +153,6 @@ pub async fn list_project_activities(
     Ok(Json(
         service::project_activity::list(&s.db, &u, id, &q).await?,
     ))
-}
-
-// ---------- 轮次 ----------
-
-pub async fn list_rounds(
-    State(s): State<AppState>,
-    u: CurrentUser,
-    Path(id): Path<u64>,
-) -> ApiResult<Json<Value>> {
-    Ok(Json(service::round::list(&s.db, &u, id).await?))
-}
-pub async fn create_round(
-    State(s): State<AppState>,
-    u: CurrentUser,
-    Path(id): Path<u64>,
-    Json(req): Json<service::round::RoundCreate>,
-) -> ApiResult<Json<Value>> {
-    require(&s, &u, "round:create").await?;
-    Ok(Json(service::round::create(&s.db, &u, id, &req).await?))
-}
-pub async fn get_round(
-    State(s): State<AppState>,
-    u: CurrentUser,
-    Path(id): Path<u64>,
-) -> ApiResult<Json<Value>> {
-    Ok(Json(service::round::detail(&s.db, &u, id).await?))
-}
-/// 轮次确认/驳回：内部用户需 round:confirm 权限点；供应商人员走 confirmSide 校验（service::round::check_side）
-async fn require_round_decide(s: &AppState, u: &CurrentUser) -> ApiResult<()> {
-    if u.is_internal() {
-        require(s, u, "round:confirm").await?;
-    }
-    Ok(())
-}
-
-pub async fn confirm_round(
-    State(s): State<AppState>,
-    u: CurrentUser,
-    Path(id): Path<u64>,
-) -> ApiResult<Json<Value>> {
-    require_round_decide(&s, &u).await?;
-    Ok(Json(service::round::confirm(&s.db, &s.cfg, &u, id).await?))
-}
-pub async fn reject_round(
-    State(s): State<AppState>,
-    u: CurrentUser,
-    Path(id): Path<u64>,
-    Json(req): Json<service::round::RejectReq>,
-) -> ApiResult<Json<Value>> {
-    require_round_decide(&s, &u).await?;
-    Ok(Json(
-        service::round::reject(&s.db, &s.cfg, &u, id, &req).await?,
-    ))
-}
-pub async fn cancel_round(
-    State(s): State<AppState>,
-    u: CurrentUser,
-    Path(id): Path<u64>,
-) -> ApiResult<Json<Value>> {
-    require(&s, &u, "round:cancel").await?;
-    Ok(Json(service::round::cancel(&s.db, &s.cfg, &u, id).await?))
 }
 
 // ---------- 留言 ----------

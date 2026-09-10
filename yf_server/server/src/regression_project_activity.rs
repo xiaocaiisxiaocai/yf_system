@@ -3,19 +3,14 @@
 use std::collections::HashSet;
 
 use chrono::{Duration, Timelike, Utc};
-use migration::MigratorTrait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, Set, Statement, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set,
+    TransactionTrait,
 };
 use serde_json::{json, Value};
 
 use crate::{
-    entity::{
-        audit_logs,
-        enums::{CommonStatus, ConfirmSide, MessageStatus, RoundStatus},
-        files, messages, project_activities, projects, roles, rounds, users,
-    },
+    entity::{audit_logs, enums::CommonStatus, files, project_activities, projects, roles, users},
     error::AppError,
     middleware::auth::CurrentUser,
     regression::Fixture,
@@ -146,15 +141,20 @@ async fn create_draft(f: &Fixture, name: &str) -> u64 {
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn project_activity_captures_four_business_types_and_project_status() {
+async fn project_activity_captures_project_workflow_files_and_messages() {
     let f = Fixture::new().await;
+    let project = projects::Entity::find_by_id(f.project_id)
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    let supplier = create_supplier_user(&f, project.supplier_id).await;
     let message_id = service::message::create(
         &f.state.db,
         &f.member,
         f.project_id,
         &service::message::MessageCreate {
-            content: "四类动态留言".into(),
-            round_id: Some(f.round_id),
+            content: "项目动态留言".into(),
         },
         &f.state.cfg.web.base_url,
     )
@@ -162,7 +162,7 @@ async fn project_activity_captures_four_business_types_and_project_status() {
     .unwrap()["id"]
         .as_u64()
         .unwrap();
-    let sid = f.init("activity-four-types.pdf").await;
+    let sid = f.init("activity-project-workflow.pdf").await;
     service::upload::put_chunk(&f.state, &f.member, &sid, 0, b"test")
         .await
         .unwrap();
@@ -171,59 +171,62 @@ async fn project_activity_captures_four_business_types_and_project_status() {
         .unwrap()["id"]
         .as_u64()
         .unwrap();
-    service::round::confirm(&f.state.db, &f.state.cfg, &f.admin, f.round_id)
-        .await
-        .unwrap();
-    let rejected_round = service::round::create(
+
+    let submit = service::project::SubmitReq {
+        confirm_side: "SUPPLIER".into(),
+    };
+    service::project::submit(
         &f.state.db,
+        &f.state.cfg.web.base_url,
         &f.admin,
         f.project_id,
-        &service::round::RoundCreate {
-            title: Some("待驳回轮次".into()),
-            remark: None,
-            confirm_side: "COMPANY".into(),
-        },
+        &submit,
     )
     .await
-    .unwrap()["id"]
-        .as_u64()
-        .unwrap();
+    .unwrap();
     let rejection_reason = "尺寸证据不完整";
-    service::round::reject(
+    service::project::reject(
         &f.state.db,
-        &f.state.cfg,
-        &f.admin,
-        rejected_round,
-        &service::round::RejectReq {
-            reason: Some(rejection_reason.into()),
+        &f.state.cfg.web.base_url,
+        &supplier,
+        f.project_id,
+        &service::project::RejectReq {
+            reason: rejection_reason.into(),
         },
     )
     .await
     .unwrap();
-    let cancelled_round = service::round::create(
+    service::project::submit(
         &f.state.db,
+        &f.state.cfg.web.base_url,
         &f.admin,
         f.project_id,
-        &service::round::RoundCreate {
-            title: Some("待撤销轮次".into()),
-            remark: None,
-            confirm_side: "COMPANY".into(),
-        },
+        &submit,
     )
     .await
-    .unwrap()["id"]
-        .as_u64()
-        .unwrap();
-    service::round::cancel(&f.state.db, &f.state.cfg, &f.admin, cancelled_round)
-        .await
-        .unwrap();
-    service::project::set_status(
+    .unwrap();
+    service::project::withdraw(
         &f.state.db,
+        &f.state.cfg.web.base_url,
         &f.admin,
         f.project_id,
-        &service::project::StatusChange {
-            status: "COMPLETED".into(),
-        },
+    )
+    .await
+    .unwrap();
+    service::project::submit(
+        &f.state.db,
+        &f.state.cfg.web.base_url,
+        &f.admin,
+        f.project_id,
+        &submit,
+    )
+    .await
+    .unwrap();
+    service::project::confirm(
+        &f.state.db,
+        &f.state.cfg.web.base_url,
+        &supplier,
+        f.project_id,
     )
     .await
     .unwrap();
@@ -232,11 +235,10 @@ async fn project_activity_captures_four_business_types_and_project_status() {
     let rows = list(&response);
     for (activity_type, action) in [
         ("PROJECT", "START"),
-        ("PROJECT", "COMPLETE"),
-        ("ROUND", "CREATE"),
-        ("ROUND", "CONFIRM"),
-        ("ROUND", "REJECT"),
-        ("ROUND", "CANCEL"),
+        ("PROJECT", "SUBMIT"),
+        ("PROJECT", "REJECT"),
+        ("PROJECT", "WITHDRAW"),
+        ("PROJECT", "CONFIRM"),
         ("FILE", "UPLOAD"),
         ("MESSAGE", "CREATE"),
     ] {
@@ -257,42 +259,19 @@ async fn project_activity_captures_four_business_types_and_project_status() {
         .find(|item| item["type"] == "FILE" && item["targetId"] == file_id)
         .unwrap();
     assert_eq!(file["actorName"], "测试成员");
-    assert_eq!(file["roundId"], f.round_id);
-    assert_eq!(file["roundNo"], 1);
     let message = rows
         .iter()
         .find(|item| item["type"] == "MESSAGE" && item["targetId"] == message_id)
         .unwrap();
     assert_eq!(message["actorName"], "测试成员");
-    assert_eq!(message["roundId"], f.round_id);
-    assert_eq!(message["roundNo"], 1);
-    let admin_name = users::Entity::find_by_id(f.admin.id)
-        .one(&f.state.db)
-        .await
-        .unwrap()
-        .unwrap()
-        .real_name;
-    let confirmed = rows
-        .iter()
-        .find(|item| item["type"] == "ROUND" && item["action"] == "CONFIRM")
-        .unwrap();
-    assert_eq!(confirmed["actorName"], admin_name);
-    assert_eq!(confirmed["targetId"], f.round_id);
     let rejected = rows
         .iter()
-        .find(|item| item["type"] == "ROUND" && item["action"] == "REJECT")
+        .find(|item| item["type"] == "PROJECT" && item["action"] == "REJECT")
         .unwrap();
-    assert_eq!(rejected["actorName"], admin_name);
-    assert_eq!(rejected["targetId"], rejected_round);
     assert_eq!(rejected["summary"], rejection_reason);
-    let cancelled = rows
-        .iter()
-        .find(|item| item["type"] == "ROUND" && item["action"] == "CANCEL")
-        .unwrap();
-    assert_eq!(cancelled["actorName"], admin_name);
-    assert_eq!(cancelled["targetId"], cancelled_round);
     assert_eq!(response["summary"]["status"], "COMPLETED");
-    assert_eq!(response["summary"]["pendingRounds"], 0);
+    assert_eq!(response["summary"]["pendingConfirmation"], false);
+    assert!(response["summary"]["confirmSide"].is_null());
     assert_eq!(response["summary"]["lastActivityAt"], rows[0]["occurredAt"]);
 }
 
@@ -404,8 +383,6 @@ async fn project_activity_enforces_scope_without_log_permission_and_never_leaks_
         "occurredAt",
         "title",
         "summary",
-        "roundId",
-        "roundNo",
         "targetId",
         "targetAvailable",
     ]);
@@ -435,8 +412,6 @@ async fn project_activity_cursor_is_stable_for_equal_times_and_filters_preserve_
             occurred_at: Set(same_time),
             title: Set(format!("同秒动态 {index}")),
             summary: Set(None),
-            round_id: Set(None),
-            round_no: Set(None),
             target_id: Set(None),
             source_key: Set(format!("cursor-fixture:{}:{index}", f.project_id)),
             ..Default::default()
@@ -632,7 +607,6 @@ async fn project_activity_deleted_targets_cannot_reopen_and_message_text_is_reda
         f.project_id,
         &service::message::MessageCreate {
             content: secret_message.into(),
-            round_id: Some(f.round_id),
         },
         &f.state.cfg.web.base_url,
     )
@@ -744,137 +718,86 @@ async fn project_activity_deleted_targets_cannot_reopen_and_message_text_is_reda
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn project_activity_012_backfill_is_idempotent_and_does_not_invent_round_transitions() {
-    let f = Fixture::new().await;
-    let url = std::env::var("YF_TEST_DATABASE_URL").expect("请使用隔离测试脚本");
-    assert!(url
-        .split('?')
-        .next()
-        .unwrap_or(&url)
-        .rsplit('/')
-        .next()
-        .unwrap_or_default()
-        .starts_with("yf_test_"));
-    let migrations = migration::Migrator::migrations();
-    let target = migrations
-        .iter()
-        .position(|item| item.name() == "m20260909_000012_project_activities")
-        .expect("project activity migration must remain registered");
-    migration::Migrator::down(&f.state.db, Some((migrations.len() - target) as u32))
-        .await
-        .unwrap();
+async fn project_activity_workflow_sources_follow_project_status_logs_and_are_unique() {
+    use crate::entity::project_status_logs;
 
-    let known_created_at = Utc::now()
-        .checked_sub_signed(Duration::days(365))
-        .unwrap()
-        .with_nanosecond(123_000_000)
-        .unwrap();
-    let legacy_round = rounds::ActiveModel {
-        project_id: Set(f.project_id),
-        round_no: Set(900_001),
-        title: Set(Some("无状态日志历史轮次".into())),
-        remark: Set(None),
-        confirm_side: Set(ConfirmSide::Company),
-        status: Set(RoundStatus::Confirmed),
-        decided_by: Set(None),
-        decided_at: Set(None),
-        reject_reason: Set(None),
-        created_by: Set(f.admin.id),
-        created_at: Set(known_created_at),
-        updated_at: Set(known_created_at),
-        ..Default::default()
-    }
-    .insert(&f.state.db)
+    let f = Fixture::new().await;
+    service::project::set_status(
+        &f.state.db,
+        &f.admin,
+        f.project_id,
+        &service::project::StatusChange {
+            status: "TERMINATED".into(),
+        },
+    )
     .await
     .unwrap();
-    let persisted_round = rounds::Entity::find_by_id(legacy_round.id)
-        .one(&f.state.db)
+    service::project::set_status(
+        &f.state.db,
+        &f.admin,
+        f.project_id,
+        &service::project::StatusChange {
+            status: "IN_PROGRESS".into(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let logs = project_status_logs::Entity::find()
+        .filter(project_status_logs::Column::ProjectId.eq(f.project_id))
+        .filter(project_status_logs::Column::Action.is_in(["START", "TERMINATE", "RESTART"]))
+        .order_by_asc(project_status_logs::Column::Id)
+        .all(&f.state.db)
         .await
-        .unwrap()
         .unwrap();
     assert_eq!(
-        persisted_round.created_at.nanosecond(),
-        0,
-        "legacy rounds store their evidence timestamp at whole-second precision"
+        logs.iter()
+            .map(|row| row.action.as_str())
+            .collect::<Vec<_>>(),
+        ["START", "TERMINATE", "RESTART"]
     );
-    let legacy_secret = "迁移后不应复活的已删留言";
-    let legacy_message = messages::ActiveModel {
-        project_id: Set(f.project_id),
-        round_id: Set(None),
-        sender_id: Set(f.member.id),
-        content: Set(legacy_secret.into()),
-        status: Set(MessageStatus::Deleted),
-        deleted_by: Set(Some(f.admin.id)),
-        deleted_at: Set(Some(known_created_at + Duration::minutes(1))),
-        created_at: Set(known_created_at),
-        ..Default::default()
-    }
-    .insert(&f.state.db)
-    .await
-    .unwrap();
-
-    migration::Migrator::up(&f.state.db, Some(1)).await.unwrap();
-    let round_events = project_activities::Entity::find()
-        .filter(project_activities::Column::RoundId.eq(legacy_round.id))
+    let source_keys = logs
+        .iter()
+        .map(|row| format!("project-status-log:{}", row.id))
+        .collect::<Vec<_>>();
+    let rows = project_activities::Entity::find()
+        .filter(project_activities::Column::ProjectId.eq(f.project_id))
+        .filter(project_activities::Column::SourceKey.is_in(source_keys.clone()))
         .order_by_asc(project_activities::Column::Id)
         .all(&f.state.db)
         .await
         .unwrap();
-    assert_eq!(round_events.len(), 1);
-    assert_eq!(round_events[0].action, "CREATE");
-    assert_eq!(round_events[0].occurred_at, persisted_round.created_at);
+    assert_eq!(rows.len(), logs.len());
     assert_eq!(
-        round_events[0].source_key,
-        format!("round:{}:create", legacy_round.id)
+        rows.iter()
+            .map(|row| row.action.as_str())
+            .collect::<Vec<_>>(),
+        ["START", "TERMINATE", "RESTART"]
     );
-    let message_events = project_activities::Entity::find()
-        .filter(project_activities::Column::TargetId.eq(legacy_message.id))
-        .filter(project_activities::Column::ActivityType.eq("MESSAGE"))
-        .all(&f.state.db)
-        .await
-        .unwrap();
-    assert_eq!(message_events.len(), 2);
-    assert!(message_events.iter().all(|item| item.summary.is_none()));
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.source_key.clone())
+            .collect::<HashSet<_>>()
+            .len(),
+        rows.len(),
+        "project status history must map to one unique timeline event"
+    );
 
-    let before = project_activities::Entity::find()
-        .count(&f.state.db)
-        .await
-        .unwrap();
-    f.state
-        .db
-        .execute(Statement::from_sql_and_values(
-            DbBackend::MySql,
-            "DELETE FROM seaql_migrations WHERE version = ?",
-            ["m20260909_000012_project_activities".into()],
-        ))
-        .await
-        .unwrap();
-    migration::Migrator::up(&f.state.db, Some(1)).await.unwrap();
-    let after = project_activities::Entity::find()
-        .count(&f.state.db)
-        .await
-        .unwrap();
-    let distinct = f
-        .state
-        .db
-        .query_one(Statement::from_string(
-            DbBackend::MySql,
-            "SELECT COUNT(DISTINCT source_key) AS n FROM project_activities",
-        ))
-        .await
-        .unwrap()
-        .unwrap()
-        .try_get::<i64>("", "n")
-        .unwrap();
-    assert_eq!(after, before);
-    assert_eq!(distinct as u64, after);
-    assert!(!project_activities::Entity::find()
-        .filter(project_activities::Column::ProjectId.eq(f.project_id))
+    let audit_actions = audit_logs::Entity::find()
+        .filter(audit_logs::Column::TargetId.eq(f.project_id.to_string()))
         .all(&f.state.db)
         .await
         .unwrap()
+        .into_iter()
+        .map(|row| row.action)
+        .collect::<Vec<_>>();
+    for action in ["PROJECT_START", "PROJECT_TERMINATE", "PROJECT_RESTART"] {
+        assert!(audit_actions.iter().any(|value| value == action));
+    }
+    assert!(!audit_actions.iter().any(|value| value == "PROJECT_STATUS"));
+    assert!(list(&activities(&f, &f.member).await)
         .iter()
-        .any(|item| item.summary.as_deref() == Some(legacy_secret)));
+        .all(|item| item.get("roundId").is_none() && item.get("roundNo").is_none()));
 }
 
 #[tokio::test]

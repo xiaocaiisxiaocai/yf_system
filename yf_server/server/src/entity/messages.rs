@@ -7,8 +7,6 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: u64,
     pub project_id: u64,
-    /// NULL = 项目级留言
-    pub round_id: Option<u64>,
     pub sender_id: u64,
     #[sea_orm(column_type = "Text")]
     pub content: String,

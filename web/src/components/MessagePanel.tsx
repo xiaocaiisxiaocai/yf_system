@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Avatar, Button, Drawer, Empty, Input, List, Popconfirm, Popover, Select, Space, Spin, Tag, Typography,
+  Avatar, Button, Drawer, Empty, Input, List, Popconfirm, Popover, Space, Spin, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconCheck, IconDelete, IconSend } from '@arco-design/web-react/icon'
 import http from '../api/client'
 import { useAuth } from '../store/auth'
-import { type Message as Msg, type Round, fmtTime } from '../api/types'
+import { type Message as Msg, fmtTime } from '../api/types'
 
 interface Props {
   projectId: number
   projectStatus: string
-  rounds: Round[]
   onRead?: () => void
   targetId?: number
 }
@@ -22,7 +21,7 @@ interface Reader {
   readAt?: string | null
 }
 
-export default function MessagePanel({ projectId, projectStatus, rounds, onRead, targetId }: Props) {
+export default function MessagePanel({ projectId, projectStatus, onRead, targetId }: Props) {
   const [list, setList] = useState<Msg[]>([])
   const [total, setTotal] = useState(0)
   const [hasMore, setHasMore] = useState(false)
@@ -31,8 +30,6 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead,
   const [loadError, setLoadError] = useState(false)
   const [appendError, setAppendError] = useState(false)
   const [content, setContent] = useState('')
-  const [roundId, setRoundId] = useState<number | undefined>()
-  const [filterRound, setFilterRound] = useState<number | undefined>()
   const [receipt, setReceipt] = useState<{ id: number; readers: Reader[]; unread: Reader[] } | null>(null)
   const { hasPerm, user } = useAuth()
   const listRef = useRef<HTMLDivElement>(null)
@@ -42,9 +39,8 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead,
   const markingRead = useRef(new Set<number>())
   const [sending, setSending] = useState(false)
 
-  const roundMap = new Map(rounds.map((r) => [r.id, r.roundNo]))
-  const pendingRounds = rounds.filter((r) => r.status === 'PENDING')
   const canWrite = !targetId && hasPerm('message:create') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
+  const canDelete = hasPerm('message:delete_any') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
 
   const load = useCallback(
     async (p: number, append: boolean) => {
@@ -54,7 +50,7 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead,
       else setLoadError(false)
       try {
         const r = await http.get(`/projects/${projectId}/messages`, {
-          params: { page: p, pageSize: 20, roundId: filterRound, beforeId: append ? cursor.current : undefined, targetId },
+          params: { page: p, pageSize: 20, beforeId: append ? cursor.current : undefined, targetId },
         })
         if (seq !== loadSeq.current) return // 已有更新的请求在途，丢弃旧响应
         setTotal(r.data.total)
@@ -74,13 +70,13 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead,
         if (seq === loadSeq.current) setLoading(false)
       }
     },
-    [projectId, filterRound, targetId]
+    [projectId, targetId]
   )
 
   useEffect(() => {
     load(1, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterRound, projectId, targetId])
+  }, [projectId, targetId])
 
   // 只有留言实际进入可视区域后才上报已读，避免“加载第一页=全部已读”。
   useEffect(() => {
@@ -113,7 +109,7 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead,
     if (!text || sending) return
     setSending(true)
     try {
-      await http.post(`/projects/${projectId}/messages`, { content: text, roundId })
+      await http.post(`/projects/${projectId}/messages`, { content: text })
       setContent('')
       load(1, false)
     } finally {
@@ -143,37 +139,10 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead,
         <div>
           <h2>协作留言（{total}）</h2>
         </div>
-        <Select
-          allowClear
-          placeholder="全部留言"
-          style={{ width: 160 }}
-          value={filterRound}
-          onChange={(v) => setFilterRound(v as number | undefined)}
-        >
-          <Select.Option value={0}>仅项目级</Select.Option>
-          {rounds.map((r) => (
-            <Select.Option key={r.id} value={r.id}>
-              第 {r.roundNo} 轮
-            </Select.Option>
-          ))}
-        </Select>
       </div>
 
       {canWrite && (
         <div className="message-composer" style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          <Select
-            allowClear
-            placeholder="关联轮次（可选）"
-            style={{ width: 150 }}
-            value={roundId}
-            onChange={(v) => setRoundId(v as number | undefined)}
-          >
-            {pendingRounds.map((r) => (
-              <Select.Option key={r.id} value={r.id}>
-                第 {r.roundNo} 轮
-              </Select.Option>
-            ))}
-          </Select>
           <Input.TextArea
             placeholder="输入留言，Ctrl+Enter 发送"
             value={content}
@@ -222,13 +191,7 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead,
                       <Tag size="small" color={m.senderType === 'SUPPLIER' ? 'purple' : 'arcoblue'}>
                         {m.senderType === 'SUPPLIER' ? '供应商' : '公司'}
                       </Tag>
-                      {m.roundId ? (
-                        <Tag size="small">第 {roundMap.get(m.roundId) ?? '?'} 轮</Tag>
-                      ) : (
-                        <Tag size="small" color="gray">
-                          项目级
-                        </Tag>
-                      )}
+                      <Tag size="small" color="gray">项目留言</Tag>
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                         {fmtTime(m.createdAt)}
                       </Typography.Text>
@@ -257,7 +220,7 @@ export default function MessagePanel({ projectId, projectStatus, rounds, onRead,
                           回执详情
                         </Button>
                       )}
-                      {hasPerm('message:delete_any') && (
+                      {canDelete && (
                         <Popconfirm title="删除这条留言？删除后双方均不可见。" onOk={() => remove(m.id)}>
                           <Button size="mini" type="text" status="danger" icon={<IconDelete />} style={{ marginLeft: 8 }}>
                             删除

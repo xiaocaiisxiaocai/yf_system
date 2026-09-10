@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, Modal, Progress, Select, Typography, Message } from '@arco-design/web-react'
+import { Button, Modal, Progress, Typography, Message } from '@arco-design/web-react'
 import { IconUpload } from '@arco-design/web-react/icon'
 import http from '../api/client'
 import { fmtSize } from '../api/types'
@@ -7,9 +7,6 @@ import { fileMd5 } from '../api/file-hash'
 
 interface Props {
   projectId: number
-  roundId: number
-  rounds?: { id: number; roundNo: number }[]
-  onRoundChange?: (id: number) => void
   visible: boolean
   onClose: () => void
   onDone: () => void
@@ -27,7 +24,7 @@ interface Attempt {
   finish: () => void
 }
 
-export default function ChunkUploader({ projectId, roundId, rounds, onRoundChange, visible, onClose, onDone }: Props) {
+export default function ChunkUploader({ projectId, visible, onClose, onDone }: Props) {
   const [file, setFile] = useState<File | null>(null)
   const [phase, setPhase] = useState<Phase>('pick')
   const [percent, setPercent] = useState(0)
@@ -130,7 +127,6 @@ export default function ChunkUploader({ projectId, roundId, rounds, onRoundChang
       setPhase('uploading')
       const init = await http.post('/uploads/init', {
         projectId,
-        roundId,
         fileName: file.name,
         fileSize: file.size,
         fileMd5: digest,
@@ -213,23 +209,6 @@ export default function ChunkUploader({ projectId, roundId, rounds, onRoundChang
         )
       }
     >
-      {rounds && rounds.length > 1 && onRoundChange && (
-        <div style={{ marginBottom: 12 }}>
-          <Typography.Text type="secondary" style={{ marginRight: 8 }}>上传到轮次：</Typography.Text>
-          <Select
-            value={roundId}
-            style={{ width: 160 }}
-            disabled={busy}
-            onChange={(v) => onRoundChange(v as number)}
-          >
-            {rounds.map((r) => (
-              <Select.Option key={r.id} value={r.id}>
-                第 {r.roundNo} 轮
-              </Select.Option>
-            ))}
-          </Select>
-        </div>
-      )}
       <input
         type="file"
         className="upload-file-input"

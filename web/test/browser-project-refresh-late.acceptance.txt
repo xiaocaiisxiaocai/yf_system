@@ -1,15 +1,15 @@
 async(page)=>{
   await page.goto('http://127.0.0.1:5173/projects');
   await page.getByRole('row').filter({hasText:'LIVE0905165733完整验收486ceb'}).getByRole('button',{name:'进入',exact:true}).click();
-  await page.getByRole('button',{name:'撤销',exact:true}).first().waitFor();
+  await page.getByRole('button',{name:'撤回',exact:true}).first().waitFor();
   let release,capturedResolve,simulated=0;
   const hold=new Promise(resolve=>release=resolve),captured=new Promise(resolve=>capturedResolve=resolve);
   const handler=async route=>{const response=await route.fetch();capturedResolve();await hold;await route.fulfill({response});};
-  const cancel=async route=>{simulated++;await route.fulfill({status:200,contentType:'application/json',body:'null'});};
+  const withdraw=async route=>{simulated++;await route.fulfill({status:200,contentType:'application/json',body:'{}'});};
   await page.route('**/api/v1/projects/36',handler);
-  await page.route('**/api/v1/rounds/*/cancel',cancel);
+  await page.route('**/api/v1/projects/36/withdraw',withdraw);
   try{
-    await page.getByRole('button',{name:'撤销',exact:true}).first().click();
+    await page.getByRole('button',{name:'撤回',exact:true}).first().click();
     await page.getByRole('button',{name:'确定',exact:true}).click();
     await Promise.race([captured,page.waitForTimeout(10000).then(()=>{throw Error('refresh not captured')})]);
     await page.goBack();
@@ -18,6 +18,6 @@ async(page)=>{
     release();await page.waitForLoadState('networkidle');
     await page.getByText('FULL1900项目已编辑',{exact:true}).waitFor();
     if(simulated!==1)throw Error('cancel simulation count '+simulated);
-    return {latePostOperationRefreshIgnored:true,targetProject:37,simulatedCancelResponses:simulated,realRoundStateUnchanged:true};
-  }finally{release();await page.unroute('**/api/v1/projects/36',handler);await page.unroute('**/api/v1/rounds/*/cancel',cancel);}
+    return {latePostOperationRefreshIgnored:true,targetProject:37,simulatedWithdrawResponses:simulated,realProjectStateUnchanged:true};
+  }finally{release();await page.unroute('**/api/v1/projects/36',handler);await page.unroute('**/api/v1/projects/36/withdraw',withdraw);}
 }

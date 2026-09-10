@@ -55,6 +55,10 @@ pub fn router(state: AppState) -> Router {
                 .delete(project::delete_project),
         )
         .route("/projects/{id}/status", put(project::update_project_status))
+        .route("/projects/{id}/submit", post(project::submit_project))
+        .route("/projects/{id}/confirm", post(project::confirm_project))
+        .route("/projects/{id}/reject", post(project::reject_project))
+        .route("/projects/{id}/withdraw", post(project::withdraw_project))
         .route(
             "/projects/{id}/members",
             get(project::list_project_members).put(project::set_project_members),
@@ -68,19 +72,11 @@ pub fn router(state: AppState) -> Router {
             "/projects/{id}/activities",
             get(project::list_project_activities),
         )
-        .route(
-            "/projects/{id}/rounds",
-            get(project::list_rounds).post(project::create_round),
-        )
         .route("/projects/{id}/files", get(file::list_project_files))
         .route(
             "/projects/{id}/messages",
             get(project::list_messages).post(project::create_message),
         )
-        .route("/rounds/{id}", get(project::get_round))
-        .route("/rounds/{id}/confirm", post(project::confirm_round))
-        .route("/rounds/{id}/reject", post(project::reject_round))
-        .route("/rounds/{id}/cancel", post(project::cancel_round))
         // 文件与分片上传（分片请求体上限 64MB）
         .route("/uploads/init", post(file::init_upload))
         .route(

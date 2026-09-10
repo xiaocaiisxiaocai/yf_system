@@ -127,11 +127,9 @@ export default function ProjectList() {
 
   const statusActions = (p: Project) => {
     const opts: { key: string; text: string }[] = []
-    if (p.status === 'DRAFT') opts.push({ key: 'IN_PROGRESS', text: '开工' })
-    if (p.status === 'IN_PROGRESS') {
-      opts.push({ key: 'COMPLETED', text: '完成' })
-      opts.push({ key: 'TERMINATED', text: '终止' })
-    }
+    if (p.status === 'DRAFT') opts.push({ key: 'IN_PROGRESS', text: '开始' })
+    if (p.status === 'IN_PROGRESS') opts.push({ key: 'TERMINATED', text: '终止' })
+    if (p.status === 'TERMINATED') opts.push({ key: 'IN_PROGRESS', text: '重新开始' })
     return opts
   }
 
@@ -170,7 +168,7 @@ export default function ProjectList() {
             <Button key="enter" size="mini" type="text" onClick={() => nav(`/projects/${r.id}`)}>
               进入
             </Button>,
-            isInternal && hasPerm('project:update') && (
+            isInternal && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(r.status) && (
               <Button key="edit" size="mini" type="text" onClick={() => openEdit(r)}>
                 编辑
               </Button>
@@ -192,8 +190,8 @@ export default function ProjectList() {
                 ))}
               </Select>
             ),
-            canDelete && r.status !== 'IN_PROGRESS' && (
-              <Popconfirm key="delete" title="仅可删除没有轮次、文件和留言的项目，删除后不可恢复。确认？" onOk={() => remove(r)}>
+            canDelete && ['DRAFT', 'TERMINATED'].includes(r.status) && (
+              <Popconfirm key="delete" title="仅可删除没有文件和留言的项目，删除后不可恢复。确认？" onOk={() => remove(r)}>
                 <Button size="mini" type="text" status="danger">删除</Button>
               </Popconfirm>
             ),
@@ -274,9 +272,7 @@ export default function ProjectList() {
           loading={loading}
           columns={columns}
           data={data.list}
-          scroll={compactTable
-            ? { y: 'var(--page-table-scroll-y)' }
-            : { x: 978, y: 'var(--page-table-scroll-y)' }}
+          scroll={{ y: 'var(--page-table-scroll-y)' }}
           pagination={{
             total: data.total,
             current: page,

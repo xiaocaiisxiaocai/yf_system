@@ -315,8 +315,23 @@ async fn full_business_unique_keys_trim_compare_with_database_collation_and_excl
 }
 
 async fn reset_before_015(db: &sea_orm::DatabaseConnection) {
-    migration::Migrator::fresh(db).await.unwrap();
-    migration::Migrator::down(db, Some(1)).await.unwrap();
+    let migrations = migration::Migrator::migrations();
+    let target = migrations
+        .iter()
+        .position(|item| item.name() == "m20260909_000015_business_name_uniqueness")
+        .expect("business uniqueness migration must remain registered");
+    migration::Migrator::up(db, Some(target as u32))
+        .await
+        .unwrap();
+}
+
+fn sibling_database_url(base: &str, database: &str) -> String {
+    let (without_query, query) = base
+        .split_once('?')
+        .map_or((base, None), |(head, tail)| (head, Some(tail)));
+    let slash = without_query.rfind('/').expect("MySQL URL 缺少数据库路径");
+    let suffix = query.map_or_else(String::new, |value| format!("?{value}"));
+    format!("{}/{database}{suffix}", &without_query[..slash])
 }
 
 #[tokio::test]
@@ -324,7 +339,20 @@ async fn reset_before_015(db: &sea_orm::DatabaseConnection) {
 async fn full_uniqueness_migration_cleans_duplicates_rebinds_references_and_adds_indexes() {
     let url = std::env::var("YF_TEST_DATABASE_URL").expect("请使用隔离测试脚本");
     assert!(url.rsplit('/').next().unwrap().starts_with("yf_test_"));
-    let db = Database::connect(url).await.unwrap();
+    let outer = Database::connect(&url).await.unwrap();
+    let database_name = format!("yf_test_unique_{}", uuid::Uuid::new_v4().simple());
+    outer
+        .execute(Statement::from_string(
+            DbBackend::MySql,
+            format!(
+                "CREATE DATABASE `{database_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+            ),
+        ))
+        .await
+        .unwrap();
+    let db = Database::connect(sibling_database_url(&url, &database_name))
+        .await
+        .unwrap();
     reset_before_015(&db).await;
 
     for sql in [
@@ -499,5 +527,12 @@ async fn full_uniqueness_migration_cleans_duplicates_rebinds_references_and_adds
     .await
     .expect("same name under another parent and kind is allowed");
 
-    migration::Migrator::fresh(&db).await.unwrap();
+    db.close().await.unwrap();
+    outer
+        .execute(Statement::from_string(
+            DbBackend::MySql,
+            format!("DROP DATABASE `{database_name}`"),
+        ))
+        .await
+        .unwrap();
 }

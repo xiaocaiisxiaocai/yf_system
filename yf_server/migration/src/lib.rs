@@ -15,6 +15,7 @@ mod m20260909_000012_project_activities;
 mod m20260909_000013_delete_permissions;
 mod m20260909_000014_backfill_audit_actors;
 mod m20260909_000015_business_name_uniqueness;
+mod m20260910_000016_project_workflow;
 
 pub struct Migrator;
 
@@ -37,6 +38,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260909_000013_delete_permissions::Migration),
             Box::new(m20260909_000014_backfill_audit_actors::Migration),
             Box::new(m20260909_000015_business_name_uniqueness::Migration),
+            Box::new(m20260910_000016_project_workflow::Migration),
         ]
     }
 }

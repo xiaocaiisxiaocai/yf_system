@@ -7,11 +7,11 @@ use sea_orm::{
 };
 use serde_json::{json, Value};
 
-use crate::entity::enums::{CommonStatus, OutboxEventType, OutboxStatus, RoundStatus};
+use crate::entity::enums::{CommonStatus, ConfirmSide, OutboxEventType, OutboxStatus};
 use crate::entity::{
     audit_logs, email_outbox, messages, projects, roles, system_configs, user_roles, users,
 };
-use crate::error::ApiResult;
+use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
 use crate::state::AppState;
 
@@ -86,9 +86,10 @@ pub(crate) fn event_type_name(event: OutboxEventType) -> &'static str {
         OutboxEventType::StorageWarning => "STORAGE_WARNING",
         OutboxEventType::FileUploaded => "FILE_UPLOADED",
         OutboxEventType::MessageCreated => "MESSAGE_CREATED",
-        OutboxEventType::RoundConfirmed => "ROUND_CONFIRMED",
-        OutboxEventType::RoundRejected => "ROUND_REJECTED",
-        OutboxEventType::RoundCancelled => "ROUND_CANCELLED",
+        OutboxEventType::ProjectSubmitted => "PROJECT_SUBMITTED",
+        OutboxEventType::ProjectConfirmed => "PROJECT_CONFIRMED",
+        OutboxEventType::ProjectRejected => "PROJECT_REJECTED",
+        OutboxEventType::ProjectWithdrawn => "PROJECT_WITHDRAWN",
     }
 }
 
@@ -126,11 +127,40 @@ async fn audit_missing_email(
     .await;
 }
 
-/// 收件人：启用创建人、内部成员和供应商账号，排除操作者并按邮箱去重。
+enum RecipientTarget {
+    Side {
+        side: ConfirmSide,
+        required_permission: Option<&'static str>,
+    },
+    Users(Vec<u64>),
+    SideOrUsers {
+        side: ConfirmSide,
+        user_ids: Vec<u64>,
+    },
+}
+
+fn account_side(user: &users::Model) -> ConfirmSide {
+    if user.user_type == crate::entity::enums::UserType::Supplier {
+        ConfirmSide::Supplier
+    } else {
+        ConfirmSide::Company
+    }
+}
+
+fn opposite_side(user: &CurrentUser) -> ConfirmSide {
+    if user.user_type == crate::entity::enums::UserType::Supplier {
+        ConfirmSide::Company
+    } else {
+        ConfirmSide::Supplier
+    }
+}
+
+/// 收件人只能来自项目当前可见的启用参与账号，并按邮箱去重。
 async fn recipients(
     db: &impl ConnectionTrait,
     project: &projects::Model,
-    exclude_user: u64,
+    exclude_user: Option<u64>,
+    target: &RecipientTarget,
 ) -> ApiResult<RecipientSelection> {
     let accounts = super::participants::accounts(db, project).await?;
 
@@ -138,8 +168,26 @@ async fn recipients(
     let mut out = Vec::new();
     let mut missing_email = Vec::new();
     for u in accounts {
-        if u.id == exclude_user {
+        if exclude_user == Some(u.id) {
             continue;
+        }
+        let required_permission = match target {
+            RecipientTarget::Side {
+                side,
+                required_permission,
+            } if account_side(&u) == *side => *required_permission,
+            RecipientTarget::Users(ids) if ids.contains(&u.id) => None,
+            RecipientTarget::SideOrUsers { side, user_ids }
+                if account_side(&u) == *side || user_ids.contains(&u.id) =>
+            {
+                None
+            }
+            _ => continue,
+        };
+        if let Some(permission) = required_permission {
+            if super::perm::check_perm(db, u.id, permission).await.is_err() {
+                continue;
+            }
         }
         if u.email.trim().is_empty() {
             missing_email.push(MissingEmailAccount {
@@ -160,19 +208,28 @@ async fn recipients(
     })
 }
 
-async fn enqueue(
-    db: &impl ConnectionTrait,
+struct ProjectNotice<'a> {
     event: OutboxEventType,
-    project: &projects::Model,
-    round_id: Option<u64>,
+    project: &'a projects::Model,
+    target: RecipientTarget,
     subject: String,
     body: String,
-    exclude_user: u64,
-) -> ApiResult<()> {
+    exclude_user: Option<u64>,
+}
+
+async fn enqueue(db: &impl ConnectionTrait, notice: ProjectNotice<'_>) -> ApiResult<()> {
+    let ProjectNotice {
+        event,
+        project,
+        target,
+        subject,
+        body,
+        exclude_user,
+    } = notice;
     if !enabled(db).await {
         return Ok(());
     }
-    let selection = recipients(db, project, exclude_user).await?;
+    let selection = recipients(db, project, exclude_user, &target).await?;
     for account in selection.missing_email {
         audit_missing_email(db, event, account).await;
     }
@@ -181,7 +238,6 @@ async fn enqueue(
             event_type: Set(event),
             project_id: Set(Some(project.id)),
             dedupe_key: Set(None),
-            round_id: Set(round_id),
             recipient_user_id: Set(Some(uid)),
             recipient_email: Set(email),
             subject: Set(subject.clone()),
@@ -271,7 +327,6 @@ pub async fn enqueue_storage_warning(state: &AppState) -> ApiResult<()> {
             event_type: Set(OutboxEventType::StorageWarning),
             dedupe_key: Set(Some(storage_warning_key(date, user.id))),
             project_id: Set(None),
-            round_id: Set(None),
             recipient_user_id: Set(Some(user.id)),
             recipient_email: Set(user.email),
             subject: Set(subject.clone()),
@@ -301,24 +356,28 @@ pub async fn enqueue_storage_warning(state: &AppState) -> ApiResult<()> {
 pub async fn enqueue_file_notice(
     db: &impl ConnectionTrait,
     project: &projects::Model,
-    round_no: i32,
     file_name: &str,
     uploader: &CurrentUser,
     base_url: &str,
 ) -> ApiResult<()> {
     let subject = format!("[协作平台] 项目「{}」有新文件上传", project.name);
     let body = format!(
-        "项目：{}\n轮次：第 {} 轮\n文件：{}\n上传人：工号 {}\n\n请登录平台查看并下载：{}\n\n（本邮件由系统自动发送，附件请登录平台获取）",
-        project.name, round_no, file_name, uploader.employee_no, base_url
+        "项目：{}\n文件：{}\n上传人：工号 {}\n\n请登录平台查看并下载：{}\n\n（本邮件由系统自动发送，附件请登录平台获取）",
+        project.name, file_name, uploader.employee_no, base_url
     );
     enqueue(
         db,
-        OutboxEventType::FileUploaded,
-        project,
-        None,
-        subject,
-        body,
-        uploader.id,
+        ProjectNotice {
+            event: OutboxEventType::FileUploaded,
+            project,
+            target: RecipientTarget::Side {
+                side: opposite_side(uploader),
+                required_permission: None,
+            },
+            subject,
+            body,
+            exclude_user: Some(uploader.id),
+        },
     )
     .await
 }
@@ -344,76 +403,103 @@ pub async fn enqueue_message_notice(
     );
     enqueue(
         db,
-        OutboxEventType::MessageCreated,
-        project,
-        message.round_id,
-        subject,
-        body,
-        sender.id,
+        ProjectNotice {
+            event: OutboxEventType::MessageCreated,
+            project,
+            target: RecipientTarget::Side {
+                side: opposite_side(sender),
+                required_permission: None,
+            },
+            subject,
+            body,
+            exclude_user: Some(sender.id),
+        },
     )
     .await
 }
 
-/// 供上传完成调用：需要项目模型 + 轮次号
+/// 供上传完成调用。
 pub async fn enqueue_file_upload(
     db: &impl ConnectionTrait,
     project: &projects::Model,
-    round_no: i32,
     file_name: &str,
     uploader: &CurrentUser,
     base_url: &str,
 ) -> ApiResult<()> {
-    enqueue_file_notice(db, project, round_no, file_name, uploader, base_url).await
+    enqueue_file_notice(db, project, file_name, uploader, base_url).await
 }
 
-pub struct RoundNotice<'a> {
-    pub round_id: u64,
-    pub round_no: i32,
-    pub to: RoundStatus,
+pub struct WorkflowNotice<'a> {
+    pub action: &'a str,
+    pub confirm_side: Option<ConfirmSide>,
     pub reason: Option<&'a str>,
+    pub latest_submitter_id: Option<u64>,
     pub operator: &'a CurrentUser,
     pub base_url: &'a str,
 }
 
-/// 轮次流转通知（确认/驳回/撤销）
-pub async fn enqueue_round_notice(
+/// 项目提交、确认、驳回与撤回通知。
+pub async fn enqueue_project_workflow_notice(
     db: &impl ConnectionTrait,
     project: &projects::Model,
-    notice: RoundNotice<'_>,
+    notice: WorkflowNotice<'_>,
 ) -> ApiResult<()> {
-    let RoundNotice {
-        round_id,
-        round_no,
-        to,
+    let WorkflowNotice {
+        action,
+        confirm_side,
         reason,
+        latest_submitter_id,
         operator,
         base_url,
     } = notice;
-    let (event, action) = match to {
-        RoundStatus::Confirmed => (OutboxEventType::RoundConfirmed, "已确认"),
-        RoundStatus::Rejected => (OutboxEventType::RoundRejected, "已驳回"),
-        RoundStatus::Cancelled => (OutboxEventType::RoundCancelled, "已撤销"),
+    let (event, verb) = match action {
+        "SUBMIT" => (OutboxEventType::ProjectSubmitted, "已提交验收"),
+        "CONFIRM" => (OutboxEventType::ProjectConfirmed, "已确认完成"),
+        "REJECT" => (OutboxEventType::ProjectRejected, "已驳回"),
+        "WITHDRAW" => (OutboxEventType::ProjectWithdrawn, "已撤回验收"),
         _ => return Ok(()),
     };
-    let subject = format!(
-        "[协作平台] 项目「{}」第 {} 轮{}",
-        project.name, round_no, action
-    );
+    let subject = format!("[协作平台] 项目「{}」{}", project.name, verb);
     let reason_line = reason
         .map(|r| format!("\n驳回原因：{r}"))
         .unwrap_or_default();
+    let confirm_side_line = confirm_side
+        .map(|side| match side {
+            ConfirmSide::Company => "\n确认方：公司",
+            ConfirmSide::Supplier => "\n确认方：供应商",
+        })
+        .unwrap_or_default();
     let body = format!(
-        "项目：{}\n轮次：第 {} 轮\n结果：{}\n操作人：工号 {}{}\n\n请登录平台查看：{}\n\n（本邮件由系统自动发送）",
-        project.name, round_no, action, operator.employee_no, reason_line, base_url
+        "项目：{}\n结果：{}{}\n操作人：工号 {}{}\n\n请登录平台查看：{}\n\n（本邮件由系统自动发送）",
+        project.name, verb, confirm_side_line, operator.employee_no, reason_line, base_url
     );
+    let target = match action {
+        "SUBMIT" => RecipientTarget::Side {
+            side: confirm_side
+                .ok_or_else(|| AppError::Internal("项目提交通知缺少确认方".into()))?,
+            required_permission: Some("project:confirm"),
+        },
+        "CONFIRM" | "REJECT" => RecipientTarget::Users(vec![latest_submitter_id
+            .ok_or_else(|| AppError::Internal("项目结果通知缺少最近提交者".into()))?]),
+        "WITHDRAW" => RecipientTarget::SideOrUsers {
+            side: confirm_side
+                .ok_or_else(|| AppError::Internal("项目撤回通知缺少待确认方".into()))?,
+            user_ids: vec![latest_submitter_id
+                .ok_or_else(|| AppError::Internal("项目撤回通知缺少最近提交者".into()))?],
+        },
+        _ => return Ok(()),
+    };
     enqueue(
         db,
-        event,
-        project,
-        Some(round_id),
-        subject,
-        body,
-        operator.id,
+        ProjectNotice {
+            event,
+            project,
+            target,
+            subject,
+            body,
+            // 撤回要同时通知待确认方和最近提交者；最近提交者通常就是操作者。
+            exclude_user: (action != "WITHDRAW").then_some(operator.id),
+        },
     )
     .await
 }

@@ -1,7 +1,7 @@
 //! Transaction-final authorization regressions. Run only through scripts/test-isolated.py.
 
 use crate::{
-    entity::{audit_logs, permissions, projects, role_permissions, rounds},
+    entity::{audit_logs, permissions, projects, role_permissions},
     error::AppError,
     regression::Fixture,
     service,
@@ -103,25 +103,50 @@ async fn revoke_and_release(txn: DatabaseTransaction, role: u64) {
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn write_permission_round_create_rechecks_after_lock_wait() {
+async fn write_permission_project_submit_rechecks_after_lock_wait() {
+    use crate::entity::{
+        enums::{FileDirection, FileStatus, ProjectStatus},
+        files, project_status_logs,
+    };
+    use chrono::Utc;
+    use sea_orm::{ActiveModelTrait, Set};
+
     let f = Fixture::new().await;
-    let role = grant_only(&f, "round:create").await;
-    let before = rounds::Entity::find()
-        .filter(rounds::Column::ProjectId.eq(f.project_id))
+    files::ActiveModel {
+        project_id: Set(f.project_id),
+        uploader_id: Set(f.member.id),
+        direction: Set(FileDirection::C2s),
+        original_name: Set("permission-submit.pdf".into()),
+        stored_name: Set(uuid::Uuid::new_v4().to_string()),
+        ext: Set("pdf".into()),
+        size_bytes: Set(1),
+        mime_type: Set(Some("application/pdf".into())),
+        sha256: Set(None),
+        storage_path: Set("regression/permission-submit.pdf".into()),
+        status: Set(FileStatus::Available),
+        deleted_at: Set(None),
+        created_at: Set(Utc::now()),
+        ..Default::default()
+    }
+    .insert(&f.state.db)
+    .await
+    .unwrap();
+    let role = grant_only(&f, "project:submit").await;
+    let before = project_status_logs::Entity::find()
+        .filter(project_status_logs::Column::ProjectId.eq(f.project_id))
         .count(&f.state.db)
         .await
         .unwrap();
     let (txn, blocker) = gate_and_project(&f).await;
     let (db, actor, project_id) = (f.state.db.clone(), f.member.clone(), f.project_id);
     let pending = tokio::spawn(async move {
-        service::round::create(
+        service::project::submit(
             &db,
+            "http://localhost",
             &actor,
             project_id,
-            &service::round::RoundCreate {
-                title: Some("权限撤销后不得创建".into()),
-                remark: None,
-                confirm_side: "COMPANY".into(),
+            &service::project::SubmitReq {
+                confirm_side: "SUPPLIER".into(),
             },
         )
         .await
@@ -130,8 +155,17 @@ async fn write_permission_round_create_rechecks_after_lock_wait() {
     revoke_and_release(txn, role).await;
     assert!(matches!(pending.await.unwrap(), Err(AppError::Forbidden)));
     assert_eq!(
-        rounds::Entity::find()
-            .filter(rounds::Column::ProjectId.eq(f.project_id))
+        projects::Entity::find_by_id(f.project_id)
+            .one(&f.state.db)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ProjectStatus::InProgress
+    );
+    assert_eq!(
+        project_status_logs::Entity::find()
+            .filter(project_status_logs::Column::ProjectId.eq(f.project_id))
             .count(&f.state.db)
             .await
             .unwrap(),
@@ -151,12 +185,7 @@ async fn write_permission_message_create_rechecks_before_message_outbox_and_audi
         .unwrap();
     let role = grant_only(&f, "message:create").await;
     let (txn, blocker) = gate_and_project(&f).await;
-    let (db, actor, project_id, round_id) = (
-        f.state.db.clone(),
-        f.member.clone(),
-        f.project_id,
-        f.round_id,
-    );
+    let (db, actor, project_id) = (f.state.db.clone(), f.member.clone(), f.project_id);
     let pending = tokio::spawn(async move {
         service::message::create(
             &db,
@@ -164,7 +193,6 @@ async fn write_permission_message_create_rechecks_before_message_outbox_and_audi
             project_id,
             &service::message::MessageCreate {
                 content: "权限撤销后不得留言".into(),
-                round_id: Some(round_id),
             },
             "http://localhost",
         )

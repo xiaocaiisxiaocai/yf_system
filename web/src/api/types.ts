@@ -11,46 +11,23 @@ export interface Project {
   description?: string
   supplierId: number
   supplierName?: string
-  status: 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED' | 'TERMINATED'
+  status: 'DRAFT' | 'IN_PROGRESS' | 'PENDING_CONFIRMATION' | 'COMPLETED' | 'TERMINATED'
+  /** 当前待确认项目的确认方；项目回到进行中后由后端清空。 */
+  confirmSide?: ConfirmSide | null
+  /** 当前待确认提交的提交人；撤回仅由提交人或内部全量查看者发起。 */
+  latestSubmitterId?: number | null
+  rejectReason?: string | null
   createdBy: number
   createdByName?: string
   createdAt: string
   updatedAt: string
 }
 
-export interface Round {
-  id: number
-  projectId: number
-  roundNo: number
-  title?: string
-  remark?: string
-  confirmSide: 'COMPANY' | 'SUPPLIER'
-  status: 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'CANCELLED'
-  decidedBy?: number | null
-  decidedByName?: string | null
-  decidedAt?: string | null
-  rejectReason?: string | null
-  createdBy: number
-  createdByName?: string
-  createdAt: string
-  logs?: RoundLog[]
-}
-
-export interface RoundLog {
-  id: number
-  fromStatus?: string | null
-  toStatus: string
-  reason?: string | null
-  operatorId: number
-  operatorName?: string
-  createdAt: string
-}
+export type ConfirmSide = 'COMPANY' | 'SUPPLIER'
 
 export interface FileItem {
   id: number
   projectId: number
-  roundId: number
-  roundNo?: number
   uploaderId: number
   uploaderName?: string
   direction: 'C2S' | 'S2C'
@@ -65,7 +42,6 @@ export interface FileItem {
 export interface Message {
   id: number
   projectId: number
-  roundId?: number | null
   content: string
   senderId: number
   senderName: string
@@ -95,15 +71,9 @@ export interface SupplierMember {
 export const PROJECT_STATUS: Record<string, { text: string; color: string }> = {
   DRAFT: { text: '草稿', color: 'gray' },
   IN_PROGRESS: { text: '进行中', color: 'arcoblue' },
+  PENDING_CONFIRMATION: { text: '待确认', color: 'orange' },
   COMPLETED: { text: '已完成', color: 'green' },
   TERMINATED: { text: '已终止', color: 'red' },
-}
-
-export const ROUND_STATUS: Record<string, { text: string; color: string }> = {
-  PENDING: { text: '待确认', color: 'orange' },
-  CONFIRMED: { text: '已确认', color: 'green' },
-  REJECTED: { text: '已驳回', color: 'red' },
-  CANCELLED: { text: '已撤销', color: 'gray' },
 }
 
 export function fmtSize(n: number): string {

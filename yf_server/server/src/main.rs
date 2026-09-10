@@ -29,6 +29,8 @@ mod regression_project_activity;
 #[cfg(test)]
 mod regression_project_members;
 #[cfg(test)]
+mod regression_project_workflow_migration;
+#[cfg(test)]
 mod regression_write_permissions;
 
 use migration::MigratorTrait;
@@ -52,6 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         migration::Migrator::up(&db, None).await?;
         tracing::info!("数据库迁移完成（含种子数据）");
     }
+    service::migration_cleanup::drain(&db, &cfg.storage.root).await?;
 
     let state = AppState::new(db, cfg);
     tokio::spawn(notify::worker::run(state.clone()));

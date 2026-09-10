@@ -292,7 +292,6 @@ mod tests {
         email_outbox::ActiveModel {
             event_type: Set(crate::entity::enums::OutboxEventType::FileUploaded),
             project_id: Set(Some(f.project_id)),
-            round_id: Set(Some(f.round_id)),
             recipient_user_id: Set(Some(f.member.id)),
             recipient_email: Set("regression@example.invalid".into()),
             subject: Set("lease regression".into()),

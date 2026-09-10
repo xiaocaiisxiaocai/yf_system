@@ -11,8 +11,8 @@ use crate::dto::PageResp;
 use crate::entity::enums::{CommonStatus, UserType};
 use crate::entity::{
     audit_logs, departments, email_outbox, files, message_reads, messages, project_members,
-    projects, refresh_tokens, roles, round_status_logs, rounds, suppliers, upload_sessions,
-    user_roles, users,
+    project_status_logs, projects, refresh_tokens, roles, suppliers, upload_sessions, user_roles,
+    users,
 };
 use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
@@ -699,17 +699,8 @@ pub(super) async fn ensure_no_owned_content(db: &impl ConnectionTrait, id: u64) 
         .one(db)
         .await?
         .is_some()
-        || rounds::Entity::find()
-            .filter(
-                Condition::any()
-                    .add(rounds::Column::CreatedBy.eq(id))
-                    .add(rounds::Column::DecidedBy.eq(id)),
-            )
-            .one(db)
-            .await?
-            .is_some()
-        || round_status_logs::Entity::find()
-            .filter(round_status_logs::Column::OperatorId.eq(id))
+        || project_status_logs::Entity::find()
+            .filter(project_status_logs::Column::OperatorId.eq(id))
             .one(db)
             .await?
             .is_some()

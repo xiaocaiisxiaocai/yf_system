@@ -9,10 +9,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::entity::enums::{
-    FileDirection, FileStatus, ProjectStatus, RoundStatus, UploadStatus, UserType,
-};
-use crate::entity::{files, projects, rounds, system_configs, upload_sessions};
+use crate::entity::enums::{FileDirection, FileStatus, ProjectStatus, UploadStatus, UserType};
+use crate::entity::{files, projects, system_configs, upload_sessions};
 use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
 use crate::state::AppState;
@@ -46,7 +44,6 @@ async fn commit_upload_transaction(txn: DatabaseTransaction) -> ApiResult<()> {
 #[serde(rename_all = "camelCase")]
 pub struct InitReq {
     pub project_id: u64,
-    pub round_id: u64,
     pub file_name: String,
     pub file_size: u64,
     pub file_md5: Option<String>,
@@ -105,12 +102,10 @@ async fn validate_file(
     Ok(ext)
 }
 
-/// 轮次可写 = 项目 IN_PROGRESS 且轮次 PENDING
-async fn ensure_round_writable(
+async fn ensure_project_writable(
     db: &DatabaseConnection,
     project_id: u64,
-    round_id: u64,
-) -> ApiResult<rounds::Model> {
+) -> ApiResult<projects::Model> {
     let project = crate::entity::projects::Entity::find_by_id(project_id)
         .one(db)
         .await?
@@ -120,53 +115,34 @@ async fn ensure_round_writable(
             "项目需处于「进行中」才能上传文件".into(),
         ));
     }
-    let r = rounds::Entity::find_by_id(round_id)
-        .one(db)
-        .await?
-        .ok_or(AppError::BadRequest("轮次不存在".into()))?;
-    if r.project_id != project_id {
-        return Err(AppError::BadRequest("轮次不属于该项目".into()));
-    }
-    if r.status != RoundStatus::Pending {
-        return Err(AppError::Conflict("该轮次已关闭，不可上传文件".into()));
-    }
-    Ok(r)
+    Ok(project)
 }
 
-/// 与项目状态、轮次决定及成员调整共享数据库行锁。固定顺序：项目 → 轮次 → 上传会话。
+/// 与项目状态决定及成员调整共享数据库行锁。固定顺序：项目 → 上传会话。
 /// 文件合并在事务外执行，只有最终写入和分片落盘持有这些锁。
 async fn lock_writable_target(
     txn: &DatabaseTransaction,
     user: &CurrentUser,
     session: &upload_sessions::Model,
-) -> ApiResult<(projects::Model, rounds::Model)> {
-    lock_writable_ids(txn, user, session.project_id, session.round_id).await
+) -> ApiResult<projects::Model> {
+    lock_writable_id(txn, user, session.project_id).await
 }
 
-async fn lock_writable_ids(
+async fn lock_writable_id(
     txn: &DatabaseTransaction,
     user: &CurrentUser,
     project_id: u64,
-    round_id: u64,
-) -> ApiResult<(projects::Model, rounds::Model)> {
+) -> ApiResult<projects::Model> {
     let project = projects::Entity::find_by_id(project_id)
         .lock_exclusive()
         .one(txn)
         .await?
         .ok_or(AppError::NotFound)?;
-    let round = rounds::Entity::find_by_id(round_id)
-        .lock_exclusive()
-        .one(txn)
-        .await?
-        .ok_or(AppError::NotFound)?;
     scope::ensure_project_access(txn, user, project.id).await?;
-    if project.status != ProjectStatus::InProgress || round.status != RoundStatus::Pending {
-        return Err(AppError::Conflict("项目或轮次已关闭，不可上传文件".into()));
+    if project.status != ProjectStatus::InProgress {
+        return Err(AppError::Conflict("项目当前不可上传文件".into()));
     }
-    if round.project_id != project.id {
-        return Err(AppError::BadRequest("轮次不属于该项目".into()));
-    }
-    Ok((project, round))
+    Ok(project)
 }
 
 /// 扫描临时目录，返回已上传且大小正确的分片序号
@@ -193,7 +169,7 @@ fn uploaded_chunks(root: &str, sid: &str, chunk_size: u32, total: u32, file_size
 pub async fn init(state: &AppState, user: &CurrentUser, req: &InitReq) -> ApiResult<Value> {
     let db = &state.db;
     scope::ensure_project_access(db, user, req.project_id).await?;
-    ensure_round_writable(db, req.project_id, req.round_id).await?;
+    ensure_project_writable(db, req.project_id).await?;
     let ext = validate_file(db, state, &req.file_name, req.file_size).await?;
     if let Some(md5) = &req.file_md5 {
         if md5.len() != 32 || !md5.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -213,7 +189,6 @@ pub async fn init(state: &AppState, user: &CurrentUser, req: &InitReq) -> ApiRes
     let existing = if let Some(md5) = &req.file_md5 {
         upload_sessions::Entity::find()
             .filter(upload_sessions::Column::ProjectId.eq(req.project_id))
-            .filter(upload_sessions::Column::RoundId.eq(req.round_id))
             .filter(upload_sessions::Column::UploaderId.eq(user.id))
             .filter(upload_sessions::Column::FileName.eq(req.file_name.clone()))
             .filter(upload_sessions::Column::FileSize.eq(req.file_size))
@@ -292,12 +267,11 @@ pub async fn init(state: &AppState, user: &CurrentUser, req: &InitReq) -> ApiRes
     let prepared: ApiResult<DatabaseTransaction> = async {
         let txn = db.begin().await?;
         super::perm::lock_business_state(&txn).await?;
-        lock_writable_ids(&txn, user, req.project_id, req.round_id).await?;
+        lock_writable_id(&txn, user, req.project_id).await?;
         super::perm::recheck_manager(&txn, user.id, "file:upload").await?;
         upload_sessions::ActiveModel {
             id: Set(sid.clone()),
             project_id: Set(req.project_id),
-            round_id: Set(req.round_id),
             uploader_id: Set(user.id),
             file_name: Set(req.file_name.clone()),
             file_size: Set(req.file_size),
@@ -506,7 +480,7 @@ pub async fn merge(state: &AppState, user: &CurrentUser, sid: &str) -> ApiResult
             }
         }
         if let Some(f) = files::Entity::find()
-            .filter(files::Column::RoundId.eq(s.round_id))
+            .filter(files::Column::ProjectId.eq(s.project_id))
             .filter(files::Column::OriginalName.eq(&s.file_name))
             .filter(files::Column::UploaderId.eq(user.id))
             .order_by_desc(files::Column::Id)
@@ -524,8 +498,8 @@ pub async fn merge(state: &AppState, user: &CurrentUser, sid: &str) -> ApiResult
         return Err(AppError::Conflict("会话已失效".into()));
     }
 
-    // 上传期间轮次可能已被确认/撤销，合并前复查可写性
-    ensure_round_writable(db, s.project_id, s.round_id).await?;
+    // 上传期间项目可能已提交验收或终止，合并前复查可写性。
+    ensure_project_writable(db, s.project_id).await?;
 
     // 校验分片完整性
     let uploaded = uploaded_chunks(
@@ -685,7 +659,7 @@ async fn do_merge(
     let prepared: ApiResult<(DatabaseTransaction, files::Model)> = async {
         let txn = db.begin().await?;
         super::perm::lock_business_state(&txn).await?;
-        let (project, round) = lock_writable_target(&txn, user, s).await?;
+        let project = lock_writable_target(&txn, user, s).await?;
         let session = upload_sessions::Entity::find_by_id(s.id.clone())
             .lock_exclusive()
             .one(&txn)
@@ -697,7 +671,6 @@ async fn do_merge(
         super::perm::recheck_manager(&txn, user.id, "file:upload").await?;
         let model = files::ActiveModel {
             project_id: Set(s.project_id),
-            round_id: Set(s.round_id),
             uploader_id: Set(user.id),
             direction: Set(direction),
             original_name: Set(s.file_name.clone()),
@@ -716,15 +689,8 @@ async fn do_merge(
         }
         .insert(&txn)
         .await?;
-        notify::enqueue_file_upload(
-            &txn,
-            &project,
-            round.round_no,
-            &s.file_name,
-            user,
-            &state.cfg.web.base_url,
-        )
-        .await?;
+        notify::enqueue_file_upload(&txn, &project, &s.file_name, user, &state.cfg.web.base_url)
+            .await?;
         audit::insert(
             &txn,
             Some(user.id),
@@ -732,7 +698,7 @@ async fn do_merge(
             "FILE_UPLOAD",
             Some("file"),
             Some(model.id.to_string()),
-            Some(json!({"name": s.file_name, "size": s.file_size, "roundId": s.round_id})),
+            Some(json!({"name": s.file_name, "size": s.file_size, "projectId": s.project_id})),
             None,
         )
         .await?;
@@ -868,7 +834,6 @@ mod regression_tests {
                     &f.member,
                     &InitReq {
                         project_id: f.project_id,
-                        round_id: f.round_id,
                         file_name: "init-commit-confirmation.pdf".into(),
                         file_size: 4,
                         file_md5: None,
@@ -947,12 +912,6 @@ mod regression_tests {
             .await
             .unwrap();
         projects::Entity::find_by_id(f.project_id)
-            .lock_exclusive()
-            .one(&txn)
-            .await
-            .unwrap()
-            .unwrap();
-        rounds::Entity::find_by_id(f.round_id)
             .lock_exclusive()
             .one(&txn)
             .await
@@ -1075,7 +1034,7 @@ mod regression_tests {
 
     #[tokio::test]
     #[ignore = "isolated MySQL required"]
-    async fn final_merge_rechecks_round_closed_after_initial_validation() {
+    async fn final_merge_rechecks_project_frozen_after_initial_validation() {
         let f = crate::regression::Fixture::new().await;
         let sid = f.init("closed.pdf").await;
         put_chunk(&f.state, &f.member, &sid, 0, b"test")
@@ -1085,15 +1044,21 @@ mod regression_tests {
         let mut active: upload_sessions::ActiveModel = session.clone().into();
         active.status = Set(UploadStatus::Merging);
         active.update(&f.state.db).await.unwrap();
-        crate::service::round::confirm(&f.state.db, &f.state.cfg, &f.admin, f.round_id)
+        let mut project: projects::ActiveModel = projects::Entity::find_by_id(f.project_id)
+            .one(&f.state.db)
             .await
-            .unwrap();
+            .unwrap()
+            .unwrap()
+            .into();
+        project.status = Set(ProjectStatus::PendingConfirmation);
+        project.confirm_side = Set(Some(crate::entity::enums::ConfirmSide::Supplier));
+        project.update(&f.state.db).await.unwrap();
         assert!(
             matches!(
                 do_merge(&f.state, &f.member, &session).await,
                 Err(AppError::Conflict(_))
             ),
-            "合并最终提交不得向已关闭轮次插入文件"
+            "合并最终提交不得向已冻结项目插入文件"
         );
     }
 }

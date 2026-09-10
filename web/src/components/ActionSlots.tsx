@@ -9,7 +9,6 @@ export type ActionSlotsVariant =
   | 'user'
   | 'role'
   | 'file'
-  | 'round'
   | 'single'
 
 export function actionSlots(slots: ActionSlot[], variant: ActionSlotsVariant) {

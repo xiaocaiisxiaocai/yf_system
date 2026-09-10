@@ -9,7 +9,7 @@ import { fmtTime } from '../api/types'
 interface Summary {
   projectCount: number
   activeProjectCount: number
-  pendingRounds: number
+  pendingConfirmations: number
   unreadMessages: number
   recentMessages: {
     id: number
@@ -61,7 +61,7 @@ export default function Dashboard() {
   const cards = [
     { title: '可见项目', value: data?.projectCount },
     { title: '进行中项目', value: data?.activeProjectCount },
-    { title: '待我方确认轮次', value: data?.pendingRounds },
+    { title: '待确认项目', value: data?.pendingConfirmations },
     { title: '未读留言', value: data?.unreadMessages },
   ]
 

@@ -6,7 +6,6 @@ async(page)=>{
   ['/suppliers',async()=>page.getByRole('button',{name:'新增供应商',exact:true}).click(),'.arco-modal'],
   ['/suppliers',async()=>page.getByRole('row').filter({hasText:'FULL1843'}).getByRole('button',{name:'账号管理',exact:true}).click(),'.arco-drawer'],
   ['/rbac/roles',async()=>page.getByRole('row').filter({hasText:'FULL1657'}).getByRole('button',{name:'分配权限',exact:true}).click(),'.arco-drawer'],
-  ['/projects/37?tab=rounds',async()=>page.getByTitle('历史',{exact:true}).first().click(),'.arco-drawer'],
   ['/projects/36?tab=messages',async()=>page.getByRole('button',{name:'回执详情',exact:true}).first().click(),'.arco-drawer'],
   ['/projects/36?tab=files',async()=>page.getByRole('button',{name:'上传文件',exact:true}).click(),'.arco-modal'],
  ];

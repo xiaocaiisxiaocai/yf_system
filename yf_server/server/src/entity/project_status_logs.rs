@@ -1,20 +1,20 @@
 use super::enums::{ConfirmSide, ProjectStatus};
 use sea_orm::entity::prelude::*;
 
+/// Authoritative project state history. Every state transition is appended transactionally.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-#[sea_orm(table_name = "projects")]
+#[sea_orm(table_name = "project_status_logs")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: u64,
-    pub name: String,
-    pub description: Option<String>,
-    /// 一对一关联供应商
-    pub supplier_id: u64,
-    pub status: ProjectStatus,
+    pub project_id: u64,
+    pub from_status: Option<ProjectStatus>,
+    pub to_status: ProjectStatus,
+    pub action: String,
+    pub operator_id: u64,
     pub confirm_side: Option<ConfirmSide>,
-    pub created_by: u64,
+    pub reason: Option<String>,
     pub created_at: DateTimeUtc,
-    pub updated_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

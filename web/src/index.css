@@ -630,6 +630,26 @@ html, body, #root {
 .upload-file-input::file-selector-button { margin-right: 12px; padding: 6px 12px; border: 1px solid var(--app-border); border-radius: 6px; background: var(--color-fill-2); color: var(--color-text-1); font: inherit; cursor: pointer; }
 .upload-file-input:disabled::file-selector-button { cursor: not-allowed; opacity: 0.5; }
 .detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.project-detail-page, .project-detail-summary-card, .project-detail-tabs-card { min-width: 0; }
+.project-detail-tabs-card { overflow: hidden; }
+.project-workflow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  margin-top: 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: #f8faff;
+}
+.project-workflow-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; flex: 1; }
+.project-workflow-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 4px; min-width: 0; }
+.project-workflow-status > .arco-typography { max-width: min(420px, 45vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-workflow-confirm-side { flex-shrink: 0; }
+.project-workflow-actions { flex-shrink: 0; justify-content: flex-end; }
+.page-card--table { min-width: 0; }
 .dashboard-stat-card { border-radius: var(--app-radius); border-color: var(--app-border); box-shadow: 0 2px 8px rgb(25 42 70 / 3%); }
 .dashboard-stat-card .arco-statistic-title { color: var(--app-text-muted); font-size: 13px; margin-bottom: 12px; }
 .dashboard-stat-card .arco-statistic-value { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -713,7 +733,6 @@ html, body, #root {
 .action-slots--user { grid-template-columns: 48px 72px 48px 44px; }
 .action-slots--role { grid-template-columns: 76px 44px 44px 44px; }
 .action-slots--file { grid-template-columns: 58px 44px; }
-.action-slots--round { grid-template-columns: 60px 60px 50px 50px; column-gap: 4px; }
 .action-slots--single { grid-template-columns: 48px 44px; }
 
 /* 带预览按钮的文件名单元格：文本占据剩余空间，按钮始终不被长文件名挤走。 */
@@ -875,6 +894,10 @@ html, body, #root {
   .mobile-menu-trigger { display: inline-flex; }
   .layout-content { padding: 10px; }
   .page-card { padding: 12px; }
+  .project-workflow { align-items: stretch; flex-direction: column; gap: 12px; }
+  .project-workflow-summary { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .project-workflow-status > .arco-typography { max-width: 100%; }
+  .project-workflow-actions { justify-content: flex-start; }
   .profile-grid { grid-template-columns: 1fr; }
   .profile-readonly-grid { grid-template-columns: 1fr; }
   .system-storage-summary { grid-template-columns: 96px minmax(0, 1fr); gap: 16px; }
@@ -952,10 +975,13 @@ html, body, #root {
 .project-detail-tabs-card--activity .arco-tabs,
 .project-detail-tabs-card--activity .arco-tabs-content,
 .project-detail-tabs-card--activity .arco-tabs-content-inner,
-.project-detail-tabs-card--activity .arco-tabs-pane-active { height: 100%; min-height: 0; }
+.project-detail-tabs-card--activity .arco-tabs-content-item-active,
+.project-detail-tabs-card--activity .arco-tabs-pane { height: 100%; min-height: 0; }
 .project-detail-tabs-card--activity .arco-tabs { display: flex; flex-direction: column; }
 .project-detail-tabs-card--activity .arco-tabs-header { flex: 0 0 auto; }
 .project-detail-tabs-card--activity .arco-tabs-content { flex: 1; overflow: hidden; }
+.project-detail-tabs-card--activity .arco-tabs-content-item-active,
+.project-detail-tabs-card--activity .arco-tabs-pane { overflow: hidden; }
 .project-activity { min-width: 0; min-height: 0; height: 100%; display: flex; flex-direction: column; }
 .project-activity-summary {
   display: grid;

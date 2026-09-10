@@ -367,6 +367,8 @@ test('hard delete actions require their dedicated delete permission', async () =
   await act(async () => { renderer = create(React.createElement(Project)) })
   const busy = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, { id: 2, name: 'busy', status: 'IN_PROGRESS' })
   assert.equal(findActionButton(busy, '删除'), undefined, 'in-progress projects must not offer delete')
+  const terminated = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, { id: 3, name: 'terminated', status: 'TERMINATED' })
+  assert.ok(findActionButton(terminated, '删除'), 'empty terminated projects may be deleted')
   await act(async () => renderer.unmount())
 })
 
@@ -408,7 +410,7 @@ for (const [page, api, props] of [
   ['pages/project/ProjectList.tsx', '/projects', {}],
   ['pages/supplier/SupplierList.tsx', '/admin/suppliers', {}],
   ['pages/org/UserList.tsx', '/admin/users', {}],
-  ['components/FileTable.tsx', '/projects/1/files', { projectId: 1, projectStatus: 'IN_PROGRESS', rounds: [] }],
+  ['components/FileTable.tsx', '/projects/1/files', { projectId: 1, projectStatus: 'IN_PROGRESS' }],
 ]) {
   test(`${page}: repeated identical searches finish and reload`, async () => {
     let requests = 0
@@ -472,96 +474,6 @@ test('supplier account permission revocation removes the open account drawer', a
   assert.equal(renderer.root.findAllByType('Drawer').length,0,'revocation must remove the already-open drawer')
   assert.equal(accountRequests,1,'revocation cannot issue another account read')
   await act(async()=>renderer.unmount())
-})
-
-test('round cancellation is shown only to its creator or a viewer of all projects', async () => {
-  for (const [userId,viewAll,expected] of [[2,false,false],[1,false,true],[2,true,true]]) {
-    const round={id:8,createdBy:1,status:'PENDING',confirmSide:'COMPANY'}
-    const Page=loadTs('src/components/RoundPanel.tsx',{
-      '@arco-design/web-react':arco,'@arco-design/web-react/icon':new Proxy({},{get:(_,n)=>component(n)}),
-      '../api/client':{get:async()=>({data:[round]})},
-      '../store/auth':{useAuth:()=>({user:{id:userId,userType:'INTERNAL'},hasPerm:p=>p==='round:cancel'||(viewAll&&p==='project:view_all')})},
-      '../api/types':{ROUND_STATUS:{},fmtTime:String},
-    }).default
-    let renderer
-    await act(async()=>{renderer=create(React.createElement(Page,{projectId:1,projectStatus:'IN_PROGRESS',onChanged(){}}))})
-    const actions=renderer.root.findByType('Table').props.columns.at(-1).render(null,round)
-    const allowed=!!findElement(actions, (node) => node.props.title === '撤销该轮次？关联文件将一并锁定')
-    assert.equal(allowed,expected,`user ${userId}, viewAll ${viewAll}`)
-    await act(async()=>renderer.unmount())
-  }
-})
-
-test('round history requests ignore late responses and closing invalidates them', async () => {
-  const rounds = [
-    { id: 1, roundNo: 1, status: 'CONFIRMED', confirmSide: 'COMPANY', createdBy: 1, createdAt: '' },
-    { id: 2, roundNo: 2, status: 'CONFIRMED', confirmSide: 'COMPANY', createdBy: 1, createdAt: '' },
-  ]
-  const pending = new Map()
-  const http = {
-    get: async (url) => {
-      if (url === '/projects/1/rounds') return { data: rounds }
-      const id = Number(url.match(/rounds\/(\d+)$/)[1])
-      return new Promise((resolve) => {
-        const queue = pending.get(id) || []
-        queue.push(resolve)
-        pending.set(id, queue)
-      })
-    },
-  }
-  const timeline = Object.assign(component('Timeline'), { Item: component('Timeline.Item') })
-  const roundArco = new Proxy({}, { get: (_, key) => key === 'Timeline' ? timeline : arco[key] })
-  const Page = loadTs('src/components/RoundPanel.tsx', {
-    '@arco-design/web-react': roundArco,
-    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
-    '../api/client': http,
-    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }),
-    '../api/types': { ROUND_STATUS: {}, fmtTime: String },
-  }).default
-  const historyData = (round) => ({ ...round, logs: [{ id: round.id, toStatus: 'CONFIRMED', operatorName: `操作人${round.id}`, createdAt: '' }] })
-  const release = async (id, round) => {
-    const queue = pending.get(id)
-    assert.ok(queue && queue.length > 0, `history request ${id} must be pending`)
-    queue.shift()({ data: historyData(round) })
-  }
-  let renderer
-  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', onChanged() {} })) })
-  const historyButton = (round) => {
-    const actions = renderer.root.findByType('Table').props.columns.at(-1).render(null, round)
-    return findActionButton(actions, '历史')
-  }
-
-  let firstRequest
-  let secondRequest
-  await act(async () => {
-    firstRequest = historyButton(rounds[0]).props.onClick()
-    secondRequest = historyButton(rounds[1]).props.onClick()
-    await Promise.resolve()
-  })
-  await act(async () => { await release(2, rounds[1]); await secondRequest })
-  await act(async () => { await release(1, rounds[0]); await firstRequest })
-  let drawer = renderer.root.findByType('Drawer')
-  assert.equal(drawer.props.visible, true)
-  assert.match(drawer.props.title, /第 2 轮/)
-  assert.equal(drawer.findByType('Timeline').props.children[0].props.children[0].props.children[1].props.children, '操作人2')
-
-  let lateRequest
-  await act(async () => {
-    lateRequest = historyButton(rounds[0]).props.onClick()
-    await Promise.resolve()
-  })
-  drawer = renderer.root.findByType('Drawer')
-  await act(async () => drawer.props.onCancel())
-  await act(async () => { await release(1, rounds[0]); await lateRequest })
-  assert.equal(renderer.root.findByType('Drawer').props.visible, false, 'closing must invalidate a late history response')
-
-  let unmountedRequest
-  await act(async () => {
-    unmountedRequest = historyButton(rounds[1]).props.onClick()
-    await Promise.resolve()
-  })
-  await act(async () => renderer.unmount())
-  await act(async () => { await release(2, rounds[1]); await unmountedRequest })
 })
 
 test('member picker waits for a successful member load and guards loading/error handlers', async () => {
@@ -759,7 +671,7 @@ test('paginated lists and file table expose a retry state after the main GET fai
       }),
     },
     {
-      file: 'src/components/FileTable.tsx', api: '/projects/1/files', props: { projectId: 1, projectStatus: 'IN_PROGRESS', rounds: [] },
+      file: 'src/components/FileTable.tsx', api: '/projects/1/files', props: { projectId: 1, projectStatus: 'IN_PROGRESS' },
       mocks: (http) => ({
         '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
         '../api/client': http, '../store/auth': auth, '../api/types': { fmtTime: String, fmtSize: String },
@@ -886,14 +798,6 @@ test('dashboard and project detail panels expose retry instead of a false empty 
   const auth = { useAuth: (selector) => selector ? selector(state) : state }
   const cases = [
     {
-      file: 'src/components/RoundPanel.tsx', api: '/projects/1/rounds', props: { projectId: 1, projectStatus: 'IN_PROGRESS', onChanged() {} },
-      data: [{ id: 1, roundNo: 1, status: 'CONFIRMED', confirmSide: 'COMPANY', createdBy: 1, createdAt: '' }],
-      mocks: (http) => ({
-        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
-        '../api/client': http, '../store/auth': auth, '../api/types': { ROUND_STATUS: {}, fmtTime: String },
-      }),
-    },
-    {
       file: 'src/components/MemberPanel.tsx', api: '/projects/1/members', props: { projectId: 1, supplierName: '供应商' },
       data: [{ userId: 1, employeeNo: 'A1', realName: '管理员', createdAt: '' }],
       mocks: (http) => ({
@@ -902,7 +806,7 @@ test('dashboard and project detail panels expose retry instead of a false empty 
       }),
     },
     {
-      file: 'src/components/MessagePanel.tsx', api: '/projects/1/messages', props: { projectId: 1, projectStatus: 'IN_PROGRESS', rounds: [] },
+      file: 'src/components/MessagePanel.tsx', api: '/projects/1/messages', props: { projectId: 1, projectStatus: 'IN_PROGRESS' },
       data: { list: [{ id: 1, senderId: 2, senderName: '成员', senderType: 'INTERNAL', content: '消息', readByMe: true, readCount: 1, totalCount: 1, createdAt: '' }], total: 1 },
       mocks: (http) => ({
         '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
@@ -927,7 +831,7 @@ test('dashboard and project detail panels expose retry instead of a false empty 
     },
     {
       file: 'src/pages/Dashboard.tsx', api: '/dashboard/summary', props: {},
-      data: { projectCount: 1, activeProjectCount: 1, pendingRounds: 0, unreadMessages: 0, recentMessages: [] },
+      data: { projectCount: 1, activeProjectCount: 1, pendingConfirmations: 0, unreadMessages: 0, recentMessages: [] },
       mocks: (http) => ({
         '@arco-design/web-react': new Proxy({
           Grid: Object.assign(component('Grid'), { Row: component('Grid.Row'), Col: component('Grid.Col') }),
@@ -1024,7 +928,7 @@ test('message receipt requests ignore late responses and closing invalidates the
     },
   }).default
   let renderer
-  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'COMPLETED', rounds: [] })) })
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'COMPLETED' })) })
   const receiptButtons = renderer.root.findAllByType('Button').filter((node) => node.props.children === '回执详情')
   assert.equal(receiptButtons.length, 2)
   await act(async () => {
@@ -1046,6 +950,31 @@ test('message receipt requests ignore late responses and closing invalidates the
   await act(async () => drawer.props.onCancel())
   await act(async () => { releaseOld({ data: { readers: [{ userId: 4, realName: '关闭后返回', userType: 'INTERNAL' }], unread: [] } }); await oldRequest })
   assert.equal(renderer.root.findByType('Drawer').props.visible, false)
+  await act(async () => renderer.unmount())
+})
+
+test('completed and terminated projects hide message delete controls', async () => {
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../store/auth': { useAuth: () => ({ user: { id: 1 }, hasPerm: () => true }) },
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async () => ({
+        data: {
+          list: [{ id: 1, projectId: 1, senderId: 2, senderName: '成员', senderType: 'INTERNAL', content: '历史留言', readCount: 0, totalCount: 1, readByMe: true, createdAt: '' }],
+          total: 1,
+        },
+      }),
+    },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'COMPLETED' })) })
+  assert.equal(renderer.root.findAllByType('Popconfirm').length, 0)
+  await act(async () => renderer.update(React.createElement(Page, { projectId: 1, projectStatus: 'TERMINATED' })))
+  assert.equal(renderer.root.findAllByType('Popconfirm').length, 0)
+  await act(async () => renderer.update(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })))
+  assert.equal(renderer.root.findAllByType('Popconfirm').length, 1)
   await act(async () => renderer.unmount())
 })
 
@@ -1076,7 +1005,7 @@ test('lost upload merge response retries only merge on the same session', async 
     },
   }).default
   let renderer
-  await act(async () => { renderer = create(React.createElement(Uploader, { projectId: 1, roundId: 1, visible: true, onClose: () => { closed++ }, onDone: () => { done++ } })) })
+  await act(async () => { renderer = create(React.createElement(Uploader, { projectId: 1, visible: true, onClose: () => { closed++ }, onDone: () => { done++ } })) })
   await act(async () => renderer.root.findByType('input').props.onChange({ target: { files: [{ name: 'sample.pdf', size: 1, slice: () => new Blob(['x']) }] } }))
   let footer
   await act(async () => {
@@ -1123,7 +1052,7 @@ test('concurrent merge confirmation clicks issue only one retry request', async 
     },
   }).default
   let renderer
-  await act(async () => { renderer = create(React.createElement(Uploader, { projectId: 1, roundId: 1, visible: true, onClose: () => { closed++ }, onDone: () => { done++ } })) })
+  await act(async () => { renderer = create(React.createElement(Uploader, { projectId: 1, visible: true, onClose: () => { closed++ }, onDone: () => { done++ } })) })
   await act(async () => renderer.root.findByType('input').props.onChange({ target: { files: [{ name: 'sample.pdf', size: 1, slice: () => new Blob(['x']) }] } }))
   await act(async () => {
     const start = renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick()
@@ -1239,7 +1168,7 @@ test('file filtering clears a selection that is no longer visible', async () => 
     './ChunkUploader':component('Uploader'),'./PdfPreview':component('PDF'),
   }).default
   let renderer
-  await act(async()=>{renderer=create(React.createElement(Page,{projectId:1,projectStatus:'IN_PROGRESS',rounds:[]}))})
+  await act(async()=>{renderer=create(React.createElement(Page,{projectId:1,projectStatus:'IN_PROGRESS'}))})
   await act(async()=>renderer.root.findByType('Table').props.rowSelection.onChange([23]))
   await act(async()=>renderer.root.findByType('Input.Search').props.onSearch('different-file'))
   assert.equal(renderer.root.findByType('Table').props.rowSelection.selectedRowKeys.length,0,'hidden selected files must not remain in the download batch')
@@ -1248,7 +1177,7 @@ test('file filtering clears a selection that is no longer visible', async () => 
 
 test('file preview, download and delete icon actions expose accessible names', async () => {
   const row = {
-    id: 1, originalName: '图纸.pdf', ext: 'pdf', sizeBytes: 1, roundId: 2, direction: 'C2S',
+    id: 1, originalName: '图纸.pdf', ext: 'pdf', sizeBytes: 1, direction: 'C2S',
     createdAt: '', canDelete: true,
   }
   const Page = loadTs('src/components/FileTable.tsx', {
@@ -1260,7 +1189,7 @@ test('file preview, download and delete icon actions expose accessible names', a
     './ChunkUploader': component('Uploader'), './PdfPreview': component('PDF'),
   }).default
   let renderer
-  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', rounds: [] })) })
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
   const table = renderer.root.findByType('Table')
   const columns = table.props.columns
   const nameCell = columns[0].render(row.originalName, row)
@@ -1279,9 +1208,9 @@ test('invalid project route identifiers render a recoverable error without API c
       'react-router-dom':{useParams:()=>({id}),useSearchParams:()=>[new URLSearchParams(),()=>{}],useNavigate:()=>()=>{}},
       '../../api/client':{get:async()=>{calls++;throw Error('invalid request')}},
       '../../api/types':{PROJECT_STATUS:{},fmtTime:String},
-      '../../components/RoundPanel':component('Rounds'),'../../components/FileTable':component('Files'),
-      '../../components/MessagePanel':component('Messages'),'../../components/MemberPanel':component('Members'),
-      '../../components/ProjectActivityPanel':component('Activities'),
+       '../../components/FileTable':component('Files'),
+       '../../components/MessagePanel':component('Messages'),'../../components/MemberPanel':component('Members'),
+       '../../components/ProjectActivityPanel':component('Activities'),'../../components/ProjectWorkflowPanel':component('Workflow'),
     }).default
     let renderer
     await act(async()=>{renderer=create(React.createElement(Page))})
@@ -1300,9 +1229,9 @@ test('project navigation ignores late responses across valid and invalid routes'
     'react-router-dom':{useParams:()=>({id}),useSearchParams:()=>[new URLSearchParams(),()=>{}],useNavigate:()=>()=>{}},
     '../../api/client':{get:url=>new Promise(resolve=>pending.set(url,resolve))},
     '../../api/types':{PROJECT_STATUS:{IN_PROGRESS:{text:'进行中'}},fmtTime:String},
-    '../../components/RoundPanel':component('Rounds'),'../../components/FileTable':component('Files'),
-    '../../components/MessagePanel':component('Messages'),'../../components/MemberPanel':component('Members'),
-    '../../components/ProjectActivityPanel':component('Activities'),
+     '../../components/FileTable':component('Files'),
+     '../../components/MessagePanel':component('Messages'),'../../components/MemberPanel':component('Members'),
+     '../../components/ProjectActivityPanel':component('Activities'),'../../components/ProjectWorkflowPanel':component('Workflow'),
   }).default
   let renderer
   await act(async()=>{renderer=create(React.createElement(Page))})
@@ -1314,17 +1243,16 @@ test('project navigation ignores late responses across valid and invalid routes'
   const project=n=>({id:n,name:`项目${n}`,status:'IN_PROGRESS'})
   await act(async()=>pending.get('/projects/2')({data:project(2)}))
   await act(async()=>pending.get('/projects/1')({data:project(1)}))
-  assert.equal(renderer.root.findByType('Rounds').props.projectId,2)
-  await act(async()=>renderer.root.findByType('Rounds').props.onChanged())
+  assert.equal(renderer.root.findByType('Files').props.projectId,2)
   id='3'
   await act(async()=>renderer.update(React.createElement(Page)))
   await act(async()=>pending.get('/projects/3')({data:project(3)}))
   await act(async()=>pending.get('/projects/2')({data:project(2)}))
-  assert.equal(renderer.root.findByType('Rounds').props.projectId,3,'a late refresh after a round operation must not replace the new project')
+  assert.equal(renderer.root.findByType('Files').props.projectId,3,'a late refresh after a project operation must not replace the new project')
   await act(async()=>renderer.unmount())
 })
 
-test('unknown project tab query falls back to rounds and keeps description expansion keyboard accessible', async () => {
+test('unknown project tab query falls back to files and keeps description expansion keyboard accessible', async () => {
   const project = {
     id: 1,
     name: '项目 1',
@@ -1341,20 +1269,20 @@ test('unknown project tab query falls back to rounds and keeps description expan
       useNavigate: () => () => {},
     },
     '../../api/client': {
-      get: async (url) => ({ data: url.endsWith('/rounds') ? [] : url.endsWith('/summary') ? { unreadMessages: 0, pendingRounds: 0 } : project }),
+      get: async (url) => ({ data: url.endsWith('/summary') ? { unreadMessages: 0 } : project }),
     },
     '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中', color: 'blue' } }, fmtTime: String },
-    '../../components/RoundPanel': component('Rounds'),
     '../../components/FileTable': component('Files'),
     '../../components/MessagePanel': component('Messages'),
     '../../components/MemberPanel': component('Members'),
     '../../components/ProjectActivityPanel': component('Activities'),
+    '../../components/ProjectWorkflowPanel': component('Workflow'),
   }).default
   let renderer
   await act(async () => { renderer = create(React.createElement(Page)) })
   const tabs = renderer.root.findByType('Tabs')
-  assert.equal(tabs.props.activeTab, 'rounds')
-  assert.ok(renderer.root.findByType('Rounds'))
+  assert.equal(tabs.props.activeTab, 'files')
+  assert.ok(renderer.root.findByType('Files'))
   const ellipsis = renderer.root.findByType('Descriptions').props.data.find((item) => item.label === '项目说明').value
   const expand = ellipsis.props.expandRender(false)
   assert.equal(expand.props['aria-expanded'], false)
@@ -1362,19 +1290,144 @@ test('unknown project tab query falls back to rounds and keeps description expan
   await act(async () => renderer.unmount())
 })
 
-function activityRow(id, type = 'ROUND', overrides = {}) {
+test('project workflow exposes only permissioned project-level actions and matches the confirmer type', async () => {
+  const calls = []
+  const http = {
+    put: async (url, body) => { calls.push({ method: 'put', url, body }); return { data: {} } },
+    post: async (url, body) => { calls.push({ method: 'post', url, body }); return { data: {} } },
+  }
+  const Page = loadTs('src/components/ProjectWorkflowPanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': http,
+    '../api/types': { PROJECT_STATUS: { PENDING_CONFIRMATION: { text: '待确认', color: 'orange' } } },
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:confirm', 'project:withdraw']),
+  }).default
+  let renderer
+  const changed = []
+  await act(async () => {
+    renderer = create(React.createElement(Page, {
+      project: { id: 1, status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 1 },
+      onChanged: () => changed.push(true),
+    }))
+  })
+  assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '确认'))
+  assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '驳回'))
+  assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '撤回'))
+
+  await act(async () => renderer.update(React.createElement(Page, {
+    project: { id: 1, status: 'PENDING_CONFIRMATION', confirmSide: 'SUPPLIER', latestSubmitterId: 2 },
+    onChanged: () => changed.push(true),
+  })))
+  assert.equal(renderer.root.findAllByType('Button').some((node) => node.props.children === '确认'), false)
+  assert.equal(renderer.root.findAllByType('Button').some((node) => node.props.children === '驳回'), false)
+  assert.equal(renderer.root.findAllByType('Button').some((node) => node.props.children === '撤回'), false)
+  await act(async () => renderer.unmount())
+
+  const AllViewPage = loadTs('src/components/ProjectWorkflowPanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': http,
+    '../api/types': { PROJECT_STATUS: { PENDING_CONFIRMATION: { text: '待确认', color: 'orange' } } },
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:withdraw', 'project:view_all']),
+  }).default
+  await act(async () => {
+    renderer = create(React.createElement(AllViewPage, {
+      project: { id: 1, status: 'PENDING_CONFIRMATION', confirmSide: 'SUPPLIER', latestSubmitterId: 2 },
+      onChanged: () => changed.push(true),
+    }))
+  })
+  assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '撤回'))
+  await act(async () => renderer.unmount())
+})
+
+test('project workflow status commands are limited to start, terminate and restart', async () => {
+  const calls = []
+  const http = { put: async (url, body) => { calls.push({ url, body }); return { data: {} } }, post: async () => ({ data: {} }) }
+  const Page = loadTs('src/components/ProjectWorkflowPanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': http,
+    '../api/types': { PROJECT_STATUS: { DRAFT: { text: '草稿' }, IN_PROGRESS: { text: '进行中' }, TERMINATED: { text: '已终止' }, COMPLETED: { text: '已完成' } } },
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:status']),
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { project: { id: 1, status: 'DRAFT' }, onChanged() {} })) })
+  await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '开始').props.onClick())
+  assert.equal(calls.at(-1).url, '/projects/1/status')
+  assert.equal(calls.at(-1).body.status, 'IN_PROGRESS')
+
+  await act(async () => { renderer.update(React.createElement(Page, { project: { id: 1, status: 'IN_PROGRESS' }, onChanged() {} })) })
+  const terminate = renderer.root.findAllByType('Popconfirm').find((node) => String(node.props.title).includes('终止项目'))
+  await act(async () => terminate.props.onOk())
+  assert.equal(calls.at(-1).url, '/projects/1/status')
+  assert.equal(calls.at(-1).body.status, 'TERMINATED')
+
+  await act(async () => { renderer.update(React.createElement(Page, { project: { id: 1, status: 'TERMINATED' }, onChanged() {} })) })
+  await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '重新开始').props.onClick())
+  assert.equal(calls.at(-1).url, '/projects/1/status')
+  assert.equal(calls.at(-1).body.status, 'IN_PROGRESS')
+  await act(async () => { renderer.update(React.createElement(Page, { project: { id: 1, status: 'COMPLETED' }, onChanged() {} })) })
+  assert.equal(renderer.root.findAllByType('Button').some((node) => ['开始', '终止', '重新开始'].includes(node.props.children)), false)
+  await act(async () => renderer.unmount())
+})
+
+test('project submission sends only the opposite organization as confirmer', async () => {
+  const calls = []
+  const http = { post: async (url, body) => { calls.push({ url, body }); return { data: {} } } }
+  const render = (user) => loadTs('src/components/ProjectWorkflowPanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': http,
+    '../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中' } } },
+    '../store/auth': authModule(user, ['project:submit']),
+  }).default
+
+  for (const [user, expectedSide, title] of [
+    [{ id: 1, userType: 'INTERNAL' }, 'SUPPLIER', '提交给供应商确认？'],
+    [{ id: 2, userType: 'SUPPLIER' }, 'COMPANY', '提交给公司确认？'],
+  ]) {
+    const Page = render(user)
+    let renderer
+    await act(async () => {
+      renderer = create(React.createElement(Page, { project: { id: 1, status: 'IN_PROGRESS' }, onChanged() {} }))
+    })
+    const submit = renderer.root.findAllByType('Popconfirm').find((node) => node.props.title === title)
+    assert.ok(submit, title)
+    await act(async () => submit.props.onOk())
+    assert.equal(calls.at(-1).url, '/projects/1/submit')
+    assert.equal(calls.at(-1).body.confirmSide, expectedSide)
+    await act(async () => renderer.unmount())
+  }
+})
+
+test('project pages contain no round entry points or project round selectors', () => {
+  const root = path.resolve(__dirname, '..')
+  const files = [
+    'src/pages/project/ProjectDetail.tsx',
+    'src/pages/project/ProjectList.tsx',
+    'src/components/FileTable.tsx',
+    'src/components/MessagePanel.tsx',
+    'src/components/ChunkUploader.tsx',
+    'src/components/ProjectActivityPanel.tsx',
+  ]
+  for (const file of files) {
+    const source = fs.readFileSync(path.join(root, file), 'utf8')
+    assert.doesNotMatch(source, /轮次|roundId|roundNo|pendingRounds|RoundPanel/, file)
+  }
+})
+
+function activityRow(id, type = 'PROJECT', overrides = {}) {
   return {
     id,
     type,
     action: 'CREATED',
     actorName: `操作人${id}`,
     occurredAt: `2026-09-09T00:00:${String(id).padStart(2, '0')}Z`,
-    title: type === 'ROUND' ? '发起轮次' : `${type}动作`,
+    title: type === 'PROJECT' ? '项目动作' : `${type}动作`,
     summary: type === 'PROJECT' ? '项目摘要' : `${type}对象`,
-    roundId: type === 'ROUND' ? id : null,
-    roundNo: type === 'ROUND' ? id : null,
     targetId: id,
-    targetAvailable: type === 'ROUND',
+    targetAvailable: type !== 'PROJECT',
     ...overrides,
   }
 }
@@ -1398,7 +1451,7 @@ test('project activity waits for its tab, filters, refreshes and ignores late re
     data: {
       list,
       nextCursor,
-      summary: { status: 'IN_PROGRESS', pendingRounds: 2, lastActivityAt: '2026-09-09T00:00:01Z' },
+        summary: { status: 'IN_PROGRESS', pendingConfirmation: true, confirmSide: 'COMPANY', lastActivityAt: '2026-09-09T00:00:01Z' },
     },
   })
   let renderer
@@ -1408,16 +1461,16 @@ test('project activity waits for its tab, filters, refreshes and ignores late re
   assert.deepEqual(JSON.parse(JSON.stringify(pending[0].params)), { pageSize: 20 })
 
   const first = activityRow(1)
-  const filtered = activityRow(2, 'ROUND', { summary: '<驳回原因>', title: '<发起轮次>' })
+  const filtered = activityRow(2, 'PROJECT', { summary: '<驳回原因>', title: '<驳回项目>', action: 'REJECT', targetAvailable: false })
   await act(async () => {
-    renderer.root.findByType('Select').props.onChange('ROUND')
+    renderer.root.findByType('Select').props.onChange('PROJECT')
     await Promise.resolve()
   })
-  assert.deepEqual(JSON.parse(JSON.stringify(pending[1].params)), { pageSize: 20, type: 'ROUND' })
+  assert.deepEqual(JSON.parse(JSON.stringify(pending[1].params)), { pageSize: 20, type: 'PROJECT' })
   await act(async () => pending[1].resolve(response([filtered])))
   await act(async () => pending[0].resolve(response([first], 'late-cursor')))
   const renderedRows = renderer.root.findAll((node) => node.props['data-activity-type'] !== undefined)
-  assert.deepEqual(renderedRows.map((node) => node.props['data-activity-type']), ['ROUND'])
+  assert.deepEqual(renderedRows.map((node) => node.props['data-activity-type']), ['PROJECT'])
   assert.equal(renderer.root.findAll((node) => node.props.dangerouslySetInnerHTML !== undefined).length, 0)
   assert.ok(JSON.stringify(renderer.toJSON()).includes('<驳回原因>'), 'server text must remain text content')
   assert.ok(renderer.root.findAll((node) => node.props['data-activity-id'] === 2)[0])
@@ -1450,7 +1503,7 @@ test('project activity exposes malformed initial responses as a retryable failur
         data: {
           list: [activityRow(6)],
           nextCursor: null,
-          summary: { status: 'IN_PROGRESS', pendingRounds: 0, lastActivityAt: null },
+          summary: { status: 'IN_PROGRESS', pendingConfirmation: false, confirmSide: null, lastActivityAt: null },
         },
       }
     },
@@ -1488,9 +1541,9 @@ test('project activity keeps loaded rows when an append fails, retries the curso
               activityRow(3, 'PROJECT', { summary: null }),
               activityRow(4, 'MESSAGE', { targetAvailable: true, summary: '留言内容' }),
             ]
-            : [activityRow(1, 'ROUND', { summary: '驳回原因：需要补充资料' })],
+            : [activityRow(1, 'PROJECT', { summary: '驳回原因：需要补充资料', action: 'REJECT' })],
           nextCursor: config.params.cursor ? null : 'cursor-1',
-          summary: { status: 'IN_PROGRESS', pendingRounds: 1, lastActivityAt: '2026-09-09T00:00:01Z' },
+          summary: { status: 'IN_PROGRESS', pendingConfirmation: true, confirmSide: 'SUPPLIER', lastActivityAt: '2026-09-09T00:00:01Z' },
         },
       }
     },
@@ -1516,16 +1569,12 @@ test('project activity keeps loaded rows when an append fails, retries the curso
   assert.deepEqual(JSON.parse(JSON.stringify(calls[2])), { pageSize: 20, cursor: 'cursor-1' })
   const ids = renderer.root.findAll((node) => node.props['data-activity-id'] !== undefined).map((node) => node.props['data-activity-id'])
   assert.deepEqual(ids, [1, 2, 3, 4])
-  const roundTargetLinks = renderer.root.findAllByProps({ 'aria-label': '查看第 1 轮 · 驳回原因：需要补充资料' })
-  assert.ok(roundTargetLinks.length > 0)
-  await act(async () => roundTargetLinks[0].props.onClick())
-  assert.deepEqual(navigated, [['ROUND', 1, 1]])
   assert.equal(renderer.root.findAllByProps({ 'aria-label': '查看图纸.pdf' }).length, 0, 'unavailable file target must not be a link')
   assert.equal(renderer.root.findAllByProps({ 'aria-label': '查看项目摘要' }).length, 0, 'project target must never be a link')
   const messageTargetLinks = renderer.root.findAllByProps({ 'aria-label': '查看留言内容' })
   assert.ok(messageTargetLinks.length > 0, 'available message target should be a link')
   await act(async () => messageTargetLinks[0].props.onClick())
-  assert.deepEqual(navigated, [['ROUND', 1, 1], ['MESSAGE', 4, null]])
+  assert.deepEqual(navigated, [['MESSAGE', 4]])
   await act(async () => renderer.unmount())
 })
 
@@ -1540,26 +1589,26 @@ test('project detail activity URL tab and target navigation preserve valid tab s
       useSearchParams: () => [query, (next) => { updates.push(next); query = new URLSearchParams(next) }],
       useNavigate: () => () => {},
     },
-    '../../api/client': { get: async (url) => ({ data: url.endsWith('/rounds') ? [] : url.endsWith('/summary') ? { unreadMessages: 0, pendingRounds: 0 } : project }) },
+    '../../api/client': { get: async (url) => ({ data: url.endsWith('/summary') ? { unreadMessages: 0 } : project }) },
     '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中', color: 'blue' } }, fmtTime: String },
-    '../../components/RoundPanel': component('Rounds'),
     '../../components/FileTable': component('Files'),
     '../../components/MessagePanel': component('Messages'),
     '../../components/MemberPanel': component('Members'),
     '../../components/ProjectActivityPanel': component('Activities'),
+    '../../components/ProjectWorkflowPanel': component('Workflow'),
   }).default
   let renderer
   await act(async () => { renderer = create(React.createElement(Page)) })
   assert.equal(renderer.root.findByType('Tabs').props.activeTab, 'activity')
   const activities = renderer.root.findByType('Activities')
   assert.equal(activities.props.active, true)
-  await act(async () => activities.props.onNavigate('ROUND', 7, 7))
-  assert.equal(updates.at(-1).get('tab'), 'rounds')
+  await act(async () => activities.props.onNavigate('FILE', 7))
+  assert.equal(updates.at(-1).get('tab'), 'files')
   assert.equal(updates.at(-1).get('target'), '7')
 
   await act(async () => renderer.update(React.createElement(Page)))
-  assert.equal(renderer.root.findByType('Tabs').props.activeTab, 'rounds')
-  assert.equal(renderer.root.findByType('Rounds').props.targetId, 7)
+  assert.equal(renderer.root.findByType('Tabs').props.activeTab, 'files')
+  assert.equal(renderer.root.findByType('Files').props.targetId, 7)
   assert.ok(renderer.root.findAll((node) => node.props.children === '显示全部').length > 0)
   await act(async () => renderer.root.findAllByType('Tabs')[0].props.onChange('files'))
   assert.equal(updates.at(-1).get('tab'), 'files')
@@ -1708,7 +1757,7 @@ for (const deleteCount of [1,20]) test(`deleting ${deleteCount} loaded messages 
     '../api/client':http,'../store/auth':{useAuth:()=>({hasPerm:()=>true,user:{id:1}})},'../api/types':{fmtTime:String},
   }).default
   let renderer
-  await act(async()=>{renderer=create(React.createElement(Page,{projectId:1,projectStatus:'IN_PROGRESS',rounds:[]}))})
+  await act(async()=>{renderer=create(React.createElement(Page,{projectId:1,projectStatus:'IN_PROGRESS'}))})
   for(let i=0;i<deleteCount;i++) await act(async()=>renderer.root.findAllByType('Popconfirm')[0].props.onOk())
   const more=renderer.root.findAllByType('Button').find(n=>JSON.stringify(n.props.children)?.includes('加载更多'))
   assert.ok(more,'older messages must remain reachable after deleting the loaded batch')
@@ -1734,7 +1783,7 @@ test('a failed second message page can be retried without losing or duplicating 
     '../api/client':http,'../store/auth':{useAuth:()=>({hasPerm:()=>false,user:{id:1}})},'../api/types':{fmtTime:String},
   }).default
   let renderer
-  await act(async()=>{renderer=create(React.createElement(Page,{projectId:1,projectStatus:'IN_PROGRESS',rounds:[]}))})
+  await act(async()=>{renderer=create(React.createElement(Page,{projectId:1,projectStatus:'IN_PROGRESS'}))})
   let more=renderer.root.findAllByType('Button').find(n=>JSON.stringify(n.props.children)?.includes('加载更多'))
   let rejected=false
   try { await act(async()=>{await more.props.onClick()}) } catch { rejected=true }
@@ -1788,6 +1837,41 @@ test('audit time filtering preserves an explicitly selected midnight endpoint', 
   await act(async()=>renderer.root.findAllByType('Button').find(n=>n.props.children==='查询').props.onClick())
   assert.equal(query.end,new Date('2026-09-05 00:00:00').toISOString(),'midnight must not silently include the following entire day')
   await act(async()=>renderer.unmount())
+})
+
+test('project workflow audit actions expose precise labels and state or rejection summaries', async () => {
+  const row = {
+    id: 201,
+    action: 'PROJECT_REJECT',
+    targetType: 'project',
+    targetId: '7',
+    detail: { from: 'PENDING_CONFIRMATION', to: 'IN_PROGRESS', reason: '需要补充资料' },
+    createdAt: '2026-09-09T00:00:00Z',
+  }
+  const Page = loadTs('src/pages/system/AuditLog.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../../api/client': { get: async () => ({ data: { list: [row], total: 1, page: 1, pageSize: 20 } }) },
+    '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['log:view']),
+    '../../api/types': { fmtTime: String },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const table = renderer.root.findByType('Table')
+  const action = table.props.columns.find((column) => column.dataIndex === 'action').render(row.action, row)
+  assert.match(JSON.stringify(action), /驳回项目/)
+  const summary = table.props.columns.find((column) => column.title === '内容摘要').render(null, row)
+  assert.match(JSON.stringify(summary), /待确认/)
+  assert.match(JSON.stringify(summary), /进行中/)
+  assert.match(JSON.stringify(summary), /驳回原因：需要补充资料/)
+
+  const actionSelect = renderer.root.findAllByType('Select').find((select) => select.props.placeholder === '具体操作')
+  const values = React.Children.toArray(actionSelect.props.children).map((option) => option.props.value)
+  for (const value of ['PROJECT_START', 'PROJECT_SUBMIT', 'PROJECT_CONFIRM', 'PROJECT_REJECT', 'PROJECT_WITHDRAW', 'PROJECT_TERMINATE', 'PROJECT_RESTART']) {
+    assert.ok(values.includes(value), `项目日志筛选缺少 ${value}`)
+  }
+  assert.ok(!values.includes('PROJECT_STATUS'))
+  await act(async () => renderer.unmount())
 })
 
 test('audit hard-delete controls require the dedicated delete permission', async () => {
@@ -1942,7 +2026,7 @@ test('a failed upload drains in-flight chunks before enabling retry', async () =
     '../api/client':{post:async url=>{if(url.endsWith('/merge'))merges++;return {data:{sessionId:'test-session',chunkSize:1,totalChunks:3,uploadedChunks:[]}}},put:async()=>{if(calls++===0)throw new Error('network failed');await pending}},
   }).default
   let renderer,start
-  await act(async()=>{renderer=create(React.createElement(Uploader,{projectId:1,roundId:1,visible:true,onClose(){},onDone(){}}))})
+  await act(async()=>{renderer=create(React.createElement(Uploader,{projectId:1,visible:true,onClose(){},onDone(){}}))})
   await act(async()=>renderer.root.findByType('input').props.onChange({target:{files:[{name:'sample.pdf',size:3,slice:()=>new Blob(['x'])}]}}))
   await act(async()=>{start=renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick().then(()=>{settled=true});await new Promise(resolve=>setImmediate(resolve))})
   const retriedEarly=settled
@@ -1981,7 +2065,7 @@ test('closing waits for old chunks to settle before another upload can start', a
     '../api/client':{post:async url=>{if(url.endsWith('/merge')){merges.push(url);return {data:{}}}return {data:{sessionId:`session-${++inits}`,chunkSize:1,totalChunks:1,uploadedChunks:[]}}},put:async url=>url.includes('session-1')?oldChunk:newChunk,delete:async()=>({})},
   }).default
   let renderer,first,second,closing
-  await act(async()=>{renderer=create(React.createElement(Uploader,{projectId:1,roundId:1,visible:true,onClose(){closed++},onDone(){done++}}))})
+  await act(async()=>{renderer=create(React.createElement(Uploader,{projectId:1,visible:true,onClose(){closed++},onDone(){done++}}))})
   const pick=()=>renderer.root.findByType('input').props.onChange({target:{files:[{name:'sample.pdf',size:1,slice:()=>new Blob(['x'])}]}})
   const start=()=>renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick()
   await act(async()=>pick())
@@ -2008,7 +2092,7 @@ test('merging upload cannot be reported cancelled while its file commits', async
     '../api/client':{post:async url=>{if(url.endsWith('/merge')){mergeStarted();return merged}return {data:{sessionId:'session-1',chunkSize:1,totalChunks:1,uploadedChunks:[0]}}},delete:async()=>{throw new Error('409 merge in progress')}},
   }).default
   let renderer,upload
-  await act(async()=>{renderer=create(React.createElement(Uploader,{projectId:1,roundId:1,visible:true,onClose(){closed++},onDone(){done++}}))})
+  await act(async()=>{renderer=create(React.createElement(Uploader,{projectId:1,visible:true,onClose(){closed++},onDone(){done++}}))})
   await act(async()=>renderer.root.findByType('input').props.onChange({target:{files:[{name:'sample.pdf',size:1}]}}))
   await act(async()=>{upload=renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick();await started})
   await act(async()=>{const footer=renderer.root.findByType('Modal').props.footer;if(footer.props.onClick)await footer.props.onClick();renderer.root.findByType('Modal').props.onCancel()})
@@ -2028,7 +2112,7 @@ test('late initialization settles and cancels before reopening can reuse its ses
     '../api/client':{post:async url=>{if(url.endsWith('/merge')){events.push('merge');return {data:{id:1}}}events.push('init');if(++initCount===1){initStarted();return late}return {data:{sessionId:'shared-session',chunkSize:1,totalChunks:1,uploadedChunks:[0]}}},delete:async()=>{events.push('delete')}},
   }).default
   let renderer,first,closing
-  await act(async()=>{renderer=create(React.createElement(Uploader,{projectId:1,roundId:1,visible:true,onClose(){closed++},onDone(){}}))})
+  await act(async()=>{renderer=create(React.createElement(Uploader,{projectId:1,visible:true,onClose(){closed++},onDone(){}}))})
   const pick=()=>renderer.root.findByType('input').props.onChange({target:{files:[{name:'sample.pdf',size:1}]}})
   await act(async()=>pick())
   await act(async()=>{first=renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick();await started})

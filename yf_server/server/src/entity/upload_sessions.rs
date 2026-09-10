@@ -12,7 +12,6 @@ pub struct Model {
     )]
     pub id: String,
     pub project_id: u64,
-    pub round_id: u64,
     pub uploader_id: u64,
     pub file_name: String,
     pub file_size: u64,

@@ -8,10 +8,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::dto::PageResp;
-use crate::entity::enums::{CommonStatus, ProjectStatus, RoundStatus, UserType};
+use crate::entity::enums::{CommonStatus, ConfirmSide, ProjectStatus, UserType};
 use crate::entity::{
-    departments, email_outbox, files, messages, project_activities, project_members, projects,
-    rounds, suppliers, upload_sessions, users,
+    departments, email_outbox, files, messages, project_activities, project_members,
+    project_status_logs, projects, suppliers, upload_sessions, users,
 };
 use crate::error::{ApiResult, AppError};
 use crate::middleware::auth::CurrentUser;
@@ -47,26 +47,37 @@ pub struct StatusChange {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SubmitReq {
+    pub confirm_side: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectReq {
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MembersSet {
     pub user_ids: Vec<u64>,
 }
 
-fn status_str(s: &ProjectStatus) -> &'static str {
+pub fn status_str(s: &ProjectStatus) -> &'static str {
     match s {
         ProjectStatus::Draft => "DRAFT",
         ProjectStatus::InProgress => "IN_PROGRESS",
+        ProjectStatus::PendingConfirmation => "PENDING_CONFIRMATION",
         ProjectStatus::Completed => "COMPLETED",
         ProjectStatus::Terminated => "TERMINATED",
     }
 }
 
-fn transition_allowed(from: ProjectStatus, to: ProjectStatus) -> bool {
-    matches!(
-        (from, to),
-        (ProjectStatus::Draft, ProjectStatus::InProgress)
-            | (ProjectStatus::InProgress, ProjectStatus::Completed)
-            | (ProjectStatus::InProgress, ProjectStatus::Terminated)
-    )
+fn confirm_side_str(side: ConfirmSide) -> &'static str {
+    match side {
+        ConfirmSide::Company => "COMPANY",
+        ConfirmSide::Supplier => "SUPPLIER",
+    }
 }
 
 pub async fn project_json(db: &DatabaseConnection, p: &projects::Model) -> Value {
@@ -85,6 +96,7 @@ pub async fn project_json(db: &DatabaseConnection, p: &projects::Model) -> Value
         "supplierId": p.supplier_id,
         "supplierName": supplier.as_ref().map(|s| s.name.clone()),
         "status": status_str(&p.status),
+        "confirmSide": p.confirm_side.map(confirm_side_str),
         "createdBy": p.created_by,
         "createdByName": creator.map(|u| u.real_name),
         "createdAt": p.created_at, "updatedAt": p.updated_at,
@@ -138,6 +150,7 @@ pub async fn list(
             "supplierId": p.supplier_id,
             "supplierName": sup,
             "status": status_str(&p.status),
+            "confirmSide": p.confirm_side.map(confirm_side_str),
             "createdBy": p.created_by,
             "createdByName": creator_map.get(&p.created_by),
             "createdAt": p.created_at, "updatedAt": p.updated_at,
@@ -200,6 +213,7 @@ pub async fn create(
         description: Set(req.description.clone()),
         supplier_id: Set(req.supplier_id),
         status: Set(ProjectStatus::Draft),
+        confirm_side: Set(None),
         created_by: Set(me.id),
         created_at: Set(now),
         updated_at: Set(now),
@@ -214,6 +228,19 @@ pub async fn create(
         user_id: Set(me.id),
         created_by: Set(Some(me.id)),
         created_at: Set(now),
+    }
+    .insert(&txn)
+    .await?;
+    project_status_logs::ActiveModel {
+        project_id: Set(model.id),
+        from_status: Set(None),
+        to_status: Set(ProjectStatus::Draft),
+        action: Set("CREATE".to_owned()),
+        operator_id: Set(me.id),
+        confirm_side: Set(None),
+        reason: Set(None),
+        created_at: Set(now),
+        ..Default::default()
     }
     .insert(&txn)
     .await?;
@@ -237,6 +264,20 @@ pub async fn detail(db: &DatabaseConnection, user: &CurrentUser, id: u64) -> Api
     let mut v = project_json(db, &p).await;
     let members = list_members(db, id).await?;
     v["members"] = members;
+    let latest_reject = project_status_logs::Entity::find()
+        .filter(project_status_logs::Column::ProjectId.eq(id))
+        .filter(project_status_logs::Column::Action.eq("REJECT"))
+        .order_by_desc(project_status_logs::Column::Id)
+        .one(db)
+        .await?;
+    let latest_submit = project_status_logs::Entity::find()
+        .filter(project_status_logs::Column::ProjectId.eq(id))
+        .filter(project_status_logs::Column::Action.eq("SUBMIT"))
+        .order_by_desc(project_status_logs::Column::Id)
+        .one(db)
+        .await?;
+    v["rejectReason"] = json!(latest_reject.and_then(|row| row.reason));
+    v["latestSubmitterId"] = json!(latest_submit.map(|row| row.operator_id));
     Ok(v)
 }
 
@@ -260,6 +301,9 @@ pub async fn update(
         .ok_or(AppError::NotFound)?;
     super::perm::recheck_manager(&txn, me.id, "project:update").await?;
     scope::ensure_project_access(&txn, me, id).await?;
+    if !matches!(p.status, ProjectStatus::Draft | ProjectStatus::InProgress) {
+        return Err(AppError::Conflict("项目当前状态不可编辑".into()));
+    }
     if p.supplier_id != req.supplier_id {
         return Err(AppError::BadRequest(
             "项目创建后不可更换供应商；请新建项目以避免历史数据越权".into(),
@@ -290,20 +334,103 @@ pub async fn update(
     Ok(project_json(db, &model).await)
 }
 
-/// 状态流转：DRAFT→IN_PROGRESS→COMPLETED/TERMINATED；终态只读。
+struct Transition<'a> {
+    to: ProjectStatus,
+    action: &'a str,
+    next_confirm_side: Option<ConfirmSide>,
+    history_confirm_side: Option<ConfirmSide>,
+    reason: Option<String>,
+}
+
+fn workflow_audit_action(action: &str) -> ApiResult<&'static str> {
+    match action {
+        "START" => Ok("PROJECT_START"),
+        "SUBMIT" => Ok("PROJECT_SUBMIT"),
+        "CONFIRM" => Ok("PROJECT_CONFIRM"),
+        "REJECT" => Ok("PROJECT_REJECT"),
+        "WITHDRAW" => Ok("PROJECT_WITHDRAW"),
+        "TERMINATE" => Ok("PROJECT_TERMINATE"),
+        "RESTART" => Ok("PROJECT_RESTART"),
+        _ => Err(AppError::Internal(format!("未知项目流程动作: {action}"))),
+    }
+}
+
+async fn apply_transition(
+    txn: &sea_orm::DatabaseTransaction,
+    me: &CurrentUser,
+    project: projects::Model,
+    transition: Transition<'_>,
+) -> ApiResult<()> {
+    let Transition {
+        to,
+        action,
+        next_confirm_side,
+        history_confirm_side,
+        reason,
+    } = transition;
+    let from = project.status;
+    let project_id = project.id;
+    let audit_action = workflow_audit_action(action)?;
+    let now = Utc::now();
+    let mut update: projects::ActiveModel = project.into();
+    update.status = Set(to);
+    update.confirm_side = Set(next_confirm_side);
+    update.updated_at = Set(now);
+    let result = projects::Entity::update_many()
+        .set(update)
+        .filter(projects::Column::Id.eq(project_id))
+        .filter(projects::Column::Status.eq(from))
+        .exec(txn)
+        .await?;
+    if result.rows_affected == 0 {
+        return Err(AppError::Conflict(
+            "项目状态已被他人变更，请刷新后重试".into(),
+        ));
+    }
+    let status_log = project_status_logs::ActiveModel {
+        project_id: Set(project_id),
+        from_status: Set(Some(from)),
+        to_status: Set(to),
+        action: Set(action.to_owned()),
+        operator_id: Set(me.id),
+        confirm_side: Set(history_confirm_side),
+        reason: Set(reason.clone()),
+        created_at: Set(now),
+        ..Default::default()
+    }
+    .insert(txn)
+    .await?;
+    audit::insert(
+        txn,
+        Some(me.id),
+        Some(me.employee_no.clone()),
+        audit_action,
+        Some("project"),
+        Some(project_id.to_string()),
+        Some(json!({
+            "from": status_str(&from),
+            "to": status_str(&to),
+            "action": action,
+            "confirmSide": history_confirm_side.map(confirm_side_str),
+            "reason": reason,
+            "statusLogId": status_log.id,
+        })),
+        None,
+    )
+    .await?;
+    Ok(())
+}
+
+/// 管理状态动作：开始、终止、重新开始。完成只能由验收确认产生。
 pub async fn set_status(
     db: &DatabaseConnection,
     me: &CurrentUser,
     id: u64,
     req: &StatusChange,
 ) -> ApiResult<Value> {
-    let to = match req.status.as_str() {
-        "DRAFT" => ProjectStatus::Draft,
-        "IN_PROGRESS" => ProjectStatus::InProgress,
-        "COMPLETED" => ProjectStatus::Completed,
-        "TERMINATED" => ProjectStatus::Terminated,
-        _ => return Err(AppError::BadRequest("非法项目状态".into())),
-    };
+    if !me.is_internal() {
+        return Err(AppError::Forbidden);
+    }
     let txn = db.begin().await?;
     super::perm::lock_management_state(&txn).await?;
     let p = projects::Entity::find_by_id(id)
@@ -313,40 +440,46 @@ pub async fn set_status(
         .ok_or(AppError::NotFound)?;
     super::perm::recheck_manager(&txn, me.id, "project:status").await?;
     scope::ensure_project_access(&txn, me, id).await?;
-    let from = p.status;
-    let allowed = transition_allowed(from, to);
-    if !allowed {
-        return Err(AppError::Conflict(format!(
-            "项目状态不允许从 {} 变更为 {}",
-            status_str(&from),
-            status_str(&to)
-        )));
+    let (to, action) = match (p.status, req.status.as_str()) {
+        (ProjectStatus::Draft, "IN_PROGRESS") => (ProjectStatus::InProgress, "START"),
+        (ProjectStatus::Terminated, "IN_PROGRESS") => (ProjectStatus::InProgress, "RESTART"),
+        (ProjectStatus::InProgress, "TERMINATED") => (ProjectStatus::Terminated, "TERMINATE"),
+        (_, "IN_PROGRESS" | "TERMINATED") => {
+            return Err(AppError::Conflict(format!(
+                "项目当前状态 {} 不允许执行该管理动作",
+                status_str(&p.status)
+            )))
+        }
+        _ => {
+            return Err(AppError::BadRequest(
+                "仅允许开始、终止或重新开始项目".into(),
+            ))
+        }
+    };
+    if action == "TERMINATE" {
+        let active_uploads = upload_sessions::Entity::find()
+            .filter(upload_sessions::Column::ProjectId.eq(id))
+            .filter(upload_sessions::Column::Status.is_in([
+                crate::entity::enums::UploadStatus::Uploading,
+                crate::entity::enums::UploadStatus::Merging,
+            ]))
+            .count(&txn)
+            .await?;
+        if active_uploads > 0 {
+            return Err(AppError::Conflict("项目仍有活动上传会话，不能终止".into()));
+        }
     }
-    let mut am: projects::ActiveModel = p.into();
-    am.status = Set(to);
-    am.updated_at = Set(Utc::now());
-    // CAS：仅当状态仍为原值时流转，防并发重复变更
-    let upd = projects::Entity::update_many()
-        .set(am)
-        .filter(projects::Column::Id.eq(id))
-        .filter(projects::Column::Status.eq(from))
-        .exec(&txn)
-        .await?;
-    if upd.rows_affected == 0 {
-        txn.rollback().await?;
-        return Err(AppError::Conflict(
-            "项目状态已被他人变更，请刷新后重试".into(),
-        ));
-    }
-    audit::insert(
+    apply_transition(
         &txn,
-        Some(me.id),
-        Some(me.employee_no.clone()),
-        "PROJECT_STATUS",
-        Some("project"),
-        Some(id.to_string()),
-        Some(json!({"to": req.status})),
-        None,
+        me,
+        p,
+        Transition {
+            to,
+            action,
+            next_confirm_side: None,
+            history_confirm_side: None,
+            reason: None,
+        },
     )
     .await?;
     txn.commit().await?;
@@ -355,6 +488,271 @@ pub async fn set_status(
         .await?
         .ok_or(AppError::NotFound)?;
     Ok(project_json(db, &model).await)
+}
+
+fn user_side(user: &CurrentUser) -> ConfirmSide {
+    if user.user_type == UserType::Supplier {
+        ConfirmSide::Supplier
+    } else {
+        ConfirmSide::Company
+    }
+}
+
+fn parse_confirm_side(value: &str) -> ApiResult<ConfirmSide> {
+    match value {
+        "COMPANY" => Ok(ConfirmSide::Company),
+        "SUPPLIER" => Ok(ConfirmSide::Supplier),
+        _ => Err(AppError::BadRequest(
+            "确认方必须为 COMPANY 或 SUPPLIER".into(),
+        )),
+    }
+}
+
+async fn lock_workflow_project(
+    txn: &sea_orm::DatabaseTransaction,
+    me: &CurrentUser,
+    project_id: u64,
+    permission: &str,
+) -> ApiResult<projects::Model> {
+    super::perm::lock_business_state(txn).await?;
+    let project = projects::Entity::find_by_id(project_id)
+        .lock_exclusive()
+        .one(txn)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    super::perm::recheck_manager(txn, me.id, permission).await?;
+    scope::ensure_project_access(txn, me, project_id).await?;
+    Ok(project)
+}
+
+pub async fn submit(
+    db: &DatabaseConnection,
+    base_url: &str,
+    me: &CurrentUser,
+    project_id: u64,
+    req: &SubmitReq,
+) -> ApiResult<Value> {
+    let side = parse_confirm_side(req.confirm_side.trim())?;
+    if side == user_side(me) {
+        return Err(AppError::BadRequest("确认方必须选择提交人的另一方".into()));
+    }
+    let txn = db.begin().await?;
+    let project = lock_workflow_project(&txn, me, project_id, "project:submit").await?;
+    if project.status != ProjectStatus::InProgress {
+        return Err(AppError::Conflict("只有进行中的项目可以提交验收".into()));
+    }
+    let available_files = files::Entity::find()
+        .filter(files::Column::ProjectId.eq(project_id))
+        .filter(files::Column::Status.eq(crate::entity::enums::FileStatus::Available))
+        .count(&txn)
+        .await?;
+    if available_files == 0 {
+        return Err(AppError::Conflict(
+            "项目至少上传一个可用文件后才能提交验收".into(),
+        ));
+    }
+    let active_uploads = upload_sessions::Entity::find()
+        .filter(upload_sessions::Column::ProjectId.eq(project_id))
+        .filter(upload_sessions::Column::Status.is_in([
+            crate::entity::enums::UploadStatus::Uploading,
+            crate::entity::enums::UploadStatus::Merging,
+        ]))
+        .count(&txn)
+        .await?;
+    if active_uploads > 0 {
+        return Err(AppError::Conflict(
+            "项目仍有活动上传会话，不能提交验收".into(),
+        ));
+    }
+    apply_transition(
+        &txn,
+        me,
+        project.clone(),
+        Transition {
+            to: ProjectStatus::PendingConfirmation,
+            action: "SUBMIT",
+            next_confirm_side: Some(side),
+            history_confirm_side: Some(side),
+            reason: None,
+        },
+    )
+    .await?;
+    super::notify::enqueue_project_workflow_notice(
+        &txn,
+        &project,
+        super::notify::WorkflowNotice {
+            action: "SUBMIT",
+            confirm_side: Some(side),
+            reason: None,
+            latest_submitter_id: None,
+            operator: me,
+            base_url,
+        },
+    )
+    .await?;
+    txn.commit().await?;
+    let model = projects::Entity::find_by_id(project_id)
+        .one(db)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(project_json(db, &model).await)
+}
+
+async fn decide(
+    db: &DatabaseConnection,
+    base_url: &str,
+    me: &CurrentUser,
+    project_id: u64,
+    action: &'static str,
+    reason: Option<String>,
+) -> ApiResult<Value> {
+    let txn = db.begin().await?;
+    let project = lock_workflow_project(&txn, me, project_id, "project:confirm").await?;
+    if project.status != ProjectStatus::PendingConfirmation {
+        return Err(AppError::Conflict("项目当前不在待确认状态".into()));
+    }
+    let side = project
+        .confirm_side
+        .ok_or_else(|| AppError::Internal("待确认项目缺少确认方".into()))?;
+    if side != user_side(me) {
+        return Err(AppError::Forbidden);
+    }
+    let latest_submit = latest_submission(&txn, project_id).await?;
+    let to = if action == "CONFIRM" {
+        ProjectStatus::Completed
+    } else {
+        ProjectStatus::InProgress
+    };
+    apply_transition(
+        &txn,
+        me,
+        project.clone(),
+        Transition {
+            to,
+            action,
+            next_confirm_side: None,
+            history_confirm_side: Some(side),
+            reason: reason.clone(),
+        },
+    )
+    .await?;
+    super::notify::enqueue_project_workflow_notice(
+        &txn,
+        &project,
+        super::notify::WorkflowNotice {
+            action,
+            confirm_side: Some(side),
+            reason: reason.as_deref(),
+            latest_submitter_id: Some(latest_submit.operator_id),
+            operator: me,
+            base_url,
+        },
+    )
+    .await?;
+    txn.commit().await?;
+    let model = projects::Entity::find_by_id(project_id)
+        .one(db)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(project_json(db, &model).await)
+}
+
+pub async fn confirm(
+    db: &DatabaseConnection,
+    base_url: &str,
+    me: &CurrentUser,
+    project_id: u64,
+) -> ApiResult<Value> {
+    decide(db, base_url, me, project_id, "CONFIRM", None).await
+}
+
+pub async fn reject(
+    db: &DatabaseConnection,
+    base_url: &str,
+    me: &CurrentUser,
+    project_id: u64,
+    req: &RejectReq,
+) -> ApiResult<Value> {
+    let reason = req.reason.trim();
+    if reason.is_empty() {
+        return Err(AppError::BadRequest("驳回原因不能为空".into()));
+    }
+    if reason.chars().count() > 500 {
+        return Err(AppError::BadRequest("驳回原因过长（最多 500 字）".into()));
+    }
+    decide(
+        db,
+        base_url,
+        me,
+        project_id,
+        "REJECT",
+        Some(reason.to_owned()),
+    )
+    .await
+}
+
+pub async fn withdraw(
+    db: &DatabaseConnection,
+    base_url: &str,
+    me: &CurrentUser,
+    project_id: u64,
+) -> ApiResult<Value> {
+    let txn = db.begin().await?;
+    let project = lock_workflow_project(&txn, me, project_id, "project:withdraw").await?;
+    if project.status != ProjectStatus::PendingConfirmation {
+        return Err(AppError::Conflict("项目当前不在待确认状态".into()));
+    }
+    let side = project.confirm_side;
+    let latest_submit = latest_submission(&txn, project_id).await?;
+    let privileged = me.is_internal() && scope::can_view_all(&txn, me.id).await?;
+    if latest_submit.operator_id != me.id && !privileged {
+        return Err(AppError::Forbidden);
+    }
+    apply_transition(
+        &txn,
+        me,
+        project.clone(),
+        Transition {
+            to: ProjectStatus::InProgress,
+            action: "WITHDRAW",
+            next_confirm_side: None,
+            history_confirm_side: side,
+            reason: None,
+        },
+    )
+    .await?;
+    super::notify::enqueue_project_workflow_notice(
+        &txn,
+        &project,
+        super::notify::WorkflowNotice {
+            action: "WITHDRAW",
+            confirm_side: side,
+            reason: None,
+            latest_submitter_id: Some(latest_submit.operator_id),
+            operator: me,
+            base_url,
+        },
+    )
+    .await?;
+    txn.commit().await?;
+    let model = projects::Entity::find_by_id(project_id)
+        .one(db)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(project_json(db, &model).await)
+}
+
+async fn latest_submission(
+    txn: &sea_orm::DatabaseTransaction,
+    project_id: u64,
+) -> ApiResult<project_status_logs::Model> {
+    project_status_logs::Entity::find()
+        .filter(project_status_logs::Column::ProjectId.eq(project_id))
+        .filter(project_status_logs::Column::Action.eq("SUBMIT"))
+        .order_by_desc(project_status_logs::Column::Id)
+        .one(txn)
+        .await?
+        .ok_or_else(|| AppError::Internal("待确认项目缺少提交历史".into()))
 }
 
 pub async fn list_members(db: &DatabaseConnection, project_id: u64) -> ApiResult<Value> {
@@ -451,13 +849,19 @@ pub async fn set_members(
     // 与账号/角色变更共用管理锁；必须先管理锁再项目锁，且在快照读取前取得。
     super::perm::lock_management_state(&txn).await?;
     // 和上传最终授权检查串行化，成员移除提交后旧会话不能继续写入。
-    projects::Entity::find_by_id(project_id)
+    let project = projects::Entity::find_by_id(project_id)
         .lock_exclusive()
         .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
     super::perm::recheck_manager(&txn, me.id, "project:member").await?;
     scope::ensure_project_access(&txn, me, project_id).await?;
+    if !matches!(
+        project.status,
+        ProjectStatus::Draft | ProjectStatus::InProgress
+    ) {
+        return Err(AppError::Conflict("项目当前状态不可调整成员".into()));
+    }
     // 等待期间目标或操作者可能已停用；校验最终完整集合（包括保留的操作者）。
     for uid in &ids {
         let u = users::Entity::find_by_id(*uid)
@@ -501,7 +905,7 @@ pub async fn set_members(
     Ok(())
 }
 
-/// 工作台/列表徽标：未读留言数 + 待我方确认轮次数
+/// 项目徽标：未读留言数 + 是否待我方确认。
 pub async fn summary(
     db: &DatabaseConnection,
     user: &CurrentUser,
@@ -509,18 +913,19 @@ pub async fn summary(
 ) -> ApiResult<Value> {
     scope::ensure_project_access(db, user, project_id).await?;
     let unread = crate::service::message::unread_count(db, user.id, project_id).await?;
-    let my_side = if user.user_type == UserType::Supplier {
-        crate::entity::enums::ConfirmSide::Supplier
-    } else {
-        crate::entity::enums::ConfirmSide::Company
-    };
-    let pending_rounds = crate::entity::rounds::Entity::find()
-        .filter(crate::entity::rounds::Column::ProjectId.eq(project_id))
-        .filter(crate::entity::rounds::Column::Status.eq(RoundStatus::Pending))
-        .filter(crate::entity::rounds::Column::ConfirmSide.eq(my_side))
-        .count(db)
-        .await?;
-    Ok(json!({ "unreadMessages": unread, "pendingRounds": pending_rounds }))
+    let project = projects::Entity::find_by_id(project_id)
+        .one(db)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let pending_confirmation = super::perm::check_perm(db, user.id, "project:confirm")
+        .await
+        .is_ok()
+        && project.status == ProjectStatus::PendingConfirmation
+        && project.confirm_side == Some(user_side(user));
+    Ok(json!({
+        "unreadMessages": unread,
+        "pendingConfirmation": pending_confirmation,
+    }))
 }
 
 /// 下拉选项：启用中的供应商（仅内部用户可用，用于新建项目）
@@ -577,16 +982,22 @@ pub async fn internal_user_options(
 }
 
 fn delete_refused_reason(status: ProjectStatus, has_content: bool) -> Option<&'static str> {
-    if status == ProjectStatus::InProgress {
-        return Some("进行中的项目不能删除");
+    if matches!(
+        status,
+        ProjectStatus::InProgress | ProjectStatus::PendingConfirmation | ProjectStatus::Completed
+    ) {
+        return Some("进行中、待确认或已完成的项目不能删除");
     }
     if has_content {
-        return Some("项目内仍有轮次、文件或留言，不能直接删除");
+        return Some("项目内仍有文件或留言，不能直接删除");
     }
     None
 }
 
 pub async fn delete(state: &AppState, user: &CurrentUser, id: u64) -> ApiResult<()> {
+    if !user.is_internal() {
+        return Err(AppError::Forbidden);
+    }
     let txn = state.db.begin().await?;
     // Same order as member management: management gate -> project row -> authorization.
     // Acquire the project lock before snapshot reads, so a concurrent start cannot pass a stale DRAFT check.
@@ -598,10 +1009,6 @@ pub async fn delete(state: &AppState, user: &CurrentUser, id: u64) -> ApiResult<
         .ok_or(AppError::NotFound)?;
     super::perm::recheck_manager(&txn, user.id, "project:delete").await?;
     scope::ensure_project_access(&txn, user, id).await?;
-    let round_count = rounds::Entity::find()
-        .filter(rounds::Column::ProjectId.eq(id))
-        .count(&txn)
-        .await?;
     let file_count = files::Entity::find()
         .filter(files::Column::ProjectId.eq(id))
         .count(&txn)
@@ -610,9 +1017,7 @@ pub async fn delete(state: &AppState, user: &CurrentUser, id: u64) -> ApiResult<
         .filter(messages::Column::ProjectId.eq(id))
         .count(&txn)
         .await?;
-    if let Some(reason) =
-        delete_refused_reason(project.status, round_count + file_count + message_count > 0)
-    {
+    if let Some(reason) = delete_refused_reason(project.status, file_count + message_count > 0) {
         return Err(AppError::BadRequest(reason.into()));
     }
     if upload_sessions::Entity::find()
@@ -623,13 +1028,17 @@ pub async fn delete(state: &AppState, user: &CurrentUser, id: u64) -> ApiResult<
     {
         return Err(AppError::BadRequest("项目仍有上传记录，不能删除".into()));
     }
-    // A project with business content is refused above, never cascaded into file/round/message deletion.
+    // A project with business content is refused above, never cascaded into file/message deletion.
     project_members::Entity::delete_many()
         .filter(project_members::Column::ProjectId.eq(id))
         .exec(&txn)
         .await?;
     email_outbox::Entity::delete_many()
         .filter(email_outbox::Column::ProjectId.eq(id))
+        .exec(&txn)
+        .await?;
+    project_status_logs::Entity::delete_many()
+        .filter(project_status_logs::Column::ProjectId.eq(id))
         .exec(&txn)
         .await?;
     audit::insert(
@@ -658,7 +1067,6 @@ pub async fn delete(state: &AppState, user: &CurrentUser, id: u64) -> ApiResult<
 
 #[cfg(test)]
 mod tests {
-    use super::transition_allowed;
     use crate::entity::enums::ProjectStatus;
 
     #[test]
@@ -666,11 +1074,11 @@ mod tests {
         use super::delete_refused_reason;
         assert_eq!(
             delete_refused_reason(ProjectStatus::InProgress, false),
-            Some("进行中的项目不能删除")
+            Some("进行中、待确认或已完成的项目不能删除")
         );
         assert_eq!(
             delete_refused_reason(ProjectStatus::Draft, true),
-            Some("项目内仍有轮次、文件或留言，不能直接删除")
+            Some("项目内仍有文件或留言，不能直接删除")
         );
         assert_eq!(delete_refused_reason(ProjectStatus::Draft, false), None);
         assert_eq!(
@@ -680,18 +1088,20 @@ mod tests {
     }
 
     #[test]
-    fn completed_and_terminated_projects_are_terminal() {
-        assert!(!transition_allowed(
-            ProjectStatus::Completed,
-            ProjectStatus::InProgress
-        ));
-        assert!(!transition_allowed(
-            ProjectStatus::Terminated,
-            ProjectStatus::InProgress
-        ));
-        assert!(transition_allowed(
-            ProjectStatus::Draft,
-            ProjectStatus::InProgress
-        ));
+    fn workflow_audit_actions_are_specific() {
+        use super::workflow_audit_action;
+
+        for (workflow, audit) in [
+            ("START", "PROJECT_START"),
+            ("SUBMIT", "PROJECT_SUBMIT"),
+            ("CONFIRM", "PROJECT_CONFIRM"),
+            ("REJECT", "PROJECT_REJECT"),
+            ("WITHDRAW", "PROJECT_WITHDRAW"),
+            ("TERMINATE", "PROJECT_TERMINATE"),
+            ("RESTART", "PROJECT_RESTART"),
+        ] {
+            assert_eq!(workflow_audit_action(workflow).unwrap(), audit);
+        }
+        assert!(workflow_audit_action("STATUS").is_err());
     }
 }

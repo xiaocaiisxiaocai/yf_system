@@ -7,7 +7,6 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: u64,
     pub project_id: u64,
-    pub round_id: u64,
     pub uploader_id: u64,
     /// 由上传人身份自动推导：内部=C2S，供应商=S2C
     pub direction: FileDirection,
