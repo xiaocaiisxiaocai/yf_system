@@ -190,7 +190,7 @@ html, body, #root {
 .profile-readonly-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
 .profile-readonly-item { min-width: 0; padding: 10px 12px; border-radius: 8px; background: var(--color-fill-1); }
 .profile-readonly-item span { display: block; margin-bottom: 4px; color: var(--color-text-3); font-size: 12px; }
-.profile-readonly-item strong { display: block; overflow: hidden; color: var(--color-text-1); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.profile-readonly-item strong { display: block; color: var(--color-text-1); font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
 .profile-boundary-note { margin: 0 0 16px; padding: 9px 12px; border-radius: 8px; background: rgb(var(--primary-1)); color: rgb(var(--primary-7)); font-size: 12px; line-height: 1.6; }
 .profile-card-tip { display: block; margin-bottom: 16px; line-height: 1.6; }
 .page-card--table {
