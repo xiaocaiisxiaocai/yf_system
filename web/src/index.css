@@ -1102,6 +1102,16 @@ html, body, #root {
 
 @media (max-width: 720px) {
   .project-target-notice { margin-top: -2px; }
+  .project-detail-page--activity { display: block; height: auto; overflow: visible; }
+  .project-detail-tabs-card--activity { flex: none; }
+  .project-detail-tabs-card--activity > .arco-card-body,
+  .project-detail-tabs-card--activity .arco-tabs,
+  .project-detail-tabs-card--activity .arco-tabs-content,
+  .project-detail-tabs-card--activity .arco-tabs-content-inner,
+  .project-detail-tabs-card--activity .arco-tabs-content-item-active,
+  .project-detail-tabs-card--activity .arco-tabs-pane { height: auto; overflow: visible; }
+  .project-activity { height: auto; }
+  .project-activity-feed { flex: none; overflow: visible; padding-right: 0; }
   .project-activity-summary { grid-template-columns: 1fr; gap: 6px; }
   .project-activity-summary-item { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 10px; }
   .project-activity-summary-value { margin-top: 0; text-align: right; }
