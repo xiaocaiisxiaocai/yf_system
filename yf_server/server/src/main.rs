@@ -21,6 +21,8 @@ mod regression_delete_accounts;
 #[cfg(test)]
 mod regression_delete_project;
 #[cfg(test)]
+mod regression_disabled_role;
+#[cfg(test)]
 mod regression_identity_review;
 #[cfg(test)]
 mod regression_org_migration;

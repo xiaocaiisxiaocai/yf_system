@@ -449,11 +449,17 @@ pub async fn update(
         .into_iter()
         .map(|binding| binding.role_id)
         .collect();
-    if let Some(role_ids) = &requested_roles {
+    validate_role_ids(&old_role_ids)?;
+    let role_changed = requested_roles
+        .as_ref()
+        .is_some_and(|role_ids| role_ids != &old_role_ids);
+    if role_changed {
+        let role_ids = requested_roles
+            .as_ref()
+            .expect("role_changed requires requested roles");
         ensure_admin_role_change_safe(&txn, me.id, id, role_ids).await?;
         ensure_internal_role_assignable(&txn, role_ids[0]).await?;
-    } else {
-        validate_role_ids(&old_role_ids)?;
+    } else if user.status == CommonStatus::Active {
         ensure_internal_role_assignable(&txn, old_role_ids[0]).await?;
     }
     let old_role_id = old_role_ids.first().copied();
@@ -472,7 +478,10 @@ pub async fn update(
     am.updated_at = Set(Utc::now());
     let model = am.update(&txn).await?;
     let mut new_role = None;
-    if let Some(role_ids) = &requested_roles {
+    if role_changed {
+        let role_ids = requested_roles
+            .as_ref()
+            .expect("role_changed requires requested roles");
         user_roles::Entity::delete_many()
             .filter(user_roles::Column::UserId.eq(id))
             .exec(&txn)
@@ -489,7 +498,7 @@ pub async fn update(
     if req.department_id.is_some() {
         changed_fields.push("departmentId");
     }
-    if requested_roles.is_some() {
+    if role_changed {
         changed_fields.push("roleId");
     }
     audit::insert(
