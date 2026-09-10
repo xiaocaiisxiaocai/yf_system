@@ -37,6 +37,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone }: P
   const [file, setFile] = useState<File | null>(null)
   const [phase, setPhase] = useState<Phase>('pick')
   const [percent, setPercent] = useState(0)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const attemptRef = useRef<Attempt | null>(null)
   const busy = phase !== 'pick' && phase !== 'done'
 
@@ -51,6 +52,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone }: P
   }, [])
 
   const reset = () => {
+    if (fileInputRef.current) fileInputRef.current.value = ''
     setFile(null)
     setPhase('pick')
     setPercent(0)
@@ -255,6 +257,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone }: P
       }
     >
       <input
+        ref={fileInputRef}
         type="file"
         className="upload-file-input"
         aria-label="选择上传文件"

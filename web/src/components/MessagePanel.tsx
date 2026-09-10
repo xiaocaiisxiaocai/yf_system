@@ -69,11 +69,10 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
         setPage(p)
         setLoadError(false)
         setAppendError(false)
-      } catch (error) {
+      } catch {
         if (seq === loadSeq.current) {
           if (append) setAppendError(true)
           else setLoadError(true)
-          if (append) throw error
         }
       } finally {
         if (seq === loadSeq.current) setLoading(false)

@@ -1192,6 +1192,7 @@ test('a definitive upload integrity failure can discard the damaged session and 
   let done = 0
   let closed = 0
   const file = { name: 'damaged.pdf', size: 1, slice: () => new Blob(['x']) }
+  const fileInput = { value: 'damaged.pdf' }
   const Uploader = loadTs('src/components/ChunkUploader.tsx', {
     '@arco-design/web-react': arco,
     '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
@@ -1219,7 +1220,9 @@ test('a definitive upload integrity failure can discard the damaged session and 
     },
   }).default
   let renderer
-  await act(async () => { renderer = create(React.createElement(Uploader, { projectId: 1, visible: true, onClose: () => { closed++ }, onDone: () => { done++ } })) })
+  await act(async () => { renderer = create(React.createElement(Uploader, { projectId: 1, visible: true, onClose: () => { closed++ }, onDone: () => { done++ } }), {
+    createNodeMock: (element) => element.type === 'input' ? fileInput : null,
+  }) })
   await act(async () => renderer.root.findByType('input').props.onChange({ target: { files: [file] } }))
   await act(async () => renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick())
   let discard = findActionButton(renderer.root.findByType('Modal').props.footer, '清理并重新选择')
@@ -1228,9 +1231,11 @@ test('a definitive upload integrity failure can discard the damaged session and 
   assert.deepEqual(deletes, ['/uploads/damaged-session'])
   discard = findActionButton(renderer.root.findByType('Modal').props.footer, '清理并重新选择')
   assert.ok(discard, 'failed cleanup must retain the damaged session for retry')
+  assert.equal(fileInput.value, 'damaged.pdf', 'failed cleanup keeps the selected file until cleanup succeeds')
   await act(async () => discard.props.onClick())
   assert.deepEqual(deletes, ['/uploads/damaged-session', '/uploads/damaged-session'])
   assert.equal(renderer.root.findByType('input').props.disabled, false)
+  assert.equal(fileInput.value, '', 'cleanup must clear the native input so choosing the same file fires change again')
   await act(async () => renderer.root.findByType('input').props.onChange({ target: { files: [file] } }))
   await act(async () => renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick())
   assert.deepEqual(merges, ['damaged-session', 'fresh-session'])
@@ -2087,7 +2092,7 @@ for (const deleteCount of [1,20]) test(`deleting ${deleteCount} loaded messages 
 
 test('a failed second message page can be retried without losing or duplicating messages', async () => {
   const rows=Array.from({length:41},(_,i)=>({id:41-i,senderId:2,senderName:'成员',senderType:'INTERNAL',content:`message ${41-i}`,readByMe:true,readCount:0,totalCount:1}))
-  let appendFailures=1
+  let appendFailures=2
   const http = {
     get: async (_url,{params}) => {
       if(params.beforeId && appendFailures>0){appendFailures--;throw Error('transient page failure')}
@@ -2103,11 +2108,15 @@ test('a failed second message page can be retried without losing or duplicating 
   let renderer
   await act(async()=>{renderer=create(React.createElement(Page,{projectId:1,projectStatus:'IN_PROGRESS'}))})
   let more=renderer.root.findAllByType('Button').find(n=>JSON.stringify(n.props.children)?.includes('加载更多'))
-  let rejected=false
-  try { await act(async()=>{await more.props.onClick()}) } catch { rejected=true }
-  assert.equal(rejected,true,'the first failed append should surface as a rejected load')
-  more=renderer.root.findAllByType('Button').find(n=>JSON.stringify(n.props.children)?.includes('加载更多'))
-  await act(async()=>more.props.onClick())
+  const visibleIds=()=>renderer.root.findAll(n=>n.props['data-message-id']!==undefined).map(n=>n.props['data-message-id'])
+  const retry=()=>renderer.root.findAllByType('Button').find(n=>n.props.children==='重试')
+  await act(async()=>assert.doesNotReject(more.props.onClick(), 'a handled page failure must not escape the UI event handler'))
+  assert.deepEqual(visibleIds(),rows.slice(0,20).map(r=>r.id),'failed append keeps the first page intact')
+  assert.ok(retry(),'the failure must expose an explicit retry action')
+  await act(async()=>assert.doesNotReject(retry().props.onClick(), 'a failed retry must also stay handled'))
+  assert.deepEqual(visibleIds(),rows.slice(0,20).map(r=>r.id))
+  await act(async()=>retry().props.onClick())
+  assert.equal(retry(),undefined,'successful retry clears the failure state')
   more=renderer.root.findAllByType('Button').find(n=>JSON.stringify(n.props.children)?.includes('加载更多'))
   await act(async()=>more.props.onClick())
   const ids=renderer.root.findAll(n=>n.props['data-message-id']!==undefined).map(n=>n.props['data-message-id'])
