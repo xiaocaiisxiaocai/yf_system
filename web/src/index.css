@@ -454,6 +454,8 @@ html, body, #root {
 .arco-table .arco-table-td { color: #344054; vertical-align: middle; }
 .arco-table .arco-table-container { border-color: var(--app-border); border-radius: 7px 7px 0 0; }
 .arco-table .arco-table-pagination { padding-top: 12px; }
+.arco-pagination { flex-wrap: wrap; gap: 8px; }
+.arco-pagination-total-text { flex-shrink: 0; height: auto; white-space: nowrap; }
 .arco-table .arco-table-cell {
   min-width: 0;
   overflow: hidden;
@@ -894,9 +896,9 @@ html, body, #root {
   .responsive-toolbar > .arco-space-item:first-child { flex: 1 0 100%; }
   .responsive-toolbar .arco-input-search,
   .responsive-toolbar .arco-select { max-width: 100%; }
-  .arco-pagination { flex-wrap: wrap; gap: 8px; }
-  .arco-pagination-total-text { white-space: nowrap; }
   .arco-table-pagination { flex-wrap: wrap; }
+  .arco-pagination-list { display: flex; flex-wrap: wrap; gap: 4px; }
+  .arco-pagination-item:not(:last-child) { margin-right: 0; }
   .audit-filter-panel { min-width: 0; }
   .audit-filter-panel > * { min-width: 0; max-width: 100%; }
   .layout-sider { display: none; }

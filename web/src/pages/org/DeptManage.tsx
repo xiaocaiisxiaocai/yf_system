@@ -286,7 +286,7 @@ export default function DeptManage() {
             </>
           ) : (
             <div className="dept-empty-detail">
-              <Typography.Title heading={5} style={{ margin: 0 }}>请选择左侧组织节点</Typography.Title>
+              <Typography.Title heading={5} style={{ margin: 0 }}>请选择组织节点</Typography.Title>
             </div>
           )}
         </section>
