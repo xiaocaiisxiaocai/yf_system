@@ -112,6 +112,8 @@ pub async fn update(db: &DatabaseConnection, me: &CurrentUser, req: &ConfigBatch
         validated.push((item.key.clone(), validated_value(&item.key, &item.value)?));
     }
     let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    super::perm::recheck_manager(&txn, me.id, "config:manage").await?;
     for (key, value) in &validated {
         let Some(c) = system_configs::Entity::find_by_id(key.clone())
             .one(&txn)

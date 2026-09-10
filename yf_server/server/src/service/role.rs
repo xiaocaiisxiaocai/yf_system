@@ -118,6 +118,8 @@ pub async fn create(
     let name = req.name.trim();
     let now = Utc::now();
     let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    super::perm::recheck_manager(&txn, me.id, "role:manage").await?;
     ensure_name_unique(&txn, name, None).await?;
     let model = roles::ActiveModel {
         name: Set(name.to_string()),
@@ -156,8 +158,11 @@ pub async fn update(
     req: &RoleUpsert,
 ) -> ApiResult<Value> {
     validate_details(req)?;
+    let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    super::perm::recheck_manager(&txn, me.id, "role:manage").await?;
     let role = roles::Entity::find_by_id(id)
-        .one(db)
+        .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
     if role.is_built_in && req.name.trim() != role.name {
@@ -165,7 +170,6 @@ pub async fn update(
     }
     let old_name = role.name.clone();
     let old_description = role.description.clone();
-    let txn = db.begin().await?;
     let name = req.name.trim();
     ensure_name_unique(&txn, name, Some(id)).await?;
     let mut am: roles::ActiveModel = role.into();

@@ -323,3 +323,326 @@ async fn business_gate_is_shared_but_still_blocks_management_changes() {
     first.commit().await.unwrap();
     management.await.unwrap();
 }
+
+#[derive(Clone, Copy, Debug)]
+enum ManagementWrite {
+    ProjectCreate,
+    RoleCreate,
+    RoleUpdate,
+    SupplierCreate,
+    SupplierUpdate,
+    PasswordReset,
+    ConfigUpdate,
+}
+
+impl ManagementWrite {
+    fn permission(self) -> &'static str {
+        match self {
+            Self::ProjectCreate => "project:create",
+            Self::RoleCreate | Self::RoleUpdate => "role:manage",
+            Self::SupplierCreate | Self::SupplierUpdate => "supplier:manage",
+            Self::PasswordReset => "user:manage",
+            Self::ConfigUpdate => "config:manage",
+        }
+    }
+
+    async fn run(
+        self,
+        db: &sea_orm::DatabaseConnection,
+        actor: &crate::middleware::auth::CurrentUser,
+        supplier_id: u64,
+        role_id: u64,
+        name: &str,
+    ) -> crate::error::ApiResult<()> {
+        match self {
+            Self::ProjectCreate => service::project::create(
+                db,
+                actor,
+                &service::project::ProjectUpsert {
+                    name: name.into(),
+                    description: None,
+                    supplier_id,
+                },
+            )
+            .await
+            .map(|_| ()),
+            Self::RoleCreate | Self::RoleUpdate => {
+                let req = service::role::RoleUpsert {
+                    name: name.into(),
+                    description: Some("changed".into()),
+                };
+                if matches!(self, Self::RoleCreate) {
+                    service::role::create(db, actor, &req).await.map(|_| ())
+                } else {
+                    service::role::update(db, actor, role_id, &req)
+                        .await
+                        .map(|_| ())
+                }
+            }
+            Self::SupplierCreate | Self::SupplierUpdate => {
+                let req = service::supplier::SupplierUpsert {
+                    name: name.into(),
+                    remark: Some("changed".into()),
+                };
+                if matches!(self, Self::SupplierCreate) {
+                    service::supplier::create(db, actor, &req).await.map(|_| ())
+                } else {
+                    service::supplier::update(db, actor, supplier_id, &req)
+                        .await
+                        .map(|_| ())
+                }
+            }
+            Self::PasswordReset => {
+                service::user::reset_password(
+                    db,
+                    actor,
+                    actor.id,
+                    &service::user::PasswordReset {
+                        new_password: "ChangedRegression123".into(),
+                    },
+                )
+                .await
+            }
+            Self::ConfigUpdate => {
+                service::config::update(
+                    db,
+                    actor,
+                    &service::config::ConfigBatch {
+                        items: vec![service::config::ConfigUpdate {
+                            key: "storage.warn_percent".into(),
+                            value: "79".into(),
+                        }],
+                    },
+                )
+                .await
+            }
+        }
+    }
+
+    // Compare persisted state without logging password hashes or other account data.
+    async fn snapshot(self, f: &Fixture, supplier_id: u64, role_id: u64, name: &str) -> String {
+        use crate::entity::{roles, suppliers, system_configs, users};
+        let db = &f.state.db;
+        match self {
+            Self::ProjectCreate => format!(
+                "{:?}",
+                projects::Entity::find()
+                    .filter(projects::Column::Name.eq(name))
+                    .one(db)
+                    .await
+                    .unwrap()
+            ),
+            Self::RoleCreate => format!(
+                "{:?}",
+                roles::Entity::find()
+                    .filter(roles::Column::Name.eq(name))
+                    .one(db)
+                    .await
+                    .unwrap()
+            ),
+            Self::RoleUpdate => format!(
+                "{:?}",
+                roles::Entity::find_by_id(role_id).one(db).await.unwrap()
+            ),
+            Self::SupplierCreate => format!(
+                "{:?}",
+                suppliers::Entity::find()
+                    .filter(suppliers::Column::Name.eq(name))
+                    .one(db)
+                    .await
+                    .unwrap()
+            ),
+            Self::SupplierUpdate => format!(
+                "{:?}",
+                suppliers::Entity::find_by_id(supplier_id)
+                    .one(db)
+                    .await
+                    .unwrap()
+            ),
+            Self::PasswordReset => {
+                let user = users::Entity::find_by_id(f.member.id)
+                    .one(db)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                format!(
+                    "{:?}",
+                    (
+                        user.password_hash,
+                        user.must_change_password,
+                        user.failed_login_attempts,
+                        user.locked_until
+                    )
+                )
+            }
+            Self::ConfigUpdate => format!(
+                "{:?}",
+                system_configs::Entity::find_by_id("storage.warn_percent")
+                    .one(db)
+                    .await
+                    .unwrap()
+            ),
+        }
+    }
+}
+
+async fn management_writes_after_authorization_change(disable_account: bool) {
+    use crate::entity::{enums::CommonStatus, users};
+    use sea_orm::{ActiveModelTrait, Set};
+    let mut outcomes = Vec::new();
+    for operation in [
+        ManagementWrite::ProjectCreate,
+        ManagementWrite::RoleCreate,
+        ManagementWrite::RoleUpdate,
+        ManagementWrite::SupplierCreate,
+        ManagementWrite::SupplierUpdate,
+        ManagementWrite::PasswordReset,
+        ManagementWrite::ConfigUpdate,
+    ] {
+        let f = Fixture::new().await;
+        let role_id = grant_only(&f, operation.permission()).await;
+        let supplier_id = projects::Entity::find_by_id(f.project_id)
+            .one(&f.state.db)
+            .await
+            .unwrap()
+            .unwrap()
+            .supplier_id;
+        let name = format!("权限终检-{}", f.member.employee_no);
+        let before = operation.snapshot(&f, supplier_id, role_id, &name).await;
+        let audit_before = audit_logs::Entity::find()
+            .filter(audit_logs::Column::UserId.eq(f.member.id))
+            .count(&f.state.db)
+            .await
+            .unwrap();
+        let (txn, blocker) = gate_and_project(&f).await;
+        let (db, actor, request_name) = (f.state.db.clone(), f.member.clone(), name.clone());
+        let mut pending = tokio::spawn(async move {
+            operation
+                .run(&db, &actor, supplier_id, role_id, &request_name)
+                .await
+        });
+        // Before the fix, a write can complete while management owns the gate.
+        // After the fix, observe the actual MySQL wait before revoking access.
+        let premature = tokio::select! {
+            result = &mut pending => Some(result.unwrap()),
+            () = await_owned_lock(&f.state.db, blocker) => None,
+        };
+        if disable_account {
+            let mut user: users::ActiveModel = users::Entity::find_by_id(f.member.id)
+                .one(&txn)
+                .await
+                .unwrap()
+                .unwrap()
+                .into();
+            user.status = Set(CommonStatus::Disabled);
+            user.update(&txn).await.unwrap();
+        } else {
+            role_permissions::Entity::delete_many()
+                .filter(role_permissions::Column::RoleId.eq(role_id))
+                .exec(&txn)
+                .await
+                .unwrap();
+        }
+        txn.commit().await.unwrap();
+        let waited = premature.is_none();
+        let result = match premature {
+            Some(result) => result,
+            None => pending.await.unwrap(),
+        };
+        let unchanged = before == operation.snapshot(&f, supplier_id, role_id, &name).await;
+        let audit_unchanged = audit_before
+            == audit_logs::Entity::find()
+                .filter(audit_logs::Column::UserId.eq(f.member.id))
+                .count(&f.state.db)
+                .await
+                .unwrap();
+        outcomes.push((
+            operation,
+            waited,
+            matches!(result, Err(AppError::Forbidden)),
+            unchanged,
+            audit_unchanged,
+        ));
+    }
+    assert!(
+        outcomes
+            .iter()
+            .all(|(_, waited, denied, unchanged, audit_unchanged)| *waited
+                && *denied
+                && *unchanged
+                && *audit_unchanged),
+        "operation, waited, forbidden, data unchanged, audit unchanged: {outcomes:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "isolated MySQL required"]
+async fn write_permission_management_writes_recheck_revoked_permission() {
+    management_writes_after_authorization_change(false).await;
+}
+
+#[tokio::test]
+#[ignore = "isolated MySQL required"]
+async fn write_permission_management_writes_recheck_disabled_account() {
+    management_writes_after_authorization_change(true).await;
+}
+
+#[tokio::test]
+#[ignore = "isolated MySQL required"]
+async fn write_permission_project_create_rechecks_supplier_after_management_wait() {
+    use crate::entity::{enums::CommonStatus, suppliers};
+    use sea_orm::{ActiveModelTrait, Set};
+    let f = Fixture::new().await;
+    grant_only(&f, "project:create").await;
+    let supplier_id = projects::Entity::find_by_id(f.project_id)
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .unwrap()
+        .supplier_id;
+    let name = format!("供应商禁用终检-{}", f.member.employee_no);
+    let (txn, blocker) = gate_and_project(&f).await;
+    let (db, actor, request_name) = (f.state.db.clone(), f.member.clone(), name.clone());
+    let pending = tokio::spawn(async move {
+        service::project::create(
+            &db,
+            &actor,
+            &service::project::ProjectUpsert {
+                name: request_name,
+                description: None,
+                supplier_id,
+            },
+        )
+        .await
+    });
+    await_owned_lock(&f.state.db, blocker).await;
+    let mut supplier: suppliers::ActiveModel = suppliers::Entity::find_by_id(supplier_id)
+        .one(&txn)
+        .await
+        .unwrap()
+        .unwrap()
+        .into();
+    supplier.status = Set(CommonStatus::Disabled);
+    supplier.update(&txn).await.unwrap();
+    txn.commit().await.unwrap();
+    assert!(
+        matches!(pending.await.unwrap(), Err(AppError::BadRequest(message)) if message == "供应商已被禁用")
+    );
+    assert_eq!(
+        projects::Entity::find()
+            .filter(projects::Column::Name.eq(name))
+            .count(&f.state.db)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        audit_logs::Entity::find()
+            .filter(audit_logs::Column::UserId.eq(f.member.id))
+            .filter(audit_logs::Column::Action.eq("PROJECT_CREATE"))
+            .count(&f.state.db)
+            .await
+            .unwrap(),
+        0
+    );
+}

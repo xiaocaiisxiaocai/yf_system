@@ -132,6 +132,8 @@ pub async fn create(
     let name = req.name.trim();
     let now = Utc::now();
     let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    super::perm::recheck_manager(&txn, me.id, "supplier:manage").await?;
     ensure_name_unique(&txn, name, None).await?;
     let model = suppliers::ActiveModel {
         name: Set(name.to_string()),
@@ -177,14 +179,16 @@ pub async fn update(
     id: u64,
     req: &SupplierUpsert,
 ) -> ApiResult<Value> {
+    validate_supplier(req)?;
+    let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    super::perm::recheck_manager(&txn, me.id, "supplier:manage").await?;
     let s = suppliers::Entity::find_by_id(id)
-        .one(db)
+        .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
-    validate_supplier(req)?;
     let name = req.name.trim();
     let old_name = s.name.clone();
-    let txn = db.begin().await?;
     ensure_name_unique(&txn, name, Some(id)).await?;
     let mut am: suppliers::ActiveModel = s.into();
     am.name = Set(name.to_string());

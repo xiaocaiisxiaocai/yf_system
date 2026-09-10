@@ -197,8 +197,12 @@ pub async fn create(
         return Err(AppError::BadRequest("项目名称过长".into()));
     }
     validate_description(req.description.as_deref())?;
+    // Read permissions and supplier state only after management changes finish.
+    let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    super::perm::recheck_manager(&txn, me.id, "project:create").await?;
     let supplier = suppliers::Entity::find_by_id(req.supplier_id)
-        .one(db)
+        .one(&txn)
         .await?
         .ok_or(AppError::BadRequest("供应商不存在".into()))?;
     if supplier.status != CommonStatus::Active {
@@ -206,7 +210,6 @@ pub async fn create(
     }
     let now = Utc::now();
     // 项目与创建人成员记录同事务，避免半成功状态
-    let txn = db.begin().await?;
     ensure_name_unique(&txn, name, None).await?;
     let model = projects::ActiveModel {
         name: Set(name.to_string()),

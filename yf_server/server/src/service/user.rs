@@ -590,15 +590,18 @@ pub async fn reset_password(
     if !password::strong_enough(&req.new_password) {
         return Err(AppError::BadRequest("新密码需 6-20 位".into()));
     }
+    let txn = db.begin().await?;
+    super::perm::lock_management_state(&txn).await?;
+    super::perm::recheck_manager(&txn, me.id, "user:manage").await?;
     let user = users::Entity::find_by_id(id)
-        .one(db)
+        .lock_exclusive()
+        .one(&txn)
         .await?
         .ok_or(AppError::NotFound)?;
     if user.user_type != UserType::Internal {
         return Err(AppError::BadRequest("供应商人员请在供应商模块维护".into()));
     }
     let employee_no = user.employee_no.clone();
-    let txn = db.begin().await?;
     let mut am: users::ActiveModel = user.into();
     am.password_hash = Set(password::hash(&req.new_password)?);
     am.must_change_password = Set(true);
