@@ -1,0 +1,790 @@
+{
+  "sourceCommit": "cefe0d3ce8b783fc22358daa987a34b7a5dcda26",
+  "source": "yf_server/migration/src through m20260911_000017_auth_session_families",
+  "tables": [
+    {
+      "name": "audit_logs",
+      "sql": "CREATE TABLE `audit_logs` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `user_id` bigint(20) unsigned DEFAULT NULL,\n  `employee_no` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `action` varchar(48) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `target_type` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `target_id` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `detail` json DEFAULT NULL,\n  `ip` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`),\n  KEY `idx_audit_time` (`created_at`),\n  KEY `idx_audit_user` (`user_id`),\n  KEY `idx_audit_action` (`action`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "departments",
+      "sql": "CREATE TABLE `departments` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `name` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `parent_id` bigint(20) unsigned DEFAULT NULL,\n  `sort_no` int(11) NOT NULL DEFAULT '0',\n  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'ACTIVE',\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  `kind` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'DIVISION',\n  `business_parent_scope` bigint(20) unsigned GENERATED ALWAYS AS (ifnull(`parent_id`,0)) STORED,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_departments_parent_kind_name` (`business_parent_scope`,`kind`,`name`),\n  KEY `idx_departments_parent` (`parent_id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "email_outbox",
+      "sql": "CREATE TABLE `email_outbox` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `event_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `dedupe_key` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `project_id` bigint(20) unsigned DEFAULT NULL,\n  `recipient_user_id` bigint(20) unsigned DEFAULT NULL,\n  `recipient_email` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `subject` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `body` text COLLATE utf8mb4_unicode_ci NOT NULL,\n  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'PENDING',\n  `retry_count` int(11) NOT NULL DEFAULT '0',\n  `next_attempt_at` datetime(3) DEFAULT NULL,\n  `last_error` varchar(1024) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `sent_at` datetime DEFAULT NULL,\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_outbox_dedupe_key` (`dedupe_key`),\n  KEY `idx_outbox_status` (`status`,`retry_count`),\n  KEY `idx_outbox_status_next` (`status`,`next_attempt_at`),\n  KEY `fk_outbox_project_v2` (`project_id`),\n  CONSTRAINT `fk_outbox_project_v2` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "files",
+      "sql": "CREATE TABLE `files` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `project_id` bigint(20) unsigned NOT NULL,\n  `uploader_id` bigint(20) unsigned NOT NULL,\n  `direction` varchar(8) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `original_name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `stored_name` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `ext` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `size_bytes` bigint(20) unsigned NOT NULL,\n  `mime_type` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `sha256` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `storage_path` varchar(512) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'AVAILABLE',\n  `deleted_at` datetime(3) DEFAULT NULL,\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `stored_name` (`stored_name`),\n  KEY `fk_files_uploader` (`uploader_id`),\n  KEY `idx_files_project` (`project_id`),\n  KEY `idx_files_status_deleted_at` (`status`,`deleted_at`),\n  CONSTRAINT `fk_files_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`),\n  CONSTRAINT `fk_files_uploader` FOREIGN KEY (`uploader_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "message_reads",
+      "sql": "CREATE TABLE `message_reads` (\n  `message_id` bigint(20) unsigned NOT NULL,\n  `user_id` bigint(20) unsigned NOT NULL,\n  `read_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (`message_id`,`user_id`),\n  KEY `idx_mr_user` (`user_id`),\n  CONSTRAINT `fk_mr_msg` FOREIGN KEY (`message_id`) REFERENCES `messages` (`id`),\n  CONSTRAINT `fk_mr_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "messages",
+      "sql": "CREATE TABLE `messages` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `project_id` bigint(20) unsigned NOT NULL,\n  `sender_id` bigint(20) unsigned NOT NULL,\n  `content` text COLLATE utf8mb4_unicode_ci NOT NULL,\n  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'NORMAL',\n  `deleted_by` bigint(20) unsigned DEFAULT NULL,\n  `deleted_at` datetime DEFAULT NULL,\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`),\n  KEY `fk_msg_sender` (`sender_id`),\n  KEY `idx_msg_project_time` (`project_id`,`created_at`),\n  CONSTRAINT `fk_msg_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`),\n  CONSTRAINT `fk_msg_sender` FOREIGN KEY (`sender_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "permissions",
+      "sql": "CREATE TABLE `permissions` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `code` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `name` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `type` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `parent_id` bigint(20) unsigned DEFAULT NULL,\n  `sort_no` int(11) NOT NULL DEFAULT '0',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `code` (`code`),\n  KEY `idx_permissions_parent` (`parent_id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "project_activities",
+      "sql": "CREATE TABLE `project_activities` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `project_id` bigint(20) unsigned NOT NULL,\n  `activity_type` varchar(16) NOT NULL,\n  `action` varchar(32) NOT NULL,\n  `actor_id` bigint(20) unsigned DEFAULT NULL,\n  `actor_name` varchar(128) NOT NULL,\n  `occurred_at` datetime(3) NOT NULL,\n  `title` varchar(160) NOT NULL,\n  `summary` varchar(160) DEFAULT NULL,\n  `target_id` bigint(20) unsigned DEFAULT NULL,\n  `source_key` varchar(191) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_project_activities_source` (`source_key`),\n  KEY `idx_project_activities_project_time` (`project_id`,`occurred_at`,`id`),\n  KEY `idx_project_activities_project_type_time` (`project_id`,`activity_type`,`occurred_at`,`id`),\n  CONSTRAINT `fk_project_activities_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+    },
+    {
+      "name": "project_members",
+      "sql": "CREATE TABLE `project_members` (\n  `project_id` bigint(20) unsigned NOT NULL,\n  `user_id` bigint(20) unsigned NOT NULL,\n  `created_by` bigint(20) unsigned DEFAULT NULL,\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (`project_id`,`user_id`),\n  KEY `idx_pm_user` (`user_id`),\n  CONSTRAINT `fk_pm_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`),\n  CONSTRAINT `fk_pm_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "project_status_logs",
+      "sql": "CREATE TABLE `project_status_logs` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `project_id` bigint(20) unsigned NOT NULL,\n  `from_status` varchar(24) DEFAULT NULL,\n  `to_status` varchar(24) NOT NULL,\n  `action` varchar(16) NOT NULL,\n  `operator_id` bigint(20) unsigned NOT NULL,\n  `confirm_side` varchar(16) DEFAULT NULL,\n  `reason` varchar(1024) DEFAULT NULL,\n  `created_at` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_project_status_logs_project_time` (`project_id`,`created_at`,`id`),\n  KEY `fk_project_status_logs_operator` (`operator_id`),\n  CONSTRAINT `fk_project_status_logs_operator` FOREIGN KEY (`operator_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_project_status_logs_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+    },
+    {
+      "name": "projects",
+      "sql": "CREATE TABLE `projects` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `name` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `description` varchar(1024) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `supplier_id` bigint(20) unsigned NOT NULL,\n  `status` varchar(24) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'DRAFT',\n  `confirm_side` varchar(16) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `created_by` bigint(20) unsigned NOT NULL,\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_projects_name` (`name`),\n  KEY `idx_projects_supplier` (`supplier_id`),\n  KEY `idx_projects_status` (`status`),\n  CONSTRAINT `fk_projects_supplier` FOREIGN KEY (`supplier_id`) REFERENCES `suppliers` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "refresh_tokens",
+      "sql": "CREATE TABLE `refresh_tokens` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `user_id` bigint(20) unsigned NOT NULL,\n  `session_id` varchar(36) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `token_hash` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `expires_at` datetime NOT NULL,\n  `revoked` tinyint(1) NOT NULL DEFAULT '0',\n  `ip` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `token_hash` (`token_hash`),\n  KEY `fk_rt_user` (`user_id`),\n  KEY `idx_refresh_tokens_session_state` (`session_id`,`user_id`,`revoked`,`expires_at`),\n  CONSTRAINT `fk_rt_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "role_permissions",
+      "sql": "CREATE TABLE `role_permissions` (\n  `role_id` bigint(20) unsigned NOT NULL,\n  `permission_id` bigint(20) unsigned NOT NULL,\n  PRIMARY KEY (`role_id`,`permission_id`),\n  KEY `fk_rp_perm` (`permission_id`),\n  CONSTRAINT `fk_rp_perm` FOREIGN KEY (`permission_id`) REFERENCES `permissions` (`id`),\n  CONSTRAINT `fk_rp_role` FOREIGN KEY (`role_id`) REFERENCES `roles` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "roles",
+      "sql": "CREATE TABLE `roles` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `name` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `description` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `is_built_in` tinyint(1) NOT NULL DEFAULT '0',\n  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'ACTIVE',\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_roles_name` (`name`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "seaql_migrations",
+      "sql": "CREATE TABLE `seaql_migrations` (\n  `version` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `applied_at` bigint(20) NOT NULL,\n  PRIMARY KEY (`version`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "suppliers",
+      "sql": "CREATE TABLE `suppliers` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `name` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `remark` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'ACTIVE',\n  `created_by` bigint(20) unsigned DEFAULT NULL,\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_suppliers_name` (`name`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "system_configs",
+      "sql": "CREATE TABLE `system_configs` (\n  `cfg_key` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `cfg_value` varchar(2048) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `description` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`cfg_key`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "upload_sessions",
+      "sql": "CREATE TABLE `upload_sessions` (\n  `id` varchar(36) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `project_id` bigint(20) unsigned NOT NULL,\n  `uploader_id` bigint(20) unsigned NOT NULL,\n  `file_name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `file_size` bigint(20) unsigned NOT NULL,\n  `file_md5` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `chunk_size` int(10) unsigned NOT NULL,\n  `total_chunks` int(10) unsigned NOT NULL,\n  `temp_dir` varchar(512) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'UPLOADING',\n  `result_file_id` bigint(20) unsigned DEFAULT NULL,\n  `expires_at` datetime NOT NULL,\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`),\n  KEY `fk_us_project` (`project_id`),\n  KEY `idx_us_uploader` (`uploader_id`),\n  KEY `idx_us_status_exp` (`status`,`expires_at`),\n  KEY `idx_upload_result_file` (`result_file_id`),\n  CONSTRAINT `fk_us_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`),\n  CONSTRAINT `fk_us_uploader` FOREIGN KEY (`uploader_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "user_roles",
+      "sql": "CREATE TABLE `user_roles` (\n  `user_id` bigint(20) unsigned NOT NULL,\n  `role_id` bigint(20) unsigned NOT NULL,\n  PRIMARY KEY (`user_id`,`role_id`),\n  UNIQUE KEY `uk_user_roles_user_id` (`user_id`),\n  KEY `fk_ur_role` (`role_id`),\n  CONSTRAINT `fk_ur_role` FOREIGN KEY (`role_id`) REFERENCES `roles` (`id`),\n  CONSTRAINT `fk_ur_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "users",
+      "sql": "CREATE TABLE `users` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `employee_no` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `password_hash` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `real_name` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `email` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `user_type` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `supplier_id` bigint(20) unsigned DEFAULT NULL,\n  `department_id` bigint(20) unsigned DEFAULT NULL,\n  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'ACTIVE',\n  `must_change_password` tinyint(1) NOT NULL DEFAULT '1',\n  `failed_login_attempts` int(11) NOT NULL DEFAULT '0',\n  `locked_until` datetime DEFAULT NULL,\n  `last_login_at` datetime DEFAULT NULL,\n  `last_login_ip` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `created_by` bigint(20) unsigned DEFAULT NULL,\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_users_employee_no` (`employee_no`),\n  KEY `idx_users_supplier` (`supplier_id`),\n  KEY `idx_users_department` (`department_id`),\n  CONSTRAINT `fk_users_supplier` FOREIGN KEY (`supplier_id`) REFERENCES `suppliers` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    }
+  ],
+  "seeds": {
+    "roles": [
+      {
+        "id": 1,
+        "name": "系统管理员",
+        "description": null,
+        "is_built_in": 1,
+        "status": "ACTIVE",
+        "created_at": "2026-09-11T00:00:00",
+        "updated_at": "2026-09-11T00:00:00"
+      },
+      {
+        "id": 2,
+        "name": "项目管理员",
+        "description": null,
+        "is_built_in": 1,
+        "status": "ACTIVE",
+        "created_at": "2026-09-11T00:00:00",
+        "updated_at": "2026-09-11T00:00:00"
+      },
+      {
+        "id": 3,
+        "name": "内部成员",
+        "description": null,
+        "is_built_in": 1,
+        "status": "ACTIVE",
+        "created_at": "2026-09-11T00:00:00",
+        "updated_at": "2026-09-11T00:00:00"
+      },
+      {
+        "id": 4,
+        "name": "供应商人员",
+        "description": null,
+        "is_built_in": 1,
+        "status": "ACTIVE",
+        "created_at": "2026-09-11T00:00:00",
+        "updated_at": "2026-09-11T00:00:00"
+      }
+    ],
+    "permissions": [
+      {
+        "id": 1,
+        "code": "dashboard",
+        "name": "工作台",
+        "type": "MENU",
+        "parent_id": null,
+        "sort_no": 0
+      },
+      {
+        "id": 2,
+        "code": "project:list",
+        "name": "项目列表",
+        "type": "MENU",
+        "parent_id": null,
+        "sort_no": 1
+      },
+      {
+        "id": 3,
+        "code": "supplier:list",
+        "name": "供应商管理",
+        "type": "MENU",
+        "parent_id": null,
+        "sort_no": 2
+      },
+      {
+        "id": 4,
+        "code": "org:user",
+        "name": "用户管理",
+        "type": "MENU",
+        "parent_id": null,
+        "sort_no": 3
+      },
+      {
+        "id": 5,
+        "code": "org:dept",
+        "name": "组织架构",
+        "type": "MENU",
+        "parent_id": null,
+        "sort_no": 4
+      },
+      {
+        "id": 6,
+        "code": "rbac:role",
+        "name": "角色权限",
+        "type": "MENU",
+        "parent_id": null,
+        "sort_no": 5
+      },
+      {
+        "id": 7,
+        "code": "log:audit",
+        "name": "操作日志",
+        "type": "MENU",
+        "parent_id": null,
+        "sort_no": 6
+      },
+      {
+        "id": 8,
+        "code": "system:config",
+        "name": "系统参数",
+        "type": "MENU",
+        "parent_id": null,
+        "sort_no": 7
+      },
+      {
+        "id": 9,
+        "code": "project:create",
+        "name": "创建项目",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 0
+      },
+      {
+        "id": 10,
+        "code": "project:update",
+        "name": "编辑项目",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 1
+      },
+      {
+        "id": 11,
+        "code": "project:delete",
+        "name": "删除项目",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 2
+      },
+      {
+        "id": 12,
+        "code": "project:status",
+        "name": "项目状态变更",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 3
+      },
+      {
+        "id": 13,
+        "code": "project:member",
+        "name": "管理项目成员",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 4
+      },
+      {
+        "id": 14,
+        "code": "project:view_all",
+        "name": "查看全部项目",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 5
+      },
+      {
+        "id": 18,
+        "code": "file:upload",
+        "name": "上传文件",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 9
+      },
+      {
+        "id": 19,
+        "code": "file:download",
+        "name": "下载文件",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 10
+      },
+      {
+        "id": 20,
+        "code": "file:preview",
+        "name": "预览文件",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 11
+      },
+      {
+        "id": 21,
+        "code": "file:delete",
+        "name": "删除文件",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 12
+      },
+      {
+        "id": 22,
+        "code": "message:create",
+        "name": "发表留言",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 13
+      },
+      {
+        "id": 23,
+        "code": "message:delete_any",
+        "name": "删除留言",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 14
+      },
+      {
+        "id": 24,
+        "code": "supplier:manage",
+        "name": "供应商管理",
+        "type": "ACTION",
+        "parent_id": 3,
+        "sort_no": 15
+      },
+      {
+        "id": 25,
+        "code": "supplier:delete",
+        "name": "删除供应商",
+        "type": "ACTION",
+        "parent_id": 3,
+        "sort_no": 16
+      },
+      {
+        "id": 26,
+        "code": "supplier:account",
+        "name": "供应商账号管理",
+        "type": "ACTION",
+        "parent_id": 3,
+        "sort_no": 17
+      },
+      {
+        "id": 27,
+        "code": "supplier:account_delete",
+        "name": "删除供应商账号",
+        "type": "ACTION",
+        "parent_id": 3,
+        "sort_no": 18
+      },
+      {
+        "id": 28,
+        "code": "user:manage",
+        "name": "用户管理",
+        "type": "ACTION",
+        "parent_id": 4,
+        "sort_no": 19
+      },
+      {
+        "id": 29,
+        "code": "user:delete",
+        "name": "删除用户",
+        "type": "ACTION",
+        "parent_id": 4,
+        "sort_no": 20
+      },
+      {
+        "id": 30,
+        "code": "dept:manage",
+        "name": "组织架构管理",
+        "type": "ACTION",
+        "parent_id": 5,
+        "sort_no": 21
+      },
+      {
+        "id": 31,
+        "code": "dept:delete",
+        "name": "删除组织节点",
+        "type": "ACTION",
+        "parent_id": 5,
+        "sort_no": 22
+      },
+      {
+        "id": 32,
+        "code": "role:manage",
+        "name": "角色管理",
+        "type": "ACTION",
+        "parent_id": 6,
+        "sort_no": 23
+      },
+      {
+        "id": 33,
+        "code": "role:delete",
+        "name": "删除角色",
+        "type": "ACTION",
+        "parent_id": 6,
+        "sort_no": 24
+      },
+      {
+        "id": 34,
+        "code": "log:view",
+        "name": "日志查看",
+        "type": "ACTION",
+        "parent_id": 7,
+        "sort_no": 25
+      },
+      {
+        "id": 35,
+        "code": "log:delete",
+        "name": "删除日志",
+        "type": "ACTION",
+        "parent_id": 7,
+        "sort_no": 26
+      },
+      {
+        "id": 36,
+        "code": "config:manage",
+        "name": "系统参数管理",
+        "type": "ACTION",
+        "parent_id": 8,
+        "sort_no": 27
+      },
+      {
+        "id": 45,
+        "code": "project:submit",
+        "name": "提交项目验收",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 40
+      },
+      {
+        "id": 46,
+        "code": "project:confirm",
+        "name": "确认/驳回项目",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 41
+      },
+      {
+        "id": 47,
+        "code": "project:withdraw",
+        "name": "撤回项目验收",
+        "type": "ACTION",
+        "parent_id": 2,
+        "sort_no": 42
+      }
+    ],
+    "role_permissions": [
+      {
+        "role_id": 1,
+        "permission_id": 1
+      },
+      {
+        "role_id": 2,
+        "permission_id": 1
+      },
+      {
+        "role_id": 3,
+        "permission_id": 1
+      },
+      {
+        "role_id": 4,
+        "permission_id": 1
+      },
+      {
+        "role_id": 1,
+        "permission_id": 2
+      },
+      {
+        "role_id": 2,
+        "permission_id": 2
+      },
+      {
+        "role_id": 3,
+        "permission_id": 2
+      },
+      {
+        "role_id": 4,
+        "permission_id": 2
+      },
+      {
+        "role_id": 1,
+        "permission_id": 3
+      },
+      {
+        "role_id": 1,
+        "permission_id": 4
+      },
+      {
+        "role_id": 1,
+        "permission_id": 5
+      },
+      {
+        "role_id": 1,
+        "permission_id": 6
+      },
+      {
+        "role_id": 1,
+        "permission_id": 7
+      },
+      {
+        "role_id": 1,
+        "permission_id": 8
+      },
+      {
+        "role_id": 1,
+        "permission_id": 9
+      },
+      {
+        "role_id": 2,
+        "permission_id": 9
+      },
+      {
+        "role_id": 1,
+        "permission_id": 10
+      },
+      {
+        "role_id": 2,
+        "permission_id": 10
+      },
+      {
+        "role_id": 1,
+        "permission_id": 11
+      },
+      {
+        "role_id": 1,
+        "permission_id": 12
+      },
+      {
+        "role_id": 2,
+        "permission_id": 12
+      },
+      {
+        "role_id": 1,
+        "permission_id": 13
+      },
+      {
+        "role_id": 2,
+        "permission_id": 13
+      },
+      {
+        "role_id": 1,
+        "permission_id": 14
+      },
+      {
+        "role_id": 2,
+        "permission_id": 14
+      },
+      {
+        "role_id": 1,
+        "permission_id": 18
+      },
+      {
+        "role_id": 2,
+        "permission_id": 18
+      },
+      {
+        "role_id": 3,
+        "permission_id": 18
+      },
+      {
+        "role_id": 4,
+        "permission_id": 18
+      },
+      {
+        "role_id": 1,
+        "permission_id": 19
+      },
+      {
+        "role_id": 2,
+        "permission_id": 19
+      },
+      {
+        "role_id": 3,
+        "permission_id": 19
+      },
+      {
+        "role_id": 4,
+        "permission_id": 19
+      },
+      {
+        "role_id": 1,
+        "permission_id": 20
+      },
+      {
+        "role_id": 2,
+        "permission_id": 20
+      },
+      {
+        "role_id": 3,
+        "permission_id": 20
+      },
+      {
+        "role_id": 4,
+        "permission_id": 20
+      },
+      {
+        "role_id": 1,
+        "permission_id": 21
+      },
+      {
+        "role_id": 1,
+        "permission_id": 22
+      },
+      {
+        "role_id": 2,
+        "permission_id": 22
+      },
+      {
+        "role_id": 3,
+        "permission_id": 22
+      },
+      {
+        "role_id": 4,
+        "permission_id": 22
+      },
+      {
+        "role_id": 1,
+        "permission_id": 23
+      },
+      {
+        "role_id": 1,
+        "permission_id": 24
+      },
+      {
+        "role_id": 1,
+        "permission_id": 25
+      },
+      {
+        "role_id": 1,
+        "permission_id": 26
+      },
+      {
+        "role_id": 1,
+        "permission_id": 27
+      },
+      {
+        "role_id": 1,
+        "permission_id": 28
+      },
+      {
+        "role_id": 1,
+        "permission_id": 29
+      },
+      {
+        "role_id": 1,
+        "permission_id": 30
+      },
+      {
+        "role_id": 1,
+        "permission_id": 31
+      },
+      {
+        "role_id": 1,
+        "permission_id": 32
+      },
+      {
+        "role_id": 1,
+        "permission_id": 33
+      },
+      {
+        "role_id": 1,
+        "permission_id": 34
+      },
+      {
+        "role_id": 1,
+        "permission_id": 35
+      },
+      {
+        "role_id": 1,
+        "permission_id": 36
+      },
+      {
+        "role_id": 1,
+        "permission_id": 45
+      },
+      {
+        "role_id": 2,
+        "permission_id": 45
+      },
+      {
+        "role_id": 3,
+        "permission_id": 45
+      },
+      {
+        "role_id": 4,
+        "permission_id": 45
+      },
+      {
+        "role_id": 1,
+        "permission_id": 46
+      },
+      {
+        "role_id": 2,
+        "permission_id": 46
+      },
+      {
+        "role_id": 3,
+        "permission_id": 46
+      },
+      {
+        "role_id": 4,
+        "permission_id": 46
+      },
+      {
+        "role_id": 1,
+        "permission_id": 47
+      },
+      {
+        "role_id": 2,
+        "permission_id": 47
+      }
+    ],
+    "system_configs": [
+      {
+        "cfg_key": "notify.enabled",
+        "cfg_value": "true",
+        "description": "邮件通知总开关",
+        "updated_at": "2026-09-11T00:00:00"
+      },
+      {
+        "cfg_key": "security.management_lock",
+        "cfg_value": "1",
+        "description": "权限与高风险操作事务锁",
+        "updated_at": "2026-09-11T00:00:00"
+      },
+      {
+        "cfg_key": "storage.warn_percent",
+        "cfg_value": "85",
+        "description": "存储使用率告警阈值（百分比）",
+        "updated_at": "2026-09-11T00:00:00"
+      },
+      {
+        "cfg_key": "upload.allowed_exts",
+        "cfg_value": "step,stp,iges,igs,stl,obj,fbx,dwg,dxf,pdf,doc,docx,xls,xlsx,ppt,pptx,png,jpg,jpeg,zip,rar,7z",
+        "description": "允许上传的扩展名白名单",
+        "updated_at": "2026-09-11T00:00:00"
+      },
+      {
+        "cfg_key": "upload.chunk_size",
+        "cfg_value": "10485760",
+        "description": "分片大小（字节，默认 10MB）",
+        "updated_at": "2026-09-11T00:00:00"
+      },
+      {
+        "cfg_key": "upload.max_file_size",
+        "cfg_value": "2147483648",
+        "description": "单文件大小上限（字节，默认 2GB）",
+        "updated_at": "2026-09-11T00:00:00"
+      }
+    ],
+    "seaql_migrations": [
+      {
+        "version": "m20260903_000001_init",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260903_000002_seed",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260904_000003_integrity_hardening",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260904_000004_storage_warning",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260904_000005_single_user_role",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260908_000006_identity_fields_cleanup",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260908_000007_identity_index_cleanup",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260909_000008_drop_users_phone",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260909_000009_drop_supplier_contact_fields",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260909_000010_org_structure_kinds",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260909_000011_validate_org_structure_kinds",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260909_000012_project_activities",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260909_000013_delete_permissions",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260909_000014_backfill_audit_actors",
+        "applied_at": 1789109032
+      },
+      {
+        "version": "m20260909_000015_business_name_uniqueness",
+        "applied_at": 1789109033
+      },
+      {
+        "version": "m20260910_000016_project_workflow",
+        "applied_at": 1789109033
+      },
+      {
+        "version": "m20260911_000017_auth_session_families",
+        "applied_at": 1789109033
+      }
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+**/bin/
+**/obj/
+**/appsettings.Local.json
+**/TestResults/
+publish/
+.vs/
+**/__pycache__/
+**/*.pyc

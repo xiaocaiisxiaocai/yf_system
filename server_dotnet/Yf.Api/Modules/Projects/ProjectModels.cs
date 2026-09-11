@@ -1,0 +1,178 @@
+using System.Text.Json.Serialization;
+
+namespace Yf.Api.Modules.Projects;
+
+public sealed class ProjectUpsertRequest
+{
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; init; }
+
+    [JsonPropertyName("supplierId")]
+    public ulong SupplierId { get; init; }
+}
+
+public sealed class ProjectStatusRequest
+{
+    [JsonPropertyName("status")]
+    public string? Status { get; init; }
+}
+
+public sealed class ProjectSubmitRequest
+{
+    [JsonPropertyName("confirmSide")]
+    public string? ConfirmSide { get; init; }
+}
+
+public sealed class ProjectRejectRequest
+{
+    [JsonPropertyName("reason")]
+    public string? Reason { get; init; }
+}
+
+public sealed class ProjectMembersRequest
+{
+    [JsonPropertyName("userIds")]
+    public ulong[]? UserIds { get; init; }
+}
+
+public sealed class MessageCreateRequest
+{
+    [JsonPropertyName("content")]
+    public string? Content { get; init; }
+}
+
+public sealed class MarkMessagesReadRequest
+{
+    [JsonPropertyName("ids")]
+    public ulong[]? Ids { get; init; }
+}
+
+internal sealed class ProjectRow
+{
+    public ulong Id { get; init; }
+    public string Name { get; init; } = string.Empty;
+    public string? Description { get; init; }
+    public ulong SupplierId { get; init; }
+    public string Status { get; init; } = string.Empty;
+    public string? ConfirmSide { get; init; }
+    public ulong CreatedBy { get; init; }
+    public DateTime CreatedAt { get; init; }
+    public DateTime UpdatedAt { get; init; }
+    public string? SupplierName { get; init; }
+    public string? CreatedByName { get; init; }
+}
+
+internal sealed class UserRow
+{
+    public ulong Id { get; init; }
+    public string EmployeeNo { get; init; } = string.Empty;
+    public string RealName { get; init; } = string.Empty;
+    public string Email { get; init; } = string.Empty;
+    public string UserType { get; init; } = string.Empty;
+    public ulong? SupplierId { get; init; }
+    public ulong? DepartmentId { get; init; }
+    public string Status { get; init; } = string.Empty;
+    public string? DepartmentName { get; init; }
+}
+
+internal sealed class ProjectStatusLogRow
+{
+    public ulong Id { get; init; }
+    public ulong ProjectId { get; init; }
+    public string? FromStatus { get; init; }
+    public string ToStatus { get; init; } = string.Empty;
+    public string Action { get; init; } = string.Empty;
+    public ulong OperatorId { get; init; }
+    public string? ConfirmSide { get; init; }
+    public string? Reason { get; init; }
+    public DateTime CreatedAt { get; init; }
+}
+
+internal sealed class MessageRow
+{
+    public ulong Id { get; init; }
+    public ulong ProjectId { get; init; }
+    public ulong SenderId { get; init; }
+    public string Content { get; init; } = string.Empty;
+    public string Status { get; init; } = string.Empty;
+    public DateTime CreatedAt { get; init; }
+    public string SenderName { get; init; } = string.Empty;
+    public string SenderType { get; init; } = string.Empty;
+}
+
+internal sealed class MessageReadRow
+{
+    public ulong MessageId { get; init; }
+    public ulong UserId { get; init; }
+    public DateTime ReadAt { get; init; }
+}
+
+internal sealed class ActivityRow
+{
+    public ulong Id { get; init; }
+    public ulong ProjectId { get; init; }
+    public string ActivityType { get; init; } = string.Empty;
+    public string Action { get; init; } = string.Empty;
+    public ulong? ActorId { get; init; }
+    public string ActorName { get; init; } = string.Empty;
+    public DateTime OccurredAt { get; init; }
+    public string Title { get; init; } = string.Empty;
+    public string? Summary { get; init; }
+    public ulong? TargetId { get; init; }
+    public string SourceKey { get; init; } = string.Empty;
+}
+
+internal sealed class AuditRow
+{
+    public ulong Id { get; init; }
+    public ulong? UserId { get; init; }
+    public string? EmployeeNo { get; init; }
+    public string Action { get; init; } = string.Empty;
+    public string? TargetType { get; init; }
+    public string? TargetId { get; init; }
+    public string? Detail { get; init; }
+    public DateTime CreatedAt { get; init; }
+}
+
+internal static class ProjectJson
+{
+    internal static DateTime Utc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
+    };
+
+    internal static object Project(ProjectRow row) => new
+    {
+        id = row.Id,
+        name = row.Name,
+        description = row.Description,
+        supplierId = row.SupplierId,
+        supplierName = row.SupplierName,
+        status = row.Status,
+        confirmSide = row.ConfirmSide,
+        createdBy = row.CreatedBy,
+        createdByName = row.CreatedByName,
+        createdAt = Utc(row.CreatedAt),
+        updatedAt = Utc(row.UpdatedAt),
+    };
+
+    internal static object Page<T>(IReadOnlyList<T> list, ulong total, ulong page, ulong pageSize) => new
+    {
+        list,
+        total,
+        page,
+        pageSize,
+    };
+
+    internal static (ulong Page, ulong Size) ClampPage(ulong page, ulong size)
+    {
+        var actualSize = Math.Clamp(size, 1UL, 100UL);
+        var maxPage = ulong.MaxValue / actualSize;
+        return (Math.Clamp(page, 1UL, maxPage), actualSize);
+    }
+}

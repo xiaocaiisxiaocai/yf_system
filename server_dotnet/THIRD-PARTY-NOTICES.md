@@ -1,0 +1,71 @@
+# Third-Party Notices
+
+This distribution includes the following .NET runtime dependencies resolved by
+`Yf.Api/packages.lock.json` for `net10.0` and `net10.0/win-x64`. The package type
+below is the Direct or Transitive value recorded in that lock file. Complete
+license and notice texts are shipped in the adjacent `licenses` directory.
+
+| Package | Version | Type | License and notice files |
+| --- | --- | --- | --- |
+| Dapper | 2.1.79 | Direct | `licenses/Dapper-LICENSE.txt`, `licenses/Apache-2.0.txt` |
+| Konscious.Security.Cryptography.Argon2 | 1.3.1 | Direct | `licenses/Konscious.Security.Cryptography-LICENSE.txt` |
+| MailKit | 4.17.0 | Direct | `licenses/MailKit-LICENSE.txt` |
+| MySqlConnector | 2.6.2 | Direct | `licenses/MySqlConnector-LICENSE.txt` |
+| System.IdentityModel.Tokens.Jwt | 8.22.0 | Direct | `licenses/IdentityModel-LICENSE.txt` |
+| BouncyCastle.Cryptography | 2.6.2 | Transitive | `licenses/BouncyCastle-LICENSE.md` |
+| Konscious.Security.Cryptography.Blake2 | 1.1.1 | Transitive | `licenses/Konscious.Security.Cryptography-LICENSE.txt` |
+| Microsoft.Bcl.Cryptography | 10.0.2 | Transitive | `licenses/dotnet-LICENSE.txt`, `licenses/dotnet-THIRD-PARTY-NOTICES.txt` |
+| Microsoft.IdentityModel.Abstractions | 8.22.0 | Transitive | `licenses/IdentityModel-LICENSE.txt` |
+| Microsoft.IdentityModel.JsonWebTokens | 8.22.0 | Transitive | `licenses/IdentityModel-LICENSE.txt` |
+| Microsoft.IdentityModel.Logging | 8.22.0 | Transitive | `licenses/IdentityModel-LICENSE.txt` |
+| Microsoft.IdentityModel.Tokens | 8.22.0 | Transitive | `licenses/IdentityModel-LICENSE.txt` |
+| MimeKit | 4.17.0 | Transitive | `licenses/MimeKit-LICENSE.txt` |
+| System.Security.Cryptography.Pkcs | 10.0.0 | Transitive | `licenses/dotnet-LICENSE.txt`, `licenses/dotnet-THIRD-PARTY-NOTICES.txt` |
+
+## Provenance
+
+- Dapper 2.1.79 declares Apache-2.0 in its NuGet metadata. Its package repository
+  commit is `72a54c475f75e18cb93cba0809d00a5e6e49efd9`; the bundled Dapper notice is
+  from `https://github.com/DapperLib/Dapper/blob/72a54c475f75e18cb93cba0809d00a5e6e49efd9/License.txt`.
+  The complete Apache License 2.0 text is from
+  `https://www.apache.org/licenses/LICENSE-2.0.txt`.
+- Konscious.Security.Cryptography.Argon2 1.3.1 and Blake2 1.1.1 declare MIT.
+  Their shared license is from package repository commit
+  `4ed95a5377e411506ca6868409b5c7d7ecaa859b` at
+  `https://github.com/kmaragon/Konscious.Security.Cryptography/blob/4ed95a5377e411506ca6868409b5c7d7ecaa859b/LICENSE`.
+- MailKit 4.17.0 and MimeKit 4.17.0 declare MIT. Their complete texts are from
+  the matching `4.17.0` repository tags:
+  `https://github.com/jstedfast/MailKit/blob/4.17.0/LICENSE` and
+  `https://github.com/jstedfast/MimeKit/blob/4.17.0/LICENSE`.
+- MySqlConnector 2.6.2 declares MIT. Its complete license is from package
+  repository commit `775689bb3e1ab55d16171e0795264fa746e364c4` at
+  `https://github.com/mysql-net/MySqlConnector/blob/775689bb3e1ab55d16171e0795264fa746e364c4/LICENSE`.
+- System.IdentityModel.Tokens.Jwt and its four Microsoft.IdentityModel
+  dependencies at 8.22.0 declare MIT. Their shared license is from package
+  repository commit `0472f79d9f346c9519fb43d877612a1d8dd22e1e` at
+  `https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/blob/0472f79d9f346c9519fb43d877612a1d8dd22e1e/LICENSE.txt`.
+- BouncyCastle.Cryptography 2.6.2 declares MIT and embeds `LICENSE.md` in the
+  restored NuGet package. The distributed text is copied byte-for-text from
+  that package; its repository commit is
+  `b4f2f6ad76bcd1f11f365ee50cc7447fbce79077`.
+- Microsoft.Bcl.Cryptography 10.0.2 and System.Security.Cryptography.Pkcs
+  10.0.0 declare MIT and embed the same complete `THIRD-PARTY-NOTICES.TXT`
+  (SHA-256 `6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21`).
+  The distributed notice is copied from those restored packages. Their lock
+  metadata identifies dotnet/dotnet commits
+  `44525024595742ebe09023abe709df51de65009b` and
+  `b0f34d51fccc69fd334253924abd8d6853fad7aa`, respectively. The MIT text is
+  from `https://github.com/dotnet/dotnet/blob/44525024595742ebe09023abe709df51de65009b/LICENSE.TXT`.
+
+NuGet metadata, package versions, repository commits, and embedded notice files
+were read from the restored packages under `D:/Net_NuGet/Packages`; that cache
+path is provenance only and is not included in the release payload.
+
+## Frontend lock-file licenses
+
+The publishing script also creates `licenses/frontend/INDEX.json` from
+`web/package-lock.json` and copies root-level `LICENSE*`, `NOTICE*`, and
+`COPYING*` text files from matching locally installed packages. The index marks
+production/development, optional, and locally installed status. It covers the
+lock file for license review and does not claim that every indexed package is
+present in the production JavaScript bundle.
