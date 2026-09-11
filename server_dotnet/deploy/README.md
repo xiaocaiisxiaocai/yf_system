@@ -38,13 +38,84 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
 
 如果配置文件父目录不允许应用池遍历，还需由管理员给对应应用池授予父目录“遍历文件夹”权限。不要给网站目录业务文件写权限，不要给 Everyone 配置读权限。
 
-## 验收和升级
+## 正式服务器备份、升级与恢复
+
+以下命令必须在**目标服务器的管理员 Windows PowerShell 5.1** 中执行，并保持 `maintain-iis.ps1` 与同一发布包中的 `maintenance-common.ps1` 位于同一目录。示例站点名为安装脚本默认值 `YfSystemDotNet`；如果安装时使用了其他名称，三种操作都必须传入该实际名称。
+
+维护只支持由独立应用池承载、没有子应用的现有 IIS 站点。应用池必须使用 `ApplicationPoolIdentity` 且不加载用户 profile。站点必须使用外部 JSON 作为唯一主配置，由 `web.config` 中唯一的 `YF_CONFIG_PATH` 指向该文件，并以 in-process 的 `dotnet .\Yf.Api.dll` 标准形式启动。执行前移除站点、应用池、应用池默认值、机器和当前 PowerShell 中的 `App__*` / `App:*` 高优先级覆盖；维护脚本会拒绝这些覆盖和继承的额外 `YF_CONFIG_PATH`，防止备份、迁移或健康检查连接到另一套资源。正式配置的 `WebBaseUrl` 必须是实际 HTTPS 来源，`CookieSecure` 必须为 `true`。
+
+服务器需安装与目标 MySQL 兼容的 5.7 或更高版本 `mysql.exe`、`mysqldump.exe` 客户端；若不在 `PATH`，按下例传绝对路径。脚本只检查客户端可执行文件存在，版本和服务器兼容性需在维护窗口前确认。所有目录必须是互不包含的本地绝对路径，不能经过 junction/symlink 等重解析点；备份目录、新程序目录和恢复存储目录必须不存在或为空。
+
+### Backup
+
+从当前站点生成同一 `SiteName` 的离线备份：
+
+```powershell
+.\maintain-iis.ps1 `
+  -Action Backup `
+  -SiteName 'YfSystemDotNet' `
+  -BackupDirectory 'E:\YfBackups\2026-09-11-before-upgrade' `
+  -MySqlDump 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe'
+```
+
+备份包含当前程序、独立存储、外部 JSON 配置、数据库表、触发器、存储过程和事件，并用清单记录文件 SHA-256。它同时包含数据库凭据、JWT/SMTP 等密钥、业务数据和上传文件；应放在网站目录之外受限且加密的备份介质上，限制管理员/备份账号访问，不提交源码库，不通过普通文件共享长期暴露，并按保留策略安全清除。
+
+### Upgrade
+
+升级前准备已核对清单的新发布包和一个新的空程序目录。命令会先在应用池停止期间完成同样的离线备份，再复制新包、按需迁移并切换现有站点物理路径：
+
+```powershell
+.\maintain-iis.ps1 `
+  -Action Upgrade `
+  -SiteName 'YfSystemDotNet' `
+  -BackupDirectory 'E:\YfBackups\2026-09-11-before-upgrade' `
+  -PackageRoot 'D:\Packages\YfDotNet-NEW' `
+  -NewSiteRoot 'C:\inetpub\yf_system_dotnet_20260911' `
+  -MySqlDump 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe' `
+  -MigrateDatabase
+```
+
+只有该版本确实要求 schema 升级时才传 `-MigrateDatabase`；否则省略。升级继续使用当前数据库、存储和外部配置。不要直接覆盖当前程序目录，也不要同时让新旧版本写同一套资源。
+
+### Restore
+
+恢复只接受清单中 `siteName` 与当前 `-SiteName` 相同的备份。先由 DBA 创建**不同于当前数据库名**的新数据库及专用账号，并确认目标 schema 中表、routines 和 events 均为零；不要把原库清空后复用。再准备新的空程序目录、新的空存储目录和新的外部 JSON 配置。新配置必须指向这些新资源，保持当前站点完全相同的 HTTPS `WebBaseUrl`，并设置 `CookieSecure=true`。
+
+```powershell
+.\maintain-iis.ps1 `
+  -Action Restore `
+  -SiteName 'YfSystemDotNet' `
+  -BackupDirectory 'E:\YfBackups\2026-09-11-before-upgrade' `
+  -NewSiteRoot 'C:\inetpub\yf_system_dotnet_restore_20260911' `
+  -RestoreConfigPath 'D:\YfConfig\appsettings.Restored.json' `
+  -MySql 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe'
+```
+
+Restore 使用备份内的程序和 schema，不接受 `-MigrateDatabase`。若导入失败，新数据库可能只写入了一部分；保留失败现场供 DBA 判断，换另一套全新的空目标重试。成功恢复后如需升级，再使用与目标版本对应的 `Upgrade` 流程。
+
+三种操作都会先停止该站点的专属应用池并等待其工作进程全部退出。脚本只管理这个命名站点的专属池，不能排除其他 IIS 站点、Windows 服务、计划任务、命令行工具或远程实例继续写同一数据库和存储；管理员必须在维护窗口前识别并停止所有外部写入者。原池本来在运行时，成功后脚本才会启动它，并从配置中的同一 HTTPS 来源检查 `/health` 的 `status=ok, db=up`；任何步骤或健康检查失败都会让应用池保持停止。脚本不会删除旧数据库、旧存储或旧程序目录，也不会自动把站点切回旧路径；排查完成前不要手工启动应用池。旧资源确认不再需要前，按成套回退边界保留。
+
+`Restore` 维护的是现有 IIS 站点，不会在裸机上创建 IIS、证书、绑定或应用池。灾难恢复到新机器时，先安装 IIS、Hosting Bundle、证书和 MySQL 客户端，使用**备份所对应版本**的发布包创建与备份同名的专属站点，例如：
+
+```powershell
+.\install-iis.ps1 `
+  -PackageRoot 'D:\Packages\YfDotNet-BACKUP-VERSION' `
+  -HostName 'yf.example.com' `
+  -CertificateThumbprint '替换为LocalMachine-My证书指纹' `
+  -ConfigPath 'D:\YfConfig\appsettings.DisasterStaging.json' `
+  -SiteName 'YfSystemDotNet' `
+  -AppPoolName 'YfSystemDotNet' `
+  -SiteRoot 'C:\inetpub\yf_system_dotnet_staging'
+```
+
+这一步使用的临时外部配置、程序目录、数据库和存储仍须与最终恢复目标分开，并保持站点不对外服务。随后用同版本 `maintain-iis.ps1 -Action Restore` 恢复到另一套新空数据库、存储、程序目录和外部配置。这是分阶段恢复流程，不是一键全新服务器恢复。
+
+## 验收
 
 - 检查 `https://实际主机名/health` 返回 `status=ok, db=up`。
 - 打开根页面，首次改密后检查菜单、权限、项目提交/确认，以及真实 PDF 预览和下载。
 - 配置 SMTP 后检查管理员邮件状态与实际收件；后台邮件有持久队列、认领租约和重试。发送采用至少一次语义，极端断电可能重复，不能当作严格一次投递。
 - 应用池使用 AlwaysRunning、无空闲退出和站点预加载；仍需监控应用池、数据库、磁盘和邮件失败。
-- 正式升级先停写并备份数据库、独立存储、外部配置与旧程序目录；准备另一个空目录解压核验新包，再停止对应应用池，切换网站物理路径并恢复应用池。复制原部署生成的 `web.config` 外部配置环境项到新目录；禁止将开发机本地配置覆盖正式配置。
-- 失败回退切换回旧程序路径；若发生数据库迁移，必须按对应迁移的备份恢复计划处理。不要同时让旧版本与新版本写同一套数据库/存储来做生产 A/B 测试。
+- 每次备份、升级或恢复后检查受保护备份的清单和日志；升级/恢复还要完成浏览器业务验收。若执行过数据库迁移，回退必须按该版本的数据库备份计划成套处理。
 
-应用只公开 `wwwroot` 静态资源，配置、DLL 和数据库不作为静态文件暴露。部署脚本在开发阶段只做语法与包检查；开发机的构建/隔离测试不能证明目标服务器的 IIS、证书、网络或 SMTP 已验收。
+应用只公开 `wwwroot` 静态资源，配置、DLL 和数据库不作为静态文件暴露。部署脚本在开发阶段只做语法与包检查；当前开发机没有创建或操作真实 IIS 站点，仅可读取 Microsoft.Web.Administration 默认配置。开发机的构建/隔离测试不能证明目标服务器的 IIS 站点、专属应用池、证书、网络或 SMTP 已验收。

@@ -46,6 +46,10 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_") as temp:
     actual = {path.relative_to(package).as_posix() for path in package.rglob("*") if path.is_file()}
     if actual != expected_paths:
         raise RuntimeError("Manifest does not cover every payload file")
+    required = {"Yf.Api.dll", "Yf.Api.runtimeconfig.json", "web.config", "wwwroot/index.html",
+                "install-iis.ps1", "maintain-iis.ps1", "maintenance-common.ps1", "README.md"}
+    if not required.issubset(actual):
+        raise RuntimeError("Required application or maintenance payload is missing")
     if any("testhost" in Path(name).stem.lower() and Path(name).suffix.lower() in (".dll", ".exe") for name in actual):
         raise RuntimeError("A test host was included in the production payload")
     settings = json.loads((package / "appsettings.json").read_text(encoding="utf-8-sig"))["App"]

@@ -36,7 +36,7 @@ npm run dev
 
 前端开发代理仍指向 `127.0.0.1:8080`。先停止你确认属于该项目的旧后端，再用新后端占用此端口；不要同时让两个后端写同一套业务库与文件目录。若需并行评估，使用独立数据库、存储、监听端口及前端代理。
 
-配置优先级：`appsettings.json` → 当前环境配置 → `appsettings.Local.json` → `YF_CONFIG_PATH` 指定文件 → 环境变量 → 命令行。推荐机密使用外部配置或 `App__ConnectionString` / `App__JwtSecret` 环境变量，避免在命令行出现密码。配置更改后重启应用。
+配置优先级：`appsettings.json` → 当前环境配置 → `appsettings.Local.json` → `YF_CONFIG_PATH` 指定文件 → 环境变量 → 命令行。本地直接运行时可使用外部配置或进程级 `App__ConnectionString` / `App__JwtSecret` 环境变量，避免在命令行出现密码。正式 IIS 安装和维护只支持 `YF_CONFIG_PATH` 指向的网站外部 JSON 主配置，并拒绝站点、应用池、机器或维护进程中的 `App__*` / `App:*` 高优先级覆盖。配置更改后重启应用。
 
 ## 数据库初始化与升级
 
@@ -80,9 +80,14 @@ dotnet build .\TestHost\Yf.Api.TestHost.csproj
 # 仅在当前进程设置本机测试管理连接，勿将真实凭据写入命令历史或版本库。
 # $env:YF_TEST_DATABASE_URL 的格式为 mysql://账号:URL编码密码@127.0.0.1:3306/ignored
 python .\scripts\test-isolated.py
+
+# 真实维护备份/恢复测试；同样必须显式设置上面的本机测试管理连接。
+python .\scripts\test-maintenance.py
 ```
 
 HTTP 测试需要 Python 3.11+ 与 `pymysql`，仅使用显式设置的 `YF_TEST_DATABASE_URL`（本机 MySQL 测试管理账号，需创建/删除测试库及查看锁等待）。不读取 Rust 配置。测试在随机命名的 `yf_test_dotnet_*` 库与临时存储中运行，结束只删除自身资源；邮件发送禁用，通知验证仅检查 outbox。
+
+`test-maintenance.py` 还要求本机 `mysql.exe` 与 `mysqldump.exe` 可用，并使用随机命名的 `yf_test_maintenance_*` 数据库验证真实 MySQL、程序和存储字节的备份/恢复、篡改拒绝及非空目标拒绝。它只接受 `localhost`、`127.0.0.1` 或 `::1` 的显式 `YF_TEST_DATABASE_URL`，会创建并删除自身测试数据库；客户端应为与测试 MySQL 兼容的 5.7 或更高版本。该测试不启动或操作 IIS，不验证目标服务器的站点、专属应用池、HTTPS 证书、权限或网络。
 
 先测试实际生产入口的启动、健康和验证码返回，再通过独立 `TestHost` 执行完整 HTTP 用例。测试宿主使用同一 API 工厂，仅注册内存 CAPTCHA 观察器和带随机密钥的一次性答案路由，绑定回环地址；生产 API 不注册该观察器、不映射答案路由，发布包不包含测试宿主。验证码生产图像不再采用可由固定像素解码的数码管字体，并对发放与登录尝试限速；这不代表其能抵抗所有 OCR。
 
@@ -99,6 +104,40 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish-iis.ps1 -FreshOutputD
 发布脚本参数以 `Get-Help .\scripts\publish-iis.ps1 -Detailed` 为准。输出目录必须是新目录或空目录。发布包包含后端、`wwwroot` 前端、IIS 配置、安装脚本、说明与 SHA-256 清单。将整个发布包复制到另一台服务器，按包内 `README.md` 安装。不会在开发电脑上自动部署 IIS。
 
 开发机可运行 `python .\scripts\verify-release.py D:\Releases\YfDotNet-NEW.zip`，先核对解压 ZIP 的全部清单哈希、安全配置与缺配置启动拒绝，实测生产入口、静态页面；完整 HTTP 测试由独立宿主加载发布包中的同一 API 二进制与依赖。报告区分这些证据，不将开发机检查表述为目标 IIS/SMTP 验收。
+
+## IIS 正式服务器维护
+
+发布包同时包含 `maintain-iis.ps1` 与 `maintenance-common.ps1`。它们只维护已经存在、使用专属应用池且没有子应用的同名 IIS 站点；应用池必须使用 `ApplicationPoolIdentity` 且不加载用户 profile。正式站点必须通过唯一 `YF_CONFIG_PATH` 使用网站外部 JSON，保持 HTTPS `WebBaseUrl` 和 `CookieSecure=true`，并以 in-process 的 `dotnet .\Yf.Api.dll` 标准形式启动。维护不调用 Rust，也不支持 `App__*` / `App:*`、额外 `YF_CONFIG_PATH` 或命令行配置覆盖。
+
+在目标服务器管理员 Windows PowerShell 5.1 中，从发布包根执行。`mysql.exe`、`mysqldump.exe` 使用与服务器兼容的 5.7 或更高版本；不在 `PATH` 时传绝对路径：
+
+```powershell
+# 当前站点的完整离线备份
+.\maintain-iis.ps1 -Action Backup -SiteName 'YfSystemDotNet' `
+  -BackupDirectory 'E:\YfBackups\2026-09-11-before-upgrade' `
+  -MySqlDump 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe'
+
+# 先备份，再把已核对的新包切换到新空程序目录；仅需升级 schema 时保留 -MigrateDatabase
+.\maintain-iis.ps1 -Action Upgrade -SiteName 'YfSystemDotNet' `
+  -BackupDirectory 'E:\YfBackups\2026-09-11-before-upgrade' `
+  -PackageRoot 'D:\Packages\YfDotNet-NEW' `
+  -NewSiteRoot 'C:\inetpub\yf_system_dotnet_20260911' `
+  -MySqlDump 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe' `
+  -MigrateDatabase
+
+# 使用同一 SiteName 的备份恢复；配置必须指向另一套新空数据库和新空存储
+.\maintain-iis.ps1 -Action Restore -SiteName 'YfSystemDotNet' `
+  -BackupDirectory 'E:\YfBackups\2026-09-11-before-upgrade' `
+  -NewSiteRoot 'C:\inetpub\yf_system_dotnet_restore_20260911' `
+  -RestoreConfigPath 'D:\YfConfig\appsettings.Restored.json' `
+  -MySql 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe'
+```
+
+Restore 的新数据库名必须不同于当前数据库，执行前由 DBA 确认其中表、routines、events 全部为空；新程序目录、新存储和新外部配置也必须与当前资源及备份互相独立。恢复沿用备份内程序和 schema，不能同时传 `-MigrateDatabase`，并且恢复配置必须保持当前站点完全相同的 HTTPS origin。备份包含外部配置、数据库、程序和存储，也包含密钥与业务数据，必须在网站目录之外使用受限 ACL 和加密备份介质保护，禁止提交版本库或长期放在普通共享目录。
+
+维护期间脚本只停止该命名站点的专属应用池，并等待其 worker 全部退出；它不能排除其他 IIS 站点、服务、计划任务或远程实例写同一数据库和存储，管理员必须在维护窗口前停止所有外部写入者。任一步骤或恢复启动后的 HTTPS `/health` 检查失败，应用池保持停止。旧数据库、存储和程序不会被删除，新数据库导入失败时可能留有部分数据；调查后换新的空目标重试。完整参数、路径隔离、回退和灾难恢复步骤见发布包内 `README.md`。新机器必须先用备份对应版本的 `install-iis.ps1` 创建同名站点，再运行 Restore；该流程不承诺从裸机一键恢复。
+
+当前开发机未创建或操作真实 IIS 站点，只能读取 Microsoft.Web.Administration 默认配置；维护测试不构成目标服务器 IIS、证书、权限或网络验收。
 
 ## 依赖与来源
 

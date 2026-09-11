@@ -134,6 +134,8 @@ foreach ($required in @(
     $apiProject,
     $webLock,
     (Join-Path $deployRoot 'install-iis.ps1'),
+    (Join-Path $deployRoot 'maintain-iis.ps1'),
+    (Join-Path $deployRoot 'maintenance-common.ps1'),
     (Join-Path $deployRoot 'README.md'),
     (Join-Path $deployRoot 'appsettings.example.json'),
     $noticesSource
@@ -202,7 +204,7 @@ foreach ($item in Get-ChildItem -LiteralPath $webDist -Force) {
     Copy-Item -LiteralPath $item.FullName -Destination $wwwRoot -Recurse
 }
 
-foreach ($name in @('install-iis.ps1', 'README.md', 'appsettings.example.json')) {
+foreach ($name in @('install-iis.ps1', 'maintain-iis.ps1', 'maintenance-common.ps1', 'README.md', 'appsettings.example.json')) {
     Copy-Item -LiteralPath (Join-Path $deployRoot $name) -Destination (Join-Path $outputRoot $name)
 }
 Copy-Item -LiteralPath $noticesSource -Destination (Join-Path $outputRoot 'THIRD-PARTY-NOTICES.md')
@@ -373,7 +375,7 @@ if ($packagedSettings.App.ConnectionString -ne '' -or $packagedSettings.App.JwtS
     $packagedSettings.App.StorageRoot -ne '' -or $packagedSettings.App.Smtp.Password -ne '') {
     throw 'Packaged appsettings.json must not contain usable configuration or secrets.'
 }
-foreach ($requiredPayload in @('Yf.Api.dll', 'Yf.Api.runtimeconfig.json', 'web.config', 'wwwroot\index.html')) {
+foreach ($requiredPayload in @('Yf.Api.dll', 'Yf.Api.runtimeconfig.json', 'web.config', 'wwwroot\index.html', 'install-iis.ps1', 'maintain-iis.ps1', 'maintenance-common.ps1')) {
     if (!(Test-Path -LiteralPath (Join-Path $outputRoot $requiredPayload) -PathType Leaf)) {
         throw "Required published payload is missing: $requiredPayload"
     }
