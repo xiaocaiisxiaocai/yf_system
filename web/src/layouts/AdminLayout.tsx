@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Layout, Menu, Dropdown, Avatar, Button, Drawer } from '@arco-design/web-react'
+import { Layout, Menu, Dropdown, Avatar, Button, Drawer, Alert } from '@arco-design/web-react'
 import {
   IconHome,
   IconFile,
@@ -46,6 +46,7 @@ export default function AdminLayout() {
   })
 
   const items = MENU_ITEMS.filter((m) => menus.includes(m.code))
+  const hasMenus = items.length > 0
   const selected =
     items
       .filter((m) => (m.path === '/' ? loc.pathname === '/' : loc.pathname.startsWith(m.path)))
@@ -103,13 +104,13 @@ export default function AdminLayout() {
   return (
     <Layout className="layout-shell">
       <Header className="layout-header">
-        <Button
+        {hasMenus && <Button
           className="mobile-menu-trigger"
           type="text"
           aria-label="打开导航菜单"
           icon={<IconMenu />}
           onClick={() => setMobileMenuOpen(true)}
-        />
+        />}
         <div className="layout-logo" title="供应商协作平台">
           <img src="/saa-logo.svg" alt="SAA" />
           <span>供应商协作平台</span>
@@ -144,7 +145,7 @@ export default function AdminLayout() {
         </Dropdown>
       </Header>
       <Layout className="layout-main">
-        <Sider
+        {hasMenus && <Sider
           className={`layout-sider${siderCollapsed ? ' layout-sider--collapsed' : ''}`}
           width={200}
           collapsedWidth={64}
@@ -162,12 +163,18 @@ export default function AdminLayout() {
           >
             {siderCollapsed ? <IconMenuUnfold /> : <><IconMenuFold /><span>收起导航</span></>}
           </button>
-        </Sider>
+        </Sider>}
         <Content className="layout-content">
+          {!hasMenus && <Alert
+            type="info"
+            title="暂无可用功能，请联系管理员"
+            content="当前账号尚未分配菜单权限。你仍可通过右上角账号菜单维护个人资料、修改密码或退出登录。"
+            style={{ marginBottom: 16 }}
+          />}
           <Outlet />
         </Content>
       </Layout>
-      <Drawer
+      {hasMenus && <Drawer
         className="mobile-nav-drawer"
         title={(
           <div className="drawer-brand">
@@ -183,7 +190,7 @@ export default function AdminLayout() {
         onCancel={() => setMobileMenuOpen(false)}
       >
         {menu(true)}
-      </Drawer>
+      </Drawer>}
     </Layout>
   )
 }
