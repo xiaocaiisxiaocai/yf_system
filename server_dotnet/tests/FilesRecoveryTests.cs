@@ -284,9 +284,9 @@ public sealed class FilesRecoveryTests
                             (id,employee_no,user_type,supplier_id,status,must_change_password,email,real_name)
                             VALUES(1,'T001','INTERNAL',NULL,'ACTIVE',FALSE,NULL,'Tester');
                         INSERT INTO roles(id,name,status,is_built_in) VALUES(1,'文件测试','ACTIVE',FALSE);
-                        INSERT INTO permissions(id,code) VALUES(1,'file:upload');
+                        INSERT INTO permissions(id,code) VALUES(1,'file:upload'),(2,'project:list');
                         INSERT INTO user_roles(user_id,role_id) VALUES(1,1);
-                        INSERT INTO role_permissions(role_id,permission_id) VALUES(1,1);
+                        INSERT INTO role_permissions(role_id,permission_id) VALUES(1,1),(1,2);
                         INSERT INTO projects(id,supplier_id,created_by,status,confirm_side,name)
                             VALUES(1,1,1,'IN_PROGRESS',NULL,'File Test');
                         """, cancellationToken: ct));

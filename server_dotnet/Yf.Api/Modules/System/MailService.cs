@@ -8,8 +8,41 @@ using Yf.Api.Infrastructure;
 
 namespace Yf.Api.Modules.SystemManagement;
 
-public sealed class MailService(AppDb db, AppOptions options, AuditService audit, SystemService system)
+public sealed class MailService
 {
+    private readonly AppDb db;
+    private readonly AppOptions options;
+    private readonly AuditService audit;
+    private readonly SystemService system;
+    private readonly ILogger<MailService> logger;
+    private readonly ISmtpDelivery smtp;
+
+    public MailService(
+        AppDb db,
+        AppOptions options,
+        AuditService audit,
+        SystemService system,
+        ILogger<MailService> logger)
+        : this(db, options, audit, system, logger, new MailKitSmtpDelivery())
+    {
+    }
+
+    internal MailService(
+        AppDb db,
+        AppOptions options,
+        AuditService audit,
+        SystemService system,
+        ILogger<MailService> logger,
+        ISmtpDelivery smtp)
+    {
+        this.db = db;
+        this.options = options;
+        this.audit = audit;
+        this.system = system;
+        this.logger = logger;
+        this.smtp = smtp;
+    }
+
     public static string MaskEmail(string address)
     {
         var text = address.Trim();
@@ -37,7 +70,7 @@ public sealed class MailService(AppDb db, AppOptions options, AuditService audit
     {
         await using var conn = await db.OpenAsync(ct);
         var cfg = options.Smtp;
-        var configured = cfg.Host.Length > 0 && cfg.Username.Length > 0 && cfg.Password.Length > 0 && cfg.From.Length > 0;
+        var configured = cfg.IsConfigured;
         var counts = (await conn.QueryAsync<QueueCount>(new CommandDefinition("SELECT status,COUNT(*) AS count FROM email_outbox GROUP BY status", cancellationToken: ct))).ToDictionary(x => x.Status, x => x.Count);
         var missingCount = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT COUNT(*) FROM users WHERE status='ACTIVE' AND TRIM(email)=''", cancellationToken: ct));
         var missing = await conn.QueryAsync(new CommandDefinition("SELECT id AS userId,employee_no AS employeeNo,real_name AS realName,user_type AS userType,status FROM users WHERE status='ACTIVE' AND TRIM(email)='' ORDER BY employee_no LIMIT 20", cancellationToken: ct));
@@ -97,7 +130,7 @@ public sealed class MailService(AppDb db, AppOptions options, AuditService audit
 
     public async Task FlushAsync(CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(options.Smtp.Host)) return;
+        if (!options.Smtp.IsConfigured) return;
         await using var conn = await db.OpenAsync(ct);
         if (!await EnabledAsync(conn, ct)) return;
         var pending = await conn.QueryAsync<MailRow>(new CommandDefinition("SELECT id,event_type AS EventType,recipient_email AS RecipientEmail,subject,body,status,retry_count AS RetryCount,next_attempt_at AS NextAttemptAt FROM email_outbox WHERE (status='PENDING' AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())) OR (status='SENDING' AND next_attempt_at<=UTC_TIMESTAMP()) ORDER BY id LIMIT 10", cancellationToken: ct));
@@ -112,19 +145,13 @@ public sealed class MailService(AppDb db, AppOptions options, AuditService audit
             DateTime? next = null;
             try
             {
-                var cfg = options.Smtp;
-                if (!MailboxAddress.TryParse(cfg.From, out var from) && !MailboxAddress.TryParse(cfg.Username, out from)) throw new FormatException("发件地址无效");
-                if (!MailboxAddress.TryParse(mail.RecipientEmail, out var to)) throw new FormatException("收件地址无效");
-                var message = new MimeMessage();
-                message.From.Add(from); message.To.Add(to); message.Subject = mail.Subject;
-                message.Body = new TextPart("plain") { Text = mail.Body };
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 timeout.CancelAfter(TimeSpan.FromSeconds(60));
-                using var client = new SmtpClient { Timeout = 60000 };
-                await client.ConnectAsync(cfg.Host, cfg.Port, cfg.Port == 465 ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls, timeout.Token);
-                await client.AuthenticateAsync(cfg.Username, cfg.Password, timeout.Token);
-                await client.SendAsync(message, timeout.Token);
-                await client.DisconnectAsync(true, timeout.Token);
+                var delivery = await smtp.SendAsync(options.Smtp,
+                    new(mail.RecipientEmail, mail.Subject, mail.Body), timeout.Token);
+                if (delivery.DisconnectFailureType is not null)
+                    logger.LogWarning("SMTP message {OutboxId} was accepted, but connection cleanup failed ({ErrorType}).",
+                        mail.Id, delivery.DisconnectFailureType);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
@@ -135,15 +162,73 @@ public sealed class MailService(AppDb db, AppOptions options, AuditService audit
                 status = terminal ? "FAILED" : "PENDING";
                 if (!terminal) next = DateTime.UtcNow.AddSeconds(30 * Math.Pow(2, Math.Clamp(retries - 1, 0, 6)));
             }
-            await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-            var changed = await conn.ExecuteAsync(new CommandDefinition("UPDATE email_outbox SET status=@status,retry_count=@retries,last_error=@error,next_attempt_at=@next,sent_at=IF(@status='SENT',UTC_TIMESTAMP(6),sent_at) WHERE id=@Id AND status='SENDING' AND next_attempt_at=@lease", new { mail.Id, status, retries, error, next, lease }, tx, cancellationToken: ct));
-            if (changed == 1) await audit.WriteAsync(conn, tx, null, status == "SENT" ? "EMAIL_SENT" : status == "FAILED" ? "EMAIL_FAILED" : "EMAIL_RETRY", "email_outbox", mail.Id, new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error }, null, ct);
-            await tx.CommitAsync(ct);
+            // Once SendAsync has returned, the SMTP server accepted the message. Persist that
+            // outcome during a short window independent of host shutdown; a QUIT failure must
+            // not turn a known delivery into a retry and send a duplicate message.
+            using var completion = status == "SENT" ? new CancellationTokenSource(TimeSpan.FromSeconds(15)) : null;
+            var completionToken = completion?.Token ?? ct;
+            await using var tx = await AppDb.BeginTransactionAsync(conn, completionToken);
+            var changed = await conn.ExecuteAsync(new CommandDefinition("UPDATE email_outbox SET status=@status,retry_count=@retries,last_error=@error,next_attempt_at=@next,sent_at=IF(@status='SENT',UTC_TIMESTAMP(6),sent_at) WHERE id=@Id AND status='SENDING' AND next_attempt_at=@lease", new { mail.Id, status, retries, error, next, lease }, tx, cancellationToken: completionToken));
+            if (changed == 1) await audit.WriteAsync(conn, tx, null, status == "SENT" ? "EMAIL_SENT" : status == "FAILED" ? "EMAIL_FAILED" : "EMAIL_RETRY", "email_outbox", mail.Id, new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error }, null, completionToken);
+            await tx.CommitAsync(completionToken);
         }
     }
     private sealed class QueueCount { public string Status { get; set; } = ""; public ulong Count { get; set; } }
     private sealed class Recipient { public ulong Id { get; set; } public string Email { get; set; } = ""; public string EmployeeNo { get; set; } = ""; public string RealName { get; set; } = ""; }
     private sealed class MailRow { public ulong Id { get; set; } public string EventType { get; set; } = ""; public string RecipientEmail { get; set; } = ""; public string Subject { get; set; } = ""; public string Body { get; set; } = ""; public string Status { get; set; } = ""; public int RetryCount { get; set; } public DateTime? NextAttemptAt { get; set; } }
+}
+
+internal sealed record SmtpEnvelope(string Recipient, string Subject, string Body);
+internal sealed record SmtpDeliveryResult(string? DisconnectFailureType);
+
+internal interface ISmtpDelivery
+{
+    Task<SmtpDeliveryResult> SendAsync(SmtpOptions options, SmtpEnvelope envelope, CancellationToken ct);
+}
+
+internal sealed class MailKitSmtpDelivery : ISmtpDelivery
+{
+    public async Task<SmtpDeliveryResult> SendAsync(
+        SmtpOptions options,
+        SmtpEnvelope envelope,
+        CancellationToken ct)
+    {
+        if (!MailboxAddress.TryParse(options.From, out var from)
+            && !MailboxAddress.TryParse(options.Username, out from))
+            throw new FormatException("发件地址无效");
+        if (!MailboxAddress.TryParse(envelope.Recipient, out var to))
+            throw new FormatException("收件地址无效");
+
+        var message = new MimeMessage();
+        message.From.Add(from);
+        message.To.Add(to);
+        message.Subject = envelope.Subject;
+        message.Body = new TextPart("plain") { Text = envelope.Body };
+
+        using var client = new SmtpClient { Timeout = 60000 };
+        await client.ConnectAsync(options.Host, options.Port,
+            options.Port == 465 ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls, ct);
+        await client.AuthenticateAsync(options.Username, options.Password, ct);
+        await client.SendAsync(message, ct);
+
+        return await CompleteAcceptedDeliveryAsync(
+            cleanupToken => client.DisconnectAsync(true, cleanupToken));
+    }
+
+    internal static async Task<SmtpDeliveryResult> CompleteAcceptedDeliveryAsync(
+        Func<CancellationToken, Task> disconnect)
+    {
+        try
+        {
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await disconnect(cleanup.Token);
+            return new(null);
+        }
+        catch (Exception error)
+        {
+            return new(error.GetType().Name);
+        }
+    }
 }
 
 public sealed class MailWorker(MailService mail, AppOptions options, ILogger<MailWorker> logger) : BackgroundService

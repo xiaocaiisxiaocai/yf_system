@@ -28,21 +28,26 @@ public sealed class IdentityMiddleware(RequestDelegate next)
         catch (ApiException) { throw; }
         catch { throw ApiException.Unauthorized("登录状态无效"); }
 
-        await using var conn = await db.OpenAsync(ct);
-        if (!await identity.HasActiveSessionAsync(conn, null, claims.UserId, claims.SessionId, ct)) throw ApiException.Unauthorized("登录状态已失效，请重新登录");
-        var row = await conn.QuerySingleOrDefaultAsync<AuthUser>(new CommandDefinition(
-            "SELECT id Id,employee_no EmployeeNo,user_type UserType,supplier_id SupplierId,status Status,must_change_password MustChangePassword FROM users WHERE id=@id",
-            new { id = claims.UserId }, cancellationToken: ct)) ?? throw ApiException.Unauthorized("账号不存在");
-        if (row.Status != "ACTIVE") throw ApiException.Unauthorized("账号已被禁用");
-        if (row.UserType == "SUPPLIER")
+        // Authentication owns only its lookups, not the downstream request. In
+        // particular, uploads/downloads must not pin this connection while they
+        // stream or wait for a second connection from the same pool.
+        await using (var conn = await db.OpenAsync(ct))
         {
-            if (row.SupplierId is not ulong sid || await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-                    "SELECT EXISTS(SELECT 1 FROM suppliers WHERE id=@sid AND status='ACTIVE')", new { sid }, cancellationToken: ct)) != 1)
-                throw ApiException.Unauthorized("所属供应商已被禁用");
+            if (!await identity.HasActiveSessionAsync(conn, null, claims.UserId, claims.SessionId, ct)) throw ApiException.Unauthorized("登录状态已失效，请重新登录");
+            var row = await conn.QuerySingleOrDefaultAsync<AuthUser>(new CommandDefinition(
+                "SELECT id Id,employee_no EmployeeNo,user_type UserType,supplier_id SupplierId,status Status,must_change_password MustChangePassword FROM users WHERE id=@id",
+                new { id = claims.UserId }, cancellationToken: ct)) ?? throw ApiException.Unauthorized("账号不存在");
+            if (row.Status != "ACTIVE") throw ApiException.Unauthorized("账号已被禁用");
+            if (row.UserType == "SUPPLIER")
+            {
+                if (row.SupplierId is not ulong sid || await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                        "SELECT EXISTS(SELECT 1 FROM suppliers WHERE id=@sid AND status='ACTIVE')", new { sid }, cancellationToken: ct)) != 1)
+                    throw ApiException.Unauthorized("所属供应商已被禁用");
+            }
+            if (row.MustChangePassword && path is not ("/api/v1/auth/profile" or "/api/v1/auth/password" or "/api/v1/auth/logout"))
+                throw new ApiException(403, 40303, "请先修改初始密码");
+            context.Items[typeof(CurrentUser)] = new CurrentUser(row.Id, row.EmployeeNo, row.UserType, row.SupplierId);
         }
-        if (row.MustChangePassword && path is not ("/api/v1/auth/profile" or "/api/v1/auth/password" or "/api/v1/auth/logout"))
-            throw new ApiException(403, 40303, "请先修改初始密码");
-        context.Items[typeof(CurrentUser)] = new CurrentUser(row.Id, row.EmployeeNo, row.UserType, row.SupplierId);
         await next(context);
     }
 

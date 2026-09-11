@@ -30,8 +30,7 @@ public sealed class AppOptions
         if (!Uri.TryCreate(WebBaseUrl, UriKind.Absolute, out var web) || web.Scheme is not ("http" or "https") || web.UserInfo.Length != 0)
             throw new InvalidOperationException("App:WebBaseUrl must be an HTTP(S) origin.");
         if (AccessTtlMinutes is < 1 or > 1440 || RefreshTtlDays is < 1 or > 365) throw new InvalidOperationException("Invalid token lifetime.");
-        if (Smtp.Host.Length > 0 && (Smtp.Username.Length == 0 || Smtp.Password.Length == 0 || Smtp.From.Length == 0))
-            throw new InvalidOperationException("SMTP requires username, password and from.");
+        Smtp.Validate();
     }
 
     public void ValidateStorageLocation(string applicationRoot)
@@ -51,4 +50,21 @@ public sealed class SmtpOptions
     public string Username { get; set; } = "";
     public string Password { get; set; } = "";
     public string From { get; set; } = "";
+
+    public bool IsConfigured => Host.Length > 0;
+
+    public void Validate()
+    {
+        // An empty host deliberately disables SMTP. Any attempted configuration
+        // must be complete so the application does not start with a dead queue.
+        if (!IsConfigured) return;
+        if (string.IsNullOrWhiteSpace(Host))
+            throw new InvalidOperationException("App:Smtp:Host cannot be whitespace.");
+        if (Port is < 1 or > 65535)
+            throw new InvalidOperationException("App:Smtp:Port must be between 1 and 65535.");
+        if (string.IsNullOrWhiteSpace(Username) || string.IsNullOrWhiteSpace(Password))
+            throw new InvalidOperationException("SMTP requires a non-empty username and password.");
+        if (string.IsNullOrWhiteSpace(From) || !System.Net.Mail.MailAddress.TryCreate(From, out _))
+            throw new InvalidOperationException("App:Smtp:From must be a valid email address.");
+    }
 }

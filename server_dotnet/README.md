@@ -1,6 +1,6 @@
 # ASP.NET Core API 后端
 
-独立的 .NET 10 后端。原 Rust 后端 `../yf_server` 保留；React 前端 `../web` 共用，接口仍为 `/api/v1`。本次新增在 `codex/aspnet-core-backend` 分支，不自动切换正在使用的服务。
+当前维护的独立 .NET 10 后端，配套 React 前端位于 `../web`，接口为 `/api/v1`。原 Rust 目录 `../yf_server` 仅保留归档参考，不作为运行、测试或升级依赖。源码合并不会自动切换正在使用的服务。
 
 ## 功能与结构
 

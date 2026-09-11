@@ -47,8 +47,8 @@ function findActionButton(node, text) {
   return findElement(node, (item) => item.props.children === text)
 }
 
-function authModule(user, permissions = []) {
-  const state = { user, hasPerm: (code) => permissions.includes(code) }
+function authModule(user, permissions = [], menus = []) {
+  const state = { user, menus, hasPerm: (code) => permissions.includes(code) }
   return { useAuth: (selector) => selector ? selector(state) : state }
 }
 
@@ -886,7 +886,7 @@ test('list actions cannot let an old refresh overwrite a newer filter result', a
 
 test('dashboard and project detail panels expose retry instead of a false empty state', async () => {
   const iconMock = new Proxy({}, { get: (_, name) => component(name) })
-  const state = { user: { id: 1, realName: '管理员', userType: 'INTERNAL' }, hasPerm: () => false }
+  const state = { user: { id: 1, realName: '管理员', userType: 'INTERNAL' }, menus: ['dashboard'], hasPerm: () => false }
   const auth = { useAuth: (selector) => selector ? selector(state) : state }
   const cases = [
     {
@@ -994,7 +994,7 @@ test('dashboard pending projects can retry, navigate, refresh, and recover from 
     }, { get: (obj, key) => obj[key] ?? component(key) }),
     '@arco-design/web-react/icon': iconMock,
     '../api/client': http,
-    '../store/auth': authModule({ id: 1, realName: '管理员', userType: 'INTERNAL' }, ['project:confirm']),
+    '../store/auth': authModule({ id: 1, realName: '管理员', userType: 'INTERNAL' }, ['project:confirm'], ['dashboard']),
     '../api/types': { fmtTime: String },
     'react-router-dom': { Link: component('Link'), useNavigate: () => () => {} },
   }).default
@@ -1032,6 +1032,28 @@ test('dashboard pending projects can retry, navigate, refresh, and recover from 
   await act(async () => refresh.props.onClick())
   await act(async () => pendingRequests[4].resolve({ data: { list: [], total: 0, page: 1, pageSize: 10 } }))
   assert.ok(renderer.root.findAllByType('Empty').some((node) => node.props.description === '暂无待确认项目'))
+  await act(async () => renderer.unmount())
+})
+
+test('dashboard without its menu permission stays local and does not call dashboard APIs', async () => {
+  const calls = []
+  const Page = loadTs('src/pages/Dashboard.tsx', {
+    '@arco-design/web-react': new Proxy({
+      Grid: Object.assign(component('Grid'), { Row: component('Grid.Row'), Col: component('Grid.Col') }),
+      List: Object.assign(component('List'), { Item: Object.assign(component('List.Item'), { Meta: component('List.Item.Meta') }) }),
+      Typography: arco.Typography,
+      Message: arco.Message,
+    }, { get: (obj, key) => obj[key] ?? component(key) }),
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': { get: async (url) => { calls.push(url); throw new Error('must not request') } },
+    '../store/auth': authModule({ id: 1, realName: '受限用户', userType: 'INTERNAL' }, [], []),
+    '../api/types': { fmtTime: String },
+    'react-router-dom': { Link: component('Link'), useNavigate: () => () => {} },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  assert.deepEqual(calls, [])
+  assert.equal(renderer.root.findByType('Result').props.title, '工作台不可用')
   await act(async () => renderer.unmount())
 })
 
@@ -2422,6 +2444,37 @@ test('project workflow audit actions expose precise labels and state or rejectio
     assert.ok(values.includes(value), `项目日志筛选缺少 ${value}`)
   }
   assert.ok(!values.includes('PROJECT_STATUS'))
+  await act(async () => renderer.unmount())
+})
+
+test('profile update audit exposes the auth filter label and changed field summary', async () => {
+  const row = {
+    id: 202,
+    userId: 1,
+    employeeNo: 'admin',
+    action: 'PROFILE_UPDATE',
+    targetType: 'user',
+    targetId: '1',
+    detail: { changedFields: ['email'] },
+    createdAt: '2026-09-11T00:00:00Z',
+  }
+  const Page = loadTs('src/pages/system/AuditLog.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../../api/client': { get: async () => ({ data: { list: [row], total: 1, page: 1, pageSize: 20 } }) },
+    '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['log:view']),
+    '../../api/types': { fmtTime: String },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const table = renderer.root.findByType('Table')
+  const action = table.props.columns.find((column) => column.dataIndex === 'action').render(row.action, row)
+  assert.match(JSON.stringify(action), /更新个人资料/)
+  const summary = table.props.columns.find((column) => column.title === '内容摘要').render(null, row)
+  assert.match(JSON.stringify(summary), /修改 邮箱/)
+  const actionSelect = renderer.root.findAllByType('Select').find((select) => select.props.placeholder === '具体操作')
+  const values = React.Children.toArray(actionSelect.props.children).map((option) => option.props.value)
+  assert.ok(values.includes('PROFILE_UPDATE'))
   await act(async () => renderer.unmount())
 })
 

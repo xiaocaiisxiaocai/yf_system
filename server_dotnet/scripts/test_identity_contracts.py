@@ -4,6 +4,7 @@ The caller owns the disposable database and API process. This module never disco
 connects to another database and does not start services.
 """
 import secrets
+import urllib.parse
 
 
 def _password():
@@ -51,12 +52,26 @@ def run_identity_checks(client, Client, conn, check):
         "departmentId": None, "roleId": ordinary_role["id"]
     })
     check("identity internal account create and update", updated["realName"] == "契约更新用户" and updated["roleId"] == ordinary_role["id"])
+    email_keyword = urllib.parse.quote(updated["email"])
+    email_results = client.call("GET", f"/api/v1/admin/users?keyword={email_keyword}")
+    check("identity internal account search includes email", email_results["total"] == 1 and email_results["list"][0]["id"] == user_id)
     disabled = client.call("PUT", f"/api/v1/admin/users/{user_id}/status", {"status": "DISABLED"})
     client.call("PUT", f"/api/v1/admin/users/{user_id}/status", {"status": "ACTIVE"})
     client.call("PUT", f"/api/v1/admin/users/{user_id}/password", {"newPassword": _password()})
     client.call("PUT", f"/api/v1/admin/users/{user_id}/roles", {"roleIds": [ordinary_role["id"]]})
     client.call("DELETE", f"/api/v1/admin/users/{user_id}")
     check("identity account status reset role and delete", disabled["status"] == "DISABLED")
+
+    # Self-service profile updates are part of the authentication audit category and retain
+    # structured field details for the frontend summary.
+    profile = client.call("GET", "/api/v1/auth/profile")
+    profile_email = "profile." + secrets.token_hex(5) + "@example.invalid"
+    updated_profile = client.call("PUT", "/api/v1/auth/profile", {"email": profile_email})
+    profile_logs = client.call("GET", "/api/v1/admin/audit-logs?category=AUTH&action=PROFILE_UPDATE")
+    profile_rows = [row for row in profile_logs["list"] if row["userId"] == profile["user"]["id"]]
+    check("identity profile update is visible in auth audit category",
+          updated_profile["user"]["email"] == profile_email and len(profile_rows) == 1
+          and profile_rows[0]["detail"]["changedFields"] == ["email"])
 
     # A delegated user may manage ordinary users but cannot read other admin domains or grant
     # the built-in administrator role above its authority ceiling.
@@ -131,6 +146,18 @@ def run_identity_checks(client, Client, conn, check):
         "employeeNo": supplier_employee, "password": supplier_password, "realName": "供应商会话用户",
         "email": supplier_employee + "@example.invalid"
     })
+    client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/status", {"status": "DISABLED"}, expected=400)
+    client.call("PUT", f"/api/v1/admin/supplier-accounts/{supplier_user['id']}/status", {"status": "DISABLED"})
+    client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/status", {"status": "DISABLED"})
+    blocked_employee = "blocked_supplier_" + secrets.token_hex(3)
+    client.call("POST", f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
+        "employeeNo": blocked_employee, "password": _password(), "realName": "禁用角色账号",
+        "email": blocked_employee + "@example.invalid"
+    }, expected=400)
+    client.call("PUT", f"/api/v1/admin/supplier-accounts/{supplier_user['id']}/status", {"status": "ACTIVE"}, expected=400)
+    client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/status", {"status": "ACTIVE"})
+    client.call("PUT", f"/api/v1/admin/supplier-accounts/{supplier_user['id']}/status", {"status": "ACTIVE"})
+    check("identity supplier role protects active accounts and gates account creation or enable", True)
     with conn.cursor() as cursor:
         cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (supplier_user["id"],))
     supplier_client = Client(client.base)
@@ -159,3 +186,27 @@ def run_identity_checks(client, Client, conn, check):
     supplier_client.call("POST", "/api/v1/auth/refresh", expected=401)
     client.call("PUT", f"/api/v1/admin/suppliers/{supplier['id']}/status", {"status": "ACTIVE"})
     check("identity disabled supplier invalidates account session", True)
+
+    # Logout records only a real session revocation. A repeated request with the same, now-revoked
+    # access token must not duplicate the audit row or disclose either token/session identifier.
+    logout_password = _password()
+    logout_employee = "logout_" + secrets.token_hex(4)
+    logout_user = client.call("POST", "/api/v1/admin/users", {
+        "employeeNo": logout_employee, "password": logout_password, "realName": "注销审计用户",
+        "email": logout_employee + "@example.invalid", "departmentId": None, "roleId": ordinary_role["id"]
+    })
+    with conn.cursor() as cursor:
+        cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (logout_user["id"],))
+    logout_client = Client(client.base)
+    logout_client.login(logout_employee, logout_password)
+    logout_client.call("POST", "/api/v1/auth/logout")
+    logout_client.call("POST", "/api/v1/auth/logout")
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT target_type,target_id,detail,ip FROM audit_logs WHERE user_id=%s AND action='LOGOUT' ORDER BY id", (logout_user["id"],))
+        logout_rows = cursor.fetchall()
+        cursor.execute("SELECT COUNT(*) FROM refresh_tokens WHERE user_id=%s AND revoked=0", (logout_user["id"],))
+        active_logout_tokens = cursor.fetchone()[0]
+    check("identity logout audits one valid revocation without credential disclosure",
+          active_logout_tokens == 0 and len(logout_rows) == 1
+          and logout_rows[0][0] is None and logout_rows[0][1] is None and logout_rows[0][2] is None
+          and bool(logout_rows[0][3]))

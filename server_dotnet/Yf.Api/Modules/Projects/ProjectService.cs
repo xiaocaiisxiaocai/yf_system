@@ -22,6 +22,7 @@ internal sealed class ProjectService(
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         var clauses = new List<string>();
         var args = new DynamicParameters();
         if (!current.IsInternal)
@@ -94,6 +95,7 @@ internal sealed class ProjectService(
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:create", ct);
         var supplierStatus = await conn.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
             "SELECT status FROM suppliers WHERE id = @SupplierId",
@@ -430,29 +432,45 @@ internal sealed class ProjectService(
 
     internal async Task<object> SupplierOptionsAsync(MySqlConnection conn, CurrentUser actor, CancellationToken ct)
     {
-        if (!actor.IsInternal)
-        {
-            throw ApiException.Forbidden();
-        }
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        AccessService.RequireInternal(current);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
+        var canListAll = await ProjectAccessService.HasPermissionAsync(
+            conn, tx, current.Id, "project:create", ct)
+            || await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:view_all", ct);
         var rows = await conn.QueryAsync(new CommandDefinition(
-            "SELECT id, name FROM suppliers WHERE status='ACTIVE'",
-            cancellationToken: ct));
+            canListAll
+                ? "SELECT id, name FROM suppliers WHERE status='ACTIVE' ORDER BY id"
+                : """
+                  SELECT DISTINCT s.id,s.name
+                  FROM suppliers s
+                  INNER JOIN projects p ON p.supplier_id=s.id
+                  WHERE s.status='ACTIVE'
+                    AND (p.created_by=@UserId OR EXISTS(
+                      SELECT 1 FROM project_members pm WHERE pm.project_id=p.id AND pm.user_id=@UserId))
+                  ORDER BY s.id
+                  """,
+            new { UserId = current.Id }, tx, cancellationToken: ct));
+        await tx.CommitAsync(ct);
         return rows.AsList();
     }
 
     internal async Task<object> InternalUserOptionsAsync(MySqlConnection conn, CurrentUser actor, CancellationToken ct)
     {
-        if (!actor.IsInternal)
-        {
-            throw ApiException.Forbidden();
-        }
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        AccessService.RequireInternal(current);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "project:member", ct);
         var rows = await conn.QueryAsync(new CommandDefinition(
             """
             SELECT u.id AS id,u.employee_no AS employeeNo,u.real_name AS realName,d.name AS deptName
             FROM users u LEFT JOIN departments d ON d.id=u.department_id
             WHERE u.user_type='INTERNAL' AND u.status='ACTIVE'
             """,
-            cancellationToken: ct));
+            transaction: tx, cancellationToken: ct));
+        await tx.CommitAsync(ct);
         return rows.AsList();
     }
 

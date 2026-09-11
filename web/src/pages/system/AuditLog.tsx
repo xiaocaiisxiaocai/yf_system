@@ -36,6 +36,7 @@ const ACTIONS: Record<string, { label: string; category: string; color: string }
   LOGIN_LOCKED: { label: '账号锁定', category: '认证安全', color: 'red' },
   LOGOUT: { label: '退出登录', category: '认证安全', color: 'gray' },
   PASSWORD_CHANGE: { label: '修改密码', category: '认证安全', color: 'orange' },
+  PROFILE_UPDATE: { label: '更新个人资料', category: '认证安全', color: 'purple' },
   PROJECT_CREATE: { label: '创建项目', category: '项目协作', color: 'arcoblue' },
   PROJECT_UPDATE: { label: '更新项目', category: '项目协作', color: 'arcoblue' },
   PROJECT_START: { label: '开始项目', category: '项目协作', color: 'arcoblue' },
@@ -139,12 +140,13 @@ function detailSummary(row: LogRow): string {
   if (row.action === 'USER_ASSIGN_ROLE' || row.action === 'USER_ASSIGN_ROLES') {
     return `${displayValue(actor)}：角色 ${displayValue(detail.oldRoleId)} → ${displayValue(detail.newRoleName ?? detail.newRoleId)}`
   }
-  if (row.action === 'USER_UPDATE') {
+  if (row.action === 'USER_UPDATE' || row.action === 'PROFILE_UPDATE') {
     const fields = Array.isArray(detail.changedFields)
       ? detail.changedFields.map((field) => FIELD_LABELS[String(field)] || String(field)).join('、')
       : ''
-    if (!actor && !fields) return '历史记录未包含变更字段'
-    return `${displayValue(actor)}${fields ? `；修改 ${fields}` : ''}`
+    const subject = actor == null || actor === '' ? '' : displayValue(actor)
+    if (!subject && !fields) return '历史记录未包含变更字段'
+    return [subject, fields ? `修改 ${fields}` : ''].filter(Boolean).join('；')
   }
   if (PROJECT_WORKFLOW_ACTIONS.has(row.action)) {
     const stateChange = detail.from != null || detail.to != null

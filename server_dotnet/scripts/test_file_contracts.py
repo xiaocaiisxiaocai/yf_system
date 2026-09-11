@@ -18,6 +18,59 @@ def _abort(client, session_id):
     client.call("DELETE", f"/api/v1/uploads/{session_id}")
 
 
+def _new_internal_with_permissions(client, conn, codes):
+    permissions = client.call("GET", "/api/v1/permissions")
+    permission_ids = {item["code"]: item["id"] for item in permissions}
+    role = client.call("POST", "/api/v1/admin/roles", {
+        "name": "文件预览回归-" + secrets.token_hex(5),
+        "description": "owned isolated file preview fixture",
+    })
+    client.call("PUT", f"/api/v1/admin/roles/{role['id']}/permissions", {
+        "permissionIds": [permission_ids[code] for code in codes],
+    })
+    employee = "filepreview_" + secrets.token_hex(5)
+    password = _password()
+    user = client.call("POST", "/api/v1/admin/users", {
+        "employeeNo": employee,
+        "password": password,
+        "realName": "文件预览契约用户",
+        "email": employee + "@example.invalid",
+        "departmentId": None,
+        "roleId": role["id"],
+    })
+    with conn.cursor() as cursor:
+        cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (user["id"],))
+    actor = type(client)(client.base)
+    actor.login(employee, password)
+    return actor
+
+
+def _insert_available_file(conn, project_id, uploader_id, storage_root, extension, content=None, size=None):
+    token = secrets.token_hex(8)
+    stored_name = token + "." + extension
+    path = storage_root / stored_name
+    if content is not None:
+        path.write_bytes(content)
+    else:
+        with path.open("wb") as stream:
+            stream.truncate(size)
+    physical_size = path.stat().st_size
+    digest = hashlib.sha256(content).hexdigest() if content is not None else "0" * 64
+    mime = {
+        "zip": "application/zip",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }[extension]
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,"
+            "mime_type,sha256,storage_path,status,deleted_at,created_at) "
+            "VALUES(%s,%s,'C2S',%s,%s,%s,%s,%s,%s,%s,'AVAILABLE',NULL,UTC_TIMESTAMP(3))",
+            (project_id, uploader_id, stored_name, stored_name, extension, physical_size,
+             mime, digest, stored_name),
+        )
+        return cursor.lastrowid
+
+
 def run_file_checks(client, conn, check, pid, fid):
     # An uploaded chunk is discovered by a second init with the same strong identity.
     resumed_bytes = b"%PDF-1.4\nfile resume contract\n%%EOF\n"
@@ -163,12 +216,32 @@ def run_file_checks(client, conn, check, pid, fid):
     # Even an authorized request must never follow a database path outside StorageRoot.
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT f.storage_path,us.temp_dir FROM files f "
+            "SELECT f.storage_path,f.uploader_id,us.temp_dir FROM files f "
             "JOIN upload_sessions us ON us.result_file_id=f.id WHERE f.id=%s",
             (fid,),
         )
-        original_storage_path, completed_temp_dir = cursor.fetchone()
+        original_storage_path, uploader_id, completed_temp_dir = cursor.fetchone()
     storage_root = Path(completed_temp_dir).parents[1]
+
+    # Preview and download are independent permissions. Inline content is only
+    # available for the three browser-supported formats and has a common 50 MiB cap.
+    preview_client = _new_internal_with_permissions(
+        client, conn, ["project:list", "project:view_all", "file:preview"])
+    preview_pdf, _ = preview_client.call("GET", f"/api/v1/files/{fid}/content", raw=True)
+    preview_client.call("GET", f"/api/v1/files/{fid}/download", expected=403)
+    zip_bytes = b"PK\x03\x04file preview boundary"
+    zip_fid = _insert_available_file(
+        conn, pid, uploader_id, storage_root, "zip", content=zip_bytes)
+    oversized_xlsx_fid = _insert_available_file(
+        conn, pid, uploader_id, storage_root, "xlsx", size=50 * 1024 * 1024 + 1)
+    preview_client.call("GET", f"/api/v1/files/{zip_fid}/content", expected=400)
+    preview_client.call("GET", f"/api/v1/files/{oversized_xlsx_fid}/content", expected=400)
+    downloaded_zip, _ = client.call("GET", f"/api/v1/files/{zip_fid}/download", raw=True)
+    check(
+        "file preview permission enforces type size and independent download boundaries",
+        preview_pdf.startswith(b"%PDF") and downloaded_zip == zip_bytes,
+    )
+
     outside_dir = storage_root.parent / ("file-contract-outside-" + secrets.token_hex(5))
     outside_file = outside_dir / "secret.pdf"
     outside_dir.mkdir()

@@ -102,14 +102,14 @@ public sealed class IdentityService(
         return (new(accessToken.Token, accessToken.ExpiresAt), next);
     }
 
-    public async Task LogoutAsync(string? refreshToken, string? authorization, CancellationToken ct)
+    public async Task LogoutAsync(string? refreshToken, string? authorization, string clientIp, CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
         var targets = new HashSet<(ulong UserId, string SessionId)>();
         if (!string.IsNullOrWhiteSpace(refreshToken))
         {
             var row = await conn.QuerySingleOrDefaultAsync<RefreshTokenRow>(new CommandDefinition(
-                "SELECT user_id UserId,session_id SessionId FROM refresh_tokens WHERE token_hash=@hash",
+                "SELECT user_id UserId,session_id SessionId FROM refresh_tokens WHERE token_hash=@hash AND revoked=0 AND expires_at>UTC_TIMESTAMP(6)",
                 new { hash = TokenService.HashRefreshToken(refreshToken) }, cancellationToken: ct));
             if (row is not null) targets.Add((row.UserId, row.SessionId));
         }
@@ -126,7 +126,11 @@ public sealed class IdentityService(
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         foreach (var uid in targets.Select(x => x.UserId).Distinct().Order())
             await conn.QuerySingleOrDefaultAsync<ulong?>(new CommandDefinition("SELECT id FROM users WHERE id=@uid FOR UPDATE", new { uid }, tx, cancellationToken: ct));
-        foreach (var target in targets) await RevokeSessionAsync(conn, tx, target.UserId, target.SessionId, ct);
+        foreach (var target in targets)
+        {
+            if (await RevokeSessionAsync(conn, tx, target.UserId, target.SessionId, ct) > 0)
+                await audit.WriteAsync(conn, tx, target.UserId, "LOGOUT", null, null, null, clientIp, ct);
+        }
         await tx.CommitAsync(ct);
     }
 
@@ -193,8 +197,8 @@ public sealed class IdentityService(
         return raw;
     }
 
-    private static Task RevokeSessionAsync(MySqlConnection conn, MySqlTransaction tx, ulong userId, string sessionId, CancellationToken ct) =>
-        conn.ExecuteAsync(new CommandDefinition("UPDATE refresh_tokens SET revoked=1 WHERE user_id=@userId AND session_id=@sessionId", new { userId, sessionId }, tx, cancellationToken: ct));
+    private static Task<int> RevokeSessionAsync(MySqlConnection conn, MySqlTransaction tx, ulong userId, string sessionId, CancellationToken ct) =>
+        conn.ExecuteAsync(new CommandDefinition("UPDATE refresh_tokens SET revoked=1 WHERE user_id=@userId AND session_id=@sessionId AND revoked=0", new { userId, sessionId }, tx, cancellationToken: ct));
 
     private static async Task<bool> IsSupplierActiveAsync(MySqlConnection conn, MySqlTransaction tx, UserRow user, CancellationToken ct)
     {

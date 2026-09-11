@@ -16,6 +16,7 @@ internal sealed class DashboardService
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
         if (!await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct))
         {
             await tx.CommitAsync(ct);
@@ -52,6 +53,7 @@ internal sealed class DashboardService
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
         var (scope, parameters) = await VisibleScopeAsync(conn, tx, current, ct);
         var projects = (await conn.QueryAsync<ProjectRow>(new CommandDefinition(
             $"""

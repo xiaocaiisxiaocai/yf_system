@@ -8,7 +8,7 @@ namespace Yf.Api.Modules.Files;
 
 public sealed class FileService(AppDb db, AppOptions options, AuditService audit, BatchDownloadLimiter limiter)
 {
-    private const ulong PdfPreviewMaximumBytes = 50UL * 1024 * 1024;
+    private const ulong PreviewMaximumBytes = 50UL * 1024 * 1024;
     private const ulong BatchInputMaximumBytes = 256UL * 1024 * 1024;
     private const ulong BatchZipOverheadBytes = 2UL * 1024 * 1024;
 
@@ -51,6 +51,8 @@ public sealed class FileService(AppDb db, AppOptions options, AuditService audit
         await AccessService.RequirePermissionAsync(conn, null, actor, inline ? "file:preview" : "file:download", ct);
         var row = await LoadAvailableAsync(conn, id, ct);
         await ProjectAccessService.RequireViewAsync(conn, null, actor, row.ProjectId, ct);
+        if (inline && !IsPreviewable(row.Ext))
+            throw ApiException.BadRequest("该文件类型不支持在线预览，请下载原文件查看");
         string path;
         try
         {
@@ -59,9 +61,8 @@ public sealed class FileService(AppDb db, AppOptions options, AuditService audit
         }
         catch (FileNotFoundException) { throw ApiException.NotFound(); }
         var physicalSize = (ulong)new FileInfo(path).Length;
-        if (inline && row.Ext.Equals("pdf", StringComparison.OrdinalIgnoreCase)
-            && Math.Max(row.SizeBytes, physicalSize) > PdfPreviewMaximumBytes)
-            throw ApiException.BadRequest($"PDF 超过 {PdfPreviewMaximumBytes / 1024 / 1024} MiB，不能在线预览，请下载原文件查看");
+        if (inline && Math.Max(row.SizeBytes, physicalSize) > PreviewMaximumBytes)
+            throw ApiException.BadRequest($"文件超过 {PreviewMaximumBytes / 1024 / 1024} MiB，不能在线预览，请下载原文件查看");
 
         var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
@@ -214,6 +215,11 @@ public sealed class FileService(AppDb db, AppOptions options, AuditService audit
             UploadService.FileSelect + " WHERE f.id=@Id", new { Id = id }, cancellationToken: ct));
         return row is { Status: "AVAILABLE" } ? row : throw ApiException.NotFound();
     }
+
+    private static bool IsPreviewable(string extension) =>
+        extension.Equals("pdf", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals("xls", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals("xlsx", StringComparison.OrdinalIgnoreCase);
 
     private sealed record ArchiveSource(string Path, string OriginalName);
 

@@ -15,7 +15,7 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
         AccessService.RequireInternal(actor);
         await AccessService.RequirePermissionAsync(conn, null, actor, "user:manage", ct);
         var where = " WHERE u.user_type='INTERNAL'";
-        if (!string.IsNullOrWhiteSpace(keyword)) where += " AND (u.employee_no LIKE CONCAT('%',@keyword,'%') OR u.real_name LIKE CONCAT('%',@keyword,'%'))";
+        if (!string.IsNullOrWhiteSpace(keyword)) where += " AND (u.employee_no LIKE CONCAT('%',@keyword,'%') OR u.real_name LIKE CONCAT('%',@keyword,'%') OR u.email LIKE CONCAT('%',@keyword,'%'))";
         if (departmentId.HasValue) where += " AND u.department_id=@departmentId";
         if (!string.IsNullOrWhiteSpace(status)) where += " AND u.status=@status";
         var total = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT COUNT(*) FROM users u" + where, new { keyword = keyword?.Trim(), departmentId, status }, cancellationToken: ct));

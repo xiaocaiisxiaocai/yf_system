@@ -147,6 +147,7 @@ public static class ProjectAccessService
         bool forUpdate,
         CancellationToken ct)
     {
+        await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         var sql = """
             SELECT id AS Id, supplier_id AS SupplierId, created_by AS CreatedBy,
                    status AS Status, confirm_side AS ConfirmSide

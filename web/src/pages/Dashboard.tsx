@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card, Empty, Grid, List, Pagination, Spin, Statistic, Tag, Typography } from '@arco-design/web-react'
+import { Button, Card, Empty, Grid, List, Pagination, Result, Spin, Statistic, Tag, Typography } from '@arco-design/web-react'
 import { IconRight } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import http from '../api/client'
@@ -50,6 +50,7 @@ export default function Dashboard() {
   const [pendingReloadKey, setPendingReloadKey] = useState(0)
   const pendingSeq = useRef(0)
   const user = useAuth((s) => s.user)
+  const hasDashboard = useAuth((s) => s.menus.includes('dashboard'))
   const nav = useNavigate()
 
   const load = useCallback(() => {
@@ -59,6 +60,7 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
+    if (!hasDashboard) return undefined
     const seq = ++loadSeq.current
     let active = true
     http.get('/dashboard/summary')
@@ -77,7 +79,7 @@ export default function Dashboard() {
     return () => {
       active = false
     }
-  }, [reloadKey])
+  }, [hasDashboard, reloadKey])
 
   const reloadPending = useCallback(() => {
     setPendingLoading(true)
@@ -91,6 +93,7 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
+    if (!hasDashboard) return undefined
     const seq = ++pendingSeq.current
     let correctingPage = false
     http.get('/dashboard/pending-projects', { params: { page: pendingPage, pageSize: 10 } })
@@ -115,7 +118,7 @@ export default function Dashboard() {
     return () => {
       pendingSeq.current += 1
     }
-  }, [pendingPage, pendingReloadKey])
+  }, [hasDashboard, pendingPage, pendingReloadKey])
 
   const cards = [
     { title: '可见项目', value: data?.projectCount },
@@ -123,6 +126,16 @@ export default function Dashboard() {
     { title: '待确认项目', value: data?.pendingConfirmations },
     { title: '未读留言', value: data?.unreadMessages },
   ]
+
+  if (!hasDashboard) {
+    return (
+      <Result
+        status="403"
+        title="工作台不可用"
+        subTitle="当前账号未分配工作台菜单权限，请从导航进入已授权功能，或在右上角维护个人资料。"
+      />
+    )
+  }
 
   return (
     <div>

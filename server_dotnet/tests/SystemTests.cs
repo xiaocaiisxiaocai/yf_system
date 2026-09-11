@@ -52,4 +52,67 @@ public class SystemTests
         Assert.Equal("SMTP 认证失败", MailService.SanitizeError("authentication failed alice@example.invalid password=my-secret"));
         Assert.Equal("SMTP 连接失败", MailService.SanitizeError("TLS connection smtp.private.invalid"));
     }
+
+    [Fact]
+    public void EmptySmtpHostKeepsMailDisabled()
+    {
+        var options = ValidOptions();
+        options.Smtp = new SmtpOptions { Host = "", Port = 0 };
+
+        options.Validate();
+
+        Assert.False(options.Smtp.IsConfigured);
+    }
+
+    [Theory]
+    [InlineData(" ", 465, "sender@example.invalid", "secret", "sender@example.invalid")]
+    [InlineData("smtp.example.invalid", 0, "sender@example.invalid", "secret", "sender@example.invalid")]
+    [InlineData("smtp.example.invalid", 65536, "sender@example.invalid", "secret", "sender@example.invalid")]
+    [InlineData("smtp.example.invalid", 465, " ", "secret", "sender@example.invalid")]
+    [InlineData("smtp.example.invalid", 465, "sender@example.invalid", " ", "sender@example.invalid")]
+    [InlineData("smtp.example.invalid", 465, "sender@example.invalid", "secret", "not-an-address")]
+    public void InvalidEnabledSmtpConfigurationIsRejected(
+        string host,
+        int port,
+        string username,
+        string password,
+        string from)
+    {
+        var options = ValidOptions();
+        options.Smtp = new SmtpOptions
+        {
+            Host = host,
+            Port = port,
+            Username = username,
+            Password = password,
+            From = from
+        };
+
+        Assert.Throws<InvalidOperationException>(() => options.Validate());
+    }
+
+    [Fact]
+    public void CompleteSmtpConfigurationIsAccepted()
+    {
+        var options = ValidOptions();
+        options.Smtp = new SmtpOptions
+        {
+            Host = "smtp.example.invalid",
+            Port = 465,
+            Username = "sender@example.invalid",
+            Password = "secret",
+            From = "sender@example.invalid"
+        };
+
+        options.Validate();
+
+        Assert.True(options.Smtp.IsConfigured);
+    }
+
+    private static AppOptions ValidOptions() => new()
+    {
+        ConnectionString = "Server=127.0.0.1;Database=yf_system;User ID=test;Password=test",
+        StorageRoot = Path.Combine(Path.GetTempPath(), "yf_options_test", "storage"),
+        JwtSecret = "test-jwt-secret-with-at-least-32-bytes"
+    };
 }

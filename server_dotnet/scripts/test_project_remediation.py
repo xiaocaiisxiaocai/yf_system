@@ -200,8 +200,78 @@ def _assert_no_submit_side_effect(conn, project_id):
 
 def run_project_remediation_checks(client, Client, conn, check):
     supplier, supplier_user, supplier_client = _new_supplier(client, Client, conn)
-    role_id = _new_role(client, ["project:submit", "project:withdraw"])
-    view_all_role_id = _new_role(client, ["project:view_all", "project:submit"])
+    dashboardless_role_id = _new_role(client, ["project:list"])
+    dashboardless_user, dashboardless_client = _new_internal(
+        client, Client, conn, dashboardless_role_id, "无工作台权限用户")
+    dashboardless_client.call("GET", "/api/v1/projects")
+    dashboardless_client.call("GET", "/api/v1/dashboard/summary", expected=403)
+    dashboardless_client.call("GET", "/api/v1/dashboard/pending-projects", expected=403)
+    check("dashboard endpoints require the dashboard menu permission", True)
+
+    # Removing the project menu must revoke both the list and resource read paths,
+    # even when the actor remains an explicit member or supplier-side participant.
+    no_project_role_id = _new_role(client, [])
+    no_project_user, no_project_client = _new_internal(
+        client, Client, conn, no_project_role_id, "无项目菜单成员")
+    member_manager_role_id = _new_role(client, ["project:list", "project:member"])
+    _, member_manager_client = _new_internal(
+        client, Client, conn, member_manager_role_id, "成员选择控制用户")
+    creator_role_id = _new_role(client, ["project:list", "project:create"])
+    _, creator_client = _new_internal(
+        client, Client, conn, creator_role_id, "项目创建控制用户")
+    create_only_role_id = _new_role(client, ["project:create"])
+    _, create_only_client = _new_internal(
+        client, Client, conn, create_only_role_id, "缺项目菜单创建用户")
+    unrelated_supplier = client.call("POST", "/api/v1/admin/suppliers", {
+        "name": "项目选项无关供应商-" + secrets.token_hex(5),
+        "remark": "owned isolated project option fixture",
+    })
+    access_project = _new_project(client, supplier["id"], "项目菜单撤销")
+    client.call("PUT", f"/api/v1/projects/{access_project}/members", {
+        "userIds": [no_project_user["id"], dashboardless_user["id"]],
+    })
+    no_project_client.call("GET", "/api/v1/projects", expected=403)
+    no_project_client.call("GET", f"/api/v1/projects/{access_project}", expected=403)
+    no_project_client.call("GET", f"/api/v1/projects/{access_project}/messages", expected=403)
+    no_project_client.call("GET", "/api/v1/supplier-options", expected=403)
+    no_project_client.call("GET", "/api/v1/internal-user-options", expected=403)
+    create_only_client.call("POST", "/api/v1/projects", {
+        "name": "不应创建-" + secrets.token_hex(5),
+        "description": "project menu gate regression",
+        "supplierId": supplier["id"],
+    }, expected=403)
+    dashboardless_client.call("GET", "/api/v1/internal-user-options", expected=403)
+    scoped_supplier_options = dashboardless_client.call("GET", "/api/v1/supplier-options")
+    creator_supplier_options = creator_client.call("GET", "/api/v1/supplier-options")
+    member_options = member_manager_client.call("GET", "/api/v1/internal-user-options")
+    check(
+        "project options require permissions and only expose the actor's supplier scope",
+        {item["id"] for item in scoped_supplier_options} == {supplier["id"]}
+        and {supplier["id"], unrelated_supplier["id"]}.issubset(
+            {item["id"] for item in creator_supplier_options})
+        and any(item["id"] == no_project_user["id"] for item in member_options),
+    )
+
+    permissions = client.call("GET", "/api/v1/permissions")
+    project_list_id = next(item["id"] for item in permissions if item["code"] == "project:list")
+    role_page = client.call("GET", "/api/v1/admin/roles")
+    supplier_role = next(role for role in role_page["list"] if role["name"] == "供应商人员")
+    supplier_role_permissions = supplier_role["permissionIds"]
+    try:
+        client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
+            "permissionIds": [item for item in supplier_role_permissions if item != project_list_id],
+        })
+        supplier_client.call("GET", "/api/v1/projects", expected=403)
+        supplier_client.call("GET", f"/api/v1/projects/{access_project}", expected=403)
+        supplier_client.call("GET", f"/api/v1/projects/{access_project}/messages", expected=403)
+    finally:
+        client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
+            "permissionIds": supplier_role_permissions,
+        })
+    check("project menu revocation blocks existing internal members and supplier participants", True)
+
+    role_id = _new_role(client, ["project:list", "project:submit", "project:withdraw"])
+    view_all_role_id = _new_role(client, ["project:list", "project:view_all", "project:submit"])
     old_user, old_client = _new_internal(client, Client, conn, role_id, "旧提交者")
     new_user, _ = _new_internal(client, Client, conn, role_id, "新提交者")
     view_all_user, view_all_client = _new_internal(
