@@ -25,7 +25,32 @@ public sealed class SupplierService(AppDb db, AuditService audit)
     }
     public async Task<object> SetStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
     {
-        status = AdminValidation.Status(status); await using var c = await db.OpenAsync(ct); await using var t = await AppDb.BeginTransactionAsync(c, ct); await AccessService.LockManagementAsync(c, t, ct); actor = await AccessService.RecheckActorAsync(c, t, actor, ct); AccessService.RequireInternal(actor); await AccessService.RequirePermissionAsync(c, t, actor, "supplier:manage", ct); var row = await c.QuerySingleOrDefaultAsync<SupplierRow>(new CommandDefinition(SupplierSelect + " WHERE id=@id FOR UPDATE", new { id }, t, cancellationToken: ct)) ?? throw ApiException.NotFound(); await c.ExecuteAsync(new CommandDefinition("UPDATE suppliers SET status=@status,updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { status, id }, t, cancellationToken: ct)); await audit.WriteAsync(c, t, actor.Id, "SUPPLIER_STATUS", "supplier", id, new { row.Name, oldStatus = row.Status, newStatus = status }, null, ct); await t.CommitAsync(ct); return new { row.Id, row.Name, row.Remark, Status = status, row.CreatedAt };
+        status = AdminValidation.Status(status);
+        await using var c = await db.OpenAsync(ct);
+        await using var t = await AppDb.BeginTransactionAsync(c, ct);
+        await AccessService.LockManagementAsync(c, t, ct);
+        actor = await AccessService.RecheckActorAsync(c, t, actor, ct);
+        AccessService.RequireInternal(actor);
+        await AccessService.RequirePermissionAsync(c, t, actor, "supplier:manage", ct);
+        var row = await c.QuerySingleOrDefaultAsync<SupplierRow>(new CommandDefinition(
+            SupplierSelect + " WHERE id=@id FOR UPDATE", new { id }, t, cancellationToken: ct)) ?? throw ApiException.NotFound();
+        await c.ExecuteAsync(new CommandDefinition(
+            "UPDATE suppliers SET status=@status,updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { status, id }, t, cancellationToken: ct));
+        var revokedSessionCount = 0;
+        if (status == "DISABLED")
+        {
+            var accountIds = (await c.QueryAsync<ulong>(new CommandDefinition(
+                "SELECT id FROM users WHERE user_type='SUPPLIER' AND supplier_id=@id ORDER BY id FOR UPDATE",
+                new { id }, t, cancellationToken: ct))).ToArray();
+            if (accountIds.Length > 0)
+                revokedSessionCount = await c.ExecuteAsync(new CommandDefinition(
+                    "UPDATE refresh_tokens SET revoked=1 WHERE user_id IN @accountIds AND revoked=0",
+                    new { accountIds }, t, cancellationToken: ct));
+        }
+        await audit.WriteAsync(c, t, actor.Id, "SUPPLIER_STATUS", "supplier", id,
+            new { row.Name, oldStatus = row.Status, newStatus = status, sessionsRevoked = status == "DISABLED", revokedSessionCount }, null, ct);
+        await t.CommitAsync(ct);
+        return new { row.Id, row.Name, row.Remark, Status = status, row.CreatedAt };
     }
     public async Task DeleteAsync(CurrentUser actor, ulong id, CancellationToken ct)
     {

@@ -104,10 +104,11 @@ public sealed class MailService
 
     public async Task EnqueueStorageWarningAsync(CancellationToken ct)
     {
-        await using var conn = await db.OpenAsync(ct);
-        if (!await EnabledAsync(conn, ct)) return;
+        await using (var enabledConnection = await db.OpenAsync(ct))
+            if (!await EnabledAsync(enabledConnection, ct)) return;
         var storage = await system.StorageAsync(ct);
         if (!storage.Warning) return;
+        await using var conn = await db.OpenAsync(ct);
         var recipients = await conn.QueryAsync<Recipient>(new CommandDefinition("SELECT DISTINCT u.id,u.email,u.employee_no AS EmployeeNo,u.real_name AS RealName FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id WHERE u.status='ACTIVE' AND r.status='ACTIVE' AND r.is_built_in=1 AND r.name='系统管理员'", cancellationToken: ct));
         foreach (var user in recipients)
         {

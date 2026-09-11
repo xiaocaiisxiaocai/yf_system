@@ -151,7 +151,7 @@ def run_identity_checks(client, Client, conn, check):
         active_family_tokens = cursor.fetchone()[0]
     check("identity refresh rotation replay revokes session family", active_family_tokens == 0)
 
-    # Disabling a supplier blocks an already-issued supplier access token and future refresh.
+    # Disabling one supplier revokes every account/session while another supplier keeps working.
     supplier = client.call("POST", "/api/v1/admin/suppliers", {
         "name": "会话禁用供应商-" + secrets.token_hex(4), "remark": "isolated identity contract"
     })
@@ -173,10 +173,33 @@ def run_identity_checks(client, Client, conn, check):
     client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/status", {"status": "ACTIVE"})
     client.call("PUT", f"/api/v1/admin/supplier-accounts/{supplier_user['id']}/status", {"status": "ACTIVE"})
     check("identity supplier role protects active accounts and gates account creation or enable", True)
+    supplier_peer_password = _password()
+    supplier_peer_employee = "supplier_peer_" + secrets.token_hex(4)
+    supplier_peer_user = client.call("POST", f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
+        "employeeNo": supplier_peer_employee, "password": supplier_peer_password,
+        "realName": "供应商第二会话用户", "email": supplier_peer_employee + "@example.invalid"
+    })
+    control_supplier = client.call("POST", "/api/v1/admin/suppliers", {
+        "name": "会话控制供应商-" + secrets.token_hex(4), "remark": "isolated identity control"
+    })
+    control_supplier_password = _password()
+    control_supplier_employee = "supplier_control_" + secrets.token_hex(4)
+    control_supplier_user = client.call(
+        "POST", f"/api/v1/admin/suppliers/{control_supplier['id']}/accounts", {
+            "employeeNo": control_supplier_employee, "password": control_supplier_password,
+            "realName": "其他供应商控制用户", "email": control_supplier_employee + "@example.invalid"
+        })
     with conn.cursor() as cursor:
-        cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (supplier_user["id"],))
+        cursor.execute("UPDATE users SET must_change_password=0 WHERE id IN (%s,%s,%s)",
+                       (supplier_user["id"], supplier_peer_user["id"], control_supplier_user["id"]))
     supplier_client = Client(client.base)
     supplier_client.login(supplier_employee, supplier_password)
+    supplier_second_session = Client(client.base)
+    supplier_second_session.login(supplier_employee, supplier_password)
+    supplier_peer_client = Client(client.base)
+    supplier_peer_client.login(supplier_peer_employee, supplier_peer_password)
+    control_supplier_client = Client(client.base)
+    control_supplier_client.login(control_supplier_employee, control_supplier_password)
     with conn.cursor() as cursor:
         cursor.execute("SELECT permission_id FROM role_permissions WHERE role_id=%s", (supplier_role["id"],))
         existing_unsafe_ids = {row[0] for row in cursor.fetchall()}
@@ -196,11 +219,68 @@ def run_identity_checks(client, Client, conn, check):
                 cursor.executemany("DELETE FROM role_permissions WHERE role_id=%s AND permission_id=%s",
                                    [(supplier_role["id"], permission_id) for permission_id in inserted_unsafe_ids])
     check("identity supplier cannot cross five internal admin domains after unsafe grants", True)
+    target_supplier_sessions = [
+        (supplier_client, supplier_client.token, _refresh_cookie(supplier_client)),
+        (supplier_second_session, supplier_second_session.token, _refresh_cookie(supplier_second_session)),
+        (supplier_peer_client, supplier_peer_client.token, _refresh_cookie(supplier_peer_client)),
+    ]
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM refresh_tokens WHERE user_id IN (%s,%s) AND revoked=0",
+                       (supplier_user["id"], supplier_peer_user["id"]))
+        active_target_sessions_before_disable = cursor.fetchone()[0]
     client.call("PUT", f"/api/v1/admin/suppliers/{supplier['id']}/status", {"status": "DISABLED"})
-    supplier_client.call("GET", "/api/v1/auth/profile", expected=401)
-    supplier_client.call("POST", "/api/v1/auth/refresh", expected=401)
+    for old_client, _, old_refresh in target_supplier_sessions:
+        old_client.call("GET", "/api/v1/auth/profile", expected=401)
+        Client(client.base).call("POST", "/api/v1/auth/refresh",
+                                 headers={"Cookie": "refresh_token=" + old_refresh}, expected=401)
+    unaffected_profile = control_supplier_client.call("GET", "/api/v1/auth/profile")
+    unaffected_refresh = control_supplier_client.call("POST", "/api/v1/auth/refresh")
+    control_supplier_client.token = unaffected_refresh["accessToken"]
+    unaffected_profile_after_refresh = control_supplier_client.call("GET", "/api/v1/auth/profile")
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM refresh_tokens WHERE user_id IN (%s,%s) AND revoked=0",
+                       (supplier_user["id"], supplier_peer_user["id"]))
+        active_supplier_sessions_while_disabled = cursor.fetchone()[0]
+        cursor.execute("SELECT detail FROM audit_logs WHERE action='SUPPLIER_STATUS' AND target_id=%s ORDER BY id DESC LIMIT 1",
+                       (str(supplier["id"]),))
+        disabled_supplier_audit = cursor.fetchone()[0]
     client.call("PUT", f"/api/v1/admin/suppliers/{supplier['id']}/status", {"status": "ACTIVE"})
-    check("identity disabled supplier invalidates account session", True)
+    for old_client, _, old_refresh in target_supplier_sessions:
+        old_client.call("GET", "/api/v1/auth/profile", expected=401)
+        Client(client.base).call("POST", "/api/v1/auth/refresh",
+                                 headers={"Cookie": "refresh_token=" + old_refresh}, expected=401)
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM refresh_tokens WHERE user_id IN (%s,%s) AND revoked=0",
+                       (supplier_user["id"], supplier_peer_user["id"]))
+        active_supplier_sessions_before_relogin = cursor.fetchone()[0]
+    resumed_supplier = Client(client.base)
+    resumed_supplier.login(supplier_employee, supplier_password)
+    resumed_profile = resumed_supplier.call("GET", "/api/v1/auth/profile")
+    resumed_supplier_peer = Client(client.base)
+    resumed_supplier_peer.login(supplier_peer_employee, supplier_peer_password)
+    resumed_peer_profile = resumed_supplier_peer.call("GET", "/api/v1/auth/profile")
+    unaffected_profile_after_reenable = control_supplier_client.call("GET", "/api/v1/auth/profile")
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM refresh_tokens WHERE user_id IN (%s,%s) AND revoked=0",
+                       (supplier_user["id"], supplier_peer_user["id"]))
+        active_supplier_sessions_after_login = cursor.fetchone()[0]
+    disabled_supplier_detail = json.loads(disabled_supplier_audit)
+    check("identity disabled supplier revokes every account session without affecting another supplier",
+          active_target_sessions_before_disable == 3
+          and active_supplier_sessions_while_disabled == 0
+          and active_supplier_sessions_before_relogin == 0
+          and active_supplier_sessions_after_login == 2
+          and resumed_profile["user"]["id"] == supplier_user["id"]
+          and resumed_peer_profile["user"]["id"] == supplier_peer_user["id"]
+          and unaffected_profile["user"]["id"] == control_supplier_user["id"]
+          and unaffected_profile_after_refresh["user"]["id"] == control_supplier_user["id"]
+          and unaffected_profile_after_reenable["user"]["id"] == control_supplier_user["id"]
+          and disabled_supplier_detail["sessionsRevoked"] is True
+          and disabled_supplier_detail["revokedSessionCount"] >= 3
+          and all(secret not in disabled_supplier_audit
+                  for secret in ([supplier_password, supplier_peer_password, control_supplier_password]
+                                 + [secret for _, access, refresh in target_supplier_sessions
+                                    for secret in (access, refresh)])))
 
     # Logout records only a real session revocation. A repeated request with the same, now-revoked
     # access token must not duplicate the audit row or disclose either token/session identifier.

@@ -18,8 +18,8 @@ public static class SystemModule
         {
             var db = context.HttpContext.RequestServices.GetRequiredService<AppDb>();
             AccessService.RequireInternal(AccessService.GetCurrent(context.HttpContext));
-            await using var conn = await db.OpenAsync(context.HttpContext.RequestAborted);
-            await AccessService.RequirePermissionAsync(conn, null, AccessService.GetCurrent(context.HttpContext), "config:manage", context.HttpContext.RequestAborted);
+            await using (var conn = await db.OpenAsync(context.HttpContext.RequestAborted))
+                await AccessService.RequirePermissionAsync(conn, null, AccessService.GetCurrent(context.HttpContext), "config:manage", context.HttpContext.RequestAborted);
             return await next(context);
         });
         config.MapGet("/configs", (SystemService service, CancellationToken ct) => service.ListConfigsAsync(ct));
@@ -32,8 +32,8 @@ public static class SystemModule
         {
             var db = context.HttpContext.RequestServices.GetRequiredService<AppDb>();
             AccessService.RequireInternal(AccessService.GetCurrent(context.HttpContext));
-            await using var conn = await db.OpenAsync(context.HttpContext.RequestAborted);
-            await AccessService.RequirePermissionAsync(conn, null, AccessService.GetCurrent(context.HttpContext), "log:view", context.HttpContext.RequestAborted);
+            await using (var conn = await db.OpenAsync(context.HttpContext.RequestAborted))
+                await AccessService.RequirePermissionAsync(conn, null, AccessService.GetCurrent(context.HttpContext), "log:view", context.HttpContext.RequestAborted);
             return await next(context);
         });
         logs.MapGet("", (HttpContext ctx, SystemService service, CancellationToken ct) => service.ListLogsAsync(ctx.Request, ct));

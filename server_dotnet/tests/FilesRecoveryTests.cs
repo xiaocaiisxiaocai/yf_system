@@ -137,17 +137,34 @@ public sealed class FilesRecoveryTests
 
         var sessionDirectory = FileStorage.SessionDirectory(scope.StorageRoot, sessionId);
         Directory.CreateDirectory(sessionDirectory);
-        var referenced = scope.CreateFinal("referenced.bin");
-        var orphan = scope.CreateFinal("orphan.bin");
+        var referenced = scope.CreateFinal($"{Guid.NewGuid():D}.bin");
+        var orphan = scope.CreateFinal($"{Guid.NewGuid():D}.bin");
+        var unrelated = scope.CreateFinal($"{Guid.NewGuid():D}.bin");
+        var outside = Path.Combine(Path.GetDirectoryName(scope.StorageRoot)!, "outside.bin");
+        await File.WriteAllBytesAsync(outside, [2], ct);
         await scope.ReferenceFileAsync(referenced);
         await WriteMarkerAsync(sessionDirectory, referenced);
         await WriteMarkerAsync(sessionDirectory, orphan);
+        await File.WriteAllBytesAsync(
+            Path.Combine(sessionDirectory, UploadService.PendingFinalMarkerPrefix + Guid.NewGuid().ToString("D")),
+            [], ct);
+        await File.WriteAllTextAsync(
+            Path.Combine(sessionDirectory, UploadService.PendingFinalMarkerPrefix + Guid.NewGuid().ToString("D")),
+            "files/2026/09", ct);
+        await File.WriteAllTextAsync(
+            Path.Combine(sessionDirectory, UploadService.PendingFinalMarkerPrefix + Guid.NewGuid().ToString("D")),
+            "../outside.bin", ct);
+        await File.WriteAllTextAsync(
+            Path.Combine(sessionDirectory, UploadService.PendingFinalStagingPrefix + Guid.NewGuid().ToString("D")),
+            "interrupted-before-publication", ct);
 
         await scope.Maintenance.RunGarbageCollectionAsync(ct);
 
         Assert.Equal("EXPIRED", await scope.StatusAsync(sessionId));
         Assert.True(File.Exists(referenced));
         Assert.False(File.Exists(orphan));
+        Assert.True(File.Exists(unrelated));
+        Assert.Equal([2], await File.ReadAllBytesAsync(outside, ct));
         Assert.False(Directory.Exists(sessionDirectory));
     }
 
@@ -294,7 +311,8 @@ public sealed class FilesRecoveryTests
                 var maintenance = new FilesMaintenanceService(
                     database, options, NullLogger<FilesMaintenanceService>.Instance);
                 var upload = new UploadService(database, options,
-                    new AuditService(Array.Empty<IProjectAuditCapture>()));
+                    new AuditService(Array.Empty<IProjectAuditCapture>()),
+                    NullLogger<UploadService>.Instance);
                 return new FilesDatabaseScope(
                     administration, databaseName, disposableRoot, database, maintenance, upload);
             }

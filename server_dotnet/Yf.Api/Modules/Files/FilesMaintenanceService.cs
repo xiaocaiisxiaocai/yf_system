@@ -145,7 +145,8 @@ public sealed class FilesMaintenanceService(
                 }
                 if (expired)
                 {
-                    await UploadService.CleanupPendingFinalsAsync(conn, options.StorageRoot, candidate.Id, ct);
+                    await UploadService.CleanupPendingFinalsAsync(
+                        conn, options.StorageRoot, candidate.Id, logger, ct);
                     await FileStorage.DeleteDirectoryTreeAsync(options.StorageRoot,
                         FileStorage.SessionDirectory(FileStorage.Root(options.StorageRoot), candidate.Id), ct);
                 }
@@ -180,7 +181,7 @@ public sealed class FilesMaintenanceService(
             var directory = FileStorage.SessionDirectory(root, session.Id);
             try
             {
-                await UploadService.CleanupPendingFinalsAsync(conn, root, session.Id, ct);
+                await UploadService.CleanupPendingFinalsAsync(conn, root, session.Id, logger, ct);
                 await FileStorage.DeleteDirectoryTreeAsync(root, directory, ct);
             }
             catch (Exception error) { logger.LogWarning(error, "清理过期上传目录失败 {SessionId}", session.Id); }
@@ -267,7 +268,7 @@ public sealed class FilesMaintenanceService(
                         "SELECT EXISTS(SELECT 1 FROM upload_sessions WHERE id=@Id AND status IN ('UPLOADING','MERGING'))",
                         new { Id = info.Name }, cancellationToken: ct));
                     if (isNowActive) continue;
-                    await UploadService.CleanupPendingFinalsAsync(conn, root, info.Name, ct);
+                    await UploadService.CleanupPendingFinalsAsync(conn, root, info.Name, logger, ct);
                     await FileStorage.DeleteDirectoryTreeAsync(root, directory, ct);
                 }
                 else

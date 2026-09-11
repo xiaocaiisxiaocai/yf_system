@@ -45,6 +45,7 @@ public sealed class IdentityService(
 
         await using var conn = await db.OpenAsync(ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        await AccessService.LockBusinessAsync(conn, tx, ct);
         var user = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(UserSelect + " WHERE id=@id FOR UPDATE", new { id = candidate.Id }, tx, cancellationToken: ct));
         if (user is null || !await PasswordService.VerifyAsync(request.Password, user.PasswordHash, ct) || user.Status != "ACTIVE" ||
             !await IsSupplierActiveAsync(conn, tx, user, ct))
@@ -76,6 +77,7 @@ public sealed class IdentityService(
             "SELECT id Id,user_id UserId,session_id SessionId,token_hash TokenHash,expires_at ExpiresAt,revoked Revoked FROM refresh_tokens WHERE token_hash=@hash",
             new { hash }, cancellationToken: ct)) ?? throw ApiException.Unauthorized("登录状态无效");
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        await AccessService.LockBusinessAsync(conn, tx, ct);
         var user = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(UserSelect + " WHERE id=@id FOR UPDATE", new { id = found.UserId }, tx, cancellationToken: ct))
                    ?? throw ApiException.Unauthorized("账号不存在");
         var row = await conn.QuerySingleOrDefaultAsync<RefreshTokenRow>(new CommandDefinition(
