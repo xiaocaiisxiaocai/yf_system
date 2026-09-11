@@ -237,7 +237,9 @@ $frontendPackagesJson = @(& node -e $nodeLockReader $webLock) -join "`n"
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($frontendPackagesJson)) {
     throw 'Unable to read frontend dependency metadata from package-lock.json.'
 }
-$frontendPackages = @($frontendPackagesJson | ConvertFrom-Json)
+# Windows PowerShell 5.1 emits a JSON array as one pipeline object. Assign it
+# directly so foreach visits packages instead of treating the array as a package.
+$frontendPackages = $frontendPackagesJson | ConvertFrom-Json
 $frontendLicensesRoot = Join-Path $outputRoot 'licenses\frontend'
 New-Item -ItemType Directory -Path $frontendLicensesRoot | Out-Null
 $frontendIndexEntries = @()
