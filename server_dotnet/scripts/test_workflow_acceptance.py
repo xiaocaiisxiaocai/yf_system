@@ -1,0 +1,332 @@
+"""Persistent project-lifecycle acceptance using caller-owned isolated resources.
+
+The caller supplies an authenticated administrator, disposable database connection,
+and API Client type. The mail worker must remain disabled; notification assertions
+stop at durable PENDING outbox rows.
+"""
+
+import secrets
+
+from test_business_acceptance import _activate_user, _download_matches, _password, _upload_chunks
+
+
+def _project_snapshot(conn, project_id):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT status,confirm_side,name,description FROM projects WHERE id=%s",
+            (project_id,),
+        )
+        project = cursor.fetchone()
+        cursor.execute(
+            "SELECT action,operator_id,confirm_side,reason FROM project_status_logs "
+            "WHERE project_id=%s ORDER BY id",
+            (project_id,),
+        )
+        history = tuple(cursor.fetchall())
+        cursor.execute(
+            "SELECT event_type,recipient_user_id,status,retry_count FROM email_outbox "
+            "WHERE project_id=%s ORDER BY id",
+            (project_id,),
+        )
+        outbox = tuple(cursor.fetchall())
+        cursor.execute(
+            "SELECT user_id FROM project_members WHERE project_id=%s ORDER BY user_id",
+            (project_id,),
+        )
+        members = tuple(row[0] for row in cursor.fetchall())
+        cursor.execute(
+            "SELECT id,status,deleted_at FROM files WHERE project_id=%s ORDER BY id",
+            (project_id,),
+        )
+        files = tuple(cursor.fetchall())
+        cursor.execute(
+            "SELECT id,status,content FROM messages WHERE project_id=%s ORDER BY id",
+            (project_id,),
+        )
+        messages = tuple(cursor.fetchall())
+        cursor.execute(
+            "SELECT id,status,result_file_id FROM upload_sessions WHERE project_id=%s ORDER BY id",
+            (project_id,),
+        )
+        uploads = tuple(cursor.fetchall())
+        cursor.execute(
+            "SELECT action,target_type,target_id FROM audit_logs ORDER BY id"
+        )
+        audit = tuple(cursor.fetchall())
+        cursor.execute(
+            "SELECT activity_type,action,target_id FROM project_activities "
+            "WHERE project_id=%s ORDER BY id",
+            (project_id,),
+        )
+        activities = tuple(cursor.fetchall())
+    return project, history, outbox, members, files, messages, uploads, audit, activities
+
+
+def _expect_atomic_rejection(check, conn, actor, project_id, label, method, path,
+                             body=None, expected=409):
+    before = _project_snapshot(conn, project_id)
+    actor.call(method, path, body, expected=expected)
+    after = _project_snapshot(conn, project_id)
+    check(label + " is rejected without state audit or outbox writes", after == before)
+
+
+def _event_count(conn, project_id, event_type, recipient_id):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT COUNT(*) FROM email_outbox WHERE project_id=%s AND event_type=%s "
+            "AND recipient_user_id=%s AND status='PENDING' AND retry_count=0",
+            (project_id, event_type, recipient_id),
+        )
+        return cursor.fetchone()[0]
+
+
+def _audit_actions(conn, project_id):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT action FROM audit_logs WHERE target_type='project' AND target_id=%s ORDER BY id",
+            (str(project_id),),
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+
+def run_workflow_acceptance(client, Client, conn, check):
+    suffix = secrets.token_hex(5)
+    permissions = client.call("GET", "/api/v1/permissions")
+    withdraw_permission_id = next(
+        permission["id"] for permission in permissions
+        if permission["code"] == "project:withdraw")
+    supplier_role = next(
+        role for role in client.call("GET", "/api/v1/admin/roles?pageSize=100")["list"]
+        if role["name"] == "供应商人员")
+    original_supplier_permission_ids = list(supplier_role["permissionIds"])
+    check(
+        "default supplier role does not implicitly grant project withdrawal",
+        withdraw_permission_id not in original_supplier_permission_ids,
+    )
+    supplier = client.call("POST", "/api/v1/admin/suppliers", {
+        "name": "工作流完整验收供应商-" + suffix,
+        "remark": "owned isolated workflow acceptance fixture",
+    })
+    supplier_employee = "wf_supplier_" + suffix
+    supplier_initial = _password()
+    supplier_user = client.call(
+        "POST", f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
+            "employeeNo": supplier_employee,
+            "password": supplier_initial,
+            "realName": "工作流验收供应商",
+            "email": supplier_employee + "@example.invalid",
+        })
+    supplier_client = _activate_user(
+        client, Client, check, supplier_employee, supplier_initial,
+        supplier_user["id"], "workflow supplier")
+
+    internal_role = next(
+        role for role in client.call("GET", "/api/v1/admin/user-role-options")
+        if role["name"] == "内部成员")
+    internal_employee = "wf_internal_" + suffix
+    internal_initial = _password()
+    internal_user = client.call("POST", "/api/v1/admin/users", {
+        "employeeNo": internal_employee,
+        "password": internal_initial,
+        "realName": "工作流验收内部成员",
+        "email": internal_employee + "@example.invalid",
+        "departmentId": None,
+        "roleId": internal_role["id"],
+    })
+    internal_client = _activate_user(
+        client, Client, check, internal_employee, internal_initial,
+        internal_user["id"], "workflow internal member")
+
+    created = client.call("POST", "/api/v1/projects", {
+        "name": "工作流完整验收项目-" + suffix,
+        "description": "draft lifecycle fixture",
+        "supplierId": supplier["id"],
+    })
+    project_id = created["id"]
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT action,from_status,to_status FROM project_status_logs "
+            "WHERE project_id=%s ORDER BY id",
+            (project_id,),
+        )
+        draft_history = list(cursor.fetchall())
+        cursor.execute(
+            "SELECT COUNT(*) FROM email_outbox WHERE project_id=%s",
+            (project_id,),
+        )
+        draft_outbox = cursor.fetchone()[0]
+    check(
+        "project creation persists an auditable DRAFT without notifications",
+        created["status"] == "DRAFT"
+        and created["confirmSide"] is None
+        and draft_history == [("CREATE", None, "DRAFT")]
+        and _audit_actions(conn, project_id) == ["PROJECT_CREATE"]
+        and draft_outbox == 0,
+    )
+
+    client.call("PUT", f"/api/v1/projects/{project_id}/members", {
+        "userIds": [internal_user["id"]],
+    })
+    started = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
+        "status": "IN_PROGRESS",
+    })
+    outbox_before_management = _event_count(
+        conn, project_id, "PROJECT_SUBMITTED", internal_user["id"])
+    terminated = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
+        "status": "TERMINATED",
+    })
+    restarted = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
+        "status": "IN_PROGRESS",
+    })
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT action,from_status,to_status FROM project_status_logs "
+            "WHERE project_id=%s ORDER BY id",
+            (project_id,),
+        )
+        management_history = list(cursor.fetchall())
+        cursor.execute(
+            "SELECT COUNT(*) FROM email_outbox WHERE project_id=%s",
+            (project_id,),
+        )
+        management_outbox = cursor.fetchone()[0]
+    project_audits = _audit_actions(conn, project_id)
+    check(
+        "terminate and restart persist exact state history and audit",
+        started["status"] == "IN_PROGRESS"
+        and terminated["status"] == "TERMINATED"
+        and restarted["status"] == "IN_PROGRESS"
+        and management_history == [
+            ("CREATE", None, "DRAFT"),
+            ("START", "DRAFT", "IN_PROGRESS"),
+            ("TERMINATE", "IN_PROGRESS", "TERMINATED"),
+            ("RESTART", "TERMINATED", "IN_PROGRESS"),
+        ]
+        and {"PROJECT_START", "PROJECT_TERMINATE", "PROJECT_RESTART"}.issubset(project_audits)
+        and management_outbox == outbox_before_management == 0,
+    )
+
+    payload = (b"workflow-completed-read-boundary\n" * 12000) + b"EOF"
+    file_id, _, _ = _upload_chunks(
+        supplier_client, project_id, "workflow-boundary.pdf", payload)
+    message = supplier_client.call(
+        "POST", f"/api/v1/projects/{project_id}/messages",
+        {"content": "完成前创建，完成后仍应可读但不可删除"})
+
+    submitted_for_reject = supplier_client.call(
+        "POST", f"/api/v1/projects/{project_id}/submit", {"confirmSide": "COMPANY"})
+    rejected = internal_client.call(
+        "POST", f"/api/v1/projects/{project_id}/reject", {"reason": "公司验收驳回"})
+    submitted_for_withdraw = supplier_client.call(
+        "POST", f"/api/v1/projects/{project_id}/submit", {"confirmSide": "COMPANY"})
+    _expect_atomic_rejection(
+        check, conn, supplier_client, project_id, "supplier withdrawal without explicit permission",
+        "POST", f"/api/v1/projects/{project_id}/withdraw", expected=403)
+    client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
+        "permissionIds": original_supplier_permission_ids + [withdraw_permission_id],
+    })
+    try:
+        withdrawn = supplier_client.call("POST", f"/api/v1/projects/{project_id}/withdraw")
+    finally:
+        client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
+            "permissionIds": original_supplier_permission_ids,
+        })
+    submitted_for_confirm = supplier_client.call(
+        "POST", f"/api/v1/projects/{project_id}/submit", {"confirmSide": "COMPANY"})
+    completed = internal_client.call("POST", f"/api/v1/projects/{project_id}/confirm")
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT action,operator_id,confirm_side,reason,from_status,to_status "
+            "FROM project_status_logs WHERE project_id=%s ORDER BY id",
+            (project_id,),
+        )
+        history = list(cursor.fetchall())
+    workflow_tail = history[-6:]
+    project_audits = _audit_actions(conn, project_id)
+    check(
+        "supplier submit company reject supplier withdraw and company confirm persist",
+        submitted_for_reject["status"] == "PENDING_CONFIRMATION"
+        and submitted_for_reject["confirmSide"] == "COMPANY"
+        and rejected["status"] == "IN_PROGRESS"
+        and rejected["confirmSide"] is None
+        and submitted_for_withdraw["status"] == "PENDING_CONFIRMATION"
+        and withdrawn["status"] == "IN_PROGRESS"
+        and submitted_for_confirm["status"] == "PENDING_CONFIRMATION"
+        and completed["status"] == "COMPLETED"
+        and completed["confirmSide"] is None
+        and workflow_tail == [
+            ("SUBMIT", supplier_user["id"], "COMPANY", None,
+             "IN_PROGRESS", "PENDING_CONFIRMATION"),
+            ("REJECT", internal_user["id"], "COMPANY", "公司验收驳回",
+             "PENDING_CONFIRMATION", "IN_PROGRESS"),
+            ("SUBMIT", supplier_user["id"], "COMPANY", None,
+             "IN_PROGRESS", "PENDING_CONFIRMATION"),
+            ("WITHDRAW", supplier_user["id"], "COMPANY", None,
+             "PENDING_CONFIRMATION", "IN_PROGRESS"),
+            ("SUBMIT", supplier_user["id"], "COMPANY", None,
+             "IN_PROGRESS", "PENDING_CONFIRMATION"),
+            ("CONFIRM", internal_user["id"], "COMPANY", None,
+             "PENDING_CONFIRMATION", "COMPLETED"),
+        ]
+        and project_audits.count("PROJECT_SUBMIT") == 3
+        and project_audits.count("PROJECT_REJECT") == 1
+        and project_audits.count("PROJECT_WITHDRAW") == 1
+        and project_audits.count("PROJECT_CONFIRM") == 1
+        and _event_count(conn, project_id, "PROJECT_SUBMITTED", internal_user["id"]) == 3
+        and _event_count(conn, project_id, "PROJECT_REJECTED", supplier_user["id"]) == 1
+        and _event_count(conn, project_id, "PROJECT_WITHDRAWN", internal_user["id"]) == 1
+        and _event_count(conn, project_id, "PROJECT_WITHDRAWN", supplier_user["id"]) == 1
+        and _event_count(conn, project_id, "PROJECT_CONFIRMED", supplier_user["id"]) == 1,
+    )
+
+    # COMPLETED is read-only for business content. Existing project, file, and
+    # message reads remain available, while every mutation below must roll back
+    # without status history, audit, activity, or outbox side effects.
+    detail = supplier_client.call("GET", f"/api/v1/projects/{project_id}")
+    messages = supplier_client.call("GET", f"/api/v1/projects/{project_id}/messages?pageSize=100")
+    files = supplier_client.call("GET", f"/api/v1/projects/{project_id}/files?pageSize=100")
+    check(
+        "completed project content remains readable",
+        detail["status"] == "COMPLETED"
+        and any(item["id"] == message["id"] for item in messages["list"])
+        and any(item["id"] == file_id for item in files["list"])
+        and _download_matches(supplier_client, file_id, payload),
+    )
+
+    _expect_atomic_rejection(
+        check, conn, supplier_client, project_id, "completed upload init",
+        "POST", "/api/v1/uploads/init", {
+            "projectId": project_id,
+            "fileName": "after-completed.pdf",
+            "fileSize": 1,
+            "fileMd5": "0" * 32,
+        })
+    _expect_atomic_rejection(
+        check, conn, supplier_client, project_id, "completed message create",
+        "POST", f"/api/v1/projects/{project_id}/messages", {"content": "不可新增"})
+    _expect_atomic_rejection(
+        check, conn, client, project_id, "completed message delete",
+        "DELETE", f"/api/v1/messages/{message['id']}")
+    _expect_atomic_rejection(
+        check, conn, client, project_id, "completed file delete",
+        "DELETE", f"/api/v1/files/{file_id}")
+    _expect_atomic_rejection(
+        check, conn, client, project_id, "completed project edit",
+        "PUT", f"/api/v1/projects/{project_id}", {
+            "name": created["name"],
+            "description": "不可编辑",
+            "supplierId": supplier["id"],
+        })
+    _expect_atomic_rejection(
+        check, conn, client, project_id, "completed project members",
+        "PUT", f"/api/v1/projects/{project_id}/members", {
+            "userIds": [internal_user["id"]],
+        })
+    _expect_atomic_rejection(
+        check, conn, supplier_client, project_id, "completed project resubmit",
+        "POST", f"/api/v1/projects/{project_id}/submit", {"confirmSide": "COMPANY"})
+    _expect_atomic_rejection(
+        check, conn, client, project_id, "completed project delete",
+        # ProjectWorkflowRules rejects deletion as an invalid request (400).
+        "DELETE", f"/api/v1/projects/{project_id}", expected=400)

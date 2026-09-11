@@ -98,9 +98,11 @@ export default function ExcelPreview({ fileId }: Props) {
 
   useEffect(() => {
     let active = true
+    const controller = new AbortController()
     http
-      .get(`/files/${fileId}/content`, { responseType: 'arraybuffer' })
+      .get(`/files/${fileId}/content`, { responseType: 'arraybuffer', signal: controller.signal })
       .then((response) => {
+        if (!active) return
         const buffer = new Uint8Array(response.data as ArrayBuffer)
         const isXlsx = buffer[0] === 0x50 && buffer[1] === 0x4b
         const isXls = buffer[0] === 0xd0 && buffer[1] === 0xcf
@@ -131,6 +133,7 @@ export default function ExcelPreview({ fileId }: Props) {
       })
     return () => {
       active = false
+      controller.abort()
     }
   }, [fileId])
 

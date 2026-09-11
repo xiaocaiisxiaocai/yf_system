@@ -6,6 +6,47 @@ const vm = require('node:vm')
 const ts = require('typescript')
 const React = require('react')
 const { create, act } = require('react-test-renderer')
+const os = require('node:os')
+const { pathToFileURL } = require('node:url')
+const { spawnSync } = require('node:child_process')
+
+test('production PDF engine reads a real document without native Uint8Array.toHex', () => {
+  const engineFile = path.resolve(__dirname, '../src/components/pdfEngine.ts')
+  let source = fs.readFileSync(engineFile, 'utf8')
+  // Resolve the exact API and worker selected by production, without mocking either.
+  source = source.replace(/import workerUrl from '([^']+)\?url'/, (_, specifier) =>
+    `const workerUrl = ${JSON.stringify(pathToFileURL(require.resolve(specifier)).href)}`)
+  source = source.replace(/from '(pdfjs-dist[^']*)'/g, (_, specifier) =>
+    `from ${JSON.stringify(pathToFileURL(require.resolve(specifier)).href)}`)
+  source = source.replace('import.meta.env.BASE_URL', JSON.stringify('file:///unused-test-assets/'))
+  const output = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'yf-pdf-compat-'))
+  try {
+    const modulePath = path.join(temp, 'engine.mjs')
+    fs.writeFileSync(modulePath, output)
+    const script = `
+      import assert from 'node:assert/strict';
+      import fs from 'node:fs';
+      delete Uint8Array.prototype.toHex;
+      assert.equal(Uint8Array.prototype.toHex, undefined);
+      const { openPdf } = await import(${JSON.stringify(pathToFileURL(modulePath).href)});
+      const task = openPdf(new Uint8Array(fs.readFileSync(${JSON.stringify(path.resolve(__dirname, 'fixtures/pdf-compatibility.pdf'))})));
+      try {
+        const pdf = await task.promise;
+        assert.equal(pdf.numPages, 1);
+        const page = await pdf.getPage(1);
+        const content = await page.getTextContent();
+        assert.match(content.items.map(item => item.str).join(' '), /Local acceptance PDF/);
+      } finally { await task.destroy(); }
+    `
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 15000 })
+    assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error))
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true })
+  }
+})
 
 const deferred = () => {
   let resolve, reject

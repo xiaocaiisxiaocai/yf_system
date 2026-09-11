@@ -5,6 +5,7 @@ Connection credentials stay in process memory; only test names/results are print
 """
 import hashlib
 import contextlib
+from collections import deque
 import http.cookiejar
 import io
 import json
@@ -26,6 +27,8 @@ from test_identity_contracts import run_identity_checks
 from test_file_contracts import run_file_checks
 from test_system_contracts import run_system_checks
 from test_project_remediation import run_project_remediation_checks
+from test_business_acceptance import run_business_acceptance
+from test_workflow_acceptance import run_workflow_acceptance
 
 ROOT = Path(__file__).resolve().parents[2]
 PUBLISHED = os.environ.get("YF_TEST_API_DIR")
@@ -44,6 +47,8 @@ def check(name, condition):
 
 
 class Client:
+    _captcha_issued = {}
+
     def __init__(self, base):
         self.base = base
         self.cookies = http.cookiejar.CookieJar()
@@ -72,6 +77,19 @@ class Client:
         return json.loads(data) if data else None
 
     def captcha(self):
+        # All fixture accounts share one loopback IP. Pace normal business login
+        # checks below the production 30/minute limit instead of weakening it.
+        recent = self._captcha_issued.setdefault(self.base, deque())
+        while True:
+            now = time.monotonic()
+            while recent and now - recent[0] >= 61:
+                recent.popleft()
+            if len(recent) < 24:
+                break
+            remaining = 61 - (now - recent[0])
+            print(f"Pacing fixture CAPTCHA requests; {remaining:.0f}s until budget recovers", flush=True)
+            time.sleep(min(10, max(0.1, remaining)))
+        recent.append(time.monotonic())
         challenge = self.call("GET", "/api/v1/auth/captcha")
         answer = self.call("GET", "/__test/captcha-answer/" + challenge["captchaId"], headers={"X-Test-Host-Key": TEST_KEY})
         challenge["captchaCode"] = answer["answer"]
@@ -290,12 +308,16 @@ try:
             for suffix in ("", "/summary", "/members", "/supplier-members", "/activities", "/files", "/messages"):
                 client.call("GET", f"/api/v1/projects/{pid}" + suffix)
             check("project detail and collaboration read routes", True)
-            flow_password = secrets.token_urlsafe(24)
+            flow_password = "Yf9!" + secrets.token_urlsafe(18)
+            changed_flow_password = "Yf9!" + secrets.token_urlsafe(18)
             flow_user = client.call("POST", f"/api/v1/admin/suppliers/{sid}/accounts", {"employeeNo": "workflow_supplier", "password": flow_password, "realName": "验收供应商", "email": "workflow@example.invalid"})
-            with conn.cursor() as cursor:
-                cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (flow_user["id"],))
             supplier_client = Client(base)
-            supplier_client.login("workflow_supplier", flow_password)
+            first_flow_login = supplier_client.login("workflow_supplier", flow_password)
+            supplier_client.call("GET", "/api/v1/projects", expected=403)
+            supplier_client.call("PUT", "/api/v1/auth/password", {"oldPassword": flow_password, "newPassword": changed_flow_password})
+            supplier_client.call("GET", "/api/v1/auth/profile", expected=401)
+            second_flow_login = supplier_client.login("workflow_supplier", changed_flow_password)
+            check("workflow supplier changes initial password through API", first_flow_login["mustChangePassword"] and not second_flow_login["mustChangePassword"] and second_flow_login["user"]["id"] == flow_user["id"])
             client.call("POST", f"/api/v1/projects/{pid}/submit", {"confirmSide": "SUPPLIER"})
             client.call("POST", f"/api/v1/projects/{pid}/withdraw")
             client.call("POST", f"/api/v1/projects/{pid}/submit", {"confirmSide": "SUPPLIER"})
@@ -305,6 +327,8 @@ try:
             check("project submit/withdraw/reject/confirm workflow", True)
             client.call("DELETE", f"/api/v1/files/{fid}", expected=409)
             check("completed project file mutation denied", True)
+            run_business_acceptance(client, Client, conn, check)
+            run_workflow_acceptance(client, Client, conn, check)
             process.terminate()
             process.wait(timeout=15)
             process = None

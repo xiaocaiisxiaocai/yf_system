@@ -1,5 +1,7 @@
-import { getDocument, GlobalWorkerOptions, version } from 'pdfjs-dist'
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+// The legacy pair supplies the same API and worker with browser polyfills.
+// Managed desktop browsers may not yet implement Uint8Array.toHex/toBase64.
+import { getDocument, GlobalWorkerOptions, version } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
 GlobalWorkerOptions.workerSrc = workerUrl
 

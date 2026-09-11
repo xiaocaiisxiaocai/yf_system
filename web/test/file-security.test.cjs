@@ -55,6 +55,38 @@ function loadFileTable() {
   return exports.default
 }
 
+function loadExcelPreview(http, xlsx) {
+  const component = name => props => React.createElement(name, props, props.children)
+  const arco = new Proxy({
+    Select: Object.assign(component('Select'), { Option: component('Select.Option') }),
+    Typography: { Text: component('Text') },
+  }, { get: (target, name) => target[name] ?? component(name) })
+  const mocks = {
+    '@arco-design/web-react': arco,
+    xlsx,
+    '../api/client': http,
+  }
+  const filename = path.resolve(__dirname, '../src/components/ExcelPreview.tsx')
+  const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      jsx: ts.JsxEmit.ReactJSX,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+  }).outputText
+  const exports = {}
+  const context = {
+    exports,
+    module: { exports },
+    console,
+    AbortController,
+    require: name => mocks[name] ?? require(name),
+  }
+  vm.runInNewContext(source, context, { filename })
+  return exports.default
+}
+
 test('PDF preview accepts the 50 MiB boundary and leaves larger files download-only', async () => {
   const FileTable = loadFileTable()
   let renderer
@@ -70,4 +102,41 @@ test('PDF preview accepts the 50 MiB boundary and leaves larger files download-o
   assert.ok(previewButton(50 * 1024 * 1024))
   assert.equal(previewButton(50 * 1024 * 1024 + 1), undefined)
   await act(async () => renderer.unmount())
+})
+
+test('Excel preview aborts its download and skips parsing after unmount', async () => {
+  let resolveDownload
+  let requestSignal
+  let readCalls = 0
+  const download = new Promise(resolve => { resolveDownload = resolve })
+  const ExcelPreview = loadExcelPreview({
+    get: async (_url, options) => {
+      requestSignal = options.signal
+      return download
+    },
+  }, {
+    read: () => {
+      readCalls += 1
+      return { SheetNames: [], Sheets: {} }
+    },
+    utils: {},
+  })
+
+  let renderer
+  await act(async () => {
+    renderer = create(React.createElement(ExcelPreview, { fileId: 7 }))
+  })
+  await act(async () => {
+    renderer.unmount()
+  })
+  await act(async () => {
+    resolveDownload({ data: new Uint8Array([0x50, 0x4b]).buffer })
+    await download
+    await Promise.resolve()
+  })
+
+  assert.deepEqual(
+    { aborted: requestSignal?.aborted === true, readCalls },
+    { aborted: true, readCalls: 0 },
+  )
 })

@@ -3,6 +3,7 @@
 The caller owns the disposable database and API process. This module never discovers or
 connects to another database and does not start services.
 """
+import json
 import secrets
 import urllib.parse
 
@@ -13,6 +14,20 @@ def _password():
 
 def _refresh_cookie(client):
     return next(cookie.value for cookie in client.cookies if cookie.name == "refresh_token")
+
+
+def _login_attempt(Client, base, employee_no, password, expected=200):
+    actor = Client(base)
+    challenge = actor.captcha()
+    result = actor.call("POST", "/api/v1/auth/login", {
+        "employeeNo": employee_no,
+        "password": password,
+        "captchaId": challenge["captchaId"],
+        "captchaCode": challenge["captchaCode"],
+    }, expected=expected)
+    if expected == 200:
+        actor.token = result["accessToken"]
+    return actor, result
 
 
 def run_identity_checks(client, Client, conn, check):
@@ -210,3 +225,241 @@ def run_identity_checks(client, Client, conn, check):
           active_logout_tokens == 0 and len(logout_rows) == 1
           and logout_rows[0][0] is None and logout_rows[0][1] is None and logout_rows[0][2] is None
           and bool(logout_rows[0][3]))
+
+    run_identity_lifecycle_checks(client, Client, conn, check)
+
+
+def run_identity_lifecycle_checks(client, Client, conn, check):
+    """Exercise password, session, RBAC, and audit postconditions through public APIs."""
+    suffix = secrets.token_hex(5)
+    admin_profile = client.call("GET", "/api/v1/auth/profile")["user"]
+    permissions = client.call("GET", "/api/v1/permissions")
+    user_manage = next(item["id"] for item in permissions if item["code"] == "user:manage")
+    ordinary_role = next(role for role in client.call("GET", "/api/v1/admin/user-role-options")
+                         if role["name"] == "内部成员")
+
+    lifecycle_role = client.call("POST", "/api/v1/admin/roles", {
+        "name": "身份生命周期角色-" + suffix,
+        "description": "password session and live RBAC acceptance",
+    })
+    role_id = lifecycle_role["id"]
+    client.call("PUT", f"/api/v1/admin/roles/{role_id}/permissions", {
+        "permissionIds": [user_manage],
+    })
+    employee_no = "lifecycle_" + suffix
+    password0 = _password()
+    lifecycle_user = client.call("POST", "/api/v1/admin/users", {
+        "employeeNo": employee_no,
+        "password": password0,
+        "realName": "身份生命周期用户",
+        "email": employee_no + "@example.invalid",
+        "departmentId": None,
+        "roleId": role_id,
+    })
+    user_id = lifecycle_user["id"]
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT password_hash FROM users WHERE id=%s", (user_id,))
+        initial_hash = cursor.fetchone()[0]
+
+    # First-password flow: only profile/password/logout are available, and changing the
+    # password revokes both halves of the session before the new password can be used.
+    actor, first_login = _login_attempt(Client, client.base, employee_no, password0)
+    forced = actor.call("GET", "/api/v1/projects", expected=403)
+    refresh0 = _refresh_cookie(actor)
+    password1 = _password()
+    actor.call("PUT", "/api/v1/auth/password", {
+        "oldPassword": password0,
+        "newPassword": password1,
+    })
+    actor.call("GET", "/api/v1/auth/profile", expected=401)
+    Client(client.base).call("POST", "/api/v1/auth/refresh",
+                             headers={"Cookie": "refresh_token=" + refresh0}, expected=401)
+    actor, second_login = _login_attempt(Client, client.base, employee_no, password1)
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT password_hash,must_change_password,status FROM users WHERE id=%s", (user_id,))
+        password1_hash, must_change, user_status = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) FROM refresh_tokens WHERE user_id=%s AND revoked=0", (user_id,))
+        active_after_login = cursor.fetchone()[0]
+    check("identity first-password flow persists the new credential and revokes the old session",
+          first_login["mustChangePassword"] is True and forced["code"] == 40303
+          and second_login["mustChangePassword"] is False
+          and password1_hash != initial_hash and must_change == 0 and user_status == "ACTIVE"
+          and active_after_login == 1)
+
+    # A rejected ordinary change must leave both the password hash and live session intact.
+    password2 = _password()
+    wrong_old = _password()
+    wrong_change = actor.call("PUT", "/api/v1/auth/password", {
+        "oldPassword": wrong_old,
+        "newPassword": password2,
+    }, expected=400)
+    surviving_profile = actor.call("GET", "/api/v1/auth/profile")
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT password_hash,must_change_password FROM users WHERE id=%s", (user_id,))
+        hash_after_rejection, flag_after_rejection = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) FROM refresh_tokens WHERE user_id=%s AND revoked=0", (user_id,))
+        sessions_after_rejection = cursor.fetchone()[0]
+    check("identity wrong old password is atomic and preserves the valid session",
+          wrong_change["code"] == 40001 and surviving_profile["user"]["id"] == user_id
+          and hash_after_rejection == password1_hash and flag_after_rejection == 0
+          and sessions_after_rejection == 1)
+
+    # The normal second change has the same all-session revocation contract as the first.
+    refresh1 = _refresh_cookie(actor)
+    actor.call("PUT", "/api/v1/auth/password", {
+        "oldPassword": password1,
+        "newPassword": password2,
+    })
+    actor.call("GET", "/api/v1/auth/profile", expected=401)
+    Client(client.base).call("POST", "/api/v1/auth/refresh",
+                             headers={"Cookie": "refresh_token=" + refresh1}, expected=401)
+    _, previous_password_result = _login_attempt(Client, client.base, employee_no, password1, expected=401)
+    actor, normal_login = _login_attempt(Client, client.base, employee_no, password2)
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT password_hash,must_change_password FROM users WHERE id=%s", (user_id,))
+        password2_hash, flag_after_second_change = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) FROM refresh_tokens WHERE user_id=%s AND revoked=0", (user_id,))
+        active_after_second_login = cursor.fetchone()[0]
+        cursor.execute("SELECT employee_no,detail FROM audit_logs WHERE user_id=%s AND action='PASSWORD_CHANGE' ORDER BY id", (user_id,))
+        self_change_logs = cursor.fetchall()
+    check("identity ordinary password change invalidates the previous credential and session",
+          previous_password_result["code"] == 40101 and normal_login["mustChangePassword"] is False
+          and password2_hash != password1_hash and flag_after_second_change == 0
+          and active_after_second_login == 1 and len(self_change_logs) == 2
+          and all(row[0] == employee_no and row[1] is None for row in self_change_logs))
+
+    # An administrator reset and disable must revoke an already active internal session.
+    refresh2 = _refresh_cookie(actor)
+    password3 = _password()
+    client.call("PUT", f"/api/v1/admin/users/{user_id}/password", {"newPassword": password3})
+    actor.call("GET", "/api/v1/auth/profile", expected=401)
+    Client(client.base).call("POST", "/api/v1/auth/refresh",
+                             headers={"Cookie": "refresh_token=" + refresh2}, expected=401)
+    _, reset_old_password = _login_attempt(Client, client.base, employee_no, password2, expected=401)
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT password_hash,must_change_password,status FROM users WHERE id=%s", (user_id,))
+        reset_hash, reset_flag, reset_status = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) FROM refresh_tokens WHERE user_id=%s AND revoked=0", (user_id,))
+        reset_sessions = cursor.fetchone()[0]
+    reset_actor, reset_login = _login_attempt(Client, client.base, employee_no, password3)
+    reset_refresh = _refresh_cookie(reset_actor)
+    client.call("PUT", f"/api/v1/admin/users/{user_id}/status", {"status": "DISABLED"})
+    reset_actor.call("GET", "/api/v1/auth/profile", expected=401)
+    Client(client.base).call("POST", "/api/v1/auth/refresh",
+                             headers={"Cookie": "refresh_token=" + reset_refresh}, expected=401)
+    _, disabled_login = _login_attempt(Client, client.base, employee_no, password3, expected=401)
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT status FROM users WHERE id=%s", (user_id,))
+        disabled_persisted_status = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM refresh_tokens WHERE user_id=%s AND revoked=0", (user_id,))
+        disabled_sessions = cursor.fetchone()[0]
+    client.call("PUT", f"/api/v1/admin/users/{user_id}/status", {"status": "ACTIVE"})
+    reset_actor.call("GET", "/api/v1/auth/profile", expected=401)
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT must_change_password,status FROM users WHERE id=%s", (user_id,))
+        reenabled_flag, reenabled_status = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) FROM refresh_tokens WHERE user_id=%s AND revoked=0", (user_id,))
+        reenabled_sessions = cursor.fetchone()[0]
+    reenabled_actor, reenabled_login = _login_attempt(Client, client.base, employee_no, password3)
+    check("identity admin reset and disable persist state and never resurrect revoked sessions",
+          reset_old_password["code"] == 40101 and reset_login["mustChangePassword"] is True
+          and reset_hash != password2_hash and reset_flag == 1 and reset_status == "ACTIVE" and reset_sessions == 0
+          and disabled_login["code"] == 40101 and reenabled_login["mustChangePassword"] is True
+          and disabled_persisted_status == "DISABLED" and disabled_sessions == 0
+          and reenabled_flag == 1 and reenabled_status == "ACTIVE" and reenabled_sessions == 0)
+
+    # Finish the reset-password flow, then prove permission changes affect the same access token.
+    password4 = _password()
+    reenabled_actor.call("PUT", "/api/v1/auth/password", {
+        "oldPassword": password3,
+        "newPassword": password4,
+    })
+    actor, final_login = _login_attempt(Client, client.base, employee_no, password4)
+    actor.call("GET", "/api/v1/admin/users")
+    client.call("PUT", f"/api/v1/admin/roles/{role_id}/permissions", {"permissionIds": []})
+    denied_after_revoke = actor.call("GET", "/api/v1/admin/users", expected=403)
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM role_permissions WHERE role_id=%s", (role_id,))
+        permissions_after_revoke = cursor.fetchone()[0]
+    client.call("PUT", f"/api/v1/admin/roles/{role_id}/permissions", {
+        "permissionIds": [user_manage],
+    })
+    restored_page = actor.call("GET", "/api/v1/admin/users?" + urllib.parse.urlencode({
+        "keyword": employee_no,
+    }))
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM role_permissions WHERE role_id=%s AND permission_id=%s",
+                       (role_id, user_manage))
+        permissions_after_restore = cursor.fetchone()[0]
+    check("identity live RBAC revocation and restore affect the same access token",
+          final_login["mustChangePassword"] is False and denied_after_revoke["code"] == 40301
+          and permissions_after_revoke == 0 and permissions_after_restore == 1
+          and restored_page["total"] == 1 and restored_page["list"][0]["id"] == user_id)
+
+    # Role status and deletion constraints must preserve both role and user state on rejection.
+    disable_bound = client.call("PUT", f"/api/v1/admin/roles/{role_id}/status",
+                                {"status": "DISABLED"}, expected=400)
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT status FROM roles WHERE id=%s", (role_id,))
+        status_after_bound_rejection = cursor.fetchone()[0]
+    client.call("PUT", f"/api/v1/admin/users/{user_id}/status", {"status": "DISABLED"})
+    client.call("PUT", f"/api/v1/admin/roles/{role_id}/status", {"status": "DISABLED"})
+    enable_with_disabled_role = client.call("PUT", f"/api/v1/admin/users/{user_id}/status",
+                                            {"status": "ACTIVE"}, expected=400)
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT status FROM roles WHERE id=%s", (role_id,))
+        disabled_role_status = cursor.fetchone()[0]
+        cursor.execute("SELECT status FROM users WHERE id=%s", (user_id,))
+        disabled_user_status = cursor.fetchone()[0]
+    client.call("PUT", f"/api/v1/admin/roles/{role_id}/status", {"status": "ACTIVE"})
+    client.call("PUT", f"/api/v1/admin/users/{user_id}/status", {"status": "ACTIVE"})
+    delete_bound = client.call("DELETE", f"/api/v1/admin/roles/{role_id}", expected=400)
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM roles WHERE id=%s", (role_id,))
+        role_after_delete_rejection = cursor.fetchone()[0]
+    client.call("PUT", f"/api/v1/admin/users/{user_id}/roles", {
+        "roleIds": [ordinary_role["id"]],
+    })
+    client.call("DELETE", f"/api/v1/admin/roles/{role_id}")
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM roles WHERE id=%s", (role_id,))
+        role_after_delete = cursor.fetchone()[0]
+        cursor.execute("SELECT role_id FROM user_roles WHERE user_id=%s", (user_id,))
+        final_user_role = cursor.fetchone()[0]
+    check("identity role binding status and delete invariants preserve persisted state",
+          disable_bound["code"] == 40001 and status_after_bound_rejection == "ACTIVE"
+          and enable_with_disabled_role["code"] == 40001
+          and disabled_role_status == "DISABLED" and disabled_user_status == "DISABLED"
+          and delete_bound["code"] == 40001 and role_after_delete_rejection == 1
+          and role_after_delete == 0 and final_user_role == ordinary_role["id"])
+
+    # Verify the management audit survives deletion and records actor, target, and deltas.
+    role_logs = client.call("GET", "/api/v1/admin/audit-logs?" + urllib.parse.urlencode({
+        "targetType": "role",
+        "targetId": role_id,
+        "pageSize": 100,
+    }))
+    role_rows = role_logs["list"]
+    role_actions = {row["action"] for row in role_rows}
+    permission_deltas = {
+        (row["detail"]["oldPermissionCount"], row["detail"]["newPermissionCount"])
+        for row in role_rows if row["action"] == "ROLE_ASSIGN_PERMS"
+    }
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT action,employee_no,detail FROM audit_logs WHERE target_type='user' AND target_id=%s AND action IN ('USER_RESET_PASSWORD','USER_STATUS') ORDER BY id", (str(user_id),))
+        user_security_logs = cursor.fetchall()
+    reset_details = [json.loads(row[2]) for row in user_security_logs if row[0] == "USER_RESET_PASSWORD"]
+    status_details = [json.loads(row[2]) for row in user_security_logs if row[0] == "USER_STATUS"]
+    serialized_security_details = " ".join(row[2] or "" for row in user_security_logs)
+    check("identity lifecycle audit preserves actor target and security deltas without passwords",
+          {"ROLE_CREATE", "ROLE_ASSIGN_PERMS", "ROLE_STATUS", "ROLE_DELETE"}.issubset(role_actions)
+          and all(row["targetId"] == str(role_id) and row["userId"] == admin_profile["id"]
+                  and row["employeeNo"] == admin_profile["employeeNo"] for row in role_rows)
+          and {(0, 1), (1, 0)}.issubset(permission_deltas)
+          and len(reset_details) == 1 and reset_details[0]["sessionsRevoked"] is True
+          and reset_details[0]["mustChangePassword"] is True
+          and {(item["oldStatus"], item["newStatus"]) for item in status_details}
+          >= {("ACTIVE", "DISABLED"), ("DISABLED", "ACTIVE")}
+          and all(row[1] == admin_profile["employeeNo"] for row in user_security_logs)
+          and all(password not in serialized_security_details
+                  for password in (password0, password1, password2, password3, password4)))
