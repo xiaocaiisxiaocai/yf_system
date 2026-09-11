@@ -14,7 +14,7 @@ internal sealed class DashboardService
         CancellationToken ct)
     {
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         if (!await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct))
         {
@@ -50,7 +50,7 @@ internal sealed class DashboardService
 
     internal async Task<object> SummaryAsync(MySqlConnection conn, CurrentUser actor, CancellationToken ct)
     {
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         var (scope, parameters) = await VisibleScopeAsync(conn, tx, current, ct);
         var projects = (await conn.QueryAsync<ProjectRow>(new CommandDefinition(

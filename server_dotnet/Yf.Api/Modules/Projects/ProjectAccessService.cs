@@ -25,7 +25,7 @@ public static class ProjectAccessService
             return await RequireViewCoreAsync(conn, tx, actor, projectId, false, ct);
         }
 
-        await using var owned = await conn.BeginTransactionAsync(ct);
+        await using var owned = await AppDb.BeginTransactionAsync(conn, ct);
         var project = await RequireViewCoreAsync(conn, owned, actor, projectId, false, ct);
         await owned.CommitAsync(ct);
         return project;
@@ -40,7 +40,7 @@ public static class ProjectAccessService
     {
         if (tx is null)
         {
-            await using var owned = await conn.BeginTransactionAsync(ct);
+            await using var owned = await AppDb.BeginTransactionAsync(conn, ct);
             var result = await RequireFileUploadAsync(conn, owned, actor, projectId, ct);
             await owned.CommitAsync(ct);
             return result;
@@ -65,7 +65,7 @@ public static class ProjectAccessService
     {
         if (tx is null)
         {
-            await using var owned = await conn.BeginTransactionAsync(ct);
+            await using var owned = await AppDb.BeginTransactionAsync(conn, ct);
             var result = await RequireFileDeleteAsync(conn, owned, actor, projectId, ct);
             await owned.CommitAsync(ct);
             return result;
@@ -89,7 +89,7 @@ public static class ProjectAccessService
     {
         if (tx is null)
         {
-            await using var owned = await conn.BeginTransactionAsync(ct);
+            await using var owned = await AppDb.BeginTransactionAsync(conn, ct);
             var result = await CanDeleteFilesAsync(conn, owned, actor, ct);
             await owned.CommitAsync(ct);
             return result;

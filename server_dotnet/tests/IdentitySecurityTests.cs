@@ -59,7 +59,7 @@ public sealed class IdentitySecurityTests
     }
 
     [Fact]
-    public void ParsesRustClaimsWithNumericUidAndNoDotNetOnlyClaims()
+    public void ParsesApiClaimsWithNumericUidAndSessionContract()
     {
         const string secret = "identity-test-secret-with-at-least-32-bytes";
         var service = new TokenService(new AppOptions { JwtSecret = secret, AccessTtlMinutes = 30 });
@@ -67,8 +67,8 @@ public sealed class IdentitySecurityTests
         var header = Base64UrlEncoder.Encode("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
         var body = Base64UrlEncoder.Encode(JsonSerializer.Serialize(new
         {
-            sub = "RUST001", uid = 18446744073709551614UL, sid = "rust-session-family",
-            jti = "rust-jti", iat = now, exp = now + 1800
+            sub = "API001", uid = 18446744073709551614UL, sid = "api-session-family",
+            jti = "api-jti", iat = now, exp = now + 1800
         }));
         var signingInput = header + "." + body;
         using var hmac = new System.Security.Cryptography.HMACSHA256(Encoding.UTF8.GetBytes(secret));
@@ -76,19 +76,31 @@ public sealed class IdentitySecurityTests
 
         var parsed = service.ParseAccess(signingInput + "." + signature);
         Assert.Equal(18446744073709551614UL, parsed.UserId);
-        Assert.Equal("RUST001", parsed.EmployeeNo);
-        Assert.Equal("rust-session-family", parsed.SessionId);
+        Assert.Equal("API001", parsed.EmployeeNo);
+        Assert.Equal("api-session-family", parsed.SessionId);
     }
 
     [Fact]
     public void CaptchaIsPngAndSingleUse()
     {
-        var service = new CaptchaService();
+        var observer = new RecordingCaptchaObserver();
+        var service = new CaptchaService([observer]);
         var response = service.Issue("127.0.0.1");
         Assert.StartsWith("data:image/png;base64,", response.Svg);
         var png = Convert.FromBase64String(response.Svg["data:image/png;base64,".Length..]);
         Assert.Equal(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, png[..8]);
-        Assert.False(service.Verify(response.CaptchaId, "not-the-code"));
-        Assert.False(service.Verify(response.CaptchaId, "not-the-code"));
+        Assert.Equal(response.CaptchaId, observer.CaptchaId);
+        Assert.Equal(6, observer.Answer.Length);
+        Assert.All(observer.Answer, value => Assert.Contains(value, "ACDEFHJKLMNPRTUVWXY347"));
+        Assert.Contains(observer.Answer, char.IsAsciiLetterUpper);
+        Assert.True(service.Verify(response.CaptchaId, observer.Answer));
+        Assert.False(service.Verify(response.CaptchaId, observer.Answer));
+    }
+
+    private sealed class RecordingCaptchaObserver : ICaptchaChallengeObserver
+    {
+        public string CaptchaId { get; private set; } = "";
+        public string Answer { get; private set; } = "";
+        public void OnIssued(string captchaId, string answer) => (CaptchaId, Answer) = (captchaId, answer);
     }
 }

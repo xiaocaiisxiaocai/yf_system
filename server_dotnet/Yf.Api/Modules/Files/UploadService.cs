@@ -1,6 +1,7 @@
 using Dapper;
 using MySqlConnector;
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Projects;
@@ -20,6 +21,7 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
         var extension = await ValidateFileAsync(conn, request, ct);
         if (request.FileMd5 is not null && !Md5Pattern().IsMatch(request.FileMd5))
             throw ApiException.BadRequest("文件 MD5 摘要格式无效");
+        var fileMd5 = request.FileMd5?.ToLowerInvariant();
 
         var chunkSize = (uint)Math.Clamp(await ConfigUInt64Async(conn, "upload.chunk_size", (ulong)options.UploadChunkSize, ct),
             MinimumChunkSize, MaximumChunkSize);
@@ -28,10 +30,20 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
         var totalChunks = (uint)totalChunks64;
         FileStorage.EnsureFreeSpace(options.StorageRoot, request.FileSize);
 
-        UploadSessionRow? existing = null;
-        if (request.FileMd5 is not null)
+        MySqlNamedLock? identityLease = null;
+        if (fileMd5 is not null)
         {
-            existing = await conn.QuerySingleOrDefaultAsync<UploadSessionRow>(new CommandDefinition("""
+            var identityLockName = MySqlNamedLock.Name("upload-init", conn.Database,
+                request.ProjectId, actor.Id, request.FileName, request.FileSize, fileMd5);
+            identityLease = await MySqlNamedLock.TryAcquireAsync(conn, identityLockName, 10, ct)
+                ?? throw ApiException.Conflict("相同文件正在初始化，请稍后重试");
+        }
+        await using (identityLease)
+        {
+            UploadSessionRow? existing = null;
+            if (fileMd5 is not null)
+            {
+                existing = await conn.QuerySingleOrDefaultAsync<UploadSessionRow>(new CommandDefinition("""
                 SELECT id AS Id,project_id AS ProjectId,uploader_id AS UploaderId,file_name AS FileName,
                        file_size AS FileSize,file_md5 AS FileMd5,chunk_size AS ChunkSize,total_chunks AS TotalChunks,
                        temp_dir AS TempDir,status AS Status,result_file_id AS ResultFileId,
@@ -41,31 +53,32 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
                   AND file_size=@FileSize AND file_md5=@FileMd5 AND expires_at>UTC_TIMESTAMP(6)
                   AND status IN ('UPLOADING','MERGING')
                 ORDER BY created_at DESC LIMIT 1
-                """, new { request.ProjectId, UploaderId = actor.Id, request.FileName, request.FileSize, request.FileMd5 }, cancellationToken: ct));
-        }
-        if (existing is not null)
-        {
-            if (existing.Status == "MERGING")
-            {
-                if (existing.UpdatedAt > DateTime.UtcNow.AddMinutes(-10))
-                    throw ApiException.Conflict("该文件正在合并，请稍候");
-                existing = await ResetStaleMergeAsync(conn, actor, existing, ct);
+                """, new { request.ProjectId, UploaderId = actor.Id, request.FileName, request.FileSize, FileMd5 = fileMd5 }, cancellationToken: ct));
             }
-            return await InitResponseAsync(existing, resumed: true, ct);
-        }
+            if (existing is not null)
+            {
+                if (existing.Status == "MERGING")
+                {
+                    var mergeLockName = MergeLockName(conn, existing.Id);
+                    await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(conn, mergeLockName, 0, ct)
+                        ?? throw ApiException.Conflict("该文件正在合并，请稍候");
+                    existing = await ResetOrphanedMergeAsync(conn, actor, existing, ct);
+                }
+                return await InitResponseAsync(existing, resumed: true, ct);
+            }
 
-        var sessionId = Guid.NewGuid().ToString("D");
-        var root = FileStorage.Root(options.StorageRoot);
-        var tempDir = FileStorage.SessionDirectory(root, sessionId);
-        Directory.CreateDirectory(tempDir);
-        await FileStorage.ResolveExistingAsync(root, tempDir, requireFile: false, ct);
-        var now = TruncateMilliseconds(DateTime.UtcNow);
-        try
-        {
-            await using var tx = (MySqlTransaction)await conn.BeginTransactionAsync(ct);
-            var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-            await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, request.ProjectId, ct);
-            await conn.ExecuteAsync(new CommandDefinition("""
+            var sessionId = Guid.NewGuid().ToString("D");
+            var root = FileStorage.Root(options.StorageRoot);
+            var tempDir = FileStorage.SessionDirectory(root, sessionId);
+            Directory.CreateDirectory(tempDir);
+            await FileStorage.ResolveExistingAsync(root, tempDir, requireFile: false, ct);
+            var now = TruncateMilliseconds(DateTime.UtcNow);
+            try
+            {
+                await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+                var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+                await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, request.ProjectId, ct);
+                await conn.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO upload_sessions
                     (id,project_id,uploader_id,file_name,file_size,file_md5,chunk_size,total_chunks,temp_dir,status,result_file_id,expires_at,created_at,updated_at)
                 VALUES
@@ -73,25 +86,26 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
                 """, new
                 {
                     Id = sessionId, request.ProjectId, UploaderId = current.Id, request.FileName,
-                    request.FileSize, request.FileMd5, ChunkSize = chunkSize, TotalChunks = totalChunks,
+                    request.FileSize, FileMd5 = fileMd5, ChunkSize = chunkSize, TotalChunks = totalChunks,
                     TempDir = tempDir, ExpiresAt = now.AddHours(24), Now = now
                 }, tx, cancellationToken: ct));
-            try { await tx.CommitAsync(ct); }
+                try { await tx.CommitAsync(ct); }
+                catch
+                {
+                    using var reconcile = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                    if (!await SessionExistsSafelyAsync(sessionId, reconcile.Token))
+                        throw;
+                }
+            }
             catch
             {
-                if (!await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-                        "SELECT EXISTS(SELECT 1 FROM upload_sessions WHERE id=@Id)", new { Id = sessionId }, cancellationToken: ct)))
-                    throw;
+                if (!await SessionExistsSafelyAsync(sessionId, ct))
+                    await TryDeleteDirectoryAsync(options.StorageRoot, tempDir, CancellationToken.None);
+                throw;
             }
+            _ = extension;
+            return new { sessionId, chunkSize, totalChunks, uploadedChunks = Array.Empty<uint>() };
         }
-        catch
-        {
-            if (!await SessionExistsSafelyAsync(sessionId, ct))
-                await TryDeleteDirectoryAsync(options.StorageRoot, tempDir, CancellationToken.None);
-            throw;
-        }
-        _ = extension;
-        return new { sessionId, chunkSize, totalChunks, uploadedChunks = Array.Empty<uint>() };
     }
 
     public async Task<object> GetAsync(HttpContext context, string sessionId, CancellationToken ct)
@@ -101,6 +115,9 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
         var session = await LoadSessionAsync(conn, null, sessionId, false, ct);
         if (session.UploaderId != actor.Id) throw ApiException.Forbidden();
         await ProjectAccessService.RequireViewAsync(conn, null, actor, session.ProjectId, ct);
+        await AccessService.RequirePermissionAsync(conn, null, actor, "file:upload", ct);
+        if (session.Status == "UPLOADING" && session.ExpiresAt < DateTime.UtcNow)
+            throw ApiException.Conflict("上传会话已过期，请重新发起");
         var chunks = await UploadedChunksAsync(session, ct);
         return new
         {
@@ -114,20 +131,20 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
     {
         if (index < 0) throw ApiException.BadRequest("分片序号越界");
         var actor = AccessService.GetCurrent(context);
-        await using var conn = await db.OpenAsync(ct);
-        var initial = await LoadSessionAsync(conn, null, sessionId, false, ct);
-        if (initial.UploaderId != actor.Id) throw ApiException.Forbidden();
-        await using var tx = (MySqlTransaction)await conn.BeginTransactionAsync(ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-        await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, initial.ProjectId, ct);
-        var session = await LoadSessionAsync(conn, tx, sessionId, true, ct);
-        if (session.UploaderId != current.Id) throw ApiException.Forbidden();
-        if (session.Status != "UPLOADING") throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
-        if (session.ExpiresAt < DateTime.UtcNow) throw ApiException.Conflict("上传会话已过期，请重新发起");
-        if ((uint)index >= session.TotalChunks) throw ApiException.BadRequest("分片序号越界");
-        var expected = (uint)index == session.TotalChunks - 1
-            ? session.FileSize - (ulong)session.ChunkSize * (session.TotalChunks - 1)
-            : session.ChunkSize;
+        UploadSessionRow initial;
+        await using (var initialConnection = await db.OpenAsync(ct))
+        {
+            initial = await LoadSessionAsync(initialConnection, null, sessionId, false, ct);
+            if (initial.UploaderId != actor.Id) throw ApiException.Forbidden();
+            await ProjectAccessService.RequireFileUploadAsync(
+                initialConnection, null, actor, initial.ProjectId, ct);
+        }
+        if (initial.Status != "UPLOADING") throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
+        if (initial.ExpiresAt < DateTime.UtcNow) throw ApiException.Conflict("上传会话已过期，请重新发起");
+        if ((uint)index >= initial.TotalChunks) throw ApiException.BadRequest("分片序号越界");
+        var expected = (uint)index == initial.TotalChunks - 1
+            ? initial.FileSize - (ulong)initial.ChunkSize * (initial.TotalChunks - 1)
+            : initial.ChunkSize;
         if (context.Request.ContentLength is long contentLength && (ulong)contentLength != expected)
             throw ApiException.BadRequest($"分片大小不符：期望 {expected}，实际 {contentLength}");
         FileStorage.EnsureFreeSpace(options.StorageRoot, expected);
@@ -137,39 +154,64 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
         Directory.CreateDirectory(directory);
         await FileStorage.ResolveExistingAsync(root, directory, requireFile: false, ct);
         var path = FileStorage.ChunkPath(root, sessionId, (uint)index);
-        if (File.Exists(path) && (ulong)new FileInfo(path).Length == expected)
-        {
-            await tx.CommitAsync(ct);
-            return;
-        }
-        if (File.Exists(path)) File.Delete(path);
-        var temporary = path + ".tmp";
+        var temporary = FileStorage.EnsureLexicallyWithin(root,
+            path + $".{Guid.NewGuid():D}.uploading", false);
         try
         {
             await WriteExactAsync(body, temporary, expected, ct);
+            // Network receive is complete before any business or project row is locked.
+            await using var conn = await db.OpenAsync(ct);
+            await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+            var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+            await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, initial.ProjectId, ct);
+            var session = await LoadSessionAsync(conn, tx, sessionId, true, ct);
+            if (session.UploaderId != current.Id) throw ApiException.Forbidden();
+            if (session.ProjectId != initial.ProjectId)
+                throw ApiException.Conflict("上传会话所属项目已变化，请重新查询");
+            if (session.Status != "UPLOADING") throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
+            if (session.ExpiresAt < DateTime.UtcNow) throw ApiException.Conflict("上传会话已过期，请重新发起");
+            if ((uint)index >= session.TotalChunks) throw ApiException.BadRequest("分片序号越界");
+            var lockedExpected = (uint)index == session.TotalChunks - 1
+                ? session.FileSize - (ulong)session.ChunkSize * (session.TotalChunks - 1)
+                : session.ChunkSize;
+            if (lockedExpected != expected) throw ApiException.Conflict("上传会话参数已变化，请重新查询");
+            if (File.Exists(path) && (ulong)new FileInfo(path).Length == expected)
+            {
+                await tx.CommitAsync(ct);
+                return;
+            }
+            if (File.Exists(path)) File.Delete(path);
             File.Move(temporary, path, overwrite: false);
             await tx.CommitAsync(ct);
         }
-        catch
-        {
-            TryDeleteFile(temporary);
-            throw;
-        }
+        finally { TryDeleteFile(temporary); }
     }
 
     public async Task AbortAsync(HttpContext context, string sessionId, CancellationToken ct)
     {
         var actor = AccessService.GetCurrent(context);
         await using var conn = await db.OpenAsync(ct);
-        string directory;
-        await using (var tx = (MySqlTransaction)await conn.BeginTransactionAsync(ct))
+        var initial = await LoadSessionAsync(conn, null, sessionId, false, ct);
+        if (initial.UploaderId != actor.Id) throw ApiException.Forbidden();
+        await ProjectAccessService.RequireViewAsync(conn, null, actor, initial.ProjectId, ct);
+        await AccessService.RequirePermissionAsync(conn, null, actor, "file:upload", ct);
+
+        // Always take the merge lease, including when the initial snapshot still says
+        // UPLOADING. This closes the race where another request changes it to MERGING
+        // between the snapshot and the row lock below.
+        await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(
+            conn, MergeLockName(conn, sessionId), 0, ct)
+            ?? throw ApiException.Conflict("正在合并中，请稍候");
+        await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
         {
             var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
             var session = await LoadSessionAsync(conn, tx, sessionId, true, ct);
             if (session.UploaderId != current.Id) throw ApiException.Forbidden();
+            await ProjectAccessService.RequireViewAsync(conn, tx, current, session.ProjectId, ct);
             await AccessService.RequirePermissionAsync(conn, tx, current, "file:upload", ct);
-            if (session.Status is "COMPLETED" or "MERGING") throw ApiException.Conflict("会话已完成，不可放弃");
-            directory = FileStorage.SessionDirectory(FileStorage.Root(options.StorageRoot), sessionId);
+            if (session.Status == "COMPLETED") throw ApiException.Conflict("会话已完成，不可放弃");
+            if (session.Status is not ("UPLOADING" or "MERGING" or "EXPIRED" or "ABORTED"))
+                throw ApiException.Conflict("会话已失效");
             if (session.Status != "ABORTED")
             {
                 await conn.ExecuteAsync(new CommandDefinition(
@@ -180,7 +222,7 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
             }
             await tx.CommitAsync(ct);
         }
-        await TryDeleteDirectoryAsync(options.StorageRoot, directory, CancellationToken.None);
+        await TryCleanupSessionArtifactsAsync(conn, sessionId, CancellationToken.None);
     }
 
     public async Task<object> MergeAsync(HttpContext context, string sessionId, CancellationToken ct)
@@ -190,28 +232,31 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
         var session = await LoadSessionAsync(conn, null, sessionId, false, ct);
         if (session.UploaderId != actor.Id) throw ApiException.Forbidden();
         await ProjectAccessService.RequireViewAsync(conn, null, actor, session.ProjectId, ct);
+        await AccessService.RequirePermissionAsync(conn, null, actor, "file:upload", ct);
         if (session.Status == "COMPLETED") return await CompletedFileAsync(conn, session, actor.Id, ct);
-        if (session.Status == "MERGING") throw ApiException.Conflict("正在合并中，请稍候");
-        if (session.Status != "UPLOADING") throw ApiException.Conflict("会话已失效");
+        if (session.Status is not ("UPLOADING" or "MERGING")) throw ApiException.Conflict("会话已失效");
+        if (session.Status == "UPLOADING" && session.ExpiresAt < DateTime.UtcNow)
+            throw ApiException.Conflict("上传会话已过期，请重新发起");
+
+        await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(
+            conn, MergeLockName(conn, sessionId), 0, ct)
+            ?? throw ApiException.Conflict("正在合并中，请稍候");
+        session = await LoadSessionAsync(conn, null, sessionId, false, ct);
+        if (session.Status == "COMPLETED") return await CompletedFileAsync(conn, session, actor.Id, ct);
+        if (session.Status is not ("UPLOADING" or "MERGING")) throw ApiException.Conflict("会话已失效");
+        if (session.Status == "UPLOADING" && session.ExpiresAt < DateTime.UtcNow)
+            throw ApiException.Conflict("上传会话已过期，请重新发起");
         await ProjectAccessService.RequireFileUploadAsync(conn, null, actor, session.ProjectId, ct);
         var uploaded = await UploadedChunksAsync(session, ct);
         if ((uint)uploaded.Count != session.TotalChunks)
             throw ApiException.BadRequest($"分片不完整：已传 {uploaded.Count}/{session.TotalChunks}");
         FileStorage.EnsureFreeSpace(options.StorageRoot, session.FileSize);
-
-        var changed = await conn.ExecuteAsync(new CommandDefinition("""
-            UPDATE upload_sessions SET status='MERGING',updated_at=UTC_TIMESTAMP(3)
-            WHERE id=@Id AND status='UPLOADING'
-            """, new { Id = sessionId }, cancellationToken: ct));
-        if (changed != 1) throw ApiException.Conflict("合并已在进行中，请稍候");
-        // Lease 由数据库生成后立即回读，避免客户端 DateTime 与 DATETIME(3) 舍入或时区语义不同。
-        session = await LoadSessionAsync(conn, null, sessionId, false, ct);
+        session = await ClaimMergeAsync(conn, actor, session, ct);
         var lease = session.UpdatedAt;
         try
         {
             var result = await DoMergeAsync(conn, context, actor, session, ct);
-            await TryDeleteDirectoryAsync(options.StorageRoot,
-                FileStorage.SessionDirectory(FileStorage.Root(options.StorageRoot), session.Id), CancellationToken.None);
+            await TryCleanupSessionArtifactsAsync(conn, session.Id, CancellationToken.None);
             return result;
         }
         catch
@@ -255,18 +300,22 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
             TryDeleteFile(mergeTemp);
             throw ApiException.BadRequest("文件 MD5 校验失败，请重新上传");
         }
-        File.Move(mergeTemp, finalPath, overwrite: false);
         var relativePath = Path.GetRelativePath(root, finalPath).Replace(Path.DirectorySeparatorChar, '/');
         var keepFinal = false;
         try
         {
-            await using var tx = (MySqlTransaction)await conn.BeginTransactionAsync(ct);
+            await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
             var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
             var project = await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, session.ProjectId, ct);
             var locked = await LoadSessionAsync(conn, tx, session.Id, true, ct);
             if (locked.Status != "MERGING" || locked.UpdatedAt != session.UpdatedAt)
                 throw ApiException.Conflict("上传会话状态已变化，请重新查询");
 
+            // Final publication happens only after the database connection that owns
+            // the named lease has passed the persisted fencing check. A disconnected
+            // former owner therefore cannot publish after another worker takes over.
+            await WritePendingFinalMarkerAsync(root, session.Id, relativePath, ct);
+            File.Move(mergeTemp, finalPath, overwrite: false);
             var direction = current.IsInternal ? "C2S" : "S2C";
             await conn.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,mime_type,sha256,storage_path,status,deleted_at,created_at)
@@ -292,7 +341,8 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
             try { await tx.CommitAsync(ct); }
             catch
             {
-                var confirmed = await ConfirmCompletedFileSafelyAsync(session.Id, ct);
+                using var reconcile = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                var confirmed = await ConfirmCompletedFileSafelyAsync(session.Id, reconcile.Token);
                 if (confirmed is not null) { keepFinal = true; return FileJson(confirmed); }
                 keepFinal = true;
                 throw;
@@ -302,23 +352,49 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
         }
         finally
         {
+            TryDeleteFile(mergeTemp);
             if (!keepFinal) TryDeleteFile(finalPath);
         }
     }
 
-    private async Task<UploadSessionRow> ResetStaleMergeAsync(MySqlConnection conn, CurrentUser actor,
-        UploadSessionRow session, CancellationToken ct)
+    private async Task<UploadSessionRow> ClaimMergeAsync(
+        MySqlConnection conn, CurrentUser actor, UploadSessionRow session, CancellationToken ct)
     {
-        await using var tx = (MySqlTransaction)await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, session.ProjectId, ct);
         var locked = await LoadSessionAsync(conn, tx, session.Id, true, ct);
-        if (locked.Status != "MERGING" || locked.UpdatedAt != session.UpdatedAt)
+        if (locked.UploaderId != current.Id) throw ApiException.Forbidden();
+        if (locked.Status is not ("UPLOADING" or "MERGING"))
+            throw ApiException.Conflict("上传会话状态已变化，请重新查询");
+        if (locked.Status == "UPLOADING" && locked.ExpiresAt < DateTime.UtcNow)
+            throw ApiException.Conflict("上传会话已过期，请重新发起");
+        var changed = await conn.ExecuteAsync(new CommandDefinition("""
+            UPDATE upload_sessions
+            SET status='MERGING',
+                updated_at=CASE WHEN updated_at>=UTC_TIMESTAMP() THEN DATE_ADD(updated_at,INTERVAL 1 SECOND) ELSE UTC_TIMESTAMP() END
+            WHERE id=@Id AND status IN ('UPLOADING','MERGING')
+            """, new { Id = session.Id }, tx, cancellationToken: ct));
+        if (changed != 1) throw ApiException.Conflict("上传会话状态已变化，请重新查询");
+        await tx.CommitAsync(ct);
+        return await LoadSessionAsync(conn, null, session.Id, false, ct);
+    }
+
+    private async Task<UploadSessionRow> ResetOrphanedMergeAsync(MySqlConnection conn, CurrentUser actor,
+        UploadSessionRow session, CancellationToken ct)
+    {
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, session.ProjectId, ct);
+        var locked = await LoadSessionAsync(conn, tx, session.Id, true, ct);
+        if (locked.Status != "MERGING")
             throw ApiException.Conflict("会话已变更，请重试");
         var changed = await conn.ExecuteAsync(new CommandDefinition("""
-            UPDATE upload_sessions SET status='UPLOADING',updated_at=UTC_TIMESTAMP(6)
-            WHERE id=@Id AND status='MERGING' AND updated_at=@UpdatedAt
-            """, new { session.Id, session.UpdatedAt }, tx, cancellationToken: ct));
+            UPDATE upload_sessions
+            SET status='UPLOADING',
+                updated_at=CASE WHEN updated_at>=UTC_TIMESTAMP() THEN DATE_ADD(updated_at,INTERVAL 1 SECOND) ELSE UTC_TIMESTAMP() END
+            WHERE id=@Id AND status='MERGING'
+            """, new { session.Id }, tx, cancellationToken: ct));
         if (changed != 1) throw ApiException.Conflict("会话已变更，请重试");
         await tx.CommitAsync(ct);
         return await LoadSessionAsync(conn, null, session.Id, false, ct);
@@ -369,7 +445,7 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
         return extension;
     }
 
-    private static string ExtensionOf(string name) =>
+    internal static string ExtensionOf(string name) =>
         name.Contains('.') ? name[(name.LastIndexOf('.') + 1)..].ToLowerInvariant() : name.ToLowerInvariant();
 
     private static async Task<ulong> ConfigUInt64Async(MySqlConnection conn, string key, ulong fallback, CancellationToken ct)
@@ -391,8 +467,6 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
             FROM upload_sessions WHERE id=@Id
             """ + (forUpdate ? " FOR UPDATE" : string.Empty), new { Id = id }, tx, cancellationToken: ct));
         if (session is null) throw ApiException.NotFound();
-        if (session.ExpiresAt < DateTime.UtcNow && session.Status == "UPLOADING")
-            throw ApiException.Conflict("上传会话已过期，请重新发起");
         return session;
     }
 
@@ -426,10 +500,12 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
         try
         {
             await using var conn = await db.OpenAsync(ct);
+            await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
             await conn.ExecuteAsync(new CommandDefinition("""
                 UPDATE upload_sessions SET status='UPLOADING',updated_at=UTC_TIMESTAMP(6)
                 WHERE id=@Id AND status='MERGING' AND updated_at=@Lease
-                """, new { Id = id, Lease = lease }, cancellationToken: ct));
+                """, new { Id = id, Lease = lease }, tx, cancellationToken: ct));
+            await tx.CommitAsync(ct);
         }
         catch { }
     }
@@ -519,6 +595,65 @@ public sealed partial class UploadService(AppDb db, AppOptions options, AuditSer
         originalName = file.OriginalName, ext = file.Ext, sizeBytes = file.SizeBytes,
         mimeType = file.MimeType, sha256 = file.Sha256, createdAt = file.CreatedAt
     };
+
+    internal const string PendingFinalMarkerPrefix = ".pending-final-";
+
+    internal static string MergeLockName(MySqlConnection conn, string sessionId) =>
+        MySqlNamedLock.Name("upload-merge", conn.Database, sessionId);
+
+    private static async Task WritePendingFinalMarkerAsync(
+        string root, string sessionId, string relativePath, CancellationToken ct)
+    {
+        var directory = FileStorage.SessionDirectory(root, sessionId);
+        var marker = FileStorage.EnsureLexicallyWithin(root,
+            Path.Combine(directory, PendingFinalMarkerPrefix + Guid.NewGuid().ToString("D")), false);
+        var payload = Encoding.UTF8.GetBytes(relativePath);
+        await using var output = new FileStream(marker, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+            4096, FileOptions.Asynchronous | FileOptions.WriteThrough);
+        await output.WriteAsync(payload, ct);
+        await output.FlushAsync(ct);
+        output.Flush(flushToDisk: true);
+    }
+
+    internal static async Task CleanupPendingFinalsAsync(
+        MySqlConnection conn, string configuredRoot, string sessionId, CancellationToken ct)
+    {
+        var root = FileStorage.Root(configuredRoot);
+        var directory = FileStorage.SessionDirectory(root, sessionId);
+        if (!Directory.Exists(directory)) return;
+        directory = await FileStorage.ResolveExistingAsync(root, directory, requireFile: false, ct);
+        foreach (var candidate in Directory.EnumerateFiles(
+                     directory, PendingFinalMarkerPrefix + "*", SearchOption.TopDirectoryOnly))
+        {
+            ct.ThrowIfCancellationRequested();
+            var marker = await FileStorage.ResolveExistingFileAsync(root, candidate, ct);
+            if (new FileInfo(marker).Length is <= 0 or > 2048)
+                throw new InvalidOperationException("待提交文件标记无效");
+            var raw = (await File.ReadAllTextAsync(marker, Encoding.UTF8, ct)).Trim();
+            var finalPath = await FileStorage.ResolveForCleanupAsync(root, raw, ct);
+            var relativePath = Path.GetRelativePath(root, finalPath).Replace(Path.DirectorySeparatorChar, '/');
+            var referenced = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+                "SELECT EXISTS(SELECT 1 FROM files WHERE storage_path=@StoragePath)",
+                new { StoragePath = relativePath }, cancellationToken: ct));
+            if (!referenced) File.Delete(finalPath);
+            File.Delete(marker);
+        }
+    }
+
+    private async Task TryCleanupSessionArtifactsAsync(
+        MySqlConnection conn, string sessionId, CancellationToken ct)
+    {
+        try
+        {
+            await CleanupPendingFinalsAsync(conn, options.StorageRoot, sessionId, ct);
+            await FileStorage.DeleteDirectoryTreeAsync(options.StorageRoot,
+                FileStorage.SessionDirectory(FileStorage.Root(options.StorageRoot), sessionId), ct);
+        }
+        catch
+        {
+            // The maintenance worker retries durable markers and session directories.
+        }
+    }
 
     private static DateTime TruncateMilliseconds(DateTime value) =>
         new(value.Ticks - value.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);

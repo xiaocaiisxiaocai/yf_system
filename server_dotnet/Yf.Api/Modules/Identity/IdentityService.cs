@@ -39,18 +39,18 @@ public sealed class IdentityService(
         if (candidate is null || !matches)
         {
             await using var auditConn = await db.OpenAsync(ct);
-            await AuditBestEffortAsync(auditConn, candidate?.Id, "LOGIN_FAILED", null, null, null, clientIp, ct);
+            await AuditBestEffortAsync(auditConn, candidate?.Id, employeeNo, "LOGIN_FAILED", null, null, null, clientIp, ct);
             throw ApiException.Unauthorized("工号或密码错误");
         }
 
         await using var conn = await db.OpenAsync(ct);
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var user = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(UserSelect + " WHERE id=@id FOR UPDATE", new { id = candidate.Id }, tx, cancellationToken: ct));
         if (user is null || !await PasswordService.VerifyAsync(request.Password, user.PasswordHash, ct) || user.Status != "ACTIVE" ||
             !await IsSupplierActiveAsync(conn, tx, user, ct))
         {
             await tx.RollbackAsync(ct);
-            await AuditBestEffortAsync(conn, user?.Id, "LOGIN_FAILED", null, null, null, clientIp, ct);
+            await AuditBestEffortAsync(conn, user?.Id, employeeNo, "LOGIN_FAILED", null, null, null, clientIp, ct);
             throw ApiException.Unauthorized("工号或密码错误");
         }
         await conn.ExecuteAsync(new CommandDefinition(
@@ -59,11 +59,12 @@ public sealed class IdentityService(
         var sessionId = Guid.NewGuid().ToString();
         var refresh = await IssueRefreshAsync(conn, tx, user.Id, sessionId, clientIp, ct);
         var accessToken = tokens.IssueAccess(user.Id, user.EmployeeNo, sessionId);
+        var grants = await permissions.GetCodesAndMenusAsync(conn, tx, user.Id, ct);
+        var response = new LoginResponse(accessToken.Token, accessToken.ExpiresAt, user.MustChangePassword,
+            grants.Permissions, grants.Menus, await BriefAsync(conn, tx, user, ct));
         await tx.CommitAsync(ct);
-        await AuditBestEffortAsync(conn, user.Id, "LOGIN", null, null, null, clientIp, ct);
-        var grants = await permissions.GetCodesAndMenusAsync(conn, null, user.Id, ct);
-        return (new(accessToken.Token, accessToken.ExpiresAt, user.MustChangePassword, grants.Permissions, grants.Menus,
-            await BriefAsync(conn, null, user, ct)), refresh);
+        await AuditBestEffortAsync(conn, user.Id, user.EmployeeNo, "LOGIN", null, null, null, clientIp, ct);
+        return (response, refresh);
     }
 
     public async Task<(TokenResponse Response, string Refresh)> RefreshAsync(string refreshToken, string clientIp, CancellationToken ct)
@@ -74,7 +75,7 @@ public sealed class IdentityService(
         var found = await conn.QuerySingleOrDefaultAsync<RefreshTokenRow>(new CommandDefinition(
             "SELECT id Id,user_id UserId,session_id SessionId,token_hash TokenHash,expires_at ExpiresAt,revoked Revoked FROM refresh_tokens WHERE token_hash=@hash",
             new { hash }, cancellationToken: ct)) ?? throw ApiException.Unauthorized("登录状态无效");
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var user = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(UserSelect + " WHERE id=@id FOR UPDATE", new { id = found.UserId }, tx, cancellationToken: ct))
                    ?? throw ApiException.Unauthorized("账号不存在");
         var row = await conn.QuerySingleOrDefaultAsync<RefreshTokenRow>(new CommandDefinition(
@@ -86,7 +87,7 @@ public sealed class IdentityService(
             {
                 await RevokeSessionAsync(conn, tx, row.UserId, row.SessionId, ct);
                 await tx.CommitAsync(ct);
-                await AuditBestEffortAsync(conn, row.UserId, "LOGIN_FAILED", "refresh_token", null,
+                await AuditBestEffortAsync(conn, row.UserId, null, "LOGIN_FAILED", "refresh_token", null,
                     new { reason = "refresh token reuse detected" }, clientIp, ct);
             }
             throw ApiException.Unauthorized("登录状态已失效，请重新登录");
@@ -122,7 +123,7 @@ public sealed class IdentityService(
             catch { }
         }
         if (targets.Count == 0) return;
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         foreach (var uid in targets.Select(x => x.UserId).Distinct().Order())
             await conn.QuerySingleOrDefaultAsync<ulong?>(new CommandDefinition("SELECT id FROM users WHERE id=@uid FOR UPDATE", new { uid }, tx, cancellationToken: ct));
         foreach (var target in targets) await RevokeSessionAsync(conn, tx, target.UserId, target.SessionId, ct);
@@ -133,7 +134,7 @@ public sealed class IdentityService(
     {
         if (string.IsNullOrEmpty(request.OldPassword)) throw ApiException.BadRequest("原密码错误");
         await using var conn = await db.OpenAsync(ct);
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var user = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(UserSelect + " WHERE id=@id FOR UPDATE", new { id = current.Id }, tx, cancellationToken: ct)) ?? throw ApiException.NotFound();
         if (user.Status != "ACTIVE") throw ApiException.Forbidden();
         if (!await PasswordService.VerifyAsync(request.OldPassword, user.PasswordHash, ct)) throw ApiException.BadRequest("原密码错误");
@@ -158,7 +159,7 @@ public sealed class IdentityService(
         ValidateEmail(request.Email);
         var email = request.Email.Trim();
         await using var conn = await db.OpenAsync(ct);
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var user = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(UserSelect + " WHERE id=@id FOR UPDATE", new { id = current.Id }, tx, cancellationToken: ct)) ?? throw ApiException.NotFound();
         if (user.Status != "ACTIVE") throw ApiException.Forbidden();
         if (user.Email != email)
@@ -166,8 +167,13 @@ public sealed class IdentityService(
             await conn.ExecuteAsync(new CommandDefinition("UPDATE users SET email=@email,updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { email, id = current.Id }, tx, cancellationToken: ct));
             await audit.WriteAsync(conn, tx, current.Id, "PROFILE_UPDATE", "user", current.Id, new { changedFields = new[] { "email" } }, null, ct);
         }
+        var updated = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(
+            UserSelect + " WHERE id=@id", new { id = current.Id }, tx, cancellationToken: ct)) ?? throw ApiException.NotFound();
+        var grants = await permissions.GetCodesAndMenusAsync(conn, tx, updated.Id, ct);
+        var response = new ProfileResponse(await BriefAsync(conn, tx, updated, ct), updated.MustChangePassword,
+            grants.Permissions, grants.Menus);
         await tx.CommitAsync(ct);
-        return await ProfileAsync(current, ct);
+        return response;
     }
 
     internal async Task<bool> HasActiveSessionAsync(MySqlConnection conn, MySqlTransaction? tx, ulong userId, string sessionId, CancellationToken ct) =>
@@ -213,9 +219,9 @@ public sealed class IdentityService(
         return $"$argon2id$v=19$m=19456,t=2,p=1${Convert.ToBase64String(salt).TrimEnd('=')}${Convert.ToBase64String(await argon.GetBytesAsync(32)).TrimEnd('=')}";
     }
 
-    private async Task AuditBestEffortAsync(MySqlConnection conn, ulong? userId, string action,
+    private async Task AuditBestEffortAsync(MySqlConnection conn, ulong? userId, string? employeeNo, string action,
         string? targetType, ulong? targetId, object? detail, string? ip, CancellationToken ct)
     {
-        try { await audit.WriteAsync(conn, null, userId, action, targetType, targetId, detail, ip, ct); } catch { }
+        try { await audit.WriteAsync(conn, null, userId, action, targetType, targetId, detail, ip, ct, employeeNo); } catch { }
     }
 }

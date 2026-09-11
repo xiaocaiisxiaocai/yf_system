@@ -30,4 +30,19 @@ internal static class ProjectWorkflowRules
             throw ApiException.BadRequest("项目仍有上传记录，不能删除");
         }
     }
+
+    internal static ulong[] NormalizeMemberIds(IReadOnlyCollection<ulong> requestedIds, ulong actorId)
+    {
+        if (requestedIds.Count > 200)
+        {
+            throw ApiException.BadRequest("成员数量超过上限");
+        }
+
+        var ids = requestedIds.Append(actorId).Distinct().Order().ToArray();
+        if (ids.Length > 200)
+        {
+            throw ApiException.BadRequest("成员数量超过上限");
+        }
+        return ids;
+    }
 }

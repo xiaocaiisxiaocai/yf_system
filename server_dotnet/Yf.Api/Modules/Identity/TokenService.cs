@@ -13,8 +13,8 @@ public sealed class TokenService(AppOptions options)
     {
         var now = DateTimeOffset.UtcNow;
         var expires = now.AddMinutes(options.AccessTtlMinutes);
-        // Keep the payload identical to the Rust jsonwebtoken Claims contract. In particular,
-        // uid/iat/exp are JSON numbers; Claim(string, string) would encode uid as a JSON string.
+        // Serialize the API's token contract directly so uid/iat/exp remain JSON numbers;
+        // Claim(string, string) would encode uid as a JSON string.
         var header = Base64UrlEncoder.Encode(JsonSerializer.Serialize(new { alg = "HS256", typ = "JWT" }));
         var payload = Base64UrlEncoder.Encode(JsonSerializer.Serialize(new
         {
@@ -33,8 +33,7 @@ public sealed class TokenService(AppOptions options)
 
     public AccessClaims ParseAccess(string token)
     {
-        // The default inbound map renames `sub` to ClaimTypes.NameIdentifier, which would reject
-        // access tokens issued by the Rust service during a rolling backend switch.
+        // Keep canonical JWT claim names so the API can read its own `sub` contract directly.
         var handler = new JwtSecurityTokenHandler { MapInboundClaims = false };
         handler.ValidateToken(token, new TokenValidationParameters
         {
@@ -42,7 +41,7 @@ public sealed class TokenService(AppOptions options)
             IssuerSigningKey = Key(), ValidateLifetime = true, ClockSkew = TimeSpan.Zero,
             ValidAlgorithms = [SecurityAlgorithms.HmacSha256]
         }, out var validated);
-        if (validated is not JwtSecurityToken jwt || !TryReadRustClaims(jwt.RawPayload, out var claims))
+        if (validated is not JwtSecurityToken jwt || !TryReadClaims(jwt.RawPayload, out var claims))
             throw ApiException.Unauthorized("登录状态无效");
         return claims;
     }
@@ -52,7 +51,7 @@ public sealed class TokenService(AppOptions options)
     public static string HashRefreshToken(string token) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
     private SymmetricSecurityKey Key() => new(Encoding.UTF8.GetBytes(options.JwtSecret));
 
-    private static bool TryReadRustClaims(string rawPayload, out AccessClaims claims)
+    private static bool TryReadClaims(string rawPayload, out AccessClaims claims)
     {
         claims = default!;
         try

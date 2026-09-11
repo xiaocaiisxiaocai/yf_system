@@ -135,7 +135,7 @@ public sealed class MailService(AppDb db, AppOptions options, AuditService audit
                 status = terminal ? "FAILED" : "PENDING";
                 if (!terminal) next = DateTime.UtcNow.AddSeconds(30 * Math.Pow(2, Math.Clamp(retries - 1, 0, 6)));
             }
-            await using var tx = await conn.BeginTransactionAsync(ct);
+            await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
             var changed = await conn.ExecuteAsync(new CommandDefinition("UPDATE email_outbox SET status=@status,retry_count=@retries,last_error=@error,next_attempt_at=@next,sent_at=IF(@status='SENT',UTC_TIMESTAMP(6),sent_at) WHERE id=@Id AND status='SENDING' AND next_attempt_at=@lease", new { mail.Id, status, retries, error, next, lease }, tx, cancellationToken: ct));
             if (changed == 1) await audit.WriteAsync(conn, tx, null, status == "SENT" ? "EMAIL_SENT" : status == "FAILED" ? "EMAIL_FAILED" : "EMAIL_RETRY", "email_outbox", mail.Id, new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error }, null, ct);
             await tx.CommitAsync(ct);

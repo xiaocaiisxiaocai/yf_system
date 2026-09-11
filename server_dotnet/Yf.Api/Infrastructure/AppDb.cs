@@ -5,6 +5,12 @@ namespace Yf.Api.Infrastructure;
 
 public sealed class AppDb(AppOptions options)
 {
+    // Business writes serialize on the management gate and then the project/user
+    // row. Reads made after waiting for those locks must see the latest commit,
+    // rather than a REPEATABLE READ snapshot created by the actor pre-check.
+    public static ValueTask<MySqlTransaction> BeginTransactionAsync(MySqlConnection connection, CancellationToken ct = default)
+        => connection.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+
     public async Task<MySqlConnection> OpenAsync(CancellationToken cancellationToken = default)
     {
         var builder = new MySqlConnectionStringBuilder(options.ConnectionString)
@@ -40,6 +46,11 @@ public sealed record CurrentUser(ulong Id, string EmployeeNo, string UserType, u
 
 public sealed class AccessService
 {
+    public static void RequireInternal(CurrentUser user)
+    {
+        if (!user.IsInternal) throw ApiException.Forbidden("仅内部用户可以访问管理功能");
+    }
+
     public static CurrentUser GetCurrent(HttpContext context) =>
         context.Items.TryGetValue(typeof(CurrentUser), out var actor) && actor is CurrentUser user ? user : throw ApiException.Unauthorized();
 

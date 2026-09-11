@@ -31,6 +31,7 @@ public sealed class PermissionService
 
     public async Task EnsureGrantableAsync(MySqlConnection conn, MySqlTransaction tx, CurrentUser actor, IReadOnlyCollection<ulong> ids, CancellationToken ct)
     {
+        AccessService.RequireInternal(actor);
         if (await AccessService.IsSystemAdminAsync(conn, tx, actor.Id, ct)) return;
         var distinct = ids.Distinct().ToArray();
         var owned = await GetCodesAsync(conn, tx, actor.Id, ct);
@@ -41,6 +42,7 @@ public sealed class PermissionService
 
     public async Task EnsureManageRoleAsync(MySqlConnection conn, MySqlTransaction tx, CurrentUser actor, ulong roleId, CancellationToken ct)
     {
+        AccessService.RequireInternal(actor);
         if (await AccessService.IsSystemAdminAsync(conn, tx, actor.Id, ct)) return;
         var role = await conn.QuerySingleOrDefaultAsync<RoleGuard>(new CommandDefinition(
             "SELECT is_built_in IsBuiltIn,name Name FROM roles WHERE id=@roleId", new { roleId }, tx, cancellationToken: ct));
@@ -52,6 +54,7 @@ public sealed class PermissionService
 
     public async Task EnsureManageUserAsync(MySqlConnection conn, MySqlTransaction tx, CurrentUser actor, ulong userId, CancellationToken ct)
     {
+        AccessService.RequireInternal(actor);
         if (await AccessService.IsSystemAdminAsync(conn, tx, actor.Id, ct)) return;
         foreach (var roleId in await conn.QueryAsync<ulong>(new CommandDefinition("SELECT role_id FROM user_roles WHERE user_id=@userId", new { userId }, tx, cancellationToken: ct)))
             await EnsureManageRoleAsync(conn, tx, actor, roleId, ct);

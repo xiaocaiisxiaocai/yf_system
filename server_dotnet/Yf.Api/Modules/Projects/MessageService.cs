@@ -72,7 +72,7 @@ internal sealed class MessageService(
         {
             throw ApiException.BadRequest("留言内容为空或超长（≤4000 字）");
         }
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "message:create", ct);
@@ -108,7 +108,7 @@ internal sealed class MessageService(
         {
             throw ApiException.BadRequest("单次标记数量超过上限");
         }
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         if (ids.Length == 0)
         {
@@ -180,7 +180,7 @@ internal sealed class MessageService(
         CancellationToken ct)
     {
         var initial = await LoadMessageAsync(conn, null, messageId, false, false, ct);
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         var project = await LoadProjectAsync(conn, tx, initial.ProjectId, true, ct);
         var message = await LoadMessageAsync(conn, tx, messageId, true, false, ct);

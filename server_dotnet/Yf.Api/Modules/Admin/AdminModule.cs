@@ -12,8 +12,8 @@ public static class AdminModule
 
     public static IEndpointRouteBuilder MapAdminModule(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/v1/departments", (DepartmentService s, CancellationToken ct) => s.ListAsync(ct));
-        endpoints.MapGet("/api/v1/permissions", (RoleService s, CancellationToken ct) => s.PermissionsAsync(ct));
+        endpoints.MapGet("/api/v1/departments", (HttpContext c, DepartmentService s, CancellationToken ct) => s.ListAsync(AccessService.GetCurrent(c), ct));
+        endpoints.MapGet("/api/v1/permissions", (HttpContext c, RoleService s, CancellationToken ct) => s.PermissionsAsync(AccessService.GetCurrent(c), ct));
         var admin = endpoints.MapGroup("/api/v1/admin");
 
         admin.MapGet("/users", (HttpContext c, UserService s, CancellationToken ct) => { var p = QueryValues.Page(c.Request); ulong? dept = ulong.TryParse(c.Request.Query["departmentId"], out var d) ? d : null; return s.ListAsync(AccessService.GetCurrent(c), p.Page, p.Size, p.Offset, c.Request.Query["keyword"], dept, c.Request.Query["status"], ct); });

@@ -159,7 +159,24 @@ internal static class ProjectNotificationService
             return;
         }
 
-        var recipients = await ParticipantsAsync(conn, tx, project, ct);
+        var recipients = (await ParticipantsAsync(conn, tx, project, ct)).ToList();
+        if (targetUsers.Count > 0)
+        {
+            var participantIds = recipients.Select(user => user.Id).ToHashSet();
+            var explicitUsers = await conn.QueryAsync<UserRow>(new CommandDefinition(
+                """
+                SELECT id AS Id, employee_no AS EmployeeNo, real_name AS RealName,
+                       email AS Email, user_type AS UserType, supplier_id AS SupplierId,
+                       department_id AS DepartmentId, status AS Status
+                FROM users
+                WHERE id IN @TargetUserIds AND status='ACTIVE'
+                ORDER BY id
+                """,
+                new { TargetUserIds = targetUsers.ToArray() },
+                tx,
+                cancellationToken: ct));
+            recipients.AddRange(explicitUsers.Where(user => participantIds.Add(user.Id)));
+        }
         var seenEmails = new HashSet<string>(StringComparer.Ordinal);
         foreach (var recipient in recipients)
         {

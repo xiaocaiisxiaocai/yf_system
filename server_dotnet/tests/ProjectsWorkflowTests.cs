@@ -9,7 +9,7 @@ public sealed class ProjectsWorkflowTests
     [InlineData("DRAFT", "IN_PROGRESS", "IN_PROGRESS", "START")]
     [InlineData("TERMINATED", "IN_PROGRESS", "IN_PROGRESS", "RESTART")]
     [InlineData("IN_PROGRESS", "TERMINATED", "TERMINATED", "TERMINATE")]
-    public void ManagementTransitionsMatchTheRustWorkflow(
+    public void ManagementTransitionsRespectProjectStateMachine(
         string from,
         string requested,
         string expectedTo,
@@ -64,5 +64,25 @@ public sealed class ProjectsWorkflowTests
 
         var upload = Assert.Throws<ApiException>(() => ProjectWorkflowRules.EnsureDeletable("DRAFT", false, true));
         Assert.Equal("项目仍有上传记录，不能删除", upload.Message);
+    }
+
+    [Fact]
+    public void MemberLimitIncludesTheRequiredOperator()
+    {
+        var requested = Enumerable.Range(1, 200).Select(value => (ulong)value).ToArray();
+
+        var error = Assert.Throws<ApiException>(() =>
+            ProjectWorkflowRules.NormalizeMemberIds(requested, 201));
+
+        Assert.Equal(400, error.Status);
+        Assert.Equal("成员数量超过上限", error.Message);
+    }
+
+    [Fact]
+    public void MemberNormalizationDeduplicatesAndKeepsTheOperatorWithinTheLimit()
+    {
+        var normalized = ProjectWorkflowRules.NormalizeMemberIds([3, 2, 2], 1);
+
+        Assert.Equal([1UL, 2UL, 3UL], normalized);
     }
 }

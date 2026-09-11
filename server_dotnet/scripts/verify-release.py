@@ -46,6 +46,8 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_") as temp:
     actual = {path.relative_to(package).as_posix() for path in package.rglob("*") if path.is_file()}
     if actual != expected_paths:
         raise RuntimeError("Manifest does not cover every payload file")
+    if any("testhost" in Path(name).stem.lower() and Path(name).suffix.lower() in (".dll", ".exe") for name in actual):
+        raise RuntimeError("A test host was included in the production payload")
     settings = json.loads((package / "appsettings.json").read_text(encoding="utf-8-sig"))["App"]
     if any(settings[key] for key in ("ConnectionString", "JwtSecret", "StorageRoot")) or settings["Smtp"]["Password"]:
         raise RuntimeError("Packaged defaults contain usable private configuration")
@@ -65,7 +67,7 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_") as temp:
     http_report = json.loads((source / ".runlogs/dotnet-published-results.json").read_text(encoding="utf-8"))
     report = {"archive": str(archive), "sha256": digest(archive), "bytes": archive.stat().st_size,
               "fileCount": len(actual), "source": manifest["source"], "build": manifest["build"],
-              "zipPathsCrcAndHashes": "passed", "missingConfigurationFailsClosed": True,
+              "zipPathsCrcAndHashes": "passed", "missingConfigurationFailsClosed": True, "testHostExcludedFromPayload": True,
               "publishedUnitHttp": http_report, "targetIisTested": False, "realSmtpTested": False}
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print("Verified release report: " + str(report_path), flush=True)

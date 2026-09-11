@@ -20,7 +20,7 @@ internal sealed class ProjectService(
         CancellationToken ct)
     {
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         var clauses = new List<string>();
         var args = new DynamicParameters();
@@ -91,7 +91,7 @@ internal sealed class ProjectService(
         }
         var name = ValidateNameForCreate(request.Name);
         ValidateDescription(request.Description);
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:create", ct);
@@ -136,8 +136,9 @@ internal sealed class ProjectService(
             tx,
             cancellationToken: ct));
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_CREATE", "project", projectId, new { name }, ip, ct);
+        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
-        return ProjectJson.Project(await LoadProjectAsync(conn, null, projectId, false, ct));
+        return result;
     }
 
     internal async Task<object> DetailAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
@@ -182,7 +183,7 @@ internal sealed class ProjectService(
     {
         var name = ValidateNameForUpdate(request.Name);
         ValidateDescription(request.Description);
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
@@ -210,8 +211,9 @@ internal sealed class ProjectService(
             throw ApiException.Conflict("项目名称已存在");
         }
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_UPDATE", "project", projectId, null, ip, ct);
+        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
-        return ProjectJson.Project(await LoadProjectAsync(conn, null, projectId, false, ct));
+        return result;
     }
 
     internal async Task<object> SetStatusAsync(
@@ -226,7 +228,7 @@ internal sealed class ProjectService(
         {
             throw ApiException.Forbidden();
         }
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
@@ -239,8 +241,9 @@ internal sealed class ProjectService(
             throw ApiException.Conflict("项目仍有活动上传会话，不能终止");
         }
         await ApplyTransitionAsync(conn, tx, current, project, to, action, null, null, ip, ct);
+        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
-        return ProjectJson.Project(await LoadProjectAsync(conn, null, projectId, false, ct));
+        return result;
     }
 
     internal async Task<object> SubmitAsync(
@@ -252,7 +255,7 @@ internal sealed class ProjectService(
         CancellationToken ct)
     {
         var side = ParseConfirmSide(request.ConfirmSide);
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var (project, current) = await LockWorkflowProjectAsync(conn, tx, actor, projectId, "project:submit", ct);
         if (side == UserSide(current))
         {
@@ -275,8 +278,9 @@ internal sealed class ProjectService(
         }
         await ApplyTransitionAsync(conn, tx, current, project, ProjectStatuses.PendingConfirmation, "SUBMIT", side, null, ip, ct);
         await ProjectNotificationService.EnqueueWorkflowAsync(conn, tx, project, "SUBMIT", side, null, null, current, options.WebBaseUrl, audit, ct);
+        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
-        return ProjectJson.Project(await LoadProjectAsync(conn, null, projectId, false, ct));
+        return result;
     }
 
     internal Task<object> ConfirmAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, string? ip, CancellationToken ct) =>
@@ -309,7 +313,7 @@ internal sealed class ProjectService(
         string? ip,
         CancellationToken ct)
     {
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var (project, current) = await LockWorkflowProjectAsync(conn, tx, actor, projectId, "project:withdraw", ct);
         if (project.Status != ProjectStatuses.PendingConfirmation)
         {
@@ -324,8 +328,9 @@ internal sealed class ProjectService(
         }
         await ApplyTransitionAsync(conn, tx, current, project, ProjectStatuses.InProgress, "WITHDRAW", project.ConfirmSide, null, ip, ct);
         await ProjectNotificationService.EnqueueWorkflowAsync(conn, tx, project, "WITHDRAW", project.ConfirmSide, null, latestSubmit.OperatorId, current, options.WebBaseUrl, audit, ct);
+        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
-        return ProjectJson.Project(await LoadProjectAsync(conn, null, projectId, false, ct));
+        return result;
     }
 
     internal async Task<object> ListMembersAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
@@ -371,11 +376,7 @@ internal sealed class ProjectService(
     {
         await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
         var requestedIds = request.UserIds ?? [];
-        if (requestedIds.Length > 200)
-        {
-            throw ApiException.BadRequest("成员数量超过上限");
-        }
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
@@ -385,7 +386,7 @@ internal sealed class ProjectService(
         {
             throw ApiException.Conflict("项目当前状态不可调整成员");
         }
-        var ids = requestedIds.Append(current.Id).Distinct().Order().ToArray();
+        var ids = ProjectWorkflowRules.NormalizeMemberIds(requestedIds, current.Id);
         foreach (var id in ids)
         {
             var user = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(
@@ -466,7 +467,7 @@ internal sealed class ProjectService(
         {
             throw ApiException.Forbidden();
         }
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
@@ -513,7 +514,7 @@ internal sealed class ProjectService(
         string? ip,
         CancellationToken ct)
     {
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var (project, current) = await LockWorkflowProjectAsync(conn, tx, actor, projectId, "project:confirm", ct);
         if (project.Status != ProjectStatuses.PendingConfirmation)
         {
@@ -531,8 +532,9 @@ internal sealed class ProjectService(
         var to = action == "CONFIRM" ? ProjectStatuses.Completed : ProjectStatuses.InProgress;
         await ApplyTransitionAsync(conn, tx, current, project, to, action, project.ConfirmSide, reason, ip, ct);
         await ProjectNotificationService.EnqueueWorkflowAsync(conn, tx, project, action, project.ConfirmSide, reason, latestSubmit.OperatorId, current, options.WebBaseUrl, audit, ct);
+        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
-        return ProjectJson.Project(await LoadProjectAsync(conn, null, projectId, false, ct));
+        return result;
     }
 
     private async Task<(ProjectRow Project, CurrentUser Current)> LockWorkflowProjectAsync(
@@ -635,7 +637,20 @@ internal sealed class ProjectService(
         bool forUpdate,
         CancellationToken ct)
     {
-        var sql = """
+        if (forUpdate)
+        {
+            var lockedId = await conn.QuerySingleOrDefaultAsync<ulong?>(new CommandDefinition(
+                "SELECT id FROM projects WHERE id=@ProjectId FOR UPDATE",
+                new { ProjectId = projectId },
+                tx,
+                cancellationToken: ct));
+            if (lockedId is null)
+            {
+                throw ApiException.NotFound();
+            }
+        }
+
+        const string sql = """
             SELECT p.id AS Id,p.name AS Name,p.description AS Description,p.supplier_id AS SupplierId,
                    p.status AS Status,p.confirm_side AS ConfirmSide,p.created_by AS CreatedBy,
                    p.created_at AS CreatedAt,p.updated_at AS UpdatedAt,
@@ -644,7 +659,7 @@ internal sealed class ProjectService(
             LEFT JOIN suppliers s ON s.id=p.supplier_id
             LEFT JOIN users u ON u.id=p.created_by
             WHERE p.id=@ProjectId
-            """ + (forUpdate ? " FOR UPDATE" : string.Empty);
+            """;
         var row = await conn.QuerySingleOrDefaultAsync<ProjectRow>(new CommandDefinition(
             sql, new { ProjectId = projectId }, tx, cancellationToken: ct));
         return row ?? throw ApiException.NotFound();

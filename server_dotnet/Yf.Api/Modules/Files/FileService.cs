@@ -92,7 +92,7 @@ public sealed class FileService(AppDb db, AppOptions options, AuditService audit
         var initial = await conn.QuerySingleOrDefaultAsync<FileRow>(new CommandDefinition(
             UploadService.FileSelect + " WHERE f.id=@Id", new { Id = id }, cancellationToken: ct))
             ?? throw ApiException.NotFound();
-        await using var tx = (MySqlTransaction)await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await ProjectAccessService.RequireFileDeleteAsync(conn, tx, current, initial.ProjectId, ct);
         var row = await conn.QuerySingleOrDefaultAsync<FileRow>(new CommandDefinition(

@@ -6,8 +6,9 @@ namespace Yf.Api.Modules.Admin;
 
 public sealed class DepartmentService(AppDb db, AuditService audit)
 {
-    public async Task<object> ListAsync(CancellationToken ct)
+    public async Task<object> ListAsync(CurrentUser actor, CancellationToken ct)
     {
+        AccessService.RequireInternal(actor);
         await using var conn = await db.OpenAsync(ct);
         var all = (await conn.QueryAsync<DeptRow>(new CommandDefinition("SELECT id Id,name Name,parent_id ParentId,kind Kind,sort_no SortNo,status Status FROM departments ORDER BY sort_no,id", cancellationToken: ct))).AsList();
         List<object> Build(ulong? parent) => all.Where(x => x.ParentId == parent).Select(x => (object)new { x.Id, x.Name, x.ParentId, x.Kind, x.SortNo, x.Status, children = Build(x.Id) }).ToList();
@@ -20,8 +21,8 @@ public sealed class DepartmentService(AppDb db, AuditService audit)
     private async Task<object> WriteAsync(CurrentUser actor, ulong? id, DepartmentUpsert request, CancellationToken ct)
     {
         Validate(request);
-        await using var conn = await db.OpenAsync(ct); await using var tx = await conn.BeginTransactionAsync(ct);
-        await AccessService.LockManagementAsync(conn, tx, ct); actor = await AccessService.RecheckActorAsync(conn, tx, actor, ct); await AccessService.RequirePermissionAsync(conn, tx, actor, "dept:manage", ct);
+        await using var conn = await db.OpenAsync(ct); await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        await AccessService.LockManagementAsync(conn, tx, ct); actor = await AccessService.RecheckActorAsync(conn, tx, actor, ct); AccessService.RequireInternal(actor); await AccessService.RequirePermissionAsync(conn, tx, actor, "dept:manage", ct);
         DeptRow? existing = null;
         if (id.HasValue) existing = await FindAsync(conn, tx, id.Value, ct) ?? throw ApiException.NotFound();
         if (id.HasValue && await WouldCycleAsync(conn, tx, id.Value, request.ParentId, ct)) throw ApiException.BadRequest("不能将组织移动到自身或其下级下");
@@ -43,15 +44,16 @@ public sealed class DepartmentService(AppDb db, AuditService audit)
             await RecomputeAsync(conn, tx, resultId, kind, ct);
         }
         await audit.WriteAsync(conn, tx, actor.Id, id is null ? "DEPT_CREATE" : "DEPT_UPDATE", "department", resultId, new { name = request.Name.Trim(), kind, parentId = request.ParentId, sortNo = request.SortNo ?? existing?.SortNo ?? 0 }, null, ct);
+        var row = await FindAsync(conn, tx, resultId, ct) ?? throw ApiException.NotFound();
+        var result = new { row.Id, row.Name, row.ParentId, row.Kind, row.SortNo, row.Status };
         await tx.CommitAsync(ct);
-        var row = await FindAsync(conn, null, resultId, ct) ?? throw ApiException.NotFound();
-        return new { row.Id, row.Name, row.ParentId, row.Kind, row.SortNo, row.Status };
+        return result;
     }
 
     public async Task<object> SetStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
     {
-        status = AdminValidation.Status(status); await using var conn = await db.OpenAsync(ct); await using var tx = await conn.BeginTransactionAsync(ct);
-        await AccessService.LockManagementAsync(conn, tx, ct); actor = await AccessService.RecheckActorAsync(conn, tx, actor, ct); await AccessService.RequirePermissionAsync(conn, tx, actor, "dept:manage", ct);
+        status = AdminValidation.Status(status); await using var conn = await db.OpenAsync(ct); await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        await AccessService.LockManagementAsync(conn, tx, ct); actor = await AccessService.RecheckActorAsync(conn, tx, actor, ct); AccessService.RequireInternal(actor); await AccessService.RequirePermissionAsync(conn, tx, actor, "dept:manage", ct);
         var row = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound();
         await conn.ExecuteAsync(new CommandDefinition("UPDATE departments SET status=@status,updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { status, id }, tx, cancellationToken: ct));
         await audit.WriteAsync(conn, tx, actor.Id, "DEPT_STATUS", "department", id, new { row.Name, row.Kind, oldStatus = row.Status, newStatus = status }, null, ct); await tx.CommitAsync(ct);
@@ -60,8 +62,8 @@ public sealed class DepartmentService(AppDb db, AuditService audit)
 
     public async Task DeleteAsync(CurrentUser actor, ulong id, CancellationToken ct)
     {
-        await using var conn = await db.OpenAsync(ct); await using var tx = await conn.BeginTransactionAsync(ct);
-        await AccessService.LockManagementAsync(conn, tx, ct); actor = await AccessService.RecheckActorAsync(conn, tx, actor, ct); await AccessService.RequirePermissionAsync(conn, tx, actor, "dept:manage", ct); await AccessService.RequirePermissionAsync(conn, tx, actor, "dept:delete", ct);
+        await using var conn = await db.OpenAsync(ct); await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        await AccessService.LockManagementAsync(conn, tx, ct); actor = await AccessService.RecheckActorAsync(conn, tx, actor, ct); AccessService.RequireInternal(actor); await AccessService.RequirePermissionAsync(conn, tx, actor, "dept:manage", ct); await AccessService.RequirePermissionAsync(conn, tx, actor, "dept:delete", ct);
         var row = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound();
         if (await conn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM departments WHERE parent_id=@id)", new { id }, tx, cancellationToken: ct)) == 1) throw ApiException.BadRequest("请先删除下级组织节点");
         if (await conn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM users WHERE department_id=@id)", new { id }, tx, cancellationToken: ct)) == 1) throw ApiException.BadRequest("该组织仍有用户，请先调整用户归属或禁用组织");

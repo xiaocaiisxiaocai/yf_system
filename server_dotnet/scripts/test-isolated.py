@@ -4,7 +4,6 @@ Requires Python 3.11+, pymysql, and a built Yf.Api. No real email is sent.
 Connection credentials stay in process memory; only test names/results are printed.
 """
 import hashlib
-import base64
 import contextlib
 import http.cookiejar
 import io
@@ -13,25 +12,27 @@ import os
 from pathlib import Path
 import secrets
 import socket
+import shutil
 import subprocess
 import tempfile
 import time
-import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 import zipfile
-import zlib
 import pymysql
 from test_identity_contracts import run_identity_checks
 from test_file_contracts import run_file_checks
 from test_system_contracts import run_system_checks
+from test_project_remediation import run_project_remediation_checks
 
 ROOT = Path(__file__).resolve().parents[2]
 PUBLISHED = os.environ.get("YF_TEST_API_DIR")
 API = Path(PUBLISHED).resolve() if PUBLISHED else ROOT / "server_dotnet/Yf.Api"
 DLL = API / "Yf.Api.dll" if PUBLISHED else API / "bin/Debug/net10.0/Yf.Api.dll"
+TEST_HOST = ROOT / "server_dotnet/TestHost/bin/Debug/net10.0/Yf.Api.TestHost.dll"
+TEST_KEY = secrets.token_urlsafe(48)
 checks = []
 
 
@@ -70,42 +71,25 @@ class Client:
             return data, response.headers
         return json.loads(data) if data else None
 
-    def login(self, username, password):
+    def captcha(self):
         challenge = self.call("GET", "/api/v1/auth/captcha")
-        code = test_captcha_digits(challenge["svg"])
+        answer = self.call("GET", "/__test/captcha-answer/" + challenge["captchaId"], headers={"X-Test-Host-Key": TEST_KEY})
+        challenge["captchaCode"] = answer["answer"]
+        return challenge
+
+    def login(self, username, password):
+        challenge = self.captcha()
+        code = challenge["captchaCode"]
         result = self.call("POST", "/api/v1/auth/login", {"employeeNo": username, "password": password, "captchaId": challenge["captchaId"], "captchaCode": code})
         self.token = result["accessToken"]
         return result
 
 
-def test_captcha_digits(data_url):
-    """Decode this backend's generated test image; no authentication bypass is added to API."""
-    png = base64.b64decode(data_url.split(",", 1)[1])
-    pos, data = 8, b""
-    while pos < len(png):
-        length = int.from_bytes(png[pos:pos + 4], "big")
-        if png[pos + 4:pos + 8] == b"IDAT":
-            data += png[pos + 8:pos + 8 + length]
-        pos += length + 12
-    pixels = zlib.decompress(data)
-    templates = [{0,1,2,3,4,5}, {1,2}, {0,1,6,4,3}, {0,1,6,2,3}, {5,6,1,2},
-                 {0,5,6,2,3}, {0,5,6,4,2,3}, {0,1,2}, {0,1,2,3,4,5,6}, {0,1,2,3,5,6}]
-    centers = [(9,1), (17,11), (17,30), (9,40), (1,30), (1,11), (9,21)]
-    digits = []
-    for i in range(6):
-        active = set()
-        for segment, (dx, dy) in enumerate(centers):
-            x, y = 13 + 29 * i + dx, 10 + dy
-            dark = sum(pixels[(y + oy) * 577 + 1 + (x + ox) * 3] < 65 for ox in (-1, 0, 1) for oy in (-1, 0, 1))
-            if dark >= 4:
-                active.add(segment)
-        digits.append(str(templates.index(active)))
-    return "".join(digits)
-
-
-config = tomllib.loads((ROOT / "yf_server/config.local.toml").read_text(encoding="utf-8-sig"))
-url = urllib.parse.urlsplit(config["database"]["url"])
-if url.hostname not in ("127.0.0.1", "localhost", "::1"):
+config_url = os.environ.get("YF_TEST_DATABASE_URL")
+if not config_url:
+    raise SystemExit("Set process-scoped YF_TEST_DATABASE_URL to a local MySQL test-administration URL; no project configuration is discovered.")
+url = urllib.parse.urlsplit(config_url)
+if url.scheme != "mysql" or url.hostname not in ("127.0.0.1", "localhost", "::1"):
     raise SystemExit("Isolated testing only allows local MySQL")
 name = "yf_test_dotnet_" + uuid.uuid4().hex
 user = urllib.parse.unquote(url.username or "")
@@ -148,7 +132,7 @@ try:
                     "App__JwtSecret": secrets.token_urlsafe(48), "App__StorageRoot": str(storage),
                     "App__WebBaseUrl": base, "App__CookieSecure": "false", "App__WorkerEnabled": "false",
                     "App__Smtp__Host": "", "ASPNETCORE_URLS": base, "YF_BOOTSTRAP_PASSWORD": initial,
-                    "Logging__LogLevel__Default": "Warning"})
+                    "Logging__LogLevel__Default": "Warning", "YF_TEST_HOST_KEY": TEST_KEY})
         initialized = subprocess.run(["dotnet", str(DLL), "--initialize-database"], cwd=API, env=env, capture_output=True)
         if initialized.returncode:
             raise RuntimeError(".NET empty database initialization failed: " + initialized.stderr.decode(errors="replace")[:1500])
@@ -156,6 +140,50 @@ try:
         refused = subprocess.run(["dotnet", str(DLL), "--initialize-database"], cwd=API, env=env, capture_output=True)
         check("initializer refuses nonempty database", refused.returncode != 0)
         del env["YF_BOOTSTRAP_PASSWORD"]
+        # Downgrade only our empty isolated fixture to exercise adoption and the
+        # restartable 16 -> 17 upgrade without invoking any other backend.
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT password_hash FROM users WHERE employee_no='admin'")
+            preserved_hash = cursor.fetchone()[0]
+            cursor.execute("DROP TABLE yf_schema_migrations")
+            cursor.execute("DELETE FROM seaql_migrations WHERE version='m20260911_000017_auth_session_families'")
+            cursor.execute("ALTER TABLE refresh_tokens DROP INDEX idx_refresh_tokens_session_state, DROP COLUMN session_id")
+            cursor.execute("INSERT INTO refresh_tokens(user_id,token_hash,expires_at,revoked) SELECT id,%s,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 DAY),0 FROM users WHERE employee_no='admin'", (secrets.token_hex(32),))
+            legacy_token_id = cursor.lastrowid
+            cursor.execute("INSERT IGNORE INTO role_permissions(role_id,permission_id) SELECT r.id,p.id FROM roles r CROSS JOIN permissions p WHERE r.name='供应商人员' AND p.code='user:manage'")
+        for attempt in range(2):
+            migration = subprocess.run(["dotnet", str(DLL), "--migrate-database"], cwd=API, env=env, capture_output=True)
+            if migration.returncode:
+                raise RuntimeError(".NET migration failed: " + migration.stderr.decode(errors="replace")[:1500])
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT password_hash FROM users WHERE employee_no='admin'")
+            check(".NET migration from baseline 16 is repeatable and preserves users", cursor.fetchone()[0] == preserved_hash)
+            cursor.execute("SELECT COUNT(*) FROM yf_schema_migrations")
+            check(".NET owns schema version history", cursor.fetchone()[0] == 1)
+            cursor.execute("SELECT session_id FROM refresh_tokens WHERE id=%s", (legacy_token_id,))
+            check("legacy refresh rows get persisted session family", cursor.fetchone()[0] == format(legacy_token_id, 'x').zfill(36))
+            cursor.execute("SELECT COUNT(*) FROM role_permissions rp JOIN roles r ON r.id=rp.role_id JOIN permissions p ON p.id=rp.permission_id WHERE r.name='供应商人员' AND p.code='user:manage'")
+            check("migration removes preexisting supplier management grants", cursor.fetchone()[0] == 0)
+            cursor.execute("SELECT checksum FROM yf_schema_migrations WHERE version=1")
+            checksum = cursor.fetchone()[0]
+            cursor.execute("UPDATE yf_schema_migrations SET checksum=%s", ('0' * 64,))
+        tampered = subprocess.run(["dotnet", str(DLL)], cwd=API, env=env, capture_output=True, timeout=20)
+        check("startup rejects modified migration history", tampered.returncode != 0)
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE yf_schema_migrations SET checksum=%s", (checksum,))
+        if not TEST_HOST.is_file():
+            raise RuntimeError("Build server_dotnet/TestHost/Yf.Api.TestHost.csproj before HTTP testing")
+        test_dll = TEST_HOST
+        if PUBLISHED:
+            # Run the exact extracted production assembly and dependencies under
+            # the separate observer host, in a disposable copy. Never modify ZIP.
+            test_payload = Path(temp) / "test-payload"
+            shutil.copytree(API, test_payload)
+            for suffix in (".dll", ".deps.json", ".runtimeconfig.json"):
+                source = TEST_HOST.parent / ("Yf.Api.TestHost" + suffix)
+                shutil.copy2(source, test_payload / source.name)
+            test_dll = test_payload / TEST_HOST.name
+            check("test host uses exact published API assembly", hashlib.sha256((test_payload / "Yf.Api.dll").read_bytes()).digest() == hashlib.sha256(DLL.read_bytes()).digest())
         with open(Path(temp) / "api.log", "wb") as log:
             process = subprocess.Popen(["dotnet", str(DLL)], cwd=API, env=env, stdout=log, stderr=log)
             stack.callback(stop_process, process)
@@ -170,7 +198,11 @@ try:
                     time.sleep(0.1)
             else:
                 raise RuntimeError("Test API health timeout")
-            check("HTTP health and database connectivity", True)
+            check("production entry HTTP health and database connectivity", True)
+            challenge = client.call("GET", "/api/v1/auth/captcha")
+            check("production CAPTCHA image contract", challenge["svg"].startswith("data:image/png;base64,") and "answer" not in challenge)
+            answer_page, answer_headers = client.call("GET", "/__test/captcha-answer/" + challenge["captchaId"], expected=200 if PUBLISHED else 404, headers={"X-Test-Host-Key": TEST_KEY}, raw=True)
+            check("production entry has no CAPTCHA answer route", "application/json" not in answer_headers.get("Content-Type", "") and b'"answer"' not in answer_page)
             if PUBLISHED:
                 page, _ = client.call("GET", "/", raw=True)
                 login_page, _ = client.call("GET", "/login", raw=True)
@@ -179,6 +211,20 @@ try:
                 client.call("GET", "/Yf.Api.dll", expected=404, raw=True)
                 unknown = client.call("GET", "/api/unknown", expected=404)
                 check("published config binaries and unknown API are not exposed", unknown["code"] == 40401)
+            stop_process(process)
+            process = subprocess.Popen(["dotnet", str(test_dll)], cwd=API, env=env, stdout=log, stderr=log)
+            stack.callback(stop_process, process)
+            client = Client(base)
+            for _ in range(100):
+                if process.poll() is not None:
+                    raise RuntimeError("Test observer host exited: " + (Path(temp) / "api.log").read_text(errors="replace")[-1800:])
+                try:
+                    client.call("GET", "/health")
+                    break
+                except (OSError, AssertionError):
+                    time.sleep(0.1)
+            else:
+                raise RuntimeError("Test observer health timeout")
             client.call("GET", "/api/v1/projects", expected=401)
             check("anonymous API denied", True)
             result = client.login("admin", initial)
@@ -191,6 +237,7 @@ try:
             profile = client.call("GET", "/api/v1/auth/profile")
             check("profile has frontend permission/menu contract", bool(profile["permissions"]) and bool(profile["menus"]))
             run_identity_checks(client, Client, conn, check)
+            run_project_remediation_checks(client, Client, conn, check)
             for path in ("/dashboard/summary", "/dashboard/pending-projects", "/departments", "/permissions", "/supplier-options", "/internal-user-options", "/admin/users", "/admin/roles", "/admin/suppliers", "/admin/user-role-options", "/admin/system/configs", "/admin/system/storage", "/admin/system/mail-status", "/admin/audit-logs"):
                 client.call("GET", "/api/v1" + path)
                 check("read contract " + path, True)
@@ -202,12 +249,12 @@ try:
             run_system_checks(client, conn, check)
             supplier = client.call("POST", "/api/v1/admin/suppliers", {"name": ".NET 隔离供应商", "remark": "temporary"})
             sid = supplier["id"]
-            project = client.call("POST", "/api/v1/projects", {"name": ".NET 隔离项目", "description": "compatibility", "supplierId": sid})
+            project = client.call("POST", "/api/v1/projects", {"name": ".NET 隔离项目", "description": "isolated regression", "supplierId": sid})
             pid = project["id"]
             client.call("PUT", f"/api/v1/projects/{pid}/status", {"status": "IN_PROGRESS"})
             check("supplier/project creation and project start", True)
             pdf = b"%PDF-1.4\n" + b"test data\n" * 40000 + b"%%EOF\n"
-            upload = client.call("POST", "/api/v1/uploads/init", {"projectId": pid, "fileName": "compatibility.pdf", "fileSize": len(pdf), "fileMd5": hashlib.md5(pdf).hexdigest()})
+            upload = client.call("POST", "/api/v1/uploads/init", {"projectId": pid, "fileName": "regression.pdf", "fileSize": len(pdf), "fileMd5": hashlib.md5(pdf).hexdigest()})
             session = upload["sessionId"]
             size = upload["chunkSize"]
             for index in range(upload["totalChunks"]):
@@ -226,7 +273,16 @@ try:
             with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
                 check("batch ZIP member integrity", zipped.testzip() is None and zipped.read(zipped.namelist()[0]) == pdf)
             run_file_checks(client, conn, check, pid, fid)
-            message = client.call("POST", f"/api/v1/projects/{pid}/messages", {"content": "接口兼容测试留言"})
+            recovery_bytes = b"%PDF-1.4\nowned interrupted merge regression\n%%EOF\n"
+            recovery = client.call("POST", "/api/v1/uploads/init", {"projectId": pid, "fileName": "recovery.pdf", "fileSize": len(recovery_bytes)})
+            recovery_id = recovery["sessionId"]
+            client.call("PUT", f"/api/v1/uploads/{recovery_id}/chunks/0", recovery_bytes, headers={"Content-Type": "application/octet-stream"})
+            with conn.cursor() as cursor:
+                cursor.execute("UPDATE upload_sessions SET status='MERGING' WHERE id=%s", (recovery_id,))
+            recovered = client.call("POST", f"/api/v1/uploads/{recovery_id}/merge")
+            recovered_data, _ = client.call("GET", f"/api/v1/files/{recovered['id']}/download", raw=True)
+            check("abandoned merge without MD5 completes on retry with exact bytes", recovered_data == recovery_bytes)
+            message = client.call("POST", f"/api/v1/projects/{pid}/messages", {"content": "隔离接口测试留言"})
             mid = message["id"]
             client.call("POST", "/api/v1/messages/read", {"ids": [mid]})
             client.call("GET", f"/api/v1/messages/{mid}/reads")
@@ -249,59 +305,13 @@ try:
             check("project submit/withdraw/reject/confirm workflow", True)
             client.call("DELETE", f"/api/v1/files/{fid}", expected=409)
             check("completed project file mutation denied", True)
-            rust_executable = os.environ.get("YF_TEST_RUST_EXE")
-            if rust_executable:
-                stop_process(process)
-                process = None
-                rust_config = Path(temp) / "rust-test.toml"
-                rust_config.write_text(
-                    f'[server]\naddr = "127.0.0.1:{port}"\n'
-                    '[database]\nurl = ""\nauto_migrate = false\n'
-                    f'[storage]\nroot = "{storage.as_posix()}"\n'
-                    '[jwt]\nsecret = ""\naccess_ttl_minutes = 30\nrefresh_ttl_days = 7\ncookie_secure = false\n'
-                    '[upload]\nmax_file_size = 2147483648\nchunk_size = 262144\n[smtp]\nhost = ""\n'
-                    f'[web]\nbase_url = "{base}"\n', encoding="utf-8")
-                rust_env = env.copy()
-                rust_env.update({"YF_CONFIG": str(rust_config), "YF_DATABASE_URL": urllib.parse.urlunsplit((url.scheme, url.netloc, "/" + name, url.query, "")),
-                                 "YF_JWT_SECRET": env["App__JwtSecret"], "YF_SMTP_HOST": "", "YF_WEB_BASE_URL": base})
-                process = subprocess.Popen([str(Path(rust_executable).resolve())], cwd=Path(temp), env=rust_env, stdout=log, stderr=log)
-                stack.callback(stop_process, process)
-                for _ in range(100):
-                    if process.poll() is not None:
-                        raise RuntimeError("Isolated Rust compatibility process exited")
-                    try:
-                        client.call("GET", "/health")
-                        break
-                    except (OSError, AssertionError):
-                        time.sleep(0.1)
-                rust_profile = client.call("GET", "/api/v1/auth/profile")
-                check("Rust accepts ASP.NET JWT and shared persisted session", rust_profile["user"]["employeeNo"] == "admin")
-                refreshed = client.call("POST", "/api/v1/auth/refresh")
-                client.token = refreshed["accessToken"]
-                check("Rust rotates ASP.NET-issued refresh cookie", bool(client.token))
-                stop_process(process)
-                process = subprocess.Popen(["dotnet", str(DLL)], cwd=API, env=env, stdout=log, stderr=log)
-                stack.callback(stop_process, process)
-                for _ in range(100):
-                    if process.poll() is not None:
-                        raise RuntimeError("ASP.NET compatibility restart exited")
-                    try:
-                        client.call("GET", "/health")
-                        break
-                    except (OSError, AssertionError):
-                        time.sleep(0.1)
-                dotnet_profile = client.call("GET", "/api/v1/auth/profile")
-                check("ASP.NET accepts Rust JWT and shared persisted session", dotnet_profile["user"]["employeeNo"] == "admin")
-                refreshed = client.call("POST", "/api/v1/auth/refresh")
-                client.token = refreshed["accessToken"]
-                check("ASP.NET rotates Rust-issued refresh cookie", bool(client.token))
             process.terminate()
             process.wait(timeout=15)
             process = None
         print(f"PASS {len(checks)} checks; no production data or email used", flush=True)
         report = ROOT / (".runlogs/dotnet-published-results.json" if PUBLISHED else ".runlogs/dotnet-isolated-results.json")
         report.parent.mkdir(exist_ok=True)
-        report.write_text(json.dumps({"passed": len(checks), "checks": checks, "businessDatabaseTouched": False, "smtpUsed": False}, ensure_ascii=False, indent=2), encoding="utf-8")
+        report.write_text(json.dumps({"passed": len(checks), "checks": checks, "businessDatabaseTouched": False, "smtpUsed": False, "productionEntrySmoke": True, "httpSuiteHost": "separate CAPTCHA observer host using the same API factory and assembly"}, ensure_ascii=False, indent=2), encoding="utf-8")
 finally:
     if process is not None:
         process.terminate()

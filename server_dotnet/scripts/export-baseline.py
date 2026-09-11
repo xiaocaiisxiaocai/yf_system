@@ -1,22 +1,32 @@
 """Developer-only: export schema/seeds from a newly migrated disposable database.
 
-Never exports business data. Credentials are loaded in memory from ignored local config.
+Never exports business data. Credentials are supplied through process-scoped YF_TEST_DATABASE_URL. No Rust tools or configuration are read.
 """
+import argparse
 import datetime
 import json
 import os
 from pathlib import Path
 import secrets
 import subprocess
-import tomllib
+import tempfile
 import urllib.parse
 import uuid
 import pymysql
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--output", type=Path, required=True, help="New JSON file for review; existing files are never overwritten")
+out = parser.parse_args().output.resolve()
+if out.exists():
+    raise SystemExit("Output already exists; refusing to overwrite a reviewed baseline")
+if not out.parent.is_dir():
+    raise SystemExit("Output parent directory must already exist")
 root = Path(__file__).resolve().parents[2]
-config = tomllib.loads((root / "yf_server/config.local.toml").read_text(encoding="utf-8-sig"))
-url = urllib.parse.urlsplit(config["database"]["url"])
-if url.hostname not in ("127.0.0.1", "localhost", "::1"):
+config_url = os.environ.get("YF_TEST_DATABASE_URL")
+if not config_url:
+    raise SystemExit("Set YF_TEST_DATABASE_URL to a local MySQL test-administration URL")
+url = urllib.parse.urlsplit(config_url)
+if url.scheme != "mysql" or url.hostname not in ("127.0.0.1", "localhost", "::1"):
     raise SystemExit("Only local MySQL is permitted")
 name = "yf_test_baseline_" + uuid.uuid4().hex
 conn = pymysql.connect(host=url.hostname, port=url.port or 3306,
@@ -28,17 +38,24 @@ try:
         c.execute(f"CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
         created = True
     env = os.environ.copy()
-    env["DATABASE_URL"] = urllib.parse.urlunsplit((url.scheme, url.netloc, "/" + name, url.query, ""))
+    env.pop("YF_CONFIG_PATH", None)
     env["YF_BOOTSTRAP_PASSWORD"] = secrets.token_urlsafe(24)
-    result = subprocess.run([str(root / ".runlogs/iis-release/server/migration.exe"), "up"], env=env, capture_output=True)
-    if result.returncode:
-        raise RuntimeError("Disposable database migration failed; output withheld to protect connection details")
+    def cs(value):
+        return '\"' + str(value).replace('\"', '\"\"') + '\"'
+    with tempfile.TemporaryDirectory(prefix="yf_dotnet_baseline_") as temp:
+        env.update({"App__ConnectionString": f"Server={cs(url.hostname)};Port={url.port or 3306};Database={name};User ID={cs(urllib.parse.unquote(url.username or ''))};Password={cs(urllib.parse.unquote(url.password or ''))}",
+                    "App__JwtSecret": secrets.token_urlsafe(48), "App__StorageRoot": temp,
+                    "App__WebBaseUrl": "http://127.0.0.1:8080", "App__WorkerEnabled": "false"})
+        api = root / "server_dotnet/Yf.Api"
+        result = subprocess.run(["dotnet", str(api / "bin/Debug/net10.0/Yf.Api.dll"), "--initialize-database"], cwd=api, env=env, capture_output=True)
+        if result.returncode:
+            raise RuntimeError("Disposable .NET initialization failed; output withheld to protect connection details")
     conn.select_db(name)
     baseline = {"sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
-                "source": "yf_server/migration/src through m20260911_000017_auth_session_families", "tables": [], "seeds": {}}
+                "source": "server_dotnet/Yf.Api .NET initializer; schema import baseline 17; owned upgrades stay in SchemaMigrations", "tables": [], "seeds": {}}
     with conn.cursor() as c:
         c.execute("SHOW TABLES")
-        tables = [row[0] for row in c.fetchall() if row[0] != "project_workflow_cleanup_paths"]
+        tables = [row[0] for row in c.fetchall() if row[0] not in ("project_workflow_cleanup_paths", "yf_schema_migrations")]
         for table in tables:
             c.execute(f"SHOW CREATE TABLE `{table}`")
             ddl = c.fetchone()[1]
@@ -53,8 +70,8 @@ try:
                 rows.append({key: ("2026-09-11T00:00:00" if isinstance(value, datetime.datetime) else value)
                              for key, value in zip(columns, row)})
             baseline["seeds"][table] = rows
-    out = root / "server_dotnet/Yf.Api/Infrastructure/schema-baseline.json"
-    out.write_text(json.dumps(baseline, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with out.open("x", encoding="utf-8") as exported:
+        exported.write(json.dumps(baseline, ensure_ascii=False, indent=2) + "\n")
     print(f"Exported {len(tables)} tables; only built-in roles/permissions/config/migration seed rows; no users or credentials")
 finally:
     if created:

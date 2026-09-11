@@ -17,7 +17,7 @@ public static class SystemModule
         config.AddEndpointFilter(async (context, next) =>
         {
             var db = context.HttpContext.RequestServices.GetRequiredService<AppDb>();
-            var access = context.HttpContext.RequestServices.GetRequiredService<AccessService>();
+            AccessService.RequireInternal(AccessService.GetCurrent(context.HttpContext));
             await using var conn = await db.OpenAsync(context.HttpContext.RequestAborted);
             await AccessService.RequirePermissionAsync(conn, null, AccessService.GetCurrent(context.HttpContext), "config:manage", context.HttpContext.RequestAborted);
             return await next(context);
@@ -31,7 +31,7 @@ public static class SystemModule
         logs.AddEndpointFilter(async (context, next) =>
         {
             var db = context.HttpContext.RequestServices.GetRequiredService<AppDb>();
-            var access = context.HttpContext.RequestServices.GetRequiredService<AccessService>();
+            AccessService.RequireInternal(AccessService.GetCurrent(context.HttpContext));
             await using var conn = await db.OpenAsync(context.HttpContext.RequestAborted);
             await AccessService.RequirePermissionAsync(conn, null, AccessService.GetCurrent(context.HttpContext), "log:view", context.HttpContext.RequestAborted);
             return await next(context);
@@ -94,9 +94,10 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions optio
             throw ApiException.BadRequest("参数必须为 1–100 个不重复的项目");
         var normalized = body.Items.Select(x => new ConfigItem(x.Key, NormalizeConfig(x.Key, x.Value))).ToArray();
         await using var conn = await db.OpenAsync(ct);
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         actor = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
+        AccessService.RequireInternal(actor);
         await AccessService.RequirePermissionAsync(conn, tx, actor, "config:manage", ct);
         foreach (var item in normalized)
         {
@@ -152,9 +153,10 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions optio
     {
         if (ids is null || ids.Length is < 1 or > 500) throw ApiException.BadRequest("每次可删除 1–500 条日志");
         await using var conn = await db.OpenAsync(ct);
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         actor = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
+        AccessService.RequireInternal(actor);
         await AccessService.RequirePermissionAsync(conn, tx, actor, "log:view", ct);
         await AccessService.RequirePermissionAsync(conn, tx, actor, "log:delete", ct);
         var rows = (await conn.QueryAsync<AuditRow>(new CommandDefinition("SELECT id,action FROM audit_logs WHERE id IN @ids ORDER BY id FOR UPDATE", new { ids = ids.Distinct().ToArray() }, tx, cancellationToken: ct))).ToArray();

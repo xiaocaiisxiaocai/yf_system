@@ -4,9 +4,16 @@ using System.Security.Cryptography;
 
 namespace Yf.Api.Modules.Identity;
 
-public sealed class CaptchaService
+public interface ICaptchaChallengeObserver
+{
+    void OnIssued(string captchaId, string answer);
+}
+
+public sealed class CaptchaService(IEnumerable<ICaptchaChallengeObserver> observers)
 {
     private const int Width = 192, Height = 60, Capacity = 4096;
+    private const string Letters = "ACDEFHJKLMNPRTUVWXY";
+    private const string Alphabet = Letters + "347";
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
     private readonly ConcurrentDictionary<string, Challenge> _items = new();
     private readonly ConcurrentDictionary<string, Window> _rates = new();
@@ -15,9 +22,14 @@ public sealed class CaptchaService
     {
         if (!Allow("captcha:" + clientIp, 30)) throw Yf.Api.Infrastructure.ApiException.BadRequest("验证码请求过于频繁，请稍后再试");
         Prune();
-        var code = string.Concat(Enumerable.Range(0, 6).Select(_ => "23456789"[RandomNumberGenerator.GetInt32(8)]));
+        var code = CreateCode();
         var id = Guid.NewGuid().ToString();
         _items[id] = new(code, DateTimeOffset.UtcNow.Add(Ttl));
+        foreach (var observer in observers)
+        {
+            try { observer.OnIssued(id, code); }
+            catch { }
+        }
         return new(id, "data:image/png;base64," + Convert.ToBase64String(Render(code)));
     }
 
@@ -61,12 +73,50 @@ public sealed class CaptchaService
         }
     }
 
+    private static string CreateCode()
+    {
+        var value = new char[6];
+        value[0] = Letters[RandomNumberGenerator.GetInt32(Letters.Length)];
+        for (var i = 1; i < value.Length; i++) value[i] = Alphabet[RandomNumberGenerator.GetInt32(Alphabet.Length)];
+        for (var i = value.Length - 1; i > 0; i--)
+        {
+            var swap = RandomNumberGenerator.GetInt32(i + 1);
+            (value[i], value[swap]) = (value[swap], value[i]);
+        }
+        return new string(value);
+    }
+
     private static byte[] Render(string code)
     {
         var rgb = new byte[Width * Height * 3];
-        Array.Fill(rgb, (byte)242);
-        for (var i = 0; i < code.Length; i++) DrawDigit(rgb, code[i] - '0', 13 + i * 29, 10);
-        for (var i = 0; i < 360; i++) Set(rgb, RandomNumberGenerator.GetInt32(Width), RandomNumberGenerator.GetInt32(Height), (byte)RandomNumberGenerator.GetInt32(80, 190));
+        var background = (byte)RandomNumberGenerator.GetInt32(232, 252);
+        for (var p = 0; p < rgb.Length; p += 3)
+        {
+            rgb[p] = background;
+            rgb[p + 1] = (byte)Math.Max(0, background - RandomNumberGenerator.GetInt32(0, 8));
+            rgb[p + 2] = (byte)Math.Max(0, background - RandomNumberGenerator.GetInt32(0, 8));
+        }
+        for (var i = 0; i < code.Length; i++)
+        {
+            var originX = 9 + i * 30 + RandomNumberGenerator.GetInt32(-3, 4);
+            var originY = 8 + RandomNumberGenerator.GetInt32(-4, 5);
+            DrawGlyph(rgb, code[i], originX, originY, RandomNumberGenerator.GetInt32(-3, 4),
+                RandomNumberGenerator.GetInt32(18, 75), RandomNumberGenerator.GetInt32(0, 360));
+        }
+        for (var i = 0; i < 1; i++)
+        {
+            var y = RandomNumberGenerator.GetInt32(5, Height - 5);
+            var amplitude = RandomNumberGenerator.GetInt32(2, 8);
+            var phase = RandomNumberGenerator.GetInt32(0, 360) * Math.PI / 180d;
+            var shade = (byte)RandomNumberGenerator.GetInt32(90, 190);
+            for (var x = 0; x < Width; x++)
+                Set(rgb, x, y + (int)Math.Round(Math.Sin(x / 13d + phase) * amplitude), shade);
+        }
+        for (var i = 0; i < 240; i++)
+        {
+            var shade = (byte)RandomNumberGenerator.GetInt32(70, 225);
+            Set(rgb, RandomNumberGenerator.GetInt32(Width), RandomNumberGenerator.GetInt32(Height), shade);
+        }
         var raw = new byte[(Width * 3 + 1) * Height];
         for (var y = 0; y < Height; y++) Buffer.BlockCopy(rgb, y * Width * 3, raw, y * (Width * 3 + 1) + 1, Width * 3);
         using var output = new MemoryStream();
@@ -80,23 +130,44 @@ public sealed class CaptchaService
         return output.ToArray();
     }
 
-    private static readonly int[][] Segments =
-    [
-        [0,1,2,3,4,5], [1,2], [0,1,6,4,3], [0,1,6,2,3], [5,6,1,2],
-        [0,5,6,2,3], [0,5,6,4,2,3], [0,1,2], [0,1,2,3,4,5,6], [0,1,2,3,5,6]
-    ];
-    private static void DrawDigit(byte[] rgb, int digit, int x, int y)
+    private static readonly IReadOnlyDictionary<char, string[]> Glyphs = new Dictionary<char, string[]>
     {
-        foreach (var s in Segments[digit])
+        ['A']=["01110","10001","10001","11111","10001","10001","10001"], ['B']=["11110","10001","10001","11110","10001","10001","11110"],
+        ['C']=["01111","10000","10000","10000","10000","10000","01111"], ['D']=["11110","10001","10001","10001","10001","10001","11110"],
+        ['E']=["11111","10000","10000","11110","10000","10000","11111"], ['F']=["11111","10000","10000","11110","10000","10000","10000"],
+        ['G']=["01111","10000","10000","10111","10001","10001","01110"], ['H']=["10001","10001","10001","11111","10001","10001","10001"],
+        ['J']=["00111","00010","00010","00010","10010","10010","01100"], ['K']=["10001","10010","10100","11000","10100","10010","10001"],
+        ['L']=["10000","10000","10000","10000","10000","10000","11111"], ['M']=["10001","11011","10101","10101","10001","10001","10001"],
+        ['N']=["10001","11001","10101","10011","10001","10001","10001"], ['P']=["11110","10001","10001","11110","10000","10000","10000"],
+        ['Q']=["01110","10001","10001","10001","10101","10010","01101"], ['R']=["11110","10001","10001","11110","10100","10010","10001"],
+        ['S']=["01111","10000","10000","01110","00001","00001","11110"], ['T']=["11111","00100","00100","00100","00100","00100","00100"],
+        ['U']=["10001","10001","10001","10001","10001","10001","01110"], ['V']=["10001","10001","10001","10001","10001","01010","00100"],
+        ['W']=["10001","10001","10001","10101","10101","11011","10001"], ['X']=["10001","10001","01010","00100","01010","10001","10001"],
+        ['Y']=["10001","10001","01010","00100","00100","00100","00100"], ['Z']=["11111","00001","00010","00100","01000","10000","11111"],
+        ['2']=["01110","10001","00001","00010","00100","01000","11111"], ['3']=["11110","00001","00001","01110","00001","00001","11110"],
+        ['4']=["00010","00110","01010","10010","11111","00010","00010"], ['5']=["11111","10000","10000","11110","00001","00001","11110"],
+        ['6']=["01110","10000","10000","11110","10001","10001","01110"], ['7']=["11111","00001","00010","00100","01000","01000","01000"],
+        ['8']=["01110","10001","10001","01110","10001","10001","01110"], ['9']=["01110","10001","10001","01111","00001","00001","01110"]
+    };
+
+    private static void DrawGlyph(byte[] rgb, char value, int x, int y, int shear, int shade, int phaseDegrees)
+    {
+        var glyph = Glyphs[value];
+        var phase = phaseDegrees * Math.PI / 180d;
+        for (var row = 0; row < glyph.Length; row++)
         {
-            var (sx, sy, ex, ey) = s switch
+            for (var column = 0; column < glyph[row].Length; column++)
             {
-                0 => (x + 3, y, x + 16, y + 3), 1 => (x + 16, y + 3, x + 19, y + 20),
-                2 => (x + 16, y + 22, x + 19, y + 39), 3 => (x + 3, y + 39, x + 16, y + 42),
-                4 => (x, y + 22, x + 3, y + 39), 5 => (x, y + 3, x + 3, y + 20),
-                _ => (x + 3, y + 20, x + 16, y + 23)
-            };
-            for (var py = sy; py <= ey; py++) for (var px = sx; px <= ex; px++) Set(rgb, px, py, 35);
+                if (glyph[row][column] != '1') continue;
+                for (var dy = 0; dy < 6; dy++)
+                for (var dx = 0; dx < 4; dx++)
+                {
+                    var py = y + row * 6 + dy;
+                    var wave = (int)Math.Round(Math.Sin((py + column * 3) / 8d + phase) * 2);
+                    var px = x + column * 4 + dx + shear * (row - 3) / 4 + wave;
+                    Set(rgb, px, py, (byte)Math.Clamp(shade + RandomNumberGenerator.GetInt32(-8, 9), 0, 255));
+                }
+            }
         }
     }
     private static void Set(byte[] data, int x, int y, byte v)

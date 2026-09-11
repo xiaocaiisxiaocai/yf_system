@@ -81,8 +81,12 @@ public sealed class FilesMaintenanceService(
             {
                 throw new InvalidOperationException($"删除迁移遗留路径失败 {resolved}: {error.Message}", error);
             }
-            await conn.ExecuteAsync(new CommandDefinition(
-                "DELETE FROM project_workflow_cleanup_paths WHERE id=@Id", new { item.Id }, cancellationToken: ct));
+            await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+            {
+                await conn.ExecuteAsync(new CommandDefinition(
+                    "DELETE FROM project_workflow_cleanup_paths WHERE id=@Id", new { item.Id }, tx, cancellationToken: ct));
+                await tx.CommitAsync(ct);
+            }
         }
         await conn.ExecuteAsync(new CommandDefinition(
             "DROP TABLE IF EXISTS project_workflow_cleanup_paths", cancellationToken: ct));
@@ -90,10 +94,67 @@ public sealed class FilesMaintenanceService(
 
     internal async Task RunGarbageCollectionAsync(CancellationToken ct)
     {
+        await RecoverAbandonedMergesAsync(ct);
         await ExpireUploadsAsync(ct);
         await PurgeDeletedFilesAsync(ct);
         await PurgeTemporaryArchivesAsync(ct);
         await PurgeOrphanUploadDirectoriesAsync(ct);
+    }
+
+    private async Task RecoverAbandonedMergesAsync(CancellationToken ct)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        var merging = (await conn.QueryAsync<UploadSessionRow>(new CommandDefinition("""
+            SELECT id AS Id,project_id AS ProjectId,uploader_id AS UploaderId,file_name AS FileName,
+                   file_size AS FileSize,file_md5 AS FileMd5,chunk_size AS ChunkSize,total_chunks AS TotalChunks,
+                   temp_dir AS TempDir,status AS Status,result_file_id AS ResultFileId,
+                   expires_at AS ExpiresAt,created_at AS CreatedAt,updated_at AS UpdatedAt
+            FROM upload_sessions WHERE status='MERGING'
+            """, cancellationToken: ct))).ToArray();
+        foreach (var candidate in merging)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(
+                    conn, UploadService.MergeLockName(conn, candidate.Id), 0, ct);
+                if (mergeLease is null) continue;
+                var expired = false;
+                await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+                {
+                    var current = await conn.QuerySingleOrDefaultAsync<UploadSessionRow>(new CommandDefinition("""
+                        SELECT id AS Id,project_id AS ProjectId,uploader_id AS UploaderId,file_name AS FileName,
+                               file_size AS FileSize,file_md5 AS FileMd5,chunk_size AS ChunkSize,total_chunks AS TotalChunks,
+                               temp_dir AS TempDir,status AS Status,result_file_id AS ResultFileId,
+                               expires_at AS ExpiresAt,created_at AS CreatedAt,updated_at AS UpdatedAt
+                        FROM upload_sessions WHERE id=@Id FOR UPDATE
+                        """, new { candidate.Id }, tx, cancellationToken: ct));
+                    if (current is null || current.Status != "MERGING")
+                    {
+                        await tx.CommitAsync(ct);
+                        continue;
+                    }
+                    expired = current.ExpiresAt < DateTime.UtcNow;
+                    await conn.ExecuteAsync(new CommandDefinition("""
+                        UPDATE upload_sessions
+                        SET status=@Status,
+                            updated_at=CASE WHEN updated_at>=UTC_TIMESTAMP() THEN DATE_ADD(updated_at,INTERVAL 1 SECOND) ELSE UTC_TIMESTAMP() END
+                        WHERE id=@Id AND status='MERGING'
+                        """, new { Status = expired ? "EXPIRED" : "UPLOADING", current.Id }, tx, cancellationToken: ct));
+                    await tx.CommitAsync(ct);
+                }
+                if (expired)
+                {
+                    await UploadService.CleanupPendingFinalsAsync(conn, options.StorageRoot, candidate.Id, ct);
+                    await FileStorage.DeleteDirectoryTreeAsync(options.StorageRoot,
+                        FileStorage.SessionDirectory(FileStorage.Root(options.StorageRoot), candidate.Id), ct);
+                }
+            }
+            catch (Exception error)
+            {
+                logger.LogWarning(error, "恢复失联文件合并失败 {SessionId}", candidate.Id);
+            }
+        }
     }
 
     private async Task ExpireUploadsAsync(CancellationToken ct)
@@ -106,13 +167,22 @@ public sealed class FilesMaintenanceService(
             """, cancellationToken: ct))).ToArray();
         foreach (var session in expired)
         {
-            var claimed = await conn.ExecuteAsync(new CommandDefinition("""
-                UPDATE upload_sessions SET status='EXPIRED',updated_at=UTC_TIMESTAMP(6)
-                WHERE id=@Id AND status='UPLOADING' AND expires_at<UTC_TIMESTAMP(6)
-                """, new { session.Id }, cancellationToken: ct));
+            int claimed;
+            await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+            {
+                claimed = await conn.ExecuteAsync(new CommandDefinition("""
+                    UPDATE upload_sessions SET status='EXPIRED',updated_at=UTC_TIMESTAMP(6)
+                    WHERE id=@Id AND status='UPLOADING' AND expires_at<UTC_TIMESTAMP(6)
+                    """, new { session.Id }, tx, cancellationToken: ct));
+                await tx.CommitAsync(ct);
+            }
             if (claimed != 1) continue;
             var directory = FileStorage.SessionDirectory(root, session.Id);
-            try { await FileStorage.DeleteDirectoryTreeAsync(root, directory, ct); }
+            try
+            {
+                await UploadService.CleanupPendingFinalsAsync(conn, root, session.Id, ct);
+                await FileStorage.DeleteDirectoryTreeAsync(root, directory, ct);
+            }
             catch (Exception error) { logger.LogWarning(error, "清理过期上传目录失败 {SessionId}", session.Id); }
         }
     }
@@ -135,8 +205,10 @@ public sealed class FilesMaintenanceService(
                     File.Delete(path);
                 }
                 catch (FileNotFoundException) { }
+                await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
                 await conn.ExecuteAsync(new CommandDefinition("DELETE FROM files WHERE id=@Id AND status='DELETED'",
-                    new { row.Id }, cancellationToken: ct));
+                    new { row.Id }, tx, cancellationToken: ct));
+                await tx.CommitAsync(ct);
             }
             catch (Exception error)
             {
@@ -183,7 +255,25 @@ public sealed class FilesMaintenanceService(
             }
             try
             {
-                await FileStorage.DeleteDirectoryTreeAsync(root, directory, ct);
+                if (Guid.TryParseExact(info.Name, "D", out _))
+                {
+                    // The active set above is only a scan optimization. The lease and
+                    // second database read are the authority, so another IIS worker
+                    // cannot have its live merge directory removed from a stale snapshot.
+                    await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(
+                        conn, UploadService.MergeLockName(conn, info.Name), 0, ct);
+                    if (mergeLease is null) continue;
+                    var isNowActive = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+                        "SELECT EXISTS(SELECT 1 FROM upload_sessions WHERE id=@Id AND status IN ('UPLOADING','MERGING'))",
+                        new { Id = info.Name }, cancellationToken: ct));
+                    if (isNowActive) continue;
+                    await UploadService.CleanupPendingFinalsAsync(conn, root, info.Name, ct);
+                    await FileStorage.DeleteDirectoryTreeAsync(root, directory, ct);
+                }
+                else
+                {
+                    await FileStorage.DeleteDirectoryTreeAsync(root, directory, ct);
+                }
             }
             catch (Exception error) { logger.LogWarning(error, "清理孤儿上传目录失败 {Directory}", info.Name); }
         }

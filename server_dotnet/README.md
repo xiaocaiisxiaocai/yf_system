@@ -11,7 +11,7 @@
 - `Yf.Api/Modules/System`：参数、存储容量、日志、邮件 outbox 与 TLS SMTP 后台发送。
 - `Yf.Api/Infrastructure`：MySQL/Dapper、统一错误、事务权限门禁、审计及空库初始化。
 
-采用 ASP.NET Core Minimal API；按业务模块拆分，数据库访问使用参数化 SQL。没有新增第二套业务数据模型。
+采用 ASP.NET Core Minimal API；按业务模块拆分，数据库访问使用参数化 SQL。沿用现有业务数据，后续接口、数据库升级与测试由 .NET 独立维护；Rust 源码仅保留归档参考。
 
 ## 本地运行
 
@@ -38,9 +38,18 @@ npm run dev
 
 配置优先级：`appsettings.json` → 当前环境配置 → `appsettings.Local.json` → `YF_CONFIG_PATH` 指定文件 → 环境变量 → 命令行。推荐机密使用外部配置或 `App__ConnectionString` / `App__JwtSecret` 环境变量，避免在命令行出现密码。配置更改后重启应用。
 
-## 数据库与双后端兼容
+## 数据库初始化与升级
 
-接入已有库要求最新迁移为 `m20260911_000017_auth_session_families`。启动只检查版本，不执行历史迁移。旧版本库先备份并按 Rust 已有迁移流程升级；新后端拒绝未知或不完整版本。
+启动只校验结构和 `.NET` 迁移历史，不自动执行 DDL。新安装直接初始化；导入现有第 16 或 17 版结构时，先停写、备份数据库和文件，再运行：
+
+```powershell
+$env:YF_CONFIG_PATH = 'D:\YfConfig\appsettings.Local.json'
+dotnet run --project .\Yf.Api -- --migrate-database
+```
+
+升级命令使用数据库命名锁防止同时迁移，校验业务表完整性，并建立 `yf_schema_migrations` 独立历史。第 16 版缺失的刷新会话族字段、数据回填与索引由 .NET 补齐；第 17 版直接接管；同时撤销供应商角色的内部管理授权并记录审计。步骤可在 DDL 中断后重跑，重复执行不删除业务数据。启动拒绝未知版本或被修改的历史。后续升级在 `Infrastructure/SchemaMigrations.cs` 中维护。
+
+第 15 版及更早的旧业务结构包含有损工作流转换，不在本次自动导入范围内；命令会在改动前拒绝，需要另行审查数据转换和备份恢复方案，不依赖运行 Rust 升级。
 
 新安装可由 DBA 先创建空库和专用账号，然后执行独立初始化：
 
@@ -55,11 +64,11 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
 
 初始化创建 `admin` 并强制首次改密，不输出密码。非空数据库一律拒绝；MySQL DDL 无法完整回滚，若初始化失败会保留失败现场，不会自动删库。排查并由数据库管理员确认后，换一个空库重试。
 
-内嵌 schema 来源为同一仓库 Rust 的 17 个迁移，经隔离空库生成；只包含表结构、内置角色、权限、系统参数、迁移记录，不含业务数据、用户密码或测试账号。`scripts/export-baseline.py` 是维护工具，普通部署不需要 Python 或 Rust。
+内嵌初始 schema 是第 17 版的结构快照，只包含表结构、内置角色、权限、系统参数与导入来源历史，不含业务数据、密码或测试账号。历史 `seaql_migrations` 仅作为来源记录；运行版本以 `yf_schema_migrations` 为准。`scripts/export-baseline.py` 只从 .NET 初始化的临时库导出种子，不调用其他后端。维护时使用 `python .\scripts\export-baseline.py --output D:\Temp\待审查基线.json` 导出到新文件；审查差异后再更新内嵌快照，工具拒绝覆盖现有文件。
 
-切换现有系统时：备份 MySQL 与文件目录，停止写入，使用相同数据库与存储路径；相同 JWT 密钥可保留格式兼容的会话，主动更换密钥会要求重新登录。先验证登录、权限、上传/下载和项目流程，再开放用户访问。回退时停止 .NET 后端，恢复 Rust 启动入口；本次新增不改变业务表结构。备份恢复会回退切换后的新写入，必须按停写窗口处理。
+切换现有系统必须先备份 MySQL、文件与配置，停止旧入口写入，再执行显式迁移和 .NET 启动。验证登录、权限、上传/下载和项目流程后开放访问。失败回退按该次部署的程序与数据库备份成套恢复；不承诺新旧后端可以互换运行或共享会话。
 
-密码规则与当前前端/Rust 一致：12–64 个 Unicode 字符，最多 256 UTF-8 字节，拒绝常见弱密码和简单重复；已有 Argon2 PHC 密码可继续验证，不强制批量重置。
+密码规则：12–64 个 Unicode 字符，最多 256 UTF-8 字节，拒绝常见弱密码和简单重复；已有 Argon2 PHC 密码继续验证，不强制批量重置。
 
 ## 测试
 
@@ -67,11 +76,17 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
 
 ```powershell
 dotnet test --project .\tests\Yf.Api.Tests.csproj
-dotnet build .\Yf.Api\Yf.Api.csproj
+dotnet build .\TestHost\Yf.Api.TestHost.csproj
+# 仅在当前进程设置本机测试管理连接，勿将真实凭据写入命令历史或版本库。
+# $env:YF_TEST_DATABASE_URL 的格式为 mysql://账号:URL编码密码@127.0.0.1:3306/ignored
 python .\scripts\test-isolated.py
 ```
 
-HTTP 测试需要 Python 3.11+ 与 `pymysql`，仅从旧后端本机私有配置读取 MySQL 管理连接，在随机命名的 `yf_test_dotnet_*` 库和临时存储目录运行；结束时只删除自己创建的测试资源，禁用邮件 worker，不发送真实邮件。它会真实执行账号、权限、会话、项目及文件接口。旧业务库不会成为测试库。
+HTTP 测试需要 Python 3.11+ 与 `pymysql`，仅使用显式设置的 `YF_TEST_DATABASE_URL`（本机 MySQL 测试管理账号，需创建/删除测试库及查看锁等待）。不读取 Rust 配置。测试在随机命名的 `yf_test_dotnet_*` 库与临时存储中运行，结束只删除自身资源；邮件发送禁用，通知验证仅检查 outbox。
+
+先测试实际生产入口的启动、健康和验证码返回，再通过独立 `TestHost` 执行完整 HTTP 用例。测试宿主使用同一 API 工厂，仅注册内存 CAPTCHA 观察器和带随机密钥的一次性答案路由，绑定回环地址；生产 API 不注册该观察器、不映射答案路由，发布包不包含测试宿主。验证码生产图像不再采用可由固定像素解码的数码管字体，并对发放与登录尝试限速；这不代表其能抵抗所有 OCR。
+
+`tests/Contracts/api-v1.json` 固定前端 HTTP 方法/路径契约，不再解析 Rust 路由。项目回归验证真实数据库锁等待、并发提交与撤回；上传回归验证慢请求、并发初始化、中断恢复及文件清理。
 
 测试脚本中的 PDF 样本用于传输字节/Range 验证；这些检查不等同于在浏览器里渲染真实 PDF，也不等同于目标服务器 IIS 或真实 SMTP 验收。
 
@@ -83,7 +98,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish-iis.ps1 -FreshOutputD
 
 发布脚本参数以 `Get-Help .\scripts\publish-iis.ps1 -Detailed` 为准。输出目录必须是新目录或空目录。发布包包含后端、`wwwroot` 前端、IIS 配置、安装脚本、说明与 SHA-256 清单。将整个发布包复制到另一台服务器，按包内 `README.md` 安装。不会在开发电脑上自动部署 IIS。
 
-开发机可运行 `python .\scripts\verify-release.py D:\Releases\YfDotNet-NEW.zip`，对解压出的真实发布程序核对 ZIP/清单哈希、安全配置、缺配置启动拒绝、前端静态页面及隔离 HTTP 测试。可选的 `YF_TEST_RUST_EXE` 指向已构建的 Rust `server.exe`，会额外在同一临时库上依次切换两个后端，验证 JWT 与刷新会话双向兼容；不会同时运行两个服务。
+开发机可运行 `python .\scripts\verify-release.py D:\Releases\YfDotNet-NEW.zip`，先核对解压 ZIP 的全部清单哈希、安全配置与缺配置启动拒绝，实测生产入口、静态页面；完整 HTTP 测试由独立宿主加载发布包中的同一 API 二进制与依赖。报告区分这些证据，不将开发机检查表述为目标 IIS/SMTP 验收。
 
 ## 依赖与来源
 
@@ -97,4 +112,4 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish-iis.ps1 -FreshOutputD
 | MailKit | 4.17.0 | https://github.com/jstedfast/MailKit | TLS SMTP |
 | xUnit v3 | 4.0.0 | https://github.com/xunit/xunit | 自动化测试 |
 
-准确传递依赖版本见各项目 `packages.lock.json`。前端依赖与许可沿用 `web/package-lock.json` 及发布的第三方许可文件。持续维护时两套后端的接口、安全策略与数据库版本需要一起更新；不能只改一套却继续宣称行为等价。
+准确传递依赖版本见各项目 `packages.lock.json`。前端依赖与许可沿用 `web/package-lock.json` 及发布的第三方许可文件。新功能、安全修复、契约与数据库版本以本目录的 .NET 后端为维护入口，不要求同步 Rust。
