@@ -10,6 +10,25 @@ namespace Yf.Api.Tests;
 
 public sealed class FilesRecoveryTests
 {
+    [Fact]
+    public async Task SessionCommitConfirmationControlsSuccessAndDirectoryCleanup()
+    {
+        var unknown = await UploadService.ProbeSessionExistenceAsync(
+            _ => Task.FromException<bool>(new IOException("confirmation unavailable")),
+            TestContext.Current.CancellationToken);
+        var exists = await UploadService.ProbeSessionExistenceAsync(
+            _ => Task.FromResult(true), TestContext.Current.CancellationToken);
+        var missing = await UploadService.ProbeSessionExistenceAsync(
+            _ => Task.FromResult(false), TestContext.Current.CancellationToken);
+
+        Assert.Equal(new SessionCommitRecoveryDecision(true, false),
+            UploadService.SessionCommitRecovery(exists));
+        Assert.Equal(new SessionCommitRecoveryDecision(false, true),
+            UploadService.SessionCommitRecovery(missing));
+        Assert.Equal(new SessionCommitRecoveryDecision(false, false),
+            UploadService.SessionCommitRecovery(unknown));
+    }
+
     [Fact(Timeout = 30_000)]
     public async Task GarbageCollectionDoesNotResetALiveMergeButRecoversAfterConnectionLoss()
     {

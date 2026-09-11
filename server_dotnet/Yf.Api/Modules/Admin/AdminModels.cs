@@ -17,7 +17,12 @@ public sealed record UserCreate(
     ulong? DepartmentId,
     ulong? RoleId,
     IReadOnlyList<ulong>? RoleIds);
-public sealed record UserUpdate(string? RealName, string? Email, JsonElement? DepartmentId, ulong? RoleId, IReadOnlyList<ulong>? RoleIds);
+public sealed record UserUpdate(
+    string? RealName = null,
+    string? Email = null,
+    JsonElement DepartmentId = default,
+    ulong? RoleId = null,
+    IReadOnlyList<ulong>? RoleIds = null);
 public sealed record SupplierUpsert([property: JsonRequired] string Name, string? Remark);
 public sealed record SupplierAccountCreate(
     [property: JsonRequired] string EmployeeNo,
@@ -63,6 +68,7 @@ internal static class AdminValidation
     {
         var legacy = roleIds?.Distinct().ToArray();
         if (legacy is { Length: not 1 }) throw Yf.Api.Infrastructure.ApiException.BadRequest("启用的内部用户必须且只能绑定一个角色");
+        if (roleId == 0 || legacy is { Length: 1 } && legacy[0] == 0) throw Yf.Api.Infrastructure.ApiException.BadRequest("角色不存在: 0");
         if (roleId.HasValue && legacy is { Length: 1 } && legacy[0] != roleId) throw Yf.Api.Infrastructure.ApiException.BadRequest("roleId 与 roleIds 不一致");
         return roleId ?? legacy?.SingleOrDefault() ?? (required ? throw Yf.Api.Infrastructure.ApiException.BadRequest("请选择角色") : 0UL);
     }

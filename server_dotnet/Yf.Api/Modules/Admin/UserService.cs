@@ -59,11 +59,11 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
     public async Task<object> UpdateAsync(CurrentUser actor, ulong id, UserUpdate request, CancellationToken ct)
     {
         if (request.RealName is not null) ValidateName(request.RealName); if (request.Email is not null) AdminValidation.Email(request.Email);
-        var departmentSpecified = request.DepartmentId.HasValue;
-        ulong? departmentId = request.DepartmentId?.ValueKind switch
+        var departmentSpecified = request.DepartmentId.ValueKind != System.Text.Json.JsonValueKind.Undefined;
+        ulong? departmentId = request.DepartmentId.ValueKind switch
         {
-            null or System.Text.Json.JsonValueKind.Null => null,
-            System.Text.Json.JsonValueKind.Number when request.DepartmentId.Value.TryGetUInt64(out var parsed) => parsed,
+            System.Text.Json.JsonValueKind.Undefined or System.Text.Json.JsonValueKind.Null => null,
+            System.Text.Json.JsonValueKind.Number when request.DepartmentId.TryGetUInt64(out var parsed) => parsed,
             _ => throw ApiException.BadRequest("组织编号格式不正确")
         };
         var roleId = AdminValidation.OneRole(request.RoleId, request.RoleIds, false);
@@ -74,16 +74,35 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
         var oldRoles = (await conn.QueryAsync<ulong>(new CommandDefinition("SELECT DISTINCT role_id FROM user_roles WHERE user_id=@id", new { id }, tx, cancellationToken: ct))).ToArray();
         if (oldRoles.Length != 1) throw ApiException.BadRequest("启用的内部用户必须且只能绑定一个角色");
         ulong? oldRole = oldRoles[0];
-        if (roleId != 0 && roleId != oldRole)
+        var roleChanged = roleId != 0 && roleId != oldRole;
+        if (roleChanged)
         {
             await EnsureAdminRemovalSafeAsync(conn, tx, actor.Id, id, roleId, ct); await permissionCeiling.EnsureManageRoleAsync(conn, tx, actor, roleId, ct); await EnsureRoleAssignableAsync(conn, tx, roleId, ct);
         }
         else if (user.Status == "ACTIVE") await EnsureRoleAssignableAsync(conn, tx, oldRoles[0], ct);
         await conn.ExecuteAsync(new CommandDefinition("UPDATE users SET real_name=COALESCE(@realName,real_name),email=COALESCE(@email,email),department_id=IF(@departmentSpecified,@departmentId,department_id),updated_at=UTC_TIMESTAMP(6) WHERE id=@id",
             new { realName = request.RealName?.Trim(), email = request.Email?.Trim(), departmentSpecified, departmentId, id }, tx, cancellationToken: ct));
-        if (roleId != 0 && roleId != oldRole) { await conn.ExecuteAsync(new CommandDefinition("DELETE FROM user_roles WHERE user_id=@id; INSERT INTO user_roles(user_id,role_id) VALUES(@id,@roleId)", new { id, roleId }, tx, cancellationToken: ct)); }
-        await audit.WriteAsync(conn, tx, actor.Id, "USER_UPDATE", "user", id, new { user.EmployeeNo, oldRoleId = oldRole, newRoleId = roleId == 0 ? oldRole : roleId, departmentSpecified, departmentId }, null, ct);
-        var result = await JsonAsync(conn, tx, await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound(), ct);
+        if (roleChanged) { await conn.ExecuteAsync(new CommandDefinition("DELETE FROM user_roles WHERE user_id=@id; INSERT INTO user_roles(user_id,role_id) VALUES(@id,@roleId)", new { id, roleId }, tx, cancellationToken: ct)); }
+        var updated = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound();
+        var changedFields = new List<string>();
+        if (request.RealName is not null) changedFields.Add("realName");
+        if (request.Email is not null) changedFields.Add("email");
+        if (departmentSpecified) changedFields.Add("departmentId");
+        if (roleChanged) changedFields.Add("roleId");
+        var newRoleName = roleChanged
+            ? await conn.QuerySingleAsync<string>(new CommandDefinition("SELECT name FROM roles WHERE id=@roleId", new { roleId }, tx, cancellationToken: ct))
+            : null;
+        await audit.WriteAsync(conn, tx, actor.Id, "USER_UPDATE", "user", id, new
+        {
+            updated.EmployeeNo,
+            changedFields,
+            oldDepartmentId = user.DepartmentId,
+            newDepartmentId = updated.DepartmentId,
+            oldRoleId = oldRole,
+            newRoleId = roleChanged ? roleId : oldRole,
+            newRoleName
+        }, null, ct);
+        var result = await JsonAsync(conn, tx, updated, ct);
         await tx.CommitAsync(ct); return result;
     }
 

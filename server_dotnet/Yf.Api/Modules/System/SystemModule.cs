@@ -58,6 +58,9 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions optio
 
     public static string? NormalizeConfig(string key, string? input)
     {
+        key = key.Trim().ToLowerInvariant();
+        if (key.Length == 0 || key.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or '-')))
+            throw ApiException.BadRequest("系统参数名称无效");
         var value = input?.Trim();
         if (key == "security.management_lock") throw ApiException.BadRequest("系统内部参数不可修改");
         (long min, long max)? range = key switch
@@ -90,9 +93,11 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions optio
 
     public async Task UpdateConfigsAsync(ConfigBatch body, CurrentUser actor, CancellationToken ct)
     {
-        if (body.Items is null || body.Items.Length is < 1 or > 100 || body.Items.Any(x => x is null || string.IsNullOrWhiteSpace(x.Key)) || body.Items.Select(x => x.Key).Distinct().Count() != body.Items.Length)
+        if (body.Items is null || body.Items.Length is < 1 or > 100 || body.Items.Any(x => x is null || string.IsNullOrWhiteSpace(x.Key)))
             throw ApiException.BadRequest("参数必须为 1–100 个不重复的项目");
-        var normalized = body.Items.Select(x => new ConfigItem(x.Key, NormalizeConfig(x.Key, x.Value))).ToArray();
+        var normalized = body.Items.Select(x => new ConfigItem(x.Key.Trim().ToLowerInvariant(), NormalizeConfig(x.Key, x.Value))).ToArray();
+        if (normalized.Select(x => x.Key).Distinct(StringComparer.Ordinal).Count() != normalized.Length)
+            throw ApiException.BadRequest("参数必须为 1–100 个不重复的项目");
         await using var conn = await db.OpenAsync(ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
@@ -128,20 +133,20 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions optio
         var where = new List<string>();
         var args = new DynamicParameters(new { size, offset });
         foreach (var (name, column) in new[] { ("action", "a.action"), ("targetType", "a.target_type"), ("targetId", "a.target_id") })
-            if (!string.IsNullOrWhiteSpace(request.Query[name])) { where.Add($"{column}=@{name}"); args.Add(name, request.Query[name].ToString()); }
+            if (!string.IsNullOrWhiteSpace(request.Query[name])) { where.Add($"{column}=@{name}"); args.Add(name, request.Query[name].ToString().Trim()); }
         if (!string.IsNullOrWhiteSpace(request.Query["keyword"]))
         {
             where.Add("(a.employee_no LIKE @keyword OR a.action LIKE @keyword OR a.target_type LIKE @keyword OR a.target_id LIKE @keyword)");
-            args.Add("keyword", "%" + request.Query["keyword"] + "%");
+            args.Add("keyword", "%" + request.Query["keyword"].ToString().Trim() + "%");
         }
-        if (!string.IsNullOrWhiteSpace(request.Query["employeeNo"])) { where.Add("a.employee_no LIKE @employeeNo"); args.Add("employeeNo", "%" + request.Query["employeeNo"] + "%"); }
+        if (!string.IsNullOrWhiteSpace(request.Query["employeeNo"])) { where.Add("a.employee_no LIKE @employeeNo"); args.Add("employeeNo", "%" + request.Query["employeeNo"].ToString().Trim() + "%"); }
         foreach (var name in new[] { "start", "end" })
             if (!string.IsNullOrWhiteSpace(request.Query[name]))
             {
                 if (!DateTimeOffset.TryParse(request.Query[name], CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)) throw ApiException.BadRequest("日期参数无效");
                 where.Add($"a.created_at {(name == "start" ? ">=" : "<=")} @{name}"); args.Add(name, at.UtcDateTime);
             }
-        if (Categories.TryGetValue(request.Query["category"].ToString(), out var actions)) { where.Add("a.action IN @actions"); args.Add("actions", actions); }
+        if (Categories.TryGetValue(request.Query["category"].ToString().Trim(), out var actions)) { where.Add("a.action IN @actions"); args.Add("actions", actions); }
         var condition = where.Count == 0 ? "" : " WHERE " + string.Join(" AND ", where);
         await using var conn = await db.OpenAsync(ct);
         var total = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT COUNT(*) FROM audit_logs a" + condition, args, cancellationToken: ct));

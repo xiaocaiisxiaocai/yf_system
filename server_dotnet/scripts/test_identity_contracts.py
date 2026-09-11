@@ -52,21 +52,59 @@ def run_identity_checks(client, Client, conn, check):
         failed_employee_no = cursor.fetchone()[0]
     check("identity unknown employee login keeps attempted employee number in audit", failed_employee_no == missing_employee)
 
-    # Ordinary account CRUD, including the singular role contract and a reset that revokes sessions.
+    # Ordinary account CRUD, including omitted-versus-null department updates, the singular
+    # role contract, and a reset that revokes sessions.
     roles = client.call("GET", "/api/v1/admin/user-role-options")
     ordinary_role = next(role for role in roles if role["name"] not in ("系统管理员", "供应商人员"))
     crud_password = _password()
     employee = "crud_" + secrets.token_hex(5)
+    department = client.call("POST", "/api/v1/admin/departments", {
+        "name": "契约临时组织-" + secrets.token_hex(4), "parentId": None, "sortNo": 0
+    })
     account = client.call("POST", "/api/v1/admin/users", {
         "employeeNo": employee, "password": crud_password, "realName": "契约临时用户",
-        "email": employee + "@example.invalid", "departmentId": None, "roleId": ordinary_role["id"]
+        "email": employee + "@example.invalid", "departmentId": department["id"],
+        "roleId": ordinary_role["id"]
     })
     user_id = account["id"]
+    retained = client.call("PUT", f"/api/v1/admin/users/{user_id}", {
+        "realName": "契约保留组织用户", "roleId": ordinary_role["id"]
+    })
+    retained_page = client.call("GET", "/api/v1/admin/users?" + urllib.parse.urlencode({
+        "keyword": employee,
+    }))
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT department_id FROM users WHERE id=%s", (user_id,))
+        retained_department_id = cursor.fetchone()[0]
+    invalid_zero_role = client.call("PUT", f"/api/v1/admin/users/{user_id}", {
+        "roleId": 0,
+    }, expected=400)
     updated = client.call("PUT", f"/api/v1/admin/users/{user_id}", {
         "realName": "契约更新用户", "email": employee + ".updated@example.invalid",
         "departmentId": None, "roleId": ordinary_role["id"]
     })
-    check("identity internal account create and update", updated["realName"] == "契约更新用户" and updated["roleId"] == ordinary_role["id"])
+    cleared_page = client.call("GET", "/api/v1/admin/users?" + urllib.parse.urlencode({
+        "keyword": employee,
+    }))
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT department_id FROM users WHERE id=%s", (user_id,))
+        persisted_department_id = cursor.fetchone()[0]
+        cursor.execute("SELECT detail FROM audit_logs WHERE action='USER_UPDATE' AND target_type='user' AND target_id=%s ORDER BY id DESC LIMIT 1", (str(user_id),))
+        update_detail = json.loads(cursor.fetchone()[0])
+    check("identity omitted department update preserves the assignment",
+          retained["departmentId"] == department["id"]
+          and retained_page["total"] == 1
+          and retained_page["list"][0]["departmentId"] == department["id"]
+          and retained_department_id == department["id"])
+    check("identity explicit null department update clears the assignment and audit delta",
+          updated["realName"] == "契约更新用户" and updated["roleId"] == ordinary_role["id"]
+          and updated["departmentId"] is None
+          and cleared_page["total"] == 1 and cleared_page["list"][0]["departmentId"] is None
+          and persisted_department_id is None
+          and update_detail["changedFields"] == ["realName", "email", "departmentId"]
+          and update_detail["oldDepartmentId"] == department["id"]
+          and update_detail["newDepartmentId"] is None)
+    check("identity explicit zero role is rejected", invalid_zero_role["code"] == 40001)
     email_keyword = urllib.parse.quote(updated["email"])
     email_results = client.call("GET", f"/api/v1/admin/users?keyword={email_keyword}")
     check("identity internal account search includes email", email_results["total"] == 1 and email_results["list"][0]["id"] == user_id)
@@ -75,6 +113,7 @@ def run_identity_checks(client, Client, conn, check):
     client.call("PUT", f"/api/v1/admin/users/{user_id}/password", {"newPassword": _password()})
     client.call("PUT", f"/api/v1/admin/users/{user_id}/roles", {"roleIds": [ordinary_role["id"]]})
     client.call("DELETE", f"/api/v1/admin/users/{user_id}")
+    client.call("DELETE", f"/api/v1/admin/departments/{department['id']}")
     check("identity account status reset role and delete", disabled["status"] == "DISABLED")
 
     # Self-service profile updates are part of the authentication audit category and retain

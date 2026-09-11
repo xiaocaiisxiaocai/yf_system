@@ -24,7 +24,7 @@ internal static class ProjectNotificationService
             project,
             "MESSAGE_CREATED",
             OppositeSide(actor),
-            null,
+            ["project:list"],
             [],
             false,
             actor.Id,
@@ -82,13 +82,19 @@ internal static class ProjectNotificationService
             throw new InvalidOperationException("项目结果通知缺少最近提交者");
         }
 
+        IReadOnlyCollection<string> requiredSidePermissions = action switch
+        {
+            "SUBMIT" => ["project:list", "project:confirm"],
+            "WITHDRAW" => ["project:list"],
+            _ => [],
+        };
         await EnqueueAsync(
             conn,
             tx,
             project,
             eventType,
             targetSide,
-            action == "SUBMIT" ? "project:confirm" : null,
+            requiredSidePermissions,
             targetUsers,
             action == "WITHDRAW",
             action == "WITHDRAW" ? null : actor.Id,
@@ -139,7 +145,7 @@ internal static class ProjectNotificationService
         ProjectRow project,
         string eventType,
         string? targetSide,
-        string? requiredPermission,
+        IReadOnlyCollection<string> requiredSidePermissions,
         IReadOnlyCollection<ulong> targetUsers,
         bool sideOrUsers,
         ulong? excludeUser,
@@ -191,8 +197,10 @@ internal static class ProjectNotificationService
             {
                 continue;
             }
-            if (requiredPermission is not null
-                && !await ProjectAccessService.HasPermissionAsync(conn, tx, recipient.Id, requiredPermission, ct))
+            if (sideMatch
+                && !userMatch
+                && requiredSidePermissions.Count > 0
+                && !await HasAllPermissionsAsync(conn, tx, recipient.Id, requiredSidePermissions, ct))
             {
                 continue;
             }
@@ -247,6 +255,17 @@ internal static class ProjectNotificationService
                 tx,
                 cancellationToken: ct));
         }
+    }
+
+    private static async Task<bool> HasAllPermissionsAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        ulong userId,
+        IReadOnlyCollection<string> permissions,
+        CancellationToken ct)
+    {
+        var granted = await AccessService.PermissionCodesAsync(conn, tx, userId, ct);
+        return permissions.All(permission => granted.Contains(permission, StringComparer.Ordinal));
     }
 
     private static string OppositeSide(CurrentUser actor) => actor.IsInternal ? "SUPPLIER" : "COMPANY";

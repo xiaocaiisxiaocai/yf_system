@@ -132,18 +132,30 @@ public sealed class MailService
     public async Task FlushAsync(CancellationToken ct)
     {
         if (!options.Smtp.IsConfigured) return;
-        await using var conn = await db.OpenAsync(ct);
-        if (!await EnabledAsync(conn, ct)) return;
-        var pending = await conn.QueryAsync<MailRow>(new CommandDefinition("SELECT id,event_type AS EventType,recipient_email AS RecipientEmail,subject,body,status,retry_count AS RetryCount,next_attempt_at AS NextAttemptAt FROM email_outbox WHERE (status='PENDING' AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())) OR (status='SENDING' AND next_attempt_at<=UTC_TIMESTAMP()) ORDER BY id LIMIT 10", cancellationToken: ct));
+        MailRow[] pending;
+        await using (var conn = await db.OpenAsync(ct))
+        {
+            if (!await EnabledAsync(conn, ct)) return;
+            pending = (await conn.QueryAsync<MailRow>(new CommandDefinition("SELECT id,event_type AS EventType,recipient_email AS RecipientEmail,subject,body,status,retry_count AS RetryCount,next_attempt_at AS NextAttemptAt FROM email_outbox WHERE (status='PENDING' AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())) OR (status='SENDING' AND next_attempt_at<=UTC_TIMESTAMP()) ORDER BY id LIMIT 10", cancellationToken: ct))).ToArray();
+        }
         foreach (var mail in pending)
         {
-            var lease = DateTime.SpecifyKind(new DateTime(DateTime.UtcNow.AddMinutes(10).Ticks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond), DateTimeKind.Utc);
-            var claimed = await conn.ExecuteAsync(new CommandDefinition("UPDATE email_outbox SET status='SENDING',next_attempt_at=@lease WHERE id=@Id AND status=@Status AND retry_count=@RetryCount AND next_attempt_at <=> @NextAttemptAt AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())", new { mail.Id, mail.Status, mail.RetryCount, mail.NextAttemptAt, lease }, cancellationToken: ct));
-            if (claimed != 1) continue;
+            DateTime lease;
+            await using (var claimConnection = await db.OpenAsync(ct))
+            {
+                await using var claimTransaction = await AppDb.BeginTransactionAsync(claimConnection, ct);
+                var claimed = await claimConnection.ExecuteAsync(new CommandDefinition("UPDATE email_outbox SET status='SENDING',next_attempt_at=UTC_TIMESTAMP()+INTERVAL 10 MINUTE WHERE id=@Id AND status=@Status AND retry_count=@RetryCount AND next_attempt_at <=> @NextAttemptAt AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())", new { mail.Id, mail.Status, mail.RetryCount, mail.NextAttemptAt }, claimTransaction, cancellationToken: ct));
+                if (claimed != 1) continue;
+                lease = await claimConnection.QuerySingleAsync<DateTime>(new CommandDefinition(
+                    "SELECT next_attempt_at FROM email_outbox WHERE id=@Id", new { mail.Id }, claimTransaction, cancellationToken: ct));
+                await claimTransaction.CommitAsync(ct);
+            }
+            // SMTP may take a minute. The durable lease protects this message;
+            // no pooled database connection is needed while waiting on the network.
             string status = "SENT";
             string? error = null;
             var retries = mail.RetryCount;
-            DateTime? next = null;
+            int? retryDelaySeconds = null;
             try
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -161,15 +173,16 @@ public sealed class MailService
                 error = ex is OperationCanceledException ? "SMTP 连接超时" : SanitizeError(ex.Message);
                 var terminal = retries >= 3 || ex is FormatException || ex is SmtpCommandException command && (int)command.StatusCode >= 500;
                 status = terminal ? "FAILED" : "PENDING";
-                if (!terminal) next = DateTime.UtcNow.AddSeconds(30 * Math.Pow(2, Math.Clamp(retries - 1, 0, 6)));
+                if (!terminal) retryDelaySeconds = 30 * (1 << Math.Clamp(retries - 1, 0, 6));
             }
             // Once SendAsync has returned, the SMTP server accepted the message. Persist that
             // outcome during a short window independent of host shutdown; a QUIT failure must
             // not turn a known delivery into a retry and send a duplicate message.
             using var completion = status == "SENT" ? new CancellationTokenSource(TimeSpan.FromSeconds(15)) : null;
             var completionToken = completion?.Token ?? ct;
+            await using var conn = await db.OpenAsync(completionToken);
             await using var tx = await AppDb.BeginTransactionAsync(conn, completionToken);
-            var changed = await conn.ExecuteAsync(new CommandDefinition("UPDATE email_outbox SET status=@status,retry_count=@retries,last_error=@error,next_attempt_at=@next,sent_at=IF(@status='SENT',UTC_TIMESTAMP(6),sent_at) WHERE id=@Id AND status='SENDING' AND next_attempt_at=@lease", new { mail.Id, status, retries, error, next, lease }, tx, cancellationToken: completionToken));
+            var changed = await conn.ExecuteAsync(new CommandDefinition("UPDATE email_outbox SET status=@status,retry_count=@retries,last_error=@error,next_attempt_at=IF(@retryDelaySeconds IS NULL,NULL,TIMESTAMPADD(SECOND,@retryDelaySeconds,UTC_TIMESTAMP())),sent_at=IF(@status='SENT',UTC_TIMESTAMP(6),sent_at) WHERE id=@Id AND status='SENDING' AND next_attempt_at=@lease", new { mail.Id, status, retries, error, retryDelaySeconds, lease }, tx, cancellationToken: completionToken));
             if (changed == 1) await audit.WriteAsync(conn, tx, null, status == "SENT" ? "EMAIL_SENT" : status == "FAILED" ? "EMAIL_FAILED" : "EMAIL_RETRY", "email_outbox", mail.Id, new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error }, null, completionToken);
             await tx.CommitAsync(completionToken);
         }

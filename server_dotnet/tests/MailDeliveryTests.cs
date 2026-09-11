@@ -9,6 +9,44 @@ namespace Yf.Api.Tests;
 public sealed class MailDeliveryTests
 {
     [Fact(Timeout = 30_000)]
+    public async Task SlowSmtpReleasesTheOnlyDatabaseConnectionAndKeepsItsLease()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        var delivery = new PausedDelivery();
+        var audit = new AuditService(Array.Empty<IProjectAuditCapture>());
+        var service = new MailService(scope.Database, scope.Options, audit,
+            new SystemService(scope.Database, audit, scope.Options), NullLogger<MailService>.Instance, delivery);
+        var flush = service.FlushAsync(ct);
+        try
+        {
+            await delivery.Started.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(5));
+            await using (var connection = await scope.Database.OpenAsync(deadline.Token))
+            {
+                Assert.Equal("SENDING", await connection.ExecuteScalarAsync<string>(new CommandDefinition(
+                    "SELECT status FROM email_outbox WHERE id=1", cancellationToken: deadline.Token)));
+                Assert.InRange(await connection.ExecuteScalarAsync<long>(new CommandDefinition(
+                    "SELECT TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(),next_attempt_at) FROM email_outbox WHERE id=1",
+                    cancellationToken: deadline.Token)), 590, 600);
+            }
+            // A second worker can access the same one-connection pool, but cannot
+            // take or deliver the first worker's still-valid lease.
+            await service.FlushAsync(deadline.Token);
+            Assert.Equal(1, delivery.SendCount);
+        }
+        finally
+        {
+            delivery.Resume.TrySetResult();
+            await flush;
+        }
+        await using var finalConnection = await scope.Database.OpenAsync(ct);
+        Assert.Equal("SENT", await finalConnection.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT status FROM email_outbox WHERE id=1", cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 30_000)]
     public async Task AcceptedMessageRemainsSentWhenSmtpDisconnectFails()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -56,6 +94,9 @@ public sealed class MailDeliveryTests
         Assert.Equal("PENDING", row.Status);
         Assert.Equal(1, row.RetryCount);
         Assert.NotNull(row.NextAttemptAt);
+        Assert.InRange(await connection.ExecuteScalarAsync<long>(new CommandDefinition(
+            "SELECT TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(),next_attempt_at) FROM email_outbox WHERE id=1",
+            cancellationToken: ct)), 20, 30);
         Assert.Null(row.SentAt);
         Assert.Equal(1, delivery.SendCount);
         Assert.Equal(1, await connection.ExecuteScalarAsync<int>(new CommandDefinition(
@@ -94,6 +135,20 @@ public sealed class MailDeliveryTests
         {
             SendCount++;
             throw new IOException("simulated failure before SMTP accepted the message");
+        }
+    }
+
+    private sealed class PausedDelivery : ISmtpDelivery
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Resume { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int SendCount { get; private set; }
+        public async Task<SmtpDeliveryResult> SendAsync(SmtpOptions options, SmtpEnvelope envelope, CancellationToken ct)
+        {
+            SendCount++;
+            Started.TrySetResult();
+            await Resume.Task.WaitAsync(ct);
+            return new(null);
         }
     }
 
@@ -145,7 +200,8 @@ public sealed class MailDeliveryTests
                 {
                     ConnectionString = new MySqlConnectionStringBuilder(adminOptions.ConnectionString)
                     {
-                        Database = databaseName
+                        Database = databaseName,
+                        MaximumPoolSize = 1
                     }.ConnectionString,
                     StorageRoot = Path.Combine(Path.GetTempPath(), "yf_mail_test_storage"),
                     WorkerEnabled = false,

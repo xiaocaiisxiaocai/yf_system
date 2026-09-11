@@ -95,6 +95,9 @@ def run_workflow_acceptance(client, Client, conn, check):
     withdraw_permission_id = next(
         permission["id"] for permission in permissions
         if permission["code"] == "project:withdraw")
+    confirm_permission_id = next(
+        permission["id"] for permission in permissions
+        if permission["code"] == "project:confirm")
     supplier_role = next(
         role for role in client.call("GET", "/api/v1/admin/roles?pageSize=100")["list"]
         if role["name"] == "供应商人员")
@@ -137,6 +140,28 @@ def run_workflow_acceptance(client, Client, conn, check):
         client, Client, check, internal_employee, internal_initial,
         internal_user["id"], "workflow internal member")
 
+    confirm_only_role = client.call("POST", "/api/v1/admin/roles", {
+        "name": "仅确认无项目菜单-" + suffix,
+        "description": "verifies notification recipients can actually open the project",
+    })
+    client.call("PUT", f"/api/v1/admin/roles/{confirm_only_role['id']}/permissions", {
+        "permissionIds": [confirm_permission_id],
+    })
+    confirm_only_employee = "wf_confirm_only_" + suffix
+    confirm_only_initial = _password()
+    confirm_only_user = client.call("POST", "/api/v1/admin/users", {
+        "employeeNo": confirm_only_employee,
+        "password": confirm_only_initial,
+        "realName": "仅确认无项目菜单成员",
+        "email": confirm_only_employee + "@example.invalid",
+        "departmentId": None,
+        "roleId": confirm_only_role["id"],
+    })
+    confirm_only_client = _activate_user(
+        client, Client, check, confirm_only_employee, confirm_only_initial,
+        confirm_only_user["id"], "workflow confirm-only member")
+    confirm_only_client.call("GET", "/api/v1/projects", expected=403)
+
     created = client.call("POST", "/api/v1/projects", {
         "name": "工作流完整验收项目-" + suffix,
         "description": "draft lifecycle fixture",
@@ -165,7 +190,7 @@ def run_workflow_acceptance(client, Client, conn, check):
     )
 
     client.call("PUT", f"/api/v1/projects/{project_id}/members", {
-        "userIds": [internal_user["id"]],
+        "userIds": [internal_user["id"], confirm_only_user["id"]],
     })
     started = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
         "status": "IN_PROGRESS",
@@ -209,6 +234,11 @@ def run_workflow_acceptance(client, Client, conn, check):
     payload = (b"workflow-completed-read-boundary\n" * 12000) + b"EOF"
     file_id, _, _ = _upload_chunks(
         supplier_client, project_id, "workflow-boundary.pdf", payload)
+    check(
+        "file upload notifies a visible member but not a member without project:list",
+        _event_count(conn, project_id, "FILE_UPLOADED", internal_user["id"]) == 1
+        and _event_count(conn, project_id, "FILE_UPLOADED", confirm_only_user["id"]) == 0,
+    )
     message = supplier_client.call(
         "POST", f"/api/v1/projects/{project_id}/messages",
         {"content": "完成前创建，完成后仍应可读但不可删除"})
@@ -273,9 +303,13 @@ def run_workflow_acceptance(client, Client, conn, check):
         and project_audits.count("PROJECT_REJECT") == 1
         and project_audits.count("PROJECT_WITHDRAW") == 1
         and project_audits.count("PROJECT_CONFIRM") == 1
+        and _event_count(conn, project_id, "MESSAGE_CREATED", internal_user["id"]) == 1
+        and _event_count(conn, project_id, "MESSAGE_CREATED", confirm_only_user["id"]) == 0
         and _event_count(conn, project_id, "PROJECT_SUBMITTED", internal_user["id"]) == 3
+        and _event_count(conn, project_id, "PROJECT_SUBMITTED", confirm_only_user["id"]) == 0
         and _event_count(conn, project_id, "PROJECT_REJECTED", supplier_user["id"]) == 1
         and _event_count(conn, project_id, "PROJECT_WITHDRAWN", internal_user["id"]) == 1
+        and _event_count(conn, project_id, "PROJECT_WITHDRAWN", confirm_only_user["id"]) == 0
         and _event_count(conn, project_id, "PROJECT_WITHDRAWN", supplier_user["id"]) == 1
         and _event_count(conn, project_id, "PROJECT_CONFIRMED", supplier_user["id"]) == 1,
     )

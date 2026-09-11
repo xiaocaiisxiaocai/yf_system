@@ -77,6 +77,7 @@ public sealed partial class UploadService(
             Directory.CreateDirectory(tempDir);
             await FileStorage.ResolveExistingAsync(root, tempDir, requireFile: false, ct);
             var now = TruncateMilliseconds(DateTime.UtcNow);
+            SessionCommitRecoveryDecision? commitRecovery = null;
             try
             {
                 await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
@@ -97,13 +98,20 @@ public sealed partial class UploadService(
                 catch
                 {
                     using var reconcile = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-                    if (!await SessionExistsSafelyAsync(sessionId, reconcile.Token))
+                    // Only a positive read can turn a lost COMMIT acknowledgement into success.
+                    // A failed confirmation query is still an unknown outcome and must be reported
+                    // to the caller, while preserving the directory for a later retry or cleanup.
+                    commitRecovery = SessionCommitRecovery(
+                        await SessionExistsSafelyAsync(sessionId, reconcile.Token));
+                    if (!commitRecovery.Value.Acknowledge)
                         throw;
                 }
             }
             catch
             {
-                if (!await SessionExistsSafelyAsync(sessionId, ct))
+                var recovery = commitRecovery
+                    ?? SessionCommitRecovery(await SessionExistsSafelyAsync(sessionId, ct));
+                if (recovery.DeleteDirectory)
                     await TryDeleteDirectoryAsync(options.StorageRoot, tempDir, CancellationToken.None);
                 throw;
             }
@@ -488,16 +496,28 @@ public sealed partial class UploadService(
         return file is null ? throw ApiException.Conflict("会话已完成") : FileJson(file);
     }
 
-    private async Task<bool> SessionExistsSafelyAsync(string id, CancellationToken ct)
-    {
-        try
+    private async Task<bool?> SessionExistsSafelyAsync(string id, CancellationToken ct) =>
+        await ProbeSessionExistenceAsync(async cancellationToken =>
         {
-            await using var conn = await db.OpenAsync(ct);
+            await using var conn = await db.OpenAsync(cancellationToken);
             return await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-                "SELECT EXISTS(SELECT 1 FROM upload_sessions WHERE id=@Id)", new { Id = id }, cancellationToken: ct));
-        }
-        catch { return true; }
+                "SELECT EXISTS(SELECT 1 FROM upload_sessions WHERE id=@Id)", new { Id = id }, cancellationToken: cancellationToken));
+        }, ct);
+
+    internal static async Task<bool?> ProbeSessionExistenceAsync(
+        Func<CancellationToken, Task<bool>> probe, CancellationToken ct)
+    {
+        try { return await probe(ct); }
+        catch { return null; }
     }
+
+    internal static SessionCommitRecoveryDecision SessionCommitRecovery(bool? sessionExists) =>
+        sessionExists switch
+        {
+            true => new(Acknowledge: true, DeleteDirectory: false),
+            false => new(Acknowledge: false, DeleteDirectory: true),
+            null => new(Acknowledge: false, DeleteDirectory: false)
+        };
 
     private async Task ResetMergeLeaseSafelyAsync(string id, DateTime lease, CancellationToken ct)
     {
@@ -541,7 +561,15 @@ public sealed partial class UploadService(
             LEFT JOIN project_members pm ON pm.user_id=u.id AND pm.project_id=@ProjectId
             LEFT JOIN projects p ON p.id=@ProjectId
             LEFT JOIN suppliers s ON s.id=p.supplier_id AND s.status='ACTIVE'
-            WHERE u.status='ACTIVE' AND u.id<>@UploaderId AND (
+            WHERE u.status='ACTIVE' AND u.id<>@UploaderId
+              AND EXISTS (
+                  SELECT 1
+                  FROM user_roles ur
+                  JOIN roles r ON r.id=ur.role_id AND r.status='ACTIVE'
+                  JOIN role_permissions rp ON rp.role_id=r.id
+                  JOIN permissions perm ON perm.id=rp.permission_id AND perm.code='project:list'
+                  WHERE ur.user_id=u.id
+              ) AND (
                 (@UploaderType='SUPPLIER' AND u.user_type='INTERNAL' AND (u.id=p.created_by OR pm.user_id IS NOT NULL)) OR
                 (@UploaderType<>'SUPPLIER' AND u.user_type='SUPPLIER' AND u.supplier_id=p.supplier_id AND s.id IS NOT NULL)
             ) ORDER BY u.id

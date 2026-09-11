@@ -24,6 +24,10 @@ public class SystemTests
     [InlineData("notify.enabled", "yes")]
     [InlineData("upload.allowed_exts", "pdf,../exe")]
     [InlineData("security.management_lock", "anything")]
+    [InlineData("SECURITY.MANAGEMENT_LOCK", "anything")]
+    [InlineData(" security.management_lock ", "anything")]
+    [InlineData("security.management_lóck", "anything")]
+    [InlineData("UPLOAD.CHUNK_SIZE", "0")]
     public void UnsafeConfigValuesAreRejected(string key, string value)
         => Assert.Throws<ApiException>(() => SystemService.NormalizeConfig(key, value));
 

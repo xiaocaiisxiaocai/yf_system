@@ -106,3 +106,5 @@ internal sealed class UploadSessionRow
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
+
+internal readonly record struct SessionCommitRecoveryDecision(bool Acknowledge, bool DeleteDirectory);
