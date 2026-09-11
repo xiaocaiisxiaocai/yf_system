@@ -1,53 +1,133 @@
-import { useEffect, useState } from 'react'
-import { Empty, Spin } from '@arco-design/web-react'
+import { useEffect, useRef, useState } from 'react'
+import { Button, InputNumber, Select, Spin } from '@arco-design/web-react'
+import type { PDFDocumentProxy, PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dist'
 import http from '../api/client'
 
-export default function PdfPreview({ fileId }: { fileId: number }) {
-  const [result, setResult] = useState<{ fileId: number; url: string | null; failed: boolean }>({
-    fileId,
-    url: null,
-    failed: false,
-  })
+function PreviewError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return <div className="pdf-preview-status" role="alert">
+    <span>{message}</span>
+    <Button onClick={onRetry} aria-label="重试 PDF 预览">重试</Button>
+  </div>
+}
 
+function PdfPage({ document, pageNumber, zoom, width, onRetry }: {
+  document: PDFDocumentProxy; pageNumber: number; zoom: string; width: number; onRetry: () => void
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [ready, setReady] = useState(false)
+  const [failed, setFailed] = useState(false)
   useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
     let active = true
-    let obj: string | null = null
-    http
-      .get(`/files/${fileId}/content`, { responseType: 'blob' })
-      .then((r) => {
-        if (!active) return
-        obj = URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }))
-        setResult({ fileId, url: obj, failed: false })
-      })
-      .catch(() => {
-        if (active) setResult({ fileId, url: null, failed: true })
-      })
+    let renderTask: RenderTask | undefined
+    async function render() {
+      try {
+        const page = await document.getPage(pageNumber)
+        if (!active || !canvas) return
+        const base = page.getViewport({ scale: 1 })
+        const scale = zoom === 'fit' ? width / base.width : Number(zoom)
+        const viewport = page.getViewport({ scale })
+        // Bound backing-store memory for engineering drawings and high-DPI screens.
+        const density = Math.min(window.devicePixelRatio || 1, 2,
+          Math.sqrt(16_000_000 / (viewport.width * viewport.height)),
+          8192 / viewport.width, 8192 / viewport.height)
+        canvas.width = Math.max(1, Math.floor(viewport.width * density))
+        canvas.height = Math.max(1, Math.floor(viewport.height * density))
+        canvas.style.width = `${viewport.width}px`
+        canvas.style.height = `${viewport.height}px`
+        renderTask = page.render({ canvas, viewport, transform: [density, 0, 0, density, 0, 0], background: '#ffffff' })
+        await renderTask.promise
+        if (active) setReady(true)
+      } catch {
+        if (active) setFailed(true)
+      }
+    }
+    void render()
     return () => {
       active = false
-      if (obj) URL.revokeObjectURL(obj)
+      renderTask?.cancel()
+      canvas.width = 0
+      canvas.height = 0
+    }
+  }, [document, pageNumber, zoom, width])
+  return <>
+    {failed ? <PreviewError message="PDF 页面渲染失败，请重试或下载原文件查看。" onRetry={onRetry} />
+      : !ready && <div className="pdf-preview-status" role="status"><Spin />正在渲染第 {pageNumber} 页…</div>}
+    <canvas ref={canvasRef} role="img" aria-label={`PDF 第 ${pageNumber} 页`} style={{ display: ready && !failed ? 'block' : 'none' }} />
+  </>
+}
+
+function PdfDocument({ fileId, onRetry }: { fileId: number; onRetry: () => void }) {
+  const [document, setDocument] = useState<PDFDocumentProxy | null>(null)
+  const [error, setError] = useState('')
+  const [pageNumber, setPageNumber] = useState(1)
+  const [zoom, setZoom] = useState('fit')
+  const [width, setWidth] = useState(0)
+  const viewportRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    let active = true
+    let task: PDFDocumentLoadingTask | undefined
+    const controller = new AbortController()
+    async function load() {
+      try {
+        const [response, engine] = await Promise.all([
+          http.get<ArrayBuffer>(`/files/${fileId}/content`, { responseType: 'arraybuffer', signal: controller.signal }),
+          import('./pdfEngine'),
+        ])
+        if (!active) return
+        task = engine.openPdf(new Uint8Array(response.data))
+        const loaded = await task.promise
+        if (active) setDocument(loaded)
+      } catch (cause) {
+        if (active) setError(cause instanceof Error && cause.name === 'PasswordException'
+          ? '此 PDF 受密码保护，请下载原文件后输入文档密码查看。'
+          : 'PDF 加载失败，文件可能损坏或网络暂时不可用。请重试或下载原文件查看。')
+      }
+    }
+    void load()
+    return () => {
+      active = false
+      controller.abort()
+      // Destroy the worker as well as any pending parsing/rendering work.
+      void task?.destroy().catch(() => undefined)
     }
   }, [fileId])
+  useEffect(() => {
+    const element = viewportRef.current
+    if (!element) return
+    const update = () => setWidth(Math.max(1, element.clientWidth - 32))
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  const changePage = (value: number | undefined) => {
+    if (document && value !== undefined && Number.isFinite(value)) {
+      setPageNumber(Math.min(document.numPages, Math.max(1, Math.trunc(value))))
+      viewportRef.current?.scrollTo?.({ top: 0, left: 0 })
+    }
+  }
+  return <section className="pdf-preview" aria-label="PDF 预览">
+    {document && !error && <div className="pdf-preview-toolbar" role="group" aria-label="PDF 阅读控制">
+      <Button size="small" aria-label="上一页" disabled={pageNumber <= 1} onClick={() => changePage(pageNumber - 1)}>上一页</Button>
+      <InputNumber size="small" aria-label="PDF 页码" min={1} max={document.numPages} precision={0} value={pageNumber} onChange={changePage} style={{ width: 76 }} />
+      <span role="status">/ {document.numPages} 页</span>
+      <Button size="small" aria-label="下一页" disabled={pageNumber >= document.numPages} onClick={() => changePage(pageNumber + 1)}>下一页</Button>
+      <Select size="small" aria-label="PDF 缩放" value={zoom} onChange={setZoom} style={{ width: 120 }}
+        options={[{ value: 'fit', label: '适合宽度' }, ...[0.5, 0.75, 1, 1.25, 1.5, 2].map(value => ({ value: String(value), label: `${value * 100}%` }))]} />
+    </div>}
+    <div ref={viewportRef} className="pdf-preview-viewport" tabIndex={0} aria-label="PDF 页面内容">
+      {error ? <PreviewError message={error} onRetry={onRetry} />
+        : document && width > 0
+          ? <PdfPage key={`${pageNumber}:${zoom}:${width}`} document={document} pageNumber={pageNumber} zoom={zoom} width={width} onRetry={onRetry} />
+          : <div className="pdf-preview-status" role="status"><Spin />正在加载 PDF…</div>}
+    </div>
+  </section>
+}
 
-  const current = result.fileId === fileId ? result : { fileId, url: null, failed: false }
-
-  if (current.failed)
-    return (
-      <div style={{ padding: 60 }}>
-        <Empty description="PDF 加载失败，请尝试下载后查看" />
-      </div>
-    )
-  if (!current.url)
-    return (
-      <div style={{ textAlign: 'center', padding: 60 }}>
-        <Spin size={32} />
-      </div>
-    )
-  return (
-    <>
-      <div role="note" style={{ padding: '8px 16px', color: 'var(--color-text-2)' }}>
-        PDF 由浏览器预览；若预览区域为空白，请使用下方「下载原文件」查看。
-      </div>
-      <iframe className="pdf-frame" src={current.url} title="PDF 预览" />
-    </>
-  )
+export default function PdfPreview({ fileId }: { fileId: number }) {
+  const [attempt, setAttempt] = useState(0)
+  // Every file/retry owns fresh document, canvas, page and zoom state.
+  return <PdfDocument key={`${fileId}:${attempt}`} fileId={fileId} onRetry={() => setAttempt(value => value + 1)} />
 }

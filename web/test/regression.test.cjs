@@ -1364,23 +1364,8 @@ test('supplier form and table drop contact address and email fields', async () =
   await act(async () => renderer.unmount())
 })
 
-test('closing or switching PDF previews before download completion does not leak blob URLs', async () => {
-  const pending=new Map(),created=[],revoked=[]
-  const Page=loadTs('src/components/PdfPreview.tsx',{
-    '@arco-design/web-react':arco,
-    '../api/client':{get:url=>new Promise(resolve=>pending.set(url,resolve))},
-  },{Blob,URL:{createObjectURL:()=>{const u=`blob:test-${created.length}`;created.push(u);return u},revokeObjectURL:u=>revoked.push(u)}}).default
-  let renderer
-  await act(async()=>{renderer=create(React.createElement(Page,{fileId:1}))})
-  await act(async()=>renderer.update(React.createElement(Page,{fileId:2})))
-  await act(async()=>pending.get('/files/1/content')({data:'old pdf'}))
-  await act(async()=>pending.get('/files/2/content')({data:'current pdf'}))
-  assert.equal(renderer.root.findByType('iframe').props.src,created.at(-1))
-  await act(async()=>renderer.update(React.createElement(Page,{fileId:3})))
-  await act(async()=>renderer.unmount())
-  await act(async()=>pending.get('/files/3/content')({data:'closed pdf'}))
-  assert.deepEqual(new Set(revoked),new Set(created),'every created URL must be released, including late responses')
-})
+// PDF cancellation, late responses and document cleanup are covered with the
+// canvas renderer in pdf-preview.test.cjs (the iframe no longer creates blobs).
 
 test('file filtering clears a selection that is no longer visible', async () => {
   const Page=loadTs('src/components/FileTable.tsx',{
