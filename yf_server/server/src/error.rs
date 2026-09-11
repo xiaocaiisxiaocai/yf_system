@@ -23,8 +23,6 @@ pub enum AppError {
     NotFound,
     #[error("{0}")]
     Conflict(String),
-    #[error("失败次数过多，账号已锁定 30 分钟")]
-    Locked,
     #[error("需要图形验证码")]
     CaptchaRequired,
     #[error("服务器内部错误")]
@@ -41,7 +39,6 @@ impl AppError {
             Self::Forbidden | Self::OutOfScope | Self::MustChangePassword => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
-            Self::Locked => StatusCode::LOCKED,
             Self::CaptchaRequired => StatusCode::PRECONDITION_REQUIRED,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -57,7 +54,6 @@ impl AppError {
             Self::MustChangePassword => 40303,
             Self::NotFound => 40401,
             Self::Conflict(_) => 40901,
-            Self::Locked => 42301,
             Self::CaptchaRequired => 42801,
             Self::Internal(_) => 50000,
         }

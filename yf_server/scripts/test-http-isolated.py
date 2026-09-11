@@ -6,7 +6,6 @@ No running application is stopped; all resources created here are removed on exi
 import json
 import os
 from pathlib import Path
-import re
 import secrets
 import socket
 import subprocess
@@ -41,9 +40,17 @@ def main():
     url = urllib.parse.urlsplit(os.environ.get("YF_DATABASE_URL", local["database"]["url"]))
     if url.hostname not in ("localhost", "127.0.0.1", "::1"):
         raise SystemExit("HTTP 隔离测试仅允许本机 MySQL")
-    executable = ROOT / "target" / "debug" / ("server.exe" if os.name == "nt" else "server")
-    if not executable.is_file():
-        raise SystemExit("请先在 yf_server 运行 cargo build -p server --locked --offline")
+    # Fixture endpoints are compiled exclusively into the test executable.
+    build = subprocess.run(["cargo", "test", "-p", "server", "--no-run", "--locked", "--offline", "--message-format=json"],
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
+    if build.returncode:
+        print(build.stderr, file=sys.stderr)
+        raise SystemExit("HTTP 测试二进制构建失败")
+    artifacts = [json.loads(line) for line in build.stdout.splitlines() if line.startswith('{')]
+    executable = next((Path(item["executable"]) for item in artifacts if item.get("reason") == "compiler-artifact"
+        and item.get("target", {}).get("name") == "server" and item.get("profile", {}).get("test") and item.get("executable")), None)
+    if executable is None:
+        raise SystemExit("缺少本次构建的 HTTP 测试二进制")
 
     database = "yf_test_http_" + uuid.uuid4().hex
     connection = pymysql.connect(
@@ -80,11 +87,14 @@ def main():
                 for section, values in cfg.items()
             ), encoding="utf-8")
             env = {key: value for key, value in os.environ.items() if not key.startswith("YF_")}
+            initial_password = secrets.token_urlsafe(18)
+            env["YF_BOOTSTRAP_PASSWORD"] = initial_password
+            env["YF_TEST_DATABASE_URL"] = cfg["database"]["url"]
             env.update(YF_CONFIG=str(config_path), RUST_LOG="info,sea_orm=warn,sqlx=warn", PYTHONIOENCODING="utf-8")
             log_path = temp / "server.private.log"
             with log_path.open("wb") as log:
                 process = subprocess.Popen(
-                    [str(executable)], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
+                    [str(executable), "regression_http_fixture::serve_http_fixture", "--ignored", "--exact", "--nocapture"], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
                 )
                 try:
@@ -100,18 +110,21 @@ def main():
                         if time.monotonic() >= deadline:
                             raise RuntimeError("隔离服务健康检查超时")
                         time.sleep(0.2)
-                    # The bootstrap password exists only in this temporary private log.
-                    text = re.sub(r"\x1b\[[0-9;]*m", "", log_path.read_text(encoding="utf-8"))
-                    initial = re.search(r"\bpassword=([^\s]+)", text)
-                    if initial is None:
-                        raise RuntimeError("未发现隔离库首次部署凭据")
-                    auth = request(base, "POST", "/api/v1/auth/login", {"employeeNo": "admin", "password": initial[1]})
+                    startup_log = log_path.read_text(encoding="utf-8")
+                    if "首次部署管理员已创建" not in startup_log:
+                        raise RuntimeError("初始化日志证据缺失")
+                    if initial_password in startup_log:
+                        raise RuntimeError("初始化日志不应包含密码")
+                    challenge = request(base, "GET", "/__test/captcha")
+                    auth = request(base, "POST", "/api/v1/auth/login", {"employeeNo": "admin", "password": initial_password, **challenge})
                     if auth.get("mustChangePassword") is not True:
                         raise RuntimeError("隔离管理员未要求首次改密")
                     password = secrets.token_urlsafe(12)
-                    request(base, "PUT", "/api/v1/auth/password", {"oldPassword": initial[1], "newPassword": password}, auth["accessToken"])
+                    request(base, "PUT", "/api/v1/auth/password", {"oldPassword": initial_password, "newPassword": password}, auth["accessToken"])
                     print("隔离服务已就绪；首次改密已验证；SMTP 禁用；凭据不输出", flush=True)
                     env.update(YF_E2E_ISOLATED="1", YF_E2E_BASE_URL=base + "/api/v1", YF_E2E_ADMIN_PASSWORD=password)
+                    if sample := os.environ.get("YF_TEST_CAPTCHA_SAMPLE"):
+                        env["YF_TEST_CAPTCHA_SAMPLE"] = sample
                     result = subprocess.run([sys.executable, str(ROOT / "e2e_test.py")], cwd=ROOT, env=env)
                     return result.returncode
                 finally:

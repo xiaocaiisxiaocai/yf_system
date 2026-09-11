@@ -341,7 +341,10 @@ async fn project_workflow_migration_clears_project_domain_and_preserves_accounts
     migration::Migrator::up(&db, None).await.unwrap();
 
     // The structural migration itself must also be safe when invoked again after all DDL landed.
-    let workflow = migration::Migrator::migrations().pop().unwrap();
+    let workflow = migration::Migrator::migrations()
+        .into_iter()
+        .find(|migration| migration.name() == "m20260910_000016_project_workflow")
+        .expect("project workflow migration must remain registered");
     let manager = migration::SchemaManager::new(&db);
     workflow.up(&manager).await.unwrap();
 

@@ -79,3 +79,69 @@ pub async fn check_perm(db: &impl ConnectionTrait, user_id: u64, code: &str) -> 
         Err(AppError::Forbidden)
     }
 }
+
+/// Called inside the management transaction: delegates cannot grant permissions
+/// they do not own, or mutate accounts/roles above their authority ceiling.
+pub async fn ensure_grantable_permissions(
+    db: &impl ConnectionTrait,
+    actor: u64,
+    ids: &[u64],
+) -> ApiResult<()> {
+    if super::scope::is_system_admin(db, actor).await? {
+        return Ok(());
+    }
+    let owned = permission_codes(db, actor).await?;
+    let requested = crate::entity::permissions::Entity::find()
+        .filter(crate::entity::permissions::Column::Id.is_in(ids.to_vec()))
+        .all(db)
+        .await?;
+    if requested.len() != ids.iter().collect::<std::collections::HashSet<_>>().len()
+        || requested.iter().any(|p| !owned.contains(&p.code))
+    {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
+}
+
+pub async fn ensure_manage_role(
+    db: &impl ConnectionTrait,
+    actor: u64,
+    role_id: u64,
+) -> ApiResult<()> {
+    if super::scope::is_system_admin(db, actor).await? {
+        return Ok(());
+    }
+    let role = crate::entity::roles::Entity::find_by_id(role_id)
+        .one(db)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if role.is_built_in && role.name == "系统管理员" {
+        return Err(AppError::Forbidden);
+    }
+    let ids = crate::entity::role_permissions::Entity::find()
+        .filter(crate::entity::role_permissions::Column::RoleId.eq(role_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|r| r.permission_id)
+        .collect::<Vec<_>>();
+    ensure_grantable_permissions(db, actor, &ids).await
+}
+
+pub async fn ensure_manage_user(
+    db: &impl ConnectionTrait,
+    actor: u64,
+    target: u64,
+) -> ApiResult<()> {
+    if super::scope::is_system_admin(db, actor).await? {
+        return Ok(());
+    }
+    let bindings = crate::entity::user_roles::Entity::find()
+        .filter(crate::entity::user_roles::Column::UserId.eq(target))
+        .all(db)
+        .await?;
+    for binding in bindings {
+        ensure_manage_role(db, actor, binding.role_id).await?;
+    }
+    Ok(())
+}

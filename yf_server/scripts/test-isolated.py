@@ -1,5 +1,6 @@
 """Create a disposable local database; never run tests against the configured business database."""
 import os
+import secrets
 from pathlib import Path
 import subprocess
 import sys
@@ -25,9 +26,10 @@ try:
         created = True
     with tempfile.TemporaryDirectory(prefix="yf_test_storage_") as storage:
         env = os.environ.copy()
+        env["YF_BOOTSTRAP_PASSWORD"] = secrets.token_urlsafe(18)
         env["YF_TEST_DATABASE_URL"] = urllib.parse.urlunsplit((url.scheme, url.netloc, "/" + name, url.query, ""))
         env["YF_TEST_STORAGE_ROOT"] = storage
-        result = subprocess.run(["cargo", "test", "-p", "server", "--locked", "--offline", *sys.argv[1:], "--", "--ignored", "--test-threads=1"], cwd=root, env=env)
+        result = subprocess.run(["cargo", "test", "-p", "server", "--locked", "--offline", *sys.argv[1:], "--", "--ignored", "--test-threads=1", "--skip", "regression_http_fixture::serve_http_fixture"], cwd=root, env=env)
     sys.exit(result.returncode)
 finally:
     if created:

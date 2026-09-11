@@ -3,9 +3,7 @@ use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 
 use crate::error::AppError;
 
-pub const MAX_PASSWORD_BYTES: usize = 128;
-pub const MIN_PASSWORD_CHARS: usize = 6;
-pub const MAX_PASSWORD_CHARS: usize = 20;
+pub use migration::password_policy::{strong_enough, MAX_PASSWORD_BYTES, POLICY_MESSAGE};
 
 pub fn hash(password: &str) -> Result<String, AppError> {
     let salt = SaltString::generate(&mut OsRng);
@@ -24,21 +22,34 @@ pub fn verify(password: &str, hash: &str) -> bool {
     }
 }
 
-/// 密码策略：6–20 个字符；登录入口另有 UTF-8 字节数上限，避免超大请求。
-pub fn strong_enough(password: &str) -> bool {
-    password.chars().count() >= MIN_PASSWORD_CHARS
-        && password.chars().count() <= MAX_PASSWORD_CHARS
-        && password.len() <= MAX_PASSWORD_BYTES
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
-    fn passwords_follow_the_six_to_twenty_character_policy() {
-        assert!(super::strong_enough("123456"));
-        assert!(super::strong_enough("纯中文密码啊"));
-        assert!(super::strong_enough(&"a".repeat(20)));
-        assert!(!super::strong_enough("12345"));
-        assert!(!super::strong_enough(&"a".repeat(21)));
+    fn passwords_enforce_length_and_common_weak_patterns() {
+        assert!(super::strong_enough("Regression123"));
+        assert!(super::strong_enough("这是一句可以记住的长密码短语"));
+        let boundary = "😀abcdeFG".repeat(8);
+        assert!(super::strong_enough(&boundary));
+        assert!(!super::strong_enough(&(boundary + "x")));
+        for weak in [
+            "123456",
+            "shortphrase",
+            "Password123456!",
+            "P@ssw0rd1234!",
+            "passwordpassword1!",
+            "qwerty123456",
+            "123456789012",
+            "abcdabcdabcd",
+            "            ",
+        ] {
+            assert!(!super::strong_enough(weak));
+        }
+    }
+
+    #[test]
+    fn existing_short_password_hashes_still_verify() {
+        let old = super::hash("Old123").unwrap();
+        assert!(super::verify("Old123", &old));
+        assert!(!super::strong_enough("Old123"));
     }
 }

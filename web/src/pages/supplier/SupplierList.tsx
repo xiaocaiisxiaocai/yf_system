@@ -526,7 +526,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
                   field="password"
                   rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}
                 >
-                  <PasswordInput placeholder="6-20 位" />
+                  <PasswordInput placeholder="12-64 位" />
                 </Form.Item>
               </>
             )}
@@ -560,7 +560,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
             field="newPassword"
                 rules={[{ required: true, message: '请输入新密码' }, passwordRule]}
           >
-            <PasswordInput placeholder="6-20 位" />
+            <PasswordInput placeholder="12-64 位" />
           </Form.Item>
           <div className="dialog-note">下次登录需改密</div>
         </Form>

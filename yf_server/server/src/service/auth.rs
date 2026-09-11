@@ -1,12 +1,15 @@
-//! 认证纵切片：登录（含锁定策略）、refresh 旋转、登出、改密、profile。
-//! 规则：连续失败 5 次锁 30 分钟；改密/登出吊销 refresh token；供应商禁用则其人员拒绝登录。
+//! 认证纵切片：验证码登录、refresh 旋转、持久会话撤销、改密、profile。
+//! 规则：每次登录都验证一次图形挑战；匿名失败不锁账号；改密吊销全部会话，登出只吊销当前会话族。
+use argon2::password_hash::{PasswordHasher, SaltString};
+use argon2::Argon2;
 use chrono::{Duration, Utc};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait,
-    QueryFilter, QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    QuerySelect, Set, TransactionTrait,
 };
 use serde_json::json;
+use std::sync::LazyLock;
 
 use crate::config::Config;
 use crate::dto::*;
@@ -18,10 +21,19 @@ use crate::util::{jwt, password, token};
 
 use super::audit;
 
-const MAX_FAILED: i32 = 5;
+/// A real Argon2id hash keeps unknown-user verification on the same cost path as known users.
+/// It is initialized on the first login attempt regardless of whether that username exists.
+static DUMMY_PASSWORD_HASH: LazyLock<String> = LazyLock::new(|| {
+    let salt = SaltString::encode_b64(b"yf-login-dummy-salt")
+        .expect("the fixed dummy-login salt is a valid PHC salt");
+    Argon2::default()
+        .hash_password(b"constant-dummy-login-password", &salt)
+        .expect("the fixed dummy-login password can be hashed")
+        .to_string()
+});
 
-fn lock_active(until: Option<chrono::DateTime<Utc>>, now: chrono::DateTime<Utc>) -> bool {
-    until.is_some_and(|value| value > now)
+fn invalid_credentials() -> AppError {
+    AppError::Unauthorized("工号或密码错误".into())
 }
 
 /// 返回 (登录响应, refresh token 原文)
@@ -32,20 +44,40 @@ pub async fn login(
     ip: Option<String>,
     captchas: &crate::state::CaptchaStore,
 ) -> ApiResult<(LoginResponse, String)> {
-    let txn = db.begin().await?;
-    let user = users::Entity::find()
-        .filter(users::Column::EmployeeNo.eq(req.employee_no.trim()))
-        .lock_exclusive()
-        .one(&txn)
-        .await?;
+    // A challenge is required for every account and every attempt. This preserves one response
+    // path for unknown, disabled and formerly locked accounts while IP limits bound issuance and
+    // login attempts in the handler.
+    let challenge_ok = match (&req.captcha_id, &req.captcha_code) {
+        (Some(id), Some(code)) => super::captcha::verify(captchas, id, code),
+        _ => false,
+    };
+    if !challenge_ok {
+        return Err(AppError::CaptchaRequired);
+    }
 
-    // 统一报错文案，避免工号枚举
-    let Some(user) = user else {
-        txn.rollback().await?;
+    let candidate = users::Entity::find()
+        .filter(users::Column::EmployeeNo.eq(req.employee_no.trim()))
+        .one(db)
+        .await?;
+    // Force initialization on every process's first login before selecting either hash.
+    let dummy_hash = DUMMY_PASSWORD_HASH.as_str();
+    let password_matches = password::verify(
+        &req.password,
+        candidate
+            .as_ref()
+            .map(|user| user.password_hash.as_str())
+            .unwrap_or(dummy_hash),
+    );
+    let failed_user_id = candidate.as_ref().map(|user| user.id);
+    let failed_employee_no = candidate
+        .as_ref()
+        .map(|user| user.employee_no.clone())
+        .unwrap_or_else(|| req.employee_no.clone());
+    let Some(candidate) = candidate.filter(|_| password_matches) else {
         audit::log(
             db,
-            None,
-            Some(req.employee_no.clone()),
+            failed_user_id,
+            Some(failed_employee_no),
             "LOGIN_FAILED",
             None,
             None,
@@ -53,82 +85,31 @@ pub async fn login(
             ip,
         )
         .await;
-        return Err(AppError::Unauthorized("工号或密码错误".into()));
+        return Err(invalid_credentials());
     };
 
+    // Re-read under a row lock after the expensive password check so an admin reset/disable and
+    // login cannot cross. Wrong guesses never take the account lock.
+    let txn = db.begin().await?;
+    let user = users::Entity::find_by_id(candidate.id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or_else(invalid_credentials)?;
     let now = Utc::now();
-    // 连续失败 3 次后要求图形验证码
-    if user.failed_login_attempts >= 3 {
-        let ok = match (&req.captcha_id, &req.captcha_code) {
-            (Some(id), Some(code)) => super::captcha::verify(captchas, id, code),
-            _ => false,
-        };
-        if !ok {
-            return Err(AppError::CaptchaRequired);
-        }
-    }
-
-    if lock_active(user.locked_until, now) {
-        return Err(AppError::Locked);
-    }
-    if user.status != CommonStatus::Active {
-        return Err(AppError::Unauthorized("账号已被禁用".into()));
-    }
-    if let Some(sid) =
-        crate::middleware::auth::supplier_id_for_auth(user.user_type, user.supplier_id)?
-    {
-        let supplier = suppliers::Entity::find_by_id(sid).one(&txn).await?;
-        if supplier.map(|s| s.status) != Some(CommonStatus::Active) {
-            return Err(AppError::Unauthorized("所属供应商已被禁用".into()));
-        }
-    }
-
-    if !password::verify(&req.password, &user.password_hash) {
-        // 原子自增，避免并发失败登录丢失计数
-        users::Entity::update_many()
-            .col_expr(
-                users::Column::FailedLoginAttempts,
-                Expr::col(users::Column::FailedLoginAttempts).add(1),
-            )
-            .filter(users::Column::Id.eq(user.id))
-            .exec(&txn)
-            .await?;
-        let attempts = users::Entity::find_by_id(user.id)
+    let supplier_active = match (user.user_type, user.supplier_id) {
+        (UserType::Internal, _) => true,
+        (UserType::Supplier, Some(sid)) => suppliers::Entity::find_by_id(sid)
             .one(&txn)
             .await?
-            .map(|u| u.failed_login_attempts)
-            .unwrap_or(0);
-        if attempts >= MAX_FAILED {
-            // 仅在未锁定状态下落锁，防止并发重复触发
-            users::Entity::update_many()
-                .col_expr(users::Column::FailedLoginAttempts, Expr::value(0))
-                .col_expr(
-                    users::Column::LockedUntil,
-                    Expr::value(now + Duration::minutes(30)),
-                )
-                .filter(users::Column::Id.eq(user.id))
-                .filter(
-                    Condition::any()
-                        .add(users::Column::LockedUntil.is_null())
-                        .add(users::Column::LockedUntil.lte(now)),
-                )
-                .exec(&txn)
-                .await?;
-            txn.commit().await?;
-            audit::log(
-                db,
-                Some(user.id),
-                Some(user.employee_no.clone()),
-                "LOGIN_LOCKED",
-                None,
-                None,
-                None,
-                ip,
-            )
-            .await;
-            return Err(AppError::Locked);
-        }
-        txn.commit().await?;
+            .is_some_and(|supplier| supplier.status == CommonStatus::Active),
+        (UserType::Supplier, None) => false,
+    };
+    if !password::verify(&req.password, &user.password_hash)
+        || user.status != CommonStatus::Active
+        || !supplier_active
+    {
+        txn.rollback().await?;
         audit::log(
             db,
             Some(user.id),
@@ -140,13 +121,7 @@ pub async fn login(
             ip,
         )
         .await;
-        if attempts >= 3 {
-            return Err(AppError::CaptchaRequired);
-        }
-        return Err(AppError::Unauthorized(format!(
-            "工号或密码错误（剩余尝试次数 {}）",
-            MAX_FAILED - attempts
-        )));
+        return Err(invalid_credentials());
     }
 
     let mut am: users::ActiveModel = user.clone().into();
@@ -156,13 +131,22 @@ pub async fn login(
     am.last_login_ip = Set(ip.clone());
     am.update(&txn).await?;
 
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let refresh = issue_refresh(
+        &txn,
+        user.id,
+        &session_id,
+        cfg.jwt.refresh_ttl_days,
+        ip.clone(),
+    )
+    .await?;
     let (access_token, expires_at) = jwt::issue_access(
         &cfg.jwt.secret,
         user.id,
         &user.employee_no,
+        &session_id,
         cfg.jwt.access_ttl_minutes,
     )?;
-    let refresh = issue_refresh(&txn, user.id, cfg.jwt.refresh_ttl_days, ip.clone()).await?;
     txn.commit().await?;
     audit::log(
         db,
@@ -209,12 +193,14 @@ async fn perms_and_menus(
 async fn issue_refresh(
     db: &impl ConnectionTrait,
     user_id: u64,
+    session_id: &str,
     ttl_days: i64,
     ip: Option<String>,
 ) -> ApiResult<String> {
     let raw = token::new_refresh_token();
     refresh_tokens::ActiveModel {
         user_id: Set(user_id),
+        session_id: Set(session_id.to_string()),
         token_hash: Set(token::hash_token(&raw)),
         expires_at: Set(Utc::now() + Duration::days(ttl_days)),
         revoked: Set(false),
@@ -227,7 +213,7 @@ async fn issue_refresh(
     Ok(raw)
 }
 
-/// 旋转 refresh：CAS 吊销旧 token，重放（并发/盗用）则吊销该用户全部会话
+/// 旋转 refresh：CAS 吊销旧 token；重放仅吊销被泄露的会话族。
 pub async fn refresh(
     db: &DatabaseConnection,
     cfg: &Config,
@@ -254,9 +240,9 @@ pub async fn refresh(
         .ok_or_else(|| AppError::Unauthorized("登录状态无效".into()))?;
 
     if row.revoked || row.expires_at < Utc::now() {
-        // 已吊销的旧 token 再次使用 = 疑似重放/泄露，吊销该用户全部 refresh token
+        // 已吊销的旧 token 再次使用 = 疑似重放/泄露，吊销该会话族。
         if row.revoked {
-            revoke_all(&txn, row.user_id).await?;
+            revoke_session(&txn, row.user_id, &row.session_id).await?;
             txn.commit().await?;
             audit::log(
                 db,
@@ -295,13 +281,15 @@ pub async fn refresh(
         return Err(AppError::Unauthorized("登录状态已失效，请重新登录".into()));
     }
 
+    let new_refresh =
+        issue_refresh(&txn, user.id, &row.session_id, cfg.jwt.refresh_ttl_days, ip).await?;
     let (access_token, expires_at) = jwt::issue_access(
         &cfg.jwt.secret,
         user.id,
         &user.employee_no,
+        &row.session_id,
         cfg.jwt.access_ttl_minutes,
     )?;
-    let new_refresh = issue_refresh(&txn, user.id, cfg.jwt.refresh_ttl_days, ip).await?;
     txn.commit().await?;
     Ok((
         TokenResponse {
@@ -312,14 +300,49 @@ pub async fn refresh(
     ))
 }
 
-pub async fn logout(db: &DatabaseConnection, refresh_token: Option<&str>) -> ApiResult<()> {
-    if let Some(raw) = refresh_token {
-        refresh_tokens::Entity::update_many()
-            .col_expr(refresh_tokens::Column::Revoked, Expr::value(true))
+pub async fn logout(
+    db: &DatabaseConnection,
+    refresh_token: Option<&str>,
+    access_session: Option<&(u64, String)>,
+) -> ApiResult<()> {
+    let cookie_session = if let Some(raw) = refresh_token {
+        refresh_tokens::Entity::find()
             .filter(refresh_tokens::Column::TokenHash.eq(token::hash_token(raw)))
-            .exec(db)
+            .one(db)
+            .await?
+            .map(|row| (row.user_id, row.session_id))
+    } else {
+        None
+    };
+    let mut targets = Vec::with_capacity(2);
+    if let Some(target) = cookie_session {
+        targets.push(target);
+    }
+    if let Some(target) = access_session {
+        targets.push(target.clone());
+    }
+    targets.sort_unstable();
+    targets.dedup();
+    if targets.is_empty() {
+        return Ok(());
+    }
+
+    let txn = db.begin().await?;
+    // Match refresh/change-password lock ordering. Sorting user ids also prevents two valid
+    // credentials from producing opposite lock orders.
+    let mut user_ids: Vec<u64> = targets.iter().map(|(user_id, _)| *user_id).collect();
+    user_ids.sort_unstable();
+    user_ids.dedup();
+    for user_id in user_ids {
+        users::Entity::find_by_id(user_id)
+            .lock_exclusive()
+            .one(&txn)
             .await?;
     }
+    for (user_id, session_id) in targets {
+        revoke_session(&txn, user_id, &session_id).await?;
+    }
+    txn.commit().await?;
     Ok(())
 }
 
@@ -341,7 +364,7 @@ pub async fn change_password(
         return Err(AppError::BadRequest("原密码错误".into()));
     }
     if !password::strong_enough(&req.new_password) {
-        return Err(AppError::BadRequest("新密码需 6-20 位".into()));
+        return Err(AppError::BadRequest(password::POLICY_MESSAGE.into()));
     }
     let mut am: users::ActiveModel = user.into();
     am.password_hash = Set(password::hash(&req.new_password)?);
@@ -369,6 +392,20 @@ pub async fn revoke_all(db: &impl ConnectionTrait, user_id: u64) -> ApiResult<()
     refresh_tokens::Entity::update_many()
         .col_expr(refresh_tokens::Column::Revoked, Expr::value(true))
         .filter(refresh_tokens::Column::UserId.eq(user_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+async fn revoke_session(
+    db: &impl ConnectionTrait,
+    user_id: u64,
+    session_id: &str,
+) -> ApiResult<()> {
+    refresh_tokens::Entity::update_many()
+        .col_expr(refresh_tokens::Column::Revoked, Expr::value(true))
+        .filter(refresh_tokens::Column::UserId.eq(user_id))
+        .filter(refresh_tokens::Column::SessionId.eq(session_id))
         .exec(db)
         .await?;
     Ok(())
@@ -442,13 +479,13 @@ async fn brief(db: &DatabaseConnection, user: &users::Model) -> ApiResult<UserBr
 
 #[cfg(test)]
 mod tests {
-    use super::lock_active;
-    use chrono::{Duration, Utc};
+    use super::DUMMY_PASSWORD_HASH;
 
     #[test]
-    fn expired_lock_is_not_active_and_can_be_rearmed() {
-        let now = Utc::now();
-        assert!(!lock_active(Some(now - Duration::seconds(1)), now));
-        assert!(lock_active(Some(now + Duration::seconds(1)), now));
+    fn dummy_password_hash_uses_the_normal_verifier() {
+        assert!(crate::util::password::verify(
+            "constant-dummy-login-password",
+            DUMMY_PASSWORD_HASH.as_str()
+        ));
     }
 }

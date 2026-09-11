@@ -161,6 +161,7 @@ pub async fn update(
     let txn = db.begin().await?;
     super::perm::lock_management_state(&txn).await?;
     super::perm::recheck_manager(&txn, me.id, "role:manage").await?;
+    super::perm::ensure_manage_role(&txn, me.id, id).await?;
     let role = roles::Entity::find_by_id(id)
         .one(&txn)
         .await?
@@ -208,6 +209,7 @@ pub async fn set_status(
     let txn = db.begin().await?;
     super::perm::lock_management_state(&txn).await?;
     super::perm::recheck_manager(&txn, me.id, "role:manage").await?;
+    super::perm::ensure_manage_role(&txn, me.id, id).await?;
     let role = roles::Entity::find_by_id(id)
         .one(&txn)
         .await?
@@ -274,6 +276,7 @@ pub async fn assign_permissions(
     let txn = db.begin().await?;
     super::perm::lock_management_state(&txn).await?;
     super::perm::recheck_manager(&txn, me.id, "role:manage").await?;
+    super::perm::ensure_manage_role(&txn, me.id, id).await?;
     let role = roles::Entity::find_by_id(id)
         .one(&txn)
         .await?
@@ -285,6 +288,7 @@ pub async fn assign_permissions(
     let mut permission_ids = req.permission_ids.clone();
     permission_ids.sort_unstable();
     permission_ids.dedup();
+    super::perm::ensure_grantable_permissions(&txn, me.id, &permission_ids).await?;
     let valid: std::collections::HashSet<u64> = permissions::Entity::find()
         .filter(permissions::Column::Id.is_in(permission_ids.clone()))
         .all(&txn)
@@ -385,6 +389,7 @@ pub async fn delete(db: &DatabaseConnection, me: &CurrentUser, id: u64) -> ApiRe
     let txn = db.begin().await?;
     super::perm::lock_management_state(&txn).await?;
     super::perm::recheck_manager(&txn, me.id, "role:delete").await?;
+    super::perm::ensure_manage_role(&txn, me.id, id).await?;
     let role = roles::Entity::find_by_id(id)
         .one(&txn)
         .await?

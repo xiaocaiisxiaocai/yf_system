@@ -6,8 +6,8 @@ pub mod system;
 
 use axum::extract::DefaultBodyLimit;
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::middleware::from_fn_with_state;
+use axum::http::{header, HeaderValue, Method, StatusCode};
+use axum::middleware::{from_fn, from_fn_with_state, Next};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use tower_http::cors::CorsLayer;
@@ -19,15 +19,41 @@ use crate::service;
 use crate::state::AppState;
 
 pub fn router(state: AppState) -> Router {
+    // Only the configured frontend origin can read credentialed API responses.
+    // Local Vite proxy and production same-origin requests do not require CORS.
+    let web_uri: axum::http::Uri = state
+        .cfg
+        .web
+        .base_url
+        .parse()
+        .expect("validated web.base_url");
+    let origin = HeaderValue::from_str(&format!(
+        "{}://{}",
+        web_uri.scheme_str().unwrap(),
+        web_uri.authority().unwrap()
+    ))
+    .expect("validated frontend origin");
+    let cors = CorsLayer::new()
+        .allow_origin(origin)
+        .allow_credentials(true)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
     // ---- 公开路由 ----
     let public = Router::new()
         .route("/auth/login", post(auth::login))
+        .route("/auth/logout", post(auth::logout))
         .route("/auth/refresh", post(auth::refresh))
         .route("/auth/captcha", get(captcha));
 
     // ---- 受保护路由（仅登录，数据范围由 service 层强制）----
     let authed = Router::new()
-        .route("/auth/logout", post(auth::logout))
         .route(
             "/auth/profile",
             get(auth::profile).put(auth::update_profile),
@@ -225,9 +251,35 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .nest("/api/v1", public.merge(protected))
         .layer(TraceLayer::new_for_http())
-        // 开发期放开；生产由 IIS 同源托管前端后可移除
-        .layer(CorsLayer::permissive())
+        .layer(cors)
+        .layer(from_fn(security_headers))
         .with_state(state)
+}
+
+async fn security_headers(req: axum::extract::Request, next: Next) -> axum::response::Response {
+    let is_api = req.uri().path().starts_with("/api/");
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    if is_api {
+        headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        );
+        headers.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("frame-ancestors 'none'"),
+        );
+    }
+    response
 }
 
 async fn health(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
@@ -243,7 +295,21 @@ async fn health(State(state): State<AppState>) -> (StatusCode, Json<serde_json::
     }
 }
 
-async fn captcha(State(state): State<AppState>) -> Json<CaptchaResp> {
+async fn captcha(
+    State(state): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+) -> crate::error::ApiResult<Json<CaptchaResp>> {
+    let ip = auth::resolve_client_ip(peer, &headers, state.cfg.server.trust_loopback_proxy);
+    if !state.rate_allow(
+        &format!("captcha:{ip}"),
+        30,
+        std::time::Duration::from_secs(60),
+    ) {
+        return Err(crate::error::AppError::BadRequest(
+            "验证码请求过于频繁，请稍后再试".into(),
+        ));
+    }
     let (captcha_id, svg) = service::captcha::issue(&state.captchas);
-    Json(CaptchaResp { captcha_id, svg })
+    Ok(Json(CaptchaResp { captcha_id, svg }))
 }

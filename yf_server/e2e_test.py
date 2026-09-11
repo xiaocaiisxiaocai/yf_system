@@ -16,11 +16,16 @@ if not ADMIN_PASSWORD:
     print("缺少 YF_E2E_ADMIN_PASSWORD；测试不会读取或内置管理员密码。", file=sys.stderr)
     sys.exit(2)
 
-def req(method, path, body=None, token=None, raw=None, cookie=None):
+def req(method, path, body=None, token=None, raw=None, cookie=None, headers=None):
+    if path == "/auth/login" and method == "POST" and isinstance(body, dict) and not body.get("captchaId"):
+        # Only available in the cfg(test) fixture launched by the isolation runner.
+        with urllib.request.urlopen(BASE.removesuffix('/api/v1') + '/__test/captcha', timeout=5) as response:
+            body = {**body, **json.load(response)}
     url = BASE + urllib.parse.quote(path, safe="/?=&%:+,")
     h = {"Content-Type": "application/json"}
     if token: h["Authorization"] = "Bearer " + token
     if cookie: h["Cookie"] = cookie
+    if headers: h.update(headers)
     data = None
     if raw is not None:
         data = raw
@@ -50,6 +55,19 @@ def login(employee_no, password, captcha_id=None, captcha_code=None):
     body = {"employeeNo": employee_no, "password": password}
     if captcha_id: body["captchaId"] = captcha_id; body["captchaCode"] = captcha_code
     return req("POST", "/auth/login", body)[:2]
+
+print("== 0. HTTP 安全边界 ==")
+s, _, h = req("GET", "/auth/captcha", headers={"Origin": "https://untrusted.invalid"})
+h = {key.lower(): value for key, value in h.items()}
+check("API 安全响应头和禁止缓存", s == 200 and h.get("x-content-type-options") == "nosniff" and h.get("x-frame-options") == "DENY" and h.get("cache-control") == "private, no-store")
+check("未授权跨域来源不能读取响应", h.get("access-control-allow-origin") != "https://untrusted.invalid")
+s, _, h = req("OPTIONS", "/auth/login", headers={"Origin": BASE.removesuffix('/api/v1'), "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type"})
+h = {key.lower(): value for key, value in h.items()}
+check("配置的同源前端预检通过", s == 200 and h.get("access-control-allow-origin") == BASE.removesuffix('/api/v1'))
+s, _, h = req("POST", "/auth/logout")
+check("无凭据退出也成功并清理 Cookie", s == 200 and any(key.lower() == "set-cookie" and ("Max-Age=0" in value or "Expires=" in value) for key, value in h.items()))
+s, _, _ = req("POST", "/auth/logout", headers={"Origin": "https://untrusted.invalid"})
+check("跨站退出 Origin 被拒绝", s == 403)
 
 print("== 1. 登录与认证 ==")
 s, r = login("admin", ADMIN_PASSWORD)
@@ -112,12 +130,12 @@ s, r, _ = req("GET", "/admin/user-role-options", token=ADMIN)
 check("内部用户角色选项排除供应商角色", s == 200 and all(x.get("name") != "供应商人员" for x in r), f"got {s} {r}")
 
 s, r, _ = req("POST", "/admin/users", {
-    "employeeNo": "pm_zhang", "password": "Pm@123456", "realName": "张项目",
+    "employeeNo": "pm_zhang", "password": "Pm@Test123456", "realName": "张项目",
     "email": "pm_zhang@example.com", "departmentId": DEPT_ID, "roleId": PM_ROLE}, ADMIN)
 check("创建内部用户并保存部门/单角色", s == 200 and r.get("id") and r.get("departmentId") == DEPT_ID and r.get("roleId") == PM_ROLE, f"got {s} {r}")
 PM_ID = r.get("id")
 s, r, _ = req("POST", "/admin/users", {
-    "employeeNo": "pm_zhang", "password": "Pm@123456", "realName": "重复", "email": "x@x.com"}, ADMIN)
+    "employeeNo": "pm_zhang", "password": "Pm@Test123456", "realName": "重复", "email": "x@x.com"}, ADMIN)
 check("重名用户被拒", s in (400, 409), f"got {s} {r}")
 
 s, r, _ = req("PUT", f"/admin/users/{PM_ID}/roles", {"roleIds": [PM_ROLE, STAFF_ROLE]}, ADMIN)
@@ -158,13 +176,13 @@ s, r, _ = req("GET", "/admin/roles?page=1&pageSize=50", token=ADMIN)
 viewer = [x for x in r["list"] if x["name"] == "只读角色"]
 check("授权回读", viewer and set(viewer[0]["permissionIds"]) == {PERMS["dashboard"], PERMS["project:list"], PERMS["file:download"], PERMS["file:preview"]}, str(viewer))
 
-s, pm_login = login("pm_zhang", "Pm@123456")
+s, pm_login = login("pm_zhang", "Pm@Test123456")
 check("PM 登录", s == 200 and pm_login.get("accessToken"), f"got {s} {pm_login}")
 PM = pm_login["accessToken"]
 if pm_login.get("mustChangePassword"):
-    s, r, _ = req("PUT", "/auth/password", {"oldPassword": "Pm@123456", "newPassword": "Pm@654321"}, PM)
+    s, r, _ = req("PUT", "/auth/password", {"oldPassword": "Pm@Test123456", "newPassword": "Pm@Test654321"}, PM)
     check("PM 首登强制改密", s == 200, f"got {s} {r}")
-    s, pm_login = login("pm_zhang", "Pm@654321")
+    s, pm_login = login("pm_zhang", "Pm@Test654321")
     check("PM 改密后重登", s == 200 and pm_login.get("accessToken"), f"got {s} {pm_login}")
     PM = pm_login["accessToken"]
 check("PM 权限含 project:create", "project:create" in pm_login.get("permissions", []), str(pm_login.get("permissions")))
@@ -190,7 +208,7 @@ if acct:
     check("创建供应商账号(复用已有)", True, "reuse hy_li")
 else:
     s, r, _ = req("POST", f"/admin/suppliers/{SUP_ID}/accounts", {
-        "employeeNo": "hy_li", "password": "Hy@123456", "realName": "李工", "email": "li@hongyuan.com"}, ADMIN)
+        "employeeNo": "hy_li", "password": "Hy@Test123456", "realName": "李工", "email": "li@hongyuan.com"}, ADMIN)
     check("创建供应商账号", s == 200 and r.get("id"), f"got {s} {r}")
     SUP_UID = r.get("id")
 
@@ -205,7 +223,7 @@ s, r, _ = req("GET", f"/admin/suppliers/{SUP2_ID}/accounts", token=ADMIN)
 acct2 = [x for x in (r if isinstance(r, list) else r.get("list", [])) if x["employeeNo"] == "lh_wang"]
 if not acct2:
     s, r, _ = req("POST", f"/admin/suppliers/{SUP2_ID}/accounts", {
-        "employeeNo": "lh_wang", "password": "Lh@123456", "realName": "王经理", "email": "wang@lanhai.com"}, ADMIN)
+        "employeeNo": "lh_wang", "password": "Lh@Test123456", "realName": "王经理", "email": "wang@lanhai.com"}, ADMIN)
     check("创建第二供应商+账号", s == 200 and r.get("id"), f"got {s} {r}")
 else:
     check("创建第二供应商+账号(复用)", True, "reuse lh_wang")
@@ -213,39 +231,39 @@ else:
 s, r, _ = req("GET", f"/admin/suppliers/{SUP_ID}/accounts", token=ADMIN)
 check("供应商账号列表", s == 200 and isinstance(r, list) and any(x.get("employeeNo") == "hy_li" for x in r), f"got {s} {r}")
 
-s, sup_login = login("hy_li", "Hy@654321")
+s, sup_login = login("hy_li", "Hy@Test654321")
 if s != 200 or not sup_login.get("accessToken"):
-    s, sup_login = login("hy_li", "Hy@123456")
+    s, sup_login = login("hy_li", "Hy@Test123456")
 check("供应商登录", s == 200 and sup_login.get("accessToken"), f"got {s} {sup_login}")
 SUP = sup_login["accessToken"]
-HY_PW = "Hy@654321" if not sup_login.get("mustChangePassword") else "Hy@123456"
+HY_PW = "Hy@Test654321" if not sup_login.get("mustChangePassword") else "Hy@Test123456"
 if sup_login.get("mustChangePassword"):
     s, r, _ = req("GET", "/projects", token=SUP)
     check("未改密访问业务接口被拒(40303)", s == 403 and r.get("code") == 40303, f"got {s} {r}")
-    s, r, _ = req("PUT", "/auth/password", {"oldPassword": HY_PW, "newPassword": "Hy@654321"}, SUP)
+    s, r, _ = req("PUT", "/auth/password", {"oldPassword": HY_PW, "newPassword": "Hy@Test654321"}, SUP)
     check("供应商首登强制改密", s == 200, f"got {s} {r}")
-    s, sup_login = login("hy_li", "Hy@654321")
+    s, sup_login = login("hy_li", "Hy@Test654321")
     check("供应商改密后重登", s == 200 and sup_login.get("accessToken") and not sup_login.get("mustChangePassword"), f"got {s} {sup_login}")
     SUP = sup_login["accessToken"]
-    HY_PW = "Hy@654321"
+    HY_PW = "Hy@Test654321"
 SUP_UID_FROM_LOGIN = sup_login["user"]["id"]
 check("供应商类型 SUPPLIER", sup_login["user"]["userType"] == "SUPPLIER", str(sup_login["user"]))
 check("供应商菜单仅基础项", set(sup_login.get("menus", [])) == {"dashboard", "project:list"}, str(sup_login.get("menus")))
 # 前一轮运行可能已触发验证码门槛：管理员重置密码会清零失败计数（同时验证该接口）
 s, r, _ = req("GET", f"/admin/suppliers/{SUP2_ID}/accounts", token=ADMIN)
 LH_UID = [x for x in (r if isinstance(r, list) else r.get("list", [])) if x["employeeNo"] == "lh_wang"][0]["id"]
-s, r, _ = req("PUT", f"/admin/supplier-accounts/{LH_UID}/password", {"newPassword": "Lh@123456"}, ADMIN)
+s, r, _ = req("PUT", f"/admin/supplier-accounts/{LH_UID}/password", {"newPassword": "Lh@Test123456"}, ADMIN)
 check("重置供应商账号密码(清除验证码状态)", s == 200, f"got {s} {r}")
-s, sup2_login = login("lh_wang", "Lh@123456")
+s, sup2_login = login("lh_wang", "Lh@Test123456")
 check("第二供应商登录", s == 200 and sup2_login.get("accessToken"), f"got {s} {sup2_login}")
 SUP2 = sup2_login["accessToken"]
-LH_PW = "Lh@123456"
+LH_PW = "Lh@Test123456"
 if sup2_login.get("mustChangePassword"):
-    s, r, _ = req("PUT", "/auth/password", {"oldPassword": "Lh@123456", "newPassword": "Lh@654321"}, SUP2)
+    s, r, _ = req("PUT", "/auth/password", {"oldPassword": "Lh@Test123456", "newPassword": "Lh@Test654321"}, SUP2)
     check("第二供应商首登改密", s == 200, f"got {s} {r}")
-    s, sup2_login = login("lh_wang", "Lh@654321")
+    s, sup2_login = login("lh_wang", "Lh@Test654321")
     SUP2 = sup2_login.get("accessToken", "")
-    LH_PW = "Lh@654321"
+    LH_PW = "Lh@Test654321"
 
 print("== 4. 项目 / 项目级审批（M2） ==")
 s, r, _ = req("POST", "/projects", {"name": "HX-2600 壳体打样", "supplierId": SUP_ID, "description": "铝合金壳体 CNC 打样"}, PM)
@@ -495,6 +513,11 @@ if first_cookie is not None:
     check("refresh返回访问令牌并旋转Cookie", s == 200 and bool(refreshed.get("accessToken")) and second_cookie is not None and second_cookie.value != first_cookie.value)
     s, _, _ = req("POST", "/auth/refresh", cookie=first_cookie.OutputString(attrs=[]))
     check("旧refresh Cookie不可重放", s == 401)
+    s, _, _ = req("GET", "/auth/profile", token=refreshed.get("accessToken"))
+    check("refresh重放也撤销该族旧访问令牌", s == 401)
+    # Logout is tested with a fresh active family; the replayed family is already revoked.
+    s, refreshed, headers = req("POST", "/auth/login", {"employeeNo": "admin", "password": active_admin_password})
+    second_cookie = refresh_cookie(headers)
     if second_cookie is not None:
         s, _, headers = req("POST", "/auth/logout", token=refreshed.get("accessToken"), cookie=second_cookie.OutputString(attrs=[]))
         cleared_cookie = refresh_cookie(headers)
@@ -516,13 +539,18 @@ check("恢复账号", s == 200, f"got {s} {r}")
 s, sup_login = login("hy_li", HY_PW)
 check("恢复后可登录", s == 200 and sup_login.get("accessToken"), f"got {s} {r}")
 
-# 验证码：lh_wang 连错 3 次（其 token 已在上文拿到，不再影响后续）
+# Every attempt has a one-use challenge; failed attempts do not hard-lock the victim.
 for i in range(3):
     login("lh_wang", "wrong-pass")
 s, r = login("lh_wang", LH_PW)
-check("3次失败后需验证码(428)", s == 428 and r.get("code") == 42801, f"got {s} {r}")
+check("失败后正确密码和新验证码仍可恢复登录", s == 200 and r.get("accessToken"), f"got {s} {r}")
 s, cap = req("GET", "/auth/captcha")[:2]
-check("验证码接口返回SVG", s == 200 and cap.get("captchaId") and "<svg" in cap.get("svg", ""), f"got {s} {str(cap)[:120]}")
+check("验证码接口返回无文本答案的栅格图片", s == 200 and cap.get("captchaId") and cap.get("svg", "").startswith("data:image/png;base64,") and "<text" not in cap.get("svg", ""))
+if s == 200 and os.environ.get("YF_TEST_CAPTCHA_SAMPLE"):
+    import base64
+    from pathlib import Path
+    Path(os.environ["YF_TEST_CAPTCHA_SAMPLE"]).write_bytes(base64.b64decode(cap["svg"].split(',', 1)[1], validate=True))
+
 s, r = login("lh_wang", LH_PW, cap["captchaId"], "0000")
 check("错误验证码仍拒(428)", s == 428, f"got {s} {r}")
 

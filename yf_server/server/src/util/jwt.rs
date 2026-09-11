@@ -8,6 +8,8 @@ pub struct Claims {
     /// employee number
     pub sub: String,
     pub uid: u64,
+    /// Persistent refresh-session family identifier.
+    pub sid: String,
     pub jti: String,
     pub iat: usize,
     pub exp: usize,
@@ -17,6 +19,7 @@ pub fn issue_access(
     secret: &str,
     uid: u64,
     employee_no: &str,
+    session_id: &str,
     ttl_minutes: i64,
 ) -> Result<(String, usize), AppError> {
     let now = chrono::Utc::now();
@@ -24,6 +27,7 @@ pub fn issue_access(
     let claims = Claims {
         sub: employee_no.to_string(),
         uid,
+        sid: session_id.to_string(),
         jti: uuid::Uuid::new_v4().to_string(),
         iat: now.timestamp() as usize,
         exp,

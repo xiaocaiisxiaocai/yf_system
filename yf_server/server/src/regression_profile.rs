@@ -75,7 +75,7 @@ async fn supplier_updates_only_own_email_and_password() {
         &current,
         &ChangePasswordRequest {
             old_password: "Regression123".into(),
-            new_password: "Changed456".into(),
+            new_password: "Changed456789".into(),
         },
     )
     .await
@@ -86,7 +86,7 @@ async fn supplier_updates_only_own_email_and_password() {
         .unwrap()
         .unwrap();
     assert!(crate::util::password::verify(
-        "Changed456",
+        "Changed456789",
         &own_row.password_hash
     ));
     assert!(!own_row.must_change_password);

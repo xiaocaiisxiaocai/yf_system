@@ -1,5 +1,8 @@
 use axum::extract::{ConnectInfo, State};
-use axum::http::{header::HeaderName, HeaderMap};
+use axum::http::{
+    header::{HeaderName, AUTHORIZATION, ORIGIN},
+    HeaderMap,
+};
 use axum::Json;
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use std::net::{IpAddr, SocketAddr};
@@ -13,7 +16,11 @@ use crate::state::AppState;
 const REFRESH_COOKIE: &str = "refresh_token";
 const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 
-fn resolve_client_ip(peer: SocketAddr, headers: &HeaderMap, trust_loopback_proxy: bool) -> IpAddr {
+pub(super) fn resolve_client_ip(
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    trust_loopback_proxy: bool,
+) -> IpAddr {
     if !trust_loopback_proxy || !peer.ip().is_loopback() {
         return peer.ip();
     }
@@ -55,6 +62,47 @@ fn clear_refresh_cookie() -> Cookie<'static> {
         .build()
 }
 
+fn request_origin_allowed(configured_frontend: &str, headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(ORIGIN) else {
+        // Native clients and same-origin non-browser callers commonly omit Origin.
+        return true;
+    };
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    let Ok(web_uri) = configured_frontend.parse::<axum::http::Uri>() else {
+        return false;
+    };
+    let Some(scheme) = web_uri.scheme_str() else {
+        return false;
+    };
+    let Some(authority) = web_uri.authority() else {
+        return false;
+    };
+    origin == format!("{scheme}://{authority}")
+}
+
+async fn verified_access_session(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> ApiResult<Option<(u64, String)>> {
+    let Some(raw) = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    else {
+        return Ok(None);
+    };
+    let Ok(claims) = crate::util::jwt::parse_access(&state.cfg.jwt.secret, raw) else {
+        return Ok(None);
+    };
+    match crate::middleware::auth::ensure_active_session(&state.db, claims.uid, &claims.sid).await {
+        Ok(()) => Ok(Some((claims.uid, claims.sid))),
+        Err(AppError::Unauthorized(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 pub async fn login(
     State(state): State<AppState>,
     ConnectInfo(ip): ConnectInfo<SocketAddr>,
@@ -71,7 +119,7 @@ pub async fn login(
         return Err(AppError::BadRequest("工号或密码错误".into()));
     }
     // 登录限流：同账号同 IP 每分钟 10 次（防单账号爆破）；单 IP 每分钟 60 次（防批量扫号）。
-    // 账号级连续失败锁定/验证码策略在 service 层兜底。
+    // 验证码在 service 层强制一次性核销；匿名失败不会写入账号硬锁。
     let minute = std::time::Duration::from_secs(60);
     let client_ip = resolve_client_ip(ip, &headers, state.cfg.server.trust_loopback_proxy);
     let per_account = format!("login:{client_ip}:{}", req.employee_no.trim());
@@ -110,14 +158,16 @@ pub async fn refresh(
 
 pub async fn logout(
     State(state): State<AppState>,
+    headers: HeaderMap,
     jar: CookieJar,
 ) -> ApiResult<(CookieJar, Json<serde_json::Value>)> {
-    let raw = jar.get(REFRESH_COOKIE).map(|c| c.value().to_string());
-    service::auth::logout(&state.db, raw.as_deref()).await?;
-    Ok((
-        jar.remove(clear_refresh_cookie()),
-        Json(serde_json::json!({})),
-    ))
+    if !request_origin_allowed(&state.cfg.web.base_url, &headers) {
+        return Err(AppError::Forbidden);
+    }
+    let refresh = jar.get(REFRESH_COOKIE).map(|cookie| cookie.value());
+    let access = verified_access_session(&state, &headers).await?;
+    service::auth::logout(&state.db, refresh, access.as_ref()).await?;
+    Ok((jar.add(clear_refresh_cookie()), Json(serde_json::json!({}))))
 }
 
 pub async fn change_password(
@@ -148,7 +198,7 @@ pub async fn update_profile(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_client_ip;
+    use super::{request_origin_allowed, resolve_client_ip};
     use axum::http::{HeaderMap, HeaderValue};
     use std::net::{IpAddr, SocketAddr};
 
@@ -207,5 +257,16 @@ mod tests {
             resolve_client_ip(loopback, &repeated, true),
             IpAddr::from([127, 0, 0, 1])
         );
+    }
+
+    #[test]
+    fn logout_origin_must_match_configured_frontend_when_present() {
+        let mut headers = HeaderMap::new();
+        let configured = "http://localhost:5173";
+        assert!(request_origin_allowed(configured, &headers));
+        headers.insert("origin", HeaderValue::from_static("https://evil.example"));
+        assert!(!request_origin_allowed(configured, &headers));
+        headers.insert("origin", HeaderValue::from_static(configured));
+        assert!(request_origin_allowed(configured, &headers));
     }
 }

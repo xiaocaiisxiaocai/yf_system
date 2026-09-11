@@ -46,6 +46,7 @@ function loadTs(relativePath, mocks = {}) {
     AbortController,
     require: (name) => {
       if (name in mocks) return mocks[name]
+      if (name.endsWith('.json')) return JSON.parse(fs.readFileSync(path.resolve(path.dirname(filename), name), 'utf8'))
       if (name.replace(/\\/g, '/').endsWith('/ActionSlots')) return actionSlots
       if (name.replace(/\\/g, '/').endsWith('/PasswordInput')) return component('PasswordInput')
       return require(name)
@@ -88,13 +89,15 @@ function validatorError(rule, value) {
 
 test('password contract counts Unicode scalars and is shared by every password-writing form', async () => {
   const password = loadTs('src/utils/password.ts')
-  assert.equal(password.PASSWORD_MIN_CHARS, 6)
-  assert.equal(password.PASSWORD_MAX_CHARS, 20)
-  assert.equal(password.PASSWORD_MAX_BYTES, 128)
-  assert.equal(validatorError(password.passwordRule, '😀'.repeat(11)), undefined)
-  assert.equal(validatorError(password.passwordRule, '😀'.repeat(20)), undefined)
-  assert.match(String(validatorError(password.passwordRule, '😀'.repeat(21))), /6-20/)
-  assert.match(String(validatorError(password.passwordRule, '短密码')), /6-20/)
+  assert.equal(password.PASSWORD_MIN_CHARS, 12)
+  assert.equal(password.PASSWORD_MAX_CHARS, 64)
+  assert.equal(password.PASSWORD_MAX_BYTES, 256)
+  assert.equal(validatorError(password.passwordRule, '这是一句可以记住的长密码短语'), undefined)
+  assert.equal(validatorError(password.passwordRule, '😀abcdeFG'.repeat(8)), undefined)
+  assert.match(String(validatorError(password.passwordRule, '😀abcdeFG'.repeat(8) + 'x')), /12-64/)
+  for (const weak of ['短密码', 'Password123456!', 'P@ssw0rd1234!', 'passwordpassword1!', 'qwerty123456', '123456789012', 'abcdabcdabcd']) {
+    assert.match(String(validatorError(password.passwordRule, weak)), /12-64/)
+  }
 
   const pageCases = [
     {

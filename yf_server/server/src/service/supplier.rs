@@ -318,7 +318,7 @@ pub async fn create_account(
         return Err(AppError::BadRequest("姓名需为 1~32 个字符".into()));
     }
     if !password::strong_enough(&req.password) {
-        return Err(AppError::BadRequest("初始密码需 6-20 位".into()));
+        return Err(AppError::BadRequest(password::POLICY_MESSAGE.into()));
     }
     crate::util::validation::email(&req.email)?;
     let now = Utc::now();
@@ -515,7 +515,7 @@ pub async fn reset_account_password(
 ) -> ApiResult<()> {
     ensure_internal_account_manager(me)?;
     if !password::strong_enough(new_password) {
-        return Err(AppError::BadRequest("新密码需 6-20 位".into()));
+        return Err(AppError::BadRequest(password::POLICY_MESSAGE.into()));
     }
     let txn = db.begin().await?;
     super::perm::lock_management_state(&txn).await?;

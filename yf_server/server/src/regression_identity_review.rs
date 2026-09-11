@@ -122,7 +122,7 @@ async fn identity_review_user_manage_cannot_reset_supplier_account_password() {
             &f.member,
             account.id,
             &service::user::PasswordReset {
-                new_password: "Changed123".into(),
+                new_password: "Changed123456".into(),
             },
         )
         .await,
@@ -151,14 +151,16 @@ async fn identity_review_supplier_without_owner_cannot_login() {
     update.supplier_id = Set(None);
     update.update(&f.state.db).await.unwrap();
 
+    let (captcha_id, _) = service::captcha::issue(&f.state.captchas);
+    let captcha_code = f.state.captchas.lock().unwrap()[&captcha_id].0.clone();
     let result = service::auth::login(
         &f.state.db,
         &f.state.cfg,
         &crate::dto::LoginRequest {
             employee_no: account.employee_no,
             password: "Regression123".into(),
-            captcha_id: None,
-            captcha_code: None,
+            captcha_id: Some(captcha_id),
+            captcha_code: Some(captcha_code),
         },
         None,
         &f.state.captchas,

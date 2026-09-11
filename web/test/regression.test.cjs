@@ -399,6 +399,7 @@ function loadTs(relativePath, mocks, globals = {}) {
     exports, module: { exports }, console, setTimeout, clearTimeout, URL, URLSearchParams, AbortController, ...globals,
     require: (name) => {
       if (typeof name === 'string' && name in mocks) return mocks[name]
+      if (name.endsWith('.json')) return JSON.parse(fs.readFileSync(path.resolve(path.dirname(filename), name), 'utf8'))
       if (typeof name === 'string' && name.replace(/\\/g, '/').endsWith('/ActionSlots')) return actionSlotsModule
       if (typeof name === 'string' && name.replace(/\\/g, '/').endsWith('/PasswordInput')) return component('PasswordInput')
       if (typeof name === 'string' && name.startsWith('.') && name.replace(/\\/g, '/').endsWith('/utils/password')) {
@@ -2918,4 +2919,17 @@ test('project status update uses a per-project synchronous in-flight latch', asy
   assert.equal(puts, 1)
   await act(async () => { release({ data: {} }); await first; await second })
   await act(async () => renderer.unmount())
+})
+
+
+test('auth persistence removes personal details and migrates legacy records', () => {
+  let options
+  const auth=loadTs('src/store/auth.ts',{'zustand/middleware':{persist:(fn, config)=>{options=config;return fn}}}).useAuth
+  auth.getState().setLogin({accessToken:'fixture-token',user:{id:7,employeeNo:'fixture',realName:'个人姓名',email:'fixture@example.invalid',userType:'INTERNAL'},permissions:['project:list'],menus:['dashboard'],mustChangePassword:false})
+  const saved=options.partialize(auth.getState())
+  assert.deepEqual(Object.keys(saved.user),['id'])
+  assert.equal('token' in saved,false)
+  const migrated=options.migrate({user:{id:7,employeeNo:'fixture',realName:'个人姓名',email:'fixture@example.invalid'},token:'legacy-token'},0)
+  assert.deepEqual(Object.keys(migrated.user),['id'])
+  assert.equal('token' in migrated,false)
 })

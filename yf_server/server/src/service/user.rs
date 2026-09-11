@@ -276,7 +276,7 @@ pub async fn create(
         return Err(AppError::Conflict("工号已存在".into()));
     }
     if !password::strong_enough(&req.password) {
-        return Err(AppError::BadRequest("初始密码需 6-20 位".into()));
+        return Err(AppError::BadRequest(password::POLICY_MESSAGE.into()));
     }
     crate::util::validation::email(&req.email)?;
     if let Some(d) = req.department_id {
@@ -284,6 +284,7 @@ pub async fn create(
     }
     let role_ids = requested_role_ids(req.role_id, req.role_ids.as_deref())?
         .ok_or_else(|| AppError::BadRequest("请选择角色".into()))?;
+    super::perm::ensure_manage_role(&txn, me.id, role_ids[0]).await?;
     let now = Utc::now();
     // 用户与角色绑定同事务，避免半成功状态
     let model = users::ActiveModel {
@@ -430,6 +431,7 @@ pub async fn update(
     if user.user_type != UserType::Internal {
         return Err(AppError::BadRequest("供应商人员请在供应商模块维护".into()));
     }
+    super::perm::ensure_manage_user(&txn, me.id, id).await?;
     if let Some(v) = &req.real_name {
         if v.trim().is_empty() || v.trim().chars().count() > 32 {
             return Err(AppError::BadRequest("姓名需为 1~32 个字符".into()));
@@ -458,6 +460,7 @@ pub async fn update(
             .as_ref()
             .expect("role_changed requires requested roles");
         ensure_admin_role_change_safe(&txn, me.id, id, role_ids).await?;
+        super::perm::ensure_manage_role(&txn, me.id, role_ids[0]).await?;
         ensure_internal_role_assignable(&txn, role_ids[0]).await?;
     } else if user.status == CommonStatus::Active {
         ensure_internal_role_assignable(&txn, old_role_ids[0]).await?;
@@ -543,6 +546,7 @@ pub async fn set_status(
     if user.user_type != UserType::Internal {
         return Err(AppError::BadRequest("供应商人员请在供应商模块维护".into()));
     }
+    super::perm::ensure_manage_user(&txn, me.id, id).await?;
     if status == "DISABLED" {
         ensure_admin_role_change_safe(&txn, me.id, id, &[]).await?;
     }
@@ -597,7 +601,7 @@ pub async fn reset_password(
     req: &PasswordReset,
 ) -> ApiResult<()> {
     if !password::strong_enough(&req.new_password) {
-        return Err(AppError::BadRequest("新密码需 6-20 位".into()));
+        return Err(AppError::BadRequest(password::POLICY_MESSAGE.into()));
     }
     let txn = db.begin().await?;
     super::perm::lock_management_state(&txn).await?;
@@ -610,6 +614,7 @@ pub async fn reset_password(
     if user.user_type != UserType::Internal {
         return Err(AppError::BadRequest("供应商人员请在供应商模块维护".into()));
     }
+    super::perm::ensure_manage_user(&txn, me.id, id).await?;
     let employee_no = user.employee_no.clone();
     let mut am: users::ActiveModel = user.into();
     am.password_hash = Set(password::hash(&req.new_password)?);
@@ -654,7 +659,9 @@ pub async fn assign_roles(
     if user.user_type != UserType::Internal {
         return Err(AppError::BadRequest("供应商人员角色固定，不可调整".into()));
     }
+    super::perm::ensure_manage_user(&txn, me.id, id).await?;
     validate_role_ids(&req.role_ids)?;
+    super::perm::ensure_manage_role(&txn, me.id, req.role_ids[0]).await?;
     ensure_admin_role_change_safe(&txn, me.id, id, &req.role_ids).await?;
     let old_role_id = user_roles::Entity::find()
         .filter(user_roles::Column::UserId.eq(id))
@@ -786,6 +793,7 @@ pub async fn delete(db: &DatabaseConnection, me: &CurrentUser, id: u64) -> ApiRe
     if user.user_type != UserType::Internal {
         return Err(AppError::BadRequest("供应商人员请在供应商模块删除".into()));
     }
+    super::perm::ensure_manage_user(&txn, me.id, id).await?;
     if user.employee_no == "admin" {
         return Err(AppError::BadRequest("系统管理员账号不可删除".into()));
     }

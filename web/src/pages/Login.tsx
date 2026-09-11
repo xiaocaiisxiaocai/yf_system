@@ -17,6 +17,7 @@ export default function Login() {
   const [form] = Form.useForm()
   const [captcha, setCaptcha] = useState<Captcha | null>(null)
   const [loading, setLoading] = useState(false)
+  const [captchaFailed, setCaptchaFailed] = useState(false)
   const setLogin = useAuth((s) => s.setLogin)
   const nav = useNavigate()
   const loc = useLocation() as { state?: { from?: string } }
@@ -25,8 +26,10 @@ export default function Login() {
     try {
       const r = await axios.get('/api/v1/auth/captcha')
       setCaptcha(r.data)
+      setCaptchaFailed(false)
       form.setFieldValue('captchaCode', '')
     } catch {
+      setCaptchaFailed(true)
       if (!silent) Message.error('验证码刷新失败')
     }
   }
@@ -34,6 +37,11 @@ export default function Login() {
   const submit = async (v: { employeeNo: string; password: string; captchaCode?: string }) => {
     setLoading(true)
     try {
+      if (!captcha) {
+        await loadCaptcha()
+        Message.info('请填写验证码后登录')
+        return
+      }
       const body: Record<string, string> = { employeeNo: v.employeeNo.trim(), password: v.password }
       if (captcha) {
         body.captchaId = captcha.captchaId
@@ -48,7 +56,10 @@ export default function Login() {
       if (r.data.mustChangePassword) {
         nav('/change-password')
       } else {
-        nav(loc.state?.from || '/', { replace: true })
+        const target = loc.state?.from
+        const safeTarget = typeof target === 'string' && target.startsWith('/') && !target.startsWith('//')
+          && !target.includes('\\') && ![...target].some(character => character.charCodeAt(0) <= 32) ? target : '/'
+        nav(safeTarget, { replace: true })
       }
     } catch (e) {
       if (axios.isAxiosError(e)) {
@@ -75,6 +86,8 @@ export default function Login() {
     const s = useAuth.getState()
     if (s.token && s.user) {
       nav('/', { replace: true })
+    } else {
+      void loadCaptcha()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -97,12 +110,13 @@ export default function Login() {
                 aria-label="验证码"
                 suffix={
                   <button className="captcha-refresh" type="button" aria-label="刷新验证码" title="点击刷新" onClick={() => void loadCaptcha()}>
-                    <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(captcha.svg)}`} alt="验证码" />
+                    <img src={/^data:image\/(png|jpeg);base64,/.test(captcha.svg) ? captcha.svg : ''} alt="验证码" />
                   </button>
                 }
               />
             </Form.Item>
           )}
+          {!captcha && <Button onClick={() => void loadCaptcha()}>{captchaFailed ? '验证码加载失败，点击重试' : '正在加载验证码…'}</Button>}
           <Button type="primary" size="large" long htmlType="submit" loading={loading}>
             登录
           </Button>

@@ -16,6 +16,32 @@ pub struct Fixture {
     pub project_id: u64,
 }
 
+fn login_request(
+    state: &AppState,
+    employee_no: String,
+    password: &str,
+) -> crate::dto::LoginRequest {
+    let (captcha_id, _) = service::captcha::issue(&state.captchas);
+    let captcha_code = state.captchas.lock().unwrap()[&captcha_id].0.clone();
+    crate::dto::LoginRequest {
+        employee_no,
+        password: password.into(),
+        captcha_id: Some(captcha_id),
+        captcha_code: Some(captcha_code),
+    }
+}
+
+async fn login_session(
+    state: &AppState,
+    employee_no: String,
+    password: &str,
+) -> (crate::dto::LoginResponse, String) {
+    let req = login_request(state, employee_no, password);
+    service::auth::login(&state.db, &state.cfg, &req, None, &state.captchas)
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
 async fn full_disabled_supplier_accounts_remain_manageable_but_cannot_login() {
@@ -89,12 +115,11 @@ async fn full_disabled_supplier_accounts_remain_manageable_but_cannot_login() {
     service::supplier::set_account_status(&f.state.db, &f.admin, ids[1], "ACTIVE")
         .await
         .unwrap();
-    let req = crate::dto::LoginRequest {
-        employee_no: format!("{}s1", f.member.employee_no),
-        password: "Regression123".into(),
-        captcha_id: None,
-        captcha_code: None,
-    };
+    let req = login_request(
+        &f.state,
+        format!("{}s1", f.member.employee_no),
+        "Regression123",
+    );
     assert!(matches!(
         service::auth::login(&f.state.db, &f.state.cfg, &req, None, &f.state.captchas).await,
         Err(crate::error::AppError::Unauthorized(_))
@@ -102,6 +127,11 @@ async fn full_disabled_supplier_accounts_remain_manageable_but_cannot_login() {
     service::supplier::set_status(&f.state.db, &f.admin, sid, "ACTIVE")
         .await
         .unwrap();
+    let req = login_request(
+        &f.state,
+        format!("{}s1", f.member.employee_no),
+        "Regression123",
+    );
     service::auth::login(&f.state.db, &f.state.cfg, &req, None, &f.state.captchas)
         .await
         .unwrap();
@@ -1346,65 +1376,59 @@ async fn full_role_description_boundaries_preserve_existing_data() {
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn full_auth_failure_threshold_lock_expiry_and_reset() {
+async fn full_auth_requires_captcha_never_locks_and_correct_password_recovers() {
     use crate::{dto::LoginRequest, error::AppError};
     use sea_orm::{ActiveModelTrait, Set};
     let f = Fixture::new().await;
-    let mut req = LoginRequest {
+    let missing_challenge = LoginRequest {
         employee_no: format!(" {} ", f.member.employee_no),
         password: "Wrong123".into(),
         captcha_id: None,
         captcha_code: None,
     };
-    for _ in 0..2 {
-        assert!(matches!(
-            service::auth::login(&f.state.db, &f.state.cfg, &req, None, &f.state.captchas).await,
-            Err(AppError::Unauthorized(_))
-        ));
-    }
     assert!(matches!(
-        service::auth::login(&f.state.db, &f.state.cfg, &req, None, &f.state.captchas).await,
+        service::auth::login(
+            &f.state.db,
+            &f.state.cfg,
+            &missing_challenge,
+            None,
+            &f.state.captchas
+        )
+        .await,
         Err(AppError::CaptchaRequired)
     ));
-    let row = users::Entity::find_by_id(f.member.id)
+    let mut row: users::ActiveModel = users::Entity::find_by_id(f.member.id)
         .one(&f.state.db)
         .await
         .unwrap()
-        .unwrap();
-    assert_eq!(row.failed_login_attempts, 3);
-    for fourth in [true, false] {
-        let (id, _) = service::captcha::issue(&f.state.captchas);
-        req.captcha_code = Some(f.state.captchas.lock().unwrap()[&id].0.to_lowercase());
-        req.captcha_id = Some(id);
-        let result =
-            service::auth::login(&f.state.db, &f.state.cfg, &req, None, &f.state.captchas).await;
-        if fourth {
-            assert!(matches!(result, Err(AppError::CaptchaRequired)));
-        } else {
-            assert!(matches!(result, Err(AppError::Locked)));
-        }
+        .unwrap()
+        .into();
+    row.failed_login_attempts = Set(99);
+    row.locked_until = Set(Some(chrono::Utc::now() + chrono::Duration::minutes(30)));
+    row.update(&f.state.db).await.unwrap();
+
+    for employee_no in [f.member.employee_no.clone(), "no_such_user".into()] {
+        let req = login_request(&f.state, employee_no, "Wrong123");
+        let error =
+            match service::auth::login(&f.state.db, &f.state.cfg, &req, None, &f.state.captchas)
+                .await
+            {
+                Err(error) => error,
+                Ok(_) => panic!("invalid credentials unexpectedly logged in"),
+            };
+        assert!(
+            matches!(error, AppError::Unauthorized(ref message) if message == "工号或密码错误")
+        );
     }
-    req.password = "Regression123".into();
-    req.captcha_id = None;
-    req.captcha_code = None;
-    assert!(matches!(
-        service::auth::login(&f.state.db, &f.state.cfg, &req, None, &f.state.captchas).await,
-        Err(AppError::Locked)
-    ));
-    let row = users::Entity::find_by_id(f.member.id)
-        .one(&f.state.db)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(row.locked_until.unwrap() > chrono::Utc::now() + chrono::Duration::minutes(29));
-    let mut update: users::ActiveModel = row.into();
-    update.locked_until = Set(Some(chrono::Utc::now() - chrono::Duration::seconds(1)));
-    update.update(&f.state.db).await.unwrap();
-    assert!(
-        service::auth::login(&f.state.db, &f.state.cfg, &req, None, &f.state.captchas)
-            .await
-            .is_ok()
+
+    let req = login_request(
+        &f.state,
+        format!(" {} ", f.member.employee_no),
+        "Regression123",
     );
+    service::auth::login(&f.state.db, &f.state.cfg, &req, None, &f.state.captchas)
+        .await
+        .unwrap();
     let row = users::Entity::find_by_id(f.member.id)
         .one(&f.state.db)
         .await
@@ -1412,20 +1436,6 @@ async fn full_auth_failure_threshold_lock_expiry_and_reset() {
         .unwrap();
     assert_eq!(row.failed_login_attempts, 0);
     assert!(row.locked_until.is_none());
-    req.password = "Wrong123".into();
-    assert!(matches!(
-        service::auth::login(&f.state.db, &f.state.cfg, &req, None, &f.state.captchas).await,
-        Err(AppError::Unauthorized(_))
-    ));
-    assert_eq!(
-        users::Entity::find_by_id(f.member.id)
-            .one(&f.state.db)
-            .await
-            .unwrap()
-            .unwrap()
-            .failed_login_attempts,
-        1
-    );
 }
 
 #[tokio::test]
@@ -2366,7 +2376,173 @@ async fn full_department_input_boundaries() {
 
 #[tokio::test]
 #[ignore = "isolated MySQL required"]
-async fn full_auth_login_rechecks_locked_account() {
+async fn full_auth_logout_is_session_scoped_and_password_change_revokes_all_access() {
+    let f = Fixture::new().await;
+    let (first, _) = login_session(&f.state, f.member.employee_no.clone(), "Regression123").await;
+    let (second, second_refresh) =
+        login_session(&f.state, f.member.employee_no.clone(), "Regression123").await;
+    let first_claims =
+        crate::util::jwt::parse_access(&f.state.cfg.jwt.secret, &first.access_token).unwrap();
+    let second_claims =
+        crate::util::jwt::parse_access(&f.state.cfg.jwt.secret, &second.access_token).unwrap();
+    assert_ne!(first_claims.sid, second_claims.sid);
+
+    let first_session = (f.member.id, first_claims.sid.clone());
+    service::auth::logout(&f.state.db, None, Some(&first_session))
+        .await
+        .unwrap();
+    assert!(crate::middleware::auth::ensure_active_session(
+        &f.state.db,
+        f.member.id,
+        &first_claims.sid
+    )
+    .await
+    .is_err());
+    crate::middleware::auth::ensure_active_session(&f.state.db, f.member.id, &second_claims.sid)
+        .await
+        .unwrap();
+
+    service::auth::change_password(
+        &f.state.db,
+        &f.member,
+        &crate::dto::ChangePasswordRequest {
+            old_password: "Regression123".into(),
+            new_password: "RevokedSession123!".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(crate::middleware::auth::ensure_active_session(
+        &f.state.db,
+        f.member.id,
+        &second_claims.sid
+    )
+    .await
+    .is_err());
+    assert!(
+        service::auth::refresh(&f.state.db, &f.state.cfg, &second_refresh, None)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+#[ignore = "isolated MySQL required"]
+async fn full_auth_refresh_rotation_keeps_sid_and_replay_revokes_only_that_family() {
+    let f = Fixture::new().await;
+    let (first, first_refresh) =
+        login_session(&f.state, f.member.employee_no.clone(), "Regression123").await;
+    let first_claims =
+        crate::util::jwt::parse_access(&f.state.cfg.jwt.secret, &first.access_token).unwrap();
+    let (second, second_refresh) =
+        service::auth::refresh(&f.state.db, &f.state.cfg, &first_refresh, None)
+            .await
+            .unwrap();
+    let second_claims =
+        crate::util::jwt::parse_access(&f.state.cfg.jwt.secret, &second.access_token).unwrap();
+    assert_eq!(first_claims.sid, second_claims.sid);
+    crate::middleware::auth::ensure_active_session(&f.state.db, f.member.id, &first_claims.sid)
+        .await
+        .unwrap();
+
+    assert!(
+        service::auth::refresh(&f.state.db, &f.state.cfg, &first_refresh, None)
+            .await
+            .is_err()
+    );
+    assert!(crate::middleware::auth::ensure_active_session(
+        &f.state.db,
+        f.member.id,
+        &second_claims.sid
+    )
+    .await
+    .is_err());
+    assert!(
+        service::auth::refresh(&f.state.db, &f.state.cfg, &second_refresh, None)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+#[ignore = "isolated MySQL required"]
+async fn full_auth_logout_accepts_revoked_cookie_and_missing_credentials_is_idempotent() {
+    let f = Fixture::new().await;
+    service::auth::logout(&f.state.db, None, None)
+        .await
+        .unwrap();
+
+    let (first, old_refresh) =
+        login_session(&f.state, f.member.employee_no.clone(), "Regression123").await;
+    let claims =
+        crate::util::jwt::parse_access(&f.state.cfg.jwt.secret, &first.access_token).unwrap();
+    let (_, current_refresh) =
+        service::auth::refresh(&f.state.db, &f.state.cfg, &old_refresh, None)
+            .await
+            .unwrap();
+    service::auth::logout(&f.state.db, Some(&old_refresh), None)
+        .await
+        .unwrap();
+    assert!(
+        crate::middleware::auth::ensure_active_session(&f.state.db, f.member.id, &claims.sid)
+            .await
+            .is_err()
+    );
+    assert!(
+        service::auth::refresh(&f.state.db, &f.state.cfg, &current_refresh, None)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+#[ignore = "isolated MySQL required"]
+async fn full_auth_logout_serializes_with_refresh_rotation() {
+    use sea_orm::{ConnectionTrait, DbBackend, QuerySelect, Statement, TransactionTrait};
+    let f = Fixture::new().await;
+    let (login, refresh_token) =
+        login_session(&f.state, f.member.employee_no.clone(), "Regression123").await;
+    let claims =
+        crate::util::jwt::parse_access(&f.state.cfg.jwt.secret, &login.access_token).unwrap();
+    let txn = f.state.db.begin().await.unwrap();
+    users::Entity::find_by_id(f.member.id)
+        .lock_exclusive()
+        .one(&txn)
+        .await
+        .unwrap();
+    let blocker = txn
+        .query_one(Statement::from_string(
+            DbBackend::MySql,
+            "SELECT CONNECTION_ID() AS id",
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "id")
+        .unwrap();
+    let refresh_state = f.state.clone();
+    let refreshing = tokio::spawn(async move {
+        service::auth::refresh(&refresh_state.db, &refresh_state.cfg, &refresh_token, None).await
+    });
+    await_owned_lock(&f.state.db, blocker).await;
+    let (logout_db, user_id, sid) = (f.state.db.clone(), f.member.id, claims.sid.clone());
+    let logging_out = tokio::spawn(async move {
+        let session = (user_id, sid);
+        service::auth::logout(&logout_db, None, Some(&session)).await
+    });
+    txn.commit().await.unwrap();
+    let _ = refreshing.await.unwrap();
+    logging_out.await.unwrap().unwrap();
+    assert!(
+        crate::middleware::auth::ensure_active_session(&f.state.db, f.member.id, &claims.sid)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+#[ignore = "isolated MySQL required"]
+async fn full_auth_login_recovers_a_committed_legacy_lock() {
     use sea_orm::{ConnectionTrait, DbBackend, QuerySelect, Statement, TransactionTrait};
     let f = Fixture::new().await;
     let txn = f.state.db.begin().await.unwrap();
@@ -2386,28 +2562,24 @@ async fn full_auth_login_rechecks_locked_account() {
         .try_get("", "id")
         .unwrap();
     let (state, employee_no) = (f.state.clone(), f.member.employee_no.clone());
+    let req = login_request(&state, employee_no, "Regression123");
     let pending = tokio::spawn(async move {
-        service::auth::login(
-            &state.db,
-            &state.cfg,
-            &crate::dto::LoginRequest {
-                employee_no,
-                password: "Regression123".into(),
-                captcha_id: None,
-                captcha_code: None,
-            },
-            None,
-            &state.captchas,
-        )
-        .await
+        service::auth::login(&state.db, &state.cfg, &req, None, &state.captchas).await
     });
     await_owned_lock(&f.state.db, blocker).await;
     txn.execute(Statement::from_string(DbBackend::MySql,format!("UPDATE users SET locked_until=DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 MINUTE) WHERE id={}",f.member.id))).await.unwrap();
     txn.commit().await.unwrap();
-    assert!(
-        pending.await.unwrap().is_err(),
-        "waiting login must not clear a committed lock"
-    );
+    pending
+        .await
+        .unwrap()
+        .expect("a correct password plus CAPTCHA must recover a legacy account lock");
+    let user = users::Entity::find_by_id(f.member.id)
+        .one(&f.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(user.locked_until.is_none());
+    assert_eq!(user.failed_login_attempts, 0);
 }
 
 #[tokio::test]
@@ -2420,20 +2592,10 @@ async fn full_auth_unknown_user_does_not_exhaust_pool() {
         .min_connections(1)
         .acquire_timeout(std::time::Duration::from_secs(4));
     let db = sea_orm::Database::connect(options).await.unwrap();
+    let req = login_request(&f.state, "no_such_regression_user".into(), "irrelevant");
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        service::auth::login(
-            &db,
-            &f.state.cfg,
-            &crate::dto::LoginRequest {
-                employee_no: "no_such_regression_user".into(),
-                password: "irrelevant".into(),
-                captcha_id: None,
-                captcha_code: None,
-            },
-            None,
-            &f.state.captchas,
-        ),
+        service::auth::login(&db, &f.state.cfg, &req, None, &f.state.captchas),
     )
     .await;
     assert!(
@@ -2445,20 +2607,10 @@ async fn full_auth_unknown_user_does_not_exhaust_pool() {
 async fn auth_change_barrier(refresh: bool) {
     use sea_orm::{ConnectionTrait, DbBackend, QuerySelect, Statement, TransactionTrait};
     let f = Fixture::new().await;
-    let (_, token) = service::auth::login(
-        &f.state.db,
-        &f.state.cfg,
-        &crate::dto::LoginRequest {
-            employee_no: f.member.employee_no.clone(),
-            password: "Regression123".into(),
-            captcha_id: None,
-            captcha_code: None,
-        },
-        None,
-        &f.state.captchas,
-    )
-    .await
-    .unwrap();
+    let req = login_request(&f.state, f.member.employee_no.clone(), "Regression123");
+    let (_, token) = service::auth::login(&f.state.db, &f.state.cfg, &req, None, &f.state.captchas)
+        .await
+        .unwrap();
     let txn = f.state.db.begin().await.unwrap();
     users::Entity::find_by_id(f.member.id)
         .lock_exclusive()
@@ -2487,7 +2639,7 @@ async fn auth_change_barrier(refresh: bool) {
                 &user,
                 &crate::dto::ChangePasswordRequest {
                     old_password: "Regression123".into(),
-                    new_password: "Changed123".into(),
+                    new_password: "Changed123456".into(),
                 },
             )
             .await

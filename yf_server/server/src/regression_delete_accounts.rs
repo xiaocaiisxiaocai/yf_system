@@ -172,6 +172,18 @@ async fn delete_safety_requires_explicit_delete_permissions() {
     )
     .await
     .unwrap();
+    // Keep the target below the delegated actor's authorization ceiling. The role is deliberately
+    // empty and is deleted later in this same scenario after user deletion removes its binding.
+    service::user::assign_roles(
+        &f.state.db,
+        &f.admin,
+        target_user.id,
+        &service::user::RoleAssign {
+            role_ids: vec![role["id"].as_u64().unwrap()],
+        },
+    )
+    .await
+    .unwrap();
     let dept = service::dept::create(
         &f.state.db,
         &f.admin,

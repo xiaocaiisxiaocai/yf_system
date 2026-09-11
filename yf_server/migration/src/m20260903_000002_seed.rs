@@ -1,12 +1,8 @@
 //! 种子数据：admin 账号、4 个内置角色、权限点清单、角色-权限绑定、系统参数。
-//! 首次建库时生成随机初始密码并仅打印一次部署日志；admin 首次登录强制改密。
+//! 首次建库从进程环境接收管理员初始密码；禁止日志记录凭据，首次登录强制改密。
 use std::collections::HashMap;
-use std::fmt::Write as _;
 
-use argon2::password_hash::{
-    rand_core::{OsRng, RngCore},
-    SaltString,
-};
+use argon2::password_hash::{rand_core::OsRng, SaltString};
 use argon2::{Argon2, PasswordHasher};
 use sea_orm_migration::prelude::*;
 use sea_orm_migration::sea_orm::{ConnectionTrait, DbBackend, Statement};
@@ -130,13 +126,15 @@ impl MigrationTrait for Migration {
             ))
             .await?;
         if existing.is_none() {
-            let mut random = [0u8; 16];
-            OsRng.fill_bytes(&mut random);
-            let mut suffix = String::with_capacity(32);
-            for byte in random {
-                write!(&mut suffix, "{byte:02x}").map_err(|e| DbErr::Custom(e.to_string()))?;
+            let initial_password = std::env::var("YF_BOOTSTRAP_PASSWORD").map_err(|_| {
+                DbErr::Custom(
+                    "首次初始化需要通过进程环境提供 YF_BOOTSTRAP_PASSWORD；不会生成或打印密码"
+                        .into(),
+                )
+            })?;
+            if !crate::password_policy::strong_enough(&initial_password) {
+                return Err(DbErr::Custom(crate::password_policy::POLICY_MESSAGE.into()));
             }
-            let initial_password = format!("Aa1!{suffix}");
             let salt = SaltString::generate(&mut OsRng);
             let hash = Argon2::default()
                 .hash_password(initial_password.as_bytes(), &salt)
@@ -149,7 +147,9 @@ impl MigrationTrait for Migration {
                 ["admin".into(), hash.into(), "系统管理员".into(), "admin@example.com".into()],
             ))
             .await?;
-            tracing::warn!(username = "admin", password = %initial_password, "首次部署管理员凭据；请立即安全保存并在首次登录后修改");
+            tracing::info!(
+                "首次部署管理员已创建；请首次登录后修改密码并清除初始化进程环境中的凭据"
+            );
         }
 
         // 2. 角色

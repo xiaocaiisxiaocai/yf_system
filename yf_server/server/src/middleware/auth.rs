@@ -5,10 +5,11 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use sea_orm::EntityTrait;
+use chrono::Utc;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 use crate::entity::enums::{CommonStatus, UserType};
-use crate::entity::{suppliers, users};
+use crate::entity::{refresh_tokens, suppliers, users};
 use crate::error::{ApiResult, AppError};
 use crate::state::AppState;
 use crate::util::jwt;
@@ -30,6 +31,26 @@ pub(crate) fn supplier_id_for_auth(
         UserType::Supplier => supplier_id
             .map(Some)
             .ok_or_else(|| AppError::Unauthorized("所属供应商已被禁用".into())),
+    }
+}
+
+pub(crate) async fn ensure_active_session(
+    db: &sea_orm::DatabaseConnection,
+    user_id: u64,
+    session_id: &str,
+) -> ApiResult<()> {
+    let active = refresh_tokens::Entity::find()
+        .filter(refresh_tokens::Column::SessionId.eq(session_id))
+        .filter(refresh_tokens::Column::UserId.eq(user_id))
+        .filter(refresh_tokens::Column::Revoked.eq(false))
+        .filter(refresh_tokens::Column::ExpiresAt.gt(Utc::now()))
+        .one(db)
+        .await?
+        .is_some();
+    if active {
+        Ok(())
+    } else {
+        Err(AppError::Unauthorized("登录状态已失效，请重新登录".into()))
     }
 }
 
@@ -55,6 +76,7 @@ pub async fn middleware(
         .ok_or_else(|| AppError::Unauthorized("缺少登录凭证".into()))?;
 
     let claims = jwt::parse_access(&state.cfg.jwt.secret, token)?;
+    ensure_active_session(&state.db, claims.uid, &claims.sid).await?;
     let user = users::Entity::find_by_id(claims.uid)
         .one(&state.db)
         .await?

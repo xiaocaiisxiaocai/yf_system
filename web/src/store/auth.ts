@@ -65,9 +65,15 @@ export const useAuth = create<AuthState>()(
     }),
     {
       name: 'yf-auth',
-      // token 不持久化；持久化的用户信息用于启动时决定是否尝试静默刷新
+      version: 1,
+      migrate: (persisted) => {
+        const previous = persisted as { user?: { id?: number } } | undefined
+        return { user: typeof previous?.user?.id === 'number' ? { id: previous.user.id } : null }
+      },
+      // Only an account id is needed for boot/cross-tab account-switch detection.
+      // Name, employee number, email and supplier details are fetched after refresh.
       partialize: (s) => ({
-        user: s.user,
+        user: s.user ? { id: s.user.id } : null,
         permissions: s.permissions,
         menus: s.menus,
         mustChangePassword: s.mustChangePassword,

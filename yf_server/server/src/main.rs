@@ -19,11 +19,15 @@ mod regression_business_uniqueness;
 #[cfg(test)]
 mod regression_dashboard;
 #[cfg(test)]
+mod regression_delegation;
+#[cfg(test)]
 mod regression_delete_accounts;
 #[cfg(test)]
 mod regression_delete_project;
 #[cfg(test)]
 mod regression_disabled_role;
+#[cfg(test)]
+mod regression_http_fixture;
 #[cfg(test)]
 mod regression_identity_review;
 #[cfg(test)]

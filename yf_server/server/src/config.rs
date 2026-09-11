@@ -129,6 +129,14 @@ impl Config {
         if !(cfg.web.base_url.starts_with("http://") || cfg.web.base_url.starts_with("https://")) {
             return Err("web.base_url 必须是 http:// 或 https:// 开头的前端地址".into());
         }
+        let uri: axum::http::Uri = cfg
+            .web
+            .base_url
+            .parse()
+            .map_err(|_| "web.base_url 不是有效的 HTTP 地址")?;
+        if uri.authority().is_none() || uri.authority().is_some_and(|a| a.as_str().contains('@')) {
+            return Err("web.base_url 必须包含主机且不能包含凭据".into());
+        }
         Ok(cfg)
     }
 }

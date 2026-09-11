@@ -11,11 +11,13 @@ mysql -uroot -p -e "CREATE DATABASE IF NOT EXISTS yf_system DEFAULT CHARACTER SE
 # 2. 复制 config.toml 为已忽略的 config.local.toml，填写本机配置
 #    （也可用环境变量 YF_DATABASE_URL / YF_JWT_SECRET 覆盖敏感项）
 
-# 3. 本地启动（config.local.toml 中 auto_migrate=true 时自动迁移）
+# 3. 首次新库先单独初始化（Python 3.11+；交互输入初始密码，不写命令历史）
 cd yf_server
+python scripts/initialize.py
+# 初始化子进程退出后再启动服务；不要把初始化密码留在长期服务环境中。
 cargo run -p server
 
-# 或手工执行迁移（先显式设置 DATABASE_URL；CLI 不读取 config.local.toml）
+# 已有库可手工执行迁移（先显式设置 DATABASE_URL；CLI 不读取 config.local.toml）
 # 完整环境变量检查及恢复步骤见 DEPLOYMENT.md
 cargo run -p migration -- up
 ```
@@ -23,7 +25,7 @@ cargo run -p migration -- up
 - 健康检查：http://127.0.0.1:8080/health
 - API 根路径：`/api/v1`
 - SMTP 凭据可通过 `YF_SMTP_HOST`、`YF_SMTP_PORT`、`YF_SMTP_USERNAME`、`YF_SMTP_PASSWORD`、`YF_SMTP_FROM` 进程级注入，避免写入配置文件；邮件中的登录地址使用前端 `web.base_url`，部署时可通过 `YF_WEB_BASE_URL` 覆盖。
-- 首次初始化会创建 `admin`，随机初始密码仅写入当次后端启动日志；首次登录强制改密。不要把初始密码写入源码、文档或长期日志。
+- 首次初始化会创建 `admin`，必须通过启动进程的 `YF_BOOTSTRAP_PASSWORD` 环境变量安全注入 12–64 字符的初始密码；未提供则停止初始化。不要把值写入源码、命令历史或日志，初始化后清除该变量，首次登录仍强制改密。已有数据库不受此要求影响。
 - Windows/IIS 发布、迁移、备份与恢复流程见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
 ## 删除操作
@@ -44,7 +46,7 @@ cargo run -p migration -- up
 
 删除回归测试使用 `python scripts/test-isolated.py delete_safety_`，脚本只允许本机 MySQL，创建并清理临时测试库，不使用业务库运行删除测试。
 
-完整 HTTP 链路测试使用 `python scripts/test-http-isolated.py`。先运行 `cargo build -p server --locked --offline` 更新测试二进制；Windows 下若该二进制正在运行，需先核实并停止本项目对应进程，构建后恢复。运行器从本地配置读取 MySQL 连接，创建临时数据库、随机端口服务和临时存储，禁用 SMTP；在结束时清理自己创建的资源，不停止已有应用。它调用 `e2e_test.py` 验证认证、Cookie 旋转/退出、权限、组织、项目审批、上传下载、留言、审计及工作台接口。`e2e_test.py` 不再默认连接业务端口，不能用业务库运行此套写入测试。
+完整 HTTP 链路测试使用 `python scripts/test-http-isolated.py`。运行器构建独立测试二进制，不覆盖或停止现有 server；从本地配置读取 MySQL 连接，创建临时数据库、随机端口服务和临时存储，禁用 SMTP，并清理自己创建的资源。图形挑战答案由仅编译进测试二进制的私有夹具提供，生产 server 不包含此路由。它调用 `e2e_test.py` 验证认证、Cookie 旋转/退出、权限、组织、项目审批、上传下载、留言、审计及工作台接口，不能连接业务库运行。
 
 系统管理员角色绑定启用用户时必须保留用户管理和角色管理入口，避免管理员在权限分配时锁死系统；角色禁用和删除仍受绑定用户校验约束。
 

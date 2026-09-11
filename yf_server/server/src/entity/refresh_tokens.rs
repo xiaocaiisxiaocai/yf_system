@@ -7,6 +7,8 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: u64,
     pub user_id: u64,
+    /// Stable session family shared by every refresh-token rotation.
+    pub session_id: String,
     pub token_hash: String,
     pub expires_at: DateTimeUtc,
     pub revoked: bool,

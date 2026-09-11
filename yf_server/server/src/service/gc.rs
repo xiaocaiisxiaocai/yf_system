@@ -1,13 +1,13 @@
 //! 定期清理：过期/中止的上传临时目录、残留的批量打包 zip、软删除文件、过期 refresh token、过期验证码。
 //! 由 notify worker 的循环每 10 分钟驱动一次（见 worker.rs）。
 use chrono::{Duration, Utc};
-use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 use crate::entity::enums::{FileStatus, UploadStatus};
 use crate::entity::{files, refresh_tokens, upload_sessions};
 use crate::state::AppState;
 
-/// 软删文件保留 30 天后物理删除；refresh token 吊销/过期 7 天后清除；tmp zip 保留 1 天
+/// 软删文件保留 30 天后物理删除；refresh token 原到期时间 7 天后清除；tmp zip 保留 1 天
 const FILE_KEEP_DAYS: i64 = 30;
 const TOKEN_KEEP_DAYS: i64 = 7;
 const ZIP_KEEP_HOURS: i64 = 24;
@@ -59,15 +59,11 @@ async fn purge_deleted_files(state: &AppState) {
     }
 }
 
-/// 清除已吊销或已过期的旧 refresh token
+/// Keep rotated/revoked token hashes through their original validity window for replay detection.
 async fn purge_old_tokens(state: &AppState) {
     let cutoff = Utc::now() - Duration::days(TOKEN_KEEP_DAYS);
-    let doomed = Condition::any()
-        .add(refresh_tokens::Column::Revoked.eq(true))
-        .add(refresh_tokens::Column::ExpiresAt.lt(Utc::now()));
     let r = refresh_tokens::Entity::delete_many()
-        .filter(refresh_tokens::Column::CreatedAt.lt(cutoff))
-        .filter(doomed)
+        .filter(refresh_tokens::Column::ExpiresAt.lt(cutoff))
         .exec(&state.db)
         .await;
     if let Err(e) = r {

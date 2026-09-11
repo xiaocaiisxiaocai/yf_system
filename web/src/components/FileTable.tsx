@@ -19,11 +19,14 @@ interface Props {
   targetId?: number
 }
 
+const PDF_PREVIEW_MAX_BYTES = 50 * 1024 * 1024
+
 /** 依据扩展名判定预览能力：Excel→只读表格，PDF→内联，其余仅下载 */
 function previewKind(ext: string, sizeBytes = 0): 'excel' | 'pdf' | 'none' {
   // Excel 需要在浏览器内完整解析工作簿，限制在线预览体积以避免页面 OOM。
   if ((ext === 'xlsx' || ext === 'xls') && sizeBytes <= 50 * 1024 * 1024) return 'excel'
-  if (ext === 'pdf') return 'pdf'
+  // PDF.js 同样会在浏览器内完整缓冲文件；较大文件仅允许下载。
+  if (ext === 'pdf' && sizeBytes <= PDF_PREVIEW_MAX_BYTES) return 'pdf'
   return 'none'
 }
 

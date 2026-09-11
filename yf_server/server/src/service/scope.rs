@@ -51,7 +51,8 @@ pub async fn can_view_all(db: &impl ConnectionTrait, user_id: u64) -> ApiResult<
         .any(|c| c == "project:view_all"))
 }
 
-/// 内置系统管理员身份仅用于展示和最后管理员保护；业务授权统一使用权限点。
+/// Built-in administrator identity also protects privileged account/role delegation;
+/// ordinary business operations still require their explicit permission points.
 pub async fn is_system_admin(db: &impl ConnectionTrait, user_id: u64) -> ApiResult<bool> {
     let admin_role = roles::Entity::find()
         .filter(roles::Column::IsBuiltIn.eq(true))
