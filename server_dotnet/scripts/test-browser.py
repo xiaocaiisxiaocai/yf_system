@@ -25,8 +25,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = Path(__file__).resolve().parent / 'browser'
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path)
-parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'final', 'layout'],
-    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'final', 'layout'])
+parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'final', 'layout', 'project-edges', 'access'],
+    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'final', 'layout', 'project-edges', 'access'])
 args = parser.parse_args()
 if args.steps[:2] != ['auth', 'fixtures']:
     raise SystemExit('Every fresh run must start with auth fixtures.')

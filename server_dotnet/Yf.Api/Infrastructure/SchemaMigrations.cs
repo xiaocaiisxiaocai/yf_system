@@ -1,7 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
-using System.Text.RegularExpressions;
 using Dapper;
 using MySqlConnector;
 using Yf.Api.Modules.Admin;
@@ -14,6 +12,15 @@ public static class SchemaMigrations
     public const int CurrentVersion = 1;
     private const string PreviousBaseline = "m20260910_000016_project_workflow";
     private const string MigrationName = "000001_adopt_schema_sessions_supplier_boundary";
+    private const string MigrationTableSql = """
+        CREATE TABLE `yf_schema_migrations` (
+          `version` int NOT NULL,
+          `name` varchar(128) NOT NULL,
+          `checksum` char(64) NOT NULL,
+          `applied_at` datetime(6) NOT NULL,
+          PRIMARY KEY (`version`)
+        ) ENGINE=InnoDB
+        """;
     private static string Checksum => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(MigrationName + ":1")));
 
     public static async Task ApplyAsync(AppDb db, CancellationToken ct = default)
@@ -28,13 +35,24 @@ public static class SchemaMigrations
         if (legacy is not (PreviousBaseline or SchemaBootstrap.Version))
             throw new InvalidOperationException("Migration refused: supported import baselines are project_workflow (16) and auth_session_families (17). Older or unknown schemas need a separately reviewed data conversion; no changes were made.");
 
-        // Check business tables before any DDL. The one deliberately missing field
-        // in baseline 16 is repaired below. This catches partial initialization too.
-        await ValidateShapeAsync(conn, allowMissingSessionId: legacy == PreviousBaseline, ct);
-        await conn.ExecuteAsync(new CommandDefinition("CREATE TABLE IF NOT EXISTS yf_schema_migrations (version INT NOT NULL PRIMARY KEY, name VARCHAR(128) NOT NULL, checksum CHAR(64) NOT NULL, applied_at DATETIME(6) NOT NULL)", cancellationToken: ct));
-        var rows = (await conn.QueryAsync<MigrationRow>(new CommandDefinition("SELECT version,name,checksum FROM yf_schema_migrations ORDER BY version", cancellationToken: ct))).ToArray();
-        if (rows.Any(x => x.Version != CurrentVersion || x.Name != MigrationName || x.Checksum != Checksum))
-            throw new InvalidOperationException("Unknown or modified .NET migration history; upgrade this application or restore the correct migration definitions.");
+        // Validate all existing structures and histories before the first DDL or data write.
+        // Baseline 16 may only be missing the session-family additions repaired below.
+        await SchemaShapeValidator.ValidateBaselineAsync(conn,
+            legacy == PreviousBaseline
+                ? SchemaShapeValidationMode.LegacyV16BeforeSessionMigration
+                : SchemaShapeValidationMode.Strict,
+            ct);
+        await ValidatePermissionGateAsync(conn, ct);
+        var hasMigrationTable = await HasTableAsync(conn, "yf_schema_migrations", ct);
+        if (hasMigrationTable)
+        {
+            await SchemaShapeValidator.ValidateTableAsync(conn, "yf_schema_migrations", MigrationTableSql, ct);
+            ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: false);
+        }
+        else
+        {
+            await conn.ExecuteAsync(new CommandDefinition(MigrationTableSql, cancellationToken: ct));
+        }
 
         // MySQL DDL commits implicitly. Every step is repeatable after a crash,
         // and history is recorded only after the resulting schema is validated.
@@ -47,8 +65,9 @@ public static class SchemaMigrations
         var index = await conn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='refresh_tokens' AND index_name='idx_refresh_tokens_session_state'", cancellationToken: ct));
         if (index == 0)
             await conn.ExecuteAsync(new CommandDefinition("CREATE INDEX idx_refresh_tokens_session_state ON refresh_tokens(session_id,user_id,revoked,expires_at)", cancellationToken: ct));
-        await ValidateShapeAsync(conn, false, ct);
-        await ValidateSessionSchemaAsync(conn, ct);
+        await SchemaShapeValidator.ValidateBaselineAsync(conn, SchemaShapeValidationMode.Strict, ct);
+        await ValidatePermissionGateAsync(conn, ct);
+        await SchemaShapeValidator.ValidateTableAsync(conn, "yf_schema_migrations", MigrationTableSql, ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         var supplierGrants = await conn.QueryAsync<SupplierGrant>(new CommandDefinition(
@@ -70,44 +89,33 @@ public static class SchemaMigrations
     {
         if (!await HasTableAsync(conn, "yf_schema_migrations", ct))
             throw new InvalidOperationException("Database has not been adopted by .NET. Back up the database and run --migrate-database explicitly before startup.");
-        var rows = (await conn.QueryAsync<MigrationRow>(new CommandDefinition("SELECT version,name,checksum FROM yf_schema_migrations ORDER BY version", cancellationToken: ct))).ToArray();
-        if (rows.Length != 1 || rows[0].Version != CurrentVersion || rows[0].Name != MigrationName || rows[0].Checksum != Checksum)
-            throw new InvalidOperationException("Unsupported .NET schema version or modified migration history; run the matching application migration command.");
-        await ValidateShapeAsync(conn, false, ct);
-        await ValidateSessionSchemaAsync(conn, ct);
+        await SchemaShapeValidator.ValidateTableAsync(conn, "yf_schema_migrations", MigrationTableSql, ct);
+        ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: true);
+        await SchemaShapeValidator.ValidateBaselineAsync(conn, SchemaShapeValidationMode.Strict, ct);
+        await ValidatePermissionGateAsync(conn, ct);
     }
 
-    private static async Task ValidateSessionSchemaAsync(MySqlConnection conn, CancellationToken ct)
+    private static async Task ValidatePermissionGateAsync(MySqlConnection conn, CancellationToken ct)
     {
-        var columnOk = await conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='refresh_tokens' AND column_name='session_id' AND data_type='varchar' AND character_maximum_length=36 AND is_nullable='NO')", cancellationToken: ct));
-        var indexColumns = await conn.ExecuteScalarAsync<string>(new CommandDefinition("SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='refresh_tokens' AND index_name='idx_refresh_tokens_session_state'", cancellationToken: ct));
-        if (!columnOk || indexColumns != "session_id,user_id,revoked,expires_at")
-            throw new InvalidOperationException("Session-family column or index has an unsupported definition. Inspect schema before migration.");
-    }
-
-    private static async Task ValidateShapeAsync(MySqlConnection conn, bool allowMissingSessionId, CancellationToken ct)
-    {
-        using var resource = typeof(SchemaBootstrap).Assembly.GetManifestResourceStream("Yf.Api.Infrastructure.schema-baseline.json")!;
-        using var baseline = await JsonDocument.ParseAsync(resource, cancellationToken: ct);
-        var columns = (await conn.QueryAsync<ColumnRow>(new CommandDefinition("SELECT table_name TableName,column_name ColumnName FROM information_schema.columns WHERE table_schema=DATABASE()", cancellationToken: ct)))
-            .Select(x => x.TableName + "." + x.ColumnName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var table in baseline.RootElement.GetProperty("tables").EnumerateArray())
-        {
-            var name = table.GetProperty("name").GetString()!;
-            foreach (Match match in Regex.Matches(table.GetProperty("sql").GetString()!, @"(?m)^\s*`([^`]+)`\s+"))
-            {
-                var column = name + "." + match.Groups[1].Value;
-                if (allowMissingSessionId && column == "refresh_tokens.session_id") continue;
-                if (!columns.Contains(column)) throw new InvalidOperationException("Incomplete database schema: missing " + column);
-            }
-        }
         var gate = await conn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM system_configs WHERE cfg_key='security.management_lock'", cancellationToken: ct));
         if (gate != 1) throw new InvalidOperationException("Database permission gate missing.");
+    }
+
+    private static async Task<MigrationRow[]> ReadMigrationRowsAsync(MySqlConnection conn, CancellationToken ct) =>
+        (await conn.QueryAsync<MigrationRow>(new CommandDefinition(
+            "SELECT version,name,checksum FROM yf_schema_migrations ORDER BY version",
+            cancellationToken: ct))).ToArray();
+
+    private static void ValidateMigrationRows(MigrationRow[] rows, bool requireCurrent)
+    {
+        if (rows.Any(x => x.Version != CurrentVersion || x.Name != MigrationName || x.Checksum != Checksum))
+            throw new InvalidOperationException("Unknown or modified .NET migration history; upgrade this application or restore the correct migration definitions.");
+        if (requireCurrent && rows.Length != 1)
+            throw new InvalidOperationException("Unsupported .NET schema version or modified migration history; run the matching application migration command.");
     }
 
     private static Task<bool> HasTableAsync(MySqlConnection conn, string table, CancellationToken ct) => conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=@table)", new { table }, cancellationToken: ct));
     private static Task<bool> HasColumnAsync(MySqlConnection conn, string table, string column, CancellationToken ct) => conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=@table AND column_name=@column)", new { table, column }, cancellationToken: ct));
     private sealed record MigrationRow(int Version, string Name, string Checksum);
-    private sealed record ColumnRow(string TableName, string ColumnName);
     private sealed record SupplierGrant(ulong RoleId, ulong PermissionId, string Code);
 }

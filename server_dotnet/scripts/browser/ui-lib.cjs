@@ -31,6 +31,6 @@ async function login(p,user,password){
 }
 async function api(c,method,url,data,token,expected=200){const r=await c.request.fetch(s.base+'/api/v1'+url,{method,data,headers:{Origin:s.base,Authorization:'Bearer '+token}});assert.equal(r.status(),expected,method+' '+url);return r;}
 async function navigate(p,url){await p.goto(s.base+url);await p.getByText('收起导航',{exact:true}).waitFor();}
-async function action(p,suffix,method,fn){const response=p.waitForResponse(r=>new URL(r.url()).pathname.endsWith(suffix)&&r.request().method()===method);await fn();const r=await response;assert.equal(r.status(),200,suffix);return r.json();}
+async function action(p,suffix,method,fn){const [r]=await Promise.all([p.waitForResponse(r=>new URL(r.url()).pathname.endsWith(suffix)&&r.request().method()===method),Promise.resolve().then(fn)]);assert.equal(r.status(),200,suffix);return r.json();}
 function track(p,label){p.on('pageerror',e=>fs.appendFileSync(OUT+'/page-errors.jsonl',JSON.stringify({label,error:e.message})+'\n'));p.on('response',r=>{if(r.status()>=500&&!p.expectedServerErrors?.has(new URL(r.url()).pathname))fs.appendFileSync(OUT+'/http-errors.jsonl',JSON.stringify({label,status:r.status(),path:new URL(r.url()).pathname})+'\n');});}
 module.exports={fs,path,assert,OUT,s,f,save,record,login,api,navigate,action,track};
