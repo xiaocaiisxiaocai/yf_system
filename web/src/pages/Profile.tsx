@@ -1,3 +1,4 @@
+import { textLengthRule } from '../utils/textRules'
 import { useState } from 'react'
 import { Button, Card, Form, Input, Message, Typography } from '@arco-design/web-react'
 import { IconEmail, IconLock, IconSave } from '@arco-design/web-react/icon'
@@ -95,9 +96,10 @@ export default function Profile() {
               rules={[
                 { required: true, message: '请输入邮箱' },
                 { type: 'email', message: '邮箱格式不正确' },
+                textLengthRule('联系邮箱', 128),
               ]}
             >
-              <Input prefix={<IconEmail />} placeholder="请输入联系邮箱" maxLength={128} autoComplete="email" />
+              <Input prefix={<IconEmail />} placeholder="请输入联系邮箱" autoComplete="email" />
             </Form.Item>
             <Button type="primary" htmlType="submit" icon={<IconSave />} loading={profileLoading}>
               保存资料

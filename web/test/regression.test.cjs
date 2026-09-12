@@ -405,6 +405,7 @@ function loadTs(relativePath, mocks, globals = {}) {
       if (typeof name === 'string' && name.startsWith('.') && name.replace(/\\/g, '/').endsWith('/utils/password')) {
         return loadTs('src/utils/password.ts', {})
       }
+      if (name.endsWith('/textRules')) return loadTs('src/utils/textRules.ts', {})
       return require(name)
     },
   }, { filename })

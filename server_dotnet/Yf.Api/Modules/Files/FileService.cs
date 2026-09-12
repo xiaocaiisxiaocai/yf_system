@@ -20,7 +20,7 @@ public sealed class FileService(AppDb db, AppOptions options, AuditService audit
         var (page, size, offset) = QueryValues.Page(context.Request);
         var direction = context.Request.Query["direction"].ToString();
         var keyword = context.Request.Query["keyword"].ToString().Trim();
-        var targetId = ulong.TryParse(context.Request.Query["targetId"], out var parsedTarget) ? parsedTarget : (ulong?)null;
+        var targetId = QueryValues.OptionalUInt64(context.Request, "targetId");
         var where = " WHERE f.project_id=@ProjectId AND f.status='AVAILABLE'";
         if (targetId is not null) where += " AND f.id=@TargetId";
         if (!string.IsNullOrEmpty(direction)) where += " AND f.direction=@Direction";

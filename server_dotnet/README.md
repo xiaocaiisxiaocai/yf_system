@@ -95,6 +95,23 @@ HTTP 测试需要 Python 3.11+ 与 `pymysql`，仅使用显式设置的 `YF_TEST
 
 测试脚本中的 PDF 样本用于传输字节/Range 验证；这些检查不等同于在浏览器里渲染真实 PDF，也不等同于目标服务器 IIS 或真实 SMTP 验收。
 
+### 浏览器自动化
+
+`scripts/test-browser.py` 使用已安装的 Chrome 和现有 Playwright `run.js`，验证构建后的 React 与同一 ASP.NET API 的登录、改密、管理操作、项目协作、文件预览下载以及页面布局。先构建对应源码，再运行；脚本不会安装依赖、启动业务实例或读取项目私有配置。
+
+```powershell
+dotnet build .\TestHost\Yf.Api.TestHost.csproj --no-restore
+Push-Location ..\web
+try { npm run build } finally { Pop-Location }
+# 显式设置本机测试管理连接 YF_TEST_DATABASE_URL（与 HTTP 测试相同）。
+$env:YF_PLAYWRIGHT_RUNNER = 'C:\你的工具目录\playwright-skill\run.js'
+python .\scripts\test-browser.py --output ..\.runlogs\browser-NEW
+```
+
+每次使用新的空证据目录。结果含实际步骤、源码与被测构建产物 SHA-256、截图、下载完整性及资源清理状态；测试期间修改源码或产物会使本轮校验失败。它创建随机临时数据库、文件目录、账号和独立回环测试宿主，保留生产限速，验证码答案仅通过测试宿主观察器获取，邮件发送关闭。结束只清理本轮资源与私有登录状态。
+
+`--steps auth fixtures system` 可单独检查系统参数和日志；`business` 必须在 `users` 后，`final` 和 `layout` 必须在 `business` 后。完整默认步骤对应 `scripts/browser` 中的脚本，不代表覆盖所有状态组合、实际移动设备、目标 IIS 或外部 SMTP。
+
 ## IIS 发布
 
 ```powershell

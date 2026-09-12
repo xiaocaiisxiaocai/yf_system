@@ -24,7 +24,7 @@ const actionSlots = {
   actionSlots: (slots) => React.createElement('div', {}, slots.filter(Boolean)),
 }
 
-function loadTs(relativePath, mocks = {}) {
+function loadTs(relativePath, mocks = {}, globals = {}) {
   const filename = path.resolve(__dirname, '..', relativePath)
   const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
     compilerOptions: {
@@ -44,11 +44,13 @@ function loadTs(relativePath, mocks = {}) {
     URL,
     URLSearchParams,
     AbortController,
+    ...globals,
     require: (name) => {
       if (name in mocks) return mocks[name]
       if (name.endsWith('.json')) return JSON.parse(fs.readFileSync(path.resolve(path.dirname(filename), name), 'utf8'))
       if (name.replace(/\\/g, '/').endsWith('/ActionSlots')) return actionSlots
       if (name.replace(/\\/g, '/').endsWith('/PasswordInput')) return component('PasswordInput')
+      if (name.endsWith('/textRules')) return loadTs('src/utils/textRules.ts', {})
       return require(name)
     },
   }, { filename })
@@ -194,6 +196,41 @@ test('form limits match the backend character contracts', async () => {
     const input = formItem.find((node) => node.type === 'Input' || node.type === 'Input.TextArea')
     assert.equal(input.props.maxLength, item.maxLength, `${item.page}:${item.field}`)
     await act(async () => renderer.unmount())
+  }
+})
+
+test('required business names and emails validate scalar lengths before submitting', async () => {
+  const pages = [
+    ['project/ProjectList.tsx', [['name',128]]],
+    ['rbac/RoleList.tsx', [['name',64]]],
+    ['supplier/SupplierList.tsx', [['name',64],['realName',32],['email',128]]],
+    ['org/UserList.tsx', [['realName',32],['email',128]]],
+    ['Profile.tsx', [['email',128]]],
+  ]
+  for (const [page,fields] of pages) {
+    const prefix=page.includes('/')?'../../':'../'
+    const Page=loadTs('src/pages/'+page, {
+      '@arco-design/web-react':arco,
+      '@arco-design/web-react/icon':iconModule(),
+      'react-router-dom':{useNavigate:()=>()=>{},Link:component('Link')},
+      [prefix+'api/client']:{get:async url=>({data:/options|departments|permissions/.test(url)?[]:{list:[],total:0,page:1,pageSize:10}})},
+      [prefix+'api/types']:{PROJECT_STATUS:{},fmtTime:String},
+      [prefix+'store/auth']:authModule(['supplier:account']),
+      [prefix+'utils/password']:{passwordRule:{}},
+    },{window:{matchMedia:()=>({matches:false,addEventListener(){},removeEventListener(){}})}}).default
+    let renderer
+    await act(async()=>{renderer=create(React.createElement(Page))})
+    for(const [field,max] of fields){
+      const item=renderer.root.findAllByType('Form.Item').find(node=>node.props.field===field)
+      assert(item,page+':'+field)
+      const rule=item.props.rules.find(rule=>typeof rule?.validator==='function')
+      assert(rule,page+':'+field+' requires scalar-aware validation')
+      assert.equal(validatorError(rule,' 😀'.trim().repeat(max)),undefined,page+':'+field+' accepts maximum scalar count')
+      assert.match(String(validatorError(rule,'😀'.repeat(max+1))),new RegExp(String(max)))
+      assert.match(String(validatorError(rule,'   ')),new RegExp(String(max)))
+      assert.equal(validatorError(rule,'  正常名称  '),undefined)
+    }
+    await act(async()=>renderer.unmount())
   }
 })
 

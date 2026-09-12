@@ -1,3 +1,4 @@
+import { textLengthRule } from '../../utils/textRules'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Button, Card, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Typography,
@@ -365,7 +366,7 @@ export default function ProjectList() {
         autoFocus={false}
       >
         <Form className="form-grid" form={form} layout="vertical">
-          <Form.Item label="项目名称" field="name" rules={[{ required: true, message: '请输入项目名称' }]}>
+          <Form.Item label="项目名称" field="name" rules={[{ required: true, message: '请输入项目名称' }, textLengthRule('项目名称', 128)]}>
             <Input placeholder="项目名称" />
           </Form.Item>
           <Form.Item label="关联供应商" field="supplierId" rules={[{ required: true, message: '请选择供应商' }]}>

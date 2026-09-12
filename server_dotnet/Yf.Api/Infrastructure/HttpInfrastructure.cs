@@ -1,6 +1,7 @@
 using MySqlConnector;
 using System.Net;
 using System.Text.Json;
+using System.Globalization;
 
 namespace Yf.Api.Infrastructure;
 
@@ -43,10 +44,20 @@ public sealed class ApiErrorMiddleware(RequestDelegate next, ILogger<ApiErrorMid
 
 public static class QueryValues
 {
+    public static ulong? OptionalUInt64(HttpRequest request, string name)
+    {
+        if (!request.Query.TryGetValue(name, out var values)) return null;
+        if (values.Count != 1 || !ulong.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out var value))
+            throw ApiException.BadRequest("请求参数错误: " + name);
+        return value;
+    }
+
     public static (ulong Page, uint Size, ulong Offset) Page(HttpRequest request)
     {
-        var p = ulong.TryParse(request.Query["page"], out var parsed) ? parsed : 1;
-        var s = uint.TryParse(request.Query["pageSize"], out var size) ? Math.Clamp(size, 1U, 100U) : 20;
+        var p = OptionalUInt64(request, "page") ?? 1;
+        var requestedSize = OptionalUInt64(request, "pageSize") ?? 20;
+        if (requestedSize > uint.MaxValue) throw ApiException.BadRequest("请求参数错误: pageSize");
+        var s = Math.Clamp((uint)requestedSize, 1U, 100U);
         p = Math.Clamp(p, 1, ulong.MaxValue / s);
         return (p, s, (p - 1) * s);
     }

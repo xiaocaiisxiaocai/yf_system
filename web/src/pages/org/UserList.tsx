@@ -1,3 +1,4 @@
+import { textLengthRule } from '../../utils/textRules'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Button, Card, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, TreeSelect, Typography,
@@ -417,10 +418,10 @@ export default function UserList() {
                 </Form.Item>
               </>
             )}
-            <Form.Item label="姓名" field="realName" rules={[{ required: true, message: '请输入姓名' }]}>
+            <Form.Item label="姓名" field="realName" rules={[{ required: true, message: '请输入姓名' }, textLengthRule('姓名', 32)]}>
               <Input placeholder="姓名" />
             </Form.Item>
-            <Form.Item label="邮箱" field="email" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }]}>
+            <Form.Item label="邮箱" field="email" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }, textLengthRule('邮箱', 128)]}>
               <Input placeholder="name@example.com" />
             </Form.Item>
             <Form.Item label="所属组织" field="departmentId">

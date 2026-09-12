@@ -16,7 +16,7 @@ public static class AdminModule
         endpoints.MapGet("/api/v1/permissions", (HttpContext c, RoleService s, CancellationToken ct) => s.PermissionsAsync(AccessService.GetCurrent(c), ct));
         var admin = endpoints.MapGroup("/api/v1/admin");
 
-        admin.MapGet("/users", (HttpContext c, UserService s, CancellationToken ct) => { var p = QueryValues.Page(c.Request); ulong? dept = ulong.TryParse(c.Request.Query["departmentId"], out var d) ? d : null; return s.ListAsync(AccessService.GetCurrent(c), p.Page, p.Size, p.Offset, c.Request.Query["keyword"], dept, c.Request.Query["status"], ct); });
+        admin.MapGet("/users", (HttpContext c, UserService s, CancellationToken ct) => { var p = QueryValues.Page(c.Request); var dept = QueryValues.OptionalUInt64(c.Request, "departmentId"); return s.ListAsync(AccessService.GetCurrent(c), p.Page, p.Size, p.Offset, c.Request.Query["keyword"], dept, c.Request.Query["status"], ct); });
         admin.MapGet("/user-role-options", (HttpContext c, UserService s, CancellationToken ct) => s.RoleOptionsAsync(AccessService.GetCurrent(c), c.Request.Query["keyword"], ct));
         admin.MapPost("/users", (UserCreate r, HttpContext c, UserService s, CancellationToken ct) => s.CreateAsync(AccessService.GetCurrent(c), r, ct));
         admin.MapPut("/users/{id:long}", (ulong id, UserUpdate r, HttpContext c, UserService s, CancellationToken ct) => s.UpdateAsync(AccessService.GetCurrent(c), id, r, ct));

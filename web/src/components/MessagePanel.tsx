@@ -21,6 +21,34 @@ interface Reader {
   readAt?: string | null
 }
 
+interface ReadCounts {
+  id: number
+  readCount: number
+  totalCount: number
+}
+
+const RECEIPT_SYNC_CONCURRENCY = 4
+
+async function loadReadCounts(ids: number[]): Promise<ReadCounts[]> {
+  const counts: ReadCounts[] = []
+  for (let start = 0; start < ids.length; start += RECEIPT_SYNC_CONCURRENCY) {
+    const batch = ids.slice(start, start + RECEIPT_SYNC_CONCURRENCY)
+    const results = await Promise.all(batch.map(async (id) => {
+      try {
+        const response = await http.get(`/messages/${id}/reads`)
+        if (!Array.isArray(response.data?.readers) || !Array.isArray(response.data?.unread)) return null
+        const readers = response.data.readers
+        const unread = response.data.unread
+        return { id, readCount: readers.length, totalCount: readers.length + unread.length }
+      } catch {
+        return null
+      }
+    }))
+    counts.push(...results.filter((result): result is ReadCounts => result !== null))
+  }
+  return counts
+}
+
 export default function MessagePanel({ projectId, projectStatus, onRead, targetId }: Props) {
   const [list, setList] = useState<Msg[]>([])
   const [total, setTotal] = useState(0)
@@ -40,7 +68,21 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
   const cursorStartTotal = useRef<number | null>(null)
   const loadedMessages = useRef<Msg[]>([])
   const markingRead = useRef(new Set<number>())
+  const mounted = useRef(true)
+  const messageScope = useRef({ key: '', generation: 0 })
   const [sending, setSending] = useState(false)
+
+  const scopeKey = `${projectId}:${targetId ?? ''}`
+  if (messageScope.current.key !== scopeKey) {
+    messageScope.current = { key: scopeKey, generation: messageScope.current.generation + 1 }
+  }
+
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   const canWrite = !targetId && hasPerm('message:create') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
   const canDelete = hasPerm('message:delete_any') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
@@ -97,11 +139,22 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
           .map((entry) => Number((entry.target as HTMLElement).closest<HTMLElement>('[data-message-id]')?.dataset.messageId))
           .filter((id) => Number.isFinite(id) && !markingRead.current.has(id))
         if (!ids.length) return
+        const scopeGeneration = messageScope.current.generation
         ids.forEach((id) => markingRead.current.add(id))
-        void http.post('/messages/read', { ids }).then(() => {
+        void http.post('/messages/read', { ids }).then(async () => {
+          if (!mounted.current || messageScope.current.generation !== scopeGeneration) return
           loadedMessages.current = loadedMessages.current.map((m) => (ids.includes(m.id) ? { ...m, readByMe: true } : m))
           setList(loadedMessages.current)
           onRead?.()
+
+          const counts = await loadReadCounts(ids)
+          if (!mounted.current || messageScope.current.generation !== scopeGeneration || counts.length === 0) return
+          const byId = new Map(counts.map((item) => [item.id, item]))
+          loadedMessages.current = loadedMessages.current.map((message) => {
+            const next = byId.get(message.id)
+            return next ? { ...message, readCount: next.readCount, totalCount: next.totalCount } : message
+          })
+          setList(loadedMessages.current)
         }).catch(() => {
           ids.forEach((id) => markingRead.current.delete(id))
         })
@@ -111,7 +164,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
     // 观察正文末尾的小标记；长留言不可能有 60% 的整块高度同时进入视口。
     root.querySelectorAll<HTMLElement>('[data-unread="true"] .message-read-marker').forEach((node) => observer.observe(node))
     return () => observer.disconnect()
-  }, [list, onRead])
+  }, [list, onRead, projectId, targetId])
 
   const send = async () => {
     const text = content.trim()

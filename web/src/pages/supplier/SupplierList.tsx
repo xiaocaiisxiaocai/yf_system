@@ -1,3 +1,4 @@
+import { textLengthRule } from '../../utils/textRules'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Typography,
@@ -271,7 +272,7 @@ export default function SupplierList() {
         onCancel={() => { if (!saving) setEditOpen(false) }}
       >
         <Form form={form} layout="vertical">
-          <Form.Item label="供应商名称" field="name" rules={[{ required: true, message: '请输入名称' }]}>
+          <Form.Item label="供应商名称" field="name" rules={[{ required: true, message: '请输入名称' }, textLengthRule('供应商名称', 64)]}>
             <Input placeholder="公司全称" />
           </Form.Item>
           <Form.Item label="备注" field="remark">
@@ -295,6 +296,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
   const [editing, setEditing] = useState<Account | null>(null)
   const [resetTarget, setResetTarget] = useState<Account | null>(null)
   const togglingAccountIdsRef = useRef(new Set<number>())
+  const accountsRequestId = useRef(0)
   const [togglingAccountIds, setTogglingAccountIds] = useState<ReadonlySet<number>>(new Set())
   const [form] = Form.useForm()
   const [pwdForm] = Form.useForm()
@@ -306,26 +308,33 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
   }, [supplier])
 
   const load = useCallback(async () => {
+    const requestId = ++accountsRequestId.current
     setRefreshing(true)
     try {
       const next = await fetchAccounts()
-      if (next) setAccountsState(next)
+      if (accountsRequestId.current === requestId && next) setAccountsState(next)
     } catch {
-      setAccountsState({ supplierId: supplier?.id ?? null, list: [], error: true })
+      if (accountsRequestId.current === requestId) {
+        setAccountsState({ supplierId: supplier?.id ?? null, list: [], error: true })
+      }
     } finally {
-      setRefreshing(false)
+      if (accountsRequestId.current === requestId) setRefreshing(false)
     }
   }, [fetchAccounts, supplier?.id])
 
   useEffect(() => {
     let active = true
+    const requestId = ++accountsRequestId.current
     fetchAccounts().then((next) => {
-      if (active && next) setAccountsState(next)
+      if (active && accountsRequestId.current === requestId && next) setAccountsState(next)
     }).catch(() => {
-      if (active) setAccountsState({ supplierId: supplier?.id ?? null, list: [], error: true })
+      if (active && accountsRequestId.current === requestId) {
+        setAccountsState({ supplierId: supplier?.id ?? null, list: [], error: true })
+      }
     })
     return () => {
       active = false
+      if (accountsRequestId.current === requestId) accountsRequestId.current += 1
     }
   }, [fetchAccounts, supplier?.id])
 
@@ -530,10 +539,10 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
                 </Form.Item>
               </>
             )}
-            <Form.Item label="姓名" field="realName" rules={[{ required: true, message: '请输入姓名' }]}>
+            <Form.Item label="姓名" field="realName" rules={[{ required: true, message: '请输入姓名' }, textLengthRule('姓名', 32)]}>
               <Input placeholder="姓名" />
             </Form.Item>
-            <Form.Item label="邮箱" field="email" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }]}>
+            <Form.Item label="邮箱" field="email" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }, textLengthRule('邮箱', 128)]}>
               <Input placeholder="name@example.com" />
             </Form.Item>
           </div>

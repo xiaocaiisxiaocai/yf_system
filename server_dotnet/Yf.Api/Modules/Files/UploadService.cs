@@ -76,7 +76,6 @@ public sealed partial class UploadService(
             var tempDir = FileStorage.SessionDirectory(root, sessionId);
             Directory.CreateDirectory(tempDir);
             await FileStorage.ResolveExistingAsync(root, tempDir, requireFile: false, ct);
-            var now = TruncateMilliseconds(DateTime.UtcNow);
             SessionCommitRecoveryDecision? commitRecovery = null;
             try
             {
@@ -87,12 +86,13 @@ public sealed partial class UploadService(
                 INSERT INTO upload_sessions
                     (id,project_id,uploader_id,file_name,file_size,file_md5,chunk_size,total_chunks,temp_dir,status,result_file_id,expires_at,created_at,updated_at)
                 VALUES
-                    (@Id,@ProjectId,@UploaderId,@FileName,@FileSize,@FileMd5,@ChunkSize,@TotalChunks,@TempDir,'UPLOADING',NULL,@ExpiresAt,@Now,@Now)
+                    (@Id,@ProjectId,@UploaderId,@FileName,@FileSize,@FileMd5,@ChunkSize,@TotalChunks,@TempDir,'UPLOADING',NULL,
+                     DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 24 HOUR),UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
                 """, new
                 {
                     Id = sessionId, request.ProjectId, UploaderId = current.Id, request.FileName,
                     request.FileSize, FileMd5 = fileMd5, ChunkSize = chunkSize, TotalChunks = totalChunks,
-                    TempDir = tempDir, ExpiresAt = now.AddHours(24), Now = now
+                    TempDir = tempDir
                 }, tx, cancellationToken: ct));
                 try { await tx.CommitAsync(ct); }
                 catch
@@ -128,7 +128,7 @@ public sealed partial class UploadService(
         if (session.UploaderId != actor.Id) throw ApiException.Forbidden();
         await ProjectAccessService.RequireViewAsync(conn, null, actor, session.ProjectId, ct);
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:upload", ct);
-        if (session.Status == "UPLOADING" && session.ExpiresAt < DateTime.UtcNow)
+        if (session.Status == "UPLOADING" && session.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
         var chunks = await UploadedChunksAsync(session, ct);
         return new
@@ -152,7 +152,7 @@ public sealed partial class UploadService(
                 initialConnection, null, actor, initial.ProjectId, ct);
         }
         if (initial.Status != "UPLOADING") throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
-        if (initial.ExpiresAt < DateTime.UtcNow) throw ApiException.Conflict("上传会话已过期，请重新发起");
+        if (initial.IsExpired) throw ApiException.Conflict("上传会话已过期，请重新发起");
         if ((uint)index >= initial.TotalChunks) throw ApiException.BadRequest("分片序号越界");
         var expected = (uint)index == initial.TotalChunks - 1
             ? initial.FileSize - (ulong)initial.ChunkSize * (initial.TotalChunks - 1)
@@ -181,7 +181,7 @@ public sealed partial class UploadService(
             if (session.ProjectId != initial.ProjectId)
                 throw ApiException.Conflict("上传会话所属项目已变化，请重新查询");
             if (session.Status != "UPLOADING") throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
-            if (session.ExpiresAt < DateTime.UtcNow) throw ApiException.Conflict("上传会话已过期，请重新发起");
+            if (session.IsExpired) throw ApiException.Conflict("上传会话已过期，请重新发起");
             if ((uint)index >= session.TotalChunks) throw ApiException.BadRequest("分片序号越界");
             var lockedExpected = (uint)index == session.TotalChunks - 1
                 ? session.FileSize - (ulong)session.ChunkSize * (session.TotalChunks - 1)
@@ -247,7 +247,7 @@ public sealed partial class UploadService(
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:upload", ct);
         if (session.Status == "COMPLETED") return await CompletedFileAsync(conn, session, actor.Id, ct);
         if (session.Status is not ("UPLOADING" or "MERGING")) throw ApiException.Conflict("会话已失效");
-        if (session.Status == "UPLOADING" && session.ExpiresAt < DateTime.UtcNow)
+        if (session.Status == "UPLOADING" && session.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
 
         await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(
@@ -256,7 +256,7 @@ public sealed partial class UploadService(
         session = await LoadSessionAsync(conn, null, sessionId, false, ct);
         if (session.Status == "COMPLETED") return await CompletedFileAsync(conn, session, actor.Id, ct);
         if (session.Status is not ("UPLOADING" or "MERGING")) throw ApiException.Conflict("会话已失效");
-        if (session.Status == "UPLOADING" && session.ExpiresAt < DateTime.UtcNow)
+        if (session.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
         await ProjectAccessService.RequireFileUploadAsync(conn, null, actor, session.ProjectId, ct);
         var uploaded = await UploadedChunksAsync(session, ct);
@@ -283,7 +283,8 @@ public sealed partial class UploadService(
     {
         var extension = ExtensionOf(session.FileName);
         var storedName = $"{Guid.NewGuid():D}.{extension}";
-        var now = TruncateMilliseconds(DateTime.UtcNow);
+        var now = await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
+            "SELECT UTC_TIMESTAMP(6)", cancellationToken: ct));
         var root = FileStorage.Root(options.StorageRoot);
         var finalPath = FileStorage.FinalPath(root, now, storedName);
         var finalDirectory = Path.GetDirectoryName(finalPath) ?? throw new InvalidOperationException("存储目录无效");
@@ -379,13 +380,13 @@ public sealed partial class UploadService(
         if (locked.UploaderId != current.Id) throw ApiException.Forbidden();
         if (locked.Status is not ("UPLOADING" or "MERGING"))
             throw ApiException.Conflict("上传会话状态已变化，请重新查询");
-        if (locked.Status == "UPLOADING" && locked.ExpiresAt < DateTime.UtcNow)
+        if (locked.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
         var changed = await conn.ExecuteAsync(new CommandDefinition("""
             UPDATE upload_sessions
             SET status='MERGING',
                 updated_at=CASE WHEN updated_at>=UTC_TIMESTAMP() THEN DATE_ADD(updated_at,INTERVAL 1 SECOND) ELSE UTC_TIMESTAMP() END
-            WHERE id=@Id AND status IN ('UPLOADING','MERGING')
+            WHERE id=@Id AND status IN ('UPLOADING','MERGING') AND expires_at>UTC_TIMESTAMP(6)
             """, new { Id = session.Id }, tx, cancellationToken: ct));
         if (changed != 1) throw ApiException.Conflict("上传会话状态已变化，请重新查询");
         await tx.CommitAsync(ct);
@@ -401,11 +402,13 @@ public sealed partial class UploadService(
         var locked = await LoadSessionAsync(conn, tx, session.Id, true, ct);
         if (locked.Status != "MERGING")
             throw ApiException.Conflict("会话已变更，请重试");
+        if (locked.IsExpired)
+            throw ApiException.Conflict("上传会话已过期，请重新发起");
         var changed = await conn.ExecuteAsync(new CommandDefinition("""
             UPDATE upload_sessions
             SET status='UPLOADING',
                 updated_at=CASE WHEN updated_at>=UTC_TIMESTAMP() THEN DATE_ADD(updated_at,INTERVAL 1 SECOND) ELSE UTC_TIMESTAMP() END
-            WHERE id=@Id AND status='MERGING'
+            WHERE id=@Id AND status='MERGING' AND expires_at>UTC_TIMESTAMP(6)
             """, new { session.Id }, tx, cancellationToken: ct));
         if (changed != 1) throw ApiException.Conflict("会话已变更，请重试");
         await tx.CommitAsync(ct);
@@ -475,7 +478,8 @@ public sealed partial class UploadService(
             SELECT id AS Id,project_id AS ProjectId,uploader_id AS UploaderId,file_name AS FileName,
                    file_size AS FileSize,file_md5 AS FileMd5,chunk_size AS ChunkSize,total_chunks AS TotalChunks,
                    temp_dir AS TempDir,status AS Status,result_file_id AS ResultFileId,
-                   expires_at AS ExpiresAt,created_at AS CreatedAt,updated_at AS UpdatedAt
+                   expires_at AS ExpiresAt,created_at AS CreatedAt,updated_at AS UpdatedAt,
+                   expires_at<=UTC_TIMESTAMP(6) AS IsExpired
             FROM upload_sessions WHERE id=@Id
             """ + (forUpdate ? " FOR UPDATE" : string.Empty), new { Id = id }, tx, cancellationToken: ct));
         if (session is null) throw ApiException.NotFound();
@@ -790,9 +794,6 @@ public sealed partial class UploadService(
             // The maintenance worker retries durable markers and session directories.
         }
     }
-
-    private static DateTime TruncateMilliseconds(DateTime value) =>
-        new(value.Ticks - value.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
 
     internal const string FileSelect = """
         SELECT f.id AS Id,f.project_id AS ProjectId,f.uploader_id AS UploaderId,f.direction AS Direction,

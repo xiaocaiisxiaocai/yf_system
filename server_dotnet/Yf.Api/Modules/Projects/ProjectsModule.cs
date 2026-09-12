@@ -179,25 +179,11 @@ public static class ProjectsModule
     private static string? QueryString(HttpContext context, string name) =>
         context.Request.Query.TryGetValue(name, out var value) ? value.ToString() : null;
 
-    private static ulong QueryUlong(HttpContext context, string name, ulong fallback)
-    {
-        var value = QueryString(context, name);
-        if (value is null)
-        {
-            return fallback;
-        }
-        return ulong.TryParse(value, out var result) ? result : throw ApiException.BadRequest("请求参数错误");
-    }
+    private static ulong QueryUlong(HttpContext context, string name, ulong fallback) =>
+        QueryValues.OptionalUInt64(context.Request, name) ?? fallback;
 
-    private static ulong? QueryNullableUlong(HttpContext context, string name)
-    {
-        var value = QueryString(context, name);
-        if (value is null)
-        {
-            return null;
-        }
-        return ulong.TryParse(value, out var result) ? result : throw ApiException.BadRequest("请求参数错误");
-    }
+    private static ulong? QueryNullableUlong(HttpContext context, string name) =>
+        QueryValues.OptionalUInt64(context.Request, name);
 
     private static string Ip(HttpContext context) =>
         ClientIp.Resolve(context, context.RequestServices.GetRequiredService<AppOptions>());

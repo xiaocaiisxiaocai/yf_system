@@ -134,13 +134,20 @@ public sealed class FilesMaintenanceService(
                         await tx.CommitAsync(ct);
                         continue;
                     }
-                    expired = current.ExpiresAt < DateTime.UtcNow;
-                    await conn.ExecuteAsync(new CommandDefinition("""
+                    var changed = await conn.ExecuteAsync(new CommandDefinition("""
                         UPDATE upload_sessions
-                        SET status=@Status,
+                        SET status=CASE WHEN expires_at<=UTC_TIMESTAMP(6) THEN 'EXPIRED' ELSE 'UPLOADING' END,
                             updated_at=CASE WHEN updated_at>=UTC_TIMESTAMP() THEN DATE_ADD(updated_at,INTERVAL 1 SECOND) ELSE UTC_TIMESTAMP() END
                         WHERE id=@Id AND status='MERGING'
-                        """, new { Status = expired ? "EXPIRED" : "UPLOADING", current.Id }, tx, cancellationToken: ct));
+                        """, new { current.Id }, tx, cancellationToken: ct));
+                    if (changed != 1)
+                    {
+                        await tx.CommitAsync(ct);
+                        continue;
+                    }
+                    expired = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+                        "SELECT status='EXPIRED' FROM upload_sessions WHERE id=@Id",
+                        new { current.Id }, tx, cancellationToken: ct));
                     await tx.CommitAsync(ct);
                 }
                 if (expired)
@@ -164,7 +171,7 @@ public sealed class FilesMaintenanceService(
         var root = FileStorage.Root(options.StorageRoot);
         var expired = (await conn.QueryAsync<ExpiredUpload>(new CommandDefinition("""
             SELECT id AS Id FROM upload_sessions
-            WHERE status='UPLOADING' AND expires_at<UTC_TIMESTAMP(6)
+            WHERE status='UPLOADING' AND expires_at<=UTC_TIMESTAMP(6)
             """, cancellationToken: ct))).ToArray();
         foreach (var session in expired)
         {
@@ -173,7 +180,7 @@ public sealed class FilesMaintenanceService(
             {
                 claimed = await conn.ExecuteAsync(new CommandDefinition("""
                     UPDATE upload_sessions SET status='EXPIRED',updated_at=UTC_TIMESTAMP(6)
-                    WHERE id=@Id AND status='UPLOADING' AND expires_at<UTC_TIMESTAMP(6)
+                    WHERE id=@Id AND status='UPLOADING' AND expires_at<=UTC_TIMESTAMP(6)
                     """, new { session.Id }, tx, cancellationToken: ct));
                 await tx.CommitAsync(ct);
             }

@@ -1,3 +1,4 @@
+import { textLengthRule } from '../../utils/textRules'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Space, Table, Tag, Tree, Typography,
@@ -309,7 +310,7 @@ export default function RoleList() {
         onCancel={() => { if (!saving) setEditOpen(false) }}
       >
         <Form form={form} layout="vertical">
-          <Form.Item label="角色名称" field="name" rules={[{ required: true, message: '请输入名称' }]}>
+          <Form.Item label="角色名称" field="name" rules={[{ required: true, message: '请输入名称' }, textLengthRule('名称', 64)]}>
             <Input placeholder="角色名称" disabled={editing?.isBuiltIn} />
           </Form.Item>
           <Form.Item label="角色说明" field="description">

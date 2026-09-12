@@ -35,7 +35,8 @@ public sealed class FilesRecoveryTests
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
         var sessionId = Guid.NewGuid().ToString("D");
-        await scope.InsertSessionAsync(sessionId, "MERGING", DateTime.UtcNow.AddHours(1));
+        await scope.InsertSessionAsync(sessionId, "MERGING", expired: false);
+        Assert.False(await scope.IsExpiredByDatabaseAsync(sessionId));
 
         await using var owner = await scope.Database.OpenAsync(ct);
         await using var lease = await MySqlNamedLock.TryAcquireAsync(
@@ -51,6 +52,7 @@ public sealed class FilesRecoveryTests
         await scope.KillConnectionAsync(owner.ServerThread, ct);
         await scope.Maintenance.RunGarbageCollectionAsync(ct);
         Assert.Equal("UPLOADING", await scope.StatusAsync(sessionId));
+        Assert.True(Directory.Exists(FileStorage.SessionDirectory(scope.StorageRoot, sessionId)));
     }
 
     [Fact(Timeout = 30_000)]
@@ -59,7 +61,8 @@ public sealed class FilesRecoveryTests
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
         var sessionId = Guid.NewGuid().ToString("D");
-        await scope.InsertSessionAsync(sessionId, "UPLOADING", DateTime.UtcNow.AddHours(1));
+        await scope.InsertSessionAsync(sessionId, "UPLOADING", expired: false);
+        Assert.False(await scope.IsExpiredByDatabaseAsync(sessionId));
         var body = new BlockingOneByteStream();
         var context = scope.Context(contentLength: 1);
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -126,6 +129,81 @@ public sealed class FilesRecoveryTests
             WHERE project_id=1 AND uploader_id=1 AND file_name='same.bin'
               AND file_size=1 AND file_md5=@Md5
             """, new { Md5 = new string('a', 32) }, cancellationToken: ct)));
+        var timing = await scope.TimingAsync(ids[0]!);
+        Assert.True(timing.CreatedEqualsUpdated);
+        Assert.True(timing.HasTwentyFourHourLifetime);
+        Assert.True(timing.IsActive);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task GetUsesDatabaseExpiryForActiveAndExpiredSessions()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var activeId = Guid.NewGuid().ToString("D");
+        var expiredId = Guid.NewGuid().ToString("D");
+        await scope.InsertSessionAsync(activeId, "UPLOADING", expired: false);
+        await scope.InsertSessionAsync(expiredId, "UPLOADING", expired: true);
+
+        Assert.False(await scope.IsExpiredByDatabaseAsync(activeId));
+        Assert.True(await scope.IsExpiredByDatabaseAsync(expiredId));
+        await scope.Upload.GetAsync(scope.Context(), activeId, ct);
+        var expired = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Upload.GetAsync(scope.Context(), expiredId, ct));
+        Assert.Equal(409, expired.Status);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ChunkUsesDatabaseExpiryForActiveAndExpiredSessions()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var activeId = Guid.NewGuid().ToString("D");
+        var expiredId = Guid.NewGuid().ToString("D");
+        await scope.InsertSessionAsync(activeId, "UPLOADING", expired: false);
+        await scope.InsertSessionAsync(expiredId, "UPLOADING", expired: true);
+
+        Assert.False(await scope.IsExpiredByDatabaseAsync(activeId));
+        Assert.True(await scope.IsExpiredByDatabaseAsync(expiredId));
+        using var activeBody = new MemoryStream([1]);
+        await scope.Upload.PutChunkAsync(scope.Context(contentLength: 1), activeId, 0,
+            activeBody, ct);
+        using var expiredBody = new MemoryStream([1]);
+        var expired = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Upload.PutChunkAsync(scope.Context(contentLength: 1), expiredId, 0,
+                expiredBody, ct));
+        Assert.Equal(409, expired.Status);
+        Assert.True(File.Exists(FileStorage.ChunkPath(scope.StorageRoot, activeId, 0)));
+        Assert.False(File.Exists(FileStorage.ChunkPath(scope.StorageRoot, expiredId, 0)));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task MergeUsesDatabaseExpiryForActiveAndExpiredSessions()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var activeId = Guid.NewGuid().ToString("D");
+        var expiredId = Guid.NewGuid().ToString("D");
+        var expiredMergingId = Guid.NewGuid().ToString("D");
+        await scope.InsertSessionAsync(activeId, "UPLOADING", expired: false);
+        await scope.InsertSessionAsync(expiredId, "UPLOADING", expired: true);
+        await scope.InsertSessionAsync(expiredMergingId, "MERGING", expired: true);
+
+        Assert.False(await scope.IsExpiredByDatabaseAsync(activeId));
+        Assert.True(await scope.IsExpiredByDatabaseAsync(expiredId));
+        Assert.True(await scope.IsExpiredByDatabaseAsync(expiredMergingId));
+        var incomplete = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Upload.MergeAsync(scope.Context(), activeId, ct));
+        var expired = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Upload.MergeAsync(scope.Context(), expiredId, ct));
+        var expiredMerging = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Upload.MergeAsync(scope.Context(), expiredMergingId, ct));
+        Assert.Equal(400, incomplete.Status);
+        Assert.Equal(409, expired.Status);
+        Assert.Equal(409, expiredMerging.Status);
+        Assert.Equal("UPLOADING", await scope.StatusAsync(activeId));
+        Assert.Equal("UPLOADING", await scope.StatusAsync(expiredId));
+        Assert.Equal("MERGING", await scope.StatusAsync(expiredMergingId));
     }
 
     [Fact(Timeout = 30_000)]
@@ -134,7 +212,8 @@ public sealed class FilesRecoveryTests
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
         var sessionId = Guid.NewGuid().ToString("D");
-        await scope.InsertSessionAsync(sessionId, "MERGING", DateTime.UtcNow.AddHours(1));
+        await scope.InsertSessionAsync(sessionId, "MERGING", expired: false);
+        Assert.False(await scope.IsExpiredByDatabaseAsync(sessionId));
 
         var incomplete = await Assert.ThrowsAsync<ApiException>(() =>
             scope.Upload.MergeAsync(scope.Context(), sessionId, ct));
@@ -152,7 +231,8 @@ public sealed class FilesRecoveryTests
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
         var sessionId = Guid.NewGuid().ToString("D");
-        await scope.InsertSessionAsync(sessionId, "MERGING", DateTime.UtcNow.AddMinutes(-1));
+        await scope.InsertSessionAsync(sessionId, "MERGING", expired: true);
+        Assert.True(await scope.IsExpiredByDatabaseAsync(sessionId));
 
         var sessionDirectory = FileStorage.SessionDirectory(scope.StorageRoot, sessionId);
         Directory.CreateDirectory(sessionDirectory);
@@ -343,7 +423,7 @@ public sealed class FilesRecoveryTests
             }
         }
 
-        public async Task InsertSessionAsync(string id, string status, DateTime expiresAt)
+        public async Task InsertSessionAsync(string id, string status, bool expired)
         {
             Directory.CreateDirectory(FileStorage.SessionDirectory(StorageRoot, id));
             await using var connection = await Database.OpenAsync();
@@ -351,14 +431,36 @@ public sealed class FilesRecoveryTests
                 INSERT INTO upload_sessions
                     (id,project_id,uploader_id,file_name,file_size,file_md5,chunk_size,total_chunks,
                      temp_dir,status,result_file_id,expires_at,created_at,updated_at)
-                VALUES(@Id,1,1,'sample.bin',1,NULL,1,1,@TempDir,@Status,NULL,@ExpiresAt,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
+                VALUES(@Id,1,1,'sample.bin',1,NULL,1,1,@TempDir,@Status,NULL,
+                       CASE WHEN @Expired THEN UTC_TIMESTAMP(6)-INTERVAL 1 MINUTE
+                            ELSE UTC_TIMESTAMP(6)+INTERVAL 1 HOUR END,
+                       UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
                 """, new
             {
                 Id = id,
                 TempDir = FileStorage.SessionDirectory(StorageRoot, id),
                 Status = status,
-                ExpiresAt = expiresAt
+                Expired = expired
             });
+        }
+
+        public async Task<bool> IsExpiredByDatabaseAsync(string id)
+        {
+            await using var connection = await Database.OpenAsync();
+            return await connection.QuerySingleAsync<bool>(
+                "SELECT expires_at<=UTC_TIMESTAMP(6) FROM upload_sessions WHERE id=@Id",
+                new { Id = id });
+        }
+
+        public async Task<SessionTiming> TimingAsync(string id)
+        {
+            await using var connection = await Database.OpenAsync();
+            return await connection.QuerySingleAsync<SessionTiming>("""
+                SELECT created_at=updated_at AS CreatedEqualsUpdated,
+                       expires_at=DATE_ADD(created_at,INTERVAL 24 HOUR) AS HasTwentyFourHourLifetime,
+                       expires_at>UTC_TIMESTAMP(6) AS IsActive
+                FROM upload_sessions WHERE id=@Id
+                """, new { Id = id });
         }
 
         public DefaultHttpContext Context(long? contentLength = null)
@@ -406,6 +508,13 @@ public sealed class FilesRecoveryTests
                 try { Directory.Delete(disposableRoot, recursive: true); } catch { }
             }
         }
+    }
+
+    private sealed class SessionTiming
+    {
+        public bool CreatedEqualsUpdated { get; init; }
+        public bool HasTwentyFourHourLifetime { get; init; }
+        public bool IsActive { get; init; }
     }
 
     private sealed class BlockingOneByteStream : Stream

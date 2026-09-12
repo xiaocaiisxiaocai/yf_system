@@ -1,0 +1,25 @@
+const {chromium}=require('playwright');
+const crypto=require('node:crypto');
+const {fs,OUT,s,api}=require(process.env.YF_BROWSER_SUPPORT_DIR+'/ui-lib.cjs');
+const XLSX=require(process.env.YF_PROJECT_ROOT+'/web/node_modules/xlsx');
+(async()=>{let b;try{
+ b=await chromium.launch({channel:'chrome',headless:true});const c=await b.newContext();
+ const roles=(await(await api(c,'GET','/admin/roles',undefined,s.adminToken)).json()).list;
+ const fixtures={users:{},suppliers:{},roles:Object.fromEntries(roles.map(r=>[r.name,r.id]))};
+ const password=()=> 'Browser!'+crypto.randomBytes(18).toString('base64url');
+ for(const [key,label] of [['a','自动验收甲公司'],['b','自动验收乙公司']]){
+  const supplier=await(await api(c,'POST','/admin/suppliers',{name:label,remark:'本轮独立测试库'},s.adminToken)).json();
+  fixtures.suppliers[key]=supplier;const initial=password();
+  const user=await(await api(c,'POST','/admin/suppliers/'+supplier.id+'/accounts',{employeeNo:'auto_supplier_'+key,password:initial,realName:label+'代表',email:key+'@example.invalid'},s.adminToken)).json();
+  fixtures.users[key]={id:user.id,username:user.employeeNo,password:initial,changedPassword:password()};
+ }
+ for(const [key,label,role] of [['member','自动验收内部员工','内部成员'],['manager','自动验收项目经理','项目管理员']]){
+  const initial=password();const user=await(await api(c,'POST','/admin/users',{employeeNo:'auto_'+key,password:initial,realName:label,email:key+'@example.invalid',departmentId:null,roleId:fixtures.roles[role]},s.adminToken)).json();
+  fixtures.users[key]={id:user.id,username:user.employeeNo,password:initial,changedPassword:password()};
+ }
+ fs.writeFileSync(OUT+'/fixtures.private.json',JSON.stringify(fixtures));
+ fs.copyFileSync(process.env.YF_PROJECT_ROOT+'/web/test/fixtures/pdf-compatibility.pdf',OUT+'/valid-preview.pdf');
+ const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet([['公司','验收结果'],['甲公司','PASS']]),'验收');
+ XLSX.writeFile(book,OUT+'/vendor-response.xlsx');
+ console.log('Created disposable API fixtures and valid document samples.');
+}finally{if(b)await b.close();}})().catch(e=>{console.error(e.message);process.exitCode=1;});

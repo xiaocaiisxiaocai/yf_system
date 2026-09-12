@@ -2,6 +2,15 @@
 from urllib.parse import urlencode
 
 def run_system_checks(client, conn, check):
+    for route in ('users', 'roles', 'suppliers', 'audit-logs'):
+        for key in ('page', 'pageSize'):
+            for raw in ('', 'abc', '-1', '18446744073709551616', '1&' + key + '=2'):
+                rejected = client.call('GET', '/api/v1/admin/' + route + '?' + key + '=' + raw, expected=400)
+                assert rejected['code'] == 40001 and 'list' not in rejected
+    for raw in ('', 'abc', '-1', '18446744073709551616', '1&departmentId=2'):
+        rejected = client.call('GET', '/api/v1/admin/users?departmentId=' + raw, expected=400)
+        assert rejected['code'] == 40001 and 'list' not in rejected
+    check('malformed numeric admin filters reject without returning broader data', True)
     before = {x["key"]: x["value"] for x in client.call("GET", "/api/v1/admin/system/configs")}
     client.call("PUT", "/api/v1/admin/system/configs", {"items": [
         {"key": "notify.enabled", "value": "false"}, {"key": "unknown-test-setting", "value": "anything"}

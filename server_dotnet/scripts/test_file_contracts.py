@@ -72,6 +72,13 @@ def _insert_available_file(conn, project_id, uploader_id, storage_root, extensio
 
 
 def run_file_checks(client, conn, check, pid, fid):
+    for key in ('targetId', 'page', 'pageSize'):
+        for raw in ('', 'abc', '-1', '18446744073709551616', '1&' + key + '=2'):
+            rejected = client.call('GET', f'/api/v1/projects/{pid}/files?{key}={raw}', expected=400)
+            assert rejected['code'] == 40001 and 'list' not in rejected
+    filtered = client.call('GET', f'/api/v1/projects/{pid}/files?targetId={fid}')
+    check('file target and pagination reject malformed filters but retain valid targeting',
+          filtered['total'] == 1 and filtered['list'][0]['id'] == fid)
     # An uploaded chunk is discovered by a second init with the same strong identity.
     resumed_bytes = b"%PDF-1.4\nfile resume contract\n%%EOF\n"
     resumed_md5 = hashlib.md5(resumed_bytes).hexdigest()
