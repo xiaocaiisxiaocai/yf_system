@@ -25,14 +25,15 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = Path(__file__).resolve().parent / 'browser'
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path)
-parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'final', 'layout', 'project-edges', 'access'],
-    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'final', 'layout', 'project-edges', 'access'])
+parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges'],
+    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges'])
 args = parser.parse_args()
 if args.steps[:2] != ['auth', 'fixtures']:
     raise SystemExit('Every fresh run must start with auth fixtures.')
 if len(args.steps) != len(set(args.steps)):
     raise SystemExit('Run each browser step at most once.')
-for step, dependencies in {'business': ['users'], 'final': ['business'], 'layout': ['business']}.items():
+for step, dependencies in {'business': ['users'], 'final': ['business'], 'layout': ['business'],
+                           'project-edges': ['users'], 'file-edges': ['users'], 'message-edges': ['users']}.items():
     if step in args.steps and any(required not in args.steps[:args.steps.index(step)] for required in dependencies):
         raise SystemExit(f'{step} requires earlier steps: {", ".join(dependencies)}')
 output = (args.output or ROOT / '.runlogs' / ('browser-' + time.strftime('%Y%m%d-%H%M%S'))).resolve()

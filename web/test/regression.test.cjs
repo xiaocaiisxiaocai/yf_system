@@ -2987,3 +2987,59 @@ test('auth persistence removes personal details and migrates legacy records', ()
   assert.deepEqual(Object.keys(migrated.user),['id'])
   assert.equal('token' in migrated,false)
 })
+
+test('message composition counts Unicode code points and sends the complete 4000 character boundary', async () => {
+  const posts = []
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': {
+      get: async () => ({ data: { list: [], total: 0 } }),
+      post: async (url, body) => { posts.push({ url, body }); return { data: {} } },
+    },
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
+  const input = () => renderer.root.findByType('Input.TextArea')
+  const text = '中'.repeat(3998) + '🙂🙂'
+  await act(async () => input().props.onChange(text + '超'))
+  assert.equal(input().props.value, text, 'the limit must preserve whole supplementary Unicode characters')
+  const send = renderer.root.findAllByType('Button').find((node) => node.props.children === '发送')
+  await act(async () => send.props.onClick())
+  assert.equal(posts.length, 1)
+  assert.equal(posts[0].body.content, text)
+  assert.equal(input().props.value, '')
+  await act(async () => renderer.unmount())
+})
+
+test('message send failure is handled, preserves the draft, and allows a successful retry', async () => {
+  let fail = true
+  const posts = []
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': {
+      get: async () => ({ data: { list: [], total: 0 } }),
+      post: async (_url, body) => { if (fail) throw new Error('service unavailable'); posts.push(body); return { data: {} } },
+    },
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
+  const input = () => renderer.root.findByType('Input.TextArea')
+  const send = () => renderer.root.findAllByType('Button').find((node) => node.props.children === '发送')
+  await act(async () => input().props.onChange('  保留重试的留言  '))
+  await act(async () => { await assert.doesNotReject(send().props.onClick()) })
+  assert.equal(input().props.value, '  保留重试的留言  ')
+  assert.equal(send().props.loading, false)
+  assert.equal(posts.length, 0)
+  fail = false
+  await act(async () => send().props.onClick())
+  assert.equal(posts.length, 1)
+  assert.equal(posts[0].content, '保留重试的留言')
+  assert.equal(input().props.value, '')
+  await act(async () => renderer.unmount())
+})

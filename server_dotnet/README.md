@@ -112,7 +112,9 @@ python .\scripts\test-browser.py --output ..\.runlogs\browser-NEW
 
 每次使用新的空证据目录。结果含实际步骤、源码与被测构建产物 SHA-256、截图、下载完整性及资源清理状态；测试期间修改源码或产物会使本轮校验失败。它创建随机临时数据库、文件目录、账号和独立回环测试宿主，保留生产限速，验证码答案仅通过测试宿主观察器获取，邮件发送关闭。结束只清理本轮资源与私有登录状态。
 
-`--steps auth fixtures system` 可单独检查系统参数和日志；`--steps auth fixtures project-edges access` 检查项目筛选分页、终止重启、异常重试和权限变化、多标签换号。`business` 必须在 `users` 后，`final` 和 `layout` 必须在 `business` 后。完整默认步骤对应 `scripts/browser` 中的脚本，不代表覆盖所有状态组合、实际移动设备、目标 IIS 或外部 SMTP。
+`--steps auth fixtures system` 可单独检查系统参数和日志；`--steps auth fixtures users project-edges access` 检查五态筛选、编辑、分页、终止重启、异常重试和权限变化、多标签换号。`business`、`project-edges`、`file-edges`、`message-edges` 必须在 `users` 后，`final` 和 `layout` 必须在 `business` 后。
+
+默认步骤还包括 `auth-edges`（匿名404、认证失败恢复、键盘、跳转和会话刷新）、`file-edges`（双向文件筛选分页、失败恢复和多表预览）、`config-member-edges`（成员选项失败、停用成员及全部公开配置字段）、`message-edges`（Unicode长度、重复发送、失败重试、游标分页和动态跳转）。可按上述依赖通过 `--steps` 单独执行。故障注入只作用于本轮浏览器路由，成功重试仍调用真实隔离 API。完整默认步骤对应 `scripts/browser` 中的脚本，不代表覆盖所有状态组合、实际移动设备、目标 IIS 或外部 SMTP。
 
 ## IIS 发布
 

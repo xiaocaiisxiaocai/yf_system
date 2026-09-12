@@ -166,6 +166,45 @@ const { assert, OUT, s, f, record, login, api, action, track } = require(process
       await page.getByRole('button', { name: '重试', exact: true }).click();
       await page.getByRole('button', { name: '返回项目列表', exact: true }).waitFor(); page.expectedServerErrors.clear();
     });
+
+    await record('O14-O17 五种状态筛选准确，进行中项目编辑仍持久化且供应商固定', async () => {
+      assert(f.users.a.uiFirstChanged, 'run users before project-edges');
+      const statusPrefix = '状态筛选-' + crypto.randomBytes(5).toString('hex');
+      const pdf = require('node:fs').readFileSync(OUT + '/valid-preview.pdf');
+      const md5 = crypto.createHash('md5').update(pdf).digest('hex');
+      const byStatus = {};
+      for (const status of ['DRAFT', 'IN_PROGRESS', 'PENDING_CONFIRMATION', 'COMPLETED', 'TERMINATED']) {
+        const item = await json('POST', '/projects', { name: statusPrefix + '-' + status, supplierId: f.suppliers.a.id });
+        byStatus[status] = item;
+        if (status === 'DRAFT') continue;
+        await json('PUT', '/projects/' + item.id + '/status', { status: 'IN_PROGRESS' });
+        if (status === 'TERMINATED') await json('PUT', '/projects/' + item.id + '/status', { status });
+        if (status === 'PENDING_CONFIRMATION' || status === 'COMPLETED') {
+          const upload = await json('POST', '/uploads/init', { projectId: item.id, fileName: '状态验证.pdf', fileSize: pdf.length, fileMd5: md5 });
+          for (let offset = 0, index = 0; offset < pdf.length; offset += upload.chunkSize, index++)
+            await api(context, 'PUT', '/uploads/' + upload.sessionId + '/chunks/' + index, pdf.subarray(offset, offset + upload.chunkSize), auth.accessToken);
+          await json('POST', '/uploads/' + upload.sessionId + '/merge');
+          await json('POST', '/projects/' + item.id + '/submit', { confirmSide: 'SUPPLIER' });
+          if (status === 'COMPLETED') await api(context, 'POST', '/projects/' + item.id + '/confirm', undefined, f.users.a.token);
+        }
+      }
+      await page.goto(s.base + '/projects'); await page.getByRole('heading', { name: '项目协作', exact: true }).waitFor();
+      await search(statusPrefix);
+      for (const [status, label] of [['DRAFT', '草稿'], ['PENDING_CONFIRMATION', '待确认'], ['COMPLETED', '已完成'], ['TERMINATED', '已终止'], ['IN_PROGRESS', '进行中']]) {
+        const data = await listAction({ keyword: statusPrefix, status, page: 1 }, async () => {
+          await page.locator('.page-toolbar .arco-select').first().click();
+          await page.getByRole('option', { name: label, exact: true }).click();
+        });
+        assert.equal(data.total, 1); assert.equal(data.list[0].id, byStatus[status].id); assert.equal(data.list[0].status, status);
+      }
+      const active = byStatus.IN_PROGRESS;
+      await row(active.name).getByRole('button', { name: '编辑', exact: true }).click();
+      const dialog = page.getByRole('dialog'); assert(await dialog.getByRole('combobox').isDisabled());
+      const edited = active.name + '-保存'; await dialog.getByPlaceholder('项目名称', { exact: true }).fill(edited);
+      await action(page, '/projects/' + active.id, 'PUT', () => dialog.getByRole('button', { name: '保存修改', exact: true }).click());
+      const persisted = await json('GET', '/projects/' + active.id); assert.equal(persisted.name, edited); assert.equal(persisted.status, 'IN_PROGRESS');
+      assert.equal(persisted.supplierId, f.suppliers.a.id);
+    });
     await page.screenshot({ path: OUT + '/project-edges.png', fullPage: true });
   } catch (error) {
     if (page) { await page.screenshot({ path: OUT + '/project-edges-failure.png', fullPage: true }).catch(() => {}); console.log((await page.locator('body').innerText()).slice(-5000)); }

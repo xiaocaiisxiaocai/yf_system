@@ -174,6 +174,8 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
       await http.post(`/projects/${projectId}/messages`, { content: text })
       setContent('')
       load(1, false)
+    } catch {
+      // 请求层已显示错误；保留草稿，允许用户重试。
     } finally {
       setSending(false)
     }
@@ -215,9 +217,8 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
           <Input.TextArea
             placeholder="输入留言，Ctrl+Enter 发送"
             value={content}
-            onChange={setContent}
+            onChange={(value) => setContent(Array.from(value).slice(0, 4000).join(''))}
             autoSize={{ minRows: 2, maxRows: 5 }}
-            maxLength={4000}
             style={{ flex: 1 }}
             onKeyDown={(e) => {
               if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') send()

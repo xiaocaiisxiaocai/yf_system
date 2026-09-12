@@ -47,6 +47,7 @@ function Guard({ children, menu, permission }: { children: JSX.Element; menu?: s
 
 export default function App() {
   const booted = useAuth((s) => s.booted)
+  const token = useAuth((s) => s.token)
 
   // 启动引导：内存中的 token 随刷新丢失，用 refresh cookie 静默换新
   useEffect(() => {
@@ -113,7 +114,7 @@ export default function App() {
           <Route path="rbac/roles" element={<Guard menu="rbac:role" permission="role:manage"><RoleList /></Guard>} />
           <Route path="logs" element={<Guard menu="log:audit" permission="log:view"><AuditLog /></Guard>} />
           <Route path="system/config" element={<Guard menu="system:config" permission="config:manage"><SysConfig /></Guard>} />
-          <Route path="*" element={<NotFound />} />
+          {token ? <Route path="*" element={<NotFound />} /> : null}
         </Route>
         <Route path="*" element={<NotFound />} />
       </Routes>

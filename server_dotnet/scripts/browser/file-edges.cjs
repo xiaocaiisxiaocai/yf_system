@@ -1,0 +1,311 @@
+const { chromium } = require('playwright');
+const crypto = require('node:crypto');
+const XLSX = require(process.env.YF_PROJECT_ROOT + '/web/node_modules/xlsx');
+const { fs, assert, OUT, s, f, record, api, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
+
+const fileListPath = projectId => '/api/v1/projects/' + projectId + '/files';
+
+async function uploadApi(context, token, projectId, fileName, bytes) {
+  const fileMd5 = crypto.createHash('md5').update(bytes).digest('hex');
+  const initResponse = await api(context, 'POST', '/uploads/init', {
+    projectId, fileName, fileSize: bytes.length, fileMd5,
+  }, token);
+  const init = await initResponse.json();
+  for (let index = 0; index < init.totalChunks; index++) {
+    const chunk = bytes.subarray(index * init.chunkSize, Math.min((index + 1) * init.chunkSize, bytes.length));
+    const response = await context.request.fetch(s.base + '/api/v1/uploads/' + init.sessionId + '/chunks/' + index, {
+      method: 'PUT',
+      data: chunk,
+      headers: {
+        Origin: s.base,
+        Authorization: 'Bearer ' + token,
+        'Content-Type': 'application/octet-stream',
+      },
+    });
+    assert.equal(response.status(), 200, 'upload chunk ' + index);
+  }
+  const merged = await (await api(context, 'POST', '/uploads/' + init.sessionId + '/merge', undefined, token)).json();
+  return { ...merged, sessionId: init.sessionId };
+}
+
+function workbookBytes(marker) {
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
+    ['文件边界验收', '第一页'],
+    [marker, 'FIRST-SHEET-PASS'],
+  ]), '第一页');
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
+    ['文件边界验收', '第二页'],
+    [marker, 'SECOND-SHEET-PASS'],
+  ]), '第二页');
+  return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
+}
+
+(async () => {
+  let browser, page;
+  try {
+    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    const admin = await browser.newContext({
+      viewport: { width: 1440, height: 1000 },
+      storageState: OUT + '/admin.storage.private.json',
+    });
+    const memberApi = await browser.newContext();
+    const supplierApi = await browser.newContext();
+    page = await admin.newPage();
+    track(page, 'file-edges');
+
+    const suffix = crypto.randomBytes(5).toString('hex');
+    const prefix = 'file-edge-' + suffix;
+    const configs = await (await api(admin, 'GET', '/admin/system/configs', undefined, s.adminToken)).json();
+    const originalChunkSize = configs.find(item => item.key === 'upload.chunk_size')?.value;
+    assert(originalChunkSize, 'upload.chunk_size fixture');
+    await api(admin, 'PUT', '/admin/system/configs', {
+      items: [{ key: 'upload.chunk_size', value: String(1024 * 1024) }],
+    }, s.adminToken);
+    const project = await (await api(admin, 'POST', '/projects', {
+      name: '文件边界验收-' + suffix,
+      description: 'O26/O28 独立浏览器验收夹具',
+      supplierId: f.suppliers.a.id,
+    }, s.adminToken)).json();
+    await api(admin, 'PUT', '/projects/' + project.id + '/members', { userIds: [f.users.member.id] }, s.adminToken);
+    await api(admin, 'PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' }, s.adminToken);
+
+    const c2sNames = [];
+    const s2cNames = [];
+    for (let index = 0; index < 7; index++) {
+      const name = prefix + '-c2s-' + String(index).padStart(2, '0') + '.zip';
+      const bytes = Buffer.from('C2S|' + suffix + '|' + index);
+      await uploadApi(memberApi, f.users.member.token, project.id, name, bytes);
+      c2sNames.push(name);
+    }
+    for (let index = 0; index < 6; index++) {
+      const name = prefix + '-s2c-' + String(index).padStart(2, '0') + '.zip';
+      const bytes = Buffer.from('S2C|' + suffix + '|' + index);
+      await uploadApi(supplierApi, f.users.a.token, project.id, name, bytes);
+      s2cNames.push(name);
+    }
+    const workbookName = prefix + '-s2c-workbook.xlsx';
+    await uploadApi(supplierApi, f.users.a.token, project.id, workbookName, workbookBytes(suffix));
+    s2cNames.push(workbookName);
+
+    const waitForList = (expected, status = 200) => page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === fileListPath(project.id)
+        && response.request().method() === 'GET'
+        && response.status() === status
+        && Object.entries(expected).every(([key, value]) => (url.searchParams.get(key) || '') === String(value));
+    });
+    const listAction = async (expected, action) => {
+      const [response] = await Promise.all([waitForList(expected), Promise.resolve().then(action)]);
+      return response.json();
+    };
+    const search = page.getByPlaceholder('文件名', { exact: true });
+    const direction = page.locator('.responsive-toolbar .arco-select').first();
+    const row = name => page.getByRole('row').filter({ hasText: name });
+    const uploadDiagnostics = OUT + '/file-upload-diagnostics.json';
+    const uploadEvents = [];
+    const writeUploadEvent = event => {
+      uploadEvents.push(event);
+      fs.writeFileSync(uploadDiagnostics, JSON.stringify(uploadEvents, null, 2));
+    };
+    const isUploadPath = path => path.startsWith('/api/v1/uploads/');
+    page.on('request', request => {
+      const path = new URL(request.url()).pathname;
+      if (isUploadPath(path)) writeUploadEvent({ event: 'request', method: request.method(), path, status: null, requestfailed: null });
+    });
+    page.on('response', response => {
+      const path = new URL(response.url()).pathname;
+      if (isUploadPath(path)) writeUploadEvent({ event: 'response', method: response.request().method(), path, status: response.status(), requestfailed: null });
+    });
+    page.on('requestfailed', request => {
+      const path = new URL(request.url()).pathname;
+      if (isUploadPath(path)) writeUploadEvent({ event: 'requestfailed', method: request.method(), path, status: null, requestfailed: request.failure()?.errorText || 'unknown' });
+    });
+
+    const initial = waitForList({ page: 1, pageSize: 10 });
+    await page.goto(s.base + '/projects/' + project.id);
+    const initialData = await (await initial).json();
+    await page.getByRole('tab', { name: '文件', exact: true, selected: true }).waitFor();
+
+    await record('文件列表双向多页总数和分页真实结果', async () => {
+      assert.equal(initialData.total, 14);
+      assert.equal(initialData.list.length, 10);
+      await page.getByText('共 14 条', { exact: true }).waitFor();
+      const second = await listAction({ page: 2, pageSize: 10 }, () =>
+        page.locator('.arco-pagination-item').filter({ hasText: /^2$/ }).click());
+      assert.equal(second.total, 14);
+      assert.equal(second.list.length, 4);
+      assert(second.list.every(item => item.direction === 'C2S'));
+    });
+
+    await record('文件名与方向查询清除且筛选换页清理选择', async () => {
+      await row(c2sNames[0]).getByRole('checkbox').locator('..').click();
+      await page.getByRole('button', { name: '打包下载（1）', exact: true }).waitFor();
+
+      const supplierFiles = await listAction({ page: 1, pageSize: 10, direction: 'S2C' }, async () => {
+        await direction.click();
+        await page.getByRole('option', { name: '供应商 → 公司', exact: true }).click();
+      });
+      assert.equal(supplierFiles.total, 7);
+      assert(supplierFiles.list.every(item => item.direction === 'S2C'));
+      assert.equal(await page.getByRole('button', { name: '打包下载（1）', exact: true }).count(), 0);
+
+      const byName = await listAction({ page: 1, pageSize: 10, direction: 'S2C', keyword: workbookName }, async () => {
+        await search.fill(workbookName);
+        await search.press('Enter');
+      });
+      assert.equal(byName.total, 1);
+      assert.equal(byName.list[0].originalName, workbookName);
+      await row(workbookName).waitFor();
+
+      const clearedName = await listAction({ page: 1, pageSize: 10, direction: 'S2C', keyword: '' }, async () => {
+        await search.hover();
+        await page.locator('.responsive-toolbar .arco-input-search .arco-input-clear-icon').click();
+        assert.equal(await search.inputValue(), '');
+      });
+      assert.equal(clearedName.total, 7);
+
+      await direction.hover();
+      const clearedDirection = await listAction({ page: 1, pageSize: 10, direction: '' }, () =>
+        direction.locator('.arco-select-clear-icon').click());
+      assert.equal(clearedDirection.total, 14);
+    });
+
+    await record('文件列表错误重试和迟到响应不覆盖新条件', async () => {
+      const path = fileListPath(project.id);
+      page.expectedServerErrors = new Set([path]);
+      await page.route(new RegExp(path.replaceAll('/', '\\/') + '(?:\\?|$)'), route => route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 50301, message: 'temporary file-list failure' }),
+      }), { times: 1 });
+      await page.reload();
+      await page.getByText('加载失败', { exact: true }).waitFor();
+      const retried = await listAction({ page: 1, pageSize: 10 }, () =>
+        page.getByRole('button', { name: '重试', exact: true }).click());
+      assert.equal(retried.total, 14);
+
+      let releaseOld;
+      const oldReleased = new Promise(resolve => { releaseOld = resolve; });
+      let markOldSeen;
+      const oldSeen = new Promise(resolve => { markOldSeen = resolve; });
+      let markOldDone;
+      const oldDone = new Promise(resolve => { markOldDone = resolve; });
+      const oldKeyword = prefix + '-c2s';
+      const newestKeyword = workbookName;
+      await page.route(new RegExp(path.replaceAll('/', '\\/') + '(?:\\?|$)'), async route => {
+        const url = new URL(route.request().url());
+        if (url.searchParams.get('keyword') !== oldKeyword) return route.continue();
+        const response = await route.fetch();
+        markOldSeen();
+        await oldReleased;
+        await route.fulfill({ response });
+        markOldDone();
+      });
+
+      await search.fill(oldKeyword);
+      await search.press('Enter');
+      await oldSeen;
+      const newest = await listAction({ page: 1, pageSize: 10, keyword: newestKeyword }, async () => {
+        await search.fill(newestKeyword);
+        await search.press('Enter');
+      });
+      assert.equal(newest.total, 1);
+      await row(workbookName).waitFor();
+      releaseOld();
+      await oldDone;
+      await page.waitForTimeout(100);
+      assert.equal(await row(workbookName).count(), 1);
+      assert.equal(await page.getByText(c2sNames[0], { exact: true }).count(), 0);
+      await page.unroute(new RegExp(path.replaceAll('/', '\\/') + '(?:\\?|$)'));
+      page.expectedServerErrors.clear();
+    });
+
+    await record('多工作表Excel预览真实切换', async () => {
+      await row(workbookName).getByRole('button', { name: '预览文件', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByRole('table', { name: 'Excel 工作表：第一页', exact: true }).waitFor();
+      await dialog.locator('.excel-preview-toolbar .arco-select').click();
+      await page.getByRole('option', { name: '第二页', exact: true }).click();
+      await dialog.getByRole('table', { name: 'Excel 工作表：第二页', exact: true }).waitFor();
+      await dialog.getByText('SECOND-SHEET-PASS', { exact: true }).waitFor();
+      await dialog.getByRole('button', { name: '关闭弹窗', exact: true }).click();
+      await dialog.waitFor({ state: 'hidden' });
+    });
+
+    await record('真实浏览器上传中断后复用会话断点续传', async () => {
+      const interruptedName = prefix + '-interrupted.zip';
+      const interruptedBytes = Buffer.alloc(2 * 1024 * 1024 + 257, 0x5a);
+      await listAction({ page: 1, pageSize: 10, keyword: '' }, async () => {
+        await search.fill('');
+        await search.press('Enter');
+      });
+      await page.getByRole('button', { name: '上传文件', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByLabel('选择上传文件').setInputFiles({
+        name: interruptedName,
+        mimeType: 'application/zip',
+        buffer: interruptedBytes,
+      });
+
+      let failedChunkPath;
+      await page.route('**/api/v1/uploads/*/chunks/*', async route => {
+        failedChunkPath = new URL(route.request().url()).pathname;
+        writeUploadEvent({ event: 'route-hit', method: route.request().method(), path: failedChunkPath, status: null, requestfailed: null });
+        try {
+          await route.abort('connectionreset');
+        } finally {
+          writeUploadEvent({ event: 'route-exit', method: route.request().method(), path: failedChunkPath, status: null, requestfailed: null });
+        }
+      }, { times: 1 });
+
+      const firstInitReady = page.waitForResponse(response =>
+        new URL(response.url()).pathname === '/api/v1/uploads/init'
+        && response.request().method() === 'POST' && response.status() === 200);
+      await dialog.getByRole('button', { name: '上传所选文件', exact: true }).click();
+      const firstInit = await (await firstInitReady).json();
+      writeUploadEvent({ event: 'init', method: 'POST', path: '/api/v1/uploads/init', status: 200, requestfailed: null,
+        totalChunks: firstInit.totalChunks, chunkSize: firstInit.chunkSize });
+      await page.getByText('上传中断，可点击开始后从断点续传', { exact: true }).waitFor();
+      assert(failedChunkPath);
+
+      const secondInitReady = page.waitForResponse(response =>
+        new URL(response.url()).pathname === '/api/v1/uploads/init'
+        && response.request().method() === 'POST' && response.status() === 200);
+      const mergeReady = page.waitForResponse(response =>
+        new URL(response.url()).pathname === '/api/v1/uploads/' + firstInit.sessionId + '/merge'
+        && response.request().method() === 'POST');
+      await dialog.getByRole('button', { name: '上传所选文件', exact: true }).click();
+      const secondInit = await (await secondInitReady).json();
+      writeUploadEvent({ event: 'resume-init', method: 'POST', path: '/api/v1/uploads/init', status: 200, requestfailed: null,
+        totalChunks: secondInit.totalChunks, chunkSize: secondInit.chunkSize });
+      assert.equal(secondInit.sessionId, firstInit.sessionId);
+      assert.equal(secondInit.resumed, true);
+      assert(secondInit.uploadedChunks.length > 0, 'at least one completed chunk must be resumed');
+      assert.equal((await mergeReady).status(), 200);
+      await dialog.waitFor({ state: 'hidden' });
+      await row(interruptedName).waitFor();
+
+      const persisted = await (await api(admin, 'GET', '/projects/' + project.id + '/files?keyword=' + encodeURIComponent(interruptedName), undefined, s.adminToken)).json();
+      assert.equal(persisted.total, 1);
+      assert.equal(persisted.list[0].originalName, interruptedName);
+    });
+
+    await api(admin, 'PUT', '/admin/system/configs', {
+      items: [{ key: 'upload.chunk_size', value: originalChunkSize }],
+    }, s.adminToken);
+    await page.screenshot({ path: OUT + '/file-edges.png', fullPage: true });
+    await admin.close();
+    await memberApi.close();
+    await supplierApi.close();
+  } catch (error) {
+    if (page) {
+      await page.screenshot({ path: OUT + '/file-edges-failure.png', fullPage: true }).catch(() => {});
+      console.log((await page.locator('body').innerText()).slice(-5000));
+    }
+    console.error(error.stack);
+    process.exitCode = 1;
+  } finally {
+    if (browser) await browser.close();
+  }
+})();
