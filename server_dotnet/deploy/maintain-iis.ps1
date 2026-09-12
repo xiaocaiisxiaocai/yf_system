@@ -95,10 +95,11 @@ function Set-YfSiteConfig([string]$Root,[string]$ExternalConfig) {
 }
 function Grant-YfApplicationAccess([string]$Root,$Config,[string]$Pool) {
     $identity='IIS AppPool\'+$Pool
-    foreach ($grant in @(@($Root,"${identity}:(OI)(CI)RX"),@($Config.Storage,"${identity}:(OI)(CI)M"),@($Config.Path,"${identity}:R"))) {
+    foreach ($grant in @(@($Root,"${identity}:(OI)(CI)RX"),@($Config.Storage,"${identity}:(OI)(CI)M"))) {
         & icacls.exe $grant[0] /grant $grant[1] | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application pool access.' }
     }
+    Protect-YfConfigurationFile $Config.Path $identity
 }
 function Invoke-YfMigration([string]$Root,[string]$ExternalConfig) {
     $saved=@{}
@@ -134,6 +135,7 @@ Assert-YfEffectiveConfiguration $SiteName $pool $currentConfig.Path $currentConf
 if ($currentConfig.Origin -notlike 'https://*' -or $currentConfig.Config.App.CookieSecure -ne $true) { throw 'Maintenance requires a production HTTPS origin and secure cookies.' }
 $backupRoot=Get-YfFullPath $BackupDirectory
 Assert-YfSeparate @($currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupRoot)
+if ($currentConfig.CaFile) { Assert-YfSeparate @($currentConfig.CaFile,$currentRoot,$backupRoot) }
 if ($Action -eq 'Restore') {
     if ($MigrateDatabase) { throw 'Restore uses the backed-up application and schema; migration must be a separate later upgrade.' }
     $targetConfig=Read-YfMaintenanceConfig $RestoreConfigPath
@@ -151,12 +153,18 @@ if ($Action -ne 'Backup') {
     $NewSiteRoot=Get-YfFullPath $NewSiteRoot
     Assert-YfEmptyDirectory $NewSiteRoot
     $paths=@($currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupRoot,$NewSiteRoot)
-    if ($Action -eq 'Restore') { $paths+=@($targetConfig.Storage,$targetConfig.Path); Assert-YfEmptyDirectory $targetConfig.Storage }
+    if ($currentConfig.CaFile) { Assert-YfSeparate @($currentConfig.CaFile,$currentRoot,$backupRoot,$NewSiteRoot) }
+    if ($Action -eq 'Restore') {
+        $paths+=@($targetConfig.Storage,$targetConfig.Path)
+        if ($targetConfig.CaFile) { Assert-YfSeparate @($targetConfig.CaFile,$currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupRoot,$NewSiteRoot) }
+        Assert-YfEmptyDirectory $targetConfig.Storage
+    }
     Assert-YfSeparate $paths
 }
 if ($Action -eq 'Upgrade') {
     $PackageRoot=Get-YfFullPath $PackageRoot
     Assert-YfSeparate @($PackageRoot,$currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupRoot,$NewSiteRoot)
+    if ($currentConfig.CaFile) { Assert-YfSeparate @($currentConfig.CaFile,$PackageRoot,$currentRoot,$backupRoot,$NewSiteRoot) }
     Assert-YfManifest $PackageRoot | Out-Null
     Assert-YfPublishedConfig $PackageRoot
     foreach ($required in @('Yf.Api.dll','Yf.Api.runtimeconfig.json','web.config','wwwroot\index.html')) {

@@ -20,6 +20,7 @@ public sealed class AppDb(AppOptions options)
             DefaultCommandTimeout = 30,
             AllowUserVariables = false
         };
+        DatabaseTransportPolicy.Validate(builder);
         var connection = new MySqlConnection(builder.ConnectionString);
         try { await connection.OpenAsync(cancellationToken); return connection; }
         catch { await connection.DisposeAsync(); throw; }

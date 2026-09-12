@@ -27,9 +27,11 @@ $guarded=Read-YfMaintenanceConfig (Join-Path $root 'guarded.json')
 $backup=Join-Path $root 'backup'
 $application=Join-Path $root 'application'
 $restored=Join-Path $root 'restored-app'
+Reject { Assert-YfSeparate @($application,(Join-Path $application 'nested')) } 'overlapping paths refused'
+& (Join-Path $PSScriptRoot 'test-deploy-security.ps1')
+
 $sqlClient=(Get-Command mysql.exe -ErrorAction Stop).Source
 $dumpClient=(Get-Command mysqldump.exe -ErrorAction Stop).Source
-Reject { Assert-YfSeparate @($application,(Join-Path $application 'nested')) } 'overlapping paths refused'
 Assert-YfLaunch 'dotnet' '.\Yf.Api.dll' 'inprocess'
 Assert-YfEnvironmentNames @('YF_CONFIG_PATH','ASPNETCORE_ENVIRONMENT') -AllowConfigPath
 Assert-YfPublishedConfig $application

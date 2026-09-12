@@ -19,6 +19,8 @@ public sealed class IdentityService(
         FROM users
         """;
     private static readonly Lazy<Task<string>> DummyHash = new(() => CreateDummyHashAsync());
+    internal const int MaximumFailedLogins = 10;
+    internal const int LoginLockMinutes = 15;
 
     public async Task<(LoginResponse Response, string Refresh)> LoginAsync(LoginRequest request, string clientIp, CancellationToken ct)
     {
@@ -36,7 +38,7 @@ public sealed class IdentityService(
         // first unknown-account request cannot be distinguished by the extra Argon2 calculation.
         var dummyHash = await DummyHash.Value;
         var matches = await PasswordService.VerifyAsync(request.Password, candidate?.PasswordHash ?? dummyHash, ct);
-        if (candidate is null || !matches)
+        if (candidate is null)
         {
             await using var auditConn = await db.OpenAsync(ct);
             await AuditBestEffortAsync(auditConn, candidate?.Id, employeeNo, "LOGIN_FAILED", null, null, null, clientIp, ct);
@@ -47,11 +49,48 @@ public sealed class IdentityService(
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockBusinessAsync(conn, tx, ct);
         var user = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(UserSelect + " WHERE id=@id FOR UPDATE", new { id = candidate.Id }, tx, cancellationToken: ct));
-        if (user is null || !await PasswordService.VerifyAsync(request.Password, user.PasswordHash, ct) || user.Status != "ACTIVE" ||
-            !await IsSupplierActiveAsync(conn, tx, user, ct))
+        if (user is null)
         {
             await tx.RollbackAsync(ct);
             await AuditBestEffortAsync(conn, user?.Id, employeeNo, "LOGIN_FAILED", null, null, null, clientIp, ct);
+            throw ApiException.Unauthorized("工号或密码错误");
+        }
+        // The account row lock shares failure state across IPs, processes and restarts.
+        // Use the database clock; attempts during a lock must not extend its expiry.
+        var loginState = await conn.QuerySingleAsync<LoginState>(new CommandDefinition("""
+            SELECT failed_login_attempts FailedAttempts,
+                   COALESCE(locked_until>UTC_TIMESTAMP(6),0) IsLocked,
+                   COALESCE(locked_until<=UTC_TIMESTAMP(6),0) LockExpired
+            FROM users WHERE id=@Id
+            """, new { user.Id }, tx, cancellationToken: ct));
+        if (loginState.IsLocked)
+        {
+            await tx.RollbackAsync(ct);
+            await AuditBestEffortAsync(conn, user.Id, employeeNo, "LOGIN_FAILED", null, null, null, clientIp, ct);
+            throw ApiException.Unauthorized("工号或密码错误");
+        }
+        // Recheck a concurrently reset password, but avoid hashing twice under a
+        // database lock when the credential we just verified has not changed.
+        if (user.PasswordHash != candidate.PasswordHash)
+            matches = await PasswordService.VerifyAsync(request.Password, user.PasswordHash, ct);
+        if (!matches)
+        {
+            var failures = loginState.LockExpired ? 1 : Math.Min(Math.Max(0, loginState.FailedAttempts), MaximumFailedLogins) + 1;
+            await conn.ExecuteAsync(new CommandDefinition("""
+                UPDATE users SET failed_login_attempts=@failures,
+                    locked_until=CASE WHEN @failures>=@limit THEN DATE_ADD(UTC_TIMESTAMP(6),INTERVAL @minutes MINUTE) ELSE NULL END
+                WHERE id=@Id
+                """, new { failures, limit = MaximumFailedLogins, minutes = LoginLockMinutes, user.Id }, tx, cancellationToken: ct));
+            await tx.CommitAsync(ct);
+            var lockedNow = failures >= MaximumFailedLogins;
+            await AuditBestEffortAsync(conn, user.Id, employeeNo, lockedNow ? "LOGIN_LOCKED" : "LOGIN_FAILED",
+                null, null, lockedNow ? new { failedAttempts = failures, lockMinutes = LoginLockMinutes } : null, clientIp, ct);
+            throw ApiException.Unauthorized("工号或密码错误");
+        }
+        if (user.Status != "ACTIVE" || !await IsSupplierActiveAsync(conn, tx, user, ct))
+        {
+            await tx.RollbackAsync(ct);
+            await AuditBestEffortAsync(conn, user.Id, employeeNo, "LOGIN_FAILED", null, null, null, clientIp, ct);
             throw ApiException.Unauthorized("工号或密码错误");
         }
         await conn.ExecuteAsync(new CommandDefinition(
@@ -146,7 +185,7 @@ public sealed class IdentityService(
         if (!await PasswordService.VerifyAsync(request.OldPassword, user.PasswordHash, ct)) throw ApiException.BadRequest("原密码错误");
         PasswordService.Validate(request.NewPassword);
         var hash = await PasswordService.HashAsync(request.NewPassword, ct);
-        await conn.ExecuteAsync(new CommandDefinition("UPDATE users SET password_hash=@hash,must_change_password=0,updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { hash, id = current.Id }, tx, cancellationToken: ct));
+        await conn.ExecuteAsync(new CommandDefinition("UPDATE users SET password_hash=@hash,must_change_password=0,failed_login_attempts=0,locked_until=NULL,updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { hash, id = current.Id }, tx, cancellationToken: ct));
         await RevokeAllAsync(conn, tx, current.Id, ct);
         await audit.WriteAsync(conn, tx, current.Id, "PASSWORD_CHANGE", null, null, null, null, ct);
         await tx.CommitAsync(ct);
@@ -229,5 +268,12 @@ public sealed class IdentityService(
         string? targetType, ulong? targetId, object? detail, string? ip, CancellationToken ct)
     {
         try { await audit.WriteAsync(conn, null, userId, action, targetType, targetId, detail, ip, ct, employeeNo); } catch { }
+    }
+
+    private sealed class LoginState
+    {
+        public int FailedAttempts { get; init; }
+        public bool IsLocked { get; init; }
+        public bool LockExpired { get; init; }
     }
 }

@@ -45,14 +45,15 @@ $PackageRoot = FullPath $PackageRoot
 $SiteRoot = FullPath $SiteRoot
 $ConfigPath = FullPath $ConfigPath
 foreach ($path in @($PackageRoot,$SiteRoot,$ConfigPath)) { NoLinks $path }
-if ((Within $SiteRoot $PackageRoot) -or (Within $PackageRoot $SiteRoot) -or (Within $ConfigPath $SiteRoot) -or (Within $ConfigPath $PackageRoot)) { throw 'Package, destination and external configuration must be separate.' }
 if (!(Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { throw 'External configuration does not exist.' }
 if ((Test-Path -LiteralPath $SiteRoot) -and @(Get-ChildItem -LiteralPath $SiteRoot -Force).Count) { throw 'Destination must be absent or empty; existing deployment is not overwritten.' }
 $config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $storage = FullPath $config.App.StorageRoot
 NoLinks $storage
 if (!(Test-Path -LiteralPath $storage -PathType Container)) { throw 'Create the independent storage directory before installation.' }
-foreach ($other in @($PackageRoot,$SiteRoot)) { if ((Within $storage $other) -or (Within $other $storage)) { throw 'Storage cannot overlap application or package directories.' } }
+foreach ($other in @($PackageRoot,$SiteRoot,$ConfigPath)) {
+    if ((Within $storage $other) -or (Within $other $storage)) { throw 'Package, destination, external configuration and storage must be separate.' }
+}
 $origin = 'https://' + $HostName + $(if ($HttpsPort -eq 443) { '' } else { ':'+$HttpsPort })
 if ($config.App.CookieSecure -ne $true -or $config.App.WebBaseUrl.TrimEnd('/') -ne $origin) { throw 'Production configuration requires CookieSecure=true and WebBaseUrl equal to the HTTPS site origin.' }
 if ([string]::IsNullOrWhiteSpace($config.App.ConnectionString) -or [Text.Encoding]::UTF8.GetByteCount($config.App.JwtSecret) -lt 32) { throw 'Database connection and a random JWT secret (at least 32 bytes) are required.' }
@@ -69,9 +70,13 @@ foreach ($actual in Get-ChildItem -LiteralPath $PackageRoot -Recurse -File -Forc
     $relative = $actual.FullName.Substring($PackageRoot.Length).TrimStart('\').ToLowerInvariant()
     if ($relative -ne 'manifest.json' -and $knownPaths -notcontains $relative) { throw "Unlisted file in package: $relative" }
 }
-foreach ($required in @('Yf.Api.dll','Yf.Api.runtimeconfig.json','web.config','wwwroot\index.html')) {
+foreach ($required in @('Yf.Api.dll','Yf.Api.runtimeconfig.json','web.config','wwwroot\index.html','maintenance-common.ps1')) {
     if (!(Test-Path -LiteralPath (Join-Path $PackageRoot $required) -PathType Leaf)) { throw "Missing required payload: $required" }
 }
+. (Join-Path $PackageRoot 'maintenance-common.ps1')
+Assert-YfSeparate @($PackageRoot,$SiteRoot,$ConfigPath,$storage)
+$maintenanceConfig = Read-YfMaintenanceConfig $ConfigPath
+if ($maintenanceConfig.Storage -ne $storage) { throw 'Configuration storage path changed during validation.' }
 Import-Module WebAdministration -ErrorAction Stop
 if (Test-Path "IIS:\Sites\$SiteName") { throw 'IIS site already exists; follow documented upgrade procedure.' }
 if (Test-Path "IIS:\AppPools\$AppPoolName") { throw 'IIS application pool already exists; refusing to reuse another application pool.' }
@@ -110,8 +115,7 @@ $identity = 'IIS AppPool\' + $AppPoolName
 if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application read permissions.' }
 & icacls.exe $storage /grant "${identity}:(OI)(CI)M" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Unable to grant storage permissions.' }
-& icacls.exe $ConfigPath /grant "${identity}:R" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Unable to grant external configuration read permissions.' }
+Protect-YfConfigurationFile $ConfigPath $identity
 New-Website -Name $SiteName -PhysicalPath $SiteRoot -ApplicationPool $AppPoolName -Port $HttpsPort -HostHeader $HostName -Ssl -SslFlags 1 | Out-Null
 $binding = Get-WebBinding -Name $SiteName -Protocol https
 $binding.AddSslCertificate($thumb,'My')

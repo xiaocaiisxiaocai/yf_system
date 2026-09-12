@@ -20,8 +20,10 @@ public sealed class AppOptions
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ConnectionString)) throw new InvalidOperationException("App:ConnectionString must be configured; no database is created automatically.");
-        try { _ = new MySqlConnectionStringBuilder(ConnectionString); }
+        MySqlConnectionStringBuilder database;
+        try { database = new MySqlConnectionStringBuilder(ConnectionString); }
         catch { throw new InvalidOperationException("Invalid App:ConnectionString."); }
+        DatabaseTransportPolicy.Validate(database);
         if (System.Text.Encoding.UTF8.GetByteCount(JwtSecret) < 32) throw new InvalidOperationException("App:JwtSecret must be at least 32 bytes.");
         if (string.IsNullOrWhiteSpace(StorageRoot) || !Path.IsPathFullyQualified(StorageRoot))
             throw new InvalidOperationException("App:StorageRoot must be an absolute path to the existing independent storage directory.");

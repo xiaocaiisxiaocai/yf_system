@@ -46,12 +46,47 @@ function Protect-YfDirectory([string]$Path) {
     }
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
+function Protect-YfConfigurationFile([string]$Path, $ReadIdentity) {
+    if (!(Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'Configuration file is missing.' }
+    $readSid = if ($ReadIdentity -is [Security.Principal.SecurityIdentifier]) {
+        $ReadIdentity
+    } else {
+        (New-Object Security.Principal.NTAccount ([string]$ReadIdentity)).Translate([Security.Principal.SecurityIdentifier])
+    }
+    $acl = New-Object Security.AccessControl.FileSecurity
+    $acl.SetAccessRuleProtection($true,$false)
+    $fullControlSids = @(
+        [Security.Principal.WindowsIdentity]::GetCurrent().User,
+        (New-Object Security.Principal.SecurityIdentifier 'S-1-5-18'),
+        (New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544')
+    ) | Select-Object -Unique
+    foreach ($sid in $fullControlSids) {
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow')
+        $acl.AddAccessRule($rule)
+    }
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($readSid,'Read','Allow')))
+    Set-Acl -LiteralPath $Path -AclObject $acl
+
+    $applied = Get-Acl -LiteralPath $Path
+    $writeMask = [Security.AccessControl.FileSystemRights]::WriteData -bor [Security.AccessControl.FileSystemRights]::AppendData -bor [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor [Security.AccessControl.FileSystemRights]::WriteAttributes -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+    $readRules = @($applied.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | Where-Object {
+        $_.IdentityReference -eq $readSid -and $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow
+    })
+    if (!$applied.AreAccessRulesProtected -or $readRules.Count -ne 1 -or
+        ($readRules[0].FileSystemRights -band $writeMask) -ne 0 -or
+        ($readRules[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::Read) -ne [Security.AccessControl.FileSystemRights]::Read) {
+        throw 'Configuration ACL verification failed; the application identity must have read-only access.'
+    }
+}
 function Write-YfJson([string]$Path, $Value) {
     [IO.File]::WriteAllText($Path,($Value | ConvertTo-Json -Depth 12),(New-Object Text.UTF8Encoding($false)))
 }
 function Get-YfDbOption($Builder,[string[]]$Names,[string]$Default='') {
     foreach ($name in $Names) { if ($Builder.ContainsKey($name)) { return [string]$Builder[$name] } }
     return $Default
+}
+function Test-YfLoopbackDatabaseServer([string]$Server) {
+    return $Server -in @('localhost','127.0.0.1','::1','[::1]')
 }
 function Read-YfMaintenanceConfig([string]$Path) {
     $Path = Get-YfFullPath $Path
@@ -70,13 +105,23 @@ function Read-YfMaintenanceConfig([string]$Path) {
         $ssl = Get-YfDbOption $builder @('SSL Mode','SslMode') 'Preferred'
         $sslModes = @{ None='DISABLED'; Disabled='DISABLED'; Preferred='PREFERRED'; Required='REQUIRED'; VerifyCA='VERIFY_CA'; VerifyFull='VERIFY_IDENTITY' }
         if ($database -notmatch '^[A-Za-z0-9_]+$' -or !$user -or $server -notmatch '^[A-Za-z0-9_.:-]+$' -or $port -lt 1 -or $port -gt 65535 -or $protocol -notin @('Sockets','Socket','TCP','Tcp') -or !$sslModes.ContainsKey($ssl)) { throw 'Unsupported database settings.' }
-        foreach ($key in @('CertificateFile','Certificate File','CertificatePassword','Certificate Password','SslCert','SslKey','SslCa','CACertificateFile')) {
+        if (!(Test-YfLoopbackDatabaseServer $server) -and $ssl -ne 'VerifyFull') {
+            throw 'Remote database maintenance requires SSL Mode=VerifyFull.'
+        }
+        $caFile = Get-YfDbOption $builder @('CACertificateFile','CA Certificate File','SslCa','SSL CA')
+        if ($caFile) {
+            $caFile = Get-YfFullPath $caFile
+            Assert-YfNoLinks $caFile
+            if (!(Test-Path -LiteralPath $caFile -PathType Leaf)) { throw 'Database CA certificate file is missing.' }
+            Assert-YfSeparate @($Path,$storage,$caFile)
+        }
+        foreach ($key in @('CertificateFile','Certificate File','CertificatePassword','Certificate Password','SslCert','SslKey')) {
             if ($builder.ContainsKey($key)) { throw 'Client certificate connections need a separately configured backup client.' }
         }
         $origin = [Uri]$config.App.WebBaseUrl
         if (!$origin.IsAbsoluteUri -or $origin.Scheme -notin @('http','https')) { throw 'Invalid origin.' }
     } catch { throw 'Unable to read maintenance configuration. Check paths, TCP database settings and JSON; credentials are not printed.' }
-    return [pscustomobject]@{ Path=$Path; Storage=$storage; Database=$database; Server=$server; Port=$port; User=$user; Password=$password; SslMode=$sslModes[$ssl]; Origin=$config.App.WebBaseUrl; Config=$config }
+    return [pscustomobject]@{ Path=$Path; Storage=$storage; Database=$database; Server=$server; Port=$port; User=$user; Password=$password; SslMode=$sslModes[$ssl]; CaFile=$caFile; Origin=$config.App.WebBaseUrl; Config=$config }
 }
 function ConvertTo-YfMySqlOption([string]$Value) {
     return '"'+$Value.Replace('\','\\').Replace('"','\"').Replace("`r",'\r').Replace("`n",'\n')+'"'
@@ -84,6 +129,7 @@ function ConvertTo-YfMySqlOption([string]$Value) {
 function Write-YfMySqlDefaults($Config,[string]$Directory) {
     $path = Join-Path $Directory ('.mysql-'+[guid]::NewGuid().ToString('N')+'.cnf')
     $lines = @('[client]', ('host='+(ConvertTo-YfMySqlOption $Config.Server)), ('port='+$Config.Port), ('user='+(ConvertTo-YfMySqlOption $Config.User)), ('password='+(ConvertTo-YfMySqlOption $Config.Password)), ('ssl-mode='+$Config.SslMode), 'protocol=TCP', 'default-character-set=utf8mb4')
+    if ($Config.CaFile) { $lines += 'ssl-ca='+(ConvertTo-YfMySqlOption $Config.CaFile) }
     try {
         [IO.File]::WriteAllLines($path,$lines,(New-Object Text.UTF8Encoding($false)))
         return $path
@@ -154,7 +200,9 @@ function Assert-YfBackupSite([string]$BackupRoot,[string]$SiteName) {
 function New-YfBackup([string]$ApplicationRoot,$Config,[string]$Destination,[string]$MySqlDump,[string]$SiteName) {
     $ApplicationRoot = Get-YfFullPath $ApplicationRoot
     $Destination = Get-YfFullPath $Destination
-    Assert-YfSeparate @($ApplicationRoot,$Config.Storage,$Config.Path,$Destination)
+    $paths = @($ApplicationRoot,$Config.Storage,$Config.Path,$Destination)
+    if ($Config.CaFile) { $paths += $Config.CaFile }
+    Assert-YfSeparate $paths
     Assert-YfEmptyDirectory $Destination
     Assert-YfNoLinks $ApplicationRoot
     Assert-YfNoLinks $Config.Storage
@@ -184,7 +232,9 @@ function Restore-YfBackup([string]$BackupRoot,$Config,[string]$NewApplicationRoo
     foreach ($name in @('database.sql','configuration.json','application\Yf.Api.dll','application\web.config','application\wwwroot\index.html')) {
         if (!(Test-Path -LiteralPath (Join-Path $BackupRoot $name) -PathType Leaf)) { throw 'Required backup payload is missing.' }
     }
-    Assert-YfSeparate @($BackupRoot,$Config.Storage,$Config.Path,$NewApplicationRoot)
+    $paths = @($BackupRoot,$Config.Storage,$Config.Path,$NewApplicationRoot)
+    if ($Config.CaFile) { $paths += $Config.CaFile }
+    Assert-YfSeparate $paths
     Assert-YfEmptyDirectory $NewApplicationRoot
     Assert-YfEmptyDirectory $Config.Storage
     $scratch = Join-Path ([IO.Path]::GetTempPath()) ('yf-restore-'+[guid]::NewGuid().ToString('N'))

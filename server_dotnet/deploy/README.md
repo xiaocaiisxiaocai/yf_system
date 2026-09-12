@@ -5,7 +5,7 @@
 ## 准备
 
 1. 将发布 ZIP 与 `.sha256` 一并复制到服务器，核对哈希后解压到独立临时目录。
-2. 将 `appsettings.example.json` 复制到网站和发布包以外，例如 `D:\YfConfig\appsettings.Production.json`。填入数据库连接、随机 JWT 密钥、独立存储目录、实际 HTTPS 来源和 SMTP（可留空以禁用发送）。不要把机密放入 `wwwroot`。
+2. 将 `appsettings.example.json` 复制到网站、发布包和业务存储目录以外，例如 `D:\YfConfig\appsettings.Production.json`。填入数据库连接、随机 JWT 密钥、独立存储目录、实际 HTTPS 来源和 SMTP（可留空以禁用发送）。不要把机密放入 `wwwroot` 或应用池可写目录。
 3. 创建存储目录，例如 `D:\YfData\storage`。已有系统要使用与数据库匹配的原文件存储。已有第 16/17 版结构必须按下方命令接管为 .NET schema version 1。更早或未知版本会被拒绝，不能直接启动。
 4. 新库可使用本包初始化；已有库不执行此命令。先由 DBA 创建空库，再在包根执行：
 
@@ -32,11 +32,11 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
   -SiteRoot 'C:\inetpub\yf_system_dotnet'
 ```
 
-脚本核对包文件 SHA-256、独立路径、证书、Hosting Bundle 和运行时，然后创建新应用池、新 HTTPS 站点，并授予最小的程序读、配置读和文件存储修改权限。前后端同站点、同来源，不需要 ARR、URL Rewrite 或 Rust Windows 服务。
+脚本核对包文件 SHA-256、程序包/站点/配置/存储独立路径、证书、Hosting Bundle 和运行时，然后创建新应用池、新 HTTPS 站点。它关闭配置文件 ACL 继承，只保留当前管理员、SYSTEM、Administrators 完全控制和应用池身份只读；业务存储只给应用池修改，程序目录只读。前后端同站点、同来源，不需要 ARR、URL Rewrite 或 Rust Windows 服务。
 
 脚本拒绝已存在站点/应用池和非空目标目录，不覆盖其他部署。它不自动开放防火墙、不修改 DNS，也不停止现有后端服务。请按实际网络环境配置 DNS、443/TCP 与 HTTPS 证书，并在停写窗口切换入口。
 
-如果配置文件父目录不允许应用池遍历，还需由管理员给对应应用池授予父目录“遍历文件夹”权限。不要给网站目录业务文件写权限，不要给 Everyone 配置读权限。
+如果配置文件父目录不允许应用池遍历，还需由管理员给对应应用池授予父目录“遍历文件夹”权限；父目录本身不能给应用池或广泛主体写入/删除子项权限，否则仍可能替换配置文件。不要给网站目录业务文件写权限，不要给 Everyone、Users 或 Authenticated Users 配置读权限。组织确需额外备份/运维主体读取配置时，安装后由管理员按最小权限显式添加，并重新核对应用池仍然只有读取权限。
 
 ## 正式服务器备份、升级与恢复
 
@@ -45,6 +45,8 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
 维护只支持由独立应用池承载、没有子应用的现有 IIS 站点。应用池必须使用 `ApplicationPoolIdentity` 且不加载用户 profile。站点必须使用外部 JSON 作为唯一主配置，由 `web.config` 中唯一的 `YF_CONFIG_PATH` 指向该文件，并以 in-process 的 `dotnet .\Yf.Api.dll` 标准形式启动。执行前移除站点、应用池、应用池默认值、机器和当前 PowerShell 中的 `App__*` / `App:*` 高优先级覆盖；维护脚本会拒绝这些覆盖和继承的额外 `YF_CONFIG_PATH`，防止备份、迁移或健康检查连接到另一套资源。正式配置的 `WebBaseUrl` 必须是实际 HTTPS 来源，`CookieSecure` 必须为 `true`。
 
 服务器需安装与目标 MySQL 兼容的 5.7 或更高版本 `mysql.exe`、`mysqldump.exe` 客户端；若不在 `PATH`，按下例传绝对路径。脚本只检查客户端可执行文件存在，版本和服务器兼容性需在维护窗口前确认。所有目录必须是互不包含的本地绝对路径，不能经过 junction/symlink 等重解析点；备份目录、新程序目录和恢复存储目录必须不存在或为空。
+
+数据库位于 `localhost`、`127.0.0.1` 或 `::1` 时，为兼容隔离测试和同机维护，连接串可以继续使用 `None`、`Disabled`、`Preferred` 等现有 `SSL Mode`。任何非回环数据库都必须设置 `SSL Mode=VerifyFull`，维护脚本会传给 `mysql`/`mysqldump` 为 `VERIFY_IDENTITY`，拒绝 `Preferred`、`Required` 和 `VerifyCA`，避免加密降级或只验 CA 不验主机名。私有 CA 可在连接串中使用 `CACertificateFile`、`CA Certificate File`、`SslCa` 或 `SSL CA` 指向网站、存储和包目录之外的本地绝对只读文件；脚本核对文件存在且无重解析点，并把它传为 `ssl-ca`。客户端证书/私钥仍不由维护脚本接管，需单独配置受控的备份客户端。
 
 ### Backup
 
@@ -58,7 +60,7 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
   -MySqlDump 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe'
 ```
 
-备份包含当前程序、独立存储、外部 JSON 配置、数据库表、触发器、存储过程和事件，并用清单记录文件 SHA-256。它同时包含数据库凭据、JWT/SMTP 等密钥、业务数据和上传文件；应放在网站目录之外受限且加密的备份介质上，限制管理员/备份账号访问，不提交源码库，不通过普通文件共享长期暴露，并按保留策略安全清除。
+备份包含当前程序、独立存储、外部 JSON 配置、数据库表、触发器、存储过程和事件，并用清单记录文件 SHA-256。它同时包含数据库凭据、JWT/SMTP 等密钥、业务数据和上传文件；应放在网站目录之外受限且加密的备份介质上，限制管理员/备份账号访问，不提交源码库，不通过普通文件共享长期暴露，并按保留策略安全清除。远程数据库必须先满足上面的 `VerifyFull` 证书身份验证要求，不能依靠网络边界代替传输加密。
 
 ### Upgrade
 
