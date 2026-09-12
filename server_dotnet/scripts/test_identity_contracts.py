@@ -9,7 +9,7 @@ import urllib.parse
 
 
 def _password():
-    return "Identity-" + secrets.token_urlsafe(18)
+    return "Yf9!" + secrets.token_urlsafe(9)
 
 
 def _refresh_cookie(client):
@@ -18,12 +18,9 @@ def _refresh_cookie(client):
 
 def _login_attempt(Client, base, employee_no, password, expected=200):
     actor = Client(base)
-    challenge = actor.captcha()
     result = actor.call("POST", "/api/v1/auth/login", {
         "employeeNo": employee_no,
         "password": password,
-        "captchaId": challenge["captchaId"],
-        "captchaCode": challenge["captchaCode"],
     }, expected=expected)
     if expected == 200:
         actor.token = result["accessToken"]
@@ -31,31 +28,54 @@ def _login_attempt(Client, base, employee_no, password, expected=200):
 
 
 def run_identity_checks(client, Client, conn, check):
-    # The observer route belongs to the isolated TestHost. The generated challenge still uses
-    # the production renderer and guarantees at least one letter, so the former digit sampler
-    # cannot reconstruct a valid answer.
-    challenge = client.captcha()
-    captcha_code = challenge["captchaCode"]
-    check("identity captcha uses expanded randomized alphabet",
-          len(captcha_code) == 6 and any(value.isalpha() for value in captcha_code)
-          and all(value in "ACDEFHJKLMNPRTUVWXY347" for value in captcha_code))
-
     # Preserve the attempted employee number even when no users row can supply it.
     missing_employee = "missing_" + secrets.token_hex(5)
-    failed_challenge = client.captcha()
-    client.call("POST", "/api/v1/auth/login", {
+    missing_result = client.call("POST", "/api/v1/auth/login", {
         "employeeNo": missing_employee, "password": _password(),
-        "captchaId": failed_challenge["captchaId"], "captchaCode": failed_challenge["captchaCode"]
     }, expected=401)
     with conn.cursor() as cursor:
         cursor.execute("SELECT employee_no FROM audit_logs WHERE action='LOGIN_FAILED' ORDER BY id DESC LIMIT 1")
         failed_employee_no = cursor.fetchone()[0]
-    check("identity unknown employee login keeps attempted employee number in audit", failed_employee_no == missing_employee)
+    check("identity direct login failure is unauthorized without CAPTCHA",
+          missing_result["code"] == 40101 and failed_employee_no == missing_employee)
 
     # Ordinary account CRUD, including omitted-versus-null department updates, the singular
     # role contract, and a reset that revokes sessions.
     roles = client.call("GET", "/api/v1/admin/user-role-options")
     ordinary_role = next(role for role in roles if role["name"] not in ("系统管理员", "供应商人员"))
+    boundary_suffix = secrets.token_hex(4)
+    boundary_payload = {
+        "realName": "密码边界用户", "email": f"password-boundary-{boundary_suffix}@example.invalid",
+        "departmentId": None, "roleId": ordinary_role["id"],
+    }
+    too_short = client.call("POST", "/api/v1/admin/users", {
+        **boundary_payload, "employeeNo": "pw5_" + boundary_suffix, "password": "A1!bc",
+    }, expected=400)
+    minimum = client.call("POST", "/api/v1/admin/users", {
+        **boundary_payload, "employeeNo": "pw6_" + boundary_suffix, "password": "G7!mQx",
+    })
+    maximum = client.call("POST", "/api/v1/admin/users", {
+        **boundary_payload, "employeeNo": "pw20_" + boundary_suffix,
+        "password": "A1!bcDefGhijkLmNopQr",
+    })
+    too_long = client.call("POST", "/api/v1/admin/users", {
+        **boundary_payload, "employeeNo": "pw21_" + boundary_suffix,
+        "password": "A1!bcDefGhijkLmNopQrs",
+    }, expected=400)
+    weak = client.call("POST", "/api/v1/admin/users", {
+        **boundary_payload, "employeeNo": "pwweak_" + boundary_suffix, "password": "admin!",
+    }, expected=400)
+    client.call("DELETE", f"/api/v1/admin/users/{minimum['id']}")
+    client.call("DELETE", f"/api/v1/admin/users/{maximum['id']}")
+    check("identity password policy accepts 6 and 20 characters and rejects 5, 21, and weak passwords",
+          too_short["code"] == 40001 and too_long["code"] == 40001
+          and weak["code"] == 40001 and minimum["id"] != maximum["id"])
+
+    admin_employee = client.call("GET", "/api/v1/auth/profile")["user"]["employeeNo"]
+    _, wrong_password = _login_attempt(Client, client.base, admin_employee, _password(), expected=401)
+    check("identity wrong password is unauthorized rather than a CAPTCHA challenge",
+          wrong_password["code"] == 40101)
+
     crud_password = _password()
     employee = "crud_" + secrets.token_hex(5)
     department = client.call("POST", "/api/v1/admin/departments", {

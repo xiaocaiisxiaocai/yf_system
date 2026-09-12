@@ -4,7 +4,7 @@
 
 ## 功能与结构
 
-- `Yf.Api/Modules/Identity`：验证码、登录、JWT、刷新会话轮换/重放撤销、个人资料与改密。
+- `Yf.Api/Modules/Identity`：工号密码登录、JWT、刷新会话轮换/重放撤销、个人资料与改密。
 - `Yf.Api/Modules/Admin`：组织、账号、角色、供应商和供应商账号；权限委派上限与最后管理员保护。
 - `Yf.Api/Modules/Projects`：项目、成员、提交/确认/驳回/撤回、留言/已读、动态、工作台。
 - `Yf.Api/Modules/Files`：分片上传与续传、合并校验、下载、Range 预览、批量 ZIP、软删除和垃圾清理。
@@ -57,7 +57,7 @@ dotnet run --project .\Yf.Api -- --migrate-database
 
 ```powershell
 $env:YF_CONFIG_PATH = 'D:\YfConfig\appsettings.Local.json'
-$secret = Read-Host '初始管理员密码（12–64字符，禁止常见弱密码）' -AsSecureString
+$secret = Read-Host '初始管理员密码（6–20字符，禁止常见弱密码）' -AsSecureString
 $credential = New-Object System.Net.NetworkCredential('', $secret)
 $env:YF_BOOTSTRAP_PASSWORD = $credential.Password
 try { dotnet run --project .\Yf.Api -- --initialize-database }
@@ -70,9 +70,9 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
 
 切换现有系统必须先备份 MySQL、文件与配置，停止旧入口写入，再执行显式迁移和 .NET 启动。验证登录、权限、上传/下载和项目流程后开放访问。失败回退按该次部署的程序与数据库备份成套恢复；不承诺新旧后端可以互换运行或共享会话。
 
-密码规则：12–64 个 Unicode 字符，最多 256 UTF-8 字节，拒绝常见弱密码和简单重复；已有 Argon2 PHC 密码继续验证，不强制批量重置。
+新建账号、初始化管理员、重置密码和修改密码统一要求 6–20 个 Unicode 字符，拒绝常见弱密码和简单重复。登录只需工号和密码，不再提供或校验图形验证码。已有 Argon2 PHC 密码继续验证，包括此前设置的超过 20 字符的密码，不强制批量重置；旧密码验证仍保留 256 UTF-8 字节的输入上限。
 
-登录保护：验证码与现有 IP 限流之外，同一账号连续失败 10 次后暂停密码登录 15 分钟。失败计数和截止时间保存在数据库，跨 IP、应用实例和进程重启共享；账号按数据库身份合并计算，大小写变化不会重置计数。锁定期间尝试正确或错误密码均返回统一失败消息，重试不会延长截止时间。到期后可重新尝试，成功登录、已登录用户完成改密或管理员重置密码会清除计数与暂停状态。此保护复用现有用户字段，无需数据库迁移；不自动注销其他有效会话，改密仍按原规则撤销旧会话。应结合登录失败审计监控恶意锁号，避免把短暂锁定当作验证码或入口防护的替代。
+登录保护：保留现有 IP 与 IP+账号限流；同一账号连续失败 10 次后暂停密码登录 15 分钟。失败计数和截止时间保存在数据库，跨 IP、应用实例和进程重启共享；账号按数据库身份合并计算，大小写变化不会重置计数。锁定期间尝试正确或错误密码均返回统一失败消息，重试不会延长截止时间。到期后可重新尝试，成功登录、已登录用户完成改密或管理员重置密码会清除计数与暂停状态。此保护复用现有用户字段，无需数据库迁移；不自动注销其他有效会话，改密仍按原规则撤销旧会话。可结合登录失败审计监控恶意锁号。
 
 远程 MySQL 连接必须设置 `SslMode=VerifyFull`，校验证书链与主机名；私有 CA 可通过连接串 `SslCa` 指定可信 PEM 文件。仅 `localhost` 或明确回环 IP 的本机连接保留原有 TLS 模式，混合本机/远程主机列表按远程处理；API 连接与维护脚本均拒绝弱化远程校验。现有远程连接串升级前应先配置匹配域名的服务器证书和可信 CA，不能把代码更新视为服务器证书已部署。
 
@@ -95,7 +95,7 @@ HTTP 测试需要 Python 3.11+ 与 `pymysql`，仅使用显式设置的 `YF_TEST
 
 `test-maintenance.py` 还要求本机 `mysql.exe` 与 `mysqldump.exe` 可用，并使用随机命名的 `yf_test_maintenance_*` 数据库验证真实 MySQL、程序和存储字节的备份/恢复、篡改拒绝及非空目标拒绝。它只接受 `localhost`、`127.0.0.1` 或 `::1` 的显式 `YF_TEST_DATABASE_URL`，会创建并删除自身测试数据库；客户端应为与测试 MySQL 兼容的 5.7 或更高版本。该测试不启动或操作 IIS，不验证目标服务器的站点、专属应用池、HTTPS 证书、权限或网络。
 
-先测试实际生产入口的启动、健康和验证码返回，再通过独立 `TestHost` 执行完整 HTTP 用例。测试宿主使用同一 API 工厂，仅注册内存 CAPTCHA 观察器和带随机密钥的一次性答案路由，绑定回环地址；生产 API 不注册该观察器、不映射答案路由，发布包不包含测试宿主。验证码生产图像不再采用可由固定像素解码的数码管字体，并对发放与登录尝试限速；这不代表其能抵抗所有 OCR。
+先测试实际生产入口的启动、健康和工号密码登录，再通过独立 `TestHost` 执行完整 HTTP 用例。测试宿主使用同一 API 工厂，绑定回环地址；正式 API 和测试宿主均不提供验证码或答案接口，发布包不包含测试宿主。
 
 `tests/Contracts/api-v1.json` 固定前端 HTTP 方法/路径契约，不再解析 Rust 路由。项目回归验证真实数据库锁等待、并发提交与撤回；上传回归验证慢请求、并发初始化、中断恢复及文件清理。
 
@@ -114,7 +114,7 @@ $env:YF_PLAYWRIGHT_RUNNER = 'C:\你的工具目录\playwright-skill\run.js'
 python .\scripts\test-browser.py --output ..\.runlogs\browser-NEW
 ```
 
-每次使用新的空证据目录。结果含实际步骤、源码与被测构建产物 SHA-256、截图、下载完整性及资源清理状态；测试期间修改源码或产物会使本轮校验失败。它创建随机临时数据库、文件目录、账号和独立回环测试宿主，保留生产限速，验证码答案仅通过测试宿主观察器获取，邮件发送关闭。结束只清理本轮资源与私有登录状态。
+每次使用新的空证据目录。结果含实际步骤、源码与被测构建产物 SHA-256、截图、下载完整性及资源清理状态；测试期间修改源码或产物会使本轮校验失败。它创建随机临时数据库、文件目录、账号和独立回环测试宿主，使用工号密码直接登录，保留生产限速，邮件发送关闭。结束只清理本轮资源与私有登录状态。
 
 `--steps auth fixtures system` 可单独检查系统参数和日志；`--steps auth fixtures users project-edges access` 检查五态筛选、编辑、分页、终止重启、异常重试和权限变化、多标签换号。`business`、`project-edges`、`file-edges`、`message-edges` 必须在 `users` 后，`final` 和 `layout` 必须在 `business` 后。
 

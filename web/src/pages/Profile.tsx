@@ -123,7 +123,7 @@ export default function Profile() {
                 passwordRule,
               ]}
             >
-              <PasswordInput prefix={<IconLock />} autoComplete="new-password" />
+              <PasswordInput prefix={<IconLock />} placeholder="6-20 位" autoComplete="new-password" />
             </Form.Item>
             <Form.Item label="确认新密码" field="confirm" rules={[{ required: true, message: '请再次输入新密码' }]}>
               <PasswordInput prefix={<IconLock />} autoComplete="new-password" />

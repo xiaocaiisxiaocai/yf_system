@@ -98,8 +98,7 @@ try:
             probe.bind(('127.0.0.1', 0))
             port = probe.getsockname()[1]
         base = f'http://127.0.0.1:{port}'
-        key = secrets.token_urlsafe(48)
-        initial = 'Browser!' + secrets.token_urlsafe(18)
+        initial = 'Yf9!' + secrets.token_urlsafe(9)
         env = os.environ.copy()
         env.pop('YF_CONFIG_PATH', None)
         env.update({
@@ -107,7 +106,7 @@ try:
             'App__JwtSecret': secrets.token_urlsafe(48), 'App__StorageRoot': str(storage_path),
             'App__WebBaseUrl': base, 'App__CookieSecure': 'false', 'App__WorkerEnabled': 'false',
             'App__Smtp__Host': '', 'ASPNETCORE_URLS': base, 'ASPNETCORE_WEBROOT': str(ROOT / 'web/dist'),
-            'YF_TEST_HOST_KEY': key, 'YF_BOOTSTRAP_PASSWORD': initial,
+            'YF_BOOTSTRAP_PASSWORD': initial,
             'YF_PROJECT_ROOT': str(ROOT), 'YF_BROWSER_SUPPORT_DIR': str(SCRIPTS),
             'YF_BROWSER_EVIDENCE_DIR': str(output), 'Logging__LogLevel__Default': 'Warning',
         })
@@ -130,8 +129,8 @@ try:
                 time.sleep(.1)
             else:
                 raise RuntimeError('Owned TestHost health check timed out.')
-            (output / 'state.private.json').write_text(json.dumps({'base': base, 'key': key,
-                'initialPassword': initial, 'adminChangedPassword': 'Browser!' + secrets.token_urlsafe(18)}), encoding='utf-8')
+            (output / 'state.private.json').write_text(json.dumps({'base': base,
+                'initialPassword': initial, 'adminChangedPassword': 'Yf9!' + secrets.token_urlsafe(9)}), encoding='utf-8')
             print(f'Owned browser host ready: {base}; no business data or SMTP', flush=True)
             for script in args.steps:
                 print('RUN browser ' + script, flush=True)

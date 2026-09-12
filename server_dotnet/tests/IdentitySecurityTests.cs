@@ -12,28 +12,57 @@ public sealed class IdentitySecurityTests
     [Fact]
     public async Task ExistingWeakPasswordHashStillVerifies()
     {
-        var password = "Old123";
-        var salt = Encoding.ASCII.GetBytes("historical-salt!");
-        var argon = new Argon2id(Encoding.UTF8.GetBytes(password))
-        {
-            Salt = salt, MemorySize = 4096, Iterations = 3, DegreeOfParallelism = 1
-        };
-        var digest = await argon.GetBytesAsync(32);
-        var phc = $"$argon2id$v=19$m=4096,t=3,p=1${Convert.ToBase64String(salt).TrimEnd('=')}${Convert.ToBase64String(digest).TrimEnd('=')}";
+        const string password = "admin1";
+        var phc = await LegacyHashAsync(password);
 
         Assert.True(await PasswordService.VerifyAsync(password, phc, TestContext.Current.CancellationToken));
         Assert.False(PasswordService.StrongEnough(password));
     }
 
     [Fact]
-    public void PasswordPolicyCountsUnicodeScalarsAndCapsUtf8Bytes()
+    public async Task ExistingPasswordLongerThanNewPolicyStillVerifies()
     {
-        var boundary = string.Concat(Enumerable.Repeat("😀abcdeFG", 8));
-        Assert.Equal(64, boundary.EnumerateRunes().Count());
-        Assert.True(PasswordService.StrongEnough(boundary));
-        Assert.False(PasswordService.StrongEnough(boundary + "x"));
+        const string password = "HistoricalPassword#2025!";
+        var phc = await LegacyHashAsync(password);
+
+        Assert.True(password.EnumerateRunes().Count() > 20);
+        Assert.True(await PasswordService.VerifyAsync(password, phc, TestContext.Current.CancellationToken));
+        Assert.False(PasswordService.StrongEnough(password));
+        Assert.False(await PasswordService.VerifyAsync(new string('界', 86), phc, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public void PasswordPolicyUsesSixToTwentyUnicodeScalarsAndRejectsWeakValues()
+    {
+        const string five = "😀Q7!x";
+        const string six = "😀Q7!xz";
+        const string twenty = "😀Ab1!cD2@eF3#gH4$iJ5";
+
+        Assert.Equal(5, five.EnumerateRunes().Count());
+        Assert.Equal(6, six.EnumerateRunes().Count());
+        Assert.Equal(20, twenty.EnumerateRunes().Count());
+        Assert.False(PasswordService.StrongEnough(five));
+        Assert.True(PasswordService.StrongEnough(six));
+        Assert.True(PasswordService.StrongEnough(twenty));
+        Assert.False(PasswordService.StrongEnough(twenty + "K"));
         Assert.False(PasswordService.StrongEnough("Password123456!"));
         Assert.False(PasswordService.StrongEnough("abcdabcdabcd"));
+    }
+
+    [Fact]
+    public void LoginRateLimiterKeepsIpAndIpAccountLimits()
+    {
+        var accountLimiter = new LoginRateLimiter();
+        Assert.All(Enumerable.Range(1, 10), _ => Assert.True(accountLimiter.AllowLogin("192.0.2.1", "target")));
+        Assert.False(accountLimiter.AllowLogin("192.0.2.1", "target"));
+        Assert.True(accountLimiter.AllowLogin("192.0.2.1", "other"));
+        Assert.True(accountLimiter.AllowLogin("192.0.2.2", "target"));
+
+        var ipLimiter = new LoginRateLimiter();
+        Assert.All(Enumerable.Range(1, 60), attempt =>
+            Assert.True(ipLimiter.AllowLogin("198.51.100.1", "account-" + attempt)));
+        Assert.False(ipLimiter.AllowLogin("198.51.100.1", "account-61"));
+        Assert.True(ipLimiter.AllowLogin("198.51.100.2", "account-61"));
     }
 
     [Fact]
@@ -80,27 +109,14 @@ public sealed class IdentitySecurityTests
         Assert.Equal("api-session-family", parsed.SessionId);
     }
 
-    [Fact]
-    public void CaptchaIsPngAndSingleUse()
+    private static async Task<string> LegacyHashAsync(string password)
     {
-        var observer = new RecordingCaptchaObserver();
-        var service = new CaptchaService([observer]);
-        var response = service.Issue("127.0.0.1");
-        Assert.StartsWith("data:image/png;base64,", response.Svg);
-        var png = Convert.FromBase64String(response.Svg["data:image/png;base64,".Length..]);
-        Assert.Equal(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, png[..8]);
-        Assert.Equal(response.CaptchaId, observer.CaptchaId);
-        Assert.Equal(6, observer.Answer.Length);
-        Assert.All(observer.Answer, value => Assert.Contains(value, "ACDEFHJKLMNPRTUVWXY347"));
-        Assert.Contains(observer.Answer, char.IsAsciiLetterUpper);
-        Assert.True(service.Verify(response.CaptchaId, observer.Answer));
-        Assert.False(service.Verify(response.CaptchaId, observer.Answer));
-    }
-
-    private sealed class RecordingCaptchaObserver : ICaptchaChallengeObserver
-    {
-        public string CaptchaId { get; private set; } = "";
-        public string Answer { get; private set; } = "";
-        public void OnIssued(string captchaId, string answer) => (CaptchaId, Answer) = (captchaId, answer);
+        var salt = Encoding.ASCII.GetBytes("historical-salt!");
+        var argon = new Argon2id(Encoding.UTF8.GetBytes(password))
+        {
+            Salt = salt, MemorySize = 4096, Iterations = 3, DegreeOfParallelism = 1
+        };
+        var digest = await argon.GetBytesAsync(32);
+        return $"$argon2id$v=19$m=4096,t=3,p=1${Convert.ToBase64String(salt).TrimEnd('=')}${Convert.ToBase64String(digest).TrimEnd('=')}";
     }
 }

@@ -11,7 +11,7 @@ import secrets
 
 
 def _password():
-    return "Files-" + secrets.token_urlsafe(18)
+    return "Yf9!" + secrets.token_urlsafe(9)
 
 
 def _abort(client, session_id):

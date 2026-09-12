@@ -7,7 +7,7 @@ namespace Yf.Api.Modules.Identity;
 public sealed class IdentityService(
     AppDb db,
     AppOptions options,
-    CaptchaService captchas,
+    LoginRateLimiter loginRateLimiter,
     TokenService tokens,
     PermissionService permissions,
     AuditService audit)
@@ -28,8 +28,7 @@ public sealed class IdentityService(
         if (employeeNo.Length == 0 || string.IsNullOrEmpty(request.Password)) throw ApiException.BadRequest("工号和密码不能为空");
         if (employeeNo.EnumerateRunes().Count() > 64 || System.Text.Encoding.UTF8.GetByteCount(request.Password) > PasswordService.MaxPasswordBytes)
             throw ApiException.BadRequest("工号或密码错误");
-        if (!captchas.AllowLogin(clientIp, employeeNo)) throw ApiException.BadRequest("请求过于频繁，请稍后再试");
-        if (!captchas.Verify(request.CaptchaId, request.CaptchaCode)) throw new ApiException(428, 42801, "需要图形验证码");
+        if (!loginRateLimiter.AllowLogin(clientIp, employeeNo)) throw ApiException.BadRequest("请求过于频繁，请稍后再试");
 
         UserRow? candidate;
         await using (var lookup = await db.OpenAsync(ct))
@@ -260,7 +259,7 @@ public sealed class IdentityService(
     private static async Task<string> CreateDummyHashAsync()
     {
         var salt = System.Text.Encoding.ASCII.GetBytes("yf-login-dummy-salt");
-        var argon = new Konscious.Security.Cryptography.Argon2id(System.Text.Encoding.UTF8.GetBytes("constant-dummy-login-password")) { Salt = salt, MemorySize = 19456, Iterations = 2, DegreeOfParallelism = 1 };
+        var argon = new Konscious.Security.Cryptography.Argon2id(System.Text.Encoding.UTF8.GetBytes("dummy-login#2026")) { Salt = salt, MemorySize = 19456, Iterations = 2, DegreeOfParallelism = 1 };
         return $"$argon2id$v=19$m=19456,t=2,p=1${Convert.ToBase64String(salt).TrimEnd('=')}${Convert.ToBase64String(await argon.GetBytesAsync(32)).TrimEnd('=')}";
     }
 

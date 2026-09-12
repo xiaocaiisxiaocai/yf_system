@@ -414,7 +414,7 @@ export default function UserList() {
                   field="password"
                   rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}
                 >
-                  <PasswordInput placeholder="12-64 位" />
+                  <PasswordInput placeholder="6-20 位" />
                 </Form.Item>
               </>
             )}
@@ -465,7 +465,7 @@ export default function UserList() {
             field="newPassword"
                 rules={[{ required: true, message: '请输入新密码' }, passwordRule]}
           >
-            <PasswordInput placeholder="12-64 位" />
+            <PasswordInput placeholder="6-20 位" />
           </Form.Item>
           <div className="dialog-note">重置后将退出当前登录</div>
         </Form>

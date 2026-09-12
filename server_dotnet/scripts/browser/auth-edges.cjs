@@ -1,46 +1,17 @@
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const {
-  fs, assert, OUT, s, record, login, api, track,
+  assert, OUT, s, record, login, reserveLoginBudget, api, track,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
-const captchaPath = '/api/v1/auth/captcha';
 const loginPath = '/api/v1/auth/login';
 const refreshPath = '/api/v1/auth/refresh';
 const summaryPath = '/api/v1/dashboard/summary';
 const pendingPath = '/api/v1/dashboard/pending-projects';
 
 const pathOf = value => new URL(value.url()).pathname;
-const isCaptcha = response => pathOf(response) === captchaPath;
 const isLogin = response => pathOf(response) === loginPath
   && response.request().method() === 'POST';
-
-async function reserveCaptchaBudget(count) {
-  const budgetFile = OUT + '/captcha-budget.json';
-  let issued = fs.existsSync(budgetFile) ? JSON.parse(fs.readFileSync(budgetFile, 'utf8')) : [];
-  issued = issued.filter(timestamp => Date.now() - timestamp < 61000);
-  if (issued.length + count > 20) {
-    const delay = 61000 - (Date.now() - issued[0]);
-    console.log('Waiting for production CAPTCHA budget: ' + Math.ceil(delay / 1000) + 's');
-    await new Promise(resolve => setTimeout(resolve, delay));
-    issued = issued.filter(timestamp => Date.now() - timestamp < 61000);
-  }
-  issued.push(...Array.from({ length: count }, () => Date.now()));
-  fs.writeFileSync(budgetFile, JSON.stringify(issued));
-}
-
-async function observedChallenge(requester, response) {
-  assert.equal(response.status(), 200, 'CAPTCHA request');
-  const challenge = await response.json();
-  assert.ok(challenge.captchaId, 'CAPTCHA id');
-  assert.match(challenge.svg, /^data:image\/(png|jpeg);base64,/, 'visible PNG/JPEG challenge');
-  const observed = await requester.get(
-    s.base + '/__test/captcha-answer/' + challenge.captchaId,
-    { headers: { 'X-Test-Host-Key': s.key } },
-  );
-  assert.equal(observed.status(), 200, 'isolated TestHost challenge observer');
-  return { ...challenge, answer: (await observed.json()).answer };
-}
 
 async function createNoMenuUser(context) {
   const marker = crypto.randomBytes(4).toString('hex');
@@ -53,8 +24,8 @@ async function createNoMenuUser(context) {
   }, s.adminToken);
 
   const employeeNo = 'auth_edge_' + marker;
-  const initialPassword = 'AuthEdge!' + crypto.randomBytes(18).toString('base64url');
-  const password = 'AuthEdge!' + crypto.randomBytes(18).toString('base64url');
+  const initialPassword = 'AuthEdge!' + crypto.randomBytes(6).toString('base64url');
+  const password = 'AuthEdge!' + crypto.randomBytes(6).toString('base64url');
   const user = await (await api(context, 'POST', '/admin/users', {
     employeeNo,
     password: initialPassword,
@@ -114,28 +85,22 @@ async function initializePassword(browser, user) {
     const loginContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     page = await loginContext.newPage();
     track(page, 'auth-edges-login');
-    let rejectInitialCaptcha = true;
-    await page.route('**/api/v1/auth/captcha', async route => {
-      if (rejectInitialCaptcha) {
-        rejectInitialCaptcha = false;
-        await route.abort('failed');
-      } else {
-        await route.continue();
-      }
-    });
+    let captchaRequests = 0;
+    const countCaptcha = request => {
+      if (pathOf(request) === '/api/v1/auth/captcha') captchaRequests += 1;
+    };
+    page.on('request', countCaptcha);
     await page.goto(s.base + '/login');
 
-    let challenge;
-    await record('O01 验证码GET失败后提供可用重试并恢复图像', async () => {
-      await page.getByRole('button', { name: '验证码加载失败，点击重试', exact: true }).waitFor();
+    await record('O01 登录页仅渲染工号密码且不请求验证码', async () => {
+      await page.getByRole('textbox', { name: '工号', exact: true }).waitFor();
+      await page.getByRole('textbox', { name: '密码', exact: true }).waitFor();
+      assert.equal(await page.getByRole('textbox', { name: '验证码', exact: true }).count(), 0);
       assert.equal(await page.getByRole('img', { name: '验证码', exact: true }).count(), 0);
-      await reserveCaptchaBudget(1);
-      const recovered = page.waitForResponse(isCaptcha);
-      await page.getByRole('button', { name: '验证码加载失败，点击重试', exact: true }).click();
-      challenge = await observedChallenge(page.request, await recovered);
-      await page.getByRole('img', { name: '验证码', exact: true }).waitFor();
-      assert.equal(await page.getByRole('button', { name: '验证码加载失败，点击重试', exact: true }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: /验证码/ }).count(), 0);
+      assert.equal(captchaRequests, 0, 'login page must not request CAPTCHA');
     });
+    page.off('request', countCaptcha);
 
     let loginRequests = 0;
     const countLogin = request => {
@@ -146,17 +111,14 @@ async function initializePassword(browser, user) {
       await page.getByRole('button', { name: '登录', exact: true }).click();
       await page.getByText('请输入工号', { exact: true }).waitFor();
       await page.getByText('请输入密码', { exact: true }).waitFor();
-      await page.getByText('请输入验证码', { exact: true }).waitFor();
       assert.equal(loginRequests, 0, 'empty form must not send login request');
     });
 
-    await record('O02-O05 密码键盘显隐保留焦点且密码Enter可恢复网络失败', async () => {
+    await record('O04-O05 密码键盘显隐保留焦点且网络失败后可重试', async () => {
       const employee = page.getByRole('textbox', { name: '工号', exact: true });
       const password = page.getByRole('textbox', { name: '密码', exact: true });
-      const captcha = page.getByRole('textbox', { name: '验证码', exact: true });
       await employee.fill('admin');
       await password.fill(s.adminPassword);
-      await captcha.fill(challenge.answer);
 
       await password.focus();
       await page.keyboard.press('Tab');
@@ -174,21 +136,20 @@ async function initializePassword(browser, user) {
       assert.equal(await password.getAttribute('type'), 'password');
 
       await page.route('**/api/v1/auth/login', route => route.abort('failed'), { times: 1 });
-      await reserveCaptchaBudget(1);
+      await reserveLoginBudget('admin');
       const failed = page.waitForEvent('requestfailed', request => (
         pathOf(request) === loginPath && request.method() === 'POST'
       ));
-      const refreshed = page.waitForResponse(isCaptcha);
       await password.focus();
       await page.keyboard.press('Enter');
       await failed;
-      challenge = await observedChallenge(page.request, await refreshed);
       await page.getByText('登录失败', { exact: true }).waitFor();
       assert.equal(new URL(page.url()).pathname, '/login');
       assert.equal(loginRequests, 1, 'password Enter sends one login request');
+      assert.equal(await employee.inputValue(), 'admin');
     });
 
-    await record('O02 快速重复登录只建立一个会话并进入系统', async () => {
+    await record('O02-O04 密码Enter直登且快速重复提交只建立一个会话', async () => {
       const responses = [];
       let intercepted = 0;
       const collect = response => {
@@ -200,14 +161,26 @@ async function initializePassword(browser, user) {
         await new Promise(resolve => setTimeout(resolve, 250));
         await route.continue();
       });
-      await page.getByRole('textbox', { name: '验证码', exact: true }).fill(challenge.answer);
+      await reserveLoginBudget('admin', 2);
+      const posted = page.waitForRequest(request => (
+        pathOf(request) === loginPath && request.method() === 'POST'
+      ));
       const logged = page.waitForResponse(response => isLogin(response) && response.status() === 200);
-      await page.getByRole('button', { name: '登录', exact: true }).dblclick({ delay: 25 });
+      const password = page.getByRole('textbox', { name: '密码', exact: true });
+      await password.focus();
+      await page.keyboard.press('Enter');
+      await page.keyboard.press('Enter');
+      const loginRequest = await posted;
       await logged;
       await page.waitForURL(s.base + '/');
       await page.getByRole('heading', { name: /^工作台/ }).waitFor();
       await page.waitForTimeout(800);
-      assert.equal(intercepted, 1, 'rapid double click must not duplicate login POST');
+      const payload = loginRequest.postDataJSON();
+      assert.equal(payload.employeeNo, 'admin');
+      assert.equal(payload.password, s.adminPassword);
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'captchaId'), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'captchaAnswer'), false);
+      assert.equal(intercepted, 1, 'rapid Enter must not duplicate login POST');
       assert.deepEqual(responses, [200]);
       page.off('response', collect);
       await page.unroute('**/api/v1/auth/login');

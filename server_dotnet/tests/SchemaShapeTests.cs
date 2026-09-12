@@ -58,7 +58,7 @@ public sealed class SchemaShapeTests
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("shape_empty", ct);
         var previousPassword = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD");
-        Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", "SchemaShape#" + Guid.NewGuid().ToString("N"));
+        Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", "Shape#" + Guid.NewGuid().ToString("N")[..12] + "!");
         try
         {
             await SchemaBootstrap.InitializeEmptyAsync(database.Database, ct);

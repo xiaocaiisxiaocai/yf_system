@@ -30,7 +30,7 @@ const {fs,assert,OUT,s,f,record,login,track}=require(process.env.YF_BROWSER_SUPP
  });
  const anon=await b.newContext();const q=await anon.newPage();track(q,'anonymous-layout');
  for(const [width,height] of [[1440,1000],[390,844]])await record('匿名登录页面 '+width+'px',async()=>{
-  await q.setViewportSize({width,height});await q.goto(s.base+'/projects');await q.waitForURL('**/login');await q.getByRole('textbox',{name:'验证码',exact:true}).waitFor();
+   await q.setViewportSize({width,height});await q.goto(s.base+'/projects');await q.waitForURL('**/login');await q.getByRole('textbox',{name:'工号',exact:true}).waitFor();
   assert(await q.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await q.screenshot({path:OUT+'/layout-login-'+width+'.png'});results.push({name:'login',route:'/login',width,height,status:'pass'});
  });
  fs.writeFileSync(OUT+'/layout-results.json',JSON.stringify(results,null,2));

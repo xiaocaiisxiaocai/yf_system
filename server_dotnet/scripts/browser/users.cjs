@@ -25,14 +25,16 @@ const {fs,assert,OUT,s,f,save,record,login,api,track}=require(process.env.YF_BRO
   let requests=0;const handler=r=>{if(r.method()==='PUT'&&r.url().endsWith('/auth/password'))requests++;};p.on('request',handler);
   await p.getByLabel('当前密码',{exact:true}).fill(u.changedPassword);
   await p.getByLabel('新密码',{exact:true}).fill('short');await p.getByLabel('确认新密码',{exact:true}).fill('short');
-  await p.getByRole('button',{name:'修改密码',exact:true}).click();await p.getByText('密码需 12-64 个字符，不能使用常见弱密码或简单重复序列',{exact:true}).waitFor();
-  await p.getByLabel('新密码',{exact:true}).fill('Normal!Internal-2026-Q7v9');
-  await p.getByLabel('确认新密码',{exact:true}).fill('Mismatch!Internal-2026-Q7v9');
+  await p.getByRole('button',{name:'修改密码',exact:true}).click();await p.getByText('密码需 6-20 个字符，不能使用常见弱密码或简单重复序列',{exact:true}).waitFor();
+  await p.getByLabel('新密码',{exact:true}).fill('123456');await p.getByLabel('确认新密码',{exact:true}).fill('123456');
+  await p.getByRole('button',{name:'修改密码',exact:true}).click();await p.getByText('密码需 6-20 个字符，不能使用常见弱密码或简单重复序列',{exact:true}).waitFor();
+  await p.getByLabel('新密码',{exact:true}).fill('Normal!Q7v9-2026');
+  await p.getByLabel('确认新密码',{exact:true}).fill('Mismatch!Q7v9-26');
   await p.getByRole('button',{name:'修改密码',exact:true}).click();await p.getByText('两次输入的新密码不一致',{exact:true}).waitFor();
   assert.equal(requests,0);p.off('request',handler);
  });
  await record('个人资料普通改密成功并重新登录',async()=>{
-  const next='Normal!Internal-2026-Q7v9';await p.getByLabel('新密码',{exact:true}).fill(next);await p.getByLabel('确认新密码',{exact:true}).fill(next);
+  const next='Normal!Q7v9-2026';await p.getByLabel('新密码',{exact:true}).fill(next);await p.getByLabel('确认新密码',{exact:true}).fill(next);
   await p.getByRole('button',{name:'修改密码',exact:true}).click();await p.waitForURL('**/login');
   const result=await login(p,u.username,next);u.changedPassword=next;u.token=result.accessToken;save();await p.waitForURL(s.base+'/');
   await c.storageState({path:OUT+'/member.storage.private.json'});

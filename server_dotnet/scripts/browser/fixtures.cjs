@@ -6,7 +6,7 @@ const XLSX=require(process.env.YF_PROJECT_ROOT+'/web/node_modules/xlsx');
  b=await chromium.launch({channel:'chrome',headless:true});const c=await b.newContext();
  const roles=(await(await api(c,'GET','/admin/roles',undefined,s.adminToken)).json()).list;
  const fixtures={users:{},suppliers:{},roles:Object.fromEntries(roles.map(r=>[r.name,r.id]))};
- const password=()=> 'Browser!'+crypto.randomBytes(18).toString('base64url');
+ const password=()=> 'Browser!'+crypto.randomBytes(6).toString('base64url');
  for(const [key,label] of [['a','自动验收甲公司'],['b','自动验收乙公司']]){
   const supplier=await(await api(c,'POST','/admin/suppliers',{name:label,remark:'本轮独立测试库'},s.adminToken)).json();
   fixtures.suppliers[key]=supplier;const initial=password();

@@ -10,7 +10,7 @@ import time
 
 
 def _password():
-    return "Project-" + secrets.token_urlsafe(18)
+    return "Yf9!" + secrets.token_urlsafe(9)
 
 
 def _new_role(client, codes):

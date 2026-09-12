@@ -1,41 +1,12 @@
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const {
-  fs, assert, OUT, s, record, login, api, track,
+  assert, OUT, s, record, login, reserveLoginBudget, api, track,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
-const captchaPath = '/api/v1/auth/captcha';
 const loginPath = '/api/v1/auth/login';
-const isCaptcha = response => new URL(response.url()).pathname === captchaPath;
 const isLogin = response => new URL(response.url()).pathname === loginPath
   && response.request().method() === 'POST';
-
-async function reserveCaptchaBudget(count) {
-  const budgetFile = OUT + '/captcha-budget.json';
-  let issued = fs.existsSync(budgetFile) ? JSON.parse(fs.readFileSync(budgetFile, 'utf8')) : [];
-  issued = issued.filter(timestamp => Date.now() - timestamp < 61000);
-  if (issued.length + count > 20) {
-    const delay = 61000 - (Date.now() - issued[0]);
-    console.log('Waiting for production CAPTCHA budget: ' + Math.ceil(delay / 1000) + 's');
-    await new Promise(resolve => setTimeout(resolve, delay));
-    issued = issued.filter(timestamp => Date.now() - timestamp < 61000);
-  }
-  issued.push(...Array.from({ length: count }, () => Date.now()));
-  fs.writeFileSync(budgetFile, JSON.stringify(issued));
-}
-
-async function observedChallenge(requester, response) {
-  assert.equal(response.status(), 200, 'CAPTCHA request');
-  const challenge = await response.json();
-  assert.ok(challenge.captchaId, 'CAPTCHA id');
-  assert.match(challenge.svg, /^data:image\/(png|jpeg);base64,/, 'visible PNG/JPEG challenge');
-  const observed = await requester.get(
-    s.base + '/__test/captcha-answer/' + challenge.captchaId,
-    { headers: { 'X-Test-Host-Key': s.key } },
-  );
-  assert.equal(observed.status(), 200, 'isolated TestHost challenge observer');
-  return { ...challenge, answer: (await observed.json()).answer };
-}
 
 async function initializePassword(browser, user) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
@@ -66,8 +37,8 @@ async function createAccessUser(context, permissions, marker, key, permissionCod
     }),
   }, s.adminToken);
   const employeeNo = 'access_' + key + '_' + marker;
-  const initialPassword = 'Access!' + crypto.randomBytes(18).toString('base64url');
-  const password = 'Access!' + crypto.randomBytes(18).toString('base64url');
+  const initialPassword = 'Access!' + crypto.randomBytes(6).toString('base64url');
+  const password = 'Access!' + crypto.randomBytes(6).toString('base64url');
   const user = await (await api(context, 'POST', '/admin/users', {
     employeeNo,
     password: initialPassword,
@@ -99,61 +70,53 @@ async function createAccessUser(context, permissions, marker, key, permissionCod
     page = await noMenuContext.newPage();
     track(page, 'access-no-menu');
     const safeDeepLink = '/profile?source=access';
-    await reserveCaptchaBudget(4);
-    const initialChallengeResponse = page.waitForResponse(isCaptcha);
+    let captchaRequests = 0;
+    const countCaptcha = request => {
+      if (new URL(request.url()).pathname === '/api/v1/auth/captcha') captchaRequests += 1;
+    };
+    page.on('request', countCaptcha);
     await page.goto(s.base + safeDeepLink);
     await page.waitForURL('**/login');
-    let challenge = await observedChallenge(page.request, await initialChallengeResponse);
 
-    await record('O01 验证码可见且手动刷新清空旧输入', async () => {
-      const image = page.getByRole('img', { name: '验证码', exact: true });
-      await image.waitFor();
-      assert.match(await image.getAttribute('src'), /^data:image\/(png|jpeg);base64,/);
-      await page.getByRole('textbox', { name: '验证码', exact: true }).fill('stale');
-      const previousId = challenge.captchaId;
-      const refreshed = page.waitForResponse(isCaptcha);
-      await page.getByRole('button', { name: '刷新验证码', exact: true }).click();
-      challenge = await observedChallenge(page.request, await refreshed);
-      assert.notEqual(challenge.captchaId, previousId);
-      assert.equal(await page.getByRole('textbox', { name: '验证码', exact: true }).inputValue(), '');
+    await record('O01 受保护深链转到无验证码登录页', async () => {
+      await page.getByRole('textbox', { name: '工号', exact: true }).waitFor();
+      await page.getByRole('textbox', { name: '密码', exact: true }).waitFor();
+      assert.equal(await page.getByRole('textbox', { name: '验证码', exact: true }).count(), 0);
+      assert.equal(await page.getByRole('img', { name: '验证码', exact: true }).count(), 0);
+      assert.equal(captchaRequests, 0, 'protected redirect must not request CAPTCHA');
     });
 
     let loginRequests = 0;
     page.on('request', request => {
       if (new URL(request.url()).pathname === loginPath && request.method() === 'POST') loginRequests += 1;
     });
-    await record('O02 错误密码留在登录页并自动取得新挑战', async () => {
-      await page.getByRole('textbox', { name: '工号', exact: true }).fill(noMenu.employeeNo);
-      await page.getByRole('textbox', { name: '密码', exact: true }).fill(noMenu.password + '-wrong');
-      await page.getByRole('textbox', { name: '验证码', exact: true }).fill(challenge.answer);
+    await record('O02-O03 错误密码可恢复并返回合法同源深链', async () => {
+      const employee = page.getByRole('textbox', { name: '工号', exact: true });
+      const password = page.getByRole('textbox', { name: '密码', exact: true });
+      const wrongPassword = noMenu.password.slice(0, -1)
+        + (noMenu.password.endsWith('X') ? 'Y' : 'X');
+      await employee.fill(noMenu.employeeNo);
+      await password.fill(wrongPassword);
+      await reserveLoginBudget(noMenu.employeeNo);
       const failed = page.waitForResponse(isLogin);
-      const refreshed = page.waitForResponse(isCaptcha);
       await page.getByRole('button', { name: '登录', exact: true }).click();
       assert.equal((await failed).status(), 401);
-      challenge = await observedChallenge(page.request, await refreshed);
       await page.getByText('工号或密码错误', { exact: true }).waitFor();
       assert.equal(new URL(page.url()).pathname, '/login');
       assert.equal(loginRequests, 1);
-    });
-
-    await record('O02-O03 错误验证码恢复后返回合法同源深链', async () => {
-      await page.getByRole('textbox', { name: '密码', exact: true }).fill(noMenu.password);
-      await page.getByRole('textbox', { name: '验证码', exact: true }).fill('WRONG');
-      const rejected = page.waitForResponse(isLogin);
-      const refreshed = page.waitForResponse(isCaptcha);
-      await page.getByRole('button', { name: '登录', exact: true }).click();
-      assert.equal((await rejected).status(), 428);
-      challenge = await observedChallenge(page.request, await refreshed);
-      await page.getByText('需要图形验证码', { exact: true }).waitFor();
-
-      await page.getByRole('textbox', { name: '验证码', exact: true }).fill(challenge.answer);
+      assert.equal(await employee.inputValue(), noMenu.employeeNo);
+      await password.fill(noMenu.password);
+      await reserveLoginBudget(noMenu.employeeNo);
       const recovered = page.waitForResponse(isLogin);
       await page.getByRole('button', { name: '登录', exact: true }).click();
       assert.equal((await recovered).status(), 200);
       await page.waitForURL(s.base + safeDeepLink);
       await page.getByRole('heading', { name: '个人资料', exact: true }).waitFor();
-      assert.equal(loginRequests, 3, 'each click creates exactly one login request');
+      assert.equal(new URL(page.url()).origin, s.base);
+      assert.equal(loginRequests, 2, 'each click creates exactly one login request');
+      assert.equal(captchaRequests, 0, 'credential recovery must not request CAPTCHA');
     });
+    page.off('request', countCaptcha);
 
     await record('O07 无菜单账号主页说明且仍可进入个人资料', async () => {
       let dashboardRequests = 0;
@@ -188,10 +151,8 @@ async function createAccessUser(context, permissions, marker, key, permissionCod
 
     const switchPage = await menuContext.newPage();
     track(switchPage, 'access-switch-tab');
-    await reserveCaptchaBudget(2);
-    const switchInitialChallenge = switchPage.waitForResponse(isCaptcha);
     await switchPage.goto(s.base + '/login');
-    await switchInitialChallenge;
+    await switchPage.getByRole('textbox', { name: '工号', exact: true }).waitFor();
 
     page = await menuContext.newPage();
     track(page, 'access-menu-only');
@@ -220,12 +181,9 @@ async function createAccessUser(context, permissions, marker, key, permissionCod
     });
 
     await record('O08 第二标签真实登录换号后两个标签不保留旧菜单', async () => {
-      const refreshed = switchPage.waitForResponse(isCaptcha);
-      await switchPage.getByRole('button', { name: '刷新验证码', exact: true }).click();
-      const switchChallenge = await observedChallenge(switchPage.request, await refreshed);
       await switchPage.getByRole('textbox', { name: '工号', exact: true }).fill(noMenu.employeeNo);
       await switchPage.getByRole('textbox', { name: '密码', exact: true }).fill(noMenu.password);
-      await switchPage.getByRole('textbox', { name: '验证码', exact: true }).fill(switchChallenge.answer);
+      await reserveLoginBudget(noMenu.employeeNo);
       const switched = switchPage.waitForResponse(isLogin);
       await switchPage.getByRole('button', { name: '登录', exact: true }).click();
       assert.equal((await switched).status(), 200);

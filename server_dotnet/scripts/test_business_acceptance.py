@@ -11,7 +11,7 @@ import urllib.parse
 
 
 def _password():
-    return "Yf9!" + secrets.token_urlsafe(18)
+    return "Yf9!" + secrets.token_urlsafe(9)
 
 
 def _flatten_departments(nodes):

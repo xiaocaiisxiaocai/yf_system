@@ -39,7 +39,7 @@ try:
         created = True
     env = os.environ.copy()
     env.pop("YF_CONFIG_PATH", None)
-    env["YF_BOOTSTRAP_PASSWORD"] = secrets.token_urlsafe(24)
+    env["YF_BOOTSTRAP_PASSWORD"] = "Yf9!" + secrets.token_urlsafe(9)
     def cs(value):
         return '\"' + str(value).replace('\"', '\"\"') + '\"'
     with tempfile.TemporaryDirectory(prefix="yf_dotnet_baseline_") as temp:

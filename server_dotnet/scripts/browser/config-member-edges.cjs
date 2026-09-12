@@ -33,7 +33,7 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
     token = auth.accessToken;
     const adminId = auth.user.id;
     const marker = crypto.randomBytes(5).toString('hex');
-    const password = () => 'UiEdge9!' + crypto.randomBytes(18).toString('base64url');
+    const password = () => 'UiEdge9!' + crypto.randomBytes(6).toString('base64url');
     const roleId = Number(f.roles && f.roles['内部成员']);
     assert.ok(roleId > 0, 'fixture must contain the 内部成员 role id');
     assert.ok(f.suppliers && f.suppliers.a && f.suppliers.a.id, 'fixture must contain supplier a');

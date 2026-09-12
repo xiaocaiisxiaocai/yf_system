@@ -4,9 +4,7 @@ namespace Yf.Api.Modules.Identity;
 
 public sealed record LoginRequest(
     string EmployeeNo,
-    [property: JsonRequired] string Password,
-    string? CaptchaId,
-    string? CaptchaCode);
+    [property: JsonRequired] string Password);
 
 public sealed record ChangePasswordRequest(
     [property: JsonRequired] string OldPassword,
@@ -39,8 +37,6 @@ public sealed record ProfileResponse(
     bool MustChangePassword,
     IReadOnlyList<string> Permissions,
     IReadOnlyList<string> Menus);
-
-public sealed record CaptchaResponse(string CaptchaId, string Svg);
 
 internal sealed class UserRow
 {

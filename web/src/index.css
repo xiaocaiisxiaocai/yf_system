@@ -93,8 +93,6 @@ html, body, #root {
 .auth-form > .arco-btn-primary { margin-top: 4px; box-shadow: 0 10px 26px rgba(22, 93, 255, .25); }
 .auth-notice { margin: -6px 0 20px; padding: 9px 12px; border: 1px solid #ffe0b3; border-radius: 6px; background: #fff7e8; color: #a86200; font-size: 13px; line-height: 20px; text-align: center; }
 .auth-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding-top: 2px; }
-.captcha-refresh { display: inline-flex; align-items: center; justify-content: center; height: 34px; padding: 0 2px; border: 0; background: transparent; cursor: pointer; }
-.captcha-refresh img { display: block; width: auto; max-width: 116px; height: 32px; }
 @media (max-width: 900px) {
   .auth-page { justify-content: center; padding: 92px 24px 32px; background-position: 38% center; }
   .auth-page::after { background: rgba(1, 14, 36, .42); }

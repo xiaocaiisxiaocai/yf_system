@@ -26,7 +26,7 @@ function flattenDepartments(nodes, result = []) {
     await page.waitForURL(s.base + '/');
     const token = auth.accessToken;
     const marker = crypto.randomBytes(5).toString('hex');
-    const password = () => 'Ui9!' + crypto.randomBytes(18).toString('base64url');
+    const password = () => 'Ui9!' + crypto.randomBytes(6).toString('base64url');
     const userPassword = password();
     const userResetPassword = password();
     const accountPassword = password();
@@ -192,7 +192,7 @@ function flattenDepartments(nodes, result = []) {
       await page.getByRole('button', { name: '新增用户', exact: true }).click();
       modal = currentModal();
       await modal.getByPlaceholder('3-32 位字母、数字或下划线', { exact: true }).fill(userNo);
-      await modal.getByPlaceholder('12-64 位', { exact: true }).fill(userPassword);
+      await modal.getByPlaceholder('6-20 位', { exact: true }).fill(userPassword);
       await modal.getByPlaceholder('姓名', { exact: true }).fill('UI内部用户');
       await modal.getByPlaceholder('name@example.com', { exact: true }).fill(userEmail);
       await openChoice(modal, '选择组织');
@@ -257,7 +257,7 @@ function flattenDepartments(nodes, result = []) {
 
       await userRow().getByRole('button', { name: '重置密码', exact: true }).click();
       modal = currentModal();
-      await modal.getByPlaceholder('12-64 位', { exact: true }).fill(userResetPassword);
+      await modal.getByPlaceholder('6-20 位', { exact: true }).fill(userResetPassword);
       const reset = await action(page, '/admin/users/' + user.id + '/password', 'PUT', () => (
         modal.getByRole('button', { name: '确认重置', exact: true }).click()
       ));
@@ -367,7 +367,7 @@ function flattenDepartments(nodes, result = []) {
       await drawer.getByRole('button', { name: '新增账号', exact: true }).click();
       modal = currentModal();
       await modal.getByPlaceholder('3-32 位字母、数字或下划线', { exact: true }).fill(accountNo);
-      await modal.getByPlaceholder('12-64 位', { exact: true }).fill(accountPassword);
+      await modal.getByPlaceholder('6-20 位', { exact: true }).fill(accountPassword);
       await modal.getByPlaceholder('姓名', { exact: true }).fill('UI供应商账号');
       await modal.getByPlaceholder('name@example.com', { exact: true }).fill(accountEmail);
       account = await action(page, '/admin/suppliers/' + supplier.id + '/accounts', 'POST', () => (
@@ -395,7 +395,7 @@ function flattenDepartments(nodes, result = []) {
 
       await accountRow().getByRole('button', { name: '重置密码', exact: true }).click();
       modal = currentModal();
-      await modal.getByPlaceholder('12-64 位', { exact: true }).fill(accountResetPassword);
+      await modal.getByPlaceholder('6-20 位', { exact: true }).fill(accountResetPassword);
       const reset = await action(page, '/admin/supplier-accounts/' + account.id + '/password', 'PUT', () => (
         modal.getByRole('button', { name: '确认重置', exact: true }).click()
       ));

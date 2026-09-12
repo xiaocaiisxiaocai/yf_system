@@ -7,7 +7,7 @@ public static class IdentityModule
     private const string RefreshCookie = "refresh_token";
 
     public static IServiceCollection AddIdentityModule(this IServiceCollection services) => services
-        .AddSingleton<CaptchaService>()
+        .AddSingleton<LoginRateLimiter>()
         .AddSingleton<TokenService>()
         .AddSingleton<PermissionService>()
         .AddSingleton<IdentityService>();
@@ -15,7 +15,6 @@ public static class IdentityModule
     public static IEndpointRouteBuilder MapIdentityModule(this IEndpointRouteBuilder endpoints)
     {
         var auth = endpoints.MapGroup("/api/v1/auth");
-        auth.MapGet("/captcha", (HttpContext ctx, CaptchaService service, AppOptions options) => service.Issue(ClientIp.Resolve(ctx, options)));
         auth.MapPost("/login", async (LoginRequest request, HttpContext ctx, IdentityService service, AppOptions options, CancellationToken ct) =>
         {
             if (!OriginAllowed(ctx.Request.Headers.Origin.ToString(), options.WebBaseUrl)) throw ApiException.Forbidden();

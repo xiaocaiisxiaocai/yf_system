@@ -8,7 +8,7 @@ public sealed class IdentityMiddleware(RequestDelegate next)
 {
     private static readonly HashSet<string> PublicPaths = new(StringComparer.Ordinal)
     {
-        "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/refresh", "/api/v1/auth/captcha"
+        "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/refresh"
     };
 
     public async Task InvokeAsync(HttpContext context, AppDb db, TokenService tokens, IdentityService identity)

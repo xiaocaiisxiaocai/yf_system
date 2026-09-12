@@ -19,7 +19,6 @@
   "GET /api/v1/admin/system/storage",
   "GET /api/v1/admin/user-role-options",
   "GET /api/v1/admin/users",
-  "GET /api/v1/auth/captcha",
   "GET /api/v1/auth/profile",
   "GET /api/v1/dashboard/pending-projects",
   "GET /api/v1/dashboard/summary",

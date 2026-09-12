@@ -91,14 +91,19 @@ function validatorError(rule, value) {
 
 test('password contract counts Unicode scalars and is shared by every password-writing form', async () => {
   const password = loadTs('src/utils/password.ts')
-  assert.equal(password.PASSWORD_MIN_CHARS, 12)
-  assert.equal(password.PASSWORD_MAX_CHARS, 64)
+  assert.equal(password.PASSWORD_MIN_CHARS, 6)
+  assert.equal(password.PASSWORD_MAX_CHARS, 20)
   assert.equal(password.PASSWORD_MAX_BYTES, 256)
-  assert.equal(validatorError(password.passwordRule, '这是一句可以记住的长密码短语'), undefined)
-  assert.equal(validatorError(password.passwordRule, '😀abcdeFG'.repeat(8)), undefined)
-  assert.match(String(validatorError(password.passwordRule, '😀abcdeFG'.repeat(8) + 'x')), /12-64/)
-  for (const weak of ['短密码', 'Password123456!', 'P@ssw0rd1234!', 'passwordpassword1!', 'qwerty123456', '123456789012', 'abcdabcdabcd']) {
-    assert.match(String(validatorError(password.passwordRule, weak)), /12-64/)
+  const sixCharacters = 'A中🙂b2#'
+  const twentyCharacters = sixCharacters.repeat(3) + 'Z9'
+  assert.equal(Array.from(sixCharacters).length, 6)
+  assert.equal(Array.from(twentyCharacters).length, 20)
+  assert.match(String(validatorError(password.passwordRule, 'A中🙂2#')), /6-20/)
+  assert.equal(validatorError(password.passwordRule, sixCharacters), undefined)
+  assert.equal(validatorError(password.passwordRule, twentyCharacters), undefined)
+  assert.match(String(validatorError(password.passwordRule, `${twentyCharacters}x`)), /6-20/)
+  for (const weak of ['短密码', 'abcdef', '中'.repeat(6), 'Password123456!', 'P@ssw0rd1234!', 'passwordpassword1!', 'qwerty123456', '123456789012', 'abcdabcdabcd']) {
+    assert.equal(validatorError(password.passwordRule, weak), password.PASSWORD_VALIDATION_MESSAGE)
   }
 
   const pageCases = [
@@ -158,6 +163,7 @@ test('password contract counts Unicode scalars and is shared by every password-w
       const formItem = renderer.root.findAllByType('Form.Item').find((node) => node.props.field === field)
       assert.ok(formItem, `${item.page} must render ${field}`)
       assert.ok(formItem.props.rules.includes(password.passwordRule), `${item.page}:${field} must use the shared password contract`)
+      assert.match(formItem.findByType('PasswordInput').props.placeholder, /6[–-]20/, `${item.page}:${field} must show the shared password range`)
     }
     await act(async () => renderer.unmount())
   }

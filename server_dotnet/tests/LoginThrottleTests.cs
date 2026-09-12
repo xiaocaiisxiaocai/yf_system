@@ -1,5 +1,7 @@
+using System.Text;
 using System.Text.Json;
 using Dapper;
+using Konscious.Security.Cryptography;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Identity;
@@ -9,7 +11,19 @@ namespace Yf.Api.Tests;
 public sealed class LoginThrottleTests
 {
     [Fact(Timeout = 120_000)]
-    public async Task FailuresAcrossIpsAndInstancesPersistAndExpireWithoutExtendingTheLock()
+    public async Task LoginWithoutCaptchaAcceptsExistingLongPasswordWithoutForcingReset()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await LoginDatabase.CreateAsync(ct);
+
+        var response = await scope.LoginAsync("legacy", scope.LegacyPassword, "192.0.2.250", ct);
+
+        Assert.Equal(3UL, response.User.Id);
+        Assert.False(response.MustChangePassword);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task LoginWithoutCaptchaKeepsFailuresAcrossIpsAndInstancesAndDoesNotExtendTheLock()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await LoginDatabase.CreateAsync(ct);
@@ -51,8 +65,8 @@ public sealed class LoginThrottleTests
         Assert.Equal(10, (await scope.StateAsync(ct)).Failures);
         await scope.RejectAsync("target", scope.Password, "203.0.113.100", ct);
 
-        var replacement = Guid.NewGuid().ToString("N") + "Ab!";
-        await scope.Service(new CaptchaService([])).ChangePasswordAsync(
+        const string replacement = "NextLogin#2026";
+        await scope.Service().ChangePasswordAsync(
             new CurrentUser(1, "target", "INTERNAL", null), new(scope.Password, replacement), ct);
         Assert.Equal(0, (await scope.StateAsync(ct)).Failures);
         Assert.Null((await scope.StateAsync(ct)).LockedUntil);
@@ -76,8 +90,8 @@ public sealed class LoginThrottleTests
             // A waiting management lock proves login has already loaded and hashed
             // its candidate. Self-service password change only needs the user row.
             await scope.WaitForBlockedLoginAsync(ct);
-            var replacement = Guid.NewGuid().ToString("N") + "Bb!";
-            await scope.Service(new CaptchaService([])).ChangePasswordAsync(
+            const string replacement = "Concurrent#2026";
+            await scope.Service().ChangePasswordAsync(
                 new CurrentUser(1, "target", "INTERNAL", null), new(scope.Password, replacement), ct);
             await transaction.CommitAsync(ct);
             released = true;
@@ -97,13 +111,14 @@ public sealed class LoginThrottleTests
         }
     }
 
-    private sealed class LoginDatabase(MySqlConnection admin, string name, AppOptions options, string password) : IAsyncDisposable
+    private sealed class LoginDatabase(MySqlConnection admin, string name, AppOptions options, string password, string legacyPassword) : IAsyncDisposable
     {
         private readonly AppDb _db = new(options);
         public string Password { get; } = password;
+        public string LegacyPassword { get; } = legacyPassword;
 
-        public IdentityService Service(CaptchaService captchas) =>
-            new(_db, options, captchas, new TokenService(options), new PermissionService(), new AuditService([]));
+        public IdentityService Service() =>
+            new(_db, options, new LoginRateLimiter(), new TokenService(options), new PermissionService(), new AuditService([]));
 
         public Task<MySqlConnection> OpenAsync(CancellationToken ct) => _db.OpenAsync(ct);
 
@@ -125,11 +140,8 @@ public sealed class LoginThrottleTests
 
         public async Task<LoginResponse> LoginAsync(string employeeNo, string supplied, string ip, CancellationToken ct)
         {
-            // Each request gets a fresh in-memory service, representing another application instance.
-            var observer = new CaptchaObserver();
-            var captchas = new CaptchaService([observer]);
-            var challenge = captchas.Issue(ip);
-            return (await Service(captchas).LoginAsync(new(employeeNo, supplied, challenge.CaptchaId, observer.Answer), ip, ct)).Response;
+            // Each request gets a fresh in-memory limiter, representing another application instance.
+            return (await Service().LoginAsync(new(employeeNo, supplied), ip, ct)).Response;
         }
 
         public async Task RejectAsync(string employeeNo, string supplied, string ip, CancellationToken ct)
@@ -186,8 +198,9 @@ public sealed class LoginThrottleTests
                 created = true;
                 builder.Database = name;
                 var options = new AppOptions { ConnectionString = builder.ConnectionString, JwtSecret = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N") };
-                var password = Guid.NewGuid().ToString("N") + "Aa!";
-                var scope = new LoginDatabase(admin, name, options, password);
+                var password = "T#" + Guid.NewGuid().ToString("N")[..12] + "a!";
+                const string legacyPassword = "HistoricalPassword#2025!";
+                var scope = new LoginDatabase(admin, name, options, password, legacyPassword);
                 await using var conn = await scope._db.OpenAsync(ct);
                 using var resource = typeof(SchemaBootstrap).Assembly.GetManifestResourceStream("Yf.Api.Infrastructure.schema-baseline.json")!;
                 using var baseline = await JsonDocument.ParseAsync(resource, cancellationToken: ct);
@@ -199,8 +212,13 @@ public sealed class LoginThrottleTests
                     INSERT INTO system_configs(cfg_key,cfg_value) VALUES('security.management_lock','');
                     INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password)
                     VALUES(1,'target',@hash,'Throttle target','','INTERNAL','ACTIVE',0),
-                          (2,'unaffected',@hash,'Other account','','INTERNAL','ACTIVE',0);
-                    """, new { hash = await PasswordService.HashAsync(password, ct) }, cancellationToken: ct));
+                          (2,'unaffected',@hash,'Other account','','INTERNAL','ACTIVE',0),
+                          (3,'legacy',@legacyHash,'Legacy account','','INTERNAL','ACTIVE',0);
+                    """, new
+                    {
+                        hash = await PasswordService.HashAsync(password, ct),
+                        legacyHash = await LegacyHashAsync(legacyPassword)
+                    }, cancellationToken: ct));
                 return scope;
             }
             catch
@@ -216,12 +234,17 @@ public sealed class LoginThrottleTests
             try { await admin.ExecuteAsync(new CommandDefinition($"DROP DATABASE `{name}`", cancellationToken: CancellationToken.None)); }
             finally { await admin.DisposeAsync(); }
         }
-    }
 
-    private sealed class CaptchaObserver : ICaptchaChallengeObserver
-    {
-        public string Answer { get; private set; } = "";
-        public void OnIssued(string captchaId, string answer) => Answer = answer;
+        private static async Task<string> LegacyHashAsync(string password)
+        {
+            var salt = Encoding.ASCII.GetBytes("legacy-login-salt");
+            var argon = new Argon2id(Encoding.UTF8.GetBytes(password))
+            {
+                Salt = salt, MemorySize = 4096, Iterations = 3, DegreeOfParallelism = 1
+            };
+            var digest = await argon.GetBytesAsync(32);
+            return $"$argon2id$v=19$m=4096,t=3,p=1${Convert.ToBase64String(salt).TrimEnd('=')}${Convert.ToBase64String(digest).TrimEnd('=')}";
+        }
     }
 
     private sealed class State

@@ -8,7 +8,7 @@ namespace Yf.Api.Modules.Identity;
 public static class PasswordService
 {
     public const int MaxPasswordBytes = 256;
-    public const string PolicyMessage = "密码需 12-64 个字符，不能使用常见弱密码或简单重复序列";
+    public const string PolicyMessage = "密码需 6-20 个字符，不能使用常见弱密码或简单重复序列";
     private const int MemoryKb = 19_456;
     private const int Iterations = 2;
     private const int Parallelism = 1;
@@ -31,7 +31,7 @@ public static class PasswordService
     {
         if (password is null) return false;
         var chars = password.EnumerateRunes().Count();
-        if (chars is < 12 or > 64 || Encoding.UTF8.GetByteCount(password) > MaxPasswordBytes) return false;
+        if (chars is < 6 or > 20 || Encoding.UTF8.GetByteCount(password) > MaxPasswordBytes) return false;
 
         var end = password.Length;
         while (end > 0 && password[end - 1] <= 127 && (char.IsDigit(password[end - 1]) || IsAsciiPunctuation(password[end - 1]))) end--;

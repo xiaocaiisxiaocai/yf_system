@@ -133,8 +133,8 @@ http.interceptors.response.use(
       ? '网络连接失败，请稍后重试'
       : error.code === 'ECONNABORTED' ? '请求超时，请稍后重试' : undefined
     const msg = error.response?.data?.message || connectionMessage || error.message || '网络错误'
-    // 428 需要验证码由登录页自行处理，不全局提示；40303 由跳转承载
-    if (status !== 428 && biz !== 40303) Message.error(msg)
+    // 40303 由跳转承载
+    if (biz !== 40303) Message.error(msg)
     return Promise.reject(error)
   }
 )

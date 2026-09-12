@@ -5,7 +5,6 @@ Connection credentials stay in process memory; only test names/results are print
 """
 import hashlib
 import contextlib
-from collections import deque
 import http.cookiejar
 import io
 import json
@@ -35,7 +34,6 @@ PUBLISHED = os.environ.get("YF_TEST_API_DIR")
 API = Path(PUBLISHED).resolve() if PUBLISHED else ROOT / "server_dotnet/Yf.Api"
 DLL = API / "Yf.Api.dll" if PUBLISHED else API / "bin/Debug/net10.0/Yf.Api.dll"
 TEST_HOST = ROOT / "server_dotnet/TestHost/bin/Debug/net10.0/Yf.Api.TestHost.dll"
-TEST_KEY = secrets.token_urlsafe(48)
 checks = []
 
 
@@ -47,8 +45,6 @@ def check(name, condition):
 
 
 class Client:
-    _captcha_issued = {}
-
     def __init__(self, base):
         self.base = base
         self.cookies = http.cookiejar.CookieJar()
@@ -76,29 +72,8 @@ class Client:
             return data, response.headers
         return json.loads(data) if data else None
 
-    def captcha(self):
-        # All fixture accounts share one loopback IP. Pace normal business login
-        # checks below the production 30/minute limit instead of weakening it.
-        recent = self._captcha_issued.setdefault(self.base, deque())
-        while True:
-            now = time.monotonic()
-            while recent and now - recent[0] >= 61:
-                recent.popleft()
-            if len(recent) < 24:
-                break
-            remaining = 61 - (now - recent[0])
-            print(f"Pacing fixture CAPTCHA requests; {remaining:.0f}s until budget recovers", flush=True)
-            time.sleep(min(10, max(0.1, remaining)))
-        recent.append(time.monotonic())
-        challenge = self.call("GET", "/api/v1/auth/captcha")
-        answer = self.call("GET", "/__test/captcha-answer/" + challenge["captchaId"], headers={"X-Test-Host-Key": TEST_KEY})
-        challenge["captchaCode"] = answer["answer"]
-        return challenge
-
     def login(self, username, password):
-        challenge = self.captcha()
-        code = challenge["captchaCode"]
-        result = self.call("POST", "/api/v1/auth/login", {"employeeNo": username, "password": password, "captchaId": challenge["captchaId"], "captchaCode": code})
+        result = self.call("POST", "/api/v1/auth/login", {"employeeNo": username, "password": password})
         self.token = result["accessToken"]
         return result
 
@@ -142,15 +117,15 @@ try:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
         base = f"http://127.0.0.1:{port}"
-        initial = secrets.token_urlsafe(24)
-        changed = secrets.token_urlsafe(24)
+        initial = "Yf9!" + secrets.token_urlsafe(9)
+        changed = "Yf9!" + secrets.token_urlsafe(9)
         env = os.environ.copy()
         env.pop("YF_CONFIG_PATH", None)
         env.update({"App__ConnectionString": f"Server={cs(url.hostname)};Port={url.port or 3306};Database={name};User ID={cs(user)};Password={cs(password)}",
                     "App__JwtSecret": secrets.token_urlsafe(48), "App__StorageRoot": str(storage),
                     "App__WebBaseUrl": base, "App__CookieSecure": "false", "App__WorkerEnabled": "false",
                     "App__Smtp__Host": "", "ASPNETCORE_URLS": base, "YF_BOOTSTRAP_PASSWORD": initial,
-                    "Logging__LogLevel__Default": "Warning", "YF_TEST_HOST_KEY": TEST_KEY})
+                    "Logging__LogLevel__Default": "Warning"})
         initialized = subprocess.run(["dotnet", str(DLL), "--initialize-database"], cwd=API, env=env, capture_output=True)
         if initialized.returncode:
             raise RuntimeError(".NET empty database initialization failed: " + initialized.stderr.decode(errors="replace")[:1500])
@@ -194,7 +169,7 @@ try:
         test_dll = TEST_HOST
         if PUBLISHED:
             # Run the exact extracted production assembly and dependencies under
-            # the separate observer host, in a disposable copy. Never modify ZIP.
+            # the loopback-only test host, in a disposable copy. Never modify ZIP.
             test_payload = Path(temp) / "test-payload"
             shutil.copytree(API, test_payload)
             for suffix in (".dll", ".deps.json", ".runtimeconfig.json"):
@@ -217,10 +192,9 @@ try:
             else:
                 raise RuntimeError("Test API health timeout")
             check("production entry HTTP health and database connectivity", True)
-            challenge = client.call("GET", "/api/v1/auth/captcha")
-            check("production CAPTCHA image contract", challenge["svg"].startswith("data:image/png;base64,") and "answer" not in challenge)
-            answer_page, answer_headers = client.call("GET", "/__test/captcha-answer/" + challenge["captchaId"], expected=200 if PUBLISHED else 404, headers={"X-Test-Host-Key": TEST_KEY}, raw=True)
-            check("production entry has no CAPTCHA answer route", "application/json" not in answer_headers.get("Content-Type", "") and b'"answer"' not in answer_page)
+            unavailable_captcha = client.call("GET", "/api/v1/auth/captcha", expected=401)
+            check("production authentication API does not expose CAPTCHA anonymously",
+                  unavailable_captcha["code"] == 40101)
             if PUBLISHED:
                 page, _ = client.call("GET", "/", raw=True)
                 login_page, _ = client.call("GET", "/login", raw=True)
@@ -235,23 +209,25 @@ try:
             client = Client(base)
             for _ in range(100):
                 if process.poll() is not None:
-                    raise RuntimeError("Test observer host exited: " + (Path(temp) / "api.log").read_text(errors="replace")[-1800:])
+                    raise RuntimeError("Loopback test host exited: " + (Path(temp) / "api.log").read_text(errors="replace")[-1800:])
                 try:
                     client.call("GET", "/health")
                     break
                 except (OSError, AssertionError):
                     time.sleep(0.1)
             else:
-                raise RuntimeError("Test observer health timeout")
+                raise RuntimeError("Loopback test host health timeout")
             client.call("GET", "/api/v1/projects", expected=401)
             check("anonymous API denied", True)
             result = client.login("admin", initial)
-            check("bootstrap login enforces password change", result["mustChangePassword"])
+            check("bootstrap direct login enforces password change without CAPTCHA", result["mustChangePassword"])
             client.call("GET", "/api/v1/projects", expected=403)
             client.call("PUT", "/api/v1/auth/password", {"oldPassword": initial, "newPassword": changed})
             client.call("GET", "/api/v1/auth/profile", expected=401)
             result = client.login("admin", changed)
             check("password change revokes old session and re-login works", not result["mustChangePassword"] and result["user"]["isSystemAdmin"])
+            missing_captcha = client.call("GET", "/api/v1/auth/captcha", expected=404)
+            check("authenticated authentication API has no CAPTCHA endpoint", missing_captcha["code"] == 40401)
             profile = client.call("GET", "/api/v1/auth/profile")
             check("profile has frontend permission/menu contract", bool(profile["permissions"]) and bool(profile["menus"]))
             run_identity_checks(client, Client, conn, check)
@@ -308,8 +284,8 @@ try:
             for suffix in ("", "/summary", "/members", "/supplier-members", "/activities", "/files", "/messages"):
                 client.call("GET", f"/api/v1/projects/{pid}" + suffix)
             check("project detail and collaboration read routes", True)
-            flow_password = "Yf9!" + secrets.token_urlsafe(18)
-            changed_flow_password = "Yf9!" + secrets.token_urlsafe(18)
+            flow_password = "Yf9!" + secrets.token_urlsafe(9)
+            changed_flow_password = "Yf9!" + secrets.token_urlsafe(9)
             flow_user = client.call("POST", f"/api/v1/admin/suppliers/{sid}/accounts", {"employeeNo": "workflow_supplier", "password": flow_password, "realName": "验收供应商", "email": "workflow@example.invalid"})
             supplier_client = Client(base)
             first_flow_login = supplier_client.login("workflow_supplier", flow_password)
@@ -335,7 +311,7 @@ try:
         print(f"PASS {len(checks)} checks; no production data or email used", flush=True)
         report = ROOT / (".runlogs/dotnet-published-results.json" if PUBLISHED else ".runlogs/dotnet-isolated-results.json")
         report.parent.mkdir(exist_ok=True)
-        report.write_text(json.dumps({"passed": len(checks), "checks": checks, "businessDatabaseTouched": False, "smtpUsed": False, "productionEntrySmoke": True, "httpSuiteHost": "separate CAPTCHA observer host using the same API factory and assembly"}, ensure_ascii=False, indent=2), encoding="utf-8")
+        report.write_text(json.dumps({"passed": len(checks), "checks": checks, "businessDatabaseTouched": False, "smtpUsed": False, "productionEntrySmoke": True, "httpSuiteHost": "loopback-only host using the same API factory and assembly"}, ensure_ascii=False, indent=2), encoding="utf-8")
 finally:
     if process is not None:
         process.terminate()
