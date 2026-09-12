@@ -21,6 +21,7 @@ public sealed class ConnectionLifecycleTests
 {
     [Theory(Timeout = 30_000)]
     [InlineData("/api/v1/admin/system/storage")]
+    [InlineData("/api/v1/admin/system/mail-settings")]
     [InlineData("/api/v1/admin/audit-logs")]
     public async Task SystemEndpointFilterReleasesPermissionConnectionBeforeHandler(string route)
     {
@@ -56,6 +57,7 @@ public sealed class ConnectionLifecycleTests
         builder.Services.AddSingleton(database.Database);
         builder.Services.AddSingleton<AuditService>();
         builder.Services.AddSingleton<SystemService>();
+        builder.Services.AddSingleton<SmtpSettingsService>();
         builder.Services.AddSingleton<MailService>();
         await using var application = builder.Build();
         application.MapSystemModule();

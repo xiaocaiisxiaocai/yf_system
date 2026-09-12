@@ -1128,3 +1128,6 @@ html, body, #root {
   .project-activity-time { width: 100%; margin-left: 0; }
   .project-activity-timeline .arco-timeline-item { padding-bottom: 8px; }
 }
+
+.system-smtp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; }
+.system-smtp-grid > label { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--color-text-2); }

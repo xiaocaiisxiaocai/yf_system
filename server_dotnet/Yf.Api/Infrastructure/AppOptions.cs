@@ -52,6 +52,7 @@ public sealed class SmtpOptions
     public string Username { get; set; } = "";
     public string Password { get; set; } = "";
     public string From { get; set; } = "";
+    public string Security { get; set; } = "Auto";
 
     public bool IsConfigured => Host.Length > 0;
 
@@ -64,6 +65,8 @@ public sealed class SmtpOptions
             throw new InvalidOperationException("App:Smtp:Host cannot be whitespace.");
         if (Port is < 1 or > 65535)
             throw new InvalidOperationException("App:Smtp:Port must be between 1 and 65535.");
+        if (Security is not ("Auto" or "SslOnConnect" or "StartTls"))
+            throw new InvalidOperationException("SMTP security must be Auto, SslOnConnect or StartTls.");
         if (string.IsNullOrWhiteSpace(Username) || string.IsNullOrWhiteSpace(Password))
             throw new InvalidOperationException("SMTP requires a non-empty username and password.");
         if (string.IsNullOrWhiteSpace(From) || !System.Net.Mail.MailAddress.TryCreate(From, out _))

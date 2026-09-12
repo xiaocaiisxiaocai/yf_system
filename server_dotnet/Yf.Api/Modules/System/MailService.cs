@@ -16,6 +16,7 @@ public sealed class MailService
     private readonly SystemService system;
     private readonly ILogger<MailService> logger;
     private readonly ISmtpDelivery smtp;
+    private readonly SmtpSettingsService settings;
 
     public MailService(
         AppDb db,
@@ -41,6 +42,7 @@ public sealed class MailService
         this.system = system;
         this.logger = logger;
         this.smtp = smtp;
+        settings = new(db, options, audit);
     }
 
     public static string MaskEmail(string address)
@@ -69,8 +71,9 @@ public sealed class MailService
     public async Task<object> StatusAsync(CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
-        var cfg = options.Smtp;
-        var configured = cfg.IsConfigured;
+        var resolved = await settings.ResolveAsync(conn, null, ct);
+        var cfg = resolved.Options;
+        var configured = resolved.Configured;
         var counts = (await conn.QueryAsync<QueueCount>(new CommandDefinition("SELECT status,COUNT(*) AS count FROM email_outbox GROUP BY status", cancellationToken: ct))).ToDictionary(x => x.Status, x => x.Count);
         var missingCount = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT COUNT(*) FROM users WHERE status='ACTIVE' AND TRIM(email)=''", cancellationToken: ct));
         var missing = await conn.QueryAsync(new CommandDefinition("SELECT id AS userId,employee_no AS employeeNo,real_name AS realName,user_type AS userType,status FROM users WHERE status='ACTIVE' AND TRIM(email)='' ORDER BY employee_no LIMIT 20", cancellationToken: ct));
@@ -131,11 +134,13 @@ public sealed class MailService
 
     public async Task FlushAsync(CancellationToken ct)
     {
-        if (!options.Smtp.IsConfigured) return;
+        ResolvedSmtpSettings resolved;
         MailRow[] pending;
         await using (var conn = await db.OpenAsync(ct))
         {
             if (!await EnabledAsync(conn, ct)) return;
+            resolved = await settings.ResolveAsync(conn, null, ct);
+            if (!resolved.Configured) return;
             pending = (await conn.QueryAsync<MailRow>(new CommandDefinition("SELECT id,event_type AS EventType,recipient_email AS RecipientEmail,subject,body,status,retry_count AS RetryCount,next_attempt_at AS NextAttemptAt FROM email_outbox WHERE (status='PENDING' AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())) OR (status='SENDING' AND next_attempt_at<=UTC_TIMESTAMP()) ORDER BY id LIMIT 10", cancellationToken: ct))).ToArray();
         }
         foreach (var mail in pending)
@@ -160,7 +165,7 @@ public sealed class MailService
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 timeout.CancelAfter(TimeSpan.FromSeconds(60));
-                var delivery = await smtp.SendAsync(options.Smtp,
+                var delivery = await smtp.SendAsync(resolved.Options,
                     new(mail.RecipientEmail, mail.Subject, mail.Body), timeout.Token);
                 if (delivery.DisconnectFailureType is not null)
                     logger.LogWarning("SMTP message {OutboxId} was accepted, but connection cleanup failed ({ErrorType}).",
@@ -220,8 +225,12 @@ internal sealed class MailKitSmtpDelivery : ISmtpDelivery
         message.Body = new TextPart("plain") { Text = envelope.Body };
 
         using var client = new SmtpClient { Timeout = 60000 };
-        await client.ConnectAsync(options.Host, options.Port,
-            options.Port == 465 ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls, ct);
+        await client.ConnectAsync(options.Host, options.Port, options.Security switch
+        {
+            "SslOnConnect" => SecureSocketOptions.SslOnConnect,
+            "StartTls" => SecureSocketOptions.StartTls,
+            _ => options.Port == 465 ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls
+        }, ct);
         await client.AuthenticateAsync(options.Username, options.Password, ct);
         await client.SendAsync(message, ct);
 

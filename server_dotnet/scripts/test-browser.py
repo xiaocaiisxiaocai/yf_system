@@ -105,7 +105,7 @@ try:
             'App__ConnectionString': f'Server={quoted(url.hostname)};Port={url.port or 3306};Database={schema};User ID={quoted(urllib.parse.unquote(url.username or ""))};Password={quoted(urllib.parse.unquote(url.password or ""))}',
             'App__JwtSecret': secrets.token_urlsafe(48), 'App__StorageRoot': str(storage_path),
             'App__WebBaseUrl': base, 'App__CookieSecure': 'false', 'App__WorkerEnabled': 'false',
-            'App__Smtp__Host': '', 'ASPNETCORE_URLS': base, 'ASPNETCORE_WEBROOT': str(ROOT / 'web/dist'),
+            'App__Smtp__Host': '', 'ASPNETCORE_URLS': base, 'URLS': base, 'ASPNETCORE_WEBROOT': str(ROOT / 'web/dist'),
             'YF_BOOTSTRAP_PASSWORD': initial,
             'YF_PROJECT_ROOT': str(ROOT), 'YF_BROWSER_SUPPORT_DIR': str(SCRIPTS),
             'YF_BROWSER_EVIDENCE_DIR': str(output), 'Logging__LogLevel__Default': 'Warning',

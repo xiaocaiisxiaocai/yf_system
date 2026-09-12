@@ -104,6 +104,47 @@ public sealed class MailDeliveryTests
             cancellationToken: ct)));
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task ExistingWorkerReadsChangedDatabaseSettingsWithoutRestart()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        scope.Options.Smtp.Host = "";
+        var audit = new AuditService([]);
+        var delivery = new CaptureSettingsDelivery();
+        var settings = new SmtpSettingsService(scope.Database, scope.Options, audit);
+        var service = new MailService(scope.Database, scope.Options, audit,
+            new SystemService(scope.Database, audit, scope.Options), NullLogger<MailService>.Instance, delivery);
+        await service.FlushAsync(ct);
+        Assert.Empty(delivery.Seen);
+        for (var round = 0; round < 2; round++)
+        {
+            await using (var conn = await scope.Database.OpenAsync(ct))
+            {
+                var json = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Host = "smtp" + round + ".example.invalid", Port = round == 0 ? 465 : 587,
+                    Username = "sender@example.invalid", From = "notice@example.invalid",
+                    Security = round == 0 ? "SslOnConnect" : "StartTls", ProtectedPassword = settings.Protect("fixture-code-" + round)
+                });
+                await conn.ExecuteAsync(new CommandDefinition("INSERT INTO system_configs(cfg_key,cfg_value) VALUES('mail.smtp',@json) ON DUPLICATE KEY UPDATE cfg_value=@json", new { json }, cancellationToken: ct));
+                if (round == 1) await conn.ExecuteAsync(new CommandDefinition("INSERT INTO email_outbox(event_type,recipient_email,subject,body,status,retry_count) VALUES('PROJECT_SUBMITTED','recipient@example.invalid','second','body','PENDING',0)", cancellationToken: ct));
+            }
+            await service.FlushAsync(ct);
+            Assert.Equal(round + 1, delivery.Seen.Count);
+            Assert.Equal("smtp" + round + ".example.invalid", delivery.Seen[round].Host);
+            Assert.Equal("fixture-code-" + round, delivery.Seen[round].Password);
+        }
+        Assert.Equal("StartTls", delivery.Seen[1].Security);
+    }
+
+    private sealed class CaptureSettingsDelivery : ISmtpDelivery
+    {
+        public List<SmtpOptions> Seen { get; } = [];
+        public Task<SmtpDeliveryResult> SendAsync(SmtpOptions options, SmtpEnvelope envelope, CancellationToken ct)
+        { Seen.Add(options); return Task.FromResult(new SmtpDeliveryResult(null)); }
+    }
+
     private sealed class AcceptedThenDisconnectFailedDelivery(Action accepted) : ISmtpDelivery
     {
         public int SendCount { get; private set; }

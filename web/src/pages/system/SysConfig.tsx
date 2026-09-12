@@ -3,8 +3,16 @@ import { Button, Card, Input, InputNumber, Message, Progress, Select, Space, Spi
 import { useNavigate } from 'react-router-dom'
 import http from '../../api/client'
 import { fmtSize, fmtTime } from '../../api/types'
+import PasswordInput from '../../components/PasswordInput'
 
 const MB = 1024 * 1024
+
+interface SmtpSettings {
+  host: string; port: number; username: string; from: string
+  security: 'Auto' | 'SslOnConnect' | 'StartTls'
+  hasPassword: boolean; configured: boolean; passwordNeedsUpdate: boolean
+}
+const EMPTY_SMTP: SmtpSettings = { host: '', port: 465, username: '', from: '', security: 'Auto', hasPassword: false, configured: false, passwordNeedsUpdate: false }
 
 const CONFIG_META: Record<string, { name: string; description: string; hint?: string }> = {
   'notify.enabled': { name: '邮件通知', description: '邮件通知总开关' },
@@ -123,24 +131,33 @@ export default function SysConfig() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
+  const [smtp, setSmtp] = useState<SmtpSettings>(EMPTY_SMTP)
+  const [smtpDraft, setSmtpDraft] = useState<SmtpSettings>(EMPTY_SMTP)
+  const [smtpPassword, setSmtpPassword] = useState('')
+  const [smtpSaving, setSmtpSaving] = useState(false)
 
   const fetchSnapshot = useCallback(async () => {
-    const [configsResponse, storageResponse, mailResponse] = await Promise.all([
+    const [configsResponse, storageResponse, mailResponse, smtpResponse] = await Promise.all([
       http.get('/admin/system/configs'),
       http.get('/admin/system/storage'),
       http.get('/admin/system/mail-status'),
+      http.get('/admin/system/mail-settings'),
     ])
     return {
       configs: configsResponse.data as Cfg[],
       storage: storageResponse.data as Storage,
       mail: normalizeMailStatus(mailResponse.data),
+      smtp: { ...EMPTY_SMTP, ...smtpResponse.data } as SmtpSettings,
     }
   }, [])
 
-  const applySnapshot = useCallback((next: { configs: Cfg[]; storage: Storage; mail: MailStatus }) => {
+  const applySnapshot = useCallback((next: { configs: Cfg[]; storage: Storage; mail: MailStatus; smtp: SmtpSettings }) => {
     setConfigs(next.configs)
     setStorage(next.storage)
     setMail(next.mail || EMPTY_MAIL_STATUS)
+    setSmtp(next.smtp)
+    setSmtpDraft(next.smtp)
+    setSmtpPassword('')
     setEditing({})
   }, [])
 
@@ -169,6 +186,35 @@ export default function SysConfig() {
 
   const dirty = Object.entries(editing).filter(([k, v]) => configs.find((c) => c.key === k)?.value !== v)
   const dirtyKeys = new Set(dirty.map(([key]) => key))
+  const smtpDirty = smtpPassword.length > 0 || (['host', 'port', 'username', 'from', 'security'] as const).some((key) => smtpDraft[key] !== smtp[key])
+  const smtpIdentityChanged = smtpDraft.host.trim().toLowerCase() !== smtp.host.toLowerCase() || smtpDraft.username.trim() !== smtp.username
+
+  const saveSmtp = async () => {
+    if (smtpSaving || !smtpDirty) return
+    if (smtp.hasPassword && smtpIdentityChanged && !smtpPassword) {
+      Message.warning('更改 SMTP 服务器或登录账号时，请重新填写授权码')
+      return
+    }
+    if (!smtpDraft.host.trim() || !smtpDraft.username.trim() || !smtpDraft.from.trim() || (!smtp.hasPassword && !smtpPassword)) {
+      Message.warning('请填写 SMTP 服务器、登录账号、发件邮箱和邮箱密码或授权码')
+      return
+    }
+    setSmtpSaving(true)
+    try {
+      const response = await http.put('/admin/system/mail-settings', {
+        host: smtpDraft.host.trim(), port: smtpDraft.port, username: smtpDraft.username.trim(),
+        from: smtpDraft.from.trim(), security: smtpDraft.security, password: smtpPassword || null,
+      })
+      const saved = response.data as SmtpSettings
+      setSmtp(saved)
+      setSmtpDraft(saved)
+      setSmtpPassword('')
+      Message.success('邮箱设置已保存，无需重启')
+      try { setMail(normalizeMailStatus((await http.get('/admin/system/mail-status')).data)) }
+      catch { /* 保存已成功，状态刷新失败不会撤销配置。 */ }
+    } catch { /* 拦截器已提示，保留输入以便重试。 */ }
+    finally { setSmtpSaving(false) }
+  }
 
   const setValue = (key: string, value: string) => {
     setEditing((current) => ({ ...current, [key]: value }))
@@ -180,7 +226,11 @@ export default function SysConfig() {
     try {
       await http.put('/admin/system/configs', { items: dirty.map(([key, value]) => ({ key, value })) })
       Message.success('参数已保存')
-      load()
+      const next = await fetchSnapshot()
+      setConfigs(next.configs)
+      setStorage(next.storage)
+      setMail(next.mail)
+      setEditing({})
     } catch {
       /* 拦截器已提示 */
     } finally {
@@ -271,6 +321,25 @@ export default function SysConfig() {
               }
             >
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <Typography.Text type="secondary">配置系统通知的发件邮箱，保存后用于后续邮件发送。邮箱服务商要求授权码时，请填写授权码。</Typography.Text>
+                {smtp.passwordNeedsUpdate && <Typography.Text type="warning">已保存的授权码无法读取，请重新填写并保存。</Typography.Text>}
+                <div className="system-smtp-grid">
+                  <label>SMTP 服务器<Input aria-label="SMTP 服务器" placeholder="例如 smtp.example.com" value={smtpDraft.host} maxLength={253} disabled={smtpSaving} onChange={(host) => setSmtpDraft((v) => ({ ...v, host }))} /></label>
+                  <label>SMTP 端口<InputNumber aria-label="SMTP 端口" min={1} max={65535} precision={0} value={smtpDraft.port} disabled={smtpSaving} onChange={(port) => setSmtpDraft((v) => ({ ...v, port: typeof port === 'number' ? port : 0 }))} /></label>
+                  <label>SMTP 登录账号<Input aria-label="SMTP 登录账号" placeholder="通常为完整邮箱地址" autoComplete="off" value={smtpDraft.username} maxLength={320} disabled={smtpSaving} onChange={(username) => setSmtpDraft((v) => ({ ...v, username }))} /></label>
+                  <label>发件邮箱<Input aria-label="发件邮箱" placeholder="例如 notice@example.com" value={smtpDraft.from} maxLength={320} disabled={smtpSaving} onChange={(from) => setSmtpDraft((v) => ({ ...v, from }))} /></label>
+                  <label>邮箱密码 / 授权码<PasswordInput aria-label="邮箱密码或授权码" autoComplete="new-password" placeholder={smtp.hasPassword && !smtpIdentityChanged ? '已设置，留空保留原授权码' : '请输入邮箱密码或授权码'} value={smtpPassword} maxLength={1024} disabled={smtpSaving} onChange={setSmtpPassword} /></label>
+                  <label>连接加密<Select aria-label="SMTP 连接加密" value={smtpDraft.security} disabled={smtpSaving} onChange={(security) => setSmtpDraft((v) => ({ ...v, security }))}>
+                    <Select.Option value="Auto">自动（465 使用 TLS，其他端口使用 STARTTLS）</Select.Option>
+                    <Select.Option value="SslOnConnect">TLS / SSL（通常为 465）</Select.Option>
+                    <Select.Option value="StartTls">STARTTLS（通常为 587）</Select.Option>
+                  </Select></label>
+                </div>
+                <Space wrap>
+                  <Button type="primary" disabled={!smtpDirty} loading={smtpSaving} onClick={saveSmtp}>保存邮箱设置</Button>
+                  <Button disabled={!smtpDirty || smtpSaving} onClick={() => { setSmtpDraft(smtp); setSmtpPassword('') }}>取消修改</Button>
+                  <Typography.Text type="secondary">授权码不回显；邮件是否发送由下方“邮件通知”开关控制。</Typography.Text>
+                </Space>
                 <Space wrap size={20}>
                   <Typography.Text type="secondary">
                     SMTP {mail.configured ? `${mail.host || '-'}:${mail.port || '-'}` : '未配置'}

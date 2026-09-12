@@ -9,7 +9,7 @@ namespace Yf.Api.Modules.SystemManagement;
 public static class SystemModule
 {
     public static IServiceCollection AddSystemModule(this IServiceCollection services)
-        => services.AddSingleton<SystemService>().AddSingleton<MailService>().AddHostedService<MailWorker>();
+        => services.AddSingleton<SystemService>().AddSingleton<SmtpSettingsService>().AddSingleton<MailService>().AddHostedService<MailWorker>();
 
     public static IEndpointRouteBuilder MapSystemModule(this IEndpointRouteBuilder endpoints)
     {
@@ -27,6 +27,9 @@ public static class SystemModule
         { await service.UpdateConfigsAsync(body, AccessService.GetCurrent(ctx), ct); return Results.Json(new { }); });
         config.MapGet("/storage", (SystemService service, CancellationToken ct) => service.StorageAsync(ct));
         config.MapGet("/mail-status", (MailService service, CancellationToken ct) => service.StatusAsync(ct));
+        config.MapGet("/mail-settings", (SmtpSettingsService service, CancellationToken ct) => service.GetAsync(ct));
+        config.MapPut("/mail-settings", (SmtpSettingsUpdate body, HttpContext ctx, SmtpSettingsService service, CancellationToken ct) =>
+            service.SaveAsync(body, AccessService.GetCurrent(ctx), ct));
         var logs = endpoints.MapGroup("/api/v1/admin/audit-logs");
         logs.AddEndpointFilter(async (context, next) =>
         {
@@ -53,7 +56,7 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions optio
     public async Task<object> ListConfigsAsync(CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
-        return await conn.QueryAsync(new CommandDefinition("SELECT cfg_key AS `key`,cfg_value AS value,description,updated_at AS updatedAt FROM system_configs WHERE cfg_key <> 'security.management_lock' ORDER BY cfg_key", cancellationToken: ct));
+        return await conn.QueryAsync(new CommandDefinition("SELECT cfg_key AS `key`,cfg_value AS value,description,updated_at AS updatedAt FROM system_configs WHERE cfg_key NOT IN ('security.management_lock','mail.smtp') ORDER BY cfg_key", cancellationToken: ct));
     }
 
     public static string? NormalizeConfig(string key, string? input)
@@ -62,7 +65,7 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions optio
         if (key.Length == 0 || key.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or '-')))
             throw ApiException.BadRequest("系统参数名称无效");
         var value = input?.Trim();
-        if (key == "security.management_lock") throw ApiException.BadRequest("系统内部参数不可修改");
+        if (key is "security.management_lock" or "mail.smtp") throw ApiException.BadRequest("请使用对应的专用配置入口");
         (long min, long max)? range = key switch
         {
             "upload.max_file_size" => (1048576, 21474836480),

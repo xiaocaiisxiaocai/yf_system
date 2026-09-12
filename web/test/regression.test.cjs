@@ -3043,3 +3043,65 @@ test('message send failure is handled, preserves the draft, and allows a success
   assert.equal(input().props.value, '')
   await act(async () => renderer.unmount())
 })
+
+
+test('SMTP editor preserves authorization codes, retries failed saves, and keeps unrelated edits', async () => {
+  let stored = { host: 'smtp.example.invalid', port: 465, username: 'sender@example.invalid', from: 'notice@example.invalid', security: 'Auto', hasPassword: true, configured: true, passwordNeedsUpdate: false }
+  let fail = true
+  let notifyValue = 'true'
+  const writes = []
+  const Page = loadTs('src/pages/system/SysConfig.tsx', {
+    '@arco-design/web-react': arco,
+    '../../api/client': {
+      get: async url => ({ data: url.endsWith('/mail-settings') ? stored : url.endsWith('/configs') ? [{ key: 'notify.enabled', value: notifyValue }] : url.endsWith('/storage') ? { totalBytes: 100, availableBytes: 100, usedPercent: 0, warnPercent: 85, root: '/' } : { configured: true } }),
+      put: async (url, body) => {
+        writes.push({ url, body })
+        if (fail) throw new Error('simulated save failure')
+        if (url.endsWith('/configs')) { notifyValue = body.items[0].value; return { data: {} } }
+        const { password: _password, ...fields } = body
+        stored = { ...stored, ...fields, hasPassword: true }
+        return { data: stored }
+      },
+    },
+    '../../api/types': { fmtTime: String, fmtSize: String },
+    'react-router-dom': { useNavigate: () => () => {} },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const port = () => renderer.root.findAllByType('InputNumber').find(n => n.props['aria-label'] === 'SMTP 端口')
+  const password = () => renderer.root.findByType('PasswordInput')
+  const save = () => renderer.root.findAllByType('Button').find(n => n.props.children === '保存邮箱设置')
+  const notification = () => {
+    const table = renderer.root.findAllByType('Table').find(n => n.props.data?.some(row => row.key === 'notify.enabled'))
+    const row = table.props.data.find(row => row.key === 'notify.enabled')
+    return findElement(table.props.columns[1].render(row.value, row), n => n.props['aria-label'] === '邮件通知')
+  }
+  assert.equal(password().props.value, '')
+  await act(async () => notification().props.onChange('false'))
+  await act(async () => port().props.onChange(587))
+  await act(async () => save().props.onClick())
+  assert.equal(save().props.loading, false)
+  assert.equal(port().props.value, 587)
+  fail = false
+  await act(async () => save().props.onClick())
+  assert.equal(writes.at(-1).url, '/admin/system/mail-settings')
+  assert.equal(writes.at(-1).body.password, null)
+  assert.equal(notification().props.value, 'false')
+  await act(async () => password().props.onChange('new-fixture-code'))
+  await act(async () => save().props.onClick())
+  assert.equal(writes.at(-1).body.password, 'new-fixture-code')
+  assert.equal(password().props.value, '')
+  assert.equal(save().props.disabled, true)
+  const beforeIdentityChange = writes.length
+  await act(async () => renderer.root.findAllByType('Input').find(n => n.props['aria-label'] === 'SMTP 服务器').props.onChange('other.example.invalid'))
+  await act(async () => save().props.onClick())
+  assert.equal(writes.length, beforeIdentityChange, 'existing code cannot be reused for another server')
+  await act(async () => password().props.onChange('replacement-fixture-code'))
+  await act(async () => save().props.onClick())
+  assert.equal(writes.at(-1).body.host, 'other.example.invalid')
+  await act(async () => password().props.onChange('unsaved-mail-code'))
+  const configCard = renderer.root.findAllByType('Card').find(n => n.props.title === '系统参数')
+  await act(async () => findElement(configCard.props.extra, n => n.props.children === '保存').props.onClick())
+  assert.equal(password().props.value, 'unsaved-mail-code', 'saving general parameters keeps the SMTP draft')
+  await act(async () => renderer.unmount())
+})

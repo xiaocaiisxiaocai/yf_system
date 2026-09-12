@@ -124,7 +124,7 @@ try:
         env.update({"App__ConnectionString": f"Server={cs(url.hostname)};Port={url.port or 3306};Database={name};User ID={cs(user)};Password={cs(password)}",
                     "App__JwtSecret": secrets.token_urlsafe(48), "App__StorageRoot": str(storage),
                     "App__WebBaseUrl": base, "App__CookieSecure": "false", "App__WorkerEnabled": "false",
-                    "App__Smtp__Host": "", "ASPNETCORE_URLS": base, "YF_BOOTSTRAP_PASSWORD": initial,
+                    "App__Smtp__Host": "", "ASPNETCORE_URLS": base, "URLS": base, "YF_BOOTSTRAP_PASSWORD": initial,
                     "Logging__LogLevel__Default": "Warning"})
         initialized = subprocess.run(["dotnet", str(DLL), "--initialize-database"], cwd=API, env=env, capture_output=True)
         if initialized.returncode:

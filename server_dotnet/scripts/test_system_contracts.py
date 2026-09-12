@@ -1,7 +1,44 @@
 """System config and audit integrity checks using caller-owned isolated resources."""
 from urllib.parse import urlencode
+import json
+import secrets
 
 def run_system_checks(client, conn, check):
+    # This caller always owns a disposable database and runs with WorkerEnabled=false.
+    smtp_before = client.call('GET', '/api/v1/admin/system/mail-settings')
+    assert 'password' not in smtp_before and not smtp_before['hasPassword']
+    anonymous = type(client)(client.base)
+    anonymous.call('GET', '/api/v1/admin/system/mail-settings', expected=401)
+    authorization_code = secrets.token_urlsafe(18)
+    smtp_payload = {'host': 'smtp.example.invalid', 'port': 465, 'username': 'sender@example.invalid',
+                    'from': 'notice@example.invalid', 'security': 'SslOnConnect', 'password': authorization_code}
+    anonymous.call('PUT', '/api/v1/admin/system/mail-settings', smtp_payload, expected=401)
+    client.call('PUT', '/api/v1/admin/system/mail-settings', {**smtp_payload, 'password': None}, expected=400)
+    saved = client.call('PUT', '/api/v1/admin/system/mail-settings', smtp_payload)
+    assert saved['hasPassword'] and saved['configured'] and 'password' not in saved
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT cfg_value FROM system_configs WHERE cfg_key='mail.smtp'")
+        encrypted_record = cursor.fetchone()[0]
+        cursor.execute("SELECT detail FROM audit_logs WHERE action='CONFIG_UPDATE' ORDER BY id DESC LIMIT 1")
+        audit_detail = cursor.fetchone()[0]
+    assert authorization_code not in encrypted_record and authorization_code not in str(audit_detail)
+    assert json.loads(encrypted_record)['ProtectedPassword'].startswith('v1.')
+    readback = client.call('GET', '/api/v1/admin/system/mail-settings')
+    assert readback == saved
+    assert all(item['key'] != 'mail.smtp' for item in client.call('GET', '/api/v1/admin/system/configs'))
+    client.call('PUT', '/api/v1/admin/system/configs', {'items': [{'key': ' MAIL.SMTP ', 'value': '{}'}]}, expected=400)
+    kept = client.call('PUT', '/api/v1/admin/system/mail-settings', {**smtp_payload, 'port': 587, 'security': 'StartTls', 'password': ''})
+    assert kept['hasPassword'] and kept['port'] == 587
+    client.call('PUT', '/api/v1/admin/system/mail-settings', {**smtp_payload, 'host': 'other.example.invalid', 'password': None}, expected=400)
+    client.call('PUT', '/api/v1/admin/system/mail-settings', {**smtp_payload, 'username': 'other@example.invalid', 'password': None}, expected=400)
+    status = client.call('GET', '/api/v1/admin/system/mail-status')
+    assert status['configured'] and status['host'] == smtp_payload['host'] and status['port'] == 587
+    for bad in ({'host': 'https://smtp.example.invalid'}, {'port': 0}, {'security': 'None'}, {'from': 'bad address'}):
+        client.call('PUT', '/api/v1/admin/system/mail-settings', {**smtp_payload, **bad}, expected=400)
+    assert client.call('GET', '/api/v1/admin/system/mail-settings') == kept
+    check('SMTP settings persist encrypted, redact credentials, preserve blank passwords and become effective without restart', True)
+    with conn.cursor() as cursor:
+        cursor.execute("DELETE FROM system_configs WHERE cfg_key='mail.smtp'")
     for route in ('users', 'roles', 'suppliers', 'audit-logs'):
         for key in ('page', 'pageSize'):
             for raw in ('', 'abc', '-1', '18446744073709551616', '1&' + key + '=2'):
