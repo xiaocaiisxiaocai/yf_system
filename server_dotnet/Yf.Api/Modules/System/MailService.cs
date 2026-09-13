@@ -11,9 +11,7 @@ namespace Yf.Api.Modules.SystemManagement;
 public sealed class MailService
 {
     private readonly AppDb db;
-    private readonly AppOptions options;
     private readonly AuditService audit;
-    private readonly SystemService system;
     private readonly ILogger<MailService> logger;
     private readonly ISmtpDelivery smtp;
     private readonly SmtpSettingsService settings;
@@ -22,9 +20,8 @@ public sealed class MailService
         AppDb db,
         AppOptions options,
         AuditService audit,
-        SystemService system,
         ILogger<MailService> logger)
-        : this(db, options, audit, system, logger, new MailKitSmtpDelivery())
+        : this(db, options, audit, logger, new MailKitSmtpDelivery())
     {
     }
 
@@ -32,14 +29,11 @@ public sealed class MailService
         AppDb db,
         AppOptions options,
         AuditService audit,
-        SystemService system,
         ILogger<MailService> logger,
         ISmtpDelivery smtp)
     {
         this.db = db;
-        this.options = options;
         this.audit = audit;
-        this.system = system;
         this.logger = logger;
         this.smtp = smtp;
         settings = new(db, options, audit);
@@ -74,7 +68,7 @@ public sealed class MailService
         var resolved = await settings.ResolveAsync(conn, null, ct);
         var cfg = resolved.Options;
         var configured = resolved.Configured;
-        var counts = (await conn.QueryAsync<QueueCount>(new CommandDefinition("SELECT status,COUNT(*) AS count FROM email_outbox GROUP BY status", cancellationToken: ct))).ToDictionary(x => x.Status, x => x.Count);
+        var counts = (await conn.QueryAsync<QueueCount>(new CommandDefinition("SELECT status,COUNT(*) AS count FROM email_outbox WHERE event_type <> 'STORAGE_WARNING' GROUP BY status", cancellationToken: ct))).ToDictionary(x => x.Status, x => x.Count);
         var missingCount = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT COUNT(*) FROM users WHERE status='ACTIVE' AND TRIM(email)=''", cancellationToken: ct));
         var missing = await conn.QueryAsync(new CommandDefinition("SELECT id AS userId,employee_no AS employeeNo,real_name AS realName,user_type AS userType,status FROM users WHERE status='ACTIVE' AND TRIM(email)='' ORDER BY employee_no LIMIT 20", cancellationToken: ct));
         var recent = await conn.QueryAsync<AuditRow>(new CommandDefinition("SELECT id,action,target_type AS TargetType,target_id AS TargetId,detail,created_at AS CreatedAt FROM audit_logs WHERE action IN ('EMAIL_SENT','EMAIL_FAILED','EMAIL_RETRY','EMAIL_SKIPPED_MISSING_EMAIL') ORDER BY created_at DESC,id DESC LIMIT 10", cancellationToken: ct));
@@ -105,26 +99,6 @@ public sealed class MailService
         return output;
     }
 
-    public async Task EnqueueStorageWarningAsync(CancellationToken ct)
-    {
-        await using (var enabledConnection = await db.OpenAsync(ct))
-            if (!await EnabledAsync(enabledConnection, ct)) return;
-        var storage = await system.StorageAsync(ct);
-        if (!storage.Warning) return;
-        await using var conn = await db.OpenAsync(ct);
-        var recipients = await conn.QueryAsync<Recipient>(new CommandDefinition("SELECT DISTINCT u.id,u.email,u.employee_no AS EmployeeNo,u.real_name AS RealName FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id WHERE u.status='ACTIVE' AND r.status='ACTIVE' AND r.is_built_in=1 AND r.name='系统管理员'", cancellationToken: ct));
-        foreach (var user in recipients)
-        {
-            if (string.IsNullOrWhiteSpace(user.Email))
-            {
-                await audit.WriteAsync(conn, null, null, "EMAIL_SKIPPED_MISSING_EMAIL", "user", user.Id, new { eventType = "STORAGE_WARNING", reason = "RECIPIENT_EMAIL_MISSING", user.EmployeeNo, user.RealName }, null, ct);
-                continue;
-            }
-            await conn.ExecuteAsync(new CommandDefinition("INSERT INTO email_outbox(event_type,dedupe_key,recipient_user_id,recipient_email,subject,body,status,retry_count,created_at) VALUES('STORAGE_WARNING',@key,@Id,@Email,@subject,@body,'PENDING',0,UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE dedupe_key=VALUES(dedupe_key)",
-                new { key = $"storage-warning:{DateTime.UtcNow:yyyy-MM-dd}:{user.Id}", user.Id, user.Email, subject = $"[协作平台] 存储空间告警：已使用 {storage.UsedPercent:F1}%", body = $"存储目录：{storage.Root}\n所在卷：{storage.MountPoint}\n已使用：{storage.UsedPercent:F1}%\n告警阈值：{storage.WarnPercent:F1}%\n可用空间：{storage.AvailableBytes} 字节\n\n请及时扩容或按数据保留策略清理文件。" }, cancellationToken: ct));
-        }
-    }
-
     public async Task PurgeExpiredSessionsAsync(CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
@@ -141,7 +115,7 @@ public sealed class MailService
             if (!await EnabledAsync(conn, ct)) return;
             resolved = await settings.ResolveAsync(conn, null, ct);
             if (!resolved.Configured) return;
-            pending = (await conn.QueryAsync<MailRow>(new CommandDefinition("SELECT id,event_type AS EventType,recipient_email AS RecipientEmail,subject,body,status,retry_count AS RetryCount,next_attempt_at AS NextAttemptAt FROM email_outbox WHERE (status='PENDING' AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())) OR (status='SENDING' AND next_attempt_at<=UTC_TIMESTAMP()) ORDER BY id LIMIT 10", cancellationToken: ct))).ToArray();
+            pending = (await conn.QueryAsync<MailRow>(new CommandDefinition("SELECT id,event_type AS EventType,recipient_email AS RecipientEmail,subject,body,status,retry_count AS RetryCount,next_attempt_at AS NextAttemptAt FROM email_outbox WHERE event_type <> 'STORAGE_WARNING' AND ((status='PENDING' AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())) OR (status='SENDING' AND next_attempt_at<=UTC_TIMESTAMP())) ORDER BY id LIMIT 10", cancellationToken: ct))).ToArray();
         }
         foreach (var mail in pending)
         {
@@ -193,7 +167,6 @@ public sealed class MailService
         }
     }
     private sealed class QueueCount { public string Status { get; set; } = ""; public ulong Count { get; set; } }
-    private sealed class Recipient { public ulong Id { get; set; } public string Email { get; set; } = ""; public string EmployeeNo { get; set; } = ""; public string RealName { get; set; } = ""; }
     private sealed class MailRow { public ulong Id { get; set; } public string EventType { get; set; } = ""; public string RecipientEmail { get; set; } = ""; public string Subject { get; set; } = ""; public string Body { get; set; } = ""; public string Status { get; set; } = ""; public int RetryCount { get; set; } public DateTime? NextAttemptAt { get; set; } }
 }
 
@@ -260,16 +233,15 @@ public sealed class MailWorker(MailService mail, AppOptions options, ILogger<Mai
     {
         if (!options.WorkerEnabled) return;
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
-        var nextStorage = DateTime.MinValue;
+        var nextCleanup = DateTime.MinValue;
         do
         {
             try
             {
-                if (DateTime.UtcNow >= nextStorage)
+                if (DateTime.UtcNow >= nextCleanup)
                 {
-                    nextStorage = DateTime.UtcNow.AddMinutes(10);
+                    nextCleanup = DateTime.UtcNow.AddMinutes(10);
                     await mail.PurgeExpiredSessionsAsync(stoppingToken);
-                    await mail.EnqueueStorageWarningAsync(stoppingToken);
                 }
                 await mail.FlushAsync(stoppingToken);
             }

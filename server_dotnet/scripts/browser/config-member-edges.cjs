@@ -7,7 +7,6 @@ const {
 const MB = 1024 * 1024;
 const configLabels = {
   'notify.enabled': '邮件通知',
-  'storage.warn_percent': '存储告警阈值',
   'upload.allowed_exts': '允许上传类型',
   'upload.chunk_size': '上传分片大小',
   'upload.max_file_size': '单文件大小上限',
@@ -163,10 +162,6 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
         const next = value === 'true' ? 'false' : 'true';
         return [key, { input: next, persisted: next }];
       }
-      if (key === 'storage.warn_percent') {
-        const next = String(Number(value) >= 99 ? 98 : Number(value) + 1);
-        return [key, { input: next, persisted: next }];
-      }
       if (key === 'upload.chunk_size') {
         const currentMb = Number(value) / MB;
         const display = currentMb >= 64 ? currentMb - 0.25 : currentMb + 0.25;
@@ -226,7 +221,7 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
         dirty += 1;
         await assertDirty(dirty);
       }
-      const deferredKey = 'storage.warn_percent';
+      const deferredKey = 'notify.enabled';
       await editConfig(deferredKey, original[deferredKey]);
       dirty -= 1;
       await assertDirty(dirty);

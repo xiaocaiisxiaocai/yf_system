@@ -20,7 +20,6 @@ public sealed class ConnectionLifecycleCollection
 public sealed class ConnectionLifecycleTests
 {
     [Theory(Timeout = 30_000)]
-    [InlineData("/api/v1/admin/system/storage")]
     [InlineData("/api/v1/admin/system/mail-settings")]
     [InlineData("/api/v1/admin/audit-logs")]
     public async Task SystemEndpointFilterReleasesPermissionConnectionBeforeHandler(string route)
@@ -49,7 +48,6 @@ public sealed class ConnectionLifecycleTests
             INSERT INTO role_permissions VALUES(1,1),(1,2);
             INSERT INTO user_roles VALUES(1,1);
             INSERT INTO users VALUES(1,'pool_admin');
-            INSERT INTO system_configs VALUES('storage.warn_percent','85');
             """, ct);
 
         var builder = WebApplication.CreateSlimBuilder();
@@ -85,51 +83,6 @@ public sealed class ConnectionLifecycleTests
 
         Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
         Assert.True(context.Response.Body.Length > 0);
-    }
-
-    [Fact(Timeout = 30_000)]
-    public async Task StorageWarningReleasesConfigurationConnectionBeforeStorageRead()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var database = await LocalDatabaseScope.CreateOrSkipAsync("storage_warning", ct);
-        await database.SeedAsync("""
-            CREATE TABLE system_configs(cfg_key VARCHAR(100) PRIMARY KEY, cfg_value TEXT NOT NULL);
-            CREATE TABLE users(
-                id BIGINT UNSIGNED PRIMARY KEY, email VARCHAR(128) NOT NULL,
-                employee_no VARCHAR(64) NOT NULL, real_name VARCHAR(100) NOT NULL,
-                status VARCHAR(16) NOT NULL
-            );
-            CREATE TABLE roles(
-                id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(64) NOT NULL,
-                status VARCHAR(16) NOT NULL, is_built_in BOOLEAN NOT NULL
-            );
-            CREATE TABLE user_roles(user_id BIGINT UNSIGNED NOT NULL, role_id BIGINT UNSIGNED NOT NULL);
-            CREATE TABLE email_outbox(
-                id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                event_type VARCHAR(32) NOT NULL, dedupe_key VARCHAR(160) NOT NULL UNIQUE,
-                recipient_user_id BIGINT UNSIGNED NULL, recipient_email VARCHAR(128) NOT NULL,
-                subject VARCHAR(255) NOT NULL, body TEXT NOT NULL,
-                status VARCHAR(16) NOT NULL, retry_count INT NOT NULL,
-                created_at DATETIME(6) NOT NULL
-            );
-            INSERT INTO system_configs VALUES('notify.enabled','true'),('storage.warn_percent','0.000001');
-            INSERT INTO users VALUES(1,'admin@example.invalid','pool_admin','Pool Admin','ACTIVE');
-            INSERT INTO roles VALUES(1,'系统管理员','ACTIVE',1);
-            INSERT INTO user_roles VALUES(1,1);
-            """, ct);
-        var audit = new AuditService(Array.Empty<IProjectAuditCapture>());
-        var system = new SystemService(database.Database, audit, database.Options);
-        var service = new MailService(database.Database, database.Options, audit, system,
-            NullLogger<MailService>.Instance);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(TimeSpan.FromSeconds(5));
-
-        await service.EnqueueStorageWarningAsync(deadline.Token);
-
-        await using var connection = await database.Database.OpenAsync(ct);
-        Assert.Equal(1, await connection.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM email_outbox WHERE event_type='STORAGE_WARNING' AND recipient_user_id=1 AND status='PENDING'",
-            cancellationToken: ct)));
     }
 
     [Fact(Timeout = 120_000)]

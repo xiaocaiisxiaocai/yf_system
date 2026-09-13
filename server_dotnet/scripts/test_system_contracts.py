@@ -4,6 +4,12 @@ import json
 import secrets
 
 def run_system_checks(client, conn, check):
+    with conn.cursor() as cursor:
+        cursor.execute("INSERT INTO system_configs(cfg_key,cfg_value,description,updated_at) VALUES('storage.warn_percent','85','legacy fixture',UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE cfg_value='85'")
+    assert all(item['key'] != 'storage.warn_percent' for item in client.call('GET', '/api/v1/admin/system/configs'))
+    client.call('PUT', '/api/v1/admin/system/configs', {'items': [{'key': ' STORAGE.WARN_PERCENT ', 'value': '90'}]}, expected=400)
+    client.call('GET', '/api/v1/admin/system/storage', expected=404)
+    check('retired storage status and warning threshold are no longer exposed or editable', True)
     # This caller always owns a disposable database and runs with WorkerEnabled=false.
     smtp_before = client.call('GET', '/api/v1/admin/system/mail-settings')
     assert 'password' not in smtp_before and not smtp_before['hasPassword']

@@ -1066,7 +1066,7 @@ test('system config exposes mail configuration, queue outcomes and missing mailb
     '../../api/client': {
       get: async (url) => {
         calls.push(url)
-        if (url === '/admin/system/configs') return { data: [] }
+        if (url === '/admin/system/configs') return { data: [{ key: 'storage.warn_percent', value: '85' }] }
         if (url === '/admin/system/storage') return { data: { totalBytes: 100, availableBytes: 40, usedPercent: 60, warnPercent: 80, warning: false, root: '/' } }
         return { data: {
           configured: false,
@@ -1087,8 +1087,11 @@ test('system config exposes mail configuration, queue outcomes and missing mailb
   await act(async () => { renderer = create(React.createElement(Page)) })
   await act(async () => { await Promise.resolve(); await Promise.resolve() })
   assert.ok(calls.includes('/admin/system/mail-status'))
+  assert.ok(!calls.includes('/admin/system/storage'))
+  assert.equal(renderer.root.findAll(n => n.props.title === '存储状态').length, 0)
   assert.ok(renderer.root.findAll((node) => node.props.title === '邮件发送').length > 0)
   const tables = renderer.root.findAllByType('Table')
+  assert.ok(tables.every(table => !table.props.data?.some(row => row.key === 'storage.warn_percent')))
   assert.ok(tables.some((table) => table.props.data?.some((row) => row.action === 'EMAIL_FAILED')))
   await act(async () => renderer.unmount())
 })

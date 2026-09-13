@@ -692,12 +692,6 @@
         "updated_at": "2026-09-11T00:00:00"
       },
       {
-        "cfg_key": "storage.warn_percent",
-        "cfg_value": "85",
-        "description": "存储使用率告警阈值（百分比）",
-        "updated_at": "2026-09-11T00:00:00"
-      },
-      {
         "cfg_key": "upload.allowed_exts",
         "cfg_value": "step,stp,iges,igs,stl,obj,fbx,dwg,dxf,pdf,doc,docx,xls,xlsx,ppt,pptx,png,jpg,jpeg,zip,rar,7z",
         "description": "允许上传的扩展名白名单",

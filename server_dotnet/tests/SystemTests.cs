@@ -21,6 +21,8 @@ public class SystemTests
     [InlineData("upload.chunk_size", "0")]
     [InlineData("upload.max_file_size", "21474836481")]
     [InlineData("storage.warn_percent", "100")]
+    [InlineData("storage.warn_percent", "85")]
+    [InlineData(" STORAGE.WARN_PERCENT ", "85")]
     [InlineData("notify.enabled", "yes")]
     [InlineData("upload.allowed_exts", "pdf,../exe")]
     [InlineData("security.management_lock", "anything")]

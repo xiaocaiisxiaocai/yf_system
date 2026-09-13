@@ -25,7 +25,6 @@ public static class SystemModule
         config.MapGet("/configs", (SystemService service, CancellationToken ct) => service.ListConfigsAsync(ct));
         config.MapPut("/configs", async (ConfigBatch body, HttpContext ctx, SystemService service, CancellationToken ct) =>
         { await service.UpdateConfigsAsync(body, AccessService.GetCurrent(ctx), ct); return Results.Json(new { }); });
-        config.MapGet("/storage", (SystemService service, CancellationToken ct) => service.StorageAsync(ct));
         config.MapGet("/mail-status", (MailService service, CancellationToken ct) => service.StatusAsync(ct));
         config.MapGet("/mail-settings", (SmtpSettingsService service, CancellationToken ct) => service.GetAsync(ct));
         config.MapPut("/mail-settings", (SmtpSettingsUpdate body, HttpContext ctx, SmtpSettingsService service, CancellationToken ct) =>
@@ -49,14 +48,13 @@ public static class SystemModule
 public sealed record ConfigItem(string Key, string? Value);
 public sealed record ConfigBatch(ConfigItem[] Items);
 public sealed record IdList(ulong[] Ids);
-public sealed record StorageSnapshot(string Root, string MountPoint, long TotalBytes, long AvailableBytes, long UsedBytes, double UsedPercent, double WarnPercent, bool Warning);
 
-public sealed class SystemService(AppDb db, AuditService audit, AppOptions options)
+public sealed class SystemService(AppDb db, AuditService audit)
 {
     public async Task<object> ListConfigsAsync(CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
-        return await conn.QueryAsync(new CommandDefinition("SELECT cfg_key AS `key`,cfg_value AS value,description,updated_at AS updatedAt FROM system_configs WHERE cfg_key NOT IN ('security.management_lock','mail.smtp') ORDER BY cfg_key", cancellationToken: ct));
+        return await conn.QueryAsync(new CommandDefinition("SELECT cfg_key AS `key`,cfg_value AS value,description,updated_at AS updatedAt FROM system_configs WHERE cfg_key NOT IN ('security.management_lock','mail.smtp','storage.warn_percent') ORDER BY cfg_key", cancellationToken: ct));
     }
 
     public static string? NormalizeConfig(string key, string? input)
@@ -66,11 +64,11 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions optio
             throw ApiException.BadRequest("系统参数名称无效");
         var value = input?.Trim();
         if (key is "security.management_lock" or "mail.smtp") throw ApiException.BadRequest("请使用对应的专用配置入口");
+        if (key == "storage.warn_percent") throw ApiException.BadRequest("存储告警阈值已停用");
         (long min, long max)? range = key switch
         {
             "upload.max_file_size" => (1048576, 21474836480),
             "upload.chunk_size" => (262144, 67108864),
-            "storage.warn_percent" => (1, 99),
             _ => null
         };
         if (range is { } bounds)
@@ -115,19 +113,6 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions optio
         }
         await audit.WriteAsync(conn, tx, actor.Id, "CONFIG_UPDATE", "system_config", null, new { keys = normalized.Select(x => x.Key) }, null, ct);
         await tx.CommitAsync(ct);
-    }
-
-    public async Task<StorageSnapshot> StorageAsync(CancellationToken ct)
-    {
-        await using var conn = await db.OpenAsync(ct);
-        var configured = await conn.QuerySingleOrDefaultAsync<string>(new CommandDefinition("SELECT cfg_value FROM system_configs WHERE cfg_key='storage.warn_percent'", cancellationToken: ct));
-        double warn = double.TryParse(configured, CultureInfo.InvariantCulture, out var parsed) && parsed is > 0 and < 100 ? parsed : 85;
-        var root = Path.GetFullPath(options.StorageRoot);
-        var drive = DriveInfo.GetDrives().Where(x => x.IsReady && root.StartsWith(x.Name, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)).OrderByDescending(x => x.Name.Length).FirstOrDefault()
-            ?? throw new InvalidOperationException("Storage volume unavailable.");
-        var used = drive.TotalSize - drive.AvailableFreeSpace;
-        var percent = drive.TotalSize > 0 ? 100.0 * used / drive.TotalSize : 0;
-        return new(root, drive.Name, drive.TotalSize, drive.AvailableFreeSpace, used, percent, warn, percent >= warn);
     }
 
     public async Task<object> ListLogsAsync(HttpRequest request, CancellationToken ct)

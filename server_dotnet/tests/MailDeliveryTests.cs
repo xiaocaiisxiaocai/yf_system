@@ -16,7 +16,7 @@ public sealed class MailDeliveryTests
         var delivery = new PausedDelivery();
         var audit = new AuditService(Array.Empty<IProjectAuditCapture>());
         var service = new MailService(scope.Database, scope.Options, audit,
-            new SystemService(scope.Database, audit, scope.Options), NullLogger<MailService>.Instance, delivery);
+            NullLogger<MailService>.Instance, delivery);
         var flush = service.FlushAsync(ct);
         try
         {
@@ -54,8 +54,7 @@ public sealed class MailDeliveryTests
         using var stopping = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var delivery = new AcceptedThenDisconnectFailedDelivery(stopping.Cancel);
         var audit = new AuditService(Array.Empty<IProjectAuditCapture>());
-        var system = new SystemService(scope.Database, audit, scope.Options);
-        var service = new MailService(scope.Database, scope.Options, audit, system,
+        var service = new MailService(scope.Database, scope.Options, audit,
             NullLogger<MailService>.Instance, delivery);
 
         await service.FlushAsync(stopping.Token);
@@ -81,8 +80,7 @@ public sealed class MailDeliveryTests
         await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
         var delivery = new SendFailedDelivery();
         var audit = new AuditService(Array.Empty<IProjectAuditCapture>());
-        var system = new SystemService(scope.Database, audit, scope.Options);
-        var service = new MailService(scope.Database, scope.Options, audit, system,
+        var service = new MailService(scope.Database, scope.Options, audit,
             NullLogger<MailService>.Instance, delivery);
 
         await service.FlushAsync(ct);
@@ -114,7 +112,7 @@ public sealed class MailDeliveryTests
         var delivery = new CaptureSettingsDelivery();
         var settings = new SmtpSettingsService(scope.Database, scope.Options, audit);
         var service = new MailService(scope.Database, scope.Options, audit,
-            new SystemService(scope.Database, audit, scope.Options), NullLogger<MailService>.Instance, delivery);
+            NullLogger<MailService>.Instance, delivery);
         await service.FlushAsync(ct);
         Assert.Empty(delivery.Seen);
         for (var round = 0; round < 2; round++)
@@ -136,6 +134,21 @@ public sealed class MailDeliveryTests
             Assert.Equal("fixture-code-" + round, delivery.Seen[round].Password);
         }
         Assert.Equal("StartTls", delivery.Seen[1].Security);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task RetiredStorageWarningsAreNotDelivered()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var conn = await scope.Database.OpenAsync(ct))
+            await conn.ExecuteAsync(new CommandDefinition("UPDATE email_outbox SET event_type='STORAGE_WARNING' WHERE id=1", cancellationToken: ct));
+        var delivery = new CaptureSettingsDelivery();
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]), NullLogger<MailService>.Instance, delivery);
+        await service.FlushAsync(ct);
+        Assert.Empty(delivery.Seen);
+        await using var check = await scope.Database.OpenAsync(ct);
+        Assert.Equal("PENDING", await check.ExecuteScalarAsync<string>(new CommandDefinition("SELECT status FROM email_outbox WHERE id=1", cancellationToken: ct)));
     }
 
     private sealed class CaptureSettingsDelivery : ISmtpDelivery

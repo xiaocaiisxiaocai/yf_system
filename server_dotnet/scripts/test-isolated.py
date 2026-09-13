@@ -232,7 +232,7 @@ try:
             check("profile has frontend permission/menu contract", bool(profile["permissions"]) and bool(profile["menus"]))
             run_identity_checks(client, Client, conn, check)
             run_project_remediation_checks(client, Client, conn, check)
-            for path in ("/dashboard/summary", "/dashboard/pending-projects", "/departments", "/permissions", "/supplier-options", "/internal-user-options", "/admin/users", "/admin/roles", "/admin/suppliers", "/admin/user-role-options", "/admin/system/configs", "/admin/system/storage", "/admin/system/mail-status", "/admin/audit-logs"):
+            for path in ("/dashboard/summary", "/dashboard/pending-projects", "/departments", "/permissions", "/supplier-options", "/internal-user-options", "/admin/users", "/admin/roles", "/admin/suppliers", "/admin/user-role-options", "/admin/system/configs", "/admin/system/mail-status", "/admin/audit-logs"):
                 client.call("GET", "/api/v1" + path)
                 check("read contract " + path, True)
             configs = client.call("GET", "/api/v1/admin/system/configs")

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Card, Input, InputNumber, Message, Progress, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
+import { Button, Card, Input, InputNumber, Message, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
 import { useNavigate } from 'react-router-dom'
 import http from '../../api/client'
-import { fmtSize, fmtTime } from '../../api/types'
+import { fmtTime } from '../../api/types'
 import PasswordInput from '../../components/PasswordInput'
 
 const MB = 1024 * 1024
@@ -16,7 +16,6 @@ const EMPTY_SMTP: SmtpSettings = { host: '', port: 465, username: '', from: '', 
 
 const CONFIG_META: Record<string, { name: string; description: string; hint?: string }> = {
   'notify.enabled': { name: '邮件通知', description: '邮件通知总开关' },
-  'storage.warn_percent': { name: '存储告警阈值', description: '达到该使用率时告警' },
   'upload.allowed_exts': { name: '允许上传类型', description: '允许上传的文件扩展名', hint: '使用英文逗号分隔' },
   'upload.chunk_size': { name: '上传分片大小', description: '每个上传分片的大小' },
   'upload.max_file_size': { name: '单文件大小上限', description: '单个文件允许的最大大小' },
@@ -27,16 +26,6 @@ interface Cfg {
   value: string
   description?: string
   updatedAt?: string
-}
-
-interface Storage {
-  root: string
-  mountPoint?: string
-  totalBytes: number
-  availableBytes: number
-  usedPercent: number
-  warnPercent: number
-  warning: boolean
 }
 
 interface MailDetail {
@@ -124,7 +113,6 @@ function mailRecentSummary(row: MailRecent): string {
 export default function SysConfig() {
   const navigate = useNavigate()
   const [configs, setConfigs] = useState<Cfg[]>([])
-  const [storage, setStorage] = useState<Storage | null>(null)
   const [mail, setMail] = useState<MailStatus | null>(null)
   const [editing, setEditing] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
@@ -137,23 +125,20 @@ export default function SysConfig() {
   const [smtpSaving, setSmtpSaving] = useState(false)
 
   const fetchSnapshot = useCallback(async () => {
-    const [configsResponse, storageResponse, mailResponse, smtpResponse] = await Promise.all([
+    const [configsResponse, mailResponse, smtpResponse] = await Promise.all([
       http.get('/admin/system/configs'),
-      http.get('/admin/system/storage'),
       http.get('/admin/system/mail-status'),
       http.get('/admin/system/mail-settings'),
     ])
     return {
-      configs: configsResponse.data as Cfg[],
-      storage: storageResponse.data as Storage,
+      configs: (configsResponse.data as Cfg[]).filter((item) => item.key !== 'storage.warn_percent'),
       mail: normalizeMailStatus(mailResponse.data),
       smtp: { ...EMPTY_SMTP, ...smtpResponse.data } as SmtpSettings,
     }
   }, [])
 
-  const applySnapshot = useCallback((next: { configs: Cfg[]; storage: Storage; mail: MailStatus; smtp: SmtpSettings }) => {
+  const applySnapshot = useCallback((next: { configs: Cfg[]; mail: MailStatus; smtp: SmtpSettings }) => {
     setConfigs(next.configs)
-    setStorage(next.storage)
     setMail(next.mail || EMPTY_MAIL_STATUS)
     setSmtp(next.smtp)
     setSmtpDraft(next.smtp)
@@ -228,7 +213,6 @@ export default function SysConfig() {
       Message.success('参数已保存')
       const next = await fetchSnapshot()
       setConfigs(next.configs)
-      setStorage(next.storage)
       setMail(next.mail)
       setEditing({})
     } catch {
@@ -237,16 +221,6 @@ export default function SysConfig() {
       setSaving(false)
     }
   }
-
-  const usedPct = storage
-    ? Math.min(100, Math.max(0, Math.round(
-      Number.isFinite(storage.usedPercent)
-        ? storage.usedPercent
-        : storage.totalBytes > 0
-          ? ((storage.totalBytes - storage.availableBytes) / storage.totalBytes) * 100
-          : 0,
-    )))
-    : 0
 
   const editor = (cfg: Cfg) => {
     const value = editing[cfg.key] ?? cfg.value
@@ -278,19 +252,6 @@ export default function SysConfig() {
               setValue(cfg.key, '')
             }
           }}
-        />
-      )
-    }
-    if (cfg.key === 'storage.warn_percent') {
-      return (
-        <InputNumber
-          aria-label={label}
-          min={1}
-          max={99}
-          precision={0}
-          suffix="%"
-          value={Number(value)}
-          onChange={(next) => setValue(cfg.key, typeof next === 'number' ? String(next) : '')}
         />
       )
     }
@@ -379,52 +340,6 @@ export default function SysConfig() {
               </div>
             </Card>
           )}
-          <Card
-            className="page-card system-storage-card"
-            title="存储状态"
-            extra={storage && (
-              <Tag color={storage.warning ? 'red' : 'green'}>
-                {storage.warning ? '容量告警' : '运行正常'}
-              </Tag>
-            )}
-          >
-            {storage && (
-              <div className="system-storage-summary">
-                <div className="system-storage-progress">
-                  <Progress
-                    type="circle"
-                    width={96}
-                    percent={usedPct}
-                    color={storage.warning ? '#f53f3f' : '#165dff'}
-                  />
-                  <span>空间使用率</span>
-                </div>
-                <div className="system-storage-capacity">
-                  <span className="system-storage-label">已用空间</span>
-                  <strong>{fmtSize(storage.totalBytes - storage.availableBytes)}</strong>
-                  <span>共 {fmtSize(storage.totalBytes)}</span>
-                </div>
-                <div className="system-storage-metrics">
-                  <div className="system-storage-metric system-storage-metric--wide">
-                    <span>存储目录</span>
-                    <strong title={storage.root}>{storage.root}</strong>
-                  </div>
-                  <div className="system-storage-metric">
-                    <span>可用空间</span>
-                    <strong>{fmtSize(storage.availableBytes)}</strong>
-                  </div>
-                  <div className="system-storage-metric">
-                    <span>告警阈值</span>
-                    <strong className={storage.warning ? 'is-warning' : ''}>{storage.warnPercent}%</strong>
-                  </div>
-                  <div className="system-storage-metric system-storage-metric--wide">
-                    <span>挂载点</span>
-                    <strong title={storage.mountPoint || '-'}>{storage.mountPoint || '-'}</strong>
-                  </div>
-                </div>
-              </div>
-            )}
-          </Card>
           <Card
             className="page-card system-config-card"
             title="系统参数"
