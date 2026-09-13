@@ -6,6 +6,7 @@ const pathOf=r=>new URL(r.url()).pathname;
  const auth=await login(p,'admin',s.adminPassword);await p.waitForURL(s.base+'/');
  const configs=async()=>Object.fromEntries((await(await api(c,'GET','/admin/system/configs',undefined,auth.accessToken)).json()).map(x=>[x.key,x.value]));
  const original=await configs();await navigate(p,'/system/config');
+ const restored={...original,'upload.allowed_exts':Array.from(new Set(original['upload.allowed_exts'].split(',').map(x=>x.trim().toLowerCase()))).sort().join(',')};
  await p.getByLabel('允许上传类型',{exact:true}).waitFor();
  const threshold=original['upload.allowed_exts'].split(',').includes('cfgtest') ? original['upload.allowed_exts'].split(',').filter(x=>x!=='cfgtest').sort().join(',') : [...original['upload.allowed_exts'].split(','),'cfgtest'].sort().join(',');
  await record('系统参数编辑重置不写入、保存后刷新及恢复原值',async()=>{
@@ -17,7 +18,8 @@ const pathOf=r=>new URL(r.url()).pathname;
   assert.equal((await configs())['upload.allowed_exts'],threshold);
   await p.getByLabel('允许上传类型',{exact:true}).fill(original['upload.allowed_exts']);
   await action(p,'/admin/system/configs','PUT',()=>p.getByRole('button',{name:'保存',exact:true}).click());
-  assert.deepEqual(await configs(),original);
+  assert.deepEqual(await configs(),restored);
+  Object.assign(original,restored);
  });
  await record('系统参数非法扩展名失败后保留编辑并可重置',async()=>{
   await p.getByLabel('允许上传类型',{exact:true}).fill('../invalid');

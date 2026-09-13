@@ -147,7 +147,8 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
 
     await page.goto(s.base + '/system/config');
     await page.getByRole('heading', { name: '系统参数', exact: true }).waitFor();
-    await page.getByLabel('存储告警阈值', { exact: true }).waitFor();
+    await page.getByLabel('允许上传类型', { exact: true }).waitFor();
+    assert.equal(await page.getByLabel('存储告警阈值', { exact: true }).count(), 0);
     const readConfigRows = async () => (await json('GET', '/admin/system/configs'));
     const originalRows = await readConfigRows();
     const original = Object.fromEntries(originalRows.map(row => [row.key, row.value]));
@@ -260,7 +261,7 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
       assert.deepEqual(normalizeExtensions(restored['upload.allowed_exts']), normalizeExtensions(original['upload.allowed_exts']),
         'allowed extension set restored with API canonical ordering');
       await page.reload();
-      await page.getByLabel('存储告警阈值', { exact: true }).waitFor();
+      await page.getByLabel('允许上传类型', { exact: true }).waitFor();
       assert.equal(Number(await page.getByLabel('上传分片大小', { exact: true }).inputValue()), Number(original['upload.chunk_size']) / MB);
       assert.equal(Number(await page.getByLabel('单文件大小上限', { exact: true }).inputValue()), Number(original['upload.max_file_size']) / MB);
       await assertDirty(0);

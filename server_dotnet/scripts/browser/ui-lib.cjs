@@ -3,10 +3,13 @@ const OUT=process.env.YF_BROWSER_EVIDENCE_DIR;
 const s=JSON.parse(fs.readFileSync(OUT+'/state.private.json','utf8'));
 const f=fs.existsSync(OUT+'/fixtures.private.json')?JSON.parse(fs.readFileSync(OUT+'/fixtures.private.json','utf8')):{};
 function save(){fs.writeFileSync(OUT+'/fixtures.private.json',JSON.stringify(f));}
+let activeOperation=null;
 async function record(name,fn){
  const file=OUT+'/browser-operations.json';
+ const previousOperation=activeOperation;activeOperation=name;
  try{await fn();const items=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):[];items.push({name,status:'pass',at:new Date().toISOString()});fs.writeFileSync(file,JSON.stringify(items,null,2));console.log('PASS '+name);}
  catch(e){const items=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):[];items.push({name,status:'fail',at:new Date().toISOString(),error:e.message});fs.writeFileSync(file,JSON.stringify(items,null,2));throw e;}
+ finally{activeOperation=previousOperation;}
 }
 async function login(p,user,password){
  if(p.url()!==s.base+'/login')await p.goto(s.base+'/login');
@@ -44,5 +47,17 @@ async function reserveLoginBudget(user,count=1){
 async function api(c,method,url,data,token,expected=200){const r=await c.request.fetch(s.base+'/api/v1'+url,{method,data,headers:{Origin:s.base,Authorization:'Bearer '+token}});assert.equal(r.status(),expected,method+' '+url);return r;}
 async function navigate(p,url){await p.goto(s.base+url);await p.getByText('收起导航',{exact:true}).waitFor();}
 async function action(p,suffix,method,fn){const [r]=await Promise.all([p.waitForResponse(r=>new URL(r.url()).pathname.endsWith(suffix)&&r.request().method()===method),Promise.resolve().then(fn)]);assert.equal(r.status(),200,suffix);return r.json();}
-function track(p,label){p.on('pageerror',e=>fs.appendFileSync(OUT+'/page-errors.jsonl',JSON.stringify({label,error:e.message})+'\n'));p.on('response',r=>{if(r.status()>=500&&!p.expectedServerErrors?.has(new URL(r.url()).pathname))fs.appendFileSync(OUT+'/http-errors.jsonl',JSON.stringify({label,status:r.status(),path:new URL(r.url()).pathname})+'\n');});}
+function track(p,label){
+ const diagnostic=(kind,detail)=>fs.appendFileSync(OUT+'/browser-diagnostics.jsonl',JSON.stringify({at:new Date().toISOString(),label,operation:activeOperation,kind,...detail})+'\n');
+ const safeText=text=>String(text).replace(/Bearer\s+\S+/gi,'Bearer [redacted]').replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'[redacted-token]').slice(0,1200);
+ p.on('pageerror',e=>fs.appendFileSync(OUT+'/page-errors.jsonl',JSON.stringify({label,error:safeText(e.message)})+'\n'));
+ p.on('console',message=>{if(message.type()==='error')diagnostic('console-error',{message:safeText(message.text())});});
+ p.on('requestfailed',request=>diagnostic('request-failed',{method:request.method(),path:new URL(request.url()).pathname,error:request.failure()?.errorText}));
+ p.on('response',r=>{
+  if(r.status()<400)return;
+  const entry={label,status:r.status(),method:r.request().method(),path:new URL(r.url()).pathname};
+  diagnostic('http-error',{...entry,expectedServerError:p.expectedServerErrors?.has(entry.path)||false});
+  if(r.status()>=500&&!p.expectedServerErrors?.has(entry.path))fs.appendFileSync(OUT+'/http-errors.jsonl',JSON.stringify(entry)+'\n');
+ });
+}
 module.exports={fs,path,assert,OUT,s,f,save,record,login,reserveLoginBudget,api,navigate,action,track};

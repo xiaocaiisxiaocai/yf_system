@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, Form, Input, Message } from '@arco-design/web-react'
 import { IconLock, IconUser } from '@arco-design/web-react/icon'
 import { useLocation, useNavigate } from 'react-router-dom'
@@ -11,11 +11,14 @@ import PasswordInput from '../components/PasswordInput'
 export default function Login() {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const submitting = useRef(false)
   const setLogin = useAuth((s) => s.setLogin)
   const nav = useNavigate()
   const loc = useLocation() as { state?: { from?: string } }
 
   const submit = async (v: { employeeNo: string; password: string }) => {
+    if (submitting.current) return
+    submitting.current = true
     setLoading(true)
     try {
       const r = await withAuthLock(async () => {
@@ -43,6 +46,7 @@ export default function Login() {
         Message.error('网络错误')
       }
     } finally {
+      submitting.current = false
       setLoading(false)
     }
   }
@@ -60,10 +64,10 @@ export default function Login() {
     <AuthShell>
         <Form className="auth-form" form={form} layout="vertical" onSubmit={submit} autoComplete="on">
           <Form.Item field="employeeNo" rules={[{ required: true, message: '请输入工号' }]}>
-            <Input size="large" prefix={<IconUser />} placeholder="请输入工号" aria-label="工号" autoComplete="username" />
+            <Input size="large" prefix={<IconUser />} placeholder="请输入工号" aria-label="工号" autoComplete="username" disabled={loading} />
           </Form.Item>
           <Form.Item field="password" rules={[{ required: true, message: '请输入密码' }]}>
-            <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入密码" aria-label="密码" autoComplete="current-password" onPressEnter={() => form.submit()} />
+            <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入密码" aria-label="密码" autoComplete="current-password" disabled={loading} onPressEnter={() => form.submit()} />
           </Form.Item>
           <Button type="primary" size="large" long htmlType="submit" loading={loading}>
             登录

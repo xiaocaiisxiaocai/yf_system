@@ -3,6 +3,17 @@ const {fs,assert,OUT,s,record,login,api,navigate,action,track}=require(process.e
 (async()=>{let b,p;try{b=await chromium.launch({channel:'chrome',headless:true});const c=await b.newContext({viewport:{width:1440,height:1000}});p=await c.newPage();track(p,'management');const auth=await login(p,'admin',s.adminPassword);await p.waitForURL(s.base+'/');
 const roleName='UI自动验收角色-'+Date.now();let role;
 await navigate(p,'/rbac/roles');
+await record('内置角色隐藏删除入口且直接删除请求被拒绝',async()=>{
+ const before=(await(await api(c,'GET','/admin/roles',undefined,auth.accessToken)).json()).list.filter(r=>r.isBuiltIn);
+ assert(before.length>0,'built-in role fixtures must exist');
+ for(const item of before){
+  const builtInRow=p.getByRole('row').filter({hasText:item.name});await builtInRow.waitFor();
+  assert.equal(await builtInRow.getByRole('button',{name:'删除',exact:true}).count(),0);
+  await api(c,'DELETE','/admin/roles/'+item.id,undefined,auth.accessToken,400);
+ }
+ const after=(await(await api(c,'GET','/admin/roles',undefined,auth.accessToken)).json()).list.filter(r=>r.isBuiltIn);
+ assert.deepEqual(after,before,'rejected deletion must preserve every built-in role and permission');
+});
 await record('角色新增必填校验、取消和创建持久化',async()=>{
  await p.getByRole('button',{name:'新增角色',exact:true}).click();await p.getByRole('button',{name:'创建角色',exact:true}).click();await p.getByText('请输入名称',{exact:true}).waitFor();
  await p.getByRole('button',{name:'取消',exact:true}).click();await p.getByRole('button',{name:'新增角色',exact:true}).click();

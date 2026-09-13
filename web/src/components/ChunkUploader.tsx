@@ -183,6 +183,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone }: P
       const missing = Array.from({ length: total }, (_, i) => i).filter((i) => !uploaded.has(i))
       let cursor = 0
       let failed = false
+      let firstFailure: { reason: unknown } | undefined
       const worker = async () => {
         while (cursor < missing.length && !failed && isCurrent()) {
           const i = missing[cursor++]
@@ -195,6 +196,13 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone }: P
             })
           } catch (error) {
             failed = true
+            if (!firstFailure) {
+              firstFailure = { reason: error }
+              // One failed chunk makes the current worker batch unusable. Stop
+              // sibling requests promptly while retaining completed chunks for
+              // the next init/resume attempt.
+              attempt.controller.abort()
+            }
             throw error
           }
           if (!isCurrent()) return
@@ -204,6 +212,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone }: P
       }
       const results = await Promise.allSettled(Array.from({ length: Math.min(3, missing.length) }, () => worker()))
       if (!isCurrent()) return
+      if (firstFailure) throw firstFailure.reason
       const failure = results.find((result) => result.status === 'rejected')
       if (failure?.status === 'rejected') throw failure.reason
       await confirmMerge(attempt)

@@ -2625,22 +2625,55 @@ test('upload identity is based on bytes rather than filename and size', async ()
   await assert.rejects(fileMd5(a, () => true), /取消/)
 })
 
-test('a failed upload drains in-flight chunks before enabling retry', async () => {
-  let release, settled=false, calls=0, merges=0
-  const pending=new Promise(resolve=>{release=resolve})
+test('a failed upload aborts sibling chunks promptly and resumes the same session', async () => {
+  let initCalls=0, merges=0, settled=false, siblingAborted=false
+  const puts=[]
+  let markFailure
+  const failureObserved=new Promise(resolve=>{markFailure=resolve})
+  const originalFailure=new Error('original chunk failure')
   const Uploader=loadTs('src/components/ChunkUploader.tsx',{
     '@arco-design/web-react':arco,'@arco-design/web-react/icon':new Proxy({},{get:(_,n)=>component(n)}),
     '../api/types':{fmtSize:String},'../api/file-hash':{fileMd5:async()=> 'test-hash'},
-    '../api/client':{post:async url=>{if(url.endsWith('/merge'))merges++;return {data:{sessionId:'test-session',chunkSize:1,totalChunks:3,uploadedChunks:[]}}},put:async()=>{if(calls++===0)throw new Error('network failed');await pending}},
+    '../api/client':{
+      post:async url=>{
+        if(url.endsWith('/merge')){merges++;return {data:{id:99}}}
+        initCalls++
+        return {data:{sessionId:'test-session',chunkSize:1,totalChunks:3,uploadedChunks:initCalls===1?[]:[0],resumed:initCalls>1}}
+      },
+      put:async(url,_blob,config)=>{
+        const chunk=Number(url.split('/').at(-1))
+        puts.push({attempt:initCalls,chunk})
+        if(initCalls>1)return {data:{}}
+        if(chunk===0)return {data:{}}
+        if(chunk===1){markFailure();throw originalFailure}
+        return new Promise((resolve,reject)=>{
+          const abort=()=>{siblingAborted=true;const error=new Error('sibling aborted');error.name='AbortError';reject(error)}
+          if(config.signal.aborted)abort()
+          else config.signal.addEventListener('abort',abort,{once:true})
+        })
+      },
+      delete:async()=>{throw new Error('failed upload must retain its resumable session')},
+    },
   }).default
   let renderer,start
   await act(async()=>{renderer=create(React.createElement(Uploader,{projectId:1,visible:true,onClose(){},onDone(){}}))})
   await act(async()=>renderer.root.findByType('input').props.onChange({target:{files:[{name:'sample.pdf',size:3,slice:()=>new Blob(['x'])}]}}))
-  await act(async()=>{start=renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick().then(()=>{settled=true});await new Promise(resolve=>setImmediate(resolve))})
-  const retriedEarly=settled
-  await act(async()=>{release();await start})
-  assert.equal(retriedEarly,false,'one failed worker must not allow retry while sibling chunks are in flight')
+  await act(async()=>{
+    start=renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick().then(()=>{settled=true})
+    await failureObserved
+    await new Promise(resolve=>setImmediate(resolve))
+  })
+  assert.equal(siblingAborted,true,'the first failed chunk must abort a sibling that has no other completion path')
+  assert.equal(settled,true,'the failed attempt must finish without waiting for the chunk timeout')
+  await act(async()=>start)
+  assert.deepEqual(puts.filter(item=>item.attempt===1).map(item=>item.chunk).sort(),[0,1,2])
   assert.equal(merges,0)
+  const retry=renderer.root.findByType('Modal').props.footer.props.children[1]
+  assert.equal(retry.props.disabled,false)
+  await act(async()=>retry.props.onClick())
+  assert.equal(initCalls,2)
+  assert.deepEqual(puts.filter(item=>item.attempt===2).map(item=>item.chunk).sort(),[1,2],'retry keeps the completed chunk and uploads only missing chunks')
+  assert.equal(merges,1)
   await act(async()=>renderer.unmount())
 })
 
@@ -3241,6 +3274,60 @@ test('project detail ignores an older unread summary after the read refresh comp
   await act(async () => summaries[0].resolve({ data: { unreadMessages: 1 } }))
 
   assert.equal(renderer.root.findAllByType('Badge').length, 0, 'the older unread count must not restore a stale badge')
+  await act(async () => renderer.unmount())
+})
+
+test('login rejects duplicate submissions even before the browser lock runs and allows retry after failure', async () => {
+  let releaseLock
+  const lock = new Promise(resolve => { releaseLock = resolve })
+  const requests = []
+  const logins = []
+  const navigations = []
+  const authState = { token: null, user: null, setLogin: value => logins.push(value) }
+  const useAuth = Object.assign(selector => selector(authState), { getState: () => authState })
+  const axios = {
+    post: (url, body) => new Promise((resolve, reject) => requests.push({ url, body, resolve, reject })),
+    isAxiosError: () => false,
+  }
+  const Page = loadTs('src/pages/Login.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    'react-router-dom': { useNavigate: () => path => navigations.push(path), useLocation: () => ({ state: { from: '/projects' } }) },
+    axios: { __esModule: true, default: axios },
+    '../store/auth': { useAuth },
+    '../api/client': { withAuthLock: action => lock.then(action) },
+    '../components/AuthShell': { __esModule: true, default: component('AuthShell') },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  let first
+  const payload = { employeeNo: ' admin ', password: 'synthetic-login-password' }
+  const submit = renderer.root.findByType('Form').props.onSubmit
+  act(() => {
+    first = submit(payload)
+    void submit(payload)
+  })
+  assert.equal(requests.length, 0, 'network is still waiting for the shared browser lock')
+  assert.equal(renderer.root.findByType('Input').props.disabled, true)
+  assert.equal(renderer.root.findByType('PasswordInput').props.disabled, true)
+  await act(async () => { releaseLock(); await lock })
+  assert.equal(requests.length, 1, 'duplicate calls must not enqueue a second login')
+  assert.equal(requests[0].body.employeeNo, 'admin')
+  await act(async () => { requests[0].reject(new Error('simulated network failure')); await first })
+  assert.equal(renderer.root.findByType('Input').props.disabled, false)
+  assert.equal(logins.length, 0)
+  let retry
+  await act(async () => {
+    retry = renderer.root.findByType('Form').props.onSubmit(payload)
+    await lock
+  })
+  assert.equal(requests.length, 2)
+  await act(async () => {
+    requests[1].resolve({ data: { accessToken: 'fixture', mustChangePassword: false } })
+    await retry
+  })
+  assert.equal(logins.length, 1)
+  assert.deepEqual(navigations, ['/projects'])
   await act(async () => renderer.unmount())
 })
 

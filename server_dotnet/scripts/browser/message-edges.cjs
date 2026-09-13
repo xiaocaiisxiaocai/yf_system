@@ -26,6 +26,51 @@ const { assert, OUT, s, f, record, login, api, action, track } = require(process
     page.on('request', req => { if (new URL(req.url()).pathname === endpoint && req.method() === 'POST') posts++; });
     await page.goto(s.base + '/projects/' + project.id + '?tab=messages'); await input().waitFor();
 
+    await record('已读刷新后的未读角标不会被迟到的首屏摘要覆盖', async () => {
+      const raceProject = await request('POST', '/projects', {
+        name: '未读摘要竞态-' + crypto.randomBytes(4).toString('hex'), supplierId: f.suppliers.a.id,
+      });
+      await request('PUT', '/projects/' + raceProject.id + '/status', { status: 'IN_PROGRESS' });
+      const supplierContext = await browser.newContext();
+      let release;
+      const held = new Promise(resolve => { release = resolve; });
+      let arrived;
+      const firstArrived = new Promise(resolve => { arrived = resolve; });
+      const summaryPath = '/api/v1/projects/' + raceProject.id + '/summary';
+      let requests = 0;
+      const handler = async route => {
+        if (++requests !== 1) return route.continue();
+        const response = await route.fetch();
+        assert.equal((await response.json()).unreadMessages, 1, 'old snapshot must contain a real unread message');
+        arrived(); await held; await route.fulfill({ response });
+      };
+      try {
+        const supplierPage = await supplierContext.newPage(); track(supplierPage, 'summary-race-supplier');
+        const supplier = await login(supplierPage, f.users.a.username, f.users.a.changedPassword);
+        await api(supplierContext, 'POST', '/projects/' + raceProject.id + '/messages',
+          { content: '等待管理员实际阅读的摘要竞态留言' }, supplier.accessToken);
+        await page.route('**' + summaryPath, handler);
+        await page.goto(s.base + '/projects/' + raceProject.id);
+        await firstArrived;
+        const read = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/messages/read'
+          && response.request().method() === 'POST' && response.status() === 200);
+        const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === summaryPath && response.status() === 200);
+        await page.getByRole('tab', { name: /留言/ }).click();
+        await page.getByText('等待管理员实际阅读的摘要竞态留言', { exact: true }).waitFor();
+        await read;
+        assert.equal((await (await refreshed).json()).unreadMessages, 0);
+        const stale = page.waitForResponse(response => new URL(response.url()).pathname === summaryPath);
+        release(); await (await stale).finished();
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        assert.equal(await page.getByRole('tab', { name: /留言/ }).locator('.arco-badge').count(), 0);
+        assert.equal((await request('GET', '/projects/' + raceProject.id + '/summary')).unreadMessages, 0);
+        await page.screenshot({ path: OUT + '/summary-late-response.png' });
+      } finally {
+        release(); await page.unroute('**' + summaryPath, handler); await supplierContext.close();
+      }
+      await page.goto(s.base + '/projects/' + project.id + '?tab=messages'); await input().waitFor();
+    });
+
     await record('O33 空白留言与Ctrl+Enter不产生写入', async () => {
       const mailBefore = await pendingMail(); const before = posts;
       await input().fill('  \n \t  ');

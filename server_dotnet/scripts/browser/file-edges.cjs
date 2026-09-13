@@ -249,15 +249,29 @@ function workbookBytes(marker) {
       });
 
       let failedChunkPath;
+      let committed = false;
+      let firstChunkCommitted;
+      const committedChunk = new Promise(resolve => { firstChunkCommitted = resolve; });
       await page.route('**/api/v1/uploads/*/chunks/*', async route => {
-        failedChunkPath = new URL(route.request().url()).pathname;
-        writeUploadEvent({ event: 'route-hit', method: route.request().method(), path: failedChunkPath, status: null, requestfailed: null });
-        try {
-          await route.abort('connectionreset');
-        } finally {
-          writeUploadEvent({ event: 'route-exit', method: route.request().method(), path: failedChunkPath, status: null, requestfailed: null });
+        const chunkPath = new URL(route.request().url()).pathname;
+        const index = Number(chunkPath.split('/').at(-1));
+        if (index === 0 && !committed) {
+          const response = await route.fetch();
+          assert.equal(response.status(), 200, 'commit one real chunk before injecting a later failure');
+          await route.fulfill({ response });
+          committed = true; firstChunkCommitted();
+          return;
         }
-      }, { times: 1 });
+        if (index === 1 && !failedChunkPath) {
+          await committedChunk;
+          failedChunkPath = chunkPath;
+          writeUploadEvent({ event: 'route-hit', method: route.request().method(), path: chunkPath, status: null, requestfailed: null });
+          try { await route.abort('connectionreset'); }
+          finally { writeUploadEvent({ event: 'route-exit', method: route.request().method(), path: chunkPath, status: null, requestfailed: null }); }
+          return;
+        }
+        await route.continue();
+      });
 
       const firstInitReady = page.waitForResponse(response =>
         new URL(response.url()).pathname === '/api/v1/uploads/init'
