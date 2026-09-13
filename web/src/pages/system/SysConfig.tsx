@@ -290,11 +290,11 @@ export default function SysConfig() {
                   <label>SMTP 登录账号<Input aria-label="SMTP 登录账号" placeholder="通常为完整邮箱地址" autoComplete="off" value={smtpDraft.username} maxLength={320} disabled={smtpSaving} onChange={(username) => setSmtpDraft((v) => ({ ...v, username }))} /></label>
                   <label>发件邮箱<Input aria-label="发件邮箱" placeholder="例如 notice@example.com" value={smtpDraft.from} maxLength={320} disabled={smtpSaving} onChange={(from) => setSmtpDraft((v) => ({ ...v, from }))} /></label>
                   <label>邮箱密码 / 授权码<PasswordInput aria-label="邮箱密码或授权码" autoComplete="new-password" placeholder={smtp.hasPassword && !smtpIdentityChanged ? '已设置，留空保留原授权码' : '请输入邮箱密码或授权码'} value={smtpPassword} maxLength={1024} disabled={smtpSaving} onChange={setSmtpPassword} /></label>
-                  <label>连接加密<Select aria-label="SMTP 连接加密" value={smtpDraft.security} disabled={smtpSaving} onChange={(security) => setSmtpDraft((v) => ({ ...v, security }))}>
+                  <div className="system-smtp-field"><span>连接加密</span><Select aria-label="SMTP 连接加密" value={smtpDraft.security} disabled={smtpSaving} onChange={(security) => setSmtpDraft((v) => ({ ...v, security }))}>
                     <Select.Option value="Auto">自动（465 使用 TLS，其他端口使用 STARTTLS）</Select.Option>
                     <Select.Option value="SslOnConnect">TLS / SSL（通常为 465）</Select.Option>
                     <Select.Option value="StartTls">STARTTLS（通常为 587）</Select.Option>
-                  </Select></label>
+                  </Select></div>
                 </div>
                 <Space wrap>
                   <Button type="primary" disabled={!smtpDirty} loading={smtpSaving} onClick={saveSmtp}>保存邮箱设置</Button>

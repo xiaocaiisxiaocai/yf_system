@@ -3072,6 +3072,12 @@ test('SMTP editor preserves authorization codes, retries failed saves, and keeps
   let renderer
   await act(async () => { renderer = create(React.createElement(Page)) })
   const port = () => renderer.root.findAllByType('InputNumber').find(n => n.props['aria-label'] === 'SMTP 端口')
+  const security = () => renderer.root.findAllByType('Select').find(n => n.props['aria-label'] === 'SMTP 连接加密')
+  for (let ancestor = security().parent; ancestor; ancestor = ancestor.parent) {
+    assert.notEqual(ancestor.type, 'label', 'a wrapping label forwards another click to the Select input and closes its popup')
+  }
+  await act(async () => security().props.onChange('StartTls'))
+  assert.equal(security().props.value, 'StartTls')
   const password = () => renderer.root.findByType('PasswordInput')
   const save = () => renderer.root.findAllByType('Button').find(n => n.props.children === '保存邮箱设置')
   const notification = () => {
@@ -3089,6 +3095,7 @@ test('SMTP editor preserves authorization codes, retries failed saves, and keeps
   await act(async () => save().props.onClick())
   assert.equal(writes.at(-1).url, '/admin/system/mail-settings')
   assert.equal(writes.at(-1).body.password, null)
+  assert.equal(writes.at(-1).body.security, 'StartTls')
   assert.equal(notification().props.value, 'false')
   await act(async () => password().props.onChange('new-fixture-code'))
   await act(async () => save().props.onClick())

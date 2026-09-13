@@ -1105,4 +1105,4 @@ html, body, #root {
 }
 
 .system-smtp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; }
-.system-smtp-grid > label { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--color-text-2); }
+.system-smtp-grid > label, .system-smtp-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--color-text-2); }
