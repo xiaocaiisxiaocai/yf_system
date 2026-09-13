@@ -50,6 +50,12 @@ public sealed class MarkMessagesReadRequest
     public ulong[]? Ids { get; init; }
 }
 
+public sealed class MarkCollaborationReadRequest
+{
+    [JsonPropertyName("ids")]
+    public ulong[]? Ids { get; init; }
+}
+
 internal sealed class ProjectRow
 {
     public ulong Id { get; init; }

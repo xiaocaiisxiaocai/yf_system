@@ -88,7 +88,7 @@ internal sealed class MessageService(
             cancellationToken: ct));
         var messageId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
             "SELECT LAST_INSERT_ID()", transaction: tx, cancellationToken: ct));
-        await ProjectNotificationService.EnqueueMessageAsync(conn, tx, project, content, current, options.WebBaseUrl, audit, ct);
+        await ProjectNotificationService.EnqueueMessageAsync(conn, tx, project, messageId, content, current, options.WebBaseUrl, audit, ct);
         await audit.WriteAsync(conn, tx, current.Id, "MESSAGE_CREATE", "message", messageId, new { projectId }, ip, ct);
         var message = await LoadMessageAsync(conn, tx, messageId, false, false, ct);
         var participants = await ProjectNotificationService.ParticipantsAsync(conn, tx, project, ct);

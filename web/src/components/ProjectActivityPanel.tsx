@@ -33,6 +33,7 @@ interface ActivityResponse {
 interface Props {
   projectId: number
   active?: boolean
+  revision?: string
   onNavigate?: (type: ActivityType, targetId: number) => void
 }
 
@@ -133,7 +134,15 @@ function displayTitle(item: ProjectActivity): string {
   return item.title || item.action || '项目动态'
 }
 
-export default function ProjectActivityPanel({ projectId, active = true, onNavigate }: Props) {
+export default function ProjectActivityPanel({ projectId, active = true, onNavigate, revision = '' }: Props) {
+  const [seenRevision, setSeenRevision] = useState(revision)
+  const currentRevision = useRef(revision)
+  useEffect(() => {
+    currentRevision.current = revision
+    // The first remote snapshot establishes the baseline for subsequent update notices.
+    // eslint-disable-next-line react/set-state-in-effect
+    if (!seenRevision && revision) setSeenRevision(revision)
+  }, [revision, seenRevision])
   const [filter, setFilter] = useState<ActivityType | undefined>()
   const [list, setList] = useState<ProjectActivity[]>([])
   const [summary, setSummary] = useState<ActivitySummary>(EMPTY_SUMMARY)
@@ -155,6 +164,7 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
     if (!append && currentRequest?.mode === 'initial' && currentRequest.queryKey === queryKey) return
 
     const seq = ++requestSeq.current
+    const requestRevision = currentRevision.current
     inFlight.current = { mode: append ? 'append' : 'initial', queryKey }
     if (append) {
       setAppending(true)
@@ -183,6 +193,7 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
       cursor.current = data.nextCursor
       setNextCursor(data.nextCursor)
       setSummary(data.summary)
+      if (!append) setSeenRevision(requestRevision)
       setLoadError(false)
       setAppendError(false)
     } catch {
@@ -277,7 +288,9 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
             <Select.Option value="">全部</Select.Option>
             {ACTIVITY_TYPES.map((item) => <Select.Option key={item.value} value={item.value}>{item.label}</Select.Option>)}
           </Select>
-          <Button onClick={() => load(false)} loading={loading}>刷新</Button>
+          <Button onClick={() => load(false)} loading={loading}>
+            {revision && seenRevision && revision !== seenRevision ? '有新动态，点击查看' : '刷新'}
+          </Button>
         </div>
       </div>
 

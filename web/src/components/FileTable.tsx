@@ -9,6 +9,7 @@ import { type FileItem, type PageResp, fmtSize, fmtTime } from '../api/types'
 import { actionSlots } from './ActionSlots'
 import ChunkUploader from './ChunkUploader'
 import PdfPreview from './PdfPreview'
+import { useCollaboration } from '../store/collaboration'
 
 // Excel 解析器仅在用户真正打开工作簿预览时按需加载
 const ExcelPreview = lazy(() => import('./ExcelPreview'))
@@ -42,6 +43,8 @@ async function downloadAuthed(id: number, name: string) {
 }
 
 export default function FileTable({ projectId, projectStatus, targetId }: Props) {
+  const revision = useCollaboration((state) => state.revision)
+  const syncStatus = useCollaboration((state) => state.status)
   const [data, setData] = useState<PageResp<FileItem>>({ list: [], total: 0, page: 1, pageSize: 10 })
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)
@@ -75,13 +78,14 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
   }, [])
 
   useEffect(() => {
+    if (syncStatus === 'error') return
     const seq = ++loadSeq.current
     let active = true
     fetchFiles()
       .then((next) => {
         if (active && seq === loadSeq.current) {
           setData(next)
-          setSelected([])
+          setSelected((current) => current.filter((id) => next.list.some((file) => file.id === id)))
           setLoadError(false)
           const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || pageSize)))
           if (page > lastPage) setPage(lastPage)
@@ -96,7 +100,7 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
     return () => {
       active = false
     }
-  }, [fetchFiles, page, pageSize, reloadKey])
+  }, [fetchFiles, page, pageSize, reloadKey, revision, syncStatus])
 
   useEffect(() => {
     // The upload dialog is owned by this component and must close when the project becomes read-only.

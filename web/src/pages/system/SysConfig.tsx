@@ -294,7 +294,7 @@ export default function SysConfig() {
               extra={
                 <Space size={8}>
                   <Tag color={mail.configured ? 'green' : 'red'}>{mail.configured ? 'SMTP 已配置' : 'SMTP 未配置'}</Tag>
-                  <Tag color={mail.notificationsEnabled ? 'arcoblue' : 'gray'}>{mail.notificationsEnabled ? '通知已启用' : '通知已关闭'}</Tag>
+                  <Tag color={mail.notificationsEnabled ? 'arcoblue' : 'gray'}>{mail.notificationsEnabled ? '邮件通知已启用' : '邮件通知已关闭'}</Tag>
                 </Space>
               }
             >

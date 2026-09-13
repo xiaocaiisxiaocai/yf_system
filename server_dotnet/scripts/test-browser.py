@@ -31,8 +31,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = Path(__file__).resolve().parent / 'browser'
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path)
-parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls'],
-    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls'])
+parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration'],
+    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration'])
 args = parser.parse_args()
 if not __debug__:
     raise SystemExit('Do not run the browser suite with Python assertions disabled (-O/PYTHONOPTIMIZE).')
@@ -42,7 +42,7 @@ if len(args.steps) != len(set(args.steps)):
     raise SystemExit('Run each browser step at most once.')
 for step, dependencies in {'business': ['users'], 'final': ['business'], 'layout': ['business'],
                            'project-edges': ['users'], 'file-edges': ['users'], 'message-edges': ['users'],
-                           'smtp-settings': ['system'], 'business-controls': ['users']}.items():
+                           'smtp-settings': ['system'], 'business-controls': ['users'], 'collaboration': ['users']}.items():
     if step in args.steps and any(required not in args.steps[:args.steps.index(step)] for required in dependencies):
         raise SystemExit(f'{step} requires earlier steps: {", ".join(dependencies)}')
 output = (args.output or ROOT / '.runlogs' / ('browser-' + time.strftime('%Y%m%d-%H%M%S'))).resolve()

@@ -9,9 +9,10 @@ namespace Yf.Api.Infrastructure;
 /// <summary>Explicit, restartable .NET-owned schema upgrades. Startup never changes schema.</summary>
 public static class SchemaMigrations
 {
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
     private const string PreviousBaseline = "m20260910_000016_project_workflow";
-    private const string MigrationName = "000001_adopt_schema_sessions_supplier_boundary";
+    private const string FirstMigrationName = "000001_adopt_schema_sessions_supplier_boundary";
+    private const string CollaborationMigrationName = "000002_collaboration_notification_reads";
     private const string MigrationTableSql = """
         CREATE TABLE `yf_schema_migrations` (
           `version` int NOT NULL,
@@ -21,7 +22,19 @@ public static class SchemaMigrations
           PRIMARY KEY (`version`)
         ) ENGINE=InnoDB
         """;
-    private static string Checksum => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(MigrationName + ":1")));
+    internal const string CollaborationReadsTableSql = """
+        CREATE TABLE `collaboration_reads` (
+          `activity_id` bigint unsigned NOT NULL,
+          `user_id` bigint unsigned NOT NULL,
+          `read_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (`activity_id`,`user_id`),
+          KEY `idx_collaboration_reads_user_activity` (`user_id`,`activity_id`),
+          CONSTRAINT `fk_collaboration_reads_activity` FOREIGN KEY (`activity_id`) REFERENCES `project_activities` (`id`) ON DELETE CASCADE,
+          CONSTRAINT `fk_collaboration_reads_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """;
+    private static string FirstChecksum => Checksum(FirstMigrationName);
+    private static string CollaborationChecksum => Checksum(CollaborationMigrationName);
 
     public static async Task ApplyAsync(AppDb db, CancellationToken ct = default)
     {
@@ -44,15 +57,24 @@ public static class SchemaMigrations
             ct);
         await ValidatePermissionGateAsync(conn, ct);
         var hasMigrationTable = await HasTableAsync(conn, "yf_schema_migrations", ct);
+        var hasCollaborationReads = await HasTableAsync(conn, "collaboration_reads", ct);
+        MigrationRow[] migrationRows;
         if (hasMigrationTable)
         {
             await SchemaShapeValidator.ValidateTableAsync(conn, "yf_schema_migrations", MigrationTableSql, ct);
-            ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: false);
+            migrationRows = await ReadMigrationRowsAsync(conn, ct);
+            ValidateMigrationRows(migrationRows, requireCurrent: false);
         }
         else
         {
-            await conn.ExecuteAsync(new CommandDefinition(MigrationTableSql, cancellationToken: ct));
+            migrationRows = [];
         }
+        if (hasCollaborationReads)
+            await SchemaShapeValidator.ValidateTableAsync(conn, "collaboration_reads", CollaborationReadsTableSql, ct);
+        if (migrationRows.Any(row => row.Version == CurrentVersion) && !hasCollaborationReads)
+            throw new InvalidOperationException("Migration history says collaboration reads are applied, but the required table is missing. Restore the matching schema before retrying.");
+        if (!hasMigrationTable)
+            await conn.ExecuteAsync(new CommandDefinition(MigrationTableSql, cancellationToken: ct));
 
         // MySQL DDL commits implicitly. Every step is repeatable after a crash,
         // and history is recorded only after the resulting schema is validated.
@@ -68,6 +90,9 @@ public static class SchemaMigrations
         await SchemaShapeValidator.ValidateBaselineAsync(conn, SchemaShapeValidationMode.Strict, ct);
         await ValidatePermissionGateAsync(conn, ct);
         await SchemaShapeValidator.ValidateTableAsync(conn, "yf_schema_migrations", MigrationTableSql, ct);
+        if (!hasCollaborationReads)
+            await conn.ExecuteAsync(new CommandDefinition(CollaborationReadsTableSql, cancellationToken: ct));
+        await SchemaShapeValidator.ValidateTableAsync(conn, "collaboration_reads", CollaborationReadsTableSql, ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         var supplierGrants = await conn.QueryAsync<SupplierGrant>(new CommandDefinition(
@@ -76,12 +101,16 @@ public static class SchemaMigrations
         {
             await conn.ExecuteAsync(new CommandDefinition("DELETE FROM role_permissions WHERE role_id=@RoleId AND permission_id=@PermissionId", grant, tx, cancellationToken: ct));
             await new AuditService([]).WriteAsync(conn, tx, null, "ROLE_ASSIGN_PERMS", "role", grant.RoleId,
-                new { migration = MigrationName, removedPermission = grant.Code, reason = "supplier identity boundary" }, null, ct);
+                new { migration = FirstMigrationName, removedPermission = grant.Code, reason = "supplier identity boundary" }, null, ct);
         }
         if (legacy == PreviousBaseline)
             await conn.ExecuteAsync(new CommandDefinition("INSERT INTO seaql_migrations(version,applied_at) VALUES (@version,UNIX_TIMESTAMP())", new { version = SchemaBootstrap.Version }, tx, cancellationToken: ct));
-        await conn.ExecuteAsync(new CommandDefinition("INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (@version,@name,@checksum,UTC_TIMESTAMP(6))", new { version = CurrentVersion, name = MigrationName, checksum = Checksum }, tx, cancellationToken: ct));
+        await conn.ExecuteAsync(new CommandDefinition("INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (1,@name,@checksum,UTC_TIMESTAMP(6))", new { name = FirstMigrationName, checksum = FirstChecksum }, tx, cancellationToken: ct));
+        // No receipt backfill is intentional: after v2, existing meaningful visible
+        // activities are initially unread for each user, with no arbitrary cutoff.
+        await conn.ExecuteAsync(new CommandDefinition("INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (2,@name,@checksum,UTC_TIMESTAMP(6))", new { name = CollaborationMigrationName, checksum = CollaborationChecksum }, tx, cancellationToken: ct));
         await tx.CommitAsync(ct);
+        ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: true);
         Console.WriteLine("Database is at .NET schema version " + CurrentVersion + ". No business records were removed.");
     }
 
@@ -91,6 +120,9 @@ public static class SchemaMigrations
             throw new InvalidOperationException("Database has not been adopted by .NET. Back up the database and run --migrate-database explicitly before startup.");
         await SchemaShapeValidator.ValidateTableAsync(conn, "yf_schema_migrations", MigrationTableSql, ct);
         ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: true);
+        if (!await HasTableAsync(conn, "collaboration_reads", ct))
+            throw new InvalidOperationException("Database schema version 2 is incomplete. Run the matching application migration command before startup.");
+        await SchemaShapeValidator.ValidateTableAsync(conn, "collaboration_reads", CollaborationReadsTableSql, ct);
         await SchemaShapeValidator.ValidateBaselineAsync(conn, SchemaShapeValidationMode.Strict, ct);
         await ValidatePermissionGateAsync(conn, ct);
     }
@@ -108,11 +140,19 @@ public static class SchemaMigrations
 
     private static void ValidateMigrationRows(MigrationRow[] rows, bool requireCurrent)
     {
-        if (rows.Any(x => x.Version != CurrentVersion || x.Name != MigrationName || x.Checksum != Checksum))
+        var expected = new[]
+        {
+            new MigrationRow(1, FirstMigrationName, FirstChecksum),
+            new MigrationRow(2, CollaborationMigrationName, CollaborationChecksum),
+        };
+        if (rows.Length > expected.Length || rows.Where((row, index) => row != expected[index]).Any())
             throw new InvalidOperationException("Unknown or modified .NET migration history; upgrade this application or restore the correct migration definitions.");
-        if (requireCurrent && rows.Length != 1)
+        if (requireCurrent && rows.Length != CurrentVersion)
             throw new InvalidOperationException("Unsupported .NET schema version or modified migration history; run the matching application migration command.");
     }
+
+    private static string Checksum(string name) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(name + ":1")));
 
     private static Task<bool> HasTableAsync(MySqlConnection conn, string table, CancellationToken ct) => conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=@table)", new { table }, cancellationToken: ct));
     private static Task<bool> HasColumnAsync(MySqlConnection conn, string table, string column, CancellationToken ct) => conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=@table AND column_name=@column)", new { table, column }, cancellationToken: ct));

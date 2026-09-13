@@ -8,9 +8,12 @@ import MessagePanel from '../../components/MessagePanel'
 import MemberPanel from '../../components/MemberPanel'
 import ProjectActivityPanel from '../../components/ProjectActivityPanel'
 import ProjectWorkflowPanel from '../../components/ProjectWorkflowPanel'
+import { useCollaboration } from '../../store/collaboration'
+import { isAxiosError } from 'axios'
 
 interface Summary {
   unreadMessages: number
+  activityRevision?: string
 }
 
 export default function ProjectDetail() {
@@ -25,6 +28,8 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const navigate = useNavigate()
   const [project, setProject] = useState<Project | null>(null)
   const [summary, setSummary] = useState<Summary>({ unreadMessages: 0 })
+  const revision = useCollaboration((state) => state.revision)
+  const syncStatus = useCollaboration((state) => state.status)
   const summarySeq = useRef(0)
   const [loadErrorFor, setLoadErrorFor] = useState<number | null>(null)
   const loadingProjectId = useRef<number | null>(null)
@@ -98,7 +103,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
   }, [searchParams, setSearchParams, tab])
 
   useEffect(() => {
-    if (!validProjectId) return
+    if (!validProjectId || syncStatus === 'error') return
     let active = true
     const controller = new AbortController()
     loadingProjectId.current = pid
@@ -108,8 +113,11 @@ function ProjectDetailContent({ id }: { id?: string }) {
         setProject(next)
         setLoadErrorFor(null)
       })
-      .catch(() => {
-        if (active) setLoadErrorFor(pid)
+      .catch((error: unknown) => {
+        if (active) {
+          setLoadErrorFor(pid)
+          if (isAxiosError(error) && (error.response?.status === 403 || error.response?.status === 404)) setProject(null)
+        }
       })
       .finally(() => {
         if (active && loadingProjectId.current === pid) loadingProjectId.current = null
@@ -118,17 +126,17 @@ function ProjectDetailContent({ id }: { id?: string }) {
       active = false
       controller.abort()
     }
-  }, [fetchProject, pid, validProjectId])
+  }, [fetchProject, pid, validProjectId, revision, syncStatus])
 
   useEffect(() => {
-    if (project?.id !== pid) return
+    if (project?.id !== pid || syncStatus === 'error') return
     // Summary is the external server state synchronized after the project becomes available.
     // eslint-disable-next-line react/set-state-in-effect
     void loadSummary()
     return () => {
       summarySeq.current += 1
     }
-  }, [project?.id, pid, loadSummary])
+  }, [project?.id, pid, loadSummary, revision, syncStatus])
 
   if (!validProjectId) return (
     <div style={{ textAlign: 'center', padding: 32 }}>
@@ -161,6 +169,12 @@ function ProjectDetailContent({ id }: { id?: string }) {
 
   return (
     <div className={`project-detail-page${tab === 'activity' ? ' project-detail-page--activity' : ''}`}>
+      {loadErrorFor === pid && (
+        <div role="status" style={{ marginBottom: 12 }}>
+          <Typography.Text type="warning">项目更新失败，当前显示上次获取的数据。</Typography.Text>
+          <Button type="text" size="small" onClick={loadProject}>重新获取</Button>
+        </div>
+      )}
       <Card className="page-card project-detail-summary-card" style={{ marginBottom: 16 }}>
         <div className="detail-heading">
           <div>
@@ -219,7 +233,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
         <Tabs activeTab={tab} onChange={handleTabChange}>
           <Tabs.TabPane key="files" title="文件">
             <FileTable
-              key={`${pid}:${targetId ?? 'all'}`}
+              key={`${pid}:${filesTargetId ?? 'all'}`}
               projectId={pid}
               projectStatus={project.status}
               targetId={filesTargetId}
@@ -238,17 +252,20 @@ function ProjectDetailContent({ id }: { id?: string }) {
             }
           >
             <MessagePanel
-              key={`${pid}:${targetId ?? 'all'}`}
+              key={pid}
               projectId={pid}
               projectStatus={project.status}
               targetId={messagesTargetId}
               onRead={loadSummary}
+              revision={summary.activityRevision}
+              onSent={messagesTargetId ? clearTarget : undefined}
             />
           </Tabs.TabPane>
           <Tabs.TabPane key="activity" title="项目动态">
             <ProjectActivityPanel
               projectId={pid}
               active={tab === 'activity'}
+              revision={summary.activityRevision}
               onNavigate={handleActivityNavigate}
             />
           </Tabs.TabPane>

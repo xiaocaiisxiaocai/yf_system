@@ -71,7 +71,7 @@ public sealed class SchemaShapeTests
     }
 
     [Fact(Timeout = 60_000)]
-    public async Task V17AndDotNetV1RemainRestartable()
+    public async Task V17AndDotNetV2RemainRestartable()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("shape_v17", ct);
@@ -82,8 +82,11 @@ public sealed class SchemaShapeTests
         await SchemaBootstrap.ValidateAsync(database.Database, ct);
 
         await using var conn = await database.Database.OpenAsync(ct);
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM yf_schema_migrations WHERE version=1", cancellationToken: ct)));
+        Assert.Equal(SchemaMigrations.CurrentVersion, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM yf_schema_migrations", cancellationToken: ct)));
+        Assert.True(await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='collaboration_reads')",
+            cancellationToken: ct)));
     }
 
     [Fact(Timeout = 60_000)]
@@ -286,7 +289,7 @@ public sealed class SchemaShapeTests
         private static readonly string[] DataSnapshotTables =
         [
             "roles", "permissions", "role_permissions", "system_configs", "seaql_migrations",
-            "yf_schema_migrations", "refresh_tokens", "audit_logs"
+            "yf_schema_migrations", "collaboration_reads", "refresh_tokens", "audit_logs"
         ];
 
         public AppDb Database { get; } = database;
@@ -389,8 +392,8 @@ public sealed class SchemaShapeTests
         public async Task RecreateMigrationTableWithLegacyDdlAsync(CancellationToken ct)
         {
             await using var conn = await Database.OpenAsync(ct);
-            var row = await conn.QuerySingleAsync<MigrationHistoryRow>(new CommandDefinition(
-                "SELECT version,name,checksum,applied_at AppliedAt FROM yf_schema_migrations",
+            var rows = await conn.QueryAsync<MigrationHistoryRow>(new CommandDefinition(
+                "SELECT version,name,checksum,applied_at AppliedAt FROM yf_schema_migrations ORDER BY version",
                 cancellationToken: ct));
             await conn.ExecuteAsync(new CommandDefinition("DROP TABLE yf_schema_migrations", cancellationToken: ct));
             await conn.ExecuteAsync(new CommandDefinition("""
@@ -403,7 +406,7 @@ public sealed class SchemaShapeTests
                 """, cancellationToken: ct));
             await conn.ExecuteAsync(new CommandDefinition(
                 "INSERT INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES(@Version,@Name,@Checksum,@AppliedAt)",
-                row, cancellationToken: ct));
+                rows, cancellationToken: ct));
         }
 
         public async Task InsertRefreshTokenAsync(bool includeSessionColumn, CancellationToken ct)

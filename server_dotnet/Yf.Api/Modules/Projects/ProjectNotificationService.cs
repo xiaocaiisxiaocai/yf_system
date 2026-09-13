@@ -10,6 +10,7 @@ internal static class ProjectNotificationService
         MySqlConnection conn,
         MySqlTransaction tx,
         ProjectRow project,
+        ulong messageId,
         string content,
         CurrentUser actor,
         string baseUrl,
@@ -18,6 +19,7 @@ internal static class ProjectNotificationService
     {
         var preview = Truncate(content, 80);
         var suffix = content.EnumerateRunes().Count() > 80 ? "…" : string.Empty;
+        var targetUrl = ProjectUrl(baseUrl, project.Id, "messages", messageId);
         await EnqueueAsync(
             conn,
             tx,
@@ -29,7 +31,7 @@ internal static class ProjectNotificationService
             false,
             actor.Id,
             $"[协作平台] 项目「{project.Name}」有新留言",
-            $"项目：{project.Name}\n留言人：工号 {actor.EmployeeNo}\n内容：{preview}{suffix}\n\n请登录平台查看：{baseUrl}\n\n（本邮件由系统自动发送）",
+            $"项目：{project.Name}\n留言人：工号 {actor.EmployeeNo}\n内容：{preview}{suffix}\n\n请登录平台查看：{targetUrl}\n\n（本邮件由系统自动发送）",
             ct,
             audit);
     }
@@ -88,6 +90,7 @@ internal static class ProjectNotificationService
             "WITHDRAW" => ["project:list"],
             _ => [],
         };
+        var targetUrl = ProjectUrl(baseUrl, project.Id, "activity");
         await EnqueueAsync(
             conn,
             tx,
@@ -99,7 +102,7 @@ internal static class ProjectNotificationService
             action == "WITHDRAW",
             action == "WITHDRAW" ? null : actor.Id,
             $"[协作平台] 项目「{project.Name}」{verb}",
-            $"项目：{project.Name}\n结果：{verb}{sideLine}\n操作人：工号 {actor.EmployeeNo}{reasonLine}\n\n请登录平台查看：{baseUrl}\n\n（本邮件由系统自动发送）",
+            $"项目：{project.Name}\n结果：{verb}{sideLine}\n操作人：工号 {actor.EmployeeNo}{reasonLine}\n\n请登录平台查看：{targetUrl}\n\n（本邮件由系统自动发送）",
             ct,
             audit);
     }
@@ -271,6 +274,9 @@ internal static class ProjectNotificationService
     private static string OppositeSide(CurrentUser actor) => actor.IsInternal ? "SUPPLIER" : "COMPANY";
 
     private static string SideUserType(string side) => side == "SUPPLIER" ? "SUPPLIER" : "INTERNAL";
+
+    private static string ProjectUrl(string baseUrl, ulong projectId, string tab, ulong? targetId = null) =>
+        $"{baseUrl.TrimEnd('/')}/projects/{projectId}?tab={tab}" + (targetId is null ? string.Empty : $"&target={targetId.Value}");
 
     private static string Truncate(string value, int count) => string.Concat(value.EnumerateRunes().Take(count));
 }

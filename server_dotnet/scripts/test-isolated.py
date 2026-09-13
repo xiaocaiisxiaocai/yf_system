@@ -27,6 +27,7 @@ from test_identity_contracts import run_identity_checks
 from test_file_contracts import run_file_checks
 from test_system_contracts import run_system_checks
 from test_project_remediation import run_project_remediation_checks
+from test_collaboration_contracts import run_collaboration_checks
 from test_business_acceptance import run_business_acceptance
 from test_workflow_acceptance import run_workflow_acceptance
 
@@ -145,6 +146,7 @@ try:
         with conn.cursor() as cursor:
             cursor.execute("SELECT password_hash FROM users WHERE employee_no='admin'")
             preserved_hash = cursor.fetchone()[0]
+            cursor.execute("DROP TABLE collaboration_reads")
             cursor.execute("DROP TABLE yf_schema_migrations")
             cursor.execute("DELETE FROM seaql_migrations WHERE version='m20260911_000017_auth_session_families'")
             cursor.execute("ALTER TABLE refresh_tokens DROP INDEX idx_refresh_tokens_session_state, DROP COLUMN session_id")
@@ -159,18 +161,27 @@ try:
             cursor.execute("SELECT password_hash FROM users WHERE employee_no='admin'")
             check(".NET migration from baseline 16 is repeatable and preserves users", cursor.fetchone()[0] == preserved_hash)
             cursor.execute("SELECT COUNT(*) FROM yf_schema_migrations")
-            check(".NET owns schema version history", cursor.fetchone()[0] == 1)
+            check(".NET owns schema version history", cursor.fetchone()[0] == 2)
+            cursor.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='collaboration_reads'")
+            check("collaboration read receipt migration creates its additive table", cursor.fetchone()[0] == 1)
             cursor.execute("SELECT session_id FROM refresh_tokens WHERE id=%s", (legacy_token_id,))
             check("legacy refresh rows get persisted session family", cursor.fetchone()[0] == format(legacy_token_id, 'x').zfill(36))
             cursor.execute("SELECT COUNT(*) FROM role_permissions rp JOIN roles r ON r.id=rp.role_id JOIN permissions p ON p.id=rp.permission_id WHERE r.name='供应商人员' AND p.code='user:manage'")
             check("migration removes preexisting supplier management grants", cursor.fetchone()[0] == 0)
+            cursor.execute("DELETE FROM yf_schema_migrations WHERE version=2")
+        stale_schema = subprocess.run(["dotnet", str(DLL)], cwd=API, env=env, capture_output=True, timeout=20)
+        check("startup refuses an unapplied collaboration migration", stale_schema.returncode != 0)
+        migration = subprocess.run(["dotnet", str(DLL), "--migrate-database"], cwd=API, env=env, capture_output=True)
+        if migration.returncode:
+            raise RuntimeError(".NET collaboration migration recovery failed: " + migration.stderr.decode(errors="replace")[:1500])
+        with conn.cursor() as cursor:
             cursor.execute("SELECT checksum FROM yf_schema_migrations WHERE version=1")
             checksum = cursor.fetchone()[0]
-            cursor.execute("UPDATE yf_schema_migrations SET checksum=%s", ('0' * 64,))
+            cursor.execute("UPDATE yf_schema_migrations SET checksum=%s WHERE version=1", ('0' * 64,))
         tampered = subprocess.run(["dotnet", str(DLL)], cwd=API, env=env, capture_output=True, timeout=20)
         check("startup rejects modified migration history", tampered.returncode != 0)
         with conn.cursor() as cursor:
-            cursor.execute("UPDATE yf_schema_migrations SET checksum=%s", (checksum,))
+            cursor.execute("UPDATE yf_schema_migrations SET checksum=%s WHERE version=1", (checksum,))
         if not TEST_HOST.is_file():
             raise RuntimeError("Build server_dotnet/TestHost/Yf.Api.TestHost.csproj before HTTP testing")
         test_dll = TEST_HOST
@@ -240,6 +251,7 @@ try:
             check("profile has frontend permission/menu contract", bool(profile["permissions"]) and bool(profile["menus"]))
             run_identity_checks(client, Client, conn, check)
             run_project_remediation_checks(client, Client, conn, check)
+            run_collaboration_checks(client, Client, conn, check)
             for path in ("/dashboard/summary", "/dashboard/pending-projects", "/departments", "/permissions", "/supplier-options", "/internal-user-options", "/admin/users", "/admin/roles", "/admin/suppliers", "/admin/user-role-options", "/admin/system/configs", "/admin/system/mail-status", "/admin/audit-logs"):
                 client.call("GET", "/api/v1" + path)
                 check("read contract " + path, True)

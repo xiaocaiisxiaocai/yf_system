@@ -18,6 +18,7 @@ import {
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../store/auth'
 import http, { withAuthLock } from '../api/client'
+import CollaborationNotifications from '../components/CollaborationNotifications'
 
 const { Sider, Header, Content } = Layout
 
@@ -33,7 +34,7 @@ const MENU_ITEMS = [
 ]
 
 export default function AdminLayout() {
-  const { menus, user, logout } = useAuth()
+  const { generation, menus, permissions, token, user, logout } = useAuth()
   const nav = useNavigate()
   const loc = useLocation()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -47,6 +48,9 @@ export default function AdminLayout() {
 
   const items = MENU_ITEMS.filter((m) => menus.includes(m.code))
   const hasMenus = items.length > 0
+  const canUseCollaboration = Boolean(
+    token && menus.includes('project:list') && permissions.includes('project:list'),
+  )
   const selected =
     items
       .filter((m) => (m.path === '/' ? loc.pathname === '/' : loc.pathname.startsWith(m.path)))
@@ -115,34 +119,37 @@ export default function AdminLayout() {
           <img src="/saa-logo.svg" alt="SAA" />
           <span>供应商协作平台</span>
         </div>
-        <Dropdown
-          trigger="click"
-          droplist={
-            <Menu
-              onClickMenuItem={(k) => {
-                if (k === 'profile') nav('/profile')
-                if (k === 'logout') doLogout()
-              }}
-            >
-              <Menu.Item key="profile">
-                <IconUser style={{ marginRight: 8 }} />
-                个人资料维护
-              </Menu.Item>
-              <Menu.Item key="logout">
-                <IconPoweroff style={{ marginRight: 8 }} />
-                退出登录
-              </Menu.Item>
-            </Menu>
-          }
-        >
-          <button className="layout-profile" type="button" aria-label={`账号菜单：${user?.realName || '当前用户'}`}>
-            <Avatar size={30} style={{ background: 'rgb(var(--primary-6))' }}>
-              {user?.realName?.slice(0, 1)}
-            </Avatar>
-            <span>{user?.realName}</span>
-            <IconDown />
-          </button>
-        </Dropdown>
+        <div className="layout-header-account">
+          {canUseCollaboration && <CollaborationNotifications key={`${generation}:${user?.id}`} />}
+          <Dropdown
+            trigger="click"
+            droplist={
+              <Menu
+                onClickMenuItem={(k) => {
+                  if (k === 'profile') nav('/profile')
+                  if (k === 'logout') doLogout()
+                }}
+              >
+                <Menu.Item key="profile">
+                  <IconUser style={{ marginRight: 8 }} />
+                  个人资料维护
+                </Menu.Item>
+                <Menu.Item key="logout">
+                  <IconPoweroff style={{ marginRight: 8 }} />
+                  退出登录
+                </Menu.Item>
+              </Menu>
+            }
+          >
+            <button className="layout-profile" type="button" aria-label={`账号菜单：${user?.realName || '当前用户'}`}>
+              <Avatar size={30} style={{ background: 'rgb(var(--primary-6))' }}>
+                {user?.realName?.slice(0, 1)}
+              </Avatar>
+              <span>{user?.realName}</span>
+              <IconDown />
+            </button>
+          </Dropdown>
+        </div>
       </Header>
       <Layout className="layout-main">
         {hasMenus && <Sider

@@ -9,6 +9,7 @@ public static class ProjectsModule
         services.AddScoped<ProjectService>();
         services.AddScoped<MessageService>();
         services.AddScoped<DashboardService>();
+        services.AddScoped<CollaborationService>();
         services.AddSingleton<ProjectActivityService>();
         services.AddSingleton<IProjectAuditCapture>(provider => provider.GetRequiredService<ProjectActivityService>());
         return services;
@@ -162,6 +163,39 @@ public static class ProjectsModule
                 QueryUlong(context, "pageSize", 20),
                 ct));
         });
+        api.MapGet("/dashboard/messages", async (HttpContext context, AppDb db, DashboardService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.MessagesAsync(
+                conn,
+                AccessService.GetCurrent(context),
+                QueryUlong(context, "page", 1),
+                QueryUlong(context, "pageSize", 10),
+                QueryBool(context, "unreadOnly", false),
+                ct));
+        });
+        api.MapGet("/collaboration/summary", async (HttpContext context, AppDb db, CollaborationService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.SummaryAsync(conn, AccessService.GetCurrent(context), ct));
+        });
+        api.MapGet("/collaboration/notifications", async (HttpContext context, AppDb db, CollaborationService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.NotificationsAsync(
+                conn,
+                AccessService.GetCurrent(context),
+                QueryUlong(context, "page", 1),
+                QueryUlong(context, "pageSize", 20),
+                QueryBool(context, "unreadOnly", false),
+                ct));
+        });
+        api.MapPost("/collaboration/reads", async (HttpContext context, MarkCollaborationReadRequest request, AppDb db, CollaborationService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            await service.MarkReadAsync(conn, AccessService.GetCurrent(context), request, ct);
+            return Results.Ok(new { });
+        });
         api.MapGet("/supplier-options", async (HttpContext context, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
@@ -184,6 +218,19 @@ public static class ProjectsModule
 
     private static ulong? QueryNullableUlong(HttpContext context, string name) =>
         QueryValues.OptionalUInt64(context.Request, name);
+
+    private static bool QueryBool(HttpContext context, string name, bool fallback)
+    {
+        if (!context.Request.Query.TryGetValue(name, out var values))
+        {
+            return fallback;
+        }
+        if (values.Count != 1 || !bool.TryParse(values[0], out var value))
+        {
+            throw ApiException.BadRequest("请求参数错误: " + name);
+        }
+        return value;
+    }
 
     private static string Ip(HttpContext context) =>
         ClientIp.Resolve(context, context.RequestServices.GetRequiredService<AppOptions>());

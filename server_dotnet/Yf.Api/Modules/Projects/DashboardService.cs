@@ -6,6 +6,53 @@ namespace Yf.Api.Modules.Projects;
 
 internal sealed class DashboardService
 {
+    internal async Task<object> MessagesAsync(
+        MySqlConnection conn,
+        CurrentUser actor,
+        ulong page,
+        ulong pageSize,
+        bool unreadOnly,
+        CancellationToken ct)
+    {
+        var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
+        var (scope, parameters) = await ProjectAccessService.VisibleScopeAsync(conn, tx, current, ct);
+        parameters.Add("UserId", current.Id);
+        parameters.Add("Offset", (actualPage - 1) * size);
+        parameters.Add("Size", size);
+        var unread = "m.sender_id<>@UserId AND NOT EXISTS(SELECT 1 FROM message_reads mr WHERE mr.message_id=m.id AND mr.user_id=@UserId)";
+        var filter = $"m.status='NORMAL' AND {scope}" + (unreadOnly ? $" AND {unread}" : string.Empty);
+        var total = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+            $"SELECT COUNT(*) FROM messages m INNER JOIN projects p ON p.id=m.project_id WHERE {filter}",
+            parameters, tx, cancellationToken: ct));
+        var rows = (await conn.QueryAsync<DashboardMessageRow>(new CommandDefinition(
+            $"""
+            SELECT m.id AS Id,m.project_id AS ProjectId,p.name AS ProjectName,m.content AS Content,
+                   m.sender_id AS SenderId,m.created_at AS CreatedAt,u.real_name AS SenderName,
+                   EXISTS(SELECT 1 FROM message_reads mr WHERE mr.message_id=m.id AND mr.user_id=@UserId) AS ReadByMe
+            FROM messages m
+            INNER JOIN projects p ON p.id=m.project_id
+            INNER JOIN users u ON u.id=m.sender_id
+            WHERE {filter}
+            ORDER BY m.id DESC LIMIT @Size OFFSET @Offset
+            """,
+            parameters, tx, cancellationToken: ct))).AsList();
+        var list = rows.Select(row => new
+        {
+            id = row.Id,
+            projectId = row.ProjectId,
+            projectName = row.ProjectName,
+            content = string.Concat(row.Content.EnumerateRunes().Take(60)),
+            senderName = row.SenderName,
+            createdAt = ProjectJson.Utc(row.CreatedAt),
+            unread = row.SenderId != current.Id && !row.ReadByMe,
+        }).ToArray();
+        await tx.CommitAsync(ct);
+        return ProjectJson.Page(list, total, actualPage, size);
+    }
+
     internal async Task<object> PendingProjectsAsync(
         MySqlConnection conn,
         CurrentUser actor,
@@ -22,7 +69,7 @@ internal sealed class DashboardService
             await tx.CommitAsync(ct);
             return ProjectJson.Page(Array.Empty<object>(), 0, actualPage, size);
         }
-        var (scope, parameters) = await VisibleScopeAsync(conn, tx, current, ct);
+        var (scope, parameters) = await ProjectAccessService.VisibleScopeAsync(conn, tx, current, ct);
         parameters.Add("ConfirmSide", UserSide(current));
         parameters.Add("Offset", (actualPage - 1) * size);
         parameters.Add("Size", size);
@@ -54,7 +101,7 @@ internal sealed class DashboardService
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
-        var (scope, parameters) = await VisibleScopeAsync(conn, tx, current, ct);
+        var (scope, parameters) = await ProjectAccessService.VisibleScopeAsync(conn, tx, current, ct);
         var projects = (await conn.QueryAsync<ProjectRow>(new CommandDefinition(
             $"""
             SELECT p.id AS Id,p.name AS Name,p.status AS Status,p.confirm_side AS ConfirmSide
@@ -109,36 +156,24 @@ internal sealed class DashboardService
         };
     }
 
-    private static async Task<(string Clause, DynamicParameters Parameters)> VisibleScopeAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        CurrentUser actor,
-        CancellationToken ct)
-    {
-        var parameters = new DynamicParameters();
-        if (!actor.IsInternal)
-        {
-            if (actor.SupplierId is null)
-            {
-                throw ApiException.OutOfScope();
-            }
-            parameters.Add("ActorSupplierId", actor.SupplierId.Value);
-            return ("p.supplier_id=@ActorSupplierId", parameters);
-        }
-        if (await ProjectAccessService.HasPermissionAsync(conn, tx, actor.Id, "project:view_all", ct))
-        {
-            return ("1=1", parameters);
-        }
-        parameters.Add("ActorId", actor.Id);
-        return ("(p.created_by=@ActorId OR EXISTS(SELECT 1 FROM project_members pm WHERE pm.project_id=p.id AND pm.user_id=@ActorId))", parameters);
-    }
-
     private static string UserSide(CurrentUser actor) => actor.IsInternal ? "COMPANY" : "SUPPLIER";
 
     private sealed class RecentMessageRow
     {
         public ulong Id { get; init; }
         public ulong ProjectId { get; init; }
+        public string Content { get; init; } = string.Empty;
+        public ulong SenderId { get; init; }
+        public DateTime CreatedAt { get; init; }
+        public string? SenderName { get; init; }
+        public bool ReadByMe { get; init; }
+    }
+
+    private sealed class DashboardMessageRow
+    {
+        public ulong Id { get; init; }
+        public ulong ProjectId { get; init; }
+        public string ProjectName { get; init; } = string.Empty;
         public string Content { get; init; } = string.Empty;
         public ulong SenderId { get; init; }
         public DateTime CreatedAt { get; init; }

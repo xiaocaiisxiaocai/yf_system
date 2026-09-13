@@ -8,6 +8,7 @@ const React = require('react')
 const { create, act } = require('react-test-renderer')
 
 const component = (name) => Object.assign((props) => React.createElement(name, props), {
+  Group: (props) => React.createElement(`${name}.Group`, props),
   Search: (props) => React.createElement(`${name}.Search`, props),
   Option: (props) => React.createElement(`${name}.Option`, props),
   TextArea: (props) => React.createElement(`${name}.TextArea`, props),
@@ -389,6 +390,45 @@ test('department hard delete requires the dedicated delete permission', async ()
   }
 })
 
+test('collaboration updates preserve message draft and history until explicit refresh; target remains writable', async () => {
+  let revision = 'initial'
+  let calls = 0
+  let sent
+  let onSent = 0
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async () => { calls++; return { data: { list: [], total: 0 } } },
+      post: async (_url, body) => { sent = body.content },
+    },
+  }).default
+  const props = { projectId: 1, projectStatus: 'IN_PROGRESS', targetId: 9, revision, onSent: () => onSent++ }
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, props)) })
+  await act(async () => renderer.root.findByType('Input.TextArea').props.onChange('正在写的回复'))
+  const before = calls
+  revision = 'after-other-user-message'
+  props.revision = revision
+  await act(async () => renderer.update(React.createElement(Page, props)))
+  assert.equal(calls, before, 'a live update must not replace the currently read message history')
+  assert.equal(renderer.root.findByType('Input.TextArea').props.value, '正在写的回复')
+  const showLatest = renderer.root.findAllByType('Button').find((node) => node.props.children === '查看最新留言')
+  assert.ok(showLatest)
+  await act(async () => showLatest.props.onClick())
+  assert.equal(calls, before + 1)
+  assert.equal(renderer.root.findByType('Input.TextArea').props.value, '正在写的回复')
+  await act(async () => renderer.update(React.createElement(Page, { ...props, targetId: undefined })))
+  assert.equal(renderer.root.findByType('Input.TextArea').props.value, '正在写的回复', 'leaving target view must preserve composition')
+  await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '发送').props.onClick())
+  assert.equal(sent, '正在写的回复')
+  assert.equal(onSent, 1)
+  assert.equal(renderer.root.findByType('Input.TextArea').props.value, '')
+  await act(async () => renderer.unmount())
+})
+
 function loadTs(relativePath, mocks, globals = {}) {
   const filename = path.resolve(__dirname, '..', relativePath)
   const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
@@ -398,7 +438,10 @@ function loadTs(relativePath, mocks, globals = {}) {
   vm.runInNewContext(source, {
     exports, module: { exports }, console, setTimeout, clearTimeout, URL, URLSearchParams, AbortController, ...globals,
     require: (name) => {
-      if (typeof name === 'string' && name in mocks) return mocks[name]
+      if (typeof name === 'string' && name in mocks) return name === 'react-router-dom' ? { Link: component('Link'), ...mocks[name] } : mocks[name]
+      if (name.endsWith('/store/collaboration')) return { useCollaboration: (selector) => selector({ revision: '', unreadCount: 0, refresh: async () => {} }) }
+      if (name.endsWith('/CollaborationNotifications')) return component('CollaborationNotifications')
+      if (name.endsWith('.css')) return {}
       if (name.endsWith('.json')) return JSON.parse(fs.readFileSync(path.resolve(path.dirname(filename), name), 'utf8'))
       if (typeof name === 'string' && name.replace(/\\/g, '/').endsWith('/ActionSlots')) return actionSlotsModule
       if (typeof name === 'string' && name.replace(/\\/g, '/').endsWith('/PasswordInput')) return component('PasswordInput')
@@ -787,12 +830,13 @@ test('paginated lists and file table expose a retry state after the main GET fai
     const Page = loadTs(item.file, item.mocks(http)).default
     let renderer
     await act(async () => { renderer = create(React.createElement(Page, item.props)) })
-    assert.ok(renderer.root.findAll((node) => node.props && node.props.children === '加载失败').length > 0, item.file)
+    const failureText = '加载失败'
+    assert.ok(renderer.root.findAll((node) => node.props && node.props.children === failureText).length > 0, item.file)
     const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试')
     assert.ok(retry, `${item.file} must offer retry`)
     fail = false
     await act(async () => retry.props.onClick())
-    assert.equal(renderer.root.findAll((node) => node.props && node.props.children === '加载失败').length, 0, item.file)
+    assert.equal(renderer.root.findAll((node) => node.props && node.props.children === failureText).length, 0, item.file)
     await act(async () => renderer.unmount())
   }
 })
@@ -980,6 +1024,7 @@ test('dashboard pending projects can retry, navigate, refresh, and recover from 
   const http = {
     get: async (url, config = {}) => {
       if (url === '/dashboard/summary') return { data: summary }
+      if (url === '/dashboard/messages') return { data: { list: [], total: 0, page: 1, pageSize: 10 } }
       if (url === '/dashboard/pending-projects') {
         return new Promise((resolve, reject) => pendingRequests.push({ params: config.params, resolve, reject }))
       }
@@ -1028,7 +1073,7 @@ test('dashboard pending projects can retry, navigate, refresh, and recover from 
   await act(async () => pendingRequests[3].resolve({ data: { list: firstPage, total: 10, page: 1, pageSize: 10 } }))
   assert.equal(renderer.root.findAllByType('Pagination').length, 0, 'a single valid page must not retain a stale page-two control')
 
-  const refresh = renderer.root.findAllByType('Card').find((node) => node.props.className === 'dashboard-pending').props.extra
+  const refresh = renderer.root.findAllByType('Card').find((node) => node.props.className?.split(' ').includes('dashboard-pending')).props.extra
   assert.ok(refresh, 'a workflow status change must have a reachable list refresh')
   await act(async () => refresh.props.onClick())
   await act(async () => pendingRequests[4].resolve({ data: { list: [], total: 0, page: 1, pageSize: 10 } }))

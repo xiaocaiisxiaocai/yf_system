@@ -342,7 +342,7 @@ public sealed partial class UploadService(
                 }, tx, cancellationToken: ct));
             var fileId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
                 "SELECT LAST_INSERT_ID()", transaction: tx, cancellationToken: ct));
-            await EnqueueFileNoticeAsync(conn, tx, project.Id, session.FileName, current, ct);
+            await EnqueueFileNoticeAsync(conn, tx, project.Id, fileId, session.FileName, current, ct);
             await audit.WriteAsync(conn, tx, current.Id, "FILE_UPLOAD", "file", fileId,
                 new { name = session.FileName, size = session.FileSize, projectId = session.ProjectId },
                 ClientIp.Resolve(context, options), ct);
@@ -552,7 +552,7 @@ public sealed partial class UploadService(
     }
 
     private async Task EnqueueFileNoticeAsync(MySqlConnection conn, MySqlTransaction tx, ulong projectId,
-        string fileName, CurrentUser uploader, CancellationToken ct)
+        ulong fileId, string fileName, CurrentUser uploader, CancellationToken ct)
     {
         var enabled = await conn.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(
             "SELECT cfg_value FROM system_configs WHERE cfg_key='notify.enabled'", transaction: tx, cancellationToken: ct));
@@ -579,7 +579,8 @@ public sealed partial class UploadService(
             ) ORDER BY u.id
             """, new { ProjectId = projectId, UploaderId = uploader.Id, UploaderType = uploader.UserType }, tx, cancellationToken: ct));
         var subject = $"[协作平台] 项目「{projectName}」有新文件上传";
-        var body = $"项目：{projectName}\n文件：{fileName}\n上传人：工号 {uploader.EmployeeNo}\n\n请登录平台查看并下载：{options.WebBaseUrl}\n\n（本邮件由系统自动发送，附件请登录平台获取）";
+        var targetUrl = $"{options.WebBaseUrl.TrimEnd('/')}/projects/{projectId}?tab=files&target={fileId}";
+        var body = $"项目：{projectName}\n文件：{fileName}\n上传人：工号 {uploader.EmployeeNo}\n\n请登录平台查看并下载：{targetUrl}\n\n（本邮件由系统自动发送，附件请登录平台获取）";
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var recipient in recipients)
         {

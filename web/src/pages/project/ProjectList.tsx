@@ -9,6 +9,7 @@ import http from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import { type PageResp, type Project, PROJECT_STATUS, fmtTime } from '../../api/types'
+import { useCollaboration } from '../../store/collaboration'
 
 interface SupplierOpt {
   id: number
@@ -16,6 +17,8 @@ interface SupplierOpt {
 }
 
 export default function ProjectList() {
+  const revision = useCollaboration((state) => state.revision)
+  const syncStatus = useCollaboration((state) => state.status)
   const [data, setData] = useState<PageResp<Project>>({ list: [], total: 0, page: 1, pageSize: 10 })
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)
@@ -55,6 +58,7 @@ export default function ProjectList() {
   }, [])
 
   useEffect(() => {
+    if (syncStatus === 'error') return
     let active = true
     fetchProjects()
       .then((next) => {
@@ -74,7 +78,7 @@ export default function ProjectList() {
     return () => {
       active = false
     }
-  }, [fetchProjects, page, pageSize, reloadKey])
+  }, [fetchProjects, page, pageSize, reloadKey, revision, syncStatus])
 
   const retrySupplierOptions = () => {
     setSupplierOptionsLoading(true)
@@ -200,9 +204,13 @@ export default function ProjectList() {
       {
         title: '状态',
         dataIndex: 'status',
-        width: 76,
+        width: 112,
         align: 'center' as const,
-        render: (v: string) => <Tag color={PROJECT_STATUS[v]?.color}>{PROJECT_STATUS[v]?.text || v}</Tag>,
+        render: (v: string, row: Project) => <Tag color={PROJECT_STATUS[v]?.color}>
+          {v === 'PENDING_CONFIRMATION'
+            ? row.confirmSide === 'COMPANY' ? '待公司确认' : '待供应商确认'
+            : PROJECT_STATUS[v]?.text || v}
+        </Tag>,
       },
       ...(!compactTable ? [
         { title: '创建人', dataIndex: 'createdByName', width: 100, align: 'center' as const, ellipsis: true },

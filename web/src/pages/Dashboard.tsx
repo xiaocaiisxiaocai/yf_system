@@ -2,24 +2,28 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Card, Empty, Grid, List, Pagination, Result, Spin, Statistic, Tag, Typography } from '@arco-design/web-react'
 import { IconRight } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
-import http from '../api/client'
-import { useAuth } from '../store/auth'
+import http, { type QuietRequestConfig } from '../api/client'
 import { fmtTime } from '../api/types'
+import { useAuth } from '../store/auth'
+import { useCollaboration } from '../store/collaboration'
+import '../styles/dashboard-collaboration.css'
+
+interface DashboardMessage {
+  id: number
+  projectId: number
+  projectName?: string
+  content: string
+  senderName?: string
+  createdAt: string
+  unread: boolean
+}
 
 interface Summary {
   projectCount: number
   activeProjectCount: number
   pendingConfirmations: number
   unreadMessages: number
-  recentMessages: {
-    id: number
-    projectId: number
-    projectName?: string
-    content: string
-    senderName?: string
-    createdAt: string
-    unread: boolean
-  }[]
+  recentMessages: DashboardMessage[]
 }
 
 interface PendingProject {
@@ -37,94 +41,213 @@ interface PendingProjectPage {
   pageSize: number
 }
 
+interface MessagePage {
+  list: DashboardMessage[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+const PAGE_SIZE = 10
+
 export default function Dashboard() {
   const [data, setData] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
-  const [reloadKey, setReloadKey] = useState(0)
-  const loadSeq = useRef(0)
-  const [pendingData, setPendingData] = useState<PendingProjectPage>({ list: [], total: 0, page: 1, pageSize: 10 })
+  const [summaryRefreshError, setSummaryRefreshError] = useState(false)
+  const summarySeq = useRef(0)
+  const hasSummarySnapshot = useRef(false)
+
+  const [pendingData, setPendingData] = useState<PendingProjectPage>({ list: [], total: 0, page: 1, pageSize: PAGE_SIZE })
   const [pendingPage, setPendingPage] = useState(1)
   const [pendingLoading, setPendingLoading] = useState(true)
   const [pendingError, setPendingError] = useState(false)
-  const [pendingReloadKey, setPendingReloadKey] = useState(0)
+  const [pendingRefreshError, setPendingRefreshError] = useState(false)
   const pendingSeq = useRef(0)
+  const hasPendingSnapshot = useRef(false)
+
+  const [messageData, setMessageData] = useState<MessagePage>({ list: [], total: 0, page: 1, pageSize: PAGE_SIZE })
+  const [messagePage, setMessagePage] = useState(1)
+  const [unreadOnly, setUnreadOnly] = useState(true)
+  const [messageLoading, setMessageLoading] = useState(true)
+  const [messageError, setMessageError] = useState(false)
+  const [messageRefreshError, setMessageRefreshError] = useState(false)
+  const messageSeq = useRef(0)
+  const hasMessageSnapshot = useRef(false)
+
+  const mounted = useRef(true)
+  const observedRevision = useRef<string | null>(null)
   const user = useAuth((s) => s.user)
   const hasDashboard = useAuth((s) => s.menus.includes('dashboard'))
+  const collaborationRevision = useCollaboration((s) => s.revision)
+  const collaborationStatus = useCollaboration((s) => s.status)
   const nav = useNavigate()
 
-  const load = useCallback(() => {
-    setLoading(true)
-    setLoadError(false)
-    setReloadKey((value) => value + 1)
-  }, [])
-
   useEffect(() => {
-    if (!hasDashboard) return undefined
-    const seq = ++loadSeq.current
-    let active = true
-    http.get('/dashboard/summary')
-      .then((r) => {
-        if (active && seq === loadSeq.current) {
-          setData(r.data)
-          setLoadError(false)
-        }
-      })
-      .catch(() => {
-        if (active && seq === loadSeq.current) setLoadError(true)
-      })
-      .finally(() => {
-        if (active && seq === loadSeq.current) setLoading(false)
-      })
+    mounted.current = true
     return () => {
-      active = false
+      mounted.current = false
+      summarySeq.current += 1
+      pendingSeq.current += 1
+      messageSeq.current += 1
     }
-  }, [hasDashboard, reloadKey])
-
-  const reloadPending = useCallback(() => {
-    setPendingLoading(true)
-    setPendingError(false)
-    setPendingReloadKey((value) => value + 1)
   }, [])
 
-  const refreshDashboard = () => {
-    load()
-    reloadPending()
-  }
+  const fetchSummary = useCallback(async (quiet = false) => {
+    if (!hasDashboard) return
+    const seq = ++summarySeq.current
+    if (!quiet) {
+      setLoading(true)
+      setLoadError(false)
+      setSummaryRefreshError(false)
+    }
+    try {
+      const config: QuietRequestConfig | undefined = quiet ? { quietNetworkError: true } : undefined
+      const response = await http.get('/dashboard/summary', config)
+      if (!mounted.current || seq !== summarySeq.current) return
+      setData(response.data as Summary)
+      hasSummarySnapshot.current = true
+      setLoadError(false)
+      setSummaryRefreshError(false)
+    } catch {
+      if (mounted.current && seq === summarySeq.current) {
+        if (quiet && hasSummarySnapshot.current) setSummaryRefreshError(true)
+        else setLoadError(true)
+      }
+    } finally {
+      if (mounted.current && seq === summarySeq.current) setLoading(false)
+    }
+  }, [hasDashboard])
 
-  useEffect(() => {
-    if (!hasDashboard) return undefined
+  const fetchPending = useCallback(async (requestedPage: number, quiet = false) => {
+    if (!hasDashboard) return
     const seq = ++pendingSeq.current
-    let correctingPage = false
-    http.get('/dashboard/pending-projects', { params: { page: pendingPage, pageSize: 10 } })
-      .then((r) => {
-        if (seq !== pendingSeq.current) return
-        const next = r.data as PendingProjectPage
-        const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || 10)))
-        if (pendingPage > lastPage) {
-          correctingPage = true
+    if (!quiet) {
+      setPendingLoading(true)
+      setPendingError(false)
+      setPendingRefreshError(false)
+    }
+    try {
+      let page = requestedPage
+      while (mounted.current && seq === pendingSeq.current) {
+        const config: QuietRequestConfig = {
+          params: { page, pageSize: PAGE_SIZE },
+          ...(quiet ? { quietNetworkError: true } : {}),
+        }
+        const response = await http.get('/dashboard/pending-projects', config)
+        if (!mounted.current || seq !== pendingSeq.current) return
+        const next = response.data as PendingProjectPage
+        const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || PAGE_SIZE)))
+        if (page > lastPage) {
+          page = lastPage
           setPendingPage(lastPage)
-          return
+          continue
         }
         setPendingData(next)
+        hasPendingSnapshot.current = true
         setPendingError(false)
-      })
-      .catch(() => {
-        if (seq === pendingSeq.current) setPendingError(true)
-      })
-      .finally(() => {
-        if (seq === pendingSeq.current && !correctingPage) setPendingLoading(false)
-      })
-    return () => {
-      pendingSeq.current += 1
+        setPendingRefreshError(false)
+        return
+      }
+    } catch {
+      if (mounted.current && seq === pendingSeq.current) {
+        if (quiet && hasPendingSnapshot.current) setPendingRefreshError(true)
+        else setPendingError(true)
+      }
+    } finally {
+      if (mounted.current && seq === pendingSeq.current) setPendingLoading(false)
     }
-  }, [hasDashboard, pendingPage, pendingReloadKey])
+  }, [hasDashboard])
+
+  const fetchMessages = useCallback(async (requestedPage: number, nextUnreadOnly: boolean, quiet = false) => {
+    if (!hasDashboard) return
+    const seq = ++messageSeq.current
+    if (!quiet) {
+      setMessageLoading(true)
+      setMessageError(false)
+      setMessageRefreshError(false)
+    }
+    try {
+      let page = requestedPage
+      while (mounted.current && seq === messageSeq.current) {
+        const config: QuietRequestConfig = {
+          params: { page, pageSize: PAGE_SIZE, unreadOnly: nextUnreadOnly },
+          ...(quiet ? { quietNetworkError: true } : {}),
+        }
+        const response = await http.get('/dashboard/messages', config)
+        if (!mounted.current || seq !== messageSeq.current) return
+        const next = response.data as MessagePage
+        const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || PAGE_SIZE)))
+        if (page > lastPage) {
+          page = lastPage
+          setMessagePage(lastPage)
+          continue
+        }
+        setMessageData(next)
+        hasMessageSnapshot.current = true
+        setMessageError(false)
+        setMessageRefreshError(false)
+        return
+      }
+    } catch {
+      if (mounted.current && seq === messageSeq.current) {
+        if (quiet && hasMessageSnapshot.current) setMessageRefreshError(true)
+        else setMessageError(true)
+      }
+    } finally {
+      if (mounted.current && seq === messageSeq.current) setMessageLoading(false)
+    }
+  }, [hasDashboard])
+
+  useEffect(() => {
+    if (!hasDashboard) {
+      summarySeq.current += 1
+      pendingSeq.current += 1
+      messageSeq.current += 1
+      return
+    }
+    // Establish the initial snapshots from the three independent server resources.
+    // eslint-disable-next-line react/set-state-in-effect
+    void fetchSummary()
+    void fetchPending(1)
+    void fetchMessages(1, true)
+  }, [fetchMessages, fetchPending, fetchSummary, hasDashboard])
+
+  useEffect(() => {
+    if (!hasDashboard) return
+    if (collaborationStatus === 'error') {
+      observedRevision.current = ''
+      return
+    }
+    if (observedRevision.current === null) {
+      observedRevision.current = collaborationRevision
+      return
+    }
+    if (observedRevision.current === collaborationRevision) return
+    observedRevision.current = collaborationRevision
+    void fetchSummary(true)
+    void fetchPending(pendingPage, true)
+    void fetchMessages(messagePage, unreadOnly, true)
+  }, [collaborationRevision, collaborationStatus, fetchMessages, fetchPending, fetchSummary, hasDashboard, messagePage, pendingPage, unreadOnly])
+
+  const refreshDashboard = () => {
+    void fetchSummary()
+    void fetchPending(pendingPage)
+    void fetchMessages(messagePage, unreadOnly)
+  }
+
+  const changeMessageFilter = (nextUnreadOnly: boolean) => {
+    if (nextUnreadOnly === unreadOnly) return
+    setUnreadOnly(nextUnreadOnly)
+    setMessagePage(1)
+    void fetchMessages(1, nextUnreadOnly)
+  }
 
   const cards = [
-    { title: '可见项目', value: data?.projectCount },
-    { title: '进行中项目', value: data?.activeProjectCount },
-    { title: '待确认项目', value: data?.pendingConfirmations },
-    { title: '未读留言', value: data?.unreadMessages },
+    { title: '可见项目', value: data?.projectCount, to: '/projects', action: '查看项目' },
+    { title: '进行中项目', value: data?.activeProjectCount, to: '/projects', action: '查看项目' },
+    { title: '待确认项目', value: data?.pendingConfirmations, href: '#dashboard-pending', action: '查看待确认' },
+    { title: '未读留言', value: data?.unreadMessages, href: '#dashboard-messages', action: '查看留言' },
   ]
 
   if (!hasDashboard) {
@@ -138,141 +261,222 @@ export default function Dashboard() {
   }
 
   return (
-    <div>
-      <div className="page-heading">
+    <div className="dashboard-collaboration">
+      <div className="page-heading dashboard-heading">
         <div>
           <h1>工作台{user ? ` · ${user.realName}` : ''}</h1>
+          <Typography.Text type="secondary">优先处理待确认项目与未读留言</Typography.Text>
         </div>
+        <Button size="small" loading={pendingLoading || messageLoading} onClick={refreshDashboard}>刷新工作台</Button>
       </div>
-      <Grid.Row className="dashboard-stats" gutter={[16, 16]}>
-        {cards.map((c) => (
-          <Grid.Col xs={24} sm={12} md={6} key={c.title}>
-            <Card className="dashboard-stat-card">
-              <Statistic title={c.title} value={c.value ?? '-'} />
-            </Card>
-          </Grid.Col>
-        ))}
-      </Grid.Row>
-      <Card
-        className="dashboard-pending"
-        style={{ marginTop: 16 }}
-        title={
-          <div className="section-heading">
-            <div>
-              <h2>待我方确认的项目</h2>
-            </div>
-          </div>
-        }
-        extra={<Button size="small" loading={pendingLoading} onClick={refreshDashboard}>刷新</Button>}
-      >
-        {pendingLoading ? (
-          <Spin loading style={{ width: '100%', minHeight: 80 }} />
-        ) : pendingError ? (
-          <div className="dashboard-pending-feedback">
-            <Typography.Text type="error">待确认项目加载失败</Typography.Text>
-            <Button size="small" onClick={reloadPending}>重试</Button>
-          </div>
-        ) : pendingData.list.length > 0 ? (
-          <>
-            <List
-              className="dashboard-pending-list"
-              dataSource={pendingData.list}
-              render={(project) => (
-                <List.Item
-                  key={project.id}
-                  extra={<Typography.Text type="secondary">更新于 {fmtTime(project.updatedAt)}</Typography.Text>}
-                >
-                  <List.Item.Meta
-                    title={<Link className="dashboard-pending-link" to={`/projects/${project.id}`}>{project.name}</Link>}
-                    description={(
-                      <Tag color="orange">
-                        {project.confirmSide === 'COMPANY' ? '待公司确认' : '待供应商确认'}
-                      </Tag>
-                    )}
-                  />
-                </List.Item>
-              )}
-            />
-            {pendingData.total > 10 && (
-              <div className="dashboard-pending-pagination">
-                <Pagination
-                  current={pendingPage}
-                  pageSize={10}
-                  total={pendingData.total}
-                  onChange={(page) => {
-                    setPendingLoading(true)
-                    setPendingError(false)
-                    setPendingPage(page)
-                  }}
-                />
+
+      <Grid.Row className="dashboard-workbench" gutter={[16, 16]}>
+        <Grid.Col xs={24} lg={12}>
+          <Card
+            id="dashboard-pending"
+            className="dashboard-task-card dashboard-pending"
+            title={(
+              <div className="dashboard-section-title">
+                <div>
+                  <h2>待我方确认的项目</h2>
+                  <span>{pendingData.total > 0 ? `共 ${pendingData.total} 项` : '需要处理的项目确认'}</span>
+                </div>
+                {pendingData.total > 0 && <Tag color="orange">{pendingData.total}</Tag>}
               </div>
             )}
-          </>
-        ) : (
-          <Empty description="暂无待确认项目" />
-        )}
-      </Card>
-      <Card
-        className="dashboard-latest"
-        style={{ marginTop: 16 }}
-        title={
-          <div className="section-heading">
-            <div>
-              <h2>最新留言</h2>
-            </div>
-          </div>
-        }
-        extra={<span className="dashboard-latest-limit">近 5 条</span>}
-      >
-        {loading ? (
-          <Spin loading style={{ width: '100%', minHeight: 80 }} />
-        ) : loadError ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
-            <Typography.Text type="error">加载失败</Typography.Text>
-            <Button size="small" onClick={load}>重试</Button>
-          </div>
-        ) : data && data.recentMessages.length > 0 ? (
-          <List
-            dataSource={data.recentMessages}
-            render={(m) => (
-              <List.Item
-                key={m.id}
-                className={`dashboard-message-item${m.unread ? ' dashboard-message-item--unread' : ''}`}
-                role="link"
-                tabIndex={0}
-                onClick={() => nav(`/projects/${m.projectId}?tab=messages`)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    nav(`/projects/${m.projectId}?tab=messages`)
-                  }
-                }}
-                extra={(
-                  <div className="dashboard-message-extra">
-                    <Typography.Text type="secondary">{fmtTime(m.createdAt)}</Typography.Text>
-                    <IconRight />
+            extra={<Button size="small" loading={pendingLoading} onClick={refreshDashboard}>刷新</Button>}
+          >
+            {pendingRefreshError && !pendingLoading && (
+              <div className="dashboard-stale-notice" role="status">
+                <span>更新暂时失败，显示上次数据</span>
+                <Button size="mini" onClick={() => { void fetchPending(pendingPage) }}>重试</Button>
+              </div>
+            )}
+            {pendingLoading ? (
+              <Spin loading className="dashboard-card-loading" />
+            ) : pendingError ? (
+              <div className="dashboard-feedback">
+                <Typography.Text type="error">待确认项目加载失败</Typography.Text>
+                <Button size="small" onClick={() => { void fetchPending(pendingPage) }}>重试</Button>
+              </div>
+            ) : pendingData.list.length > 0 ? (
+              <>
+                <List
+                  className="dashboard-pending-list"
+                  dataSource={pendingData.list}
+                  render={(project) => (
+                    <List.Item
+                      key={project.id}
+                      extra={<Typography.Text type="secondary">更新于 {fmtTime(project.updatedAt)}</Typography.Text>}
+                    >
+                      <List.Item.Meta
+                        title={<Link className="dashboard-pending-link" to={`/projects/${project.id}`}>{project.name}</Link>}
+                        description={<Tag color="orange">待我方确认</Tag>}
+                      />
+                    </List.Item>
+                  )}
+                />
+                {pendingData.total > pendingData.pageSize && (
+                  <div className="dashboard-pagination">
+                    <Pagination
+                      current={pendingPage}
+                      pageSize={pendingData.pageSize || PAGE_SIZE}
+                      total={pendingData.total}
+                      sizeCanChange={false}
+                      onChange={(page) => {
+                        setPendingPage(page)
+                        void fetchPending(page)
+                      }}
+                    />
                   </div>
                 )}
-              >
-                <List.Item.Meta
-                  title={
-                    <span className="dashboard-message-title">
-                      {m.unread && <span className="dashboard-message-unread" aria-label="未读" title="未读" />}
-                      <Tag color="arcoblue">
-                        {m.projectName || `项目#${m.projectId}`}
-                      </Tag>
-                      <span className="dashboard-message-sender">{m.senderName || '未知用户'}</span>
-                    </span>
-                  }
-                  description={m.content}
-                />
-              </List.Item>
+              </>
+            ) : (
+              <Empty description="暂无待确认项目" />
             )}
-          />
+          </Card>
+        </Grid.Col>
+
+        <Grid.Col xs={24} lg={12}>
+          <Card
+            id="dashboard-messages"
+            className="dashboard-task-card dashboard-messages"
+            title={(
+              <div className="dashboard-section-title">
+                <div>
+                  <h2>项目留言</h2>
+                  <span>{unreadOnly ? `共 ${messageData.total} 条未读` : `共 ${messageData.total} 条留言`}</span>
+                </div>
+              </div>
+            )}
+            extra={(
+              <Button.Group>
+                <Button size="mini" type={unreadOnly ? 'primary' : 'secondary'} aria-pressed={unreadOnly} onClick={() => changeMessageFilter(true)}>未读</Button>
+                <Button size="mini" type={!unreadOnly ? 'primary' : 'secondary'} aria-pressed={!unreadOnly} onClick={() => changeMessageFilter(false)}>全部</Button>
+              </Button.Group>
+            )}
+          >
+            {messageRefreshError && !messageLoading && (
+              <div className="dashboard-stale-notice" role="status">
+                <span>更新暂时失败，显示上次数据</span>
+                <Button size="mini" onClick={() => { void fetchMessages(messagePage, unreadOnly) }}>重试</Button>
+              </div>
+            )}
+            {messageLoading ? (
+              <Spin loading className="dashboard-card-loading" />
+            ) : messageError ? (
+              <div className="dashboard-feedback">
+                <Typography.Text type="error">留言加载失败</Typography.Text>
+                <Button size="small" onClick={() => { void fetchMessages(messagePage, unreadOnly) }}>重试</Button>
+              </div>
+            ) : messageData.list.length > 0 ? (
+              <>
+                <List
+                  className="dashboard-message-list"
+                  dataSource={messageData.list}
+                  render={(message) => {
+                    const projectLabel = message.projectName || `项目#${message.projectId}`
+                    const target = `/projects/${message.projectId}?tab=messages&target=${message.id}`
+                    return (
+                      <List.Item
+                        key={message.id}
+                        className={`dashboard-message-item${message.unread ? ' dashboard-message-item--unread' : ''}`}
+                        role="link"
+                        tabIndex={0}
+                        aria-label={`查看${projectLabel}的留言`}
+                        onClick={() => nav(target)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            nav(target)
+                          }
+                        }}
+                        extra={(
+                          <div className="dashboard-message-extra">
+                            <Typography.Text type="secondary">{fmtTime(message.createdAt)}</Typography.Text>
+                            <IconRight />
+                          </div>
+                        )}
+                      >
+                        <List.Item.Meta
+                          title={(
+                            <span className="dashboard-message-title">
+                              {message.unread && <span className="dashboard-message-unread" aria-label="未读" title="未读" />}
+                              <Tag color="arcoblue">{projectLabel}</Tag>
+                              <span className="dashboard-message-sender">{message.senderName || '未知用户'}</span>
+                            </span>
+                          )}
+                          description={<span className="dashboard-message-content">{message.content}</span>}
+                        />
+                      </List.Item>
+                    )
+                  }}
+                />
+                {messageData.total > messageData.pageSize && (
+                  <div className="dashboard-pagination">
+                    <Pagination
+                      current={messagePage}
+                      pageSize={messageData.pageSize || PAGE_SIZE}
+                      total={messageData.total}
+                      sizeCanChange={false}
+                      onChange={(page) => {
+                        setMessagePage(page)
+                        void fetchMessages(page, unreadOnly)
+                      }}
+                    />
+                  </div>
+                )}
+              </>
+            ) : (
+              <Empty description={unreadOnly ? '暂无未读留言' : '暂无留言'} />
+            )}
+          </Card>
+        </Grid.Col>
+      </Grid.Row>
+
+      <section className="dashboard-overview" aria-labelledby="dashboard-overview-title">
+        <div className="dashboard-overview-heading">
+          <div>
+            <h2 id="dashboard-overview-title">业务概览</h2>
+            <span>项目与协作状态汇总</span>
+          </div>
+          {loadError && data && <Typography.Text type="error">概览刷新失败，当前显示上次结果</Typography.Text>}
+          {summaryRefreshError && data && (
+            <span className="dashboard-overview-stale" role="status">
+              更新暂时失败，显示上次数据
+              <Button size="mini" onClick={() => { void fetchSummary() }}>重试</Button>
+            </span>
+          )}
+        </div>
+        {loading && !data ? (
+          <Spin loading className="dashboard-overview-loading" />
+        ) : loadError && !data ? (
+          <div className="dashboard-feedback dashboard-overview-error">
+            <Typography.Text type="error">加载失败</Typography.Text>
+            <Button size="small" onClick={() => { void fetchSummary() }}>重试</Button>
+          </div>
         ) : (
-          <Empty description="暂无留言" />
+          <Grid.Row className="dashboard-stats" gutter={[12, 12]}>
+            {cards.map((card) => {
+              const content = (
+                <Card className="dashboard-stat-card">
+                  <Statistic title={card.title} value={card.value ?? '-'} />
+                  <span className="dashboard-stat-action">{card.action}<IconRight /></span>
+                </Card>
+              )
+              return (
+                <Grid.Col xs={12} md={6} key={card.title}>
+                  {card.to ? (
+                    <Link className="dashboard-stat-link" to={card.to} aria-label={`${card.title}：${card.action}`}>{content}</Link>
+                  ) : (
+                    <a className="dashboard-stat-link" href={card.href} aria-label={`${card.title}：${card.action}`}>{content}</a>
+                  )}
+                </Grid.Col>
+              )
+            })}
+          </Grid.Row>
         )}
-      </Card>
+      </section>
     </div>
   )
 }

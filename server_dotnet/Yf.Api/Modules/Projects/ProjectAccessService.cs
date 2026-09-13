@@ -13,6 +13,30 @@ public sealed record ProjectAccess(
 
 public static class ProjectAccessService
 {
+    internal static async Task<(string Clause, DynamicParameters Parameters)> VisibleScopeAsync(
+        MySqlConnection conn,
+        MySqlTransaction? tx,
+        CurrentUser actor,
+        CancellationToken ct)
+    {
+        var parameters = new DynamicParameters();
+        if (!actor.IsInternal)
+        {
+            if (actor.SupplierId is null)
+            {
+                throw ApiException.OutOfScope();
+            }
+            parameters.Add("ActorSupplierId", actor.SupplierId.Value);
+            return ("p.supplier_id=@ActorSupplierId", parameters);
+        }
+        if (await HasPermissionAsync(conn, tx, actor.Id, "project:view_all", ct))
+        {
+            return ("1=1", parameters);
+        }
+        parameters.Add("ActorId", actor.Id);
+        return ("(p.created_by=@ActorId OR EXISTS(SELECT 1 FROM project_members pm WHERE pm.project_id=p.id AND pm.user_id=@ActorId))", parameters);
+    }
+
     public static async Task<ProjectAccess> RequireViewAsync(
         MySqlConnection conn,
         MySqlTransaction? tx,

@@ -9,7 +9,11 @@ let refreshing: Promise<boolean> | null = null
 let refreshingGeneration: number | undefined
 type ProfileRefresh = { generation: number; token: string; promise: Promise<void> }
 let refreshingProfile: ProfileRefresh | null = null
-type SessionConfig = AxiosRequestConfig & { _retried?: boolean; authGeneration?: number }
+export type QuietRequestConfig = AxiosRequestConfig & {
+  /** 仅抑制可重试的网络、超时、限流和服务端错误提示；鉴权与权限错误仍正常处理。 */
+  quietNetworkError?: boolean
+}
+type SessionConfig = QuietRequestConfig & { _retried?: boolean; authGeneration?: number }
 const isCurrentSession = (config?: SessionConfig) => !config || config.authGeneration === useAuth.getState().generation
 
 /** 同源标签共享 refresh cookie，必须在拿到浏览器锁后才发送旋转请求。生产使用 HTTPS。 */
@@ -133,8 +137,16 @@ http.interceptors.response.use(
       ? '网络连接失败，请稍后重试'
       : error.code === 'ECONNABORTED' ? '请求超时，请稍后重试' : undefined
     const msg = error.response?.data?.message || connectionMessage || error.message || '网络错误'
+    const quietTransientError = cfg?.quietNetworkError === true && (
+      error.code === 'ERR_NETWORK'
+      || error.code === 'ECONNABORTED'
+      || status === 404
+      || status === 408
+      || status === 429
+      || (typeof status === 'number' && status >= 500)
+    )
     // 40303 由跳转承载
-    if (biz !== 40303) Message.error(msg)
+    if (biz !== 40303 && !quietTransientError) Message.error(msg)
     return Promise.reject(error)
   }
 )

@@ -420,10 +420,12 @@ internal sealed class ProjectService(
     {
         var project = await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
         var unread = await MessageService.UnreadCountAsync(conn, null, actor.Id, projectId, ct);
+        var activityRevision = await ProjectActivityService.RevisionAsync(conn, null, projectId, ct);
         var canConfirm = await ProjectAccessService.HasPermissionAsync(conn, null, actor.Id, "project:confirm", ct);
         return new
         {
             unreadMessages = unread,
+            activityRevision,
             pendingConfirmation = canConfirm
                 && project.Status == ProjectStatuses.PendingConfirmation
                 && project.ConfirmSide == UserSide(actor),

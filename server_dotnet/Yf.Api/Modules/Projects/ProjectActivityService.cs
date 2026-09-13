@@ -8,6 +8,18 @@ namespace Yf.Api.Modules.Projects;
 
 internal sealed class ProjectActivityService : IProjectAuditCapture
 {
+    internal static async Task<string> RevisionAsync(
+        MySqlConnection conn,
+        MySqlTransaction? tx,
+        ulong projectId,
+        CancellationToken ct)
+    {
+        var row = await conn.QuerySingleAsync<ProjectActivityRevisionRow>(new CommandDefinition(
+            "SELECT COUNT(*) AS ActivityCount,COALESCE(MAX(id),0) AS LatestId FROM project_activities WHERE project_id=@ProjectId",
+            new { ProjectId = projectId }, tx, cancellationToken: ct));
+        return $"{row.ActivityCount}:{row.LatestId}";
+    }
+
     public async Task CaptureAsync(MySqlConnection db, MySqlTransaction? tx, ulong auditId, CancellationToken ct)
     {
         var audit = await db.QuerySingleOrDefaultAsync<AuditRow>(new CommandDefinition(
@@ -362,5 +374,11 @@ internal sealed class ProjectActivityService : IProjectAuditCapture
         public string Content { get; init; } = string.Empty;
         public DateTime CreatedAt { get; init; }
         public DateTime? DeletedAt { get; init; }
+    }
+
+    private sealed class ProjectActivityRevisionRow
+    {
+        public ulong ActivityCount { get; init; }
+        public ulong LatestId { get; init; }
     }
 }

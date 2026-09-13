@@ -11,7 +11,9 @@ interface Props {
   projectId: number
   projectStatus: string
   onRead?: () => void
+  onSent?: () => void
   targetId?: number
+  revision?: string
 }
 
 interface Reader {
@@ -49,7 +51,15 @@ async function loadReadCounts(ids: number[]): Promise<ReadCounts[]> {
   return counts
 }
 
-export default function MessagePanel({ projectId, projectStatus, onRead, targetId }: Props) {
+export default function MessagePanel({ projectId, projectStatus, onRead, onSent, targetId, revision = '' }: Props) {
+  const [seenRevision, setSeenRevision] = useState(revision)
+  const currentRevision = useRef(revision)
+  useEffect(() => {
+    currentRevision.current = revision
+    // Establish the first server snapshot without presenting historical data as a new arrival.
+    // eslint-disable-next-line react/set-state-in-effect
+    if (!seenRevision && revision) setSeenRevision(revision)
+  }, [revision, seenRevision])
   const [list, setList] = useState<Msg[]>([])
   const [total, setTotal] = useState(0)
   const [hasMore, setHasMore] = useState(false)
@@ -84,12 +94,13 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
     }
   }, [])
 
-  const canWrite = !targetId && hasPerm('message:create') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
+  const canWrite = hasPerm('message:create') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
   const canDelete = hasPerm('message:delete_any') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
 
   const load = useCallback(
     async (p: number, append: boolean) => {
       const seq = ++loadSeq.current
+      const requestRevision = currentRevision.current
       setLoading(true)
       if (append) setAppendError(false)
       else setLoadError(false)
@@ -108,6 +119,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
         loadedMessages.current = nextList
         setHasMore(r.data.list.length === 20 && (totalChangedDuringCursor || nextList.length < r.data.total))
         setList(nextList)
+        setSeenRevision(requestRevision)
         setPage(p)
         setLoadError(false)
         setAppendError(false)
@@ -174,6 +186,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
       await http.post(`/projects/${projectId}/messages`, { content: text })
       setContent('')
       load(1, false)
+      onSent?.()
     } catch {
       // 请求层已显示错误；保留草稿，允许用户重试。
     } finally {
@@ -212,6 +225,13 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
         </div>
       </div>
 
+      {revision && seenRevision && revision !== seenRevision && (
+        <div role="status" style={{ marginBottom: 12 }}>
+          <Typography.Text type="secondary">协作信息有更新</Typography.Text>
+          <Button type="text" size="small" onClick={() => load(1, false)}>查看最新留言</Button>
+        </div>
+      )}
+
       {canWrite && (
         <div className="message-composer" style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
           <Input.TextArea
@@ -246,6 +266,8 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
                 className="msg-item"
                 key={m.id}
                 data-message-id={m.id}
+                aria-label={m.id === targetId ? '当前定位留言' : undefined}
+                style={m.id === targetId ? { borderLeft: '3px solid rgb(var(--primary-6))', paddingLeft: 12, background: 'var(--color-fill-1)' } : undefined}
                 data-unread={!m.readByMe && m.senderId !== user?.id ? 'true' : 'false'}
               >
                 <Space align="start">

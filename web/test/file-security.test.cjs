@@ -49,7 +49,7 @@ function loadFileTable() {
     exports,
     module: { exports },
     console,
-    require: name => mocks[name] ?? require(name),
+    require: name => mocks[name] ?? (name.endsWith('/store/collaboration') ? { useCollaboration: (selector) => selector({ revision: '' }) } : require(name)),
   }
   vm.runInNewContext(source, context, { filename })
   return exports.default

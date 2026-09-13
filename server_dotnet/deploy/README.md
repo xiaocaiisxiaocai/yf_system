@@ -6,7 +6,7 @@
 
 1. 将发布 ZIP 与 `.sha256` 一并复制到服务器，核对哈希后解压到独立临时目录。
 2. 将 `appsettings.example.json` 复制到网站、发布包和业务存储目录以外，例如 `D:\YfConfig\appsettings.Production.json`。填入数据库连接、随机 JWT 密钥、独立存储目录、实际 HTTPS 来源和 SMTP（可留空以禁用发送）。不要把机密放入 `wwwroot` 或应用池可写目录。
-3. 创建存储目录，例如 `D:\YfData\storage`。已有系统要使用与数据库匹配的原文件存储。已有第 16/17 版结构必须按下方命令接管为 .NET schema version 1。更早或未知版本会被拒绝，不能直接启动。
+3. 创建存储目录，例如 `D:\YfData\storage`。已有系统要使用与数据库匹配的原文件存储。已有第 16/17 版结构或 .NET schema version 1，必须按下方命令升级到 .NET schema version 2；本版新增用户通知查看记录表，保留原有项目、文件和账号。更早或未知版本会被拒绝，不能直接启动。
 4. 新库可使用本包初始化；已有库不执行此命令。先由 DBA 创建空库，再在包根执行：
 
 ```powershell
