@@ -3115,3 +3115,153 @@ test('SMTP editor preserves authorization codes, retries failed saves, and keeps
   assert.equal(password().props.value, 'unsaved-mail-code', 'saving general parameters keeps the SMTP draft')
   await act(async () => renderer.unmount())
 })
+
+test('system config freezes edits during save and keeps the committed value when refresh fails', async () => {
+  const deferred = () => {
+    let resolve
+    let reject
+    const promise = new Promise((ok, fail) => { resolve = ok; reject = fail })
+    return { promise, resolve, reject }
+  }
+  const write = deferred()
+  const refresh = deferred()
+  const refreshStarted = deferred()
+  const messages = []
+  let configGets = 0
+  const configArco = new Proxy({
+    ...arco,
+    Message: {
+      error(message) { messages.push(['error', message]) },
+      warning(message) { messages.push(['warning', message]) },
+      success(message) { messages.push(['success', message]) },
+      info(message) { messages.push(['info', message]) },
+    },
+  }, { get: (obj, key) => obj[key] ?? component(key) })
+  const Page = loadTs('src/pages/system/SysConfig.tsx', {
+    '@arco-design/web-react': configArco,
+    '../../api/client': {
+      get: async (url) => {
+        if (url.endsWith('/configs')) {
+          configGets += 1
+          if (configGets === 1) return { data: [{ key: 'notify.enabled', value: 'true' }] }
+          refreshStarted.resolve()
+          return refresh.promise
+        }
+        if (url.endsWith('/mail-settings')) {
+          return { data: { host: '', port: 465, username: '', from: '', security: 'Auto', hasPassword: false, configured: false, passwordNeedsUpdate: false } }
+        }
+        return { data: { configured: false, notificationsEnabled: true, queue: {}, missingEmailAccounts: [], recent: [] } }
+      },
+      put: async (url, body) => {
+        assert.equal(url, '/admin/system/configs')
+        assert.deepEqual(Array.from(body.items, (item) => ({ ...item })), [{ key: 'notify.enabled', value: 'false' }])
+        return write.promise
+      },
+    },
+    '../../api/types': { fmtTime: String },
+    'react-router-dom': { useNavigate: () => () => {} },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const configTable = () => renderer.root.findAllByType('Table').find((node) => node.props.data?.some((row) => row.key === 'notify.enabled'))
+  const notification = () => {
+    const table = configTable()
+    const row = table.props.data.find((item) => item.key === 'notify.enabled')
+    return findElement(table.props.columns[1].render(row.value, row), (node) => node.props['aria-label'] === '邮件通知')
+  }
+  const saveButton = () => {
+    const card = renderer.root.findAllByType('Card').find((node) => node.props.title === '系统参数')
+    return findElement(card.props.extra, (node) => node.props.children === '保存')
+  }
+
+  await act(async () => notification().props.onChange('false'))
+  let savePromise
+  act(() => {
+    savePromise = saveButton().props.onClick()
+  })
+  assert.equal(notification().props.disabled, true)
+  assert.equal(saveButton().props.disabled, true)
+  await act(async () => notification().props.onChange('true'))
+  assert.equal(notification().props.value, 'false', 'a late edit cannot be accepted while the saved snapshot is in flight')
+
+  await act(async () => {
+    write.resolve({ data: {} })
+    await refreshStarted.promise
+  })
+  assert.equal(configGets, 2, 'a post-save snapshot refresh is attempted')
+  await act(async () => {
+    refresh.reject(new Error('simulated refresh failure after commit'))
+    await savePromise
+  })
+
+  assert.equal(notification().props.value, 'false', 'the confirmed server value remains visible after refresh failure')
+  assert.equal(saveButton().props.disabled, true, 'the committed value is no longer dirty')
+  assert.ok(messages.some(([type, message]) => type === 'success' && message === '参数已保存'))
+  assert.ok(messages.some(([type, message]) => type === 'warning' && message.includes('参数已保存，但最新状态刷新失败')))
+  await act(async () => renderer.unmount())
+})
+
+test('project detail ignores an older unread summary after the read refresh completes', async () => {
+  const deferred = () => {
+    let resolve
+    const promise = new Promise((ok) => { resolve = ok })
+    return { promise, resolve }
+  }
+  const summaries = []
+  const project = { id: 1, name: '竞态项目', status: 'IN_PROGRESS', supplierName: '供应商', updatedAt: '2026-09-13T00:00:00Z' }
+  const Page = loadTs('src/pages/project/ProjectDetail.tsx', {
+    '@arco-design/web-react': arco,
+    'react-router-dom': {
+      useParams: () => ({ id: '1' }),
+      useSearchParams: () => [new URLSearchParams('tab=messages'), () => {}],
+      useNavigate: () => () => {},
+    },
+    '../../api/client': {
+      get: async (url) => {
+        if (!url.endsWith('/summary')) return { data: project }
+        const request = deferred()
+        summaries.push(request)
+        return request.promise
+      },
+    },
+    '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中', color: 'blue' } }, fmtTime: String },
+    '../../components/FileTable': component('Files'),
+    '../../components/MessagePanel': component('Messages'),
+    '../../components/MemberPanel': component('Members'),
+    '../../components/ProjectActivityPanel': component('Activities'),
+    '../../components/ProjectWorkflowPanel': component('Workflow'),
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  assert.equal(summaries.length, 1)
+
+  act(() => { void renderer.root.findByType('Messages').props.onRead() })
+  assert.equal(summaries.length, 2)
+  await act(async () => summaries[1].resolve({ data: { unreadMessages: 0 } }))
+  await act(async () => summaries[0].resolve({ data: { unreadMessages: 1 } }))
+
+  assert.equal(renderer.root.findAllByType('Badge').length, 0, 'the older unread count must not restore a stale badge')
+  await act(async () => renderer.unmount())
+})
+
+test('built-in roles never expose hard delete while custom roles still can', async () => {
+  const builtIn = { id: 1, name: '供应商人员', isBuiltIn: true, status: 'ACTIVE', permissionIds: [], assignedUserCount: 0 }
+  const custom = { id: 2, name: '自定义角色', isBuiltIn: false, status: 'ACTIVE', permissionIds: [], assignedUserCount: 0 }
+  const Page = loadTs('src/pages/rbac/RoleList.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../../api/client': {
+      get: async (url) => ({ data: url === '/permissions' ? [] : { list: [builtIn, custom], total: 2, page: 1, pageSize: 20 } }),
+    },
+    '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['role:manage', 'role:delete']),
+    '../../api/types': {},
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const table = renderer.root.findByType('Table')
+  const actions = table.props.columns.at(-1)
+
+  assert.equal(findActionButton(actions.render(null, builtIn), '删除'), undefined)
+  assert.ok(findActionButton(actions.render(null, custom), '删除'))
+  await act(async () => renderer.unmount())
+})

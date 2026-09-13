@@ -42,7 +42,76 @@ try {
     if ($manifestVerification -lt 0 -or $sharedCodeImport -le $manifestVerification) {
         throw 'Installer imports shared deployment code before package hash verification.'
     }
-    Write-Output 'PASS installer applies path separation and configuration ACL guards'
+    $publishedConfigGuard=$installScript.IndexOf('Assert-YfPublishedConfig $PackageRoot',[StringComparison]::Ordinal)
+    $effectiveConfigGuard=$installScript.IndexOf('Assert-YfInstallationConfiguration $SiteName',[StringComparison]::Ordinal)
+    $firstDeploymentWrite=$installScript.IndexOf('New-Item -ItemType Directory -Path $SiteRoot',[StringComparison]::Ordinal)
+    if ($publishedConfigGuard -lt 0 -or $effectiveConfigGuard -lt 0 -or $firstDeploymentWrite -lt 0 -or
+        $publishedConfigGuard -ge $firstDeploymentWrite -or $effectiveConfigGuard -ge $firstDeploymentWrite) {
+        throw 'Installer does not validate published and inherited configuration before deployment writes.'
+    }
+    $poolCreated=$installScript.IndexOf('New-WebAppPool -Name $AppPoolName',[StringComparison]::Ordinal)
+    $poolIdentitySet=$installScript.IndexOf("-Name processModel.identityType -Value 'ApplicationPoolIdentity'",[StringComparison]::Ordinal)
+    $poolProfileDisabled=$installScript.IndexOf('-Name processModel.loadUserProfile -Value $false',[StringComparison]::Ordinal)
+    $siteCreated=$installScript.IndexOf('New-Website -Name $SiteName',[StringComparison]::Ordinal)
+    if ($poolCreated -lt 0 -or $poolIdentitySet -le $poolCreated -or $poolProfileDisabled -le $poolCreated -or $siteCreated -lt 0 -or
+        $poolIdentitySet -ge $siteCreated -or $poolProfileDisabled -ge $siteCreated) {
+        throw 'Installer does not fix the dedicated pool identity and profile before creating the site.'
+    }
+    Write-Output 'PASS installer applies path, configuration, ACL and pre-write environment guards'
+
+    $externalConfig='D:\YfConfig\appsettings.Production.json'
+    $effectiveVariables=@(
+        [pscustomobject]@{Name='YF_CONFIG_PATH';Value=$externalConfig},
+        [pscustomobject]@{Name='ASPNETCORE_ENVIRONMENT';Value='Production'}
+    )
+    $convertedEmpty=ConvertTo-YfConfigurationVariables @()
+    $convertedNull=ConvertTo-YfConfigurationVariables $null
+    if (@($convertedEmpty).Count -ne 0 -or @($convertedNull).Count -ne 0) {
+        throw 'Empty IIS environment collections were not normalized.'
+    }
+    Assert-YfConfigurationEnvironment `
+        -AspNetCoreVariables $convertedEmpty `
+        -ApplicationPoolVariableNames @() `
+        -DefaultPoolVariableNames @() `
+        -MachineVariableNames @() `
+        -ProcessVariableNames @()
+    Assert-YfConfigurationEnvironment `
+        -AspNetCoreVariables $convertedNull `
+        -ApplicationPoolVariableNames @() `
+        -DefaultPoolVariableNames @() `
+        -MachineVariableNames @() `
+        -ProcessVariableNames @()
+    Write-Output 'PASS empty and null IIS environment collections remain empty through the shared helper chain'
+    Assert-YfConfigurationEnvironment $effectiveVariables @() @() @() @() $externalConfig
+    Reject {
+        Assert-YfConfigurationEnvironment @([pscustomobject]@{Name='App__ConnectionString';Value='wrong-database'}) @() @() @() @()
+    } 'inherited web.config App override refused'
+    Reject {
+        Assert-YfConfigurationEnvironment @() @('App:ConnectionString') @() @() @()
+    } 'application pool App override refused'
+    Reject {
+        Assert-YfConfigurationEnvironment @() @() @('App__ConnectionString') @() @()
+    } 'application pool default App override refused'
+    Reject {
+        Assert-YfConfigurationEnvironment @() @() @() @('App__ConnectionString') @()
+    } 'machine App override refused'
+    Reject {
+        Assert-YfConfigurationEnvironment @() @() @() @() @('App__ConnectionString')
+    } 'deployment process App override refused'
+    Reject {
+        Assert-YfConfigurationEnvironment @([pscustomobject]@{Name='YF_CONFIG_PATH';Value=$externalConfig}) @() @() @() @()
+    } 'inherited YF_CONFIG_PATH refused during installation'
+    Reject {
+        Assert-YfConfigurationEnvironment $effectiveVariables @() @() @() @() 'D:\YfConfig\different.json'
+    } 'mismatched effective YF_CONFIG_PATH refused'
+    Assert-YfApplicationPoolProcessModel 'ApplicationPoolIdentity' $false
+    Reject {
+        Assert-YfApplicationPoolProcessModel 'SpecificUser' $false
+    } 'custom application pool identity refused by maintenance guard'
+    Reject {
+        Assert-YfApplicationPoolProcessModel 'ApplicationPoolIdentity' $true
+    } 'application pool user profile refused by maintenance guard'
+    Write-Output 'PASS shared environment guard covers every IIS installation configuration source'
 
     $aclFixture=Join-Path $root 'acl-fixture.json'
     [IO.File]::WriteAllText($aclFixture,'{}',(New-Object Text.UTF8Encoding($false)))

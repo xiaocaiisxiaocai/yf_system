@@ -10,16 +10,6 @@ function Reject([scriptblock]$Operation,[string]$Name) {
     if (!$rejected) { throw "Expected rejection: $Name" }
     Write-Output "PASS $Name"
 }
-$maintainScript=Join-Path $PSScriptRoot '..\deploy\maintain-iis.ps1'
-$tokens=$null
-$parseErrors=$null
-$ast=[Management.Automation.Language.Parser]::ParseFile($maintainScript,[ref]$tokens,[ref]$parseErrors)
-if ($parseErrors.Count) { throw 'Unable to parse maintain-iis.ps1 guard functions.' }
-foreach ($name in @('Assert-YfEnvironmentNames','Assert-YfLaunch','Assert-YfPublishedConfig')) {
-    $definitions=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true) | Where-Object { $_.Name -eq $name })
-    if ($definitions.Count -ne 1) { throw "Expected exactly one guard function: $name" }
-    Invoke-Expression $definitions[0].Extent.Text
-}
 $source=Read-YfMaintenanceConfig (Join-Path $root 'source.json')
 $target=Read-YfMaintenanceConfig (Join-Path $root 'target.json')
 $second=Read-YfMaintenanceConfig (Join-Path $root 'second.json')
@@ -34,7 +24,7 @@ $sqlClient=(Get-Command mysql.exe -ErrorAction Stop).Source
 $dumpClient=(Get-Command mysqldump.exe -ErrorAction Stop).Source
 Assert-YfLaunch 'dotnet' '.\Yf.Api.dll' 'inprocess'
 Assert-YfEnvironmentNames @('YF_CONFIG_PATH','ASPNETCORE_ENVIRONMENT') -AllowConfigPath
-Assert-YfPublishedConfig $application
+Assert-YfPublishedConfig $application -AllowConfigPath
 Write-Output 'PASS standard dotnet in-process published configuration guard'
 $webConfigPath=Join-Path $application 'web.config'
 $standardWebConfig=[IO.File]::ReadAllBytes($webConfigPath)
@@ -42,7 +32,7 @@ try {
     [xml]$xml=Get-Content -LiteralPath $webConfigPath -Raw -Encoding UTF8
     $xml.SelectSingleNode('//aspNetCore').SetAttribute('arguments','.\Yf.Api.dll --urls http://127.0.0.1:5000')
     $xml.Save($webConfigPath)
-    Reject { Assert-YfPublishedConfig $application } 'additional launch command line refused'
+    Reject { Assert-YfPublishedConfig $application -AllowConfigPath } 'additional launch command line refused'
 } finally { [IO.File]::WriteAllBytes($webConfigPath,$standardWebConfig) }
 foreach ($variableName in @('App__ConnectionString','App:StorageRoot')) {
     try {
@@ -53,11 +43,11 @@ foreach ($variableName in @('App__ConnectionString','App:StorageRoot')) {
         $node.SetAttribute('value','forbidden-test-value')
         $variables.AppendChild($node) | Out-Null
         $xml.Save($webConfigPath)
-        Reject { Assert-YfPublishedConfig $application } "$variableName published override refused"
+        Reject { Assert-YfPublishedConfig $application -AllowConfigPath } "$variableName published override refused"
     } finally { [IO.File]::WriteAllBytes($webConfigPath,$standardWebConfig) }
 }
 Reject { Assert-YfEnvironmentNames @('YF_CONFIG_PATH') } 'inherited YF_CONFIG_PATH refused'
-Write-Output 'PASS only extracted guards were exercised; IIS was not used'
+Write-Output 'PASS shared deployment guards were exercised; IIS was not used'
 $missingDefaultsParent=Join-Path $root 'missing-defaults-parent'
 Reject { Write-YfMySqlDefaults $source $missingDefaultsParent } 'credential defaults write failure handled'
 if (Test-Path -LiteralPath $missingDefaultsParent) { throw 'Credential defaults failure created an unexpected path.' }

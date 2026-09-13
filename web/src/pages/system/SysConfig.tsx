@@ -202,19 +202,35 @@ export default function SysConfig() {
   }
 
   const setValue = (key: string, value: string) => {
+    if (saving) return
     setEditing((current) => ({ ...current, [key]: value }))
   }
 
   const save = async () => {
-    if (dirty.length === 0) return
+    if (saving || dirty.length === 0) return
+    const items = dirty.map(([key, value]) => ({ key, value }))
+    const savedValues = new Map(items.map((item) => [item.key, item.value]))
     setSaving(true)
     try {
-      await http.put('/admin/system/configs', { items: dirty.map(([key, value]) => ({ key, value })) })
+      await http.put('/admin/system/configs', { items })
+      setConfigs((current) => current.map((config) => (
+        savedValues.has(config.key) ? { ...config, value: savedValues.get(config.key)! } : config
+      )))
+      setEditing((current) => {
+        const next = { ...current }
+        for (const item of items) {
+          if (next[item.key] === item.value) delete next[item.key]
+        }
+        return next
+      })
       Message.success('参数已保存')
-      const next = await fetchSnapshot()
-      setConfigs(next.configs)
-      setMail(next.mail)
-      setEditing({})
+      try {
+        const next = await fetchSnapshot()
+        setConfigs(next.configs)
+        setMail(next.mail)
+      } catch {
+        Message.warning('参数已保存，但最新状态刷新失败，请稍后刷新页面')
+      }
     } catch {
       /* 拦截器已提示 */
     } finally {
@@ -227,7 +243,7 @@ export default function SysConfig() {
     const label = CONFIG_META[cfg.key]?.name || cfg.key
     if (cfg.key === 'notify.enabled') {
       return (
-        <Select aria-label={label} value={value} onChange={(v) => setValue(cfg.key, String(v))}>
+        <Select aria-label={label} value={value} disabled={saving} onChange={(v) => setValue(cfg.key, String(v))}>
           <Select.Option value="true">启用</Select.Option>
           <Select.Option value="false">关闭</Select.Option>
         </Select>
@@ -245,6 +261,7 @@ export default function SysConfig() {
           step={isChunkSize ? 0.25 : 1}
           suffix="MB"
           value={Number.isFinite(numericValue) ? numericValue / MB : undefined}
+          disabled={saving}
           onChange={(next) => {
             if (typeof next === 'number' && Number.isFinite(next)) {
               setValue(cfg.key, String(Math.round(next * MB)))
@@ -255,7 +272,7 @@ export default function SysConfig() {
         />
       )
     }
-    return <Input aria-label={label} value={value} onChange={(next) => setValue(cfg.key, next)} />
+    return <Input aria-label={label} value={value} disabled={saving} onChange={(next) => setValue(cfg.key, next)} />
   }
 
   return (
@@ -347,7 +364,7 @@ export default function SysConfig() {
               <Space size={8}>
                 {dirty.length > 0 && <span className="system-config-dirty">已修改 {dirty.length} 项</span>}
                 <Button disabled={dirty.length === 0 || saving} onClick={() => setEditing({})}>重置</Button>
-                <Button type="primary" disabled={dirty.length === 0} loading={saving} onClick={save}>保存</Button>
+                <Button type="primary" disabled={dirty.length === 0 || saving} loading={saving} onClick={save}>保存</Button>
               </Space>
             }
           >

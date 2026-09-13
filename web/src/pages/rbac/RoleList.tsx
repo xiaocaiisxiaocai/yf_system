@@ -274,7 +274,7 @@ export default function RoleList() {
                   {r.status === 'ACTIVE' ? '禁用' : '启用'}
                 </Button>
               </Popconfirm>,
-              canDelete && (
+              canDelete && !r.isBuiltIn && (
                 <Popconfirm key="delete" title="删除后不可恢复，仍绑定用户时无法删除。确认？" onOk={() => remove(r)}>
                   <Button size="mini" type="text" status="danger">删除</Button>
                 </Popconfirm>

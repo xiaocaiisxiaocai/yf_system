@@ -9,6 +9,9 @@ import subprocess
 import tempfile
 from urllib.parse import unquote, urlsplit
 
+if not __debug__:
+    raise SystemExit("Do not run the maintenance suite with Python assertions disabled (-O/PYTHONOPTIMIZE).")
+
 import pymysql
 
 source = Path(__file__).resolve().parents[2]

@@ -88,13 +88,13 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
 
 ## 测试
 
-在 `server_dotnet` 目录：
+在 `server_dotnet` 目录运行。完整回归前，先为当前进程设置指向独立本机测试实例的 `YF_TEST_DATABASE_URL`；数据库测试未配置连接时会跳过，单凭命令退出码为 0 不能证明完整回归通过，必须同时核对失败、跳过和未运行数量均为 0。
 
 ```powershell
+# 先安全设置当前进程的 YF_TEST_DATABASE_URL，不把密码写入命令历史。
+# 连接格式：mysql://账号:URL编码密码@127.0.0.1:测试端口/ignored
 dotnet test --project .\tests\Yf.Api.Tests.csproj
 dotnet build .\TestHost\Yf.Api.TestHost.csproj
-# 仅在当前进程设置本机测试管理连接，勿将真实凭据写入命令历史或版本库。
-# $env:YF_TEST_DATABASE_URL 的格式为 mysql://账号:URL编码密码@127.0.0.1:3306/ignored
 python .\scripts\test-isolated.py
 
 # 真实维护备份/恢复测试；同样必须显式设置上面的本机测试管理连接。
@@ -102,6 +102,8 @@ python .\scripts\test-maintenance.py
 ```
 
 HTTP 测试需要 Python 3.11+ 与 `pymysql`，仅使用显式设置的 `YF_TEST_DATABASE_URL`（本机 MySQL 测试管理账号，需创建/删除测试库及查看锁等待）。不读取 Rust 配置。测试在随机命名的 `yf_test_dotnet_*` 库与临时存储中运行，结束只删除自身资源；邮件发送禁用，通知验证仅检查 outbox。
+
+测试必须保留 Python 断言，不使用 `python -O` 或 `PYTHONOPTIMIZE`。HTTP 与浏览器入口会在使用 TestHost 前核对其实际加载的 API 和托管依赖字节；只构建 API、未同步构建 TestHost 时应重新构建，不能跳过一致性检查。
 
 `test-maintenance.py` 还要求本机 `mysql.exe` 与 `mysqldump.exe` 可用，并使用随机命名的 `yf_test_maintenance_*` 数据库验证真实 MySQL、程序和存储字节的备份/恢复、篡改拒绝及非空目标拒绝。它只接受 `localhost`、`127.0.0.1` 或 `::1` 的显式 `YF_TEST_DATABASE_URL`，会创建并删除自身测试数据库；客户端应为与测试 MySQL 兼容的 5.7 或更高版本。该测试不启动或操作 IIS，不验证目标服务器的站点、专属应用池、HTTPS 证书、权限或网络。
 

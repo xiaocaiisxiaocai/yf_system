@@ -77,11 +77,13 @@ foreach ($required in @('Yf.Api.dll','Yf.Api.runtimeconfig.json','web.config','w
 Assert-YfSeparate @($PackageRoot,$SiteRoot,$ConfigPath,$storage)
 $maintenanceConfig = Read-YfMaintenanceConfig $ConfigPath
 if ($maintenanceConfig.Storage -ne $storage) { throw 'Configuration storage path changed during validation.' }
+Assert-YfPublishedConfig $PackageRoot
 Import-Module WebAdministration -ErrorAction Stop
 if (Test-Path "IIS:\Sites\$SiteName") { throw 'IIS site already exists; follow documented upgrade procedure.' }
 if (Test-Path "IIS:\AppPools\$AppPoolName") { throw 'IIS application pool already exists; refusing to reuse another application pool.' }
 if (!(Get-WebGlobalModule | Where-Object Name -eq 'AspNetCoreModuleV2')) { throw 'Install the .NET 10 Hosting Bundle after IIS, then restart IIS/WAS as its installer directs.' }
 if (!(Get-WebGlobalModule | Where-Object Name -eq 'ApplicationInitializationModule')) { throw 'Enable IIS Application Initialization before installation.' }
+Assert-YfInstallationConfiguration $SiteName
 $runtimes = & dotnet --list-runtimes
 if ($LASTEXITCODE -ne 0 -or !($runtimes -match '^Microsoft.AspNetCore.App 10\.')) { throw '.NET 10 ASP.NET Core runtime is required.' }
 $thumb = $CertificateThumbprint.Replace(' ','').ToUpperInvariant()
@@ -107,6 +109,8 @@ foreach ($pair in @(@('YF_CONFIG_PATH',$ConfigPath),@('ASPNETCORE_ENVIRONMENT','
 $webConfig.Save($webConfigPath)
 New-WebAppPool -Name $AppPoolName | Out-Null
 Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name managedRuntimeVersion -Value ''
+Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.identityType -Value 'ApplicationPoolIdentity'
+Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.loadUserProfile -Value $false
 Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name startMode -Value AlwaysRunning
 Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.idleTimeout -Value ([TimeSpan]::Zero)
 Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name enable32BitAppOnWin64 -Value $false

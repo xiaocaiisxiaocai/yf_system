@@ -1,6 +1,105 @@
 #Requires -Version 5.1
-# Shared by maintain-iis.ps1; importing this file performs no maintenance.
+# Shared by install-iis.ps1 and maintain-iis.ps1; importing this file performs no deployment or maintenance.
 Set-StrictMode -Version 2.0
+
+function Assert-YfEnvironmentNames([string[]]$Names, [switch]$AllowConfigPath) {
+    foreach ($name in $Names) {
+        if ($name -match '^App(__|:)' -or (!$AllowConfigPath -and $name -eq 'YF_CONFIG_PATH')) {
+            throw 'Deployment requires external JSON configuration without App environment overrides or inherited YF_CONFIG_PATH. Remove the override from the relevant scope before retrying.'
+        }
+    }
+}
+function Assert-YfApplicationPoolProcessModel([string]$IdentityType,[bool]$LoadUserProfile) {
+    if ($IdentityType -ne 'ApplicationPoolIdentity' -or $LoadUserProfile) {
+        throw 'Deployment requires ApplicationPoolIdentity without a loaded user profile.'
+    }
+}
+function Assert-YfLaunch([string]$ProcessPath,[string]$Arguments,[string]$HostingModel) {
+    if ($ProcessPath -ne 'dotnet' -or $Arguments.Trim() -notin @('.\Yf.Api.dll','Yf.Api.dll','".\Yf.Api.dll"','"Yf.Api.dll"') -or $HostingModel -ne 'inprocess') {
+        throw 'Deployment requires the standard in-process dotnet Yf.Api.dll launch without additional command-line settings.'
+    }
+}
+function Assert-YfPublishedConfig([string]$Root,[switch]$AllowConfigPath) {
+    [xml]$xml=Get-Content -LiteralPath (Join-Path $Root 'web.config') -Raw -Encoding UTF8
+    $nodes=@($xml.SelectNodes('//aspNetCore'))
+    if ($nodes.Count -ne 1) { throw 'Exactly one ASP.NET Core launch configuration is required.' }
+    $asp=$nodes[0]
+    Assert-YfLaunch $asp.GetAttribute('processPath') $asp.GetAttribute('arguments') $asp.GetAttribute('hostingModel')
+    Assert-YfEnvironmentNames @($asp.SelectNodes('environmentVariables/environmentVariable') | ForEach-Object { $_.GetAttribute('name') }) -AllowConfigPath:$AllowConfigPath
+}
+function Assert-YfConfigurationEnvironment(
+    [object[]]$AspNetCoreVariables,
+    [string[]]$ApplicationPoolVariableNames,
+    [string[]]$DefaultPoolVariableNames,
+    [string[]]$MachineVariableNames,
+    [string[]]$ProcessVariableNames,
+    [string]$ExternalConfig=''
+) {
+    $allowConfigPath=![string]::IsNullOrWhiteSpace($ExternalConfig)
+    $webVariables=@($AspNetCoreVariables | Where-Object { $null -ne $_ })
+    Assert-YfEnvironmentNames @($webVariables | ForEach-Object { [string]$_.Name }) -AllowConfigPath:$allowConfigPath
+    if ($allowConfigPath) {
+        $effectivePaths=@($webVariables | Where-Object { [string]$_.Name -eq 'YF_CONFIG_PATH' })
+        if ($effectivePaths.Count -ne 1 -or [string]$effectivePaths[0].Value -ne $ExternalConfig) {
+            throw 'Effective IIS configuration does not match the external configuration file.'
+        }
+    }
+    Assert-YfEnvironmentNames $ApplicationPoolVariableNames
+    Assert-YfEnvironmentNames $DefaultPoolVariableNames
+    Assert-YfEnvironmentNames $MachineVariableNames
+    Assert-YfEnvironmentNames $ProcessVariableNames
+}
+function ConvertTo-YfConfigurationVariables($Collection) {
+    return @($Collection | Where-Object { $null -ne $_ } | ForEach-Object { [pscustomobject]@{ Name=[string]$_['name']; Value=[string]$_['value'] } })
+}
+function Assert-YfInstallationConfiguration([string]$Name) {
+    # A new site has no effective configuration to query yet. Validate every source it
+    # will inherit before creating anything; the caller validates package web.config.
+    Add-Type -Path (Join-Path $env:windir 'System32\inetsrv\Microsoft.Web.Administration.dll')
+    $manager=New-Object Microsoft.Web.Administration.ServerManager
+    try {
+        $configuration=$manager.GetApplicationHostConfiguration()
+        if (@($configuration.GetLocationPaths() | Where-Object {
+            $_ -eq $Name -or $_.StartsWith($Name+'/',[StringComparison]::OrdinalIgnoreCase)
+        }).Count) {
+            throw 'A pre-existing IIS location configuration for the new site must be removed before installation.'
+        }
+        $asp=$configuration.GetSection('system.webServer/aspNetCore')
+        $defaults=$configuration.GetSection('system.applicationHost/applicationPools').GetChildElement('applicationPoolDefaults')
+        Assert-YfConfigurationEnvironment `
+            -AspNetCoreVariables (ConvertTo-YfConfigurationVariables $asp.GetCollection('environmentVariables')) `
+            -ApplicationPoolVariableNames @() `
+            -DefaultPoolVariableNames @($defaults.GetCollection('environmentVariables') | ForEach-Object { [string]$_['name'] }) `
+            -MachineVariableNames @([Environment]::GetEnvironmentVariables('Machine').Keys) `
+            -ProcessVariableNames @(Get-ChildItem Env: | ForEach-Object { $_.Name })
+    } finally { $manager.Dispose() }
+}
+function Assert-YfEffectiveConfiguration([string]$Name,[string]$Pool,[string]$ExternalConfig,[string]$Origin) {
+    # Read inherited IIS settings as well as local web.config before stopping anything.
+    Add-Type -Path (Join-Path $env:windir 'System32\inetsrv\Microsoft.Web.Administration.dll')
+    $manager=New-Object Microsoft.Web.Administration.ServerManager
+    try {
+        $targetSite=$manager.Sites[$Name]
+        $uri=[Uri]$Origin
+        if ($targetSite.Applications.Count -ne 1 -or $uri.Scheme -ne 'https' -or $uri.AbsolutePath -ne '/' -or $uri.Query -or $uri.Fragment -or
+            !@($targetSite.Bindings | Where-Object { $_.Protocol -eq 'https' -and $_.Host -eq $uri.DnsSafeHost -and $_.EndPoint.Port -eq $uri.Port }).Count) {
+            throw 'Maintenance requires one root IIS application and an HTTPS binding matching the configured site origin.'
+        }
+        $applicationPool=$manager.ApplicationPools[$Pool]
+        Assert-YfApplicationPoolProcessModel ($applicationPool.ProcessModel.IdentityType.ToString()) ([bool]$applicationPool.ProcessModel.LoadUserProfile)
+        $asp=$manager.GetWebConfiguration($Name).GetSection('system.webServer/aspNetCore')
+        Assert-YfLaunch ([string]$asp['processPath']) ([string]$asp['arguments']) ([string]$asp['hostingModel'])
+        $variables=@($asp.GetCollection('environmentVariables'))
+        $defaults=$manager.GetApplicationHostConfiguration().GetSection('system.applicationHost/applicationPools').GetChildElement('applicationPoolDefaults')
+        Assert-YfConfigurationEnvironment `
+            -AspNetCoreVariables (ConvertTo-YfConfigurationVariables $variables) `
+            -ApplicationPoolVariableNames @($applicationPool.GetCollection('environmentVariables') | ForEach-Object { [string]$_['name'] }) `
+            -DefaultPoolVariableNames @($defaults.GetCollection('environmentVariables') | ForEach-Object { [string]$_['name'] }) `
+            -MachineVariableNames @([Environment]::GetEnvironmentVariables('Machine').Keys) `
+            -ProcessVariableNames @(Get-ChildItem Env: | ForEach-Object { $_.Name }) `
+            -ExternalConfig $ExternalConfig
+    } finally { $manager.Dispose() }
+}
 
 function Get-YfFullPath([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path) -or $Path -notmatch '^[A-Za-z]:[\\/]') { throw 'Use an absolute local disk path.' }

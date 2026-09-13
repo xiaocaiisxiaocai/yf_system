@@ -20,6 +20,12 @@ import urllib.request
 import zipfile
 
 import pymysql
+from browser_step_evidence import (
+    BrowserStepEvidenceError,
+    snapshot_browser_evidence,
+    validate_browser_step_evidence,
+)
+from test_host_artifacts import verify_test_host_artifacts
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = Path(__file__).resolve().parent / 'browser'
@@ -28,6 +34,8 @@ parser.add_argument('--output', type=Path)
 parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges'],
     choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges'])
 args = parser.parse_args()
+if not __debug__:
+    raise SystemExit('Do not run the browser suite with Python assertions disabled (-O/PYTHONOPTIMIZE).')
 if args.steps[:2] != ['auth', 'fixtures']:
     raise SystemExit('Every fresh run must start with auth fixtures.')
 if len(args.steps) != len(set(args.steps)):
@@ -52,6 +60,7 @@ host = ROOT / 'server_dotnet/TestHost/bin/Debug/net10.0/Yf.Api.TestHost.dll'
 for required in (dll, host, ROOT / 'web/dist/index.html'):
     if not required.is_file():
         raise SystemExit('Build the API, TestHost and frontend first: ' + str(required))
+test_host_artifacts = verify_test_host_artifacts(dll.parent, host)
 
 
 def sources():
@@ -75,7 +84,7 @@ def stop_owned(owned):
 
 
 before = sources()
-artifact_files = [dll, host, *sorted((ROOT / 'web/dist').rglob('*'))]
+artifact_files = [dll, host, *test_host_artifacts, *sorted((ROOT / 'web/dist').rglob('*'))]
 artifact_hashes = {str(file.relative_to(ROOT)).replace('\\', '/'): hashlib.sha256(file.read_bytes()).hexdigest()
                    for file in artifact_files if file.is_file()}
 schema = 'yf_test_browser_' + secrets.token_hex(12)
@@ -84,7 +93,8 @@ connection = pymysql.connect(host=url.hostname, port=url.port or 3306,
 created = False
 process = None
 storage_path = None
-result = {'status': 'fail', 'steps': args.steps, 'businessDatabaseTouched': False, 'smtpUsed': False}
+result = {'status': 'fail', 'steps': args.steps, 'stepEvidence': [],
+          'businessDatabaseTouched': False, 'smtpUsed': False}
 try:
     with connection.cursor() as cursor:
         cursor.execute(f'CREATE DATABASE `{schema}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci')
@@ -134,12 +144,24 @@ try:
             print(f'Owned browser host ready: {base}; no business data or SMTP', flush=True)
             for script in args.steps:
                 print('RUN browser ' + script, flush=True)
-                with (output / (script + '.log')).open('wb') as step_log:
+                step_log_path = output / (script + '.log')
+                step_before = snapshot_browser_evidence(output)
+                with step_log_path.open('wb') as step_log:
                     step = subprocess.run(['node', str(runner.resolve()), str(SCRIPTS / (script + '.cjs'))],
                         cwd=ROOT, env=env, stdout=step_log, stderr=subprocess.STDOUT, timeout=600)
                 if step.returncode:
-                    print((output / (script + '.log')).read_text(encoding='utf-8', errors='replace')[-6000:], flush=True)
-                    raise RuntimeError('Browser step failed: ' + script)
+                    print(step_log_path.read_text(encoding='utf-8', errors='replace')[-6000:], flush=True)
+                    raise RuntimeError(f'Browser step failed: {script}; log: {step_log_path}')
+                try:
+                    evidence = validate_browser_step_evidence(
+                        script, step_before, snapshot_browser_evidence(output), output)
+                except BrowserStepEvidenceError as error:
+                    with step_log_path.open('a', encoding='utf-8') as step_log:
+                        step_log.write('\nEVIDENCE FAILURE ' + str(error) + '\n')
+                    print(step_log_path.read_text(encoding='utf-8', errors='replace')[-6000:], flush=True)
+                    raise RuntimeError(
+                        f'Browser step evidence failed: {script}; log: {step_log_path}') from error
+                result['stepEvidence'].append(evidence)
                 print('PASS browser ' + script, flush=True)
             fixtures = json.loads((output / 'fixtures.private.json').read_text(encoding='utf-8'))
             persisted = []

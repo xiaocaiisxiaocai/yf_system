@@ -22,6 +22,7 @@ import urllib.request
 import uuid
 import zipfile
 import pymysql
+from test_host_artifacts import verify_test_host_artifacts
 from test_identity_contracts import run_identity_checks
 from test_file_contracts import run_file_checks
 from test_system_contracts import run_system_checks
@@ -35,6 +36,12 @@ API = Path(PUBLISHED).resolve() if PUBLISHED else ROOT / "server_dotnet/Yf.Api"
 DLL = API / "Yf.Api.dll" if PUBLISHED else API / "bin/Debug/net10.0/Yf.Api.dll"
 TEST_HOST = ROOT / "server_dotnet/TestHost/bin/Debug/net10.0/Yf.Api.TestHost.dll"
 checks = []
+
+if not __debug__:
+    raise SystemExit("Do not run the regression suite with Python assertions disabled (-O/PYTHONOPTIMIZE).")
+if not PUBLISHED:
+    # Reject an out-of-date project-reference copy before creating any fixture database.
+    verify_test_host_artifacts(DLL.parent, TEST_HOST)
 
 
 def check(name, condition):
@@ -176,7 +183,8 @@ try:
                 source = TEST_HOST.parent / ("Yf.Api.TestHost" + suffix)
                 shutil.copy2(source, test_payload / source.name)
             test_dll = test_payload / TEST_HOST.name
-            check("test host uses exact published API assembly", hashlib.sha256((test_payload / "Yf.Api.dll").read_bytes()).digest() == hashlib.sha256(DLL.read_bytes()).digest())
+        verify_test_host_artifacts(API if PUBLISHED else DLL.parent, test_dll)
+        check("test host uses exact API assembly and managed runtime dependencies", True)
         with open(Path(temp) / "api.log", "wb") as log:
             process = subprocess.Popen(["dotnet", str(DLL)], cwd=API, env=env, stdout=log, stderr=log)
             stack.callback(stop_process, process)

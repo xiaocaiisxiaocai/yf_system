@@ -156,6 +156,17 @@ def run_identity_checks(client, Client, conn, check):
     user_manage = permission_ids["user:manage"]
     role_page = client.call("GET", "/api/v1/admin/roles")
     supplier_role = next(role for role in role_page["list"] if role["name"] == "供应商人员")
+    check("identity supplier role starts unassigned for built-in deletion coverage",
+          supplier_role["assignedUserCount"] == 0)
+    delete_built_in = client.call(
+        "DELETE", f"/api/v1/admin/roles/{supplier_role['id']}", expected=400)
+    supplier_role_after_delete_rejection = next(
+        role for role in client.call("GET", "/api/v1/admin/roles")["list"]
+        if role["id"] == supplier_role["id"])
+    check("identity unassigned built-in supplier role cannot be deleted",
+          delete_built_in["code"] == 40001
+          and supplier_role_after_delete_rejection["isBuiltIn"] is True
+          and supplier_role_after_delete_rejection["permissionIds"] == supplier_role["permissionIds"])
     client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
         "permissionIds": supplier_role["permissionIds"] + unsafe_supplier_ids
     }, expected=400)
@@ -220,6 +231,8 @@ def run_identity_checks(client, Client, conn, check):
         "employeeNo": supplier_employee, "password": supplier_password, "realName": "供应商会话用户",
         "email": supplier_employee + "@example.invalid"
     })
+    check("identity supplier account creation still works after built-in deletion rejection",
+          supplier_user["supplierId"] == supplier["id"])
     client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/status", {"status": "DISABLED"}, expected=400)
     client.call("PUT", f"/api/v1/admin/supplier-accounts/{supplier_user['id']}/status", {"status": "DISABLED"})
     client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/status", {"status": "DISABLED"})

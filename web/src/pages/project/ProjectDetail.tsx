@@ -25,6 +25,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const navigate = useNavigate()
   const [project, setProject] = useState<Project | null>(null)
   const [summary, setSummary] = useState<Summary>({ unreadMessages: 0 })
+  const summarySeq = useRef(0)
   const [loadErrorFor, setLoadErrorFor] = useState<number | null>(null)
   const loadingProjectId = useRef<number | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
@@ -63,8 +64,10 @@ function ProjectDetailContent({ id }: { id?: string }) {
   }, [pid])
 
   const loadSummary = useCallback(async () => {
+    const seq = ++summarySeq.current
     try {
-      setSummary(await fetchSummary())
+      const next = await fetchSummary()
+      if (seq === summarySeq.current) setSummary(next)
     } catch {
       /* 拦截器已提示 */
     }
@@ -119,14 +122,13 @@ function ProjectDetailContent({ id }: { id?: string }) {
 
   useEffect(() => {
     if (project?.id !== pid) return
-    let active = true
-    fetchSummary().then((next) => {
-      if (active) setSummary(next)
-    }).catch(() => undefined)
+    // Summary is the external server state synchronized after the project becomes available.
+    // eslint-disable-next-line react/set-state-in-effect
+    void loadSummary()
     return () => {
-      active = false
+      summarySeq.current += 1
     }
-  }, [project?.id, pid, fetchSummary])
+  }, [project?.id, pid, loadSummary])
 
   if (!validProjectId) return (
     <div style={{ textAlign: 'center', padding: 32 }}>

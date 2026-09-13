@@ -24,55 +24,6 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'maintenance-common.ps1')
 
-function Assert-YfEnvironmentNames([string[]]$Names, [switch]$AllowConfigPath) {
-    foreach ($name in $Names) {
-        if ($name -match '^App(__|:)' -or (!$AllowConfigPath -and $name -eq 'YF_CONFIG_PATH')) {
-            throw 'Maintenance requires external JSON configuration without App environment overrides or inherited YF_CONFIG_PATH. Remove the override and recycle the dedicated pool before retrying.'
-        }
-    }
-}
-function Assert-YfLaunch([string]$ProcessPath,[string]$Arguments,[string]$HostingModel) {
-    if ($ProcessPath -ne 'dotnet' -or $Arguments.Trim() -notin @('.\Yf.Api.dll','Yf.Api.dll','".\Yf.Api.dll"','"Yf.Api.dll"') -or $HostingModel -ne 'inprocess') {
-        throw 'Maintenance requires the standard in-process dotnet Yf.Api.dll launch without additional command-line settings.'
-    }
-}
-function Assert-YfPublishedConfig([string]$Root) {
-    [xml]$xml=Get-Content -LiteralPath (Join-Path $Root 'web.config') -Raw -Encoding UTF8
-    $nodes=@($xml.SelectNodes('//aspNetCore'))
-    if ($nodes.Count -ne 1) { throw 'Exactly one ASP.NET Core launch configuration is required.' }
-    $asp=$nodes[0]
-    Assert-YfLaunch $asp.GetAttribute('processPath') $asp.GetAttribute('arguments') $asp.GetAttribute('hostingModel')
-    Assert-YfEnvironmentNames @($asp.SelectNodes('environmentVariables/environmentVariable') | ForEach-Object { $_.GetAttribute('name') }) -AllowConfigPath
-}
-function Assert-YfEffectiveConfiguration([string]$Name,[string]$Pool,[string]$ExternalConfig,[string]$Origin) {
-    # Read inherited IIS settings as well as local web.config before stopping anything.
-    Add-Type -Path (Join-Path $env:windir 'System32\inetsrv\Microsoft.Web.Administration.dll')
-    $manager=New-Object Microsoft.Web.Administration.ServerManager
-    try {
-        $targetSite=$manager.Sites[$Name]
-        $uri=[Uri]$Origin
-        if ($targetSite.Applications.Count -ne 1 -or $uri.Scheme -ne 'https' -or $uri.AbsolutePath -ne '/' -or $uri.Query -or $uri.Fragment -or
-            !@($targetSite.Bindings | Where-Object { $_.Protocol -eq 'https' -and $_.Host -eq $uri.DnsSafeHost -and $_.EndPoint.Port -eq $uri.Port }).Count) {
-            throw 'Maintenance requires one root IIS application and an HTTPS binding matching the configured site origin.'
-        }
-        $applicationPool=$manager.ApplicationPools[$Pool]
-        if ($applicationPool.ProcessModel.IdentityType.ToString() -ne 'ApplicationPoolIdentity' -or $applicationPool.ProcessModel.LoadUserProfile) {
-            throw 'Maintenance requires ApplicationPoolIdentity without a loaded user profile.'
-        }
-        $asp=$manager.GetWebConfiguration($Name).GetSection('system.webServer/aspNetCore')
-        Assert-YfLaunch ([string]$asp['processPath']) ([string]$asp['arguments']) ([string]$asp['hostingModel'])
-        $variables=@($asp.GetCollection('environmentVariables'))
-        Assert-YfEnvironmentNames @($variables | ForEach-Object { [string]$_['name'] }) -AllowConfigPath
-        $effectivePaths=@($variables | Where-Object { [string]$_['name'] -eq 'YF_CONFIG_PATH' })
-        if ($effectivePaths.Count -ne 1 -or [string]$effectivePaths[0]['value'] -ne $ExternalConfig) { throw 'Effective IIS configuration does not match the external configuration file.' }
-        $defaults=$manager.GetApplicationHostConfiguration().GetSection('system.applicationHost/applicationPools').GetChildElement('applicationPoolDefaults')
-        foreach ($element in @($applicationPool,$defaults)) {
-            Assert-YfEnvironmentNames @($element.GetCollection('environmentVariables') | ForEach-Object { [string]$_['name'] })
-        }
-        Assert-YfEnvironmentNames @([Environment]::GetEnvironmentVariables('Machine').Keys)
-        Assert-YfEnvironmentNames @(Get-ChildItem Env: | ForEach-Object { $_.Name })
-    } finally { $manager.Dispose() }
-}
 function Test-YfWorkersStopped([string]$Pool) {
     $manager=New-Object Microsoft.Web.Administration.ServerManager
     try { return @($manager.WorkerProcesses | Where-Object { $_.AppPoolName -eq $Pool }).Count -eq 0 }
@@ -130,7 +81,7 @@ if (!(Test-Path -LiteralPath (Join-Path $currentRoot 'Yf.Api.dll'))) { throw 'Th
 $configNodes=@($currentXml.SelectNodes('//aspNetCore/environmentVariables/environmentVariable[@name="YF_CONFIG_PATH"]'))
 if ($configNodes.Count -ne 1) { throw 'Exactly one external YF_CONFIG_PATH is required in the current IIS deployment.' }
 $currentConfig=Read-YfMaintenanceConfig $configNodes[0].GetAttribute('value')
-Assert-YfPublishedConfig $currentRoot
+Assert-YfPublishedConfig $currentRoot -AllowConfigPath
 Assert-YfEffectiveConfiguration $SiteName $pool $currentConfig.Path $currentConfig.Origin
 if ($currentConfig.Origin -notlike 'https://*' -or $currentConfig.Config.App.CookieSecure -ne $true) { throw 'Maintenance requires a production HTTPS origin and secure cookies.' }
 $backupRoot=Get-YfFullPath $BackupDirectory
@@ -142,7 +93,7 @@ if ($Action -eq 'Restore') {
     if ($targetConfig.Database -eq $currentConfig.Database) { throw 'Use a different database name for restore.' }
     if ($targetConfig.Origin -ne $currentConfig.Origin -or $targetConfig.Config.App.CookieSecure -ne $true) { throw 'Restore must retain the current HTTPS site origin and secure cookies.' }
     Assert-YfBackupSite $backupRoot $SiteName | Out-Null
-    Assert-YfPublishedConfig (Join-Path $backupRoot 'application')
+    Assert-YfPublishedConfig (Join-Path $backupRoot 'application') -AllowConfigPath
     Get-Command $MySql -ErrorAction Stop | Out-Null
 } else {
     $targetConfig=$currentConfig
