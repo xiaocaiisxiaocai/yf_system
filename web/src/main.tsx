@@ -14,8 +14,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         closeIcon: <button type="button" className="drawer-close-button" aria-label="关闭抽屉"><IconClose /></button>,
       },
       Modal: {
+        // Keep popups inside the dialog focus scope, outside its scrolling content.
+        getChildrenPopupContainer: (node) => node.closest('.arco-modal-content')?.parentElement || document.body,
         closeIcon: <button type="button" className="drawer-close-button" aria-label="关闭弹窗"><IconClose /></button>,
       },
+      Trigger: { updateOnScroll: true },
       Popconfirm: {
         position: 'tr',
         triggerProps: {

@@ -177,6 +177,37 @@ function flattenDepartments(nodes, result = []) {
     await navigate(page, '/org/users');
     await page.getByRole('heading', { name: '用户管理', exact: true }).waitFor();
 
+    for (const viewport of [{ width: 1920, height: 945 }, { width: 1366, height: 768 }, { width: 1280, height: 600 }]) {
+      await record(`新增用户下拉树和角色不被裁剪 ${viewport.width}x${viewport.height}`, async () => {
+        await page.setViewportSize(viewport);
+        await page.getByRole('button', { name: '新增用户', exact: true }).click();
+        const modal = currentModal();
+        for (const [placeholder, label] of [['选择组织', editedSectionName + '（课别）'], ['选择角色', '内部成员']]) {
+          await openChoice(modal, placeholder);
+          const popup = page.locator('.arco-select-popup:visible, .arco-tree-select-popup:visible').last();
+          await popup.waitFor();
+          const option = popup.getByText(label, { exact: true }).last();
+          await option.scrollIntoViewIfNeeded();
+          // A locator being visible alone does not prove it is outside the clipping region.
+          await page.waitForFunction(() => {
+            const popups = [...document.querySelectorAll('.arco-select-popup, .arco-tree-select-popup')].filter(e => e.getBoundingClientRect().height > 0);
+            const popup = popups.at(-1);
+            if (!popup) return false;
+            const box = popup.getBoundingClientRect();
+            return !popup.closest('.arco-modal-content') && !!popup.closest('[role="dialog"]') && box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth;
+          });
+          await option.click({ trial: true });
+          await page.screenshot({ path: OUT + `/user-popup-${viewport.width}-${viewport.height}-${placeholder === '选择组织' ? 'org' : 'role'}.png`, fullPage: true });
+          await option.click();
+          await popup.waitFor({ state: 'hidden' });
+          await modal.getByText(label, { exact: true }).waitFor();
+        }
+        await modal.getByRole('button', { name: '取消', exact: true }).click();
+        await modal.waitFor({ state: 'hidden' });
+      });
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+
     await record('内部用户必填取消、创建及筛选持久化', async () => {
       await page.getByRole('button', { name: '新增用户', exact: true }).click();
       let modal = currentModal();
