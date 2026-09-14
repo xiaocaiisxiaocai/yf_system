@@ -720,7 +720,9 @@ html, body, #root {
 .action-slots--project { grid-template-columns: 44px 44px 92px 44px; }
 .action-slots--supplier { grid-template-columns: 76px 44px 44px 44px; }
 .action-slots--account { grid-template-columns: 44px 72px 44px 44px; }
-.action-slots--user { grid-template-columns: 48px 72px 48px 44px; }
+/* 用户行按实际可用操作居中，隐藏的启停／删除按钮不占位。 */
+.action-slots--user { display: flex; }
+.action-slots--user .action-slot--empty { display: none; }
 .action-slots--role { grid-template-columns: 76px 44px 44px 44px; }
 .action-slots--file { grid-template-columns: 58px 44px; }
 .action-slots--single { grid-template-columns: 48px 44px; }
