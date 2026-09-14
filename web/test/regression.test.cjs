@@ -188,7 +188,7 @@ test('collapsed sidebar tooltip renders the menu label instead of duplicating it
   assert.doesNotMatch(layout, /title=\{collapsed \? m\.label/)
 })
 
-test('table action slots keep empty action positions for row alignment', () => {
+test('table action slots preserve action order and mark unavailable actions', () => {
   const { actionSlots } = loadTs('src/components/ActionSlots.tsx', {})
   const node = actionSlots([
     React.createElement('Button', null, '进入'),

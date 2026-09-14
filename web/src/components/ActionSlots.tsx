@@ -16,7 +16,7 @@ export function actionSlots(slots: ActionSlot[], variant: ActionSlotsVariant) {
     <div className={`action-slots action-slots--${variant}`}>
       {slots.map((slot, index) => (
         <span
-          // Slot order is the alignment contract for same actions across rows.
+          // Keep action order stable; CSS removes empty slots from the layout.
           key={index}
           className={slot ? 'action-slot' : 'action-slot action-slot--empty'}
           aria-hidden={slot ? undefined : true}

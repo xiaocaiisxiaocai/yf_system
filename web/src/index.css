@@ -694,9 +694,9 @@ html, body, #root {
 .system-config-row--dirty > td { background: #f2f7ff !important; }
 
 
-/* 表格操作列保持固定槽位；同名操作在所有行同一位置，缺失权限或状态动作时保留空槽。 */
+/* 表格操作按实际可见内容整体居中，权限或状态隐藏的操作不占位。 */
 .action-slots {
-  display: grid;
+  display: flex;
   width: 100%;
   min-width: 0;
   justify-content: center;
@@ -704,6 +704,7 @@ html, body, #root {
   column-gap: 8px;
 }
 .action-slot {
+  flex: 0 0 auto;
   min-width: 0;
   height: 24px;
   display: inline-flex;
@@ -716,16 +717,7 @@ html, body, #root {
   padding-right: 4px;
 }
 .action-slot > .arco-select { width: 100%; }
-.action-slot--empty { visibility: hidden; }
-.action-slots--project { grid-template-columns: 44px 44px 92px 44px; }
-.action-slots--supplier { grid-template-columns: 76px 44px 44px 44px; }
-.action-slots--account { grid-template-columns: 44px 72px 44px 44px; }
-/* 用户行按实际可用操作居中，隐藏的启停／删除按钮不占位。 */
-.action-slots--user { display: flex; }
-.action-slots--user .action-slot--empty { display: none; }
-.action-slots--role { grid-template-columns: 76px 44px 44px 44px; }
-.action-slots--file { grid-template-columns: 58px 44px; }
-.action-slots--single { grid-template-columns: 48px 44px; }
+.action-slot--empty { display: none; }
 
 /* 带预览按钮的文件名单元格：文本占据剩余空间，按钮始终不被长文件名挤走。 */
 .file-name-cell {
