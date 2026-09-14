@@ -676,6 +676,15 @@ html, body, #root {
 .file-preview-modal > div:has(> .arco-modal-content) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .file-preview-modal .arco-modal-header { flex: 0 0 auto; min-height: 48px; padding: 12px 20px; }
 .file-preview-modal .arco-modal-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-preview-heading { display: flex; align-items: center; gap: 20px; min-width: 0; }
+.file-preview-name { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-preview-controls { flex: 0 1 auto; min-width: 0; font-size: 13px; font-weight: 400; line-height: 20px; }
+.file-preview-controls .pdf-preview-toolbar { padding-bottom: 0; }
+@media (max-width: 1000px) {
+  .file-preview-heading { flex-wrap: wrap; gap: 8px; }
+  .file-preview-name { flex-basis: 100%; }
+  .file-preview-controls { flex-basis: 100%; }
+}
 .file-preview-modal .arco-modal-content { display: flex; flex-direction: column; flex: 1; min-height: 0; max-height: none; overflow: hidden; padding: 12px 16px 16px; }
 .file-preview-modal .excel-preview { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .file-preview-modal .excel-preview-wrap { flex: 1; min-height: 0; max-height: none; }

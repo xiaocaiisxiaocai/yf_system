@@ -43,6 +43,7 @@ async function downloadAuthed(id: number, name: string) {
 }
 
 export default function FileTable({ projectId, projectStatus, targetId }: Props) {
+  const [previewToolbar, setPreviewToolbar] = useState<HTMLDivElement | null>(null)
   const revision = useCollaboration((state) => state.revision)
   const syncStatus = useCollaboration((state) => state.status)
   const [data, setData] = useState<PageResp<FileItem>>({ list: [], total: 0, page: 1, pageSize: 10 })
@@ -272,7 +273,10 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
       <Modal
         className="file-preview-modal"
         alignCenter
-        title={preview ? `预览：${preview.originalName}` : ''}
+        title={preview ? <div className="file-preview-heading">
+          <span className="file-preview-name" title={preview.originalName}>预览：{preview.originalName}</span>
+          <div className="file-preview-controls" ref={setPreviewToolbar} />
+        </div> : ''}
         visible={!!preview}
         onCancel={() => setPreview(null)}
         footer={null}
@@ -284,7 +288,7 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
             <ExcelPreview fileId={preview.id} />
           </Suspense>
         )}
-        {preview && previewKind(preview.ext, preview.sizeBytes) === 'pdf' && <PdfPreview fileId={preview.id} />}
+        {preview && previewKind(preview.ext, preview.sizeBytes) === 'pdf' && <PdfPreview fileId={preview.id} toolbarContainer={previewToolbar} />}
       </Modal>
     </div>
   )
