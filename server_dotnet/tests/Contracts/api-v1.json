@@ -12,6 +12,7 @@
   "GET /api/v1/admin/audit-logs",
   "GET /api/v1/admin/roles",
   "GET /api/v1/admin/suppliers",
+  "GET /api/v1/admin/supplier-role-options",
   "GET /api/v1/admin/suppliers/{}",
   "GET /api/v1/admin/suppliers/{}/accounts",
   "GET /api/v1/admin/system/configs",

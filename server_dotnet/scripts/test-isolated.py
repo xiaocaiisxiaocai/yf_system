@@ -25,11 +25,13 @@ import pymysql
 from test_host_artifacts import verify_test_host_artifacts
 from test_identity_contracts import run_identity_checks
 from test_file_contracts import run_file_checks
+from test_role_fixtures import assert_admin_only_initialization, install_legacy_test_roles
 from test_system_contracts import run_system_checks
 from test_project_remediation import run_project_remediation_checks
 from test_collaboration_contracts import run_collaboration_checks
 from test_business_acceptance import run_business_acceptance
 from test_workflow_acceptance import run_workflow_acceptance
+from test_manual_supplier_roles import run_manual_supplier_role_checks
 
 ROOT = Path(__file__).resolve().parents[2]
 PUBLISHED = os.environ.get("YF_TEST_API_DIR")
@@ -138,9 +140,13 @@ try:
         if initialized.returncode:
             raise RuntimeError(".NET empty database initialization failed: " + initialized.stderr.decode(errors="replace")[:1500])
         check("standalone empty database initialization", True)
+        assert_admin_only_initialization(conn)
+        check("empty initialization creates only the admin user and system administrator role", True)
         refused = subprocess.run(["dotnet", str(DLL), "--initialize-database"], cwd=API, env=env, capture_output=True)
         check("initializer refuses nonempty database", refused.returncode != 0)
         del env["YF_BOOTSTRAP_PASSWORD"]
+        # Legacy role fixtures are test-only; production initialization remains admin-only.
+        install_legacy_test_roles(conn)
         # Downgrade only our empty isolated fixture to exercise adoption and the
         # restartable 16 -> 17 upgrade without invoking any other backend.
         with conn.cursor() as cursor:
@@ -325,6 +331,7 @@ try:
             check("completed project file mutation denied", True)
             run_business_acceptance(client, Client, conn, check)
             run_workflow_acceptance(client, Client, conn, check)
+            run_manual_supplier_role_checks(client, conn, check)
             process.terminate()
             process.wait(timeout=15)
             process = None

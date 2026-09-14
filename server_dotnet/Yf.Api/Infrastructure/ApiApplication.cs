@@ -16,8 +16,11 @@ public static class ApiApplication
     {
         var initializeDatabase = args.Contains("--initialize-database", StringComparer.Ordinal);
         var migrateDatabase = args.Contains("--migrate-database", StringComparer.Ordinal);
-        if (initializeDatabase && migrateDatabase) throw new ArgumentException("Choose initialization or migration, not both.");
-        args = args.Where(x => x is not ("--initialize-database" or "--migrate-database")).ToArray();
+        var inspectDevelopment = args.Contains("--inspect-development-data", StringComparer.Ordinal);
+        var resetDevelopment = args.Contains("--reset-development-data", StringComparer.Ordinal);
+        if (new[] { initializeDatabase, migrateDatabase, inspectDevelopment, resetDevelopment }.Count(value => value) > 1)
+            throw new ArgumentException("Choose one database operation.");
+        args = args.Where(x => x is not ("--initialize-database" or "--migrate-database" or "--inspect-development-data" or "--reset-development-data")).ToArray();
         var builder = WebApplication.CreateBuilder(args);
         builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
         var externalConfig = Environment.GetEnvironmentVariable("YF_CONFIG_PATH");
@@ -30,6 +33,17 @@ public static class ApiApplication
         var options = builder.Configuration.GetSection("App").Get<AppOptions>() ?? new();
         options.Validate();
         options.ValidateStorageLocation(builder.Environment.ContentRootPath);
+        if (inspectDevelopment || resetDevelopment)
+        {
+            var result = resetDevelopment
+                ? await DevelopmentDataReset.ResetAsync(options, builder.Configuration["confirm-database"], builder.Configuration["confirm-storage-root"])
+                : await DevelopmentDataReset.InspectAsync(options);
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result, new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true, PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+            }));
+            return null;
+        }
         if (initializeDatabase)
         {
             await SchemaBootstrap.InitializeEmptyAsync(new AppDb(options));

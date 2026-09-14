@@ -117,6 +117,75 @@ public sealed class ConnectionLifecycleTests
             """, cancellationToken: ct)));
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task MinimalInitializationAndExplicitResetPreserveAdminPasswordAndSettings()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await LocalDatabaseScope.CreateOrSkipAsync("reset", ct);
+        var root = Path.Combine(Path.GetTempPath(), "yf_reset_" + Guid.NewGuid().ToString("N"));
+        database.Options.StorageRoot = root;
+        database.Options.JwtSecret = new string('z', 48);
+        var previousPassword = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD");
+        Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", "Reset#" + Guid.NewGuid().ToString("N")[..12]);
+        try { await SchemaBootstrap.InitializeEmptyAsync(database.Database, ct); }
+        finally { Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", previousPassword); }
+        Directory.CreateDirectory(Path.Combine(root, "files", "2026"));
+        Directory.CreateDirectory(Path.Combine(root, "tmp", "owned"));
+        await File.WriteAllTextAsync(Path.Combine(root, "files", "2026", "sample.pdf"), "owned file", ct);
+        await File.WriteAllTextAsync(Path.Combine(root, "tmp", "owned", "0.part"), "owned chunk", ct);
+        await File.WriteAllTextAsync(Path.Combine(root, "keep.txt"), "unmanaged file", ct);
+        try
+        {
+            string passwordHash;
+            int permissionCount;
+            await using (var conn = await database.Database.OpenAsync(ct))
+            {
+                Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM users"));
+                Assert.Equal("admin", await conn.ExecuteScalarAsync<string>("SELECT employee_no FROM users"));
+                Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM roles"));
+                Assert.Equal("系统管理员", await conn.ExecuteScalarAsync<string>("SELECT name FROM roles"));
+                passwordHash = await conn.ExecuteScalarAsync<string>("SELECT password_hash FROM users") ?? throw new InvalidOperationException("Missing initialized password hash");
+                permissionCount = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions");
+                await conn.ExecuteAsync("""
+                    INSERT INTO roles(name,is_built_in,status) VALUES('待清理角色',0,'ACTIVE');
+                    INSERT INTO users(employee_no,password_hash,real_name,email,user_type,status) SELECT 'discard',password_hash,'待清理用户','','INTERNAL','ACTIVE' FROM users WHERE employee_no='admin';
+                    INSERT INTO user_roles(user_id,role_id) SELECT u.id,r.id FROM users u JOIN roles r ON r.name='待清理角色' WHERE u.employee_no='discard';
+                    INSERT INTO suppliers(name) VALUES('待清理供应商');
+                    INSERT INTO projects(name,supplier_id,created_by) SELECT '待清理项目',s.id,u.id FROM suppliers s JOIN users u ON u.employee_no='discard';
+                    INSERT INTO messages(project_id,sender_id,content) SELECT p.id,p.created_by,'待清理留言' FROM projects p;
+                    UPDATE system_configs SET cfg_value='false' WHERE cfg_key='notify.enabled';
+                    INSERT INTO system_configs(cfg_key,cfg_value) VALUES('smtp.reset-test-secret','retained-test-value');
+                    """);
+            }
+            var plan = await DevelopmentDataReset.InspectAsync(database.Options, ct);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => DevelopmentDataReset.ResetAsync(database.Options, "wrong-db", plan.StorageRoot, ct));
+            Assert.True(File.Exists(Path.Combine(root, "files", "2026", "sample.pdf")));
+            var result = await DevelopmentDataReset.ResetAsync(database.Options, plan.Database, plan.StorageRoot, ct);
+            Assert.True(result.ResetCompleted);
+            Assert.Equal(1, result.Counts["users"]);
+            Assert.Equal(1, result.Counts["roles"]);
+            foreach (var table in new[] { "projects", "messages", "suppliers", "departments", "refresh_tokens", "audit_logs" }) Assert.Equal(0, result.Counts[table]);
+            Assert.Equal(permissionCount, result.Counts["permissions"]);
+            Assert.Equal(permissionCount, result.Counts["role_permissions"]);
+            Assert.Equal(1, result.Counts["user_roles"]);
+            Assert.False(Directory.Exists(Path.Combine(root, "files")));
+            Assert.False(Directory.Exists(Path.Combine(root, "tmp")));
+            Assert.True(File.Exists(Path.Combine(root, "keep.txt")));
+            await using (var conn = await database.Database.OpenAsync(ct))
+            {
+                Assert.Equal(passwordHash, await conn.ExecuteScalarAsync<string>("SELECT password_hash FROM users WHERE employee_no='admin'"));
+                Assert.Equal("retained-test-value", await conn.ExecuteScalarAsync<string>("SELECT cfg_value FROM system_configs WHERE cfg_key='smtp.reset-test-secret'"));
+                Assert.Equal("false", await conn.ExecuteScalarAsync<string>("SELECT cfg_value FROM system_configs WHERE cfg_key='notify.enabled'"));
+            }
+            Assert.True((await DevelopmentDataReset.ResetAsync(database.Options, plan.Database, plan.StorageRoot, ct)).ResetCompleted);
+            await SchemaBootstrap.ValidateAsync(database.Database, ct);
+        }
+        finally
+        {
+            await Yf.Api.Modules.Files.FileStorage.DeleteDirectoryTreeAsync(Path.GetTempPath(), root, CancellationToken.None);
+        }
+    }
+
     private sealed class LocalDatabaseScope(
         MySqlConnection administration,
         string databaseName,

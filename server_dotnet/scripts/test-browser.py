@@ -26,6 +26,7 @@ from browser_step_evidence import (
     validate_browser_step_evidence,
 )
 from test_host_artifacts import verify_test_host_artifacts
+from test_role_fixtures import assert_admin_only_initialization, install_legacy_test_roles
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = Path(__file__).resolve().parent / 'browser'
@@ -124,6 +125,10 @@ try:
         initialized = subprocess.run(['dotnet', str(dll), '--initialize-database'], cwd=api, env=env, capture_output=True)
         if initialized.returncode:
             raise RuntimeError('Owned database initialization failed; no business database was used.')
+        assert_admin_only_initialization(connection)
+        print('PASS empty initialization creates only the admin user and system administrator role', flush=True)
+        # Legacy role fixtures are test-only; production initialization remains admin-only.
+        install_legacy_test_roles(connection)
         env.pop('YF_BOOTSTRAP_PASSWORD')
         with (output / 'api.log').open('wb') as log:
             process = subprocess.Popen(['dotnet', str(host)], cwd=api, env=env, stdout=log, stderr=log,

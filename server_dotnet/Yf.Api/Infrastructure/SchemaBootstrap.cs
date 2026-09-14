@@ -20,6 +20,9 @@ public static class SchemaBootstrap
             using var resource = typeof(SchemaBootstrap).Assembly.GetManifestResourceStream("Yf.Api.Infrastructure.schema-baseline.json")
                 ?? throw new InvalidOperationException("Embedded schema baseline missing.");
             using var baseline = await JsonDocument.ParseAsync(resource, cancellationToken: ct);
+            var adminRoleId = baseline.RootElement.GetProperty("seeds").GetProperty("roles").EnumerateArray()
+                .Single(row => row.GetProperty("name").GetString() == "系统管理员" && row.GetProperty("is_built_in").GetInt32() == 1)
+                .GetProperty("id").GetUInt64();
             // DDL implicitly commits in MySQL. A failure leaves an incomplete new database; never drop it automatically.
             await conn.ExecuteAsync(new CommandDefinition("SET FOREIGN_KEY_CHECKS=0", cancellationToken: ct));
             try
@@ -34,6 +37,10 @@ public static class SchemaBootstrap
                 {
                     foreach (var row in table.Value.EnumerateArray())
                     {
+                        // The imported baseline contains historical role templates. New installations
+                        // intentionally seed only the administrator; other roles are user-created.
+                        if (table.Name == "roles" && row.GetProperty("id").GetUInt64() != adminRoleId) continue;
+                        if (table.Name == "role_permissions" && row.GetProperty("role_id").GetUInt64() != adminRoleId) continue;
                         var fields = row.EnumerateObject().ToArray();
                         var args = new DynamicParameters();
                         for (var i = 0; i < fields.Length; i++)

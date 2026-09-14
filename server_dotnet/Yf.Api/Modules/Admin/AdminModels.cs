@@ -28,7 +28,8 @@ public sealed record SupplierAccountCreate(
     [property: JsonRequired] string EmployeeNo,
     [property: JsonRequired] string Password,
     [property: JsonRequired] string RealName,
-    [property: JsonRequired] string Email);
+    [property: JsonRequired] string Email,
+    ulong? RoleId = null);
 public sealed record SupplierAccountUpdate(string? RealName, string? Email);
 
 internal sealed class AdminUserRow
@@ -45,6 +46,8 @@ internal sealed class AdminUserRow
     public bool MustChangePassword { get; init; }
     public DateTime? LastLoginAt { get; init; }
     public DateTime CreatedAt { get; init; }
+    public ulong? RoleId { get; init; }
+    public string? RoleName { get; init; }
 }
 
 internal sealed class RoleRow { public ulong Id { get; init; } public string Name { get; init; } = ""; public string? Description { get; init; } public bool IsBuiltIn { get; init; } public string Status { get; init; } = ""; public DateTime CreatedAt { get; init; } }

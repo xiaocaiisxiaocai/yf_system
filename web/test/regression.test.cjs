@@ -745,7 +745,7 @@ test('disabled supplier account drawer disables new account creation and rejects
     '../../store/auth': { useAuth: () => ({ hasPerm: () => true, user: { id: 1, userType: 'INTERNAL', isSystemAdmin: true } }) },
     '../../api/types': { fmtTime: String },
     '../../api/client': {
-      get: async (url) => url.endsWith('/accounts') ? { data: [] } : { data: { list: [supplier], total: 1, page: 1, pageSize: 10 } },
+      get: async (url) => url.endsWith('/accounts') || url.endsWith('/supplier-role-options') ? { data: [] } : { data: { list: [supplier], total: 1, page: 1, pageSize: 10 } },
       post: async (url) => { if (url.endsWith('/accounts')) createCalls++ ; return { data: {} } },
     },
   }).default
@@ -1394,7 +1394,7 @@ test('supplier account drawer fits on desktop and keeps columns reachable on nar
   assert.equal(drawer.props.className, 'account-drawer')
   const table = drawer.findByType('Table')
   assert.equal(table.props.className, 'account-table')
-  assert.equal(table.props.scroll.x, 840)
+  assert.ok(table.props.columns.some((column) => column.dataIndex === 'roleName'))
   const widthSum = table.props.columns.reduce((sum, col) => sum + (col.width || 0), 0)
   assert.ok(widthSum <= table.props.scroll.x, `account column widths ${widthSum} must fit the scrollable table`)
   assert.ok(table.props.scroll.x <= drawer.props.width - 48, 'desktop table must fit inside the drawer padding')

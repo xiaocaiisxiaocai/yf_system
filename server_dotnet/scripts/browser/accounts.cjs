@@ -351,6 +351,12 @@ function flattenDepartments(nodes, result = []) {
     await supplierRow().waitFor();
 
     await record('供应商账号必填取消、创建编辑与密码重置', async () => {
+      const manualRoleName = '手工供应商角色-' + marker;
+      const manualRole = await getJson('POST', '/admin/roles', { name: manualRoleName, description: '隔离开户验收角色' });
+      const permissionList = await getJson('GET', '/permissions');
+      await getJson('PUT', '/admin/roles/' + manualRole.id + '/permissions', {
+        permissionIds: permissionList.filter(item => ['dashboard', 'project:list'].includes(item.code)).map(item => item.id),
+      });
       await supplierRow().getByRole('button', { name: '账号管理', exact: true }).click();
       let drawer = currentDrawer();
       await drawer.getByText('账号管理 · ' + editedSupplierName, { exact: true }).waitFor();
@@ -370,6 +376,8 @@ function flattenDepartments(nodes, result = []) {
       await modal.getByPlaceholder('6-20 位', { exact: true }).fill(accountPassword);
       await modal.getByPlaceholder('姓名', { exact: true }).fill('UI供应商账号');
       await modal.getByPlaceholder('name@example.com', { exact: true }).fill(accountEmail);
+      await openChoice(modal, '选择供应商角色');
+      await pickVisibleOption(manualRoleName);
       account = await action(page, '/admin/suppliers/' + supplier.id + '/accounts', 'POST', () => (
         modal.getByRole('button', { name: '创建账号', exact: true }).click()
       ));
@@ -378,6 +386,8 @@ function flattenDepartments(nodes, result = []) {
       let saved = (await readAccounts(supplier.id)).find((item) => item.id === account.id);
       assert.equal(saved.employeeNo, accountNo);
       assert.equal(saved.email, accountEmail);
+      assert.equal(saved.roleId, manualRole.id);
+      assert.equal(saved.roleName, manualRoleName);
       assert.equal(saved.status, 'ACTIVE');
 
       await accountRow().getByRole('button', { name: '编辑', exact: true }).click();

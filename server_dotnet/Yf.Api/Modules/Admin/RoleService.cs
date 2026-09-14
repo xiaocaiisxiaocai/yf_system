@@ -50,7 +50,10 @@ public sealed class RoleService(AppDb db, PermissionService ceiling, AuditServic
     {
         if (requested is null) throw ApiException.BadRequest("权限点不能为空"); if (requested.Count > 500) throw ApiException.BadRequest("权限点数量超过上限"); var ids = requested.Distinct().ToArray(); await using var conn = await db.OpenAsync(ct); await using var tx = await AppDb.BeginTransactionAsync(conn, ct); await GateAsync(conn, tx, actor, "role:manage", ct); await ceiling.EnsureManageRoleAsync(conn, tx, actor, id, ct); var role = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound(); await ceiling.EnsureGrantableAsync(conn, tx, actor, ids, ct);
         var valid = ids.Length == 0 ? Array.Empty<PermissionRow>() : (await conn.QueryAsync<PermissionRow>(new CommandDefinition("SELECT id Id,code Code FROM permissions WHERE id IN @ids", new { ids }, tx, cancellationToken: ct))).ToArray(); if (valid.Length != ids.Length) throw ApiException.BadRequest("权限点不存在");
-        if (!IsSupplierPermissionSetAllowed(role.IsBuiltIn, role.Name, valid.Select(x => x.Code))) throw ApiException.BadRequest("供应商角色只能授予供应商自有项目所需权限");
+        var assignedToSupplier = await conn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM user_roles ur JOIN users u ON u.id=ur.user_id WHERE ur.role_id=@id AND u.user_type='SUPPLIER')", new { id }, tx, cancellationToken: ct)) == 1;
+        if (!IsSupplierPermissionSetAllowed(role.IsBuiltIn, role.Name, valid.Select(x => x.Code)) ||
+            assignedToSupplier && !IsSupplierAccountPermissionSetAllowed(valid.Select(x => x.Code)))
+            throw ApiException.BadRequest("供应商账号角色只能授予供应商自有项目所需权限");
         if (role.IsBuiltIn && role.Name == "系统管理员" && await conn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM users u JOIN user_roles ur ON ur.user_id=u.id WHERE ur.role_id=@id AND u.user_type='INTERNAL' AND u.status='ACTIVE'", new { id }, tx, cancellationToken: ct)) > 0)
         {
             var required = (await conn.QueryAsync<PermissionRow>(new CommandDefinition("SELECT id Id,code Code FROM permissions WHERE code IN ('rbac:role','role:manage','org:user','user:manage')", transaction: tx, cancellationToken: ct))).ToArray(); if (required.Length != 4 || required.Any(x => !ids.Contains(x.Id))) throw ApiException.BadRequest("系统管理员角色绑定启用用户时，必须保留用户管理和角色管理权限");
@@ -63,6 +66,7 @@ public sealed class RoleService(AppDb db, PermissionService ceiling, AuditServic
     }
     internal static bool IsSupplierPermissionSetAllowed(bool isBuiltIn, string roleName, IEnumerable<string> codes) =>
         !isBuiltIn || roleName != "供应商人员" || codes.All(SupplierPermissionCodes.Contains);
+    internal static bool IsSupplierAccountPermissionSetAllowed(IEnumerable<string> codes) => codes.All(SupplierPermissionCodes.Contains);
     private static async Task GateAsync(MySqlConnection c, MySqlTransaction t, CurrentUser a, string p, CancellationToken ct) { await AccessService.LockManagementAsync(c, t, ct); a = await AccessService.RecheckActorAsync(c, t, a, ct); AccessService.RequireInternal(a); await AccessService.RequirePermissionAsync(c, t, a, p, ct); }
     private static void Validate(RoleUpsert r) { if (string.IsNullOrWhiteSpace(r.Name) || r.Name.Trim().EnumerateRunes().Count() > 64) throw ApiException.BadRequest("角色名称需为 1~64 个字符"); if (r.Description?.EnumerateRunes().Count() > 255) throw ApiException.BadRequest("角色说明不能超过 255 个字符"); }
     private static async Task UniqueAsync(MySqlConnection c, MySqlTransaction t, string name, ulong? id, CancellationToken ct) { if (await c.ExecuteScalarAsync<int>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM roles WHERE name=@name AND (@id IS NULL OR id<>@id))", new { name, id }, t, cancellationToken: ct)) == 1) throw ApiException.Conflict("角色名称已存在"); }

@@ -25,8 +25,15 @@ interface Account {
   realName: string
   email: string
   status: 'ACTIVE' | 'DISABLED'
+  roleId?: number | null
+  roleName?: string | null
   lastLoginAt?: string | null
   createdAt: string
+}
+
+interface RoleOption {
+  id: number
+  name: string
 }
 
 export default function SupplierList() {
@@ -295,8 +302,12 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
   const [resettingPassword, setResettingPassword] = useState(false)
   const [editing, setEditing] = useState<Account | null>(null)
   const [resetTarget, setResetTarget] = useState<Account | null>(null)
+  const [roleOptions, setRoleOptions] = useState<RoleOption[]>([])
+  const [roleOptionsLoading, setRoleOptionsLoading] = useState(false)
+  const [roleOptionsError, setRoleOptionsError] = useState(false)
   const togglingAccountIdsRef = useRef(new Set<number>())
   const accountsRequestId = useRef(0)
+  const roleOptionsRequestId = useRef(0)
   const [togglingAccountIds, setTogglingAccountIds] = useState<ReadonlySet<number>>(new Set())
   const [form] = Form.useForm()
   const [pwdForm] = Form.useForm()
@@ -340,6 +351,24 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
 
   const accounts = supplier && accountsState.supplierId === supplier.id ? accountsState.list : []
   const loading = refreshing || (!!supplier && accountsState.supplierId !== supplier.id)
+
+  const loadRoleOptions = useCallback(async () => {
+    const requestId = ++roleOptionsRequestId.current
+    setRoleOptionsLoading(true)
+    setRoleOptionsError(false)
+    try {
+      const response = await http.get('/admin/supplier-role-options')
+      if (!Array.isArray(response.data)) throw new Error('Invalid supplier role options response')
+      if (roleOptionsRequestId.current === requestId) setRoleOptions(response.data as RoleOption[])
+    } catch {
+      if (roleOptionsRequestId.current === requestId) {
+        setRoleOptions([])
+        setRoleOptionsError(true)
+      }
+    } finally {
+      if (roleOptionsRequestId.current === requestId) setRoleOptionsLoading(false)
+    }
+  }, [])
 
   const submit = async () => {
     if (saving) return
@@ -439,6 +468,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
             setEditing(null)
             form.resetFields()
             setEditOpen(true)
+            loadRoleOptions()
           }}
         >
           新增账号
@@ -453,20 +483,21 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
         pagination={false}
         scroll={{ x: 840 }}
         columns={[
-          { title: '工号', dataIndex: 'employeeNo', width: 100, align: 'center' as const, ellipsis: true },
-          { title: '姓名', dataIndex: 'realName', width: 88, align: 'center' as const, ellipsis: true },
-          { title: '邮箱', dataIndex: 'email', width: 176, ellipsis: true },
+          { title: '工号', dataIndex: 'employeeNo', width: 90, align: 'center' as const, ellipsis: true },
+          { title: '姓名', dataIndex: 'realName', width: 80, align: 'center' as const, ellipsis: true },
+          { title: '角色', dataIndex: 'roleName', width: 100, align: 'center' as const, ellipsis: true },
+          { title: '邮箱', dataIndex: 'email', width: 150, ellipsis: true },
           {
             title: '状态',
             dataIndex: 'status',
-            width: 72,
+            width: 64,
             align: 'center' as const,
             render: (v: string) => (v === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="red">禁用</Tag>),
           },
-          { title: '最近登录', dataIndex: 'lastLoginAt', width: 160, align: 'center' as const, render: fmtTime },
+          { title: '最近登录', dataIndex: 'lastLoginAt', width: 140, align: 'center' as const, render: fmtTime },
           {
             title: '操作',
-            width: 244,
+            width: 216,
             fixed: 'right' as const,
             align: 'center' as const,
             render: (_: unknown, r: Account) => actionSlots([
@@ -476,6 +507,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
                 type="text"
                 onClick={() => {
                   setEditing(r)
+                  form.resetFields()
                   form.setFieldsValue({
                     employeeNo: r.employeeNo,
                     realName: r.realName,
@@ -519,6 +551,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
         maskClosable={!saving}
         escToExit={!saving}
         cancelButtonProps={{ disabled: saving }}
+        okButtonProps={{ disabled: !editing && (roleOptionsLoading || roleOptionsError || roleOptions.length === 0) }}
         okText={editing ? '保存账号' : '创建账号'}
         onOk={submit}
         onCancel={() => { if (!saving) setEditOpen(false) }}
@@ -537,6 +570,17 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
                 >
                   <PasswordInput placeholder="6-20 位" />
                 </Form.Item>
+                <Form.Item label="角色" field="roleId" rules={[{ required: true, message: '请选择供应商角色' }]}>
+                  <Select
+                    placeholder={roleOptionsLoading ? '正在加载角色' : '选择供应商角色'}
+                    loading={roleOptionsLoading}
+                    disabled={roleOptionsLoading || roleOptionsError || roleOptions.length === 0}
+                  >
+                    {roleOptions.map((role) => (
+                      <Select.Option key={role.id} value={role.id}>{role.name}</Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
               </>
             )}
             <Form.Item label="姓名" field="realName" rules={[{ required: true, message: '请输入姓名' }, textLengthRule('姓名', 32)]}>
@@ -546,6 +590,14 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
               <Input placeholder="name@example.com" />
             </Form.Item>
           </div>
+          {!editing && roleOptionsError && (
+            <div className="dialog-note">
+              角色加载失败。<Button size="mini" type="text" onClick={loadRoleOptions}>重试</Button>
+            </div>
+          )}
+          {!editing && !roleOptionsLoading && !roleOptionsError && roleOptions.length === 0 && (
+            <div className="dialog-note">暂无可用供应商角色，请先由管理员在“角色与权限”中创建或启用角色，并仅授予供应商自有项目权限。</div>
+          )}
           {!editing && <div className="dialog-note">首次登录需改密</div>}
         </Form>
       </Modal>
