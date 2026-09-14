@@ -140,7 +140,9 @@ export default function DeptManage() {
     setEditing(null)
     setParentForNew(parent)
     form.resetFields()
-    form.setFieldsValue({ name: '', sortNo: 0 })
+    const siblings = parent ? (parent.children || []) : tree
+    const sortNo = siblings.reduce((max, node) => Math.max(max, node.sortNo), 0) + 1
+    form.setFieldsValue({ name: '', sortNo })
     setEditOpen(true)
   }
 
@@ -317,7 +319,7 @@ export default function DeptManage() {
               <Input maxLength={64} placeholder={`请输入${modalKindMeta.label}名称`} />
             </Form.Item>
             <Form.Item label="排序号" field="sortNo">
-              <InputNumber min={0} defaultValue={0} placeholder="数字越小越靠前" style={{ width: '100%' }} />
+              <InputNumber min={0} precision={0} placeholder="数字越小越靠前" style={{ width: '100%' }} />
             </Form.Item>
           </div>
           {!editing && (

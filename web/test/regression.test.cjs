@@ -276,6 +276,12 @@ test('paginated list pages constrain table body scrolling to keep pagination vis
 })
 
 test('organization structure uses division, department and section levels', async () => {
+  let fields = {}
+  const form = { resetFields() { fields = {} }, setFieldsValue(values) { fields = values } }
+  const orgArco = new Proxy({
+    ...arco,
+    Form: Object.assign(component('Form'), { useForm: () => [form], Item: component('Form.Item') }),
+  }, { get: (obj, key) => obj[key] ?? component(key) })
   const layout = fs.readFileSync(path.resolve(__dirname, '..', 'src/layouts/AdminLayout.tsx'), 'utf8')
   assert.match(layout, /label: '组织架构'/)
   const departments = [{
@@ -295,7 +301,7 @@ test('organization structure uses division, department and section levels', asyn
     }],
   }]
   const Page = loadTs('src/pages/org/DeptManage.tsx', {
-    '@arco-design/web-react': arco,
+    '@arco-design/web-react': orgArco,
     '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
     '../../api/client': { get: async () => ({ data: departments }) },
     '../../store/auth': authModule({ id: 1, userType: 'INTERNAL', isSystemAdmin: true }, ['dept:manage', 'dept:delete']),
@@ -304,16 +310,29 @@ test('organization structure uses division, department and section levels', asyn
   await act(async () => { renderer = create(React.createElement(Page)) })
   assert.ok(renderer.root.findAll((node) => node.props.children === '组织架构').length > 0)
   assert.ok(renderer.root.findAll((node) => node.props.children === '新增事业部').length > 0)
+  const click = async (label) => act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === label).props.onClick())
+  await click('新增事业部')
+  assert.equal(fields.sortNo, 2)
   const tree = renderer.root.findByType('Tree')
   assert.equal(tree.props.blockNode, true)
   assert.equal(tree.props.showLine, true)
   await act(async () => renderer.root.findByType('Tree').props.onSelect(['1']))
   assert.ok(renderer.root.findAll((node) => node.props.children === '新增部门').length > 0)
+  await click('新增部门')
+  assert.equal(fields.sortNo, 4, 'Disabled siblings still participate in ordering')
   await act(async () => renderer.root.findByType('Tree').props.onSelect(['2']))
   assert.ok(renderer.root.findAll((node) => node.props.children === '研发部').length > 0)
   assert.ok(renderer.root.findAll((node) => node.props.children === '层级路径').length > 0)
   assert.ok(renderer.root.findAll((node) => node.props.children === '编辑部门').length > 0)
   assert.ok(renderer.root.findAll((node) => node.props.children === '新增课别').length > 0)
+  await click('新增课别')
+  assert.equal(fields.sortNo, 2, 'Only children of the selected department determine the next sort number')
+  await click('编辑部门')
+  assert.equal(fields.sortNo, 3, 'Editing keeps the existing sort number')
+  departments[0].children[0].children = []
+  await click('新增课别')
+  assert.equal(fields.sortNo, 1, 'The first sibling starts at 1')
+  departments[0].children[0].children = [{ id: 3, name: '开发课', kind: 'SECTION', parentId: 2, sortNo: 1, status: 'ACTIVE' }]
   assert.equal(renderer.root.findAll((node) => node.props.children === '新增子部门').length, 0)
   await act(async () => renderer.root.findByType('Tree').props.onSelect(['3']))
   assert.ok(renderer.root.findAll((node) => node.props.children === '编辑课别').length > 0)
