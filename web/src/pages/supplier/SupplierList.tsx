@@ -445,13 +445,19 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
     setResetTarget(null)
   }
 
+  const childDialogOpen = editOpen || resetTarget !== null
+
   return (
     <Drawer
       className="account-drawer"
       width={920}
       title={supplier ? `账号管理 · ${supplier.name}` : ''}
       visible={!!supplier}
-      onCancel={onClose}
+      focusLock={!childDialogOpen}
+      closable={!childDialogOpen}
+      maskClosable={!childDialogOpen}
+      escToExit={!childDialogOpen}
+      onCancel={() => { if (!childDialogOpen) onClose() }}
       footer={null}
     >
       {accountsState.error && accountsState.supplierId === supplier?.id && (

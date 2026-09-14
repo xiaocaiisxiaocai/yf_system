@@ -299,13 +299,17 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
                           </div>
                         }
                         trigger="click"
+                        triggerProps={{ escToClose: true }}
                       >
-                        <Typography.Text
-                          type={m.readCount >= m.totalCount && m.totalCount > 0 ? 'success' : 'secondary'}
-                          style={{ fontSize: 12, cursor: 'pointer' }}
+                        <Button
+                          size="mini"
+                          type="text"
+                          status={m.readCount >= m.totalCount && m.totalCount > 0 ? 'success' : undefined}
+                          aria-label={`查看已读人员：${m.readCount}/${m.totalCount}`}
+                          icon={<IconCheck />}
                         >
-                          <IconCheck /> 已读 {m.readCount}/{m.totalCount}
-                        </Typography.Text>
+                          已读 {m.readCount}/{m.totalCount}
+                        </Button>
                       </Popover>
                       {m.senderId === user?.id && (
                         <Button size="mini" type="text" onClick={() => openReceipt(m.id)} style={{ marginLeft: 8 }}>

@@ -52,13 +52,8 @@
 .org-view-detail-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 8px; color: var(--app-text-muted); font-size: 12px; line-height: 20px; }
 .org-view-detail-meta .arco-tag { margin: 0; }
 .org-view-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.org-view-more { position: relative; }
-.org-view-more > summary { display: flex; align-items: center; box-sizing: border-box; height: 32px; padding: 0 12px; border-radius: 4px; background: var(--color-fill-2); color: var(--color-text-2); font-size: 14px; line-height: 22px; cursor: pointer; list-style: none; }
-.org-view-more > summary::-webkit-details-marker { display: none; }
-.org-view-more > summary::after { content: '⌄'; margin-left: 8px; }
-.org-view-more > summary:hover { background: var(--color-fill-3); }
-.org-view-more-menu { position: absolute; right: 0; top: 38px; z-index: 10; min-width: 130px; padding: 6px; border: 1px solid var(--app-border); border-radius: 4px; background: #fff; box-shadow: 0 4px 10px rgb(0 0 0 / 10%); display: flex; flex-direction: column; gap: 4px; }
-.org-view-more-menu .arco-btn { width: 100%; }
+.org-view-more-trigger.arco-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.org-view-more-trigger > .arco-icon { display: block; flex-shrink: 0; font-size: 12px; }
 .org-view-overview-head { padding-bottom: 20px; border-bottom: 1px solid var(--app-border); }
 .org-view-overview-head .arco-typography { display: block; font-size: 12px; line-height: 20px; margin: 8px 0 0; }
 .org-view-children, .org-view-leaf-info { margin-top: 20px; }
@@ -74,7 +69,7 @@
 .org-view-child-status { flex-shrink: 0; font-size: 12px; line-height: 20px; color: rgb(var(--success-6)); }
 .org-view-child-status.is-disabled { color: var(--app-text-muted); }
 .org-view-child > svg { flex-shrink: 0; font-size: 14px; color: var(--color-text-3); }
-.org-view-child:focus-visible, .org-view-breadcrumb button:focus-visible, .org-view-more > summary:focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: 2px; }
+.org-view-child:focus-visible, .org-view-breadcrumb button:focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: 2px; }
 .org-view-leaf-info dl { margin: 16px 0 0; }
 .org-view-leaf-info dl > div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 16px; padding: 8px 0; font-size: 14px; line-height: 22px; }
 .org-view-leaf-info dt { color: var(--app-text-muted); }

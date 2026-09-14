@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Card, Form, Input, InputNumber, Message, Modal, Popconfirm, Spin, Tag, Tree, Typography } from '@arco-design/web-react'
-import { IconPlus, IconRight, IconSearch } from '@arco-design/web-react/icon'
+import { Button, Card, Dropdown, Form, Input, InputNumber, Menu, Message, Modal, Spin, Tag, Tree, Typography } from '@arco-design/web-react'
+import { IconDown, IconPlus, IconRight, IconSearch } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import { useAuth } from '../../store/auth'
 import './DeptManage.css'
@@ -101,6 +101,7 @@ export default function DeptManage() {
   const [loadError, setLoadError] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const [selected, setSelected] = useState<DeptNode | null>(null)
+  const [moreFor, setMoreFor] = useState<number | null>(null)
   const [keyword, setKeyword] = useState('')
   const [expandedKeys, setExpandedKeys] = useState<string[] | null>(null)
   const [editOpen, setEditOpen] = useState(false)
@@ -188,7 +189,7 @@ export default function DeptManage() {
   const remove = async (d: DeptNode) => {
     await http.delete(`/admin/departments/${d.id}`)
     Message.success(`${ORG_KIND[nodeKind(d)].label}已删除`)
-    if (selected?.id === d.id) setSelected(null)
+    setSelected((current) => current?.id === d.id ? null : current)
     load()
   }
 
@@ -301,21 +302,42 @@ export default function DeptManage() {
                     >
                       {`编辑${selectedMeta.label}`}
                     </Button>
-                    <details className="org-view-more" key={selected.id}>
-                      <summary>更多</summary>
-                      <div className="org-view-more-menu">
-                        <Popconfirm title={selected.status === 'ACTIVE' ? `禁用该${selectedMeta.label}？` : `启用该${selectedMeta.label}？`} onOk={() => toggle(selected)}>
-                          <Button status={selected.status === 'ACTIVE' ? 'danger' : 'success'}>
-                            {selected.status === 'ACTIVE' ? `禁用${selectedMeta.label}` : `启用${selectedMeta.label}`}
-                          </Button>
-                        </Popconfirm>
-                        {canDelete && (
-                          <Popconfirm title={`删除后不可恢复；有下级或关联用户时无法删除。确认删除该${selectedMeta.label}？`} onOk={() => remove(selected)}>
-                            <Button status="danger">{`删除${selectedMeta.label}`}</Button>
-                          </Popconfirm>
-                        )}
-                      </div>
-                    </details>
+                    <Dropdown
+                      key={selected.id}
+                      trigger="click"
+                      position="br"
+                      triggerProps={{ escToClose: true }}
+                      popupVisible={moreFor === selected.id}
+                      onVisibleChange={(visible) => setMoreFor(visible ? selected.id : null)}
+                      droplist={<Menu onClickMenuItem={(action) => {
+                        setMoreFor(null)
+                        const target = selected
+                        const label = selectedMeta.label
+                        if (action === 'delete' && canDelete) {
+                          Modal.confirm({
+                            title: `删除${label}`,
+                            content: `删除后不可恢复；有下级或关联用户时无法删除。确认删除该${label}？`,
+                            okText: '确认删除', cancelText: '取消', okButtonProps: { status: 'danger' },
+                            onOk: () => remove(target),
+                          })
+                        } else if (action === 'status') {
+                          const verb = target.status === 'ACTIVE' ? '禁用' : '启用'
+                          Modal.confirm({
+                            title: `${verb}${label}`,
+                            content: `确认${verb}“${target.name}”？`,
+                            okText: `确认${verb}`, cancelText: '取消',
+                            onOk: () => toggle(target),
+                          })
+                        }
+                      }}>
+                        <Menu.Item key="status">{selected.status === 'ACTIVE' ? `禁用${selectedMeta.label}` : `启用${selectedMeta.label}`}</Menu.Item>
+                        {canDelete && <Menu.Item key="delete">{`删除${selectedMeta.label}`}</Menu.Item>}
+                      </Menu>}
+                    >
+                      <Button className="org-view-more-trigger" aria-haspopup="menu" aria-expanded={moreFor === selected.id}>
+                        <span>更多</span><IconDown />
+                      </Button>
+                    </Dropdown>
                   </div>
                 )}
               </div>

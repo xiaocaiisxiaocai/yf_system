@@ -18,7 +18,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         getChildrenPopupContainer: (node) => node.closest('.arco-modal-content')?.parentElement || document.body,
         closeIcon: <button type="button" className="drawer-close-button" aria-label="关闭弹窗"><IconClose /></button>,
       },
-      Trigger: { updateOnScroll: true },
+      Trigger: { updateOnScroll: true, escToClose: true },
       Popconfirm: {
         position: 'tr',
         triggerProps: {

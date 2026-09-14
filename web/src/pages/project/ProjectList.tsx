@@ -341,7 +341,7 @@ export default function ProjectList() {
           loading={loading}
           columns={columns}
           data={data.list}
-          scroll={{ y: 'var(--page-table-scroll-y)' }}
+          scroll={{ x: columns.reduce((width, column) => width + column.width, 0), y: 'var(--page-table-scroll-y)' }}
           pagination={{
             total: data.total,
             current: page,
@@ -371,7 +371,6 @@ export default function ProjectList() {
         cancelButtonProps={{ disabled: saving }}
         okText={editing ? '保存修改' : '创建项目'}
         cancelText="取消"
-        autoFocus={false}
       >
         <Form className="form-grid" form={form} layout="vertical">
           <Form.Item label="项目名称" field="name" rules={[{ required: true, message: '请输入项目名称' }, textLengthRule('项目名称', 128)]}>

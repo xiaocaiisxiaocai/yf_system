@@ -15,7 +15,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 button, input, select, textarea { font-family: inherit; }
-.password-toggle { display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; line-height: 1; cursor: pointer; }
+.password-toggle { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex-shrink: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; line-height: 1; cursor: pointer; }
 .password-toggle:disabled { cursor: not-allowed; }
 .drawer-close-button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; }
 .drawer-close-button:hover { background: var(--color-fill-2); }
@@ -34,15 +34,13 @@ html, body, #root {
 
 /* 登录与改密页：品牌与科技场景在左，表单保持简洁地落在右侧。 */
 .auth-page {
-  height: 100vh;
-  min-height: 0;
+  min-height: 100dvh;
   position: relative;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   box-sizing: border-box;
   padding: clamp(32px, 6vw, 96px);
-  overflow: hidden;
   background-color: #031631;
   background-image: linear-gradient(90deg, rgba(1, 14, 34, .04) 0%, rgba(1, 15, 39, .02) 54%, rgba(2, 18, 48, .3) 100%), url('/auth-scene.webp');
   background-position: center;
@@ -105,7 +103,7 @@ html, body, #root {
   .auth-card { width: 100%; max-width: 430px; padding: 32px 24px; }
 }
 @media (max-height: 620px) {
-  .auth-page { justify-content: flex-end; padding: 16px 28px; background-position: center; }
+  .auth-page { align-items: flex-start; justify-content: flex-end; padding: 70px 28px 24px; background-position: center; }
   .auth-page-brand { top: 16px; left: 28px; gap: 10px; transform: none; }
   .auth-page-brand img { width: 68px; height: 30px; }
   .auth-page-brand span { padding-left: 10px; font-size: 14px; line-height: 22px; }
@@ -683,7 +681,9 @@ html, body, #root {
   .responsive-toolbar .arco-space { display: flex; flex-wrap: wrap; gap: 8px; }
   .responsive-toolbar > .arco-space-item,
   .responsive-toolbar .arco-space-item { min-width: 0; max-width: 100%; margin-right: 0 !important; }
-  .responsive-toolbar > .arco-space-item:first-child { flex: 1 0 100%; }
+  .responsive-toolbar > .arco-space { width: 100%; }
+  .responsive-toolbar > .arco-space > .arco-space-item:first-child { flex: 1 0 100%; }
+  .responsive-toolbar > .arco-space > .arco-space-item:first-child > .arco-input-search { width: 100% !important; }
   .responsive-toolbar .arco-input-search,
   .responsive-toolbar .arco-select { max-width: 100%; }
   .arco-table-pagination { flex-wrap: wrap; }
@@ -747,6 +747,13 @@ html, body, #root {
   .page-card--table { height: auto; min-height: calc(100dvh - 88px); overflow: visible; }
 }
 
+/* 平板宽度先收起侧栏，避免内容区被挤成过窄的双列。 */
+@media (min-width: 721px) and (max-width: 900px) {
+  .layout-sider { display: none; }
+  .mobile-menu-trigger { display: inline-flex; }
+  .profile-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* 项目动态：紧凑时间线，局部约束文字和间距，避免组件默认 margin 挤压内容。 */
 .project-target-notice {
   display: flex;
@@ -765,10 +772,10 @@ html, body, #root {
   flex-direction: column;
   height: calc(100dvh - 88px);
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
 }
 .project-detail-summary-card { flex: 0 0 auto; }
-.project-detail-tabs-card--activity { flex: 1; min-height: 0; overflow: hidden; }
+.project-detail-tabs-card--activity { flex: 1 0 420px; min-height: 420px; overflow: hidden; }
 .project-detail-tabs-card--activity > .arco-card-body,
 .project-detail-tabs-card--activity .arco-tabs,
 .project-detail-tabs-card--activity .arco-tabs-content,
@@ -878,10 +885,10 @@ html, body, #root {
 .project-activity-append-error { justify-content: center; }
 .project-activity-more { display: flex; justify-content: center; padding: 4px 0 8px; }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (max-height: 700px) {
   .project-target-notice { margin-top: -2px; }
   .project-detail-page--activity { display: block; height: auto; overflow: visible; }
-  .project-detail-tabs-card--activity { flex: none; }
+  .project-detail-tabs-card--activity { flex: none; min-height: 0; }
   .project-detail-tabs-card--activity > .arco-card-body,
   .project-detail-tabs-card--activity .arco-tabs,
   .project-detail-tabs-card--activity .arco-tabs-content,

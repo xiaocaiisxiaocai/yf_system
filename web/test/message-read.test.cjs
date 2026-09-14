@@ -107,7 +107,7 @@ function readLabel(renderer, value) {
     if (React.isValidElement(input)) return textContent(input.props.children)
     return input == null ? '' : String(input)
   }
-  return renderer.root.findAllByType('Text').some(node => textContent(node.props.children).includes(`已读 ${value}`))
+  return renderer.root.findAllByType('Button').some(node => textContent(node.props.children).includes(`已读 ${value}`))
 }
 
 test('mark-read refreshes the participant count from the authoritative receipt', async () => {

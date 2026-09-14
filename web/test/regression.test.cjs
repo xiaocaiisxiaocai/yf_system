@@ -15,6 +15,7 @@ const component = (name) => Object.assign((props) => React.createElement(name, p
   Password: (props) => React.createElement(`${name}.Password`, props),
   RangePicker: (props) => React.createElement(`${name}.RangePicker`, props),
   TabPane: (props) => React.createElement(`${name}.TabPane`, props),
+  Item: (props) => React.createElement(`${name}.Item`, props),
 })
 const arco = new Proxy({
   Form: Object.assign(component('Form'), { useForm: () => [{}], Item: component('Form.Item') }),
@@ -340,7 +341,7 @@ test('organization structure uses division, department and section levels', asyn
   assert.ok(renderer.root.findAll((node) => node.props.children === '编辑课别').length > 0)
   assert.equal(renderer.root.findAll((node) => node.props.children === '新增课别').length, 0)
   assert.ok(renderer.root.findAll((node) => node.props.children === '事业一部 > 研发部 > 开发课').length > 0)
-  assert.ok(renderer.root.findAll((node) => node.props.children === '删除课别').length > 0)
+  assert.ok(findElement(renderer.root.findByType('Dropdown').props.droplist, node => node.props.children === '删除课别'))
   const search = () => renderer.root.findByProps({ placeholder: '搜索组织名称' })
   await act(async () => search().props.onChange('开发课'))
   let filtered = renderer.root.findByType('Tree').props.treeData
@@ -462,9 +463,47 @@ test('department hard delete requires the dedicated delete permission', async ()
     let renderer
     await act(async () => { renderer = create(React.createElement(Page)) })
     await act(async () => renderer.root.findByType('Tree').props.onSelect(['3']))
-    assert.equal(renderer.root.findAll((node) => node.props.children === '删除课别').length > 0, expected)
+    assert.equal(!!findElement(renderer.root.findByType('Dropdown').props.droplist, node => node.props.children === '删除课别'), expected)
     await act(async () => renderer.unmount())
   }
+})
+
+test('organization more actions require confirmation and retain the selected target', async () => {
+  let confirmation
+  const writes = []
+  const nodes = [
+    { id: 1, name: '事业一部', kind: 'DIVISION', sortNo: 1, status: 'ACTIVE' },
+    { id: 2, name: '事业二部', kind: 'DIVISION', sortNo: 2, status: 'ACTIVE' },
+  ]
+  const ui = new Proxy({
+    ...arco,
+    Modal: Object.assign(component('Modal'), { confirm: (options) => { confirmation = options } }),
+  }, { get: (obj, key) => obj[key] ?? component(key) })
+  const Page = loadTs('src/pages/org/DeptManage.tsx', {
+    '@arco-design/web-react': ui,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../../api/client': {
+      get: async () => ({ data: nodes }),
+      delete: async (url) => { writes.push(url) },
+      put: async (url, body) => { writes.push({ url, body }) },
+    },
+    '../../store/auth': authModule({ id: 9, userType: 'INTERNAL' }, ['dept:manage', 'dept:delete']),
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  await act(async () => renderer.root.findByType('Tree').props.onSelect(['1']))
+  await act(async () => renderer.root.findByType('Dropdown').props.droplist.props.onClickMenuItem('delete'))
+  assert.equal(confirmation.title, '删除事业部')
+  assert.equal(writes.length, 0, 'Selecting the menu must not delete without confirmation')
+  await act(async () => renderer.root.findByType('Tree').props.onSelect(['2']))
+  await act(async () => confirmation.onOk())
+  assert.deepEqual(writes, ['/admin/departments/1'], 'Confirmation retains the original node')
+  await act(async () => renderer.root.findByType('Dropdown').props.droplist.props.onClickMenuItem('status'))
+  assert.equal(writes.length, 1, 'Status change also waits for confirmation')
+  await act(async () => confirmation.onOk())
+  assert.equal(writes[1].url, '/admin/departments/2/status')
+  assert.equal(writes[1].body.status, 'DISABLED')
+  await act(async () => renderer.unmount())
 })
 
 test('collaboration updates preserve message draft and history until explicit refresh; target remains writable', async () => {
@@ -794,8 +833,12 @@ test('password reset dialogs discard a cancelled password before another account
     const accountActionsFor = (row) => renderer.root.findAllByType('Table')[1].props.columns.at(-1).render(null, row)
 
     await act(async () => findActionButton(accountActionsFor(accounts[0]), '重置密码').props.onClick())
+    assert.equal(renderer.root.findByType('Drawer').props.focusLock, false, 'Only the child dialog may own focus')
+    await act(async () => renderer.root.findByType('Drawer').props.onCancel())
+    assert.equal(renderer.root.findByType('Drawer').props.visible, true, 'The parent cannot close underneath the dialog')
     assert.equal(resetCalls, 1, 'opening a supplier password reset must start with an empty form')
     await act(async () => renderer.root.findAllByType('Modal').find((node) => node.props.visible).props.onCancel())
+    assert.equal(renderer.root.findByType('Drawer').props.focusLock, true, 'Closing the child restores the drawer focus boundary')
     assert.equal(resetCalls, 2, 'cancelling a supplier password reset must discard the entered password')
     await act(async () => findActionButton(accountActionsFor(accounts[1]), '重置密码').props.onClick())
     assert.equal(resetCalls, 3, 'opening another supplier account cannot reuse the previous password draft')
@@ -2498,6 +2541,9 @@ test('message receipt popover distinguishes failure, retries, and ignores an old
   }).default
   let pageRenderer
   await act(async () => { pageRenderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
+  const receiptTrigger = pageRenderer.root.findByType('Popover').props.children
+  assert.equal(receiptTrigger.props['aria-label'], '查看已读人员：0/1')
+  assert.equal(pageRenderer.root.findByProps({ 'aria-label': '查看已读人员：0/1' }).findAllByType('Button').length > 0, true)
   const receiptElement = React.Children.toArray(pageRenderer.root.findByType('Popover').props.content.props.children)[1]
   const Receipt = receiptElement.type
   let renderer
