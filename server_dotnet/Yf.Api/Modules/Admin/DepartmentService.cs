@@ -26,7 +26,9 @@ public sealed class DepartmentService(AppDb db, AuditService audit)
         DeptRow? existing = null;
         if (id.HasValue) existing = await FindAsync(conn, tx, id.Value, ct) ?? throw ApiException.NotFound();
         if (id.HasValue && await WouldCycleAsync(conn, tx, id.Value, request.ParentId, ct)) throw ApiException.BadRequest("不能将组织移动到自身或其下级下");
-        var parentKind = request.ParentId is ulong parentId ? (await FindAsync(conn, tx, parentId, ct) ?? throw ApiException.BadRequest("上级组织不存在")).Kind : null;
+        var newParent = request.ParentId is ulong parentId ? await FindAsync(conn, tx, parentId, ct) ?? throw ApiException.BadRequest("上级组织不存在") : null;
+        var oldParent = existing?.ParentId is ulong oldParentId ? await FindAsync(conn, tx, oldParentId, ct) : null;
+        var parentKind = newParent?.Kind;
         var kind = parentKind switch { null => "DIVISION", "DIVISION" => "DEPARTMENT", "DEPARTMENT" => "SECTION", _ => throw ApiException.BadRequest("课别下不能再新增下级，组织层级为 事业部 > 部门 > 课别") };
         if (id.HasValue && await MaxDepthAsync(conn, tx, id.Value, ct) > (kind switch { "DIVISION" => 2, "DEPARTMENT" => 1, _ => 0 })) throw ApiException.BadRequest("超出 事业部 > 部门 > 课别 三级");
         var duplicate = await conn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM departments WHERE name=@name AND kind=@kind AND parent_id<=>@parentId AND (@id IS NULL OR id<>@id))", new { name = request.Name.Trim(), kind, parentId = request.ParentId, id }, tx, cancellationToken: ct));
@@ -43,8 +45,25 @@ public sealed class DepartmentService(AppDb db, AuditService audit)
             await conn.ExecuteAsync(new CommandDefinition("UPDATE departments SET name=@name,parent_id=@parentId,kind=@kind,sort_no=COALESCE(@sortNo,sort_no),updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { name = request.Name.Trim(), parentId = request.ParentId, kind, sortNo = request.SortNo, id }, tx, cancellationToken: ct));
             await RecomputeAsync(conn, tx, resultId, kind, ct);
         }
-        await audit.WriteAsync(conn, tx, actor.Id, id is null ? "DEPT_CREATE" : "DEPT_UPDATE", "department", resultId, new { name = request.Name.Trim(), kind, parentId = request.ParentId, sortNo = request.SortNo ?? existing?.SortNo ?? 0 }, null, ct);
         var row = await FindAsync(conn, tx, resultId, ct) ?? throw ApiException.NotFound();
+        await audit.WriteAsync(conn, tx, actor.Id, id is null ? "DEPT_CREATE" : "DEPT_UPDATE", "department", resultId, new
+        {
+            name = row.Name,
+            row.Kind,
+            parentId = row.ParentId,
+            row.SortNo,
+            targetName = row.Name,
+            oldParentId = existing?.ParentId,
+            newParentId = row.ParentId,
+            oldParentName = oldParent?.Name,
+            newParentName = newParent?.Name,
+            changes = AuditChange.OnlyChanged(
+                new AuditChange("name", "组织名称", existing?.Name, row.Name),
+                new AuditChange("parent", "上级组织", DepartmentAuditJson(oldParent), DepartmentAuditJson(newParent)),
+                new AuditChange("kind", "组织层级", existing?.Kind, row.Kind),
+                new AuditChange("sortNo", "排序号", existing?.SortNo, row.SortNo),
+                new AuditChange("status", "状态", existing?.Status, row.Status))
+        }, null, ct);
         var result = new { row.Id, row.Name, row.ParentId, row.Kind, row.SortNo, row.Status };
         await tx.CommitAsync(ct);
         return result;
@@ -56,7 +75,15 @@ public sealed class DepartmentService(AppDb db, AuditService audit)
         await AccessService.LockManagementAsync(conn, tx, ct); actor = await AccessService.RecheckActorAsync(conn, tx, actor, ct); AccessService.RequireInternal(actor); await AccessService.RequirePermissionAsync(conn, tx, actor, "dept:manage", ct);
         var row = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound();
         await conn.ExecuteAsync(new CommandDefinition("UPDATE departments SET status=@status,updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { status, id }, tx, cancellationToken: ct));
-        await audit.WriteAsync(conn, tx, actor.Id, "DEPT_STATUS", "department", id, new { row.Name, row.Kind, oldStatus = row.Status, newStatus = status }, null, ct); await tx.CommitAsync(ct);
+        await audit.WriteAsync(conn, tx, actor.Id, "DEPT_STATUS", "department", id, new
+        {
+            row.Name,
+            row.Kind,
+            oldStatus = row.Status,
+            newStatus = status,
+            targetName = row.Name,
+            changes = AuditChange.OnlyChanged(new AuditChange("status", "状态", row.Status, status))
+        }, null, ct); await tx.CommitAsync(ct);
         return new { row.Id, row.Name, row.ParentId, row.Kind, row.SortNo, Status = status };
     }
 
@@ -67,7 +94,7 @@ public sealed class DepartmentService(AppDb db, AuditService audit)
         var row = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound();
         if (await conn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM departments WHERE parent_id=@id)", new { id }, tx, cancellationToken: ct)) == 1) throw ApiException.BadRequest("请先删除下级组织节点");
         if (await conn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM users WHERE department_id=@id)", new { id }, tx, cancellationToken: ct)) == 1) throw ApiException.BadRequest("该组织仍有用户，请先调整用户归属或禁用组织");
-        await audit.WriteAsync(conn, tx, actor.Id, "DEPT_DELETE", "department", id, new { row.Name, row.Kind }, null, ct);
+        await audit.WriteAsync(conn, tx, actor.Id, "DEPT_DELETE", "department", id, new { row.Name, row.Kind, targetName = row.Name, changes = Array.Empty<AuditChange>() }, null, ct);
         await conn.ExecuteAsync(new CommandDefinition("DELETE FROM departments WHERE id=@id", new { id }, tx, cancellationToken: ct)); await tx.CommitAsync(ct);
     }
 
@@ -77,6 +104,7 @@ public sealed class DepartmentService(AppDb db, AuditService audit)
         if (status is null) throw ApiException.BadRequest("组织不存在"); if (status != "ACTIVE") throw ApiException.BadRequest("组织已被禁用");
     }
     private static void Validate(DepartmentUpsert r) { if (string.IsNullOrWhiteSpace(r.Name) || r.Name.Trim().EnumerateRunes().Count() > 64) throw ApiException.BadRequest("组织名称需为 1~64 个字符"); if (r.SortNo < 0) throw ApiException.BadRequest("排序号不能为负数"); }
+    private static object? DepartmentAuditJson(DeptRow? department) => department is null ? null : new { department.Id, department.Name };
     private static Task<DeptRow?> FindAsync(MySqlConnection c, MySqlTransaction? t, ulong id, CancellationToken ct) => c.QuerySingleOrDefaultAsync<DeptRow>(new CommandDefinition("SELECT id Id,name Name,parent_id ParentId,kind Kind,sort_no SortNo,status Status FROM departments WHERE id=@id", new { id }, t, cancellationToken: ct));
     private static async Task<bool> WouldCycleAsync(MySqlConnection c, MySqlTransaction t, ulong id, ulong? parent, CancellationToken ct) { for (var n = 0; parent.HasValue && n <= 32; n++) { if (parent == id) return true; parent = await c.QuerySingleOrDefaultAsync<ulong?>(new CommandDefinition("SELECT parent_id FROM departments WHERE id=@parent", new { parent }, t, cancellationToken: ct)); } return parent.HasValue; }
     private static async Task<int> MaxDepthAsync(MySqlConnection c, MySqlTransaction t, ulong id, CancellationToken ct) { var children = (await c.QueryAsync<ulong>(new CommandDefinition("SELECT id FROM departments WHERE parent_id=@id", new { id }, t, cancellationToken: ct))).ToArray(); var max = 0; foreach (var child in children) max = Math.Max(max, 1 + await MaxDepthAsync(c, t, child, ct)); return max; }

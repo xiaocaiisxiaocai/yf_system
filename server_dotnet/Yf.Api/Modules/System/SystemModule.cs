@@ -105,13 +105,20 @@ public sealed class SystemService(AppDb db, AuditService audit)
         actor = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         AccessService.RequireInternal(actor);
         await AccessService.RequirePermissionAsync(conn, tx, actor, "config:manage", ct);
+        var changes = new List<AuditChange>();
         foreach (var item in normalized)
         {
             var exists = await conn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM system_configs WHERE cfg_key=@Key", item, tx, cancellationToken: ct));
             if (exists != 1) throw ApiException.BadRequest($"未知系统参数：{item.Key}");
+            var previous = await conn.QuerySingleOrDefaultAsync<string?>(new CommandDefinition("SELECT cfg_value FROM system_configs WHERE cfg_key=@Key", item, tx, cancellationToken: ct));
+            if (previous != item.Value)
+            {
+                var safe = item.Key is "notify.enabled" or "upload.max_file_size" or "upload.chunk_size" or "upload.allowed_exts";
+                changes.Add(new AuditChange(item.Key, ConfigLabel(item.Key), safe ? previous : "未展示", safe ? item.Value : "已更新"));
+            }
             await conn.ExecuteAsync(new CommandDefinition("UPDATE system_configs SET cfg_value=@Value,updated_at=UTC_TIMESTAMP(6) WHERE cfg_key=@Key", item, tx, cancellationToken: ct));
         }
-        await audit.WriteAsync(conn, tx, actor.Id, "CONFIG_UPDATE", "system_config", null, new { keys = normalized.Select(x => x.Key) }, null, ct);
+        await audit.WriteAsync(conn, tx, actor.Id, "CONFIG_UPDATE", "system_config", null, new { keys = normalized.Select(x => x.Key), changes }, null, ct);
         await tx.CommitAsync(ct);
     }
 
@@ -124,7 +131,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
             if (!string.IsNullOrWhiteSpace(request.Query[name])) { where.Add($"{column}=@{name}"); args.Add(name, request.Query[name].ToString().Trim()); }
         if (!string.IsNullOrWhiteSpace(request.Query["keyword"]))
         {
-            where.Add("(a.employee_no LIKE @keyword OR a.action LIKE @keyword OR a.target_type LIKE @keyword OR a.target_id LIKE @keyword)");
+            where.Add("(a.employee_no LIKE @keyword OR u.real_name LIKE @keyword OR a.action LIKE @keyword OR a.target_type LIKE @keyword OR a.target_id LIKE @keyword OR a.detail LIKE @keyword OR p.name LIKE @keyword OR r.name LIKE @keyword OR d.name LIKE @keyword OR s.name LIKE @keyword OR target_user.real_name LIKE @keyword OR f.original_name LIKE @keyword)");
             args.Add("keyword", "%" + request.Query["keyword"].ToString().Trim() + "%");
         }
         if (!string.IsNullOrWhiteSpace(request.Query["employeeNo"])) { where.Add("a.employee_no LIKE @employeeNo"); args.Add("employeeNo", "%" + request.Query["employeeNo"].ToString().Trim() + "%"); }
@@ -136,11 +143,30 @@ public sealed class SystemService(AppDb db, AuditService audit)
             }
         if (Categories.TryGetValue(request.Query["category"].ToString().Trim(), out var actions)) { where.Add("a.action IN @actions"); args.Add("actions", actions); }
         var condition = where.Count == 0 ? "" : " WHERE " + string.Join(" AND ", where);
+        const string from = """
+            FROM audit_logs a
+            LEFT JOIN users u ON u.id=a.user_id
+            LEFT JOIN projects p ON a.target_type='project' AND p.id=a.target_id
+            LEFT JOIN roles r ON a.target_type='role' AND r.id=a.target_id
+            LEFT JOIN departments d ON a.target_type='department' AND d.id=a.target_id
+            LEFT JOIN suppliers s ON a.target_type='supplier' AND s.id=a.target_id
+            LEFT JOIN users target_user ON a.target_type='user' AND target_user.id=a.target_id
+            LEFT JOIN files f ON a.target_type='file' AND f.id=a.target_id
+            """;
         await using var conn = await db.OpenAsync(ct);
-        var total = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT COUNT(*) FROM audit_logs a" + condition, args, cancellationToken: ct));
-        var rows = await conn.QueryAsync<AuditRow>(new CommandDefinition("SELECT a.id,a.user_id AS UserId,COALESCE(a.employee_no,u.employee_no) AS EmployeeNo,a.action,a.target_type AS TargetType,a.target_id AS TargetId,a.detail,a.ip,a.created_at AS CreatedAt FROM audit_logs a LEFT JOIN users u ON u.id=a.user_id" + condition + " ORDER BY a.id DESC LIMIT @size OFFSET @offset", args, cancellationToken: ct));
+        var total = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT COUNT(*) " + from + condition, args, cancellationToken: ct));
+        var rows = await conn.QueryAsync<AuditRow>(new CommandDefinition("SELECT a.id,a.user_id AS UserId,COALESCE(a.employee_no,u.employee_no) AS EmployeeNo,u.real_name CurrentActorName,COALESCE(p.name,r.name,d.name,s.name,target_user.real_name,f.original_name) CurrentTargetName,a.action,a.target_type AS TargetType,a.target_id AS TargetId,a.detail,a.ip,a.created_at AS CreatedAt " + from + condition + " ORDER BY a.id DESC LIMIT @size OFFSET @offset", args, cancellationToken: ct));
         return new { list = rows.Select(x => x.ToResponse()), total, page, pageSize = size };
     }
+
+    private static string ConfigLabel(string key) => key switch
+    {
+        "notify.enabled" => "邮件通知",
+        "upload.max_file_size" => "单文件大小上限",
+        "upload.chunk_size" => "上传分片大小",
+        "upload.allowed_exts" => "允许的文件类型",
+        _ => key,
+    };
 
     public async Task<object> DeleteLogsAsync(ulong[] ids, CurrentUser actor, CancellationToken ct)
     {
@@ -178,11 +204,30 @@ public sealed class AuditRow
     public ulong Id { get; set; }
     public ulong? UserId { get; set; }
     public string? EmployeeNo { get; set; }
+    public string? CurrentActorName { get; set; }
+    public string? CurrentTargetName { get; set; }
     public string Action { get; set; } = "";
     public string? TargetType { get; set; }
     public string? TargetId { get; set; }
     public string? Detail { get; set; }
     public string? Ip { get; set; }
     public DateTime CreatedAt { get; set; }
-    public object ToResponse() => new { Id, UserId, EmployeeNo, Action, TargetType, TargetId, detail = Detail is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(Detail), Ip, CreatedAt };
+    public object ToResponse()
+    {
+        var detail = Detail is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(Detail);
+        string? Snapshot(string field) => detail is { ValueKind: JsonValueKind.Object } value
+            && value.TryGetProperty("auditContext", out var context) && context.ValueKind == JsonValueKind.Object
+            && context.TryGetProperty(field, out var name) && name.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(name.GetString()) ? name.GetString() : null;
+        var actorSnapshot = Snapshot("actorName");
+        var targetSnapshot = Snapshot("targetName");
+        return new
+        {
+            Id, UserId, EmployeeNo, Action, TargetType, TargetId, detail, Ip, CreatedAt,
+            actorName = actorSnapshot ?? CurrentActorName,
+            targetName = targetSnapshot ?? CurrentTargetName,
+            actorNameSource = actorSnapshot is not null ? "snapshot" : CurrentActorName is not null ? "current" : "unknown",
+            targetNameSource = targetSnapshot is not null ? "snapshot" : CurrentTargetName is not null ? "current" : "unknown",
+        };
+    }
 }

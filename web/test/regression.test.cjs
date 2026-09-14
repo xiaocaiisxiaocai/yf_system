@@ -565,6 +565,7 @@ function loadTs(relativePath, mocks, globals = {}) {
         return loadTs('src/utils/password.ts', {})
       }
       if (name.endsWith('/textRules')) return loadTs('src/utils/textRules.ts', {})
+      if (name === './auditLogDetails') return loadTs('src/pages/system/auditLogDetails.ts', {})
       return require(name)
     },
   }, { filename })
@@ -2756,7 +2757,7 @@ test('profile update audit exposes the auth filter label and changed field summa
   const action = table.props.columns.find((column) => column.dataIndex === 'action').render(row.action, row)
   assert.match(JSON.stringify(action), /更新个人资料/)
   const summary = table.props.columns.find((column) => column.title === '内容摘要').render(null, row)
-  assert.match(JSON.stringify(summary), /修改 邮箱/)
+  assert.match(JSON.stringify(summary), /修改了邮箱/)
   const actionSelect = renderer.root.findAllByType('Select').find((select) => select.props.placeholder === '具体操作')
   const values = React.Children.toArray(actionSelect.props.children).map((option) => option.props.value)
   assert.ok(values.includes('PROFILE_UPDATE'))
@@ -2835,7 +2836,7 @@ test('audit selection is cleared across filtering, paging and refresh, and repor
   let table = renderer.root.findByType('Table')
   await act(async () => table.props.rowSelection.onChange([101]))
   const staleBatchOk = renderer.root.findAllByType('Popconfirm').find((node) => String(node.props.title).includes('选中的')).props.onOk
-  await act(async () => renderer.root.findByProps({ placeholder: '操作人 / 动作编码 / 对象' }).props.onChange('next'))
+  await act(async () => renderer.root.findByProps({ placeholder: '搜索姓名、对象或详情' }).props.onChange('next'))
   await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '查询').props.onClick())
   table = renderer.root.findByType('Table')
   assert.deepEqual(Array.from(table.props.rowSelection.selectedRowKeys), [])

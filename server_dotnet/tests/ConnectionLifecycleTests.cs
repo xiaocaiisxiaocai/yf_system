@@ -34,7 +34,11 @@ public sealed class ConnectionLifecycleTests
             CREATE TABLE permissions(id BIGINT UNSIGNED PRIMARY KEY, code VARCHAR(64) NOT NULL);
             CREATE TABLE role_permissions(role_id BIGINT UNSIGNED NOT NULL, permission_id BIGINT UNSIGNED NOT NULL);
             CREATE TABLE user_roles(user_id BIGINT UNSIGNED NOT NULL, role_id BIGINT UNSIGNED NOT NULL);
-            CREATE TABLE users(id BIGINT UNSIGNED PRIMARY KEY, employee_no VARCHAR(64) NOT NULL);
+            CREATE TABLE users(id BIGINT UNSIGNED PRIMARY KEY, employee_no VARCHAR(64) NOT NULL, real_name VARCHAR(64) NOT NULL);
+            CREATE TABLE projects(id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(255) NOT NULL);
+            CREATE TABLE departments(id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(64) NOT NULL);
+            CREATE TABLE suppliers(id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(255) NOT NULL);
+            CREATE TABLE files(id BIGINT UNSIGNED PRIMARY KEY, original_name VARCHAR(255) NOT NULL);
             CREATE TABLE system_configs(cfg_key VARCHAR(100) PRIMARY KEY, cfg_value TEXT NOT NULL);
             CREATE TABLE audit_logs(
                 id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -47,7 +51,7 @@ public sealed class ConnectionLifecycleTests
             INSERT INTO permissions VALUES(1,'config:manage'),(2,'log:view');
             INSERT INTO role_permissions VALUES(1,1),(1,2);
             INSERT INTO user_roles VALUES(1,1);
-            INSERT INTO users VALUES(1,'pool_admin');
+            INSERT INTO users VALUES(1,'pool_admin','连接池测试员');
             """, ct);
 
         var builder = WebApplication.CreateSlimBuilder();

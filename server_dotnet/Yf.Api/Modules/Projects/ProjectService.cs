@@ -222,7 +222,13 @@ internal sealed class ProjectService(
         {
             throw ApiException.Conflict("项目名称已存在");
         }
-        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_UPDATE", "project", projectId, null, ip, ct);
+        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_UPDATE", "project", projectId, new
+        {
+            name,
+            changes = AuditChange.OnlyChanged(
+                new("name", "项目名称", project.Name, name),
+                new("description", "项目说明", project.Description, request.Description)),
+        }, ip, ct);
         var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
         return result;
@@ -417,6 +423,9 @@ internal sealed class ProjectService(
             throw ApiException.Conflict("项目当前状态不可调整成员");
         }
         var ids = ProjectWorkflowRules.NormalizeMemberIds(requestedIds, current.Id);
+        var previousMembers = (await conn.QueryAsync<AuditMember>(new CommandDefinition(
+            "SELECT u.id Id,u.employee_no EmployeeNo,u.real_name RealName FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project_id=@projectId ORDER BY u.id",
+            new { projectId }, tx, cancellationToken: ct))).ToArray();
         foreach (var id in ids)
         {
             var user = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(
@@ -440,9 +449,21 @@ internal sealed class ProjectService(
                 "INSERT INTO project_members(project_id,user_id,created_by,created_at) VALUES(@ProjectId,@UserId,@CreatedBy,UTC_TIMESTAMP(3))",
                 new { ProjectId = projectId, UserId = id, CreatedBy = current.Id }, tx, cancellationToken: ct));
         }
-        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_MEMBERS", "project", projectId, null, ip, ct);
+        var nextMembers = (await conn.QueryAsync<AuditMember>(new CommandDefinition(
+            "SELECT id Id,employee_no EmployeeNo,real_name RealName FROM users WHERE id IN @ids ORDER BY id",
+            new { ids }, tx, cancellationToken: ct))).ToArray();
+        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_MEMBERS", "project", projectId, new
+        {
+            name = project.Name,
+            oldMemberIds = previousMembers.Select(member => member.Id).ToArray(),
+            newMemberIds = ids,
+            addedMembers = nextMembers.Where(member => !previousMembers.Any(previous => previous.Id == member.Id)).ToArray(),
+            removedMembers = previousMembers.Where(member => !ids.Contains(member.Id)).ToArray(),
+        }, ip, ct);
         await tx.CommitAsync(ct);
     }
+
+    private sealed record AuditMember(ulong Id, string EmployeeNo, string RealName);
 
     internal async Task<object> SummaryAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
     {

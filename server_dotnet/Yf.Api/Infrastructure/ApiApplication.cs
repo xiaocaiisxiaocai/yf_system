@@ -59,6 +59,7 @@ public static class ApiApplication
         builder.WebHost.ConfigureKestrel(k => { k.AddServerHeader = false; k.Limits.MaxRequestBodySize = 64L * 1024 * 1024; });
         builder.Services.Configure<IISServerOptions>(o => o.MaxRequestBodySize = 64L * 1024 * 1024);
         builder.Services.Configure<RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
+        builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton(options).AddSingleton<AppDb>().AddSingleton<AccessService>().AddSingleton<AuditService>();
         builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule();
         builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy

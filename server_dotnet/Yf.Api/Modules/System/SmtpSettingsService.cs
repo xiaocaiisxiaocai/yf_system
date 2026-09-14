@@ -62,7 +62,18 @@ public sealed class SmtpSettingsService(AppDb db, AppOptions options, AuditServi
             ON DUPLICATE KEY UPDATE cfg_value=VALUES(cfg_value),updated_at=VALUES(updated_at)
             """, new { key = ConfigKey, value = JsonSerializer.Serialize(stored) }, tx, cancellationToken: ct));
         await audit.WriteAsync(conn, tx, actor.Id, "CONFIG_UPDATE", "system_config", null,
-            new { keys = new[] { ConfigKey }, passwordChanged = !string.IsNullOrEmpty(request.Password) }, null, ct);
+            new
+            {
+                keys = new[] { ConfigKey },
+                passwordChanged = !string.IsNullOrEmpty(request.Password),
+                targetName = "SMTP 邮件设置",
+                changes = AuditChange.OnlyChanged(
+                    new AuditChange("host", "SMTP 服务器", previous.Options.Host, next.Host),
+                    new AuditChange("port", "端口", previous.Options.Port, next.Port),
+                    new AuditChange("username", "登录账号", previous.Options.Username, next.Username),
+                    new AuditChange("from", "发件邮箱", previous.Options.From, next.From),
+                    new AuditChange("security", "加密方式", previous.Options.Security, next.Security))
+            }, null, ct);
         await tx.CommitAsync(ct);
         return new ResolvedSmtpSettings(next, false).View;
     }

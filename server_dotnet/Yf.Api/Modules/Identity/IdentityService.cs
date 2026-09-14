@@ -211,7 +211,11 @@ public sealed class IdentityService(
         if (user.Email != email)
         {
             await conn.ExecuteAsync(new CommandDefinition("UPDATE users SET email=@email,updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { email, id = current.Id }, tx, cancellationToken: ct));
-            await audit.WriteAsync(conn, tx, current.Id, "PROFILE_UPDATE", "user", current.Id, new { changedFields = new[] { "email" } }, null, ct);
+            await audit.WriteAsync(conn, tx, current.Id, "PROFILE_UPDATE", "user", current.Id, new
+            {
+                changedFields = new[] { "email" },
+                changes = AuditChange.OnlyChanged(new AuditChange("email", "邮箱", user.Email, email))
+            }, null, ct);
         }
         var updated = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(
             UserSelect + " WHERE id=@id", new { id = current.Id }, tx, cancellationToken: ct)) ?? throw ApiException.NotFound();

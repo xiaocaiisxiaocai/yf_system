@@ -1,26 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Button, Card, DatePicker, Drawer, Input, Message, Popconfirm, Select, Space, Table, Tag, Typography,
+  Button, Card, Collapse, DatePicker, Drawer, Input, Message, Popconfirm, Select, Space, Table, Tag, Typography,
 } from '@arco-design/web-react'
-import { IconEye, IconRefresh, IconSearch } from '@arco-design/web-react/icon'
+import { IconCheck, IconCopy, IconEye, IconRefresh, IconSearch } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
-
-type AuditDetail = Record<string, unknown>
-
-interface LogRow {
-  id: number
-  userId?: number | null
-  employeeNo?: string | null
-  action: string
-  targetType?: string | null
-  targetId?: string | null
-  detail?: AuditDetail | null
-  ip?: string | null
-  createdAt: string
-}
+import {
+  ACTIONS, CATEGORY_OPTIONS, TARGET_LABELS, actionForCategory, actionOptionsForCategory,
+  actorIdentity, collectionChanges, copySafeDetail, detailNotes, detailSummary, displayChanges, formatChangeValue,
+  historicalNote, safeDetailJson, sourceDetailValue, sourceLabel, targetIdentity,
+  type AuditLogRow,
+} from './auditLogDetails'
+import './AuditLog.css'
 
 interface Filters {
   keyword: string
@@ -30,179 +23,170 @@ interface Filters {
   range: string[]
 }
 
-const ACTIONS: Record<string, { label: string; category: string; color: string }> = {
-  LOGIN: { label: '登录成功', category: '认证安全', color: 'green' },
-  LOGIN_FAILED: { label: '登录失败', category: '认证安全', color: 'red' },
-  LOGIN_LOCKED: { label: '账号锁定', category: '认证安全', color: 'red' },
-  LOGOUT: { label: '退出登录', category: '认证安全', color: 'gray' },
-  PASSWORD_CHANGE: { label: '修改密码', category: '认证安全', color: 'orange' },
-  PROFILE_UPDATE: { label: '更新个人资料', category: '认证安全', color: 'purple' },
-  PROJECT_CREATE: { label: '创建项目', category: '项目协作', color: 'arcoblue' },
-  PROJECT_UPDATE: { label: '更新项目', category: '项目协作', color: 'arcoblue' },
-  PROJECT_START: { label: '开始项目', category: '项目协作', color: 'arcoblue' },
-  PROJECT_SUBMIT: { label: '提交验收', category: '项目协作', color: 'arcoblue' },
-  PROJECT_CONFIRM: { label: '验收通过', category: '项目协作', color: 'green' },
-  PROJECT_REJECT: { label: '验收驳回', category: '项目协作', color: 'red' },
-  PROJECT_WITHDRAW: { label: '撤回验收申请', category: '项目协作', color: 'orange' },
-  PROJECT_ACCEPTANCE_MIGRATE: { label: '转交公司内部验收', category: '项目协作', color: 'arcoblue' },
-  PROJECT_ACCEPTANCE_NOTIFICATIONS_MIGRATE: { label: '更新内部验收通知', category: '项目协作', color: 'arcoblue' },
-  PROJECT_TERMINATE: { label: '终止项目', category: '项目协作', color: 'red' },
-  PROJECT_RESTART: { label: '重新开始项目', category: '项目协作', color: 'arcoblue' },
-  PROJECT_DELETE: { label: '删除项目', category: '项目协作', color: 'red' },
-  PROJECT_MEMBERS: { label: '调整项目成员', category: '项目协作', color: 'purple' },
-  FILE_UPLOAD: { label: '上传文件', category: '文件', color: 'arcoblue' },
-  FILE_DOWNLOAD: { label: '下载文件', category: '文件', color: 'cyan' },
-  FILE_BATCH_DOWNLOAD: { label: '批量下载', category: '文件', color: 'cyan' },
-  FILE_DELETE: { label: '删除文件', category: '文件', color: 'red' },
-  UPLOAD_ABORT: { label: '取消上传', category: '文件', color: 'orange' },
-  MESSAGE_CREATE: { label: '发送留言', category: '留言', color: 'arcoblue' },
-  MESSAGE_DELETE: { label: '删除留言', category: '留言', color: 'red' },
-  USER_CREATE: { label: '创建用户', category: '组织权限', color: 'arcoblue' },
-  USER_UPDATE: { label: '更新用户', category: '组织权限', color: 'purple' },
-  USER_STATUS: { label: '变更用户状态', category: '组织权限', color: 'orange' },
-  USER_DELETE: { label: '删除用户', category: '组织权限', color: 'red' },
-  USER_RESET_PASSWORD: { label: '重置用户密码', category: '组织权限', color: 'orange' },
-  USER_ASSIGN_ROLE: { label: '调整用户角色', category: '组织权限', color: 'purple' },
-  USER_ASSIGN_ROLES: { label: '调整用户角色（旧）', category: '组织权限', color: 'purple' },
-  DEPT_CREATE: { label: '创建组织', category: '组织权限', color: 'arcoblue' },
-  DEPT_UPDATE: { label: '更新组织', category: '组织权限', color: 'purple' },
-  DEPT_STATUS: { label: '变更组织状态', category: '组织权限', color: 'orange' },
-  DEPT_DELETE: { label: '删除组织', category: '组织权限', color: 'red' },
-  ROLE_CREATE: { label: '创建角色', category: '组织权限', color: 'arcoblue' },
-  ROLE_UPDATE: { label: '更新角色', category: '组织权限', color: 'purple' },
-  ROLE_STATUS: { label: '变更角色状态', category: '组织权限', color: 'orange' },
-  ROLE_DELETE: { label: '删除角色', category: '组织权限', color: 'red' },
-  ROLE_ASSIGN_PERMS: { label: '调整角色权限', category: '组织权限', color: 'purple' },
-  SUPPLIER_CREATE: { label: '创建供应商', category: '供应商', color: 'arcoblue' },
-  SUPPLIER_UPDATE: { label: '更新供应商', category: '供应商', color: 'purple' },
-  SUPPLIER_STATUS: { label: '变更供应商状态', category: '供应商', color: 'orange' },
-  SUPPLIER_DELETE: { label: '删除供应商', category: '供应商', color: 'red' },
-  SUPPLIER_ACCOUNT_CREATE: { label: '创建供应商账号', category: '供应商', color: 'arcoblue' },
-  SUPPLIER_ACCOUNT_UPDATE: { label: '更新供应商账号', category: '供应商', color: 'purple' },
-  SUPPLIER_ACCOUNT_STATUS: { label: '变更供应商账号状态', category: '供应商', color: 'orange' },
-  SUPPLIER_ACCOUNT_RESET_PASSWORD: { label: '重置供应商密码', category: '供应商', color: 'orange' },
-  SUPPLIER_ACCOUNT_DELETE: { label: '删除供应商账号', category: '供应商', color: 'red' },
-  AUDIT_LOG_DELETE: { label: '删除操作日志', category: '系统', color: 'red' },
-  CONFIG_UPDATE: { label: '更新系统参数', category: '系统', color: 'orange' },
-  EMAIL_SENT: { label: '邮件发送成功', category: '系统', color: 'green' },
-  EMAIL_FAILED: { label: '邮件发送失败', category: '系统', color: 'red' },
-  EMAIL_RETRY: { label: '邮件发送重试', category: '系统', color: 'orange' },
-  EMAIL_SKIPPED_MISSING_EMAIL: { label: '邮件未入队（缺少邮箱）', category: '系统', color: 'orange' },
-  EMAIL_CANCELLED_STALE: { label: '已取消过期验收邮件', category: '系统', color: 'orange' },
+const EMPTY_FILTERS: Filters = { keyword: '', range: [] }
+
+function actionMeta(action: string) {
+  return ACTIONS[action] || { label: action, categoryCode: '', categoryLabel: '其他', color: 'gray' }
 }
 
-const CATEGORY_OPTIONS = [
-  ['AUTH', '认证安全'], ['PROJECT', '项目协作'], ['FILE', '文件'], ['MESSAGE', '留言'], ['ORG', '组织与权限'], ['SUPPLIER', '供应商'], ['SYSTEM', '系统'],
-]
-
-const TARGET_LABELS: Record<string, string> = {
-  user: '用户', role: '角色', department: '组织', supplier: '供应商', project: '项目',
-  file: '文件', message: '留言', upload_session: '上传任务', audit_log: '操作日志', system_config: '系统参数',
-  email_outbox: '邮件队列',
+function IdentityCard({ title, identity }: { title: string; identity: ReturnType<typeof actorIdentity> }) {
+  return (
+    <div className="audit-identity-card">
+      <span className="audit-identity-title">{title}</span>
+      <strong title={identity.name}>{identity.name}</strong>
+      <span title={identity.identifier}>{identity.identifier}</span>
+      <small className={`audit-source audit-source--${identity.source}`}>{identity.sourceLabel}</small>
+    </div>
+  )
 }
 
-const FIELD_LABELS: Record<string, string> = {
-  realName: '姓名', email: '邮箱', phone: '电话', departmentId: '组织', roleId: '角色',
+function ChangeCollection({
+  title, tone, items,
+}: {
+  title: string
+  tone: 'added' | 'removed'
+  items: ReturnType<typeof collectionChanges>['addedPermissions']
+}) {
+  if (!items.length) return null
+  return (
+    <div className={`audit-collection audit-collection--${tone}`}>
+      <div className="audit-collection-title"><span>{title}</span><Tag>{items.length}</Tag></div>
+      <div className="audit-collection-list">
+        {items.map((item) => (
+          <div className="audit-collection-item" key={item.key}>
+            <strong title={item.title}>{item.title}</strong>
+            {item.meta && <small title={item.meta}>{item.meta}</small>}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
-const PROJECT_STATUS_LABELS: Record<string, string> = {
-  DRAFT: '草稿', IN_PROGRESS: '进行中', PENDING_CONFIRMATION: '待验收', COMPLETED: '已完成', TERMINATED: '已终止',
-}
+function AuditDetail({ row }: { row: AuditLogRow }) {
+  const [copied, setCopied] = useState(false)
+  const meta = actionMeta(row.action)
+  const actor = actorIdentity(row)
+  const target = targetIdentity(row)
+  const changes = displayChanges(row)
+  const collections = collectionChanges(row)
+  const notes = detailNotes(row)
+  const note = historicalNote(row)
+  const context = row.detail?.auditContext
+  const rawJson = safeDetailJson(row.detail)
+  const hasCollections = collections.addedPermissions.length > 0
+    || collections.removedPermissions.length > 0
+    || collections.addedMembers.length > 0
+    || collections.removedMembers.length > 0
 
-const PROJECT_WORKFLOW_ACTIONS = new Set([
-  'PROJECT_START', 'PROJECT_SUBMIT', 'PROJECT_CONFIRM', 'PROJECT_REJECT',
-  'PROJECT_WITHDRAW', 'PROJECT_TERMINATE', 'PROJECT_RESTART',
-])
+  const copyRaw = async () => {
+    const success = await copySafeDetail(row.detail, navigator.clipboard?.writeText?.bind(navigator.clipboard))
+    if (success) {
+      setCopied(true)
+      Message.success('原始数据已复制')
+    } else {
+      setCopied(false)
+      Message.error('复制失败，请手动选择原始数据')
+    }
+  }
 
-function displayValue(value: unknown): string {
-  if (value == null || value === '') return '无'
-  if (typeof value === 'boolean') return value ? '是' : '否'
-  if (Array.isArray(value)) return value.length ? value.join('、') : '无'
-  if (typeof value === 'object') return JSON.stringify(value)
-  return String(value)
-}
+  return (
+    <div className="audit-detail">
+      <div className="audit-detail-title">
+        <div>
+          <Tag color={meta.color}>{meta.label}</Tag>
+          <span>{meta.categoryLabel}</span>
+        </div>
+        <Typography.Text type="secondary">日志 #{row.id}</Typography.Text>
+      </div>
 
-function actorIdentity(row: LogRow) {
-  const employeeNo = row.employeeNo?.trim()
-  if (row.userId != null) {
-    return { label: employeeNo || `用户 #${row.userId}`, meta: `ID ${row.userId}` }
-  }
-  if (employeeNo) return { label: employeeNo, meta: '未识别账号' }
-  return { label: '系统', meta: '系统事件' }
-}
+      <section className="audit-section" aria-labelledby="audit-overview-heading">
+        <h2 id="audit-overview-heading">操作概览</h2>
+        <p className="audit-overview">
+          <strong>{actor.name}</strong>
+          <span>于 {fmtTime(row.createdAt)} 对</span>
+          <strong>{target.name}</strong>
+          <span>执行了“{meta.label}”</span>
+        </p>
+        <div className="audit-identities">
+          <IdentityCard title="操作人" identity={actor} />
+          <IdentityCard title="操作对象" identity={target} />
+        </div>
+      </section>
 
-function projectStatusLabel(value: unknown): string {
-  if (value == null || value === '') return '未知'
-  return PROJECT_STATUS_LABELS[String(value)] || displayValue(value)
-}
+      <section className="audit-section" aria-labelledby="audit-changes-heading">
+        <h2 id="audit-changes-heading">变化明细</h2>
+        {changes.length > 0 && (
+          <div className="audit-change-table">
+            <div className="audit-change-head"><span>字段</span><span>修改前</span><span>修改后</span></div>
+            {changes.map((change, index) => (
+              <div className="audit-change-row" key={`${change.field}-${index}`}>
+                <strong title={change.label}>{change.label}</strong>
+                <span className="audit-before" title={formatChangeValue(change, 'before')}>{formatChangeValue(change, 'before')}</span>
+                <span className="audit-after" title={formatChangeValue(change, 'after')}>{formatChangeValue(change, 'after')}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {hasCollections && (
+          <div className="audit-collections">
+            <ChangeCollection title="新增权限" tone="added" items={collections.addedPermissions} />
+            <ChangeCollection title="移除权限" tone="removed" items={collections.removedPermissions} />
+            <ChangeCollection title="新增成员" tone="added" items={collections.addedMembers} />
+            <ChangeCollection title="移除成员" tone="removed" items={collections.removedMembers} />
+          </div>
+        )}
+        {notes.length > 0 && (
+          <div className="audit-detail-notes">
+            {notes.map((item, index) => (
+              <div className={`audit-detail-note audit-detail-note--${item.tone}`} key={`${item.label}-${index}`}>
+                <span>{item.label}</span><strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
+        )}
+        {changes.length === 0 && !hasCollections && notes.length === 0 && <div className="audit-empty-change">{detailSummary(row)}</div>}
+        {note && <div className="audit-history-note">{note}</div>}
+      </section>
 
-function detailSummary(row: LogRow): string {
-  const detail = row.detail || {}
-  // 兼容迁移前已落库的结构化日志详情；新的日志统一写 employeeNo。
-  const actor = detail.employeeNo ?? detail.username
-  if (row.action === 'USER_ASSIGN_ROLE' || row.action === 'USER_ASSIGN_ROLES') {
-    return `${displayValue(actor)}：角色 ${displayValue(detail.oldRoleId)} → ${displayValue(detail.newRoleName ?? detail.newRoleId)}`
-  }
-  if (row.action === 'USER_UPDATE' || row.action === 'PROFILE_UPDATE') {
-    const fields = Array.isArray(detail.changedFields)
-      ? detail.changedFields.map((field) => FIELD_LABELS[String(field)] || String(field)).join('、')
-      : ''
-    const subject = actor == null || actor === '' ? '' : displayValue(actor)
-    if (!subject && !fields) return '历史记录未包含变更字段'
-    return [subject, fields ? `修改 ${fields}` : ''].filter(Boolean).join('；')
-  }
-  if (PROJECT_WORKFLOW_ACTIONS.has(row.action)) {
-    const stateChange = detail.from != null || detail.to != null
-      ? `状态：${projectStatusLabel(detail.from)} → ${projectStatusLabel(detail.to)}`
-      : ''
-    const reason = typeof detail.reason === 'string' && detail.reason.trim()
-      ? `；驳回原因：${displayValue(detail.reason)}`
-      : ''
-    return `${stateChange}${reason}` || (row.detail ? '查看结构化详情' : '未记录补充信息')
-  }
-  if (row.action.endsWith('_STATUS')) {
-    const subject = detail.name ?? actor ?? detail.code ?? `${TARGET_LABELS[row.targetType || ''] || row.targetType || '对象'} ${row.targetId || ''}`
-    const nextStatus = detail.newStatus ?? detail.status ?? detail.to
-    if (detail.oldStatus == null) return `${displayValue(subject)}：状态变更为 ${displayValue(nextStatus)}`
-    return `${displayValue(subject)}：${displayValue(detail.oldStatus)} → ${displayValue(nextStatus)}`
-  }
-  if (row.action === 'ROLE_ASSIGN_PERMS') {
-    return `${displayValue(detail.code)}：权限点 ${displayValue(detail.oldPermissionCount)} → ${displayValue(detail.newPermissionCount)}`
-  }
-  if (row.action === 'EMAIL_SKIPPED_MISSING_EMAIL') {
-    return `${displayValue(detail.realName)}（${displayValue(detail.employeeNo)}）：未填写邮箱，通知未入队`
-  }
-  if (row.action === 'EMAIL_FAILED') {
-    return `${displayValue(detail.error)}${detail.retryCount ? `，第 ${displayValue(detail.retryCount)} 次` : ''}`
-  }
-  if (row.action === 'EMAIL_RETRY') {
-    return `${displayValue(detail.error)}，已安排第 ${displayValue(detail.retryCount)} 次重试`
-  }
-  if (row.action === 'EMAIL_SENT') {
-    return detail.recipient ? `收件人 ${displayValue(detail.recipient)}` : '邮件已发送'
-  }
-  const parts = [actor, detail.name, detail.code, detail.fileName, detail.projectId]
-    .filter((value) => value != null && value !== '')
-    .map(displayValue)
-  return parts.join(' · ') || (row.detail ? '查看结构化详情' : '未记录补充信息')
+      <section className="audit-section" aria-labelledby="audit-source-heading">
+        <h2 id="audit-source-heading">来源信息</h2>
+        <div className="audit-source-grid">
+          <span>来源</span><strong>{sourceLabel(context?.source)}</strong>
+          <span>请求 ID</span><code>{sourceDetailValue(context, context?.requestId)}</code>
+          <span>IP 地址</span><code>{sourceDetailValue(context, row.ip)}</code>
+          <span>动作编码</span><code>{row.action}</code>
+        </div>
+      </section>
+
+      <Collapse className="audit-raw-collapse" defaultActiveKey={[]}>
+        <Collapse.Item name="raw" header="原始数据">
+          <div className="audit-raw-toolbar">
+            <span>敏感字段会隐藏后再显示和复制</span>
+            <Button size="mini" icon={copied ? <IconCheck /> : <IconCopy />} onClick={copyRaw}>{copied ? '已复制' : '复制'}</Button>
+          </div>
+          <pre className="audit-json">{rawJson}</pre>
+        </Collapse.Item>
+      </Collapse>
+    </div>
+  )
 }
 
 export default function AuditLog() {
   const canDelete = useAuth((state) => state.hasPerm('log:delete'))
-  const emptyFilters: Filters = { keyword: '', range: [] }
-  const [draft, setDraft] = useState<Filters>(emptyFilters)
-  const [filters, setFilters] = useState<Filters>(emptyFilters)
-  const [data, setData] = useState<PageResp<LogRow>>({ list: [], total: 0, page: 1, pageSize: 20 })
+  const [draft, setDraft] = useState<Filters>(EMPTY_FILTERS)
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
+  const [data, setData] = useState<PageResp<AuditLogRow>>({ list: [], total: 0, page: 1, pageSize: 20 })
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
-  const [selected, setSelected] = useState<LogRow | null>(null)
+  const [selected, setSelected] = useState<AuditLogRow | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [deleting, setDeleting] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [reloadKey, setReloadKey] = useState(0)
   const deleteState = useRef({ ids: [] as number[], busy: true, allowed: false })
-  const visibleRows = useRef<LogRow[]>([])
+  const visibleRows = useRef<AuditLogRow[]>([])
   const deleteBusy = loading || deleting
 
   useEffect(() => {
@@ -213,7 +197,7 @@ export default function AuditLog() {
 
   const fetchLogs = useCallback(async () => {
     void reloadKey
-    const r = await http.get('/admin/audit-logs', {
+    const response = await http.get('/admin/audit-logs', {
       params: {
         page,
         pageSize,
@@ -225,7 +209,7 @@ export default function AuditLog() {
         end: filters.range[1] ? new Date(filters.range[1].replace(' ', 'T')).toISOString() : undefined,
       },
     })
-    return r.data as PageResp<LogRow>
+    return response.data as PageResp<AuditLogRow>
   }, [filters, page, pageSize, reloadKey])
 
   useEffect(() => {
@@ -244,7 +228,7 @@ export default function AuditLog() {
     return () => { active = false }
   }, [fetchLogs])
 
-  const actionOptions = useMemo(() => Object.entries(ACTIONS).sort((a, b) => a[1].label.localeCompare(b[1].label, 'zh-CN')), [])
+  const actionOptions = useMemo(() => actionOptionsForCategory(draft.category), [draft.category])
   const clearSelection = () => {
     deleteState.current.ids = []
     setSelectedIds([])
@@ -256,9 +240,9 @@ export default function AuditLog() {
     setLoadError(false)
   }
   const applyFilters = () => { beginReload(); setPage(1); setFilters({ ...draft }) }
-  const resetFilters = () => { beginReload(); setDraft(emptyFilters); setFilters(emptyFilters); setPage(1) }
+  const resetFilters = () => { beginReload(); setDraft(EMPTY_FILTERS); setFilters(EMPTY_FILTERS); setPage(1) }
 
-  const removeOne = async (row: LogRow) => {
+  const removeOne = async (row: AuditLogRow) => {
     const isCurrentDeletableRow = visibleRows.current.some((current) => current.id === row.id && current.action !== 'AUDIT_LOG_DELETE')
     if (!deleteState.current.allowed || deleteState.current.busy || !isCurrentDeletableRow) return
     deleteState.current.busy = true
@@ -303,19 +287,23 @@ export default function AuditLog() {
   return (
     <Card className="page-card page-card--table audit-page">
       <div className="audit-heading page-heading">
-        <div>
-          <h1>操作日志</h1>
-        </div>
+        <div><h1>操作日志</h1></div>
         <Button icon={<IconRefresh />} onClick={() => { beginReload(); setReloadKey((value) => value + 1) }}>刷新</Button>
       </div>
 
       <div className="audit-filter-panel">
-        <Input allowClear value={draft.keyword} placeholder="操作人 / 动作编码 / 对象" prefix={<IconSearch />} onChange={(value) => setDraft((state) => ({ ...state, keyword: value }))} onPressEnter={applyFilters} />
-        <Select allowClear value={draft.category} placeholder="业务分类" onChange={(value) => setDraft((state) => ({ ...state, category: value as string | undefined }))}>
+        <Input allowClear value={draft.keyword} placeholder="搜索姓名、对象或详情" prefix={<IconSearch />} onChange={(value) => setDraft((state) => ({ ...state, keyword: value }))} onPressEnter={applyFilters} />
+        <Select
+          allowClear value={draft.category} placeholder="业务分类"
+          onChange={(value) => setDraft((state) => {
+            const category = value as string | undefined
+            return { ...state, category, action: actionForCategory(category, state.action) }
+          })}
+        >
           {CATEGORY_OPTIONS.map(([value, label]) => <Select.Option key={value} value={value}>{label}</Select.Option>)}
         </Select>
         <Select allowClear showSearch value={draft.action} placeholder="具体操作" onChange={(value) => setDraft((state) => ({ ...state, action: value as string | undefined }))}>
-          {actionOptions.map(([value, meta]) => <Select.Option key={value} value={value}>{meta.label}（{value}）</Select.Option>)}
+          {actionOptions.map(([value, meta]) => <Select.Option key={value} value={value}>{meta.label}</Select.Option>)}
         </Select>
         <Select allowClear value={draft.targetType} placeholder="对象类型" onChange={(value) => setDraft((state) => ({ ...state, targetType: value as string | undefined }))}>
           {Object.entries(TARGET_LABELS).map(([value, label]) => <Select.Option key={value} value={value}>{label}</Select.Option>)}
@@ -334,7 +322,7 @@ export default function AuditLog() {
       </div>
 
       {loadError ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
+        <div className="audit-load-error">
           <Typography.Text type="error">加载失败</Typography.Text>
           <Button size="small" onClick={() => { beginReload(); setReloadKey((value) => value + 1) }}>重试</Button>
         </div>
@@ -344,68 +332,58 @@ export default function AuditLog() {
           rowKey="id"
           loading={loading}
           data={data.list}
-          scroll={{ x: 960, y: 'var(--page-table-scroll-y)' }}
+          scroll={{ x: 1128, y: 'var(--page-table-scroll-y)' }}
           rowSelection={canDelete ? {
-          selectedRowKeys: selectedIds,
-          checkboxProps: (row?: LogRow) => ({ disabled: deleteBusy || row?.action === 'AUDIT_LOG_DELETE' }),
-          onChange: (keys) => {
-            const selectableIds = new Set(data.list.filter((row) => row.action !== 'AUDIT_LOG_DELETE').map((row) => row.id))
-            const ids = keys.map(Number).filter((id) => selectableIds.has(id))
-            deleteState.current.ids = ids
-            setSelectedIds(ids)
-          },
+            selectedRowKeys: selectedIds,
+            checkboxProps: (row?: AuditLogRow) => ({ disabled: deleteBusy || row?.action === 'AUDIT_LOG_DELETE' }),
+            onChange: (keys) => {
+              const selectableIds = new Set(data.list.filter((row) => row.action !== 'AUDIT_LOG_DELETE').map((row) => row.id))
+              const ids = keys.map(Number).filter((id) => selectableIds.has(id))
+              deleteState.current.ids = ids
+              setSelectedIds(ids)
+            },
           } : undefined}
           columns={[
-          { title: '时间', dataIndex: 'createdAt', width: 160, render: fmtTime },
-          {
-            title: '操作人', dataIndex: 'employeeNo', width: 125,
-            render: (_: unknown, row?: LogRow) => {
-              if (!row) return '-'
-              const actor = actorIdentity(row)
-              return <div className="audit-actor"><span className="audit-avatar">{actor.label.slice(0, 1).toUpperCase()}</span><span><b>{actor.label}</b><small>{actor.meta}</small></span></div>
+            { title: '时间', dataIndex: 'createdAt', width: 160, render: fmtTime },
+            {
+              title: '操作人', dataIndex: 'employeeNo', width: 168,
+              render: (_: unknown, row?: AuditLogRow) => {
+                if (!row) return '-'
+                const identity = actorIdentity(row)
+                return <div className="audit-actor"><span className="audit-avatar">{identity.name.slice(0, 1).toUpperCase()}</span><span><b title={identity.name}>{identity.name}</b><small title={identity.identifier}>{identity.identifier}</small></span></div>
+              },
             },
-          },
-          {
-            title: '操作', dataIndex: 'action', width: 180,
-            render: (value: string) => {
-              const meta = ACTIONS[value] || { label: value, category: '其他', color: 'gray' }
-              return <div className="audit-action"><Tag color={meta.color}>{meta.label}</Tag><small>{value}</small></div>
+            {
+              title: '操作', dataIndex: 'action', width: 180,
+              render: (value: string) => {
+                const meta = actionMeta(value)
+                return <div className="audit-action"><Tag color={meta.color}>{meta.label}</Tag><small title={value}>{meta.categoryLabel} · {value}</small></div>
+              },
             },
-          },
-          { title: '内容摘要', width: 260, render: (_: unknown, row?: LogRow) => row ? <Typography.Text ellipsis={{ showTooltip: true }}>{detailSummary(row)}</Typography.Text> : '-' },
-          {
-            title: '对象', width: 110,
-            render: (_: unknown, row?: LogRow) => row?.targetType ? <div className="audit-target"><span>{TARGET_LABELS[row.targetType] || row.targetType}</span><small>{row.targetId ? `#${row.targetId}` : '未指定 ID'}</small></div> : '-',
-          },
-          { title: '详情', width: 120, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row?: LogRow) => row ? actionSlots([
-            <Button key="view" size="mini" type="text" icon={<IconEye />} onClick={() => setSelected(row)}>查看</Button>,
-            canDelete && row.action !== 'AUDIT_LOG_DELETE' && (
-              <Popconfirm key="delete" title="确认删除这条日志？" disabled={deleteBusy} onOk={() => removeOne(row)}>
-                <Button size="mini" type="text" status="danger" disabled={deleteBusy}>删除</Button>
-              </Popconfirm>
-            ),
-          ], 'single') : null },
+            { title: '内容摘要', width: 280, render: (_: unknown, row?: AuditLogRow) => row ? <Typography.Text ellipsis={{ showTooltip: true }}>{detailSummary(row)}</Typography.Text> : '-' },
+            {
+              title: '对象', width: 180,
+              render: (_: unknown, row?: AuditLogRow) => {
+                if (!row) return '-'
+                const identity = targetIdentity(row)
+                return <div className="audit-target"><span title={identity.name}>{identity.name}</span><small title={identity.identifier}>{identity.identifier}</small></div>
+              },
+            },
+            { title: '详情', width: 120, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row?: AuditLogRow) => row ? actionSlots([
+              <Button key="view" size="mini" type="text" icon={<IconEye />} onClick={() => setSelected(row)}>查看</Button>,
+              canDelete && row.action !== 'AUDIT_LOG_DELETE' && (
+                <Popconfirm key="delete" title="确认删除这条日志？" disabled={deleteBusy} onOk={() => removeOne(row)}>
+                  <Button size="mini" type="text" status="danger" disabled={deleteBusy}>删除</Button>
+                </Popconfirm>
+              ),
+            ], 'single') : null },
           ]}
           pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { beginReload(); setPage(nextPage); setPageSize(nextSize) } }}
         />
       )}
 
-      <Drawer width={520} title="操作日志详情" visible={!!selected} onCancel={() => setSelected(null)} footer={null}>
-        {selected && (
-          <div className="audit-detail">
-            <div className="audit-detail-title"><Tag color={(ACTIONS[selected.action] || { color: 'gray' }).color}>{ACTIONS[selected.action]?.label || selected.action}</Tag><Typography.Text type="secondary">日志 #{selected.id}</Typography.Text></div>
-            <div className="audit-detail-grid">
-              <span>发生时间</span><b>{fmtTime(selected.createdAt)}</b>
-              <span>操作人</span><b>{actorIdentity(selected).label}{selected.userId != null ? `（ID ${selected.userId}）` : ''}</b>
-              <span>动作编码</span><code>{selected.action}</code>
-              <span>操作对象</span><b>{selected.targetType ? `${TARGET_LABELS[selected.targetType] || selected.targetType}${selected.targetId ? ` #${selected.targetId}` : ''}` : '-'}</b>
-              <span>IP 地址</span><b>{selected.ip || '-'}</b>
-              <span>内容摘要</span><b>{detailSummary(selected)}</b>
-            </div>
-            <Typography.Text className="audit-json-label">结构化数据</Typography.Text>
-            <pre className="audit-json">{selected.detail ? JSON.stringify(selected.detail, null, 2) : '本条日志没有补充数据'}</pre>
-          </div>
-        )}
+      <Drawer className="audit-detail-drawer" width="min(720px, 100vw)" title="操作日志详情" visible={!!selected} onCancel={() => setSelected(null)} footer={null}>
+        {selected && <AuditDetail key={selected.id} row={selected} />}
       </Drawer>
     </Card>
   )

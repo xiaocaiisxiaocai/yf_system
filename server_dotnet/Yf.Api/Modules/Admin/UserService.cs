@@ -70,8 +70,28 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
             """, new { employeeNo = request.EmployeeNo.Trim(), hash, realName = request.RealName.Trim(), email = request.Email.Trim(), departmentId = request.DepartmentId, actorId = actor.Id }, tx, cancellationToken: ct));
         var id = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT LAST_INSERT_ID()", transaction: tx, cancellationToken: ct));
         await conn.ExecuteAsync(new CommandDefinition("INSERT INTO user_roles(user_id,role_id) VALUES(@id,@roleId)", new { id, roleId }, tx, cancellationToken: ct));
-        await audit.WriteAsync(conn, tx, actor.Id, "USER_CREATE", "user", id, new { employeeNo = request.EmployeeNo.Trim(), request.DepartmentId, roleId }, null, ct);
-        var result = await JsonAsync(conn, tx, await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound(), ct);
+        var created = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound();
+        var role = await FindRoleAsync(conn, tx, roleId, ct) ?? throw ApiException.BadRequest($"角色不存在: {roleId}");
+        var department = created.DepartmentId is ulong createdDepartmentId ? await FindDepartmentAsync(conn, tx, createdDepartmentId, ct) : null;
+        await audit.WriteAsync(conn, tx, actor.Id, "USER_CREATE", "user", id, new
+        {
+            employeeNo = created.EmployeeNo,
+            request.DepartmentId,
+            roleId,
+            created.RealName,
+            created.Email,
+            departmentName = department?.Name,
+            roleName = role.Name,
+            targetName = UserAuditName(created),
+            changes = AuditChange.OnlyChanged(
+                new AuditChange("employeeNo", "工号", null, created.EmployeeNo),
+                new AuditChange("realName", "姓名", null, created.RealName),
+                new AuditChange("email", "邮箱", null, created.Email),
+                new AuditChange("departmentId", "所属组织", null, DepartmentAuditJson(department)),
+                new AuditChange("roleId", "角色", null, RoleAuditJson(role)),
+                new AuditChange("status", "状态", null, created.Status))
+        }, null, ct);
+        var result = await JsonAsync(conn, tx, created, ct);
         await tx.CommitAsync(ct); return result;
     }
 
@@ -92,8 +112,10 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
         if (departmentId is ulong dept) await DepartmentService.EnsureActiveAsync(conn, tx, dept, ct);
         var oldRoles = (await conn.QueryAsync<ulong>(new CommandDefinition("SELECT DISTINCT role_id FROM user_roles WHERE user_id=@id", new { id }, tx, cancellationToken: ct))).ToArray();
         if (oldRoles.Length != 1) throw ApiException.BadRequest("启用的内部用户必须且只能绑定一个角色");
-        ulong? oldRole = oldRoles[0];
-        var roleChanged = roleId != 0 && roleId != oldRole;
+        var oldRoleId = oldRoles[0];
+        var oldRole = await FindRoleAsync(conn, tx, oldRoleId, ct);
+        var oldDepartment = user.DepartmentId is ulong oldDepartmentId ? await FindDepartmentAsync(conn, tx, oldDepartmentId, ct) : null;
+        var roleChanged = roleId != 0 && roleId != oldRoleId;
         if (roleChanged)
         {
             await EnsureAdminRemovalSafeAsync(conn, tx, actor.Id, id, roleId, ct); await permissionCeiling.EnsureManageRoleAsync(conn, tx, actor, roleId, ct); await EnsureRoleAssignableAsync(conn, tx, roleId, ct);
@@ -103,23 +125,29 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
             new { realName = request.RealName?.Trim(), email = request.Email?.Trim(), departmentSpecified, departmentId, id }, tx, cancellationToken: ct));
         if (roleChanged) { await conn.ExecuteAsync(new CommandDefinition("DELETE FROM user_roles WHERE user_id=@id; INSERT INTO user_roles(user_id,role_id) VALUES(@id,@roleId)", new { id, roleId }, tx, cancellationToken: ct)); }
         var updated = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound();
-        var changedFields = new List<string>();
-        if (request.RealName is not null) changedFields.Add("realName");
-        if (request.Email is not null) changedFields.Add("email");
-        if (departmentSpecified) changedFields.Add("departmentId");
-        if (roleChanged) changedFields.Add("roleId");
-        var newRoleName = roleChanged
-            ? await conn.QuerySingleAsync<string>(new CommandDefinition("SELECT name FROM roles WHERE id=@roleId", new { roleId }, tx, cancellationToken: ct))
-            : null;
+        var newRoleId = roleChanged ? roleId : oldRoleId;
+        var newRole = await FindRoleAsync(conn, tx, newRoleId, ct);
+        var newDepartment = updated.DepartmentId is ulong newDepartmentId ? await FindDepartmentAsync(conn, tx, newDepartmentId, ct) : null;
+        var changes = AuditChange.OnlyChanged(
+            new AuditChange("realName", "姓名", user.RealName, updated.RealName),
+            new AuditChange("email", "邮箱", user.Email, updated.Email),
+            new AuditChange("departmentId", "所属组织", DepartmentAuditJson(oldDepartment), DepartmentAuditJson(newDepartment)),
+            new AuditChange("roleId", "角色", RoleAuditJson(oldRole), RoleAuditJson(newRole)));
+        var changedFields = changes.Select(change => change.Field).ToArray();
         await audit.WriteAsync(conn, tx, actor.Id, "USER_UPDATE", "user", id, new
         {
             updated.EmployeeNo,
             changedFields,
             oldDepartmentId = user.DepartmentId,
             newDepartmentId = updated.DepartmentId,
-            oldRoleId = oldRole,
-            newRoleId = roleChanged ? roleId : oldRole,
-            newRoleName
+            oldRoleId,
+            newRoleId,
+            oldDepartmentName = oldDepartment?.Name,
+            newDepartmentName = newDepartment?.Name,
+            oldRoleName = oldRole?.Name,
+            newRoleName = newRole?.Name,
+            targetName = UserAuditName(updated),
+            changes
         }, null, ct);
         var result = await JsonAsync(conn, tx, updated, ct);
         await tx.CommitAsync(ct); return result;
@@ -132,7 +160,14 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
         var user = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound(); if (user.UserType != "INTERNAL") throw ApiException.BadRequest("供应商人员请在供应商模块维护"); await permissionCeiling.EnsureManageUserAsync(conn, tx, actor, id, ct);
         if (status == "DISABLED") await EnsureAdminRemovalSafeAsync(conn, tx, actor.Id, id, null, ct); else { var roleIds = (await conn.QueryAsync<ulong>(new CommandDefinition("SELECT DISTINCT role_id FROM user_roles WHERE user_id=@id", new { id }, tx, cancellationToken: ct))).ToArray(); if (roleIds.Length != 1) throw ApiException.BadRequest("启用的内部用户必须且只能绑定一个角色"); await EnsureRoleAssignableAsync(conn, tx, roleIds[0], ct); }
         await conn.ExecuteAsync(new CommandDefinition("UPDATE users SET status=@status,updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { status, id }, tx, cancellationToken: ct)); if (status == "DISABLED") await IdentityService.RevokeAllAsync(conn, tx, id, ct);
-        await audit.WriteAsync(conn, tx, actor.Id, "USER_STATUS", "user", id, new { user.EmployeeNo, oldStatus = user.Status, newStatus = status }, null, ct);
+        await audit.WriteAsync(conn, tx, actor.Id, "USER_STATUS", "user", id, new
+        {
+            user.EmployeeNo,
+            oldStatus = user.Status,
+            newStatus = status,
+            targetName = UserAuditName(user),
+            changes = AuditChange.OnlyChanged(new AuditChange("status", "状态", user.Status, status))
+        }, null, ct);
         var result = await JsonAsync(conn, tx, await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound(), ct);
         await tx.CommitAsync(ct); return result;
     }
@@ -142,15 +177,35 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
         PasswordService.Validate(password); await using var conn = await db.OpenAsync(ct); await using var tx = await AppDb.BeginTransactionAsync(conn, ct); await ManagementAsync(conn, tx, actor, "user:manage", ct);
         var user = await conn.QuerySingleOrDefaultAsync<AdminUserRow>(new CommandDefinition(Select + " WHERE id=@id FOR UPDATE", new { id }, tx, cancellationToken: ct)) ?? throw ApiException.NotFound(); if (user.UserType != "INTERNAL") throw ApiException.BadRequest("供应商人员请在供应商模块维护"); await permissionCeiling.EnsureManageUserAsync(conn, tx, actor, id, ct);
         var hash = await PasswordService.HashAsync(password, ct); await conn.ExecuteAsync(new CommandDefinition("UPDATE users SET password_hash=@hash,must_change_password=1,failed_login_attempts=0,locked_until=NULL,updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { hash, id }, tx, cancellationToken: ct)); await IdentityService.RevokeAllAsync(conn, tx, id, ct);
-        await audit.WriteAsync(conn, tx, actor.Id, "USER_RESET_PASSWORD", "user", id, new { user.EmployeeNo, sessionsRevoked = true, mustChangePassword = true }, null, ct); await tx.CommitAsync(ct);
+        await audit.WriteAsync(conn, tx, actor.Id, "USER_RESET_PASSWORD", "user", id, new
+        {
+            user.EmployeeNo,
+            sessionsRevoked = true,
+            mustChangePassword = true,
+            passwordChanged = true,
+            targetName = UserAuditName(user),
+            changes = AuditChange.OnlyChanged(new AuditChange("passwordChanged", "密码已重置", false, true))
+        }, null, ct); await tx.CommitAsync(ct);
     }
 
     public async Task AssignRoleAsync(CurrentUser actor, ulong id, IReadOnlyList<ulong> roles, CancellationToken ct)
     {
         var roleId = AdminValidation.OneRole(null, roles, true); await using var conn = await db.OpenAsync(ct); await using var tx = await AppDb.BeginTransactionAsync(conn, ct); await ManagementAsync(conn, tx, actor, "user:manage", ct);
         var user = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound(); if (user.UserType != "INTERNAL") throw ApiException.BadRequest("供应商人员角色固定，不可调整"); await permissionCeiling.EnsureManageUserAsync(conn, tx, actor, id, ct); await permissionCeiling.EnsureManageRoleAsync(conn, tx, actor, roleId, ct); await EnsureAdminRemovalSafeAsync(conn, tx, actor.Id, id, roleId, ct); await EnsureRoleAssignableAsync(conn, tx, roleId, ct);
-        var old = await conn.QuerySingleOrDefaultAsync<ulong?>(new CommandDefinition("SELECT role_id FROM user_roles WHERE user_id=@id", new { id }, tx, cancellationToken: ct)); await conn.ExecuteAsync(new CommandDefinition("DELETE FROM user_roles WHERE user_id=@id; INSERT INTO user_roles(user_id,role_id) VALUES(@id,@roleId)", new { id, roleId }, tx, cancellationToken: ct));
-        await audit.WriteAsync(conn, tx, actor.Id, "USER_ASSIGN_ROLE", "user", id, new { user.EmployeeNo, oldRoleId = old, newRoleId = roleId }, null, ct); await tx.CommitAsync(ct);
+        var old = await conn.QuerySingleOrDefaultAsync<ulong?>(new CommandDefinition("SELECT role_id FROM user_roles WHERE user_id=@id", new { id }, tx, cancellationToken: ct));
+        var oldRole = old.HasValue ? await FindRoleAsync(conn, tx, old.Value, ct) : null;
+        var newRole = await FindRoleAsync(conn, tx, roleId, ct) ?? throw ApiException.BadRequest($"角色不存在: {roleId}");
+        await conn.ExecuteAsync(new CommandDefinition("DELETE FROM user_roles WHERE user_id=@id; INSERT INTO user_roles(user_id,role_id) VALUES(@id,@roleId)", new { id, roleId }, tx, cancellationToken: ct));
+        await audit.WriteAsync(conn, tx, actor.Id, "USER_ASSIGN_ROLE", "user", id, new
+        {
+            user.EmployeeNo,
+            oldRoleId = old,
+            newRoleId = roleId,
+            oldRoleName = oldRole?.Name,
+            newRoleName = newRole.Name,
+            targetName = UserAuditName(user),
+            changes = AuditChange.OnlyChanged(new AuditChange("roleId", "角色", RoleAuditJson(oldRole), RoleAuditJson(newRole)))
+        }, null, ct); await tx.CommitAsync(ct);
     }
 
     public async Task DeleteAsync(CurrentUser actor, ulong id, CancellationToken ct)
@@ -158,7 +213,7 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
         await using var conn = await db.OpenAsync(ct); await using var tx = await AppDb.BeginTransactionAsync(conn, ct); await AccessService.LockManagementAsync(conn, tx, ct);
         actor = await AccessService.RecheckActorAsync(conn, tx, actor, ct); AccessService.RequireInternal(actor); await AccessService.RequirePermissionAsync(conn, tx, actor, "user:manage", ct); await AccessService.RequirePermissionAsync(conn, tx, actor, "user:delete", ct); var user = await conn.QuerySingleOrDefaultAsync<AdminUserRow>(new CommandDefinition(Select + " WHERE id=@id FOR UPDATE", new { id }, tx, cancellationToken: ct)) ?? throw ApiException.NotFound();
         if (id == actor.Id) throw ApiException.BadRequest("不能删除自己的账号"); if (user.UserType != "INTERNAL") throw ApiException.BadRequest("供应商人员请在供应商模块删除"); if (user.EmployeeNo == "admin") throw ApiException.BadRequest("系统管理员账号不可删除"); await permissionCeiling.EnsureManageUserAsync(conn, tx, actor, id, ct); await EnsureAdminRemovalSafeAsync(conn, tx, actor.Id, id, null, ct); await EnsureNoHistoryAsync(conn, tx, id, ct);
-        await audit.WriteAsync(conn, tx, actor.Id, "USER_DELETE", "user", id, new { user.EmployeeNo }, null, ct); await RemoveAsync(conn, tx, id, ct); await tx.CommitAsync(ct);
+        await audit.WriteAsync(conn, tx, actor.Id, "USER_DELETE", "user", id, new { user.EmployeeNo, user.RealName, targetName = UserAuditName(user), changes = Array.Empty<AuditChange>() }, null, ct); await RemoveAsync(conn, tx, id, ct); await tx.CommitAsync(ct);
     }
 
     internal static async Task EnsureNoHistoryAsync(MySqlConnection c, MySqlTransaction t, ulong id, CancellationToken ct)
@@ -169,6 +224,11 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
     internal static Task RemoveAsync(MySqlConnection c, MySqlTransaction t, ulong id, CancellationToken ct) => c.ExecuteAsync(new CommandDefinition("DELETE FROM user_roles WHERE user_id=@id; DELETE FROM refresh_tokens WHERE user_id=@id; DELETE FROM project_members WHERE user_id=@id; DELETE FROM users WHERE id=@id", new { id }, t, cancellationToken: ct));
     private static async Task ManagementAsync(MySqlConnection c, MySqlTransaction t, CurrentUser actor, string permission, CancellationToken ct) { await AccessService.LockManagementAsync(c, t, ct); actor = await AccessService.RecheckActorAsync(c, t, actor, ct); AccessService.RequireInternal(actor); await AccessService.RequirePermissionAsync(c, t, actor, permission, ct); }
     private static Task<AdminUserRow?> FindAsync(MySqlConnection c, MySqlTransaction? t, ulong id, CancellationToken ct) => c.QuerySingleOrDefaultAsync<AdminUserRow>(new CommandDefinition(Select + " WHERE id=@id", new { id }, t, cancellationToken: ct));
+    private static Task<RoleRow?> FindRoleAsync(MySqlConnection c, MySqlTransaction? t, ulong id, CancellationToken ct) => c.QuerySingleOrDefaultAsync<RoleRow>(new CommandDefinition("SELECT id Id,name Name FROM roles WHERE id=@id", new { id }, t, cancellationToken: ct));
+    private static Task<DeptRow?> FindDepartmentAsync(MySqlConnection c, MySqlTransaction? t, ulong id, CancellationToken ct) => c.QuerySingleOrDefaultAsync<DeptRow>(new CommandDefinition("SELECT id Id,name Name FROM departments WHERE id=@id", new { id }, t, cancellationToken: ct));
+    private static object? RoleAuditJson(RoleRow? role) => role is null ? null : new { role.Id, role.Name };
+    private static object? DepartmentAuditJson(DeptRow? department) => department is null ? null : new { department.Id, department.Name };
+    private static string UserAuditName(AdminUserRow user) => $"{user.RealName}（{user.EmployeeNo}）";
     private static async Task EnsureRoleAssignableAsync(MySqlConnection c, MySqlTransaction t, ulong roleId, CancellationToken ct) { var role = await c.QuerySingleOrDefaultAsync<RoleRow>(new CommandDefinition("SELECT id Id,name Name,is_built_in IsBuiltIn,status Status FROM roles WHERE id=@roleId", new { roleId }, t, cancellationToken: ct)) ?? throw ApiException.BadRequest($"角色不存在: {roleId}"); if (role.Status != "ACTIVE") throw ApiException.BadRequest("不能绑定已禁用的角色"); if (role.IsBuiltIn && role.Name == "供应商人员") throw ApiException.BadRequest("供应商角色只能由供应商账号使用"); }
     private static async Task EnsureAdminRemovalSafeAsync(MySqlConnection c, MySqlTransaction t, ulong actorId, ulong targetId, ulong? newRoleId, CancellationToken ct) { var adminRole = await c.QuerySingleOrDefaultAsync<ulong?>(new CommandDefinition("SELECT id FROM roles WHERE is_built_in=1 AND name='系统管理员'", transaction: t, cancellationToken: ct)); if (!adminRole.HasValue || newRoleId == adminRole) return; var targetStatus = await c.QuerySingleOrDefaultAsync<string>(new CommandDefinition("SELECT u.status FROM users u JOIN user_roles ur ON ur.user_id=u.id WHERE u.id=@targetId AND ur.role_id=@adminRole", new { targetId, adminRole }, t, cancellationToken: ct)); if (targetStatus is null) return; if (actorId == targetId) throw ApiException.BadRequest("不能移除自己的系统管理员角色"); var active = await c.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM users u JOIN user_roles ur ON ur.user_id=u.id WHERE ur.role_id=@adminRole AND u.status='ACTIVE'", new { adminRole }, t, cancellationToken: ct)); if (RequiresLastActiveAdminProtection(targetStatus, active)) throw ApiException.BadRequest("不能移除系统中最后一个启用管理员"); }
     internal static bool RequiresLastActiveAdminProtection(string targetStatus, int activeAdminCount) => targetStatus == "ACTIVE" && activeAdminCount <= 1;
