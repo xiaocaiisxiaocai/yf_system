@@ -181,16 +181,37 @@ html, body, #root {
 .page-card > .arco-card-header { height: auto; min-height: 40px; padding: 0 0 16px; margin-bottom: 16px; border-color: var(--app-border); }
 /* page-card 的 padding 已在外层定义，去掉 Card body 的默认内边距，避免双层 padding 挤压表格 */
 .page-card > .arco-card-body { padding: 0; }
-.profile-page { max-width: 980px; margin: 0 auto; }
-.profile-heading { margin-bottom: 16px; }
-.profile-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-.profile-card > .arco-card-header { margin-bottom: 4px; }
-.profile-readonly-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
-.profile-readonly-item { min-width: 0; padding: 10px 12px; border-radius: 8px; background: var(--color-fill-1); }
-.profile-readonly-item span { display: block; margin-bottom: 4px; color: var(--color-text-3); font-size: 12px; }
-.profile-readonly-item strong { display: block; color: var(--color-text-1); font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
-.profile-boundary-note { margin: 0 0 16px; padding: 9px 12px; border-radius: 8px; background: rgb(var(--primary-1)); color: rgb(var(--primary-7)); font-size: 12px; line-height: 1.6; }
-.profile-card-tip { display: block; margin-bottom: 16px; line-height: 1.6; }
+/* 个人资料沿用页面容器；账号概览与两项维护操作分层呈现。 */
+.profile-page { box-sizing: border-box; min-height: calc(100dvh - 88px); margin: 0; }
+.profile-heading { margin-bottom: 24px; }
+.profile-content { max-width: 1120px; }
+.profile-readonly-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 28px; padding: 16px 0; border: 1px solid var(--app-border); border-radius: 6px; background: var(--color-fill-1); }
+.profile-readonly-item { min-width: 0; padding: 0 20px; }
+.profile-readonly-item + .profile-readonly-item { border-left: 1px solid var(--app-border); }
+.profile-readonly-item span { display: block; margin-bottom: 6px; color: var(--app-text-muted); font-size: 13px; line-height: 20px; }
+.profile-readonly-item strong { display: block; color: var(--color-text-1); font-size: 14px; line-height: 22px; font-weight: 500; overflow-wrap: anywhere; }
+.profile-boundary-note { margin: -12px 0 24px; color: var(--app-text-muted); font-size: 13px; line-height: 20px; }
+.profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 48px; align-items: start; }
+.profile-section { position: relative; min-width: 0; }
+.profile-section + .profile-section::before { content: ""; position: absolute; top: 0; bottom: 0; left: -24px; width: 1px; background: var(--app-border); }
+.profile-section-heading { margin-bottom: 20px; }
+.profile-section-heading h2 { margin: 0 0 6px; font-size: 14px; line-height: 22px; font-weight: 600; color: var(--color-text-1); }
+.profile-section-heading .arco-typography { margin: 0; color: var(--app-text-muted); font-size: 13px; line-height: 20px; }
+.profile-section .arco-form-item { margin-bottom: 20px; }
+.profile-section .profile-submit { align-self: flex-start; width: fit-content; min-width: 112px; margin-top: 4px; }
+@media (max-width: 900px) {
+  .profile-grid { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .profile-section + .profile-section { padding-top: 24px; border-top: 1px solid var(--app-border); }
+  .profile-section + .profile-section::before { display: none; }
+  .profile-section .arco-form { max-width: 520px; }
+}
+@media (max-width: 520px) {
+  .profile-page { min-height: calc(100dvh - 76px); }
+  .profile-readonly-grid { grid-template-columns: minmax(0, 1fr); padding: 0 16px; margin-bottom: 24px; }
+  .profile-readonly-item { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 12px; padding: 12px 0; }
+  .profile-readonly-item span { margin: 0; }
+  .profile-readonly-item + .profile-readonly-item { border-left: 0; border-top: 1px solid var(--app-border); }
+}
 .page-card--table {
   --page-table-scroll-y: max(180px, calc(100vh - 326px));
   height: calc(100vh - 88px);
@@ -705,7 +726,6 @@ html, body, #root {
   .project-workflow-status > .arco-typography { max-width: 100%; }
   .project-workflow-actions { justify-content: flex-start; }
   .profile-grid { grid-template-columns: 1fr; }
-  .profile-readonly-grid { grid-template-columns: 1fr; }
   .system-config-card > .arco-card-header { align-items: flex-start; }
   .page-heading { gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
   .page-heading h1 { font-size: 18px; line-height: 28px; }

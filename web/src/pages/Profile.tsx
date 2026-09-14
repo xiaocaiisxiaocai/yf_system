@@ -60,84 +60,91 @@ export default function Profile() {
   }
 
   return (
-    <div className="profile-page">
+    <Card className="page-card profile-page">
       <div className="page-heading profile-heading">
         <div>
           <h1>个人资料</h1>
         </div>
       </div>
 
-      <div className="profile-grid">
-        <Card className="page-card profile-card" title="基础资料">
-          <div className="profile-readonly-grid">
-            <div className="profile-readonly-item">
-              <span>工号</span>
-              <strong>{user?.employeeNo || '-'}</strong>
-            </div>
-            <div className="profile-readonly-item">
-              <span>姓名</span>
-              <strong>{user?.realName || '-'}</strong>
-            </div>
-            <div className="profile-readonly-item">
-              <span>账号类型</span>
-              <strong>{user?.userType === 'SUPPLIER' ? '供应商人员' : '企业内部人员'}</strong>
-            </div>
+      <div className="profile-content">
+        <div className="profile-readonly-grid" aria-label="账号信息">
+          <div className="profile-readonly-item">
+            <span>工号</span>
+            <strong>{user?.employeeNo || '-'}</strong>
           </div>
-          {user?.userType === 'SUPPLIER' && (
-            <div className="profile-boundary-note" role="note">
-              账号信息由企业管理员维护
+          <div className="profile-readonly-item">
+            <span>姓名</span>
+            <strong>{user?.realName || '-'}</strong>
+          </div>
+          <div className="profile-readonly-item">
+            <span>账号类型</span>
+            <strong>{user?.userType === 'SUPPLIER' ? '供应商人员' : '企业内部人员'}</strong>
+          </div>
+        </div>
+        {user?.userType === 'SUPPLIER' && (
+          <div className="profile-boundary-note" role="note">
+            账号信息由企业管理员维护
+          </div>
+        )}
+        <div className="profile-grid">
+          <section className="profile-section" aria-labelledby="profile-contact-title">
+            <div className="profile-section-heading">
+              <h2 id="profile-contact-title">联系方式</h2>
+              <Text type="secondary">用于接收项目协作通知</Text>
             </div>
-          )}
-          <Form
-            form={profileForm}
-            layout="vertical"
-            initialValues={{ email: user?.email }}
-            onSubmit={saveProfile}
-          >
-            <Form.Item
-              label="联系邮箱"
-              field="email"
-              rules={[
-                { required: true, message: '请输入邮箱' },
-                { type: 'email', message: '邮箱格式不正确' },
-                textLengthRule('联系邮箱', 128),
-              ]}
+            <Form
+              form={profileForm}
+              layout="vertical"
+              initialValues={{ email: user?.email }}
+              onSubmit={saveProfile}
             >
-              <Input prefix={<IconEmail />} placeholder="请输入联系邮箱" autoComplete="email" />
-            </Form.Item>
-            <Button type="primary" htmlType="submit" icon={<IconSave />} loading={profileLoading}>
-              保存资料
-            </Button>
-          </Form>
-        </Card>
+              <Form.Item
+                label="联系邮箱"
+                field="email"
+                rules={[
+                  { required: true, message: '请输入邮箱' },
+                  { type: 'email', message: '邮箱格式不正确' },
+                  textLengthRule('联系邮箱', 128),
+                ]}
+              >
+                <Input prefix={<IconEmail />} placeholder="请输入联系邮箱" autoComplete="email" />
+              </Form.Item>
+              <Button className="profile-submit" type="primary" htmlType="submit" icon={<IconSave />} loading={profileLoading}>
+                保存资料
+              </Button>
+            </Form>
+          </section>
 
-        <Card className="page-card profile-card" title="登录密码">
-          <Text className="profile-card-tip" type="secondary">
-            修改后需重新登录
-          </Text>
-          <Form form={passwordForm} layout="vertical" onSubmit={changePassword}>
-            <Form.Item label="当前密码" field="oldPassword" rules={[{ required: true, message: '请输入当前密码' }]}>
-              <PasswordInput prefix={<IconLock />} autoComplete="current-password" />
-            </Form.Item>
-            <Form.Item
-              label="新密码"
-              field="newPassword"
-              rules={[
-                { required: true, message: '请输入新密码' },
-                passwordRule,
-              ]}
-            >
-              <PasswordInput prefix={<IconLock />} placeholder="6-20 位" autoComplete="new-password" />
-            </Form.Item>
-            <Form.Item label="确认新密码" field="confirm" rules={[{ required: true, message: '请再次输入新密码' }]}>
-              <PasswordInput prefix={<IconLock />} autoComplete="new-password" />
-            </Form.Item>
-            <Button type="primary" htmlType="submit" loading={passwordLoading}>
-              修改密码
-            </Button>
-          </Form>
-        </Card>
+          <section className="profile-section" aria-labelledby="profile-password-title">
+            <div className="profile-section-heading">
+              <h2 id="profile-password-title">登录密码</h2>
+              <Text type="secondary">修改后需重新登录</Text>
+            </div>
+            <Form form={passwordForm} layout="vertical" onSubmit={changePassword}>
+              <Form.Item label="当前密码" field="oldPassword" rules={[{ required: true, message: '请输入当前密码' }]}>
+                <PasswordInput prefix={<IconLock />} autoComplete="current-password" />
+              </Form.Item>
+              <Form.Item
+                label="新密码"
+                field="newPassword"
+                rules={[
+                  { required: true, message: '请输入新密码' },
+                  passwordRule,
+                ]}
+              >
+                <PasswordInput prefix={<IconLock />} placeholder="6-20 位" autoComplete="new-password" />
+              </Form.Item>
+              <Form.Item label="确认新密码" field="confirm" rules={[{ required: true, message: '请再次输入新密码' }]}>
+                <PasswordInput prefix={<IconLock />} autoComplete="new-password" />
+              </Form.Item>
+              <Button className="profile-submit" type="primary" htmlType="submit" loading={passwordLoading}>
+                修改密码
+              </Button>
+            </Form>
+          </section>
+        </div>
       </div>
-    </div>
+    </Card>
   )
 }
