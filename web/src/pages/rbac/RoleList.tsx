@@ -416,11 +416,9 @@ export default function RoleList() {
             }}
           />
         )}
-        <div className="dialog-note">
-          {permTarget?.canManage === false
-            ? '该角色超出当前账号的委派范围，仅可查看。'
-            : '勾选父节点会全选可授予的下级权限，取消父节点会取消可调整的下级权限。不可授予项保持只读；若只需菜单访问权限，可取消全部下级操作。'}
-        </div>
+        {permTarget?.canManage === false && (
+          <div className="dialog-note">该角色超出当前账号的委派范围，仅可查看。</div>
+        )}
       </Drawer>
     </Card>
   )
