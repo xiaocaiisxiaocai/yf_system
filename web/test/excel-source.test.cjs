@@ -50,6 +50,33 @@ function loadExcelSource() {
   })
 }
 
+test('auto-fit handles wrapped content, line breaks, merged titles, hidden cells and scoped columns', () => {
+  const { fitDimensions } = loadTs('vendor/vue-office-excel/auto-fit.js', {
+    './core/packages/vue-excel/src/x-spreadsheet/core/font.js': { getFontSizePxByPt: pt => pt * 4 / 3 },
+  })
+  const merged = { sri: 0, eri: 0, sci: 0, eci: 3 }
+  const data = {
+    rows: { _: { 0: { cells: { 0: { text: '合并标题'.repeat(100) }, 1: { text: '重复主格' } } }, 1: { cells: { 0: { text: '长段落'.repeat(100) }, 1: { text: '甲\n乙\n丙' }, 2: { text: '隐藏列内容' } } } }, isHide: () => false, getHeight: () => 24 },
+    cols: { isHide: () => false, getWidth: ci => ci === 2 ? 0.1 : 100 },
+    merges: { getFirstIncludes: (ri, ci) => ri === 0 && ci < 4 ? merged : null },
+    getCellStyleOrDefault: () => ({ textwrap: true, font: { size: 12, name: 'Arial' } }),
+  }
+  const context = { measureText: text => ({ width: text.length * 10 }) }
+  const all = fitDimensions(data, context)
+  assert.equal(all.widths.get(0), 360)
+  assert.equal(all.widths.get(1), 60)
+  assert.equal(all.widths.has(2), false, 'hidden columns stay hidden')
+  assert.equal(all.widths.has(3), false, 'merged titles do not widen every covered column')
+  assert.ok(all.heights.get(1) > 60, 'long paragraphs get enough wrapped lines')
+  assert.ok(all.heights.get(0) > 24, 'merged title is measured across combined widths')
+  const scoped = fitDimensions(data, context, 'col', 1, 1)
+  assert.deepEqual(Array.from(scoped.widths.keys()), [1])
+  assert.equal(scoped.heights.size, 0)
+  const rows = fitDimensions(data, context, 'row', 1, 1)
+  assert.equal(rows.widths.size, 0)
+  assert.deepEqual(Array.from(rows.heights.keys()), [1])
+})
+
 test('preview resize uses CSS pointer coordinates and keeps the minimum size', () => {
   let move, up
   const Resizer = loadTs('vendor/vue-office-excel/core/packages/vue-excel/src/x-spreadsheet/component/resizer.js', {

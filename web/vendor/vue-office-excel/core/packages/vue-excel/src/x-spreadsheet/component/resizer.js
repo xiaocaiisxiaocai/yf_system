@@ -12,7 +12,8 @@ export default class Resizer {
         .on('dblclick.stop', evt => this.mousedblclickHandler(evt))
         .css('position', 'absolute').hide(),
       this.hoverEl = h('div', `${cssPrefix}-resizer-hover`)
-        .on('mousedown.stop', evt => this.mousedownHandler(evt)),
+        .on('mousedown.stop', evt => this.mousedownHandler(evt))
+        .on('dblclick.stop', () => this.autoFitFn?.(this.cRect)),
       this.lineEl = h('div', `${cssPrefix}-resizer-line`).hide(),
     ).hide();
     // cell rect
@@ -82,6 +83,7 @@ export default class Resizer {
       el, lineEl, cRect, vertical, minDistance,
     } = this;
     let distance = vertical ? cRect.width : cRect.height;
+    const initialDistance = distance;
     // console.log('distance:', distance);
     lineEl.show();
     mouseMoveUp(window, (e) => {
@@ -103,6 +105,8 @@ export default class Resizer {
     }, () => {
       lineEl.hide();
       this.moving = false;
+      // A plain click keeps the handle in place so the second click can fit it.
+      if (distance === initialDistance) return;
       this.hide();
       if (this.finishedFn) {
         if (distance < minDistance) distance = minDistance;

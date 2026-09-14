@@ -9,4 +9,5 @@
 .excel-cell-toggle:focus-visible { outline: 2px solid #165dff; outline-offset: 2px; }
 .x-spreadsheet-selector .x-spreadsheet-selector-area { box-sizing: border-box; }
 .x-spreadsheet-selector .x-spreadsheet-selector-corner { display: none; }
+.x-spreadsheet-resizer .x-spreadsheet-resizer-line { pointer-events: none; }
 @media (max-width: 480px) { .excel-cell-content { padding: 8px; gap: 6px; } .excel-cell-address { flex-basis: 54px; } .excel-cell-toggle { padding: 0 8px; } }
