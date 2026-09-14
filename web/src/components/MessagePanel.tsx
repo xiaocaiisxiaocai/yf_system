@@ -81,6 +81,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
   const mounted = useRef(true)
   const messageScope = useRef({ key: '', generation: 0 })
   const [sending, setSending] = useState(false)
+  const sendInFlight = useRef(false)
   const [syncError, setSyncError] = useState(false)
   const [syncRetry, setSyncRetry] = useState(0)
   const scrollAnchor = useRef<{ id: number; top: number; owner: Element } | null>(null)
@@ -409,18 +410,41 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
   }, [list, onRead, projectId, targetId, applyReadCounts])
 
   const send = async () => {
-    const text = content.trim()
-    if (!text || sending) return
+    const draft = content
+    const text = draft.trim()
+    if (!text || sendInFlight.current || listLoading.current && loadedMessages.current.length === 0) return
+    const generation = messageScope.current.generation
+    sendInFlight.current = true
     setSending(true)
     try {
-      await http.post(`/projects/${projectId}/messages`, { content: text })
-      setContent('')
-      load(1, false)
+      const response = await http.post<Msg>(`/projects/${projectId}/messages`, { content: text })
+      if (!mounted.current || generation !== messageScope.current.generation) return
+      setContent((current) => current === draft ? '' : current)
+      if (targetId === undefined) {
+        // The POST returns the committed message. Show it without another list
+        // request, and prevent older in-flight reads from replacing this state.
+        messageMutations.current += 1
+        loadSeq.current += 1
+        listLoading.current = false
+        setLoading(false)
+        const message = response.data
+        if (!loadedMessages.current.some((item) => item.id === message.id)) {
+          loadedMessages.current = [message, ...loadedMessages.current].sort((a, b) => b.id - a.id)
+          setList(loadedMessages.current)
+          setTotal((value) => value + 1)
+          cursor.current = loadedMessages.current.at(-1)?.id
+        }
+        // Reconcile any simultaneous remote change; do not acknowledge its
+        // revision just because our own POST completed.
+        setSyncRetry((value) => value + 1)
+      }
+      // A targeted view clears its target and loads once through the scope effect.
       onSent?.()
     } catch {
       // 请求层已显示错误；保留草稿，允许用户重试。
     } finally {
-      setSending(false)
+      sendInFlight.current = false
+      if (mounted.current) setSending(false)
     }
   }
 
@@ -478,7 +502,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
               if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') send()
             }}
           />
-          <Button type="primary" icon={<IconSend />} onClick={send} disabled={!content.trim()} loading={sending}>
+          <Button type="primary" icon={<IconSend />} onClick={send} disabled={!content.trim() || loading && list.length === 0} loading={sending}>
             发送
           </Button>
         </div>
@@ -490,7 +514,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
           <Button size="small" onClick={() => load(1, false)}>重试</Button>
         </div>
       ) : (
-        <Spin loading={loading && page === 1} style={{ width: '100%' }}>
+        <Spin loading={loading && list.length === 0} style={{ width: '100%' }}>
           {list.length === 0 && !loading && !hasMore ? (
             <Empty description="暂无留言" />
           ) : (

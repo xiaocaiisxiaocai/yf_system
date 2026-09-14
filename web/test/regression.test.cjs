@@ -548,7 +548,7 @@ test('message revision automatically shows the new message while preserving the 
         requests.push({ url, config })
         return { data: { list: rows, total: rows.length } }
       },
-      post: async (_url, body) => { sent = body.content },
+      post: async (_url, body) => { sent = body.content; return { data: messageFixture(5, body.content) } },
     },
   }).default
   const props = { projectId: 1, projectStatus: 'IN_PROGRESS', revision: 'initial' }
@@ -569,6 +569,203 @@ test('message revision automatically shows the new message while preserving the 
   await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '发送').props.onClick())
   assert.equal(sent, '正在写的回复')
   assert.equal(renderer.root.findByType('Input.TextArea').props.value, '')
+  await act(async () => renderer.unmount())
+})
+
+test('confirmed message response appears immediately without refetching or dropping loaded history', async () => {
+  const rows = [messageFixture(3), messageFixture(2), messageFixture(1)]
+  const gets = []
+  const created = { ...messageFixture(4, '服务端已确认'), senderId: 1, senderName: '我' }
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async (url, config) => { gets.push({ url, config }); return { data: { list: rows, total: rows.length } } },
+      post: async () => ({ data: created }),
+    },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', revision: 'r1' })) })
+  await act(async () => renderer.root.findByType('Input.TextArea').props.onChange('服务端已确认'))
+  await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '发送').props.onClick())
+
+  assert.equal(gets.length, 1, 'a successful POST must not start a second list request')
+  assert.deepEqual(visibleMessageIds(renderer), [4, 3, 2, 1], 'the confirmed row is prepended without losing loaded history')
+  assert.equal(React.Children.toArray(renderer.root.findByType('h2').props.children).join(''), '协作留言（4）')
+  await act(async () => renderer.unmount())
+})
+
+test('a push arriving before the POST response is deduplicated by the confirmed message id', async () => {
+  let rows = [messageFixture(2), messageFixture(1)]
+  let releasePost
+  const postResponse = new Promise((resolve) => { releasePost = resolve })
+  const gets = []
+  const created = { ...messageFixture(3, '推送先到'), senderId: 1, senderName: '我' }
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async (url, config) => { gets.push({ url, config }); return { data: { list: rows, total: rows.length } } },
+      post: async () => postResponse,
+    },
+  }).default
+  const render = (revision) => React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', revision })
+  let renderer
+  await act(async () => { renderer = create(render('r1')) })
+  await act(async () => renderer.root.findByType('Input.TextArea').props.onChange('推送先到'))
+  let sending
+  await act(async () => {
+    sending = renderer.root.findAllByType('Button').find((node) => node.props.children === '发送').props.onClick()
+    await Promise.resolve()
+  })
+  rows = [created, ...rows]
+  await act(async () => renderer.update(render('r2')))
+  assert.deepEqual(visibleMessageIds(renderer), [3, 2, 1])
+
+  await act(async () => {
+    releasePost({ data: created })
+    await sending
+  })
+  assert.deepEqual(visibleMessageIds(renderer), [3, 2, 1], 'the same committed id must remain unique')
+  assert.equal(gets.length, 2, 'the POST response must not refetch after the push already synchronized the revision')
+  assert.equal(React.Children.toArray(renderer.root.findByType('h2').props.children).join(''), '协作留言（3）')
+  await act(async () => renderer.unmount())
+})
+
+test('late message synchronization cannot replace a message confirmed by POST', async () => {
+  const rows = [messageFixture(2), messageFixture(1)]
+  const pendingSync = []
+  const created = { ...messageFixture(3, '已确认的新留言'), senderId: 1, senderName: '我' }
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async (_url, config) => {
+        if (!config.quietNetworkError) return { data: { list: rows, total: rows.length } }
+        return new Promise((resolve) => pendingSync.push({ config, resolve }))
+      },
+      post: async () => ({ data: created }),
+    },
+  }).default
+  const render = (revision) => React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', revision })
+  let renderer
+  await act(async () => { renderer = create(render('r1')) })
+  await act(async () => renderer.update(render('r2')))
+  assert.equal(pendingSync.length, 1)
+  await act(async () => renderer.root.findByType('Input.TextArea').props.onChange('已确认的新留言'))
+  await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '发送').props.onClick())
+  assert.deepEqual(visibleMessageIds(renderer), [3, 2, 1])
+  assert.equal(pendingSync[0].config.signal.aborted, true, 'the older synchronization is cancelled after the confirmed mutation')
+
+  await act(async () => pendingSync[0].resolve({ data: { list: rows, total: rows.length } }))
+  assert.deepEqual(visibleMessageIds(renderer), [3, 2, 1], 'a stale list response must not remove the confirmed row')
+  await act(async () => renderer.unmount())
+})
+
+test('late load-more response cannot overwrite a confirmed message', async () => {
+  const rows = Array.from({ length: 25 }, (_, index) => messageFixture(25 - index))
+  let releaseAppend
+  const appendResponse = new Promise((resolve) => { releaseAppend = resolve })
+  const created = { ...messageFixture(26, '分页期间发送'), senderId: 1, senderName: '我' }
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async (_url, { params }) => params.beforeId
+        ? appendResponse
+        : { data: { list: rows.slice(0, 20), total: rows.length } },
+      post: async () => ({ data: created }),
+    },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', revision: 'r1' })) })
+  const more = renderer.root.findAllByType('Button').find((node) => String(node.props.children).startsWith('加载更多'))
+  let append
+  await act(async () => { append = more.props.onClick(); await Promise.resolve() })
+  await act(async () => renderer.root.findByType('Input.TextArea').props.onChange('分页期间发送'))
+  await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '发送').props.onClick())
+
+  await act(async () => {
+    releaseAppend({ data: { list: rows.slice(20), total: rows.length } })
+    await append
+  })
+  assert.deepEqual(visibleMessageIds(renderer), [26, ...rows.slice(0, 20).map((item) => item.id)])
+  assert.equal(React.Children.toArray(renderer.root.findByType('h2').props.children).join(''), '协作留言（26）')
+  await act(async () => renderer.unmount())
+})
+
+test('targeted send delegates scope clearing without loading the old target again', async () => {
+  const gets = []
+  let sent = 0
+  let cleared = 0
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async (_url, config) => { gets.push(config); return { data: { list: [messageFixture(9)], total: 1 } } },
+      post: async (_url, body) => { sent++; return { data: messageFixture(10, body.content) } },
+    },
+  }).default
+  let renderer
+  await act(async () => {
+    renderer = create(React.createElement(Page, {
+      projectId: 1, projectStatus: 'IN_PROGRESS', targetId: 9, revision: 'r1', onSent: () => { cleared++ },
+    }))
+  })
+  await act(async () => renderer.root.findByType('Input.TextArea').props.onChange('离开定位后查看'))
+  await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '发送').props.onClick())
+
+  assert.equal(sent, 1)
+  assert.equal(cleared, 1)
+  assert.equal(gets.length, 1, 'the child must not reload the old target before the parent clears it')
+  assert.equal(gets[0].params.targetId, 9)
+  await act(async () => renderer.unmount())
+})
+
+test('sending preserves later edits and rejects rapid duplicate clicks before rerender', async () => {
+  let releasePost
+  const postResponse = new Promise((resolve) => { releasePost = resolve })
+  let posts = 0
+  const created = { ...messageFixture(2, '第一版草稿'), senderId: 1, senderName: '我' }
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async () => ({ data: { list: [messageFixture(1)], total: 1 } }),
+      post: async () => { posts++; return postResponse },
+    },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', revision: 'r1' })) })
+  await act(async () => renderer.root.findByType('Input.TextArea').props.onChange('第一版草稿'))
+  const click = renderer.root.findAllByType('Button').find((node) => node.props.children === '发送').props.onClick
+  let first
+  await act(async () => {
+    first = click()
+    click()
+    await Promise.resolve()
+  })
+  assert.equal(posts, 1, 'the in-flight ref closes the same-render double-click window')
+  await act(async () => renderer.root.findByType('Input.TextArea').props.onChange('发送期间继续编辑'))
+  await act(async () => {
+    releasePost({ data: created })
+    await first
+  })
+
+  assert.equal(renderer.root.findByType('Input.TextArea').props.value, '发送期间继续编辑')
+  assert.deepEqual(visibleMessageIds(renderer), [2, 1])
   await act(async () => renderer.unmount())
 })
 
@@ -2361,6 +2558,70 @@ test('unknown project tab query falls back to files and keeps description expans
   await act(async () => renderer.unmount())
 })
 
+test('project detail isolates live message revision from summary churn while preserving fallback and reconnect invalidation', async () => {
+  const project = {
+    id: 1,
+    name: '实时留言项目',
+    status: 'IN_PROGRESS',
+    supplierName: '供应商',
+    updatedAt: '2026-09-14T00:00:00Z',
+  }
+  let activityRevision = 'activity-1'
+  let summaryCalls = 0
+  let collaboration = {
+    revision: 'global-1',
+    status: 'ready',
+    realtimeStatus: 'connected',
+    messageRevisions: { 1: 4 },
+    receiptRevisions: {},
+    reconnectRevision: 0,
+  }
+  const useCollaboration = (selector) => selector(collaboration)
+  const Page = loadTs('src/pages/project/ProjectDetail.tsx', {
+    '@arco-design/web-react': arco,
+    'react-router-dom': {
+      useParams: () => ({ id: '1' }),
+      useSearchParams: () => [new URLSearchParams('tab=messages'), () => {}],
+      useNavigate: () => () => {},
+    },
+    '../../api/client': {
+      get: async (url) => {
+        if (!url.endsWith('/summary')) return { data: project }
+        summaryCalls++
+        return { data: { unreadMessages: 0, activityRevision } }
+      },
+    },
+    '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中', color: 'blue' } }, fmtTime: String },
+    '../../components/FileTable': component('Files'),
+    '../../components/MessagePanel': component('Messages'),
+    '../../components/MemberPanel': component('Members'),
+    '../../components/ProjectActivityPanel': component('Activities'),
+    '../../components/ProjectWorkflowPanel': component('Workflow'),
+    '../../store/collaboration': { useCollaboration },
+  }).default
+  let renderer
+  const render = () => React.createElement(Page)
+  const messages = () => renderer.root.findByType('Messages')
+  await act(async () => { renderer = create(render()) })
+  assert.equal(messages().props.revision, 'live:4:0')
+
+  activityRevision = 'activity-2'
+  collaboration = { ...collaboration, revision: 'global-2' }
+  await act(async () => renderer.update(render()))
+  assert.equal(summaryCalls, 2, 'the global reconciliation still refreshes the project summary')
+  assert.equal(messages().props.revision, 'live:4:0', 'summary activity changes must not invalidate live messages a second time')
+
+  activityRevision = 'activity-3'
+  collaboration = { ...collaboration, revision: 'global-3', realtimeStatus: 'disconnected' }
+  await act(async () => renderer.update(render()))
+  assert.equal(messages().props.revision, 'poll:activity-3:4:0', 'disconnected mode retains summary-based polling invalidation')
+
+  collaboration = { ...collaboration, realtimeStatus: 'connected', reconnectRevision: 1 }
+  await act(async () => renderer.update(render()))
+  assert.equal(messages().props.revision, 'live:4:1', 'a completed reconnect forces one catch-up invalidation')
+  await act(async () => renderer.unmount())
+})
+
 test('project workflow limits acceptance to permissioned internal users while preserving submitter withdrawal', async () => {
   const calls = []
   const http = {
@@ -3989,7 +4250,7 @@ test('message composition counts Unicode code points and sends the complete 4000
     '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
     '../api/client': {
       get: async () => ({ data: { list: [], total: 0 } }),
-      post: async (url, body) => { posts.push({ url, body }); return { data: {} } },
+      post: async (url, body) => { posts.push({ url, body }); return { data: messageFixture(1, body.content) } },
     },
     '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
     '../api/types': { fmtTime: String },
@@ -4016,7 +4277,7 @@ test('message send failure is handled, preserves the draft, and allows a success
     '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
     '../api/client': {
       get: async () => ({ data: { list: [], total: 0 } }),
-      post: async (_url, body) => { if (fail) throw new Error('service unavailable'); posts.push(body); return { data: {} } },
+      post: async (_url, body) => { if (fail) throw new Error('service unavailable'); posts.push(body); return { data: messageFixture(1, body.content) } },
     },
     '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
     '../api/types': { fmtTime: String },

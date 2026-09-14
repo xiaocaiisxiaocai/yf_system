@@ -262,7 +262,9 @@ function ProjectDetailContent({ id }: { id?: string }) {
               projectStatus={project.status}
               targetId={messagesTargetId}
               onRead={loadSummary}
-              revision={`${summary.activityRevision ?? ''}:${liveMessages}:${reconnected}`}
+              revision={realtimeConnected
+                ? `live:${liveMessages}:${reconnected}`
+                : `poll:${summary.activityRevision ?? ''}:${liveMessages}:${reconnected}`}
               receiptRevision={`${liveReceipts}:${reconnected}`}
               realtimeConnected={realtimeConnected}
               onSent={messagesTargetId ? clearTarget : undefined}
