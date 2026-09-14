@@ -50,6 +50,23 @@ function loadExcelSource() {
   })
 }
 
+test('selected cell content resolves merged masters and preserves complete text and falsy values', () => {
+  const { selectedCellContent } = loadTs('vendor/vue-office-excel/cell-content.js')
+  const book = new ExcelJS.Workbook()
+  const sheet = book.addWorksheet('内容')
+  sheet.mergeCells('A1:C2')
+  const fullText = '<b>完整原文</b>\n' + '长内容'.repeat(300)
+  sheet.getCell('A1').value = fullText
+  const cells = { '0:0': { text: fullText }, '2:0': { text: 0 }, '3:0': { text: false } }
+  const viewer = { sheetIndex: 0, workbookDataSource: { _worksheets: [sheet] }, xs: { sheet: { data: { getCell: (r, c) => cells[`${r}:${c}`] } } } }
+  assert.equal(selectedCellContent(viewer, 1, 2).address, 'A1')
+  assert.equal(selectedCellContent(viewer, 1, 2).text, fullText)
+  assert.equal(selectedCellContent(viewer, 2, 0).text, 0)
+  assert.equal(selectedCellContent(viewer, 3, 0).text, false)
+  assert.equal(selectedCellContent(viewer, 4, 0).text, '')
+  assert.equal(selectedCellContent(viewer, -1, 0).address, '')
+})
+
 test('ExcelJS conversion keeps point fonts, converts row height to CSS pixels, and preserves image/style-only geometry', async () => {
   const sourceBook = new ExcelJS.Workbook()
   const sheet = sourceBook.addWorksheet('格式和图片')

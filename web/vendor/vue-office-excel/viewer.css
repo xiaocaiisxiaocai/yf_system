@@ -1,0 +1,9 @@
+.excel-cell-content { display: flex; flex: 0 0 auto; align-items: flex-start; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #e5e6eb; background: #fff; color: #1d2129; font: 14px/22px 'Segoe UI', 'Microsoft YaHei', sans-serif; }
+.excel-cell-address { flex: 0 0 72px; padding: 4px 8px; border: 1px solid #e5e6eb; border-radius: 4px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: #f7f8fa; }
+.excel-cell-text { display: block; flex: 1; min-width: 0; height: 32px; padding: 4px 8px; border: 1px solid #e5e6eb; border-radius: 4px; resize: none; color: inherit; background: #fff; font: inherit; overflow: auto; }
+.excel-cell-text:focus { outline: 2px solid #bedaff; outline-offset: -1px; border-color: #165dff; }
+.excel-cell-content.is-expanded .excel-cell-text { height: min(160px, 35vh); }
+.excel-cell-toggle { flex: 0 0 auto; height: 32px; padding: 0 12px; border: 0; border-radius: 4px; color: #165dff; background: #f2f3f5; font: inherit; cursor: pointer; }
+.excel-cell-toggle:hover { background: #e8f3ff; }
+.excel-cell-toggle:focus-visible { outline: 2px solid #165dff; outline-offset: 2px; }
+@media (max-width: 480px) { .excel-cell-content { padding: 8px; gap: 6px; } .excel-cell-address { flex-basis: 54px; } .excel-cell-toggle { padding: 0 8px; } }
