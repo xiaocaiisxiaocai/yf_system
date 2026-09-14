@@ -55,7 +55,7 @@ function loadFileTable() {
   return exports.default
 }
 
-function loadExcelPreview(http, xlsx) {
+function loadExcelPreview(http, browserWindow = { addEventListener() {}, removeEventListener() {} }) {
   const component = name => props => React.createElement(name, props, props.children)
   const arco = new Proxy({
     Select: Object.assign(component('Select'), { Option: component('Select.Option') }),
@@ -63,7 +63,7 @@ function loadExcelPreview(http, xlsx) {
   }, { get: (target, name) => target[name] ?? component(name) })
   const mocks = {
     '@arco-design/web-react': arco,
-    xlsx,
+    '../../generated/excel-viewer.html?raw': '<html></html>',
     '../api/client': http,
   }
   const filename = path.resolve(__dirname, '../src/components/ExcelPreview.tsx')
@@ -80,7 +80,8 @@ function loadExcelPreview(http, xlsx) {
     exports,
     module: { exports },
     console,
-    AbortController,
+    AbortController, setTimeout, clearTimeout, crypto: require('node:crypto').webcrypto,
+    window: browserWindow,
     require: name => mocks[name] ?? require(name),
   }
   vm.runInNewContext(source, context, { filename })
@@ -104,29 +105,24 @@ test('PDF preview accepts the 50 MiB boundary and leaves larger files download-o
   await act(async () => renderer.unmount())
 })
 
-test('Excel preview aborts its download and skips parsing after unmount', async () => {
+test('Excel preview aborts its content request and never posts late bytes after unmount', async () => {
   let resolveDownload
   let requestSignal
-  let readCalls = 0
+  let posted = 0
   const download = new Promise(resolve => { resolveDownload = resolve })
   const ExcelPreview = loadExcelPreview({
     get: async (_url, options) => {
       requestSignal = options.signal
       return download
     },
-  }, {
-    read: () => {
-      readCalls += 1
-      return { SheetNames: [], Sheets: {} }
-    },
-    utils: {},
   })
 
   let renderer
   await act(async () => {
-    renderer = create(React.createElement(ExcelPreview, { fileId: 7 }))
+    renderer = create(React.createElement(ExcelPreview, { fileId: 7 }), { createNodeMock: () => ({ contentWindow: { postMessage: () => posted++ } }) })
   })
   await act(async () => {
+    renderer.root.findByType('iframe').props.onLoad()
     renderer.unmount()
   })
   await act(async () => {
@@ -136,7 +132,57 @@ test('Excel preview aborts its download and skips parsing after unmount', async 
   })
 
   assert.deepEqual(
-    { aborted: requestSignal?.aborted === true, readCalls },
-    { aborted: true, readCalls: 0 },
+    { aborted: requestSignal?.aborted === true, posted },
+    { aborted: true, posted: 0 },
   )
+})
+
+test('Excel preview waits for its frame and accepts status only from that frame and channel', async () => {
+  const listeners = new Set()
+  const messages = []
+  const contentWindow = { postMessage: message => messages.push(message) }
+  const ExcelPreview = loadExcelPreview({ get: async () => ({ data: new Uint8Array([0x50, 0x4b, 3, 4]).buffer }) }, {
+    addEventListener: (_type, listener) => listeners.add(listener),
+    removeEventListener: (_type, listener) => listeners.delete(listener),
+  })
+  let renderer
+  try {
+    await act(async () => { renderer = create(React.createElement(ExcelPreview, { fileId: 9 }), { createNodeMock: () => ({ contentWindow }) }) })
+    assert.equal(messages.length, 0)
+    const frame = () => renderer.root.findByType('iframe')
+    assert.equal(frame().props.sandbox, 'allow-scripts')
+    await act(async () => frame().props.onLoad())
+    assert.equal(messages.length, 1)
+    const channel = messages[0].channel
+    const emit = event => act(async () => { for (const listener of listeners) listener(event) })
+    await emit({ source: {}, data: { type: 'excel:rendered', channel } })
+    await emit({ source: contentWindow, data: { type: 'excel:rendered', channel: 'wrong' } })
+    assert.equal(frame().props.style.visibility, 'hidden')
+    await emit({ source: contentWindow, data: { type: 'excel:rendered', channel } })
+    assert.equal(frame().props.style.visibility, 'visible')
+  } finally { if (renderer) await act(async () => renderer.unmount()) }
+  assert.equal(listeners.size, 0)
+})
+
+test('Excel preview retry fetches a new buffer and waits for the replacement frame', async () => {
+  let requests = 0
+  let listener
+  const messages = []
+  const contentWindow = { postMessage: message => messages.push(message) }
+  const ExcelPreview = loadExcelPreview({ get: async () => { requests++; return { data: new Uint8Array([0x50, 0x4b, 3, 4]).buffer } } }, {
+    addEventListener: (_type, next) => { listener = next }, removeEventListener() {},
+  })
+  let renderer
+  try {
+    await act(async () => { renderer = create(React.createElement(ExcelPreview, { fileId: 10 }), { createNodeMock: () => ({ contentWindow }) }) })
+    await act(async () => renderer.root.findByType('iframe').props.onLoad())
+    await act(async () => listener({ source: contentWindow, data: { type: 'excel:error', channel: messages[0].channel } }))
+    const retry = renderer.root.findByType('Result').props.extra
+    await act(async () => retry.props.onClick())
+    assert.equal(requests, 2)
+    assert.equal(messages.length, 1)
+    await act(async () => renderer.root.findByType('iframe').props.onLoad())
+    assert.equal(messages.length, 2)
+    assert.notEqual(messages[0].buffer, messages[1].buffer)
+  } finally { if (renderer) await act(async () => renderer.unmount()) }
 })

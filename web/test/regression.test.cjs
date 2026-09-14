@@ -3929,23 +3929,21 @@ test('a failed upload aborts sibling chunks promptly and resumes the same sessio
   await act(async()=>renderer.unmount())
 })
 
-test('empty Excel sheets retain the selector and can switch to populated sheets', async () => {
+test('source Excel conversion retains empty sheets and populated sheet navigation data', async () => {
   const XLSX = require('xlsx')
   const book = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(book, {}, '空白')
   XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['可见内容']]), '内容')
-  const Preview = loadTs('src/components/ExcelPreview.tsx', {
-    '@arco-design/web-react': arco,
-    '../api/client': { get: async () => ({ data: XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }) }) },
-  }).default
-  let renderer
-  await act(async () => { renderer = create(React.createElement(Preview, {fileId:1})) })
-  assert.equal(renderer.root.findAllByType('Select').length, 1, 'blank first sheet must not hide navigation')
-  await act(async () => renderer.root.findByType('Select').props.onChange('内容'))
-  assert.ok(JSON.stringify(renderer.toJSON()).includes('可见内容'))
-  await act(async () => renderer.root.findByType('Select').props.onChange('空白'))
-  assert.equal(renderer.root.findAllByType('Select').length, 1)
-  await act(async () => renderer.unmount())
+  const color = loadTs('vendor/vue-office-excel/core/packages/vue-excel/src/color.js', {})
+  const media = loadTs('vendor/vue-office-excel/core/packages/vue-excel/src/media.js', {}, { window: { devicePixelRatio: 1 } })
+  const engine = loadTs('vendor/vue-office-excel/core/packages/vue-excel/src/excel.js', {
+    '../../../utils/url': {}, './color': color, './media': media,
+  })
+  const workbook = await engine.readExcelData(XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }), false)
+  const { workbookData } = engine.transferExcelToSpreadSheet(workbook, { minRowLength: 30, minColLength: 10 })
+  assert.deepEqual(Array.from(workbookData, sheet => sheet.name), ['空白', '内容'])
+  assert.equal(workbookData[0].rows.len, 30, 'an empty first sheet has valid geometry and retains the tab bar')
+  assert.equal(workbookData[1].rows[0].cells[0].text, '可见内容')
 })
 
 test('closing waits for old chunks to settle before another upload can start', async () => {

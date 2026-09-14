@@ -47,3 +47,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# User-supplied full source archive; the required Excel runtime is vendored separately.
+/third_party/vue-office-source-2024-12-30/
+/web/generated/
+/web/.excel-preview-build/
