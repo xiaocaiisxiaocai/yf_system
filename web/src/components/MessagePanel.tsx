@@ -150,10 +150,13 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
       const requestVersion = countsVersion.current
       const requestLoad = loadSeq.current
       try {
+        const region = listRef.current?.closest?.('.message-scroll-area')?.getBoundingClientRect()
+        const visibleTop = Math.max(0, region?.top ?? 0)
+        const visibleBottom = Math.min(window.innerHeight, region?.bottom ?? window.innerHeight)
         const ids = [...(listRef.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [])]
           .filter((element) => {
             const rect = element.getBoundingClientRect()
-            return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight
+            return rect.width > 0 && rect.height > 0 && rect.bottom > visibleTop && rect.top < visibleBottom
           })
           .map((element) => Number(element.dataset.messageId)).slice(0, 500)
         if (listLoading.current || !ids.length) return
@@ -281,7 +284,12 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
     if (!active || loading || targetId === undefined || locatedScope.current === messageScope.current.generation) return
     const element = listRef.current?.querySelector<HTMLElement>(`[data-message-id="${targetId}"]`)
     if (element) {
-      element.scrollIntoView({ block: 'center' })
+      const owner = listRef.current?.closest?.('.message-scroll-area')
+      if (owner) {
+        const rect = element.getBoundingClientRect()
+        owner.scrollTop += rect.top - owner.getBoundingClientRect().top
+          - Math.max(0, (owner.clientHeight - rect.height) / 2)
+      } else element.scrollIntoView({ block: 'center' })
       locatedScope.current = messageScope.current.generation
     }
   }, [active, loading, list, targetId])
@@ -350,10 +358,11 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
           const elements = [...root.querySelectorAll<HTMLElement>('[data-message-id]')]
           // When reading history, anchor the same visible message before paint.
           // At the top of the list, let newly arrived messages appear immediately.
-          if (elements[0]?.getBoundingClientRect().top < 80) {
+          const owner = root.closest('.message-scroll-area') ?? root.closest('.layout-content') ?? document.scrollingElement
+          const viewportTop = owner?.getBoundingClientRect?.().top ?? 80
+          if (elements[0]?.getBoundingClientRect().top < viewportTop) {
             const ids = new Set(nextList.map((message) => message.id))
-            const element = elements.find((item) => ids.has(Number(item.dataset.messageId)) && item.getBoundingClientRect().bottom > 80)
-            const owner = root.closest('.layout-content') ?? document.scrollingElement
+            const element = elements.find((item) => ids.has(Number(item.dataset.messageId)) && item.getBoundingClientRect().bottom > viewportTop)
             if (element && owner) scrollAnchor.current = { id: Number(element.dataset.messageId), top: element.getBoundingClientRect().top, owner }
           }
         }
@@ -506,7 +515,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
   }
 
   return (
-    <div>
+    <div className="message-panel">
       <div className="section-heading">
         <div>
           <h2>协作留言（{total}）</h2>
@@ -538,6 +547,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
         </div>
       )}
 
+      <div className="message-scroll-area" tabIndex={0} aria-label="留言列表">
       {loadError ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
           <Typography.Text type="error">加载失败</Typography.Text>
@@ -633,6 +643,8 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
           )}
         </Spin>
       )}
+
+      </div>
 
       <Drawer
         width={420}

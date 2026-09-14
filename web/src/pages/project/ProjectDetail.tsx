@@ -10,6 +10,7 @@ import ProjectActivityPanel from '../../components/ProjectActivityPanel'
 import ProjectWorkflowPanel from '../../components/ProjectWorkflowPanel'
 import { useCollaboration } from '../../store/collaboration'
 import { isAxiosError } from 'axios'
+import './ProjectDetail.css'
 
 interface Summary {
   unreadMessages: number
@@ -172,14 +173,14 @@ function ProjectDetailContent({ id }: { id?: string }) {
     )
 
   return (
-    <div className={`project-detail-page${tab === 'activity' ? ' project-detail-page--activity' : ''}`}>
+    <div className="project-detail-page">
       {loadErrorFor === pid && (
         <div role="status" style={{ marginBottom: 12 }}>
           <Typography.Text type="warning">项目更新失败，当前显示上次获取的数据。</Typography.Text>
           <Button type="text" size="small" onClick={loadProject}>重新获取</Button>
         </div>
       )}
-      <Card className="page-card project-detail-summary-card" style={{ marginBottom: 16 }}>
+      <Card className="page-card project-detail-summary-card">
         <div className="detail-heading">
           <div>
             <h1>{project.name}</h1>
@@ -197,10 +198,10 @@ function ProjectDetailContent({ id }: { id?: string }) {
             { label: '供应商', value: project.supplierName || '-' },
             { label: '创建人', value: project.createdByName || '-' },
             { label: '更新时间', value: fmtTime(project.updatedAt) },
-            {
+            ...(project.description ? [{
               label: '项目说明',
               value: project.description ? (
-                <Typography.Ellipsis className="project-description" rows={3} expandable
+                <Typography.Ellipsis className="project-description" rows={1} expandable
                   expandRender={(expanded) => (
                     <Button
                       type="text"
@@ -215,10 +216,11 @@ function ProjectDetailContent({ id }: { id?: string }) {
                 </Typography.Ellipsis>
               ) : '-',
               span: 3,
-            },
+            }] : []),
           ]}
         />
         <ProjectWorkflowPanel
+          compact
           project={project}
           onChanged={() => {
             loadProject()
@@ -227,7 +229,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
         />
       </Card>
 
-      <Card className={`page-card project-detail-tabs-card${tab === 'activity' ? ' project-detail-tabs-card--activity' : ''}`}>
+      <Card className="page-card project-detail-tabs-card">
         {targetId && tab === 'files' && (
           <div className="project-target-notice">
             <Typography.Text type="secondary">已定位到目标内容</Typography.Text>

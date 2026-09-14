@@ -1,0 +1,57 @@
+.project-detail-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: calc(100dvh - 88px);
+  min-height: 0;
+  overflow: hidden;
+}
+.project-detail-page > .page-card { padding: 0; }
+.project-detail-summary-card { flex: 0 1 auto; max-height: 38%; overflow: auto; }
+.project-detail-summary-card > .arco-card-body { padding: 14px 20px; }
+.project-detail-summary-card .detail-heading { margin-bottom: 8px; }
+.project-detail-summary-card .detail-heading h1 { font-size: 18px; line-height: 28px; }
+.project-detail-summary-card .arco-descriptions-item { padding-bottom: 2px; }
+.project-detail-summary-card .project-workflow--compact {
+  margin-top: 8px;
+  padding: 8px 0 0;
+  border: 0;
+  border-top: 1px solid var(--app-border);
+  border-radius: 0;
+  background: transparent;
+}
+.project-workflow--compact .project-workflow-status { margin-top: 0; }
+.project-detail-tabs-card { flex: 1 1 0; min-height: 0; }
+.project-detail-tabs-card > .arco-card-body,
+.project-detail-tabs-card .arco-tabs {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.project-detail-tabs-card > .arco-card-body { box-sizing: border-box; padding: 12px 20px 16px; }
+.project-detail-tabs-card .arco-tabs-header { flex: 0 0 auto; }
+.project-detail-tabs-card .arco-tabs-content { flex: 1 1 0; min-height: 0; overflow: hidden; }
+.project-detail-tabs-card .arco-tabs-content-inner,
+.project-detail-tabs-card .arco-tabs-content-item-active { height: 100%; min-height: 0; }
+.project-detail-tabs-card .arco-tabs-content-item-active { overflow: auto; }
+.project-detail-tabs-card .arco-tabs-pane { height: 100%; min-height: 0; }
+.message-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
+.message-panel > .section-heading,
+.message-panel > .message-composer,
+.message-panel > [role="status"] { flex: 0 0 auto; }
+.message-panel > .section-heading { margin-bottom: 10px; }
+.message-scroll-area { flex: 1 1 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding-right: 8px; }
+.message-scroll-area:focus-visible { outline: 2px solid rgb(var(--primary-5)); outline-offset: -2px; }
+.message-scroll-area .msg-item { overflow-wrap: anywhere; }
+.project-detail-page .project-activity { height: 100%; min-height: 0; }
+.project-detail-page .project-activity-feed { flex: 1 1 0; min-height: 0; overflow: auto; }
+@media (max-width: 720px) {
+  .project-detail-page { height: calc(100dvh - 76px); gap: 10px; }
+  .project-detail-summary-card > .arco-card-body { padding: 12px; }
+  .project-detail-tabs-card > .arco-card-body { padding: 8px 12px 12px; }
+  .project-detail-summary-card .detail-heading { gap: 6px; }
+  .project-detail-summary-card .project-workflow--compact { gap: 8px; }
+  .message-panel > .message-composer { gap: 6px !important; margin-bottom: 8px !important; }
+  .message-panel .arco-textarea { max-height: 100px; }
+}

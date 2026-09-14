@@ -10,10 +10,11 @@ import { useAuth } from '../store/auth'
 interface Props {
   project: Project
   onChanged: () => void
+  compact?: boolean
 }
 
 /** 项目级流程操作；所有按钮只表达当前状态允许的命令，最终权限仍由后端校验。 */
-export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
+export default function ProjectWorkflowPanel({ project, onChanged, compact = false }: Props) {
   const { hasPerm, user } = useAuth()
   const [rejectOpen, setRejectOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -126,13 +127,15 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
     || (canSubmit && project.status === 'IN_PROGRESS')
     || (isPending && (canConfirm || canWithdraw))
 
+  if (compact && !showActions && !isPending && !(project.status === 'IN_PROGRESS' && project.rejectReason)) return null
+
   return (
-    <div className="project-workflow" aria-label="项目流程操作">
+    <div className={`project-workflow${compact ? ' project-workflow--compact' : ''}`} aria-label="项目流程操作">
       <div className="project-workflow-summary">
         <div>
-          <Typography.Text type="secondary">项目流程</Typography.Text>
+          {!compact && <Typography.Text type="secondary">项目流程</Typography.Text>}
           <div className="project-workflow-status">
-            <Tag color={status?.color}>{status?.text || project.status}</Tag>
+            {!compact && <Tag color={status?.color}>{status?.text || project.status}</Tag>}
             {project.status === 'IN_PROGRESS' && project.rejectReason && (
               <Typography.Text type="secondary" title={project.rejectReason}>上次驳回：{project.rejectReason}</Typography.Text>
             )}
