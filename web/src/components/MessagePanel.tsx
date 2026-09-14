@@ -3,7 +3,7 @@ import {
   Avatar, Button, Drawer, Empty, Input, List, Popconfirm, Popover, Space, Spin, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconCheck, IconDelete, IconSend } from '@arco-design/web-react/icon'
-import http from '../api/client'
+import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from '../store/auth'
 import { type Message as Msg, fmtTime } from '../api/types'
 
@@ -14,6 +14,7 @@ interface Props {
   onSent?: () => void
   targetId?: number
   revision?: string
+  active?: boolean
 }
 
 interface Reader {
@@ -51,7 +52,7 @@ async function loadReadCounts(ids: number[]): Promise<ReadCounts[]> {
   return counts
 }
 
-export default function MessagePanel({ projectId, projectStatus, onRead, onSent, targetId, revision = '' }: Props) {
+export default function MessagePanel({ projectId, projectStatus, onRead, onSent, targetId, revision = '', active = true }: Props) {
   const [seenRevision, setSeenRevision] = useState(revision)
   const currentRevision = useRef(revision)
   useEffect(() => {
@@ -81,6 +82,11 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
   const mounted = useRef(true)
   const messageScope = useRef({ key: '', generation: 0 })
   const [sending, setSending] = useState(false)
+  const [receiptRefresh, setReceiptRefresh] = useState(0)
+  const countsVersion = useRef(0)
+  const listLoading = useRef(false)
+  const openReceiptId = useRef<number | null>(null)
+  openReceiptId.current = receipt?.id ?? null
 
   const scopeKey = `${projectId}:${targetId ?? ''}`
   if (messageScope.current.key !== scopeKey) {
@@ -97,9 +103,102 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
   const canWrite = hasPerm('message:create') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
   const canDelete = hasPerm('message:delete_any') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
 
+  const applyReadCounts = useCallback((counts: ReadCounts[]) => {
+    const byId = new Map(counts.map((item) => [item.id, item]))
+    let changed = false
+    loadedMessages.current = loadedMessages.current.map((message) => {
+      const next = byId.get(message.id)
+      if (!next || next.readCount === message.readCount && next.totalCount === message.totalCount) return message
+      changed = true
+      return { ...message, readCount: next.readCount, totalCount: next.totalCount }
+    })
+    if (changed) setList(loadedMessages.current)
+  }, [])
+
+  const receiveReceipt = useCallback((id: number, readCount: number, totalCount: number) => {
+    countsVersion.current += 1
+    applyReadCounts([{ id, readCount, totalCount }])
+  }, [applyReadCounts])
+
+  // Read receipts change without creating a project activity. Refresh only metadata,
+  // so polling never resets a draft, a history cursor, or the user's scroll position.
+  useEffect(() => {
+    if (!active || typeof document === 'undefined' || typeof window === 'undefined') return
+    let stopped = false
+    let inFlight = false
+    let failures = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let controller: AbortController | undefined
+    const generation = messageScope.current.generation
+    const paused = () => document.visibilityState !== 'visible'
+      || typeof navigator !== 'undefined' && navigator.onLine === false
+    const sync = async () => {
+      if (stopped || inFlight) return
+      clearTimeout(timer)
+      if (paused()) return
+      inFlight = true
+      controller = new AbortController()
+      const requestVersion = countsVersion.current
+      const requestLoad = loadSeq.current
+      try {
+        const ids = [...(listRef.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [])]
+          .filter((element) => {
+            const rect = element.getBoundingClientRect()
+            return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight
+          })
+          .map((element) => Number(element.dataset.messageId)).slice(0, 500)
+        if (listLoading.current || !ids.length) return
+        const response = await http.get(`/projects/${projectId}/message-receipts`, {
+          params: { ids: ids.join(',') }, signal: controller.signal, timeout: 10000, quietNetworkError: true,
+        } as QuietRequestConfig)
+        if (stopped || controller.signal.aborted || messageScope.current.generation !== generation
+            || requestLoad !== loadSeq.current || requestVersion !== countsVersion.current) return
+        if (!Array.isArray(response.data) || response.data.some((item: ReadCounts) =>
+          !item || !ids.includes(item.id) || !Number.isInteger(item.readCount) || !Number.isInteger(item.totalCount)
+          || item.readCount < 0 || item.totalCount < item.readCount)) throw new Error('Invalid receipt counts')
+        applyReadCounts(response.data)
+        failures = 0
+        setReceiptRefresh((value) => value + 1)
+        const detailId = openReceiptId.current
+        if (detailId != null) {
+          const seq = receiptSeq.current
+          const detail = await http.get(`/messages/${detailId}/reads`, { signal: controller.signal, timeout: 10000, quietNetworkError: true } as QuietRequestConfig)
+          if (!stopped && !controller.signal.aborted && seq === receiptSeq.current
+              && openReceiptId.current === detailId && messageScope.current.generation === generation) {
+            setReceipt({ id: detailId, readers: detail.data.readers, unread: detail.data.unread })
+          }
+        }
+      } catch {
+        failures += 1
+      } finally {
+        inFlight = false
+        if (!stopped && !paused()) timer = setTimeout(sync, Math.min(5000 * 2 ** failures, 60000))
+      }
+    }
+    const wake = () => {
+      if (paused()) { clearTimeout(timer); controller?.abort(); return }
+      void sync()
+    }
+    document.addEventListener('visibilitychange', wake)
+    window.addEventListener('focus', wake)
+    window.addEventListener('online', wake)
+    window.addEventListener('offline', wake)
+    void sync()
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+      controller?.abort()
+      document.removeEventListener('visibilitychange', wake)
+      window.removeEventListener('focus', wake)
+      window.removeEventListener('online', wake)
+      window.removeEventListener('offline', wake)
+    }
+  }, [active, projectId, targetId, user?.id, applyReadCounts])
+
   const load = useCallback(
     async (p: number, append: boolean) => {
       const seq = ++loadSeq.current
+      listLoading.current = true
       const requestRevision = currentRevision.current
       setLoading(true)
       if (append) setAppendError(false)
@@ -129,7 +228,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
           else setLoadError(true)
         }
       } finally {
-        if (seq === loadSeq.current) setLoading(false)
+        if (seq === loadSeq.current) { listLoading.current = false; setLoading(false) }
       }
     },
     [projectId, targetId]
@@ -159,14 +258,10 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
           setList(loadedMessages.current)
           onRead?.()
 
+          const version = ++countsVersion.current
           const counts = await loadReadCounts(ids)
-          if (!mounted.current || messageScope.current.generation !== scopeGeneration || counts.length === 0) return
-          const byId = new Map(counts.map((item) => [item.id, item]))
-          loadedMessages.current = loadedMessages.current.map((message) => {
-            const next = byId.get(message.id)
-            return next ? { ...message, readCount: next.readCount, totalCount: next.totalCount } : message
-          })
-          setList(loadedMessages.current)
+          if (!mounted.current || messageScope.current.generation !== scopeGeneration || version !== countsVersion.current) return
+          applyReadCounts(counts)
         }).catch(() => {
           ids.forEach((id) => markingRead.current.delete(id))
         })
@@ -176,7 +271,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
     // 观察正文末尾的小标记；长留言不可能有 60% 的整块高度同时进入视口。
     root.querySelectorAll<HTMLElement>('[data-unread="true"] .message-read-marker').forEach((node) => observer.observe(node))
     return () => observer.disconnect()
-  }, [list, onRead, projectId, targetId])
+  }, [list, onRead, projectId, targetId, applyReadCounts])
 
   const send = async () => {
     const text = content.trim()
@@ -201,6 +296,8 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
     try {
       const r = await http.get(`/messages/${id}/reads`)
       if (seq === receiptSeq.current) {
+        countsVersion.current += 1
+        applyReadCounts([{ id, readCount: r.data.readers.length, totalCount: r.data.readers.length + r.data.unread.length }])
         setReceipt({ id, readers: r.data.readers, unread: r.data.unread })
         setReceiptRequest(null)
       }
@@ -295,11 +392,11 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
                         content={
                           <div style={{ maxWidth: 320 }}>
                             <Typography.Text bold style={{ fontSize: 12 }}>已读人员</Typography.Text>
-                            <ReceiptBody id={m.id} />
+                            <ReceiptBody id={m.id} refreshKey={receiptRefresh} onLoaded={receiveReceipt} />
                           </div>
                         }
                         trigger="click"
-                        triggerProps={{ escToClose: true }}
+                        triggerProps={{ escToClose: true, unmountOnExit: true }}
                       >
                         <Button
                           size="mini"
@@ -402,7 +499,11 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
 }
 
 /** 气泡内联的已读名单（轻量版） */
-function ReceiptBody({ id }: { id: number }) {
+function ReceiptBody({ id, refreshKey = 0, onLoaded }: {
+  id: number
+  refreshKey?: number
+  onLoaded?: (id: number, readCount: number, totalCount: number) => void
+}) {
   const [receipt, setReceipt] = useState<{
     id: number
     names: string[]
@@ -417,6 +518,7 @@ function ReceiptBody({ id }: { id: number }) {
     http.get(`/messages/${id}/reads`)
       .then((r) => {
         if (seq !== requestSeq.current) return
+        onLoaded?.(id, r.data.readers.length, r.data.readers.length + r.data.unread.length)
         setReceipt({
           id,
           names: r.data.readers.map((x: Reader) => x.realName),
@@ -436,6 +538,7 @@ function ReceiptBody({ id }: { id: number }) {
     http.get(`/messages/${id}/reads`)
       .then((r) => {
         if (seq !== requestSeq.current) return
+        onLoaded?.(id, r.data.readers.length, r.data.readers.length + r.data.unread.length)
         setReceipt({
           id,
           names: r.data.readers.map((x: Reader) => x.realName),
@@ -451,7 +554,7 @@ function ReceiptBody({ id }: { id: number }) {
     return () => {
       requestSeq.current += 1
     }
-  }, [id])
+  }, [id, refreshKey, onLoaded])
 
   const current = receipt.id === id
     ? receipt

@@ -253,6 +253,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
           >
             <MessagePanel
               key={pid}
+              active={tab === 'messages'}
               projectId={pid}
               projectStatus={project.status}
               targetId={messagesTargetId}

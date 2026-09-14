@@ -172,6 +172,56 @@ internal sealed class MessageService(
         return new { readers, unread };
     }
 
+    internal async Task<object[]> ReceiptsAsync(
+        MySqlConnection conn,
+        CurrentUser actor,
+        ulong projectId,
+        IReadOnlyCollection<ulong> messageIds,
+        CancellationToken ct)
+    {
+        await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
+        if (messageIds.Count == 0)
+        {
+            return [];
+        }
+
+        var project = await LoadProjectAsync(conn, null, projectId, false, ct);
+        var participants = await ProjectNotificationService.ParticipantsAsync(conn, null, project, ct);
+        var visibleIds = participants.Select(user => user.Id).ToHashSet();
+        var targets = (await conn.QueryAsync<MessageReceiptTargetRow>(new CommandDefinition(
+            """
+            SELECT id AS Id,sender_id AS SenderId
+            FROM messages
+            WHERE project_id=@ProjectId AND status='NORMAL' AND id IN @Ids
+            """,
+            new { ProjectId = projectId, Ids = messageIds.ToArray() },
+            cancellationToken: ct))).ToDictionary(message => message.Id);
+        if (targets.Count == 0)
+        {
+            return [];
+        }
+
+        var reads = (await conn.QueryAsync<MessageReadRow>(new CommandDefinition(
+            "SELECT message_id AS MessageId,user_id AS UserId,read_at AS ReadAt FROM message_reads WHERE message_id IN @Ids",
+            new { Ids = targets.Keys.ToArray() },
+            cancellationToken: ct))).ToLookup(read => read.MessageId);
+        return messageIds
+            .Where(targets.ContainsKey)
+            .Select(messageId =>
+            {
+                var target = targets[messageId];
+                var counts = ReceiptCounts(target.SenderId, reads[messageId], visibleIds, actor.Id);
+                return (object)new
+                {
+                    id = messageId,
+                    readCount = counts.ReadCount,
+                    totalCount = counts.TotalCount,
+                    readByMe = counts.ReadByMe,
+                };
+            })
+            .ToArray();
+    }
+
     internal async Task DeleteAsync(
         MySqlConnection conn,
         CurrentUser actor,
@@ -219,9 +269,7 @@ internal sealed class MessageService(
         IReadOnlySet<ulong> visibleUserIds,
         ulong viewerId)
     {
-        var readRows = reads.ToArray();
-        var totalCount = visibleUserIds.Count(id => id != message.SenderId);
-        var readCount = readRows.Count(read => read.UserId != message.SenderId && visibleUserIds.Contains(read.UserId));
+        var counts = ReceiptCounts(message.SenderId, reads, visibleUserIds, viewerId);
         return new
         {
             id = message.Id,
@@ -232,10 +280,23 @@ internal sealed class MessageService(
             senderName = message.SenderName,
             senderType = message.SenderType,
             createdAt = ProjectJson.Utc(message.CreatedAt),
-            readCount,
-            totalCount,
-            readByMe = readRows.Any(read => read.UserId == viewerId),
+            readCount = counts.ReadCount,
+            totalCount = counts.TotalCount,
+            readByMe = counts.ReadByMe,
         };
+    }
+
+    private static MessageReceiptCounts ReceiptCounts(
+        ulong senderId,
+        IEnumerable<MessageReadRow> reads,
+        IReadOnlySet<ulong> visibleUserIds,
+        ulong viewerId)
+    {
+        var readRows = reads.ToArray();
+        return new(
+            readRows.Count(read => read.UserId != senderId && visibleUserIds.Contains(read.UserId)),
+            visibleUserIds.Count(id => id != senderId),
+            readRows.Any(read => read.UserId == viewerId));
     }
 
     private static void EnsureWritable(string status)
@@ -287,4 +348,12 @@ internal sealed class MessageService(
         public ulong Id { get; init; }
         public ulong ProjectId { get; init; }
     }
+
+    private sealed class MessageReceiptTargetRow
+    {
+        public ulong Id { get; init; }
+        public ulong SenderId { get; init; }
+    }
+
+    private readonly record struct MessageReceiptCounts(int ReadCount, int TotalCount, bool ReadByMe);
 }

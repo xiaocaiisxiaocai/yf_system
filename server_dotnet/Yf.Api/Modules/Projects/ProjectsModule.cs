@@ -1,3 +1,4 @@
+using System.Globalization;
 using Yf.Api.Infrastructure;
 
 namespace Yf.Api.Modules.Projects;
@@ -125,6 +126,17 @@ public static class ProjectsModule
                 QueryNullableUlong(context, "targetId"),
                 ct));
         });
+        api.MapGet("/projects/{id:long}/message-receipts", async (HttpContext context, ulong id, AppDb db, MessageService service, CancellationToken ct) =>
+        {
+            var messageIds = ParseMessageIds(QueryString(context, "ids"));
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.ReceiptsAsync(
+                conn,
+                AccessService.GetCurrent(context),
+                id,
+                messageIds,
+                ct));
+        });
         api.MapPost("/projects/{id:long}/messages", async (HttpContext context, ulong id, MessageCreateRequest request, AppDb db, MessageService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
@@ -218,6 +230,35 @@ public static class ProjectsModule
 
     private static ulong? QueryNullableUlong(HttpContext context, string name) =>
         QueryValues.OptionalUInt64(context.Request, name);
+
+    internal static ulong[] ParseMessageIds(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return [];
+        }
+
+        var ids = new List<ulong>();
+        var seen = new HashSet<ulong>();
+        foreach (var part in raw.Split(','))
+        {
+            var token = part.Trim();
+            if (!ulong.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id == 0)
+            {
+                throw ApiException.BadRequest("请求参数错误: ids");
+            }
+            if (!seen.Add(id))
+            {
+                continue;
+            }
+            if (ids.Count == 500)
+            {
+                throw ApiException.BadRequest("单次查询数量超过上限");
+            }
+            ids.Add(id);
+        }
+        return ids.ToArray();
+    }
 
     private static bool QueryBool(HttpContext context, string name, bool fallback)
     {

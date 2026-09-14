@@ -572,6 +572,88 @@ function loadTs(relativePath, mocks, globals = {}) {
   return exports
 }
 
+function createReceiptBrowser() {
+  const makeEventTarget = () => {
+    const listeners = new Map()
+    return {
+      addEventListener(type, listener) {
+        const current = listeners.get(type) ?? new Set()
+        current.add(listener)
+        listeners.set(type, current)
+      },
+      removeEventListener(type, listener) {
+        listeners.get(type)?.delete(listener)
+      },
+      dispatch(type) {
+        for (const listener of [...(listeners.get(type) ?? [])]) listener({ type })
+      },
+    }
+  }
+  const document = makeEventTarget()
+  document.visibilityState = 'visible'
+  const window = makeEventTarget()
+  window.innerHeight = 1000
+  const navigator = { onLine: true }
+  window.navigator = navigator
+  const timers = new Map()
+  let nextTimerId = 0
+  const setTimeout = (callback, delay) => {
+    const id = ++nextTimerId
+    timers.set(id, { callback, delay })
+    return id
+  }
+  const clearTimeout = (id) => timers.delete(id)
+  const state = { nodes: [] }
+  const listNode = {
+    querySelectorAll: () => state.nodes,
+  }
+  return {
+    document,
+    window,
+    navigator,
+    state,
+    listNode,
+    timers,
+    globals: { document, window, navigator, setTimeout, clearTimeout },
+  }
+}
+
+function receiptNode(id, rect) {
+  return {
+    dataset: { messageId: String(id) },
+    getBoundingClientRect: () => rect,
+  }
+}
+
+async function flushReceiptMicrotasks() {
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
+async function runReceiptTimer(browser, delay) {
+  const entry = [...browser.timers.entries()].find(([, timer]) => timer.delay === delay)
+  assert.ok(entry, `expected a receipt timer with ${delay}ms delay`)
+  const [id, timer] = entry
+  browser.timers.delete(id)
+  await act(async () => {
+    await timer.callback()
+    await flushReceiptMicrotasks()
+  })
+}
+
+function startReceiptTimer(browser, delay) {
+  const entry = [...browser.timers.entries()].find(([, timer]) => timer.delay === delay)
+  assert.ok(entry, `expected a receipt timer with ${delay}ms delay`)
+  const [id, timer] = entry
+  browser.timers.delete(id)
+  timer.callback()
+}
+
+function receiptCountButton(renderer) {
+  return renderer.root.findAllByType('Button')
+    .find((node) => String(node.props['aria-label'] ?? '').startsWith('查看已读人员'))
+}
+
 for (const [page, api, props] of [
   ['pages/project/ProjectList.tsx', '/projects', {}],
   ['pages/supplier/SupplierList.tsx', '/admin/suppliers', {}],
@@ -1304,6 +1386,234 @@ test('message receipt requests ignore late responses and closing invalidates the
   await act(async () => drawer.props.onCancel())
   await act(async () => { releaseOld({ data: { readers: [{ userId: 4, realName: '关闭后返回', userType: 'INTERNAL' }], unread: [] } }); await oldRequest })
   assert.equal(renderer.root.findByType('Drawer').props.visible, false)
+  await act(async () => renderer.unmount())
+})
+
+test('receipt sync updates visible counts without replacing loaded messages or the draft', async () => {
+  const browser = createReceiptBrowser()
+  const messages = [
+    { id: 1, senderId: 2, senderName: '成员一', senderType: 'INTERNAL', content: '第一条内容', readCount: 0, totalCount: 1, readByMe: true, createdAt: '' },
+    { id: 2, senderId: 2, senderName: '成员二', senderType: 'INTERNAL', content: '第二条内容', readCount: 0, totalCount: 1, readByMe: true, createdAt: '' },
+  ]
+  const requests = []
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async (url, config) => {
+        requests.push({ url, config })
+        if (url === '/projects/1/messages') return { data: { list: messages, total: messages.length } }
+        if (url === '/projects/1/message-receipts') return { data: [{ id: 1, readCount: 1, totalCount: 1 }] }
+        throw new Error(`unexpected request: ${url}`)
+      },
+    },
+  }, browser.globals).default
+  let renderer
+  await act(async () => {
+    renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' }), {
+      createNodeMock: () => browser.listNode,
+    })
+    await flushReceiptMicrotasks()
+  })
+  browser.state.nodes = [
+    receiptNode(1, { width: 120, height: 32, top: 12, bottom: 44 }),
+    receiptNode(2, { width: 120, height: 32, top: 1100, bottom: 1132 }),
+  ]
+  await act(async () => renderer.root.findByType('Input.TextArea').props.onChange('正在编辑的草稿'))
+  await runReceiptTimer(browser, 5000)
+
+  const receiptRequests = requests.filter(({ url }) => url.endsWith('/message-receipts'))
+  assert.equal(receiptRequests.length, 1)
+  assert.equal(receiptRequests[0].config.params.ids, '1', 'only the visible message id is polled')
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：1/1')
+  assert.equal(renderer.root.findAllByProps({ className: 'msg-item' }).length, 2)
+  assert.equal(renderer.root.findByType('Input.TextArea').props.value, '正在编辑的草稿')
+  assert.equal(renderer.root.findAll((node) => node.props.children === '第一条内容').length, 1)
+  assert.equal(renderer.root.findAll((node) => node.props.children === '第二条内容').length, 1)
+  await act(async () => renderer.unmount())
+})
+
+test('receipt sync pauses while hidden, resumes on focus, and cleans up when inactive', async () => {
+  const browser = createReceiptBrowser()
+  const messages = [{ id: 1, senderId: 2, senderName: '成员', senderType: 'INTERNAL', content: '可见留言', readCount: 0, totalCount: 1, readByMe: true, createdAt: '' }]
+  let receiptCount = 0
+  let receiptCalls = 0
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []),
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async (url) => {
+        if (url === '/projects/1/messages') return { data: { list: messages, total: 1 } }
+        if (url === '/projects/1/message-receipts') {
+          receiptCalls++
+          receiptCount++
+          return { data: [{ id: 1, readCount: receiptCount, totalCount: Math.max(1, receiptCount) }] }
+        }
+        throw new Error(`unexpected request: ${url}`)
+      },
+    },
+  }, browser.globals).default
+  let renderer
+  await act(async () => {
+    renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', active: true }), {
+      createNodeMock: () => browser.listNode,
+    })
+    await flushReceiptMicrotasks()
+  })
+  browser.state.nodes = [receiptNode(1, { width: 120, height: 32, top: 12, bottom: 44 })]
+  await runReceiptTimer(browser, 5000)
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：1/1')
+
+  browser.document.visibilityState = 'hidden'
+  await act(async () => {
+    browser.document.dispatch('visibilitychange')
+    await flushReceiptMicrotasks()
+  })
+  const callsWhileHidden = receiptCalls
+  assert.equal(browser.timers.size, 0, 'hidden state clears the scheduled poll')
+
+  browser.document.visibilityState = 'visible'
+  await act(async () => {
+    browser.window.dispatch('focus')
+    await flushReceiptMicrotasks()
+  })
+  assert.equal(receiptCalls, callsWhileHidden + 1, 'focus resumes polling immediately')
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：2/2')
+
+  await act(async () => renderer.update(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', active: false })))
+  const callsAfterInactive = receiptCalls
+  assert.equal(browser.timers.size, 0, 'inactive panels must not retain a poll timer')
+  await act(async () => {
+    browser.window.dispatch('focus')
+    browser.window.dispatch('online')
+    browser.document.dispatch('visibilitychange')
+    await flushReceiptMicrotasks()
+  })
+  assert.equal(receiptCalls, callsAfterInactive, 'inactive panels remove all wake listeners')
+  await act(async () => renderer.unmount())
+})
+
+test('receipt sync ignores delayed responses after project switch and aborts on unmount', async () => {
+  const browser = createReceiptBrowser()
+  const pending = []
+  const messageFor = (projectId) => ({
+    id: 1, senderId: 2, senderName: '成员', senderType: 'INTERNAL', content: `项目${projectId}留言`,
+    readCount: 0, totalCount: 1, readByMe: true, createdAt: '',
+  })
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []),
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async (url, config) => {
+        const projectId = Number(url.match(/projects\/(\d+)/)?.[1])
+        if (url.endsWith('/messages')) return { data: { list: [messageFor(projectId)], total: 1 } }
+        if (url.endsWith('/message-receipts')) {
+          if (projectId === 2) return { data: [{ id: 1, readCount: 0, totalCount: 1 }] }
+          let resolve
+          let reject
+          const promise = new Promise((ok, fail) => { resolve = ok; reject = fail })
+          pending.push({ projectId, config, resolve, reject })
+          return promise
+        }
+        throw new Error(`unexpected request: ${url}`)
+      },
+    },
+  }, browser.globals).default
+  const renderOptions = { createNodeMock: () => browser.listNode }
+  let renderer
+  await act(async () => {
+    renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', active: true }), renderOptions)
+    await flushReceiptMicrotasks()
+  })
+  browser.state.nodes = [receiptNode(1, { width: 120, height: 32, top: 12, bottom: 44 })]
+  await act(async () => {
+    startReceiptTimer(browser, 5000)
+    await flushReceiptMicrotasks()
+  })
+  assert.equal(pending.length, 1)
+
+  browser.state.nodes = [receiptNode(1, { width: 120, height: 32, top: 12, bottom: 44 })]
+  await act(async () => {
+    renderer.update(React.createElement(Page, { projectId: 2, projectStatus: 'IN_PROGRESS', active: true }))
+    await flushReceiptMicrotasks()
+  })
+  assert.equal(pending[0].config.signal.aborted, true, 'switching projects aborts the old receipt request')
+  await act(async () => {
+    pending[0].resolve({ data: [{ id: 1, readCount: 1, totalCount: 1 }] })
+    await flushReceiptMicrotasks()
+  })
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：0/1')
+  assert.equal(renderer.root.findAll((node) => node.props.children === '项目2留言').length, 1)
+  await act(async () => renderer.unmount())
+
+  browser.state.nodes = []
+  let unmountedRenderer
+  await act(async () => {
+    unmountedRenderer = create(React.createElement(Page, { projectId: 3, projectStatus: 'IN_PROGRESS', active: true }), renderOptions)
+    await flushReceiptMicrotasks()
+  })
+  browser.state.nodes = [receiptNode(1, { width: 120, height: 32, top: 12, bottom: 44 })]
+  await act(async () => {
+    startReceiptTimer(browser, 5000)
+    await flushReceiptMicrotasks()
+  })
+  const lateUnmountRequest = pending.find((request) => request.projectId === 3)
+  assert.ok(lateUnmountRequest)
+  await act(async () => unmountedRenderer.unmount())
+  assert.equal(lateUnmountRequest.config.signal.aborted, true, 'unmount aborts the in-flight receipt request')
+  await act(async () => {
+    lateUnmountRequest.resolve({ data: [{ id: 1, readCount: 1, totalCount: 1 }] })
+    await flushReceiptMicrotasks()
+  })
+  assert.equal(unmountedRenderer.toJSON(), null)
+})
+
+test('receipt sync keeps the last count after failure and recovers on the backoff poll', async () => {
+  const browser = createReceiptBrowser()
+  const messages = [{ id: 1, senderId: 2, senderName: '成员', senderType: 'INTERNAL', content: '保留内容', readCount: 0, totalCount: 1, readByMe: true, createdAt: '' }]
+  let fail = true
+  let receiptCalls = 0
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []),
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async (url) => {
+        if (url === '/projects/1/messages') return { data: { list: messages, total: 1 } }
+        if (url === '/projects/1/message-receipts') {
+          receiptCalls++
+          if (fail) throw new Error('receipts unavailable')
+          return { data: [{ id: 1, readCount: 1, totalCount: 1 }] }
+        }
+        throw new Error(`unexpected request: ${url}`)
+      },
+    },
+  }, browser.globals).default
+  let renderer
+  await act(async () => {
+    renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', active: true }), {
+      createNodeMock: () => browser.listNode,
+    })
+    await flushReceiptMicrotasks()
+  })
+  browser.state.nodes = [receiptNode(1, { width: 120, height: 32, top: 12, bottom: 44 })]
+  await runReceiptTimer(browser, 5000)
+  assert.equal(receiptCalls, 1)
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：0/1', 'a failed poll preserves the last count')
+  assert.ok([...browser.timers.values()].some((timer) => timer.delay === 10000), 'failure backs off the next poll')
+
+  fail = false
+  await runReceiptTimer(browser, 10000)
+  assert.equal(receiptCalls, 2)
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：1/1')
+  assert.ok([...browser.timers.values()].some((timer) => timer.delay === 5000), 'a successful retry restores the normal interval')
   await act(async () => renderer.unmount())
 })
 
@@ -2201,6 +2511,7 @@ test('project detail activity URL tab and target navigation preserve valid tab s
   assert.equal(renderer.root.findByType('Tabs').props.activeTab, 'activity')
   const activities = renderer.root.findByType('Activities')
   assert.equal(activities.props.active, true)
+  assert.equal(renderer.root.findByType('Messages').props.active, false)
   await act(async () => activities.props.onNavigate('FILE', 7))
   assert.equal(updates.at(-1).get('tab'), 'files')
   assert.equal(updates.at(-1).get('target'), '7')
@@ -2212,6 +2523,10 @@ test('project detail activity URL tab and target navigation preserve valid tab s
   await act(async () => renderer.root.findAllByType('Tabs')[0].props.onChange('files'))
   assert.equal(updates.at(-1).get('tab'), 'files')
   assert.equal(updates.at(-1).get('target'), null)
+  await act(async () => renderer.root.findAllByType('Tabs')[0].props.onChange('messages'))
+  await act(async () => renderer.update(React.createElement(Page)))
+  assert.equal(renderer.root.findByType('Messages').props.active, true)
+  assert.equal(renderer.root.findByType('Activities').props.active, false)
   await act(async () => renderer.unmount())
 })
 
