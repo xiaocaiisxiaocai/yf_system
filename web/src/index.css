@@ -254,194 +254,6 @@ html, body, #root {
   .audit-page { --page-table-scroll-y: max(180px, calc(100vh - 457px)); }
 }
 
-/* 组织架构：左侧组织树 + 右侧详情，减少大面积空白并让操作跟随选中对象。 */
-.dept-page {
-  height: calc(100vh - 88px);
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.dept-page > .arco-card-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-.dept-page-header {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: minmax(280px, 1fr) auto auto;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 16px;
-  padding: 14px 16px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-  background: #f8faff;
-}
-.dept-page-title {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-.dept-summary {
-  display: grid;
-  grid-template-columns: repeat(3, 76px);
-  gap: 8px;
-}
-.dept-summary > div {
-  padding: 8px 10px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.76);
-  text-align: center;
-}
-.dept-summary b {
-  display: block;
-  color: var(--color-text-1);
-  font-size: 18px;
-  line-height: 22px;
-}
-.dept-summary span {
-  display: block;
-  margin-top: 2px;
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-.dept-workspace {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(320px, 38%) minmax(360px, 1fr);
-  gap: 16px;
-}
-.dept-tree-panel,
-.dept-detail-panel {
-  min-width: 0;
-  min-height: 0;
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-  background: #fff;
-  overflow: hidden;
-}
-.dept-tree-panel {
-  display: flex;
-  flex-direction: column;
-}
-.dept-panel-head {
-  flex: 0 0 auto;
-  padding: 14px 16px 12px;
-  border-bottom: 1px solid var(--color-border-2);
-  background: var(--color-fill-1);
-}
-.dept-panel-head > div {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.dept-tree-scroll {
-  flex: 1;
-  min-height: 0;
-  padding: 12px 10px;
-  overflow: auto;
-}
-.dept-tree-node {
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 100%;
-}
-.dept-tree-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.dept-page .arco-tree-node-title {
-  border-radius: 6px;
-}
-.dept-page .arco-tree-node-title:hover {
-  background: rgb(var(--primary-1));
-}
-.dept-page .arco-tree-node-selected .arco-tree-node-title {
-  color: rgb(var(--primary-6));
-  background: rgb(var(--primary-1));
-  font-weight: 500;
-}
-.dept-detail-panel {
-  display: flex;
-  flex-direction: column;
-  padding: 18px;
-  background: #fff;
-}
-.dept-detail-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--color-border-2);
-}
-.dept-detail-grid {
-  display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
-  margin-top: 18px;
-  overflow: hidden;
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-  background: #fff;
-}
-.dept-detail-grid > span,
-.dept-detail-grid > b {
-  min-width: 0;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--color-border-2);
-  line-height: 20px;
-}
-.dept-detail-grid > span {
-  color: var(--color-text-3);
-  background: var(--color-fill-1);
-  font-weight: 400;
-}
-.dept-detail-grid > b {
-  color: var(--color-text-1);
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-.dept-detail-grid > :nth-last-child(-n + 2) {
-  border-bottom: none;
-}
-.dept-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: auto;
-  padding-top: 18px;
-}
-.dept-empty-detail {
-  flex: 1;
-  min-height: 260px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  color: var(--color-text-2);
-  text-align: center;
-}
-@media (min-width: 721px) and (max-width: 1100px) {
-  .dept-page-header { grid-template-columns: 1fr auto; gap: 12px; }
-  .dept-page-title { grid-column: 1 / -1; }
-  .dept-workspace { grid-template-columns: minmax(240px, 38%) minmax(0, 1fr); }
-  .dept-detail-panel { padding: 14px; }
-  .dept-detail-grid { grid-template-columns: 78px minmax(0, 1fr); }
-}
 
 /* 表格全局：表头加粗浅底、单元格不换行、数字等宽（时间/大小列对齐）。
  * 所有单元格统一建立裁剪边界，避免未显式 ellipsis 的自定义内容绘制到下一列。 */
@@ -515,7 +327,6 @@ html, body, #root {
 .section-heading p { margin: 4px 0 0; font-size: 13px; line-height: 20px; color: var(--app-text-muted); font-weight: 400; }
 .section-heading > .arco-typography { flex-basis: 100%; }
 .section-heading > .arco-typography-secondary { font-size: 13px; }
-.dept-page-header.page-heading { display: grid; align-items: center; }
 .responsive-toolbar { flex-wrap: wrap; row-gap: 12px; }
 .responsive-toolbar .arco-space { flex-wrap: wrap; row-gap: 8px; }
 .responsive-toolbar > .arco-space-item { min-width: 0; max-width: 100%; }
@@ -905,12 +716,8 @@ html, body, #root {
   .arco-modal-content { max-height: calc(100dvh - 180px); }
   .arco-drawer-header, .arco-drawer-content, .arco-drawer-footer { padding: 16px; }
   .dept-page { min-height: calc(100vh - 76px); height: auto; overflow: visible; }
-  .dept-page-header { grid-template-columns: 1fr; align-items: stretch; padding: 12px; }
-  .dept-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .dept-workspace { grid-template-columns: 1fr; }
   .dept-tree-scroll { max-height: 42vh; }
-  .dept-detail-panel { padding: 14px; }
-  .dept-detail-grid { grid-template-columns: 82px minmax(0, 1fr); }
   .mobile-nav-drawer .arco-drawer-content {
     padding: 0;
     background: #17243a;

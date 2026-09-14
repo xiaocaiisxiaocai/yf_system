@@ -46,6 +46,7 @@ function loadTs(relativePath, mocks = {}, globals = {}) {
     AbortController,
     ...globals,
     require: (name) => {
+      if (name.endsWith('.css')) return {}
       if (name in mocks) return mocks[name]
       if (name.endsWith('/store/collaboration')) return { useCollaboration: (selector) => selector({ revision: '' }) }
       if (name.endsWith('.json')) return JSON.parse(fs.readFileSync(path.resolve(path.dirname(filename), name), 'utf8'))
