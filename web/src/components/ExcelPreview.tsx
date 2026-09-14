@@ -161,7 +161,7 @@ export default function ExcelPreview({ fileId }: Props) {
   const columnWidths = current.workbook.Sheets[current.activeSheet]?.['!cols'] ?? []
 
   return (
-    <div>
+    <div className="excel-preview">
       <div className="excel-preview-toolbar">
         <Typography.Text type="secondary">工作表</Typography.Text>
         <Select
@@ -216,7 +216,7 @@ export default function ExcelPreview({ fileId }: Props) {
       </div>}
       {preview?.truncated && (
         <Typography.Text type="secondary" className="excel-preview-note">
-          为保证浏览器流畅，仅显示前 {MAX_PREVIEW_ROWS} 行、{MAX_PREVIEW_COLUMNS} 列；完整内容请下载原文件查看。
+          为保证浏览器流畅，仅预览前 {MAX_PREVIEW_ROWS} 行、{MAX_PREVIEW_COLUMNS} 列。
         </Typography.Text>
       )}
     </div>

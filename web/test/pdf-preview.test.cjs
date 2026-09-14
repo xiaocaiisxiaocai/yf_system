@@ -104,7 +104,7 @@ function harness({ pendingRequest = false, pendingRender = false, pendingParse =
   const mount = async fileId => act(async () => {
     renderer = create(React.createElement(exports.default, { fileId }), { createNodeMock: element => element.type === 'canvas'
       ? { width: 0, height: 0, style: {}, getContext: () => ({}) }
-      : { clientWidth: 832, getBoundingClientRect: () => ({ width: 832 }) } })
+      : { clientWidth: 832, clientHeight: 632, getBoundingClientRect: () => ({ width: 832, height: 632 }) } })
   })
   return { mount, doc, requests, tasks, renders, get renderer() { return renderer }, update: fileId => act(async () => renderer.update(React.createElement(exports.default, { fileId }))) }
 }
@@ -134,6 +134,22 @@ test('PDF pagination and zoom render the selected page and cancel obsolete work'
   assert.equal(h.renders.at(-1).number, 3)
   await act(async () => h.renderer.unmount())
   assert.ok(h.renders.every(render => render.cancelled))
+})
+
+test('PDF fits the whole page and supports zoom in, zoom out and reset without changing pages', async () => {
+  const h = harness()
+  await h.mount(27)
+  assert.equal(h.renders.at(-1).options.viewport.height, 600)
+  assert.equal(h.renders.at(-1).options.viewport.width, 450)
+  await act(async () => h.renderer.root.findByProps({ 'aria-label': '放大 PDF' }).props.onClick())
+  assert.ok(h.renders.at(-1).options.viewport.height > 600)
+  await act(async () => h.renderer.root.findByProps({ 'aria-label': '缩小 PDF' }).props.onClick())
+  assert.ok(h.renders.at(-1).options.viewport.height < 752)
+  await act(async () => h.renderer.root.findByProps({ 'aria-label': '下一页' }).props.onClick())
+  await act(async () => h.renderer.root.findByProps({ 'aria-label': '重置 PDF 缩放' }).props.onClick())
+  assert.equal(h.renders.at(-1).options.viewport.height, 600)
+  assert.equal(h.renders.at(-1).number, 2)
+  await act(async () => h.renderer.unmount())
 })
 
 test('switching files or closing during loading aborts requests and ignores late PDFs', async () => {

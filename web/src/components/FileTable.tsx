@@ -270,15 +270,13 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
         />
       )}
       <Modal
+        className="file-preview-modal"
+        alignCenter
         title={preview ? `预览：${preview.originalName}` : ''}
         visible={!!preview}
         onCancel={() => setPreview(null)}
-        footer={hasPerm('file:download') ? (
-          <Button icon={<IconDownload />} onClick={() => preview && downloadAuthed(preview.id, preview.originalName)}>
-            下载原文件
-          </Button>
-        ) : null}
-        style={{ width: '86vw', maxWidth: 1200 }}
+        footer={null}
+        style={{ display: 'inline-flex', width: 'calc(100vw - 24px)', maxWidth: 'none', height: 'calc(100dvh - 24px)' }}
         unmountOnExit
       >
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'excel' && (

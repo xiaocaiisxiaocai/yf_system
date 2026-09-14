@@ -2494,6 +2494,10 @@ test('file preview, download and delete icon actions expose accessible names', a
   assert.equal(findElement(nameCell, (node) => node.props['aria-label'] === '预览文件').props['aria-label'], '预览文件')
   assert.equal(findElement(actions, (node) => node.props['aria-label'] === '下载文件').props['aria-label'], '下载文件')
   assert.equal(findElement(actions, (node) => node.props['aria-label'] === '删除文件').props['aria-label'], '删除文件')
+  await act(async () => findElement(nameCell, node => node.props['aria-label'] === '预览文件').props.onClick())
+  const preview = renderer.root.findByType('Modal')
+  assert.equal(preview.props.footer, null, 'preview has no download entry even with download permission')
+  assert.equal(preview.props.className, 'file-preview-modal')
   await act(async () => renderer.unmount())
 })
 
