@@ -68,7 +68,6 @@ function scrollbarMove() {
 }
 
 function selectorSet(multiple, ri, ci, indexesUpdated = true, moving = false) {
-  if (ri === -1 && ci === -1) return;
   const {
     table, selector, toolbar, data,
     contextMenu,
@@ -749,6 +748,11 @@ function sheetInitEvents() {
       // if (shiftKey) what = 'text';
       // if (altKey) what = 'format';
       switch (keyCode) {
+        case 65:
+          // Ctrl/Cmd+A selects the sheet; text fields retain their native selection.
+          selectorSet.call(this, false, -1, -1);
+          evt.preventDefault();
+          break;
         case 90:
           // undo: ctrl + z
           this.undo();

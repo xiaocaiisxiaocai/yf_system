@@ -50,6 +50,37 @@ function loadExcelSource() {
   })
 }
 
+test('corner and Ctrl+A select every row and column while text fields keep native Ctrl+A', () => {
+  const filename = path.resolve(__dirname, '../vendor/vue-office-excel/core/packages/vue-excel/src/x-spreadsheet/component/sheet.js')
+  const source = ts.transpileModule(fs.readFileSync(filename, 'utf8') + '\nexport { selectorSet, sheetInitEvents };', {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText
+  const handlers = {}, exports = {}
+  vm.runInNewContext(source, {
+    exports, window: {}, setTimeout, clearTimeout,
+    require: () => ({ bind(_target, name, callback) { handlers[name] = callback }, bindTouch() {} }),
+  })
+  const selection = { range: { sri: 4, sci: 2, eri: 4, eci: 2 },
+    set(ri, ci) { this.range = { sri: Math.max(0, ri), sci: Math.max(0, ci), eri: ri < 0 ? 79 : ri, eci: ci < 0 ? 11 : ci } },
+  }
+  const sheet = { selector: selection, data: { getCell: () => null }, focusing: true,
+    contextMenu: { setMode() {} }, trigger() {}, overlayerEl: { el: {}, on() { return this } },
+    rowResizer: {}, colResizer: {}, verticalScrollbar: {}, horizontalScrollbar: {}, editor: {}, modalValidation: {}, toolbar: {}, sortFilter: {},
+  }
+  exports.selectorSet.call(sheet, false, -1, -1)
+  assert.deepEqual(selection.range, { sri: 0, sci: 0, eri: 79, eci: 11 })
+  exports.sheetInitEvents.call(sheet)
+  selection.set(2, 3)
+  let prevented = false
+  handlers.keydown({ keyCode: 65, key: 'a', ctrlKey: true, preventDefault() { prevented = true } })
+  assert.deepEqual(selection.range, { sri: 0, sci: 0, eri: 79, eci: 11 })
+  assert.equal(prevented, true)
+  sheet.focusing = false
+  prevented = false
+  handlers.keydown({ keyCode: 65, key: 'a', ctrlKey: true, preventDefault() { prevented = true } })
+  assert.equal(prevented, false)
+})
+
 test('auto-fit handles wrapped content, line breaks, merged titles, hidden cells and scoped columns', () => {
   const { fitDimensions } = loadTs('vendor/vue-office-excel/auto-fit.js', {
     './core/packages/vue-excel/src/x-spreadsheet/core/font.js': { getFontSizePxByPt: pt => pt * 4 / 3 },

@@ -41,6 +41,10 @@ const fitPreview = (axis = 'all', index) => {
   copyStatusTimer = setTimeout(() => { copyStatus.hidden = true }, 2000)
 }
 const showCell = (rowIndex, columnIndex) => {
+  if (rowIndex === -1 && columnIndex === -1) {
+    contentBar.show('全选', '')
+    return
+  }
   const content = selectedCellContent(viewer, rowIndex, columnIndex)
   contentBar.show(content.address, content.text)
 }
