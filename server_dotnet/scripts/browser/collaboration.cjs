@@ -247,18 +247,21 @@ async function chooseNotificationTab(drawer, name) {
     await record('供应商提交后管理员工作台待确认区自动出现项目', async () => {
       await adminPage.goto(s.base + '/');
       await adminPage.getByRole('heading', { name: new RegExp('^工作台 · ') }).waitFor();
-      await adminPage.getByRole('heading', { name: '待我方确认的项目', exact: true }).waitFor();
-      await adminPage.getByText('暂无待确认项目', { exact: true }).waitFor();
+      await adminPage.getByRole('heading', { name: '公司内部待验收项目', exact: true }).waitFor();
+      await adminPage.getByText('暂无内部待验收项目', { exact: true }).waitFor();
       const pendingReload = waitResponse(adminPage, '/dashboard/pending-projects');
       const submit = action(supplierPage, `/projects/${project.id}/submit`, 'POST', async () => {
-        await supplierPage.getByRole('button', { name: '提交确认', exact: true }).click();
+        await supplierPage.getByRole('button', { name: '提交内部验收', exact: true }).click();
         await supplierPage.locator('.arco-popconfirm:visible').getByRole('button', { name: '确定', exact: true }).click();
       });
       await submit;
       const pending = await (await pendingReload).json();
       assert(pending.list.some(item => item.id === project.id));
       await adminPage.getByRole('link', { name: projectName, exact: true }).waitFor();
-      await supplierPage.getByText('待确认', { exact: true }).first().waitFor();
+      await supplierPage.getByText('待内部验收', { exact: true }).first().waitFor();
+      await supplierPage.getByText('验收方：公司内部', { exact: true }).waitFor();
+      assert.equal(await supplierPage.getByRole('button', { name: '验收通过', exact: true }).count(), 0);
+      assert.equal(await supplierPage.getByRole('button', { name: '验收驳回', exact: true }).count(), 0);
     });
 
     let markedNotification;
@@ -312,7 +315,7 @@ async function chooseNotificationTab(drawer, name) {
 
     await record('管理员确认后供应商项目状态无需刷新自动变为已完成', async () => {
       const supplierReload = waitResponse(supplierPage, `/projects/${project.id}`);
-      await adminPage.getByRole('button', { name: '确认', exact: true }).click();
+      await adminPage.getByRole('button', { name: '验收通过', exact: true }).click();
       await action(adminPage, `/projects/${project.id}/confirm`, 'POST',
         () => adminPage.locator('.arco-popconfirm:visible').getByRole('button', { name: '确定', exact: true }).click());
       await supplierReload;

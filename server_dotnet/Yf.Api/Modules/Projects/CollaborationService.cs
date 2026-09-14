@@ -13,6 +13,9 @@ internal sealed class CollaborationService
           OR (pa.activity_type='MESSAGE' AND pa.action='CREATE')
           OR (pa.activity_type='PROJECT' AND pa.action IN ('START','RESTART','SUBMIT','CONFIRM','REJECT','WITHDRAW','TERMINATE')))
         """;
+    private const string InternalAcceptanceVisibility = """
+        (pa.activity_type<>'PROJECT' OR pa.action<>'SUBMIT' OR @CanReceivePendingAcceptance=TRUE)
+        """;
 
     internal async Task<object> SummaryAsync(
         MySqlConnection conn,
@@ -24,6 +27,9 @@ internal sealed class CollaborationService
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         var (scope, parameters) = await ProjectAccessService.VisibleScopeAsync(conn, tx, current, ct);
         parameters.Add("UserId", current.Id);
+        parameters.Add("CanReceivePendingAcceptance", ProjectWorkflowRules.CanReceivePendingAcceptance(
+            current,
+            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct)));
         var row = await conn.QuerySingleAsync<CollaborationFingerprintRow>(new CommandDefinition(
             $"""
             SELECT COUNT(*) AS ActivityCount,COALESCE(MAX(pa.id),0) AS LatestId,
@@ -32,7 +38,8 @@ internal sealed class CollaborationService
                    COUNT(cr.activity_id) AS ReadCount,
                    CAST(COALESCE(SUM(CASE WHEN cr.activity_id IS NULL THEN 0 ELSE pa.id END),0) AS CHAR) AS ReadSum,
                    COALESCE(BIT_XOR(CASE WHEN cr.activity_id IS NULL THEN 0 ELSE pa.id END),0) AS ReadXor,
-                   COALESCE(SUM(CASE WHEN {MeaningfulActivity} AND pa.actor_id<>@UserId AND cr.activity_id IS NULL THEN 1 ELSE 0 END),0) AS UnreadCount
+                   COALESCE(SUM(CASE WHEN {MeaningfulActivity} AND {InternalAcceptanceVisibility}
+                       AND pa.actor_id<>@UserId AND cr.activity_id IS NULL THEN 1 ELSE 0 END),0) AS UnreadCount
             FROM project_activities pa
             INNER JOIN projects p ON p.id=pa.project_id
             LEFT JOIN collaboration_reads cr ON cr.activity_id=pa.id AND cr.user_id=@UserId
@@ -62,9 +69,12 @@ internal sealed class CollaborationService
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         var (scope, parameters) = await ProjectAccessService.VisibleScopeAsync(conn, tx, current, ct);
         parameters.Add("UserId", current.Id);
+        parameters.Add("CanReceivePendingAcceptance", ProjectWorkflowRules.CanReceivePendingAcceptance(
+            current,
+            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct)));
         parameters.Add("Offset", (actualPage - 1) * size);
         parameters.Add("Size", size);
-        var baseFilter = $"{scope} AND {MeaningfulActivity} AND pa.actor_id<>@UserId";
+        var baseFilter = $"{scope} AND {MeaningfulActivity} AND {InternalAcceptanceVisibility} AND pa.actor_id<>@UserId";
         var filter = baseFilter + (unreadOnly ? " AND cr.activity_id IS NULL" : string.Empty);
         var unreadCount = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
             $"""
@@ -150,13 +160,17 @@ internal sealed class CollaborationService
         }
         var (scope, parameters) = await ProjectAccessService.VisibleScopeAsync(conn, tx, current, ct);
         parameters.Add("UserId", current.Id);
+        parameters.Add("CanReceivePendingAcceptance", ProjectWorkflowRules.CanReceivePendingAcceptance(
+            current,
+            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct)));
         parameters.Add("Ids", ids);
         var validated = (await conn.QueryAsync<ulong>(new CommandDefinition(
             $"""
             SELECT pa.id
             FROM project_activities pa
             INNER JOIN projects p ON p.id=pa.project_id
-            WHERE pa.id IN @Ids AND {scope} AND {MeaningfulActivity} AND pa.actor_id<>@UserId
+            WHERE pa.id IN @Ids AND {scope} AND {MeaningfulActivity}
+              AND {InternalAcceptanceVisibility} AND pa.actor_id<>@UserId
             FOR UPDATE
             """,
             parameters, tx, cancellationToken: ct))).AsList();
@@ -170,7 +184,8 @@ internal sealed class CollaborationService
             SELECT pa.id,@UserId,UTC_TIMESTAMP(3)
             FROM project_activities pa
             INNER JOIN projects p ON p.id=pa.project_id
-            WHERE pa.id IN @Ids AND {scope} AND {MeaningfulActivity} AND pa.actor_id<>@UserId
+            WHERE pa.id IN @Ids AND {scope} AND {MeaningfulActivity}
+              AND {InternalAcceptanceVisibility} AND pa.actor_id<>@UserId
             """,
             parameters, tx, cancellationToken: ct));
         await tx.CommitAsync(ct);

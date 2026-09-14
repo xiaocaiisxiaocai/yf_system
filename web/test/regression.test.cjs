@@ -104,6 +104,8 @@ test('personal profile submits only own email and keeps password change in the s
   let renderer
   await act(async () => { renderer = create(React.createElement(Page)) })
   let forms = renderer.root.findAllByType('Form')
+  assert.ok(renderer.root.findAll((node) => node.props.children === '账号信息由企业管理员维护').length > 0,
+    'supplier profile must not imply that external users can administer supplier accounts')
 
   await act(async () => forms[0].props.onSubmit({ email: 'after@example.invalid', id: 999 }))
   assert.equal(calls[0].url, '/auth/profile')
@@ -1104,7 +1106,7 @@ test('dashboard pending projects can retry, navigate, refresh, and recover from 
 
   assert.deepEqual(JSON.parse(JSON.stringify(pendingRequests[0].params)), { page: 1, pageSize: 10 })
   await act(async () => pendingRequests[0].reject(new Error('pending projects unavailable')))
-  assert.ok(renderer.root.findAll((node) => node.props.children === '待确认项目加载失败').length > 0)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '内部待验收项目加载失败').length > 0)
   const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试')
   assert.ok(retry)
   await act(async () => retry.props.onClick())
@@ -1132,7 +1134,7 @@ test('dashboard pending projects can retry, navigate, refresh, and recover from 
   assert.ok(refresh, 'a workflow status change must have a reachable list refresh')
   await act(async () => refresh.props.onClick())
   await act(async () => pendingRequests[4].resolve({ data: { list: [], total: 0, page: 1, pageSize: 10 } }))
-  assert.ok(renderer.root.findAllByType('Empty').some((node) => node.props.description === '暂无待确认项目'))
+  assert.ok(renderer.root.findAllByType('Empty').some((node) => node.props.description === '暂无内部待验收项目'))
   await act(async () => renderer.unmount())
 })
 
@@ -1624,7 +1626,7 @@ test('unknown project tab query falls back to files and keeps description expans
   await act(async () => renderer.unmount())
 })
 
-test('project workflow exposes only permissioned project-level actions and matches the confirmer type', async () => {
+test('project workflow limits acceptance to permissioned internal users while preserving submitter withdrawal', async () => {
   const calls = []
   const http = {
     put: async (url, body) => { calls.push({ method: 'put', url, body }); return { data: {} } },
@@ -1645,17 +1647,27 @@ test('project workflow exposes only permissioned project-level actions and match
       onChanged: () => changed.push(true),
     }))
   })
-  assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '确认'))
-  assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '驳回'))
+  assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '验收通过'))
+  assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '验收驳回'))
   assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '撤回'))
+  await act(async () => renderer.unmount())
 
-  await act(async () => renderer.update(React.createElement(Page, {
-    project: { id: 1, status: 'PENDING_CONFIRMATION', confirmSide: 'SUPPLIER', latestSubmitterId: 2 },
-    onChanged: () => changed.push(true),
-  })))
-  assert.equal(renderer.root.findAllByType('Button').some((node) => node.props.children === '确认'), false)
-  assert.equal(renderer.root.findAllByType('Button').some((node) => node.props.children === '驳回'), false)
-  assert.equal(renderer.root.findAllByType('Button').some((node) => node.props.children === '撤回'), false)
+  const SupplierPage = loadTs('src/components/ProjectWorkflowPanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': http,
+    '../api/types': { PROJECT_STATUS: { PENDING_CONFIRMATION: { text: '待内部验收', color: 'orange' } } },
+    '../store/auth': authModule({ id: 2, userType: 'SUPPLIER' }, ['project:confirm', 'project:withdraw']),
+  }).default
+  await act(async () => {
+    renderer = create(React.createElement(SupplierPage, {
+      project: { id: 1, status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 2 },
+      onChanged: () => changed.push(true),
+    }))
+  })
+  assert.equal(renderer.root.findAllByType('Button').some((node) => node.props.children === '验收通过'), false)
+  assert.equal(renderer.root.findAllByType('Button').some((node) => node.props.children === '验收驳回'), false)
+  assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '撤回'))
   await act(async () => renderer.unmount())
 
   const AllViewPage = loadTs('src/components/ProjectWorkflowPanel.tsx', {
@@ -1667,7 +1679,7 @@ test('project workflow exposes only permissioned project-level actions and match
   }).default
   await act(async () => {
     renderer = create(React.createElement(AllViewPage, {
-      project: { id: 1, status: 'PENDING_CONFIRMATION', confirmSide: 'SUPPLIER', latestSubmitterId: 2 },
+      project: { id: 1, status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 2 },
       onChanged: () => changed.push(true),
     }))
   })
@@ -1706,7 +1718,7 @@ test('project workflow status commands are limited to start, terminate and resta
   await act(async () => renderer.unmount())
 })
 
-test('project submission sends only the opposite organization as confirmer', async () => {
+test('project submission from either user type always requests company internal acceptance', async () => {
   const calls = []
   const http = { post: async (url, body) => { calls.push({ url, body }); return { data: {} } } }
   const render = (user) => loadTs('src/components/ProjectWorkflowPanel.tsx', {
@@ -1717,20 +1729,21 @@ test('project submission sends only the opposite organization as confirmer', asy
     '../store/auth': authModule(user, ['project:submit']),
   }).default
 
-  for (const [user, expectedSide, title] of [
-    [{ id: 1, userType: 'INTERNAL' }, 'SUPPLIER', '提交给供应商确认？'],
-    [{ id: 2, userType: 'SUPPLIER' }, 'COMPANY', '提交给公司确认？'],
+  for (const user of [
+    { id: 1, userType: 'INTERNAL' },
+    { id: 2, userType: 'SUPPLIER' },
   ]) {
     const Page = render(user)
     let renderer
     await act(async () => {
       renderer = create(React.createElement(Page, { project: { id: 1, status: 'IN_PROGRESS' }, onChanged() {} }))
     })
-    const submit = renderer.root.findAllByType('Popconfirm').find((node) => node.props.title === title)
-    assert.ok(submit, title)
+    const submit = renderer.root.findAllByType('Popconfirm').find((node) => node.props.title === '提交公司内部验收？')
+    assert.ok(submit)
+    assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '提交内部验收'))
     await act(async () => submit.props.onOk())
     assert.equal(calls.at(-1).url, '/projects/1/submit')
-    assert.equal(calls.at(-1).body.confirmSide, expectedSide)
+    assert.equal(calls.at(-1).body.confirmSide, 'COMPANY')
     await act(async () => renderer.unmount())
   }
 })
@@ -1760,7 +1773,7 @@ test('project rejection discards a cancelled reason but retains it after a faile
       onChanged() { assert.fail('a cancelled or failed rejection must not report success') },
     }))
   })
-  const open = () => renderer.root.findAllByType('Button').find((node) => node.props.children === '驳回').props.onClick()
+  const open = () => renderer.root.findAllByType('Button').find((node) => node.props.children === '验收驳回').props.onClick()
   const modal = () => renderer.root.findByType('Modal')
   await act(async () => open())
   reason = 'cancelled draft'
@@ -1815,10 +1828,10 @@ test('workflow actions ignore duplicate invocations while validation or the requ
     let invoke
     if (action === 'start') invoke = renderer.root.findAllByType('Button').find((node) => node.props.children === '开始').props.onClick
     else if (action === 'reject') {
-      await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '驳回').props.onClick())
+      await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '验收驳回').props.onClick())
       invoke = modal().props.onOk
     } else {
-      const prefix = { submit: '提交给', confirm: '确认通过', withdraw: '撤回本次' }[action]
+      const prefix = { submit: '提交公司内部验收', confirm: '确认通过公司内部验收', withdraw: '撤回内部验收申请' }[action]
       invoke = renderer.root.findAllByType('Popconfirm').find((node) => String(node.props.title).startsWith(prefix)).props.onOk
     }
     let first
@@ -1929,6 +1942,23 @@ test('project activity waits for its tab, filters, refreshes and ignores late re
   await act(async () => renderer.unmount())
 })
 
+test('completed legacy supplier acceptance remains readable without appearing as pending internal acceptance', async () => {
+  const Page = loadTs('src/components/ProjectActivityPanel.tsx', {
+    '@arco-design/web-react': activityArco(),
+    '../api/client': { get: async () => ({ data: {
+      list: [activityRow(6, 'PROJECT', { action: 'CONFIRM' })], nextCursor: null,
+      summary: { status: 'COMPLETED', pendingConfirmation: false, confirmSide: 'SUPPLIER', lastActivityAt: null },
+    } }) },
+    '../api/types': { PROJECT_STATUS: { COMPLETED: { text: '已完成' } }, fmtTime: String },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1 })) })
+  assert.equal(renderer.root.findAll((node) => node.props['data-activity-id'] === 6).length, 1)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '无待验收申请').length > 0)
+  assert.equal(renderer.root.findAll((node) => node.props.children === '项目动态加载失败').length, 0)
+  await act(async () => renderer.unmount())
+})
+
 test('project activity exposes malformed initial responses as a retryable failure', async () => {
   let attempts = 0
   const http = {
@@ -1979,7 +2009,7 @@ test('project activity keeps loaded rows when an append fails, retries the curso
             ]
             : [activityRow(1, 'PROJECT', { summary: '驳回原因：需要补充资料', action: 'REJECT' })],
           nextCursor: config.params.cursor ? null : 'cursor-1',
-          summary: { status: 'IN_PROGRESS', pendingConfirmation: true, confirmSide: 'SUPPLIER', lastActivityAt: '2026-09-09T00:00:01Z' },
+          summary: { status: 'IN_PROGRESS', pendingConfirmation: true, confirmSide: 'COMPANY', lastActivityAt: '2026-09-09T00:00:01Z' },
         },
       }
     },
@@ -2552,9 +2582,9 @@ test('project workflow audit actions expose precise labels and state or rejectio
   await act(async () => { renderer = create(React.createElement(Page)) })
   const table = renderer.root.findByType('Table')
   const action = table.props.columns.find((column) => column.dataIndex === 'action').render(row.action, row)
-  assert.match(JSON.stringify(action), /驳回项目/)
+  assert.match(JSON.stringify(action), /验收驳回/)
   const summary = table.props.columns.find((column) => column.title === '内容摘要').render(null, row)
-  assert.match(JSON.stringify(summary), /待确认/)
+  assert.match(JSON.stringify(summary), /待验收/)
   assert.match(JSON.stringify(summary), /进行中/)
   assert.match(JSON.stringify(summary), /驳回原因：需要补充资料/)
 

@@ -202,7 +202,39 @@ def run_collaboration_checks(admin, Client, conn, check):
           and all(item["projectId"] == project_id for item in dashboard_messages["list"]))
 
     file_id, _, _ = _upload_chunks(first, project_id, "协作链接.pdf", b"collaboration-link")
-    first.call("POST", f"/api/v1/projects/{project_id}/submit", {"confirmSide": "SUPPLIER"})
+    supplier_before_submit = first_supplier_client.call("GET", "/api/v1/collaboration/summary")
+    supplier_notifications_before = first_supplier_client.call(
+        "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false")
+    internal_nonconfirmer_before = second.call("GET", "/api/v1/collaboration/summary")
+    internal_nonconfirmer_notifications_before = second.call(
+        "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false")
+    first.call("POST", f"/api/v1/projects/{project_id}/submit", {})
+    supplier_after_submit = first_supplier_client.call("GET", "/api/v1/collaboration/summary")
+    supplier_notifications_after = first_supplier_client.call(
+        "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false")
+    internal_nonconfirmer_after = second.call("GET", "/api/v1/collaboration/summary")
+    internal_nonconfirmer_notifications_after = second.call(
+        "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false")
+    check(
+        "non-confirmers observe submission revision without receiving internal acceptance notifications",
+        supplier_after_submit["latestId"] > supplier_before_submit["latestId"]
+        and supplier_after_submit["revision"] != supplier_before_submit["revision"]
+        and supplier_after_submit["unreadCount"] == supplier_before_submit["unreadCount"]
+        and supplier_notifications_after["total"] == supplier_notifications_before["total"]
+        and all(
+            item["type"] != "PROJECT" or item["action"] != "SUBMIT"
+            for item in supplier_notifications_after["list"]
+        )
+        and internal_nonconfirmer_after["latestId"] > internal_nonconfirmer_before["latestId"]
+        and internal_nonconfirmer_after["revision"] != internal_nonconfirmer_before["revision"]
+        and internal_nonconfirmer_after["unreadCount"] == internal_nonconfirmer_before["unreadCount"]
+        and internal_nonconfirmer_notifications_after["total"]
+        == internal_nonconfirmer_notifications_before["total"]
+        and all(
+            item["type"] != "PROJECT" or item["action"] != "SUBMIT"
+            for item in internal_nonconfirmer_notifications_after["list"]
+        ),
+    )
     with conn.cursor() as cursor:
         cursor.execute(
             "SELECT event_type,body FROM email_outbox WHERE project_id=%s ORDER BY id",

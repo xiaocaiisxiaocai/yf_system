@@ -12,7 +12,7 @@ export interface Project {
   supplierId: number
   supplierName?: string
   status: 'DRAFT' | 'IN_PROGRESS' | 'PENDING_CONFIRMATION' | 'COMPLETED' | 'TERMINATED'
-  /** 当前待确认项目的确认方；项目回到进行中后由后端清空。 */
+  /** 当前内部验收方；待验收时固定为 COMPANY，项目回到进行中后由后端清空。 */
   confirmSide?: ConfirmSide | null
   /** 当前待确认提交的提交人；撤回仅由提交人或内部全量查看者发起。 */
   latestSubmitterId?: number | null
@@ -23,6 +23,7 @@ export interface Project {
   updatedAt: string
 }
 
+/** 新申请固定 COMPANY；SUPPLIER 仅用于读取升级前保留的历史数据。 */
 export type ConfirmSide = 'COMPANY' | 'SUPPLIER'
 
 export interface FileItem {
@@ -71,7 +72,7 @@ export interface SupplierMember {
 export const PROJECT_STATUS: Record<string, { text: string; color: string }> = {
   DRAFT: { text: '草稿', color: 'gray' },
   IN_PROGRESS: { text: '进行中', color: 'arcoblue' },
-  PENDING_CONFIRMATION: { text: '待确认', color: 'orange' },
+  PENDING_CONFIRMATION: { text: '待内部验收', color: 'orange' },
   COMPLETED: { text: '已完成', color: 'green' },
   TERMINATED: { text: '已终止', color: 'red' },
 }

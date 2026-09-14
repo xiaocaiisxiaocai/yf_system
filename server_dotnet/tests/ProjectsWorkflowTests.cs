@@ -85,4 +85,40 @@ public sealed class ProjectsWorkflowTests
 
         Assert.Equal([1UL, 2UL, 3UL], normalized);
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("COMPANY")]
+    [InlineData(" COMPANY ")]
+    public void InternalAndSupplierSubmissionsDefaultToCompanyConfirmation(string? requestedSide)
+    {
+        Assert.Equal("COMPANY", ProjectWorkflowRules.NormalizeConfirmSide(requestedSide));
+    }
+
+    [Theory]
+    [InlineData("SUPPLIER")]
+    [InlineData("")]
+    [InlineData("company")]
+    public void NonCompanyConfirmationRequestsAreRejectedClearly(string requestedSide)
+    {
+        var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.NormalizeConfirmSide(requestedSide));
+
+        Assert.Equal(400, error.Status);
+        Assert.Equal("项目验收仅支持公司内部确认，confirmSide 必须为 COMPANY", error.Message);
+    }
+
+    [Fact]
+    public void OnlyInternalUsersCanConfirmOrRejectAndReceivePendingAcceptance()
+    {
+        var internalUser = new CurrentUser(1, "internal", "INTERNAL", null);
+        var supplierUser = new CurrentUser(2, "supplier", "SUPPLIER", 10);
+
+        ProjectWorkflowRules.RequireInternalDecisionActor(internalUser);
+        Assert.True(ProjectWorkflowRules.CanReceivePendingAcceptance(internalUser, hasConfirmPermission: true));
+        Assert.False(ProjectWorkflowRules.CanReceivePendingAcceptance(internalUser, hasConfirmPermission: false));
+        Assert.False(ProjectWorkflowRules.CanReceivePendingAcceptance(supplierUser, hasConfirmPermission: true));
+        var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.RequireInternalDecisionActor(supplierUser));
+        Assert.Equal(403, error.Status);
+        Assert.Equal("项目验收确认和驳回仅限公司内部用户", error.Message);
+    }
 }

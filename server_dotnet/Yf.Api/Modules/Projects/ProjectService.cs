@@ -256,13 +256,9 @@ internal sealed class ProjectService(
         string? ip,
         CancellationToken ct)
     {
-        var side = ParseConfirmSide(request.ConfirmSide);
+        var side = ProjectWorkflowRules.NormalizeConfirmSide(request.ConfirmSide);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var (project, current) = await LockWorkflowProjectAsync(conn, tx, actor, projectId, "project:submit", ct);
-        if (side == UserSide(current))
-        {
-            throw ApiException.BadRequest("确认方必须选择提交人的另一方");
-        }
         if (project.Status != ProjectStatuses.InProgress)
         {
             throw ApiException.Conflict("只有进行中的项目可以提交验收");
@@ -296,6 +292,7 @@ internal sealed class ProjectService(
         string? ip,
         CancellationToken ct)
     {
+        ProjectWorkflowRules.RequireInternalDecisionActor(actor);
         var reason = (request.Reason ?? string.Empty).Trim();
         if (reason.Length == 0)
         {
@@ -421,14 +418,16 @@ internal sealed class ProjectService(
         var project = await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
         var unread = await MessageService.UnreadCountAsync(conn, null, actor.Id, projectId, ct);
         var activityRevision = await ProjectActivityService.RevisionAsync(conn, null, projectId, ct);
-        var canConfirm = await ProjectAccessService.HasPermissionAsync(conn, null, actor.Id, "project:confirm", ct);
+        var canConfirm = ProjectWorkflowRules.CanReceivePendingAcceptance(
+            actor,
+            await ProjectAccessService.HasPermissionAsync(conn, null, actor.Id, "project:confirm", ct));
         return new
         {
             unreadMessages = unread,
             activityRevision,
             pendingConfirmation = canConfirm
                 && project.Status == ProjectStatuses.PendingConfirmation
-                && project.ConfirmSide == UserSide(actor),
+                && project.ConfirmSide == ProjectWorkflowRules.InternalAcceptanceSide,
         };
     }
 
@@ -535,18 +534,18 @@ internal sealed class ProjectService(
         CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var (project, current) = await LockWorkflowProjectAsync(conn, tx, actor, projectId, "project:confirm", ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        ProjectWorkflowRules.RequireInternalDecisionActor(current);
+        var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "project:confirm", ct);
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
         if (project.Status != ProjectStatuses.PendingConfirmation)
         {
             throw ApiException.Conflict("项目当前不在待确认状态");
         }
-        if (project.ConfirmSide is null)
+        if (project.ConfirmSide != ProjectWorkflowRules.InternalAcceptanceSide)
         {
-            throw new InvalidOperationException("待确认项目缺少确认方");
-        }
-        if (project.ConfirmSide != UserSide(current))
-        {
-            throw ApiException.Forbidden();
+            throw new InvalidOperationException("待确认项目的确认方必须为公司内部");
         }
         var latestSubmit = await LatestSubmissionAsync(conn, tx, projectId, ct);
         var to = action == "CONFIRM" ? ProjectStatuses.Completed : ProjectStatuses.InProgress;
@@ -771,15 +770,6 @@ internal sealed class ProjectService(
     }
 
     private static int RuneCount(string value) => value.EnumerateRunes().Count();
-
-    private static string ParseConfirmSide(string? value) => (value ?? string.Empty).Trim() switch
-    {
-        "COMPANY" => "COMPANY",
-        "SUPPLIER" => "SUPPLIER",
-        _ => throw ApiException.BadRequest("确认方必须为 COMPANY 或 SUPPLIER"),
-    };
-
-    private static string UserSide(CurrentUser actor) => actor.IsInternal ? "COMPANY" : "SUPPLIER";
 
     private sealed class ProjectDetailHistory
     {

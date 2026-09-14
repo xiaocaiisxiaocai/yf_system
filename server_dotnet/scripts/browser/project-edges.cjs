@@ -184,13 +184,13 @@ const { assert, OUT, s, f, record, login, api, action, track } = require(process
           for (let offset = 0, index = 0; offset < pdf.length; offset += upload.chunkSize, index++)
             await api(context, 'PUT', '/uploads/' + upload.sessionId + '/chunks/' + index, pdf.subarray(offset, offset + upload.chunkSize), auth.accessToken);
           await json('POST', '/uploads/' + upload.sessionId + '/merge');
-          await json('POST', '/projects/' + item.id + '/submit', { confirmSide: 'SUPPLIER' });
-          if (status === 'COMPLETED') await api(context, 'POST', '/projects/' + item.id + '/confirm', undefined, f.users.a.token);
+          await json('POST', '/projects/' + item.id + '/submit', { confirmSide: 'COMPANY' });
+          if (status === 'COMPLETED') await json('POST', '/projects/' + item.id + '/confirm');
         }
       }
       await page.goto(s.base + '/projects'); await page.getByRole('heading', { name: '项目协作', exact: true }).waitFor();
       await search(statusPrefix);
-      for (const [status, label] of [['DRAFT', '草稿'], ['PENDING_CONFIRMATION', '待确认'], ['COMPLETED', '已完成'], ['TERMINATED', '已终止'], ['IN_PROGRESS', '进行中']]) {
+      for (const [status, label] of [['DRAFT', '草稿'], ['PENDING_CONFIRMATION', '待内部验收'], ['COMPLETED', '已完成'], ['TERMINATED', '已终止'], ['IN_PROGRESS', '进行中']]) {
         const data = await listAction({ keyword: statusPrefix, status, page: 1 }, async () => {
           await page.locator('.page-toolbar .arco-select').first().click();
           await page.getByRole('option', { name: label, exact: true }).click();

@@ -46,17 +46,18 @@ await record('甲乙公司无法读取对方项目、文件或留言',async()=>{
   for(const suffix of ['/projects/'+pr.id,'/projects/'+pr.id+'/messages','/files/'+pr.pdfId+'/content','/files/'+pr.excelId+'/download'])await api(q.c,'GET',suffix,undefined,q.token,403);
  }
 });
-await record('公司提交、撤回、供应商驳回、重新提交并确认完成',async()=>{
- const pr=projects.a;await navigate(p,'/projects/'+pr.id);await confirm(p,'提交确认','/projects/'+pr.id+'/submit');await p.getByText('确认方：供应商',{exact:true}).waitFor();assert.equal(await p.getByRole('button',{name:'上传文件',exact:true}).count(),0);
- await confirm(p,'撤回','/projects/'+pr.id+'/withdraw');await p.getByRole('button',{name:'提交确认',exact:true}).waitFor();await confirm(p,'提交确认','/projects/'+pr.id+'/submit');
- await navigate(vendorA,'/projects/'+pr.id);await vendorA.getByRole('button',{name:'驳回',exact:true}).click();await vendorA.getByPlaceholder('请填写驳回原因').fill('自动验收：请补充确认');
- await action(vendorA,'/projects/'+pr.id+'/reject','POST',()=>vendorA.getByRole('button',{name:'确认驳回',exact:true}).click());await vendorA.getByText('上次驳回：自动验收：请补充确认',{exact:true}).waitFor();
- await p.reload();await confirm(p,'提交确认','/projects/'+pr.id+'/submit');await vendorA.reload();await confirm(vendorA,'确认','/projects/'+pr.id+'/confirm');
- await vendorA.getByText('已完成',{exact:true}).first().waitFor();const done=await(await api(admin.c,'GET','/projects/'+pr.id,undefined,admin.token)).json();assert.equal(done.status,'COMPLETED');await vendorA.screenshot({path:OUT+'/a-completed.png',fullPage:true});
+await record('公司提交、撤回、内部驳回、重新提交并内部验收完成',async()=>{
+ const pr=projects.a;await navigate(p,'/projects/'+pr.id);const submitted=await confirm(p,'提交内部验收','/projects/'+pr.id+'/submit');assert.equal(submitted.confirmSide,'COMPANY');await p.getByText('验收方：公司内部',{exact:true}).waitFor();assert.equal(await p.getByRole('button',{name:'上传文件',exact:true}).count(),0);
+ await navigate(vendorA,'/projects/'+pr.id);await vendorA.getByText('验收方：公司内部',{exact:true}).waitFor();assert.equal(await vendorA.getByRole('button',{name:'验收通过',exact:true}).count(),0);assert.equal(await vendorA.getByRole('button',{name:'验收驳回',exact:true}).count(),0);
+ await p.reload();await confirm(p,'撤回','/projects/'+pr.id+'/withdraw');await p.getByRole('button',{name:'提交内部验收',exact:true}).waitFor();await confirm(p,'提交内部验收','/projects/'+pr.id+'/submit');
+ await p.getByRole('button',{name:'验收驳回',exact:true}).click();await p.getByPlaceholder('请填写驳回原因').fill('自动验收：请补充确认');
+ await action(p,'/projects/'+pr.id+'/reject','POST',()=>p.getByRole('button',{name:'确认驳回',exact:true}).click());await p.getByText('上次驳回：自动验收：请补充确认',{exact:true}).waitFor();
+ await confirm(p,'提交内部验收','/projects/'+pr.id+'/submit');await confirm(p,'验收通过','/projects/'+pr.id+'/confirm');
+ await p.getByText('已完成',{exact:true}).first().waitFor();const done=await(await api(admin.c,'GET','/projects/'+pr.id,undefined,admin.token)).json();assert.equal(done.status,'COMPLETED');await p.screenshot({path:OUT+'/a-completed.png',fullPage:true});
 });
 await record('供应商提交、公司确认完成及公司项目动态',async()=>{
- const pr=projects.b;await navigate(vendorB,'/projects/'+pr.id);await confirm(vendorB,'提交确认','/projects/'+pr.id+'/submit');await vendorB.getByText('确认方：公司',{exact:true}).waitFor();
- await navigate(p,'/projects/'+pr.id);await confirm(p,'确认','/projects/'+pr.id+'/confirm');await p.getByText('已完成',{exact:true}).first().waitFor();await p.getByRole('tab',{name:'项目动态',exact:true}).click();await p.getByText('确认项目',{exact:false}).first().waitFor();await p.screenshot({path:OUT+'/b-completed-activity.png',fullPage:true});
+ const pr=projects.b;await navigate(vendorB,'/projects/'+pr.id);const submitted=await confirm(vendorB,'提交内部验收','/projects/'+pr.id+'/submit');assert.equal(submitted.confirmSide,'COMPANY');await vendorB.getByText('验收方：公司内部',{exact:true}).waitFor();assert.equal(await vendorB.getByRole('button',{name:'验收通过',exact:true}).count(),0);assert.equal(await vendorB.getByRole('button',{name:'验收驳回',exact:true}).count(),0);
+ await navigate(p,'/projects/'+pr.id);await confirm(p,'验收通过','/projects/'+pr.id+'/confirm');await p.getByText('已完成',{exact:true}).first().waitFor();await p.getByRole('tab',{name:'项目动态',exact:true}).click();await p.getByText('验收通过',{exact:false}).first().waitFor();await p.screenshot({path:OUT+'/b-completed-activity.png',fullPage:true});
 });
 await record('窄桌面项目详情可用且无页面横向溢出',async()=>{await p.setViewportSize({width:1024,height:900});assert(await p.getByRole('button',{name:'返回项目列表',exact:true}).isVisible());const width=await p.evaluate(()=>({scroll:document.documentElement.scrollWidth,view:innerWidth}));assert(width.scroll<=width.view+1);await p.screenshot({path:OUT+'/compact-project.png',fullPage:true});});
 await record('浏览器运行无未捕获脚本异常和服务端500',async()=>{for(const name of ['page-errors.jsonl','http-errors.jsonl'])assert(!fs.existsSync(OUT+'/'+name)||fs.readFileSync(OUT+'/'+name,'utf8').trim()==='');});

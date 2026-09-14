@@ -30,7 +30,7 @@ interface PendingProject {
   id: number
   name: string
   status: 'PENDING_CONFIRMATION'
-  confirmSide: 'COMPANY' | 'SUPPLIER'
+  confirmSide: 'COMPANY'
   updatedAt: string
 }
 
@@ -246,7 +246,7 @@ export default function Dashboard() {
   const cards = [
     { title: '可见项目', value: data?.projectCount, to: '/projects', action: '查看项目' },
     { title: '进行中项目', value: data?.activeProjectCount, to: '/projects', action: '查看项目' },
-    { title: '待确认项目', value: data?.pendingConfirmations, href: '#dashboard-pending', action: '查看待确认' },
+    { title: '待内部验收项目', value: data?.pendingConfirmations, href: '#dashboard-pending', action: '查看待验收' },
     { title: '未读留言', value: data?.unreadMessages, href: '#dashboard-messages', action: '查看留言' },
   ]
 
@@ -265,7 +265,7 @@ export default function Dashboard() {
       <div className="page-heading dashboard-heading">
         <div>
           <h1>工作台{user ? ` · ${user.realName}` : ''}</h1>
-          <Typography.Text type="secondary">优先处理待确认项目与未读留言</Typography.Text>
+          <Typography.Text type="secondary">优先处理公司内部验收与未读留言</Typography.Text>
         </div>
         <Button size="small" loading={pendingLoading || messageLoading} onClick={refreshDashboard}>刷新工作台</Button>
       </div>
@@ -278,8 +278,8 @@ export default function Dashboard() {
             title={(
               <div className="dashboard-section-title">
                 <div>
-                  <h2>待我方确认的项目</h2>
-                  <span>{pendingData.total > 0 ? `共 ${pendingData.total} 项` : '需要处理的项目确认'}</span>
+                  <h2>公司内部待验收项目</h2>
+                  <span>{pendingData.total > 0 ? `共 ${pendingData.total} 项` : '需要处理的内部验收'}</span>
                 </div>
                 {pendingData.total > 0 && <Tag color="orange">{pendingData.total}</Tag>}
               </div>
@@ -296,7 +296,7 @@ export default function Dashboard() {
               <Spin loading className="dashboard-card-loading" />
             ) : pendingError ? (
               <div className="dashboard-feedback">
-                <Typography.Text type="error">待确认项目加载失败</Typography.Text>
+                <Typography.Text type="error">内部待验收项目加载失败</Typography.Text>
                 <Button size="small" onClick={() => { void fetchPending(pendingPage) }}>重试</Button>
               </div>
             ) : pendingData.list.length > 0 ? (
@@ -311,7 +311,7 @@ export default function Dashboard() {
                     >
                       <List.Item.Meta
                         title={<Link className="dashboard-pending-link" to={`/projects/${project.id}`}>{project.name}</Link>}
-                        description={<Tag color="orange">待我方确认</Tag>}
+                        description={<Tag color="orange">待公司内部验收</Tag>}
                       />
                     </List.Item>
                   )}
@@ -332,7 +332,7 @@ export default function Dashboard() {
                 )}
               </>
             ) : (
-              <Empty description="暂无待确认项目" />
+              <Empty description="暂无内部待验收项目" />
             )}
           </Card>
         </Grid.Col>

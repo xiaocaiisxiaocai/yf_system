@@ -148,17 +148,57 @@ try:
         # Legacy role fixtures are test-only; production initialization remains admin-only.
         install_legacy_test_roles(conn)
         # Downgrade only our empty isolated fixture to exercise adoption and the
-        # restartable 16 -> 17 upgrade without invoking any other backend.
+        # restartable 16 -> 17 -> .NET v3 upgrade without invoking another backend.
         with conn.cursor() as cursor:
-            cursor.execute("SELECT password_hash FROM users WHERE employee_no='admin'")
-            preserved_hash = cursor.fetchone()[0]
+            cursor.execute("SELECT id,password_hash FROM users WHERE employee_no='admin'")
+            admin_user_id, preserved_hash = cursor.fetchone()
             cursor.execute("DROP TABLE collaboration_reads")
             cursor.execute("DROP TABLE yf_schema_migrations")
             cursor.execute("DELETE FROM seaql_migrations WHERE version='m20260911_000017_auth_session_families'")
             cursor.execute("ALTER TABLE refresh_tokens DROP INDEX idx_refresh_tokens_session_state, DROP COLUMN session_id")
             cursor.execute("INSERT INTO refresh_tokens(user_id,token_hash,expires_at,revoked) SELECT id,%s,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 DAY),0 FROM users WHERE employee_no='admin'", (secrets.token_hex(32),))
             legacy_token_id = cursor.lastrowid
-            cursor.execute("INSERT IGNORE INTO role_permissions(role_id,permission_id) SELECT r.id,p.id FROM roles r CROSS JOIN permissions p WHERE r.name='供应商人员' AND p.code='user:manage'")
+            cursor.execute("INSERT IGNORE INTO role_permissions(role_id,permission_id) SELECT r.id,p.id FROM roles r CROSS JOIN permissions p WHERE r.name='供应商人员' AND p.code IN ('user:manage','project:confirm')")
+            cursor.execute(
+                "INSERT INTO suppliers(name,remark,status,created_by) "
+                "VALUES('迁移内部验收供应商','owned isolated migration fixture','ACTIVE',%s)",
+                (admin_user_id,),
+            )
+            migration_supplier_id = cursor.lastrowid
+            cursor.execute(
+                "INSERT INTO projects(name,description,supplier_id,status,confirm_side,created_by) "
+                "VALUES('迁移待验收项目','must move to company',%s,'PENDING_CONFIRMATION','SUPPLIER',%s)",
+                (migration_supplier_id, admin_user_id),
+            )
+            pending_migration_project_id = cursor.lastrowid
+            cursor.executemany(
+                "INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,"
+                "confirm_side,reason,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                [
+                    (pending_migration_project_id, "IN_PROGRESS", "PENDING_CONFIRMATION", "SUBMIT",
+                     admin_user_id, "SUPPLIER", None, "2026-09-14 00:00:01.000"),
+                    (pending_migration_project_id, "PENDING_CONFIRMATION", "IN_PROGRESS", "REJECT",
+                     admin_user_id, "SUPPLIER", "历史驳回", "2026-09-14 00:00:02.000"),
+                    (pending_migration_project_id, "IN_PROGRESS", "PENDING_CONFIRMATION", "SUBMIT",
+                     admin_user_id, "SUPPLIER", None, "2026-09-14 00:00:03.000"),
+                ],
+            )
+            cursor.execute(
+                "INSERT INTO projects(name,description,supplier_id,status,confirm_side,created_by) "
+                "VALUES('迁移已完成项目','must remain unchanged',%s,'COMPLETED',NULL,%s)",
+                (migration_supplier_id, admin_user_id),
+            )
+            completed_migration_project_id = cursor.lastrowid
+            cursor.executemany(
+                "INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,"
+                "confirm_side,reason,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                [
+                    (completed_migration_project_id, "IN_PROGRESS", "PENDING_CONFIRMATION", "SUBMIT",
+                     admin_user_id, "SUPPLIER", None, "2026-09-14 00:00:04.000"),
+                    (completed_migration_project_id, "PENDING_CONFIRMATION", "COMPLETED", "CONFIRM",
+                     admin_user_id, "SUPPLIER", None, "2026-09-14 00:00:05.000"),
+                ],
+            )
         for attempt in range(2):
             migration = subprocess.run(["dotnet", str(DLL), "--migrate-database"], cwd=API, env=env, capture_output=True)
             if migration.returncode:
@@ -167,19 +207,56 @@ try:
             cursor.execute("SELECT password_hash FROM users WHERE employee_no='admin'")
             check(".NET migration from baseline 16 is repeatable and preserves users", cursor.fetchone()[0] == preserved_hash)
             cursor.execute("SELECT COUNT(*) FROM yf_schema_migrations")
-            check(".NET owns schema version history", cursor.fetchone()[0] == 2)
+            check(".NET owns schema version history", cursor.fetchone()[0] == 3)
             cursor.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='collaboration_reads'")
             check("collaboration read receipt migration creates its additive table", cursor.fetchone()[0] == 1)
             cursor.execute("SELECT session_id FROM refresh_tokens WHERE id=%s", (legacy_token_id,))
             check("legacy refresh rows get persisted session family", cursor.fetchone()[0] == format(legacy_token_id, 'x').zfill(36))
-            cursor.execute("SELECT COUNT(*) FROM role_permissions rp JOIN roles r ON r.id=rp.role_id JOIN permissions p ON p.id=rp.permission_id WHERE r.name='供应商人员' AND p.code='user:manage'")
-            check("migration removes preexisting supplier management grants", cursor.fetchone()[0] == 0)
-            cursor.execute("DELETE FROM yf_schema_migrations WHERE version=2")
+            cursor.execute("SELECT p.code FROM role_permissions rp JOIN roles r ON r.id=rp.role_id JOIN permissions p ON p.id=rp.permission_id WHERE r.name='供应商人员' AND p.code IN ('user:manage','project:confirm') ORDER BY p.code")
+            check("migration removes preexisting supplier management and confirmation grants", cursor.fetchall() == ())
+            cursor.execute(
+                "SELECT status,confirm_side FROM projects WHERE id=%s",
+                (pending_migration_project_id,),
+            )
+            pending_project_state = cursor.fetchone()
+            cursor.execute(
+                "SELECT action,confirm_side FROM project_status_logs WHERE project_id=%s ORDER BY id",
+                (pending_migration_project_id,),
+            )
+            pending_history = cursor.fetchall()
+            check(
+                "internal acceptance migration updates only the current pending supplier confirmation",
+                pending_project_state == ("PENDING_CONFIRMATION", "COMPANY")
+                and pending_history == (
+                    ("SUBMIT", "SUPPLIER"),
+                    ("REJECT", "SUPPLIER"),
+                    ("SUBMIT", "COMPANY"),
+                ),
+            )
+            cursor.execute(
+                "SELECT status,confirm_side FROM projects WHERE id=%s",
+                (completed_migration_project_id,),
+            )
+            completed_project_state = cursor.fetchone()
+            cursor.execute(
+                "SELECT action,confirm_side FROM project_status_logs WHERE project_id=%s ORDER BY id",
+                (completed_migration_project_id,),
+            )
+            completed_history = cursor.fetchall()
+            check(
+                "internal acceptance migration preserves completed supplier-confirmation history",
+                completed_project_state == ("COMPLETED", None)
+                and completed_history == (
+                    ("SUBMIT", "SUPPLIER"),
+                    ("CONFIRM", "SUPPLIER"),
+                ),
+            )
+            cursor.execute("DELETE FROM yf_schema_migrations WHERE version=3")
         stale_schema = subprocess.run(["dotnet", str(DLL)], cwd=API, env=env, capture_output=True, timeout=20)
-        check("startup refuses an unapplied collaboration migration", stale_schema.returncode != 0)
+        check("startup refuses an unapplied internal acceptance migration", stale_schema.returncode != 0)
         migration = subprocess.run(["dotnet", str(DLL), "--migrate-database"], cwd=API, env=env, capture_output=True)
         if migration.returncode:
-            raise RuntimeError(".NET collaboration migration recovery failed: " + migration.stderr.decode(errors="replace")[:1500])
+            raise RuntimeError(".NET internal acceptance migration recovery failed: " + migration.stderr.decode(errors="replace")[:1500])
         with conn.cursor() as cursor:
             cursor.execute("SELECT checksum FROM yf_schema_migrations WHERE version=1")
             checksum = cursor.fetchone()[0]
@@ -320,13 +397,20 @@ try:
             supplier_client.call("GET", "/api/v1/auth/profile", expected=401)
             second_flow_login = supplier_client.login("workflow_supplier", changed_flow_password)
             check("workflow supplier changes initial password through API", first_flow_login["mustChangePassword"] and not second_flow_login["mustChangePassword"] and second_flow_login["user"]["id"] == flow_user["id"])
-            client.call("POST", f"/api/v1/projects/{pid}/submit", {"confirmSide": "SUPPLIER"})
+            first_submission = client.call("POST", f"/api/v1/projects/{pid}/submit", {})
             client.call("POST", f"/api/v1/projects/{pid}/withdraw")
-            client.call("POST", f"/api/v1/projects/{pid}/submit", {"confirmSide": "SUPPLIER"})
-            supplier_client.call("POST", f"/api/v1/projects/{pid}/reject", {"reason": "回归测试驳回"})
-            client.call("POST", f"/api/v1/projects/{pid}/submit", {"confirmSide": "SUPPLIER"})
-            supplier_client.call("POST", f"/api/v1/projects/{pid}/confirm")
-            check("project submit/withdraw/reject/confirm workflow", True)
+            supplier_submission = supplier_client.call("POST", f"/api/v1/projects/{pid}/submit", {})
+            client.call("POST", f"/api/v1/projects/{pid}/reject", {"reason": "回归测试驳回"})
+            self_submission = client.call(
+                "POST", f"/api/v1/projects/{pid}/submit", {"confirmSide": "COMPANY"})
+            completed_project = client.call("POST", f"/api/v1/projects/{pid}/confirm")
+            check(
+                "internal and supplier submission with internal self-confirm workflow",
+                first_submission["confirmSide"] == "COMPANY"
+                and supplier_submission["confirmSide"] == "COMPANY"
+                and self_submission["confirmSide"] == "COMPANY"
+                and completed_project["status"] == "COMPLETED",
+            )
             client.call("DELETE", f"/api/v1/files/{fid}", expected=409)
             check("completed project file mutation denied", True)
             run_business_acceptance(client, Client, conn, check)

@@ -206,9 +206,9 @@ export default function ProjectList() {
         dataIndex: 'status',
         width: 112,
         align: 'center' as const,
-        render: (v: string, row: Project) => <Tag color={PROJECT_STATUS[v]?.color}>
+        render: (v: string) => <Tag color={PROJECT_STATUS[v]?.color}>
           {v === 'PENDING_CONFIRMATION'
-            ? row.confirmSide === 'COMPANY' ? '待公司确认' : '待供应商确认'
+            ? '待公司内部验收'
             : PROJECT_STATUS[v]?.text || v}
         </Tag>,
       },

@@ -126,6 +126,9 @@ def run_business_acceptance(client, Client, conn, check):
     suffix = secrets.token_hex(4)
     permissions = client.call("GET", "/api/v1/permissions")
     permission_ids = {item["code"]: item["id"] for item in permissions}
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT id FROM users WHERE employee_no='admin'")
+        admin_user_id = cursor.fetchone()[0]
 
     # Complete CRUD uses disposable objects with no login or business history, so
     # their delete paths can be verified without weakening retention invariants.
@@ -432,11 +435,10 @@ def run_business_acceptance(client, Client, conn, check):
         and foreign_write_state_after == foreign_write_state_before,
     )
 
-    internal_client.call("POST", f"/api/v1/projects/{project_a}/submit", {
-        "confirmSide": "SUPPLIER",
-    })
-    supplier_a_client.call("POST", f"/api/v1/projects/{project_a}/confirm")
-    supplier_b_client.call("POST", f"/api/v1/projects/{project_b}/submit", {
+    project_a_submission = internal_client.call(
+        "POST", f"/api/v1/projects/{project_a}/submit", {})
+    client.call("POST", f"/api/v1/projects/{project_a}/confirm")
+    project_b_submission = supplier_b_client.call("POST", f"/api/v1/projects/{project_b}/submit", {
         "confirmSide": "COMPANY",
     })
     internal_client.call("POST", f"/api/v1/projects/{project_b}/confirm")
@@ -447,8 +449,10 @@ def run_business_acceptance(client, Client, conn, check):
     actions_a = {item["action"] for item in activities_a["list"]}
     actions_b = {item["action"] for item in activities_b["list"]}
     check(
-        "internal and supplier initiated confirmations both complete with visible progress",
-        project_a_detail["status"] == "COMPLETED"
+        "internal and supplier submissions both complete through internal acceptance",
+        project_a_submission["confirmSide"] == "COMPANY"
+        and project_b_submission["confirmSide"] == "COMPANY"
+        and project_a_detail["status"] == "COMPLETED"
         and project_b_detail["status"] == "COMPLETED"
         and activities_a["summary"]["status"] == "COMPLETED"
         and activities_b["summary"]["status"] == "COMPLETED"
@@ -504,7 +508,7 @@ def run_business_acceptance(client, Client, conn, check):
              ("FILE_UPLOADED", internal_user["id"]),
              ("MESSAGE_CREATED", account_a["id"]),
              ("MESSAGE_CREATED", internal_user["id"]),
-             ("PROJECT_SUBMITTED", account_a["id"]),
+             ("PROJECT_SUBMITTED", admin_user_id),
              ("PROJECT_CONFIRMED", internal_user["id"])}.issubset(rows_a)
         and {("FILE_UPLOADED", account_b["id"]),
              ("FILE_UPLOADED", internal_user["id"]),

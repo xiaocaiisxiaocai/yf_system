@@ -71,7 +71,7 @@ public sealed class SchemaShapeTests
     }
 
     [Fact(Timeout = 60_000)]
-    public async Task V17AndDotNetV2RemainRestartable()
+    public async Task V17AndDotNetV3RemainRestartable()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("shape_v17", ct);
@@ -87,6 +87,91 @@ public sealed class SchemaShapeTests
         Assert.True(await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
             "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='collaboration_reads')",
             cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task V3InternalAcceptanceMigrationIsScopedAuditedAndRestartable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("shape_acceptance_v3", ct);
+        await database.CreateBaselineAsync(legacyV16: false, ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await database.ExecuteAsync(
+            """
+            DELETE FROM yf_schema_migrations WHERE version=3;
+            INSERT INTO role_permissions(role_id,permission_id)
+            SELECT r.id,p.id FROM roles r CROSS JOIN permissions p
+            WHERE r.name='供应商人员' AND p.code='project:confirm';
+
+            INSERT INTO suppliers(id,name,status) VALUES(9101,'v3迁移供应商','ACTIVE');
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password)
+            VALUES
+              (9201,'v3-internal','unused','内部验收人','internal-v3@example.test','INTERNAL',NULL,'ACTIVE',0),
+              (9202,'v3-supplier','unused','供应商提交人','supplier-v3@example.test','SUPPLIER',9101,'ACTIVE',0);
+
+            INSERT INTO projects(id,name,supplier_id,status,confirm_side,created_by)
+            VALUES
+              (9301,'v3待供应商确认',9101,'PENDING_CONFIRMATION','SUPPLIER',9201),
+              (9302,'v3已待公司确认',9101,'PENDING_CONFIRMATION','COMPANY',9201),
+              (9303,'v3已完成历史',9101,'COMPLETED','SUPPLIER',9201),
+              (9304,'v3进行中历史',9101,'IN_PROGRESS','SUPPLIER',9201);
+
+            INSERT INTO project_status_logs(id,project_id,from_status,to_status,action,operator_id,confirm_side,reason,created_at)
+            VALUES
+              (9401,9301,'IN_PROGRESS','PENDING_CONFIRMATION','SUBMIT',9201,'SUPPLIER',NULL,'2026-09-01 00:00:01.000'),
+              (9402,9301,'PENDING_CONFIRMATION','IN_PROGRESS','REJECT',9202,'SUPPLIER','旧周期驳回','2026-09-01 00:00:02.000'),
+              (9403,9301,'IN_PROGRESS','PENDING_CONFIRMATION','SUBMIT',9202,'SUPPLIER',NULL,'2026-09-01 00:00:03.000'),
+              (9411,9302,'IN_PROGRESS','PENDING_CONFIRMATION','SUBMIT',9202,'COMPANY',NULL,'2026-09-01 00:00:04.000'),
+              (9421,9303,'IN_PROGRESS','PENDING_CONFIRMATION','SUBMIT',9201,'SUPPLIER',NULL,'2026-09-01 00:00:05.000'),
+              (9422,9303,'PENDING_CONFIRMATION','COMPLETED','CONFIRM',9202,'SUPPLIER',NULL,'2026-09-01 00:00:06.000');
+
+            INSERT INTO email_outbox(id,event_type,project_id,recipient_user_id,recipient_email,subject,body,status,retry_count,next_attempt_at,sent_at)
+            VALUES
+              (9501,'PROJECT_SUBMITTED',9301,9202,'supplier-v3@example.test','旧待发','旧供应商确认','PENDING',0,NULL,NULL),
+              (9502,'PROJECT_SUBMITTED',9301,9202,'supplier-v3@example.test','旧失败','旧供应商确认','FAILED',3,NULL,NULL),
+              (9503,'PROJECT_SUBMITTED',9301,9202,'supplier-v3@example.test','旧发送中','旧供应商确认','SENDING',0,UTC_TIMESTAMP()+INTERVAL 10 MINUTE,NULL),
+              (9504,'PROJECT_SUBMITTED',9301,9202,'supplier-v3@example.test','旧已发送','旧供应商确认','SENT',0,NULL,UTC_TIMESTAMP()),
+              (9505,'PROJECT_REJECTED',9301,9202,'supplier-v3@example.test','其他事件','保留','PENDING',0,NULL,NULL),
+              (9506,'PROJECT_SUBMITTED',9303,9202,'supplier-v3@example.test','已完成历史','保留','PENDING',0,NULL,NULL),
+              (9507,'PROJECT_SUBMITTED',9301,9201,'internal-v3@example.test','内部通知','保留','PENDING',0,NULL,NULL),
+              (9508,'PROJECT_SUBMITTED',9302,9202,'supplier-v3@example.test','旧错误收件人','旧供应商确认','PENDING',0,NULL,NULL),
+              (9509,'PROJECT_SUBMITTED',9301,NULL,'legacy-v3@example.test','旧无用户收件人','旧供应商确认','PENDING',0,NULL,NULL);
+            """, ct);
+
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await SchemaBootstrap.ValidateAsync(database.Database, ct);
+
+        await using var conn = await database.Database.OpenAsync(ct);
+        Assert.Equal(
+            ["9301:PENDING_CONFIRMATION:COMPANY", "9302:PENDING_CONFIRMATION:COMPANY", "9303:COMPLETED:SUPPLIER", "9304:IN_PROGRESS:SUPPLIER"],
+            (await conn.QueryAsync<string>(new CommandDefinition(
+                "SELECT CONCAT(id,':',status,':',COALESCE(confirm_side,'NULL')) FROM projects WHERE id BETWEEN 9301 AND 9304 ORDER BY id",
+                cancellationToken: ct))).ToArray());
+        Assert.Equal(
+            ["9401:SUPPLIER", "9402:SUPPLIER", "9403:COMPANY", "9411:COMPANY", "9421:SUPPLIER", "9422:SUPPLIER"],
+            (await conn.QueryAsync<string>(new CommandDefinition(
+                "SELECT CONCAT(id,':',COALESCE(confirm_side,'NULL')) FROM project_status_logs WHERE id BETWEEN 9401 AND 9422 ORDER BY id",
+                cancellationToken: ct))).ToArray());
+        Assert.Equal(
+            ["9501:CANCELLED", "9502:CANCELLED", "9503:CANCELLED", "9504:SENT", "9505:PENDING", "9506:PENDING", "9507:CANCELLED", "9508:CANCELLED", "9509:CANCELLED"],
+            (await conn.QueryAsync<string>(new CommandDefinition(
+                "SELECT CONCAT(id,':',status) FROM email_outbox WHERE id BETWEEN 9501 AND 9509 ORDER BY id",
+                cancellationToken: ct))).ToArray());
+        Assert.Equal(SchemaMigrations.InternalAcceptanceCancelledMailReason,
+            await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+                "SELECT last_error FROM email_outbox WHERE id=9501", cancellationToken: ct)));
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='PROJECT_ACCEPTANCE_MIGRATE' AND target_type='project' AND target_id=9301",
+            cancellationToken: ct)));
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM role_permissions rp JOIN roles r ON r.id=rp.role_id JOIN permissions p ON p.id=rp.permission_id WHERE r.name='供应商人员' AND p.code='project:confirm'",
+            cancellationToken: ct)));
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM role_permissions rp JOIN roles r ON r.id=rp.role_id JOIN permissions p ON p.id=rp.permission_id WHERE r.name='内部成员' AND p.code='project:confirm'",
+            cancellationToken: ct)));
+        Assert.Equal(SchemaMigrations.CurrentVersion, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM yf_schema_migrations", cancellationToken: ct)));
     }
 
     [Fact(Timeout = 60_000)]

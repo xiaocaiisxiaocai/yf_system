@@ -61,10 +61,10 @@ const PROJECT_ACTION_LABEL: Record<string, string> = {
   CREATED: '创建项目',
   START: '开始项目',
   RESTART: '重新开始项目',
-  SUBMIT: '提交确认',
-  CONFIRM: '确认项目',
-  REJECT: '驳回项目',
-  WITHDRAW: '撤回确认',
+  SUBMIT: '提交验收',
+  CONFIRM: '验收通过',
+  REJECT: '验收驳回',
+  WITHDRAW: '撤回验收申请',
   TERMINATE: '终止项目',
   UPDATE: '更新项目',
 }
@@ -263,9 +263,9 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
           <strong className="project-activity-summary-value">{statusText}</strong>
         </div>
         <div className="project-activity-summary-item">
-          <span className="project-activity-summary-label">待确认</span>
+          <span className="project-activity-summary-label">内部验收</span>
           <strong className="project-activity-summary-value">
-            {summary.pendingConfirmation ? `是${summary.confirmSide === 'COMPANY' ? '（公司）' : summary.confirmSide === 'SUPPLIER' ? '（供应商）' : ''}` : '否'}
+            {summary.pendingConfirmation ? '待公司内部验收' : '无待验收申请'}
           </strong>
         </div>
         <div className="project-activity-summary-item">

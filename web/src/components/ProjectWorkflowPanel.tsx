@@ -4,16 +4,12 @@ import {
 } from '@arco-design/web-react'
 import { IconCheckCircle, IconCloseCircle, IconPlayArrow, IconStop, IconUndo } from '@arco-design/web-react/icon'
 import http from '../api/client'
-import { type ConfirmSide, type Project, PROJECT_STATUS } from '../api/types'
+import { type Project, PROJECT_STATUS } from '../api/types'
 import { useAuth } from '../store/auth'
 
 interface Props {
   project: Project
   onChanged: () => void
-}
-
-function sideText(side?: ConfirmSide | null): string {
-  return side === 'COMPANY' ? '公司' : side === 'SUPPLIER' ? '供应商' : '-'
 }
 
 /** 项目级流程操作；所有按钮只表达当前状态允许的命令，最终权限仍由后端校验。 */
@@ -36,10 +32,9 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
   }
 
   const isInternal = user?.userType === 'INTERNAL'
-  const isConfirmSide = project.confirmSide === (isInternal ? 'COMPANY' : 'SUPPLIER')
   const canStatus = isInternal && hasPerm('project:status')
   const canSubmit = hasPerm('project:submit')
-  const canConfirm = hasPerm('project:confirm') && isConfirmSide
+  const canConfirm = isInternal && hasPerm('project:confirm') && project.confirmSide === 'COMPANY'
   const canWithdraw = hasPerm('project:withdraw')
     && (project.latestSubmitterId === user?.id || (isInternal && hasPerm('project:view_all')))
 
@@ -59,8 +54,8 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
   const submitConfirmation = async () => {
     if (!beginAction()) return
     try {
-      await http.post(`/projects/${project.id}/submit`, { confirmSide: isInternal ? 'SUPPLIER' : 'COMPANY' })
-      Message.success('项目已提交确认')
+      await http.post(`/projects/${project.id}/submit`, { confirmSide: 'COMPANY' })
+      Message.success('项目已提交公司内部验收')
       onChanged()
     } finally {
       finishAction()
@@ -71,7 +66,7 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
     if (!beginAction()) return
     try {
       await http.post(`/projects/${project.id}/confirm`)
-      Message.success('项目已确认完成')
+      Message.success('公司内部验收已通过')
       onChanged()
     } finally {
       finishAction()
@@ -84,7 +79,7 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
       const values = await rejectForm.validate().catch(() => null)
       if (!values) return
       await http.post(`/projects/${project.id}/reject`, { reason: values.reason.trim() })
-      Message.success('项目已驳回')
+      Message.success('公司内部验收已驳回')
       rejectForm.resetFields()
       setRejectOpen(false)
       onChanged()
@@ -97,7 +92,7 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
     if (!beginAction()) return
     try {
       await http.post(`/projects/${project.id}/withdraw`)
-      Message.success('已撤回确认')
+      Message.success('已撤回内部验收申请')
       onChanged()
     } finally {
       finishAction()
@@ -124,7 +119,7 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
         </div>
         {isPending && (
           <Typography.Text type="secondary" className="project-workflow-confirm-side">
-            确认方：{sideText(project.confirmSide)}
+            验收方：公司内部
           </Typography.Text>
         )}
       </div>
@@ -143,10 +138,10 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
           )}
           {canSubmit && project.status === 'IN_PROGRESS' && (
             <Popconfirm
-              title={`提交给${isInternal ? '供应商' : '公司'}确认？`}
+              title="提交公司内部验收？"
               onOk={submitConfirmation}
             >
-              <Button type="primary" loading={busy}>提交确认</Button>
+              <Button type="primary" loading={busy}>提交内部验收</Button>
             </Popconfirm>
           )}
           {canStatus && project.status === 'IN_PROGRESS' && (
@@ -155,17 +150,17 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
             </Popconfirm>
           )}
           {isPending && canConfirm && (
-            <Popconfirm title="确认通过该项目？项目将进入已完成状态。" onOk={confirmProject}>
-              <Button status="success" icon={<IconCheckCircle />} loading={busy}>确认</Button>
+            <Popconfirm title="确认通过公司内部验收？项目将进入已完成状态。" onOk={confirmProject}>
+              <Button status="success" icon={<IconCheckCircle />} loading={busy}>验收通过</Button>
             </Popconfirm>
           )}
           {isPending && canConfirm && (
             <Button status="danger" icon={<IconCloseCircle />} loading={busy} onClick={() => setRejectOpen(true)}>
-              驳回
+              验收驳回
             </Button>
           )}
           {isPending && canWithdraw && (
-            <Popconfirm title="撤回本次确认后项目将回到进行中，确认撤回？" onOk={withdraw}>
+            <Popconfirm title="撤回内部验收申请后项目将回到进行中，确认撤回？" onOk={withdraw}>
               <Button icon={<IconUndo />} loading={busy}>撤回</Button>
             </Popconfirm>
           )}
@@ -174,7 +169,7 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
 
       <Modal
         className="form-dialog"
-        title="驳回项目"
+        title="内部验收驳回"
         visible={rejectOpen}
         confirmLoading={busy}
         closable={!busy}

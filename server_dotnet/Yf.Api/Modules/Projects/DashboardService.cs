@@ -64,16 +64,18 @@ internal sealed class DashboardService
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
-        if (!await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct))
+        var canReceivePendingAcceptance = ProjectWorkflowRules.CanReceivePendingAcceptance(
+            current,
+            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
+        if (!canReceivePendingAcceptance)
         {
             await tx.CommitAsync(ct);
             return ProjectJson.Page(Array.Empty<object>(), 0, actualPage, size);
         }
         var (scope, parameters) = await ProjectAccessService.VisibleScopeAsync(conn, tx, current, ct);
-        parameters.Add("ConfirmSide", UserSide(current));
         parameters.Add("Offset", (actualPage - 1) * size);
         parameters.Add("Size", size);
-        var filter = $"p.status='PENDING_CONFIRMATION' AND p.confirm_side=@ConfirmSide AND {scope}";
+        var filter = $"p.status='PENDING_CONFIRMATION' AND p.confirm_side='COMPANY' AND {scope}";
         var total = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
             $"SELECT COUNT(*) FROM projects p WHERE {filter}", parameters, tx, cancellationToken: ct));
         var rows = await conn.QueryAsync<ProjectRow>(new CommandDefinition(
@@ -109,7 +111,9 @@ internal sealed class DashboardService
             """,
             parameters, tx, cancellationToken: ct))).AsList();
         var projectIds = projects.Select(project => project.Id).ToArray();
-        var canConfirm = await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct);
+        var canConfirm = ProjectWorkflowRules.CanReceivePendingAcceptance(
+            current,
+            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
         var unreadMessages = 0UL;
         var recentMessages = Array.Empty<object>();
         if (projectIds.Length > 0)
@@ -149,14 +153,13 @@ internal sealed class DashboardService
             projectCount = projects.Count,
             activeProjectCount = projects.Count(project => project.Status == ProjectStatuses.InProgress),
             pendingConfirmations = canConfirm
-                ? projects.Count(project => project.Status == ProjectStatuses.PendingConfirmation && project.ConfirmSide == UserSide(current))
+                ? projects.Count(project => project.Status == ProjectStatuses.PendingConfirmation
+                    && project.ConfirmSide == ProjectWorkflowRules.InternalAcceptanceSide)
                 : 0,
             unreadMessages,
             recentMessages,
         };
     }
-
-    private static string UserSide(CurrentUser actor) => actor.IsInternal ? "COMPANY" : "SUPPLIER";
 
     private sealed class RecentMessageRow
     {

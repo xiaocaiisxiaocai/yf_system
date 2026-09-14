@@ -61,6 +61,10 @@ internal static class ProjectNotificationService
         {
             return;
         }
+        if (action == "SUBMIT" && confirmSide != ProjectWorkflowRules.InternalAcceptanceSide)
+        {
+            throw new InvalidOperationException("项目提交通知的确认方必须为公司内部");
+        }
 
         var sideLine = confirmSide switch
         {
@@ -72,7 +76,8 @@ internal static class ProjectNotificationService
         var targetUsers = latestSubmitterId is null ? Array.Empty<ulong>() : [latestSubmitterId.Value];
         var targetSide = action switch
         {
-            "SUBMIT" or "WITHDRAW" => confirmSide,
+            "SUBMIT" => ProjectWorkflowRules.InternalAcceptanceSide,
+            "WITHDRAW" => confirmSide,
             _ => null,
         };
         if (action == "SUBMIT" && targetSide is null)

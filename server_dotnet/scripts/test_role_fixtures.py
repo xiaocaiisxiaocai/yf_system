@@ -13,6 +13,7 @@ from pathlib import Path
 BASELINE = Path(__file__).resolve().parents[1] / "Yf.Api/Infrastructure/schema-baseline.json"
 ADMIN_ROLE_NAME = "系统管理员"
 LEGACY_TEST_ROLE_NAMES = ("项目管理员", "内部成员", "供应商人员")
+TEST_ROLE_DENIED_GRANTS = {"供应商人员": {"project:confirm"}}
 
 
 def _require_disposable_database(connection):
@@ -127,7 +128,10 @@ def install_legacy_test_roles(connection):
                             f"existing test role {name} does not match the built-in active baseline"
                         )
 
-                codes = grants_by_role[name]
+                codes = [
+                    code for code in grants_by_role[name]
+                    if code not in TEST_ROLE_DENIED_GRANTS.get(name, set())
+                ]
                 if not codes:
                     raise RuntimeError(f"schema baseline has no permissions for test role {name}")
                 placeholders = ",".join(["%s"] * len(codes))
@@ -192,5 +196,9 @@ def install_legacy_test_roles(connection):
     if installed != set(LEGACY_TEST_ROLE_NAMES):
         raise AssertionError("legacy test role setup did not install all three expected roles")
     for name, expected in grants_by_role.items():
+        expected = [
+            code for code in expected
+            if code not in TEST_ROLE_DENIED_GRANTS.get(name, set())
+        ]
         if installed_grants[name] != tuple(sorted(expected)):
             raise AssertionError(f"legacy test role {name} does not have its exact baseline grants")

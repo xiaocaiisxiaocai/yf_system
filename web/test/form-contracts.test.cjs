@@ -261,7 +261,8 @@ test('permission tree keeps menu-only grants, adds a parent for actions and remo
   await act(async () => assign.props.onClick())
 
   let tree = renderer.root.findByType('Tree')
-  assert.deepEqual(Array.from(tree.props.checkedKeys), ['5'])
+  assert.deepEqual(Array.from(tree.props.checkedKeys), [])
+  assert.deepEqual(Array.from(tree.props.halfCheckedKeys), ['5'])
   await act(async () => tree.props.onCheck(['24'], { checked: true, node: { key: '24' } }))
   tree = renderer.root.findByType('Tree')
   assert.deepEqual(new Set(tree.props.checkedKeys), new Set(['5', '24']))

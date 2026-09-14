@@ -4,6 +4,8 @@ namespace Yf.Api.Modules.Projects;
 
 internal static class ProjectWorkflowRules
 {
+    internal const string InternalAcceptanceSide = "COMPANY";
+
     internal static (string To, string Action) ManagementTransition(string from, string requested) =>
         (from, requested) switch
         {
@@ -45,4 +47,29 @@ internal static class ProjectWorkflowRules
         }
         return ids;
     }
+
+    internal static string NormalizeConfirmSide(string? value)
+    {
+        if (value is null)
+        {
+            return InternalAcceptanceSide;
+        }
+
+        return value.Trim() switch
+        {
+            InternalAcceptanceSide => InternalAcceptanceSide,
+            _ => throw ApiException.BadRequest("项目验收仅支持公司内部确认，confirmSide 必须为 COMPANY"),
+        };
+    }
+
+    internal static void RequireInternalDecisionActor(CurrentUser actor)
+    {
+        if (!actor.IsInternal)
+        {
+            throw ApiException.Forbidden("项目验收确认和驳回仅限公司内部用户");
+        }
+    }
+
+    internal static bool CanReceivePendingAcceptance(CurrentUser actor, bool hasConfirmPermission) =>
+        actor.IsInternal && hasConfirmPermission;
 }

@@ -40,10 +40,11 @@ const ACTIONS: Record<string, { label: string; category: string; color: string }
   PROJECT_CREATE: { label: '创建项目', category: '项目协作', color: 'arcoblue' },
   PROJECT_UPDATE: { label: '更新项目', category: '项目协作', color: 'arcoblue' },
   PROJECT_START: { label: '开始项目', category: '项目协作', color: 'arcoblue' },
-  PROJECT_SUBMIT: { label: '提交项目确认', category: '项目协作', color: 'arcoblue' },
-  PROJECT_CONFIRM: { label: '确认项目', category: '项目协作', color: 'green' },
-  PROJECT_REJECT: { label: '驳回项目', category: '项目协作', color: 'red' },
-  PROJECT_WITHDRAW: { label: '撤回项目确认', category: '项目协作', color: 'orange' },
+  PROJECT_SUBMIT: { label: '提交验收', category: '项目协作', color: 'arcoblue' },
+  PROJECT_CONFIRM: { label: '验收通过', category: '项目协作', color: 'green' },
+  PROJECT_REJECT: { label: '验收驳回', category: '项目协作', color: 'red' },
+  PROJECT_WITHDRAW: { label: '撤回验收申请', category: '项目协作', color: 'orange' },
+  PROJECT_ACCEPTANCE_MIGRATE: { label: '转交公司内部验收', category: '项目协作', color: 'arcoblue' },
   PROJECT_TERMINATE: { label: '终止项目', category: '项目协作', color: 'red' },
   PROJECT_RESTART: { label: '重新开始项目', category: '项目协作', color: 'arcoblue' },
   PROJECT_DELETE: { label: '删除项目', category: '项目协作', color: 'red' },
@@ -103,7 +104,7 @@ const FIELD_LABELS: Record<string, string> = {
 }
 
 const PROJECT_STATUS_LABELS: Record<string, string> = {
-  DRAFT: '草稿', IN_PROGRESS: '进行中', PENDING_CONFIRMATION: '待确认', COMPLETED: '已完成', TERMINATED: '已终止',
+  DRAFT: '草稿', IN_PROGRESS: '进行中', PENDING_CONFIRMATION: '待验收', COMPLETED: '已完成', TERMINATED: '已终止',
 }
 
 const PROJECT_WORKFLOW_ACTIONS = new Set([

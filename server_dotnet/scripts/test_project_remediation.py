@@ -317,7 +317,7 @@ def run_project_remediation_checks(client, Client, conn, check):
         submit_client.token = client.token
         worker, result = _request_in_thread(
             submit_client, "POST", f"/api/v1/projects/{deleted_project}/submit",
-            {"confirmSide": "SUPPLIER"}, 409,
+            {}, 409,
         )
         _wait_for_project_lock(conn, worker, deleted_project)
         conn.commit()
@@ -347,7 +347,7 @@ def run_project_remediation_checks(client, Client, conn, check):
         submit_client.token = client.token
         worker, result = _request_in_thread(
             submit_client, "POST", f"/api/v1/projects/{upload_project}/submit",
-            {"confirmSide": "SUPPLIER"}, 409,
+            {}, 409,
         )
         _wait_for_project_lock(conn, worker, upload_project)
         conn.commit()
@@ -365,21 +365,21 @@ def run_project_remediation_checks(client, Client, conn, check):
     client.call("PUT", f"/api/v1/projects/{withdraw_project}/members", {
         "userIds": [old_user["id"], new_user["id"]],
     })
-    old_client.call("POST", f"/api/v1/projects/{withdraw_project}/submit", {"confirmSide": "SUPPLIER"})
-    supplier_client.call("POST", f"/api/v1/projects/{withdraw_project}/reject", {"reason": "建立旧提交历史"})
+    old_client.call("POST", f"/api/v1/projects/{withdraw_project}/submit", {})
+    client.call("POST", f"/api/v1/projects/{withdraw_project}/reject", {"reason": "建立旧提交历史"})
     conn.begin()
     try:
         with conn.cursor() as cursor:
             cursor.execute("SELECT id FROM projects WHERE id=%s FOR UPDATE", (withdraw_project,))
             cursor.execute(
-                "UPDATE projects SET status='PENDING_CONFIRMATION',confirm_side='SUPPLIER',"
+                "UPDATE projects SET status='PENDING_CONFIRMATION',confirm_side='COMPANY',"
                 "updated_at=UTC_TIMESTAMP(3) WHERE id=%s",
                 (withdraw_project,),
             )
             cursor.execute(
                 "INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,"
                 "confirm_side,reason,created_at) VALUES(%s,'IN_PROGRESS','PENDING_CONFIRMATION','SUBMIT',"
-                "%s,'SUPPLIER',NULL,UTC_TIMESTAMP(3))",
+                "%s,'COMPANY',NULL,UTC_TIMESTAMP(3))",
                 (withdraw_project, new_user["id"]),
             )
         worker, result = _request_in_thread(
@@ -395,7 +395,7 @@ def run_project_remediation_checks(client, Client, conn, check):
         cursor.execute("SELECT status,confirm_side FROM projects WHERE id=%s", (withdraw_project,))
         withdraw_state = cursor.fetchone()
     check("previous submitter cannot withdraw a newer concurrent submission",
-          withdraw_state == ("PENDING_CONFIRMATION", "SUPPLIER"))
+          withdraw_state == ("PENDING_CONFIRMATION", "COMPANY"))
 
     # A view_all user may submit without becoming a project member; the explicit
     # latest submitter still has to receive the result notification.
@@ -413,8 +413,8 @@ def run_project_remediation_checks(client, Client, conn, check):
             (notice_project, new_user["id"], new_user["id"]),
         )
     view_all_client.call(
-        "POST", f"/api/v1/projects/{notice_project}/submit", {"confirmSide": "SUPPLIER"})
-    supplier_client.call("POST", f"/api/v1/projects/{notice_project}/confirm")
+        "POST", f"/api/v1/projects/{notice_project}/submit", {})
+    client.call("POST", f"/api/v1/projects/{notice_project}/confirm")
     with conn.cursor() as cursor:
         cursor.execute(
             "SELECT recipient_user_id FROM email_outbox WHERE project_id=%s "

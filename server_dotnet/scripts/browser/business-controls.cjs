@@ -120,7 +120,7 @@ async function choose(page, placeholder, optionName) {
       const pendingFirst = await (await pendingFirstPromise).json();
       assert(summary.pendingConfirmations >= 11);
       assert(summary.unreadMessages >= 1);
-      for (const [title, value] of [['待确认项目', summary.pendingConfirmations], ['未读留言', summary.unreadMessages]]) {
+      for (const [title, value] of [['待内部验收项目', summary.pendingConfirmations], ['未读留言', summary.unreadMessages]]) {
         const card = page.locator('.dashboard-stat-card').filter({ hasText: title });
         await card.getByText(String(value), { exact: true }).waitFor();
       }
@@ -171,7 +171,7 @@ async function choose(page, placeholder, optionName) {
       };
       page.on('request', countReject);
       await page.goto(s.base + '/projects/' + flowProject.id);
-      await page.getByRole('button', { name: '驳回', exact: true }).click();
+      await page.getByRole('button', { name: '验收驳回', exact: true }).click();
       let dialog = page.getByRole('dialog');
       await dialog.getByRole('button', { name: '确认驳回', exact: true }).click();
       await dialog.getByText('请填写驳回原因', { exact: true }).waitFor();
@@ -179,7 +179,7 @@ async function choose(page, placeholder, optionName) {
       await dialog.getByPlaceholder('请填写驳回原因', { exact: true }).fill('应在取消后丢弃');
       await dialog.getByRole('button', { name: '取消', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' });
-      await page.getByRole('button', { name: '驳回', exact: true }).click();
+      await page.getByRole('button', { name: '验收驳回', exact: true }).click();
       dialog = page.getByRole('dialog');
       assert.equal(await dialog.getByPlaceholder('请填写驳回原因', { exact: true }).inputValue(), '');
       await dialog.getByRole('button', { name: '取消', exact: true }).click();
@@ -195,7 +195,7 @@ async function choose(page, placeholder, optionName) {
         contentType: 'application/json',
         body: JSON.stringify({ code: 50301, message: '驳回测试暂时不可用' }),
       }), { times: 1 });
-      await page.getByRole('button', { name: '驳回', exact: true }).click();
+      await page.getByRole('button', { name: '验收驳回', exact: true }).click();
       const dialog = page.getByRole('dialog');
       const reasonInput = dialog.getByPlaceholder('请填写驳回原因', { exact: true });
       await reasonInput.fill(reason);
@@ -293,7 +293,7 @@ async function choose(page, placeholder, optionName) {
     await record('审计具体动作对象日期组合筛选匹配服务端结果', async () => {
       await page.goto(s.base + '/logs');
       await page.getByRole('button', { name: '查询', exact: true }).waitFor();
-      await choose(page, '具体操作', '提交项目确认（PROJECT_SUBMIT）');
+      await choose(page, '具体操作', '提交验收（PROJECT_SUBMIT）');
       await choose(page, '对象类型', '项目');
       const rangeInputs = page.locator('.audit-filter-panel .arco-picker input');
       assert.equal(await rangeInputs.count(), 2);

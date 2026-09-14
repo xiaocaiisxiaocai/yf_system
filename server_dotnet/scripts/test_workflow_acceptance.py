@@ -80,6 +80,12 @@ def _event_count(conn, project_id, event_type, recipient_id):
         return cursor.fetchone()[0]
 
 
+def _check_equal(check, label, actual, expected):
+    if actual != expected:
+        raise AssertionError(f"{label}: expected {expected!r}, got {actual!r}")
+    check(label, True)
+
+
 def _audit_actions(conn, project_id):
     with conn.cursor() as cursor:
         cursor.execute(
@@ -103,8 +109,9 @@ def run_workflow_acceptance(client, Client, conn, check):
         if role["name"] == "供应商人员")
     original_supplier_permission_ids = list(supplier_role["permissionIds"])
     check(
-        "default supplier role does not implicitly grant project withdrawal",
-        withdraw_permission_id not in original_supplier_permission_ids,
+        "default supplier role excludes confirmation and implicit withdrawal",
+        confirm_permission_id not in original_supplier_permission_ids
+        and withdraw_permission_id not in original_supplier_permission_ids,
     )
     supplier = client.call("POST", "/api/v1/admin/suppliers", {
         "name": "工作流完整验收供应商-" + suffix,
@@ -243,8 +250,39 @@ def run_workflow_acceptance(client, Client, conn, check):
         "POST", f"/api/v1/projects/{project_id}/messages",
         {"content": "完成前创建，完成后仍应可读但不可删除"})
 
+    _expect_atomic_rejection(
+        check, conn, internal_client, project_id,
+        "internal explicit supplier-side project submission",
+        "POST", f"/api/v1/projects/{project_id}/submit",
+        {"confirmSide": "SUPPLIER"}, expected=400)
+    _expect_atomic_rejection(
+        check, conn, supplier_client, project_id,
+        "supplier explicit supplier-side project submission",
+        "POST", f"/api/v1/projects/{project_id}/submit",
+        {"confirmSide": "SUPPLIER"}, expected=400)
     submitted_for_reject = supplier_client.call(
-        "POST", f"/api/v1/projects/{project_id}/submit", {"confirmSide": "COMPANY"})
+        "POST", f"/api/v1/projects/{project_id}/submit", {})
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO role_permissions(role_id,permission_id) VALUES(%s,%s)",
+            (supplier_role["id"], confirm_permission_id),
+        )
+    try:
+        _expect_atomic_rejection(
+            check, conn, supplier_client, project_id,
+            "supplier confirmation with a legacy project:confirm grant",
+            "POST", f"/api/v1/projects/{project_id}/confirm", expected=403)
+        _expect_atomic_rejection(
+            check, conn, supplier_client, project_id,
+            "supplier rejection with a legacy project:confirm grant",
+            "POST", f"/api/v1/projects/{project_id}/reject",
+            {"reason": "供应商不得验收"}, expected=403)
+    finally:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM role_permissions WHERE role_id=%s AND permission_id=%s",
+                (supplier_role["id"], confirm_permission_id),
+            )
     rejected = internal_client.call(
         "POST", f"/api/v1/projects/{project_id}/reject", {"reason": "公司验收驳回"})
     submitted_for_withdraw = supplier_client.call(
@@ -261,8 +299,8 @@ def run_workflow_acceptance(client, Client, conn, check):
         client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
             "permissionIds": original_supplier_permission_ids,
         })
-    submitted_for_confirm = supplier_client.call(
-        "POST", f"/api/v1/projects/{project_id}/submit", {"confirmSide": "COMPANY"})
+    submitted_for_confirm = internal_client.call(
+        "POST", f"/api/v1/projects/{project_id}/submit", {})
     completed = internal_client.call("POST", f"/api/v1/projects/{project_id}/confirm")
 
     with conn.cursor() as cursor:
@@ -274,18 +312,31 @@ def run_workflow_acceptance(client, Client, conn, check):
         history = list(cursor.fetchall())
     workflow_tail = history[-6:]
     project_audits = _audit_actions(conn, project_id)
-    check(
-        "supplier submit company reject supplier withdraw and company confirm persist",
-        submitted_for_reject["status"] == "PENDING_CONFIRMATION"
-        and submitted_for_reject["confirmSide"] == "COMPANY"
-        and rejected["status"] == "IN_PROGRESS"
-        and rejected["confirmSide"] is None
-        and submitted_for_withdraw["status"] == "PENDING_CONFIRMATION"
-        and withdrawn["status"] == "IN_PROGRESS"
-        and submitted_for_confirm["status"] == "PENDING_CONFIRMATION"
-        and completed["status"] == "COMPLETED"
-        and completed["confirmSide"] is None
-        and workflow_tail == [
+    _check_equal(
+        check,
+        "workflow responses persist company-only acceptance states",
+        (
+            (submitted_for_reject["status"], submitted_for_reject["confirmSide"]),
+            (rejected["status"], rejected["confirmSide"]),
+            (submitted_for_withdraw["status"], submitted_for_withdraw["confirmSide"]),
+            (withdrawn["status"], withdrawn["confirmSide"]),
+            (submitted_for_confirm["status"], submitted_for_confirm["confirmSide"]),
+            (completed["status"], completed["confirmSide"]),
+        ),
+        (
+            ("PENDING_CONFIRMATION", "COMPANY"),
+            ("IN_PROGRESS", None),
+            ("PENDING_CONFIRMATION", "COMPANY"),
+            ("IN_PROGRESS", None),
+            ("PENDING_CONFIRMATION", "COMPANY"),
+            ("COMPLETED", None),
+        ),
+    )
+    _check_equal(
+        check,
+        "workflow status history records the actual supplier and internal actors",
+        workflow_tail,
+        [
             ("SUBMIT", supplier_user["id"], "COMPANY", None,
              "IN_PROGRESS", "PENDING_CONFIRMATION"),
             ("REJECT", internal_user["id"], "COMPANY", "公司验收驳回",
@@ -294,24 +345,60 @@ def run_workflow_acceptance(client, Client, conn, check):
              "IN_PROGRESS", "PENDING_CONFIRMATION"),
             ("WITHDRAW", supplier_user["id"], "COMPANY", None,
              "PENDING_CONFIRMATION", "IN_PROGRESS"),
-            ("SUBMIT", supplier_user["id"], "COMPANY", None,
+            ("SUBMIT", internal_user["id"], "COMPANY", None,
              "IN_PROGRESS", "PENDING_CONFIRMATION"),
             ("CONFIRM", internal_user["id"], "COMPANY", None,
              "PENDING_CONFIRMATION", "COMPLETED"),
-        ]
-        and project_audits.count("PROJECT_SUBMIT") == 3
-        and project_audits.count("PROJECT_REJECT") == 1
-        and project_audits.count("PROJECT_WITHDRAW") == 1
-        and project_audits.count("PROJECT_CONFIRM") == 1
-        and _event_count(conn, project_id, "MESSAGE_CREATED", internal_user["id"]) == 1
-        and _event_count(conn, project_id, "MESSAGE_CREATED", confirm_only_user["id"]) == 0
-        and _event_count(conn, project_id, "PROJECT_SUBMITTED", internal_user["id"]) == 3
-        and _event_count(conn, project_id, "PROJECT_SUBMITTED", confirm_only_user["id"]) == 0
-        and _event_count(conn, project_id, "PROJECT_REJECTED", supplier_user["id"]) == 1
-        and _event_count(conn, project_id, "PROJECT_WITHDRAWN", internal_user["id"]) == 1
-        and _event_count(conn, project_id, "PROJECT_WITHDRAWN", confirm_only_user["id"]) == 0
-        and _event_count(conn, project_id, "PROJECT_WITHDRAWN", supplier_user["id"]) == 1
-        and _event_count(conn, project_id, "PROJECT_CONFIRMED", supplier_user["id"]) == 1,
+        ],
+    )
+    _check_equal(
+        check,
+        "workflow audit actions persist once per accepted transition",
+        {
+            action: project_audits.count(action)
+            for action in ("PROJECT_SUBMIT", "PROJECT_REJECT", "PROJECT_WITHDRAW", "PROJECT_CONFIRM")
+        },
+        {
+            "PROJECT_SUBMIT": 3,
+            "PROJECT_REJECT": 1,
+            "PROJECT_WITHDRAW": 1,
+            "PROJECT_CONFIRM": 1,
+        },
+    )
+    _check_equal(
+        check,
+        "workflow notifications target only eligible recipients and latest submitters",
+        {
+            "message_internal": _event_count(
+                conn, project_id, "MESSAGE_CREATED", internal_user["id"]),
+            "message_confirm_only": _event_count(
+                conn, project_id, "MESSAGE_CREATED", confirm_only_user["id"]),
+            "submitted_internal": _event_count(
+                conn, project_id, "PROJECT_SUBMITTED", internal_user["id"]),
+            "submitted_confirm_only": _event_count(
+                conn, project_id, "PROJECT_SUBMITTED", confirm_only_user["id"]),
+            "rejected_supplier": _event_count(
+                conn, project_id, "PROJECT_REJECTED", supplier_user["id"]),
+            "withdrawn_internal": _event_count(
+                conn, project_id, "PROJECT_WITHDRAWN", internal_user["id"]),
+            "withdrawn_confirm_only": _event_count(
+                conn, project_id, "PROJECT_WITHDRAWN", confirm_only_user["id"]),
+            "withdrawn_supplier": _event_count(
+                conn, project_id, "PROJECT_WITHDRAWN", supplier_user["id"]),
+            "confirmed_supplier": _event_count(
+                conn, project_id, "PROJECT_CONFIRMED", supplier_user["id"]),
+        },
+        {
+            "message_internal": 1,
+            "message_confirm_only": 0,
+            "submitted_internal": 2,
+            "submitted_confirm_only": 0,
+            "rejected_supplier": 1,
+            "withdrawn_internal": 1,
+            "withdrawn_confirm_only": 0,
+            "withdrawn_supplier": 1,
+            "confirmed_supplier": 0,
+        },
     )
 
     # COMPLETED is read-only for business content. Existing project, file, and

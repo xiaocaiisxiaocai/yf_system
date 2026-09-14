@@ -11,7 +11,7 @@ public sealed class RoleService(AppDb db, PermissionService ceiling, AuditServic
     internal static FrozenSet<string> SupplierPermissionCodes { get; } = new[]
     {
         "dashboard", "project:list", "file:upload", "file:download", "file:preview",
-        "message:create", "project:submit", "project:confirm", "project:withdraw"
+        "message:create", "project:submit", "project:withdraw"
     }.ToFrozenSet(StringComparer.Ordinal);
 
     public async Task<object> PermissionsAsync(CurrentUser actor, CancellationToken ct)
