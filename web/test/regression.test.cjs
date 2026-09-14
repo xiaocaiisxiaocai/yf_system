@@ -1866,6 +1866,118 @@ test('receipt sync keeps the last count after failure and recovers on the backof
   await act(async () => renderer.unmount())
 })
 
+test('receipt revision refreshes visible counts immediately without a realtime poll timer', async () => {
+  const browser = createReceiptBrowser()
+  const messages = [{ id: 1, senderId: 2, senderName: '成员', senderType: 'INTERNAL', content: '实时回执留言', readCount: 0, totalCount: 1, readByMe: true, createdAt: '' }]
+  const visibleNodes = [
+    receiptNode(1, { width: 120, height: 32, top: 12, bottom: 44 }),
+    receiptNode(2, { width: 120, height: 32, top: 1100, bottom: 1132 }),
+  ]
+  const requests = []
+  let receiptCalls = 0
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async (url, config) => {
+        requests.push({ url, config })
+        if (url === '/projects/1/messages') {
+          browser.state.nodes = visibleNodes
+          return { data: { list: messages, total: 1 } }
+        }
+        if (url === '/projects/1/message-receipts') {
+          receiptCalls++
+          return { data: [{ id: 1, readCount: 1, totalCount: 1 }] }
+        }
+        throw new Error(`unexpected request: ${url}`)
+      },
+    },
+  }, browser.globals).default
+  let renderer
+  await act(async () => {
+    renderer = create(React.createElement(Page, {
+      projectId: 1, projectStatus: 'IN_PROGRESS', active: true,
+      receiptRevision: 'receipt-1', realtimeConnected: true,
+    }), { createNodeMock: () => browser.listNode })
+    await flushReceiptMicrotasks()
+  })
+  assert.equal(browser.timers.size, 0, 'a connected realtime panel must not install a fixed poll timer')
+  const input = renderer.root.findByType('Input.TextArea')
+  await act(async () => input.props.onChange('保留中的实时草稿'))
+  const beforeRevision = receiptCalls
+  await act(async () => {
+    renderer.update(React.createElement(Page, {
+      projectId: 1, projectStatus: 'IN_PROGRESS', active: true,
+      receiptRevision: 'receipt-2', realtimeConnected: true,
+    }))
+    await flushReceiptMicrotasks()
+  })
+  assert.equal(receiptCalls, beforeRevision + 1, 'a receipt revision must trigger an immediate refresh')
+  assert.equal(requests.at(-1).config.params.ids, '1', 'the immediate refresh still limits itself to visible ids')
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：1/1')
+  assert.equal(renderer.root.findByType('Input.TextArea').props.value, '保留中的实时草稿')
+  assert.equal(browser.timers.size, 0)
+  await act(async () => renderer.unmount())
+})
+
+test('disconnecting realtime receipt updates restores the five second poll interval', async () => {
+  const browser = createReceiptBrowser()
+  const messages = [{ id: 1, senderId: 2, senderName: '成员', senderType: 'INTERNAL', content: '断线回执留言', readCount: 0, totalCount: 1, readByMe: true, createdAt: '' }]
+  let receiptCalls = 0
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []),
+    '../api/types': { fmtTime: String },
+    '../api/client': {
+      get: async (url) => {
+        if (url === '/projects/1/messages') {
+          browser.state.nodes = [receiptNode(1, { width: 120, height: 32, top: 12, bottom: 44 })]
+          return { data: { list: messages, total: 1 } }
+        }
+        if (url === '/projects/1/message-receipts') {
+          receiptCalls++
+          return { data: [{ id: 1, readCount: 0, totalCount: 1 }] }
+        }
+        throw new Error(`unexpected request: ${url}`)
+      },
+    },
+  }, browser.globals).default
+  let renderer
+  await act(async () => {
+    renderer = create(React.createElement(Page, {
+      projectId: 1, projectStatus: 'IN_PROGRESS', active: true,
+      receiptRevision: 'receipt-1', realtimeConnected: true,
+    }), { createNodeMock: () => browser.listNode })
+    await flushReceiptMicrotasks()
+  })
+  assert.equal(browser.timers.size, 0)
+  const beforeDisconnect = receiptCalls
+  await act(async () => {
+    renderer.update(React.createElement(Page, {
+      projectId: 1, projectStatus: 'IN_PROGRESS', active: true,
+      receiptRevision: 'receipt-1', realtimeConnected: false,
+    }))
+    await flushReceiptMicrotasks()
+  })
+  assert.equal(receiptCalls, beforeDisconnect + 1, 'disconnecting should perform an immediate catch-up refresh')
+  assert.ok([...browser.timers.values()].some((timer) => timer.delay === 5000))
+  await runReceiptTimer(browser, 5000)
+  assert.equal(receiptCalls, beforeDisconnect + 2)
+
+  await act(async () => {
+    renderer.update(React.createElement(Page, {
+      projectId: 1, projectStatus: 'IN_PROGRESS', active: true,
+      receiptRevision: 'receipt-1', realtimeConnected: true,
+    }))
+    await flushReceiptMicrotasks()
+  })
+  assert.equal(browser.timers.size, 0, 'reconnecting clears the fallback poll timer')
+  await act(async () => renderer.unmount())
+})
+
 test('completed and terminated projects hide message delete controls', async () => {
   const Page = loadTs('src/components/MessagePanel.tsx', {
     '@arco-design/web-react': arco,

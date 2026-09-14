@@ -1,6 +1,7 @@
 using Dapper;
 using Microsoft.IdentityModel.Tokens;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Modules.Identity;
 
@@ -20,10 +21,9 @@ public sealed class IdentityMiddleware(RequestDelegate next)
             await next(context);
             return;
         }
-        var header = context.Request.Headers.Authorization.ToString();
-        if (!header.StartsWith("Bearer ", StringComparison.Ordinal) || header.Length == 7) throw ApiException.Unauthorized();
+        if (!TryGetAccessToken(context.Request, out var token)) throw ApiException.Unauthorized();
         AccessClaims claims;
-        try { claims = tokens.ParseAccess(header[7..]); }
+        try { claims = tokens.ParseAccess(token); }
         catch (SecurityTokenExpiredException) { throw new ApiException(401, 40102, "登录状态已过期"); }
         catch (ApiException) { throw; }
         catch { throw ApiException.Unauthorized("登录状态无效"); }
@@ -47,8 +47,29 @@ public sealed class IdentityMiddleware(RequestDelegate next)
             if (row.MustChangePassword && path is not ("/api/v1/auth/profile" or "/api/v1/auth/password" or "/api/v1/auth/logout"))
                 throw new ApiException(403, 40303, "请先修改初始密码");
             context.Items[typeof(CurrentUser)] = new CurrentUser(row.Id, row.EmployeeNo, row.UserType, row.SupplierId);
+            context.Items[typeof(AccessClaims)] = claims;
         }
         await next(context);
+    }
+
+    internal static bool TryGetAccessToken(HttpRequest request, out string token)
+    {
+        token = string.Empty;
+        var header = request.Headers.Authorization.ToString();
+        if (header.Length > 0)
+        {
+            if (!header.StartsWith("Bearer ", StringComparison.Ordinal) || header.Length == 7)
+                return false;
+            token = header[7..];
+            return true;
+        }
+        if (!string.Equals(request.Path.Value, ProjectRealtimeHub.Path, StringComparison.Ordinal)
+            || !request.Query.TryGetValue("access_token", out var values)
+            || values.Count != 1
+            || string.IsNullOrWhiteSpace(values[0]))
+            return false;
+        token = values[0]!;
+        return true;
     }
 
     private sealed class AuthUser

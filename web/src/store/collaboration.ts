@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from './auth'
+import { startProjectRealtime } from '../services/projectRealtime'
 
 export type CollaborationType = 'FILE' | 'MESSAGE' | 'PROJECT'
 
@@ -37,6 +38,10 @@ export type CollaborationRefreshStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 interface CollaborationState extends CollaborationSummary {
   status: CollaborationRefreshStatus
+  realtimeStatus: 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+  messageRevisions: Record<number, number>
+  receiptRevisions: Record<number, number>
+  reconnectRevision: number
   refresh: () => Promise<void>
   reset: () => void
 }
@@ -127,11 +132,15 @@ const EMPTY_SUMMARY: CollaborationSummary = { unreadCount: 0, latestId: 0, revis
 export const useCollaboration = create<CollaborationState>((set) => ({
   ...EMPTY_SUMMARY,
   status: 'idle',
+  realtimeStatus: 'disconnected',
+  messageRevisions: {},
+  receiptRevisions: {},
+  reconnectRevision: 0,
   refresh: async () => {
     if (activePoller) await activePoller.refresh()
     else await refreshCollaborationSummary()
   },
-  reset: () => set({ ...EMPTY_SUMMARY, status: 'idle' }),
+  reset: () => set({ ...EMPTY_SUMMARY, status: 'idle', realtimeStatus: 'disconnected', messageRevisions: {}, receiptRevisions: {}, reconnectRevision: 0 }),
 }))
 
 interface PollSession {
@@ -184,7 +193,7 @@ export interface CollaborationPollerOptions {
   isPaused: () => boolean
   setTimer?: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void
-  intervalMs?: number
+  intervalMs?: number | (() => number)
   maximumBackoffMs?: number
 }
 
@@ -235,9 +244,10 @@ export function createCollaborationPoller(options: CollaborationPollerOptions): 
     const snapshot = syncSession()
     if (!snapshot.enabled || !snapshot.key || options.isPaused()) return
     const exponent = Math.max(0, consecutiveFailures - 1)
+    const baseInterval = typeof intervalMs === 'function' ? intervalMs() : intervalMs
     const delay = consecutiveFailures === 0
-      ? intervalMs
-      : Math.min(intervalMs * (2 ** exponent), maximumBackoffMs)
+      ? baseInterval
+      : Math.min(baseInterval * (2 ** exponent), maximumBackoffMs)
     timer = setTimer(() => {
       timer = null
       void run(false)
@@ -309,6 +319,7 @@ export function createCollaborationPoller(options: CollaborationPollerOptions): 
 }
 
 let activePoller: CollaborationPoller | null = null
+let stopRealtime: (() => void) | null = null
 
 function subscribeBrowserResume(wake: () => void): () => void {
   const onVisibility = () => { if (document.visibilityState === 'visible') wake() }
@@ -325,6 +336,7 @@ function subscribeBrowserResume(wake: () => void): () => void {
 /** AdminLayout 挂载期间唯一的全局协作概览轮询。 */
 export function startCollaborationPolling(): () => void {
   activePoller?.stop()
+  stopRealtime?.()
   const poller = createCollaborationPoller({
     getSession: currentPollSession,
     poll: (key, signal) => refreshCollaborationSummary(signal, key),
@@ -332,12 +344,43 @@ export function startCollaborationPolling(): () => void {
     subscribeSession: (wake) => useAuth.subscribe(wake),
     subscribeResume: subscribeBrowserResume,
     isPaused: () => document.visibilityState !== 'visible' || navigator.onLine === false,
+    intervalMs: () => useCollaboration.getState().realtimeStatus === 'connected' ? 60_000 : 5_000,
   })
   activePoller = poller
   poller.start()
+  const stop = startProjectRealtime({
+    getSession: () => { const session = currentPollSession(); return { ...session, key: session.key ?? '' } },
+    getAccessToken: async () => {
+      const expectedKey = currentPollSession().key
+      // Reuse the existing single-flight refresh/rotation instead of keeping a second token.
+      await http.get('/collaboration/summary', { quietNetworkError: true, timeout: 10000 } as QuietRequestConfig)
+      return expectedKey === currentPollSession().key ? useAuth.getState().token ?? '' : ''
+    },
+    subscribeSession: (wake) => useAuth.subscribe(wake),
+    onStatus: (realtimeStatus) => {
+      useCollaboration.setState({ realtimeStatus })
+      if (realtimeStatus !== 'connected') void poller.refresh()
+    },
+    onReady: () => {
+      useCollaboration.setState((state) => ({ reconnectRevision: state.reconnectRevision + 1 }))
+      void poller.refresh()
+    },
+    onEvent: ({ projectId, kind }) => {
+      if (kind === 'messages') useCollaboration.setState((state) => ({ messageRevisions: {
+        ...state.messageRevisions, [projectId]: (state.messageRevisions[projectId] ?? 0) + 1,
+      } }))
+      if (kind === 'receipts') useCollaboration.setState((state) => ({ receiptRevisions: {
+        ...state.receiptRevisions, [projectId]: (state.receiptRevisions[projectId] ?? 0) + 1,
+      } }))
+      if (kind !== 'receipts') void poller.refresh()
+    },
+  })
+  stopRealtime = stop
   return () => {
     if (activePoller === poller) activePoller = null
     poller.stop()
+    if (stopRealtime === stop) stopRealtime = null
+    stop()
     useCollaboration.getState().reset()
   }
 }

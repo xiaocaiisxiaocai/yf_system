@@ -60,12 +60,14 @@ public sealed class TokenService(AppOptions options)
             var root = document.RootElement;
             if (!root.TryGetProperty("uid", out var uidValue) || uidValue.ValueKind != JsonValueKind.Number || !uidValue.TryGetUInt64(out var uid) ||
                 !root.TryGetProperty(JwtRegisteredClaimNames.Sub, out var subValue) || subValue.ValueKind != JsonValueKind.String ||
-                !root.TryGetProperty("sid", out var sidValue) || sidValue.ValueKind != JsonValueKind.String)
+                !root.TryGetProperty("sid", out var sidValue) || sidValue.ValueKind != JsonValueKind.String ||
+                !root.TryGetProperty(JwtRegisteredClaimNames.Exp, out var expiresValue) ||
+                expiresValue.ValueKind != JsonValueKind.Number || !expiresValue.TryGetInt64(out var expiresAt))
                 return false;
             var employeeNo = subValue.GetString();
             var sessionId = sidValue.GetString();
             if (string.IsNullOrWhiteSpace(employeeNo) || string.IsNullOrWhiteSpace(sessionId)) return false;
-            claims = new(uid, employeeNo, sessionId);
+            claims = new(uid, employeeNo, sessionId, expiresAt);
             return true;
         }
         catch (JsonException) { return false; }
@@ -73,4 +75,4 @@ public sealed class TokenService(AppOptions options)
     }
 }
 
-public sealed record AccessClaims(ulong UserId, string EmployeeNo, string SessionId);
+public sealed record AccessClaims(ulong UserId, string EmployeeNo, string SessionId, long ExpiresAt);

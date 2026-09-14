@@ -11,6 +11,12 @@ public static class ProjectsModule
         services.AddScoped<MessageService>();
         services.AddScoped<DashboardService>();
         services.AddScoped<CollaborationService>();
+        services.AddSignalR(options => options.EnableDetailedErrors = false);
+        services.AddSingleton<RealtimeConnectionRegistry>();
+        services.AddSingleton<ProjectRealtimeAuthorizer>();
+        services.AddSingleton<ProjectRealtimePublisher>();
+        services.AddSingleton<IProjectRealtimePublisher>(provider => provider.GetRequiredService<ProjectRealtimePublisher>());
+        services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<ProjectRealtimePublisher>());
         services.AddSingleton<ProjectActivityService>();
         services.AddSingleton<IProjectAuditCapture>(provider => provider.GetRequiredService<ProjectActivityService>());
         return services;

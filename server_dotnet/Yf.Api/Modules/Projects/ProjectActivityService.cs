@@ -6,8 +6,12 @@ using Yf.Api.Infrastructure;
 
 namespace Yf.Api.Modules.Projects;
 
-internal sealed class ProjectActivityService : IProjectAuditCapture
+internal sealed class ProjectActivityService(
+    IHttpContextAccessor? accessor = null,
+    IProjectRealtimePublisher? realtime = null) : IProjectAuditCapture
 {
+    private static readonly object ScheduledRealtimeKey = new();
+
     internal static async Task<string> RevisionAsync(
         MySqlConnection conn,
         MySqlTransaction? tx,
@@ -54,7 +58,7 @@ internal sealed class ProjectActivityService : IProjectAuditCapture
             return;
         }
         var actorName = await ResolveActorNameAsync(db, tx, audit.UserId, audit.EmployeeNo, ct);
-        await db.ExecuteAsync(new CommandDefinition(
+        var inserted = await db.ExecuteAsync(new CommandDefinition(
             """
             INSERT IGNORE INTO project_activities
                 (project_id,activity_type,action,actor_id,actor_name,occurred_at,title,summary,target_id,source_key)
@@ -76,6 +80,27 @@ internal sealed class ProjectActivityService : IProjectAuditCapture
             },
             tx,
             cancellationToken: ct));
+        if (inserted > 0 && activity.ActivityType != "MESSAGE")
+            ScheduleRealtime(activity.ProjectId);
+    }
+
+    private void ScheduleRealtime(ulong projectId)
+    {
+        var context = accessor?.HttpContext;
+        if (context is null || realtime is null) return;
+        if (!context.Items.TryGetValue(ScheduledRealtimeKey, out var value)
+            || value is not HashSet<ulong> scheduled)
+        {
+            scheduled = [];
+            context.Items[ScheduledRealtimeKey] = scheduled;
+        }
+        if (!scheduled.Add(projectId)) return;
+        context.Response.OnCompleted(async () =>
+        {
+            if (context.Response.StatusCode >= StatusCodes.Status400BadRequest) return;
+            try { await realtime.PublishAsync(projectId, RealtimeChangeKinds.Activity, CancellationToken.None); }
+            catch { }
+        });
     }
 
     internal async Task<object> ListAsync(

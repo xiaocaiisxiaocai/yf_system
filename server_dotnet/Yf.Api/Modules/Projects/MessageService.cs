@@ -7,7 +7,8 @@ namespace Yf.Api.Modules.Projects;
 
 internal sealed class MessageService(
     AuditService audit,
-    AppOptions options)
+    AppOptions options,
+    IProjectRealtimePublisher? realtime = null)
 {
     internal async Task<object> ListAsync(
         MySqlConnection conn,
@@ -94,6 +95,7 @@ internal sealed class MessageService(
         var participants = await ProjectNotificationService.ParticipantsAsync(conn, tx, project, ct);
         var response = MessageJson(message, [], participants.Select(user => user.Id).ToHashSet(), current.Id);
         await tx.CommitAsync(ct);
+        await PublishSafelyAsync(projectId, RealtimeChangeKinds.Messages);
         return response;
     }
 
@@ -110,6 +112,7 @@ internal sealed class MessageService(
         }
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var changedProjects = new HashSet<ulong>();
         if (ids.Length == 0)
         {
             await tx.CommitAsync(ct);
@@ -138,8 +141,11 @@ internal sealed class MessageService(
                     """,
                     new { MessageId = message.Id, UserId = current.Id }, tx, cancellationToken: ct));
             }
+            changedProjects.Add(group.Key);
         }
         await tx.CommitAsync(ct);
+        foreach (var projectId in changedProjects)
+            await PublishSafelyAsync(projectId, RealtimeChangeKinds.Receipts);
     }
 
     internal async Task<object> ReadsAsync(
@@ -246,6 +252,7 @@ internal sealed class MessageService(
             new { DeletedBy = current.Id, MessageId = messageId }, tx, cancellationToken: ct));
         await audit.WriteAsync(conn, tx, current.Id, "MESSAGE_DELETE", "message", messageId, null, ip, ct);
         await tx.CommitAsync(ct);
+        await PublishSafelyAsync(message.ProjectId, RealtimeChangeKinds.Messages);
     }
 
     internal static async Task<ulong> UnreadCountAsync(
@@ -284,6 +291,13 @@ internal sealed class MessageService(
             totalCount = counts.TotalCount,
             readByMe = counts.ReadByMe,
         };
+    }
+
+    private async Task PublishSafelyAsync(ulong projectId, string kind)
+    {
+        if (realtime is null) return;
+        try { await realtime.PublishAsync(projectId, kind, CancellationToken.None); }
+        catch { }
     }
 
     private static MessageReceiptCounts ReceiptCounts(

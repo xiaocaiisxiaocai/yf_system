@@ -24,8 +24,12 @@ public class ApiContractTests
         builder.Services.AddSingleton(new AppOptions()).AddSingleton<AppDb>().AddSingleton<AccessService>().AddSingleton<AuditService>();
         builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule();
         await using var app = builder.Build();
-        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule();
-        var actual = ((IEndpointRouteBuilder)app).DataSources.SelectMany(x => x.Endpoints).OfType<RouteEndpoint>()
+        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime();
+        var endpoints = ((IEndpointRouteBuilder)app).DataSources.SelectMany(x => x.Endpoints).OfType<RouteEndpoint>().ToArray();
+        Assert.Contains(endpoints, endpoint => endpoint.RoutePattern.RawText == "/api/v1/collaboration/live");
+        // SignalR validates transport methods inside its request delegate rather than HttpMethodMetadata.
+        Assert.Contains(endpoints, endpoint => endpoint.RoutePattern.RawText == "/api/v1/collaboration/live/negotiate");
+        var actual = endpoints.Where(endpoint => !endpoint.RoutePattern.RawText!.StartsWith("/api/v1/collaboration/live", StringComparison.Ordinal))
             .SelectMany(endpoint => endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods.Select(method => Normalize(method, endpoint.RoutePattern.RawText!)))
             .ToHashSet(StringComparer.Ordinal);
         Assert.Equal(expected.Order(StringComparer.Ordinal), actual.Order(StringComparer.Ordinal));

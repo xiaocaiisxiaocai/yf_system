@@ -32,7 +32,7 @@ function createStore(initializer) {
   return useStore
 }
 
-function loadCollaboration({ http = { get: async () => ({ data: {} }) }, authState } = {}) {
+function loadCollaboration({ http = { get: async () => ({ data: {} }) }, authState, realtimeStart = () => () => {}, globals = {} } = {}) {
   let currentAuth = authState || {
     generation: 1,
     token: 'fixture-token',
@@ -66,10 +66,12 @@ function loadCollaboration({ http = { get: async () => ({ data: {} }) }, authSta
       if (name === 'zustand') return { create: createStore }
       if (name === '../api/client') return { __esModule: true, default: http }
       if (name === './auth') return { useAuth }
+      if (name === '../services/projectRealtime') return { startProjectRealtime: realtimeStart }
       return require(name)
     },
     setTimeout,
     clearTimeout,
+    ...globals,
   }
   vm.runInNewContext(source, context, { filename: sourcePath })
   return {
@@ -124,6 +126,52 @@ test('collaboration parsers accept the empty-summary sentinel and reject malform
     }),
     /条目格式错误/,
   )
+})
+
+test('realtime events invalidate only the affected project and reconnect forces catch-up', async () => {
+  let live
+  let stopped = false
+  let requests = 0
+  const timers = new Map()
+  let timerId = 0
+  const { collaboration } = loadCollaboration({
+    http: { get: async () => { requests++; return { data: { unreadCount: 0, latestId: 1, revision: 'server-1' } } } },
+    realtimeStart: options => { live = options; return () => { stopped = true } },
+    globals: {
+      document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
+      window: { addEventListener() {}, removeEventListener() {} },
+      navigator: { onLine: true },
+      setTimeout: (callback, delay) => { const id = ++timerId; timers.set(id, { callback, delay }); return id },
+      clearTimeout: id => timers.delete(id),
+    },
+  })
+  const stop = collaboration.startCollaborationPolling()
+  await new Promise(resolve => setImmediate(resolve))
+  live.onStatus('connected')
+  live.onReady()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(collaboration.useCollaboration.getState().reconnectRevision, 1)
+  assert.ok([...timers.values()].some(timer => timer.delay === 60000), 'connected transport uses a slow reconciliation interval')
+  live.onEvent({ projectId: 11, kind: 'messages' })
+  await new Promise(resolve => setImmediate(resolve))
+  const afterMessage = requests
+  live.onEvent({ projectId: 12, kind: 'receipts' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(collaboration.useCollaboration.getState().messageRevisions[11], 1)
+  assert.equal(collaboration.useCollaboration.getState().messageRevisions[12], undefined)
+  assert.equal(collaboration.useCollaboration.getState().receiptRevisions[12], 1)
+  assert.equal(requests, afterMessage, 'receipt push does not refetch the global activity feed')
+  live.onStatus('reconnecting')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.ok([...timers.values()].some(timer => timer.delay === 5000), 'disconnected transport restores fallback polling')
+  live.onStatus('connected')
+  live.onReady()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(collaboration.useCollaboration.getState().reconnectRevision, 2)
+  stop()
+  assert.equal(stopped, true)
+  assert.equal(timers.size, 0)
+  assert.equal(collaboration.useCollaboration.getState().realtimeStatus, 'disconnected')
 })
 
 test('summary refresh cannot restore stale account data after cancellation', async () => {

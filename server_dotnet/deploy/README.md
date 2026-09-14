@@ -2,6 +2,8 @@
 
 本包在**目标 Windows 服务器**使用，不需要 Rust、Node.js 或源码。程序使用 .NET 10 x64 framework-dependent 发布；需要先安装 IIS、IIS Application Initialization、.NET 10 Hosting Bundle、MySQL，以及带私钥且主机名匹配的 HTTPS 证书。
 
+实时协作使用 SignalR，建议在目标服务器的 IIS 角色服务中启用 **WebSocket Protocol**（Windows Server 功能名 `Web-WebSockets`）。反向代理也需允许 WebSocket Upgrade；Hub 路径为 `/api/v1/collaboration/live`，前后端保持同源。未启用 WebSocket 时 SignalR 可尝试其他传输，连接失败时前端恢复轮询。不要记录 Hub 的 `access_token` 查询参数，IIS 日志应移除 URI Query（`cs-uri-query`）字段或配置等效的脱敏日志；它用于浏览器的 WebSocket/SSE 握手，包含短期访问令牌。
+
 ## 准备
 
 1. 将发布 ZIP 与 `.sha256` 一并复制到服务器，核对哈希后解压到独立临时目录。

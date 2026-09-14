@@ -121,6 +121,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application read permissions.'
 if ($LASTEXITCODE -ne 0) { throw 'Unable to grant storage permissions.' }
 Protect-YfConfigurationFile $ConfigPath $identity
 New-Website -Name $SiteName -PhysicalPath $SiteRoot -ApplicationPool $AppPoolName -Port $HttpsPort -HostHeader $HostName -Ssl -SslFlags 1 | Out-Null
+# Browser SignalR handshakes carry a short-lived access_token in the query string.
+# Keep request metadata while excluding URI Query from this application's IIS log.
+Set-ItemProperty "IIS:\Sites\$SiteName" -Name logFile.logExtFileFlags -Value 'Date,Time,ClientIP,UserName,SiteName,ServerIP,Method,UriStem,ServerPort,UserAgent,HttpStatus,HttpSubStatus,Win32Status,TimeTaken'
 $binding = Get-WebBinding -Name $SiteName -Protocol https
 $binding.AddSslCertificate($thumb,'My')
 Set-ItemProperty "IIS:\Sites\$SiteName" -Name applicationDefaults.preloadEnabled -Value $true

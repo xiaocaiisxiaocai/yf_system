@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@arco-design/web-react": "^2.66.16",
+    "@microsoft/signalr": "10.0.11",
     "axios": "^1.20.0",
     "pdfjs-dist": "6.3.289",
     "react": "^18.3.1",

@@ -30,6 +30,10 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const [summary, setSummary] = useState<Summary>({ unreadMessages: 0 })
   const revision = useCollaboration((state) => state.revision)
   const syncStatus = useCollaboration((state) => state.status)
+  const liveMessages = useCollaboration((state) => state.messageRevisions?.[pid] ?? 0)
+  const liveReceipts = useCollaboration((state) => state.receiptRevisions?.[pid] ?? 0)
+  const reconnected = useCollaboration((state) => state.reconnectRevision ?? 0)
+  const realtimeConnected = useCollaboration((state) => state.realtimeStatus === 'connected')
   const summarySeq = useRef(0)
   const [loadErrorFor, setLoadErrorFor] = useState<number | null>(null)
   const loadingProjectId = useRef<number | null>(null)
@@ -258,7 +262,9 @@ function ProjectDetailContent({ id }: { id?: string }) {
               projectStatus={project.status}
               targetId={messagesTargetId}
               onRead={loadSummary}
-              revision={summary.activityRevision}
+              revision={`${summary.activityRevision ?? ''}:${liveMessages}:${reconnected}`}
+              receiptRevision={`${liveReceipts}:${reconnected}`}
+              realtimeConnected={realtimeConnected}
               onSent={messagesTargetId ? clearTarget : undefined}
             />
           </Tabs.TabPane>

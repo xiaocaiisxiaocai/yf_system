@@ -67,6 +67,10 @@ public static class ApiApplication
             .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
         configure?.Invoke(builder);
         var app = builder.Build();
+        var allowedWebOrigin = new Uri(options.WebBaseUrl).GetLeftPart(UriPartial.Authority);
+        var webSocketOptions = new WebSocketOptions();
+        webSocketOptions.AllowedOrigins.Add(allowedWebOrigin);
+        app.UseWebSockets(webSocketOptions);
         app.UseMiddleware<ApiErrorMiddleware>();
         app.Use(async (context, next) =>
         {
@@ -85,7 +89,7 @@ public static class ApiApplication
         });
         app.UseCors();
         app.UseMiddleware<IdentityMiddleware>();
-        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule();
+        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime();
         app.MapGet("/health", async (AppDb db, CancellationToken ct) =>
         {
             try

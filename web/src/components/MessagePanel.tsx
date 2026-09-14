@@ -15,6 +15,8 @@ interface Props {
   targetId?: number
   revision?: string
   active?: boolean
+  receiptRevision?: string
+  realtimeConnected?: boolean
 }
 
 interface Reader {
@@ -52,7 +54,7 @@ async function loadReadCounts(ids: number[]): Promise<ReadCounts[]> {
   return counts
 }
 
-export default function MessagePanel({ projectId, projectStatus, onRead, onSent, targetId, revision = '', active = true }: Props) {
+export default function MessagePanel({ projectId, projectStatus, onRead, onSent, targetId, revision = '', active = true, receiptRevision = '', realtimeConnected = false }: Props) {
   const [seenRevision, setSeenRevision] = useState(revision)
   const currentRevision = useRef(revision)
   useEffect(() => {
@@ -132,6 +134,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
     let inFlight = false
     let failures = 0
     let timer: ReturnType<typeof setTimeout> | undefined
+    let scrollTimer: ReturnType<typeof setTimeout> | undefined
     let controller: AbortController | undefined
     const generation = messageScope.current.generation
     const paused = () => document.visibilityState !== 'visible'
@@ -176,28 +179,32 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
         failures += 1
       } finally {
         inFlight = false
-        if (!stopped && !paused()) timer = setTimeout(sync, Math.min(5000 * 2 ** failures, 60000))
+        if (!stopped && !paused() && (!realtimeConnected || failures > 0)) timer = setTimeout(sync, Math.min(5000 * 2 ** failures, 60000))
       }
     }
     const wake = () => {
       if (paused()) { clearTimeout(timer); controller?.abort(); return }
       void sync()
     }
+    const onScroll = () => { clearTimeout(scrollTimer); scrollTimer = setTimeout(wake, 150) }
     document.addEventListener('visibilitychange', wake)
     window.addEventListener('focus', wake)
     window.addEventListener('online', wake)
     window.addEventListener('offline', wake)
+    window.addEventListener('scroll', onScroll, true)
     void sync()
     return () => {
       stopped = true
       clearTimeout(timer)
+      clearTimeout(scrollTimer)
       controller?.abort()
       document.removeEventListener('visibilitychange', wake)
       window.removeEventListener('focus', wake)
       window.removeEventListener('online', wake)
       window.removeEventListener('offline', wake)
+      window.removeEventListener('scroll', onScroll, true)
     }
-  }, [active, projectId, targetId, user?.id, applyReadCounts])
+  }, [active, projectId, targetId, user?.id, applyReadCounts, receiptRevision, realtimeConnected, list.length])
 
   const load = useCallback(
     async (p: number, append: boolean) => {
