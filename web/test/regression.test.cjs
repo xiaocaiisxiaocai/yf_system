@@ -59,7 +59,7 @@ test('account menu opens personal profile maintenance inside the authenticated l
   const layout = fs.readFileSync(path.join(root, 'src/layouts/AdminLayout.tsx'), 'utf8')
   const app = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8')
 
-  assert.match(layout, /<Menu\.Item key="profile">[\s\S]*?个人资料维护/)
+  assert.match(layout, /<Menu\.Item key="profile">[\s\S]*?个人资料\s*<\/Menu\.Item>/)
   assert.match(layout, /nav\('\/profile'\)/)
   assert.doesNotMatch(layout, /<Menu\.Item key="pwd">/)
   assert.match(app, /<Route path="profile" element=\{<Profile \/>\}/)

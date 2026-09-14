@@ -132,7 +132,7 @@ export default function AdminLayout() {
               >
                 <Menu.Item key="profile">
                   <IconUser style={{ marginRight: 8 }} />
-                  个人资料维护
+                  个人资料
                 </Menu.Item>
                 <Menu.Item key="logout">
                   <IconPoweroff style={{ marginRight: 8 }} />
