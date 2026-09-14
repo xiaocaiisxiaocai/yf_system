@@ -36,6 +36,27 @@ addEventListener('message', async event => {
     // The authenticated bytes are supplied by the parent. Never fetch a document
     // URL or expose the library's save/export API from this isolated viewer.
     await viewer.renderExcel(event.data.buffer)
+    // Resize the in-memory preview only. Keep the image anchor geometry in sync
+    // before the spreadsheet paints its updated rows/columns.
+    for (const axis of ['row', 'col']) {
+      const resizer = viewer.xs.sheet[`${axis}Resizer`]
+      const finish = resizer.finishedFn
+      resizer.finishedFn = (rect, distance) => {
+        const data = viewer.xs.sheet.data
+        const range = data.selector.range
+        const index = axis === 'row' ? rect.ri : rect.ci
+        const start = axis === 'row' ? range.sri : range.sci
+        const end = axis === 'row' ? range.eri : range.eci
+        const inSelection = index >= start && index <= end
+        const sheet = viewer.workbookDataSource._worksheets[viewer.sheetIndex]
+        for (let i = inSelection ? start : index; i <= (inSelection ? end : index); i++) {
+          if (axis === 'row') sheet.getRow(i + 1).height = distance * 3 / 4
+          else sheet.getColumn(i + 1).width = distance / 6
+        }
+        finish(rect, distance)
+        renderImage(viewer.ctx, viewer.mediasSource, sheet, viewer.offset)
+      }
+    }
     const swap = viewer.xs.bottombar.swapFunc
     viewer.xs.bottombar.swapFunc = function (...args) {
       swap.apply(this, args)

@@ -16,7 +16,7 @@ await build({
 const code = (await readFile(path.join(output, 'viewer.js'), 'utf8')).replace(/<\/script/gi, '<\\/script')
 const css = await readFile(path.join(output, 'viewer.css'), 'utf8')
 const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-YF_VIEWER_NONCE'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'"><style>${css}
-html,body{height:100%;margin:0;overflow:hidden}body{display:flex;flex-direction:column;font-family:'Segoe UI','Microsoft YaHei',sans-serif}#viewer{flex:1;min-height:0;overflow:hidden}*{box-sizing:border-box}.vue-office-excel-main{height:100%}.x-spreadsheet-resizer,.x-spreadsheet-editor{display:none!important}
+html,body{height:100%;margin:0;overflow:hidden}body{display:flex;flex-direction:column;font-family:'Segoe UI','Microsoft YaHei',sans-serif}#viewer{flex:1;min-height:0;overflow:hidden}*{box-sizing:border-box}.vue-office-excel-main{height:100%}.x-spreadsheet-editor{display:none!important}
 </style></head><body><div id="viewer"></div><script nonce="YF_VIEWER_NONCE">${code}</script></body></html>`
 await mkdir(path.join(root, 'generated'), { recursive: true })
 await writeFile(path.join(root, 'generated/excel-viewer.html'), html)

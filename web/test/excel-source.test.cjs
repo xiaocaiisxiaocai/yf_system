@@ -50,6 +50,31 @@ function loadExcelSource() {
   })
 }
 
+test('preview resize uses CSS pointer coordinates and keeps the minimum size', () => {
+  let move, up
+  const Resizer = loadTs('vendor/vue-office-excel/core/packages/vue-excel/src/x-spreadsheet/component/resizer.js', {
+    './element': {}, '../config': {},
+    './event': { mouseMoveUp(_window, onMove, onUp) { move = onMove; up = onUp } },
+  }, { window: {} }).default
+  for (const vertical of [false, true]) {
+    const resizer = Object.create(Resizer.prototype)
+    let size
+    Object.assign(resizer, {
+      vertical, minDistance: 24, cRect: { left: 0, top: 0, width: 108, height: 32 },
+      el: { css() {} }, lineEl: { show() {}, hide() {} }, hide() {},
+      finishedFn(_rect, value) { size = value },
+    })
+    resizer.mousedownHandler({ clientX: 100, clientY: 100 })
+    move({ buttons: 1, clientX: 140, clientY: 140, movementX: 80, movementY: 80 })
+    up()
+    assert.equal(size, vertical ? 148 : 72, 'physical movement units must not double the CSS resize delta')
+    resizer.mousedownHandler({ clientX: 100, clientY: 100 })
+    move({ buttons: 1, clientX: -500, clientY: -500 })
+    up()
+    assert.equal(size, 24)
+  }
+})
+
 test('double-click copy writes complete text and always cleans up its temporary selection', () => {
   for (const fail of [false, true]) {
     let listener, removed = false, focused = false, copied

@@ -76,7 +76,8 @@ export default class Resizer {
   }
 
   mousedownHandler(evt) {
-    let startEvt = evt;
+    const startX = evt.clientX;
+    const startY = evt.clientY;
     const {
       el, lineEl, cRect, vertical, minDistance,
     } = this;
@@ -85,23 +86,21 @@ export default class Resizer {
     lineEl.show();
     mouseMoveUp(window, (e) => {
       this.moving = true;
-      if (startEvt !== null && e.buttons === 1) {
+      if (e.buttons === 1) {
         // console.log('top:', top, ', left:', top, ', cRect:', cRect);
         if (vertical) {
-          distance += e.movementX;
+          distance = cRect.width + e.clientX - startX;
           if (distance > minDistance) {
             el.css('left', `${cRect.left + distance}px`);
           }
         } else {
-          distance += e.movementY;
+          distance = cRect.height + e.clientY - startY;
           if (distance > minDistance) {
             el.css('top', `${cRect.top + distance}px`);
           }
         }
-        startEvt = e;
       }
     }, () => {
-      startEvt = null;
       lineEl.hide();
       this.moving = false;
       this.hide();
