@@ -5,6 +5,7 @@
 .excel-cell-content.is-expanded .excel-cell-text { height: min(160px, 35vh); }
 .excel-cell-toggle { flex: 0 0 auto; height: 32px; padding: 0 12px; border: 0; border-radius: 4px; color: #165dff; background: #f2f3f5; font: inherit; cursor: pointer; }
 .excel-cell-toggle:hover { background: #e8f3ff; }
+.excel-copy-status { position: fixed; z-index: 1000; top: 52px; right: 16px; padding: 8px 12px; border: 1px solid #e5e6eb; border-radius: 4px; background: #fff; color: #1d2129; box-shadow: 0 2px 8px #0002; font: 14px/22px 'Segoe UI', 'Microsoft YaHei', sans-serif; pointer-events: none; }
 .excel-cell-toggle:focus-visible { outline: 2px solid #165dff; outline-offset: 2px; }
 .x-spreadsheet-selector .x-spreadsheet-selector-area { box-sizing: border-box; }
 .x-spreadsheet-selector .x-spreadsheet-selector-corner { display: none; }

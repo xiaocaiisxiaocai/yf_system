@@ -2,7 +2,7 @@ import { init } from './core/packages/js-excel/src/main.js'
 import Spreadsheet from './core/packages/vue-excel/src/x-spreadsheet/index.js'
 import zh from './core/packages/vue-excel/src/x-spreadsheet/locale/zh-cn.js'
 import { renderImage } from './core/packages/vue-excel/src/media.js'
-import { createCellContentBar, selectedCellContent } from './cell-content.js'
+import { createCellContentBar, selectedCellContent, copyCellText } from './cell-content.js'
 import './core/packages/js-excel/index.css'
 import './viewer.css'
 
@@ -12,6 +12,12 @@ let channel
 let loaded = false
 const host = document.getElementById('viewer')
 const contentBar = createCellContentBar(host)
+const copyStatus = document.createElement('div')
+copyStatus.className = 'excel-copy-status'
+copyStatus.setAttribute('role', 'status')
+copyStatus.hidden = true
+document.body.append(copyStatus)
+let copyStatusTimer
 const showCell = (rowIndex, columnIndex) => {
   const content = selectedCellContent(viewer, rowIndex, columnIndex)
   contentBar.show(content.address, content.text)
@@ -45,7 +51,19 @@ new ResizeObserver(() => {
   viewer.xs.sheet.resetData(viewer.xs.sheet.data)
   renderImage(viewer.ctx, viewer.mediasSource, viewer.workbookDataSource._worksheets[viewer.sheetIndex], viewer.offset)
 }).observe(host)
-host.addEventListener('dblclick', () => contentBar.expand())
+host.addEventListener('dblclick', event => {
+  if (!viewer?.xs || !event.target.closest?.('.x-spreadsheet-overlayer')) return
+  const grid = host.querySelector('.x-spreadsheet-overlayer-content').getBoundingClientRect()
+  if (event.clientX < grid.left || event.clientY < grid.top) return
+  const { ri, ci } = viewer.xs.sheet.data.selector
+  if (ri < 0 || ci < 0) return
+  const content = selectedCellContent(viewer, ri, ci)
+  const copied = copyCellText(content.text)
+  copyStatus.textContent = copied ? '已复制单元格内容' : '复制失败，请选中文字后按 Ctrl+C'
+  copyStatus.hidden = false
+  clearTimeout(copyStatusTimer)
+  copyStatusTimer = setTimeout(() => { copyStatus.hidden = true }, 2000)
+})
 addEventListener('contextmenu', event => event.preventDefault())
 addEventListener('keydown', event => {
   if (event.target.closest?.('.excel-cell-content')) return

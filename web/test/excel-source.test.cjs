@@ -50,6 +50,35 @@ function loadExcelSource() {
   })
 }
 
+test('double-click copy writes complete text and always cleans up its temporary selection', () => {
+  for (const fail of [false, true]) {
+    let listener, removed = false, focused = false, copied
+    const helper = { style: {}, focus() {}, select() {}, remove() { removed = true } }
+    const browserWindow = {
+      addEventListener(type, next, capture) { assert.equal(type, 'copy'); assert.equal(capture, true); listener = next },
+      removeEventListener(type, current) { assert.equal(type, 'copy'); assert.equal(current, listener); listener = undefined },
+    }
+    const browserDocument = {
+      activeElement: { focus() { focused = true } },
+      createElement: () => helper,
+      body: { append() {} },
+      execCommand(command) {
+        assert.equal(command, 'copy')
+        if (fail) throw new Error('clipboard unavailable')
+        listener({ clipboardData: { setData(type, value) { assert.equal(type, 'text/plain'); copied = value } }, preventDefault() {}, stopImmediatePropagation() {} })
+        return true
+      },
+    }
+    const { copyCellText } = loadTs('vendor/vue-office-excel/cell-content.js', {}, { window: browserWindow, document: browserDocument })
+    const content = '<b>原文</b>\n含制表符\t' + '长文本'.repeat(100)
+    assert.equal(copyCellText(content), !fail)
+    if (!fail) assert.equal(copied, content)
+    assert.equal(removed, true)
+    assert.equal(focused, true)
+    assert.equal(listener, undefined)
+  }
+})
+
 test('selected cell content resolves merged masters and preserves complete text and falsy values', () => {
   const { selectedCellContent } = loadTs('vendor/vue-office-excel/cell-content.js')
   const book = new ExcelJS.Workbook()

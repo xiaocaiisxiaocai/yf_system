@@ -414,7 +414,9 @@ export default class DataProxy {
       const row = [];
       for (let ci = sci; ci <= eci; ci += 1) {
         const cell = this.getCell(ri, ci);
-        row.push((cell && cell.text) || '');
+        const value = String(cell?.text ?? '');
+        // Keep tabs/newlines/quotes inside their original cell when pasted into Excel.
+        row.push(/[\t\r\n"]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value);
       }
       copyText.push(row);
     }
@@ -428,6 +430,7 @@ export default class DataProxy {
       evt.clipboardData.clearData();
       evt.clipboardData.setData('text/plain', copyText);
       evt.preventDefault();
+      return;
     }
 
     // this need https protocol

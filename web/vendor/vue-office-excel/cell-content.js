@@ -35,11 +35,38 @@ export function createCellContentBar(before) {
       address.title = cellAddress || ''
       text.value = value == null ? '' : String(value)
       text.scrollTop = 0
-      expand(false)
-      // Grow only when the selected content does not fit the compact line.
-      if (text.scrollHeight > text.clientHeight + 2) expand(true)
+      // Keep the grid stationary between the two clicks of a double-click.
+      // Long content remains available through the explicit expand control.
+      if (!cellAddress) expand(false)
     },
     expand() { expand(true); text.focus() },
+  }
+}
+
+export function copyCellText(value) {
+  const previous = document.activeElement
+  const helper = document.createElement('textarea')
+  helper.readOnly = true
+  helper.value = value == null ? '' : String(value)
+  Object.assign(helper.style, { position: 'fixed', left: '0', top: '0', width: '1px', height: '1px', opacity: '0' })
+  document.body.append(helper)
+  const onCopy = event => {
+    if (!event.clipboardData) return
+    event.clipboardData.setData('text/plain', helper.value)
+    event.preventDefault()
+    event.stopImmediatePropagation()
+  }
+  window.addEventListener('copy', onCopy, true)
+  try {
+    helper.focus({ preventScroll: true })
+    helper.select()
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    window.removeEventListener('copy', onCopy, true)
+    helper.remove()
+    previous?.focus?.({ preventScroll: true })
   }
 }
 

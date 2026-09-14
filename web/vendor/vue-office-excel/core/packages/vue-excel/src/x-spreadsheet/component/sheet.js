@@ -316,7 +316,7 @@ function clearClipboard() {
 
 function copy(evt) {
   const { data, selector } = this;
-  if (data.settings.mode === 'read') return;
+  // Copying is allowed in read-only previews; cut/paste remain guarded.
   data.copy();
   data.copyToSystemClipboard(evt);
   selector.showClipboard();
