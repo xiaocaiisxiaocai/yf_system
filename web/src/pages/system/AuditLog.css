@@ -32,9 +32,10 @@
   gap: 8px;
 }
 
-.audit-detail .audit-detail-title span {
+.audit-detail .audit-detail-title > div > span:not(.arco-tag),
+.audit-detail .audit-detail-title > .arco-typography {
   color: var(--color-text-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .audit-section + .audit-section {
@@ -44,9 +45,9 @@
 .audit-section h2 {
   margin: 0 0 12px;
   color: var(--color-text-1);
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
-  line-height: 24px;
+  line-height: 22px;
 }
 
 .audit-overview {
@@ -97,13 +98,13 @@
 
 .audit-identity-card > span:not(.audit-identity-title) {
   color: var(--color-text-2);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .audit-identity-title {
   margin-bottom: 3px;
   color: var(--color-text-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .audit-source {
@@ -114,7 +115,7 @@
   border-radius: 10px;
   background: var(--color-fill-1);
   color: var(--color-text-3);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 18px;
 }
 
@@ -146,7 +147,7 @@
 .audit-change-head {
   background: var(--color-fill-1);
   color: var(--color-text-3);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
 }
 
@@ -241,7 +242,7 @@
 
 .audit-collection-item small {
   color: var(--color-text-3);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 18px;
 }
 
@@ -278,7 +279,7 @@
 .audit-detail-note > span {
   background: var(--color-fill-1);
   color: var(--color-text-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .audit-detail-note > strong {
@@ -299,7 +300,7 @@
   border-color: rgb(var(--orange-2));
   background: rgb(var(--orange-1));
   color: rgb(var(--orange-7));
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .audit-source-grid {
@@ -321,17 +322,26 @@
   border-bottom: 0;
 }
 
-.audit-source-grid > span {
+.audit-source-grid > span:nth-child(odd) {
   background: var(--color-fill-1);
   color: var(--color-text-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .audit-source-grid > strong,
-.audit-source-grid > code {
+.audit-source-grid > .audit-source-value {
   color: var(--color-text-1);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.audit-source-grid > code {
+  color: var(--color-text-2);
+  font: 13px/22px Consolas, monospace;
+}
+
+.audit-detail-title .arco-tag {
   font-size: 13px;
-  font-weight: 500;
 }
 
 .audit-raw-collapse {
@@ -358,7 +368,7 @@
   gap: 12px;
   margin-bottom: 8px;
   color: var(--color-text-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .audit-detail .audit-json {

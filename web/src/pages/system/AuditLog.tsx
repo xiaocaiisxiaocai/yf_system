@@ -153,8 +153,8 @@ function AuditDetail({ row }: { row: AuditLogRow }) {
         <h2 id="audit-source-heading">来源信息</h2>
         <div className="audit-source-grid">
           <span>来源</span><strong>{sourceLabel(context?.source)}</strong>
-          <span>请求 ID</span><code>{sourceDetailValue(context, context?.requestId)}</code>
-          <span>IP 地址</span><code>{sourceDetailValue(context, row.ip)}</code>
+          <span>请求 ID</span><span className="audit-source-value">{sourceDetailValue(context, context?.requestId)}</span>
+          <span>IP 地址</span><span className="audit-source-value">{sourceDetailValue(context, row.ip)}</span>
           <span>动作编码</span><code>{row.action}</code>
         </div>
       </section>
