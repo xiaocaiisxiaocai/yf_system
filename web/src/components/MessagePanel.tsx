@@ -11,7 +11,6 @@ interface Props {
   projectId: number
   projectStatus: string
   onRead?: () => void
-  onSent?: () => void
   targetId?: number
   revision?: string
   active?: boolean
@@ -54,7 +53,7 @@ async function loadReadCounts(ids: number[]): Promise<ReadCounts[]> {
   return counts
 }
 
-export default function MessagePanel({ projectId, projectStatus, onRead, onSent, targetId, revision = '', active = true, receiptRevision = '', realtimeConnected = false }: Props) {
+export default function MessagePanel({ projectId, projectStatus, onRead, targetId, revision = '', active = true, receiptRevision = '', realtimeConnected = false }: Props) {
   const [seenRevision, setSeenRevision] = useState(revision)
   const currentRevision = useRef(revision)
   useEffect(() => {
@@ -73,6 +72,8 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
   const { hasPerm, user } = useAuth()
   const listRef = useRef<HTMLDivElement>(null)
   const loadSeq = useRef(0)
+  const loadAbort = useRef<AbortController>()
+  const locatedScope = useRef<number>()
   const receiptSeq = useRef(0)
   const cursor = useRef<number | undefined>()
   const cursorStartTotal = useRef<number | null>(null)
@@ -210,15 +211,38 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
   const load = useCallback(
     async (p: number, append: boolean) => {
       const seq = ++loadSeq.current
+      loadAbort.current?.abort()
+      const controller = new AbortController()
+      loadAbort.current = controller
       listLoading.current = true
       const requestRevision = currentRevision.current
       setLoading(true)
       if (append) setAppendError(false)
       else setLoadError(false)
       try {
-        const r = await http.get(`/projects/${projectId}/messages`, {
-          params: { page: p, pageSize: 20, beforeId: append ? cursor.current : undefined, targetId },
-        })
+        let beforeId = append ? cursor.current : undefined
+        const rows: Msg[] = []
+        let responseTotal = 0
+        let lastBatchSize = 0
+        for (;;) {
+          const response = await http.get(`/projects/${projectId}/messages`, {
+            params: { page: p, pageSize: 20, beforeId }, signal: controller.signal,
+          })
+          if (seq !== loadSeq.current || controller.signal.aborted) return
+          const batch: Msg[] = response.data.list
+          if (!Array.isArray(batch)) throw new Error('Invalid message window')
+          responseTotal = response.data.total
+          rows.push(...batch)
+          lastBatchSize = batch.length
+          const lastId = batch.at(-1)?.id
+          if (!append && targetId !== undefined && lastId !== undefined && (!Number.isSafeInteger(lastId)
+              || lastId <= 0 || beforeId !== undefined && lastId >= beforeId)) throw new Error('Invalid message cursor')
+          // A notification target is a scroll destination, never a list filter.
+          // Load the contiguous history from newest through the target page.
+          if (append || targetId === undefined || lastId === undefined || lastId <= targetId || batch.length < 20) break
+          beforeId = lastId
+        }
+        const r = { data: { list: rows, total: responseTotal } }
         if (seq !== loadSeq.current) return // 已有更新的请求在途，丢弃旧响应
         setTotal(r.data.total)
         cursor.current = r.data.list.at(-1)?.id
@@ -228,7 +252,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
         if (!append) cursorStartTotal.current = r.data.total
         const totalChangedDuringCursor = append && cursorStartTotal.current !== null && r.data.total !== cursorStartTotal.current
         loadedMessages.current = nextList
-        setHasMore(r.data.list.length === 20 && (totalChangedDuringCursor || nextList.length < r.data.total))
+        setHasMore(lastBatchSize === 20 && (totalChangedDuringCursor || nextList.length < r.data.total))
         setList(nextList)
         if (!append) setSeenRevision(requestRevision)
         setPage(p)
@@ -249,8 +273,18 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
 
   useEffect(() => {
     load(1, false)
+    return () => { loadSeq.current += 1; loadAbort.current?.abort() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, targetId])
+
+  useLayoutEffect(() => {
+    if (!active || loading || targetId === undefined || locatedScope.current === messageScope.current.generation) return
+    const element = listRef.current?.querySelector<HTMLElement>(`[data-message-id="${targetId}"]`)
+    if (element) {
+      element.scrollIntoView({ block: 'center' })
+      locatedScope.current = messageScope.current.generation
+    }
+  }, [active, loading, list, targetId])
 
   useLayoutEffect(() => {
     const anchor = scrollAnchor.current
@@ -287,7 +321,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
         // Cursor pagination remains stable when messages arrive during this fetch.
         for (;;) {
           const response = await http.get(`/projects/${projectId}/messages`, {
-            params: { page: 1, pageSize: 20, beforeId, targetId },
+            params: { page: 1, pageSize: 20, beforeId },
             signal: controller.signal, timeout: 10000, quietNetworkError: true,
           } as QuietRequestConfig)
           if (stopped || controller.signal.aborted || generation !== messageScope.current.generation
@@ -301,7 +335,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
           if (beforeId === undefined) nextTotal = response.data.total
           messages.push(...batch)
           const lastId = batch.at(-1)?.id
-          if (lastId === undefined || batch.length < 20 || targetId !== undefined || oldestId === undefined
+          if (lastId === undefined || batch.length < 20 || oldestId === undefined
               || lastId <= oldestId || messages.length >= nextTotal) break
           beforeId = lastId
         }
@@ -420,26 +454,22 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
       const response = await http.post<Msg>(`/projects/${projectId}/messages`, { content: text })
       if (!mounted.current || generation !== messageScope.current.generation) return
       setContent((current) => current === draft ? '' : current)
-      if (targetId === undefined) {
-        // The POST returns the committed message. Show it without another list
-        // request, and prevent older in-flight reads from replacing this state.
-        messageMutations.current += 1
-        loadSeq.current += 1
-        listLoading.current = false
-        setLoading(false)
-        const message = response.data
-        if (!loadedMessages.current.some((item) => item.id === message.id)) {
-          loadedMessages.current = [message, ...loadedMessages.current].sort((a, b) => b.id - a.id)
-          setList(loadedMessages.current)
-          setTotal((value) => value + 1)
-          cursor.current = loadedMessages.current.at(-1)?.id
-        }
-        // Reconcile any simultaneous remote change; do not acknowledge its
-        // revision just because our own POST completed.
-        setSyncRetry((value) => value + 1)
+      // The POST returns the committed message. Show it without another list
+      // request, and prevent older in-flight reads from replacing this state.
+      messageMutations.current += 1
+      loadSeq.current += 1
+      listLoading.current = false
+      setLoading(false)
+      const message = response.data
+      if (!loadedMessages.current.some((item) => item.id === message.id)) {
+        loadedMessages.current = [message, ...loadedMessages.current].sort((a, b) => b.id - a.id)
+        setList(loadedMessages.current)
+        setTotal((value) => value + 1)
+        cursor.current = loadedMessages.current.at(-1)?.id
       }
-      // A targeted view clears its target and loads once through the scope effect.
-      onSent?.()
+      // Reconcile any simultaneous remote change; do not acknowledge its
+      // revision just because our own POST completed.
+      setSyncRetry((value) => value + 1)
     } catch {
       // 请求层已显示错误；保留草稿，允许用户重试。
     } finally {

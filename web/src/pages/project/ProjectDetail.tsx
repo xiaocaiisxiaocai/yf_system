@@ -228,7 +228,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
       </Card>
 
       <Card className={`page-card project-detail-tabs-card${tab === 'activity' ? ' project-detail-tabs-card--activity' : ''}`}>
-        {targetId && (tab === 'files' || tab === 'messages') && (
+        {targetId && tab === 'files' && (
           <div className="project-target-notice">
             <Typography.Text type="secondary">已定位到目标内容</Typography.Text>
             <Button type="text" size="small" onClick={clearTarget}>显示全部</Button>
@@ -267,7 +267,6 @@ function ProjectDetailContent({ id }: { id?: string }) {
                 : `poll:${summary.activityRevision ?? ''}:${liveMessages}:${reconnected}`}
               receiptRevision={`${liveReceipts}:${reconnected}`}
               realtimeConnected={realtimeConnected}
-              onSent={messagesTargetId ? clearTarget : undefined}
             />
           </Tabs.TabPane>
           <Tabs.TabPane key="activity" title="项目动态">

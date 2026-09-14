@@ -55,6 +55,7 @@ function loadMessagePanel(http, observedIds) {
     exports,
     module: { exports },
     console,
+    AbortController,
     IntersectionObserver: IntersectionObserverMock,
     require: name => mocks[name] ?? require(name),
   }

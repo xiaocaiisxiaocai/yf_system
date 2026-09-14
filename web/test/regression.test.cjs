@@ -702,10 +702,9 @@ test('late load-more response cannot overwrite a confirmed message', async () =>
   await act(async () => renderer.unmount())
 })
 
-test('targeted send delegates scope clearing without loading the old target again', async () => {
+test('sending from a notification keeps the full list and inserts the confirmed message', async () => {
   const gets = []
   let sent = 0
-  let cleared = 0
   const Page = loadTs('src/components/MessagePanel.tsx', {
     '@arco-design/web-react': arco,
     '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
@@ -719,16 +718,16 @@ test('targeted send delegates scope clearing without loading the old target agai
   let renderer
   await act(async () => {
     renderer = create(React.createElement(Page, {
-      projectId: 1, projectStatus: 'IN_PROGRESS', targetId: 9, revision: 'r1', onSent: () => { cleared++ },
+      projectId: 1, projectStatus: 'IN_PROGRESS', targetId: 9, revision: 'r1',
     }))
   })
   await act(async () => renderer.root.findByType('Input.TextArea').props.onChange('离开定位后查看'))
   await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '发送').props.onClick())
 
   assert.equal(sent, 1)
-  assert.equal(cleared, 1)
-  assert.equal(gets.length, 1, 'the child must not reload the old target before the parent clears it')
-  assert.equal(gets[0].params.targetId, 9)
+  assert.equal(gets.length, 1, 'sending does not reload the list or clear the target')
+  assert.equal(gets[0].params.targetId, undefined)
+  assert.deepEqual(visibleMessageIds(renderer), [10, 9])
   await act(async () => renderer.unmount())
 })
 
@@ -769,7 +768,7 @@ test('sending preserves later edits and rejects rapid duplicate clicks before re
   await act(async () => renderer.unmount())
 })
 
-test('targeted message views auto-sync only the requested message', async () => {
+test('notification message views show the full list and continue receiving new messages', async () => {
   let target = messageFixture(9, '定位留言旧内容')
   const requests = []
   const Page = loadTs('src/components/MessagePanel.tsx', {
@@ -779,7 +778,7 @@ test('targeted message views auto-sync only the requested message', async () => 
     '../api/types': { fmtTime: String },
     '../api/client': { get: async (_url, config) => {
       requests.push(config)
-      return { data: { list: [target], total: 73 } }
+      return { data: { list: [messageFixture(10), target, messageFixture(8)], total: 3 } }
     } },
   }).default
   const render = (revision) => React.createElement(Page, {
@@ -790,11 +789,41 @@ test('targeted message views auto-sync only the requested message', async () => 
   target = messageFixture(9, '定位留言最新内容')
   await act(async () => renderer.update(render('r2')))
 
-  assert.equal(requests.length, 2, 'target mode must not page through unrelated project history')
-  assert.ok(requests.every((config) => config.params.targetId === 9))
+  assert.equal(requests.length, 2, 'the complete loaded window is synchronized once')
+  assert.deepEqual(visibleMessageIds(renderer), [10, 9, 8])
+  assert.ok(requests.every((config) => config.params.targetId === undefined))
   assert.equal(requests[1].params.beforeId, undefined)
   assert.equal(renderer.root.findAll((node) => node.props.children === '定位留言最新内容').length, 1)
   assert.equal(renderer.root.findByType('Input.TextArea').props.disabled, undefined, 'target mode remains writable')
+  await act(async () => renderer.unmount())
+})
+
+for (const missing of [false, true]) test(`notification target loads contiguous history without filtering, missing=${missing}`, async () => {
+  const rows = Array.from({ length: 65 }, (_, i) => messageFixture(65 - i)).filter(row => !missing || row.id !== 22)
+  const requests = []
+  const scrolled = []
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []),
+    '../api/types': { fmtTime: String },
+    '../api/client': { get: async (_url, { params }) => {
+      requests.push(params)
+      return { data: { list: rows.filter(row => params.beforeId === undefined || row.id < params.beforeId).slice(0, 20), total: rows.length } }
+    } },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, {
+    projectId: 1, projectStatus: 'IN_PROGRESS', targetId: 22, revision: 'r1',
+  }), { createNodeMock: () => ({ querySelector: () => missing ? null : { scrollIntoView: () => scrolled.push(22) } }) }) })
+  assert.deepEqual(requests.map(r => r.beforeId), [undefined, 46, 26])
+  assert.ok(requests.every(r => r.targetId === undefined), 'target never becomes an API filter')
+  assert.deepEqual(visibleMessageIds(renderer), rows.slice(0, 60).map(row => row.id))
+  assert.deepEqual(scrolled, missing ? [] : [22], 'only the actual target is scrolled into view once')
+  const more = renderer.root.findAllByType('Button').find(node => String(node.props.children).startsWith('加载更多'))
+  await act(async () => more.props.onClick())
+  assert.deepEqual(visibleMessageIds(renderer), rows.map(row => row.id), 'older history stays available after locating')
+  assert.deepEqual(scrolled, missing ? [] : [22], 'loading history never pulls the reader back to the target')
   await act(async () => renderer.unmount())
 })
 
