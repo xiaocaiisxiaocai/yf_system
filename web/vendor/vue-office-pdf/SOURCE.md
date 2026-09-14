@@ -21,3 +21,7 @@ an expanded horizontal scroll surface for wide zoom, render cancellation, stale-
 guards, resize-aware virtual mounting, loading-task destruction, and complete
 observer/listener/timer cleanup. The upstream download helper was omitted
 because this viewer intentionally exposes preview controls only.
+
+Scroll sizing uses the inner scrollport width and a stable scrollbar gutter, avoiding
+horizontal overflow caused only by the vertical scrollbar. Truly oversized zoomed
+pages retain horizontal scrolling.

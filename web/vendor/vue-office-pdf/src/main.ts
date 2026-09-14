@@ -86,6 +86,7 @@ class JsPdfPreview {
       boxSizing: 'border-box',
       height: '100%',
       overflow: 'auto',
+      scrollbarGutter: 'stable',
       position: 'relative',
       textAlign: 'center',
     })
@@ -212,7 +213,8 @@ class JsPdfPreview {
   }
 
   private measure() {
-    const width = Math.max(1, this.container.clientWidth - PAGE_PADDING * 2)
+    // The scroll surface is narrower than its host with classic scrollbars.
+    const width = Math.max(1, (this.wrapper.clientWidth || this.container.clientWidth) - PAGE_PADDING * 2)
     const height = Math.max(1, this.container.clientHeight - PAGE_PADDING * 2)
     const changed = width !== this.measuredWidth || height !== this.measuredHeight
     this.measuredWidth = width
@@ -254,7 +256,9 @@ class JsPdfPreview {
     })
     const contentHeight = this.layouts.length === 0 ? 0 : top - gap + PAGE_PADDING
     const widestPage = this.layouts.reduce((width, layout) => Math.max(width, layout.width), 0)
-    this.wrapperMain.style.width = `${Math.max(this.container.clientWidth, widestPage + PAGE_PADDING * 2)}px`
+    // min-width:100% fills the available scrollport without reintroducing the
+    // vertical scrollbar width. Wider pages still have a reachable left edge.
+    this.wrapperMain.style.width = `${widestPage + PAGE_PADDING * 2}px`
     this.wrapperMain.style.height = `${Math.max(this.container.clientHeight, contentHeight)}px`
   }
 

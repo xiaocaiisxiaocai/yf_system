@@ -683,6 +683,8 @@ html, body, #root {
 .pdf-preview { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
 .pdf-preview-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-bottom: 12px; }
 .pdf-preview-toolbar > span { white-space: nowrap; color: var(--color-text-2); }
+/* The modal title's icon size/margin must not bleed into its embedded controls. */
+.file-preview-controls .arco-select .arco-icon { font-size: 12px; margin: 0; }
 .pdf-preview-viewport { flex: 1; min-height: 0; overflow: hidden; background: var(--color-fill-2); }
 .pdf-preview-viewport:focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: -2px; }
 .pdf-preview-viewport canvas { margin: 0 auto; background: #fff; box-shadow: 0 1px 8px rgb(0 0 0 / 12%); }

@@ -282,6 +282,23 @@ test('adapter reports page failures and bounds a huge high-zoom backing store', 
   await h.viewer.destroy()
 })
 
+test('fit modes exclude the vertical scrollbar gutter from page and scroll-surface width', async () => {
+  const h = rendererHarness({ pageSizes: Array.from({ length: 10 }, () => ({ width: 600, height: 800 })) })
+  h.wrapper.clientWidth = h.container.clientWidth - 15
+  await h.viewer.preview(new Uint8Array([1]))
+  await flush()
+  const main = h.wrapper.children[0]
+  assert.ok(parseFloat(main.style.width) <= h.wrapper.clientWidth)
+  h.viewer.setZoom('fit')
+  await flush()
+  assert.ok(parseFloat(main.style.width) <= h.wrapper.clientWidth)
+  assert.equal(h.renders.at(-1).options.viewport.width, h.wrapper.clientWidth - 32)
+  h.viewer.setZoom(0.96)
+  await flush()
+  assert.ok(parseFloat(main.style.width) <= h.wrapper.clientWidth)
+  await h.viewer.destroy()
+})
+
 test('wide zoom expands the scroll surface and numeric resize mounts newly visible pages', async () => {
   const pageSizes = Array.from({ length: 20 }, () => ({ width: 600, height: 800 }))
   const h = rendererHarness({ pageSizes })
