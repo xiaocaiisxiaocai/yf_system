@@ -357,7 +357,7 @@ test('organization structure uses division, department and section levels', asyn
   await act(async () => search().props.onChange(''))
   const breadcrumb = renderer.root.findByProps({ 'aria-label': '层级路径' })
   await act(async () => breadcrumb.findAllByType('button').find((node) => node.props.children === '事业一部').props.onClick())
-  const childRow = renderer.root.findAllByType('button').find((node) => node.props.className === 'dept-child')
+  const childRow = renderer.root.findAllByType('button').find((node) => node.props.className === 'org-view-child')
   await act(async () => childRow.props.onClick())
   assert.deepEqual(Array.from(renderer.root.findByType('Tree').props.selectedKeys), ['2'])
   assert.ok(renderer.root.findAll((node) => node.props.children === '直属课别').length > 0)

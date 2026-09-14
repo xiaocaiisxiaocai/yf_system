@@ -1,86 +1,97 @@
-/* 紧凑组织目录、上下文操作和可导航的直属组织。 */
-.dept-page { min-height: calc(100dvh - 88px); box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; }
-.dept-page > .arco-card-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.dept-page-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding: 0 0 20px; margin-bottom: 0; }
-.dept-page-title { min-width: 0; }
-.dept-summary { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px; color: var(--color-text-3); font-size: 13px; }
-.dept-summary b { color: var(--color-text-2); font-weight: 500; }
-.dept-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 320px minmax(0, 1fr); align-items: start; gap: 32px; border-top: 1px solid var(--app-border); padding-top: 20px; }
-.dept-tree-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--app-border); border-radius: 10px; overflow: hidden; background: #fff; max-height: calc(100dvh - 240px); }
-.dept-panel-head { flex: 0 0 auto; padding: 16px; border-bottom: 1px solid var(--app-border); }
-.dept-tree-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.dept-tree-tools { display: flex; gap: 2px; }
-.dept-tree-tools .arco-btn { padding: 0 6px; font-size: 12px; color: var(--color-text-3); }
-.dept-tree-scroll { flex: 1; min-height: 0; padding: 14px 10px; overflow: auto; }
-.dept-tree-node { display: inline-flex; align-items: center; gap: 8px; min-width: 0; width: 100%; max-width: 100%; }
-.dept-tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dept-tree-kind { flex-shrink: 0; font-size: 11px; line-height: 18px; padding: 0 4px; border-radius: 3px; background: #edf0f5; color: #667085; }
-.dept-page .arco-tree-node-title { border-radius: 5px; padding-top: 7px; padding-bottom: 7px; }
-.dept-page .arco-tree-node-title:hover { background: #edf3ff; }
-.dept-page .arco-tree-node-selected .arco-tree-node-title { color: #165dff; background: #e8f0ff; font-weight: 500; box-shadow: inset 3px 0 #165dff; }
-.dept-tree-empty { padding: 32px 12px; color: var(--color-text-3); font-size: 13px; text-align: center; }
-.dept-detail-panel { min-width: 0; min-height: 0; overflow: visible; padding: 0 0 24px; }
-.dept-breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 16px; font-size: 12px; color: var(--color-text-3); }
-.dept-breadcrumb > span { min-width: 0; display: inline-flex; align-items: center; gap: 6px; }
-.dept-breadcrumb button { border: 0; background: none; color: inherit; font: inherit; padding: 2px 0; cursor: pointer; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
-.dept-breadcrumb button:hover { color: #165dff; }
-.dept-breadcrumb button[aria-current] { color: var(--color-text-1); }
-.dept-breadcrumb svg { flex-shrink: 0; font-size: 10px; }
-.dept-detail-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 18px; padding: 24px; border: 1px solid #e4eaf4; border-radius: 10px; background: linear-gradient(115deg, #f5f8ff, #fff 70%); }
-.dept-identity { min-width: 0; flex: 1 1 240px; display: flex; align-items: center; gap: 16px; }
-.dept-identity-icon { display: flex; align-items: center; justify-content: center; flex: 0 0 56px; height: 56px; background: #e8efff; color: #165dff; border: 1px solid #dce7ff; border-radius: 12px; font-size: 26px; }
-.dept-identity-text { min-width: 0; }
-.dept-detail-kind { font-size: 12px; color: var(--color-text-3); }
-.dept-detail-head h5 { font-size: 22px; line-height: 30px; }
-.dept-detail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 8px; color: var(--color-text-3); font-size: 12px; }
-.dept-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
-.dept-more { position: relative; }
-.dept-more > summary { display: flex; align-items: center; height: 32px; box-sizing: border-box; border-radius: 4px; padding: 0 12px; background: var(--color-fill-2); color: var(--color-text-2); cursor: pointer; list-style: none; }
-.dept-more > summary::-webkit-details-marker { display: none; }
-.dept-more > summary::after { content: '⌄'; margin-left: 8px; }
-.dept-more > summary:hover { background: var(--color-fill-3); }
-.dept-more-menu { position: absolute; right: 0; top: 38px; z-index: 10; min-width: 130px; padding: 6px; border: 1px solid var(--app-border); border-radius: 6px; background: #fff; box-shadow: 0 6px 20px #17243a14; display: flex; flex-direction: column; gap: 4px; }
-.dept-more-menu .arco-btn { width: 100%; }
-.dept-overview-head { display: flex; align-items: center; gap: 14px; padding: 24px; border: 1px solid #e4eaf4; border-radius: 10px; background: linear-gradient(115deg, #f5f8ff, #fff 70%); }
-.dept-overview-head > svg { font-size: 26px; color: #165dff; padding: 14px; box-sizing: content-box; border-radius: 12px; background: #edf3ff; }
-.dept-overview-head h5 { margin-bottom: 6px !important; }
-.dept-children { margin-top: 24px; }
-.dept-children-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-.dept-children-heading h3, .dept-leaf-info h3 { margin: 0; font-size: 14px; font-weight: 600; }
-.dept-children-heading > span { color: var(--color-text-3); font-size: 12px; }
-.dept-child-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 14px; }
-.dept-child { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 98px; padding: 20px; border: 1px solid var(--app-border); border-radius: 9px; background: #fff; position: relative; text-align: left; font: inherit; cursor: pointer; }
-.dept-child:hover { background: #f8faff; border-color: #b6ccfa; box-shadow: 0 3px 10px #17243a08; }
-.dept-child:focus-visible, .dept-breadcrumb button:focus-visible, .dept-more > summary:focus-visible { outline: 2px solid #165dff; outline-offset: -2px; }
-.dept-child-icon { display: flex; align-items: center; justify-content: center; flex: 0 0 38px; height: 38px; border-radius: 8px; background: #f0f4fb; color: #6482ae; }
-.dept-child-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-.dept-child-main strong { color: var(--color-text-1); font-weight: 500; overflow-wrap: anywhere; }
-.dept-child-main small { color: var(--color-text-3); font-size: 12px; }
-.dept-child-status { flex-shrink: 0; color: #16834a; font-size: 12px; }
-.dept-child-status.is-disabled { color: var(--color-text-3); }
-.dept-child > svg { flex-shrink: 0; color: var(--color-text-4); }
-.dept-leaf-info { margin-top: 24px; }
-.dept-leaf-info dl { margin-top: 16px; padding: 16px 20px; background: #fff; border: 1px solid var(--app-border); border-radius: 8px; }
-.dept-leaf-info dl > div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 16px; padding: 8px 0; font-size: 13px; line-height: 22px; }
-.dept-leaf-info dt { color: var(--color-text-3); }
-.dept-leaf-info dd { margin: 0; color: var(--color-text-1); overflow-wrap: anywhere; }
+/* 页面独立命名，避免旧版 dept-* 热更新样式影响当前布局。 */
+.org-view-page {
+  min-height: calc(100dvh - 88px);
+  box-sizing: border-box;
+  font-size: 14px;
+  line-height: 22px;
+}
+.org-view-page > .arco-card-body { padding: 0; }
+.org-view-page-header.page-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0 0 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.org-view-page-title { min-width: 0; }
+.org-view-page-title h1 { font-size: 20px; line-height: 30px; font-weight: 600; margin: 0; }
+.org-view-summary { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px; font-size: 12px; line-height: 20px; color: var(--app-text-muted); }
+.org-view-summary > span { display: inline-flex; gap: 4px; align-items: baseline; white-space: nowrap; }
+.org-view-summary b { display: inline; font: inherit; color: var(--app-text); }
+.org-view-workspace { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 20px; align-items: start; }
+.org-view-tree-panel { min-width: 0; border: 1px solid var(--app-border); border-radius: 8px; background: #fff; overflow: hidden; }
+.org-view-panel-head { padding: 16px; border-bottom: 1px solid var(--app-border); }
+.org-view-tree-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.org-view-tree-heading > .arco-typography { font-size: 14px; line-height: 22px; margin: 0; text-align: left; }
+.org-view-tree-tools { display: flex; gap: 4px; }
+.org-view-tree-tools .arco-btn { font-size: 12px; padding: 0 4px; }
+.org-view-tree-scroll { max-height: calc(100dvh - 340px); overflow: auto; padding: 12px; }
+.org-view-tree-node { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; width: 100%; font-size: 14px; line-height: 22px; }
+.org-view-tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-view-tree-kind { flex-shrink: 0; color: var(--app-text-muted); font-size: 12px; font-weight: 400; line-height: 20px; }
+.org-view-page .arco-tree-node-title { padding: 6px 8px; border-radius: 4px; }
+.org-view-page .arco-tree-node-title:hover { background: var(--color-fill-1); }
+.org-view-page .arco-tree-node-selected .arco-tree-node-title { background: rgb(var(--primary-1)); color: rgb(var(--primary-6)); font-weight: 500; }
+.org-view-tree-empty { padding: 24px 16px; text-align: center; color: var(--app-text-muted); font-size: 14px; line-height: 22px; }
+.org-view-detail-panel { min-width: 0; box-sizing: border-box; padding: 20px; border: 1px solid var(--app-border); border-radius: 8px; background: #fff; }
+.org-view-breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 20px; font-size: 12px; line-height: 20px; color: var(--app-text-muted); }
+.org-view-breadcrumb > span { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
+.org-view-breadcrumb button { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.org-view-breadcrumb button:hover { color: rgb(var(--primary-6)); }
+.org-view-breadcrumb button[aria-current] { color: var(--app-text); }
+.org-view-breadcrumb svg { flex-shrink: 0; font-size: 12px; }
+.org-view-detail-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding: 0 0 20px; border-bottom: 1px solid var(--app-border); }
+.org-view-identity { flex: 1 1 220px; min-width: 0; }
+.org-view-identity-text { min-width: 0; }
+.org-view-detail-kind { display: block; margin-bottom: 4px; color: var(--app-text-muted); font-size: 12px; line-height: 20px; }
+.org-view-name { font-size: 16px; line-height: 24px; font-weight: 600; margin: 0; color: var(--app-text); overflow-wrap: anywhere; }
+.org-view-detail-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 8px; color: var(--app-text-muted); font-size: 12px; line-height: 20px; }
+.org-view-detail-meta .arco-tag { margin: 0; }
+.org-view-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.org-view-more { position: relative; }
+.org-view-more > summary { display: flex; align-items: center; box-sizing: border-box; height: 32px; padding: 0 12px; border-radius: 4px; background: var(--color-fill-2); color: var(--color-text-2); font-size: 14px; line-height: 22px; cursor: pointer; list-style: none; }
+.org-view-more > summary::-webkit-details-marker { display: none; }
+.org-view-more > summary::after { content: '⌄'; margin-left: 8px; }
+.org-view-more > summary:hover { background: var(--color-fill-3); }
+.org-view-more-menu { position: absolute; right: 0; top: 38px; z-index: 10; min-width: 130px; padding: 6px; border: 1px solid var(--app-border); border-radius: 4px; background: #fff; box-shadow: 0 4px 10px rgb(0 0 0 / 10%); display: flex; flex-direction: column; gap: 4px; }
+.org-view-more-menu .arco-btn { width: 100%; }
+.org-view-overview-head { padding-bottom: 20px; border-bottom: 1px solid var(--app-border); }
+.org-view-overview-head .arco-typography { display: block; font-size: 12px; line-height: 20px; margin: 8px 0 0; }
+.org-view-children, .org-view-leaf-info { margin-top: 20px; }
+.org-view-children-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+.org-view-children-heading h3, .org-view-leaf-info h3 { font-size: 14px; line-height: 22px; font-weight: 600; color: var(--app-text); margin: 0; }
+.org-view-children-heading > span { font-size: 12px; line-height: 20px; color: var(--app-text-muted); }
+.org-view-child-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 16px; }
+.org-view-child { display: flex; align-items: center; gap: 12px; width: 100%; padding: 16px; border: 1px solid var(--app-border); border-radius: 4px; background: #fff; text-align: left; font: inherit; cursor: pointer; }
+.org-view-child:hover { background: var(--color-fill-1); border-color: rgb(var(--primary-3)); }
+.org-view-child-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.org-view-child-main strong { font-size: 14px; line-height: 22px; font-weight: 500; color: var(--app-text); overflow-wrap: anywhere; }
+.org-view-child-main small { font-size: 12px; line-height: 20px; color: var(--app-text-muted); }
+.org-view-child-status { flex-shrink: 0; font-size: 12px; line-height: 20px; color: rgb(var(--success-6)); }
+.org-view-child-status.is-disabled { color: var(--app-text-muted); }
+.org-view-child > svg { flex-shrink: 0; font-size: 14px; color: var(--color-text-3); }
+.org-view-child:focus-visible, .org-view-breadcrumb button:focus-visible, .org-view-more > summary:focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: 2px; }
+.org-view-leaf-info dl { margin: 16px 0 0; }
+.org-view-leaf-info dl > div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 16px; padding: 8px 0; font-size: 14px; line-height: 22px; }
+.org-view-leaf-info dt { color: var(--app-text-muted); }
+.org-view-leaf-info dd { margin: 0; color: var(--app-text); overflow-wrap: anywhere; }
 @media (min-width: 721px) and (max-width: 1100px) {
-  .dept-workspace { grid-template-columns: 280px minmax(0, 1fr); gap: 16px; }
+  .org-view-workspace { grid-template-columns: 280px minmax(0, 1fr); gap: 16px; }
 }
 @media (max-width: 720px) {
-  .dept-page { height: auto; min-height: calc(100dvh - 76px); overflow: visible; }
-  .dept-page-header { align-items: flex-start; padding-bottom: 16px; }
-  .dept-summary { gap: 10px; }
-  .dept-workspace { grid-template-columns: minmax(0, 1fr); }
-  .dept-tree-panel { max-height: 42vh; }
-  .dept-tree-scroll { max-height: 42vh; }
-  .dept-detail-head, .dept-overview-head { padding: 18px; }
-  .dept-breadcrumb button { max-width: 160px; }
-  .dept-detail-panel { padding: 0 0 8px; overflow: visible; }
-  .dept-leaf-info dl { padding: 12px; }
-  .dept-leaf-info dl > div { grid-template-columns: 64px minmax(0, 1fr); gap: 10px; }
+  .org-view-page { min-height: calc(100dvh - 76px); }
+  .org-view-workspace { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .org-view-page-header.page-heading { margin-bottom: 16px; align-items: flex-start; }
+  .org-view-summary { gap: 12px; }
+  .org-view-tree-scroll { max-height: 36vh; }
+  .org-view-detail-panel { padding: 16px; }
+  .org-view-breadcrumb button { max-width: 160px; }
+  .org-view-leaf-info dl > div { grid-template-columns: 64px minmax(0, 1fr); gap: 12px; }
 }
 @media (max-height: 700px) {
-  .dept-page { height: auto; min-height: calc(100dvh - 88px); overflow: visible; }
-  .dept-tree-scroll { max-height: 50vh; }
+  .org-view-tree-scroll { max-height: 50vh; }
 }

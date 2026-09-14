@@ -715,9 +715,6 @@ html, body, #root {
   .arco-modal-header, .arco-modal-content, .arco-modal-footer { padding: 16px; }
   .arco-modal-content { max-height: calc(100dvh - 180px); }
   .arco-drawer-header, .arco-drawer-content, .arco-drawer-footer { padding: 16px; }
-  .dept-page { min-height: calc(100vh - 76px); height: auto; overflow: visible; }
-  .dept-workspace { grid-template-columns: 1fr; }
-  .dept-tree-scroll { max-height: 42vh; }
   .mobile-nav-drawer .arco-drawer-content {
     padding: 0;
     background: #17243a;
@@ -747,8 +744,7 @@ html, body, #root {
 }
 
 @media (max-height: 700px) {
-  .page-card--table, .dept-page { height: auto; min-height: calc(100dvh - 88px); overflow: visible; }
-  .dept-tree-scroll { max-height: 50vh; }
+  .page-card--table { height: auto; min-height: calc(100dvh - 88px); overflow: visible; }
 }
 
 /* 项目动态：紧凑时间线，局部约束文字和间距，避免组件默认 margin 挤压内容。 */
