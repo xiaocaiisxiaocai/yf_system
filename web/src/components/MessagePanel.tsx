@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   Avatar, Button, Drawer, Empty, Input, List, Popconfirm, Popover, Space, Spin, Tag, Typography,
 } from '@arco-design/web-react'
@@ -57,10 +57,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
   const currentRevision = useRef(revision)
   useEffect(() => {
     currentRevision.current = revision
-    // Establish the first server snapshot without presenting historical data as a new arrival.
-    // eslint-disable-next-line react/set-state-in-effect
-    if (!seenRevision && revision) setSeenRevision(revision)
-  }, [revision, seenRevision])
+  }, [revision])
   const [list, setList] = useState<Msg[]>([])
   const [total, setTotal] = useState(0)
   const [hasMore, setHasMore] = useState(false)
@@ -82,8 +79,12 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
   const mounted = useRef(true)
   const messageScope = useRef({ key: '', generation: 0 })
   const [sending, setSending] = useState(false)
+  const [syncError, setSyncError] = useState(false)
+  const [syncRetry, setSyncRetry] = useState(0)
+  const scrollAnchor = useRef<{ id: number; top: number; owner: Element } | null>(null)
   const [receiptRefresh, setReceiptRefresh] = useState(0)
   const countsVersion = useRef(0)
+  const messageMutations = useRef(0)
   const listLoading = useRef(false)
   const openReceiptId = useRef<number | null>(null)
   openReceiptId.current = receipt?.id ?? null
@@ -112,7 +113,10 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
       changed = true
       return { ...message, readCount: next.readCount, totalCount: next.totalCount }
     })
-    if (changed) setList(loadedMessages.current)
+    if (changed) {
+      countsVersion.current += 1
+      setList(loadedMessages.current)
+    }
   }, [])
 
   const receiveReceipt = useCallback((id: number, readCount: number, totalCount: number) => {
@@ -218,10 +222,11 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
         loadedMessages.current = nextList
         setHasMore(r.data.list.length === 20 && (totalChangedDuringCursor || nextList.length < r.data.total))
         setList(nextList)
-        setSeenRevision(requestRevision)
+        if (!append) setSeenRevision(requestRevision)
         setPage(p)
         setLoadError(false)
         setAppendError(false)
+        setSyncError(false)
       } catch {
         if (seq === loadSeq.current) {
           if (append) setAppendError(true)
@@ -238,6 +243,129 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
     load(1, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, targetId])
+
+  useLayoutEffect(() => {
+    const anchor = scrollAnchor.current
+    scrollAnchor.current = null
+    if (!anchor) return
+    const element = listRef.current?.querySelector<HTMLElement>(`[data-message-id="${anchor.id}"]`)
+    if (element) anchor.owner.scrollTop += element.getBoundingClientRect().top - anchor.top
+  }, [list])
+
+  useEffect(() => {
+    if (!active || loading || loadError || !revision || revision === seenRevision) return
+    let stopped = false
+    let inFlight = false
+    let resumePending = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let controller: AbortController | undefined
+    const generation = messageScope.current.generation
+    const paused = () => typeof document !== 'undefined' && document.visibilityState !== 'visible'
+      || typeof navigator !== 'undefined' && navigator.onLine === false
+    const refresh = async () => {
+      if (stopped || inFlight || paused()) return
+      clearTimeout(timer)
+      inFlight = true
+      controller = new AbortController()
+      const requestLoad = loadSeq.current
+      const requestCounts = countsVersion.current
+      const requestMutations = messageMutations.current
+      const oldestId = loadedMessages.current.at(-1)?.id
+      const messages: Msg[] = []
+      let beforeId: number | undefined
+      let nextTotal = 0
+      try {
+        // Cover the entire loaded window, including gaps larger than one page.
+        // Cursor pagination remains stable when messages arrive during this fetch.
+        for (;;) {
+          const response = await http.get(`/projects/${projectId}/messages`, {
+            params: { page: 1, pageSize: 20, beforeId, targetId },
+            signal: controller.signal, timeout: 10000, quietNetworkError: true,
+          } as QuietRequestConfig)
+          if (stopped || controller.signal.aborted || generation !== messageScope.current.generation
+              || requestLoad !== loadSeq.current || requestMutations !== messageMutations.current) return
+          const batch: Msg[] = response.data.list
+          if (!Array.isArray(batch) || !Number.isSafeInteger(response.data.total) || response.data.total < 0
+              || batch.some((item, index) => !Number.isSafeInteger(item?.id) || item.id <= 0
+                || (index > 0 && item.id >= batch[index - 1].id) || (beforeId !== undefined && item.id >= beforeId))) {
+            throw new Error('Invalid message window')
+          }
+          if (beforeId === undefined) nextTotal = response.data.total
+          messages.push(...batch)
+          const lastId = batch.at(-1)?.id
+          if (lastId === undefined || batch.length < 20 || targetId !== undefined || oldestId === undefined
+              || lastId <= oldestId || messages.length >= nextTotal) break
+          beforeId = lastId
+        }
+        const known = new Map(loadedMessages.current.map((message) => [message.id, message]))
+        const nextList = messages.map((message) => {
+          const previous = known.get(message.id)
+          return previous ? { ...message, readByMe: message.readByMe || previous.readByMe,
+            ...(requestCounts !== countsVersion.current ? { readCount: previous.readCount, totalCount: previous.totalCount } : {}) } : message
+        })
+        const root = listRef.current
+        if (root && typeof document !== 'undefined') {
+          const elements = [...root.querySelectorAll<HTMLElement>('[data-message-id]')]
+          // When reading history, anchor the same visible message before paint.
+          // At the top of the list, let newly arrived messages appear immediately.
+          if (elements[0]?.getBoundingClientRect().top < 80) {
+            const ids = new Set(nextList.map((message) => message.id))
+            const element = elements.find((item) => ids.has(Number(item.dataset.messageId)) && item.getBoundingClientRect().bottom > 80)
+            const owner = root.closest('.layout-content') ?? document.scrollingElement
+            if (element && owner) scrollAnchor.current = { id: Number(element.dataset.messageId), top: element.getBoundingClientRect().top, owner }
+          }
+        }
+        loadedMessages.current = nextList
+        cursor.current = nextList.at(-1)?.id
+        cursorStartTotal.current = nextTotal
+        setList(nextList)
+        setTotal(nextTotal)
+        setHasMore(nextList.length < nextTotal)
+        setAppendError(false)
+        setSyncError(false)
+        setSeenRevision(revision)
+        if (openReceiptId.current != null && !nextList.some((message) => message.id === openReceiptId.current)) {
+          receiptSeq.current += 1
+          setReceipt(null)
+          setReceiptRequest(null)
+        }
+      } catch {
+        if (!stopped && !controller.signal.aborted) {
+          setSyncError(true)
+          timer = setTimeout(refresh, 5000)
+        }
+      } finally {
+        inFlight = false
+        if (resumePending && !stopped && !paused()) {
+          resumePending = false
+          void refresh()
+        }
+      }
+    }
+    const wake = () => {
+      if (paused()) { clearTimeout(timer); controller?.abort(); return }
+      if (inFlight) { resumePending = true; return }
+      void refresh()
+    }
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', wake)
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', wake)
+      window.addEventListener('online', wake)
+      window.addEventListener('offline', wake)
+    }
+    void refresh()
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+      controller?.abort()
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', wake)
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', wake)
+        window.removeEventListener('online', wake)
+        window.removeEventListener('offline', wake)
+      }
+    }
+  }, [active, loading, loadError, revision, seenRevision, projectId, targetId, user?.id, syncRetry])
 
   // 只有留言实际进入可视区域后才上报已读，避免“加载第一页=全部已读”。
   useEffect(() => {
@@ -309,9 +437,11 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
 
   const remove = async (id: number) => {
     await http.delete(`/messages/${id}`)
+    messageMutations.current += 1
     loadedMessages.current = loadedMessages.current.filter((m) => m.id !== id)
     setList(loadedMessages.current)
     setTotal((current) => Math.max(0, current - 1))
+    setSyncRetry((value) => value + 1)
   }
 
   return (
@@ -322,10 +452,10 @@ export default function MessagePanel({ projectId, projectStatus, onRead, onSent,
         </div>
       </div>
 
-      {revision && seenRevision && revision !== seenRevision && (
+      {syncError && (
         <div role="status" style={{ marginBottom: 12 }}>
-          <Typography.Text type="secondary">协作信息有更新</Typography.Text>
-          <Button type="text" size="small" onClick={() => load(1, false)}>查看最新留言</Button>
+          <Typography.Text type="error">留言同步失败，正在重试</Typography.Text>
+          <Button type="text" size="small" onClick={() => setSyncRetry((value) => value + 1)}>重试同步</Button>
         </div>
       )}
 

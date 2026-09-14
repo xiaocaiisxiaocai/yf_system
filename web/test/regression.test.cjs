@@ -506,42 +506,291 @@ test('organization more actions require confirmation and retain the selected tar
   await act(async () => renderer.unmount())
 })
 
-test('collaboration updates preserve message draft and history until explicit refresh; target remains writable', async () => {
-  let revision = 'initial'
-  let calls = 0
+function messageFixture(id, content = `留言 ${id}`) {
+  return {
+    id, projectId: 1, senderId: 2, senderName: '成员', senderType: 'INTERNAL', content,
+    readCount: 0, totalCount: 1, readByMe: true, createdAt: '',
+  }
+}
+
+function visibleMessageIds(renderer) {
+  return renderer.root.findAll((node) => node.props['data-message-id'] !== undefined)
+    .map((node) => node.props['data-message-id'])
+}
+
+function createMessageSyncClock() {
+  const timers = new Map()
+  let nextId = 0
+  return {
+    timers,
+    globals: {
+      setTimeout(callback, delay) {
+        const id = ++nextId
+        timers.set(id, { callback, delay })
+        return id
+      },
+      clearTimeout(id) { timers.delete(id) },
+    },
+  }
+}
+
+test('message revision automatically shows the new message while preserving the draft', async () => {
+  let rows = [messageFixture(3), messageFixture(2), messageFixture(1)]
+  const requests = []
   let sent
-  let onSent = 0
   const Page = loadTs('src/components/MessagePanel.tsx', {
     '@arco-design/web-react': arco,
     '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
     '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
     '../api/types': { fmtTime: String },
     '../api/client': {
-      get: async () => { calls++; return { data: { list: [], total: 0 } } },
+      get: async (url, config) => {
+        requests.push({ url, config })
+        return { data: { list: rows, total: rows.length } }
+      },
       post: async (_url, body) => { sent = body.content },
     },
   }).default
-  const props = { projectId: 1, projectStatus: 'IN_PROGRESS', targetId: 9, revision, onSent: () => onSent++ }
+  const props = { projectId: 1, projectStatus: 'IN_PROGRESS', revision: 'initial' }
   let renderer
   await act(async () => { renderer = create(React.createElement(Page, props)) })
   await act(async () => renderer.root.findByType('Input.TextArea').props.onChange('正在写的回复'))
-  const before = calls
-  revision = 'after-other-user-message'
-  props.revision = revision
-  await act(async () => renderer.update(React.createElement(Page, props)))
-  assert.equal(calls, before, 'a live update must not replace the currently read message history')
+
+  rows = [messageFixture(4, '刚刚发出的新留言'), ...rows]
+  await act(async () => renderer.update(React.createElement(Page, { ...props, revision: 'new-message' })))
+
+  assert.equal(requests.length, 2, 'a revision change fetches the current message window automatically')
+  assert.equal(requests[1].config.params.pageSize, 20)
+  assert.equal(requests[1].config.quietNetworkError, true)
+  assert.deepEqual(visibleMessageIds(renderer), [4, 3, 2, 1])
   assert.equal(renderer.root.findByType('Input.TextArea').props.value, '正在写的回复')
-  const showLatest = renderer.root.findAllByType('Button').find((node) => node.props.children === '查看最新留言')
-  assert.ok(showLatest)
-  await act(async () => showLatest.props.onClick())
-  assert.equal(calls, before + 1)
-  assert.equal(renderer.root.findByType('Input.TextArea').props.value, '正在写的回复')
-  await act(async () => renderer.update(React.createElement(Page, { ...props, targetId: undefined })))
-  assert.equal(renderer.root.findByType('Input.TextArea').props.value, '正在写的回复', 'leaving target view must preserve composition')
+  assert.equal(renderer.root.findAllByType('Button').some((node) => node.props.children === '查看最新留言'), false)
+
   await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '发送').props.onClick())
   assert.equal(sent, '正在写的回复')
-  assert.equal(onSent, 1)
   assert.equal(renderer.root.findByType('Input.TextArea').props.value, '')
+  await act(async () => renderer.unmount())
+})
+
+test('targeted message views auto-sync only the requested message', async () => {
+  let target = messageFixture(9, '定位留言旧内容')
+  const requests = []
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+    '../api/client': { get: async (_url, config) => {
+      requests.push(config)
+      return { data: { list: [target], total: 73 } }
+    } },
+  }).default
+  const render = (revision) => React.createElement(Page, {
+    projectId: 1, projectStatus: 'IN_PROGRESS', targetId: 9, revision,
+  })
+  let renderer
+  await act(async () => { renderer = create(render('r1')) })
+  target = messageFixture(9, '定位留言最新内容')
+  await act(async () => renderer.update(render('r2')))
+
+  assert.equal(requests.length, 2, 'target mode must not page through unrelated project history')
+  assert.ok(requests.every((config) => config.params.targetId === 9))
+  assert.equal(requests[1].params.beforeId, undefined)
+  assert.equal(renderer.root.findAll((node) => node.props.children === '定位留言最新内容').length, 1)
+  assert.equal(renderer.root.findByType('Input.TextArea').props.disabled, undefined, 'target mode remains writable')
+  await act(async () => renderer.unmount())
+})
+
+test('message auto-sync covers every page through the loaded history and keeps the next cursor contiguous', async () => {
+  let rows = Array.from({ length: 60 }, (_, index) => messageFixture(60 - index))
+  let phase = 'initial'
+  const requests = []
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []),
+    '../api/types': { fmtTime: String },
+    '../api/client': { get: async (url, { params }) => {
+      requests.push({ phase, url, params: { ...params } })
+      const list = rows.filter((message) => params.beforeId === undefined || message.id < params.beforeId).slice(0, 20)
+      return { data: { list, total: rows.length } }
+    } },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', revision: 'r1' })) })
+  const loadMore = () => renderer.root.findAllByType('Button')
+    .find((node) => String(node.props.children).startsWith('加载更多'))
+  await act(async () => loadMore().props.onClick())
+  assert.deepEqual(visibleMessageIds(renderer), Array.from({ length: 40 }, (_, index) => 60 - index))
+
+  phase = 'sync'
+  rows = Array.from({ length: 85 }, (_, index) => messageFixture(85 - index))
+  await act(async () => renderer.update(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', revision: 'r2' })))
+
+  const syncBeforeIds = requests.filter((request) => request.phase === 'sync').map((request) => request.params.beforeId)
+  assert.deepEqual(syncBeforeIds, [undefined, 66, 46, 26], 'sync walks descending cursors until the old id 21 is covered')
+  assert.deepEqual(visibleMessageIds(renderer), Array.from({ length: 80 }, (_, index) => 85 - index), 'new and old loaded messages stay gap-free')
+  assert.equal(React.Children.toArray(loadMore().props.children).join(''), '加载更多（80/85）')
+
+  await act(async () => loadMore().props.onClick())
+  assert.equal(requests.at(-1).params.beforeId, 6, 'load-more continues after the oldest message returned by auto-sync')
+  assert.deepEqual(visibleMessageIds(renderer), Array.from({ length: 85 }, (_, index) => 85 - index))
+  assert.equal(loadMore(), undefined)
+  await act(async () => renderer.unmount())
+})
+
+test('loading older messages cannot acknowledge a newer revision before auto-sync runs', async () => {
+  const initialRows = Array.from({ length: 40 }, (_, index) => messageFixture(40 - index))
+  let currentRows = initialRows
+  let resolveAppend
+  const requests = []
+  const appendResponse = new Promise((resolve) => { resolveAppend = resolve })
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []),
+    '../api/types': { fmtTime: String },
+    '../api/client': { get: async (_url, config) => {
+      requests.push(config)
+      if (!config.quietNetworkError && config.params.beforeId === 21) return appendResponse
+      const list = currentRows.filter((message) => config.params.beforeId === undefined || message.id < config.params.beforeId).slice(0, 20)
+      return { data: { list, total: currentRows.length } }
+    } },
+  }).default
+  const render = (revision) => React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', revision })
+  let renderer
+  await act(async () => { renderer = create(render('r1')) })
+  const loadMore = renderer.root.findAllByType('Button')
+    .find((node) => String(node.props.children).startsWith('加载更多'))
+  let append
+  await act(async () => {
+    append = loadMore.props.onClick()
+    await Promise.resolve()
+  })
+  assert.equal(requests.length, 2)
+
+  currentRows = [messageFixture(41, '追加历史期间到达'), ...initialRows]
+  await act(async () => renderer.update(render('r2')))
+  assert.equal(requests.length, 2, 'the revision waits while an append request owns the list')
+
+  await act(async () => {
+    resolveAppend({ data: { list: initialRows.slice(20), total: initialRows.length } })
+    await append
+    await Promise.resolve()
+  })
+  assert.ok(requests.some((config) => config.quietNetworkError), 'finishing append still triggers auto-sync for the unacknowledged revision')
+  assert.deepEqual(visibleMessageIds(renderer), Array.from({ length: 41 }, (_, index) => 41 - index))
+  await act(async () => renderer.unmount())
+})
+
+test('failed message auto-sync preserves history and draft, then retries after five seconds', async () => {
+  const clock = createMessageSyncClock()
+  const oldRows = [messageFixture(2), messageFixture(1)]
+  const newRows = [messageFixture(3, '重试后出现'), ...oldRows]
+  let syncAttempts = 0
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+    '../api/client': { get: async (_url, config) => {
+      if (!config.quietNetworkError) return { data: { list: oldRows, total: oldRows.length } }
+      syncAttempts++
+      if (syncAttempts === 1) throw new Error('temporary message sync failure')
+      return { data: { list: newRows, total: newRows.length } }
+    } },
+  }, clock.globals).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', revision: 'r1' })) })
+  await act(async () => renderer.root.findByType('Input.TextArea').props.onChange('失败时也保留'))
+  await act(async () => renderer.update(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', revision: 'r2' })))
+
+  assert.deepEqual(visibleMessageIds(renderer), [2, 1])
+  assert.equal(renderer.root.findByType('Input.TextArea').props.value, '失败时也保留')
+  assert.ok(renderer.root.findAllByType('Text').some((node) => node.props.children === '留言同步失败，正在重试'))
+  const retryTimer = [...clock.timers.entries()].find(([, timer]) => timer.delay === 5000)
+  assert.ok(retryTimer, 'failed sync schedules a five-second retry')
+  clock.timers.delete(retryTimer[0])
+  await act(async () => {
+    const retry = retryTimer[1].callback()
+    await retry
+  })
+
+  assert.equal(syncAttempts, 2)
+  assert.deepEqual(visibleMessageIds(renderer), [3, 2, 1])
+  assert.equal(renderer.root.findByType('Input.TextArea').props.value, '失败时也保留')
+  assert.equal(renderer.root.findAllByType('Text').some((node) => node.props.children === '留言同步失败，正在重试'), false)
+  await act(async () => renderer.unmount())
+})
+
+test('message auto-sync ignores late responses from older revisions and projects', async () => {
+  const pending = []
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []),
+    '../api/types': { fmtTime: String },
+    '../api/client': { get: async (url, config) => {
+      const projectId = Number(url.match(/projects\/(\d+)/)[1])
+      if (!config.quietNetworkError) return { data: { list: [messageFixture(projectId * 10)], total: 1 } }
+      return new Promise((resolve) => pending.push({ projectId, config, resolve }))
+    } },
+  }).default
+  const render = (projectId, revision) => React.createElement(Page, { projectId, projectStatus: 'IN_PROGRESS', revision })
+  let renderer
+  await act(async () => { renderer = create(render(1, 'r1')) })
+
+  await act(async () => {
+    renderer.update(render(1, 'r2'))
+    await Promise.resolve()
+  })
+  assert.equal(pending.length, 1)
+  await act(async () => {
+    renderer.update(render(1, 'r3'))
+    await Promise.resolve()
+  })
+  assert.equal(pending[0].config.signal.aborted, true)
+  assert.equal(pending.length, 2)
+  await act(async () => pending[1].resolve({ data: { list: [messageFixture(12, '当前 revision')], total: 1 } }))
+  await act(async () => pending[0].resolve({ data: { list: [messageFixture(11, '旧 revision')], total: 1 } }))
+  assert.deepEqual(visibleMessageIds(renderer), [12], 'late data from an older revision cannot replace the current window')
+
+  await act(async () => {
+    renderer.update(render(1, 'r4'))
+    await Promise.resolve()
+  })
+  const oldProjectRequest = pending.at(-1)
+  await act(async () => renderer.update(render(2, 'project-2')))
+  assert.equal(oldProjectRequest.config.signal.aborted, true)
+  await act(async () => oldProjectRequest.resolve({ data: { list: [messageFixture(13, '旧项目')], total: 1 } }))
+  assert.deepEqual(visibleMessageIds(renderer), [20], 'late data from the previous project cannot replace the new project load')
+  await act(async () => renderer.unmount())
+})
+
+test('inactive message panels do not auto-sync until activated', async () => {
+  let rows = [messageFixture(1)]
+  const requests = []
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, []),
+    '../api/types': { fmtTime: String },
+    '../api/client': { get: async (_url, config) => {
+      requests.push(config)
+      return { data: { list: rows, total: rows.length } }
+    } },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', revision: 'r1', active: false })) })
+  rows = [messageFixture(2), ...rows]
+  await act(async () => renderer.update(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', revision: 'r2', active: false })))
+  assert.equal(requests.length, 1, 'inactive panels perform only their initial load')
+  assert.deepEqual(visibleMessageIds(renderer), [1])
+
+  await act(async () => renderer.update(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', revision: 'r2', active: true })))
+  assert.equal(requests.length, 2)
+  assert.equal(requests[1].quietNetworkError, true)
+  assert.deepEqual(visibleMessageIds(renderer), [2, 1])
   await act(async () => renderer.unmount())
 })
 
