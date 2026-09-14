@@ -2238,24 +2238,40 @@ test('a failed second message page can be retried without losing or duplicating 
   await act(async()=>renderer.unmount())
 })
 
-test('menu-only role grants remain selected when another permission is edited', async () => {
+test('permission groups cascade on clicks while preserving existing menu-only grants', async () => {
   const role={id:7,name:'测试',permissionIds:[5],assignedUserCount:0,status:'ACTIVE'}
-  const perms=[{id:1,code:'dashboard',name:'工作台',type:'MENU',parentId:null},{id:5,code:'org:dept',name:'部门',type:'MENU',parentId:null},{id:24,code:'dept:manage',name:'管理部门',type:'ACTION',parentId:5}]
+  const perms=[{id:1,name:'工作台',type:'MENU',parentId:null},{id:5,name:'部门',type:'MENU',parentId:null},{id:24,name:'管理部门',type:'ACTION',parentId:5},{id:25,name:'删除部门',type:'ACTION',parentId:5}]
+  let saved
   const Page=loadTs('src/pages/rbac/RoleList.tsx',{
     '@arco-design/web-react':arco,'@arco-design/web-react/icon':new Proxy({},{get:(_,n)=>component(n)}),
-    '../../api/client':{get:async url=>({data:url==='/permissions'?perms:{list:[role],total:1}})},
+    '../../api/client':{get:async url=>({data:url==='/permissions'?perms:{list:[role],total:1}}),put:async(url,body)=>{saved=body.permissionIds}},
     '../../store/auth':authModule({id:1,userType:'INTERNAL',isSystemAdmin:false},['role:manage']),
   }).default
   let renderer
   await act(async()=>{renderer=create(React.createElement(Page))})
   const actions=renderer.root.findByType('Table').props.columns.at(-1).render(null,role)
-  const assign=findActionButton(actions, '分配权限')
-  await act(async()=>assign.props.onClick())
-  const tree=renderer.root.findByType('Tree')
-  assert.ok(tree.props.checkedKeys.includes('5'),'standalone menu must visibly remain granted')
-  assert.ok(!tree.props.checkedKeys.includes('24'),'menu alone must not grant its action')
-  await act(async()=>tree.props.onCheck([...tree.props.checkedKeys,'1'],{checked:true,node:{key:'1'},halfCheckedKeys:[]}))
-  assert.ok(renderer.root.findByType('Tree').props.checkedKeys.includes('5'))
+  await act(async()=>findActionButton(actions, '分配权限').props.onClick())
+  const tree=()=>renderer.root.findByType('Tree')
+  const check=async(key,checked)=>act(async()=>tree().props.onCheck([],{checked,node:{key}}))
+  assert.ok(tree().props.halfCheckedKeys.includes('5'),'menu-only access is visibly partial')
+  assert.ok(!tree().props.checkedKeys.includes('24'),'opening existing grants must not expand permissions')
+  await check('1',true)
+  assert.ok(tree().props.halfCheckedKeys.includes('5'),'editing an unrelated menu preserves menu-only access')
+  await check('5',true)
+  assert.deepEqual([...tree().props.checkedKeys].sort(),['1','24','25','5'])
+  assert.equal(tree().props.halfCheckedKeys.length,0)
+  await check('24',false)
+  assert.ok(tree().props.halfCheckedKeys.includes('5'))
+  assert.ok(tree().props.checkedKeys.includes('25'))
+  await check('5',true)
+  assert.ok(tree().props.checkedKeys.includes('24'),'clicking a partial parent selects all children')
+  await check('5',false)
+  assert.deepEqual([...tree().props.checkedKeys],['1'],'unchecking parent clears only its own branch')
+  assert.equal(tree().props.halfCheckedKeys.length,0)
+  await check('24',true)
+  assert.ok(tree().props.halfCheckedKeys.includes('5'))
+  await act(async()=>findActionButton(renderer.root.findByType('Drawer').props.footer,'保存权限').props.onClick())
+  assert.deepEqual([...saved].sort((a,b)=>a-b),[1,5,24],'saving includes the menu for a partially selected branch')
   await act(async()=>renderer.unmount())
 })
 

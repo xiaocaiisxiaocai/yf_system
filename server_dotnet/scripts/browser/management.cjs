@@ -27,6 +27,37 @@ await record('角色编辑保存并重新读取',async()=>{
 });
 await row().getByRole('button',{name:'分配权限',exact:true}).click();
 
+await record('权限父节点全选、半选、全清及保存回显',async()=>{
+ const drawer=p.locator('.arco-drawer');
+ const permissions=await(await api(c,'GET','/permissions',undefined,auth.accessToken)).json();
+ const menu=permissions.find(x=>x.name==='项目列表'&&x.type==='MENU');assert.ok(menu);
+ const children=permissions.filter(x=>x.parentId===menu.id);assert.ok(children.length>1);
+ const checkbox=name=>drawer.getByText(name,{exact:true}).locator('xpath=ancestor::*[@role="treeitem"][1]').getByRole('checkbox');
+ const click=name=>checkbox(name).locator('..').click();
+ const grants=async()=>(await(await api(c,'GET','/admin/roles',undefined,auth.accessToken)).json()).list.find(x=>x.id===role.id).permissionIds.sort((a,b)=>a-b);
+ const save=()=>action(p,'/admin/roles/'+role.id+'/permissions','PUT',()=>p.getByRole('button',{name:'保存权限',exact:true}).click());
+ await click(menu.name);
+ for(const child of children)assert.equal(await checkbox(child.name).isChecked(),true,child.name);
+ await save();
+ assert.deepEqual(await grants(),[menu.id,...children.map(x=>x.id)].sort((a,b)=>a-b));
+ await row().getByRole('button',{name:'分配权限',exact:true}).click();
+ for(const child of children)assert.equal(await checkbox(child.name).isChecked(),true,child.name+' after reopen');
+ await click(children[0].name);
+ assert.equal(await checkbox(menu.name).evaluate(el=>el.closest('label').classList.contains('arco-checkbox-indeterminate')),true);
+ await save();
+ assert.deepEqual(await grants(),[menu.id,...children.slice(1).map(x=>x.id)].sort((a,b)=>a-b));
+ await row().getByRole('button',{name:'分配权限',exact:true}).click();
+ assert.equal(await checkbox(menu.name).evaluate(el=>el.closest('label').classList.contains('arco-checkbox-indeterminate')),true);
+ await checkbox(menu.name).locator('..').click({trial:true});
+ await p.screenshot({path:OUT+'/permission-parent-partial.png',fullPage:true});
+ await click(menu.name);
+ for(const child of children)assert.equal(await checkbox(child.name).isChecked(),true,child.name+' reselected');
+ await click(menu.name);
+ for(const child of children)assert.equal(await checkbox(child.name).isChecked(),false,child.name+' cleared');
+ await save();assert.deepEqual(await grants(),[]);
+ await row().getByRole('button',{name:'分配权限',exact:true}).click();
+});
+
 await record('角色菜单权限授予和撤销保存',async()=>{
  const drawer=p.locator('.arco-drawer');await drawer.getByRole('treeitem',{name:'工作台',exact:true}).getByRole('checkbox').locator('..').click();
  await action(p,'/admin/roles/'+role.id+'/permissions','PUT',()=>p.getByRole('button',{name:'保存权限',exact:true}).click());

@@ -42,7 +42,7 @@ export default function RoleList() {
   const [savingPerms, setSavingPerms] = useState(false)
   const [editing, setEditing] = useState<Role | null>(null)
   const [permTarget, setPermTarget] = useState<Role | null>(null)
-  // 菜单与操作独立保存，避免修改其他节点时丢失单独授予的菜单。
+  // 保存实际权限；父节点的半选显示不改变已有的仅菜单授权。
   const [checked, setChecked] = useState<string[]>([])
   const [form] = Form.useForm()
 
@@ -122,6 +122,12 @@ export default function RoleList() {
         .map((p) => ({ key: String(p.id), title: p.name })),
     }))
   }, [perms])
+
+  const halfChecked = permTree
+    .filter((group) => group.children.length > 0
+      && (checked.includes(group.key) || group.children.some((child) => checked.includes(child.key)))
+      && (!checked.includes(group.key) || !group.children.every((child) => checked.includes(child.key))))
+    .map((group) => group.key)
 
   const submit = async () => {
     if (saving) return
@@ -350,28 +356,25 @@ export default function RoleList() {
             checkStrictly
             defaultExpandedKeys={permTree.map((g) => g.key)}
             treeData={permTree}
-            checkedKeys={checked}
-            onCheck={(keys, extra) => {
-              const next = keys.map(String)
+            checkedKeys={checked.filter((key) => !halfChecked.includes(key))}
+            halfCheckedKeys={halfChecked}
+            onCheck={(_, extra) => {
+              const next = new Set(checked)
+              const key = String(extra.node.key)
+              const permission = perms.find((p) => String(p.id) === key)
+              const group = permTree.find((item) => item.key === key)
+              const branch = [key, ...(group?.children.map((child) => child.key) || [])]
               if (extra.checked) {
-                const permission = perms.find((p) => String(p.id) === String(extra.node.key))
-                if (permission?.parentId) next.push(String(permission.parentId))
+                branch.forEach((id) => next.add(id))
+                if (permission?.parentId) next.add(String(permission.parentId))
               } else {
-                const permission = perms.find((p) => String(p.id) === String(extra.node.key))
-                if (permission?.type === 'MENU') {
-                  const actionIds = new Set(
-                    perms.filter((p) => p.type === 'ACTION' && p.parentId === permission.id).map((p) => String(p.id)),
-                  )
-                  for (let index = next.length - 1; index >= 0; index -= 1) {
-                    if (actionIds.has(next[index])) next.splice(index, 1)
-                  }
-                }
+                branch.forEach((id) => next.delete(id))
               }
-              setChecked(Array.from(new Set(next)))
+              setChecked(Array.from(next))
             }}
           />
         )}
-        <div className="dialog-note">勾选操作会关联菜单；仅勾选菜单不授予操作权限。</div>
+        <div className="dialog-note">勾选父节点会全选下级权限，取消父节点会全部取消。可逐项调整；若只需菜单访问权限，可取消全部下级操作。</div>
       </Drawer>
     </Card>
   )
