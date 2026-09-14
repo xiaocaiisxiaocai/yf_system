@@ -5,6 +5,8 @@ namespace Yf.Api.Infrastructure;
 
 public sealed class AppDb(AppOptions options)
 {
+    internal string WebBaseUrl => options.WebBaseUrl;
+
     // Business writes serialize on the management gate and then the project/user
     // row. Reads made after waiting for those locks must see the latest commit,
     // rather than a REPEATABLE READ snapshot created by the actor pre-check.

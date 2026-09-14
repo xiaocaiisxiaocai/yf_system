@@ -156,6 +156,7 @@ def run_identity_checks(client, Client, conn, check):
     user_manage = permission_ids["user:manage"]
     role_page = client.call("GET", "/api/v1/admin/roles")
     supplier_role = next(role for role in role_page["list"] if role["name"] == "供应商人员")
+    admin_role = next(role for role in role_page["list"] if role["name"] == "系统管理员")
     check("identity supplier role starts unassigned for built-in deletion coverage",
           supplier_role["assignedUserCount"] == 0)
     delete_built_in = client.call(
@@ -171,6 +172,32 @@ def run_identity_checks(client, Client, conn, check):
         "permissionIds": supplier_role["permissionIds"] + unsafe_supplier_ids
     }, expected=400)
     check("identity supplier role rejects management permission assignment", True)
+    limited_role_manager = client.call("POST", "/api/v1/admin/roles", {
+        "name": "受限角色管理员-" + secrets.token_hex(4), "description": "role capability projection"
+    })
+    client.call("PUT", f"/api/v1/admin/roles/{limited_role_manager['id']}/permissions", {
+        "permissionIds": [permission_ids["rbac:role"], permission_ids["role:manage"]]
+    })
+    limited_role_manager_password = _password()
+    limited_role_manager_employee = "role_delegate_" + secrets.token_hex(4)
+    limited_role_manager_user = client.call("POST", "/api/v1/admin/users", {
+        "employeeNo": limited_role_manager_employee, "password": limited_role_manager_password,
+        "realName": "受限角色管理员", "email": limited_role_manager_employee + "@example.invalid",
+        "departmentId": None, "roleId": limited_role_manager["id"]
+    })
+    with conn.cursor() as cursor:
+        cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (limited_role_manager_user["id"],))
+    limited_role_client = Client(client.base)
+    limited_role_client.login(limited_role_manager_employee, limited_role_manager_password)
+    limited_role_page = limited_role_client.call("GET", "/api/v1/admin/roles?pageSize=100")
+    limited_roles = {role["id"]: role for role in limited_role_page["list"]}
+    limited_permissions = {item["code"]: item for item in limited_role_client.call("GET", "/api/v1/permissions")}
+    check("identity role capability projection marks protected roles read-only and only owned permissions grantable",
+          limited_roles[limited_role_manager["id"]]["canManage"] is True
+          and limited_roles[admin_role["id"]]["canManage"] is False
+          and limited_permissions["role:manage"]["grantable"] is True
+          and limited_permissions["project:confirm"]["grantable"] is False
+          and limited_permissions["project:confirm"]["supplierAssignable"] is False)
     delegated_role = client.call("POST", "/api/v1/admin/roles", {
         "name": "委派用户管理员-" + secrets.token_hex(4), "description": "isolated identity contract"
     })
@@ -187,15 +214,30 @@ def run_identity_checks(client, Client, conn, check):
     delegated_client = Client(client.base)
     delegated_client.login(delegated_employee, delegated_password)
     delegated_client.call("GET", "/api/v1/admin/users")
+    delegated_role_options = delegated_client.call("GET", "/api/v1/admin/user-role-options")
     delegated_client.call("GET", "/api/v1/admin/roles", expected=403)
     delegated_client.call("GET", "/api/v1/admin/suppliers", expected=403)
-    admin_role = next(role for role in roles if role["name"] == "系统管理员")
     delegated_client.call("POST", "/api/v1/admin/users", {
         "employeeNo": "ceiling_" + secrets.token_hex(4), "password": _password(), "realName": "越权测试",
         "email": "ceiling." + secrets.token_hex(4) + "@example.invalid", "departmentId": None,
         "roleId": admin_role["id"]
     }, expected=403)
-    check("identity delegated read boundaries and permission ceiling", True)
+    check("identity delegated read boundaries and permission ceiling",
+          delegated_role["id"] in {role["id"] for role in delegated_role_options}
+          and admin_role["id"] not in {role["id"] for role in delegated_role_options})
+
+    secondary_admin = client.call("POST", "/api/v1/admin/users", {
+        "employeeNo": "secondary_admin_" + secrets.token_hex(3), "password": _password(),
+        "realName": "停用管理员", "email": "secondary.admin." + secrets.token_hex(4) + "@example.invalid",
+        "departmentId": None, "roleId": admin_role["id"]
+    })
+    client.call("PUT", f"/api/v1/admin/users/{secondary_admin['id']}/status", {"status": "DISABLED"})
+    reassigned_secondary = client.call("PUT", f"/api/v1/admin/users/{secondary_admin['id']}/roles", {
+        "roleIds": [ordinary_role["id"]]
+    })
+    client.call("DELETE", f"/api/v1/admin/users/{secondary_admin['id']}")
+    check("identity disabled secondary administrator can be reassigned without weakening the last active administrator",
+          reassigned_secondary is not None)
 
     # Rotate once, replay the old token from another client, then prove the whole family and the
     # access token minted by the successful rotation are revoked.

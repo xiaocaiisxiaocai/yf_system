@@ -30,6 +30,15 @@ public sealed class ProjectRejectRequest
 {
     [JsonPropertyName("reason")]
     public string? Reason { get; init; }
+
+    [JsonPropertyName("expectedSubmissionId")]
+    public ulong? ExpectedSubmissionId { get; init; }
+}
+
+public sealed class ProjectDecisionRequest
+{
+    [JsonPropertyName("expectedSubmissionId")]
+    public ulong? ExpectedSubmissionId { get; init; }
 }
 
 public sealed class ProjectMembersRequest
@@ -64,6 +73,7 @@ internal sealed class ProjectRow
     public ulong SupplierId { get; init; }
     public string Status { get; init; } = string.Empty;
     public string? ConfirmSide { get; init; }
+    public ulong? LatestSubmissionId { get; init; }
     public ulong CreatedBy { get; init; }
     public DateTime CreatedAt { get; init; }
     public DateTime UpdatedAt { get; init; }
@@ -161,6 +171,7 @@ internal static class ProjectJson
         supplierName = row.SupplierName,
         status = row.Status,
         confirmSide = row.ConfirmSide,
+        latestSubmissionId = row.LatestSubmissionId,
         createdBy = row.CreatedBy,
         createdByName = row.CreatedByName,
         createdAt = Utc(row.CreatedAt),

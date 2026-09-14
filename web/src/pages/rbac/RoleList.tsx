@@ -17,6 +17,8 @@ interface Role {
   status: 'ACTIVE' | 'DISABLED'
   permissionIds: number[]
   assignedUserCount: number
+  canManage?: boolean
+  supplierRestricted?: boolean
 }
 
 interface Perm {
@@ -24,6 +26,8 @@ interface Perm {
   name: string
   type: 'MENU' | 'ACTION'
   parentId: number | null
+  grantable?: boolean
+  supplierAssignable?: boolean
 }
 
 export default function RoleList() {
@@ -112,21 +116,49 @@ export default function RoleList() {
     }
   }, [])
 
+  const mutablePermissionIds = useMemo(() => {
+    if (!permTarget || permTarget.canManage === false) return new Set<string>()
+    const result = new Set(perms
+      .filter((permission) => permission.grantable !== false
+        && (!permTarget.supplierRestricted || permission.supplierAssignable !== false))
+      .map((permission) => String(permission.id)))
+    for (const permission of perms) {
+      if (permission.parentId && !result.has(String(permission.parentId))) result.delete(String(permission.id))
+    }
+    return result
+  }, [permTarget, perms])
+
+  const removablePermissionIds = useMemo(() => new Set(
+    permTarget?.canManage === false ? [] : (permTarget?.permissionIds || [])
+      .map(String)
+      .filter((id) => checked.includes(id) && !mutablePermissionIds.has(id)),
+  ), [checked, mutablePermissionIds, permTarget])
+
   const permTree = useMemo(() => {
     const menus = perms.filter((p) => p.type === 'MENU')
     return menus.map((m) => ({
       key: String(m.id),
-      title: m.name,
+      title: removablePermissionIds.has(String(m.id)) ? `${m.name}（仅可移除）` : m.name,
+      disabled: !mutablePermissionIds.has(String(m.id)) && !removablePermissionIds.has(String(m.id)),
       children: perms
         .filter((p) => p.parentId === m.id)
-        .map((p) => ({ key: String(p.id), title: p.name })),
+        .map((p) => ({
+          key: String(p.id),
+          title: removablePermissionIds.has(String(p.id)) ? `${p.name}（仅可移除）` : p.name,
+          disabled: !mutablePermissionIds.has(String(p.id)) && !removablePermissionIds.has(String(p.id)),
+        })),
     }))
-  }, [perms])
+  }, [mutablePermissionIds, perms, removablePermissionIds])
 
   const halfChecked = permTree
-    .filter((group) => group.children.length > 0
-      && (checked.includes(group.key) || group.children.some((child) => checked.includes(child.key)))
-      && (!checked.includes(group.key) || !group.children.every((child) => checked.includes(child.key))))
+    .filter((group) => {
+      const relevantChildren = permTarget?.canManage === false
+        ? group.children
+        : group.children.filter((child) => !child.disabled)
+      return relevantChildren.length > 0
+        && (checked.includes(group.key) || relevantChildren.some((child) => checked.includes(child.key)))
+        && (!checked.includes(group.key) || !relevantChildren.every((child) => checked.includes(child.key)))
+    })
     .map((group) => group.key)
 
   const submit = async () => {
@@ -150,7 +182,7 @@ export default function RoleList() {
   }
 
   const savePerms = async () => {
-    if (savingPerms || permsLoading || permsError) return
+    if (savingPerms || permsLoading || permsError || permTarget?.canManage === false) return
     const ids = Array.from(new Set(checked)).map(Number)
     setSavingPerms(true)
     try {
@@ -251,9 +283,9 @@ export default function RoleList() {
                   setChecked(r.permissionIds.map(String))
                 }}
               >
-                分配权限
+                {r.canManage === false ? '查看权限' : '分配权限'}
               </Button>,
-              <Button
+              r.canManage !== false && <Button
                 key="edit"
                 size="mini"
                 type="text"
@@ -265,7 +297,7 @@ export default function RoleList() {
               >
                 编辑
               </Button>,
-              <Popconfirm
+              r.canManage !== false && <Popconfirm
                 key="status"
                 title={
                   r.status === 'ACTIVE'
@@ -280,7 +312,7 @@ export default function RoleList() {
                   {r.status === 'ACTIVE' ? '禁用' : '启用'}
                 </Button>
               </Popconfirm>,
-              canDelete && !r.isBuiltIn && (
+              canDelete && r.canManage !== false && !r.isBuiltIn && (
                 <Popconfirm key="delete" title="删除后不可恢复，仍绑定用户时无法删除。确认？" onOk={() => remove(r)}>
                   <Button size="mini" type="text" status="danger">删除</Button>
                 </Popconfirm>
@@ -327,17 +359,19 @@ export default function RoleList() {
 
       <Drawer
         width={440}
-        title={permTarget ? `分配权限 · ${permTarget.name}` : ''}
+        title={permTarget ? `${permTarget.canManage === false ? '查看权限' : '分配权限'} · ${permTarget.name}` : ''}
         visible={!!permTarget}
         onCancel={() => { if (!savingPerms) setPermTarget(null) }}
         closable={!savingPerms}
         maskClosable={!savingPerms}
         footer={
           <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
-            <Button disabled={savingPerms} onClick={() => setPermTarget(null)}>取消</Button>
-            <Button type="primary" loading={savingPerms} disabled={permsLoading || permsError} onClick={savePerms}>
-              保存权限
-            </Button>
+            <Button disabled={savingPerms} onClick={() => setPermTarget(null)}>{permTarget?.canManage === false ? '关闭' : '取消'}</Button>
+            {permTarget?.canManage !== false && (
+              <Button type="primary" loading={savingPerms} disabled={permsLoading || permsError} onClick={savePerms}>
+                保存权限
+              </Button>
+            )}
           </Space>
         }
       >
@@ -363,10 +397,18 @@ export default function RoleList() {
               const key = String(extra.node.key)
               const permission = perms.find((p) => String(p.id) === key)
               const group = permTree.find((item) => item.key === key)
+              if (!mutablePermissionIds.has(key)) {
+                if (!extra.checked && removablePermissionIds.has(key)) {
+                  next.delete(key)
+                  setChecked(Array.from(next))
+                }
+                return
+              }
               const branch = [key, ...(group?.children.map((child) => child.key) || [])]
+                .filter((id) => mutablePermissionIds.has(id))
               if (extra.checked) {
                 branch.forEach((id) => next.add(id))
-                if (permission?.parentId) next.add(String(permission.parentId))
+                if (permission?.parentId && mutablePermissionIds.has(String(permission.parentId))) next.add(String(permission.parentId))
               } else {
                 branch.forEach((id) => next.delete(id))
               }
@@ -374,7 +416,11 @@ export default function RoleList() {
             }}
           />
         )}
-        <div className="dialog-note">勾选父节点会全选下级权限，取消父节点会全部取消。可逐项调整；若只需菜单访问权限，可取消全部下级操作。</div>
+        <div className="dialog-note">
+          {permTarget?.canManage === false
+            ? '该角色超出当前账号的委派范围，仅可查看。'
+            : '勾选父节点会全选可授予的下级权限，取消父节点会取消可调整的下级权限。不可授予项保持只读；若只需菜单访问权限，可取消全部下级操作。'}
+        </div>
       </Drawer>
     </Card>
   )

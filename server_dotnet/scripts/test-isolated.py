@@ -148,7 +148,7 @@ try:
         # Legacy role fixtures are test-only; production initialization remains admin-only.
         install_legacy_test_roles(conn)
         # Downgrade only our empty isolated fixture to exercise adoption and the
-        # restartable 16 -> 17 -> .NET v3 upgrade without invoking another backend.
+        # restartable 16 -> 17 -> .NET v4 upgrade without invoking another backend.
         with conn.cursor() as cursor:
             cursor.execute("SELECT id,password_hash FROM users WHERE employee_no='admin'")
             admin_user_id, preserved_hash = cursor.fetchone()
@@ -171,6 +171,22 @@ try:
                 (migration_supplier_id, admin_user_id),
             )
             pending_migration_project_id = cursor.lastrowid
+            cursor.execute(
+                "INSERT INTO users(employee_no,password_hash,real_name,email,user_type,status,"
+                "must_change_password,created_by) VALUES('migration_reviewer',%s,'迁移验收人',"
+                "'migration-reviewer@example.invalid','INTERNAL','ACTIVE',0,%s)",
+                (preserved_hash, admin_user_id),
+            )
+            migration_reviewer_id = cursor.lastrowid
+            cursor.execute(
+                "INSERT INTO user_roles(user_id,role_id) "
+                "SELECT %s,id FROM roles WHERE name='内部成员'",
+                (migration_reviewer_id,),
+            )
+            cursor.execute(
+                "INSERT INTO project_members(project_id,user_id,created_by) VALUES(%s,%s,%s)",
+                (pending_migration_project_id, migration_reviewer_id, admin_user_id),
+            )
             cursor.executemany(
                 "INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,"
                 "confirm_side,reason,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
@@ -182,6 +198,19 @@ try:
                     (pending_migration_project_id, "IN_PROGRESS", "PENDING_CONFIRMATION", "SUBMIT",
                      admin_user_id, "SUPPLIER", None, "2026-09-14 00:00:03.000"),
                 ],
+            )
+            cursor.execute(
+                "SELECT MAX(id) FROM project_status_logs "
+                "WHERE project_id=%s AND action='SUBMIT'",
+                (pending_migration_project_id,),
+            )
+            pending_migration_submission_id = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO email_outbox(event_type,dedupe_key,project_id,recipient_user_id,"
+                "recipient_email,subject,body,status,retry_count,created_at) "
+                "VALUES('PROJECT_SUBMITTED',NULL,%s,%s,'migration-reviewer@example.invalid',"
+                "'旧待验收通知','旧通知应取消并按版本重建','PENDING',0,UTC_TIMESTAMP(3))",
+                (pending_migration_project_id, migration_reviewer_id),
             )
             cursor.execute(
                 "INSERT INTO projects(name,description,supplier_id,status,confirm_side,created_by) "
@@ -207,7 +236,7 @@ try:
             cursor.execute("SELECT password_hash FROM users WHERE employee_no='admin'")
             check(".NET migration from baseline 16 is repeatable and preserves users", cursor.fetchone()[0] == preserved_hash)
             cursor.execute("SELECT COUNT(*) FROM yf_schema_migrations")
-            check(".NET owns schema version history", cursor.fetchone()[0] == 3)
+            check(".NET owns schema version history", cursor.fetchone()[0] == 4)
             cursor.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='collaboration_reads'")
             check("collaboration read receipt migration creates its additive table", cursor.fetchone()[0] == 1)
             cursor.execute("SELECT session_id FROM refresh_tokens WHERE id=%s", (legacy_token_id,))
@@ -251,13 +280,52 @@ try:
                     ("CONFIRM", "SUPPLIER"),
                 ),
             )
-            cursor.execute("DELETE FROM yf_schema_migrations WHERE version=3")
+            cursor.execute(
+                "SELECT dedupe_key,recipient_user_id,status,retry_count,sent_at,last_error "
+                "FROM email_outbox WHERE project_id=%s AND event_type='PROJECT_SUBMITTED' ORDER BY id",
+                (pending_migration_project_id,),
+            )
+            migration_notification_rows = cursor.fetchall()
+            expected_migration_notification_rows = (
+                (None, migration_reviewer_id, "CANCELLED", 0, None,
+                 "项目验收已调整为公司内部确认，旧供应商确认通知已取消"),
+                (f"project-acceptance:{pending_migration_project_id}:"
+                 f"{pending_migration_submission_id}:{migration_reviewer_id}",
+                 migration_reviewer_id, "PENDING", 0, None, None),
+            )
+            if migration_notification_rows != expected_migration_notification_rows:
+                raise AssertionError(
+                    "acceptance notification migration rows mismatch: "
+                    f"expected {expected_migration_notification_rows!r}, "
+                    f"got {migration_notification_rows!r}"
+                )
+            check(
+                "acceptance notification migration preserves v3 cancellation and rebuilds the current reviewer request",
+                True,
+            )
+            cursor.execute(
+                "SELECT COUNT(*) FROM audit_logs "
+                "WHERE action='PROJECT_ACCEPTANCE_NOTIFICATIONS_MIGRATE' "
+                "AND target_type='schema' AND target_id='4'"
+            )
+            check("acceptance notification migration records one auditable rebuild", cursor.fetchone()[0] == 1)
+            cursor.execute("DELETE FROM yf_schema_migrations WHERE version=4")
         stale_schema = subprocess.run(["dotnet", str(DLL)], cwd=API, env=env, capture_output=True, timeout=20)
-        check("startup refuses an unapplied internal acceptance migration", stale_schema.returncode != 0)
+        check("startup refuses an unapplied acceptance notification migration", stale_schema.returncode != 0)
         migration = subprocess.run(["dotnet", str(DLL), "--migrate-database"], cwd=API, env=env, capture_output=True)
         if migration.returncode:
-            raise RuntimeError(".NET internal acceptance migration recovery failed: " + migration.stderr.decode(errors="replace")[:1500])
+            raise RuntimeError(".NET acceptance notification migration recovery failed: " + migration.stderr.decode(errors="replace")[:1500])
         with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT status,retry_count,sent_at,last_error FROM email_outbox "
+                "WHERE dedupe_key=%s",
+                (f"project-acceptance:{pending_migration_project_id}:"
+                 f"{pending_migration_submission_id}:{migration_reviewer_id}",),
+            )
+            check(
+                "acceptance notification migration recovery leaves the current request pending",
+                cursor.fetchall() == (("PENDING", 0, None, None),),
+            )
             cursor.execute("SELECT checksum FROM yf_schema_migrations WHERE version=1")
             checksum = cursor.fetchone()[0]
             cursor.execute("UPDATE yf_schema_migrations SET checksum=%s WHERE version=1", ('0' * 64,))
@@ -398,18 +466,30 @@ try:
             second_flow_login = supplier_client.login("workflow_supplier", changed_flow_password)
             check("workflow supplier changes initial password through API", first_flow_login["mustChangePassword"] and not second_flow_login["mustChangePassword"] and second_flow_login["user"]["id"] == flow_user["id"])
             first_submission = client.call("POST", f"/api/v1/projects/{pid}/submit", {})
-            client.call("POST", f"/api/v1/projects/{pid}/withdraw")
+            client.call("POST", f"/api/v1/projects/{pid}/withdraw", {
+                "expectedSubmissionId": first_submission["latestSubmissionId"],
+            })
             supplier_submission = supplier_client.call("POST", f"/api/v1/projects/{pid}/submit", {})
-            client.call("POST", f"/api/v1/projects/{pid}/reject", {"reason": "回归测试驳回"})
+            client.call("POST", f"/api/v1/projects/{pid}/reject", {
+                "reason": "回归测试驳回",
+                "expectedSubmissionId": supplier_submission["latestSubmissionId"],
+            })
             self_submission = client.call(
                 "POST", f"/api/v1/projects/{pid}/submit", {"confirmSide": "COMPANY"})
-            completed_project = client.call("POST", f"/api/v1/projects/{pid}/confirm")
+            completed_project = client.call("POST", f"/api/v1/projects/{pid}/confirm", {
+                "expectedSubmissionId": self_submission["latestSubmissionId"],
+            })
             check(
                 "internal and supplier submission with internal self-confirm workflow",
                 first_submission["confirmSide"] == "COMPANY"
                 and supplier_submission["confirmSide"] == "COMPANY"
                 and self_submission["confirmSide"] == "COMPANY"
-                and completed_project["status"] == "COMPLETED",
+                and all(
+                    isinstance(item["latestSubmissionId"], int)
+                    for item in (first_submission, supplier_submission, self_submission)
+                )
+                and completed_project["status"] == "COMPLETED"
+                and completed_project["latestSubmissionId"] is None,
             )
             client.call("DELETE", f"/api/v1/files/{fid}", expected=409)
             check("completed project file mutation denied", True)

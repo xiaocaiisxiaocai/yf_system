@@ -5,6 +5,7 @@ using MailKit.Security;
 using MimeKit;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Modules.SystemManagement;
 
@@ -115,7 +116,7 @@ public sealed class MailService
             if (!await EnabledAsync(conn, ct)) return;
             resolved = await settings.ResolveAsync(conn, null, ct);
             if (!resolved.Configured) return;
-            pending = (await conn.QueryAsync<MailRow>(new CommandDefinition("SELECT id,event_type AS EventType,recipient_email AS RecipientEmail,subject,body,status,retry_count AS RetryCount,next_attempt_at AS NextAttemptAt FROM email_outbox WHERE event_type <> 'STORAGE_WARNING' AND ((status='PENDING' AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())) OR (status='SENDING' AND next_attempt_at<=UTC_TIMESTAMP())) ORDER BY id LIMIT 10", cancellationToken: ct))).ToArray();
+            pending = (await conn.QueryAsync<MailRow>(new CommandDefinition("SELECT id,event_type AS EventType,project_id AS ProjectId,dedupe_key AS DedupeKey,recipient_user_id AS RecipientUserId,recipient_email AS RecipientEmail,subject,body,status,retry_count AS RetryCount,next_attempt_at AS NextAttemptAt FROM email_outbox WHERE event_type <> 'STORAGE_WARNING' AND sent_at IS NULL AND ((status='PENDING' AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())) OR (status='SENDING' AND next_attempt_at<=UTC_TIMESTAMP())) ORDER BY id LIMIT 10", cancellationToken: ct))).ToArray();
         }
         foreach (var mail in pending)
         {
@@ -123,10 +124,48 @@ public sealed class MailService
             await using (var claimConnection = await db.OpenAsync(ct))
             {
                 await using var claimTransaction = await AppDb.BeginTransactionAsync(claimConnection, ct);
-                var claimed = await claimConnection.ExecuteAsync(new CommandDefinition("UPDATE email_outbox SET status='SENDING',next_attempt_at=UTC_TIMESTAMP()+INTERVAL 10 MINUTE WHERE id=@Id AND status=@Status AND retry_count=@RetryCount AND next_attempt_at <=> @NextAttemptAt AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())", new { mail.Id, mail.Status, mail.RetryCount, mail.NextAttemptAt }, claimTransaction, cancellationToken: ct));
+                var claimed = await claimConnection.ExecuteAsync(new CommandDefinition("UPDATE email_outbox SET status='SENDING',next_attempt_at=UTC_TIMESTAMP()+INTERVAL 10 MINUTE WHERE id=@Id AND sent_at IS NULL AND status=@Status AND retry_count=@RetryCount AND next_attempt_at <=> @NextAttemptAt AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())", new { mail.Id, mail.Status, mail.RetryCount, mail.NextAttemptAt }, claimTransaction, cancellationToken: ct));
                 if (claimed != 1) continue;
                 lease = await claimConnection.QuerySingleAsync<DateTime>(new CommandDefinition(
                     "SELECT next_attempt_at FROM email_outbox WHERE id=@Id", new { mail.Id }, claimTransaction, cancellationToken: ct));
+                if (mail.EventType == "PROJECT_SUBMITTED"
+                    && !await IsCurrentPendingAcceptanceAsync(claimConnection, claimTransaction, mail, ct))
+                {
+                    var cancelled = await claimConnection.ExecuteAsync(new CommandDefinition(
+                        """
+                        UPDATE email_outbox
+                        SET status='CANCELLED',next_attempt_at=NULL,last_error=@Reason
+                        WHERE id=@Id AND status='SENDING' AND next_attempt_at=@Lease
+                        """,
+                        new
+                        {
+                            mail.Id,
+                            Lease = lease,
+                            Reason = ProjectNotificationService.SupersededAcceptanceMailReason,
+                        },
+                        claimTransaction,
+                        cancellationToken: ct));
+                    if (cancelled == 1)
+                    {
+                        await audit.WriteAsync(
+                            claimConnection,
+                            claimTransaction,
+                            null,
+                            "EMAIL_CANCELLED_STALE",
+                            "email_outbox",
+                            mail.Id,
+                            new
+                            {
+                                eventType = mail.EventType,
+                                status = "CANCELLED",
+                                reason = "PROJECT_ACCEPTANCE_STALE",
+                            },
+                            null,
+                            ct);
+                    }
+                    await claimTransaction.CommitAsync(ct);
+                    continue;
+                }
                 await claimTransaction.CommitAsync(ct);
             }
             // SMTP may take a minute. The durable lease protects this message;
@@ -167,7 +206,47 @@ public sealed class MailService
         }
     }
     private sealed class QueueCount { public string Status { get; set; } = ""; public ulong Count { get; set; } }
-    private sealed class MailRow { public ulong Id { get; set; } public string EventType { get; set; } = ""; public string RecipientEmail { get; set; } = ""; public string Subject { get; set; } = ""; public string Body { get; set; } = ""; public string Status { get; set; } = ""; public int RetryCount { get; set; } public DateTime? NextAttemptAt { get; set; } }
+    private static async Task<bool> IsCurrentPendingAcceptanceAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        MailRow mail,
+        CancellationToken ct)
+    {
+        if (mail.ProjectId is null
+            || mail.RecipientUserId is null
+            || !ProjectNotificationService.TryParseAcceptanceDedupeKey(
+                mail.DedupeKey,
+                out var projectId,
+                out var submissionId,
+                out var recipientId)
+            || projectId != mail.ProjectId.Value
+            || recipientId != mail.RecipientUserId.Value)
+        {
+            return false;
+        }
+        return await ProjectNotificationService.IsCurrentPendingAcceptanceAsync(
+            conn,
+            tx,
+            projectId,
+            submissionId,
+            recipientId,
+            ct);
+    }
+
+    private sealed class MailRow
+    {
+        public ulong Id { get; set; }
+        public string EventType { get; set; } = "";
+        public ulong? ProjectId { get; set; }
+        public string? DedupeKey { get; set; }
+        public ulong? RecipientUserId { get; set; }
+        public string RecipientEmail { get; set; } = "";
+        public string Subject { get; set; } = "";
+        public string Body { get; set; } = "";
+        public string Status { get; set; } = "";
+        public int RetryCount { get; set; }
+        public DateTime? NextAttemptAt { get; set; }
+    }
 }
 
 internal sealed record SmtpEnvelope(string Recipient, string Subject, string Body);

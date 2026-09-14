@@ -254,7 +254,8 @@ async function chooseNotificationTab(drawer, name) {
         await supplierPage.getByRole('button', { name: '提交内部验收', exact: true }).click();
         await supplierPage.locator('.arco-popconfirm:visible').getByRole('button', { name: '确定', exact: true }).click();
       });
-      await submit;
+      const submitted = await submit;
+      assert(Number.isInteger(submitted.latestSubmissionId) && submitted.latestSubmissionId > 0);
       const pending = await (await pendingReload).json();
       assert(pending.list.some(item => item.id === project.id));
       await adminPage.getByRole('link', { name: projectName, exact: true }).waitFor();

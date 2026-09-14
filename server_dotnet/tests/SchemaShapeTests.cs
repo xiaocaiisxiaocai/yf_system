@@ -71,7 +71,7 @@ public sealed class SchemaShapeTests
     }
 
     [Fact(Timeout = 60_000)]
-    public async Task V17AndDotNetV3RemainRestartable()
+    public async Task V17AndCurrentDotNetMigrationsRemainRestartable()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("shape_v17", ct);
@@ -90,7 +90,7 @@ public sealed class SchemaShapeTests
     }
 
     [Fact(Timeout = 60_000)]
-    public async Task V3InternalAcceptanceMigrationIsScopedAuditedAndRestartable()
+    public async Task InternalAcceptanceMigrationsAreScopedAuditedAndRestartable()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("shape_acceptance_v3", ct);
@@ -98,7 +98,7 @@ public sealed class SchemaShapeTests
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await database.ExecuteAsync(
             """
-            DELETE FROM yf_schema_migrations WHERE version=3;
+            DELETE FROM yf_schema_migrations WHERE version>=3;
             INSERT INTO role_permissions(role_id,permission_id)
             SELECT r.id,p.id FROM roles r CROSS JOIN permissions p
             WHERE r.name='供应商人员' AND p.code='project:confirm';
@@ -107,7 +107,21 @@ public sealed class SchemaShapeTests
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password)
             VALUES
               (9201,'v3-internal','unused','内部验收人','internal-v3@example.test','INTERNAL',NULL,'ACTIVE',0),
-              (9202,'v3-supplier','unused','供应商提交人','supplier-v3@example.test','SUPPLIER',9101,'ACTIVE',0);
+              (9202,'v3-supplier','unused','供应商提交人','supplier-v3@example.test','SUPPLIER',9101,'ACTIVE',0),
+              (9203,'v4-global-reviewer','unused','全局验收人','global-v4@example.test','INTERNAL',NULL,'ACTIVE',0),
+              (9204,'v4-confirm-only','unused','缺项目菜单验收人','confirm-only-v4@example.test','INTERNAL',NULL,'ACTIVE',0),
+              (9205,'v4-shared-inbox','unused','共享收件邮箱验收人','global-v4@example.test','INTERNAL',NULL,'ACTIVE',0);
+            INSERT INTO roles(id,name,description,is_built_in,status)
+            VALUES
+              (9001,'v4全局验收人','迁移测试角色',0,'ACTIVE'),
+              (9002,'v4缺项目菜单','迁移测试角色',0,'ACTIVE');
+            INSERT INTO role_permissions(role_id,permission_id)
+            SELECT 9001,id FROM permissions WHERE code IN ('project:list','project:confirm','project:view_all');
+            INSERT INTO role_permissions(role_id,permission_id)
+            SELECT 9002,id FROM permissions WHERE code='project:confirm';
+            INSERT INTO user_roles(user_id,role_id)
+            SELECT 9201,id FROM roles WHERE name='内部成员';
+            INSERT INTO user_roles(user_id,role_id) VALUES(9203,9001),(9204,9002),(9205,9001);
 
             INSERT INTO projects(id,name,supplier_id,status,confirm_side,created_by)
             VALUES
@@ -140,6 +154,9 @@ public sealed class SchemaShapeTests
 
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await database.ExecuteAsync("DELETE FROM yf_schema_migrations WHERE version=4", ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
         await SchemaBootstrap.ValidateAsync(database.Database, ct);
 
         await using var conn = await database.Database.OpenAsync(ct);
@@ -154,10 +171,23 @@ public sealed class SchemaShapeTests
                 "SELECT CONCAT(id,':',COALESCE(confirm_side,'NULL')) FROM project_status_logs WHERE id BETWEEN 9401 AND 9422 ORDER BY id",
                 cancellationToken: ct))).ToArray());
         Assert.Equal(
-            ["9501:CANCELLED", "9502:CANCELLED", "9503:CANCELLED", "9504:SENT", "9505:PENDING", "9506:PENDING", "9507:CANCELLED", "9508:CANCELLED", "9509:CANCELLED"],
+            ["9501:CANCELLED", "9502:CANCELLED", "9503:CANCELLED", "9504:SENT", "9505:PENDING", "9506:CANCELLED", "9507:CANCELLED", "9508:CANCELLED", "9509:CANCELLED"],
             (await conn.QueryAsync<string>(new CommandDefinition(
                 "SELECT CONCAT(id,':',status) FROM email_outbox WHERE id BETWEEN 9501 AND 9509 ORDER BY id",
                 cancellationToken: ct))).ToArray());
+        Assert.Equal(
+            [
+                "project-acceptance:9301:9403:9201",
+                "project-acceptance:9301:9403:9203",
+                "project-acceptance:9302:9411:9201",
+                "project-acceptance:9302:9411:9203",
+            ],
+            (await conn.QueryAsync<string>(new CommandDefinition(
+                "SELECT dedupe_key FROM email_outbox WHERE status='PENDING' AND dedupe_key LIKE 'project-acceptance:%' ORDER BY dedupe_key",
+                cancellationToken: ct))).ToArray());
+        Assert.Equal(2, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='PROJECT_ACCEPTANCE_NOTIFICATIONS_MIGRATE' AND target_type='schema' AND target_id='4'",
+            cancellationToken: ct)));
         Assert.Equal(SchemaMigrations.InternalAcceptanceCancelledMailReason,
             await conn.ExecuteScalarAsync<string>(new CommandDefinition(
                 "SELECT last_error FROM email_outbox WHERE id=9501", cancellationToken: ct)));

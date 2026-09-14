@@ -437,11 +437,15 @@ def run_business_acceptance(client, Client, conn, check):
 
     project_a_submission = internal_client.call(
         "POST", f"/api/v1/projects/{project_a}/submit", {})
-    client.call("POST", f"/api/v1/projects/{project_a}/confirm")
+    client.call("POST", f"/api/v1/projects/{project_a}/confirm", {
+        "expectedSubmissionId": project_a_submission["latestSubmissionId"],
+    })
     project_b_submission = supplier_b_client.call("POST", f"/api/v1/projects/{project_b}/submit", {
         "confirmSide": "COMPANY",
     })
-    internal_client.call("POST", f"/api/v1/projects/{project_b}/confirm")
+    internal_client.call("POST", f"/api/v1/projects/{project_b}/confirm", {
+        "expectedSubmissionId": project_b_submission["latestSubmissionId"],
+    })
     project_a_detail = internal_client.call("GET", f"/api/v1/projects/{project_a}")
     project_b_detail = internal_client.call("GET", f"/api/v1/projects/{project_b}")
     activities_a = internal_client.call("GET", f"/api/v1/projects/{project_a}/activities?pageSize=50")
@@ -452,6 +456,8 @@ def run_business_acceptance(client, Client, conn, check):
         "internal and supplier submissions both complete through internal acceptance",
         project_a_submission["confirmSide"] == "COMPANY"
         and project_b_submission["confirmSide"] == "COMPANY"
+        and isinstance(project_a_submission["latestSubmissionId"], int)
+        and isinstance(project_b_submission["latestSubmissionId"], int)
         and project_a_detail["status"] == "COMPLETED"
         and project_b_detail["status"] == "COMPLETED"
         and activities_a["summary"]["status"] == "COMPLETED"
@@ -503,7 +509,11 @@ def run_business_acceptance(client, Client, conn, check):
     check(
         "disabled mail worker leaves complete tenant-scoped notification outbox",
         len(outbox) > 0
-        and all(status == "PENDING" and retries == 0 for _, _, _, status, retries in outbox)
+        and all(
+            retries == 0
+            and (status == "CANCELLED" if event_type == "PROJECT_SUBMITTED" else status == "PENDING")
+            for _, event_type, _, status, retries in outbox
+        )
         and {("FILE_UPLOADED", account_a["id"]),
              ("FILE_UPLOADED", internal_user["id"]),
              ("MESSAGE_CREATED", account_a["id"]),

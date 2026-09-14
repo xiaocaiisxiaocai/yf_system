@@ -2,6 +2,7 @@ using Dapper;
 using Microsoft.Extensions.Logging.Abstractions;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Projects;
 using Yf.Api.Modules.SystemManagement;
 
 namespace Yf.Api.Tests;
@@ -126,7 +127,7 @@ public sealed class MailDeliveryTests
                     Security = round == 0 ? "SslOnConnect" : "StartTls", ProtectedPassword = settings.Protect("fixture-code-" + round)
                 });
                 await conn.ExecuteAsync(new CommandDefinition("INSERT INTO system_configs(cfg_key,cfg_value) VALUES('mail.smtp',@json) ON DUPLICATE KEY UPDATE cfg_value=@json", new { json }, cancellationToken: ct));
-                if (round == 1) await conn.ExecuteAsync(new CommandDefinition("INSERT INTO email_outbox(event_type,recipient_email,subject,body,status,retry_count) VALUES('PROJECT_SUBMITTED','recipient@example.invalid','second','body','PENDING',0)", cancellationToken: ct));
+                if (round == 1) await conn.ExecuteAsync(new CommandDefinition("INSERT INTO email_outbox(event_type,recipient_email,subject,body,status,retry_count) VALUES('TEST_NOTIFICATION','recipient@example.invalid','second','body','PENDING',0)", cancellationToken: ct));
             }
             await service.FlushAsync(ct);
             Assert.Equal(round + 1, delivery.Seen.Count);
@@ -149,6 +150,50 @@ public sealed class MailDeliveryTests
         Assert.Empty(delivery.Seen);
         await using var check = await scope.Database.OpenAsync(ct);
         Assert.Equal("PENDING", await check.ExecuteScalarAsync<string>(new CommandDefinition("SELECT status FROM email_outbox WHERE id=1", cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task LegacyProjectSubmissionWithoutVersionedRecipientIsCancelledBeforeSmtp()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var conn = await scope.Database.OpenAsync(ct))
+            await conn.ExecuteAsync(new CommandDefinition("UPDATE email_outbox SET event_type='PROJECT_SUBMITTED' WHERE id=1", cancellationToken: ct));
+        var delivery = new CaptureSettingsDelivery();
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]), NullLogger<MailService>.Instance, delivery);
+
+        await service.FlushAsync(ct);
+
+        Assert.Empty(delivery.Seen);
+        await using var check = await scope.Database.OpenAsync(ct);
+        Assert.Equal("CANCELLED", await check.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT status FROM email_outbox WHERE id=1", cancellationToken: ct)));
+        Assert.Equal(1, await check.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='EMAIL_CANCELLED_STALE' AND target_id='1'", cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task WorkflowCancellationDoesNotOverwriteAnInFlightSmtpLease()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using var conn = await scope.Database.OpenAsync(ct);
+        await conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE email_outbox SET event_type='PROJECT_SUBMITTED',project_id=7,status='SENDING',next_attempt_at=UTC_TIMESTAMP()+INTERVAL 10 MINUTE WHERE id=1",
+            cancellationToken: ct));
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+
+        var changed = await ProjectNotificationService.CancelPendingAcceptanceAsync(
+            conn,
+            tx,
+            7,
+            ProjectNotificationService.SupersededAcceptanceMailReason,
+            ct);
+        await tx.CommitAsync(ct);
+
+        Assert.Equal(0, changed);
+        Assert.Equal("SENDING", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT status FROM email_outbox WHERE id=1", cancellationToken: ct)));
     }
 
     private sealed class CaptureSettingsDelivery : ISmtpDelivery
@@ -278,6 +323,9 @@ public sealed class MailDeliveryTests
                     CREATE TABLE email_outbox(
                         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                         event_type VARCHAR(32) NOT NULL,
+                        project_id BIGINT UNSIGNED NULL,
+                        dedupe_key VARCHAR(128) NULL,
+                        recipient_user_id BIGINT UNSIGNED NULL,
                         recipient_email VARCHAR(128) NOT NULL,
                         subject VARCHAR(255) NOT NULL,
                         body TEXT NOT NULL,
@@ -302,7 +350,7 @@ public sealed class MailDeliveryTests
                     INSERT INTO email_outbox
                         (id,event_type,recipient_email,subject,body,status,retry_count,next_attempt_at,last_error,sent_at)
                     VALUES
-                        (1,'PROJECT_SUBMITTED','recipient@example.invalid','subject','body','PENDING',0,NULL,NULL,NULL);
+                        (1,'TEST_NOTIFICATION','recipient@example.invalid','subject','body','PENDING',0,NULL,NULL,NULL);
                     """, cancellationToken: ct));
                 return new(administration, databaseName, database, applicationOptions);
             }

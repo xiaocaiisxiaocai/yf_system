@@ -63,20 +63,20 @@ public static class ProjectsModule
             await using var conn = await db.OpenAsync(ct);
             return Results.Ok(await service.SubmitAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
         });
-        api.MapPost("/projects/{id:long}/confirm", async (HttpContext context, ulong id, AppDb db, ProjectService service, CancellationToken ct) =>
+        api.MapPost("/projects/{id:long}/confirm", async (HttpContext context, ulong id, ProjectDecisionRequest request, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.ConfirmAsync(conn, AccessService.GetCurrent(context), id, Ip(context), ct));
+            return Results.Ok(await service.ConfirmAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
         });
         api.MapPost("/projects/{id:long}/reject", async (HttpContext context, ulong id, ProjectRejectRequest request, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             return Results.Ok(await service.RejectAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
         });
-        api.MapPost("/projects/{id:long}/withdraw", async (HttpContext context, ulong id, AppDb db, ProjectService service, CancellationToken ct) =>
+        api.MapPost("/projects/{id:long}/withdraw", async (HttpContext context, ulong id, ProjectDecisionRequest request, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.WithdrawAsync(conn, AccessService.GetCurrent(context), id, Ip(context), ct));
+            return Results.Ok(await service.WithdrawAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
         });
         api.MapGet("/projects/{id:long}/members", async (HttpContext context, ulong id, AppDb db, ProjectService service, CancellationToken ct) =>
         {

@@ -1643,7 +1643,7 @@ test('project workflow limits acceptance to permissioned internal users while pr
   const changed = []
   await act(async () => {
     renderer = create(React.createElement(Page, {
-      project: { id: 1, status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 1 },
+      project: { id: 1, status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 1, latestSubmissionId: 31 },
       onChanged: () => changed.push(true),
     }))
   })
@@ -1661,7 +1661,7 @@ test('project workflow limits acceptance to permissioned internal users while pr
   }).default
   await act(async () => {
     renderer = create(React.createElement(SupplierPage, {
-      project: { id: 1, status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 2 },
+      project: { id: 1, status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 2, latestSubmissionId: 32 },
       onChanged: () => changed.push(true),
     }))
   })
@@ -1679,7 +1679,7 @@ test('project workflow limits acceptance to permissioned internal users while pr
   }).default
   await act(async () => {
     renderer = create(React.createElement(AllViewPage, {
-      project: { id: 1, status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 2 },
+      project: { id: 1, status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 2, latestSubmissionId: 33 },
       onChanged: () => changed.push(true),
     }))
   })
@@ -1769,7 +1769,7 @@ test('project rejection discards a cancelled reason but retains it after a faile
   let renderer
   await act(async () => {
     renderer = create(React.createElement(Page, {
-      project: { id: 17, status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY' },
+      project: { id: 17, status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmissionId: 41 },
       onChanged() { assert.fail('a cancelled or failed rejection must not report success') },
     }))
   })
@@ -1789,6 +1789,7 @@ test('project rejection discards a cancelled reason but retains it after a faile
   assert.equal(calls.length, 1)
   assert.equal(calls[0].url, '/projects/17/reject')
   assert.equal(calls[0].body.reason, reason)
+  assert.equal(calls[0].body.expectedSubmissionId, 41)
   await act(async () => modal().props.onCancel())
   assert.equal(reason, '')
   await act(async () => renderer.unmount())
@@ -1820,7 +1821,7 @@ test('workflow actions ignore duplicate invocations while validation or the requ
     let changed = 0
     await act(async () => {
       renderer = create(React.createElement(Page, {
-        project: { id: 17, status: action === 'start' ? 'DRAFT' : action === 'submit' ? 'IN_PROGRESS' : 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 1 },
+        project: { id: 17, status: action === 'start' ? 'DRAFT' : action === 'submit' ? 'IN_PROGRESS' : 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 1, latestSubmissionId: 51 },
         onChanged() { changed += 1 },
       }))
     })
@@ -1848,6 +1849,74 @@ test('workflow actions ignore duplicate invocations while validation or the requ
     assert.equal(changed, 1)
     await act(async () => renderer.unmount())
   }
+})
+
+test('project workflow actions keep the submission version shown when confirmation opened', async () => {
+  let reason = '需要修改'
+  const calls = []
+  const form = {
+    resetFields() { reason = '' },
+    validate: async () => ({ reason }),
+  }
+  const localArco = new Proxy({
+    ...arco,
+    Form: Object.assign(component('Form'), { useForm: () => [form], Item: component('Form.Item') }),
+  }, { get: (obj, key) => obj[key] ?? component(key) })
+  const Page = loadTs('src/components/ProjectWorkflowPanel.tsx', {
+    '@arco-design/web-react': localArco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': { post: async (url, body) => { calls.push({ url, body }); return { data: {} } } },
+    '../api/types': { PROJECT_STATUS: { PENDING_CONFIRMATION: { text: '待确认' } } },
+    '../store/auth': authModule(
+      { id: 1, userType: 'INTERNAL' },
+      ['project:confirm', 'project:withdraw', 'project:view_all'],
+    ),
+  }).default
+  const project = (latestSubmissionId) => ({
+    id: 17,
+    status: 'PENDING_CONFIRMATION',
+    confirmSide: 'COMPANY',
+    latestSubmitterId: 2,
+    latestSubmissionId,
+  })
+  let renderer
+  await act(async () => {
+    renderer = create(React.createElement(Page, { project: project(61), onChanged() {} }))
+  })
+
+  let confirm = renderer.root.findAllByType('Popconfirm')
+    .find((node) => String(node.props.title).startsWith('确认通过公司内部验收'))
+  await act(async () => confirm.props.onVisibleChange(true))
+  await act(async () => renderer.update(React.createElement(Page, { project: project(62), onChanged() {} })))
+  confirm = renderer.root.findAllByType('Popconfirm')
+    .find((node) => String(node.props.title).startsWith('确认通过公司内部验收'))
+  await act(async () => confirm.props.onOk())
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))), {
+    url: '/projects/17/confirm',
+    body: { expectedSubmissionId: 61 },
+  })
+
+  await act(async () => renderer.root.findAllByType('Button')
+    .find((node) => node.props.children === '验收驳回').props.onClick())
+  await act(async () => renderer.update(React.createElement(Page, { project: project(63), onChanged() {} })))
+  await act(async () => renderer.root.findByType('Modal').props.onOk())
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))), {
+    url: '/projects/17/reject',
+    body: { reason: '需要修改', expectedSubmissionId: 62 },
+  })
+
+  let withdraw = renderer.root.findAllByType('Popconfirm')
+    .find((node) => String(node.props.title).startsWith('撤回内部验收申请'))
+  await act(async () => withdraw.props.onVisibleChange(true))
+  await act(async () => renderer.update(React.createElement(Page, { project: project(64), onChanged() {} })))
+  withdraw = renderer.root.findAllByType('Popconfirm')
+    .find((node) => String(node.props.title).startsWith('撤回内部验收申请'))
+  await act(async () => withdraw.props.onOk())
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))), {
+    url: '/projects/17/withdraw',
+    body: { expectedSubmissionId: 63 },
+  })
+  await act(async () => renderer.unmount())
 })
 
 test('project pages contain no round entry points or project round selectors', () => {

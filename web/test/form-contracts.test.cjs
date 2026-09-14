@@ -60,8 +60,11 @@ function loadTs(relativePath, mocks = {}, globals = {}) {
 
 function authModule(permissions = []) {
   const state = {
+    token: 'test-token',
     user: { id: 1, userType: 'INTERNAL' },
     mustChangePassword: false,
+    menus: [],
+    permissions,
     hasPerm: (code) => permissions.includes(code),
     logout() {},
     setUser() {},
@@ -271,6 +274,102 @@ test('permission tree keeps menu-only grants, adds a parent for actions and remo
   await act(async () => renderer.unmount())
 })
 
+test('supplier route accepts either supplier capability while account-only UI keeps supplier writes hidden', async () => {
+  const child = React.createElement('Allowed')
+  const app = loadTs('src/App.tsx', {
+    '@arco-design/web-react': arco,
+    './api/client': { bootAuth() {} },
+    './store/auth': {
+      useAuth: () => ({
+        token: 'test-token', mustChangePassword: false,
+        menus: ['supplier:list'], permissions: ['supplier:account'],
+      }),
+    },
+    'react-router-dom': {
+      Navigate: component('Navigate'), Route: component('Route'), Routes: component('Routes'),
+      useLocation: () => ({ pathname: '/suppliers', search: '' }),
+    },
+  }, { location: { pathname: '/suppliers' }, window: { addEventListener() {}, removeEventListener() {} } })
+  let guardRenderer
+  await act(async () => {
+    guardRenderer = create(React.createElement(app.Guard, {
+      menu: 'supplier:list', anyPermission: ['supplier:manage', 'supplier:account'], children: child,
+    }))
+  })
+  assert.equal(guardRenderer.root.findByType('Allowed').type, 'Allowed')
+  await act(async () => guardRenderer.unmount())
+
+  const supplier = { id: 8, name: '供应商', status: 'ACTIVE', createdAt: '' }
+  const SupplierList = loadTs('src/pages/supplier/SupplierList.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': iconModule(),
+    '../../api/client': { get: async () => ({ data: { list: [supplier], total: 1, page: 1, pageSize: 10 } }) },
+    '../../api/types': { fmtTime: String },
+    '../../store/auth': authModule(['supplier:account']),
+    '../../utils/password': { passwordRule: {} },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(SupplierList)) })
+  assert.equal(renderer.root.findAll((node) => node.props.children === '新增供应商').length, 0)
+  const supplierActions = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, supplier)
+  assert.ok(findElement(supplierActions, (node) => node.props.children === '账号管理'))
+  assert.equal(findElement(supplierActions, (node) => node.props.children === '编辑'), undefined)
+  assert.equal(findElement(supplierActions, (node) => node.props.children === '禁用'), undefined)
+  await act(async () => renderer.unmount())
+})
+
+test('role capabilities make protected roles read-only and exclude unsafe supplier permissions from cascades', async () => {
+  const supplierRole = {
+    id: 7, name: '供应商人员', permissionIds: [2], assignedUserCount: 0,
+    status: 'ACTIVE', canManage: true, supplierRestricted: true,
+  }
+  const protectedRole = {
+    id: 1, name: '系统管理员', permissionIds: [6, 32], assignedUserCount: 1,
+    status: 'ACTIVE', canManage: false, supplierRestricted: false,
+  }
+  const perms = [
+    { id: 2, code: 'project:list', name: '项目协作', type: 'MENU', parentId: null, grantable: true, supplierAssignable: true },
+    { id: 9, code: 'file:upload', name: '上传文件', type: 'ACTION', parentId: 2, grantable: true, supplierAssignable: true },
+    { id: 39, code: 'project:confirm', name: '确认验收', type: 'ACTION', parentId: 2, grantable: true, supplierAssignable: false },
+  ]
+  const writes = []
+  const Page = loadTs('src/pages/rbac/RoleList.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': iconModule(),
+    '../../api/client': {
+      get: async (url) => ({ data: url === '/permissions' ? perms : { list: [supplierRole, protectedRole], total: 2 } }),
+      put: async (url, body) => { writes.push({ url, body }) },
+    },
+    '../../api/types': {},
+    '../../store/auth': authModule(),
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const actionColumn = renderer.root.findByType('Table').props.columns.at(-1)
+  const protectedActions = actionColumn.render(null, protectedRole)
+  assert.ok(findElement(protectedActions, (node) => node.props.children === '查看权限'))
+  assert.equal(findElement(protectedActions, (node) => node.props.children === '编辑'), undefined)
+
+  const supplierActions = actionColumn.render(null, supplierRole)
+  await act(async () => findElement(supplierActions, (node) => node.props.children === '分配权限').props.onClick())
+  let tree = renderer.root.findByType('Tree')
+  const supplierGroup = tree.props.treeData.find((group) => group.key === '2')
+  assert.equal(supplierGroup.children.find((childNode) => childNode.key === '39').disabled, true)
+  await act(async () => tree.props.onCheck([], { checked: true, node: { key: '2' } }))
+  tree = renderer.root.findByType('Tree')
+  assert.deepEqual(new Set(tree.props.checkedKeys), new Set(['2', '9']))
+  assert.deepEqual(Array.from(tree.props.halfCheckedKeys), [])
+  await act(async () => tree.props.onCheck([], { checked: false, node: { key: '2' } }))
+  tree = renderer.root.findByType('Tree')
+  assert.deepEqual(Array.from(tree.props.checkedKeys), [])
+  const save = findElement(renderer.root.findByType('Drawer').props.footer,
+    (node) => node.props.children === '保存权限')
+  assert.ok(save)
+  await act(async () => save.props.onClick())
+  assert.deepEqual(Array.from(writes[0].body.permissionIds), [])
+  await act(async () => renderer.unmount())
+})
+
 test('supplier and supplier-account status writes ignore synchronous duplicate clicks', async () => {
   const supplier = { id: 8, name: '供应商', status: 'ACTIVE', createdAt: '' }
   const account = { id: 12, employeeNo: 's12', realName: '账号', email: 's12@example.invalid', status: 'ACTIVE', createdAt: '' }
@@ -295,7 +394,7 @@ test('supplier and supplier-account status writes ignore synchronous duplicate c
     '@arco-design/web-react/icon': iconModule(),
     '../../api/client': http,
     '../../api/types': { fmtTime: String },
-    '../../store/auth': authModule(['supplier:account']),
+    '../../store/auth': authModule(['supplier:manage', 'supplier:account']),
     '../../utils/password': { passwordRule: {} },
   }).default
   let renderer

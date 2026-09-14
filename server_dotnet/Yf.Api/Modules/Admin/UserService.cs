@@ -31,7 +31,26 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
         await using var conn = await db.OpenAsync(ct);
         AccessService.RequireInternal(actor);
         await AccessService.RequirePermissionAsync(conn, null, actor, "user:manage", ct);
-        var rows = await conn.QueryAsync<RoleRow>(new CommandDefinition("SELECT id Id,name Name FROM roles WHERE status='ACTIVE' AND NOT(is_built_in=1 AND name='供应商人员') AND (@keyword IS NULL OR name LIKE CONCAT('%',@keyword,'%')) ORDER BY id", new { keyword = string.IsNullOrWhiteSpace(keyword) ? null : keyword.Trim() }, cancellationToken: ct));
+        var owned = await permissionCeiling.GetCodesAsync(conn, null, actor.Id, ct);
+        var isAdmin = await AccessService.IsSystemAdminAsync(conn, null, actor.Id, ct);
+        var rows = await conn.QueryAsync<RoleRow>(new CommandDefinition("""
+            SELECT r.id Id,r.name Name FROM roles r
+            WHERE r.status='ACTIVE'
+              AND NOT(r.is_built_in=1 AND r.name='供应商人员')
+              AND (@isAdmin=1 OR (
+                    NOT(r.is_built_in=1 AND r.name='系统管理员')
+                    AND NOT EXISTS(
+                        SELECT 1 FROM role_permissions rp
+                        JOIN permissions p ON p.id=rp.permission_id
+                        WHERE rp.role_id=r.id AND p.code NOT IN @owned)))
+              AND (@keyword IS NULL OR r.name LIKE CONCAT('%',@keyword,'%'))
+            ORDER BY r.id
+            """, new
+            {
+                isAdmin,
+                owned = owned.ToArray(),
+                keyword = string.IsNullOrWhiteSpace(keyword) ? null : keyword.Trim()
+            }, cancellationToken: ct));
         return rows.Select(x => new { x.Id, x.Name }).ToArray();
     }
 
@@ -151,7 +170,8 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
     private static async Task ManagementAsync(MySqlConnection c, MySqlTransaction t, CurrentUser actor, string permission, CancellationToken ct) { await AccessService.LockManagementAsync(c, t, ct); actor = await AccessService.RecheckActorAsync(c, t, actor, ct); AccessService.RequireInternal(actor); await AccessService.RequirePermissionAsync(c, t, actor, permission, ct); }
     private static Task<AdminUserRow?> FindAsync(MySqlConnection c, MySqlTransaction? t, ulong id, CancellationToken ct) => c.QuerySingleOrDefaultAsync<AdminUserRow>(new CommandDefinition(Select + " WHERE id=@id", new { id }, t, cancellationToken: ct));
     private static async Task EnsureRoleAssignableAsync(MySqlConnection c, MySqlTransaction t, ulong roleId, CancellationToken ct) { var role = await c.QuerySingleOrDefaultAsync<RoleRow>(new CommandDefinition("SELECT id Id,name Name,is_built_in IsBuiltIn,status Status FROM roles WHERE id=@roleId", new { roleId }, t, cancellationToken: ct)) ?? throw ApiException.BadRequest($"角色不存在: {roleId}"); if (role.Status != "ACTIVE") throw ApiException.BadRequest("不能绑定已禁用的角色"); if (role.IsBuiltIn && role.Name == "供应商人员") throw ApiException.BadRequest("供应商角色只能由供应商账号使用"); }
-    private static async Task EnsureAdminRemovalSafeAsync(MySqlConnection c, MySqlTransaction t, ulong actorId, ulong targetId, ulong? newRoleId, CancellationToken ct) { var adminRole = await c.QuerySingleOrDefaultAsync<ulong?>(new CommandDefinition("SELECT id FROM roles WHERE is_built_in=1 AND name='系统管理员'", transaction: t, cancellationToken: ct)); if (!adminRole.HasValue || newRoleId == adminRole) return; var bound = await c.ExecuteScalarAsync<int>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM user_roles WHERE user_id=@targetId AND role_id=@adminRole)", new { targetId, adminRole }, t, cancellationToken: ct)); if (bound == 0) return; if (actorId == targetId) throw ApiException.BadRequest("不能移除自己的系统管理员角色"); var active = await c.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM users u JOIN user_roles ur ON ur.user_id=u.id WHERE ur.role_id=@adminRole AND u.status='ACTIVE'", new { adminRole }, t, cancellationToken: ct)); if (active <= 1) throw ApiException.BadRequest("不能移除系统中最后一个启用管理员"); }
+    private static async Task EnsureAdminRemovalSafeAsync(MySqlConnection c, MySqlTransaction t, ulong actorId, ulong targetId, ulong? newRoleId, CancellationToken ct) { var adminRole = await c.QuerySingleOrDefaultAsync<ulong?>(new CommandDefinition("SELECT id FROM roles WHERE is_built_in=1 AND name='系统管理员'", transaction: t, cancellationToken: ct)); if (!adminRole.HasValue || newRoleId == adminRole) return; var targetStatus = await c.QuerySingleOrDefaultAsync<string>(new CommandDefinition("SELECT u.status FROM users u JOIN user_roles ur ON ur.user_id=u.id WHERE u.id=@targetId AND ur.role_id=@adminRole", new { targetId, adminRole }, t, cancellationToken: ct)); if (targetStatus is null) return; if (actorId == targetId) throw ApiException.BadRequest("不能移除自己的系统管理员角色"); var active = await c.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM users u JOIN user_roles ur ON ur.user_id=u.id WHERE ur.role_id=@adminRole AND u.status='ACTIVE'", new { adminRole }, t, cancellationToken: ct)); if (RequiresLastActiveAdminProtection(targetStatus, active)) throw ApiException.BadRequest("不能移除系统中最后一个启用管理员"); }
+    internal static bool RequiresLastActiveAdminProtection(string targetStatus, int activeAdminCount) => targetStatus == "ACTIVE" && activeAdminCount <= 1;
     private static async Task<object> JsonAsync(MySqlConnection c, MySqlTransaction? t, AdminUserRow u, CancellationToken ct) { var roles = (await c.QueryAsync<(ulong Id,string Name)>(new CommandDefinition("SELECT r.id Id,r.name Name FROM roles r JOIN user_roles ur ON ur.role_id=r.id WHERE ur.user_id=@id ORDER BY r.id", new { id = u.Id }, t, cancellationToken: ct))).AsList(); var departmentName = u.DepartmentId is ulong d ? await c.QuerySingleOrDefaultAsync<string>(new CommandDefinition("SELECT name FROM departments WHERE id=@d", new { d }, t, cancellationToken: ct)) : null; return new { u.Id, u.EmployeeNo, u.RealName, u.Email, u.UserType, u.SupplierId, u.DepartmentId, departmentName, u.Status, u.MustChangePassword, u.LastLoginAt, u.CreatedAt, roleId = roles.FirstOrDefault().Id == 0 ? (ulong?)null : roles[0].Id, roleName = roles.FirstOrDefault().Name, roleIds = roles.Select(x=>x.Id).ToArray(), roleNames = roles.Select(x=>x.Name).ToArray() }; }
     private static void ValidateName(string value) { if (string.IsNullOrWhiteSpace(value) || value.Trim().EnumerateRunes().Count() > 32) throw ApiException.BadRequest("姓名需为 1~32 个字符"); }
 }

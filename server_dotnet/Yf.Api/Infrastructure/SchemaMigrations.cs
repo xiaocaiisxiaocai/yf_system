@@ -3,18 +3,21 @@ using System.Text;
 using Dapper;
 using MySqlConnector;
 using Yf.Api.Modules.Admin;
+using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Infrastructure;
 
 /// <summary>Explicit, restartable .NET-owned schema upgrades. Startup never changes schema.</summary>
 public static class SchemaMigrations
 {
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 4;
     private const string PreviousBaseline = "m20260910_000016_project_workflow";
     private const string FirstMigrationName = "000001_adopt_schema_sessions_supplier_boundary";
     private const string CollaborationMigrationName = "000002_collaboration_notification_reads";
     private const string InternalAcceptanceMigrationName = "000003_internal_project_acceptance";
+    private const string AcceptanceNotificationMigrationName = "000004_versioned_acceptance_notifications";
     internal const string InternalAcceptanceCancelledMailReason = "项目验收已调整为公司内部确认，旧供应商确认通知已取消";
+    internal const string AcceptanceNotificationRebuiltMailReason = "验收通知已按当前待验收申请和验收人重新生成";
     private const string MigrationTableSql = """
         CREATE TABLE `yf_schema_migrations` (
           `version` int NOT NULL,
@@ -38,6 +41,7 @@ public static class SchemaMigrations
     private static string FirstChecksum => Checksum(FirstMigrationName);
     private static string CollaborationChecksum => Checksum(CollaborationMigrationName);
     private static string InternalAcceptanceChecksum => Checksum(InternalAcceptanceMigrationName);
+    private static string AcceptanceNotificationChecksum => Checksum(AcceptanceNotificationMigrationName);
 
     public static async Task ApplyAsync(AppDb db, CancellationToken ct = default)
     {
@@ -191,6 +195,80 @@ public static class SchemaMigrations
         await conn.ExecuteAsync(new CommandDefinition(
             "INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (3,@name,@checksum,UTC_TIMESTAMP(6))",
             new { name = InternalAcceptanceMigrationName, checksum = InternalAcceptanceChecksum }, tx, cancellationToken: ct));
+        if (!migrationRows.Any(row => row.Version == 4))
+        {
+            var cancelledSubmissionNotices = await conn.ExecuteAsync(new CommandDefinition(
+                """
+                UPDATE email_outbox
+                SET status='CANCELLED',next_attempt_at=NULL,last_error=@Reason
+                WHERE event_type='PROJECT_SUBMITTED' AND sent_at IS NULL
+                  AND status IN ('PENDING','SENDING','FAILED')
+                """,
+                new { Reason = AcceptanceNotificationRebuiltMailReason }, tx, cancellationToken: ct));
+
+            var pendingAcceptances = (await conn.QueryAsync<PendingAcceptanceNotificationMigration>(new CommandDefinition(
+                """
+                SELECT p.id AS ProjectId,p.name AS ProjectName,p.supplier_id AS SupplierId,
+                       p.status AS ProjectStatus,p.confirm_side AS ConfirmSide,p.created_by AS CreatedBy,
+                       p.created_at AS ProjectCreatedAt,p.updated_at AS ProjectUpdatedAt,
+                       latest.id AS LatestSubmissionId,latest.operator_id AS SubmitterId,
+                       submitter.employee_no AS SubmitterEmployeeNo,submitter.user_type AS SubmitterUserType,
+                       submitter.supplier_id AS SubmitterSupplierId
+                FROM projects p
+                INNER JOIN project_status_logs latest ON latest.id=(
+                    SELECT MAX(psl.id) FROM project_status_logs psl
+                    WHERE psl.project_id=p.id AND psl.action='SUBMIT'
+                )
+                INNER JOIN users submitter ON submitter.id=latest.operator_id
+                WHERE p.status='PENDING_CONFIRMATION' AND p.confirm_side='COMPANY'
+                ORDER BY p.id
+                FOR UPDATE
+                """,
+                transaction: tx,
+                cancellationToken: ct))).ToArray();
+            var migrationAudit = new AuditService([]);
+            foreach (var pending in pendingAcceptances)
+            {
+                var project = new ProjectRow
+                {
+                    Id = pending.ProjectId,
+                    Name = pending.ProjectName,
+                    SupplierId = pending.SupplierId,
+                    Status = pending.ProjectStatus,
+                    ConfirmSide = pending.ConfirmSide,
+                    CreatedBy = pending.CreatedBy,
+                    CreatedAt = pending.ProjectCreatedAt,
+                    UpdatedAt = pending.ProjectUpdatedAt,
+                };
+                var submitter = new CurrentUser(
+                    pending.SubmitterId,
+                    pending.SubmitterEmployeeNo,
+                    pending.SubmitterUserType,
+                    pending.SubmitterSupplierId);
+                await ProjectNotificationService.EnqueuePendingAcceptanceAsync(
+                    conn,
+                    tx,
+                    project,
+                    pending.LatestSubmissionId,
+                    submitter,
+                    db.WebBaseUrl,
+                    migrationAudit,
+                    ct);
+            }
+            if (cancelledSubmissionNotices > 0 || pendingAcceptances.Length > 0)
+            {
+                await migrationAudit.WriteAsync(conn, tx, null, "PROJECT_ACCEPTANCE_NOTIFICATIONS_MIGRATE", "schema", 4UL,
+                    new
+                    {
+                        migration = AcceptanceNotificationMigrationName,
+                        cancelledSubmissionNotices,
+                        pendingProjectCount = pendingAcceptances.Length,
+                    }, null, ct);
+            }
+            await conn.ExecuteAsync(new CommandDefinition(
+                "INSERT INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (4,@name,@checksum,UTC_TIMESTAMP(6))",
+                new { name = AcceptanceNotificationMigrationName, checksum = AcceptanceNotificationChecksum }, tx, cancellationToken: ct));
+        }
         await tx.CommitAsync(ct);
         ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: true);
         Console.WriteLine("Database is at .NET schema version " + CurrentVersion + ". Pending acceptance records were normalized; no project history was removed.");
@@ -203,7 +281,7 @@ public static class SchemaMigrations
         await SchemaShapeValidator.ValidateTableAsync(conn, "yf_schema_migrations", MigrationTableSql, ct);
         ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: true);
         if (!await HasTableAsync(conn, "collaboration_reads", ct))
-            throw new InvalidOperationException("Database schema version 3 is incomplete. Run the matching application migration command before startup.");
+            throw new InvalidOperationException("Database schema version 4 is incomplete. Run the matching application migration command before startup.");
         await SchemaShapeValidator.ValidateTableAsync(conn, "collaboration_reads", CollaborationReadsTableSql, ct);
         await SchemaShapeValidator.ValidateBaselineAsync(conn, SchemaShapeValidationMode.Strict, ct);
         await ValidatePermissionGateAsync(conn, ct);
@@ -285,6 +363,7 @@ public static class SchemaMigrations
             new MigrationRow(1, FirstMigrationName, FirstChecksum),
             new MigrationRow(2, CollaborationMigrationName, CollaborationChecksum),
             new MigrationRow(3, InternalAcceptanceMigrationName, InternalAcceptanceChecksum),
+            new MigrationRow(4, AcceptanceNotificationMigrationName, AcceptanceNotificationChecksum),
         };
         if (rows.Length > expected.Length || rows.Where((row, index) => row != expected[index]).Any())
             throw new InvalidOperationException("Unknown or modified .NET migration history; upgrade this application or restore the correct migration definitions.");
@@ -300,4 +379,18 @@ public static class SchemaMigrations
     private sealed record MigrationRow(int Version, string Name, string Checksum);
     private sealed record SupplierGrant(ulong RoleId, ulong PermissionId, string Code);
     private sealed record PendingAcceptanceMigration(ulong ProjectId, ulong? LatestSubmissionId);
+    private sealed record PendingAcceptanceNotificationMigration(
+        ulong ProjectId,
+        string ProjectName,
+        ulong SupplierId,
+        string ProjectStatus,
+        string ConfirmSide,
+        ulong CreatedBy,
+        DateTime ProjectCreatedAt,
+        DateTime ProjectUpdatedAt,
+        ulong LatestSubmissionId,
+        ulong SubmitterId,
+        string SubmitterEmployeeNo,
+        string SubmitterUserType,
+        ulong? SubmitterSupplierId);
 }

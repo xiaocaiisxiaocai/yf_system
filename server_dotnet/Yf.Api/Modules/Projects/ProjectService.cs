@@ -66,6 +66,10 @@ internal sealed class ProjectService(
             """
             SELECT p.id AS Id, p.name AS Name, p.description AS Description,
                    p.supplier_id AS SupplierId, p.status AS Status, p.confirm_side AS ConfirmSide,
+                   CASE WHEN p.status='PENDING_CONFIRMATION' THEN (
+                       SELECT MAX(psl.id) FROM project_status_logs psl
+                       WHERE psl.project_id=p.id AND psl.action='SUBMIT'
+                   ) ELSE NULL END AS LatestSubmissionId,
                    p.created_by AS CreatedBy, p.created_at AS CreatedAt, p.updated_at AS UpdatedAt,
                    s.name AS SupplierName, u.real_name AS CreatedByName
             FROM projects p
@@ -145,9 +149,11 @@ internal sealed class ProjectService(
 
     internal async Task<object> DetailAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
     {
-        await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
-        var project = await LoadProjectAsync(conn, null, projectId, false, ct);
-        var members = await ListMembersCoreAsync(conn, null, projectId, ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, true, ct);
+        var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
+        var members = await ListMembersCoreAsync(conn, tx, projectId, ct);
         var latest = await conn.QuerySingleOrDefaultAsync<ProjectDetailHistory>(new CommandDefinition(
             """
             SELECT
@@ -155,8 +161,9 @@ internal sealed class ProjectService(
               (SELECT operator_id FROM project_status_logs WHERE project_id=@ProjectId AND action='SUBMIT' ORDER BY id DESC LIMIT 1) AS LatestSubmitterId
             """,
             new { ProjectId = projectId },
+            tx,
             cancellationToken: ct));
-        return new
+        var result = new
         {
             id = project.Id,
             name = project.Name,
@@ -172,7 +179,10 @@ internal sealed class ProjectService(
             members,
             rejectReason = latest?.RejectReason,
             latestSubmitterId = latest?.LatestSubmitterId,
+            latestSubmissionId = project.LatestSubmissionId,
         };
+        await tx.CommitAsync(ct);
+        return result;
     }
 
     internal async Task<object> UpdateAsync(
@@ -274,15 +284,32 @@ internal sealed class ProjectService(
         {
             throw ApiException.Conflict("项目仍有活动上传会话，不能提交验收");
         }
-        await ApplyTransitionAsync(conn, tx, current, project, ProjectStatuses.PendingConfirmation, "SUBMIT", side, null, ip, ct);
+        var reviewers = await ProjectReviewerService.ListAsync(conn, tx, project, ct);
+        if (reviewers.Count == 0)
+        {
+            throw ApiException.Conflict("项目没有可执行验收的公司内部用户，请先配置项目成员和验收权限");
+        }
+        var submissionId = await ApplyTransitionAsync(
+            conn, tx, current, project, ProjectStatuses.PendingConfirmation, "SUBMIT", side, null, ip, ct);
         await ProjectNotificationService.EnqueueWorkflowAsync(conn, tx, project, "SUBMIT", side, null, null, current, options.WebBaseUrl, audit, ct);
-        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
+        var submitted = await LoadProjectAsync(conn, tx, projectId, false, ct);
+        if (submitted.LatestSubmissionId != submissionId)
+        {
+            throw new InvalidOperationException("待确认项目的提交版本与状态历史不一致");
+        }
+        var result = ProjectJson.Project(submitted);
         await tx.CommitAsync(ct);
         return result;
     }
 
-    internal Task<object> ConfirmAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, string? ip, CancellationToken ct) =>
-        DecideAsync(conn, actor, projectId, "CONFIRM", null, ip, ct);
+    internal Task<object> ConfirmAsync(
+        MySqlConnection conn,
+        CurrentUser actor,
+        ulong projectId,
+        ProjectDecisionRequest request,
+        string? ip,
+        CancellationToken ct) =>
+        DecideAsync(conn, actor, projectId, "CONFIRM", RequireExpectedSubmissionId(request.ExpectedSubmissionId), null, ip, ct);
 
     internal async Task<object> RejectAsync(
         MySqlConnection conn,
@@ -292,6 +319,7 @@ internal sealed class ProjectService(
         string? ip,
         CancellationToken ct)
     {
+        var expectedSubmissionId = RequireExpectedSubmissionId(request.ExpectedSubmissionId);
         ProjectWorkflowRules.RequireInternalDecisionActor(actor);
         var reason = (request.Reason ?? string.Empty).Trim();
         if (reason.Length == 0)
@@ -302,16 +330,18 @@ internal sealed class ProjectService(
         {
             throw ApiException.BadRequest("驳回原因过长（最多 500 字）");
         }
-        return await DecideAsync(conn, actor, projectId, "REJECT", reason, ip, ct);
+        return await DecideAsync(conn, actor, projectId, "REJECT", expectedSubmissionId, reason, ip, ct);
     }
 
     internal async Task<object> WithdrawAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong projectId,
+        ProjectDecisionRequest request,
         string? ip,
         CancellationToken ct)
     {
+        var expectedSubmissionId = RequireExpectedSubmissionId(request.ExpectedSubmissionId);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var (project, current) = await LockWorkflowProjectAsync(conn, tx, actor, projectId, "project:withdraw", ct);
         if (project.Status != ProjectStatuses.PendingConfirmation)
@@ -319,6 +349,7 @@ internal sealed class ProjectService(
             throw ApiException.Conflict("项目当前不在待确认状态");
         }
         var latestSubmit = await LatestSubmissionAsync(conn, tx, projectId, ct);
+        EnsureExpectedSubmission(latestSubmit, expectedSubmissionId);
         var privileged = current.IsInternal
             && await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:view_all", ct);
         if (latestSubmit.OperatorId != current.Id && !privileged)
@@ -415,20 +446,29 @@ internal sealed class ProjectService(
 
     internal async Task<object> SummaryAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
     {
-        var project = await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
-        var unread = await MessageService.UnreadCountAsync(conn, null, actor.Id, projectId, ct);
-        var activityRevision = await ProjectActivityService.RevisionAsync(conn, null, projectId, ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var project = await ProjectAccessService.RequireViewForValidatedActorAsync(
+            conn, tx, current, projectId, true, ct);
+        var unread = await MessageService.UnreadCountAsync(conn, tx, current.Id, projectId, ct);
+        var activityRevision = await ProjectActivityService.RevisionAsync(conn, tx, projectId, ct);
         var canConfirm = ProjectWorkflowRules.CanReceivePendingAcceptance(
-            actor,
-            await ProjectAccessService.HasPermissionAsync(conn, null, actor.Id, "project:confirm", ct));
-        return new
+            current,
+            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
+        var latestSubmissionId = project.Status == ProjectStatuses.PendingConfirmation
+            ? (await LatestSubmissionAsync(conn, tx, projectId, ct)).Id
+            : (ulong?)null;
+        var result = new
         {
             unreadMessages = unread,
             activityRevision,
             pendingConfirmation = canConfirm
                 && project.Status == ProjectStatuses.PendingConfirmation
                 && project.ConfirmSide == ProjectWorkflowRules.InternalAcceptanceSide,
+            latestSubmissionId,
         };
+        await tx.CommitAsync(ct);
+        return result;
     }
 
     internal async Task<object> SupplierOptionsAsync(MySqlConnection conn, CurrentUser actor, CancellationToken ct)
@@ -529,6 +569,7 @@ internal sealed class ProjectService(
         CurrentUser actor,
         ulong projectId,
         string action,
+        ulong expectedSubmissionId,
         string? reason,
         string? ip,
         CancellationToken ct)
@@ -548,6 +589,7 @@ internal sealed class ProjectService(
             throw new InvalidOperationException("待确认项目的确认方必须为公司内部");
         }
         var latestSubmit = await LatestSubmissionAsync(conn, tx, projectId, ct);
+        EnsureExpectedSubmission(latestSubmit, expectedSubmissionId);
         var to = action == "CONFIRM" ? ProjectStatuses.Completed : ProjectStatuses.InProgress;
         await ApplyTransitionAsync(conn, tx, current, project, to, action, project.ConfirmSide, reason, ip, ct);
         await ProjectNotificationService.EnqueueWorkflowAsync(conn, tx, project, action, project.ConfirmSide, reason, latestSubmit.OperatorId, current, options.WebBaseUrl, audit, ct);
@@ -571,7 +613,7 @@ internal sealed class ProjectService(
         return (project, current);
     }
 
-    private async Task ApplyTransitionAsync(
+    private async Task<ulong> ApplyTransitionAsync(
         MySqlConnection conn,
         MySqlTransaction tx,
         CurrentUser actor,
@@ -631,11 +673,12 @@ internal sealed class ProjectService(
             reason,
             statusLogId,
         }, ip, ct);
+        return statusLogId;
     }
 
     private static async Task<ProjectStatusLogRow> LatestSubmissionAsync(
         MySqlConnection conn,
-        MySqlTransaction tx,
+        MySqlTransaction? tx,
         ulong projectId,
         CancellationToken ct)
     {
@@ -647,6 +690,23 @@ internal sealed class ProjectService(
             """,
             new { ProjectId = projectId }, tx, cancellationToken: ct));
         return row ?? throw new InvalidOperationException("待确认项目缺少提交历史");
+    }
+
+    internal static ulong RequireExpectedSubmissionId(ulong? expectedSubmissionId)
+    {
+        if (expectedSubmissionId is null or 0)
+        {
+            throw ApiException.BadRequest("expectedSubmissionId 必须为当前待验收提交版本");
+        }
+        return expectedSubmissionId.Value;
+    }
+
+    internal static void EnsureExpectedSubmission(ProjectStatusLogRow latestSubmit, ulong expectedSubmissionId)
+    {
+        if (latestSubmit.Id != expectedSubmissionId)
+        {
+            throw ApiException.Conflict("验收申请已更新，请刷新项目后重新操作");
+        }
     }
 
     private static async Task<ProjectRow> LoadProjectAsync(
@@ -672,6 +732,10 @@ internal sealed class ProjectService(
         const string sql = """
             SELECT p.id AS Id,p.name AS Name,p.description AS Description,p.supplier_id AS SupplierId,
                    p.status AS Status,p.confirm_side AS ConfirmSide,p.created_by AS CreatedBy,
+                   CASE WHEN p.status='PENDING_CONFIRMATION' THEN (
+                       SELECT MAX(psl.id) FROM project_status_logs psl
+                       WHERE psl.project_id=p.id AND psl.action='SUBMIT'
+                   ) ELSE NULL END AS LatestSubmissionId,
                    p.created_at AS CreatedAt,p.updated_at AS UpdatedAt,
                    s.name AS SupplierName,u.real_name AS CreatedByName
             FROM projects p

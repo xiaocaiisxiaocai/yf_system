@@ -16,6 +16,8 @@ export interface Project {
   confirmSide?: ConfirmSide | null
   /** 当前待确认提交的提交人；撤回仅由提交人或内部全量查看者发起。 */
   latestSubmitterId?: number | null
+  /** 当前待验收提交的不可变版本标识；确认、驳回和撤回必须回传。 */
+  latestSubmissionId?: number | null
   rejectReason?: string | null
   createdBy: number
   createdByName?: string

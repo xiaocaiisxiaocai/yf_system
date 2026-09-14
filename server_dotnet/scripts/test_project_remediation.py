@@ -272,10 +272,14 @@ def run_project_remediation_checks(client, Client, conn, check):
 
     role_id = _new_role(client, ["project:list", "project:submit", "project:withdraw"])
     view_all_role_id = _new_role(client, ["project:list", "project:view_all", "project:submit"])
+    reviewer_role_id = _new_role(
+        client, ["dashboard", "project:list", "project:view_all", "project:confirm"])
     old_user, old_client = _new_internal(client, Client, conn, role_id, "旧提交者")
     new_user, _ = _new_internal(client, Client, conn, role_id, "新提交者")
     view_all_user, view_all_client = _new_internal(
         client, Client, conn, view_all_role_id, "非成员提交者")
+    reviewer_user, reviewer_client = _new_internal(
+        client, Client, conn, reviewer_role_id, "非成员验收人")
 
     # The operator is mandatory and counts against the persisted 200-member
     # limit. Rejection must happen before validating or writing requested users.
@@ -365,8 +369,12 @@ def run_project_remediation_checks(client, Client, conn, check):
     client.call("PUT", f"/api/v1/projects/{withdraw_project}/members", {
         "userIds": [old_user["id"], new_user["id"]],
     })
-    old_client.call("POST", f"/api/v1/projects/{withdraw_project}/submit", {})
-    client.call("POST", f"/api/v1/projects/{withdraw_project}/reject", {"reason": "建立旧提交历史"})
+    old_submission = old_client.call(
+        "POST", f"/api/v1/projects/{withdraw_project}/submit", {})
+    client.call("POST", f"/api/v1/projects/{withdraw_project}/reject", {
+        "reason": "建立旧提交历史",
+        "expectedSubmissionId": old_submission["latestSubmissionId"],
+    })
     conn.begin()
     try:
         with conn.cursor() as cursor:
@@ -382,8 +390,10 @@ def run_project_remediation_checks(client, Client, conn, check):
                 "%s,'COMPANY',NULL,UTC_TIMESTAMP(3))",
                 (withdraw_project, new_user["id"]),
             )
+            current_submission_id = cursor.lastrowid
         worker, result = _request_in_thread(
-            old_client, "POST", f"/api/v1/projects/{withdraw_project}/withdraw", None, 403,
+            old_client, "POST", f"/api/v1/projects/{withdraw_project}/withdraw",
+            {"expectedSubmissionId": current_submission_id}, 403,
         )
         _wait_for_project_lock(conn, worker, withdraw_project)
         conn.commit()
@@ -412,9 +422,25 @@ def run_project_remediation_checks(client, Client, conn, check):
             "VALUES(%s,%s,%s,UTC_TIMESTAMP(3))",
             (notice_project, new_user["id"], new_user["id"]),
         )
-    view_all_client.call(
+    notice_submission = view_all_client.call(
         "POST", f"/api/v1/projects/{notice_project}/submit", {})
-    client.call("POST", f"/api/v1/projects/{notice_project}/confirm")
+    reviewer_pending = reviewer_client.call(
+        "GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100")
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT recipient_user_id FROM email_outbox WHERE project_id=%s "
+            "AND event_type='PROJECT_SUBMITTED' ORDER BY id",
+            (notice_project,),
+        )
+        submission_recipients = [row[0] for row in cursor.fetchall()]
+    check(
+        "active view_all reviewer receives the submission email and dashboard task",
+        reviewer_user["id"] in submission_recipients
+        and any(item["id"] == notice_project for item in reviewer_pending["list"]),
+    )
+    client.call("POST", f"/api/v1/projects/{notice_project}/confirm", {
+        "expectedSubmissionId": notice_submission["latestSubmissionId"],
+    })
     with conn.cursor() as cursor:
         cursor.execute(
             "SELECT recipient_user_id FROM email_outbox WHERE project_id=%s "

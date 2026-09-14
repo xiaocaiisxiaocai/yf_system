@@ -45,6 +45,7 @@ const ACTIONS: Record<string, { label: string; category: string; color: string }
   PROJECT_REJECT: { label: '验收驳回', category: '项目协作', color: 'red' },
   PROJECT_WITHDRAW: { label: '撤回验收申请', category: '项目协作', color: 'orange' },
   PROJECT_ACCEPTANCE_MIGRATE: { label: '转交公司内部验收', category: '项目协作', color: 'arcoblue' },
+  PROJECT_ACCEPTANCE_NOTIFICATIONS_MIGRATE: { label: '更新内部验收通知', category: '项目协作', color: 'arcoblue' },
   PROJECT_TERMINATE: { label: '终止项目', category: '项目协作', color: 'red' },
   PROJECT_RESTART: { label: '重新开始项目', category: '项目协作', color: 'arcoblue' },
   PROJECT_DELETE: { label: '删除项目', category: '项目协作', color: 'red' },
@@ -87,6 +88,7 @@ const ACTIONS: Record<string, { label: string; category: string; color: string }
   EMAIL_FAILED: { label: '邮件发送失败', category: '系统', color: 'red' },
   EMAIL_RETRY: { label: '邮件发送重试', category: '系统', color: 'orange' },
   EMAIL_SKIPPED_MISSING_EMAIL: { label: '邮件未入队（缺少邮箱）', category: '系统', color: 'orange' },
+  EMAIL_CANCELLED_STALE: { label: '已取消过期验收邮件', category: '系统', color: 'orange' },
 }
 
 const CATEGORY_OPTIONS = [

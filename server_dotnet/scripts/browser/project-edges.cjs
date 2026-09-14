@@ -184,8 +184,11 @@ const { assert, OUT, s, f, record, login, api, action, track } = require(process
           for (let offset = 0, index = 0; offset < pdf.length; offset += upload.chunkSize, index++)
             await api(context, 'PUT', '/uploads/' + upload.sessionId + '/chunks/' + index, pdf.subarray(offset, offset + upload.chunkSize), auth.accessToken);
           await json('POST', '/uploads/' + upload.sessionId + '/merge');
-          await json('POST', '/projects/' + item.id + '/submit', { confirmSide: 'COMPANY' });
-          if (status === 'COMPLETED') await json('POST', '/projects/' + item.id + '/confirm');
+          const submission = await json('POST', '/projects/' + item.id + '/submit', { confirmSide: 'COMPANY' });
+          assert(Number.isInteger(submission.latestSubmissionId) && submission.latestSubmissionId > 0);
+          if (status === 'COMPLETED') await json('POST', '/projects/' + item.id + '/confirm', {
+            expectedSubmissionId: submission.latestSubmissionId,
+          });
         }
       }
       await page.goto(s.base + '/projects'); await page.getByRole('heading', { name: '项目协作', exact: true }).waitFor();

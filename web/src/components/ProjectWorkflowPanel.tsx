@@ -18,6 +18,9 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
   const [rejectOpen, setRejectOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
+  const confirmSubmissionRef = useRef<number | null>(project.latestSubmissionId ?? null)
+  const withdrawSubmissionRef = useRef<number | null>(project.latestSubmissionId ?? null)
+  const [rejectSubmissionId, setRejectSubmissionId] = useState<number | null>(null)
   const [rejectForm] = Form.useForm()
 
   const beginAction = () => {
@@ -63,9 +66,14 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
   }
 
   const confirmProject = async () => {
+    const expectedSubmissionId = confirmSubmissionRef.current
+    if (!expectedSubmissionId) {
+      Message.error('验收申请版本缺失，请刷新项目后重试')
+      return
+    }
     if (!beginAction()) return
     try {
-      await http.post(`/projects/${project.id}/confirm`)
+      await http.post(`/projects/${project.id}/confirm`, { expectedSubmissionId })
       Message.success('公司内部验收已通过')
       onChanged()
     } finally {
@@ -74,13 +82,21 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
   }
 
   const rejectProject = async () => {
+    if (!rejectSubmissionId) {
+      Message.error('验收申请版本缺失，请关闭弹窗并刷新项目后重试')
+      return
+    }
     if (!beginAction()) return
     try {
       const values = await rejectForm.validate().catch(() => null)
       if (!values) return
-      await http.post(`/projects/${project.id}/reject`, { reason: values.reason.trim() })
+      await http.post(`/projects/${project.id}/reject`, {
+        reason: values.reason.trim(),
+        expectedSubmissionId: rejectSubmissionId,
+      })
       Message.success('公司内部验收已驳回')
       rejectForm.resetFields()
+      setRejectSubmissionId(null)
       setRejectOpen(false)
       onChanged()
     } finally {
@@ -89,9 +105,14 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
   }
 
   const withdraw = async () => {
+    const expectedSubmissionId = withdrawSubmissionRef.current
+    if (!expectedSubmissionId) {
+      Message.error('验收申请版本缺失，请刷新项目后重试')
+      return
+    }
     if (!beginAction()) return
     try {
-      await http.post(`/projects/${project.id}/withdraw`)
+      await http.post(`/projects/${project.id}/withdraw`, { expectedSubmissionId })
       Message.success('已撤回内部验收申请')
       onChanged()
     } finally {
@@ -150,17 +171,37 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
             </Popconfirm>
           )}
           {isPending && canConfirm && (
-            <Popconfirm title="确认通过公司内部验收？项目将进入已完成状态。" onOk={confirmProject}>
+            <Popconfirm
+              title="确认通过公司内部验收？项目将进入已完成状态。"
+              onVisibleChange={(visible) => {
+                if (visible) confirmSubmissionRef.current = project.latestSubmissionId ?? null
+              }}
+              onOk={confirmProject}
+            >
               <Button status="success" icon={<IconCheckCircle />} loading={busy}>验收通过</Button>
             </Popconfirm>
           )}
           {isPending && canConfirm && (
-            <Button status="danger" icon={<IconCloseCircle />} loading={busy} onClick={() => setRejectOpen(true)}>
+            <Button
+              status="danger"
+              icon={<IconCloseCircle />}
+              loading={busy}
+              onClick={() => {
+                setRejectSubmissionId(project.latestSubmissionId ?? null)
+                setRejectOpen(true)
+              }}
+            >
               验收驳回
             </Button>
           )}
           {isPending && canWithdraw && (
-            <Popconfirm title="撤回内部验收申请后项目将回到进行中，确认撤回？" onOk={withdraw}>
+            <Popconfirm
+              title="撤回内部验收申请后项目将回到进行中，确认撤回？"
+              onVisibleChange={(visible) => {
+                if (visible) withdrawSubmissionRef.current = project.latestSubmissionId ?? null
+              }}
+              onOk={withdraw}
+            >
               <Button icon={<IconUndo />} loading={busy}>撤回</Button>
             </Popconfirm>
           )}
@@ -180,6 +221,7 @@ export default function ProjectWorkflowPanel({ project, onChanged }: Props) {
         onCancel={() => {
           if (busyRef.current) return
           rejectForm.resetFields()
+          setRejectSubmissionId(null)
           setRejectOpen(false)
         }}
         okText="确认驳回"

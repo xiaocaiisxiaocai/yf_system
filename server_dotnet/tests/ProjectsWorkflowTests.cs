@@ -121,4 +121,29 @@ public sealed class ProjectsWorkflowTests
         Assert.Equal(403, error.Status);
         Assert.Equal("项目验收确认和驳回仅限公司内部用户", error.Message);
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0UL)]
+    public void WorkflowDecisionRequiresASubmissionVersion(ulong? expectedSubmissionId)
+    {
+        var error = Assert.Throws<ApiException>(() =>
+            ProjectService.RequireExpectedSubmissionId(expectedSubmissionId));
+
+        Assert.Equal(400, error.Status);
+        Assert.Equal("expectedSubmissionId 必须为当前待验收提交版本", error.Message);
+    }
+
+    [Fact]
+    public void WorkflowDecisionRejectsAStaleSubmissionVersion()
+    {
+        var latest = new ProjectStatusLogRow { Id = 102, ProjectId = 7, Action = "SUBMIT" };
+
+        var error = Assert.Throws<ApiException>(() =>
+            ProjectService.EnsureExpectedSubmission(latest, 101));
+
+        Assert.Equal(409, error.Status);
+        Assert.Equal("验收申请已更新，请刷新项目后重新操作", error.Message);
+        ProjectService.EnsureExpectedSubmission(latest, 102);
+    }
 }

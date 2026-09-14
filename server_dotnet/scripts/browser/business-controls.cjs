@@ -66,9 +66,11 @@ async function choose(page, placeholder, optionName) {
           content: messageText,
         }, f.users.a.token);
       }
-      await api(adminContext, 'POST', '/projects/' + project.id + '/submit', {
+      const submitted = await (await api(adminContext, 'POST', '/projects/' + project.id + '/submit', {
         confirmSide: 'COMPANY',
-      }, f.users.a.token);
+      }, f.users.a.token)).json();
+      assert(Number.isInteger(submitted.latestSubmissionId) && submitted.latestSubmissionId > 0);
+      project.latestSubmissionId = submitted.latestSubmissionId;
       pendingProjects.push(project);
     }
 
@@ -185,6 +187,46 @@ async function choose(page, placeholder, optionName) {
       await dialog.getByRole('button', { name: '取消', exact: true }).click();
       assert.equal(rejectWrites, 0);
       page.off('request', countReject);
+    });
+
+    await record('浏览器保留旧提交版本时驳回409且不会误验收新提交', async () => {
+      await page.goto(s.base + '/projects/' + flowProject.id);
+      await page.getByRole('button', { name: '验收驳回', exact: true }).waitFor();
+      const staleSubmissionId = flowProject.latestSubmissionId;
+      const staleDetail = await (await api(
+        adminContext, 'GET', '/projects/' + flowProject.id, undefined, adminToken)).json();
+      const detailPath = '/api/v1/projects/' + flowProject.id;
+      const keepStaleDetail = route => route.request().method() === 'GET'
+        ? route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(staleDetail) })
+        : route.continue();
+      await page.route('**' + detailPath, keepStaleDetail);
+      let resubmitted;
+      try {
+        await api(adminContext, 'POST', '/projects/' + flowProject.id + '/withdraw', {
+          expectedSubmissionId: staleSubmissionId,
+        }, adminToken);
+        resubmitted = await (await api(adminContext, 'POST', '/projects/' + flowProject.id + '/submit', {
+          confirmSide: 'COMPANY',
+        }, f.users.a.token)).json();
+        assert(resubmitted.latestSubmissionId > staleSubmissionId);
+        await page.getByRole('button', { name: '验收驳回', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByPlaceholder('请填写驳回原因', { exact: true }).fill('浏览器陈旧版本不得生效');
+        const conflict = page.waitForResponse(response => apiPath(response) === rejectPath
+          && response.request().method() === 'POST' && response.status() === 409);
+        await dialog.getByRole('button', { name: '确认驳回', exact: true }).click();
+        const response = await conflict;
+        assert.equal(response.request().postDataJSON().expectedSubmissionId, staleSubmissionId);
+      } finally {
+        await page.unroute('**' + detailPath, keepStaleDetail);
+      }
+      const persisted = await (await api(
+        adminContext, 'GET', '/projects/' + flowProject.id, undefined, adminToken)).json();
+      assert.equal(persisted.status, 'PENDING_CONFIRMATION');
+      assert.equal(persisted.latestSubmissionId, resubmitted.latestSubmissionId);
+      flowProject.latestSubmissionId = resubmitted.latestSubmissionId;
+      await page.reload();
+      await page.getByRole('button', { name: '验收驳回', exact: true }).waitFor();
     });
 
     await record('驳回503保留草稿并可单次重试成功', async () => {

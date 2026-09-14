@@ -38,6 +38,7 @@ interface RoleOption {
 
 export default function SupplierList() {
   const { hasPerm } = useAuth()
+  const canManageSuppliers = hasPerm('supplier:manage')
   const canManageAccounts = hasPerm('supplier:account')
   const canDelete = hasPerm('supplier:delete')
   const [data, setData] = useState<PageResp<Supplier>>({ list: [], total: 0, page: 1, pageSize: 10 })
@@ -168,17 +169,19 @@ export default function SupplierList() {
             <Select.Option value="DISABLED">禁用</Select.Option>
           </Select>
         </Space>
-        <Button
-          type="primary"
-          icon={<IconPlus />}
-          onClick={() => {
-            setEditing(null)
-            form.resetFields()
-            setEditOpen(true)
-          }}
-        >
-          新增供应商
-        </Button>
+        {canManageSuppliers && (
+          <Button
+            type="primary"
+            icon={<IconPlus />}
+            onClick={() => {
+              setEditing(null)
+              form.resetFields()
+              setEditOpen(true)
+            }}
+          >
+            新增供应商
+          </Button>
+        )}
       </div>
       {loadError ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
@@ -211,7 +214,7 @@ export default function SupplierList() {
               canManageAccounts && <Button key="accounts" size="mini" type="text" onClick={() => setAccTarget(r)}>
                 账号管理
               </Button>,
-              <Button
+              canManageSuppliers && <Button
                 key="edit"
                 size="mini"
                 type="text"
@@ -223,7 +226,7 @@ export default function SupplierList() {
               >
                 编辑
               </Button>,
-              <Popconfirm
+              canManageSuppliers && <Popconfirm
                 key="status"
                 title={r.status === 'ACTIVE' ? '禁用后其所有账号无法登录，确认？' : '确认启用？'}
                 onOk={() => toggleStatus(r)}
@@ -238,7 +241,7 @@ export default function SupplierList() {
                   {r.status === 'ACTIVE' ? '禁用' : '启用'}
                 </Button>
               </Popconfirm>,
-              canDelete && (
+              canManageSuppliers && canDelete && (
                 <Popconfirm
                   key="delete"
                   title="删除后不可恢复；存在任何供应商账号或关联项目时无法删除。确认？"

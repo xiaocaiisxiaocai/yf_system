@@ -33,13 +33,16 @@ function Authenticated({ children }: { children: JSX.Element }) {
   return token ? children : <Navigate to="/login" state={{ from: `${loc.pathname}${loc.search}` }} replace />
 }
 
-function Guard({ children, menu, permission }: { children: JSX.Element; menu?: string; permission?: string }) {
+export function Guard({ children, menu, permission, anyPermission }: { children: JSX.Element; menu?: string; permission?: string; anyPermission?: string[] }) {
   const { token, mustChangePassword, menus, permissions } = useAuth()
   const loc = useLocation()
   if (!token) return <Navigate to="/login" state={{ from: `${loc.pathname}${loc.search}` }} replace />
   if (mustChangePassword) return <Navigate to="/change-password" replace />
   if (menu && !menus.includes(menu)) return <Navigate to="/" replace />
   if (permission && !permissions.includes(permission)) {
+    return <Result status="403" title="无操作权限" subTitle="当前账号仅有此菜单权限，请联系管理员分配相应操作权限。" />
+  }
+  if (anyPermission && !anyPermission.some((item) => permissions.includes(item))) {
     return <Result status="403" title="无操作权限" subTitle="当前账号仅有此菜单权限，请联系管理员分配相应操作权限。" />
   }
   return children
@@ -108,7 +111,7 @@ export default function App() {
           <Route path="profile" element={<Profile />} />
           <Route path="projects" element={<Guard menu="project:list"><ProjectList /></Guard>} />
           <Route path="projects/:id" element={<Guard menu="project:list"><ProjectDetail /></Guard>} />
-          <Route path="suppliers" element={<Guard menu="supplier:list" permission="supplier:manage"><SupplierList /></Guard>} />
+          <Route path="suppliers" element={<Guard menu="supplier:list" anyPermission={['supplier:manage', 'supplier:account']}><SupplierList /></Guard>} />
           <Route path="org/users" element={<Guard menu="org:user" permission="user:manage"><UserList /></Guard>} />
           <Route path="org/depts" element={<Guard menu="org:dept"><DeptManage /></Guard>} />
           <Route path="rbac/roles" element={<Guard menu="rbac:role" permission="role:manage"><RoleList /></Guard>} />

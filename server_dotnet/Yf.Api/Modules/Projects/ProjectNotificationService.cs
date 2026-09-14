@@ -6,6 +6,8 @@ namespace Yf.Api.Modules.Projects;
 
 internal static class ProjectNotificationService
 {
+    internal const string SupersededAcceptanceMailReason = "验收申请已失效或收件人已无验收权限，通知已取消";
+
     internal static async Task EnqueueMessageAsync(
         MySqlConnection conn,
         MySqlTransaction tx,
@@ -66,6 +68,27 @@ internal static class ProjectNotificationService
             throw new InvalidOperationException("项目提交通知的确认方必须为公司内部");
         }
 
+        var latestSubmissionId = action is "SUBMIT" or "CONFIRM" or "REJECT" or "WITHDRAW"
+            ? await LatestSubmissionIdAsync(conn, tx, project.Id, ct)
+            : null;
+        if (action == "SUBMIT")
+        {
+            await EnqueuePendingAcceptanceAsync(
+                conn,
+                tx,
+                project,
+                latestSubmissionId ?? throw new InvalidOperationException("项目提交通知缺少提交记录"),
+                actor,
+                baseUrl,
+                audit,
+                ct);
+            return;
+        }
+        if (action is "CONFIRM" or "REJECT" or "WITHDRAW")
+        {
+            await CancelPendingAcceptanceAsync(conn, tx, project.Id, SupersededAcceptanceMailReason, ct);
+        }
+
         var sideLine = confirmSide switch
         {
             "COMPANY" => "\n确认方：公司",
@@ -111,6 +134,151 @@ internal static class ProjectNotificationService
             ct,
             audit);
     }
+
+    internal static async Task EnqueuePendingAcceptanceAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        ProjectRow project,
+        ulong latestSubmissionId,
+        CurrentUser submitter,
+        string baseUrl,
+        AuditService audit,
+        CancellationToken ct)
+    {
+        if (!await NotificationsEnabledAsync(conn, tx, ct))
+        {
+            return;
+        }
+
+        var reviewers = await ProjectReviewerService.ListAsync(conn, tx, project, ct);
+        var targetUrl = ProjectUrl(baseUrl, project.Id, "activity");
+        var subject = $"[协作平台] 项目「{project.Name}」已提交验收";
+        var body = $"项目：{project.Name}\n结果：已提交验收\n确认方：公司\n操作人：工号 {submitter.EmployeeNo}\n\n请登录平台查看：{targetUrl}\n\n（本邮件由系统自动发送）";
+        var seenEmails = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var reviewer in reviewers)
+        {
+            if (reviewer.Id == submitter.Id)
+            {
+                continue;
+            }
+            if (string.IsNullOrWhiteSpace(reviewer.Email))
+            {
+                await WriteMissingEmailAuditAsync(conn, tx, audit, "PROJECT_SUBMITTED", reviewer, ct);
+                continue;
+            }
+            if (!seenEmails.Add(reviewer.Email)) continue;
+
+            const string insert = """
+                INSERT INTO email_outbox
+                    (event_type,project_id,dedupe_key,recipient_user_id,recipient_email,
+                     subject,body,status,retry_count,next_attempt_at,last_error,sent_at,created_at)
+                VALUES
+                    ('PROJECT_SUBMITTED',@ProjectId,@DedupeKey,@RecipientUserId,@RecipientEmail,
+                     @Subject,@Body,'PENDING',0,NULL,NULL,NULL,UTC_TIMESTAMP(3))
+                ON DUPLICATE KEY UPDATE
+                    event_type=IF(sent_at IS NULL AND status='CANCELLED',VALUES(event_type),event_type),
+                    project_id=IF(sent_at IS NULL AND status='CANCELLED',VALUES(project_id),project_id),
+                    recipient_user_id=IF(sent_at IS NULL AND status='CANCELLED',VALUES(recipient_user_id),recipient_user_id),
+                    recipient_email=IF(sent_at IS NULL AND status='CANCELLED',VALUES(recipient_email),recipient_email),
+                    subject=IF(sent_at IS NULL AND status='CANCELLED',VALUES(subject),subject),
+                    body=IF(sent_at IS NULL AND status='CANCELLED',VALUES(body),body),
+                    retry_count=IF(sent_at IS NULL AND status='CANCELLED',0,retry_count),
+                    next_attempt_at=IF(sent_at IS NULL AND status='CANCELLED',NULL,next_attempt_at),
+                    last_error=IF(sent_at IS NULL AND status='CANCELLED',NULL,last_error),
+                    status=IF(sent_at IS NULL AND status='CANCELLED','PENDING',status)
+                """;
+            await conn.ExecuteAsync(new CommandDefinition(
+                insert,
+                new
+                {
+                    ProjectId = project.Id,
+                    DedupeKey = AcceptanceDedupeKey(project.Id, latestSubmissionId, reviewer.Id),
+                    RecipientUserId = reviewer.Id,
+                    RecipientEmail = reviewer.Email,
+                    Subject = subject,
+                    Body = body,
+                },
+                tx,
+                cancellationToken: ct));
+        }
+    }
+
+    internal static string AcceptanceDedupeKey(ulong projectId, ulong submissionId, ulong recipientId) =>
+        $"project-acceptance:{projectId}:{submissionId}:{recipientId}";
+
+    internal static bool TryParseAcceptanceDedupeKey(
+        string? value,
+        out ulong projectId,
+        out ulong submissionId,
+        out ulong recipientId)
+    {
+        projectId = 0;
+        submissionId = 0;
+        recipientId = 0;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+        var parts = value.Split(':');
+        return parts.Length == 4
+            && parts[0] == "project-acceptance"
+            && ulong.TryParse(parts[1], out projectId)
+            && ulong.TryParse(parts[2], out submissionId)
+            && ulong.TryParse(parts[3], out recipientId);
+    }
+
+    internal static async Task<bool> IsCurrentPendingAcceptanceAsync(
+        MySqlConnection conn,
+        MySqlTransaction? tx,
+        ulong projectId,
+        ulong submissionId,
+        ulong recipientId,
+        CancellationToken ct)
+    {
+        var project = await conn.QuerySingleOrDefaultAsync<ProjectRow>(new CommandDefinition(
+            """
+            SELECT id AS Id,name AS Name,supplier_id AS SupplierId,status AS Status,
+                   confirm_side AS ConfirmSide,created_by AS CreatedBy,
+                   created_at AS CreatedAt,updated_at AS UpdatedAt
+            FROM projects WHERE id=@ProjectId
+            """,
+            new { ProjectId = projectId },
+            tx,
+            cancellationToken: ct));
+        if (project is null
+            || project.Status != ProjectStatuses.PendingConfirmation
+            || project.ConfirmSide != ProjectWorkflowRules.InternalAcceptanceSide)
+        {
+            return false;
+        }
+        var latestSubmissionId = await LatestSubmissionIdAsync(conn, tx, projectId, ct);
+        if (latestSubmissionId != submissionId)
+        {
+            return false;
+        }
+        var reviewers = await ProjectReviewerService.ListAsync(conn, tx, project, ct);
+        return reviewers.Any(reviewer => reviewer.Id == recipientId);
+    }
+
+    internal static Task<int> CancelPendingAcceptanceAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        ulong projectId,
+        string reason,
+        CancellationToken ct) =>
+        // A SENDING row may already have crossed the SMTP side-effect boundary.
+        // Its worker must record the accepted/failure result; an expired lease is
+        // re-claimed later and cancelled by the worker's current-request check.
+        conn.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE email_outbox
+            SET status='CANCELLED',next_attempt_at=NULL,last_error=@Reason
+            WHERE project_id=@ProjectId AND event_type='PROJECT_SUBMITTED'
+              AND sent_at IS NULL AND status IN ('PENDING','FAILED')
+            """,
+            new { ProjectId = projectId, Reason = reason },
+            tx,
+            cancellationToken: ct));
 
     internal static async Task<IReadOnlyList<UserRow>> ParticipantsAsync(
         MySqlConnection conn,
@@ -162,13 +330,7 @@ internal static class ProjectNotificationService
         CancellationToken ct,
         AuditService? audit = null)
     {
-        var enabledValue = await conn.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(
-            "SELECT cfg_value FROM system_configs WHERE cfg_key = 'notify.enabled'",
-            transaction: tx,
-            cancellationToken: ct));
-        if (enabledValue is not null
-            && !enabledValue.Trim().Equals("true", StringComparison.OrdinalIgnoreCase)
-            && enabledValue.Trim() != "1")
+        if (!await NotificationsEnabledAsync(conn, tx, ct))
         {
             return;
         }
@@ -218,22 +380,7 @@ internal static class ProjectNotificationService
                 {
                     continue;
                 }
-                await audit.WriteAsync(
-                    conn,
-                    tx,
-                    null,
-                    "EMAIL_SKIPPED_MISSING_EMAIL",
-                    "user",
-                    recipient.Id,
-                    new
-                    {
-                        eventType,
-                        reason = "RECIPIENT_EMAIL_MISSING",
-                        employeeNo = recipient.EmployeeNo,
-                        realName = recipient.RealName,
-                    },
-                    null,
-                    ct);
+                await WriteMissingEmailAuditAsync(conn, tx, audit, eventType, recipient, ct);
                 continue;
             }
             if (!seenEmails.Add(recipient.Email))
@@ -277,6 +424,55 @@ internal static class ProjectNotificationService
     }
 
     private static string OppositeSide(CurrentUser actor) => actor.IsInternal ? "SUPPLIER" : "COMPANY";
+
+    private static async Task<bool> NotificationsEnabledAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        CancellationToken ct)
+    {
+        var enabledValue = await conn.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(
+            "SELECT cfg_value FROM system_configs WHERE cfg_key = 'notify.enabled'",
+            transaction: tx,
+            cancellationToken: ct));
+        return enabledValue is null
+            || enabledValue.Trim().Equals("true", StringComparison.OrdinalIgnoreCase)
+            || enabledValue.Trim() == "1";
+    }
+
+    private static Task WriteMissingEmailAuditAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        AuditService audit,
+        string eventType,
+        UserRow recipient,
+        CancellationToken ct) =>
+        audit.WriteAsync(
+            conn,
+            tx,
+            null,
+            "EMAIL_SKIPPED_MISSING_EMAIL",
+            "user",
+            recipient.Id,
+            new
+            {
+                eventType,
+                reason = "RECIPIENT_EMAIL_MISSING",
+                employeeNo = recipient.EmployeeNo,
+                realName = recipient.RealName,
+            },
+            null,
+            ct);
+
+    private static Task<ulong?> LatestSubmissionIdAsync(
+        MySqlConnection conn,
+        MySqlTransaction? tx,
+        ulong projectId,
+        CancellationToken ct) =>
+        conn.QuerySingleAsync<ulong?>(new CommandDefinition(
+            "SELECT MAX(id) FROM project_status_logs WHERE project_id=@ProjectId AND action='SUBMIT'",
+            new { ProjectId = projectId },
+            tx,
+            cancellationToken: ct));
 
     private static string SideUserType(string side) => side == "SUPPLIER" ? "SUPPLIER" : "INTERNAL";
 

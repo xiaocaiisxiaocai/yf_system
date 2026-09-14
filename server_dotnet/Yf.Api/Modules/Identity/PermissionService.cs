@@ -52,6 +52,26 @@ public sealed class PermissionService
         await EnsureGrantableAsync(conn, tx, actor, ids, ct);
     }
 
+    public async Task<IReadOnlySet<ulong>> GetManageableRoleIdsAsync(MySqlConnection conn, MySqlTransaction? tx, CurrentUser actor, IReadOnlyCollection<ulong> roleIds, CancellationToken ct)
+    {
+        AccessService.RequireInternal(actor);
+        var distinct = roleIds.Distinct().ToArray();
+        if (distinct.Length == 0) return new HashSet<ulong>();
+        if (await AccessService.IsSystemAdminAsync(conn, tx, actor.Id, ct))
+            return (await conn.QueryAsync<ulong>(new CommandDefinition("SELECT id FROM roles WHERE id IN @distinct", new { distinct }, tx, cancellationToken: ct))).ToHashSet();
+        var owned = (await GetCodesAsync(conn, tx, actor.Id, ct)).ToHashSet(StringComparer.Ordinal);
+        var manageable = await conn.QueryAsync<ulong>(new CommandDefinition("""
+            SELECT r.id FROM roles r
+            WHERE r.id IN @distinct
+              AND NOT(r.is_built_in=1 AND r.name='系统管理员')
+              AND NOT EXISTS(
+                  SELECT 1 FROM role_permissions rp
+                  JOIN permissions p ON p.id=rp.permission_id
+                  WHERE rp.role_id=r.id AND p.code NOT IN @owned)
+            """, new { distinct, owned = owned.ToArray() }, tx, cancellationToken: ct));
+        return manageable.ToHashSet();
+    }
+
     public async Task EnsureManageUserAsync(MySqlConnection conn, MySqlTransaction tx, CurrentUser actor, ulong userId, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);

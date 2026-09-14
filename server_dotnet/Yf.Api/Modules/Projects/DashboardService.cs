@@ -66,7 +66,8 @@ internal sealed class DashboardService
         await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
         var canReceivePendingAcceptance = ProjectWorkflowRules.CanReceivePendingAcceptance(
             current,
-            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
+            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct))
+            && await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:list", ct);
         if (!canReceivePendingAcceptance)
         {
             await tx.CommitAsync(ct);
@@ -113,7 +114,8 @@ internal sealed class DashboardService
         var projectIds = projects.Select(project => project.Id).ToArray();
         var canConfirm = ProjectWorkflowRules.CanReceivePendingAcceptance(
             current,
-            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
+            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct))
+            && await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:list", ct);
         var unreadMessages = 0UL;
         var recentMessages = Array.Empty<object>();
         if (projectIds.Length > 0)
