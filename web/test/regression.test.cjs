@@ -120,6 +120,42 @@ test('personal profile submits only own email and keeps password change in the s
   await act(async () => renderer.unmount())
 })
 
+for (const [page, formIndex] of [['ChangePassword', 0], ['Profile', 1]]) {
+  test(`${page} rejects the current password without submitting or ending the session`, async () => {
+    const errors = []
+    const calls = []
+    const pageArco = new Proxy({
+      ...arco,
+      Message: { ...arco.Message, error: (message) => errors.push(message) },
+    }, { get: (obj, key) => obj[key] ?? component(key) })
+    const Page = loadTs(`src/pages/${page}.tsx`, {
+      '@arco-design/web-react': pageArco,
+      '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+      'react-router-dom': { useNavigate: () => () => calls.push('navigate') },
+      '../components/AuthShell': { default: component('AuthShell'), __esModule: true },
+      '../api/client': {
+        __esModule: true,
+        default: { put: async () => calls.push('put') },
+        withAuthLock: async (action) => action(),
+      },
+      '../store/auth': { useAuth: () => ({
+        mustChangePassword: true,
+        user: { id: 1, employeeNo: 'test', realName: '测试', userType: 'INTERNAL' },
+        logout: () => calls.push('logout'),
+      }) },
+    }).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)) })
+    await act(async () => renderer.root.findAllByType('Form')[formIndex].props.onSubmit({
+      oldPassword: 'Unchanged#2026', newPassword: 'Unchanged#2026', confirm: 'Unchanged#2026',
+    }))
+    assert.deepEqual(errors, ['新密码不能与当前密码相同'])
+    assert.deepEqual(calls, [])
+    assert.ok(renderer.root.findAllByType('Form')[formIndex])
+    await act(async () => renderer.unmount())
+  })
+}
+
 test('SAA branding is wired to the application logo and favicon', () => {
   const root = path.resolve(__dirname, '..')
   const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8')

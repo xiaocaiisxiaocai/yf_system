@@ -182,6 +182,8 @@ public sealed class IdentityService(
         var user = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(UserSelect + " WHERE id=@id FOR UPDATE", new { id = current.Id }, tx, cancellationToken: ct)) ?? throw ApiException.NotFound();
         if (user.Status != "ACTIVE") throw ApiException.Forbidden();
         if (!await PasswordService.VerifyAsync(request.OldPassword, user.PasswordHash, ct)) throw ApiException.BadRequest("原密码错误");
+        if (string.Equals(request.OldPassword, request.NewPassword, StringComparison.Ordinal))
+            throw ApiException.BadRequest("新密码不能与当前密码相同");
         PasswordService.Validate(request.NewPassword);
         var hash = await PasswordService.HashAsync(request.NewPassword, ct);
         await conn.ExecuteAsync(new CommandDefinition("UPDATE users SET password_hash=@hash,must_change_password=0,failed_login_attempts=0,locked_until=NULL,updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { hash, id = current.Id }, tx, cancellationToken: ct));

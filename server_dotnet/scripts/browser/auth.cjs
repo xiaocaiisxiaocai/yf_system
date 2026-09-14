@@ -6,7 +6,7 @@ const ROOT=process.env.YF_PROJECT_ROOT;
 const OUT=process.env.YF_BROWSER_EVIDENCE_DIR;
 const state=JSON.parse(fs.readFileSync(path.join(OUT,'state.private.json'),'utf8'));
 const checks=[];
-let browser,page;
+let browser,page,initialLogin;
 async function check(name,action){await action();checks.push({name,status:'pass'});console.log('PASS '+name);fs.writeFileSync(path.join(OUT,'browser-results.json'),JSON.stringify({checks},null,2));}
 const {login}=require(process.env.YF_BROWSER_SUPPORT_DIR+'/ui-lib.cjs');
 (async()=>{
@@ -16,10 +16,24 @@ const {login}=require(process.env.YF_BROWSER_SUPPORT_DIR+'/ui-lib.cjs');
   page=await context.newPage();
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await check('管理员工号密码直登并进入首次改密',async()=>{
-   await login(page,'admin',state.initialPassword);await page.waitForURL('**/change-password');
+   initialLogin=await login(page,'admin',state.initialPassword);await page.waitForURL('**/change-password');
    await page.getByText('首次登录，请先修改初始密码',{exact:true}).waitFor();
   });
   const changed=state.adminChangedPassword;
+  await check('首次改密拒绝相同密码，直接请求也无法解除首次改密限制',async()=>{
+   let requests=0;const handler=r=>{if(r.method()==='PUT'&&r.url().endsWith('/auth/password'))requests++;};page.on('request',handler);
+   for(const name of ['原密码','新密码','确认新密码'])await page.getByRole('textbox',{name,exact:true}).fill(state.initialPassword);
+   await page.getByRole('button',{name:'确认修改',exact:true}).click();
+   await page.getByText('新密码不能与当前密码相同',{exact:true}).waitFor();
+   assert.equal(requests,0);page.off('request',handler);
+   const rejected=await context.request.put(state.base+'/api/v1/auth/password',{
+    headers:{Origin:state.base,Authorization:'Bearer '+initialLogin.accessToken},
+    data:{oldPassword:state.initialPassword,newPassword:state.initialPassword}
+   });
+   assert.equal(rejected.status(),400);assert.match(await rejected.text(),/新密码不能与当前密码相同/);
+   await page.reload();await page.waitForURL('**/change-password');
+   await page.getByText('首次登录，请先修改初始密码',{exact:true}).waitFor();
+  });
   await check('首次改密、旧会话撤销和新密码重新登录',async()=>{
    await page.getByRole('textbox',{name:'原密码',exact:true}).fill(state.initialPassword);
    await page.getByRole('textbox',{name:'新密码',exact:true}).fill(changed);

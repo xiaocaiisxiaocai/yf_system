@@ -31,6 +31,10 @@ export default function ChangePassword() {
       Message.error('两次输入的新密码不一致')
       return
     }
+    if (v.newPassword === v.oldPassword) {
+      Message.error('新密码不能与当前密码相同')
+      return
+    }
     setLoading(true)
     try {
       await withAuthLock(async () => {

@@ -10,6 +10,46 @@ namespace Yf.Api.Tests;
 
 public sealed class LoginThrottleTests
 {
+    [Theory(Timeout = 120_000)]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UnchangedPasswordIsRejectedWithoutChangingAccountOrSessions(bool firstLogin)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await LoginDatabase.CreateAsync(ct);
+        await scope.LoginAsync("target", scope.Password, "192.0.2.240", ct);
+        await scope.ExecuteAsync($"UPDATE users SET must_change_password={(firstLogin ? 1 : 0)},failed_login_attempts=3 WHERE id=1", ct);
+        await using var conn = await scope.OpenAsync(ct);
+        async Task<string> SnapshotAsync()
+        {
+            var row = await conn.QuerySingleAsync(new CommandDefinition("""
+                SELECT password_hash,must_change_password,failed_login_attempts,locked_until,updated_at,
+                  (SELECT COUNT(*) FROM audit_logs) AS audit_count,
+                  (SELECT COUNT(*) FROM refresh_tokens WHERE user_id=1 AND revoked=0) AS sessions
+                FROM users WHERE id=1
+                """, cancellationToken: ct));
+            return JsonSerializer.Serialize((IDictionary<string, object>)row);
+        }
+        var before = await SnapshotAsync();
+        var user = new CurrentUser(1, "target", "INTERNAL", null);
+
+        var error = await Assert.ThrowsAsync<ApiException>(() => scope.Service().ChangePasswordAsync(
+            user, new(scope.Password, scope.Password), ct));
+
+        Assert.Equal(400, error.Status);
+        Assert.Equal("新密码不能与当前密码相同", error.Message);
+        // Keep credentials out of failure output while checking every persisted field.
+        Assert.True(before == await SnapshotAsync(), "Rejected change must leave account, audit and sessions unchanged");
+        Assert.Equal(1, await scope.SessionsAsync(1, ct));
+        Assert.Equal(firstLogin, (await scope.LoginAsync("target", scope.Password, "192.0.2.241", ct)).MustChangePassword);
+
+        const string replacement = "Different#2026";
+        await scope.Service().ChangePasswordAsync(user, new(scope.Password, replacement), ct);
+        Assert.Equal(0, await scope.SessionsAsync(1, ct));
+        await scope.RejectAsync("target", scope.Password, "192.0.2.242", ct);
+        Assert.False((await scope.LoginAsync("target", replacement, "192.0.2.243", ct)).MustChangePassword);
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task LoginWithoutCaptchaAcceptsExistingLongPasswordWithoutForcingReset()
     {

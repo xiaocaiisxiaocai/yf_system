@@ -21,7 +21,7 @@ const {fs,assert,OUT,s,f,save,record,login,api,track}=require(process.env.YF_BRO
  const u=f.users.member;const c=await b.newContext({viewport:{width:1440,height:1000}});p=await c.newPage();track(p,'profile');
  const fresh=await login(p,u.username,u.changedPassword);u.token=fresh.accessToken;save();await p.waitForURL(s.base+'/');
  await p.goto(s.base+'/profile');await p.getByRole('button',{name:'修改密码',exact:true}).waitFor();
- await record('普通改密表单弱密码/不一致校验阻止提交',async()=>{
+ await record('普通改密表单弱密码/不一致/相同密码校验阻止提交',async()=>{
   let requests=0;const handler=r=>{if(r.method()==='PUT'&&r.url().endsWith('/auth/password'))requests++;};p.on('request',handler);
   await p.getByLabel('当前密码',{exact:true}).fill(u.changedPassword);
   await p.getByLabel('新密码',{exact:true}).fill('short');await p.getByLabel('确认新密码',{exact:true}).fill('short');
@@ -31,7 +31,12 @@ const {fs,assert,OUT,s,f,save,record,login,api,track}=require(process.env.YF_BRO
   await p.getByLabel('新密码',{exact:true}).fill('Normal!Q7v9-2026');
   await p.getByLabel('确认新密码',{exact:true}).fill('Mismatch!Q7v9-26');
   await p.getByRole('button',{name:'修改密码',exact:true}).click();await p.getByText('两次输入的新密码不一致',{exact:true}).waitFor();
+  await p.getByLabel('新密码',{exact:true}).fill(u.changedPassword);await p.getByLabel('确认新密码',{exact:true}).fill(u.changedPassword);
+  await p.getByRole('button',{name:'修改密码',exact:true}).click();await p.getByText('新密码不能与当前密码相同',{exact:true}).waitFor();
   assert.equal(requests,0);p.off('request',handler);
+  const rejected=await api(c,'PUT','/auth/password',{oldPassword:u.changedPassword,newPassword:u.changedPassword},u.token,400);
+  assert.match(await rejected.text(),/新密码不能与当前密码相同/);
+  await api(c,'GET','/auth/profile',undefined,u.token);
  });
  await record('个人资料普通改密成功并重新登录',async()=>{
   const next='Normal!Q7v9-2026';await p.getByLabel('新密码',{exact:true}).fill(next);await p.getByLabel('确认新密码',{exact:true}).fill(next);
