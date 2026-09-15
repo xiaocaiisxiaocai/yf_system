@@ -2,12 +2,21 @@ import { build } from 'vite'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { patchPptxRenderer } from '../vendor/vue-office-pptx/patch-renderer.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const output = path.resolve(root, '.pptx-preview-build')
 if (path.dirname(output) !== path.resolve(root)) throw new Error('Invalid viewer build directory')
 await build({
   configFile: false, root, publicDir: false, logLevel: 'warn',
+  plugins: [{
+    name: 'pptx-drawingml-text-layout',
+    transform(code, id) {
+      if (id.replaceAll('\\', '/').endsWith('/pptx-preview/dist/pptx-preview.es.js')) {
+        return { code: patchPptxRenderer(code), map: null }
+      }
+    },
+  }],
   build: {
     outDir: output, emptyOutDir: true, minify: true,
     lib: { entry: path.join(root, 'vendor/vue-office-pptx/viewer.js'), name: 'YfPptxPreview', formats: ['iife'], fileName: () => 'viewer.js', cssFileName: 'viewer' },

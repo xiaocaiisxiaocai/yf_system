@@ -34,3 +34,9 @@ React 的 `PptxPreview` 通过现有鉴权接口读取 PPTX 字节，再传入�
 依据：[Microsoft FillReference 定义](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.fillreference)、[Apache POI 的 DrawingML 预设几何](https://github.com/apache/poi/blob/trunk/poi/src/main/resources/org/apache/poi/sl/draw/geom/presetShapeDefinitions.xml)。不修改 npm 内核或服务器原文件。
 
 用用户实际上传的 6 页文件逐页验证，确认圆形、单边大括号、8 个渐变和宋体主题字体恢复；另回归原源码包 13 页演示文件在桌面与窄屏的图片、翻页、缩放。几何、颜色与预览隔离的 14 项针对性测试通过。用户业务文件不纳入 Git，截图及复核记录仅存于本地 `.runlogs/pptx-fidelity-20260915/`。
+
+## 文本位置修正
+
+`patch-renderer.mjs` 在构建时修正固定版本内核的文本排版：去除人为增加的 `20% × 字号` 段落上间距，将缺省文字框内边距恢复为左右 7.2、上下 3.6 磅，保留显式内边距、段落间距、形状位置和大小的小数精度。默认单行高度按 1.2 倍字号处理，显式行距仍优先。构建会验证每个补丁锚点；升级依赖后若内核变化，构建失败并要求复核，不静默丢失修正。npm 安装文件和用户原 PPTX 均不修改。
+
+针对用户反馈的搜索框，使用 PowerPoint 只读打开原文件并导出对照图、读取文本框测量值。在浏览器 78%、100%、150% 缩放下，标题及搜索文字段落左上角相对 PowerPoint 坐标偏差均小于 0.05 磅。此验证针对位置与间距，不代表所有字体的像素栅格化完全相同。测试覆盖默认/显式/零内边距、段落间距、小数坐标和依赖补丁失效检测；证据位于 `.runlogs/pptx-text-layout-20260915/`。
