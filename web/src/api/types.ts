@@ -46,6 +46,7 @@ export interface Message {
   id: number
   projectId: number
   content: string
+  images?: { id: number; name: string; sizeBytes: number; mimeType: string }[]
   senderId: number
   senderName: string
   senderType: 'INTERNAL' | 'SUPPLIER'

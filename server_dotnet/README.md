@@ -15,7 +15,7 @@
 
 项目验收统一由公司内部处理。内部人员或供应商账号获得 `project:submit` 后，可将进行中的项目提交内部验收；确认／驳回需要内部账号、`project:confirm` 和项目访问权限。供应商账号不能验收，即使存在历史遗留的确认权限也会被后端拒绝。提交与验收可以由不同内部人员协作，也不额外强制二人分离。详细规则及升级说明见[公司内部验收调整说明](../docs/公司内部验收调整说明-2026-09-14.md)。
 
-后续业务逻辑复查补齐了申请版本、防止无验收人提交、通知与授权范围一致性，以及角色委派入口。确认、驳回、撤回必须带所查看申请的 `expectedSubmissionId`；旧版本返回 409。当前数据库版本为 v4，已有部署需要停写、备份并显式迁移。见[业务逻辑复查与修复记录](../docs/业务逻辑复查与修复记录-2026-09-14.md)。
+后续业务逻辑复查补齐了申请版本、防止无验收人提交、通知与授权范围一致性，以及角色委派入口。确认、驳回、撤回必须带所查看申请的 `expectedSubmissionId`；旧版本返回 409。当前数据库版本为 v5，已有部署需要停写、备份并显式迁移。见[业务逻辑复查与修复记录](../docs/业务逻辑复查与修复记录-2026-09-14.md)。
 
 采用 ASP.NET Core Minimal API；按业务模块拆分，数据库访问使用参数化 SQL。沿用现有业务数据，后续接口、数据库升级与测试由 .NET 独立维护；Rust 源码仅保留归档参考。
 
@@ -66,6 +66,8 @@ dotnet run --project .\Yf.Api -- --migrate-database
 升级命令使用数据库命名锁防止同时迁移，校验业务表完整性，并建立 `yf_schema_migrations` 独立历史。第 16 版缺失的刷新会话族字段、数据回填与索引由 .NET 补齐；第 17 版直接接管；同时撤销供应商角色的内部管理授权并记录审计。步骤可在 DDL 中断后重跑，重复执行不删除业务数据。启动拒绝未知版本或被修改的历史。后续升级在 `Infrastructure/SchemaMigrations.cs` 中维护。
 
 在线文件预览支持 PDF、XLS、XLSX、PPTX，以及 PNG、JPG、JPEG、GIF、WebP、BMP 图片，统一使用 `GET /api/v1/files/{id}/content`，并受 50 MiB 单文件上限、`file:preview` 权限和项目可见范围约束。图片响应按扩展名返回规范 MIME 类型，不信任历史文件记录中的 MIME。视频预览支持 MP4、WebM 和 OGV，不整文件缓冲，也不使用文档/图片预览上限；浏览器先用正常 Bearer 会话调用 `POST /api/v1/files/{id}/media-session`，接口返回同源 `url` 和 300 秒有效期并设置仅限该文件媒体路径的 HttpOnly Cookie。随后原生 `<video>` 对 `GET /api/v1/files/{id}/media` 发起 Range 请求，每次请求都重新验证登录会话、账号状态、预览权限和项目范围。前端可在有效期过半时续签，媒体 URL 保持不变。
+
+留言截图由 schema v5 的 `message_images` 表管理，文件存放在私有存储根目录的 `message-images` 子目录，不发布到 `wwwroot`。`POST /api/v1/projects/{id}/messages` 同时支持原 JSON 正文和 multipart 的 `content` + 重复 `images`；每条最多 9 张、图片合计最多 50 MiB，单张还受系统参数 `upload.max_file_size` 的较小值约束。只接受 PNG、JPEG、GIF、WebP、BMP，并同时校验扩展名和文件签名。读取使用认证接口 `GET /api/v1/messages/{messageId}/images/{imageId}`，每次重新校验正常留言和项目可见范围，不使用 `file:preview` 权限。
 
 新库的默认上传白名单已包含 PPTX、MP4、WebM、OGV 和上述六种图片格式。现有库的管理员自定义白名单不会在启动时改写；需要启用这些格式时，先取得具有 `config:manage` 权限的短时访问令牌，再运行 `scripts/append-preview-upload-extensions.ps1`。脚本通过管理 API 只提交 `upload.allowed_exts`，仅补齐缺失类型，并回读核对其他公开系统参数未变化；空白值表示不限制类型，脚本会原样保留并报告 `unrestricted=true`。不要把令牌字面量写入命令历史。
 

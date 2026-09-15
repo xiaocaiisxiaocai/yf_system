@@ -244,7 +244,7 @@ try:
             cursor.execute("SELECT password_hash FROM users WHERE employee_no='admin'")
             check(".NET migration from baseline 16 is repeatable and preserves users", cursor.fetchone()[0] == preserved_hash)
             cursor.execute("SELECT COUNT(*) FROM yf_schema_migrations")
-            check(".NET owns schema version history", cursor.fetchone()[0] == 4)
+            check(".NET owns schema version history", cursor.fetchone()[0] == 5)
             cursor.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='collaboration_reads'")
             check("collaboration read receipt migration creates its additive table", cursor.fetchone()[0] == 1)
             cursor.execute("SELECT session_id FROM refresh_tokens WHERE id=%s", (legacy_token_id,))
@@ -317,7 +317,7 @@ try:
                 "AND target_type='schema' AND target_id='4'"
             )
             check("acceptance notification migration records one auditable rebuild", cursor.fetchone()[0] == 1)
-            cursor.execute("DELETE FROM yf_schema_migrations WHERE version=4")
+            cursor.execute("DELETE FROM yf_schema_migrations WHERE version>=4")
         stale_schema = subprocess.run(["dotnet", str(DLL)], cwd=API, env=env, capture_output=True, timeout=20)
         check("startup refuses an unapplied acceptance notification migration", stale_schema.returncode != 0)
         migration = subprocess.run(["dotnet", str(DLL), "--migrate-database"], cwd=API, env=env, capture_output=True)

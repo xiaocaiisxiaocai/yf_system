@@ -40,6 +40,7 @@ function loadMessagePanel(http, observedIds) {
     '../api/client': http,
     '../store/auth': { useAuth: () => ({ hasPerm: () => false, user: { id: 9 } }) },
     '../api/types': { fmtTime: String },
+    './MessageImages': { MessageImageComposer: component('MessageImageComposer'), MessageImages: component('MessageImages'), pasteMessageImages() {} },
   }
   const filename = path.resolve(__dirname, '../src/components/MessagePanel.tsx')
   const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {

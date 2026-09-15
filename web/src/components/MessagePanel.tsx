@@ -6,6 +6,7 @@ import { IconCheck, IconDelete, IconSend } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from '../store/auth'
 import { type Message as Msg, fmtTime } from '../api/types'
+import { MessageImageComposer, MessageImages, pasteMessageImages } from './MessageImages'
 
 interface Props {
   projectId: number
@@ -67,6 +68,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
   const [loadError, setLoadError] = useState(false)
   const [appendError, setAppendError] = useState(false)
   const [content, setContent] = useState('')
+  const [images, setImages] = useState<File[]>([])
   const [receipt, setReceipt] = useState<{ id: number; readers: Reader[]; unread: Reader[] } | null>(null)
   const [receiptRequest, setReceiptRequest] = useState<{ id: number; loading: boolean; error: boolean } | null>(null)
   const { hasPerm, user } = useAuth()
@@ -93,7 +95,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
   const openReceiptId = useRef<number | null>(null)
   openReceiptId.current = receipt?.id ?? null
 
-  const scopeKey = `${projectId}:${targetId ?? ''}`
+  const scopeKey = `${user?.id ?? ''}:${projectId}:${targetId ?? ''}`
   if (messageScope.current.key !== scopeKey) {
     messageScope.current = { key: scopeKey, generation: messageScope.current.generation + 1 }
   }
@@ -107,6 +109,11 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
 
   const canWrite = hasPerm('message:create') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
   const canDelete = hasPerm('message:delete_any') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
+
+  useEffect(() => {
+    setContent('')
+    setImages([])
+  }, [projectId, user?.id])
 
   const applyReadCounts = useCallback((counts: ReadCounts[]) => {
     const byId = new Map(counts.map((item) => [item.id, item]))
@@ -455,14 +462,23 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
   const send = async () => {
     const draft = content
     const text = draft.trim()
-    if (!text || sendInFlight.current || listLoading.current && loadedMessages.current.length === 0) return
+    const draftImages = images
+    if (!canWrite || (!text && !draftImages.length) || sendInFlight.current || listLoading.current && loadedMessages.current.length === 0) return
     const generation = messageScope.current.generation
     sendInFlight.current = true
     setSending(true)
     try {
-      const response = await http.post<Msg>(`/projects/${projectId}/messages`, { content: text })
+      let body: FormData | { content: string } = { content: text }
+      if (draftImages.length) {
+        const form = new FormData()
+        form.append('content', text)
+        draftImages.forEach(file => form.append('images', file, file.name))
+        body = form
+      }
+      const response = await http.post<Msg>(`/projects/${projectId}/messages`, body)
       if (!mounted.current || generation !== messageScope.current.generation) return
       setContent((current) => current === draft ? '' : current)
+      setImages(current => current.filter(file => !draftImages.includes(file)))
       // The POST returns the committed message. Show it without another list
       // request, and prevent older in-flight reads from replacing this state.
       messageMutations.current += 1
@@ -530,20 +546,25 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
       )}
 
       {canWrite && (
-        <div className="message-composer" style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          <Input.TextArea
-            placeholder="输入留言，Ctrl+Enter 发送"
-            value={content}
-            onChange={(value) => setContent(Array.from(value).slice(0, 4000).join(''))}
-            autoSize={{ minRows: 2, maxRows: 5 }}
-            style={{ flex: 1 }}
-            onKeyDown={(e) => {
-              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') send()
-            }}
-          />
-          <Button type="primary" icon={<IconSend />} onClick={send} disabled={!content.trim() || loading && list.length === 0} loading={sending}>
-            发送
-          </Button>
+        <div className="message-composer message-composer--images" onPaste={event => {
+          if (!sending) pasteMessageImages(event, images, setImages)
+        }}>
+          <div className="message-composer-input-row">
+            <Input.TextArea
+              placeholder="输入留言，Ctrl+Enter 发送"
+              value={content}
+              onChange={(value) => setContent(Array.from(value).slice(0, 4000).join(''))}
+              autoSize={{ minRows: 2, maxRows: 5 }}
+              style={{ flex: 1 }}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') send()
+              }}
+            />
+            <Button type="primary" icon={<IconSend />} onClick={send} disabled={(!content.trim() && !images.length) || loading && list.length === 0} loading={sending}>
+              发送
+            </Button>
+          </div>
+          <MessageImageComposer files={images} onChange={setImages} disabled={sending} />
         </div>
       )}
 
@@ -587,6 +608,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
                       </Typography.Text>
                     </Space>
                     <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{m.content}</div>
+                    {!!m.images?.length && <MessageImages messageId={m.id} images={m.images} />}
                     <div className="message-read-marker" aria-hidden="true" />
                     <div style={{ marginTop: 4 }}>
                       <Popover

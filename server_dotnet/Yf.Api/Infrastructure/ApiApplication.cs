@@ -82,8 +82,11 @@ public static class ApiApplication
                 context.Response.Headers.CacheControl = "private, no-store";
                 context.Response.Headers.ContentSecurityPolicy = "frame-ancestors 'none'";
                 var limit = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
-                if (limit is { IsReadOnly: false } && !(HttpMethods.IsPut(context.Request.Method) && context.Request.Path.Value!.Contains("/chunks/", StringComparison.Ordinal)))
-                    limit.MaxRequestBodySize = 2L * 1024 * 1024;
+                if (limit is { IsReadOnly: false }
+                    && !(HttpMethods.IsPut(context.Request.Method) && context.Request.Path.Value!.Contains("/chunks/", StringComparison.Ordinal)))
+                    limit.MaxRequestBodySize = ProjectsModule.IsMessageImageUpload(context.Request)
+                        ? MessageService.MultipartRequestLimitBytes
+                        : 2L * 1024 * 1024;
             }
             await next(context);
         });

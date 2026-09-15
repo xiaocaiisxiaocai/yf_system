@@ -31,6 +31,7 @@ internal sealed class DashboardService
             $"""
             SELECT m.id AS Id,m.project_id AS ProjectId,p.name AS ProjectName,m.content AS Content,
                    m.sender_id AS SenderId,m.created_at AS CreatedAt,u.real_name AS SenderName,
+                   EXISTS(SELECT 1 FROM message_images mi WHERE mi.message_id=m.id) AS HasImages,
                    EXISTS(SELECT 1 FROM message_reads mr WHERE mr.message_id=m.id AND mr.user_id=@UserId) AS ReadByMe
             FROM messages m
             INNER JOIN projects p ON p.id=m.project_id
@@ -44,7 +45,7 @@ internal sealed class DashboardService
             id = row.Id,
             projectId = row.ProjectId,
             projectName = row.ProjectName,
-            content = string.Concat(row.Content.EnumerateRunes().Take(60)),
+            content = MessagePreview(row.Content, row.HasImages),
             senderName = row.SenderName,
             createdAt = ProjectJson.Utc(row.CreatedAt),
             unread = row.SenderId != current.Id && !row.ReadByMe,
@@ -131,6 +132,7 @@ internal sealed class DashboardService
                 """
                 SELECT m.id AS Id,m.project_id AS ProjectId,m.content AS Content,m.sender_id AS SenderId,
                        m.created_at AS CreatedAt,u.real_name AS SenderName,
+                       EXISTS(SELECT 1 FROM message_images mi WHERE mi.message_id=m.id) AS HasImages,
                        EXISTS(SELECT 1 FROM message_reads mr WHERE mr.message_id=m.id AND mr.user_id=@UserId) AS ReadByMe
                 FROM messages m INNER JOIN users u ON u.id=m.sender_id
                 WHERE m.project_id IN @ProjectIds AND m.status='NORMAL'
@@ -143,7 +145,7 @@ internal sealed class DashboardService
                 id = row.Id,
                 projectId = row.ProjectId,
                 projectName = names.GetValueOrDefault(row.ProjectId),
-                content = string.Concat(row.Content.EnumerateRunes().Take(60)),
+                content = MessagePreview(row.Content, row.HasImages),
                 senderName = row.SenderName,
                 createdAt = ProjectJson.Utc(row.CreatedAt),
                 unread = row.SenderId != current.Id && !row.ReadByMe,
@@ -163,6 +165,9 @@ internal sealed class DashboardService
         };
     }
 
+    private static string MessagePreview(string content, bool hasImages) =>
+        content.Length == 0 && hasImages ? "[图片]" : string.Concat(content.EnumerateRunes().Take(60));
+
     private sealed class RecentMessageRow
     {
         public ulong Id { get; init; }
@@ -172,6 +177,7 @@ internal sealed class DashboardService
         public DateTime CreatedAt { get; init; }
         public string? SenderName { get; init; }
         public bool ReadByMe { get; init; }
+        public bool HasImages { get; init; }
     }
 
     private sealed class DashboardMessageRow
@@ -184,5 +190,6 @@ internal sealed class DashboardService
         public DateTime CreatedAt { get; init; }
         public string? SenderName { get; init; }
         public bool ReadByMe { get; init; }
+        public bool HasImages { get; init; }
     }
 }

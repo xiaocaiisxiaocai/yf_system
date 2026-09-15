@@ -126,6 +126,25 @@ internal sealed class MessageReadRow
     public DateTime ReadAt { get; init; }
 }
 
+internal sealed class MessageImageRow
+{
+    public ulong Id { get; init; }
+    public ulong MessageId { get; init; }
+    public string OriginalName { get; init; } = string.Empty;
+    public string StoredName { get; init; } = string.Empty;
+    public string Ext { get; init; } = string.Empty;
+    public ulong SizeBytes { get; init; }
+    public string MimeType { get; init; } = string.Empty;
+    public string StoragePath { get; init; } = string.Empty;
+    public DateTime CreatedAt { get; init; }
+}
+
+internal sealed record MessageImageDownload(
+    string Path,
+    string OriginalName,
+    string MimeType,
+    ulong SizeBytes);
+
 internal sealed class ActivityRow
 {
     public ulong Id { get; init; }

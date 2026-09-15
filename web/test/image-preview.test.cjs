@@ -76,3 +76,20 @@ test('closing image preview cancels authentication request and ignores late byte
   await act(async () => resolve({ data: new Blob(['late image']) }))
   assert.equal(env.created.length, 0)
 })
+
+test('message image preview requests the supplied authenticated content path', async () => {
+  let requested
+  const env = load({ get: async (path) => {
+    requested = path
+    return { data: new Blob(['message image']) }
+  } })
+  let renderer
+  try {
+    await act(async () => { renderer = create(React.createElement(env.Preview, {
+      contentUrl: '/messages/18/images/7', name: 'message.png',
+    })) })
+    assert.equal(requested, '/messages/18/images/7')
+    assert.equal(env.created.length, 1)
+  } finally { if (renderer) await act(async () => renderer.unmount()) }
+  assert.deepEqual(env.revoked, ['blob:fixture-1'])
+})

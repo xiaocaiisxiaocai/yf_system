@@ -271,15 +271,20 @@ internal sealed class ProjectActivityService(
         CancellationToken ct)
     {
         var message = await conn.QuerySingleOrDefaultAsync<MessageActivityRow>(new CommandDefinition(
-            "SELECT project_id AS ProjectId,content AS Content,created_at AS CreatedAt,deleted_at AS DeletedAt FROM messages WHERE id=@MessageId",
+            """
+            SELECT m.project_id AS ProjectId,m.content AS Content,m.created_at AS CreatedAt,m.deleted_at AS DeletedAt,
+                   EXISTS(SELECT 1 FROM message_images mi WHERE mi.message_id=m.id) AS HasImages
+            FROM messages m WHERE m.id=@MessageId
+            """,
             new { MessageId = messageId }, tx, cancellationToken: ct));
         if (message is null)
         {
             return null;
         }
         var create = audit.Action == "MESSAGE_CREATE";
+        var summary = message.Content.Length == 0 && message.HasImages ? "[图片]" : message.Content;
         return new(message.ProjectId, "MESSAGE", create ? "CREATE" : "DELETE", create ? "发表留言" : "删除留言",
-            create ? Truncate(message.Content) : null, create ? message.CreatedAt : message.DeletedAt ?? audit.CreatedAt,
+            create ? Truncate(summary) : null, create ? message.CreatedAt : message.DeletedAt ?? audit.CreatedAt,
             messageId, $"message:{messageId}:{(create ? "create" : "delete")}");
     }
 
@@ -399,6 +404,7 @@ internal sealed class ProjectActivityService(
         public string Content { get; init; } = string.Empty;
         public DateTime CreatedAt { get; init; }
         public DateTime? DeletedAt { get; init; }
+        public bool HasImages { get; init; }
     }
 
     private sealed class ProjectActivityRevisionRow

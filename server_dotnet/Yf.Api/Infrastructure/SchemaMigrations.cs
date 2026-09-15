@@ -10,12 +10,13 @@ namespace Yf.Api.Infrastructure;
 /// <summary>Explicit, restartable .NET-owned schema upgrades. Startup never changes schema.</summary>
 public static class SchemaMigrations
 {
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
     private const string PreviousBaseline = "m20260910_000016_project_workflow";
     private const string FirstMigrationName = "000001_adopt_schema_sessions_supplier_boundary";
     private const string CollaborationMigrationName = "000002_collaboration_notification_reads";
     private const string InternalAcceptanceMigrationName = "000003_internal_project_acceptance";
     private const string AcceptanceNotificationMigrationName = "000004_versioned_acceptance_notifications";
+    private const string MessageImagesMigrationName = "000005_message_images";
     internal const string InternalAcceptanceCancelledMailReason = "项目验收已调整为公司内部确认，旧供应商确认通知已取消";
     internal const string AcceptanceNotificationRebuiltMailReason = "验收通知已按当前待验收申请和验收人重新生成";
     private const string MigrationTableSql = """
@@ -38,10 +39,28 @@ public static class SchemaMigrations
           CONSTRAINT `fk_collaboration_reads_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """;
+    internal const string MessageImagesTableSql = """
+        CREATE TABLE `message_images` (
+          `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+          `message_id` bigint unsigned NOT NULL,
+          `original_name` varchar(255) NOT NULL,
+          `stored_name` varchar(64) NOT NULL,
+          `ext` varchar(8) NOT NULL,
+          `size_bytes` bigint unsigned NOT NULL,
+          `mime_type` varchar(32) NOT NULL,
+          `storage_path` varchar(512) NOT NULL,
+          `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `uk_message_images_stored_name` (`stored_name`),
+          KEY `idx_message_images_message` (`message_id`,`id`),
+          CONSTRAINT `fk_message_images_message` FOREIGN KEY (`message_id`) REFERENCES `messages` (`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """;
     private static string FirstChecksum => Checksum(FirstMigrationName);
     private static string CollaborationChecksum => Checksum(CollaborationMigrationName);
     private static string InternalAcceptanceChecksum => Checksum(InternalAcceptanceMigrationName);
     private static string AcceptanceNotificationChecksum => Checksum(AcceptanceNotificationMigrationName);
+    private static string MessageImagesChecksum => Checksum(MessageImagesMigrationName);
 
     public static async Task ApplyAsync(AppDb db, CancellationToken ct = default)
     {
@@ -65,6 +84,7 @@ public static class SchemaMigrations
         await ValidatePermissionGateAsync(conn, ct);
         var hasMigrationTable = await HasTableAsync(conn, "yf_schema_migrations", ct);
         var hasCollaborationReads = await HasTableAsync(conn, "collaboration_reads", ct);
+        var hasMessageImages = await HasTableAsync(conn, "message_images", ct);
         MigrationRow[] migrationRows;
         if (hasMigrationTable)
         {
@@ -78,8 +98,12 @@ public static class SchemaMigrations
         }
         if (hasCollaborationReads)
             await SchemaShapeValidator.ValidateTableAsync(conn, "collaboration_reads", CollaborationReadsTableSql, ct);
+        if (hasMessageImages)
+            await SchemaShapeValidator.ValidateTableAsync(conn, "message_images", MessageImagesTableSql, ct);
         if (migrationRows.Any(row => row.Version >= 2) && !hasCollaborationReads)
             throw new InvalidOperationException("Migration history says collaboration reads are applied, but the required table is missing. Restore the matching schema before retrying.");
+        if (migrationRows.Any(row => row.Version >= 5) && !hasMessageImages)
+            throw new InvalidOperationException("Migration history says message images are applied, but the required table is missing. Restore the matching schema before retrying.");
         if (!hasMigrationTable)
             await conn.ExecuteAsync(new CommandDefinition(MigrationTableSql, cancellationToken: ct));
 
@@ -100,6 +124,9 @@ public static class SchemaMigrations
         if (!hasCollaborationReads)
             await conn.ExecuteAsync(new CommandDefinition(CollaborationReadsTableSql, cancellationToken: ct));
         await SchemaShapeValidator.ValidateTableAsync(conn, "collaboration_reads", CollaborationReadsTableSql, ct);
+        if (!hasMessageImages)
+            await conn.ExecuteAsync(new CommandDefinition(MessageImagesTableSql, cancellationToken: ct));
+        await SchemaShapeValidator.ValidateTableAsync(conn, "message_images", MessageImagesTableSql, ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         var supplierGrants = await conn.QueryAsync<SupplierGrant>(new CommandDefinition(
@@ -269,9 +296,12 @@ public static class SchemaMigrations
                 "INSERT INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (4,@name,@checksum,UTC_TIMESTAMP(6))",
                 new { name = AcceptanceNotificationMigrationName, checksum = AcceptanceNotificationChecksum }, tx, cancellationToken: ct));
         }
+        await conn.ExecuteAsync(new CommandDefinition(
+            "INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (5,@name,@checksum,UTC_TIMESTAMP(6))",
+            new { name = MessageImagesMigrationName, checksum = MessageImagesChecksum }, tx, cancellationToken: ct));
         await tx.CommitAsync(ct);
         ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: true);
-        Console.WriteLine("Database is at .NET schema version " + CurrentVersion + ". Pending acceptance records were normalized; no project history was removed.");
+        Console.WriteLine("Database is at .NET schema version " + CurrentVersion + ". Message image storage is available; no project history was removed.");
     }
 
     public static async Task ValidateAsync(MySqlConnection conn, CancellationToken ct)
@@ -281,8 +311,11 @@ public static class SchemaMigrations
         await SchemaShapeValidator.ValidateTableAsync(conn, "yf_schema_migrations", MigrationTableSql, ct);
         ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: true);
         if (!await HasTableAsync(conn, "collaboration_reads", ct))
-            throw new InvalidOperationException("Database schema version 4 is incomplete. Run the matching application migration command before startup.");
+            throw new InvalidOperationException("Database schema version 5 is incomplete. Run the matching application migration command before startup.");
         await SchemaShapeValidator.ValidateTableAsync(conn, "collaboration_reads", CollaborationReadsTableSql, ct);
+        if (!await HasTableAsync(conn, "message_images", ct))
+            throw new InvalidOperationException("Database schema version 5 is incomplete. Run the matching application migration command before startup.");
+        await SchemaShapeValidator.ValidateTableAsync(conn, "message_images", MessageImagesTableSql, ct);
         await SchemaShapeValidator.ValidateBaselineAsync(conn, SchemaShapeValidationMode.Strict, ct);
         await ValidatePermissionGateAsync(conn, ct);
         await ValidateInternalAcceptanceBoundaryAsync(conn, null, ct);
@@ -364,6 +397,7 @@ public static class SchemaMigrations
             new MigrationRow(2, CollaborationMigrationName, CollaborationChecksum),
             new MigrationRow(3, InternalAcceptanceMigrationName, InternalAcceptanceChecksum),
             new MigrationRow(4, AcceptanceNotificationMigrationName, AcceptanceNotificationChecksum),
+            new MigrationRow(5, MessageImagesMigrationName, MessageImagesChecksum),
         };
         if (rows.Length > expected.Length || rows.Where((row, index) => row != expected[index]).Any())
             throw new InvalidOperationException("Unknown or modified .NET migration history; upgrade this application or restore the correct migration definitions.");

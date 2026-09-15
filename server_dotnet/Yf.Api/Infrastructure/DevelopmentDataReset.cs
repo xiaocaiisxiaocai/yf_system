@@ -9,7 +9,7 @@ namespace Yf.Api.Infrastructure;
 internal static class DevelopmentDataReset
 {
     private static readonly string[] ClearedTables = [
-        "collaboration_reads", "message_reads", "email_outbox", "project_activities", "project_members",
+        "collaboration_reads", "message_reads", "message_images", "email_outbox", "project_activities", "project_members",
         "project_status_logs", "upload_sessions", "files", "messages", "projects", "refresh_tokens",
         "user_roles", "role_permissions", "departments", "audit_logs"
     ];
@@ -38,7 +38,8 @@ internal static class DevelopmentDataReset
         var counts = new Dictionary<string, long>();
         foreach (var table in ClearedTables.Concat(["users", "roles", "suppliers", "permissions", "system_configs"]))
             counts[table] = await conn.ExecuteScalarAsync<long>(new CommandDefinition($"SELECT COUNT(*) FROM `{table}`", cancellationToken: ct));
-        return new(database, root, [Path.Combine(root, "files"), Path.Combine(root, "tmp")], counts);
+        return new(database, root,
+            [Path.Combine(root, "files"), Path.Combine(root, "message-images"), Path.Combine(root, "tmp")], counts);
     }
 
     internal static async Task<Plan> ResetAsync(AppOptions options, string? confirmedDatabase,

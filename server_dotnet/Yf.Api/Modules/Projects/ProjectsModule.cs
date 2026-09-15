@@ -1,4 +1,5 @@
 using System.Globalization;
+using Microsoft.AspNetCore.Mvc;
 using Yf.Api.Infrastructure;
 
 namespace Yf.Api.Modules.Projects;
@@ -143,10 +144,40 @@ public static class ProjectsModule
                 messageIds,
                 ct));
         });
-        api.MapPost("/projects/{id:long}/messages", async (HttpContext context, ulong id, MessageCreateRequest request, AppDb db, MessageService service, CancellationToken ct) =>
+        api.MapPost("/projects/{id:long}/messages", async (HttpContext context, ulong id, AppDb db, MessageService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.CreateAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+            var actor = AccessService.GetCurrent(context);
+            if (context.Request.HasFormContentType)
+            {
+                // Reject unauthorized or non-writable projects before ASP.NET buffers a large form.
+                await service.EnsureCreateAllowedAsync(conn, actor, id, ct);
+                IFormCollection form;
+                try { form = await context.Request.ReadFormAsync(ct); }
+                catch (InvalidDataException)
+                {
+                    throw ApiException.BadRequest("留言图片表单格式不正确或超过大小上限");
+                }
+                if (form.Files.Any(file => file.Name != "images"))
+                    throw ApiException.BadRequest("图片表单字段必须命名为 images");
+                if (form.TryGetValue("content", out var contents) && contents.Count > 1)
+                    throw ApiException.BadRequest("content 表单字段只能出现一次");
+                var request = new MessageCreateRequest { Content = contents.Count == 0 ? null : contents[0] };
+                return Results.Ok(await service.CreateAsync(
+                    conn, actor, id, request, form.Files.ToArray(), Ip(context), ct));
+            }
+            if (!context.Request.HasJsonContentType())
+                throw new ApiException(415, 41501, "留言仅支持 JSON 或 multipart/form-data");
+            var json = await context.Request.ReadFromJsonAsync<MessageCreateRequest>(cancellationToken: ct)
+                ?? throw ApiException.BadRequest("请求格式不正确");
+            return Results.Ok(await service.CreateAsync(conn, actor, id, json, Ip(context), ct));
+        })
+        .WithMetadata(new RequestSizeLimitAttribute(MessageService.MultipartRequestLimitBytes))
+        .WithMetadata(new RequestFormLimitsAttribute
+        {
+            MultipartBodyLengthLimit = MessageService.MultipartRequestLimitBytes,
+            ValueLengthLimit = 32 * 1024,
+            MultipartHeadersLengthLimit = 32 * 1024,
         });
         api.MapPost("/messages/read", async (HttpContext context, MarkMessagesReadRequest request, AppDb db, MessageService service, CancellationToken ct) =>
         {
@@ -158,6 +189,32 @@ public static class ProjectsModule
         {
             await using var conn = await db.OpenAsync(ct);
             return Results.Ok(await service.ReadsAsync(conn, AccessService.GetCurrent(context), id, ct));
+        });
+        api.MapGet("/messages/{messageId:long}/images/{imageId:long}", async (
+            HttpContext context,
+            ulong messageId,
+            ulong imageId,
+            AppDb db,
+            MessageService service,
+            CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            var image = await service.GetImageAsync(
+                conn, AccessService.GetCurrent(context), messageId, imageId, ct);
+            var stream = new FileStream(image.Path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            try
+            {
+                context.Response.Headers.CacheControl = "private, no-store";
+                context.Response.Headers.ContentDisposition =
+                    $"inline; filename*=UTF-8''{Uri.EscapeDataString(image.OriginalName)}";
+                return Results.File(stream, image.MimeType, enableRangeProcessing: false);
+            }
+            catch
+            {
+                await stream.DisposeAsync();
+                throw;
+            }
         });
         api.MapDelete("/messages/{id:long}", async (HttpContext context, ulong id, AppDb db, MessageService service, CancellationToken ct) =>
         {
@@ -264,6 +321,22 @@ public static class ProjectsModule
             ids.Add(id);
         }
         return ids.ToArray();
+    }
+
+    internal static bool IsMessageImageUpload(HttpRequest request)
+    {
+        if (!HttpMethods.IsPost(request.Method)
+            || request.ContentType is null
+            || !request.ContentType.StartsWith("multipart/form-data", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var segments = request.Path.Value?.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments is { Length: 5 }
+            && segments[0] == "api"
+            && segments[1] == "v1"
+            && segments[2] == "projects"
+            && long.TryParse(segments[3], NumberStyles.None, CultureInfo.InvariantCulture, out var projectId)
+            && projectId > 0
+            && segments[4] == "messages";
     }
 
     private static bool QueryBool(HttpContext context, string name, bool fallback)

@@ -32,6 +32,7 @@
   "GET /api/v1/files/{}/download",
   "GET /api/v1/files/{}/media",
   "GET /api/v1/internal-user-options",
+  "GET /api/v1/messages/{}/images/{}",
   "GET /api/v1/messages/{}/reads",
   "GET /api/v1/permissions",
   "GET /api/v1/projects",

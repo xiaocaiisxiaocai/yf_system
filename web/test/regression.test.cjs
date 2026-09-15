@@ -1087,11 +1087,12 @@ function loadTs(relativePath, mocks, globals = {}) {
   }).outputText
   const exports = {}
   vm.runInNewContext(source, {
-    exports, module: { exports }, console, setTimeout, clearTimeout, URL, URLSearchParams, AbortController, ...globals,
+    exports, module: { exports }, console, setTimeout, clearTimeout, URL, URLSearchParams, AbortController, FormData, ...globals,
     require: (name) => {
       if (typeof name === 'string' && name in mocks) return name === 'react-router-dom' ? { Link: component('Link'), ...mocks[name] } : mocks[name]
       if (name.endsWith('/store/collaboration')) return { useCollaboration: (selector) => selector({ revision: '', unreadCount: 0, refresh: async () => {} }) }
       if (name.endsWith('/CollaborationNotifications')) return component('CollaborationNotifications')
+      if (name === './MessageImages') return { MessageImageComposer: component('MessageImageComposer'), MessageImages: component('MessageImages'), pasteMessageImages() {} }
       if (name.endsWith('.css')) return {}
       if (name.endsWith('.json')) return JSON.parse(fs.readFileSync(path.resolve(path.dirname(filename), name), 'utf8'))
       if (typeof name === 'string' && name.replace(/\\/g, '/').endsWith('/ActionSlots')) return actionSlotsModule
@@ -4393,6 +4394,44 @@ test('message send failure is handled, preserves the draft, and allows a success
   await act(async () => renderer.unmount())
 })
 
+
+test('message images submit atomically, retain failed drafts and suppress duplicate sends', async () => {
+  let rejectPost, resolvePost
+  const posts = []
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': {
+      get: async () => ({ data: { list: [], total: 0 } }),
+      post: (url, body) => { posts.push({ url, body }); return new Promise((resolve, reject) => { resolvePost = resolve; rejectPost = reject }) },
+    },
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+  }).default
+  let renderer, pending
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
+  const composer = () => renderer.root.findByType('MessageImageComposer')
+  const send = () => renderer.root.findAllByType('Button').find(node => node.props.children === '发送')
+  const image = new File(['image fixture'], 'screenshot.png', { type: 'image/png' })
+  await act(async () => composer().props.onChange([image]))
+  assert.equal(send().props.disabled, false, 'image-only messages can be sent')
+  await act(async () => { pending = send().props.onClick(); await send().props.onClick() })
+  assert.equal(posts.length, 1)
+  assert.ok(posts[0].body instanceof FormData)
+  assert.equal(posts[0].body.get('content'), '')
+  assert.equal(posts[0].body.get('images').name, 'screenshot.png')
+  assert.equal(composer().props.disabled, true)
+  await act(async () => { rejectPost(new Error('upload failed')); await pending })
+  assert.equal(composer().props.files.length, 1, 'failure keeps screenshot for retry')
+  await act(async () => { pending = send().props.onClick() })
+  await act(async () => { resolvePost({ data: { ...messageFixture(10, ''), images: [{ id: 2, name: 'screenshot.png', sizeBytes: 13, mimeType: 'image/png' }] } }); await pending })
+  assert.equal(composer().props.files.length, 0)
+  assert.equal(renderer.root.findByType('MessageImages').props.images[0].id, 2)
+  await act(async () => composer().props.onChange([image]))
+  await act(async () => renderer.update(React.createElement(Page, { projectId: 2, projectStatus: 'IN_PROGRESS' })))
+  assert.equal(composer().props.files.length, 0, 'screenshots must not leak to another project')
+  await act(async () => renderer.unmount())
+})
 
 test('SMTP editor preserves authorization codes, retries failed saves, and keeps unrelated edits', async () => {
   let stored = { host: 'smtp.example.invalid', port: 465, username: 'sender@example.invalid', from: 'notice@example.invalid', security: 'Auto', hasPassword: true, configured: true, passwordNeedsUpdate: false }

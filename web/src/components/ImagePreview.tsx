@@ -5,8 +5,8 @@ import http, { type QuietRequestConfig } from '../api/client'
 import './ImagePreview.css'
 import { wheelZoomFactor } from '../../vendor/preview-wheel.js'
 
-function ImageDocument({ fileId, name, toolbarContainer }: {
-  fileId: number; name: string; toolbarContainer?: HTMLElement | null
+function ImageDocument({ fileId, contentUrl, name, toolbarContainer }: {
+  fileId?: number; contentUrl?: string; name: string; toolbarContainer?: HTMLElement | null
 }) {
   const viewport = useRef<HTMLDivElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
@@ -67,7 +67,8 @@ function ImageDocument({ fileId, name, toolbarContainer }: {
     timer.current = setTimeout(() => {
       active = false; controller.abort(); setSource(''); setStatus('error')
     }, 60000)
-    void http.get<Blob>(`/files/${fileId}/content`, {
+    const requestUrl = contentUrl ?? `/files/${fileId}/content`
+    void http.get<Blob>(requestUrl, {
       responseType: 'blob', signal: controller.signal, quietNetworkError: true,
     } as QuietRequestConfig).then(response => {
       if (!active) return
@@ -78,7 +79,7 @@ function ImageDocument({ fileId, name, toolbarContainer }: {
       active = false; controller.abort(); clearTimeout(timer.current)
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [fileId, attempt])
+  }, [fileId, contentUrl, attempt])
 
   const changeZoom = (value: number | 'fit') => {
     zoomAnchor.current = null
@@ -136,6 +137,14 @@ function ImageDocument({ fileId, name, toolbarContainer }: {
   </section>
 }
 
-export default function ImagePreview(props: { fileId: number; name: string; toolbarContainer?: HTMLElement | null }) {
-  return <ImageDocument key={props.fileId} {...props} />
+type ImagePreviewProps = {
+  name: string
+  toolbarContainer?: HTMLElement | null
+} & (
+  | { fileId: number; contentUrl?: never }
+  | { fileId?: never; contentUrl: string }
+)
+
+export default function ImagePreview(props: ImagePreviewProps) {
+  return <ImageDocument key={props.contentUrl ?? props.fileId} {...props} />
 }
