@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import {
   Button, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
-import { IconDownload, IconEye, IconUpload, IconDelete } from '@arco-design/web-react/icon'
+import { IconDownload, IconEye, IconUpload, IconDelete, IconClose } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from '../store/auth'
 import { type FileItem, type PageResp, fmtSize, fmtTime } from '../api/types'
@@ -281,9 +281,12 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
       <Modal
         className="file-preview-modal"
         alignCenter
+        closable={false}
         title={preview ? <div className="file-preview-heading">
           <span className="file-preview-name" title={preview.originalName}>预览：{preview.originalName}</span>
           <div className="file-preview-controls" ref={setPreviewToolbar} />
+          <Button className="file-preview-close" type="text" aria-label="关闭文件预览"
+            icon={<IconClose />} onClick={() => setPreview(null)} />
         </div> : ''}
         visible={!!preview}
         onCancel={() => setPreview(null)}

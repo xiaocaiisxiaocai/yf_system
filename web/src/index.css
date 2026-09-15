@@ -674,15 +674,19 @@ html, body, #root {
 /* Arco's focus lock adds a wrapper around the header and content. */
 .file-preview-modal > div:has(> .arco-modal-content) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .file-preview-modal .arco-modal-header { flex: 0 0 auto; min-height: 48px; padding: 12px 20px; }
-.file-preview-modal .arco-modal-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.file-preview-heading { display: flex; align-items: center; gap: 20px; min-width: 0; }
-.file-preview-name { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-preview-controls { flex: 0 1 auto; min-width: 0; font-size: 13px; font-weight: 400; line-height: 20px; }
+.file-preview-modal .arco-modal-title { width: 100%; padding-right: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-preview-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto 32px; align-items: center; gap: 16px; min-width: 0; }
+.file-preview-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-preview-controls { min-width: 0; font-size: 13px; font-weight: 400; line-height: 20px; }
+.file-preview-close.arco-btn { width: 32px; min-width: 32px; height: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; color: var(--color-text-2); }
+.file-preview-close .arco-icon { display: block; font-size: 14px; margin: 0; vertical-align: middle; }
 .file-preview-controls .pdf-preview-toolbar { padding-bottom: 0; }
 @media (max-width: 1000px) {
-  .file-preview-heading { flex-wrap: wrap; gap: 8px; }
-  .file-preview-name { flex-basis: 100%; }
-  .file-preview-controls { flex-basis: 100%; }
+  .file-preview-heading { grid-template-columns: minmax(0, 1fr) 32px; gap: 8px 16px; }
+  .file-preview-name { grid-column: 1; grid-row: 1; }
+  .file-preview-close { grid-column: 2; grid-row: 1; }
+  .file-preview-controls { grid-column: 1 / -1; grid-row: 2; }
+  .file-preview-controls:empty { display: none; }
 }
 .file-preview-modal .arco-modal-content { display: flex; flex-direction: column; flex: 1; min-height: 0; max-height: none; overflow: hidden; padding: 12px 16px 16px; }
 .pdf-preview { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
