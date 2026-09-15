@@ -56,23 +56,24 @@ export default function ChangePassword() {
           <div className="auth-notice" role="status">首次登录，请先修改初始密码</div>
         )}
         <Form className="auth-form" form={form} layout="vertical" onSubmit={submit}>
-          <Form.Item field="oldPassword" rules={[{ required: true, message: '请输入原密码' }]}>
-            <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入原密码" aria-label="原密码" autoComplete="current-password" />
+          <Form.Item label="原密码" field="oldPassword" rules={[{ required: true, message: '请输入原密码' }]}>
+            <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入原密码" aria-label="原密码" autoComplete="current-password" disabled={loading} />
           </Form.Item>
           <Form.Item
             field="newPassword"
+            label="新密码"
             rules={[
               { required: true, message: '请输入新密码' },
               passwordRule,
             ]}
           >
-            <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入新密码（6–20 位）" aria-label="新密码" autoComplete="new-password" />
+            <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入新密码（6–20 位）" aria-label="新密码" autoComplete="new-password" disabled={loading} />
           </Form.Item>
-          <Form.Item field="confirm" rules={[{ required: true, message: '请再次输入新密码' }]}>
-            <PasswordInput size="large" prefix={<IconLock />} placeholder="请再次输入新密码" aria-label="确认新密码" autoComplete="new-password" />
+          <Form.Item label="确认新密码" field="confirm" rules={[{ required: true, message: '请再次输入新密码' }]}>
+            <PasswordInput size="large" prefix={<IconLock />} placeholder="请再次输入新密码" aria-label="确认新密码" autoComplete="new-password" disabled={loading} />
           </Form.Item>
           <div className="auth-actions">
-            <Button long onClick={mustChangePassword ? exitLogin : () => nav(-1)}>
+            <Button long disabled={loading} onClick={mustChangePassword ? exitLogin : () => nav(-1)}>
               {mustChangePassword ? '退出登录' : '返回'}
             </Button>
             <Button type="primary" long htmlType="submit" loading={loading}>确认修改</Button>

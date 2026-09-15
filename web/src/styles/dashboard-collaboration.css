@@ -72,6 +72,8 @@
 .dashboard-message-list,
 .dashboard-message-list .arco-list-item-main,
 .dashboard-message-list .arco-list-item-meta { min-width: 0; }
+.dashboard-message-list .arco-list-item-meta-content { width: 100%; min-width: 0; }
+.dashboard-task-card .arco-list-item-extra-content { flex-shrink: 0; margin-left: 12px; }
 
 .dashboard-message-list .arco-list-item-meta-description { margin-top: 6px; }
 .dashboard-message-content {
@@ -118,6 +120,13 @@
 .dashboard-stat-card .arco-statistic-value { font-size: 24px; }
 .dashboard-stat-action { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; color: rgb(var(--primary-6)); font-size: 12px; white-space: nowrap; }
 .dashboard-stat-action svg { font-size: 12px; }
+
+@media (max-width: 1279px) {
+  .dashboard-task-card .arco-list-item { align-items: flex-start; flex-wrap: wrap; }
+  .dashboard-task-card .arco-list-item-main,
+  .dashboard-task-card .arco-list-item-extra-content { width: 100%; min-width: 0; flex: 1 0 100%; }
+  .dashboard-task-card .arco-list-item-extra-content { margin: 6px 0 0; }
+}
 
 @media (max-width: 767px) {
   .dashboard-heading { align-items: flex-start; }

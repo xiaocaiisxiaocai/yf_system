@@ -4,7 +4,7 @@ import {
   Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
-import http from '../../api/client'
+import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import PasswordInput from '../../components/PasswordInput'
 import { useAuth } from '../../store/auth'
@@ -317,7 +317,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
 
   const fetchAccounts = useCallback(async () => {
     if (!supplier) return
-    const r = await http.get(`/admin/suppliers/${supplier.id}/accounts`)
+    const r = await http.get(`/admin/suppliers/${supplier.id}/accounts`, { quietNetworkError: true } as QuietRequestConfig)
     return { supplierId: supplier.id, list: r.data as Account[] }
   }, [supplier])
 
@@ -354,13 +354,14 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
 
   const accounts = supplier && accountsState.supplierId === supplier.id ? accountsState.list : []
   const loading = refreshing || (!!supplier && accountsState.supplierId !== supplier.id)
+  const accountsFailed = !!accountsState.error && accountsState.supplierId === supplier?.id
 
   const loadRoleOptions = useCallback(async () => {
     const requestId = ++roleOptionsRequestId.current
     setRoleOptionsLoading(true)
     setRoleOptionsError(false)
     try {
-      const response = await http.get('/admin/supplier-role-options')
+      const response = await http.get('/admin/supplier-role-options', { quietNetworkError: true } as QuietRequestConfig)
       if (!Array.isArray(response.data)) throw new Error('Invalid supplier role options response')
       if (roleOptionsRequestId.current === requestId) setRoleOptions(response.data as RoleOption[])
     } catch {
@@ -405,6 +406,8 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
     try {
       await http.put(`/admin/supplier-accounts/${a.id}/status`, { status: a.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
       load()
+    } catch {
+      // 请求层已展示错误；保留当前账号快照并恢复按钮供用户重试。
     } finally {
       const remainingIds = new Set(togglingAccountIdsRef.current)
       remainingIds.delete(a.id)
@@ -460,14 +463,14 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
       onCancel={() => { if (!childDialogOpen) onClose() }}
       footer={null}
     >
-      {accountsState.error && accountsState.supplierId === supplier?.id && (
+      {accountsFailed && (
         <Space style={{ marginBottom: 12 }}>
           <Typography.Text type="error">加载失败</Typography.Text>
           <Button size="small" loading={refreshing} onClick={load}>重试</Button>
         </Space>
       )}
       <div className="drawer-toolbar responsive-toolbar">
-        <Typography.Text type="secondary">共 {accounts.length} 个账号</Typography.Text>
+        <Typography.Text type="secondary">{loading ? '账号加载中…' : accountsFailed ? '账号列表暂不可用' : `共 ${accounts.length} 个账号`}</Typography.Text>
         <Button
           type="primary"
           size="small"
@@ -483,11 +486,12 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
           新增账号
         </Button>
       </div>
-      <Table
+      {!accountsFailed && <Table
         className="account-table"
         rowKey="id"
         size="small"
         loading={loading}
+        noDataElement={loading ? <span /> : undefined}
         data={accounts}
         pagination={false}
         scroll={{ x: 840 }}
@@ -549,7 +553,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
             ], 'account'),
           },
         ]}
-      />
+      />}
 
       <Modal
         className="form-dialog"
@@ -575,11 +579,17 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
                 <Form.Item
                   label="初始密码"
                   field="password"
+                  extra="首次登录需改密"
                   rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}
                 >
                   <PasswordInput placeholder="6-20 位" />
                 </Form.Item>
-                <Form.Item label="角色" field="roleId" rules={[{ required: true, message: '请选择供应商角色' }]}>
+                <Form.Item label="角色" field="roleId" rules={[{ required: true, message: '请选择供应商角色' }]}
+                  extra={roleOptionsError
+                    ? <>角色加载失败。<Button size="mini" type="text" onClick={loadRoleOptions}>重试</Button></>
+                    : !roleOptionsLoading && roleOptions.length === 0
+                      ? '暂无可用供应商角色，请先由管理员在“角色与权限”中创建或启用角色，并仅授予供应商自有项目权限。'
+                      : undefined}>
                   <Select
                     placeholder={roleOptionsLoading ? '正在加载角色' : '选择供应商角色'}
                     loading={roleOptionsLoading}
@@ -599,15 +609,6 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
               <Input placeholder="name@example.com" />
             </Form.Item>
           </div>
-          {!editing && roleOptionsError && (
-            <div className="dialog-note">
-              角色加载失败。<Button size="mini" type="text" onClick={loadRoleOptions}>重试</Button>
-            </div>
-          )}
-          {!editing && !roleOptionsLoading && !roleOptionsError && roleOptions.length === 0 && (
-            <div className="dialog-note">暂无可用供应商角色，请先由管理员在“角色与权限”中创建或启用角色，并仅授予供应商自有项目权限。</div>
-          )}
-          {!editing && <div className="dialog-note">首次登录需改密</div>}
         </Form>
       </Modal>
 

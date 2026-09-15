@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Card, Input, InputNumber, Message, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
 import { useNavigate } from 'react-router-dom'
-import http from '../../api/client'
+import http, { type QuietRequestConfig } from '../../api/client'
 import { fmtTime } from '../../api/types'
 import PasswordInput from '../../components/PasswordInput'
 
@@ -126,9 +126,9 @@ export default function SysConfig() {
 
   const fetchSnapshot = useCallback(async () => {
     const [configsResponse, mailResponse, smtpResponse] = await Promise.all([
-      http.get('/admin/system/configs'),
-      http.get('/admin/system/mail-status'),
-      http.get('/admin/system/mail-settings'),
+      http.get('/admin/system/configs', { quietNetworkError: true } as QuietRequestConfig),
+      http.get('/admin/system/mail-status', { quietNetworkError: true } as QuietRequestConfig),
+      http.get('/admin/system/mail-settings', { quietNetworkError: true } as QuietRequestConfig),
     ])
     return {
       configs: (configsResponse.data as Cfg[]).filter((item) => item.key !== 'storage.warn_percent'),
@@ -176,6 +176,10 @@ export default function SysConfig() {
 
   const saveSmtp = async () => {
     if (smtpSaving || !smtpDirty) return
+    if (smtp.passwordNeedsUpdate && !smtpPassword) {
+      Message.warning('已保存的授权码无法读取，请重新填写并保存')
+      return
+    }
     if (smtp.hasPassword && smtpIdentityChanged && !smtpPassword) {
       Message.warning('更改 SMTP 服务器或登录账号时，请重新填写授权码')
       return
@@ -194,9 +198,12 @@ export default function SysConfig() {
       setSmtp(saved)
       setSmtpDraft(saved)
       setSmtpPassword('')
-      Message.success('邮箱设置已保存，无需重启')
-      try { setMail(normalizeMailStatus((await http.get('/admin/system/mail-status')).data)) }
-      catch { /* 保存已成功，状态刷新失败不会撤销配置。 */ }
+      try {
+        setMail(normalizeMailStatus((await http.get('/admin/system/mail-status', { quietNetworkError: true } as QuietRequestConfig)).data))
+        Message.success('邮箱设置已保存，无需重启')
+      } catch {
+        Message.warning('邮箱设置已保存，但邮件状态刷新失败，请稍后刷新页面')
+      }
     } catch { /* 拦截器已提示，保留输入以便重试。 */ }
     finally { setSmtpSaving(false) }
   }
@@ -223,11 +230,11 @@ export default function SysConfig() {
         }
         return next
       })
-      Message.success('参数已保存')
       try {
         const next = await fetchSnapshot()
         setConfigs(next.configs)
         setMail(next.mail)
+        Message.success('参数已保存')
       } catch {
         Message.warning('参数已保存，但最新状态刷新失败，请稍后刷新页面')
       }
@@ -306,8 +313,9 @@ export default function SysConfig() {
                   <label>SMTP 端口<InputNumber aria-label="SMTP 端口" min={1} max={65535} precision={0} value={smtpDraft.port} disabled={smtpSaving} onChange={(port) => setSmtpDraft((v) => ({ ...v, port: typeof port === 'number' ? port : 0 }))} /></label>
                   <label>SMTP 登录账号<Input aria-label="SMTP 登录账号" placeholder="通常为完整邮箱地址" autoComplete="off" value={smtpDraft.username} maxLength={320} disabled={smtpSaving} onChange={(username) => setSmtpDraft((v) => ({ ...v, username }))} /></label>
                   <label>发件邮箱<Input aria-label="发件邮箱" placeholder="例如 notice@example.com" value={smtpDraft.from} maxLength={320} disabled={smtpSaving} onChange={(from) => setSmtpDraft((v) => ({ ...v, from }))} /></label>
-                  <label>邮箱密码 / 授权码<PasswordInput aria-label="邮箱密码或授权码" autoComplete="new-password" placeholder={smtp.hasPassword && !smtpIdentityChanged ? '已设置，留空保留原授权码' : '请输入邮箱密码或授权码'} value={smtpPassword} maxLength={1024} disabled={smtpSaving} onChange={setSmtpPassword} /></label>
-                  <div className="system-smtp-field"><span>连接加密</span><Select aria-label="SMTP 连接加密" value={smtpDraft.security} disabled={smtpSaving} onChange={(security) => setSmtpDraft((v) => ({ ...v, security }))}>
+                  <label>邮箱密码 / 授权码<PasswordInput aria-label="邮箱密码或授权码" autoComplete="new-password" placeholder={smtp.hasPassword && !smtpIdentityChanged && !smtp.passwordNeedsUpdate ? '已设置，留空保留原授权码' : '请输入邮箱密码或授权码'} value={smtpPassword} maxLength={1024} disabled={smtpSaving} onChange={setSmtpPassword} /></label>
+                  <div className="system-smtp-field"><span>连接加密</span><Select aria-label="SMTP 连接加密" value={smtpDraft.security} disabled={smtpSaving} onChange={(security) => setSmtpDraft((v) => ({ ...v, security }))}
+                    triggerProps={{ autoAlignPopupWidth: false, autoAlignPopupMinWidth: true, className: 'smtp-security-popup', popupStyle: { maxWidth: 'calc(100vw - 32px)' } }}>
                     <Select.Option value="Auto">自动（465 使用 TLS，其他端口使用 STARTTLS）</Select.Option>
                     <Select.Option value="SslOnConnect">TLS / SSL（通常为 465）</Select.Option>
                     <Select.Option value="StartTls">STARTTLS（通常为 587）</Select.Option>

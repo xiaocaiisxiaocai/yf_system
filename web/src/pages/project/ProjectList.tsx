@@ -5,7 +5,7 @@ import {
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
-import http from '../../api/client'
+import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import { type PageResp, type Project, PROJECT_STATUS, fmtTime } from '../../api/types'
@@ -47,7 +47,7 @@ export default function ProjectList() {
   const canDelete = isInternal && hasPerm('project:delete')
 
   const fetchProjects = useCallback(async () => {
-    const r = await http.get('/projects', { params: { page, pageSize, keyword: keyword || undefined, status, supplierId } })
+    const r = await http.get('/projects', { params: { page, pageSize, keyword: keyword || undefined, status, supplierId }, quietNetworkError: true } as QuietRequestConfig)
     return r.data as PageResp<Project>
   }, [page, pageSize, keyword, status, supplierId])
 
@@ -85,7 +85,7 @@ export default function ProjectList() {
     setSupplierOptionsError(false)
     const seq = ++supplierOptionsSeq.current
     if (!isInternal) return
-    http.get('/supplier-options')
+    http.get('/supplier-options', { quietNetworkError: true } as QuietRequestConfig)
       .then((r) => {
         if (seq === supplierOptionsSeq.current) setSuppliers(r.data)
       })
@@ -100,7 +100,7 @@ export default function ProjectList() {
   useEffect(() => {
     const seq = ++supplierOptionsSeq.current
     if (isInternal) {
-      http.get('/supplier-options')
+      http.get('/supplier-options', { quietNetworkError: true } as QuietRequestConfig)
         .then((r) => {
           if (seq === supplierOptionsSeq.current) setSuppliers(r.data)
         })
@@ -168,6 +168,8 @@ export default function ProjectList() {
       await http.put(`/projects/${p.id}/status`, { status: next })
       Message.success('状态已更新')
       load()
+    } catch {
+      // 请求层已展示错误；保持当前列表状态并恢复操作入口供用户重试。
     } finally {
       statusUpdatesInFlight.current.delete(p.id)
       setStatusUpdatingIds(new Set(statusUpdatesInFlight.current))
@@ -207,9 +209,7 @@ export default function ProjectList() {
         width: 112,
         align: 'center' as const,
         render: (v: string) => <Tag color={PROJECT_STATUS[v]?.color}>
-          {v === 'PENDING_CONFIRMATION'
-            ? '待公司内部验收'
-            : PROJECT_STATUS[v]?.text || v}
+          {PROJECT_STATUS[v]?.text || v}
         </Tag>,
       },
       ...(!compactTable ? [
@@ -393,7 +393,7 @@ export default function ProjectList() {
             </Select>
           </Form.Item>
           <Form.Item className="form-grid-full" label="项目说明" field="description">
-            <Input.TextArea rows={3} maxLength={500} showWordLimit placeholder="选填" />
+            <Input.TextArea rows={3} maxLength={500} showWordLimit wordLimitPosition="outside" placeholder="选填" />
           </Form.Item>
         </Form>
       </Modal>

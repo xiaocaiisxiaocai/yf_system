@@ -145,7 +145,7 @@ export default function AdminLayout() {
               <Avatar size={30} style={{ background: 'rgb(var(--primary-6))' }}>
                 {user?.realName?.slice(0, 1)}
               </Avatar>
-              <span>{user?.realName}</span>
+              <span title={user?.realName}>{user?.realName}</span>
               <IconDown />
             </button>
           </Dropdown>

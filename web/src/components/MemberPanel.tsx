@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Checkbox, Input, List, Message, Modal, Spin, Tag, Typography } from '@arco-design/web-react'
 import { IconUserAdd } from '@arco-design/web-react/icon'
-import http from '../api/client'
+import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from '../store/auth'
 import { type Member, type SupplierMember, fmtTime } from '../api/types'
 
@@ -39,8 +39,8 @@ export default function MemberPanel({ projectId, projectStatus = 'IN_PROGRESS' }
 
   const fetchMemberGroups = useCallback(async () => {
     const [companyResponse, supplierResponse] = await Promise.all([
-      http.get(`/projects/${projectId}/members`),
-      http.get(`/projects/${projectId}/supplier-members`),
+      http.get(`/projects/${projectId}/members`, { quietNetworkError: true } as QuietRequestConfig),
+      http.get(`/projects/${projectId}/supplier-members`, { quietNetworkError: true } as QuietRequestConfig),
     ])
     return {
       members: companyResponse.data as Member[],
@@ -99,7 +99,7 @@ export default function MemberPanel({ projectId, projectStatus = 'IN_PROGRESS' }
     pickerPendingRef.current = true
     setPickerLoading(true)
     try {
-      const r = await http.get('/internal-user-options')
+      const r = await http.get('/internal-user-options', { quietNetworkError: true } as QuietRequestConfig)
       if (!membersReadyRef.current || membersRequestId.current !== memberRequestId || pickerRequestId.current !== requestId) return
       const serverOptions = r.data as UserOpt[]
       const serverOptionIds = new Set(serverOptions.map((option) => option.id))

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button, Result, Spin } from '@arco-design/web-react'
-import http from '../api/client'
+import http, { type QuietRequestConfig } from '../api/client'
 import viewerHtml from '../../generated/excel-viewer.html?raw'
 
 function ExcelDocument({ fileId }: { fileId: number }) {
@@ -34,7 +34,7 @@ function ExcelDocument({ fileId }: { fileId: number }) {
       frame.current?.contentWindow?.postMessage({ type: 'excel:load', channel, buffer, xls }, '*', [buffer])
       buffer = undefined
     }
-    void http.get<ArrayBuffer>(`/files/${fileId}/content`, { responseType: 'arraybuffer', signal: controller.signal })
+    void http.get<ArrayBuffer>(`/files/${fileId}/content`, { responseType: 'arraybuffer', signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
       .then(response => { if (active) { buffer = response.data; send.current() } })
       .catch(() => { if (active) { clearTimeout(timer); setState('error') } })
     return () => { active = false; clearTimeout(timer); controller.abort(); window.removeEventListener('message', receive); send.current = () => {} }

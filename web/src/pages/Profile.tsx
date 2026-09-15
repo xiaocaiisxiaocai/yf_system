@@ -1,5 +1,5 @@
 import { textLengthRule } from '../utils/textRules'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Button, Card, Form, Input, Message, Typography } from '@arco-design/web-react'
 import { IconEmail, IconLock, IconSave } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
@@ -15,10 +15,14 @@ export default function Profile() {
   const [passwordForm] = Form.useForm()
   const [profileLoading, setProfileLoading] = useState(false)
   const [passwordLoading, setPasswordLoading] = useState(false)
+  const submitting = useRef(false)
+  const busy = profileLoading || passwordLoading
   const { user, setUser, logout } = useAuth()
   const nav = useNavigate()
 
   const saveProfile = async (values: { email: string }) => {
+    if (submitting.current) return
+    submitting.current = true
     setProfileLoading(true)
     try {
       const response = await http.put('/auth/profile', { email: values.email })
@@ -28,11 +32,13 @@ export default function Profile() {
     } catch {
       /* 拦截器已提示 */
     } finally {
+      submitting.current = false
       setProfileLoading(false)
     }
   }
 
   const changePassword = async (values: { oldPassword: string; newPassword: string; confirm: string }) => {
+    if (submitting.current) return
     if (values.newPassword !== values.confirm) {
       Message.error('两次输入的新密码不一致')
       return
@@ -41,6 +47,7 @@ export default function Profile() {
       Message.error('新密码不能与当前密码相同')
       return
     }
+    submitting.current = true
     setPasswordLoading(true)
     try {
       await withAuthLock(async () => {
@@ -55,6 +62,7 @@ export default function Profile() {
     } catch {
       /* 拦截器已提示 */
     } finally {
+      submitting.current = false
       setPasswordLoading(false)
     }
   }
@@ -108,9 +116,9 @@ export default function Profile() {
                   textLengthRule('联系邮箱', 128),
                 ]}
               >
-                <Input prefix={<IconEmail />} placeholder="请输入联系邮箱" autoComplete="email" />
+                <Input prefix={<IconEmail />} placeholder="请输入联系邮箱" autoComplete="email" disabled={busy} />
               </Form.Item>
-              <Button className="profile-submit" type="primary" htmlType="submit" icon={<IconSave />} loading={profileLoading}>
+              <Button className="profile-submit" type="primary" htmlType="submit" icon={<IconSave />} loading={profileLoading} disabled={busy}>
                 保存资料
               </Button>
             </Form>
@@ -123,7 +131,7 @@ export default function Profile() {
             </div>
             <Form form={passwordForm} layout="vertical" onSubmit={changePassword}>
               <Form.Item label="当前密码" field="oldPassword" rules={[{ required: true, message: '请输入当前密码' }]}>
-                <PasswordInput prefix={<IconLock />} autoComplete="current-password" />
+                <PasswordInput prefix={<IconLock />} placeholder="请输入当前密码" autoComplete="current-password" disabled={busy} />
               </Form.Item>
               <Form.Item
                 label="新密码"
@@ -133,12 +141,12 @@ export default function Profile() {
                   passwordRule,
                 ]}
               >
-                <PasswordInput prefix={<IconLock />} placeholder="6-20 位" autoComplete="new-password" />
+                <PasswordInput prefix={<IconLock />} placeholder="6-20 位" autoComplete="new-password" disabled={busy} />
               </Form.Item>
               <Form.Item label="确认新密码" field="confirm" rules={[{ required: true, message: '请再次输入新密码' }]}>
-                <PasswordInput prefix={<IconLock />} autoComplete="new-password" />
+                <PasswordInput prefix={<IconLock />} placeholder="请再次输入新密码" autoComplete="new-password" disabled={busy} />
               </Form.Item>
-              <Button className="profile-submit" type="primary" htmlType="submit" loading={passwordLoading}>
+              <Button className="profile-submit" type="primary" htmlType="submit" loading={passwordLoading} disabled={busy}>
                 修改密码
               </Button>
             </Form>

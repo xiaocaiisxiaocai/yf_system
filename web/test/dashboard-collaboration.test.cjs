@@ -112,7 +112,7 @@ test('dashboard defaults to the complete paginated unread feed and deep-links a 
 
   const initialMessages = calls.find(call => call.url === '/dashboard/messages')
   assert.deepEqual({ ...initialMessages.config.params }, { page: 1, pageSize: 10, unreadOnly: true })
-  assert.equal(initialMessages.config.quietNetworkError, undefined)
+  assert.equal(initialMessages.config.quietNetworkError, true, 'inline retry states replace duplicate network toasts')
   const messageList = renderer.root.findByProps({ className: 'dashboard-message-list' })
   assert.equal(messageList.props.dataSource[0].id, 37)
   const messageRow = messageList.props.render(unread)
@@ -133,7 +133,7 @@ test('collaboration revisions refresh quietly and older replies cannot replace t
   const refreshes = []
   const http = {
     get: async (url, config = {}) => {
-      if (!config.quietNetworkError) {
+      if (collaboration.getState().revision === 'initial') {
         if (url === '/dashboard/summary') return { data: summary }
         return { data: emptyPage }
       }
@@ -187,8 +187,8 @@ test('collaboration revisions refresh quietly and older replies cannot replace t
 test('a failed quiet refresh keeps the last data visible and marks it stale', async () => {
   const collaboration = createStore(() => ({ revision: 'initial' }))
   const http = {
-    get: async (url, config = {}) => {
-      if (config.quietNetworkError) throw new Error('temporary refresh failure')
+    get: async (url) => {
+      if (collaboration.getState().revision !== 'initial') throw new Error('temporary refresh failure')
       if (url === '/dashboard/summary') return { data: summary }
       if (url === '/dashboard/pending-projects') return { data: emptyPage }
       return { data: { list: [{ id: 7, projectId: 3, content: '保留内容', createdAt: '', unread: true }], total: 1, page: 1, pageSize: 10 } }

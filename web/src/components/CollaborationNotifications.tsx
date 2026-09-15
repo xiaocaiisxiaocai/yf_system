@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, Badge, Button, Drawer, Empty, Pagination, Spin, Tabs, Tag, Typography } from '@arco-design/web-react'
 import { IconNotification } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
-import http from '../api/client'
+import http, { type QuietRequestConfig } from '../api/client'
 import { fmtTime } from '../api/types'
 import { useAuth } from '../store/auth'
 import {
@@ -91,7 +91,8 @@ export default function CollaborationNotifications() {
       const response = await http.get('/collaboration/notifications', {
         params: { page: nextPage, pageSize: PAGE_SIZE, unreadOnly: nextUnreadOnly },
         signal: controller.signal,
-      })
+        quietNetworkError: true,
+      } as QuietRequestConfig)
       const result = parseCollaborationNotificationPage(response.data)
       if (controller.signal.aborted || sequence !== requestSequence.current
         || useAuth.getState().generation !== requestGeneration) return

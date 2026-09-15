@@ -150,6 +150,14 @@ export default function RoleList() {
     }))
   }, [mutablePermissionIds, perms, removablePermissionIds])
 
+  const displayedPermTree = useMemo(() => savingPerms
+    ? permTree.map((group) => ({
+      ...group,
+      disabled: true,
+      children: group.children.map((child) => ({ ...child, disabled: true })),
+    }))
+    : permTree, [permTree, savingPerms])
+
   const halfChecked = permTree
     .filter((group) => {
       const relevantChildren = permTarget?.canManage === false
@@ -190,6 +198,8 @@ export default function RoleList() {
       Message.success('权限已保存')
       setPermTarget(null)
       load()
+    } catch {
+      // 请求层已展示错误；保留抽屉和当前选择，允许用户直接重试。
     } finally {
       setSavingPerms(false)
     }
@@ -389,10 +399,11 @@ export default function RoleList() {
             checkable
             checkStrictly
             defaultExpandedKeys={permTree.map((g) => g.key)}
-            treeData={permTree}
+            treeData={displayedPermTree}
             checkedKeys={checked.filter((key) => !halfChecked.includes(key))}
             halfCheckedKeys={halfChecked}
             onCheck={(_, extra) => {
+              if (savingPerms) return
               const next = new Set(checked)
               const key = String(extra.node.key)
               const permission = perms.find((p) => String(p.id) === key)

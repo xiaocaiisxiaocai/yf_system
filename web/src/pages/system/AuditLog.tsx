@@ -354,7 +354,7 @@ export default function AuditLog() {
               },
             },
             {
-              title: '操作', dataIndex: 'action', width: 180,
+              title: '操作类型', dataIndex: 'action', width: 180,
               render: (value: string) => {
                 const meta = actionMeta(value)
                 return <div className="audit-action"><Tag color={meta.color}>{meta.label}</Tag><small title={value}>{meta.categoryLabel} · {value}</small></div>
@@ -369,7 +369,7 @@ export default function AuditLog() {
                 return <div className="audit-target"><span title={identity.name}>{identity.name}</span><small title={identity.identifier}>{identity.identifier}</small></div>
               },
             },
-            { title: '详情', width: 120, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row?: AuditLogRow) => row ? actionSlots([
+            { title: '操作', width: 120, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row?: AuditLogRow) => row ? actionSlots([
               <Button key="view" size="mini" type="text" icon={<IconEye />} onClick={() => setSelected(row)}>查看</Button>,
               canDelete && row.action !== 'AUDIT_LOG_DELETE' && (
                 <Popconfirm key="delete" title="确认删除这条日志？" disabled={deleteBusy} onOk={() => removeOne(row)}>

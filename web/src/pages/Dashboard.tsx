@@ -79,6 +79,7 @@ export default function Dashboard() {
   const observedRevision = useRef<string | null>(null)
   const user = useAuth((s) => s.user)
   const hasDashboard = useAuth((s) => s.menus.includes('dashboard'))
+  const hasOtherMenus = useAuth((s) => s.menus.some(menu => menu !== 'dashboard'))
   const collaborationRevision = useCollaboration((s) => s.revision)
   const collaborationStatus = useCollaboration((s) => s.status)
   const nav = useNavigate()
@@ -102,7 +103,7 @@ export default function Dashboard() {
       setSummaryRefreshError(false)
     }
     try {
-      const config: QuietRequestConfig | undefined = quiet ? { quietNetworkError: true } : undefined
+      const config: QuietRequestConfig = { quietNetworkError: true }
       const response = await http.get('/dashboard/summary', config)
       if (!mounted.current || seq !== summarySeq.current) return
       setData(response.data as Summary)
@@ -132,7 +133,7 @@ export default function Dashboard() {
       while (mounted.current && seq === pendingSeq.current) {
         const config: QuietRequestConfig = {
           params: { page, pageSize: PAGE_SIZE },
-          ...(quiet ? { quietNetworkError: true } : {}),
+          quietNetworkError: true,
         }
         const response = await http.get('/dashboard/pending-projects', config)
         if (!mounted.current || seq !== pendingSeq.current) return
@@ -172,7 +173,7 @@ export default function Dashboard() {
       while (mounted.current && seq === messageSeq.current) {
         const config: QuietRequestConfig = {
           params: { page, pageSize: PAGE_SIZE, unreadOnly: nextUnreadOnly },
-          ...(quiet ? { quietNetworkError: true } : {}),
+          quietNetworkError: true,
         }
         const response = await http.get('/dashboard/messages', config)
         if (!mounted.current || seq !== messageSeq.current) return
@@ -255,7 +256,9 @@ export default function Dashboard() {
       <Result
         status="403"
         title="工作台不可用"
-        subTitle="当前账号未分配工作台菜单权限，请从导航进入已授权功能，或在右上角维护个人资料。"
+        subTitle={hasOtherMenus
+          ? '当前账号未分配工作台菜单权限，请从导航进入已授权功能，或在右上角维护个人资料。'
+          : '请联系管理员分配功能权限，或在右上角维护个人资料。'}
       />
     )
   }
@@ -402,8 +405,8 @@ export default function Dashboard() {
                           title={(
                             <span className="dashboard-message-title">
                               {message.unread && <span className="dashboard-message-unread" aria-label="未读" title="未读" />}
-                              <Tag color="arcoblue">{projectLabel}</Tag>
-                              <span className="dashboard-message-sender">{message.senderName || '未知用户'}</span>
+                              <Tag color="arcoblue"><span className="dashboard-message-project" title={projectLabel}>{projectLabel}</span></Tag>
+                              <span className="dashboard-message-sender" title={message.senderName || '未知用户'}>{message.senderName || '未知用户'}</span>
                             </span>
                           )}
                           description={<span className="dashboard-message-content">{message.content}</span>}
@@ -465,7 +468,7 @@ export default function Dashboard() {
                 </Card>
               )
               return (
-                <Grid.Col xs={12} md={6} key={card.title}>
+                <Grid.Col xs={12} xl={6} key={card.title}>
                   {card.to ? (
                     <Link className="dashboard-stat-link" to={card.to} aria-label={`${card.title}：${card.action}`}>{content}</Link>
                   ) : (

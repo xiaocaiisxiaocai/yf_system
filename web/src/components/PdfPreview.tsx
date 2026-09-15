@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button, InputNumber, Select, Spin } from '@arco-design/web-react'
-import http from '../api/client'
+import http, { type QuietRequestConfig } from '../api/client'
 import { init } from '../../vendor/vue-office-pdf/src/main'
 import type { PdfPreviewInstance, PdfZoom } from '../../vendor/vue-office-pdf/src/main'
 
@@ -45,7 +45,8 @@ function PdfDocument({ fileId, onRetry, toolbarContainer }: {
           http.get<ArrayBuffer>(`/files/${fileId}/content`, {
             responseType: 'arraybuffer',
             signal: controller.signal,
-          }),
+            quietNetworkError: true,
+          } as QuietRequestConfig),
           import('./pdfEngine'),
         ])
         if (!active) return

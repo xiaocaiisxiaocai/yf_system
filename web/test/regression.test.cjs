@@ -123,6 +123,66 @@ test('personal profile submits only own email and keeps password change in the s
   await act(async () => renderer.unmount())
 })
 
+test('profile locks both forms during save, rejects overlapping requests and unlocks after failure', async () => {
+  const calls = []
+  let resolveRequest, rejectRequest
+  const user = { id: 8, employeeNo: 'review8', realName: '测试', email: 'before@example.invalid', userType: 'INTERNAL' }
+  const profileForm = { setFieldsValue() {} }
+  let formIndex = 0
+  const profileArco = new Proxy({
+    ...arco,
+    Form: Object.assign(component('Form'), {
+      useForm: () => [formIndex++ % 2 === 0 ? profileForm : {}],
+      Item: component('Form.Item'),
+    }),
+  }, { get: (obj, key) => obj[key] ?? component(key) })
+  const Page = loadTs('src/pages/Profile.tsx', {
+    '@arco-design/web-react': profileArco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    'react-router-dom': { useNavigate: () => () => {} },
+    '../api/client': {
+      __esModule: true,
+      default: { put: (url, body) => {
+        calls.push({ url, body })
+        return new Promise((resolve, reject) => { resolveRequest = resolve; rejectRequest = reject })
+      } },
+      withAuthLock: async (action) => action(),
+    },
+    '../store/auth': { useAuth: () => ({ user, setUser() {}, logout() {} }) },
+  }).default
+  let renderer, saving
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const passwordValues = { oldPassword: 'old123', newPassword: 'new123', confirm: 'new123' }
+  await act(async () => {
+    const [saveProfile, changePassword] = renderer.root.findAllByType('Form').map((form) => form.props.onSubmit)
+    saving = saveProfile({ email: 'after@example.invalid' })
+    await saveProfile({ email: 'duplicate@example.invalid' })
+    await changePassword(passwordValues)
+  })
+  assert.equal(calls.length, 1, 'repeat or cross-form submission must not race the in-flight save')
+  assert.equal(renderer.root.findByProps({ placeholder: '请输入联系邮箱' }).props.disabled, true)
+  assert.equal(renderer.root.findByProps({ placeholder: '请输入当前密码' }).props.disabled, true)
+  assert.ok(renderer.root.findAllByType('Button').every((button) => button.props.disabled))
+  await act(async () => { rejectRequest(new Error('mock save failure')); await saving })
+  assert.equal(renderer.root.findByProps({ placeholder: '请输入联系邮箱' }).props.disabled, false)
+  await act(async () => {
+    saving = renderer.root.findAllByType('Form')[0].props.onSubmit({ email: 'retry@example.invalid' })
+  })
+  assert.equal(calls.length, 2)
+  await act(async () => { resolveRequest({ data: { user: { ...user, email: 'retry@example.invalid' } } }); await saving })
+  assert.equal(renderer.root.findByProps({ placeholder: '请输入联系邮箱' }).props.disabled, false)
+  await act(async () => {
+    const [saveProfile, changePassword] = renderer.root.findAllByType('Form').map((form) => form.props.onSubmit)
+    saving = changePassword(passwordValues)
+    await saveProfile({ email: 'concurrent@example.invalid' })
+  })
+  assert.equal(calls.length, 3)
+  assert.equal(calls[2].url, '/auth/password')
+  await act(async () => { rejectRequest(new Error('mock password failure')); await saving })
+  assert.equal(renderer.root.findByProps({ placeholder: '请输入当前密码' }).props.disabled, false)
+  await act(async () => renderer.unmount())
+})
+
 for (const [page, formIndex] of [['ChangePassword', 0], ['Profile', 1]]) {
   test(`${page} rejects the current password without submitting or ending the session`, async () => {
     const errors = []
@@ -1306,7 +1366,9 @@ test('supplier account loading failures stop spinning and can retry', async () =
   await act(async()=>{renderer=create(React.createElement(Page))})
   const actions=renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null,supplier)
   await act(async()=>findActionButton(actions, '账号管理').props.onClick())
-  assert.equal(renderer.root.findByType('Drawer').findByType('Table').props.loading,false)
+  assert.equal(renderer.root.findByType('Drawer').findAllByType('Table').length,0, 'an unknown account list must not masquerade as an empty table')
+  assert.ok(renderer.root.findAll((node)=>node.props.children==='账号列表暂不可用').length > 0)
+  assert.equal(renderer.root.findAllByType('Button').find(n=>n.props.children==='重试').props.loading,false)
   fail=false
   await act(async()=>renderer.root.findAllByType('Button').find(n=>n.props.children==='重试').props.onClick())
   assert.equal(renderer.root.findByType('Drawer').findByType('Table').props.data[0].id,16)
@@ -2584,7 +2646,8 @@ test('unknown project tab query falls back to files and keeps description expans
   const tabs = renderer.root.findByType('Tabs')
   assert.equal(tabs.props.activeTab, 'files')
   assert.ok(renderer.root.findByType('Files'))
-  const ellipsis = renderer.root.findByType('Descriptions').props.data.find((item) => item.label === '项目说明').value
+  const ellipsis = renderer.root.findByType('Ellipsis')
+  assert.equal(ellipsis.props.expandable.single, true, 'single-line descriptions must expose their expansion control')
   const expand = ellipsis.props.expandRender(false)
   assert.equal(expand.props['aria-expanded'], false)
   assert.equal(expand.props.children, '展开')
@@ -4399,6 +4462,45 @@ test('SMTP editor preserves authorization codes, retries failed saves, and keeps
   await act(async () => renderer.unmount())
 })
 
+test('unreadable SMTP authorization code cannot be retained by an empty save', async () => {
+  const writes = []
+  const notices = []
+  const smtpArco = new Proxy({ ...arco, Message: { ...arco.Message, warning: (message) => notices.push(message), success: (message) => notices.push(message) } }, { get: (obj, key) => obj[key] ?? component(key) })
+  const settings = { host: 'smtp.example.invalid', port: 465, username: 'sender@example.invalid', from: 'sender@example.invalid', security: 'Auto', hasPassword: true, configured: false, passwordNeedsUpdate: true }
+  const Page = loadTs('src/pages/system/SysConfig.tsx', {
+    '@arco-design/web-react': smtpArco,
+    '../../api/client': {
+      get: async (url) => {
+        if (writes.length && url.endsWith('/mail-status')) throw new Error('status refresh failed')
+        return { data: url.endsWith('/mail-settings') ? settings : url.endsWith('/configs') ? [] : {} }
+      },
+      put: async (url, body) => {
+        writes.push({ url, body })
+        return { data: { ...settings, ...body, passwordNeedsUpdate: false, configured: true } }
+      },
+    },
+    '../../api/types': { fmtTime: String },
+    'react-router-dom': { useNavigate: () => () => {} },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const password = () => renderer.root.findByType('PasswordInput')
+  const save = () => renderer.root.findAllByType('Button').find((node) => node.props.children === '保存邮箱设置')
+  assert.equal(password().props.placeholder, '请输入邮箱密码或授权码')
+  await act(async () => renderer.root.findAllByType('InputNumber').find((node) => node.props['aria-label'] === 'SMTP 端口').props.onChange(587))
+  await act(async () => save().props.onClick())
+  assert.equal(writes.length, 0, 'changing another field must not submit the unreadable old authorization code')
+  await act(async () => password().props.onChange('replacement-fixture-code'))
+  await act(async () => save().props.onClick())
+  assert.equal(writes.length, 1)
+  assert.equal(notices.at(-1), '邮箱设置已保存，但邮件状态刷新失败，请稍后刷新页面')
+  assert.equal(notices.includes('邮箱设置已保存，无需重启'), false)
+  assert.equal(writes[0].body.password, 'replacement-fixture-code')
+  assert.equal(password().props.value, '')
+  assert.equal(password().props.placeholder, '已设置，留空保留原授权码')
+  await act(async () => renderer.unmount())
+})
+
 test('system config freezes edits during save and keeps the committed value when refresh fails', async () => {
   const deferred = () => {
     let resolve
@@ -4479,7 +4581,7 @@ test('system config freezes edits during save and keeps the committed value when
 
   assert.equal(notification().props.value, 'false', 'the confirmed server value remains visible after refresh failure')
   assert.equal(saveButton().props.disabled, true, 'the committed value is no longer dirty')
-  assert.ok(messages.some(([type, message]) => type === 'success' && message === '参数已保存'))
+  assert.equal(messages.filter(([type]) => type === 'success').length, 0, 'a refresh failure produces one clear committed-but-stale notice')
   assert.ok(messages.some(([type, message]) => type === 'warning' && message.includes('参数已保存，但最新状态刷新失败')))
   await act(async () => renderer.unmount())
 })

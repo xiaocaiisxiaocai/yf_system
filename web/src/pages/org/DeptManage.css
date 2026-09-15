@@ -33,7 +33,9 @@
 .org-view-tree-node { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; width: 100%; font-size: 14px; line-height: 22px; }
 .org-view-tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-view-tree-kind { flex-shrink: 0; color: var(--app-text-muted); font-size: 12px; font-weight: 400; line-height: 20px; }
-.org-view-page .arco-tree-node-title { padding: 6px 8px; border-radius: 4px; }
+.org-view-page .arco-tree-node-title { min-width: 0; padding: 6px 8px; border-radius: 4px; }
+.org-view-page .arco-tree-node-title-text { display: block; min-width: 0; }
+.org-view-tree-node > .arco-tag { flex-shrink: 0; margin: 0; }
 .org-view-page .arco-tree-node-title:hover { background: var(--color-fill-1); }
 .org-view-page .arco-tree-node-selected .arco-tree-node-title { background: rgb(var(--primary-1)); color: rgb(var(--primary-6)); font-weight: 500; }
 .org-view-tree-empty { padding: 24px 16px; text-align: center; color: var(--app-text-muted); font-size: 14px; line-height: 22px; }

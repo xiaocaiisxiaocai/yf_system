@@ -127,6 +127,7 @@ html, body, #root {
   border-bottom: 1px solid var(--app-border);
 }
 .layout-profile { display: inline-flex; align-items: center; gap: 10px; margin-left: auto; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--color-text-1); cursor: pointer; font-size: 13px; white-space: nowrap; }
+.layout-profile > span:not(.arco-avatar) { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .layout-profile:hover { background: var(--color-fill-1); }
 .layout-content { min-width: 0; padding: 16px; overflow: auto; }
 .mobile-menu-trigger { display: none; }
@@ -503,7 +504,8 @@ html, body, #root {
 .dashboard-message-item--unread { background: #f2f7ff; }
 .dashboard-message-item--unread:hover, .dashboard-message-item--unread:focus-visible { background: #eaf2ff; }
 .dashboard-message-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.dashboard-message-title .arco-tag { max-width: min(360px, 45vw); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-message-title .arco-tag { flex: 0 1 auto; min-width: 0; max-width: 65%; margin: 0; overflow: hidden; white-space: nowrap; }
+.dashboard-message-project { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dashboard-message-unread { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #165dff; box-shadow: 0 0 0 3px #dbeafe; }
 .dashboard-message-sender { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dashboard-latest .arco-list-item-meta-description { display: -webkit-box; overflow: hidden; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
@@ -939,5 +941,6 @@ html, body, #root {
   .project-activity-timeline .arco-timeline-item { padding-bottom: 8px; }
 }
 
+.smtp-security-popup .arco-select-option { height: auto; line-height: 20px; padding-top: 8px; padding-bottom: 8px; white-space: normal; }
 .system-smtp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; }
 .system-smtp-grid > label, .system-smtp-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--color-text-2); }

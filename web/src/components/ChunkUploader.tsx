@@ -270,13 +270,16 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone }: P
         type="file"
         className="upload-file-input"
         aria-label="选择上传文件"
-        style={{ maxWidth: '100%' }}
+        hidden
         disabled={busy}
         onChange={(e) => {
           setFile(e.target.files?.[0] || null)
           setPercent(0)
         }}
       />
+      <Button icon={<IconUpload />} disabled={busy} onClick={() => fileInputRef.current?.click()}>
+        {file ? '重新选择文件' : '选择文件'}
+      </Button>
       {file && (
         <div style={{ marginTop: 16, overflowWrap: 'anywhere' }}>
           <Typography.Text>

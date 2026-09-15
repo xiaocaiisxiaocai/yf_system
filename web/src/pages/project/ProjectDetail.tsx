@@ -198,27 +198,22 @@ function ProjectDetailContent({ id }: { id?: string }) {
             { label: '供应商', value: project.supplierName || '-' },
             { label: '创建人', value: project.createdByName || '-' },
             { label: '更新时间', value: fmtTime(project.updatedAt) },
-            ...(project.description ? [{
-              label: '项目说明',
-              value: project.description ? (
-                <Typography.Ellipsis className="project-description" rows={1} expandable
-                  expandRender={(expanded) => (
-                    <Button
-                      type="text"
-                      size="mini"
-                      aria-expanded={expanded}
-                      aria-label={expanded ? '收起项目说明' : '展开项目说明'}
-                    >
-                      {expanded ? '收起' : '展开'}
-                    </Button>
-                  )}>
-                  {project.description}
-                </Typography.Ellipsis>
-              ) : '-',
-              span: 3,
-            }] : []),
           ]}
         />
+        {project.description && (
+          <div className="project-summary-description">
+            <span className="project-summary-description-label">项目说明</span>
+            <Typography.Ellipsis className="project-description" rows={1} expandable={{ single: true }}
+              expandRender={(expanded) => (
+                <Button type="text" size="mini" aria-expanded={expanded}
+                  aria-label={expanded ? '收起项目说明' : '展开项目说明'}>
+                  {expanded ? '收起' : '展开'}
+                </Button>
+              )}>
+              {project.description}
+            </Typography.Ellipsis>
+          </div>
+        )}
         <ProjectWorkflowPanel
           compact
           project={project}

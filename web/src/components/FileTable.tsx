@@ -3,7 +3,7 @@ import {
   Button, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconUpload, IconDelete } from '@arco-design/web-react/icon'
-import http from '../api/client'
+import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from '../store/auth'
 import { type FileItem, type PageResp, fmtSize, fmtTime } from '../api/types'
 import { actionSlots } from './ActionSlots'
@@ -67,7 +67,8 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
   const fetchFiles = useCallback(async () => {
     const r = await http.get(`/projects/${projectId}/files`, {
       params: { page, pageSize, direction, keyword: keyword || undefined, targetId },
-    })
+      quietNetworkError: true,
+    } as QuietRequestConfig)
     return r.data as PageResp<FileItem>
   }, [projectId, page, pageSize, direction, keyword, targetId])
 

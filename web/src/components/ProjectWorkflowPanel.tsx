@@ -233,7 +233,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
       >
         <Form form={rejectForm} layout="vertical">
           <Form.Item label="驳回原因（必填）" field="reason" rules={[{ required: true, message: '请填写驳回原因' }]}>
-            <Input.TextArea rows={4} maxLength={500} showWordLimit placeholder="请填写驳回原因" />
+            <Input.TextArea rows={4} maxLength={500} showWordLimit wordLimitPosition="outside" placeholder="请填写驳回原因" />
           </Form.Item>
         </Form>
       </Modal>

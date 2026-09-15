@@ -4,7 +4,7 @@ import {
   Button, Card, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, TreeSelect, Typography,
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
-import http from '../../api/client'
+import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import PasswordInput from '../../components/PasswordInput'
 import { useAuth } from '../../store/auth'
@@ -120,8 +120,8 @@ export default function UserList() {
     setOptionsError(false)
     const seq = ++optionsSeq.current
     Promise.all([
-      http.get('/departments'),
-      http.get('/admin/user-role-options'),
+      http.get('/departments', { quietNetworkError: true } as QuietRequestConfig),
+      http.get('/admin/user-role-options', { quietNetworkError: true } as QuietRequestConfig),
     ])
       .then(([departmentsResponse, rolesResponse]) => {
         if (seq !== optionsSeq.current) return
@@ -139,8 +139,8 @@ export default function UserList() {
   useEffect(() => {
     const seq = ++optionsSeq.current
     Promise.all([
-        http.get('/departments'),
-        http.get('/admin/user-role-options'),
+        http.get('/departments', { quietNetworkError: true } as QuietRequestConfig),
+        http.get('/admin/user-role-options', { quietNetworkError: true } as QuietRequestConfig),
       ])
       .then(([departmentsResponse, rolesResponse]) => {
         if (seq !== optionsSeq.current) return
