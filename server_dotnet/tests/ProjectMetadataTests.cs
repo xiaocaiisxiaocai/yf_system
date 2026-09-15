@@ -47,6 +47,25 @@ public sealed class ProjectMetadataTests
         var priorityId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
             "SELECT id FROM project_dictionaries WHERE type='PRIORITY' AND code='HIGH'", cancellationToken: ct));
 
+        var complete = new ProjectUpsertRequest
+        {
+            Name = "必填校验项目", SupplierId = 8001, WorkOrderNos = ["WO-REQUIRED"],
+            MachineModel = "M1", RobotVendorId = vendorId, RobotModelId = modelId,
+            ResponsibleUserId = 9002, PriorityId = priorityId, ExpectedCompletionDate = "2026-12-31",
+        };
+        foreach (var field in new[] { "workOrderNos", "machineModel", "robotVendorId", "robotModelId", "responsibleUserId", "priorityId", "expectedCompletionDate" })
+        {
+            var node = System.Text.Json.JsonSerializer.SerializeToNode(complete)!;
+            node[field] = null;
+            var missing = System.Text.Json.JsonSerializer.Deserialize<ProjectUpsertRequest>(node)!;
+            var error = await Assert.ThrowsAsync<ApiException>(() => projects.CreateAsync(conn, actor, missing, null, ct));
+            Assert.Equal(400, error.Status);
+        }
+        await conn.ExecuteAsync("UPDATE users SET department_id=NULL WHERE id=9002");
+        var noSection = await Assert.ThrowsAsync<ApiException>(() => projects.CreateAsync(conn, actor, complete, null, ct));
+        Assert.Equal(400, noSection.Status);
+        await conn.ExecuteAsync("UPDATE users SET department_id=7001 WHERE id=9002");
+
         var created = await projects.CreateAsync(conn, actor, new()
         {
             Name = "元数据集成项目",

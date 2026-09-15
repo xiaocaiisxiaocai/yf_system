@@ -944,6 +944,14 @@ internal sealed class ProjectService(
 
     private static ProjectMetadataInput NormalizeMetadata(ProjectUpsertRequest request)
     {
+        if (NormalizeWorkOrderNos(request.WorkOrderNos).Length == 0)
+            throw ApiException.BadRequest("请至少填写一个工令号");
+        if (string.IsNullOrWhiteSpace(request.MachineModel)) throw ApiException.BadRequest("请填写机型");
+        if (request.RobotVendorId is null or 0) throw ApiException.BadRequest("请选择 Robot 厂商");
+        if (request.RobotModelId is null or 0) throw ApiException.BadRequest("请选择 Robot 型号");
+        if (request.ResponsibleUserId is null or 0) throw ApiException.BadRequest("请选择负责人");
+        if (request.PriorityId is null or 0) throw ApiException.BadRequest("请选择优先级");
+        if (string.IsNullOrWhiteSpace(request.ExpectedCompletionDate)) throw ApiException.BadRequest("请选择预计完成日期");
         var machineModel = string.IsNullOrWhiteSpace(request.MachineModel) ? null : request.MachineModel.Trim();
         if (machineModel is not null && RuneCount(machineModel) > 128)
             throw ApiException.BadRequest("机台机型不能超过 128 个字符");
@@ -997,6 +1005,7 @@ internal sealed class ProjectService(
                 """, new { Id = responsibleUserId }, tx, cancellationToken: ct));
             if (owner is null) throw ApiException.BadRequest("负责人必须是拥有项目列表权限的启用内部用户");
             sectionId = owner.SectionId;
+            if (sectionId is null) throw ApiException.BadRequest("负责人未关联课别，请先在用户管理中设置其所属课别");
         }
         return input with { SectionId = sectionId };
     }

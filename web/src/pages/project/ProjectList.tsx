@@ -53,6 +53,7 @@ function normalizeWorkOrderNos(values?: string[]) {
 
 function workOrderNosRule(value: unknown, callback: (error?: string) => void) {
   const values = normalizeWorkOrderNos(Array.isArray(value) ? value.map(String) : [])
+  if (!values.length) { callback('请至少填写一个工令号'); return }
   if (values.length > WORK_ORDER_LIMIT) {
     callback(`工令号最多填写 ${WORK_ORDER_LIMIT} 项`)
     return
@@ -303,6 +304,10 @@ export default function ProjectList() {
     try {
       const v = await form.validate().catch(() => null) as ProjectFormValues | null
       if (!v) return
+      if (!sectionName) {
+        Message.error('负责人未关联课别，请先在用户管理中设置其所属课别')
+        return
+      }
       if (!editing && (supplierOptionsLoading || supplierOptionsError || !suppliers.some((supplier) => supplier.id === Number(v.supplierId)))) {
         Message.error('供应商选项尚未就绪，请重试加载')
         return
@@ -633,7 +638,7 @@ export default function ProjectList() {
           <Form.Item className="form-grid-full" label="项目名称" field="name" rules={[{ required: true, message: '请输入项目名称' }, textLengthRule('项目名称', 128)]}>
             <Input placeholder="项目名称" />
           </Form.Item>
-          <Form.Item className="form-grid-full" label="工令号" field="workOrderNos" rules={[{ validator: workOrderNosRule }]}>
+          <Form.Item className="form-grid-full" label="工令号" field="workOrderNos" rules={[{ required: true, message: '请至少填写一个工令号' }, { validator: workOrderNosRule }]}>
             <Select
               mode="multiple"
               allowCreate
@@ -644,10 +649,10 @@ export default function ProjectList() {
               placeholder="输入工令号后按回车，可填写多个"
             />
           </Form.Item>
-          <Form.Item label="机型" field="machineModel">
-            <Input maxLength={128} showWordLimit placeholder="选填" />
+          <Form.Item label="机型" field="machineModel" rules={[{ required: true, message: '请填写机型' }, { validator: (value, callback) => callback(value?.trim() ? undefined : '请填写机型') }]}>
+            <Input maxLength={128} showWordLimit placeholder="请输入机型" />
           </Form.Item>
-          <Form.Item label="Robot 厂商" field="robotVendorId">
+          <Form.Item label="Robot 厂商" field="robotVendorId" rules={[{ required: true, message: '请选择 Robot 厂商' }]}>
             <Select
               allowClear
               showSearch
@@ -664,7 +669,7 @@ export default function ProjectList() {
               ))}
             </Select>
           </Form.Item>
-          <Form.Item label="Robot 型号" field="robotModelId">
+          <Form.Item label="Robot 型号" field="robotModelId" rules={[{ required: true, message: '请选择 Robot 型号' }]}>
             <Select
               allowClear
               showSearch
@@ -680,7 +685,7 @@ export default function ProjectList() {
               ))}
             </Select>
           </Form.Item>
-          <Form.Item label="负责人" field="responsibleUserId">
+          <Form.Item label="负责人" field="responsibleUserId" rules={[{ required: true, message: '请选择负责人' }]}>
             <Select
               allowClear
               showSearch
@@ -697,14 +702,14 @@ export default function ProjectList() {
               ))}
             </Select>
           </Form.Item>
-          <Form.Item label="课别（自动带出）">
+          <Form.Item label="课别（自动带出）" required validateStatus={selectedResponsibleUserId && !sectionName ? 'error' : undefined} help={selectedResponsibleUserId && !sectionName ? '负责人未关联课别，请先在用户管理中设置' : undefined}>
             <Input
               readOnly
               value={sectionName ?? ''}
               placeholder={selectedResponsibleUserId ? '该负责人无直属课别' : '选择负责人后自动带出'}
             />
           </Form.Item>
-          <Form.Item label="优先级" field="priorityId">
+          <Form.Item label="优先级" field="priorityId" rules={[{ required: true, message: '请选择优先级' }]}>
             <Select
               allowClear
               showSearch
@@ -720,7 +725,7 @@ export default function ProjectList() {
               ))}
             </Select>
           </Form.Item>
-          <Form.Item label="预计完成日期" field="expectedCompletionDate">
+          <Form.Item label="预计完成日期" field="expectedCompletionDate" rules={[{ required: true, message: '请选择预计完成日期' }]}>
             <DatePicker allowClear format="YYYY-MM-DD" placeholder="选择预计完成日期" style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item label="关联供应商" field="supplierId" rules={[{ required: true, message: '请选择供应商' }]}>
