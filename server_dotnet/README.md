@@ -65,9 +65,9 @@ dotnet run --project .\Yf.Api -- --migrate-database
 
 升级命令使用数据库命名锁防止同时迁移，校验业务表完整性，并建立 `yf_schema_migrations` 独立历史。第 16 版缺失的刷新会话族字段、数据回填与索引由 .NET 补齐；第 17 版直接接管；同时撤销供应商角色的内部管理授权并记录审计。步骤可在 DDL 中断后重跑，重复执行不删除业务数据。启动拒绝未知版本或被修改的历史。后续升级在 `Infrastructure/SchemaMigrations.cs` 中维护。
 
-在线文档预览支持 PDF、XLS、XLSX 和 PPTX，单文件上限 50 MiB。视频预览支持 MP4、WebM 和 OGV，不整文件缓冲，也不使用文档预览上限；浏览器先用正常 Bearer 会话调用 `POST /api/v1/files/{id}/media-session`，接口返回同源 `url` 和 300 秒有效期并设置仅限该文件媒体路径的 HttpOnly Cookie。随后原生 `<video>` 对 `GET /api/v1/files/{id}/media` 发起 Range 请求，每次请求都重新验证登录会话、账号状态、预览权限和项目范围。前端可在有效期过半时续签，媒体 URL 保持不变。
+在线文件预览支持 PDF、XLS、XLSX、PPTX，以及 PNG、JPG、JPEG、GIF、WebP、BMP 图片，统一使用 `GET /api/v1/files/{id}/content`，并受 50 MiB 单文件上限、`file:preview` 权限和项目可见范围约束。图片响应按扩展名返回规范 MIME 类型，不信任历史文件记录中的 MIME。视频预览支持 MP4、WebM 和 OGV，不整文件缓冲，也不使用文档/图片预览上限；浏览器先用正常 Bearer 会话调用 `POST /api/v1/files/{id}/media-session`，接口返回同源 `url` 和 300 秒有效期并设置仅限该文件媒体路径的 HttpOnly Cookie。随后原生 `<video>` 对 `GET /api/v1/files/{id}/media` 发起 Range 请求，每次请求都重新验证登录会话、账号状态、预览权限和项目范围。前端可在有效期过半时续签，媒体 URL 保持不变。
 
-新库的默认上传白名单已包含 PPTX、MP4、WebM 和 OGV。现有库的管理员自定义白名单不会在启动时改写；需要启用这些格式时，先取得具有 `config:manage` 权限的短时访问令牌，再运行 `scripts/append-preview-upload-extensions.ps1`。脚本通过管理 API 只提交 `upload.allowed_exts`，仅补齐缺失类型，并回读核对其他公开系统参数未变化；空白值表示不限制类型，脚本会原样保留并报告 `unrestricted=true`。不要把令牌字面量写入命令历史。
+新库的默认上传白名单已包含 PPTX、MP4、WebM、OGV 和上述六种图片格式。现有库的管理员自定义白名单不会在启动时改写；需要启用这些格式时，先取得具有 `config:manage` 权限的短时访问令牌，再运行 `scripts/append-preview-upload-extensions.ps1`。脚本通过管理 API 只提交 `upload.allowed_exts`，仅补齐缺失类型，并回读核对其他公开系统参数未变化；空白值表示不限制类型，脚本会原样保留并报告 `unrestricted=true`。不要把令牌字面量写入命令历史。
 
 结构预检以内嵌 `schema-baseline.json` 为依据，检查列定义、主键、唯一键、业务索引列顺序、外键规则及表引擎；现有 `.NET` 迁移表本身也须满足结构和历史要求。不支持的结构漂移会在迁移命令执行 DDL、回填数据或记录历史之前被拒绝，不自动修复业务表。第 16 版缺少会话族列/索引及合法的中断状态可继续升级。
 

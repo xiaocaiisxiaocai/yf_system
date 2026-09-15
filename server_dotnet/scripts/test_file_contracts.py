@@ -19,6 +19,24 @@ def _abort(client, session_id):
     client.call("DELETE", f"/api/v1/uploads/{session_id}")
 
 
+def _upload_file(client, project_id, file_name, content):
+    initialized = client.call("POST", "/api/v1/uploads/init", {
+        "projectId": project_id,
+        "fileName": file_name,
+        "fileSize": len(content),
+        "fileMd5": hashlib.md5(content).hexdigest(),
+    })
+    chunk_size = initialized["chunkSize"]
+    for index in range(initialized["totalChunks"]):
+        client.call(
+            "PUT", f"/api/v1/uploads/{initialized['sessionId']}/chunks/{index}",
+            content[index * chunk_size:(index + 1) * chunk_size],
+            headers={"Content-Type": "application/octet-stream"},
+        )
+    merged = client.call("POST", f"/api/v1/uploads/{initialized['sessionId']}/merge")
+    return merged.get("id", merged.get("fileId"))
+
+
 def _new_internal_with_permissions(client, conn, codes):
     permissions = client.call("GET", "/api/v1/permissions")
     permission_ids = {item["code"]: item["id"] for item in permissions}
@@ -75,6 +93,14 @@ def _insert_available_file(conn, project_id, uploader_id, storage_root, extensio
 
 
 def run_file_checks(client, conn, check, pid, fid):
+    configs = client.call("GET", "/api/v1/admin/system/configs")
+    allowed_extensions = next(item["value"] for item in configs if item["key"] == "upload.allowed_exts").split(",")
+    check(
+        "new database image allowlist extends the existing upload defaults",
+        set(("gif", "webp", "bmp")).issubset(allowed_extensions)
+        and set(("pdf", "docx", "xlsx", "pptx", "png", "jpg", "jpeg", "zip", "mp4", "webm", "ogv")).issubset(allowed_extensions),
+    )
+
     for key in ('targetId', 'page', 'pageSize'):
         for raw in ('', 'abc', '-1', '18446744073709551616', '1&' + key + '=2'):
             rejected = client.call('GET', f'/api/v1/projects/{pid}/files?{key}={raw}', expected=400)
@@ -239,6 +265,41 @@ def run_file_checks(client, conn, check, pid, fid):
         client, conn, ["project:list", "project:view_all", "file:preview"])
     preview_pdf, _ = preview_client.call("GET", f"/api/v1/files/{fid}/content", raw=True)
     preview_client.call("GET", f"/api/v1/files/{fid}/download", expected=403)
+    image_payloads = {
+        "png": (b"\x89PNG\r\n\x1a\nimage-preview-png", "image/png"),
+        "jpg": (b"\xff\xd8\xff\xe0image-preview-jpg\xff\xd9", "image/jpeg"),
+        "jpeg": (b"\xff\xd8\xff\xe0image-preview-jpeg\xff\xd9", "image/jpeg"),
+        "gif": (b"GIF89a\x01\x00\x01\x00image-preview-gif", "image/gif"),
+        "webp": (b"RIFF\x10\x00\x00\x00WEBPimage-preview-webp", "image/webp"),
+        "bmp": (b"BM\x1a\x00\x00\x00image-preview-bmp", "image/bmp"),
+    }
+    image_file_ids = {}
+    image_responses = {}
+    for extension, (content, expected_mime) in image_payloads.items():
+        image_fid = _upload_file(client, pid, "preview." + extension, content)
+        if image_fid is None:
+            raise AssertionError("image merge response missing file identifier for " + extension)
+        image_file_ids[extension] = image_fid
+        served, served_headers = preview_client.call(
+            "GET", f"/api/v1/files/{image_fid}/content", raw=True)
+        image_responses[extension] = served == content and served_headers.get_content_type() == expected_mime
+    check(
+        "image previews return exact bytes and canonical MIME over authenticated HTTP",
+        all(image_responses.values()),
+    )
+
+    no_preview_client = _new_internal_with_permissions(
+        client, conn, ["project:list", "project:view_all"])
+    no_preview_client.call(
+        "GET", f"/api/v1/files/{image_file_ids['png']}/content", expected=403)
+    check("image preview denies a project-visible user without file preview permission", True)
+
+    out_of_scope_client = _new_internal_with_permissions(
+        client, conn, ["project:list", "file:preview"])
+    out_of_scope_client.call(
+        "GET", f"/api/v1/files/{image_file_ids['png']}/content", expected=403)
+    check("image preview denies a permitted user outside the project scope", True)
+
     zip_bytes = b"PK\x03\x04file preview boundary"
     zip_fid = _insert_available_file(
         conn, pid, uploader_id, storage_root, "zip", content=zip_bytes)

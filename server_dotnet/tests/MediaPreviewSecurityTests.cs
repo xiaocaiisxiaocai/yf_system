@@ -76,4 +76,16 @@ public sealed class MediaPreviewSecurityTests
         Assert.Equal("video/webm", FileStorage.MimeType("video.webm"));
         Assert.Equal("video/ogg", FileStorage.MimeType("video.ogv"));
     }
+
+    [Theory]
+    [InlineData("image.png", "image/png")]
+    [InlineData("image.jpg", "image/jpeg")]
+    [InlineData("image.jpeg", "image/jpeg")]
+    [InlineData("image.gif", "image/gif")]
+    [InlineData("image.webp", "image/webp")]
+    [InlineData("image.bmp", "image/bmp")]
+    public void ImageMimeMappingsAreCanonical(string fileName, string expected)
+    {
+        Assert.Equal(expected, FileStorage.MimeType(fileName));
+    }
 }

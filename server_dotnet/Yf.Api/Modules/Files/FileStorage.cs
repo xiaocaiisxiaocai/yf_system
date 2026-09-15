@@ -176,6 +176,7 @@ internal static class FileStorage
         ".jpg" or ".jpeg" => "image/jpeg",
         ".gif" => "image/gif",
         ".webp" => "image/webp",
+        ".bmp" => "image/bmp",
         ".txt" => "text/plain",
         ".csv" => "text/csv",
         ".json" => "application/json",

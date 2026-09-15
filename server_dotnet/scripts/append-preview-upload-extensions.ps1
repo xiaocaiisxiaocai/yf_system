@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$requiredExtensions = @('pptx', 'mp4', 'webm', 'ogv')
+$requiredExtensions = @('pptx', 'mp4', 'webm', 'ogv', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp')
 $baseUri = [Uri]$BaseUrl
 if ($baseUri.Scheme -notin @('http', 'https')) {
     throw 'BaseUrl must use HTTP or HTTPS.'

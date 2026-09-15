@@ -99,6 +99,11 @@ test('preview dispatch offers PPTX within the parser limit and streamed videos i
   assert.equal(available('PPTX', 50 * 1024 * 1024), true)
   assert.equal(available('pptx', 50 * 1024 * 1024 + 1), false)
   for (const ext of ['mp4', 'webm', 'ogv']) assert.equal(available(ext, 1024 * 1024 * 1024), true)
+  for (const ext of ['png', 'jpg', 'JPEG', 'gif', 'webp', 'bmp']) {
+    assert.equal(available(ext, 50 * 1024 * 1024), true)
+    assert.equal(available(ext, 50 * 1024 * 1024 + 1), false)
+  }
+  assert.equal(available('svg', 1024), false)
   for (const ext of ['ppt', 'html', 'avi', 'mkv']) assert.equal(available(ext, 1024), false)
   await act(async () => renderer.unmount())
 })

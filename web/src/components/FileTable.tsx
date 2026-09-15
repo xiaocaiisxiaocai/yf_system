@@ -15,6 +15,7 @@ import { useCollaboration } from '../store/collaboration'
 const ExcelPreview = lazy(() => import('./ExcelPreview'))
 const PptxPreview = lazy(() => import('./PptxPreview'))
 const VideoPreview = lazy(() => import('./VideoPreview'))
+const ImagePreview = lazy(() => import('./ImagePreview'))
 
 interface Props {
   projectId: number
@@ -25,8 +26,9 @@ interface Props {
 const PDF_PREVIEW_MAX_BYTES = 50 * 1024 * 1024
 
 /** 文档在浏览器解析；视频由授权接口按需分段播放。 */
-function previewKind(ext: string, sizeBytes = 0): 'excel' | 'pdf' | 'pptx' | 'video' | 'none' {
+function previewKind(ext: string, sizeBytes = 0): 'excel' | 'pdf' | 'pptx' | 'video' | 'image' | 'none' {
   ext = ext.toLowerCase()
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext) && sizeBytes <= 50 * 1024 * 1024) return 'image'
   if (['mp4', 'webm', 'ogv'].includes(ext)) return 'video'
   if (ext === 'pptx' && sizeBytes <= 50 * 1024 * 1024) return 'pptx'
   // Excel 需要在浏览器内完整解析工作簿，限制在线预览体积以避免页面 OOM。
@@ -295,6 +297,11 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'pdf' && <PdfPreview fileId={preview.id} toolbarContainer={previewToolbar} />}
+        {preview && previewKind(preview.ext, preview.sizeBytes) === 'image' && (
+          <Suspense fallback={<div role="status">加载图片预览…</div>}>
+            <ImagePreview fileId={preview.id} name={preview.originalName} toolbarContainer={previewToolbar} />
+          </Suspense>
+        )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'pptx' && (
           <Suspense fallback={<div role="status">加载 PPTX 渲染器…</div>}>
             <PptxPreview fileId={preview.id} toolbarContainer={previewToolbar} />

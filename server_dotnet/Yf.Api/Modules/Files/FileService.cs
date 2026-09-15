@@ -293,7 +293,13 @@ public sealed class FileService(
         extension.Equals("pdf", StringComparison.OrdinalIgnoreCase)
         || extension.Equals("xls", StringComparison.OrdinalIgnoreCase)
         || extension.Equals("xlsx", StringComparison.OrdinalIgnoreCase)
-        || extension.Equals("pptx", StringComparison.OrdinalIgnoreCase);
+        || extension.Equals("pptx", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals("png", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals("jpg", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals("jpeg", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals("gif", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals("webp", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals("bmp", StringComparison.OrdinalIgnoreCase);
 
     internal static bool IsVideo(string extension) => MediaMimeType(extension) is not null;
 
