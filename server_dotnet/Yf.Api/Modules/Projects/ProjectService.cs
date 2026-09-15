@@ -35,7 +35,10 @@ internal sealed class ProjectService(
             clauses.Add("p.supplier_id = @ActorSupplierId");
             args.Add("ActorSupplierId", current.SupplierId.Value);
         }
-        else if (!await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:view_all", ct))
+        var canViewAll = false;
+        if (current.IsInternal)
+            canViewAll = await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:view_all", ct);
+        if (current.IsInternal && !canViewAll)
         {
             clauses.Add("p.responsible_user_id = @ActorId");
             args.Add("ActorId", current.Id);
@@ -92,6 +95,7 @@ internal sealed class ProjectService(
             tx,
             cancellationToken: ct))).AsList();
         await LoadWorkOrdersAsync(conn, tx, rows, ct);
+        await LoadCopyLineageAsync(conn, tx, rows, current, canViewAll, ct);
         await tx.CommitAsync(ct);
         return ProjectJson.Page(rows.Select(ProjectJson.Project).ToArray(), total, actualPage, size);
     }
@@ -191,6 +195,29 @@ internal sealed class ProjectService(
             new { ProjectId = projectId },
             tx,
             cancellationToken: ct));
+        var hasCopyHistory = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT EXISTS(SELECT 1 FROM project_copies WHERE source_project_id=@ProjectId OR target_project_id=@ProjectId)",
+            new { ProjectId = projectId }, tx, cancellationToken: ct));
+        var sourceCopy = await conn.QuerySingleOrDefaultAsync<ProjectCopySourceRow>(new CommandDefinition(
+            """
+            SELECT pc.source_project_id AS ProjectId,source.name AS Name
+            FROM project_copies pc JOIN projects source ON source.id=pc.source_project_id
+            WHERE pc.target_project_id=@ProjectId
+            """, new { ProjectId = projectId }, tx, cancellationToken: ct));
+        object? copySource = null;
+        if (sourceCopy is not null)
+        {
+            try
+            {
+                await ProjectAccessService.RequireViewForValidatedActorAsync(
+                    conn, tx, current, sourceCopy.ProjectId, false, ct);
+                copySource = new { projectId = sourceCopy.ProjectId, name = sourceCopy.Name };
+            }
+            catch (ApiException error) when (error.Status is 403 or 404)
+            {
+                copySource = null;
+            }
+        }
         var result = new
         {
             id = project.Id,
@@ -224,6 +251,8 @@ internal sealed class ProjectService(
             priorityCode = project.PriorityCode,
             priorityName = project.PriorityName,
             expectedCompletionDate = project.ExpectedCompletionDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            hasCopyHistory,
+            copySource,
         };
         await tx.CommitAsync(ct);
         return result;
@@ -525,6 +554,10 @@ internal sealed class ProjectService(
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:delete", ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+        if (await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+                "SELECT EXISTS(SELECT 1 FROM project_copies WHERE source_project_id=@ProjectId OR target_project_id=@ProjectId)",
+                new { ProjectId = projectId }, tx, cancellationToken: ct)))
+            throw ApiException.Conflict("项目存在复制引用履历，不能删除");
         var counts = await conn.QuerySingleAsync<ContentCount>(new CommandDefinition(
             """
             SELECT (SELECT COUNT(*) FROM files WHERE project_id=@ProjectId) AS FileCount,
@@ -731,6 +764,8 @@ internal sealed class ProjectService(
                    p.section_id AS SectionId,section.name AS SectionName,p.priority_id AS PriorityId,
                    priority.code AS PriorityCode,priority.name AS PriorityName,
                    p.expected_completion_date AS ExpectedCompletionDate,
+                   EXISTS(SELECT 1 FROM project_copies pc
+                          WHERE pc.source_project_id=p.id OR pc.target_project_id=p.id) AS HasCopyHistory,
                    p.status AS Status,p.confirm_side AS ConfirmSide,p.created_by AS CreatedBy,
                    CASE WHEN p.status='PENDING_CONFIRMATION' THEN (
                        SELECT MAX(psl.id) FROM project_status_logs psl
@@ -770,6 +805,39 @@ internal sealed class ProjectService(
         if (exists)
         {
             throw ApiException.Conflict("项目名称已存在");
+        }
+    }
+
+    private static async Task LoadCopyLineageAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        IReadOnlyList<ProjectRow> projects,
+        CurrentUser actor,
+        bool canViewAll,
+        CancellationToken ct)
+    {
+        if (projects.Count == 0) return;
+        var ids = projects.Select(project => project.Id).ToArray();
+        var relations = (await conn.QueryAsync<CopyLineageRow>(new CommandDefinition(
+            """
+            SELECT pc.source_project_id AS SourceProjectId,pc.target_project_id AS TargetProjectId,
+                   source.name AS SourceName,source.supplier_id AS SourceSupplierId,
+                   source.responsible_user_id AS SourceResponsibleUserId
+            FROM project_copies pc JOIN projects source ON source.id=pc.source_project_id
+            WHERE pc.source_project_id IN @Ids OR pc.target_project_id IN @Ids
+            """, new { Ids = ids }, tx, cancellationToken: ct))).AsList();
+        foreach (var project in projects)
+        {
+            var related = relations.Where(row => row.SourceProjectId == project.Id || row.TargetProjectId == project.Id).ToArray();
+            project.HasCopyHistory = related.Length > 0;
+            var source = related.SingleOrDefault(row => row.TargetProjectId == project.Id);
+            if (source is null) continue;
+            var canViewSource = actor.IsInternal
+                ? canViewAll || source.SourceResponsibleUserId == actor.Id
+                : actor.SupplierId is not null && actor.SupplierId == source.SourceSupplierId;
+            if (!canViewSource) continue;
+            project.CopySourceProjectId = source.SourceProjectId;
+            project.CopySourceProjectName = source.SourceName;
         }
     }
 
@@ -946,6 +1014,21 @@ internal sealed class ProjectService(
     {
         public string? RejectReason { get; init; }
         public ulong? LatestSubmitterId { get; init; }
+    }
+
+    private sealed class ProjectCopySourceRow
+    {
+        public ulong ProjectId { get; init; }
+        public string Name { get; init; } = string.Empty;
+    }
+
+    private sealed class CopyLineageRow
+    {
+        public ulong SourceProjectId { get; init; }
+        public ulong TargetProjectId { get; init; }
+        public string SourceName { get; init; } = string.Empty;
+        public ulong SourceSupplierId { get; init; }
+        public ulong? SourceResponsibleUserId { get; init; }
     }
 
     private sealed class MemberRow

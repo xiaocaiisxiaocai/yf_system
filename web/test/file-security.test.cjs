@@ -157,6 +157,42 @@ test('Excel preview aborts its content request and never posts late bytes after 
   )
 })
 
+test('copied project files expose a compact reference-history action without changing preview behavior', async () => {
+  const FileTable = loadFileTable()
+  let opened = 0
+  let renderer
+  await act(async () => {
+    renderer = create(React.createElement(FileTable, {
+      projectId: 1,
+      projectStatus: 'DRAFT',
+      onOpenCopyHistory: () => { opened++ },
+    }))
+  })
+  const fileNameColumn = renderer.root.findByType('Table').props.columns[0]
+  const referenced = fileNameColumn.render('引用文件.pdf', {
+    id: 7,
+    originalName: '引用文件.pdf',
+    ext: 'pdf',
+    sizeBytes: 100,
+    isCopiedReference: true,
+  })
+  const historyButton = findElement(referenced, (node) => String(node.props['aria-label'] ?? '').includes('引用履历'))
+  assert.ok(historyButton)
+  historyButton.props.onClick()
+  assert.equal(opened, 1)
+  assert.ok(findElement(referenced, (node) => node.props['aria-label'] === '预览文件'), 'reference badge must not replace preview')
+
+  const ordinary = fileNameColumn.render('普通文件.pdf', {
+    id: 8,
+    originalName: '普通文件.pdf',
+    ext: 'pdf',
+    sizeBytes: 100,
+    isCopiedReference: false,
+  })
+  assert.equal(findElement(ordinary, (node) => String(node.props['aria-label'] ?? '').includes('引用履历')), undefined)
+  await act(async () => renderer.unmount())
+})
+
 test('Excel preview waits for its frame and accepts status only from that frame and channel', async () => {
   const listeners = new Set()
   const messages = []

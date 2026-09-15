@@ -3605,7 +3605,10 @@ test('required option sources expose loading and retry states and block submits 
     let posted = 0
     let optionAttempt = 0
     let rejectFirst
-    const form = { resetFields() {}, validate: async () => ({ name: '项目', supplierId: 8 }) }
+    const form = { resetFields() {}, validate: async () => ({
+      name: '项目', supplierId: 8, workOrderNos: ['WO-1'], machineModel: 'M1', robotVendorId: 11,
+      robotModelId: 12, responsibleUserId: 13, priorityId: 14, expectedCompletionDate: '2026-09-30',
+    }) }
     const testArco = new Proxy({
       Form: Object.assign(component('Form'), { useForm: () => [form], Item: component('Form.Item') }),
       Typography: arco.Typography, Message: arco.Message,
@@ -3613,6 +3616,8 @@ test('required option sources expose loading and retry states and block submits 
     const http = {
       get: async (url) => {
         if (url === '/projects') return { data: { list: [], total: 0, page: 1, pageSize: 10 } }
+        if (url === '/project-owner-options') return { data: [{ id: 13, employeeNo: 'owner', realName: '负责人', sectionName: '研发课' }] }
+        if (url === '/project-dictionaries') return { data: [{ id: 11, name: '字典项', enabled: true }] }
         optionAttempt++
         if (optionAttempt === 1) return new Promise((_resolve, reject) => { rejectFirst = reject })
         return { data: [{ id: 8, name: '可用供应商' }] }
@@ -3636,6 +3641,8 @@ test('required option sources expose loading and retry states and block submits 
     assert.equal(optionAttempt, 2)
     assert.equal(renderer.root.findAllByType('Button').find((node) => node.props.children === '新建项目').props.disabled, false)
     await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '新建项目').props.onClick())
+    await act(async () => { await Promise.resolve() })
+    await act(async () => renderer.root.findByProps({ placeholder: '选择负责人' }).props.onChange(13))
     await act(async () => renderer.root.findByType('Modal').props.onOk())
     assert.equal(posted, 1)
     await act(async () => renderer.unmount())
@@ -3763,6 +3770,26 @@ test('project workflow audit actions expose precise labels and state or rejectio
   for (const value of ['PROJECT_START', 'PROJECT_SUBMIT', 'PROJECT_CONFIRM', 'PROJECT_REJECT', 'PROJECT_WITHDRAW', 'PROJECT_TERMINATE', 'PROJECT_RESTART']) {
     assert.ok(values.includes(value), `项目日志筛选缺少 ${value}`)
   }
+  const copyRow = {
+    id: 202,
+    action: 'PROJECT_COPY',
+    targetType: 'project',
+    targetId: '9',
+    targetName: '装配线升级 - 副本',
+    detail: {
+      source: { id: 4, name: '装配线升级', status: 'IN_PROGRESS' },
+      target: { id: 9, name: '装配线升级 - 副本', status: 'DRAFT' },
+      fileCount: 3,
+      totalBytes: 2048,
+    },
+    createdAt: '2026-09-15T00:00:00Z',
+  }
+  const copyAction = table.props.columns.find((column) => column.dataIndex === 'action').render(copyRow.action, copyRow)
+  assert.match(JSON.stringify(copyAction), /复制项目/)
+  const copySummary = table.props.columns.find((column) => column.title === '内容摘要').render(null, copyRow)
+  assert.match(JSON.stringify(copySummary), /装配线升级 → 装配线升级 - 副本/)
+  assert.match(JSON.stringify(copySummary), /3 个文件，共 2\.0 KB/)
+  assert.ok(values.includes('PROJECT_COPY'))
   assert.ok(!values.includes('PROJECT_STATUS'))
   await act(async () => renderer.unmount())
 })
@@ -4741,5 +4768,159 @@ test('built-in roles never expose hard delete while custom roles still can', asy
 
   assert.equal(findActionButton(actions.render(null, builtIn), '删除'), undefined)
   assert.ok(findActionButton(actions.render(null, custom), '删除'))
+  await act(async () => renderer.unmount())
+})
+
+test('project copy requires a renamed project, blocks duplicate submits and keeps the dialog after failure', async () => {
+  const project = { id: 4, name: '装配线升级', status: 'IN_PROGRESS', workOrderNos: ['WO-1'] }
+  let mainFields = {}
+  let copyFields = {}
+  const mainForm = {
+    resetFields() { mainFields = {} },
+    setFieldsValue(values) { mainFields = { ...mainFields, ...values } },
+    validate: async () => mainFields,
+  }
+  const copyForm = {
+    resetFields() { copyFields = {} },
+    setFieldsValue(values) { copyFields = { ...copyFields, ...values } },
+    setFieldValue(field, value) { copyFields[field] = value },
+    validate: async () => copyFields,
+  }
+  let formCall = 0
+  const messages = []
+  const copyArco = new Proxy({
+    ...arco,
+    Form: Object.assign(component('Form'), {
+      useForm: () => [formCall++ % 2 === 0 ? mainForm : copyForm],
+      Item: component('Form.Item'),
+    }),
+    Message: { ...arco.Message, success: (message) => messages.push(message), error: (message) => messages.push(message) },
+  }, { get: (obj, key) => obj[key] ?? component(key) })
+  let postCalls = 0
+  let rejectFirst
+  const navigations = []
+  const http = {
+    get: async (url) => {
+      if (url === '/projects') return { data: { list: [project], total: 1, page: 1, pageSize: 10 } }
+      if (url === '/supplier-options') return { data: [{ id: 3, name: '供应商' }] }
+      return { data: [] }
+    },
+    post: async (url, body) => {
+      postCalls++
+      assert.equal(url, '/projects/4/copy')
+      assert.equal(body.name, '装配线升级 - 副本')
+      if (postCalls === 1) return new Promise((_resolve, reject) => { rejectFirst = reject })
+      return { data: { project: { id: 9, name: body.name }, copy: { fileCount: 3 } } }
+    },
+  }
+  const Page = loadTs('src/pages/project/ProjectList.tsx', {
+    '@arco-design/web-react': copyArco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    'react-router-dom': { useNavigate: () => (path) => navigations.push(path) },
+    '../../api/client': http,
+    '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:create']),
+    '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中' } }, fmtTime: String },
+    '../../components/ActionSlots': actionSlotsModule,
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const actionColumn = renderer.root.findByType('Table').props.columns.at(-1)
+  await act(async () => findActionButton(actionColumn.render(null, project), '复制').props.onClick())
+  assert.equal(copyFields.name, '装配线升级 - 副本')
+  let dialog = renderer.root.findAllByType('Modal').find((modal) => modal.props.title === '复制项目')
+  assert.equal(dialog.props.visible, true)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '留言、流程及验收状态、已读回执和通知').length)
+
+  let first
+  await act(async () => {
+    first = dialog.props.onOk()
+    void dialog.props.onOk()
+    await Promise.resolve()
+  })
+  assert.equal(postCalls, 1, 'an in-flight copy must reject repeated submissions')
+  await act(async () => { rejectFirst(new Error('simulated copy failure')); await first })
+  dialog = renderer.root.findAllByType('Modal').find((modal) => modal.props.title === '复制项目')
+  assert.equal(dialog.props.visible, true, 'a failed request keeps the entered name and source project')
+  assert.equal(copyFields.name, '装配线升级 - 副本')
+
+  await act(async () => dialog.props.onOk())
+  assert.equal(postCalls, 2)
+  assert.deepEqual(navigations, ['/projects/9'])
+  assert.ok(messages.some((message) => String(message).includes('3 个文件')))
+  await act(async () => renderer.unmount())
+})
+
+test('project copy history hides restricted relations and pages file mappings on demand', async () => {
+  const project = {
+    id: 8,
+    name: '新项目',
+    status: 'DRAFT',
+    workOrderNos: ['WO-8'],
+    updatedAt: '2026-09-15T00:00:00Z',
+    hasCopyHistory: true,
+    copySource: { projectId: 2, name: '原项目' },
+  }
+  const history = {
+    source: {
+      copyId: 16,
+      projectId: 2,
+      name: '原项目',
+      fileCount: 21,
+      totalBytes: 2048,
+      copiedByName: '项目管理员',
+      createdAt: '2026-09-15T01:00:00Z',
+    },
+    copies: [],
+    hasRestrictedRelations: true,
+  }
+  const calls = []
+  const http = {
+    get: async (url, config = {}) => {
+      calls.push({ url, config })
+      if (url === '/projects/8') return { data: project }
+      if (url === '/projects/8/summary') return { data: { unreadMessages: 0 } }
+      if (url === '/projects/8/copy-history') return { data: history }
+      if (url === '/project-copies/16/files') {
+        return { data: { list: [{ sourceFileId: 1, sourceFileName: '规格.xlsx', sourceDeleted: false, targetFileId: 7, targetFileName: '规格.xlsx', targetDeleted: false }], total: 21, page: config.params.page, pageSize: 20 } }
+      }
+      throw new Error(`unexpected ${url}`)
+    },
+  }
+  const Page = loadTs('src/pages/project/ProjectDetail.tsx', {
+    '@arco-design/web-react': arco,
+    'react-router-dom': {
+      useParams: () => ({ id: '8' }),
+      useSearchParams: () => [new URLSearchParams(), () => {}],
+      useNavigate: () => () => {},
+    },
+    '../../api/client': http,
+    '../../api/types': {
+      PROJECT_STATUS: { DRAFT: { text: '草稿', color: 'gray' } },
+      fmtTime: String,
+      fmtSize: (value) => `${value} B`,
+    },
+    '../../components/FileTable': component('Files'),
+    '../../components/MessagePanel': component('Messages'),
+    '../../components/ProjectActivityPanel': component('Activities'),
+    '../../components/ProjectWorkflowPanel': component('Workflow'),
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)); await Promise.resolve() })
+  assert.equal(calls.some((call) => call.url === '/projects/8/copy-history'), false, 'history loads only when requested')
+  const files = renderer.root.findByType('Files')
+  assert.equal(typeof files.props.onOpenCopyHistory, 'function')
+  await act(async () => { files.props.onOpenCopyHistory(); await Promise.resolve() })
+  assert.ok(calls.some((call) => call.url === '/projects/8/copy-history'))
+  const drawer = renderer.root.findByType('Drawer')
+  assert.equal(drawer.props.visible, true)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '部分关联项目当前无权查看，已隐藏其名称和文件信息。').length)
+  const mappingToggle = renderer.root.findAllByType('Button').find((button) => button.props.children === '查看文件映射')
+  await act(async () => { mappingToggle.props.onClick(); await Promise.resolve() })
+  const mappingCall = calls.find((call) => call.url === '/project-copies/16/files')
+  assert.deepEqual({ ...mappingCall.config.params }, { page: 1, pageSize: 20 })
+  const mappingTable = renderer.root.findAllByType('Table').find((table) => table.props.data?.[0]?.targetFileId === 7)
+  assert.ok(mappingTable)
+  await act(async () => mappingTable.props.pagination.onChange(2))
+  assert.ok(calls.some((call) => call.url === '/project-copies/16/files' && call.config.params.page === 2))
   await act(async () => renderer.unmount())
 })

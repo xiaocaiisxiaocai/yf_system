@@ -41,6 +41,48 @@ export interface Project {
   createdByName?: string
   createdAt: string
   updatedAt: string
+  /** 当前项目存在可查看或受限的复制关系。 */
+  hasCopyHistory?: boolean
+  /** 当前项目的可见复制来源；来源无权访问时由后端置空。 */
+  copySource?: { projectId: number; name: string } | null
+}
+
+export interface ProjectCopySummary {
+  copyId: number
+  /** 从当前项目视角关联的另一项目 ID；仅在关联项目可见时返回。 */
+  projectId: number
+  name: string
+  fileCount: number
+  totalBytes: number
+  copiedByName?: string | null
+  createdAt: string
+}
+
+export interface ProjectCopyHistory {
+  source: ProjectCopySummary | null
+  copies: ProjectCopySummary[]
+  hasRestrictedRelations: boolean
+}
+
+export interface ProjectCopyFileMapping {
+  sourceFileId: number
+  sourceFileName: string
+  sourceDeleted: boolean
+  targetFileId: number
+  targetFileName: string
+  targetDeleted: boolean
+}
+
+export interface ProjectCopyResult {
+  project: Project
+  copy: {
+    copyId: number
+    sourceProjectId: number
+    targetProjectId: number
+    fileCount: number
+    totalBytes: number
+    createdAt: string
+  }
 }
 
 export type ProjectDictionaryType = 'ROBOT_VENDOR' | 'ROBOT_MODEL' | 'PRIORITY'
@@ -78,6 +120,8 @@ export interface FileItem {
   mimeType?: string
   createdAt: string
   canDelete?: boolean
+  /** 该文件由项目复制产生，不暴露不可见来源的文件标识。 */
+  isCopiedReference?: boolean
 }
 
 export interface Message {

@@ -70,6 +70,7 @@ export const ACTIONS: Record<string, ActionMeta> = {
   PASSWORD_CHANGE: action('修改密码', 'AUTH', '认证安全', 'orange'),
   PROFILE_UPDATE: action('更新个人资料', 'AUTH', '认证安全', 'purple'),
   PROJECT_CREATE: action('创建项目', 'PROJECT', '项目协作', 'arcoblue'),
+  PROJECT_COPY: action('复制项目', 'PROJECT', '项目协作', 'purple'),
   PROJECT_UPDATE: action('更新项目', 'PROJECT', '项目协作', 'arcoblue'),
   PROJECT_DICTIONARY_CREATE: action('新增数据字典', 'SYSTEM', '系统', 'arcoblue'),
   PROJECT_DICTIONARY_UPDATE: action('更新数据字典', 'SYSTEM', '系统', 'purple'),
@@ -281,6 +282,12 @@ export function displayChanges(row: AuditLogRow): DisplayChange[] {
   const explicit = explicitChanges(detail)
   if (Array.isArray(detail?.changes)) return explicit.filter((item) => !['permissions', 'members'].includes(item.field))
   if (!detail) return []
+  if (row.action === 'PROJECT_COPY' && isRecord(detail.source) && isRecord(detail.target)) {
+    return [
+      { field: 'projectName', label: '项目', before: detail.source.name, after: detail.target.name, historical: true },
+      { field: 'status', label: '新项目状态', before: null, after: detail.target.status, historical: true },
+    ]
+  }
   if ((row.action === 'SUPPLIER_UPDATE' || row.action === 'ROLE_UPDATE') && (detail.oldName != null || detail.newName != null)) {
     return [{ field: 'name', label: row.action === 'SUPPLIER_UPDATE' ? '供应商名称' : '角色名称', before: detail.oldName, after: detail.newName, historical: true }]
   }
@@ -381,6 +388,10 @@ export function detailNotes(row: AuditLogRow): DetailNote[] {
   const detail = row.detail
   if (!detail) return []
   const notes: DetailNote[] = []
+  if (row.action === 'PROJECT_COPY') {
+    notes.push({ label: '复制文件', value: `${formatAuditValue(detail.fileCount)} 个`, tone: 'normal' })
+    notes.push({ label: '文件总大小', value: formatByteSize(detail.totalBytes), tone: 'normal' })
+  }
   if (detail.passwordChanged === true) notes.push({ label: '邮箱凭据', value: '已更新（不记录密码或授权码）', tone: 'normal' })
   const reason = cleanText(detail.reason)
   if (reason) {
@@ -401,12 +412,26 @@ export function detailNotes(row: AuditLogRow): DetailNote[] {
   return notes
 }
 
+function formatByteSize(value: unknown): string {
+  const bytes = Number(value)
+  if (!Number.isFinite(bytes) || bytes < 0) return formatAuditValue(value)
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
 function countSummary(added: number, removed: number, noun: string) {
   return [`新增 ${added} ${noun}`, `移除 ${removed} ${noun}`].join('，')
 }
 
 export function detailSummary(row: AuditLogRow): string {
   const detail = row.detail
+  if (row.action === 'PROJECT_COPY' && isRecord(detail?.source) && isRecord(detail?.target)) {
+    const sourceName = cleanText(detail.source.name) || '原项目'
+    const targetName = cleanText(detail.target.name) || '新项目'
+    return `${sourceName} → ${targetName}；复制 ${formatAuditValue(detail.fileCount)} 个文件，共 ${formatByteSize(detail.totalBytes)}`
+  }
   const changes = displayChanges(row)
   const collections = collectionChanges(row)
   if (collections.addedPermissions.length || collections.removedPermissions.length) {

@@ -50,7 +50,7 @@ public sealed class MessageImageTests
         var service = new MessageService(new AuditService([]), database.Options);
         await using var conn = await database.Database.OpenAsync(ct);
 
-        Assert.Equal(5, await conn.ExecuteScalarAsync<int>(
+        Assert.Equal(SchemaMigrations.CurrentVersion, await conn.ExecuteScalarAsync<int>(
             "SELECT MAX(version) FROM yf_schema_migrations"));
         Assert.True(await conn.ExecuteScalarAsync<bool>(
             "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='message_images')"));

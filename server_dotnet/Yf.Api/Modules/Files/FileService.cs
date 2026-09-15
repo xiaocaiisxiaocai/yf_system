@@ -38,7 +38,8 @@ public sealed class FileService(
         var rows = (await conn.QueryAsync<FileListRow>(new CommandDefinition("""
             SELECT f.id AS Id,f.project_id AS ProjectId,f.uploader_id AS UploaderId,f.direction AS Direction,
                    f.original_name AS OriginalName,f.ext AS Ext,f.size_bytes AS SizeBytes,f.mime_type AS MimeType,
-                   f.sha256 AS Sha256,f.created_at AS CreatedAt,u.real_name AS UploaderName
+                   f.sha256 AS Sha256,f.created_at AS CreatedAt,u.real_name AS UploaderName,
+                   EXISTS(SELECT 1 FROM file_copy_refs fcr WHERE fcr.target_file_id=f.id) AS IsCopiedReference
             FROM files f LEFT JOIN users u ON u.id=f.uploader_id
             """ + where + " ORDER BY f.id DESC LIMIT @Size OFFSET @Offset", args, cancellationToken: ct))).ToArray();
         var canDelete = await ProjectAccessService.CanDeleteFilesAsync(conn, null, actor, ct);
@@ -46,7 +47,8 @@ public sealed class FileService(
         {
             id = row.Id, projectId = row.ProjectId, uploaderId = row.UploaderId, direction = row.Direction,
             originalName = row.OriginalName, ext = row.Ext, sizeBytes = row.SizeBytes, mimeType = row.MimeType,
-            sha256 = row.Sha256, createdAt = row.CreatedAt, uploaderName = row.UploaderName, canDelete
+            sha256 = row.Sha256, createdAt = row.CreatedAt, uploaderName = row.UploaderName,
+            isCopiedReference = row.IsCopiedReference, canDelete
         });
         return new { list, total, page, pageSize = size };
     }
@@ -345,6 +347,7 @@ public sealed class FileService(
         public string? Sha256 { get; set; }
         public DateTime CreatedAt { get; set; }
         public string? UploaderName { get; set; }
+        public bool IsCopiedReference { get; set; }
     }
 
     private sealed class MediaActorRow

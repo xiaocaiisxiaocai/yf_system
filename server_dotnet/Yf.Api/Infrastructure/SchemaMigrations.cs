@@ -10,7 +10,7 @@ namespace Yf.Api.Infrastructure;
 /// <summary>Explicit, restartable .NET-owned schema upgrades. Startup never changes schema.</summary>
 public static class SchemaMigrations
 {
-    public const int CurrentVersion = 6;
+    public const int CurrentVersion = 7;
     private const string PreviousBaseline = "m20260910_000016_project_workflow";
     private const string FirstMigrationName = "000001_adopt_schema_sessions_supplier_boundary";
     private const string CollaborationMigrationName = "000002_collaboration_notification_reads";
@@ -18,6 +18,7 @@ public static class SchemaMigrations
     private const string AcceptanceNotificationMigrationName = "000004_versioned_acceptance_notifications";
     private const string MessageImagesMigrationName = "000005_message_images";
     private const string ProjectMetadataMigrationName = "000006_project_metadata_dictionaries";
+    private const string ProjectCopyMigrationName = "000007_project_copy_history";
     internal const string InternalAcceptanceCancelledMailReason = "项目验收已调整为公司内部确认，旧供应商确认通知已取消";
     internal const string AcceptanceNotificationRebuiltMailReason = "验收通知已按当前待验收申请和验收人重新生成";
     private const string MigrationTableSql = """
@@ -88,12 +89,52 @@ public static class SchemaMigrations
           CONSTRAINT `fk_project_work_orders_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """;
+    internal const string ProjectCopiesTableSql = """
+        CREATE TABLE `project_copies` (
+          `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+          `source_project_id` bigint unsigned NOT NULL,
+          `target_project_id` bigint unsigned NOT NULL,
+          `source_project_name` varchar(128) NOT NULL,
+          `target_project_name` varchar(128) NOT NULL,
+          `copied_by` bigint unsigned NOT NULL,
+          `copied_by_name` varchar(128) NOT NULL,
+          `file_count` bigint unsigned NOT NULL,
+          `total_bytes` bigint unsigned NOT NULL,
+          `created_at` datetime(6) NOT NULL,
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `uk_project_copies_target` (`target_project_id`),
+          KEY `idx_project_copies_source_time` (`source_project_id`,`created_at`,`id`),
+          KEY `idx_project_copies_copied_by` (`copied_by`),
+          CONSTRAINT `fk_project_copies_source` FOREIGN KEY (`source_project_id`) REFERENCES `projects` (`id`),
+          CONSTRAINT `fk_project_copies_target` FOREIGN KEY (`target_project_id`) REFERENCES `projects` (`id`),
+          CONSTRAINT `fk_project_copies_copied_by` FOREIGN KEY (`copied_by`) REFERENCES `users` (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """;
+    internal const string FileCopyRefsTableSql = """
+        CREATE TABLE `file_copy_refs` (
+          `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+          `copy_id` bigint unsigned NOT NULL,
+          `source_file_id` bigint unsigned NOT NULL,
+          `target_file_id` bigint unsigned NOT NULL,
+          `source_file_name` varchar(255) NOT NULL,
+          `target_file_name` varchar(255) NOT NULL,
+          `created_at` datetime(6) NOT NULL,
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `uk_file_copy_refs_target` (`target_file_id`),
+          KEY `idx_file_copy_refs_copy` (`copy_id`,`id`),
+          KEY `idx_file_copy_refs_source` (`source_file_id`),
+          CONSTRAINT `fk_file_copy_refs_copy` FOREIGN KEY (`copy_id`) REFERENCES `project_copies` (`id`) ON DELETE CASCADE,
+          CONSTRAINT `fk_file_copy_refs_source` FOREIGN KEY (`source_file_id`) REFERENCES `files` (`id`),
+          CONSTRAINT `fk_file_copy_refs_target` FOREIGN KEY (`target_file_id`) REFERENCES `files` (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """;
     private static string FirstChecksum => Checksum(FirstMigrationName);
     private static string CollaborationChecksum => Checksum(CollaborationMigrationName);
     private static string InternalAcceptanceChecksum => Checksum(InternalAcceptanceMigrationName);
     private static string AcceptanceNotificationChecksum => Checksum(AcceptanceNotificationMigrationName);
     private static string MessageImagesChecksum => Checksum(MessageImagesMigrationName);
     private static string ProjectMetadataChecksum => Checksum(ProjectMetadataMigrationName);
+    private static string ProjectCopyChecksum => Checksum(ProjectCopyMigrationName);
 
     public static async Task ApplyAsync(AppDb db, CancellationToken ct = default)
     {
@@ -120,6 +161,8 @@ public static class SchemaMigrations
         var hasMessageImages = await HasTableAsync(conn, "message_images", ct);
         var hasProjectDictionaries = await HasTableAsync(conn, "project_dictionaries", ct);
         var hasProjectWorkOrders = await HasTableAsync(conn, "project_work_orders", ct);
+        var hasProjectCopies = await HasTableAsync(conn, "project_copies", ct);
+        var hasFileCopyRefs = await HasTableAsync(conn, "file_copy_refs", ct);
         MigrationRow[] migrationRows;
         if (hasMigrationTable)
         {
@@ -139,12 +182,18 @@ public static class SchemaMigrations
             await SchemaShapeValidator.ValidateTableAsync(conn, "project_dictionaries", ProjectDictionariesTableSql, ct);
         if (hasProjectWorkOrders)
             await SchemaShapeValidator.ValidateTableAsync(conn, "project_work_orders", ProjectWorkOrdersTableSql, ct);
+        if (hasProjectCopies)
+            await SchemaShapeValidator.ValidateTableAsync(conn, "project_copies", ProjectCopiesTableSql, ct);
+        if (hasFileCopyRefs)
+            await SchemaShapeValidator.ValidateTableAsync(conn, "file_copy_refs", FileCopyRefsTableSql, ct);
         if (migrationRows.Any(row => row.Version >= 2) && !hasCollaborationReads)
             throw new InvalidOperationException("Migration history says collaboration reads are applied, but the required table is missing. Restore the matching schema before retrying.");
         if (migrationRows.Any(row => row.Version >= 5) && !hasMessageImages)
             throw new InvalidOperationException("Migration history says message images are applied, but the required table is missing. Restore the matching schema before retrying.");
         if (migrationRows.Any(row => row.Version >= 6) && (!hasProjectDictionaries || !hasProjectWorkOrders))
             throw new InvalidOperationException("Migration history says project metadata is applied, but a required table is missing. Restore the matching schema before retrying.");
+        if (migrationRows.Any(row => row.Version >= 7) && (!hasProjectCopies || !hasFileCopyRefs))
+            throw new InvalidOperationException("Migration history says project copy history is applied, but a required table is missing. Restore the matching schema before retrying.");
         if (!hasMigrationTable)
             await conn.ExecuteAsync(new CommandDefinition(MigrationTableSql, cancellationToken: ct));
 
@@ -174,6 +223,12 @@ public static class SchemaMigrations
         if (!hasProjectWorkOrders)
             await conn.ExecuteAsync(new CommandDefinition(ProjectWorkOrdersTableSql, cancellationToken: ct));
         await SchemaShapeValidator.ValidateTableAsync(conn, "project_work_orders", ProjectWorkOrdersTableSql, ct);
+        if (!hasProjectCopies)
+            await conn.ExecuteAsync(new CommandDefinition(ProjectCopiesTableSql, cancellationToken: ct));
+        await SchemaShapeValidator.ValidateTableAsync(conn, "project_copies", ProjectCopiesTableSql, ct);
+        if (!hasFileCopyRefs)
+            await conn.ExecuteAsync(new CommandDefinition(FileCopyRefsTableSql, cancellationToken: ct));
+        await SchemaShapeValidator.ValidateTableAsync(conn, "file_copy_refs", FileCopyRefsTableSql, ct);
         await EnsureProjectMetadataColumnsAsync(conn, ct);
         await ValidateProjectMetadataColumnsAsync(conn, ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
@@ -358,9 +413,12 @@ public static class SchemaMigrations
         await conn.ExecuteAsync(new CommandDefinition(
             "INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (6,@name,@checksum,UTC_TIMESTAMP(6))",
             new { name = ProjectMetadataMigrationName, checksum = ProjectMetadataChecksum }, tx, cancellationToken: ct));
+        await conn.ExecuteAsync(new CommandDefinition(
+            "INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (7,@name,@checksum,UTC_TIMESTAMP(6))",
+            new { name = ProjectCopyMigrationName, checksum = ProjectCopyChecksum }, tx, cancellationToken: ct));
         await tx.CommitAsync(ct);
         ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: true);
-        Console.WriteLine("Database is at .NET schema version " + CurrentVersion + ". Project metadata dictionaries are available; no project history was removed.");
+        Console.WriteLine("Database is at .NET schema version " + CurrentVersion + ". Project copy history is available; no project history was removed.");
     }
 
     public static async Task ValidateAsync(MySqlConnection conn, CancellationToken ct)
@@ -379,6 +437,10 @@ public static class SchemaMigrations
             throw new InvalidOperationException("Database schema version 6 is incomplete. Run the matching application migration command before startup.");
         await SchemaShapeValidator.ValidateTableAsync(conn, "project_dictionaries", ProjectDictionariesTableSql, ct);
         await SchemaShapeValidator.ValidateTableAsync(conn, "project_work_orders", ProjectWorkOrdersTableSql, ct);
+        if (!await HasTableAsync(conn, "project_copies", ct) || !await HasTableAsync(conn, "file_copy_refs", ct))
+            throw new InvalidOperationException("Database schema version 7 is incomplete. Run the matching application migration command before startup.");
+        await SchemaShapeValidator.ValidateTableAsync(conn, "project_copies", ProjectCopiesTableSql, ct);
+        await SchemaShapeValidator.ValidateTableAsync(conn, "file_copy_refs", FileCopyRefsTableSql, ct);
         await ValidateProjectMetadataColumnsAsync(conn, ct);
         await SchemaShapeValidator.ValidateBaselineAsync(conn, SchemaShapeValidationMode.Strict, ct);
         await ValidatePermissionGateAsync(conn, ct);
@@ -463,6 +525,7 @@ public static class SchemaMigrations
             new MigrationRow(4, AcceptanceNotificationMigrationName, AcceptanceNotificationChecksum),
             new MigrationRow(5, MessageImagesMigrationName, MessageImagesChecksum),
             new MigrationRow(6, ProjectMetadataMigrationName, ProjectMetadataChecksum),
+            new MigrationRow(7, ProjectCopyMigrationName, ProjectCopyChecksum),
         };
         if (rows.Length > expected.Length || rows.Where((row, index) => row != expected[index]).Any())
             throw new InvalidOperationException("Unknown or modified .NET migration history; upgrade this application or restore the correct migration definitions.");

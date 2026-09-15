@@ -404,7 +404,8 @@ public sealed class SchemaShapeTests
         private static readonly string[] DataSnapshotTables =
         [
             "roles", "permissions", "role_permissions", "system_configs", "seaql_migrations",
-            "yf_schema_migrations", "collaboration_reads", "message_images", "refresh_tokens", "audit_logs"
+            "yf_schema_migrations", "collaboration_reads", "message_images", "project_copies", "file_copy_refs",
+            "refresh_tokens", "audit_logs"
         ];
 
         public AppDb Database { get; } = database;

@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Badge, Button, Card, Descriptions, Empty, Spin, Tabs, Tag, Typography } from '@arco-design/web-react'
+import { Badge, Button, Card, Descriptions, Drawer, Empty, Spin, Table, Tabs, Tag, Typography } from '@arco-design/web-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import http from '../../api/client'
-import { type Project, PROJECT_STATUS, fmtTime } from '../../api/types'
+import http, { type QuietRequestConfig } from '../../api/client'
+import {
+  type PageResp,
+  type Project,
+  type ProjectCopyFileMapping,
+  type ProjectCopyHistory,
+  type ProjectCopySummary,
+  PROJECT_STATUS,
+  fmtSize,
+  fmtTime,
+} from '../../api/types'
 import FileTable from '../../components/FileTable'
 import MessagePanel from '../../components/MessagePanel'
 import ProjectActivityPanel from '../../components/ProjectActivityPanel'
@@ -18,6 +27,135 @@ interface Summary {
 
 function detailText(value?: string | null) {
   return value?.trim() || '-'
+}
+
+function expectCopyHistory(value: unknown): ProjectCopyHistory {
+  if (!value || typeof value !== 'object' || !Array.isArray((value as ProjectCopyHistory).copies)) {
+    throw new Error('引用履历接口返回格式错误')
+  }
+  return value as ProjectCopyHistory
+}
+
+function expectCopyFilePage(value: unknown): PageResp<ProjectCopyFileMapping> {
+  if (!value || typeof value !== 'object' || !Array.isArray((value as PageResp<ProjectCopyFileMapping>).list)) {
+    throw new Error('文件映射接口返回格式错误')
+  }
+  return value as PageResp<ProjectCopyFileMapping>
+}
+
+function ProjectCopyRecord({
+  item,
+  relation,
+  onNavigate,
+}: {
+  item: ProjectCopySummary
+  relation: 'source' | 'copy'
+  onNavigate: (projectId: number) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [data, setData] = useState<PageResp<ProjectCopyFileMapping>>({ list: [], total: 0, page: 1, pageSize: 20 })
+  const [page, setPage] = useState(1)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  const requestSeq = useRef(0)
+
+  useEffect(() => {
+    if (!expanded) return
+    const seq = ++requestSeq.current
+    const controller = new AbortController()
+    // eslint-disable-next-line react/set-state-in-effect
+    setLoading(true)
+    setError(false)
+    http.get(`/project-copies/${item.copyId}/files`, {
+      params: { page, pageSize: 20 },
+      signal: controller.signal,
+      quietNetworkError: true,
+    } as QuietRequestConfig)
+      .then((response) => {
+        if (seq !== requestSeq.current) return
+        setData(expectCopyFilePage(response.data))
+      })
+      .catch(() => {
+        if (controller.signal.aborted || seq !== requestSeq.current) return
+        setError(true)
+      })
+      .finally(() => {
+        if (seq === requestSeq.current) setLoading(false)
+      })
+    return () => {
+      requestSeq.current += 1
+      controller.abort()
+    }
+  }, [expanded, item.copyId, page, reloadKey])
+
+  const sourceLabel = relation === 'source' ? '来源项目文件' : '当前项目文件'
+  const targetLabel = relation === 'source' ? '当前项目文件' : '副本项目文件'
+
+  return (
+    <article className="project-copy-record">
+      <div className="project-copy-record-heading">
+        <div className="project-copy-record-title">
+          <Tag color={relation === 'source' ? 'arcoblue' : 'purple'}>{relation === 'source' ? '复制来源' : '派生副本'}</Tag>
+          <Button type="text" size="small" onClick={() => onNavigate(item.projectId)} title={item.name}>{item.name}</Button>
+        </div>
+        <Button size="small" type="text" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
+          {expanded ? '收起文件映射' : '查看文件映射'}
+        </Button>
+      </div>
+      <div className="project-copy-record-meta">
+        <span>操作人：{detailText(item.copiedByName)}</span>
+        <span>复制时间：{fmtTime(item.createdAt)}</span>
+        <span>文件：{item.fileCount} 个 / {fmtSize(item.totalBytes)}</span>
+      </div>
+      {expanded && (
+        <div className="project-copy-files">
+          {error ? (
+            <div className="project-copy-load-state" role="status">
+              <Typography.Text type="error">文件映射加载失败</Typography.Text>
+              <Button size="small" onClick={() => setReloadKey((value) => value + 1)}>重试</Button>
+            </div>
+          ) : (
+            <Table
+              size="small"
+              rowKey="targetFileId"
+              loading={loading}
+              data={data.list}
+              scroll={{ x: 520 }}
+              columns={[
+                {
+                  title: sourceLabel,
+                  dataIndex: 'sourceFileName',
+                  width: 240,
+                  ellipsis: true,
+                  render: (name: string, row: ProjectCopyFileMapping) => (
+                    <span className="copy-file-name" title={name}>{name}{row.sourceDeleted && <Tag color="gray">已删除</Tag>}</span>
+                  ),
+                },
+                {
+                  title: targetLabel,
+                  dataIndex: 'targetFileName',
+                  width: 240,
+                  ellipsis: true,
+                  render: (name: string, row: ProjectCopyFileMapping) => (
+                    <span className="copy-file-name" title={name}>{name}{row.targetDeleted && <Tag color="gray">已删除</Tag>}</span>
+                  ),
+                },
+              ]}
+              pagination={data.total > data.pageSize ? {
+                total: data.total,
+                current: page,
+                pageSize: data.pageSize || 20,
+                sizeCanChange: false,
+                onChange: (nextPage) => setPage(nextPage),
+              } : false}
+              noDataElement={<Empty description={item.fileCount ? '暂无可显示的文件映射' : '复制时没有项目文件'} />}
+            />
+          )}
+        </div>
+      )}
+    </article>
+  )
 }
 
 export default function ProjectDetail() {
@@ -39,6 +177,12 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const reconnected = useCollaboration((state) => state.reconnectRevision ?? 0)
   const realtimeConnected = useCollaboration((state) => state.realtimeStatus === 'connected')
   const summarySeq = useRef(0)
+  const historySeq = useRef(0)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [copyHistory, setCopyHistory] = useState<ProjectCopyHistory | null>(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState(false)
+  const [historyReloadKey, setHistoryReloadKey] = useState(0)
   const [loadErrorFor, setLoadErrorFor] = useState<number | null>(null)
   const loadingProjectId = useRef<number | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
@@ -146,6 +290,34 @@ function ProjectDetailContent({ id }: { id?: string }) {
     }
   }, [project?.id, pid, loadSummary, revision, syncStatus])
 
+  useEffect(() => {
+    if (!historyOpen || project?.id !== pid || !project.hasCopyHistory) return
+    const seq = ++historySeq.current
+    const controller = new AbortController()
+    // eslint-disable-next-line react/set-state-in-effect
+    setHistoryLoading(true)
+    setHistoryError(false)
+    http.get(`/projects/${pid}/copy-history`, {
+      signal: controller.signal,
+      quietNetworkError: true,
+    } as QuietRequestConfig)
+      .then((response) => {
+        if (seq !== historySeq.current) return
+        setCopyHistory(expectCopyHistory(response.data))
+      })
+      .catch(() => {
+        if (controller.signal.aborted || seq !== historySeq.current) return
+        setHistoryError(true)
+      })
+      .finally(() => {
+        if (seq === historySeq.current) setHistoryLoading(false)
+      })
+    return () => {
+      historySeq.current += 1
+      controller.abort()
+    }
+  }, [historyOpen, historyReloadKey, pid, project?.hasCopyHistory, project?.id])
+
   if (!validProjectId) return (
     <div style={{ textAlign: 'center', padding: 32 }}>
       <Empty description="项目地址无效" />
@@ -217,6 +389,17 @@ function ProjectDetailContent({ id }: { id?: string }) {
             { label: '更新时间', value: fmtTime(project.updatedAt) },
           ]}
         />
+        {project.hasCopyHistory && (
+          <div className="project-copy-reference-bar">
+            <div>
+              <Typography.Text bold>引用履历</Typography.Text>
+              <Typography.Text type="secondary">
+                {project.copySource?.name ? `复制自「${project.copySource.name}」` : '可查看项目复制来源和派生副本'}
+              </Typography.Text>
+            </div>
+            <Button size="small" onClick={() => setHistoryOpen(true)}>查看引用履历</Button>
+          </div>
+        )}
         {project.description && (
           <div className="project-summary-description">
             <span className="project-summary-description-label">项目说明</span>
@@ -255,6 +438,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
               projectId={pid}
               projectStatus={project.status}
               targetId={filesTargetId}
+              onOpenCopyHistory={project.hasCopyHistory ? () => setHistoryOpen(true) : undefined}
             />
           </Tabs.TabPane>
           <Tabs.TabPane
@@ -293,6 +477,68 @@ function ProjectDetailContent({ id }: { id?: string }) {
           </Tabs.TabPane>
         </Tabs>
       </Card>
+
+      <Drawer
+        className="project-copy-history-drawer"
+        width="min(720px, 100vw)"
+        title="项目引用履历"
+        visible={historyOpen}
+        onCancel={() => setHistoryOpen(false)}
+        footer={null}
+        unmountOnExit
+      >
+        <div className="project-copy-history">
+          <div className="project-copy-history-note">
+            复制项目会保留项目资料、工令号和文件；留言、流程及验收状态、已读回执和通知不会复制。
+          </div>
+          {historyLoading && !copyHistory ? (
+            <div className="project-copy-load-state"><Spin size={28} /></div>
+          ) : historyError ? (
+            <div className="project-copy-load-state" role="status">
+              <Typography.Text type="error">引用履历加载失败</Typography.Text>
+              <Button size="small" onClick={() => setHistoryReloadKey((value) => value + 1)}>重试</Button>
+            </div>
+          ) : copyHistory ? (
+            <>
+              {copyHistory.hasRestrictedRelations && (
+                <div className="project-copy-restricted" role="status">
+                  部分关联项目当前无权查看，已隐藏其名称和文件信息。
+                </div>
+              )}
+              {copyHistory.source && (
+                <section className="project-copy-history-section">
+                  <h2>复制来源</h2>
+                  <ProjectCopyRecord
+                    item={copyHistory.source}
+                    relation="source"
+                    onNavigate={(projectId) => navigate(`/projects/${projectId}`)}
+                  />
+                </section>
+              )}
+              {copyHistory.copies.length > 0 && (
+                <section className="project-copy-history-section">
+                  <h2>派生副本</h2>
+                  <div className="project-copy-history-list">
+                    {copyHistory.copies.map((item) => (
+                      <ProjectCopyRecord
+                        key={item.copyId}
+                        item={item}
+                        relation="copy"
+                        onNavigate={(projectId) => navigate(`/projects/${projectId}`)}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )}
+              {!copyHistory.source && copyHistory.copies.length === 0 && (
+                <Empty description={copyHistory.hasRestrictedRelations ? '引用记录受访问权限限制' : '暂无引用记录'} />
+              )}
+            </>
+          ) : (
+            <Empty description="暂无引用记录" />
+          )}
+        </div>
+      </Drawer>
     </div>
   )
 }

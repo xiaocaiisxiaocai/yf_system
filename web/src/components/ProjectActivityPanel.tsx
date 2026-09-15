@@ -67,6 +67,7 @@ const PROJECT_ACTION_LABEL: Record<string, string> = {
   WITHDRAW: '撤回验收申请',
   TERMINATE: '终止项目',
   UPDATE: '更新项目',
+  COPY: '复制项目',
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -9,6 +9,7 @@ public static class ProjectsModule
     public static IServiceCollection AddProjectsModule(this IServiceCollection services)
     {
         services.AddScoped<ProjectService>();
+        services.AddScoped<ProjectCopyService>();
         services.AddScoped<ProjectDictionaryService>();
         services.AddScoped<MessageService>();
         services.AddScoped<DashboardService>();
@@ -45,6 +46,22 @@ public static class ProjectsModule
         {
             await using var conn = await db.OpenAsync(ct);
             return Results.Ok(await service.CreateAsync(conn, AccessService.GetCurrent(context), request, Ip(context), ct));
+        });
+        api.MapPost("/projects/{id:long}/copy", async (HttpContext context, ulong id, ProjectCopyRequest request, AppDb db, ProjectCopyService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.CopyAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+        });
+        api.MapGet("/projects/{id:long}/copy-history", async (HttpContext context, ulong id, AppDb db, ProjectCopyService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.HistoryAsync(conn, AccessService.GetCurrent(context), id, ct));
+        });
+        api.MapGet("/project-copies/{copyId:long}/files", async (HttpContext context, ulong copyId, AppDb db, ProjectCopyService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.FileHistoryAsync(conn, AccessService.GetCurrent(context), copyId,
+                QueryUlong(context, "page", 1), QueryUlong(context, "pageSize", 20), ct));
         });
         api.MapGet("/projects/{id:long}", async (HttpContext context, ulong id, AppDb db, ProjectService service, CancellationToken ct) =>
         {

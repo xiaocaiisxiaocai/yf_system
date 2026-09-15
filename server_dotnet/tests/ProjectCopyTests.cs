@@ -1,0 +1,148 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using Dapper;
+using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Projects;
+
+namespace Yf.Api.Tests;
+
+[Collection(ConnectionLifecycleCollection.Name)]
+public sealed class ProjectCopyTests
+{
+    [Fact(Timeout = 120_000)]
+    public async Task CopyCreatesIndependentFilesAndPermissionFilteredHistory()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_copy", ct);
+        await database.CreateBaselineAsync(legacyV16: false, ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        var storage = Path.Combine(Path.GetTempPath(), "yf-project-copy-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storage);
+        try
+        {
+            await database.ExecuteAsync(SeedSql, ct);
+            var bytes = "independent-copy-content"u8.ToArray();
+            var sha = Convert.ToHexStringLower(SHA256.HashData(bytes));
+            var sourceRelative = "files/2026/09/source-copy.txt";
+            var sourcePath = Path.Combine(storage, sourceRelative.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            await File.WriteAllBytesAsync(sourcePath, bytes, ct);
+            await database.ExecuteAsync($"""
+                INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,mime_type,sha256,storage_path,status,created_at)
+                VALUES(8101,7101,1,'C2S','源文件.txt','source-copy.txt','txt',{bytes.Length},'text/plain','{sha}','{sourceRelative}','AVAILABLE',UTC_TIMESTAMP(3));
+                INSERT INTO messages(id,project_id,sender_id,content,status,created_at)
+                VALUES(8201,7101,1,'不应复制的留言','NORMAL',UTC_TIMESTAMP(3));
+                """, ct);
+
+            var options = new AppOptions { StorageRoot = storage };
+            var publisher = new RecordingPublisher();
+            var audit = new AuditService([]);
+            var service = new ProjectCopyService(database.Database, options, audit, publisher);
+            var actor = new CurrentUser(1, "admin", "INTERNAL", null);
+            await using var conn = await database.Database.OpenAsync(ct);
+            var result = Json(await service.CopyAsync(conn, actor, 7101, new() { Name = "复制项目" }, null, ct));
+            var targetId = result.RootElement.GetProperty("copy").GetProperty("targetProjectId").GetUInt64();
+            var copyId = result.RootElement.GetProperty("copy").GetProperty("copyId").GetUInt64();
+            Assert.Equal(1, result.RootElement.GetProperty("copy").GetProperty("fileCount").GetInt32());
+            Assert.Equal((ulong)bytes.Length, result.RootElement.GetProperty("copy").GetProperty("totalBytes").GetUInt64());
+            Assert.Equal("DRAFT", result.RootElement.GetProperty("project").GetProperty("status").GetString());
+            Assert.True(result.RootElement.GetProperty("project").GetProperty("hasCopyHistory").GetBoolean());
+
+            var copied = await conn.QuerySingleAsync<CopiedFile>(new CommandDefinition(
+                "SELECT id AS Id,storage_path AS StoragePath,uploader_id AS UploaderId,sha256 AS Sha256 FROM files WHERE project_id=@TargetId",
+                new { TargetId = targetId }, cancellationToken: ct));
+            Assert.NotEqual(sourceRelative, copied.StoragePath);
+            Assert.Equal(1UL, copied.UploaderId);
+            Assert.Equal(sha, copied.Sha256);
+            Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(storage,
+                copied.StoragePath.Replace('/', Path.DirectorySeparatorChar)), ct));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM messages WHERE project_id=@TargetId", new { TargetId = targetId }, cancellationToken: ct)));
+            Assert.Equal(["COPY"], (await conn.QueryAsync<string>(new CommandDefinition(
+                "SELECT action FROM project_status_logs WHERE project_id=@TargetId", new { TargetId = targetId }, cancellationToken: ct))).ToArray());
+            Assert.Equal(2, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM project_activities WHERE source_key LIKE @Key", new { Key = $"project-copy:{copyId}:%" }, cancellationToken: ct)));
+
+            using (var history = Json(await service.HistoryAsync(conn, actor, 7101, ct)))
+                Assert.Equal(targetId, history.RootElement.GetProperty("copies")[0].GetProperty("projectId").GetUInt64());
+            using (var mappings = Json(await service.FileHistoryAsync(conn, actor, copyId, 1, 20, ct)))
+            {
+                Assert.Equal(1, mappings.RootElement.GetProperty("total").GetInt32());
+                Assert.Equal(8101UL, mappings.RootElement.GetProperty("list")[0].GetProperty("sourceFileId").GetUInt64());
+                Assert.Equal(copied.Id, mappings.RootElement.GetProperty("list")[0].GetProperty("targetFileId").GetUInt64());
+            }
+
+            var projects = new ProjectService(audit, options);
+            Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() =>
+                projects.DeleteAsync(conn, actor, 7101, null, ct))).Status);
+            Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() =>
+                projects.DeleteAsync(conn, actor, targetId, null, ct))).Status);
+
+            using var emptyCopy = Json(await service.CopyAsync(conn, actor, 7102, new() { Name = "空项目副本" }, null, ct));
+            Assert.Equal(0, emptyCopy.RootElement.GetProperty("copy").GetProperty("fileCount").GetInt32());
+            Assert.Equal(0UL, emptyCopy.RootElement.GetProperty("copy").GetProperty("totalBytes").GetUInt64());
+            Assert.Equal(4, publisher.ProjectIds.Count);
+            Assert.Contains(7101UL, publisher.ProjectIds);
+            Assert.Contains(7102UL, publisher.ProjectIds);
+            Assert.Contains(targetId, publisher.ProjectIds);
+
+            await conn.ExecuteAsync(new CommandDefinition(
+                "UPDATE projects SET responsible_user_id=2,updated_at=UTC_TIMESTAMP(3) WHERE id=@TargetId",
+                new { TargetId = targetId }, cancellationToken: ct));
+            var owner = new CurrentUser(1, "admin", "INTERNAL", null);
+            // Admin has view-all, so a limited actor is introduced below to prove filtering.
+            var limited = new CurrentUser(3, "copy-owner", "INTERNAL", null);
+            using (var filtered = Json(await service.HistoryAsync(conn, limited, 7101, ct)))
+            {
+                Assert.Empty(filtered.RootElement.GetProperty("copies").EnumerateArray());
+                Assert.True(filtered.RootElement.GetProperty("hasRestrictedRelations").GetBoolean());
+            }
+            Assert.Equal(404, (await Assert.ThrowsAsync<ApiException>(() =>
+                service.FileHistoryAsync(conn, limited, copyId, 1, 20, ct))).Status);
+
+            var beforeFiles = Directory.EnumerateFiles(storage, "*", SearchOption.AllDirectories).Count();
+            await conn.ExecuteAsync(new CommandDefinition(
+                "INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,mime_type,sha256,storage_path,status,created_at) VALUES(8999,7101,1,'C2S','缺失.txt','missing.txt','txt',1,'text/plain',REPEAT('0',64),'files/2026/09/missing.txt','AVAILABLE',UTC_TIMESTAMP(3))",
+                cancellationToken: ct));
+            Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() =>
+                service.CopyAsync(conn, actor, 7101, new() { Name = "复制失败项目" }, null, ct))).Status);
+            Assert.False(await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE name='复制失败项目')", cancellationToken: ct)));
+            Assert.Equal(beforeFiles, Directory.EnumerateFiles(storage, "*", SearchOption.AllDirectories).Count());
+        }
+        finally
+        {
+            try { Directory.Delete(storage, recursive: true); } catch { }
+        }
+    }
+
+    private const string SeedSql = """
+        INSERT INTO suppliers(id,name,status,created_at,updated_at) VALUES(6101,'复制测试供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+        INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at) VALUES(7001,NULL,'复制测试课','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+        INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+        VALUES(1,'admin','unused','系统管理员','','INTERNAL',7001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (2,'copy-other','unused','其他负责人','','INTERNAL',7001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (3,'copy-owner','unused','受限负责人','','INTERNAL',7001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+        INSERT INTO roles(id,name,is_built_in,status) VALUES(6001,'复制受限角色',0,'ACTIVE');
+        INSERT INTO role_permissions(role_id,permission_id) SELECT 6001,id FROM permissions WHERE code IN ('project:list','project:create','project:delete');
+        INSERT INTO user_roles(user_id,role_id) VALUES(1,1),(3,6001);
+        INSERT INTO project_dictionaries(id,type,code,name,parent_id,sort_no,status) VALUES
+          (6201,'ROBOT_VENDOR','COPY_VENDOR','复制厂商',NULL,1,'ACTIVE'),
+          (6202,'ROBOT_MODEL','COPY_MODEL','复制型号',6201,1,'ACTIVE'),
+          (6203,'PRIORITY','COPY_PRIORITY','复制优先级',NULL,1,'ACTIVE');
+        INSERT INTO projects(id,name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,robot_model_id,responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
+        VALUES(7101,'源项目','复制来源',6101,'DRAFT',1,'M1',6201,6202,3,7001,6203,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (7102,'空源项目','无文件复制来源',6101,'DRAFT',1,'M1',6201,6202,3,7001,6203,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+        INSERT INTO project_work_orders(project_id,work_order_no,sort_no) VALUES(7101,'WO-COPY',0),(7102,'WO-EMPTY',0);
+        """;
+
+    private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, JsonSerializerOptions.Web));
+    private sealed class CopiedFile { public ulong Id { get; init; } public string StoragePath { get; init; } = "";
+        public ulong UploaderId { get; init; } public string Sha256 { get; init; } = ""; }
+    private sealed class RecordingPublisher : IProjectRealtimePublisher
+    {
+        internal List<ulong> ProjectIds { get; } = [];
+        public Task PublishAsync(ulong projectId, string kind, CancellationToken ct = default)
+        { ProjectIds.Add(projectId); return Task.CompletedTask; }
+    }
+}

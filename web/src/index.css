@@ -551,6 +551,44 @@ html, body, #root {
 .action-slot > .arco-select { width: 100%; }
 .action-slot--empty { display: none; }
 
+.project-copy-dialog-content {
+  display: grid;
+  gap: 16px;
+}
+.project-copy-source {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+  background: var(--color-fill-1);
+}
+.project-copy-dialog .arco-form-item:last-child { margin-bottom: 0; }
+.project-copy-scope {
+  display: grid;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.project-copy-scope > div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 14px;
+}
+.project-copy-scope > div + div { border-top: 1px solid var(--color-border-2); }
+.project-copy-scope span:not(.arco-tag) {
+  min-width: 0;
+  color: var(--color-text-2);
+  overflow-wrap: anywhere;
+}
+.project-copy-scope .arco-tag { justify-self: start; }
+
 /* 带预览按钮的文件名单元格：文本占据剩余空间，按钮始终不被长文件名挤走。 */
 .file-name-cell {
   display: flex;

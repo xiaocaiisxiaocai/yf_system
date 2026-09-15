@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Button, Card, DatePicker, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Typography,
 } from '@arco-design/web-react'
-import { IconPlus } from '@arco-design/web-react/icon'
+import { IconCopy, IconPlus } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
@@ -11,6 +11,7 @@ import { useAuth } from '../../store/auth'
 import {
   type PageResp,
   type Project,
+  type ProjectCopyResult,
   type ProjectDictionaryOption,
   type ProjectOwnerOption,
   PROJECT_STATUS,
@@ -36,7 +37,17 @@ interface ProjectFormValues {
   expectedCompletionDate?: string
 }
 
+interface ProjectCopyFormValues {
+  name?: string
+}
+
 const WORK_ORDER_LIMIT = 50
+
+function suggestedCopyName(name: string) {
+  const suffix = ' - 副本'
+  const room = 128 - [...suffix].length
+  return `${[...name.trim()].slice(0, room).join('').trimEnd()}${suffix}`
+}
 
 function optionFilter(input: string, option?: { props?: { children?: unknown } }) {
   return String(option?.props?.children ?? '').toLocaleLowerCase().includes(input.toLocaleLowerCase())
@@ -94,6 +105,9 @@ export default function ProjectList() {
   const [modalOpen, setModalOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const saveInFlight = useRef(false)
+  const [copySource, setCopySource] = useState<Project | null>(null)
+  const [copying, setCopying] = useState(false)
+  const copyInFlight = useRef(false)
   const [compactTable, setCompactTable] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 1100px)').matches)
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -123,6 +137,7 @@ export default function ProjectList() {
   const statusUpdatesInFlight = useRef(new Set<number>())
   const [statusUpdatingIds, setStatusUpdatingIds] = useState<Set<number>>(() => new Set())
   const [form] = Form.useForm()
+  const [copyForm] = Form.useForm()
   const nav = useNavigate()
   const { hasPerm, user } = useAuth()
   const isInternal = user?.userType === 'INTERNAL'
@@ -295,6 +310,54 @@ export default function ProjectList() {
     setMetadataOptionsLoading(false)
     setRobotModelsLoading(false)
     setModalOpen(false)
+  }
+
+  const openCopy = (project: Project) => {
+    setCopySource(project)
+    copyForm.setFieldsValue({ name: suggestedCopyName(project.name) })
+  }
+
+  const closeCopy = () => {
+    if (copyInFlight.current) return
+    setCopySource(null)
+    copyForm.resetFields()
+  }
+
+  const submitCopy = async () => {
+    if (!copySource || copyInFlight.current) return
+    copyInFlight.current = true
+    setCopying(true)
+    try {
+      const values = await copyForm.validate().catch(() => null) as ProjectCopyFormValues | null
+      if (!values) return
+      const name = values.name?.trim() ?? ''
+      if (name === copySource.name.trim()) {
+        copyForm.setFieldValue('name', name)
+        Message.error('新项目名称不能与原项目相同')
+        return
+      }
+      const response = await http.post(`/projects/${copySource.id}/copy`, { name })
+      const result = response.data as ProjectCopyResult
+      setCopySource(null)
+      copyForm.resetFields()
+      setCopying(false)
+      copyInFlight.current = false
+      if (Number.isSafeInteger(result?.project?.id) && result.project.id > 0) {
+        Message.success(`项目已复制，包含 ${result.copy?.fileCount ?? 0} 个文件`)
+        nav(`/projects/${result.project.id}`)
+      } else {
+        Message.warning('项目已复制，返回信息不完整，请在列表中查看')
+        load()
+      }
+      return
+    } catch {
+      // 请求失败时保留名称与源项目，便于用户修正后重试。
+    } finally {
+      if (copyInFlight.current) {
+        setCopying(false)
+        copyInFlight.current = false
+      }
+    }
   }
 
   const submit = async () => {
@@ -480,7 +543,7 @@ export default function ProjectList() {
     { title: '更新时间', dataIndex: 'updatedAt', width: 164, align: 'center' as const, render: fmtTime },
     {
       title: '操作',
-      width: 248,
+      width: 296,
       fixed: compactTable ? undefined : 'right' as const,
       align: 'center' as const,
       render: (_: unknown, r: Project) => {
@@ -489,6 +552,11 @@ export default function ProjectList() {
           <Button key="enter" size="mini" type="text" onClick={() => nav(`/projects/${r.id}`)}>
             进入
           </Button>,
+          isInternal && hasPerm('project:create') && (
+            <Button key="copy" size="mini" type="text" icon={<IconCopy />} onClick={() => openCopy(r)}>
+              复制
+            </Button>
+          ),
           isInternal && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(r.status) && (
             <Button key="edit" size="mini" type="text" onClick={() => openEdit(r)}>
               编辑
@@ -759,6 +827,64 @@ export default function ProjectList() {
           </Form.Item>
         </Form>
       </Modal>
+
+      {copySource && <Modal
+        className="form-dialog project-copy-dialog"
+        style={{ width: 560 }}
+        title="复制项目"
+        visible
+        onOk={submitCopy}
+        onCancel={closeCopy}
+        confirmLoading={copying}
+        closable={!copying}
+        maskClosable={!copying}
+        escToExit={!copying}
+        cancelButtonProps={{ disabled: copying }}
+        okText="复制项目"
+        cancelText="取消"
+        unmountOnExit
+      >
+        <div className="project-copy-dialog-content">
+          <div className="project-copy-source">
+            <Typography.Text type="secondary">原项目</Typography.Text>
+            <Typography.Text bold ellipsis={{ showTooltip: true }}>{copySource.name}</Typography.Text>
+          </div>
+          <Form form={copyForm} layout="vertical">
+            <Form.Item
+              label="新项目名称"
+              field="name"
+              rules={[
+                { required: true, message: '请输入新项目名称' },
+                textLengthRule('项目名称', 128),
+                {
+                  validator: (value, callback) => {
+                    const name = String(value ?? '').trim()
+                    if (!name) callback('请输入新项目名称')
+                    else if (name === copySource.name.trim()) callback('新项目名称不能与原项目相同')
+                    else callback()
+                  },
+                },
+              ]}
+            >
+              <Input autoFocus disabled={copying} placeholder="请输入与原项目不同的名称" />
+            </Form.Item>
+          </Form>
+          <div className="project-copy-scope" aria-label="项目复制范围">
+            <div>
+              <Typography.Text bold>将复制</Typography.Text>
+              <span>项目资料、工令号、关联供应商和项目文件</span>
+            </div>
+            <div>
+              <Typography.Text bold>不复制</Typography.Text>
+              <span>留言、流程及验收状态、已读回执和通知</span>
+            </div>
+            <div>
+              <Typography.Text bold>新项目状态</Typography.Text>
+              <Tag color="gray">草稿</Tag>
+            </div>
+          </div>
+        </div>
+      </Modal>}
     </Card>
   )
 }

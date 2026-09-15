@@ -35,6 +35,12 @@ public sealed class ProjectUpsertRequest
     public string? ExpectedCompletionDate { get; init; }
 }
 
+public sealed class ProjectCopyRequest
+{
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+}
+
 public sealed class ProjectDictionaryUpsertRequest
 {
     [JsonPropertyName("type")]
@@ -138,6 +144,9 @@ internal sealed class ProjectRow
     public string? PriorityCode { get; init; }
     public string? PriorityName { get; init; }
     public DateTime? ExpectedCompletionDate { get; init; }
+    public bool HasCopyHistory { get; set; }
+    public ulong? CopySourceProjectId { get; set; }
+    public string? CopySourceProjectName { get; set; }
 }
 
 internal sealed class UserRow
@@ -269,6 +278,10 @@ internal static class ProjectJson
         priorityCode = row.PriorityCode,
         priorityName = row.PriorityName,
         expectedCompletionDate = row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+        hasCopyHistory = row.HasCopyHistory,
+        copySource = row.CopySourceProjectId is { } sourceProjectId && row.CopySourceProjectName is { } sourceProjectName
+            ? (object)new { projectId = sourceProjectId, name = sourceProjectName }
+            : null,
         createdAt = Utc(row.CreatedAt),
         updatedAt = Utc(row.UpdatedAt),
     };

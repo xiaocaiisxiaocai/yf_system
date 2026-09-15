@@ -21,6 +21,7 @@ interface Props {
   projectId: number
   projectStatus: string
   targetId?: number
+  onOpenCopyHistory?: () => void
 }
 
 const PDF_PREVIEW_MAX_BYTES = 50 * 1024 * 1024
@@ -49,7 +50,7 @@ async function downloadAuthed(id: number, name: string) {
   URL.revokeObjectURL(url)
 }
 
-export default function FileTable({ projectId, projectStatus, targetId }: Props) {
+export default function FileTable({ projectId, projectStatus, targetId, onOpenCopyHistory }: Props) {
   const [previewToolbar, setPreviewToolbar] = useState<HTMLDivElement | null>(null)
   const revision = useCollaboration((state) => state.revision)
   const syncStatus = useCollaboration((state) => state.status)
@@ -218,6 +219,21 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
             render: (v: string, r: FileItem) => (
               <Space size={4} className="file-name-cell">
                 <span className="table-cell-text" title={v}>{v}</span>
+                {r.isCopiedReference && (
+                  <Tooltip content={onOpenCopyHistory ? '由项目复制产生，点击查看引用履历' : '由项目复制产生'}>
+                    {onOpenCopyHistory ? (
+                      <Button
+                        className="file-reference-button"
+                        size="mini"
+                        type="text"
+                        aria-label={`查看文件「${v}」的引用履历`}
+                        onClick={onOpenCopyHistory}
+                      >
+                        引用
+                      </Button>
+                    ) : <Tag className="file-reference-tag" color="arcoblue">引用</Tag>}
+                  </Tooltip>
+                )}
                 {previewKind(r.ext, r.sizeBytes) !== 'none' && hasPerm('file:preview') && (
                   <Tooltip content="在线预览">
                     <Button size="mini" type="text" icon={<IconEye />} aria-label="预览文件" onClick={() => setPreview(r)} />

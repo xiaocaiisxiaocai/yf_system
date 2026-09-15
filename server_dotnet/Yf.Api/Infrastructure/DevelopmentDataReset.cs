@@ -10,6 +10,7 @@ internal static class DevelopmentDataReset
 {
     private static readonly string[] ClearedTables = [
         "collaboration_reads", "message_reads", "message_images", "email_outbox", "project_activities", "project_members",
+        "file_copy_refs", "project_copies",
         "project_status_logs", "upload_sessions", "files", "messages", "projects", "refresh_tokens",
         "user_roles", "role_permissions", "departments", "audit_logs"
     ];
