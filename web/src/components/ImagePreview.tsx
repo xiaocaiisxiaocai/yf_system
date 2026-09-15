@@ -1,13 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button, Result, Spin } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../api/client'
 import './ImagePreview.css'
+import { wheelZoomFactor } from '../../vendor/preview-wheel.js'
 
 function ImageDocument({ fileId, name, toolbarContainer }: {
   fileId: number; name: string; toolbarContainer?: HTMLElement | null
 }) {
   const viewport = useRef<HTMLDivElement>(null)
+  const imageRef = useRef<HTMLImageElement>(null)
+  const zoomAnchor = useRef<{ x: number; y: number; fractionX: number; fractionY: number } | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
   const [source, setSource] = useState('')
@@ -19,6 +22,34 @@ function ImageDocument({ fileId, name, toolbarContainer }: {
   const fit = natural.width && natural.height && size.width && size.height
     ? Math.min(1, Math.max(1, size.width - 32) / natural.width, Math.max(1, size.height - 32) / natural.height) : 1
   const scale = zoom === 'fit' ? fit : zoom
+
+  useEffect(() => {
+    const element = viewport.current
+    if (!element || status !== 'ready') return
+    const wheel = (event: WheelEvent) => {
+      const factor = wheelZoomFactor(event)
+      if (factor === 1) return
+      event.preventDefault(); event.stopPropagation()
+      const rect = imageRef.current?.getBoundingClientRect()
+      if (!rect?.width || !rect.height) return
+      zoomAnchor.current = { x: event.clientX, y: event.clientY,
+        fractionX: (event.clientX - rect.left) / rect.width, fractionY: (event.clientY - rect.top) / rect.height }
+      setZoom(current => Math.max(0.01, Math.min(8, (current === 'fit' ? fit : current) * factor)))
+    }
+    element.addEventListener('wheel', wheel, { passive: false })
+    return () => element.removeEventListener('wheel', wheel)
+  }, [status, fit])
+
+  useLayoutEffect(() => {
+    const anchor = zoomAnchor.current
+    const element = viewport.current
+    const rect = imageRef.current?.getBoundingClientRect()
+    zoomAnchor.current = null
+    if (anchor && element && rect) {
+      element.scrollLeft += rect.left + anchor.fractionX * rect.width - anchor.x
+      element.scrollTop += rect.top + anchor.fractionY * rect.height - anchor.y
+    }
+  }, [scale])
 
   useEffect(() => {
     const element = viewport.current
@@ -50,6 +81,7 @@ function ImageDocument({ fileId, name, toolbarContainer }: {
   }, [fileId, attempt])
 
   const changeZoom = (value: number | 'fit') => {
+    zoomAnchor.current = null
     setZoom(value)
     // Center the newly sized image while leaving normal wheel/drag scrolling local.
     requestAnimationFrame(() => {
@@ -86,7 +118,7 @@ function ImageDocument({ fileId, name, toolbarContainer }: {
       {source && <div className="image-preview-stage" style={{
         width: Math.max(size.width, natural.width * scale + 32), height: Math.max(size.height, natural.height * scale + 32),
       }}>
-        <img src={source} alt={name} draggable={false} onContextMenu={event => event.preventDefault()}
+        <img ref={imageRef} src={source} alt={name} draggable={false} onContextMenu={event => event.preventDefault()}
           style={{ width: natural.width ? natural.width * scale : undefined, height: natural.height ? natural.height * scale : undefined, visibility: status === 'ready' ? 'visible' : 'hidden' }}
           onLoad={event => {
             const image = event.currentTarget

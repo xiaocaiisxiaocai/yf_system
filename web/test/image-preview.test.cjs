@@ -22,6 +22,7 @@ function load(http) {
     require(name) {
       if (name === './ImagePreview.css') return {}
       if (name === '../api/client') return http
+      if (name === '../../vendor/preview-wheel.js') return require(path.resolve(__dirname, '../vendor/preview-wheel.js'))
       if (name === '@arco-design/web-react') return new Proxy({}, { get: (_, name) => component(name) })
       return require(name)
     },
@@ -34,7 +35,8 @@ test('image preview fits large images and supports original size and reset', asy
   let renderer
   try {
     await act(async () => { renderer = create(React.createElement(env.Preview, { fileId: 1, name: 'test.png' }), {
-      createNodeMock: () => ({ clientWidth: 1032, clientHeight: 632 }),
+      createNodeMock: () => ({ clientWidth: 1032, clientHeight: 632, addEventListener() {}, removeEventListener() {},
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 1000, height: 500 }) }),
     }) })
     await act(async () => renderer.root.findByType('img').props.onLoad({ currentTarget: { naturalWidth: 2000, naturalHeight: 1000 } }))
     assert.equal(renderer.root.findByType('img').props.style.width, 1000)
