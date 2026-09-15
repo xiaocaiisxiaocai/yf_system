@@ -4,7 +4,7 @@ import {
   Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Space, Table, Tag, Tree, Typography,
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
-import http from '../../api/client'
+import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import { type PageResp } from '../../api/types'
@@ -87,7 +87,7 @@ export default function RoleList() {
     setPermsLoading(true)
     setPermsError(false)
     const seq = ++permsSeq.current
-    http.get('/permissions')
+    http.get('/permissions', { quietNetworkError: true } as QuietRequestConfig)
       .then((r) => {
         if (seq === permsSeq.current) setPerms(r.data)
       })
@@ -101,7 +101,7 @@ export default function RoleList() {
 
   useEffect(() => {
     const seq = ++permsSeq.current
-    http.get('/permissions')
+    http.get('/permissions', { quietNetworkError: true } as QuietRequestConfig)
       .then((r) => {
         if (seq === permsSeq.current) setPerms(r.data)
       })
@@ -190,7 +190,7 @@ export default function RoleList() {
   }
 
   const savePerms = async () => {
-    if (savingPerms || permsLoading || permsError || permTarget?.canManage === false) return
+    if (savingPerms || permsLoading || permsError || perms.length === 0 || permTarget?.canManage === false) return
     const ids = Array.from(new Set(checked)).map(Number)
     setSavingPerms(true)
     try {
@@ -378,7 +378,7 @@ export default function RoleList() {
           <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
             <Button disabled={savingPerms} onClick={() => setPermTarget(null)}>{permTarget?.canManage === false ? '关闭' : '取消'}</Button>
             {permTarget?.canManage !== false && (
-              <Button type="primary" loading={savingPerms} disabled={permsLoading || permsError} onClick={savePerms}>
+              <Button type="primary" loading={savingPerms} disabled={permsLoading || permsError || perms.length === 0} onClick={savePerms}>
                 保存权限
               </Button>
             )}

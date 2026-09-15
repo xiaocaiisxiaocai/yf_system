@@ -161,6 +161,29 @@ test('role permission save failure resolves the click handler, keeps selections,
   await act(async () => renderer.unmount())
 })
 
+test('empty permission catalog disables saving but an intentionally cleared role remains saveable', async () => {
+  for (const catalogAvailable of [false, true]) {
+    const role = { id: 7, name: '测试角色', isBuiltIn: false, status: 'ACTIVE', permissionIds: [1], assignedUserCount: 0, canManage: true }
+    const writes = []
+    const permissions = catalogAvailable ? [{ id: 1, name: '项目协作', type: 'MENU', parentId: null, grantable: true }] : []
+    const Page = loadPage('src/pages/rbac/RoleList.tsx', {
+      get: async (url) => ({ data: url === '/permissions' ? permissions : { list: [role], total: 1, page: 1, pageSize: 20 } }),
+      put: async (_url, body) => { writes.push(body); return { data: {} } },
+    }, [])
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)); await flush() })
+    const actions = renderer.root.findByType('Table').props.columns.at(-1).render(null, role)
+    await act(async () => findElement(actions, (node) => node.props.children === '分配权限').props.onClick())
+    if (catalogAvailable) await act(async () => renderer.root.findByType('Tree').props.onCheck([], { checked: false, node: { key: '1' } }))
+    const save = findElement(renderer.root.findByType('Drawer').props.footer, (node) => node.props.children === '保存权限')
+    assert.equal(save.props.disabled, !catalogAvailable)
+    await act(async () => { await save.props.onClick(); await flush() })
+    assert.equal(writes.length, catalogAvailable ? 1 : 0)
+    if (catalogAvailable) assert.deepEqual(Array.from(writes[0].permissionIds), [])
+    await act(async () => renderer.unmount())
+  }
+})
+
 test('project status failure resolves the select handler and re-enables the same row for retry', async () => {
   const project = {
     id: 101, name: '失败重试项目', supplierId: 8, supplierName: '供应商', status: 'DRAFT',
