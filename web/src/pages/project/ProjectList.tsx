@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Button, Card, DatePicker, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Typography,
 } from '@arco-design/web-react'
-import { IconCopy, IconPlus } from '@arco-design/web-react/icon'
+import { IconPlus } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
@@ -108,14 +108,6 @@ export default function ProjectList() {
   const [copySource, setCopySource] = useState<Project | null>(null)
   const [copying, setCopying] = useState(false)
   const copyInFlight = useRef(false)
-  const [compactTable, setCompactTable] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 1100px)').matches)
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const query = window.matchMedia('(max-width: 1100px)')
-    const update = () => setCompactTable(query.matches)
-    query.addEventListener('change', update)
-    return () => query.removeEventListener('change', update)
-  }, [])
   const [editing, setEditing] = useState<Project | null>(null)
   const [suppliers, setSuppliers] = useState<SupplierOpt[]>([])
   const [supplierOptionsLoading, setSupplierOptionsLoading] = useState(true)
@@ -513,7 +505,7 @@ export default function ProjectList() {
       title: '项目名称',
       dataIndex: 'name',
       width: 150,
-      fixed: compactTable ? undefined : 'left' as const,
+      fixed: 'left' as const,
       ellipsis: true,
       render: (v: string, r: Project) => <Link to={`/projects/${r.id}`}>{v}</Link>,
     },
@@ -543,8 +535,8 @@ export default function ProjectList() {
     { title: '更新时间', dataIndex: 'updatedAt', width: 164, align: 'center' as const, render: fmtTime },
     {
       title: '操作',
-      width: 296,
-      fixed: compactTable ? undefined : 'right' as const,
+      width: 256,
+      fixed: 'right' as const,
       align: 'center' as const,
       render: (_: unknown, r: Project) => {
         const nextStatuses = statusActions(r)
@@ -553,7 +545,7 @@ export default function ProjectList() {
             进入
           </Button>,
           isInternal && hasPerm('project:create') && (
-            <Button key="copy" size="mini" type="text" icon={<IconCopy />} onClick={() => openCopy(r)}>
+            <Button key="copy" size="mini" type="text" onClick={() => openCopy(r)}>
               复制
             </Button>
           ),
@@ -830,7 +822,6 @@ export default function ProjectList() {
 
       {copySource && <Modal
         className="form-dialog project-copy-dialog"
-        style={{ width: 560 }}
         title="复制项目"
         visible
         onOk={submitCopy}

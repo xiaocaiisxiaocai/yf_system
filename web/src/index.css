@@ -553,8 +553,9 @@ html, body, #root {
 
 .project-copy-dialog-content {
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
+.project-copy-dialog .arco-modal-content { padding: 20px 24px 18px; }
 .project-copy-source {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -564,7 +565,7 @@ html, body, #root {
   padding: 12px 14px;
   border: 1px solid var(--color-border-2);
   border-radius: 6px;
-  background: var(--color-fill-1);
+  background: var(--color-fill-2);
 }
 .project-copy-dialog .arco-form-item:last-child { margin-bottom: 0; }
 .project-copy-scope {
@@ -572,6 +573,7 @@ html, body, #root {
   border: 1px solid var(--color-border-2);
   border-radius: 6px;
   overflow: hidden;
+  background: var(--color-fill-1);
 }
 .project-copy-scope > div {
   display: grid;
@@ -579,12 +581,19 @@ html, body, #root {
   align-items: start;
   gap: 12px;
   min-width: 0;
-  padding: 10px 14px;
+  padding: 9px 12px;
 }
 .project-copy-scope > div + div { border-top: 1px solid var(--color-border-2); }
+.project-copy-scope > div > .arco-typography {
+  color: var(--color-text-2);
+  font-size: 13px;
+  line-height: 20px;
+}
 .project-copy-scope span:not(.arco-tag) {
   min-width: 0;
-  color: var(--color-text-2);
+  color: var(--color-text-3);
+  font-size: 13px;
+  line-height: 20px;
   overflow-wrap: anywhere;
 }
 .project-copy-scope .arco-tag { justify-self: start; }
@@ -791,6 +800,7 @@ html, body, #root {
   .page-table { flex: 1 0 auto; }
   .form-grid { grid-template-columns: 1fr; }
   .arco-modal-header, .arco-modal-content, .arco-modal-footer { padding: 16px; }
+  .project-copy-dialog .arco-modal-content { padding: 16px; }
   .arco-modal-content { max-height: calc(100dvh - 180px); }
   .arco-drawer-header, .arco-drawer-content, .arco-drawer-footer { padding: 16px; }
   .mobile-nav-drawer .arco-drawer-content {
