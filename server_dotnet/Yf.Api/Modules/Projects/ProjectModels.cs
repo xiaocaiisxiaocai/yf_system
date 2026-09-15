@@ -12,6 +12,48 @@ public sealed class ProjectUpsertRequest
 
     [JsonPropertyName("supplierId")]
     public ulong SupplierId { get; init; }
+
+    [JsonPropertyName("workOrderNos")]
+    public string?[]? WorkOrderNos { get; init; }
+
+    [JsonPropertyName("machineModel")]
+    public string? MachineModel { get; init; }
+
+    [JsonPropertyName("robotVendorId")]
+    public ulong? RobotVendorId { get; init; }
+
+    [JsonPropertyName("robotModelId")]
+    public ulong? RobotModelId { get; init; }
+
+    [JsonPropertyName("responsibleUserId")]
+    public ulong? ResponsibleUserId { get; init; }
+
+    [JsonPropertyName("priorityId")]
+    public ulong? PriorityId { get; init; }
+
+    [JsonPropertyName("expectedCompletionDate")]
+    public string? ExpectedCompletionDate { get; init; }
+}
+
+public sealed class ProjectDictionaryUpsertRequest
+{
+    [JsonPropertyName("type")]
+    public string? Type { get; init; }
+
+    [JsonPropertyName("code")]
+    public string? Code { get; init; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("parentId")]
+    public ulong? ParentId { get; init; }
+
+    [JsonPropertyName("sortNo")]
+    public int SortNo { get; init; }
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; init; } = true;
 }
 
 public sealed class ProjectStatusRequest
@@ -79,6 +121,23 @@ internal sealed class ProjectRow
     public DateTime UpdatedAt { get; init; }
     public string? SupplierName { get; init; }
     public string? CreatedByName { get; init; }
+    public string[] WorkOrderNos { get; set; } = [];
+    public string? MachineModel { get; init; }
+    public ulong? RobotVendorId { get; init; }
+    public string? RobotVendorCode { get; init; }
+    public string? RobotVendorName { get; init; }
+    public ulong? RobotModelId { get; init; }
+    public string? RobotModelCode { get; init; }
+    public string? RobotModelName { get; init; }
+    public ulong? ResponsibleUserId { get; init; }
+    public string? ResponsibleUserEmployeeNo { get; init; }
+    public string? ResponsibleUserName { get; init; }
+    public ulong? SectionId { get; init; }
+    public string? SectionName { get; init; }
+    public ulong? PriorityId { get; init; }
+    public string? PriorityCode { get; init; }
+    public string? PriorityName { get; init; }
+    public DateTime? ExpectedCompletionDate { get; init; }
 }
 
 internal sealed class UserRow
@@ -193,6 +252,23 @@ internal static class ProjectJson
         latestSubmissionId = row.LatestSubmissionId,
         createdBy = row.CreatedBy,
         createdByName = row.CreatedByName,
+        workOrderNos = row.WorkOrderNos,
+        machineModel = row.MachineModel,
+        robotVendorId = row.RobotVendorId,
+        robotVendorCode = row.RobotVendorCode,
+        robotVendorName = row.RobotVendorName,
+        robotModelId = row.RobotModelId,
+        robotModelCode = row.RobotModelCode,
+        robotModelName = row.RobotModelName,
+        responsibleUserId = row.ResponsibleUserId,
+        responsibleUserEmployeeNo = row.ResponsibleUserEmployeeNo,
+        responsibleUserName = row.ResponsibleUserName,
+        sectionId = row.SectionId,
+        sectionName = row.SectionName,
+        priorityId = row.PriorityId,
+        priorityCode = row.PriorityCode,
+        priorityName = row.PriorityName,
+        expectedCompletionDate = row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
         createdAt = Utc(row.CreatedAt),
         updatedAt = Utc(row.UpdatedAt),
     };

@@ -11,6 +11,24 @@ export interface Project {
   description?: string
   supplierId: number
   supplierName?: string
+  workOrderNos: string[]
+  machineModel?: string | null
+  robotVendorId?: number | null
+  robotVendorCode?: string | null
+  robotVendorName?: string | null
+  robotModelId?: number | null
+  robotModelCode?: string | null
+  robotModelName?: string | null
+  responsibleUserId?: number | null
+  responsibleUserEmployeeNo?: string | null
+  responsibleUserName?: string | null
+  sectionId?: number | null
+  sectionName?: string | null
+  priorityId?: number | null
+  priorityCode?: string | null
+  priorityName?: string | null
+  /** 仅包含日期，不进行时区转换。 */
+  expectedCompletionDate?: string | null
   status: 'DRAFT' | 'IN_PROGRESS' | 'PENDING_CONFIRMATION' | 'COMPLETED' | 'TERMINATED'
   /** 当前内部验收方；待验收时固定为 COMPANY，项目回到进行中后由后端清空。 */
   confirmSide?: ConfirmSide | null
@@ -23,6 +41,26 @@ export interface Project {
   createdByName?: string
   createdAt: string
   updatedAt: string
+}
+
+export type ProjectDictionaryType = 'ROBOT_VENDOR' | 'ROBOT_MODEL' | 'PRIORITY'
+
+export interface ProjectDictionaryOption {
+  id: number
+  type: ProjectDictionaryType
+  code: string
+  name: string
+  parentId?: number | null
+  sortNo: number
+  enabled: boolean
+}
+
+export interface ProjectOwnerOption {
+  id: number
+  employeeNo: string
+  realName: string
+  sectionId?: number | null
+  sectionName?: string | null
 }
 
 /** 新申请固定 COMPANY；SUPPLIER 仅用于读取升级前保留的历史数据。 */

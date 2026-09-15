@@ -5,6 +5,36 @@ namespace Yf.Api.Tests;
 
 public sealed class ProjectsWorkflowTests
 {
+    [Fact]
+    public void ReferencedRobotModelCannotMoveToAnotherVendor()
+    {
+        var error = Assert.Throws<ApiException>(() =>
+            ProjectDictionaryService.EnsureReferencedModelParentUnchanged("ROBOT_MODEL", true, 10, 11));
+
+        Assert.Equal(409, error.Status);
+        Assert.Equal("机器人型号已被项目引用，不能更换所属厂商", error.Message);
+        ProjectDictionaryService.EnsureReferencedModelParentUnchanged("ROBOT_MODEL", false, 10, 11);
+        ProjectDictionaryService.EnsureReferencedModelParentUnchanged("ROBOT_MODEL", true, 10, 10);
+    }
+
+    [Fact]
+    public void WorkOrdersAreTrimmedDeduplicatedAndKeepFirstOrder()
+    {
+        var result = ProjectService.NormalizeWorkOrderNos([" WO-2 ", "", null, "wo-2", "WO-1"]);
+
+        Assert.Equal(["WO-2", "WO-1"], result);
+    }
+
+    [Fact]
+    public void WorkOrderLimitsAreEnforced()
+    {
+        var tooMany = Enumerable.Range(1, 51).Select(index => (string?)$"WO-{index}").ToArray();
+        Assert.Equal("工令号不能超过 50 个",
+            Assert.Throws<ApiException>(() => ProjectService.NormalizeWorkOrderNos(tooMany)).Message);
+        Assert.Equal("单个工令号不能超过 128 个字符",
+            Assert.Throws<ApiException>(() => ProjectService.NormalizeWorkOrderNos([new string('号', 129)])).Message);
+    }
+
     [Theory]
     [InlineData("DRAFT", "IN_PROGRESS", "IN_PROGRESS", "START")]
     [InlineData("TERMINATED", "IN_PROGRESS", "IN_PROGRESS", "RESTART")]

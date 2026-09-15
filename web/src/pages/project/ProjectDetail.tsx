@@ -17,6 +17,10 @@ interface Summary {
   activityRevision?: string
 }
 
+function detailText(value?: string | null) {
+  return value?.trim() || '-'
+}
+
 export default function ProjectDetail() {
   const { id } = useParams()
   // 切换项目时隔离操作后的刷新回调和表单状态，旧项目迟回不能覆盖新项目。
@@ -193,8 +197,22 @@ function ProjectDetailContent({ id }: { id?: string }) {
           </div>
         </div>
         <Descriptions
-          column={{ xs: 1, sm: 1, md: 2, lg: 3 }}
+          className="project-metadata"
+          column={{ xs: 1, sm: 2, md: 3, lg: 4 }}
           data={[
+            { label: '工令号', value: detailText(project.workOrderNos?.join('、')) },
+            { label: '机型', value: detailText(project.machineModel) },
+            { label: 'Robot 厂商', value: detailText(project.robotVendorName) },
+            { label: 'Robot 型号', value: detailText(project.robotModelName) },
+            {
+              label: '负责人',
+              value: project.responsibleUserName
+                ? `${project.responsibleUserName}${project.responsibleUserEmployeeNo ? `（${project.responsibleUserEmployeeNo}）` : ''}`
+                : '-',
+            },
+            { label: '课别', value: detailText(project.sectionName) },
+            { label: '优先级', value: detailText(project.priorityName) },
+            { label: '预计完成日期', value: detailText(project.expectedCompletionDate) },
             { label: '供应商', value: project.supplierName || '-' },
             { label: '创建人', value: project.createdByName || '-' },
             { label: '更新时间', value: fmtTime(project.updatedAt) },

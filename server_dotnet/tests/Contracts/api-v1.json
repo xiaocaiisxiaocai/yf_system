@@ -43,6 +43,8 @@
   "GET /api/v1/projects/{}/message-receipts",
   "GET /api/v1/projects/{}/messages",
   "GET /api/v1/projects/{}/summary",
+  "GET /api/v1/project-dictionaries",
+  "GET /api/v1/project-owner-options",
   "GET /api/v1/projects/{}/supplier-members",
   "GET /api/v1/supplier-options",
   "GET /api/v1/uploads/{}",
@@ -64,6 +66,7 @@
   "POST /api/v1/projects/{}/reject",
   "POST /api/v1/projects/{}/submit",
   "POST /api/v1/projects/{}/withdraw",
+  "POST /api/v1/project-dictionaries",
   "POST /api/v1/uploads/init",
   "POST /api/v1/uploads/{}/merge",
   "PUT /api/v1/admin/departments/{}",
@@ -87,5 +90,7 @@
   "PUT /api/v1/projects/{}",
   "PUT /api/v1/projects/{}/members",
   "PUT /api/v1/projects/{}/status",
-  "PUT /api/v1/uploads/{}/chunks/{}"
+  "PUT /api/v1/project-dictionaries/{}",
+  "PUT /api/v1/uploads/{}/chunks/{}",
+  "DELETE /api/v1/project-dictionaries/{}"
 ]

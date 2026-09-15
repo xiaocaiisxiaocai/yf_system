@@ -71,6 +71,9 @@ export const ACTIONS: Record<string, ActionMeta> = {
   PROFILE_UPDATE: action('更新个人资料', 'AUTH', '认证安全', 'purple'),
   PROJECT_CREATE: action('创建项目', 'PROJECT', '项目协作', 'arcoblue'),
   PROJECT_UPDATE: action('更新项目', 'PROJECT', '项目协作', 'arcoblue'),
+  PROJECT_DICTIONARY_CREATE: action('新增数据字典', 'SYSTEM', '系统', 'arcoblue'),
+  PROJECT_DICTIONARY_UPDATE: action('更新数据字典', 'SYSTEM', '系统', 'purple'),
+  PROJECT_DICTIONARY_DELETE: action('删除数据字典', 'SYSTEM', '系统', 'red'),
   PROJECT_START: action('开始项目', 'PROJECT', '项目协作', 'arcoblue'),
   PROJECT_SUBMIT: action('提交验收', 'PROJECT', '项目协作', 'arcoblue'),
   PROJECT_CONFIRM: action('验收通过', 'PROJECT', '项目协作', 'green'),
@@ -131,7 +134,7 @@ export const CATEGORY_OPTIONS = [
 export const TARGET_LABELS: Record<string, string> = {
   user: '用户', role: '角色', department: '组织', supplier: '供应商', project: '项目',
   file: '文件', message: '留言', upload_session: '上传任务', audit_log: '操作日志',
-  system_config: '系统参数', email_outbox: '邮件队列',
+  system_config: '系统参数', email_outbox: '邮件队列', project_dictionary: '数据字典',
 }
 
 const FIELD_LABELS: Record<string, string> = {

@@ -10,13 +10,14 @@ namespace Yf.Api.Infrastructure;
 /// <summary>Explicit, restartable .NET-owned schema upgrades. Startup never changes schema.</summary>
 public static class SchemaMigrations
 {
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
     private const string PreviousBaseline = "m20260910_000016_project_workflow";
     private const string FirstMigrationName = "000001_adopt_schema_sessions_supplier_boundary";
     private const string CollaborationMigrationName = "000002_collaboration_notification_reads";
     private const string InternalAcceptanceMigrationName = "000003_internal_project_acceptance";
     private const string AcceptanceNotificationMigrationName = "000004_versioned_acceptance_notifications";
     private const string MessageImagesMigrationName = "000005_message_images";
+    private const string ProjectMetadataMigrationName = "000006_project_metadata_dictionaries";
     internal const string InternalAcceptanceCancelledMailReason = "项目验收已调整为公司内部确认，旧供应商确认通知已取消";
     internal const string AcceptanceNotificationRebuiltMailReason = "验收通知已按当前待验收申请和验收人重新生成";
     private const string MigrationTableSql = """
@@ -56,11 +57,43 @@ public static class SchemaMigrations
           CONSTRAINT `fk_message_images_message` FOREIGN KEY (`message_id`) REFERENCES `messages` (`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """;
+    internal const string ProjectDictionariesTableSql = """
+        CREATE TABLE `project_dictionaries` (
+          `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+          `type` varchar(32) NOT NULL,
+          `code` varchar(64) NOT NULL,
+          `name` varchar(128) NOT NULL,
+          `parent_id` bigint unsigned DEFAULT NULL,
+          `sort_no` int NOT NULL DEFAULT 0,
+          `status` varchar(16) NOT NULL DEFAULT 'ACTIVE',
+          `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          `updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `uk_project_dictionaries_type_code` (`type`,`code`),
+          KEY `idx_project_dictionaries_type_status_sort` (`type`,`status`,`sort_no`,`id`),
+          KEY `idx_project_dictionaries_parent` (`parent_id`),
+          CONSTRAINT `fk_project_dictionaries_parent` FOREIGN KEY (`parent_id`) REFERENCES `project_dictionaries` (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """;
+    internal const string ProjectWorkOrdersTableSql = """
+        CREATE TABLE `project_work_orders` (
+          `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+          `project_id` bigint unsigned NOT NULL,
+          `work_order_no` varchar(128) NOT NULL,
+          `sort_no` int NOT NULL DEFAULT 0,
+          `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `uk_project_work_orders_project_no` (`project_id`,`work_order_no`),
+          KEY `idx_project_work_orders_project_sort` (`project_id`,`sort_no`,`id`),
+          CONSTRAINT `fk_project_work_orders_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """;
     private static string FirstChecksum => Checksum(FirstMigrationName);
     private static string CollaborationChecksum => Checksum(CollaborationMigrationName);
     private static string InternalAcceptanceChecksum => Checksum(InternalAcceptanceMigrationName);
     private static string AcceptanceNotificationChecksum => Checksum(AcceptanceNotificationMigrationName);
     private static string MessageImagesChecksum => Checksum(MessageImagesMigrationName);
+    private static string ProjectMetadataChecksum => Checksum(ProjectMetadataMigrationName);
 
     public static async Task ApplyAsync(AppDb db, CancellationToken ct = default)
     {
@@ -85,6 +118,8 @@ public static class SchemaMigrations
         var hasMigrationTable = await HasTableAsync(conn, "yf_schema_migrations", ct);
         var hasCollaborationReads = await HasTableAsync(conn, "collaboration_reads", ct);
         var hasMessageImages = await HasTableAsync(conn, "message_images", ct);
+        var hasProjectDictionaries = await HasTableAsync(conn, "project_dictionaries", ct);
+        var hasProjectWorkOrders = await HasTableAsync(conn, "project_work_orders", ct);
         MigrationRow[] migrationRows;
         if (hasMigrationTable)
         {
@@ -100,10 +135,16 @@ public static class SchemaMigrations
             await SchemaShapeValidator.ValidateTableAsync(conn, "collaboration_reads", CollaborationReadsTableSql, ct);
         if (hasMessageImages)
             await SchemaShapeValidator.ValidateTableAsync(conn, "message_images", MessageImagesTableSql, ct);
+        if (hasProjectDictionaries)
+            await SchemaShapeValidator.ValidateTableAsync(conn, "project_dictionaries", ProjectDictionariesTableSql, ct);
+        if (hasProjectWorkOrders)
+            await SchemaShapeValidator.ValidateTableAsync(conn, "project_work_orders", ProjectWorkOrdersTableSql, ct);
         if (migrationRows.Any(row => row.Version >= 2) && !hasCollaborationReads)
             throw new InvalidOperationException("Migration history says collaboration reads are applied, but the required table is missing. Restore the matching schema before retrying.");
         if (migrationRows.Any(row => row.Version >= 5) && !hasMessageImages)
             throw new InvalidOperationException("Migration history says message images are applied, but the required table is missing. Restore the matching schema before retrying.");
+        if (migrationRows.Any(row => row.Version >= 6) && (!hasProjectDictionaries || !hasProjectWorkOrders))
+            throw new InvalidOperationException("Migration history says project metadata is applied, but a required table is missing. Restore the matching schema before retrying.");
         if (!hasMigrationTable)
             await conn.ExecuteAsync(new CommandDefinition(MigrationTableSql, cancellationToken: ct));
 
@@ -127,6 +168,14 @@ public static class SchemaMigrations
         if (!hasMessageImages)
             await conn.ExecuteAsync(new CommandDefinition(MessageImagesTableSql, cancellationToken: ct));
         await SchemaShapeValidator.ValidateTableAsync(conn, "message_images", MessageImagesTableSql, ct);
+        if (!hasProjectDictionaries)
+            await conn.ExecuteAsync(new CommandDefinition(ProjectDictionariesTableSql, cancellationToken: ct));
+        await SchemaShapeValidator.ValidateTableAsync(conn, "project_dictionaries", ProjectDictionariesTableSql, ct);
+        if (!hasProjectWorkOrders)
+            await conn.ExecuteAsync(new CommandDefinition(ProjectWorkOrdersTableSql, cancellationToken: ct));
+        await SchemaShapeValidator.ValidateTableAsync(conn, "project_work_orders", ProjectWorkOrdersTableSql, ct);
+        await EnsureProjectMetadataColumnsAsync(conn, ct);
+        await ValidateProjectMetadataColumnsAsync(conn, ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         var supplierGrants = await conn.QueryAsync<SupplierGrant>(new CommandDefinition(
@@ -299,9 +348,19 @@ public static class SchemaMigrations
         await conn.ExecuteAsync(new CommandDefinition(
             "INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (5,@name,@checksum,UTC_TIMESTAMP(6))",
             new { name = MessageImagesMigrationName, checksum = MessageImagesChecksum }, tx, cancellationToken: ct));
+        await conn.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT IGNORE INTO project_dictionaries(type,code,name,parent_id,sort_no,status,created_at,updated_at) VALUES
+              ('PRIORITY','HIGH','高',NULL,10,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              ('PRIORITY','NORMAL','普通',NULL,20,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              ('PRIORITY','LOW','低',NULL,30,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
+            """, transaction: tx, cancellationToken: ct));
+        await conn.ExecuteAsync(new CommandDefinition(
+            "INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (6,@name,@checksum,UTC_TIMESTAMP(6))",
+            new { name = ProjectMetadataMigrationName, checksum = ProjectMetadataChecksum }, tx, cancellationToken: ct));
         await tx.CommitAsync(ct);
         ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: true);
-        Console.WriteLine("Database is at .NET schema version " + CurrentVersion + ". Message image storage is available; no project history was removed.");
+        Console.WriteLine("Database is at .NET schema version " + CurrentVersion + ". Project metadata dictionaries are available; no project history was removed.");
     }
 
     public static async Task ValidateAsync(MySqlConnection conn, CancellationToken ct)
@@ -314,8 +373,13 @@ public static class SchemaMigrations
             throw new InvalidOperationException("Database schema version 5 is incomplete. Run the matching application migration command before startup.");
         await SchemaShapeValidator.ValidateTableAsync(conn, "collaboration_reads", CollaborationReadsTableSql, ct);
         if (!await HasTableAsync(conn, "message_images", ct))
-            throw new InvalidOperationException("Database schema version 5 is incomplete. Run the matching application migration command before startup.");
+            throw new InvalidOperationException("Database schema version 6 is incomplete. Run the matching application migration command before startup.");
         await SchemaShapeValidator.ValidateTableAsync(conn, "message_images", MessageImagesTableSql, ct);
+        if (!await HasTableAsync(conn, "project_dictionaries", ct) || !await HasTableAsync(conn, "project_work_orders", ct))
+            throw new InvalidOperationException("Database schema version 6 is incomplete. Run the matching application migration command before startup.");
+        await SchemaShapeValidator.ValidateTableAsync(conn, "project_dictionaries", ProjectDictionariesTableSql, ct);
+        await SchemaShapeValidator.ValidateTableAsync(conn, "project_work_orders", ProjectWorkOrdersTableSql, ct);
+        await ValidateProjectMetadataColumnsAsync(conn, ct);
         await SchemaShapeValidator.ValidateBaselineAsync(conn, SchemaShapeValidationMode.Strict, ct);
         await ValidatePermissionGateAsync(conn, ct);
         await ValidateInternalAcceptanceBoundaryAsync(conn, null, ct);
@@ -398,6 +462,7 @@ public static class SchemaMigrations
             new MigrationRow(3, InternalAcceptanceMigrationName, InternalAcceptanceChecksum),
             new MigrationRow(4, AcceptanceNotificationMigrationName, AcceptanceNotificationChecksum),
             new MigrationRow(5, MessageImagesMigrationName, MessageImagesChecksum),
+            new MigrationRow(6, ProjectMetadataMigrationName, ProjectMetadataChecksum),
         };
         if (rows.Length > expected.Length || rows.Where((row, index) => row != expected[index]).Any())
             throw new InvalidOperationException("Unknown or modified .NET migration history; upgrade this application or restore the correct migration definitions.");
@@ -410,7 +475,86 @@ public static class SchemaMigrations
 
     private static Task<bool> HasTableAsync(MySqlConnection conn, string table, CancellationToken ct) => conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=@table)", new { table }, cancellationToken: ct));
     private static Task<bool> HasColumnAsync(MySqlConnection conn, string table, string column, CancellationToken ct) => conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=@table AND column_name=@column)", new { table, column }, cancellationToken: ct));
+    private static async Task EnsureProjectMetadataColumnsAsync(MySqlConnection conn, CancellationToken ct)
+    {
+        var columns = new (string Name, string Definition)[]
+        {
+            ("machine_model", "VARCHAR(128) NULL"),
+            ("robot_vendor_id", "BIGINT UNSIGNED NULL"),
+            ("robot_model_id", "BIGINT UNSIGNED NULL"),
+            ("responsible_user_id", "BIGINT UNSIGNED NULL"),
+            ("section_id", "BIGINT UNSIGNED NULL"),
+            ("priority_id", "BIGINT UNSIGNED NULL"),
+            ("expected_completion_date", "DATE NULL"),
+        };
+        foreach (var column in columns)
+        {
+            if (!await HasColumnAsync(conn, "projects", column.Name, ct))
+                await conn.ExecuteAsync(new CommandDefinition($"ALTER TABLE projects ADD COLUMN `{column.Name}` {column.Definition}", cancellationToken: ct));
+        }
+        var indexes = new (string Name, string Columns)[]
+        {
+            ("idx_projects_robot_vendor", "robot_vendor_id"),
+            ("idx_projects_robot_model", "robot_model_id"),
+            ("idx_projects_responsible_user", "responsible_user_id"),
+            ("idx_projects_section", "section_id"),
+            ("idx_projects_priority", "priority_id"),
+            ("idx_projects_expected_completion", "expected_completion_date"),
+        };
+        foreach (var index in indexes)
+        {
+            var exists = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='projects' AND index_name=@Name)",
+                new { index.Name }, cancellationToken: ct));
+            if (!exists)
+                await conn.ExecuteAsync(new CommandDefinition($"CREATE INDEX `{index.Name}` ON projects({index.Columns})", cancellationToken: ct));
+        }
+    }
+
+    private static async Task ValidateProjectMetadataColumnsAsync(MySqlConnection conn, CancellationToken ct)
+    {
+        var rows = (await conn.QueryAsync<ProjectMetadataColumn>(new CommandDefinition(
+            """
+            SELECT column_name AS Name,column_type AS ColumnType,is_nullable AS IsNullable
+            FROM information_schema.columns
+            WHERE table_schema=DATABASE() AND table_name='projects'
+              AND column_name IN ('machine_model','robot_vendor_id','robot_model_id','responsible_user_id','section_id','priority_id','expected_completion_date')
+            """, cancellationToken: ct))).ToDictionary(row => row.Name, StringComparer.OrdinalIgnoreCase);
+        var expected = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["machine_model"] = "varchar(128)",
+            ["robot_vendor_id"] = "bigint unsigned",
+            ["robot_model_id"] = "bigint unsigned",
+            ["responsible_user_id"] = "bigint unsigned",
+            ["section_id"] = "bigint unsigned",
+            ["priority_id"] = "bigint unsigned",
+            ["expected_completion_date"] = "date",
+        };
+        foreach (var item in expected)
+        {
+            if (!rows.TryGetValue(item.Key, out var row)
+                || !NormalizeIntegerDisplayWidth(row.ColumnType).Equals(item.Value, StringComparison.OrdinalIgnoreCase)
+                || row.IsNullable != "YES")
+                throw new InvalidOperationException($"Database schema version 6 has an unsupported projects.{item.Key} definition.");
+        }
+    }
+
+    private static string NormalizeIntegerDisplayWidth(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        const string prefix = "bigint(";
+        if (!normalized.StartsWith(prefix, StringComparison.Ordinal)) return normalized;
+        var close = normalized.IndexOf(')', prefix.Length);
+        if (close < 0 || !normalized[prefix.Length..close].All(char.IsAsciiDigit)) return normalized;
+        return "bigint" + normalized[(close + 1)..];
+    }
     private sealed record MigrationRow(int Version, string Name, string Checksum);
+    private sealed class ProjectMetadataColumn
+    {
+        public string Name { get; init; } = string.Empty;
+        public string ColumnType { get; init; } = string.Empty;
+        public string IsNullable { get; init; } = string.Empty;
+    }
     private sealed record SupplierGrant(ulong RoleId, ulong PermissionId, string Code);
     private sealed record PendingAcceptanceMigration(ulong ProjectId, ulong? LatestSubmissionId);
     private sealed record PendingAcceptanceNotificationMigration(

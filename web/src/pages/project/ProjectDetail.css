@@ -7,12 +7,15 @@
   overflow: hidden;
 }
 .project-detail-page > .page-card { padding: 0; }
-.project-detail-summary-card { flex: 0 1 auto; max-height: 38%; overflow: auto; }
+.project-detail-summary-card { flex: 0 1 auto; max-height: min(46%, 380px); overflow: auto; }
 .project-detail-summary-card > .arco-card-body { padding: 14px 20px; }
 .project-detail-summary-card .detail-heading { margin-bottom: 8px; }
 .project-detail-summary-card .detail-heading h1 { font-size: 18px; line-height: 28px; }
 .project-detail-summary-card .arco-descriptions-item-label,
 .project-detail-summary-card .arco-descriptions-item-value { padding-bottom: 2px; }
+.project-detail-summary-card .project-metadata { margin-top: 2px; }
+.project-detail-summary-card .project-metadata .arco-descriptions-item-label { white-space: nowrap; padding-right: 12px; }
+.project-detail-summary-card .project-metadata .arco-descriptions-item-value { min-width: 0; overflow-wrap: anywhere; }
 .project-summary-description { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin-top: 2px; }
 .project-summary-description-label { flex: 0 0 auto; color: var(--color-text-3); }
 .project-summary-description .project-description { flex: 1; min-width: 0; }
@@ -52,7 +55,7 @@
 .project-detail-page .project-activity-feed { flex: 1 1 0; min-height: 0; overflow: auto; }
 @media (max-width: 720px) {
   .project-detail-page { height: calc(100dvh - 76px); gap: 10px; }
-  .project-detail-summary-card { max-height: 42%; }
+  .project-detail-summary-card { max-height: 46%; }
   .project-detail-summary-card > .arco-card-body { padding: 12px; }
   .project-detail-tabs-card > .arco-card-body { padding: 8px 12px 12px; }
   .project-detail-summary-card .detail-heading { gap: 6px; }

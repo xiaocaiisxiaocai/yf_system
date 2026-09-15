@@ -69,6 +69,8 @@ dotnet run --project .\Yf.Api -- --migrate-database
 
 留言截图由 schema v5 的 `message_images` 表管理，文件存放在私有存储根目录的 `message-images` 子目录，不发布到 `wwwroot`。`POST /api/v1/projects/{id}/messages` 同时支持原 JSON 正文和 multipart 的 `content` + 重复 `images`；每条最多 9 张、图片合计最多 50 MiB，单张还受系统参数 `upload.max_file_size` 的较小值约束。只接受 PNG、JPEG、GIF、WebP、BMP，并同时校验扩展名和文件签名。读取使用认证接口 `GET /api/v1/messages/{messageId}/images/{imageId}`，每次重新校验正常留言和项目可见范围，不使用 `file:preview` 权限。
 
+schema v6 新增项目工令号、机台机型、机器人厂商/型号、负责人及其直属课别、优先级和预计完成日期，并提供可维护的项目字典接口。字段、权限和停用/删除规则见 [项目元数据与字典契约](docs/项目元数据与字典契约-2026-09-15.md)。
+
 新库的默认上传白名单已包含 PPTX、MP4、WebM、OGV 和上述六种图片格式。现有库的管理员自定义白名单不会在启动时改写；需要启用这些格式时，先取得具有 `config:manage` 权限的短时访问令牌，再运行 `scripts/append-preview-upload-extensions.ps1`。脚本通过管理 API 只提交 `upload.allowed_exts`，仅补齐缺失类型，并回读核对其他公开系统参数未变化；空白值表示不限制类型，脚本会原样保留并报告 `unrestricted=true`。不要把令牌字面量写入命令历史。
 
 结构预检以内嵌 `schema-baseline.json` 为依据，检查列定义、主键、唯一键、业务索引列顺序、外键规则及表引擎；现有 `.NET` 迁移表本身也须满足结构和历史要求。不支持的结构漂移会在迁移命令执行 DDL、回填数据或记录历史之前被拒绝，不自动修复业务表。第 16 版缺少会话族列/索引及合法的中断状态可继续升级。

@@ -9,6 +9,7 @@ public static class ProjectsModule
     public static IServiceCollection AddProjectsModule(this IServiceCollection services)
     {
         services.AddScoped<ProjectService>();
+        services.AddScoped<ProjectDictionaryService>();
         services.AddScoped<MessageService>();
         services.AddScoped<DashboardService>();
         services.AddScoped<CollaborationService>();
@@ -280,6 +281,33 @@ public static class ProjectsModule
         {
             await using var conn = await db.OpenAsync(ct);
             return Results.Ok(await service.InternalUserOptionsAsync(conn, AccessService.GetCurrent(context), ct));
+        });
+        api.MapGet("/project-owner-options", async (HttpContext context, AppDb db, ProjectService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.ProjectOwnerOptionsAsync(conn, AccessService.GetCurrent(context), ct));
+        });
+        api.MapGet("/project-dictionaries", async (HttpContext context, AppDb db, ProjectDictionaryService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.ListAsync(conn, AccessService.GetCurrent(context), QueryString(context, "type"),
+                QueryBool(context, "enabledOnly", false), QueryNullableUlong(context, "parentId"), ct));
+        });
+        api.MapPost("/project-dictionaries", async (HttpContext context, ProjectDictionaryUpsertRequest request, AppDb db, ProjectDictionaryService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.CreateAsync(conn, AccessService.GetCurrent(context), request, Ip(context), ct));
+        });
+        api.MapPut("/project-dictionaries/{id:long}", async (HttpContext context, ulong id, ProjectDictionaryUpsertRequest request, AppDb db, ProjectDictionaryService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.UpdateAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+        });
+        api.MapDelete("/project-dictionaries/{id:long}", async (HttpContext context, ulong id, AppDb db, ProjectDictionaryService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            await service.DeleteAsync(conn, AccessService.GetCurrent(context), id, Ip(context), ct);
+            return Results.NoContent();
         });
 
         return endpoints;

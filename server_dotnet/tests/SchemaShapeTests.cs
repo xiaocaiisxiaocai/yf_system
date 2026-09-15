@@ -396,7 +396,7 @@ public sealed class SchemaShapeTests
         Assert.Equal(before, await database.SnapshotAsync(ct));
     }
 
-    private sealed class SchemaDatabaseScope(
+    internal sealed class SchemaDatabaseScope(
         MySqlConnection administration,
         string databaseName,
         AppDb database) : IAsyncDisposable
@@ -628,6 +628,6 @@ public sealed class SchemaShapeTests
         }
     }
 
-    private sealed record DatabaseSnapshot(string Schema, string Data);
+    internal sealed record DatabaseSnapshot(string Schema, string Data);
     private sealed record MigrationHistoryRow(int Version, string Name, string Checksum, DateTime AppliedAt);
 }
