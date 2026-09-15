@@ -20,3 +20,17 @@ React 的 `PptxPreview` 通过现有鉴权接口读取 PPTX 字节，再传入�
 ## 能力范围
 
 主要支持 PPTX 中的普通文本、图片、表格、背景、常见形状和分组对象，并显示全部幻灯片。复杂图表、SmartArt、公式、动画、音视频、宏、外部链接资源以及部分高级填充或形状不保证与桌面 PowerPoint 完全一致；预览不会执行宏、刷新外部数据或播放嵌入媒体。
+
+## 主题与几何保真适配（2026-09-15）
+
+`normalize-pptx.js` 在已通过 ZIP/XML 预检的内存副本上展开渲染内核缺失的 DrawingML 规则：
+
+- 沿幻灯片、版式、母版的关系读取对应主题，避免母版回链版式造成主题解析循环。
+- 按 `fillRef` / `lnRef` 索引展开主题填充、渐变与线条，替换 `phClr`，保留显式 `noFill` 和本地属性的优先级。
+- 解析主题色映射、透明度、亮度和饱和度变换，以及在线性光空间应用的 tint/shade；转换为内核可直接读取的 RGB 颜色。
+- 补齐缺省中文主题字体与显式西文字体；实际显示仍取决于客户端是否安装对应字体。
+- `geometry.js` 补充 `flowChartConnector` 圆形及单边大括号/中括号，保留变换、尺寸、调整值和线条。弧线按预设公式转换为内核支持的三次贝塞尔。
+
+依据：[Microsoft FillReference 定义](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.fillreference)、[Apache POI 的 DrawingML 预设几何](https://github.com/apache/poi/blob/trunk/poi/src/main/resources/org/apache/poi/sl/draw/geom/presetShapeDefinitions.xml)。不修改 npm 内核或服务器原文件。
+
+用用户实际上传的 6 页文件逐页验证，确认圆形、单边大括号、8 个渐变和宋体主题字体恢复；另回归原源码包 13 页演示文件在桌面与窄屏的图片、翻页、缩放。几何、颜色与预览隔离的 14 项针对性测试通过。用户业务文件不纳入 Git，截图及复核记录仅存于本地 `.runlogs/pptx-fidelity-20260915/`。

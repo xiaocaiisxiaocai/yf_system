@@ -1,5 +1,6 @@
 import { init } from 'pptx-preview'
 import JSZip from 'jszip'
+import { normalizePptx } from './normalize-pptx.js'
 import './viewer.css'
 
 const host = document.getElementById('viewer')
@@ -51,6 +52,7 @@ async function preflightPptx(buffer) {
     const document = parser.parseFromString(source, 'application/xml')
     if (!document.documentElement || document.querySelector('parsererror')) throw new Error('Malformed PPTX XML')
   }
+  return zip
 }
 
 function sanitizeRenderedContent() {
@@ -142,12 +144,13 @@ addEventListener('message', async event => {
   loaded = true
   channel = event.data.channel
   try {
-    await preflightPptx(event.data.buffer)
+    const zip = await preflightPptx(event.data.buffer)
+    const previewBuffer = await normalizePptx(zip)
     if (!active) return
     const width = Math.max(320, host.clientWidth || 960)
     const height = Math.max(240, host.clientHeight || 540)
     const viewer = init(host, { width, height })
-    const pptx = await viewer.preview(event.data.buffer)
+    const pptx = await viewer.preview(previewBuffer)
     if (!active) return
     sanitizeRenderedContent()
     slides = Array.from(host.querySelectorAll('.pptx-preview-slide-wrapper'))
