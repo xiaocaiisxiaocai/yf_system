@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag, Typography } from '@arco-design/web-react'
+import { Button, Card, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag, Typography } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
+import './Dictionaries.css'
 
 type DictionaryType = 'ROBOT_VENDOR' | 'ROBOT_MODEL' | 'PRIORITY'
 interface DictionaryItem {
@@ -102,30 +103,52 @@ export default function Dictionaries() {
     && (!vendorId || type !== 'ROBOT_MODEL' || item.parentId === vendorId)
     && (!search || `${item.code} ${item.name}`.toLowerCase().includes(search)))
     .sort((a, b) => a.sortNo - b.sortNo || a.id - b.id)
+  const hasFilter = Boolean(search || type === 'ROBOT_MODEL' && vendorId)
+  const hasEnabledVendor = vendors.some(item => item.enabled)
+  const canCreate = !loading && !error && (type !== 'ROBOT_MODEL' || hasEnabledVendor)
+  const resetFilters = () => { setKeyword(''); setVendorId(undefined) }
+  const emptyContent = <div className="dictionary-empty">
+    <Empty description={hasFilter ? '未找到匹配项' : `暂无${label}数据`} />
+    <Typography.Text type="secondary">
+      {hasFilter
+        ? '请调整关键字或筛选条件'
+        : type === 'ROBOT_MODEL' && !hasEnabledVendor
+          ? '请先维护一个启用的 Robot 厂商'
+          : `创建后可在项目中选择${label}`}
+    </Typography.Text>
+    {hasFilter
+      ? <Button onClick={resetFilters}>清空筛选</Button>
+      : type === 'ROBOT_MODEL' && !hasEnabledVendor
+        ? <Button type="primary" onClick={() => setType('ROBOT_VENDOR')}>维护 Robot 厂商</Button>
+        : <Button type="primary" icon={<IconPlus />} onClick={() => startEdit()}>新增 {label}</Button>}
+  </div>
 
-  return <Card className="page-card">
-    <div className="page-header"><h1>数据字典</h1></div>
-    <Tabs activeTab={type} onChange={value => { setType(value as DictionaryType); setKeyword(''); setVendorId(undefined) }}>
+  return <Card className="page-card page-card--table dictionary-page">
+    <div className="page-heading">
+      <div><h1>数据字典</h1><p>维护项目使用的 Robot 厂商、型号和优先级</p></div>
+    </div>
+    <Tabs className="dictionary-tabs" activeTab={type} onChange={value => { setType(value as DictionaryType); setKeyword(''); setVendorId(undefined) }}>
       {TYPES.map(item => <Tabs.TabPane key={item.key} title={item.name} />)}
     </Tabs>
-    <div className="toolbar">
+    <div className="page-toolbar responsive-toolbar dictionary-toolbar">
       <Space wrap>
-        <Input.Search aria-label="搜索字典" placeholder="名称 / 编码" value={keyword} onChange={setKeyword} allowClear style={{ width: 240 }} />
+        <Input.Search aria-label="搜索字典" placeholder="搜索编码或名称" value={keyword} onChange={setKeyword} allowClear style={{ width: 240 }} />
         {type === 'ROBOT_MODEL' && <Select aria-label="筛选 Robot 厂商" placeholder="全部厂商" value={vendorId} onChange={setVendorId} allowClear showSearch style={{ width: 180 }}
           options={vendors.map(item => ({ label: item.name, value: item.id }))} />}
       </Space>
-      <Button type="primary" icon={<IconPlus />} disabled={loading || error} onClick={() => startEdit()}>新增{label}</Button>
+      <Button className="dictionary-add" aria-label={`新增 ${label}`} type="primary" icon={<IconPlus />} disabled={!canCreate} onClick={() => startEdit()}>新增 {label}</Button>
     </div>
     {error ? <Space style={{ padding: 24 }}><Typography.Text type="error">字典加载失败</Typography.Text><Button onClick={load}>重试</Button></Space> :
       <Table className="page-table" rowKey="id" loading={loading} data={rows} pagination={{ pageSize: 20, showTotal: true }}
-        scroll={{ x: type === 'ROBOT_MODEL' ? 880 : 720, y: 'var(--page-table-scroll-y)' }}
+        noDataElement={loading ? <span /> : emptyContent}
+        scroll={{ x: type === 'ROBOT_MODEL' ? 740 : 620, y: 'var(--page-table-scroll-y)' }}
         columns={[
           { title: '编码', dataIndex: 'code', width: 160, ellipsis: true },
           { title: '名称', dataIndex: 'name', width: 200, ellipsis: true },
           ...(type === 'ROBOT_MODEL' ? [{ title: 'Robot 厂商', width: 160, render: (_: unknown, item: DictionaryItem) => item.parentName ?? vendors.find(vendor => vendor.id === item.parentId)?.name ?? '—' }] : []),
           { title: '排序号', dataIndex: 'sortNo', width: 90, align: 'center' as const },
           { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: DictionaryItem) => <Tag color={item.enabled ? 'green' : 'gray'}>{item.enabled ? '启用' : '停用'}</Tag> },
-          { title: '操作', width: 180, align: 'center' as const, render: (_: unknown, item: DictionaryItem) => <Space>
+          { title: '操作', width: 140, align: 'center' as const, render: (_: unknown, item: DictionaryItem) => <Space size={4}>
             <Button type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button>
             <Popconfirm title={`删除“${item.name}”？已被引用的条目不能删除。`} onOk={() => remove(item)}>
               <Button type="text" size="mini" status="danger">删除</Button>

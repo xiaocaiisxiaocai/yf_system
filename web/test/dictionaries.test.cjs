@@ -22,6 +22,7 @@ function load(http, form) {
   const exports = {}
   vm.runInNewContext(output,{exports,module:{exports},require:name=> name==='@arco-design/web-react'?arco:
     name==='@arco-design/web-react/icon'?{IconPlus:component('IconPlus')}:
+    name.endsWith('.css')?{}:
     name==='../../api/client'?http:require(name)},{filename})
   return exports.default
 }
@@ -32,7 +33,7 @@ test('dictionary save blocks duplicates and retains failed form before retry',as
   const Page=load({get:async()=>({data:[]}),post:(url,body)=>{writes.push(body);return new Promise((ok,fail)=>{resolve=ok;reject=fail})}},form)
   let renderer,pending
   await act(async()=>{renderer=create(React.createElement(Page))})
-  await act(async()=>renderer.root.findAllByType('Button').find(n=>n.props.children?.[0]==='新增').props.onClick())
+  await act(async()=>renderer.root.findByProps({className:'dictionary-add'}).props.onClick())
   const nameRule = renderer.root.findAllByType('Form.Item').find(n=>n.props.field==='name').props.rules[1]
   let validated = false
   nameRule.validator('Valid name', error => { assert.equal(error, undefined); validated = true })
@@ -53,7 +54,7 @@ test('dictionary loading failure is recoverable and cannot create from stale dat
   const Page=load({get:async()=>{if(fail)throw new Error('offline');return {data:[]}}},{resetFields(){},setFieldsValue(){}})
   let renderer
   await act(async()=>{renderer=create(React.createElement(Page))})
-  const add=()=>renderer.root.findAllByType('Button').find(n=>n.props.children?.[0]==='新增')
+  const add=()=>renderer.root.findByProps({className:'dictionary-add'})
   assert.equal(add().props.disabled,true)
   fail=false
   await act(async()=>renderer.root.findAllByType('Button').find(n=>n.props.children==='重试').props.onClick())
