@@ -9,7 +9,7 @@
 - `Yf.Api/Modules/Identity`：工号密码登录、JWT、刷新会话轮换/重放撤销、个人资料与改密。
 - `Yf.Api/Modules/Admin`：组织、账号、角色、供应商和供应商账号；权限委派上限与最后管理员保护。
 - `Yf.Api/Modules/Projects`：项目、成员、提交/确认/驳回/撤回、留言/已读、动态、工作台。
-- `Yf.Api/Modules/Files`：分片上传与续传、合并校验、下载、Range 预览、批量 ZIP、软删除和垃圾清理。
+- `Yf.Api/Modules/Files`：分片上传与续传、合并校验、下载、文档/视频 Range 预览、批量 ZIP、软删除和垃圾清理。
 - `Yf.Api/Modules/System`：参数、日志、邮件 outbox 与 TLS SMTP 后台发送。
 - `Yf.Api/Infrastructure`：MySQL/Dapper、统一错误、事务权限门禁、审计及空库初始化。
 
@@ -65,6 +65,10 @@ dotnet run --project .\Yf.Api -- --migrate-database
 
 升级命令使用数据库命名锁防止同时迁移，校验业务表完整性，并建立 `yf_schema_migrations` 独立历史。第 16 版缺失的刷新会话族字段、数据回填与索引由 .NET 补齐；第 17 版直接接管；同时撤销供应商角色的内部管理授权并记录审计。步骤可在 DDL 中断后重跑，重复执行不删除业务数据。启动拒绝未知版本或被修改的历史。后续升级在 `Infrastructure/SchemaMigrations.cs` 中维护。
 
+在线文档预览支持 PDF、XLS、XLSX 和 PPTX，单文件上限 50 MiB。视频预览支持 MP4、WebM 和 OGV，不整文件缓冲，也不使用文档预览上限；浏览器先用正常 Bearer 会话调用 `POST /api/v1/files/{id}/media-session`，接口返回同源 `url` 和 300 秒有效期并设置仅限该文件媒体路径的 HttpOnly Cookie。随后原生 `<video>` 对 `GET /api/v1/files/{id}/media` 发起 Range 请求，每次请求都重新验证登录会话、账号状态、预览权限和项目范围。前端可在有效期过半时续签，媒体 URL 保持不变。
+
+新库的默认上传白名单已包含 PPTX、MP4、WebM 和 OGV。现有库的管理员自定义白名单不会在启动时改写；需要启用这些格式时，先取得具有 `config:manage` 权限的短时访问令牌，再运行 `scripts/append-preview-upload-extensions.ps1`。脚本通过管理 API 只提交 `upload.allowed_exts`，仅补齐缺失类型，并回读核对其他公开系统参数未变化；空白值表示不限制类型，脚本会原样保留并报告 `unrestricted=true`。不要把令牌字面量写入命令历史。
+
 结构预检以内嵌 `schema-baseline.json` 为依据，检查列定义、主键、唯一键、业务索引列顺序、外键规则及表引擎；现有 `.NET` 迁移表本身也须满足结构和历史要求。不支持的结构漂移会在迁移命令执行 DDL、回填数据或记录历史之前被拒绝，不自动修复业务表。第 16 版缺少会话族列/索引及合法的中断状态可继续升级。
 
 第 15 版及更早的旧业务结构包含有损工作流转换，不在本次自动导入范围内；命令会在改动前拒绝，需要另行审查数据转换和备份恢复方案，不依赖运行 Rust 升级。
@@ -102,6 +106,8 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
 dotnet test --project .\tests\Yf.Api.Tests.csproj
 dotnet build .\TestHost\Yf.Api.TestHost.csproj
 python .\scripts\test-isolated.py
+# 仅运行同一隔离生命周期中的文件 HTTP 合同：
+python .\scripts\test-isolated.py --files-only
 
 # 真实维护备份/恢复测试；同样必须显式设置上面的本机测试管理连接。
 python .\scripts\test-maintenance.py

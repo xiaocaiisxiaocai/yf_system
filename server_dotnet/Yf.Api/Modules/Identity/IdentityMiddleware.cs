@@ -16,7 +16,7 @@ public sealed class IdentityMiddleware(RequestDelegate next)
     {
         var ct = context.RequestAborted;
         var path = context.Request.Path.Value ?? "";
-        if (!context.Request.Path.StartsWithSegments("/api/v1") || PublicPaths.Contains(path))
+        if (!context.Request.Path.StartsWithSegments("/api/v1") || PublicPaths.Contains(path) || IsMediaRequest(context.Request))
         {
             await next(context);
             return;
@@ -70,6 +70,19 @@ public sealed class IdentityMiddleware(RequestDelegate next)
             return false;
         token = values[0]!;
         return true;
+    }
+
+    internal static bool IsMediaRequest(HttpRequest request)
+    {
+        if (!HttpMethods.IsGet(request.Method)) return false;
+        const string prefix = "/api/v1/files/";
+        const string suffix = "/media";
+        var path = request.Path.Value ?? string.Empty;
+        if (!path.StartsWith(prefix, StringComparison.Ordinal) || !path.EndsWith(suffix, StringComparison.Ordinal))
+            return false;
+        var id = path[prefix.Length..^suffix.Length];
+        return id.Length > 0 && long.TryParse(id, System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out var value) && value >= 0;
     }
 
     private sealed class AuthUser

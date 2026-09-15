@@ -2,11 +2,18 @@ using Dapper;
 using MySqlConnector;
 using System.IO.Compression;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Modules.Files;
 
-public sealed class FileService(AppDb db, AppOptions options, AuditService audit, BatchDownloadLimiter limiter)
+public sealed class FileService(
+    AppDb db,
+    AppOptions options,
+    AuditService audit,
+    BatchDownloadLimiter limiter,
+    MediaGrantService mediaGrants,
+    IdentityService identity)
 {
     private const ulong PreviewMaximumBytes = 50UL * 1024 * 1024;
     private const ulong BatchInputMaximumBytes = 256UL * 1024 * 1024;
@@ -72,12 +79,78 @@ public sealed class FileService(AppDb db, AppOptions options, AuditService audit
             if (inline)
             {
                 context.Response.Headers.ContentDisposition = $"inline; filename*=UTF-8''{Uri.EscapeDataString(row.OriginalName)}";
-                return Results.File(stream, row.MimeType ?? "application/octet-stream", enableRangeProcessing: true);
+                return Results.File(stream, FileStorage.MimeType("preview." + row.Ext), enableRangeProcessing: true);
             }
             await audit.WriteAsync(conn, null, actor.Id, "FILE_DOWNLOAD", "file", id,
                 new { name = row.OriginalName }, ClientIp.Resolve(context, options), ct);
             return Results.File(stream, row.MimeType ?? "application/octet-stream", row.OriginalName,
                 enableRangeProcessing: true);
+        }
+        catch
+        {
+            await stream.DisposeAsync();
+            throw;
+        }
+    }
+
+    public async Task<object> CreateMediaSessionAsync(HttpContext context, ulong id, CancellationToken ct)
+    {
+        var actor = AccessService.GetCurrent(context);
+        var claims = context.Items.TryGetValue(typeof(AccessClaims), out var rawClaims) && rawClaims is AccessClaims accessClaims
+            ? accessClaims
+            : throw ApiException.Unauthorized();
+        if (claims.UserId != actor.Id) throw ApiException.Unauthorized("登录状态无效");
+
+        await using var conn = await db.OpenAsync(ct);
+        await AccessService.RequirePermissionAsync(conn, null, actor, "file:preview", ct);
+        var row = await LoadAvailableAsync(conn, id, ct);
+        await ProjectAccessService.RequireViewAsync(conn, null, actor, row.ProjectId, ct);
+        if (!IsVideo(row.Ext)) throw ApiException.BadRequest("该文件类型不支持视频预览");
+
+        context.Response.Cookies.Append(MediaGrantService.CookieName(id), mediaGrants.Issue(actor.Id, claims.SessionId, id),
+            new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = options.CookieSecure,
+                SameSite = SameSiteMode.Strict,
+                Path = MediaPath(id),
+                MaxAge = TimeSpan.FromSeconds(MediaGrantService.LifetimeSeconds)
+            });
+        return new { url = MediaPath(id), expiresInSeconds = MediaGrantService.LifetimeSeconds };
+    }
+
+    public async Task<IResult> StreamMediaAsync(HttpContext context, ulong id, CancellationToken ct)
+    {
+        if (!context.Request.Cookies.TryGetValue(MediaGrantService.CookieName(id), out var token))
+            throw ApiException.Unauthorized("缺少媒体预览凭证");
+        var grant = mediaGrants.Parse(token);
+        if (grant.FileId != id) throw ApiException.Unauthorized("媒体预览凭证与文件不匹配");
+
+        await using var conn = await db.OpenAsync(ct);
+        if (!await identity.HasActiveSessionAsync(conn, null, grant.UserId, grant.SessionId, ct))
+            throw ApiException.Unauthorized("登录状态已失效，请重新登录");
+        var actor = await LoadMediaActorAsync(conn, grant.UserId, ct);
+        await AccessService.RequirePermissionAsync(conn, null, actor, "file:preview", ct);
+        var row = await LoadAvailableAsync(conn, id, ct);
+        await ProjectAccessService.RequireViewAsync(conn, null, actor, row.ProjectId, ct);
+        var contentType = MediaMimeType(row.Ext)
+            ?? throw ApiException.BadRequest("该文件类型不支持视频预览");
+
+        string path;
+        try
+        {
+            path = await FileStorage.ResolveExistingFileAsync(options.StorageRoot,
+                Path.Combine(options.StorageRoot, row.StoragePath), ct);
+        }
+        catch (FileNotFoundException) { throw ApiException.NotFound(); }
+
+        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+            FileOptions.Asynchronous | FileOptions.RandomAccess);
+        try
+        {
+            context.Response.Headers.CacheControl = "private, no-store";
+            context.Response.Headers.ContentDisposition = $"inline; filename*=UTF-8''{Uri.EscapeDataString(row.OriginalName)}";
+            return Results.File(stream, contentType, enableRangeProcessing: true);
         }
         catch
         {
@@ -219,7 +292,37 @@ public sealed class FileService(AppDb db, AppOptions options, AuditService audit
     private static bool IsPreviewable(string extension) =>
         extension.Equals("pdf", StringComparison.OrdinalIgnoreCase)
         || extension.Equals("xls", StringComparison.OrdinalIgnoreCase)
-        || extension.Equals("xlsx", StringComparison.OrdinalIgnoreCase);
+        || extension.Equals("xlsx", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals("pptx", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsVideo(string extension) => MediaMimeType(extension) is not null;
+
+    internal static string? MediaMimeType(string extension) => extension.ToLowerInvariant() switch
+    {
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "ogv" => "video/ogg",
+        _ => null
+    };
+
+    private static string MediaPath(ulong id) => $"/api/v1/files/{id}/media";
+
+    private static async Task<CurrentUser> LoadMediaActorAsync(MySqlConnection conn, ulong userId, CancellationToken ct)
+    {
+        var row = await conn.QuerySingleOrDefaultAsync<MediaActorRow>(new CommandDefinition("""
+            SELECT id AS Id,employee_no AS EmployeeNo,user_type AS UserType,supplier_id AS SupplierId,
+                   status AS Status,must_change_password AS MustChangePassword
+            FROM users WHERE id=@userId
+            """, new { userId }, cancellationToken: ct));
+        if (row is null || row.Status != "ACTIVE" || row.MustChangePassword)
+            throw ApiException.Unauthorized("账号状态已变化，请重新登录");
+        if (row.UserType == "SUPPLIER" && (row.SupplierId is not ulong supplierId
+            || await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT EXISTS(SELECT 1 FROM suppliers WHERE id=@supplierId AND status='ACTIVE')",
+                new { supplierId }, cancellationToken: ct)) != 1))
+            throw ApiException.Unauthorized("所属供应商已被禁用");
+        return new(row.Id, row.EmployeeNo, row.UserType, row.SupplierId);
+    }
 
     private sealed record ArchiveSource(string Path, string OriginalName);
 
@@ -236,6 +339,16 @@ public sealed class FileService(AppDb db, AppOptions options, AuditService audit
         public string? Sha256 { get; set; }
         public DateTime CreatedAt { get; set; }
         public string? UploaderName { get; set; }
+    }
+
+    private sealed class MediaActorRow
+    {
+        public ulong Id { get; set; }
+        public string EmployeeNo { get; set; } = "";
+        public string UserType { get; set; } = "";
+        public ulong? SupplierId { get; set; }
+        public string Status { get; set; } = "";
+        public bool MustChangePassword { get; set; }
     }
 
     private static void TryDelete(string path) { try { File.Delete(path); } catch { } }

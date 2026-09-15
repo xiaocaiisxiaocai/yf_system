@@ -1,6 +1,6 @@
 # Office 预览源码接入说明
 
-本次将 Excel 和 PDF 预览接入用户提供的 `vue-office源码2024-12-30.zip`，保留项目现有的鉴权接口和文件预览权限。
+Excel、PDF 和 PPTX 预览接入用户提供的 `vue-office源码2024-12-30.zip` 对应实现，视频采用浏览器原生播放器；保留项目现有的鉴权接口和文件预览权限。
 
 ## 源码与构建
 
@@ -9,15 +9,43 @@
 | 原始完整源码 | `third_party/vue-office-source-2024-12-30`（本地解压，不提交） |
 | Excel 适配源码 | `web/vendor/vue-office-excel`，原始 JS 包 1.7.14 |
 | PDF 适配源码 | `web/vendor/vue-office-pdf`，原始 JS 包 2.0.10 |
+| PPTX 适配源码 | `web/vendor/vue-office-pptx`，原始 Vue 封装 0.0.6，渲染内核 `pptx-preview` 固定 0.0.19 |
 | React 入口 | `web/src/components/ExcelPreview.tsx`、`PdfPreview.tsx` |
 | Excel 解析依赖 | ExcelJS 4.4.0；旧 XLS 转换沿用 SheetJS 0.20.3 |
 | PDF 解析依赖 | 沿用项目 PDF.js 6.3.289，不使用源码包内旧版引擎或外部 CDN |
 | 上游仓库 | https://github.com/501351981/vue-office |
 
 原始包 SHA-256：`ef8bb8ac7a02281aec026f0e6d822732d3439cecec8b282cde62f62833618a79`。
-具体来源、许可证和修改说明见两个 vendor 目录中的 `SOURCE.md` 与 LICENSE。按用户授权用于本项目，未公开发布源码。
+具体来源、许可证和修改说明见对应 vendor 目录中的 `SOURCE.md` 与 LICENSE。按用户授权用于本项目，未公开发布源码。
 
-在 `web` 目录执行 `npm ci` 后，使用原有 `npm run dev` 或 `npm run build`。它们会先自动构建 Excel 独立渲染页面；无需新增后端服务、数据库迁移或 Office 安装。部署仍发布正常生成的 `web/dist`。
+在 `web` 目录执行 `npm ci` 后，使用原有 `npm run dev` 或 `npm run build`。它们会先自动构建 Excel 和 PPTX 独立渲染页面；无需新增后端服务、数据库结构迁移或 Office 安装。部署仍发布正常生成的 `web/dist`，并同步发布新版 ASP.NET Core 后端。
+
+## 视频与 PPTX（2026-09-15）
+
+- 视频：支持 `.mp4`、`.webm`、`.ogv` 在线预览，提供播放/暂停、时间轴、音量和全屏。播放器占满可用区域，保持视频比例；失败时提供重试，不自动播放。
+- 视频内容使用原生 HTTP Range 分段读取，拖动进度无需把整个文件先放进浏览器 Blob。继续遵守系统原有上传大小设置，不套用 Office 文档的 50 MiB 解析上限。
+- PPTX：支持 `.pptx`，在现有大窗口中显示幻灯片；标题栏提供翻页、页码跳转、缩放、适合整页/宽度和重置。单个 PPTX 在线解析上限为 50 MiB，旧二进制 `.ppt` 不支持在线预览。
+- PPTX 封装来自用户提供的源码，其内核是同一作者的 [pptx-preview](https://github.com/501351981/pptx-preview)。内核随前端本地打包，文档不上传到第三方服务；来源、版本与适配记录见 `web/vendor/vue-office-pptx/SOURCE.md`。
+- 三种 Office 预览和视频预览均不提供下载按钮；文件列表里的独立下载权限继续生效。原生播放器隐藏下载菜单和右键菜单，这属于产品界面约束，不是 DRM。
+- 新数据库默认允许上述视频扩展名。已有数据库的自定义上传白名单继续保留；升级时在“系统参数 → 允许上传类型”中追加 `pptx,mp4,webm,ogv` 中缺失的项。本次已在当前开发库仅追加 `mp4,webm,ogv`，未改变其他系统参数。
+
+### 视频鉴权接口
+
+1. 前端通过原有 Bearer 鉴权调用 `POST /api/v1/files/{id}/media-session`，检查 `file:preview` 和项目访问权限。
+2. 服务端设置限于该文件媒体路径、有效期 300 秒的 HttpOnly Cookie，返回 `{ url, expiresInSeconds }`；URL 不含登录令牌。
+3. `<video>` 使用 `GET /api/v1/files/{id}/media` 获取媒体，支持 `206 Partial Content` 和跳转读取。每次请求重新检查会话、账号、项目权限和文件状态。
+4. 打开预览期间提前续签，不重建播放器；关闭时暂停、移除源并释放网络读取。会话失效后的新请求不能继续读取文件。
+
+视频是否可播放还取决于文件内的编码及浏览器支持；不对 AVI/MKV、所有 MP4 编码或服务端转码作支持承诺。PPTX 的复杂动画、SmartArt、公式、嵌入音视频和特殊字体不保证与 PowerPoint 完全一致。
+
+### 本轮验证
+
+- 视频：Chrome 真实 WebM 在 1440×900、390×844 下验证播放、暂停、时间轴跳转、失败重试、关闭释放、预览无下载入口，共 38 项断言通过。浏览器接口使用隔离夹具，没有写入业务文件。
+- PPTX：使用源码包随附的 11.1 MB 演示文件，确认 13 张幻灯片、6 个图片节点以及文字、形状、表格实际渲染；桌面和窄屏均验证翻页、页码跳转到末页、放大、重置及窗口边界。复核中修正了快速翻页后缩放回跳，以及窄屏同时显示多张时页码跳号的问题。
+- PPTX 先校验 ZIP/XML 再调用渲染器，畸形 XML 立即显示错误；受限 iframe 阻止外部网络资源加载。
+- 后端：128 项单元/契约测试通过；另使用随机隔离 MySQL 数据库运行文件专用接口测试，45 项通过，覆盖 PPTX 内容、超过 50 MiB 的视频分段 206、Cookie 属性、权限撤销和会话退出。临时测试库已清理。单测集中 60 项依赖数据库环境的测试跳过，不计作通过；新增媒体的真实数据库接口由上述 45 项覆盖。
+- 验证边界：完整后端隔离脚本曾在既有“退出登录审计唯一性”断言处提前失败，因此本轮不宣称全站后端业务验收通过；文件专用入口保持该范围可独立复测。
+- 本地证据：`.runlogs/media-preview-20260915/` 与 `.runlogs/dotnet-file-results.json`。当前开发服务已启动，`/health` 返回 `status=ok, db=up`。
 
 ## 预览行为
 

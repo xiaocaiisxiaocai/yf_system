@@ -88,6 +88,21 @@ function loadExcelPreview(http, browserWindow = { addEventListener() {}, removeE
   return exports.default
 }
 
+test('preview dispatch offers PPTX within the parser limit and streamed videos independently of document size', async () => {
+  const FileTable = loadFileTable()
+  let renderer
+  await act(async () => { renderer = create(React.createElement(FileTable, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
+  const column = renderer.root.findByType('Table').props.columns[0]
+  const available = (ext, sizeBytes) => !!findElement(column.render(`test.${ext}`, {
+    id: 7, originalName: `test.${ext}`, ext, sizeBytes,
+  }), element => element.props['aria-label'] === '预览文件')
+  assert.equal(available('PPTX', 50 * 1024 * 1024), true)
+  assert.equal(available('pptx', 50 * 1024 * 1024 + 1), false)
+  for (const ext of ['mp4', 'webm', 'ogv']) assert.equal(available(ext, 1024 * 1024 * 1024), true)
+  for (const ext of ['ppt', 'html', 'avi', 'mkv']) assert.equal(available(ext, 1024), false)
+  await act(async () => renderer.unmount())
+})
+
 test('PDF preview accepts the 50 MiB boundary and leaves larger files download-only', async () => {
   const FileTable = loadFileTable()
   let renderer

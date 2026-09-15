@@ -13,6 +13,8 @@ import { useCollaboration } from '../store/collaboration'
 
 // Excel 解析器仅在用户真正打开工作簿预览时按需加载
 const ExcelPreview = lazy(() => import('./ExcelPreview'))
+const PptxPreview = lazy(() => import('./PptxPreview'))
+const VideoPreview = lazy(() => import('./VideoPreview'))
 
 interface Props {
   projectId: number
@@ -22,8 +24,11 @@ interface Props {
 
 const PDF_PREVIEW_MAX_BYTES = 50 * 1024 * 1024
 
-/** 依据扩展名判定预览能力：Excel→只读表格，PDF→内联，其余仅下载 */
-function previewKind(ext: string, sizeBytes = 0): 'excel' | 'pdf' | 'none' {
+/** 文档在浏览器解析；视频由授权接口按需分段播放。 */
+function previewKind(ext: string, sizeBytes = 0): 'excel' | 'pdf' | 'pptx' | 'video' | 'none' {
+  ext = ext.toLowerCase()
+  if (['mp4', 'webm', 'ogv'].includes(ext)) return 'video'
+  if (ext === 'pptx' && sizeBytes <= 50 * 1024 * 1024) return 'pptx'
   // Excel 需要在浏览器内完整解析工作簿，限制在线预览体积以避免页面 OOM。
   if ((ext === 'xlsx' || ext === 'xls') && sizeBytes <= 50 * 1024 * 1024) return 'excel'
   // PDF.js 同样会在浏览器内完整缓冲文件；较大文件仅允许下载。
@@ -290,6 +295,16 @@ export default function FileTable({ projectId, projectStatus, targetId }: Props)
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'pdf' && <PdfPreview fileId={preview.id} toolbarContainer={previewToolbar} />}
+        {preview && previewKind(preview.ext, preview.sizeBytes) === 'pptx' && (
+          <Suspense fallback={<div role="status">加载 PPTX 渲染器…</div>}>
+            <PptxPreview fileId={preview.id} toolbarContainer={previewToolbar} />
+          </Suspense>
+        )}
+        {preview && previewKind(preview.ext, preview.sizeBytes) === 'video' && (
+          <Suspense fallback={<div role="status">加载视频播放器…</div>}>
+            <VideoPreview fileId={preview.id} />
+          </Suspense>
+        )}
       </Modal>
     </div>
   )

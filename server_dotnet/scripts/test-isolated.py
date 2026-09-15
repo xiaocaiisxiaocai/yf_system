@@ -14,6 +14,7 @@ import secrets
 import socket
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -39,6 +40,13 @@ API = Path(PUBLISHED).resolve() if PUBLISHED else ROOT / "server_dotnet/Yf.Api"
 DLL = API / "Yf.Api.dll" if PUBLISHED else API / "bin/Debug/net10.0/Yf.Api.dll"
 TEST_HOST = ROOT / "server_dotnet/TestHost/bin/Debug/net10.0/Yf.Api.TestHost.dll"
 checks = []
+FILES_ONLY = sys.argv[1:] == ["--files-only"]
+if sys.argv[1:] and not FILES_ONLY:
+    raise SystemExit("Usage: test-isolated.py [--files-only]")
+
+
+class FileContractsComplete(Exception):
+    pass
 
 if not __debug__:
     raise SystemExit("Do not run the regression suite with Python assertions disabled (-O/PYTHONOPTIMIZE).")
@@ -400,18 +408,20 @@ try:
             check("authenticated authentication API has no CAPTCHA endpoint", missing_captcha["code"] == 40401)
             profile = client.call("GET", "/api/v1/auth/profile")
             check("profile has frontend permission/menu contract", bool(profile["permissions"]) and bool(profile["menus"]))
-            run_identity_checks(client, Client, conn, check)
-            run_project_remediation_checks(client, Client, conn, check)
-            run_collaboration_checks(client, Client, conn, check)
-            for path in ("/dashboard/summary", "/dashboard/pending-projects", "/departments", "/permissions", "/supplier-options", "/internal-user-options", "/admin/users", "/admin/roles", "/admin/suppliers", "/admin/user-role-options", "/admin/system/configs", "/admin/system/mail-status", "/admin/audit-logs"):
-                client.call("GET", "/api/v1" + path)
-                check("read contract " + path, True)
-            configs = client.call("GET", "/api/v1/admin/system/configs")
-            check("internal management lock hidden", all(x["key"] != "security.management_lock" for x in configs))
-            client.call("PUT", "/api/v1/admin/system/configs", {"items": [{"key": "security.management_lock", "value": "x"}]}, expected=400)
+            if not FILES_ONLY:
+                run_identity_checks(client, Client, conn, check)
+                run_project_remediation_checks(client, Client, conn, check)
+                run_collaboration_checks(client, Client, conn, check)
+                for path in ("/dashboard/summary", "/dashboard/pending-projects", "/departments", "/permissions", "/supplier-options", "/internal-user-options", "/admin/users", "/admin/roles", "/admin/suppliers", "/admin/user-role-options", "/admin/system/configs", "/admin/system/mail-status", "/admin/audit-logs"):
+                    client.call("GET", "/api/v1" + path)
+                    check("read contract " + path, True)
+                configs = client.call("GET", "/api/v1/admin/system/configs")
+                check("internal management lock hidden", all(x["key"] != "security.management_lock" for x in configs))
+                client.call("PUT", "/api/v1/admin/system/configs", {"items": [{"key": "security.management_lock", "value": "x"}]}, expected=400)
             client.call("PUT", "/api/v1/admin/system/configs", {"items": [{"key": "upload.chunk_size", "value": "262144"}]})
             check("configuration validation and update", True)
-            run_system_checks(client, conn, check)
+            if not FILES_ONLY:
+                run_system_checks(client, conn, check)
             supplier = client.call("POST", "/api/v1/admin/suppliers", {"name": ".NET 隔离供应商", "remark": "temporary"})
             sid = supplier["id"]
             project = client.call("POST", "/api/v1/projects", {"name": ".NET 隔离项目", "description": "isolated regression", "supplierId": sid})
@@ -438,6 +448,8 @@ try:
             with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
                 check("batch ZIP member integrity", zipped.testzip() is None and zipped.read(zipped.namelist()[0]) == pdf)
             run_file_checks(client, conn, check, pid, fid)
+            if FILES_ONLY:
+                raise FileContractsComplete()
             recovery_bytes = b"%PDF-1.4\nowned interrupted merge regression\n%%EOF\n"
             recovery = client.call("POST", "/api/v1/uploads/init", {"projectId": pid, "fileName": "recovery.pdf", "fileSize": len(recovery_bytes)})
             recovery_id = recovery["sessionId"]
@@ -503,6 +515,11 @@ try:
         report = ROOT / (".runlogs/dotnet-published-results.json" if PUBLISHED else ".runlogs/dotnet-isolated-results.json")
         report.parent.mkdir(exist_ok=True)
         report.write_text(json.dumps({"passed": len(checks), "checks": checks, "businessDatabaseTouched": False, "smtpUsed": False, "productionEntrySmoke": True, "httpSuiteHost": "loopback-only host using the same API factory and assembly"}, ensure_ascii=False, indent=2), encoding="utf-8")
+except FileContractsComplete:
+    print(f"PASS {len(checks)} focused file checks; no production data or email used", flush=True)
+    report = ROOT / ".runlogs/dotnet-file-results.json"
+    report.parent.mkdir(exist_ok=True)
+    report.write_text(json.dumps({"passed": len(checks), "checks": checks, "businessDatabaseTouched": False, "smtpUsed": False, "productionEntrySmoke": True, "httpSuiteHost": "loopback-only host using the same API factory and assembly"}, ensure_ascii=False, indent=2), encoding="utf-8")
 finally:
     if process is not None:
         process.terminate()

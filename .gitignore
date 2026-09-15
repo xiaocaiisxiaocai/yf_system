@@ -52,3 +52,4 @@ pnpm-debug.log*
 /third_party/vue-office-source-2024-12-30/
 /web/generated/
 /web/.excel-preview-build/
+/web/.pptx-preview-build/

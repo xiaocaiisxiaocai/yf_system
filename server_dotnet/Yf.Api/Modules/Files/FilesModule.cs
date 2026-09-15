@@ -7,6 +7,7 @@ public static class FilesModule
     public static IServiceCollection AddFilesModule(this IServiceCollection services)
     {
         services.AddSingleton<BatchDownloadLimiter>();
+        services.AddSingleton<MediaGrantService>();
         services.AddScoped<FileService>();
         services.AddScoped<UploadService>();
         services.AddHostedService<FilesMaintenanceService>();
@@ -49,6 +50,12 @@ public static class FilesModule
         api.MapGet("/files/{id:long}/content", async (
             HttpContext context, ulong id, FileService service, CancellationToken ct) =>
             await service.StreamAsync(context, id, inline: true, ct));
+        api.MapPost("/files/{id:long}/media-session", async (
+            HttpContext context, ulong id, FileService service, CancellationToken ct) =>
+            Results.Ok(await service.CreateMediaSessionAsync(context, id, ct)));
+        api.MapGet("/files/{id:long}/media", async (
+            HttpContext context, ulong id, FileService service, CancellationToken ct) =>
+            await service.StreamMediaAsync(context, id, ct));
         api.MapDelete("/files/{id:long}", async (
             HttpContext context, ulong id, FileService service, CancellationToken ct) =>
         {

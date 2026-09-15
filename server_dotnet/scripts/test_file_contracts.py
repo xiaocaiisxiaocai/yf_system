@@ -5,6 +5,7 @@ module only uses those supplied resources and leaves no active upload sessions.
 """
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import secrets
@@ -59,6 +60,8 @@ def _insert_available_file(conn, project_id, uploader_id, storage_root, extensio
     mime = {
         "zip": "application/zip",
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "mp4": "video/mp4",
     }[extension]
     with conn.cursor() as cursor:
         cursor.execute(
@@ -230,8 +233,8 @@ def run_file_checks(client, conn, check, pid, fid):
         original_storage_path, uploader_id, completed_temp_dir = cursor.fetchone()
     storage_root = Path(completed_temp_dir).parents[1]
 
-    # Preview and download are independent permissions. Inline content is only
-    # available for the three browser-supported formats and has a common 50 MiB cap.
+    # Preview and download are independent permissions. Inline documents have a
+    # common 50 MiB cap; video uses a short-lived file-scoped cookie and Range stream.
     preview_client = _new_internal_with_permissions(
         client, conn, ["project:list", "project:view_all", "file:preview"])
     preview_pdf, _ = preview_client.call("GET", f"/api/v1/files/{fid}/content", raw=True)
@@ -241,13 +244,66 @@ def run_file_checks(client, conn, check, pid, fid):
         conn, pid, uploader_id, storage_root, "zip", content=zip_bytes)
     oversized_xlsx_fid = _insert_available_file(
         conn, pid, uploader_id, storage_root, "xlsx", size=50 * 1024 * 1024 + 1)
+    pptx_bytes = b"PK\x03\x04pptx preview contract"
+    pptx_fid = _insert_available_file(
+        conn, pid, uploader_id, storage_root, "pptx", content=pptx_bytes)
+    pptx_preview, pptx_headers = preview_client.call(
+        "GET", f"/api/v1/files/{pptx_fid}/content", raw=True)
     preview_client.call("GET", f"/api/v1/files/{zip_fid}/content", expected=400)
     preview_client.call("GET", f"/api/v1/files/{oversized_xlsx_fid}/content", expected=400)
     downloaded_zip, _ = client.call("GET", f"/api/v1/files/{zip_fid}/download", raw=True)
     check(
         "file preview permission enforces type size and independent download boundaries",
-        preview_pdf.startswith(b"%PDF") and downloaded_zip == zip_bytes,
+        preview_pdf.startswith(b"%PDF")
+        and pptx_preview == pptx_bytes
+        and pptx_headers.get_content_type() == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        and downloaded_zip == zip_bytes,
     )
+
+    oversized_video_fid = _insert_available_file(
+        conn, pid, uploader_id, storage_root, "mp4", size=50 * 1024 * 1024 + 1)
+    media_session_bytes, media_session_headers = preview_client.call(
+        "POST", f"/api/v1/files/{oversized_video_fid}/media-session", raw=True)
+    media_session = json.loads(media_session_bytes)
+    media_cookie = media_session_headers.get("Set-Cookie", "")
+    media_cookie_lower = media_cookie.lower()
+    access_token = preview_client.token
+    preview_client.token = None
+    video_range, video_headers = preview_client.call(
+        "GET", media_session["url"], expected=206,
+        headers={"Range": "bytes=0-7"}, raw=True)
+    check(
+        "video media grant streams ranges without bearer or document size limit",
+        media_session["expiresInSeconds"] == 300
+        and media_session["url"] == f"/api/v1/files/{oversized_video_fid}/media"
+        and "httponly" in media_cookie_lower
+        and "samesite=strict" in media_cookie_lower
+        and f"path=/api/v1/files/{oversized_video_fid}/media" in media_cookie_lower
+        and "max-age=300" in media_cookie_lower
+        and len(video_range) == 8
+        and video_headers.get_content_type() == "video/mp4"
+        and video_headers.get("Content-Range", "").startswith("bytes 0-7/"),
+    )
+    preview_client.token = access_token
+    preview_profile = preview_client.call("GET", "/api/v1/auth/profile")
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT role_id FROM user_roles WHERE user_id=%s", (preview_profile["user"]["id"],))
+        preview_role_id = cursor.fetchone()[0]
+        cursor.execute("SELECT id FROM permissions WHERE code='file:preview'")
+        preview_permission_id = cursor.fetchone()[0]
+        cursor.execute("DELETE FROM role_permissions WHERE role_id=%s AND permission_id=%s",
+                       (preview_role_id, preview_permission_id))
+    preview_client.token = None
+    preview_client.call("GET", media_session["url"], expected=403)
+    with conn.cursor() as cursor:
+        cursor.execute("INSERT INTO role_permissions(role_id,permission_id) VALUES(%s,%s)",
+                       (preview_role_id, preview_permission_id))
+    check("video media range rechecks current preview permission", True)
+    preview_client.token = access_token
+    preview_client.call("POST", "/api/v1/auth/logout")
+    preview_client.token = None
+    preview_client.call("GET", media_session["url"], expected=401)
+    check("video media grant is revoked with its login session", True)
 
     outside_dir = storage_root.parent / ("file-contract-outside-" + secrets.token_hex(5))
     outside_file = outside_dir / "secret.pdf"

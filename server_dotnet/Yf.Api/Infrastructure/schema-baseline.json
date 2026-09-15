@@ -689,7 +689,7 @@
       },
       {
         "cfg_key": "upload.allowed_exts",
-        "cfg_value": "step,stp,iges,igs,stl,obj,fbx,dwg,dxf,pdf,doc,docx,xls,xlsx,ppt,pptx,png,jpg,jpeg,zip,rar,7z",
+        "cfg_value": "step,stp,iges,igs,stl,obj,fbx,dwg,dxf,pdf,doc,docx,xls,xlsx,ppt,pptx,png,jpg,jpeg,zip,rar,7z,mp4,webm,ogv",
         "description": "允许上传的扩展名白名单",
         "updated_at": "2026-09-11T00:00:00"
       },
