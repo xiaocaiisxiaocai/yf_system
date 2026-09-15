@@ -87,22 +87,6 @@ public static class ProjectsModule
             await using var conn = await db.OpenAsync(ct);
             return Results.Ok(await service.WithdrawAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
         });
-        api.MapGet("/projects/{id:long}/members", async (HttpContext context, ulong id, AppDb db, ProjectService service, CancellationToken ct) =>
-        {
-            await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.ListMembersAsync(conn, AccessService.GetCurrent(context), id, ct));
-        });
-        api.MapPut("/projects/{id:long}/members", async (HttpContext context, ulong id, ProjectMembersRequest request, AppDb db, ProjectService service, CancellationToken ct) =>
-        {
-            await using var conn = await db.OpenAsync(ct);
-            await service.SetMembersAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct);
-            return Results.Ok(new { });
-        });
-        api.MapGet("/projects/{id:long}/supplier-members", async (HttpContext context, ulong id, AppDb db, ProjectService service, CancellationToken ct) =>
-        {
-            await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.ListSupplierMembersAsync(conn, AccessService.GetCurrent(context), id, ct));
-        });
         api.MapGet("/projects/{id:long}/summary", async (HttpContext context, ulong id, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
@@ -276,11 +260,6 @@ public static class ProjectsModule
         {
             await using var conn = await db.OpenAsync(ct);
             return Results.Ok(await service.SupplierOptionsAsync(conn, AccessService.GetCurrent(context), ct));
-        });
-        api.MapGet("/internal-user-options", async (HttpContext context, AppDb db, ProjectService service, CancellationToken ct) =>
-        {
-            await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.InternalUserOptionsAsync(conn, AccessService.GetCurrent(context), ct));
         });
         api.MapGet("/project-owner-options", async (HttpContext context, AppDb db, ProjectService service, CancellationToken ct) =>
         {

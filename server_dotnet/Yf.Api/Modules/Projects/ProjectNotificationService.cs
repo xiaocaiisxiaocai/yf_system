@@ -7,6 +7,7 @@ namespace Yf.Api.Modules.Projects;
 internal static class ProjectNotificationService
 {
     internal const string SupersededAcceptanceMailReason = "验收申请已失效或收件人已无验收权限，通知已取消";
+    internal const string StaleProjectMailReason = "收件人已无项目访问权限，通知已取消";
 
     internal static async Task EnqueueMessageAsync(
         MySqlConnection conn,
@@ -239,6 +240,7 @@ internal static class ProjectNotificationService
             """
             SELECT id AS Id,name AS Name,supplier_id AS SupplierId,status AS Status,
                    confirm_side AS ConfirmSide,created_by AS CreatedBy,
+                   responsible_user_id AS ResponsibleUserId,
                    created_at AS CreatedAt,updated_at AS UpdatedAt
             FROM projects WHERE id=@ProjectId
             """,
@@ -291,25 +293,31 @@ internal static class ProjectNotificationService
                    u.email AS Email, u.user_type AS UserType, u.supplier_id AS SupplierId,
                    u.department_id AS DepartmentId, u.status AS Status
             FROM users u
+            INNER JOIN projects p ON p.id = @ProjectId
             WHERE u.status = 'ACTIVE'
+              AND EXISTS(
+                  SELECT 1
+                  FROM user_roles ur
+                  INNER JOIN roles r ON r.id = ur.role_id AND r.status = 'ACTIVE'
+                  INNER JOIN role_permissions rp ON rp.role_id = r.id
+                  INNER JOIN permissions permission ON permission.id = rp.permission_id
+                  WHERE ur.user_id = u.id AND permission.code = 'project:list'
+              )
               AND (
                     (u.user_type = 'INTERNAL' AND (
-                        u.id = @CreatedBy OR EXISTS(
-                            SELECT 1 FROM project_members pm
-                            WHERE pm.project_id = @ProjectId AND pm.user_id = u.id
-                        )
+                        u.id = p.responsible_user_id
                     ))
                     OR
-                    (u.user_type = 'SUPPLIER' AND u.supplier_id = @SupplierId AND EXISTS(
+                    (u.user_type = 'SUPPLIER' AND u.supplier_id = p.supplier_id AND EXISTS(
                         SELECT 1 FROM suppliers s
-                        WHERE s.id = @SupplierId AND s.status = 'ACTIVE'
+                        WHERE s.id = p.supplier_id AND s.status = 'ACTIVE'
                     ))
               )
             ORDER BY u.id
             """;
         var rows = await conn.QueryAsync<UserRow>(new CommandDefinition(
             sql,
-            new { project.CreatedBy, ProjectId = project.Id, project.SupplierId },
+            new { ProjectId = project.Id },
             tx,
             cancellationToken: ct));
         return rows.AsList();
@@ -351,7 +359,17 @@ internal static class ProjectNotificationService
                 new { TargetUserIds = targetUsers.ToArray() },
                 tx,
                 cancellationToken: ct));
-            recipients.AddRange(explicitUsers.Where(user => participantIds.Add(user.Id)));
+            foreach (var explicitUser in explicitUsers)
+            {
+                if (!participantIds.Add(explicitUser.Id))
+                {
+                    continue;
+                }
+                if (await IsCurrentProjectRecipientAsync(conn, tx, project.Id, explicitUser.Id, ct))
+                {
+                    recipients.Add(explicitUser);
+                }
+            }
         }
         var seenEmails = new HashSet<string>(StringComparer.Ordinal);
         foreach (var recipient in recipients)
@@ -409,6 +427,45 @@ internal static class ProjectNotificationService
                 },
                 tx,
                 cancellationToken: ct));
+        }
+    }
+
+    internal static async Task<bool> IsCurrentProjectRecipientAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        ulong projectId,
+        ulong recipientId,
+        CancellationToken ct)
+    {
+        var recipient = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(
+            """
+            SELECT id AS Id,employee_no AS EmployeeNo,user_type AS UserType,
+                   supplier_id AS SupplierId,status AS Status
+            FROM users
+            WHERE id=@RecipientId AND status='ACTIVE'
+            """,
+            new { RecipientId = recipientId },
+            tx,
+            cancellationToken: ct));
+        if (recipient is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            await ProjectAccessService.RequireViewForValidatedActorAsync(
+                conn,
+                tx,
+                new CurrentUser(recipient.Id, recipient.EmployeeNo, recipient.UserType, recipient.SupplierId),
+                projectId,
+                false,
+                ct);
+            return true;
+        }
+        catch (ApiException)
+        {
+            return false;
         }
     }
 

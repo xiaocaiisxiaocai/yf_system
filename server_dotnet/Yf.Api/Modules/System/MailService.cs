@@ -128,8 +128,17 @@ public sealed class MailService
                 if (claimed != 1) continue;
                 lease = await claimConnection.QuerySingleAsync<DateTime>(new CommandDefinition(
                     "SELECT next_attempt_at FROM email_outbox WHERE id=@Id", new { mail.Id }, claimTransaction, cancellationToken: ct));
-                if (mail.EventType == "PROJECT_SUBMITTED"
-                    && !await IsCurrentPendingAcceptanceAsync(claimConnection, claimTransaction, mail, ct))
+                var recipientAuthorized = mail.EventType == "PROJECT_SUBMITTED"
+                    ? await IsCurrentPendingAcceptanceAsync(claimConnection, claimTransaction, mail, ct)
+                    : mail.ProjectId is null || mail.RecipientUserId is null
+                        ? mail.ProjectId is null && mail.RecipientUserId is null
+                        : await ProjectNotificationService.IsCurrentProjectRecipientAsync(
+                            claimConnection,
+                            claimTransaction,
+                            mail.ProjectId.Value,
+                            mail.RecipientUserId.Value,
+                            ct);
+                if (!recipientAuthorized)
                 {
                     var cancelled = await claimConnection.ExecuteAsync(new CommandDefinition(
                         """
@@ -141,7 +150,9 @@ public sealed class MailService
                         {
                             mail.Id,
                             Lease = lease,
-                            Reason = ProjectNotificationService.SupersededAcceptanceMailReason,
+                            Reason = mail.EventType == "PROJECT_SUBMITTED"
+                                ? ProjectNotificationService.SupersededAcceptanceMailReason
+                                : ProjectNotificationService.StaleProjectMailReason,
                         },
                         claimTransaction,
                         cancellationToken: ct));
@@ -158,7 +169,9 @@ public sealed class MailService
                             {
                                 eventType = mail.EventType,
                                 status = "CANCELLED",
-                                reason = "PROJECT_ACCEPTANCE_STALE",
+                                reason = mail.EventType == "PROJECT_SUBMITTED"
+                                    ? "PROJECT_ACCEPTANCE_STALE"
+                                    : "PROJECT_RECIPIENT_UNAUTHORIZED",
                             },
                             null,
                             ct);

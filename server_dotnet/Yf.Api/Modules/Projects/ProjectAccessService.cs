@@ -9,7 +9,8 @@ public sealed record ProjectAccess(
     ulong SupplierId,
     ulong CreatedBy,
     string Status,
-    string? ConfirmSide);
+    string? ConfirmSide,
+    ulong? ResponsibleUserId = null);
 
 public static class ProjectAccessService
 {
@@ -20,6 +21,7 @@ public static class ProjectAccessService
         CancellationToken ct)
     {
         var parameters = new DynamicParameters();
+        await AccessService.RequirePermissionAsync(conn, tx, actor, "project:list", ct);
         if (!actor.IsInternal)
         {
             if (actor.SupplierId is null)
@@ -34,7 +36,7 @@ public static class ProjectAccessService
             return ("1=1", parameters);
         }
         parameters.Add("ActorId", actor.Id);
-        return ("(p.created_by=@ActorId OR EXISTS(SELECT 1 FROM project_members pm WHERE pm.project_id=p.id AND pm.user_id=@ActorId))", parameters);
+        return ("p.responsible_user_id=@ActorId", parameters);
     }
 
     public static async Task<ProjectAccess> RequireViewAsync(
@@ -174,7 +176,8 @@ public static class ProjectAccessService
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         var sql = """
             SELECT id AS Id, supplier_id AS SupplierId, created_by AS CreatedBy,
-                   status AS Status, confirm_side AS ConfirmSide
+                   status AS Status, confirm_side AS ConfirmSide,
+                   responsible_user_id AS ResponsibleUserId
             FROM projects
             WHERE id = @ProjectId
             """ + (forUpdate ? " FOR UPDATE" : string.Empty);
@@ -209,22 +212,11 @@ public static class ProjectAccessService
         }
 
         if (await HasPermissionAsync(conn, tx, current.Id, "project:view_all", ct)
-            || project.CreatedBy == current.Id)
+            || project.ResponsibleUserId == current.Id)
         {
             return project;
         }
-
-        var isMember = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-            "SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id = @ProjectId AND user_id = @UserId)",
-            new { ProjectId = projectId, UserId = current.Id },
-            tx,
-            cancellationToken: ct));
-        if (!isMember)
-        {
-            throw ApiException.OutOfScope();
-        }
-
-        return project;
+        throw ApiException.OutOfScope();
     }
 }
 

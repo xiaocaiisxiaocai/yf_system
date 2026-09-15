@@ -562,7 +562,6 @@ public sealed partial class UploadService(
         var recipients = await conn.QueryAsync<NoticeRecipient>(new CommandDefinition("""
             SELECT DISTINCT u.id AS Id,u.email AS Email,u.employee_no AS EmployeeNo,u.real_name AS RealName
             FROM users u
-            LEFT JOIN project_members pm ON pm.user_id=u.id AND pm.project_id=@ProjectId
             LEFT JOIN projects p ON p.id=@ProjectId
             LEFT JOIN suppliers s ON s.id=p.supplier_id AND s.status='ACTIVE'
             WHERE u.status='ACTIVE' AND u.id<>@UploaderId
@@ -574,7 +573,7 @@ public sealed partial class UploadService(
                   JOIN permissions perm ON perm.id=rp.permission_id AND perm.code='project:list'
                   WHERE ur.user_id=u.id
               ) AND (
-                (@UploaderType='SUPPLIER' AND u.user_type='INTERNAL' AND (u.id=p.created_by OR pm.user_id IS NOT NULL)) OR
+                (@UploaderType='SUPPLIER' AND u.user_type='INTERNAL' AND u.id=p.responsible_user_id) OR
                 (@UploaderType<>'SUPPLIER' AND u.user_type='SUPPLIER' AND u.supplier_id=p.supplier_id AND s.id IS NOT NULL)
             ) ORDER BY u.id
             """, new { ProjectId = projectId, UploaderId = uploader.Id, UploaderType = uploader.UserType }, tx, cancellationToken: ct));

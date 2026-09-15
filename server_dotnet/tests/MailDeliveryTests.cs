@@ -173,6 +173,41 @@ public sealed class MailDeliveryTests
     }
 
     [Fact(Timeout = 30_000)]
+    public async Task QueuedProjectMailIsCancelledWhenRecipientLostProjectAccess()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var conn = await scope.Database.OpenAsync(ct))
+        {
+            await conn.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO permissions(id,code) VALUES(10,'project:list');
+                INSERT INTO roles(id,status) VALUES(10,'ACTIVE');
+                INSERT INTO role_permissions(role_id,permission_id) VALUES(10,10);
+                INSERT INTO users(id,employee_no,user_type,supplier_id,status)
+                VALUES(10,'old-owner','INTERNAL',NULL,'ACTIVE'),(11,'new-owner','INTERNAL',NULL,'ACTIVE');
+                INSERT INTO user_roles(user_id,role_id) VALUES(10,10),(11,10);
+                INSERT INTO projects(id,supplier_id,created_by,responsible_user_id,status,confirm_side)
+                VALUES(7,100,10,11,'IN_PROGRESS',NULL);
+                UPDATE email_outbox
+                SET event_type='MESSAGE_CREATED',project_id=7,recipient_user_id=10
+                WHERE id=1;
+                """, cancellationToken: ct));
+        }
+        var delivery = new CaptureSettingsDelivery();
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]), NullLogger<MailService>.Instance, delivery);
+
+        await service.FlushAsync(ct);
+
+        Assert.Empty(delivery.Seen);
+        await using var check = await scope.Database.OpenAsync(ct);
+        Assert.Equal("CANCELLED", await check.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT status FROM email_outbox WHERE id=1", cancellationToken: ct)));
+        Assert.Equal(ProjectNotificationService.StaleProjectMailReason,
+            await check.ExecuteScalarAsync<string>(new CommandDefinition(
+                "SELECT last_error FROM email_outbox WHERE id=1", cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 30_000)]
     public async Task WorkflowCancellationDoesNotOverwriteAnInFlightSmtpLease()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -345,6 +380,45 @@ public sealed class MailDeliveryTests
                         detail JSON NULL,
                         ip VARCHAR(64) NULL,
                         created_at DATETIME(6) NOT NULL
+                    );
+                    CREATE TABLE users(
+                        id BIGINT UNSIGNED PRIMARY KEY,
+                        employee_no VARCHAR(64) NOT NULL,
+                        user_type VARCHAR(16) NOT NULL,
+                        supplier_id BIGINT UNSIGNED NULL,
+                        status VARCHAR(16) NOT NULL
+                    );
+                    CREATE TABLE permissions(
+                        id BIGINT UNSIGNED PRIMARY KEY,
+                        code VARCHAR(100) NOT NULL
+                    );
+                    CREATE TABLE roles(
+                        id BIGINT UNSIGNED PRIMARY KEY,
+                        status VARCHAR(16) NOT NULL
+                    );
+                    CREATE TABLE user_roles(
+                        user_id BIGINT UNSIGNED NOT NULL,
+                        role_id BIGINT UNSIGNED NOT NULL
+                    );
+                    CREATE TABLE role_permissions(
+                        role_id BIGINT UNSIGNED NOT NULL,
+                        permission_id BIGINT UNSIGNED NOT NULL
+                    );
+                    CREATE TABLE suppliers(
+                        id BIGINT UNSIGNED PRIMARY KEY,
+                        status VARCHAR(16) NOT NULL
+                    );
+                    CREATE TABLE projects(
+                        id BIGINT UNSIGNED PRIMARY KEY,
+                        supplier_id BIGINT UNSIGNED NOT NULL,
+                        created_by BIGINT UNSIGNED NOT NULL,
+                        responsible_user_id BIGINT UNSIGNED NULL,
+                        status VARCHAR(32) NOT NULL,
+                        confirm_side VARCHAR(16) NULL
+                    );
+                    CREATE TABLE project_members(
+                        project_id BIGINT UNSIGNED NOT NULL,
+                        user_id BIGINT UNSIGNED NOT NULL
                     );
                     INSERT INTO system_configs(cfg_key,cfg_value) VALUES('notify.enabled','true');
                     INSERT INTO email_outbox

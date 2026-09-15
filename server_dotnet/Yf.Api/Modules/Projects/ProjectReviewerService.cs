@@ -34,11 +34,7 @@ internal static class ProjectReviewerService
                   WHERE ur.user_id=u.id AND permission.code='project:confirm'
               )
               AND (
-                  u.id=@CreatedBy
-                  OR EXISTS(
-                      SELECT 1 FROM project_members pm
-                      WHERE pm.project_id=@ProjectId AND pm.user_id=u.id
-                  )
+                  u.id=@ResponsibleUserId
                   OR EXISTS(
                       SELECT 1
                       FROM user_roles ur
@@ -52,7 +48,7 @@ internal static class ProjectReviewerService
             """;
         var rows = await conn.QueryAsync<UserRow>(new CommandDefinition(
             sql,
-            new { project.CreatedBy, ProjectId = project.Id },
+            new { project.ResponsibleUserId, ProjectId = project.Id },
             tx,
             cancellationToken: ct));
         return rows.AsList();

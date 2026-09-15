@@ -23,28 +23,33 @@ public sealed class MessageReceiptTests
             INSERT INTO roles(id,name,description,is_built_in,status)
             VALUES
                 (9001,'回执内部成员','回执测试角色',0,'ACTIVE'),
-                (9002,'回执供应商人员','回执测试角色',0,'ACTIVE');
+                (9002,'回执供应商人员','回执测试角色',0,'ACTIVE'),
+                (9003,'回执全局查看者','回执测试角色',0,'ACTIVE');
             INSERT INTO role_permissions(role_id,permission_id)
-            SELECT role_id,p.id
-            FROM (SELECT 9001 AS role_id UNION ALL SELECT 9002) test_roles
+            SELECT test_roles.role_id,p.id
+            FROM (SELECT 9001 AS role_id UNION ALL SELECT 9002 UNION ALL SELECT 9003) test_roles
             CROSS JOIN permissions p
-            WHERE p.code='project:list';
+            WHERE p.code='project:list'
+               OR (test_roles.role_id IN (9001,9003) AND p.code='project:confirm')
+               OR (test_roles.role_id=9003 AND p.code='project:view_all');
             INSERT INTO users
                 (id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password)
             VALUES
                 (101,'receipt-member','unused','项目成员','','INTERNAL',NULL,'ACTIVE',0),
                 (102,'receipt-outsider','unused','项目外用户','','INTERNAL',NULL,'ACTIVE',0),
+                (103,'receipt-old-member','unused','旧项目成员','','INTERNAL',NULL,'ACTIVE',0),
+                (104,'receipt-view-all','unused','全局查看者','','INTERNAL',NULL,'ACTIVE',0),
                 (201,'receipt-supplier','unused','供应商读者','','SUPPLIER',100,'ACTIVE',0),
                 (202,'receipt-supplier-peer','unused','供应商同事','','SUPPLIER',100,'ACTIVE',0),
                 (301,'receipt-other-supplier','unused','其他供应商用户','','SUPPLIER',200,'ACTIVE',0);
             INSERT INTO user_roles(user_id,role_id)
-            VALUES(101,9001),(102,9001),(201,9002),(202,9002),(301,9002);
-            INSERT INTO projects(id,name,supplier_id,status,created_by)
+            VALUES(101,9001),(102,9001),(103,9001),(104,9003),(201,9002),(202,9002),(301,9002);
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
             VALUES
-                (1001,'回执项目',100,'IN_PROGRESS',1),
-                (2001,'其他项目',200,'IN_PROGRESS',102);
+                (1001,'回执项目',100,'IN_PROGRESS',1,101),
+                (2001,'其他项目',200,'IN_PROGRESS',102,102);
             INSERT INTO project_members(project_id,user_id,created_by)
-            VALUES(1001,101,1);
+            VALUES(1001,101,1),(1001,103,1);
             INSERT INTO messages(id,project_id,sender_id,content,status)
             VALUES
                 (10001,1001,1,'不可由回执接口返回的正文','NORMAL'),
@@ -58,6 +63,23 @@ public sealed class MessageReceiptTests
         var outsider = new CurrentUser(102, "receipt-outsider", "INTERNAL", null);
 
         await using var conn = await database.Database.OpenAsync(ct);
+        var project = new ProjectRow { Id = 1001, SupplierId = 100, ResponsibleUserId = 101 };
+        var participants = await ProjectNotificationService.ParticipantsAsync(conn, null, project, ct);
+        Assert.Equal([101UL, 201UL, 202UL], participants.Select(user => user.Id).ToArray());
+        var reviewers = await ProjectReviewerService.ListAsync(conn, null, project, ct);
+        Assert.Contains(reviewers, user => user.Id == 101);
+        Assert.Contains(reviewers, user => user.Id == 104);
+        Assert.DoesNotContain(reviewers, user => user.Id == 103);
+        await using (var authorizationTx = await AppDb.BeginTransactionAsync(conn, ct))
+        {
+            Assert.True(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, authorizationTx, 1001, 101, ct));
+            Assert.True(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, authorizationTx, 1001, 104, ct));
+            Assert.False(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, authorizationTx, 1001, 103, ct));
+            Assert.True(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, authorizationTx, 1001, 201, ct));
+            Assert.False(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, authorizationTx, 1001, 301, ct));
+            await authorizationTx.CommitAsync(ct);
+        }
+
         var before = Json(await service.ReceiptsAsync(conn, admin, 1001, [10001], ct));
         var initialReceipt = Assert.Single(before.EnumerateArray());
         Assert.Equal(0, initialReceipt.GetProperty("readCount").GetInt32());
@@ -83,7 +105,7 @@ public sealed class MessageReceiptTests
         var ownMessageReceipt = Assert.Single(Json(
             await service.ReceiptsAsync(conn, supplier, 1001, [10002], ct)).EnumerateArray());
         Assert.Equal(0, ownMessageReceipt.GetProperty("readCount").GetInt32());
-        Assert.Equal(3, ownMessageReceipt.GetProperty("totalCount").GetInt32());
+        Assert.Equal(2, ownMessageReceipt.GetProperty("totalCount").GetInt32());
         Assert.False(ownMessageReceipt.GetProperty("readByMe").GetBoolean());
 
         var detailedReads = Json(await service.ReadsAsync(conn, admin, 10001, ct));

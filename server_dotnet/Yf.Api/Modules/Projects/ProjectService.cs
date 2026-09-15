@@ -37,7 +37,7 @@ internal sealed class ProjectService(
         }
         else if (!await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:view_all", ct))
         {
-            clauses.Add("(p.created_by = @ActorId OR EXISTS(SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = @ActorId))");
+            clauses.Add("p.responsible_user_id = @ActorId");
             args.Add("ActorId", current.Id);
         }
         if (!string.IsNullOrWhiteSpace(keyword))
@@ -153,15 +153,12 @@ internal sealed class ProjectService(
         await ReplaceWorkOrdersAsync(conn, tx, projectId, metadata.WorkOrderNos, ct);
         await conn.ExecuteAsync(new CommandDefinition(
             """
-            INSERT INTO project_members(project_id,user_id,created_by,created_at)
-            VALUES(@ProjectId,@UserId,@UserId,UTC_TIMESTAMP(3));
             INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,confirm_side,reason,created_at)
             VALUES(@ProjectId,NULL,'DRAFT','CREATE',@UserId,NULL,NULL,UTC_TIMESTAMP(3))
             """,
             new { ProjectId = projectId, UserId = current.Id },
             tx,
             cancellationToken: ct));
-        await AddResponsibleMemberAsync(conn, tx, projectId, metadata.ResponsibleUserId, current.Id, ct);
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_CREATE", "project", projectId, new
         {
             name,
@@ -185,7 +182,6 @@ internal sealed class ProjectService(
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, true, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
-        var members = await ListMembersCoreAsync(conn, tx, projectId, ct);
         var latest = await conn.QuerySingleOrDefaultAsync<ProjectDetailHistory>(new CommandDefinition(
             """
             SELECT
@@ -208,7 +204,6 @@ internal sealed class ProjectService(
             createdByName = project.CreatedByName,
             createdAt = ProjectJson.Utc(project.CreatedAt),
             updatedAt = ProjectJson.Utc(project.UpdatedAt),
-            members,
             rejectReason = latest?.RejectReason,
             latestSubmitterId = latest?.LatestSubmitterId,
             latestSubmissionId = project.LatestSubmissionId,
@@ -281,7 +276,6 @@ internal sealed class ProjectService(
             throw ApiException.Conflict("项目名称已存在");
         }
         await ReplaceWorkOrdersAsync(conn, tx, projectId, metadata.WorkOrderNos, ct);
-        await AddResponsibleMemberAsync(conn, tx, projectId, metadata.ResponsibleUserId, current.Id, ct);
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_UPDATE", "project", projectId, new
         {
             name,
@@ -361,7 +355,7 @@ internal sealed class ProjectService(
         var reviewers = await ProjectReviewerService.ListAsync(conn, tx, project, ct);
         if (reviewers.Count == 0)
         {
-            throw ApiException.Conflict("项目没有可执行验收的公司内部用户，请先配置项目成员和验收权限");
+            throw ApiException.Conflict("项目没有可执行验收的公司内部用户，请为项目负责人配置验收权限，或配置具备全局查看权限的验收人员");
         }
         var submissionId = await ApplyTransitionAsync(
             conn, tx, current, project, ProjectStatuses.PendingConfirmation, "SUBMIT", side, null, ip, ct);
@@ -437,105 +431,6 @@ internal sealed class ProjectService(
         return result;
     }
 
-    internal async Task<object> ListMembersAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
-    {
-        await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
-        return await ListMembersCoreAsync(conn, null, projectId, ct);
-    }
-
-    internal async Task<object> ListSupplierMembersAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
-    {
-        var accessProject = await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
-        var supplierActive = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-            "SELECT EXISTS(SELECT 1 FROM suppliers WHERE id=@SupplierId AND status='ACTIVE')",
-            new { accessProject.SupplierId }, cancellationToken: ct));
-        if (!supplierActive)
-        {
-            return Array.Empty<object>();
-        }
-        var rows = await conn.QueryAsync<UserRow>(new CommandDefinition(
-            """
-            SELECT id AS Id, employee_no AS EmployeeNo, real_name AS RealName, status AS Status
-            FROM users
-            WHERE user_type='SUPPLIER' AND supplier_id=@SupplierId AND status='ACTIVE'
-            ORDER BY id
-            """,
-            new { accessProject.SupplierId }, cancellationToken: ct));
-        return rows.Select(user => new
-        {
-            userId = user.Id,
-            employeeNo = user.EmployeeNo,
-            realName = user.RealName,
-            status = "ACTIVE",
-        }).ToArray();
-    }
-
-    internal async Task SetMembersAsync(
-        MySqlConnection conn,
-        CurrentUser actor,
-        ulong projectId,
-        ProjectMembersRequest request,
-        string? ip,
-        CancellationToken ct)
-    {
-        await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
-        var requestedIds = request.UserIds ?? [];
-        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        await AccessService.LockManagementAsync(conn, tx, ct);
-        var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
-        var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
-        await AccessService.RequirePermissionAsync(conn, tx, current, "project:member", ct);
-        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
-        if (project.Status is not (ProjectStatuses.Draft or ProjectStatuses.InProgress))
-        {
-            throw ApiException.Conflict("项目当前状态不可调整成员");
-        }
-        var requiredIds = project.ResponsibleUserId is { } responsibleUserId
-            ? requestedIds.Append(responsibleUserId).ToArray()
-            : requestedIds;
-        var ids = ProjectWorkflowRules.NormalizeMemberIds(requiredIds, current.Id);
-        var previousMembers = (await conn.QueryAsync<AuditMember>(new CommandDefinition(
-            "SELECT u.id Id,u.employee_no EmployeeNo,u.real_name RealName FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project_id=@projectId ORDER BY u.id",
-            new { projectId }, tx, cancellationToken: ct))).ToArray();
-        foreach (var id in ids)
-        {
-            var user = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(
-                "SELECT id AS Id,employee_no AS EmployeeNo,user_type AS UserType,status AS Status FROM users WHERE id=@Id",
-                new { Id = id }, tx, cancellationToken: ct));
-            if (user is null)
-            {
-                throw ApiException.BadRequest($"用户不存在: {id}");
-            }
-            if (user.UserType != "INTERNAL" || user.Status != "ACTIVE")
-            {
-                throw ApiException.BadRequest($"用户 {user.EmployeeNo} 不是启用的内部账号");
-            }
-        }
-        await conn.ExecuteAsync(new CommandDefinition(
-            "DELETE FROM project_members WHERE project_id=@ProjectId",
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
-        foreach (var id in ids)
-        {
-            await conn.ExecuteAsync(new CommandDefinition(
-                "INSERT INTO project_members(project_id,user_id,created_by,created_at) VALUES(@ProjectId,@UserId,@CreatedBy,UTC_TIMESTAMP(3))",
-                new { ProjectId = projectId, UserId = id, CreatedBy = current.Id }, tx, cancellationToken: ct));
-        }
-        var nextMembers = (await conn.QueryAsync<AuditMember>(new CommandDefinition(
-            "SELECT id Id,employee_no EmployeeNo,real_name RealName FROM users WHERE id IN @ids ORDER BY id",
-            new { ids }, tx, cancellationToken: ct))).ToArray();
-        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_MEMBERS", "project", projectId, new
-        {
-            name = project.Name,
-            oldMemberIds = previousMembers.Select(member => member.Id).ToArray(),
-            newMemberIds = ids,
-            addedMembers = nextMembers.Where(member => !previousMembers.Any(previous => previous.Id == member.Id)).ToArray(),
-            removedMembers = previousMembers.Where(member => !ids.Contains(member.Id)).ToArray(),
-        }, ip, ct);
-        await tx.CommitAsync(ct);
-    }
-
-    private sealed record AuditMember(ulong Id, string EmployeeNo, string RealName);
-
     internal async Task<object> SummaryAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
@@ -580,29 +475,10 @@ internal sealed class ProjectService(
                   FROM suppliers s
                   INNER JOIN projects p ON p.supplier_id=s.id
                   WHERE s.status='ACTIVE'
-                    AND (p.created_by=@UserId OR EXISTS(
-                      SELECT 1 FROM project_members pm WHERE pm.project_id=p.id AND pm.user_id=@UserId))
+                    AND p.responsible_user_id=@UserId
                   ORDER BY s.id
                   """,
             new { UserId = current.Id }, tx, cancellationToken: ct));
-        await tx.CommitAsync(ct);
-        return rows.AsList();
-    }
-
-    internal async Task<object> InternalUserOptionsAsync(MySqlConnection conn, CurrentUser actor, CancellationToken ct)
-    {
-        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-        AccessService.RequireInternal(current);
-        await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
-        await AccessService.RequirePermissionAsync(conn, tx, current, "project:member", ct);
-        var rows = await conn.QueryAsync(new CommandDefinition(
-            """
-            SELECT u.id AS id,u.employee_no AS employeeNo,u.real_name AS realName,d.name AS deptName
-            FROM users u LEFT JOIN departments d ON d.id=u.department_id
-            WHERE u.user_type='INTERNAL' AND u.status='ACTIVE'
-            """,
-            transaction: tx, cancellationToken: ct));
         await tx.CommitAsync(ct);
         return rows.AsList();
     }
@@ -881,35 +757,6 @@ internal sealed class ProjectService(
         return row;
     }
 
-    private static async Task<object[]> ListMembersCoreAsync(
-        MySqlConnection conn,
-        MySqlTransaction? tx,
-        ulong projectId,
-        CancellationToken ct)
-    {
-        var rows = await conn.QueryAsync<MemberRow>(new CommandDefinition(
-            """
-            SELECT u.id AS UserId,u.employee_no AS EmployeeNo,u.real_name AS RealName,
-                   u.department_id AS DepartmentId,d.name AS DeptName,u.status AS Status,
-                   pm.created_at AS CreatedAt
-            FROM project_members pm
-            INNER JOIN users u ON u.id=pm.user_id
-            LEFT JOIN departments d ON d.id=u.department_id
-            WHERE pm.project_id=@ProjectId
-            """,
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
-        return rows.Select(row => (object)new
-        {
-            userId = row.UserId,
-            employeeNo = row.EmployeeNo,
-            realName = row.RealName,
-            departmentId = row.DepartmentId,
-            deptName = row.DeptName,
-            status = row.Status,
-            createdAt = ProjectJson.Utc(row.CreatedAt),
-        }).ToArray();
-    }
-
     private static async Task EnsureNameUniqueAsync(
         MySqlConnection conn,
         MySqlTransaction tx,
@@ -1039,28 +886,6 @@ internal sealed class ProjectService(
                 "INSERT INTO project_work_orders(project_id,work_order_no,sort_no,created_at) VALUES(@ProjectId,@Value,@SortNo,UTC_TIMESTAMP(3))",
                 new { ProjectId = projectId, Value = values[index], SortNo = index }, tx, cancellationToken: ct));
         }
-    }
-
-    private static async Task AddResponsibleMemberAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        ulong projectId,
-        ulong? responsibleUserId,
-        ulong actorId,
-        CancellationToken ct)
-    {
-        if (responsibleUserId is null) return;
-        var exists = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-            "SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id=@ProjectId AND user_id=@UserId)",
-            new { ProjectId = projectId, UserId = responsibleUserId.Value }, tx, cancellationToken: ct));
-        if (exists) return;
-        var memberCount = await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM project_members WHERE project_id=@ProjectId",
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
-        if (memberCount >= 200) throw ApiException.BadRequest("成员数量超过上限，无法加入项目负责人");
-        await conn.ExecuteAsync(new CommandDefinition(
-            "INSERT INTO project_members(project_id,user_id,created_by,created_at) VALUES(@ProjectId,@UserId,@CreatedBy,UTC_TIMESTAMP(3))",
-            new { ProjectId = projectId, UserId = responsibleUserId.Value, CreatedBy = actorId }, tx, cancellationToken: ct));
     }
 
     private static async Task LoadWorkOrdersAsync(

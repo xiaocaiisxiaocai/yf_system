@@ -5,7 +5,6 @@ import http from '../../api/client'
 import { type Project, PROJECT_STATUS, fmtTime } from '../../api/types'
 import FileTable from '../../components/FileTable'
 import MessagePanel from '../../components/MessagePanel'
-import MemberPanel from '../../components/MemberPanel'
 import ProjectActivityPanel from '../../components/ProjectActivityPanel'
 import ProjectWorkflowPanel from '../../components/ProjectWorkflowPanel'
 import { useCollaboration } from '../../store/collaboration'
@@ -44,7 +43,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const loadingProjectId = useRef<number | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
-  const tab = requestedTab === 'files' || requestedTab === 'messages' || requestedTab === 'members' || requestedTab === 'activity'
+  const tab = requestedTab === 'files' || requestedTab === 'messages' || requestedTab === 'activity'
     ? requestedTab
     : 'files'
   const rawTargetId = searchParams.get('target')
@@ -291,9 +290,6 @@ function ProjectDetailContent({ id }: { id?: string }) {
               revision={summary.activityRevision}
               onNavigate={handleActivityNavigate}
             />
-          </Tabs.TabPane>
-          <Tabs.TabPane key="members" title="成员">
-            <MemberPanel projectId={pid} supplierName={project.supplierName} projectStatus={project.status} />
           </Tabs.TabPane>
         </Tabs>
       </Card>
