@@ -77,8 +77,10 @@ public sealed class RealtimeSecurityTests
                 (id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password)
             VALUES(101,'realtime-member','unused','实时成员','','INTERNAL',NULL,'ACTIVE',0);
             INSERT INTO user_roles(user_id,role_id) VALUES(101,9001);
-            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
-            VALUES(1001,'实时项目',100,'IN_PROGRESS',1,101);
+            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
+            VALUES(5001,'实时主项目',100,'IN_PROGRESS',1,101);
+            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
+            VALUES(1001,5001,'实时项目',100,'IN_PROGRESS',1,101);
             INSERT INTO project_members(project_id,user_id,created_by) VALUES(1001,101,1);
             INSERT INTO refresh_tokens(user_id,session_id,token_hash,expires_at,revoked,ip)
             VALUES(101,'realtime-session',REPEAT('a',64),DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR),0,NULL);

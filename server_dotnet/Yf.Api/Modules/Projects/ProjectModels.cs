@@ -33,6 +33,18 @@ public sealed class ProjectUpsertRequest
 
     [JsonPropertyName("expectedCompletionDate")]
     public string? ExpectedCompletionDate { get; init; }
+
+    [JsonPropertyName("subprojectNames")]
+    public string?[]? SubprojectNames { get; init; }
+}
+
+public sealed class SubprojectUpsertRequest
+{
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; init; }
 }
 
 public sealed class ProjectCopyRequest
@@ -113,6 +125,8 @@ public sealed class MarkCollaborationReadRequest
 internal sealed class ProjectRow
 {
     public ulong Id { get; init; }
+    public ulong ProjectGroupId { get; init; }
+    public string ProjectGroupName { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
     public string? Description { get; init; }
     public ulong SupplierId { get; init; }
@@ -139,8 +153,43 @@ internal sealed class ProjectRow
     public string? PriorityName { get; init; }
     public DateTime? ExpectedCompletionDate { get; init; }
     public bool HasCopyHistory { get; set; }
+    public ulong UnreadMessages { get; set; }
     public ulong? CopySourceProjectId { get; set; }
     public string? CopySourceProjectName { get; set; }
+}
+
+internal sealed class ProjectGroupRow
+{
+    public ulong Id { get; init; }
+    public string Name { get; init; } = string.Empty;
+    public string? Description { get; init; }
+    public ulong SupplierId { get; init; }
+    public string? SupplierName { get; init; }
+    public string Status { get; init; } = string.Empty;
+    public ulong CreatedBy { get; init; }
+    public string? CreatedByName { get; init; }
+    public string[] WorkOrderNos { get; set; } = [];
+    public string? MachineModel { get; init; }
+    public ulong? RobotVendorId { get; init; }
+    public string? RobotVendorName { get; init; }
+    public ulong? RobotModelId { get; init; }
+    public string? RobotModelName { get; init; }
+    public ulong? ResponsibleUserId { get; init; }
+    public string? ResponsibleUserEmployeeNo { get; init; }
+    public string? ResponsibleUserName { get; init; }
+    public ulong? SectionId { get; init; }
+    public string? SectionName { get; init; }
+    public ulong? PriorityId { get; init; }
+    public string? PriorityName { get; init; }
+    public DateTime? ExpectedCompletionDate { get; init; }
+    public DateTime? CompletedAt { get; init; }
+    public DateTime CreatedAt { get; init; }
+    public DateTime UpdatedAt { get; init; }
+    public ulong SubprojectCount { get; init; }
+    public ulong CompletedCount { get; init; }
+    public ulong PendingCount { get; init; }
+    public ulong TerminatedCount { get; init; }
+    public ulong UnreadMessages { get; init; }
 }
 
 internal sealed class UserRow
@@ -246,6 +295,8 @@ internal static class ProjectJson
     internal static object Project(ProjectRow row) => new
     {
         id = row.Id,
+        projectGroupId = row.ProjectGroupId,
+        projectGroupName = row.ProjectGroupName,
         name = row.Name,
         description = row.Description,
         supplierId = row.SupplierId,
@@ -270,11 +321,46 @@ internal static class ProjectJson
         priorityName = row.PriorityName,
         expectedCompletionDate = row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
         hasCopyHistory = row.HasCopyHistory,
+        unreadMessages = row.UnreadMessages,
         copySource = row.CopySourceProjectId is { } sourceProjectId && row.CopySourceProjectName is { } sourceProjectName
             ? (object)new { projectId = sourceProjectId, name = sourceProjectName }
             : null,
         createdAt = Utc(row.CreatedAt),
         updatedAt = Utc(row.UpdatedAt),
+    };
+
+    internal static object ProjectGroup(ProjectGroupRow row) => new
+    {
+        id = row.Id,
+        name = row.Name,
+        description = row.Description,
+        supplierId = row.SupplierId,
+        supplierName = row.SupplierName,
+        status = row.Status,
+        createdBy = row.CreatedBy,
+        createdByName = row.CreatedByName,
+        workOrderNos = row.WorkOrderNos,
+        machineModel = row.MachineModel,
+        robotVendorId = row.RobotVendorId,
+        robotVendorName = row.RobotVendorName,
+        robotModelId = row.RobotModelId,
+        robotModelName = row.RobotModelName,
+        responsibleUserId = row.ResponsibleUserId,
+        responsibleUserEmployeeNo = row.ResponsibleUserEmployeeNo,
+        responsibleUserName = row.ResponsibleUserName,
+        sectionId = row.SectionId,
+        sectionName = row.SectionName,
+        priorityId = row.PriorityId,
+        priorityName = row.PriorityName,
+        expectedCompletionDate = row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+        completedAt = row.CompletedAt is { } completedAt ? Utc(completedAt) : (DateTime?)null,
+        createdAt = Utc(row.CreatedAt),
+        updatedAt = Utc(row.UpdatedAt),
+        subprojectCount = row.SubprojectCount,
+        completedCount = row.CompletedCount,
+        pendingCount = row.PendingCount,
+        terminatedCount = row.TerminatedCount,
+        unreadMessages = row.UnreadMessages,
     };
 
     internal static object Page<T>(IReadOnlyList<T> list, ulong total, ulong page, ulong pageSize) => new

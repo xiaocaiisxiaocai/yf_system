@@ -123,12 +123,18 @@ public sealed class SchemaShapeTests
             SELECT 9201,id FROM roles WHERE name='内部成员';
             INSERT INTO user_roles(user_id,role_id) VALUES(9203,9001),(9204,9002),(9205,9001);
 
-            INSERT INTO projects(id,name,supplier_id,status,confirm_side,created_by)
+            INSERT INTO project_groups(id,name,supplier_id,status,created_by)
             VALUES
-              (9301,'v3待供应商确认',9101,'PENDING_CONFIRMATION','SUPPLIER',9201),
-              (9302,'v3已待公司确认',9101,'PENDING_CONFIRMATION','COMPANY',9201),
-              (9303,'v3已完成历史',9101,'COMPLETED','SUPPLIER',9201),
-              (9304,'v3进行中历史',9101,'IN_PROGRESS','SUPPLIER',9201);
+              (9601,'v3待供应商确认主项目',9101,'IN_PROGRESS',9201),
+              (9602,'v3已待公司确认主项目',9101,'IN_PROGRESS',9201),
+              (9603,'v3已完成历史主项目',9101,'COMPLETED',9201),
+              (9604,'v3进行中历史主项目',9101,'IN_PROGRESS',9201);
+            INSERT INTO projects(id,project_group_id,name,supplier_id,status,confirm_side,created_by)
+            VALUES
+              (9301,9601,'v3待供应商确认',9101,'PENDING_CONFIRMATION','SUPPLIER',9201),
+              (9302,9602,'v3已待公司确认',9101,'PENDING_CONFIRMATION','COMPANY',9201),
+              (9303,9603,'v3已完成历史',9101,'COMPLETED','SUPPLIER',9201),
+              (9304,9604,'v3进行中历史',9101,'IN_PROGRESS','SUPPLIER',9201);
 
             INSERT INTO project_status_logs(id,project_id,from_status,to_status,action,operator_id,confirm_side,reason,created_at)
             VALUES
@@ -177,9 +183,7 @@ public sealed class SchemaShapeTests
                 cancellationToken: ct))).ToArray());
         Assert.Equal(
             [
-                "project-acceptance:9301:9403:9201",
                 "project-acceptance:9301:9403:9203",
-                "project-acceptance:9302:9411:9201",
                 "project-acceptance:9302:9411:9203",
             ],
             (await conn.QueryAsync<string>(new CommandDefinition(

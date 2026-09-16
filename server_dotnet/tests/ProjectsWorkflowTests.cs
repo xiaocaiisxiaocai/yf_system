@@ -5,6 +5,19 @@ namespace Yf.Api.Tests;
 
 public sealed class ProjectsWorkflowTests
 {
+    [Theory]
+    [InlineData(0UL, 0UL, 0UL, 0UL, "DRAFT")]
+    [InlineData(2UL, 2UL, 0UL, 0UL, "DRAFT")]
+    [InlineData(3UL, 0UL, 3UL, 0UL, "COMPLETED")]
+    [InlineData(3UL, 0UL, 2UL, 1UL, "TERMINATED")]
+    [InlineData(3UL, 1UL, 1UL, 0UL, "IN_PROGRESS")]
+    [InlineData(3UL, 0UL, 1UL, 0UL, "IN_PROGRESS")]
+    public void MainProjectStatusIsDerivedFromEverySubproject(
+        ulong total, ulong draft, ulong completed, ulong terminated, string expected)
+    {
+        Assert.Equal(expected, ProjectGroupStatusService.DeriveStatus(total, draft, completed, terminated));
+    }
+
     [Fact]
     public void ReferencedRobotModelCannotMoveToAnotherVendor()
     {

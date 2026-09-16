@@ -6,6 +6,7 @@ namespace Yf.Api.Modules.Projects;
 
 public sealed record ProjectAccess(
     ulong Id,
+    ulong? ProjectGroupId,
     ulong SupplierId,
     ulong CreatedBy,
     string Status,
@@ -174,8 +175,18 @@ public static class ProjectAccessService
         CancellationToken ct)
     {
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
+        if (forUpdate)
+        {
+            var groupId = await conn.QuerySingleOrDefaultAsync<ulong>(new CommandDefinition(
+                "SELECT COALESCE(project_group_id,0) FROM projects WHERE id=@ProjectId",
+                new { ProjectId = projectId }, tx, cancellationToken: ct));
+            if (groupId != 0)
+                await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+                    "SELECT id FROM project_groups WHERE id=@GroupId FOR UPDATE",
+                    new { GroupId = groupId }, tx, cancellationToken: ct));
+        }
         var sql = """
-            SELECT id AS Id, supplier_id AS SupplierId, created_by AS CreatedBy,
+            SELECT id AS Id,project_group_id AS ProjectGroupId,supplier_id AS SupplierId,created_by AS CreatedBy,
                    status AS Status, confirm_side AS ConfirmSide,
                    responsible_user_id AS ResponsibleUserId
             FROM projects

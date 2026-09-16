@@ -11,7 +11,8 @@ internal static class DevelopmentDataReset
     private static readonly string[] ClearedTables = [
         "collaboration_reads", "message_reads", "message_images", "email_outbox", "project_activities", "project_members",
         "file_copy_refs", "project_copies",
-        "project_status_logs", "upload_sessions", "files", "messages", "projects", "refresh_tokens",
+        "project_group_status_logs", "project_status_logs", "upload_sessions", "files", "messages", "projects",
+        "project_group_work_orders", "project_groups", "refresh_tokens",
         "user_roles", "role_permissions", "departments", "audit_logs"
     ];
     internal sealed record Plan(string Database, string StorageRoot, string[] StorageDirectories,

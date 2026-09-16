@@ -97,7 +97,7 @@ internal sealed class CollaborationService
         var rows = (await conn.QueryAsync<CollaborationNotificationRow>(new CommandDefinition(
             $"""
             SELECT pa.id AS Id,pa.activity_type AS ActivityType,pa.action AS Action,
-                   pa.project_id AS ProjectId,p.name AS ProjectName,pa.actor_name AS ActorName,
+                   pa.project_id AS ProjectId,p.name AS ProjectName,g.name AS ProjectGroupName,pa.actor_name AS ActorName,
                    pa.title AS Title,
                    CASE WHEN pa.activity_type='MESSAGE' AND message_target.id IS NULL THEN NULL ELSE pa.summary END AS Summary,
                    pa.occurred_at AS OccurredAt,pa.target_id AS TargetId,
@@ -110,6 +110,7 @@ internal sealed class CollaborationService
                    cr.activity_id IS NOT NULL AS IsRead
             FROM project_activities pa
             INNER JOIN projects p ON p.id=pa.project_id
+            INNER JOIN project_groups g ON g.id=p.project_group_id
             LEFT JOIN collaboration_reads cr ON cr.activity_id=pa.id AND cr.user_id=@UserId
             LEFT JOIN files file_target ON pa.activity_type='FILE' AND file_target.id=pa.target_id
                 AND file_target.project_id=pa.project_id AND file_target.status='AVAILABLE'
@@ -127,6 +128,7 @@ internal sealed class CollaborationService
             action = row.Action,
             projectId = row.ProjectId,
             projectName = row.ProjectName,
+            projectGroupName = row.ProjectGroupName,
             actorName = row.ActorName,
             title = row.Title,
             summary = row.Summary,
@@ -217,6 +219,7 @@ internal sealed class CollaborationService
         public string Action { get; init; } = string.Empty;
         public ulong ProjectId { get; init; }
         public string ProjectName { get; init; } = string.Empty;
+        public string ProjectGroupName { get; init; } = string.Empty;
         public string ActorName { get; init; } = string.Empty;
         public string Title { get; init; } = string.Empty;
         public string? Summary { get; init; }

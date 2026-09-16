@@ -17,6 +17,7 @@ export interface CollaborationNotification {
   action: string
   projectId: number
   projectName: string
+  projectGroupName?: string
   actorName: string
   title: string
   summary: string | null
@@ -84,6 +85,7 @@ function parseCollaborationNotification(value: unknown): CollaborationNotificati
     || typeof value.action !== 'string'
     || !isPositiveInteger(value.projectId)
     || typeof value.projectName !== 'string'
+    || (value.projectGroupName !== undefined && typeof value.projectGroupName !== 'string')
     || typeof value.actorName !== 'string'
     || typeof value.title !== 'string'
     || (value.summary !== null && typeof value.summary !== 'string')
@@ -97,6 +99,7 @@ function parseCollaborationNotification(value: unknown): CollaborationNotificati
     action: value.action,
     projectId: value.projectId,
     projectName: value.projectName,
+    projectGroupName: value.projectGroupName as string | undefined,
     actorName: value.actorName,
     title: value.title,
     summary: value.summary,

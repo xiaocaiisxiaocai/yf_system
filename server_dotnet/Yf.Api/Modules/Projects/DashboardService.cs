@@ -29,12 +29,13 @@ internal sealed class DashboardService
             parameters, tx, cancellationToken: ct));
         var rows = (await conn.QueryAsync<DashboardMessageRow>(new CommandDefinition(
             $"""
-            SELECT m.id AS Id,m.project_id AS ProjectId,p.name AS ProjectName,m.content AS Content,
+            SELECT m.id AS Id,m.project_id AS ProjectId,p.name AS ProjectName,g.name AS ProjectGroupName,m.content AS Content,
                    m.sender_id AS SenderId,m.created_at AS CreatedAt,u.real_name AS SenderName,
                    EXISTS(SELECT 1 FROM message_images mi WHERE mi.message_id=m.id) AS HasImages,
                    EXISTS(SELECT 1 FROM message_reads mr WHERE mr.message_id=m.id AND mr.user_id=@UserId) AS ReadByMe
             FROM messages m
             INNER JOIN projects p ON p.id=m.project_id
+            INNER JOIN project_groups g ON g.id=p.project_group_id
             INNER JOIN users u ON u.id=m.sender_id
             WHERE {filter}
             ORDER BY m.id DESC LIMIT @Size OFFSET @Offset
@@ -45,6 +46,7 @@ internal sealed class DashboardService
             id = row.Id,
             projectId = row.ProjectId,
             projectName = row.ProjectName,
+            projectGroupName = row.ProjectGroupName,
             content = MessagePreview(row.Content, row.HasImages),
             senderName = row.SenderName,
             createdAt = ProjectJson.Utc(row.CreatedAt),
@@ -82,9 +84,10 @@ internal sealed class DashboardService
             $"SELECT COUNT(*) FROM projects p WHERE {filter}", parameters, tx, cancellationToken: ct));
         var rows = await conn.QueryAsync<ProjectRow>(new CommandDefinition(
             $"""
-            SELECT p.id AS Id,p.name AS Name,p.status AS Status,p.confirm_side AS ConfirmSide,
+            SELECT p.id AS Id,p.project_group_id AS ProjectGroupId,g.name AS ProjectGroupName,
+                   p.name AS Name,p.status AS Status,p.confirm_side AS ConfirmSide,
                    p.updated_at AS UpdatedAt
-            FROM projects p WHERE {filter}
+            FROM projects p INNER JOIN project_groups g ON g.id=p.project_group_id WHERE {filter}
             ORDER BY p.updated_at DESC,p.id DESC LIMIT @Size OFFSET @Offset
             """,
             parameters, tx, cancellationToken: ct));
@@ -92,6 +95,7 @@ internal sealed class DashboardService
         {
             id = row.Id,
             name = row.Name,
+            projectGroupName = row.ProjectGroupName,
             status = ProjectStatuses.PendingConfirmation,
             confirmSide = row.ConfirmSide == "COMPANY" ? "COMPANY" : "SUPPLIER",
             updatedAt = ProjectJson.Utc(row.UpdatedAt),
@@ -105,6 +109,10 @@ internal sealed class DashboardService
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
+        var (groupScope, groupParameters) = await ProjectGroupAccessService.VisibleScopeAsync(conn, tx, current, ct);
+        var groups = (await conn.QueryAsync<ProjectGroupRow>(new CommandDefinition(
+            $"SELECT g.id AS Id,g.status AS Status FROM project_groups g WHERE {groupScope}",
+            groupParameters, tx, cancellationToken: ct))).AsList();
         var (scope, parameters) = await ProjectAccessService.VisibleScopeAsync(conn, tx, current, ct);
         var projects = (await conn.QueryAsync<ProjectRow>(new CommandDefinition(
             $"""
@@ -130,21 +138,24 @@ internal sealed class DashboardService
                 new { ProjectIds = projectIds, UserId = current.Id }, tx, cancellationToken: ct));
             var rows = (await conn.QueryAsync<RecentMessageRow>(new CommandDefinition(
                 """
-                SELECT m.id AS Id,m.project_id AS ProjectId,m.content AS Content,m.sender_id AS SenderId,
+                SELECT m.id AS Id,m.project_id AS ProjectId,p.name AS ProjectName,g.name AS ProjectGroupName,
+                       m.content AS Content,m.sender_id AS SenderId,
                        m.created_at AS CreatedAt,u.real_name AS SenderName,
                        EXISTS(SELECT 1 FROM message_images mi WHERE mi.message_id=m.id) AS HasImages,
                        EXISTS(SELECT 1 FROM message_reads mr WHERE mr.message_id=m.id AND mr.user_id=@UserId) AS ReadByMe
-                FROM messages m INNER JOIN users u ON u.id=m.sender_id
+                FROM messages m INNER JOIN projects p ON p.id=m.project_id
+                INNER JOIN project_groups g ON g.id=p.project_group_id
+                INNER JOIN users u ON u.id=m.sender_id
                 WHERE m.project_id IN @ProjectIds AND m.status='NORMAL'
                 ORDER BY m.id DESC LIMIT 5
                 """,
                 new { ProjectIds = projectIds, UserId = current.Id }, tx, cancellationToken: ct))).AsList();
-            var names = projects.ToDictionary(project => project.Id, project => project.Name);
             recentMessages = rows.Select(row => (object)new
             {
                 id = row.Id,
                 projectId = row.ProjectId,
-                projectName = names.GetValueOrDefault(row.ProjectId),
+                projectName = row.ProjectName,
+                projectGroupName = row.ProjectGroupName,
                 content = MessagePreview(row.Content, row.HasImages),
                 senderName = row.SenderName,
                 createdAt = ProjectJson.Utc(row.CreatedAt),
@@ -154,8 +165,8 @@ internal sealed class DashboardService
         await tx.CommitAsync(ct);
         return new
         {
-            projectCount = projects.Count,
-            activeProjectCount = projects.Count(project => project.Status == ProjectStatuses.InProgress),
+            projectCount = groups.Count,
+            activeProjectCount = groups.Count(group => group.Status == ProjectStatuses.InProgress),
             pendingConfirmations = canConfirm
                 ? projects.Count(project => project.Status == ProjectStatuses.PendingConfirmation
                     && project.ConfirmSide == ProjectWorkflowRules.InternalAcceptanceSide)
@@ -172,6 +183,8 @@ internal sealed class DashboardService
     {
         public ulong Id { get; init; }
         public ulong ProjectId { get; init; }
+        public string ProjectName { get; init; } = string.Empty;
+        public string ProjectGroupName { get; init; } = string.Empty;
         public string Content { get; init; } = string.Empty;
         public ulong SenderId { get; init; }
         public DateTime CreatedAt { get; init; }
@@ -185,6 +198,7 @@ internal sealed class DashboardService
         public ulong Id { get; init; }
         public ulong ProjectId { get; init; }
         public string ProjectName { get; init; } = string.Empty;
+        public string ProjectGroupName { get; init; } = string.Empty;
         public string Content { get; init; } = string.Empty;
         public ulong SenderId { get; init; }
         public DateTime CreatedAt { get; init; }

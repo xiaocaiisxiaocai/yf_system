@@ -7,6 +7,8 @@ export interface PageResp<T> {
 
 export interface Project {
   id: number
+  projectGroupId: number
+  projectGroupName: string
   name: string
   description?: string
   supplierId: number
@@ -40,8 +42,47 @@ export interface Project {
   updatedAt: string
   /** 当前项目存在可查看或受限的复制关系。 */
   hasCopyHistory?: boolean
+  unreadMessages?: number
   /** 当前项目的可见复制来源；来源无权访问时由后端置空。 */
   copySource?: { projectId: number; name: string } | null
+}
+
+export interface ProjectGroup {
+  id: number
+  name: string
+  description?: string | null
+  supplierId: number
+  supplierName?: string | null
+  workOrderNos: string[]
+  machineModel?: string | null
+  robotVendorId?: number | null
+  robotVendorName?: string | null
+  robotModelId?: number | null
+  robotModelName?: string | null
+  responsibleUserId?: number | null
+  responsibleUserEmployeeNo?: string | null
+  responsibleUserName?: string | null
+  sectionId?: number | null
+  sectionName?: string | null
+  priorityId?: number | null
+  priorityName?: string | null
+  expectedCompletionDate?: string | null
+  status: 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED' | 'TERMINATED'
+  completedAt?: string | null
+  createdBy: number
+  createdByName?: string | null
+  createdAt: string
+  updatedAt: string
+  subprojectCount: number
+  completedCount: number
+  pendingCount: number
+  terminatedCount: number
+  unreadMessages: number
+}
+
+export interface ProjectGroupDetail {
+  group: ProjectGroup
+  projects: Project[]
 }
 
 export interface ProjectCopySummary {

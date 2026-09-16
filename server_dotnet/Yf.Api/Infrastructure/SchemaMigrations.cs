@@ -10,7 +10,7 @@ namespace Yf.Api.Infrastructure;
 /// <summary>Explicit, restartable .NET-owned schema upgrades. Startup never changes schema.</summary>
 public static class SchemaMigrations
 {
-    public const int CurrentVersion = 8;
+    public const int CurrentVersion = 9;
     private const string PreviousBaseline = "m20260910_000016_project_workflow";
     private const string FirstMigrationName = "000001_adopt_schema_sessions_supplier_boundary";
     private const string CollaborationMigrationName = "000002_collaboration_notification_reads";
@@ -20,6 +20,7 @@ public static class SchemaMigrations
     private const string ProjectMetadataMigrationName = "000006_project_metadata_dictionaries";
     private const string ProjectCopyMigrationName = "000007_project_copy_history";
     private const string ProjectDictionaryCodeRemovalMigrationName = "000008_remove_project_dictionary_code";
+    private const string ProjectGroupsMigrationName = "000009_project_groups";
     internal const string InternalAcceptanceCancelledMailReason = "项目验收已调整为公司内部确认，旧供应商确认通知已取消";
     internal const string AcceptanceNotificationRebuiltMailReason = "验收通知已按当前待验收申请和验收人重新生成";
     private const string MigrationTableSql = """
@@ -146,6 +147,65 @@ public static class SchemaMigrations
           CONSTRAINT `fk_file_copy_refs_target` FOREIGN KEY (`target_file_id`) REFERENCES `files` (`id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """;
+    internal const string ProjectGroupsTableSql = """
+        CREATE TABLE `project_groups` (
+          `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+          `name` varchar(128) NOT NULL,
+          `description` varchar(1024) DEFAULT NULL,
+          `supplier_id` bigint unsigned NOT NULL,
+          `status` varchar(24) NOT NULL DEFAULT 'DRAFT',
+          `created_by` bigint unsigned NOT NULL,
+          `machine_model` varchar(128) DEFAULT NULL,
+          `robot_vendor_id` bigint unsigned DEFAULT NULL,
+          `robot_model_id` bigint unsigned DEFAULT NULL,
+          `responsible_user_id` bigint unsigned DEFAULT NULL,
+          `section_id` bigint unsigned DEFAULT NULL,
+          `priority_id` bigint unsigned DEFAULT NULL,
+          `expected_completion_date` date DEFAULT NULL,
+          `completed_at` datetime(3) DEFAULT NULL,
+          `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          `updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `uk_project_groups_name` (`name`),
+          KEY `idx_project_groups_supplier` (`supplier_id`),
+          KEY `idx_project_groups_status` (`status`),
+          KEY `idx_project_groups_responsible_user` (`responsible_user_id`),
+          KEY `idx_project_groups_expected_completion` (`expected_completion_date`),
+          CONSTRAINT `fk_project_groups_supplier` FOREIGN KEY (`supplier_id`) REFERENCES `suppliers` (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """;
+    internal const string ProjectGroupWorkOrdersTableSql = """
+        CREATE TABLE `project_group_work_orders` (
+          `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+          `project_group_id` bigint unsigned NOT NULL,
+          `work_order_no` varchar(128) NOT NULL,
+          `sort_no` int NOT NULL DEFAULT 0,
+          `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `uk_project_group_work_orders_group_no` (`project_group_id`,`work_order_no`),
+          KEY `idx_project_group_work_orders_group_sort` (`project_group_id`,`sort_no`,`id`),
+          CONSTRAINT `fk_project_group_work_orders_group` FOREIGN KEY (`project_group_id`) REFERENCES `project_groups` (`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """;
+    internal const string ProjectGroupStatusLogsTableSql = """
+        CREATE TABLE `project_group_status_logs` (
+          `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+          `project_group_id` bigint unsigned NOT NULL,
+          `from_status` varchar(24) DEFAULT NULL,
+          `to_status` varchar(24) NOT NULL,
+          `action` varchar(32) NOT NULL,
+          `trigger_project_id` bigint unsigned DEFAULT NULL,
+          `operator_id` bigint unsigned NOT NULL,
+          `created_at` datetime(3) NOT NULL,
+          PRIMARY KEY (`id`),
+          KEY `idx_project_group_status_logs_group_time` (`project_group_id`,`created_at`,`id`),
+          KEY `idx_project_group_status_logs_project` (`trigger_project_id`),
+          KEY `idx_project_group_status_logs_operator` (`operator_id`),
+          CONSTRAINT `fk_project_group_status_logs_group` FOREIGN KEY (`project_group_id`) REFERENCES `project_groups` (`id`) ON DELETE CASCADE,
+          CONSTRAINT `fk_project_group_status_logs_project` FOREIGN KEY (`trigger_project_id`) REFERENCES `projects` (`id`) ON DELETE SET NULL,
+          CONSTRAINT `fk_project_group_status_logs_operator` FOREIGN KEY (`operator_id`) REFERENCES `users` (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """;
     private static string FirstChecksum => Checksum(FirstMigrationName);
     private static string CollaborationChecksum => Checksum(CollaborationMigrationName);
     private static string InternalAcceptanceChecksum => Checksum(InternalAcceptanceMigrationName);
@@ -154,6 +214,7 @@ public static class SchemaMigrations
     private static string ProjectMetadataChecksum => Checksum(ProjectMetadataMigrationName);
     private static string ProjectCopyChecksum => Checksum(ProjectCopyMigrationName);
     private static string ProjectDictionaryCodeRemovalChecksum => Checksum(ProjectDictionaryCodeRemovalMigrationName);
+    private static string ProjectGroupsChecksum => Checksum(ProjectGroupsMigrationName);
 
     public static async Task ApplyAsync(AppDb db, CancellationToken ct = default)
     {
@@ -182,6 +243,9 @@ public static class SchemaMigrations
         var hasProjectWorkOrders = await HasTableAsync(conn, "project_work_orders", ct);
         var hasProjectCopies = await HasTableAsync(conn, "project_copies", ct);
         var hasFileCopyRefs = await HasTableAsync(conn, "file_copy_refs", ct);
+        var hasProjectGroups = await HasTableAsync(conn, "project_groups", ct);
+        var hasProjectGroupWorkOrders = await HasTableAsync(conn, "project_group_work_orders", ct);
+        var hasProjectGroupStatusLogs = await HasTableAsync(conn, "project_group_status_logs", ct);
         MigrationRow[] migrationRows;
         if (hasMigrationTable)
         {
@@ -208,6 +272,12 @@ public static class SchemaMigrations
             await SchemaShapeValidator.ValidateTableAsync(conn, "project_copies", ProjectCopiesTableSql, ct);
         if (hasFileCopyRefs)
             await SchemaShapeValidator.ValidateTableAsync(conn, "file_copy_refs", FileCopyRefsTableSql, ct);
+        if (hasProjectGroups)
+            await SchemaShapeValidator.ValidateTableAsync(conn, "project_groups", ProjectGroupsTableSql, ct);
+        if (hasProjectGroupWorkOrders)
+            await SchemaShapeValidator.ValidateTableAsync(conn, "project_group_work_orders", ProjectGroupWorkOrdersTableSql, ct);
+        if (hasProjectGroupStatusLogs)
+            await SchemaShapeValidator.ValidateTableAsync(conn, "project_group_status_logs", ProjectGroupStatusLogsTableSql, ct);
         if (migrationRows.Any(row => row.Version >= 2) && !hasCollaborationReads)
             throw new InvalidOperationException("Migration history says collaboration reads are applied, but the required table is missing. Restore the matching schema before retrying.");
         if (migrationRows.Any(row => row.Version >= 5) && !hasMessageImages)
@@ -216,6 +286,10 @@ public static class SchemaMigrations
             throw new InvalidOperationException("Migration history says project metadata is applied, but a required table is missing. Restore the matching schema before retrying.");
         if (migrationRows.Any(row => row.Version >= 7) && (!hasProjectCopies || !hasFileCopyRefs))
             throw new InvalidOperationException("Migration history says project copy history is applied, but a required table is missing. Restore the matching schema before retrying.");
+        if (migrationRows.Any(row => row.Version >= 9)
+            && (!hasProjectGroups || !hasProjectGroupWorkOrders || !hasProjectGroupStatusLogs
+                || !await HasColumnAsync(conn, "projects", "project_group_id", ct)))
+            throw new InvalidOperationException("Migration history says project groups are applied, but a required table or column is missing. Restore the matching schema before retrying.");
         if (!hasMigrationTable)
             await conn.ExecuteAsync(new CommandDefinition(MigrationTableSql, cancellationToken: ct));
 
@@ -255,6 +329,8 @@ public static class SchemaMigrations
         await SchemaShapeValidator.ValidateTableAsync(conn, "file_copy_refs", FileCopyRefsTableSql, ct);
         await EnsureProjectMetadataColumnsAsync(conn, ct);
         await ValidateProjectMetadataColumnsAsync(conn, ct);
+        await EnsureProjectGroupsAsync(conn, ct);
+        await ValidateProjectGroupsAsync(conn, ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         var supplierGrants = await conn.QueryAsync<SupplierGrant>(new CommandDefinition(
@@ -443,9 +519,12 @@ public static class SchemaMigrations
         await conn.ExecuteAsync(new CommandDefinition(
             "INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (8,@name,@checksum,UTC_TIMESTAMP(6))",
             new { name = ProjectDictionaryCodeRemovalMigrationName, checksum = ProjectDictionaryCodeRemovalChecksum }, tx, cancellationToken: ct));
+        await conn.ExecuteAsync(new CommandDefinition(
+            "INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (9,@name,@checksum,UTC_TIMESTAMP(6))",
+            new { name = ProjectGroupsMigrationName, checksum = ProjectGroupsChecksum }, tx, cancellationToken: ct));
         await tx.CommitAsync(ct);
         ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: true);
-        Console.WriteLine("Database is at .NET schema version " + CurrentVersion + ". Project copy history is available; no project history was removed.");
+        Console.WriteLine("Database is at .NET schema version " + CurrentVersion + ". Project groups are available; existing project content was preserved.");
     }
 
     public static async Task ValidateAsync(MySqlConnection conn, CancellationToken ct)
@@ -469,6 +548,7 @@ public static class SchemaMigrations
         await SchemaShapeValidator.ValidateTableAsync(conn, "project_copies", ProjectCopiesTableSql, ct);
         await SchemaShapeValidator.ValidateTableAsync(conn, "file_copy_refs", FileCopyRefsTableSql, ct);
         await ValidateProjectMetadataColumnsAsync(conn, ct);
+        await ValidateProjectGroupsAsync(conn, ct);
         await SchemaShapeValidator.ValidateBaselineAsync(conn, SchemaShapeValidationMode.Strict, ct);
         await ValidatePermissionGateAsync(conn, ct);
         await ValidateInternalAcceptanceBoundaryAsync(conn, null, ct);
@@ -554,6 +634,7 @@ public static class SchemaMigrations
             new MigrationRow(6, ProjectMetadataMigrationName, ProjectMetadataChecksum),
             new MigrationRow(7, ProjectCopyMigrationName, ProjectCopyChecksum),
             new MigrationRow(8, ProjectDictionaryCodeRemovalMigrationName, ProjectDictionaryCodeRemovalChecksum),
+            new MigrationRow(9, ProjectGroupsMigrationName, ProjectGroupsChecksum),
         };
         if (rows.Length > expected.Length || rows.Where((row, index) => row != expected[index]).Any())
             throw new InvalidOperationException("Unknown or modified .NET migration history; upgrade this application or restore the correct migration definitions.");
@@ -567,6 +648,7 @@ public static class SchemaMigrations
     private static Task<bool> HasTableAsync(MySqlConnection conn, string table, CancellationToken ct) => conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=@table)", new { table }, cancellationToken: ct));
     private static Task<bool> HasColumnAsync(MySqlConnection conn, string table, string column, CancellationToken ct) => conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=@table AND column_name=@column)", new { table, column }, cancellationToken: ct));
     private static Task<bool> HasIndexAsync(MySqlConnection conn, string table, string index, CancellationToken ct) => conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=@table AND index_name=@index)", new { table, index }, cancellationToken: ct));
+    private static Task<bool> HasConstraintAsync(MySqlConnection conn, string table, string constraint, CancellationToken ct) => conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name=@table AND constraint_name=@constraint)", new { table, constraint }, cancellationToken: ct));
     private static async Task MigrateProjectDictionaryCodeRemovalAsync(MySqlConnection conn, CancellationToken ct)
     {
         if (!await HasColumnAsync(conn, "project_dictionaries", "code", ct))
@@ -648,6 +730,108 @@ public static class SchemaMigrations
                 || row.IsNullable != "YES")
                 throw new InvalidOperationException($"Database schema version 6 has an unsupported projects.{item.Key} definition.");
         }
+    }
+
+    private static async Task EnsureProjectGroupsAsync(MySqlConnection conn, CancellationToken ct)
+    {
+        if (!await HasTableAsync(conn, "project_groups", ct))
+            await conn.ExecuteAsync(new CommandDefinition(ProjectGroupsTableSql, cancellationToken: ct));
+        if (!await HasTableAsync(conn, "project_group_work_orders", ct))
+            await conn.ExecuteAsync(new CommandDefinition(ProjectGroupWorkOrdersTableSql, cancellationToken: ct));
+        if (!await HasColumnAsync(conn, "projects", "project_group_id", ct))
+            await conn.ExecuteAsync(new CommandDefinition("ALTER TABLE projects ADD COLUMN project_group_id BIGINT UNSIGNED NULL AFTER id", cancellationToken: ct));
+        if (!await HasIndexAsync(conn, "projects", "idx_projects_group", ct))
+            await conn.ExecuteAsync(new CommandDefinition("CREATE INDEX idx_projects_group ON projects(project_group_id,id)", cancellationToken: ct));
+        if (!await HasConstraintAsync(conn, "projects", "fk_projects_group", ct))
+            await conn.ExecuteAsync(new CommandDefinition("ALTER TABLE projects ADD CONSTRAINT fk_projects_group FOREIGN KEY(project_group_id) REFERENCES project_groups(id)", cancellationToken: ct));
+        if (!await HasTableAsync(conn, "project_group_status_logs", ct))
+            await conn.ExecuteAsync(new CommandDefinition(ProjectGroupStatusLogsTableSql, cancellationToken: ct));
+
+        await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+        {
+            await conn.ExecuteAsync(new CommandDefinition(
+                """
+            INSERT IGNORE INTO project_groups(
+                name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,robot_model_id,
+                responsible_user_id,section_id,priority_id,expected_completion_date,completed_at,created_at,updated_at)
+            SELECT p.name,p.description,p.supplier_id,
+                   CASE
+                     WHEN p.status='COMPLETED' THEN 'COMPLETED'
+                     WHEN p.status='TERMINATED' THEN 'TERMINATED'
+                     WHEN p.status='DRAFT' THEN 'DRAFT'
+                     ELSE 'IN_PROGRESS'
+                   END,
+                   p.created_by,p.machine_model,p.robot_vendor_id,p.robot_model_id,p.responsible_user_id,
+                   p.section_id,p.priority_id,p.expected_completion_date,
+                   CASE WHEN p.status='COMPLETED' THEN p.updated_at ELSE NULL END,
+                   p.created_at,p.updated_at
+            FROM projects p
+            WHERE p.project_group_id IS NULL
+            """, transaction: tx, cancellationToken: ct));
+            await conn.ExecuteAsync(new CommandDefinition(
+                """
+            UPDATE projects p
+            INNER JOIN project_groups g ON g.name=p.name
+            SET p.project_group_id=g.id,p.updated_at=p.updated_at
+            WHERE p.project_group_id IS NULL
+            """, transaction: tx, cancellationToken: ct));
+            await conn.ExecuteAsync(new CommandDefinition(
+                """
+            INSERT IGNORE INTO project_group_work_orders(project_group_id,work_order_no,sort_no,created_at)
+            SELECT p.project_group_id,pwo.work_order_no,pwo.sort_no,pwo.created_at
+            FROM project_work_orders pwo
+            INNER JOIN projects p ON p.id=pwo.project_id
+            WHERE p.project_group_id IS NOT NULL
+            """, transaction: tx, cancellationToken: ct));
+            await conn.ExecuteAsync(new CommandDefinition(
+                """
+            INSERT INTO project_group_status_logs(project_group_id,from_status,to_status,action,trigger_project_id,operator_id,created_at)
+            SELECT g.id,NULL,g.status,'MIGRATE',MIN(p.id),g.created_by,g.created_at
+            FROM project_groups g
+            INNER JOIN projects p ON p.project_group_id=g.id
+            WHERE NOT EXISTS(SELECT 1 FROM project_group_status_logs log WHERE log.project_group_id=g.id)
+            GROUP BY g.id,g.status,g.created_by,g.created_at
+            """, transaction: tx, cancellationToken: ct));
+            if (await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+                    "SELECT COUNT(*) FROM projects WHERE project_group_id IS NULL", transaction: tx, cancellationToken: ct)) > 0)
+                throw new InvalidOperationException("Project group migration could not assign every existing project to a main project.");
+            await tx.CommitAsync(ct);
+        }
+        var nullable = await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT is_nullable FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='projects' AND column_name='project_group_id'",
+            cancellationToken: ct));
+        if (nullable == "YES")
+            await conn.ExecuteAsync(new CommandDefinition(
+                "ALTER TABLE projects MODIFY project_group_id BIGINT UNSIGNED NOT NULL",
+                cancellationToken: ct));
+    }
+
+    private static async Task ValidateProjectGroupsAsync(MySqlConnection conn, CancellationToken ct)
+    {
+        if (!await HasTableAsync(conn, "project_groups", ct)
+            || !await HasTableAsync(conn, "project_group_work_orders", ct)
+            || !await HasTableAsync(conn, "project_group_status_logs", ct)
+            || !await HasColumnAsync(conn, "projects", "project_group_id", ct))
+            throw new InvalidOperationException("Database schema version 9 is incomplete. Run the matching application migration command before startup.");
+        await SchemaShapeValidator.ValidateTableAsync(conn, "project_groups", ProjectGroupsTableSql, ct);
+        await SchemaShapeValidator.ValidateTableAsync(conn, "project_group_work_orders", ProjectGroupWorkOrdersTableSql, ct);
+        await SchemaShapeValidator.ValidateTableAsync(conn, "project_group_status_logs", ProjectGroupStatusLogsTableSql, ct);
+        var relation = await conn.QuerySingleOrDefaultAsync<ProjectMetadataColumn>(new CommandDefinition(
+            """
+            SELECT column_name AS Name,column_type AS ColumnType,is_nullable AS IsNullable
+            FROM information_schema.columns
+            WHERE table_schema=DATABASE() AND table_name='projects' AND column_name='project_group_id'
+            """, cancellationToken: ct));
+        if (relation is null
+            || !NormalizeIntegerDisplayWidth(relation.ColumnType).Equals("bigint unsigned", StringComparison.OrdinalIgnoreCase)
+            || relation.IsNullable != "NO")
+            throw new InvalidOperationException("Database schema version 9 requires a non-null projects.project_group_id relation.");
+        if (!await HasIndexAsync(conn, "projects", "idx_projects_group", ct)
+            || !await HasConstraintAsync(conn, "projects", "fk_projects_group", ct))
+            throw new InvalidOperationException("Database schema version 9 is missing the project-to-group relationship.");
+        if (await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+                "SELECT COUNT(*) FROM projects WHERE project_group_id IS NULL", cancellationToken: ct)) > 0)
+            throw new InvalidOperationException("Database contains projects without a main project.");
     }
 
     private static string NormalizeIntegerDisplayWidth(string value)

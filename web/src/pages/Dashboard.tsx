@@ -12,6 +12,7 @@ interface DashboardMessage {
   id: number
   projectId: number
   projectName?: string
+  projectGroupName?: string
   content: string
   senderName?: string
   createdAt: string
@@ -29,6 +30,7 @@ interface Summary {
 interface PendingProject {
   id: number
   name: string
+  projectGroupName?: string
   status: 'PENDING_CONFIRMATION'
   confirmSide: 'COMPANY'
   updatedAt: string
@@ -245,9 +247,9 @@ export default function Dashboard() {
   }
 
   const cards = [
-    { title: '可见项目', value: data?.projectCount, to: '/projects', action: '查看项目' },
-    { title: '进行中项目', value: data?.activeProjectCount, to: '/projects', action: '查看项目' },
-    { title: '待内部验收项目', value: data?.pendingConfirmations, href: '#dashboard-pending', action: '查看待验收' },
+    { title: '可见主项目', value: data?.projectCount, to: '/projects', action: '查看主项目' },
+    { title: '进行中主项目', value: data?.activeProjectCount, to: '/projects', action: '查看主项目' },
+    { title: '待内部验收子项目', value: data?.pendingConfirmations, href: '#dashboard-pending', action: '查看待验收' },
     { title: '未读留言', value: data?.unreadMessages, href: '#dashboard-messages', action: '查看留言' },
   ]
 
@@ -281,7 +283,7 @@ export default function Dashboard() {
             title={(
               <div className="dashboard-section-title">
                 <div>
-                  <h2>公司内部待验收项目</h2>
+                  <h2>公司内部待验收子项目</h2>
                   <span>{pendingData.total > 0 ? `共 ${pendingData.total} 项` : '需要处理的内部验收'}</span>
                 </div>
                 {pendingData.total > 0 && <Tag color="orange">{pendingData.total}</Tag>}
@@ -299,7 +301,7 @@ export default function Dashboard() {
               <Spin loading className="dashboard-card-loading" />
             ) : pendingError ? (
               <div className="dashboard-feedback">
-                <Typography.Text type="error">内部待验收项目加载失败</Typography.Text>
+                <Typography.Text type="error">内部待验收子项目加载失败</Typography.Text>
                 <Button size="small" onClick={() => { void fetchPending(pendingPage) }}>重试</Button>
               </div>
             ) : pendingData.list.length > 0 ? (
@@ -313,7 +315,7 @@ export default function Dashboard() {
                       extra={<Typography.Text type="secondary">更新于 {fmtTime(project.updatedAt)}</Typography.Text>}
                     >
                       <List.Item.Meta
-                        title={<Link className="dashboard-pending-link" to={`/projects/${project.id}`}>{project.name}</Link>}
+                        title={<Link className="dashboard-pending-link" to={`/projects/${project.id}`}>{project.projectGroupName ? `${project.projectGroupName} / ${project.name}` : project.name}</Link>}
                         description={<Tag color="orange">待公司内部验收</Tag>}
                       />
                     </List.Item>
@@ -335,7 +337,7 @@ export default function Dashboard() {
                 )}
               </>
             ) : (
-              <Empty description="暂无内部待验收项目" />
+              <Empty description="暂无内部待验收子项目" />
             )}
           </Card>
         </Grid.Col>
@@ -378,7 +380,8 @@ export default function Dashboard() {
                   className="dashboard-message-list"
                   dataSource={messageData.list}
                   render={(message) => {
-                    const projectLabel = message.projectName || `项目#${message.projectId}`
+                    const childLabel = message.projectName || `项目#${message.projectId}`
+                    const projectLabel = message.projectGroupName ? `${message.projectGroupName} / ${childLabel}` : childLabel
                     const target = `/projects/${message.projectId}?tab=messages&target=${message.id}`
                     return (
                       <List.Item
@@ -441,7 +444,7 @@ export default function Dashboard() {
         <div className="dashboard-overview-heading">
           <div>
             <h2 id="dashboard-overview-title">业务概览</h2>
-            <span>项目与协作状态汇总</span>
+            <span>主项目与子项目协作状态汇总</span>
           </div>
           {loadError && data && <Typography.Text type="error">概览刷新失败，当前显示上次结果</Typography.Text>}
           {summaryRefreshError && data && (

@@ -79,9 +79,11 @@ function loadPage(relativePath, http, permissions) {
     },
     '../../utils/password': { passwordRule: {} },
     '../../utils/textRules': { textLengthRule: () => ({}) },
+    './ProjectDetail.css': {},
     'react-router-dom': {
       Link: component('Link'),
       useNavigate: () => () => {},
+      useParams: () => ({ id: '3' }),
     },
   }
   vm.runInNewContext(source, {
@@ -184,18 +186,18 @@ test('empty permission catalog disables saving but an intentionally cleared role
   }
 })
 
-test('project status failure resolves the select handler and re-enables the same row for retry', async () => {
+test('subproject status failure resolves the action handler and re-enables the same row for retry', async () => {
   const project = {
-    id: 101, name: '失败重试项目', supplierId: 8, supplierName: '供应商', status: 'DRAFT',
+    id: 101, projectGroupId: 3, projectGroupName: '主项目', name: '失败重试子项目', supplierId: 8, supplierName: '供应商', status: 'DRAFT',
     createdByName: '创建人', updatedAt: '',
   }
+  const group = { id: 3, name: '主项目', status: 'IN_PROGRESS', subprojectCount: 1, completedCount: 0, pendingCount: 0, terminatedCount: 0 }
   const firstWrite = deferred()
   let projectGets = 0
   let writeAttempts = 0
   const http = {
     get: async url => {
-      if (url === '/projects') { projectGets += 1; return { data: { list: [project], total: 1, page: 1, pageSize: 10 } } }
-      if (url === '/supplier-options') return { data: [{ id: 8, name: '供应商' }] }
+      if (url === '/project-groups/3') { projectGets += 1; return { data: { group, projects: [project] } } }
       throw new Error(`unexpected GET ${url}`)
     },
     put: async url => {
@@ -205,18 +207,18 @@ test('project status failure resolves the select handler and re-enables the same
       return { data: {} }
     },
   }
-  const ProjectList = loadPage('src/pages/project/ProjectList.tsx', http,
+  const ProjectList = loadPage('src/pages/project/ProjectGroupDetail.tsx', http,
     ['project:list', 'project:status'])
   let renderer
   await act(async () => { renderer = create(React.createElement(ProjectList)); await flush() })
 
   const statusControl = () => findElement(
     renderer.root.findByType('Table').props.columns.at(-1).render(null, project),
-    node => node.props.placeholder === '状态' && typeof node.props.onChange === 'function',
+    node => node.props.children === '开始' && typeof node.props.onClick === 'function',
   )
   let firstPromise
   await act(async () => {
-    firstPromise = statusControl().props.onChange('IN_PROGRESS')
+    firstPromise = statusControl().props.onClick()
     await Promise.resolve()
   })
   assert.equal(statusControl().props.disabled, true)
@@ -227,7 +229,7 @@ test('project status failure resolves the select handler and re-enables the same
   assert.equal(statusControl().props.disabled, false)
   assert.equal(projectGets, 1, 'failed writes must keep the current list snapshot')
 
-  await act(async () => { await statusControl().props.onChange('IN_PROGRESS'); await flush() })
+  await act(async () => { await statusControl().props.onClick(); await flush() })
   assert.equal(writeAttempts, 2)
   assert.ok(projectGets > 1, 'successful retry refreshes the project list')
   await act(async () => renderer.unmount())

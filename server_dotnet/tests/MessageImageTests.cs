@@ -39,10 +39,12 @@ public sealed class MessageImageTests
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password)
             VALUES(101,'image-outsider','unused','范围外用户','','INTERNAL','ACTIVE',0);
             INSERT INTO user_roles(user_id,role_id) VALUES(101,9001);
-            INSERT INTO projects(id,name,supplier_id,status,created_by)
+            INSERT INTO project_groups(id,name,supplier_id,status,created_by)
+            VALUES(5001,'图片主项目',100,'IN_PROGRESS',1),(5002,'已完成图片主项目',100,'COMPLETED',1);
+            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by)
             VALUES
-                (1001,'图片项目',100,'IN_PROGRESS',1),
-                (1002,'已完成图片项目',100,'COMPLETED',1);
+                (1001,5001,'图片项目',100,'IN_PROGRESS',1),
+                (1002,5002,'已完成图片项目',100,'COMPLETED',1);
             """, ct);
 
         var admin = new CurrentUser(1, "admin", "INTERNAL", null);

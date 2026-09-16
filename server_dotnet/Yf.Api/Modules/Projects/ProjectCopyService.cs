@@ -6,7 +6,12 @@ using Yf.Api.Modules.Files;
 
 namespace Yf.Api.Modules.Projects;
 
-internal sealed class ProjectCopyService(AppDb database, AppOptions options, AuditService audit, IProjectRealtimePublisher realtime)
+internal sealed class ProjectCopyService(
+    AppDb database,
+    AppOptions options,
+    AuditService audit,
+    IProjectRealtimePublisher realtime,
+    ProjectGroupStatusService groupStatus)
 {
     internal async Task<object> CopyAsync(MySqlConnection conn, CurrentUser actor, ulong sourceProjectId,
         ProjectCopyRequest request, string? ip, CancellationToken ct)
@@ -47,6 +52,11 @@ internal sealed class ProjectCopyService(AppDb database, AppOptions options, Aud
                 || await ActiveUploadCountAsync(conn, tx, sourceProjectId, ct) != 0)
                 throw ApiException.Conflict("源项目或文件已发生变化，请刷新后重新复制");
             await ValidateSourceAsync(conn, tx, currentSource, ct);
+            var groupState = await conn.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
+                "SELECT status FROM project_groups WHERE id=@GroupId FOR UPDATE",
+                new { GroupId = currentSource.ProjectGroupId }, tx, cancellationToken: ct));
+            if (groupState is ProjectStatuses.Completed or ProjectStatuses.Terminated)
+                throw ApiException.Conflict("主项目已结束，不能复制子项目");
             await EnsureNameUniqueAsync(conn, tx, targetName, ct);
             var createdAt = await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
                 "SELECT UTC_TIMESTAMP(6)", transaction: tx, cancellationToken: ct));
@@ -55,12 +65,12 @@ internal sealed class ProjectCopyService(AppDb database, AppOptions options, Aud
             {
                 await conn.ExecuteAsync(new CommandDefinition(
                     """
-                    INSERT INTO projects(name,description,supplier_id,status,confirm_side,created_by,created_at,updated_at,
+                    INSERT INTO projects(project_group_id,name,description,supplier_id,status,confirm_side,created_by,created_at,updated_at,
                         machine_model,robot_vendor_id,robot_model_id,responsible_user_id,section_id,priority_id,expected_completion_date)
-                    VALUES(@TargetName,@Description,@SupplierId,'DRAFT',NULL,@ActorId,@CreatedAt,@CreatedAt,
+                    VALUES(@ProjectGroupId,@TargetName,@Description,@SupplierId,'DRAFT',NULL,@ActorId,@CreatedAt,@CreatedAt,
                         @MachineModel,@RobotVendorId,@RobotModelId,@ResponsibleUserId,@SectionId,@PriorityId,@ExpectedCompletionDate)
                     """,
-                    new { TargetName = targetName, currentSource.Description, currentSource.SupplierId, ActorId = current.Id,
+                    new { currentSource.ProjectGroupId, TargetName = targetName, currentSource.Description, currentSource.SupplierId, ActorId = current.Id,
                         CreatedAt = createdAt, currentSource.MachineModel, currentSource.RobotVendorId,
                         currentSource.RobotModelId, currentSource.ResponsibleUserId, currentSource.SectionId,
                         currentSource.PriorityId, currentSource.ExpectedCompletionDate }, tx, cancellationToken: ct));
@@ -124,6 +134,7 @@ internal sealed class ProjectCopyService(AppDb database, AppOptions options, Aud
                     currentSource.SectionId, currentSource.PriorityId, currentSource.ExpectedCompletionDate },
                 fileCount = prepared.Count, totalBytes,
             }, ip, ct);
+            await groupStatus.RecalculateAsync(conn, tx, currentSource.ProjectGroupId, current.Id, targetProjectId, ct);
 
             var target = await LoadProjectAsync(conn, tx, targetProjectId, ct);
             target.HasCopyHistory = true;
@@ -308,7 +319,8 @@ internal sealed class ProjectCopyService(AppDb database, AppOptions options, Aud
     {
         var row = await conn.QuerySingleOrDefaultAsync<ProjectRow>(new CommandDefinition(
             """
-            SELECT p.id AS Id,p.name AS Name,p.description AS Description,p.supplier_id AS SupplierId,
+            SELECT p.id AS Id,p.project_group_id AS ProjectGroupId,g.name AS ProjectGroupName,
+              p.name AS Name,p.description AS Description,p.supplier_id AS SupplierId,
               p.machine_model AS MachineModel,p.robot_vendor_id AS RobotVendorId,rv.name AS RobotVendorName,
               p.robot_model_id AS RobotModelId,rm.name AS RobotModelName,
               p.responsible_user_id AS ResponsibleUserId,owner.employee_no AS ResponsibleUserEmployeeNo,
@@ -316,7 +328,8 @@ internal sealed class ProjectCopyService(AppDb database, AppOptions options, Aud
               p.priority_id AS PriorityId,priority.name AS PriorityName,
               p.expected_completion_date AS ExpectedCompletionDate,p.status AS Status,p.confirm_side AS ConfirmSide,
               p.created_by AS CreatedBy,p.created_at AS CreatedAt,p.updated_at AS UpdatedAt,s.name AS SupplierName,u.real_name AS CreatedByName
-            FROM projects p LEFT JOIN suppliers s ON s.id=p.supplier_id LEFT JOIN users u ON u.id=p.created_by
+            FROM projects p LEFT JOIN project_groups g ON g.id=p.project_group_id
+              LEFT JOIN suppliers s ON s.id=p.supplier_id LEFT JOIN users u ON u.id=p.created_by
               LEFT JOIN project_dictionaries rv ON rv.id=p.robot_vendor_id LEFT JOIN project_dictionaries rm ON rm.id=p.robot_model_id
               LEFT JOIN users owner ON owner.id=p.responsible_user_id LEFT JOIN departments section ON section.id=p.section_id AND section.kind='SECTION'
               LEFT JOIN project_dictionaries priority ON priority.id=p.priority_id WHERE p.id=@ProjectId
@@ -338,7 +351,8 @@ internal sealed class ProjectCopyService(AppDb database, AppOptions options, Aud
             "SELECT COUNT(*) FROM upload_sessions WHERE project_id=@ProjectId AND status IN ('UPLOADING','MERGING')",
             new { ProjectId = projectId }, tx, cancellationToken: ct));
 
-    private static bool SameProjectSnapshot(ProjectRow a, ProjectRow b) => a.Id == b.Id && a.Name == b.Name
+    private static bool SameProjectSnapshot(ProjectRow a, ProjectRow b) => a.Id == b.Id
+        && a.ProjectGroupId == b.ProjectGroupId && a.Name == b.Name
         && a.Description == b.Description && a.SupplierId == b.SupplierId && a.Status == b.Status
         && a.ConfirmSide == b.ConfirmSide && a.UpdatedAt == b.UpdatedAt && a.MachineModel == b.MachineModel
         && a.RobotVendorId == b.RobotVendorId && a.RobotModelId == b.RobotModelId

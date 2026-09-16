@@ -37,7 +37,8 @@ public sealed class ProjectCopyTests
             var options = new AppOptions { StorageRoot = storage };
             var publisher = new RecordingPublisher();
             var audit = new AuditService([]);
-            var service = new ProjectCopyService(database.Database, options, audit, publisher);
+            var groupStatus = new ProjectGroupStatusService(audit);
+            var service = new ProjectCopyService(database.Database, options, audit, publisher, groupStatus);
             var actor = new CurrentUser(1, "admin", "INTERNAL", null);
             await using var conn = await database.Database.OpenAsync(ct);
             var result = Json(await service.CopyAsync(conn, actor, 7101, new() { Name = "复制项目" }, null, ct));
@@ -72,7 +73,7 @@ public sealed class ProjectCopyTests
                 Assert.Equal(copied.Id, mappings.RootElement.GetProperty("list")[0].GetProperty("targetFileId").GetUInt64());
             }
 
-            var projects = new ProjectService(audit, options);
+            var projects = new ProjectService(audit, options, groupStatus);
             Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() =>
                 projects.DeleteAsync(conn, actor, 7101, null, ct))).Status);
             Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() =>
@@ -130,9 +131,13 @@ public sealed class ProjectCopyTests
           (6201,'ROBOT_VENDOR','复制厂商',NULL,1,'ACTIVE'),
           (6202,'ROBOT_MODEL','复制型号',6201,1,'ACTIVE'),
           (6203,'PRIORITY','复制优先级',NULL,1,'ACTIVE');
-        INSERT INTO projects(id,name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,robot_model_id,responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
-        VALUES(7101,'源项目','复制来源',6101,'DRAFT',1,'M1',6201,6202,3,7001,6203,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (7102,'空源项目','无文件复制来源',6101,'DRAFT',1,'M1',6201,6202,3,7001,6203,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+        INSERT INTO project_groups(id,name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,robot_model_id,responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
+        VALUES(7111,'复制主项目一','复制来源',6101,'DRAFT',1,'M1',6201,6202,3,7001,6203,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (7112,'复制主项目二','无文件复制来源',6101,'DRAFT',1,'M1',6201,6202,3,7001,6203,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+        INSERT INTO projects(id,project_group_id,name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,robot_model_id,responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
+        VALUES(7101,7111,'源项目','复制来源',6101,'DRAFT',1,'M1',6201,6202,3,7001,6203,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (7102,7112,'空源项目','无文件复制来源',6101,'DRAFT',1,'M1',6201,6202,3,7001,6203,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+        INSERT INTO project_group_work_orders(project_group_id,work_order_no,sort_no) VALUES(7111,'WO-COPY',0),(7112,'WO-EMPTY',0);
         INSERT INTO project_work_orders(project_id,work_order_no,sort_no) VALUES(7101,'WO-COPY',0),(7102,'WO-EMPTY',0);
         """;
 

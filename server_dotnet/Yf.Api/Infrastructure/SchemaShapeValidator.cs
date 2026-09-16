@@ -92,7 +92,8 @@ internal static class SchemaShapeValidator
 
         foreach (var actualColumn in actual.Columns.Values.Where(column => !expected.Columns.ContainsKey(column.Name)))
         {
-            if (!IsHarmlessExtraColumn(actualColumn.Definition))
+            if (!IsHarmlessExtraColumn(actualColumn.Definition)
+                && !IsManagedRequiredExtension(expected.Name, actualColumn.Name))
                 throw Mismatch(expected.Name, $"extra column {actualColumn.Name} can block existing inserts");
         }
 
@@ -129,7 +130,11 @@ internal static class SchemaShapeValidator
 
         var expectedForeignKeys = expected.ForeignKeys.Select(key => key.SemanticKey).ToHashSet(StringComparer.Ordinal);
         var actualForeignKeys = actual.ForeignKeys.Select(key => key.SemanticKey).ToHashSet(StringComparer.Ordinal);
-        if (!expectedForeignKeys.SetEquals(actualForeignKeys))
+        var unexpectedForeignKeys = actual.ForeignKeys
+            .Where(key => !expectedForeignKeys.Contains(key.SemanticKey))
+            .ToArray();
+        if (!expectedForeignKeys.IsSubsetOf(actualForeignKeys)
+            || unexpectedForeignKeys.Any(key => ForeignKeyTouchesBaselineColumn(key, expected.Columns)))
             throw Mismatch(expected.Name, "foreign key columns, target, or update/delete rules differ from the baseline");
 
         if (actual.OtherConstraints.Count != expected.OtherConstraints.Count
@@ -298,6 +303,17 @@ internal static class SchemaShapeValidator
         var rule = match.Groups[1].Value.ToLowerInvariant();
         return rule == "no action" ? "restrict" : rule;
     }
+
+    private static bool ForeignKeyTouchesBaselineColumn(
+        ForeignKeyShape key,
+        IReadOnlyDictionary<string, ColumnShape> baselineColumns) =>
+        key.LocalColumns.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(column => column.Trim('`'))
+            .Any(baselineColumns.ContainsKey);
+
+    private static bool IsManagedRequiredExtension(string table, string column) =>
+        table.Equals("projects", StringComparison.OrdinalIgnoreCase)
+        && column.Equals("project_group_id", StringComparison.OrdinalIgnoreCase);
 
     private static int FindMatchingParenthesis(string value, int open)
     {

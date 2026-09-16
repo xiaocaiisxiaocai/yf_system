@@ -44,10 +44,12 @@ public sealed class MessageReceiptTests
                 (301,'receipt-other-supplier','unused','其他供应商用户','','SUPPLIER',200,'ACTIVE',0);
             INSERT INTO user_roles(user_id,role_id)
             VALUES(101,9001),(102,9001),(103,9001),(104,9003),(201,9002),(202,9002),(301,9002);
-            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
+            VALUES(5001,'回执主项目',100,'IN_PROGRESS',1,101),(5002,'其他主项目',200,'IN_PROGRESS',102,102);
+            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
             VALUES
-                (1001,'回执项目',100,'IN_PROGRESS',1,101),
-                (2001,'其他项目',200,'IN_PROGRESS',102,102);
+                (1001,5001,'回执项目',100,'IN_PROGRESS',1,101),
+                (2001,5002,'其他项目',200,'IN_PROGRESS',102,102);
             INSERT INTO project_members(project_id,user_id,created_by)
             VALUES(1001,101,1),(1001,103,1);
             INSERT INTO messages(id,project_id,sender_id,content,status)

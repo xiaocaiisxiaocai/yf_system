@@ -12,6 +12,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard'))
 const NotFound = lazy(() => import('./pages/NotFound'))
 const ProjectList = lazy(() => import('./pages/project/ProjectList'))
 const ProjectDetail = lazy(() => import('./pages/project/ProjectDetail'))
+const ProjectGroupDetail = lazy(() => import('./pages/project/ProjectGroupDetail'))
 const SupplierList = lazy(() => import('./pages/supplier/SupplierList'))
 const UserList = lazy(() => import('./pages/org/UserList'))
 const DeptManage = lazy(() => import('./pages/org/DeptManage'))
@@ -111,6 +112,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="profile" element={<Profile />} />
           <Route path="projects" element={<Guard menu="project:list"><ProjectList /></Guard>} />
+          <Route path="project-groups/:id" element={<Guard menu="project:list"><ProjectGroupDetail /></Guard>} />
           <Route path="projects/:id" element={<Guard menu="project:list"><ProjectDetail /></Guard>} />
           <Route path="suppliers" element={<Guard menu="supplier:list" anyPermission={['supplier:manage', 'supplier:account']}><SupplierList /></Guard>} />
           <Route path="org/users" element={<Guard menu="org:user" permission="user:manage"><UserList /></Guard>} />

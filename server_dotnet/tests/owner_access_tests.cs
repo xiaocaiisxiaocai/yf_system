@@ -13,6 +13,7 @@ namespace Yf.Api.Tests;
 public sealed class OwnerAccessTests
 {
     private const ulong ProjectId = 10_001;
+    private const ulong ProjectGroupId = 11_001;
     private const ulong OwnerlessProjectId = 10_002;
     private const ulong CreatorId = 9_101;
     private const ulong OldMemberId = 9_102;
@@ -40,7 +41,9 @@ public sealed class OwnerAccessTests
         var matchingSupplier = new CurrentUser(SupplierUserId, "owner-supplier", "SUPPLIER", 8_001);
         var otherSupplier = new CurrentUser(OtherSupplierUserId, "owner-other-supplier", "SUPPLIER", 8_002);
         var audit = new AuditService([]);
-        var projects = new ProjectService(audit, database.Options);
+        var groupStatus = new ProjectGroupStatusService(audit);
+        var groups = new ProjectGroupService(audit, groupStatus);
+        var projects = new ProjectService(audit, database.Options, groupStatus);
 
         await using var conn = await database.Database.OpenAsync(ct);
         Assert.Equal(OldOwnerId, (await ProjectAccessService.RequireViewAsync(conn, null, oldOwner, ProjectId, ct)).ResponsibleUserId);
@@ -53,13 +56,13 @@ public sealed class OwnerAccessTests
         await AssertOutOfScopeAsync(() => ProjectAccessService.RequireViewAsync(conn, null, otherSupplier, ProjectId, ct));
         await AssertForbiddenAsync(() => ProjectAccessService.RequireViewAsync(conn, null, ownerWithoutList, 10_003, ct));
 
-        Assert.Equal(new ulong[] { ProjectId }, await ListedProjectIdsAsync(projects, conn, oldOwner, ct));
-        Assert.Empty(await ListedProjectIdsAsync(projects, conn, creator, ct));
-        Assert.Empty(await ListedProjectIdsAsync(projects, conn, oldMember, ct));
-        Assert.Equal(new ulong[] { 10_003UL, OwnerlessProjectId, ProjectId },
-            await ListedProjectIdsAsync(projects, conn, viewAll, ct));
-        Assert.Equal(new ulong[] { 10_003UL, OwnerlessProjectId, ProjectId },
-            await ListedProjectIdsAsync(projects, conn, matchingSupplier, ct));
+        Assert.Equal(new ulong[] { ProjectGroupId }, await ListedProjectGroupIdsAsync(groups, conn, oldOwner, ct));
+        Assert.Empty(await ListedProjectGroupIdsAsync(groups, conn, creator, ct));
+        Assert.Empty(await ListedProjectGroupIdsAsync(groups, conn, oldMember, ct));
+        Assert.Equal(new ulong[] { 11_003UL, 11_002UL, ProjectGroupId },
+            await ListedProjectGroupIdsAsync(groups, conn, viewAll, ct));
+        Assert.Equal(new ulong[] { 11_003UL, 11_002UL, ProjectGroupId },
+            await ListedProjectGroupIdsAsync(groups, conn, matchingSupplier, ct));
 
         using (var detail = Json(await projects.DetailAsync(conn, oldOwner, ProjectId, ct)))
         {
@@ -79,7 +82,7 @@ public sealed class OwnerAccessTests
             new { ProjectId }, cancellationToken: ct));
         Assert.Equal(2, historicalMembers);
 
-        await projects.UpdateAsync(conn, oldOwner, ProjectId, UpdateRequest(NewOwnerId), null, ct);
+        await groups.UpdateAsync(conn, oldOwner, ProjectGroupId, UpdateRequest(NewOwnerId), null, ct);
 
         await AssertOutOfScopeAsync(() => projects.DetailAsync(conn, oldOwner, ProjectId, ct));
         using (var detail = Json(await projects.DetailAsync(conn, newOwner, ProjectId, ct)))
@@ -93,8 +96,11 @@ public sealed class OwnerAccessTests
             "SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id=@ProjectId AND user_id=@NewOwnerId)",
             new { ProjectId, NewOwnerId }, cancellationToken: ct)));
 
-        var created = await projects.CreateAsync(conn, creator, CreateRequest(NewOwnerId), null, ct);
-        var createdId = Id(created);
+        var createdGroup = await groups.CreateAsync(conn, creator, CreateRequest(NewOwnerId), null, ct);
+        var createdGroupId = Id(createdGroup);
+        var createdId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+            "SELECT id FROM projects WHERE project_group_id=@GroupId",
+            new { GroupId = createdGroupId }, cancellationToken: ct));
         Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
             "SELECT COUNT(*) FROM project_members WHERE project_id=@CreatedId",
             new { CreatedId = createdId }, cancellationToken: ct)));
@@ -136,13 +142,22 @@ public sealed class OwnerAccessTests
           (6001,'ROBOT_VENDOR','负责人测试厂商',NULL,1,'ACTIVE'),
           (6002,'ROBOT_MODEL','负责人测试型号',6001,1,'ACTIVE'),
           (6003,'PRIORITY','负责人测试优先级',NULL,1,'ACTIVE');
-        INSERT INTO projects
+        INSERT INTO project_groups
           (id,name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,robot_model_id,
            responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
         VALUES
-          (10001,'负责人范围项目','范围测试',8001,'DRAFT',9101,'M1',6001,6002,9103,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (10002,'无负责人历史项目','空负责人测试',8001,'DRAFT',9101,'M1',6001,6002,NULL,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (10003,'无列表权限负责人项目','权限门禁测试',8001,'DRAFT',9101,'M1',6001,6002,9106,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+          (11001,'负责人范围主项目','范围测试',8001,'DRAFT',9101,'M1',6001,6002,9103,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (11002,'无负责人历史主项目','空负责人测试',8001,'DRAFT',9101,'M1',6001,6002,NULL,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (11003,'无列表权限负责人主项目','权限门禁测试',8001,'DRAFT',9101,'M1',6001,6002,9106,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+        INSERT INTO projects
+          (id,project_group_id,name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,robot_model_id,
+           responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
+        VALUES
+          (10001,11001,'负责人范围项目','范围测试',8001,'DRAFT',9101,'M1',6001,6002,9103,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (10002,11002,'无负责人历史项目','空负责人测试',8001,'DRAFT',9101,'M1',6001,6002,NULL,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (10003,11003,'无列表权限负责人项目','权限门禁测试',8001,'DRAFT',9101,'M1',6001,6002,9106,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+        INSERT INTO project_group_work_orders(project_group_id,work_order_no,sort_no)
+        VALUES(11001,'WO-OWNER',0),(11002,'WO-OWNERLESS',0),(11003,'WO-NO-LIST',0);
         INSERT INTO project_work_orders(project_id,work_order_no,sort_no)
         VALUES(10001,'WO-OWNER',0),(10002,'WO-OWNERLESS',0),(10003,'WO-NO-LIST',0);
         INSERT INTO project_members(project_id,user_id,created_by)
@@ -175,6 +190,7 @@ public sealed class OwnerAccessTests
         ResponsibleUserId = responsibleUserId,
         PriorityId = 6_003,
         ExpectedCompletionDate = "2027-01-31",
+        SubprojectNames = ["创建后子项目"],
     };
 
     private static FileService FileService(OwnerAccessDatabase database, AuditService audit)
@@ -204,8 +220,8 @@ public sealed class OwnerAccessTests
 
     private static CurrentUser Internal(ulong id, string employeeNo) => new(id, employeeNo, "INTERNAL", null);
 
-    private static async Task<ulong[]> ListedProjectIdsAsync(
-        ProjectService service,
+    private static async Task<ulong[]> ListedProjectGroupIdsAsync(
+        ProjectGroupService service,
         MySqlConnection conn,
         CurrentUser actor,
         CancellationToken ct)

@@ -410,6 +410,7 @@ public sealed class MailDeliveryTests
                     );
                     CREATE TABLE projects(
                         id BIGINT UNSIGNED PRIMARY KEY,
+                        project_group_id BIGINT UNSIGNED NULL,
                         supplier_id BIGINT UNSIGNED NOT NULL,
                         created_by BIGINT UNSIGNED NOT NULL,
                         responsible_user_id BIGINT UNSIGNED NULL,

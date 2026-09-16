@@ -286,7 +286,9 @@ export default function CollaborationNotifications() {
                       )}
                       <div className="collaboration-notification-meta">
                         <span>{item.actorName}</span>
-                        <span title={item.projectName}>{item.projectName}</span>
+                        <span title={item.projectGroupName ? `${item.projectGroupName} / ${item.projectName}` : item.projectName}>
+                          {item.projectGroupName ? `${item.projectGroupName} / ${item.projectName}` : item.projectName}
+                        </span>
                         <time dateTime={item.occurredAt}>{fmtTime(item.occurredAt)}</time>
                       </div>
                       {!item.read && (

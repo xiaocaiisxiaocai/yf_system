@@ -4,6 +4,8 @@ export type ActionSlot = ReactNode | false | null | undefined
 
 export type ActionSlotsVariant =
   | 'project'
+  | 'project-group'
+  | 'subproject'
   | 'supplier'
   | 'account'
   | 'user'

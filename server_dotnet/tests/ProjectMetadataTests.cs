@@ -29,7 +29,9 @@ public sealed class ProjectMetadataTests
         var actor = new CurrentUser(9001, "metadata-admin", "INTERNAL", null);
         var audit = new AuditService([]);
         var dictionaries = new ProjectDictionaryService(audit);
-        var projects = new ProjectService(audit, new AppOptions());
+        var groupStatus = new ProjectGroupStatusService(audit);
+        var groups = new ProjectGroupService(audit, groupStatus);
+        var projects = new ProjectService(audit, new AppOptions(), groupStatus);
         await using var conn = await database.Database.OpenAsync(ct);
 
         var vendorId = Id(await dictionaries.CreateAsync(conn, actor, new()
@@ -52,21 +54,22 @@ public sealed class ProjectMetadataTests
             Name = "必填校验项目", SupplierId = 8001, WorkOrderNos = ["WO-REQUIRED"],
             MachineModel = "M1", RobotVendorId = vendorId, RobotModelId = modelId,
             ResponsibleUserId = 9002, PriorityId = priorityId, ExpectedCompletionDate = "2026-12-31",
+            SubprojectNames = ["必填校验子项目"],
         };
         foreach (var field in new[] { "workOrderNos", "machineModel", "robotVendorId", "robotModelId", "responsibleUserId", "priorityId", "expectedCompletionDate" })
         {
             var node = System.Text.Json.JsonSerializer.SerializeToNode(complete)!;
             node[field] = null;
             var missing = System.Text.Json.JsonSerializer.Deserialize<ProjectUpsertRequest>(node)!;
-            var error = await Assert.ThrowsAsync<ApiException>(() => projects.CreateAsync(conn, actor, missing, null, ct));
+            var error = await Assert.ThrowsAsync<ApiException>(() => groups.CreateAsync(conn, actor, missing, null, ct));
             Assert.Equal(400, error.Status);
         }
         await conn.ExecuteAsync("UPDATE users SET department_id=NULL WHERE id=9002");
-        var noSection = await Assert.ThrowsAsync<ApiException>(() => projects.CreateAsync(conn, actor, complete, null, ct));
+        var noSection = await Assert.ThrowsAsync<ApiException>(() => groups.CreateAsync(conn, actor, complete, null, ct));
         Assert.Equal(400, noSection.Status);
         await conn.ExecuteAsync("UPDATE users SET department_id=7001 WHERE id=9002");
 
-        var created = await projects.CreateAsync(conn, actor, new()
+        var created = await groups.CreateAsync(conn, actor, new()
         {
             Name = "元数据集成项目",
             Description = "初始",
@@ -78,8 +81,11 @@ public sealed class ProjectMetadataTests
             ResponsibleUserId = 9002,
             PriorityId = priorityId,
             ExpectedCompletionDate = "2026-12-31",
+            SubprojectNames = ["元数据子项目"],
         }, null, ct);
-        var projectId = Id(created);
+        var groupId = Id(created);
+        var projectId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+            "SELECT id FROM projects WHERE project_group_id=@GroupId", new { GroupId = groupId }, cancellationToken: ct));
         using (var detail = Json(await projects.DetailAsync(conn, actor, projectId, ct)))
         {
             var root = detail.RootElement;
@@ -104,7 +110,7 @@ public sealed class ProjectMetadataTests
         {
             Type = "ROBOT_MODEL", Name = "型号 A", ParentId = vendorId, SortNo = 10, Enabled = false,
         }, null, ct);
-        var updated = await projects.UpdateAsync(conn, actor, projectId, new()
+        var updated = await groups.UpdateAsync(conn, actor, groupId, new()
         {
             Name = "元数据集成项目",
             Description = "仅修改说明",
@@ -119,8 +125,14 @@ public sealed class ProjectMetadataTests
         }, null, ct);
         using (var updatedJson = Json(updated))
         {
+            Assert.Equal("仅修改说明", updatedJson.RootElement.GetProperty("description").GetString());
             Assert.Equal("厂商 A", updatedJson.RootElement.GetProperty("robotVendorName").GetString());
             Assert.Equal("型号 A", updatedJson.RootElement.GetProperty("robotModelName").GetString());
+        }
+        using (var updatedChild = Json(await projects.DetailAsync(conn, actor, projectId, ct)))
+        {
+            Assert.Equal(JsonValueKind.Null, updatedChild.RootElement.GetProperty("description").ValueKind);
+            Assert.Equal("厂商 A", updatedChild.RootElement.GetProperty("robotVendorName").GetString());
         }
 
         var parentChange = await Assert.ThrowsAsync<ApiException>(() => dictionaries.UpdateAsync(conn, actor, modelId, new()

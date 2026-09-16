@@ -87,6 +87,9 @@ public sealed class FilesRecoveryTests
             Assert.Equal(1UL, await observer.QuerySingleAsync<ulong>(new CommandDefinition(
                 "SELECT id FROM projects WHERE id=1 FOR UPDATE", transaction: tx,
                 cancellationToken: lockProbe.Token)));
+            Assert.Equal(1UL, await observer.QuerySingleAsync<ulong>(new CommandDefinition(
+                "SELECT id FROM project_groups WHERE id=1 FOR UPDATE", transaction: tx,
+                cancellationToken: lockProbe.Token)));
             await tx.CommitAsync(lockProbe.Token);
 
             body.Release();
@@ -363,10 +366,13 @@ public sealed class FilesRecoveryTests
                         );
                         CREATE TABLE user_roles(user_id BIGINT UNSIGNED NOT NULL, role_id BIGINT UNSIGNED NOT NULL);
                         CREATE TABLE role_permissions(role_id BIGINT UNSIGNED NOT NULL, permission_id BIGINT UNSIGNED NOT NULL);
+                        CREATE TABLE project_groups(id BIGINT UNSIGNED PRIMARY KEY);
                         CREATE TABLE projects(
-                            id BIGINT UNSIGNED PRIMARY KEY, supplier_id BIGINT UNSIGNED NOT NULL,
+                            id BIGINT UNSIGNED PRIMARY KEY, project_group_id BIGINT UNSIGNED NOT NULL,
+                            supplier_id BIGINT UNSIGNED NOT NULL,
                             created_by BIGINT UNSIGNED NOT NULL, status VARCHAR(30) NOT NULL,
-                            confirm_side VARCHAR(20) NULL, name VARCHAR(100) NOT NULL
+                            confirm_side VARCHAR(20) NULL, name VARCHAR(100) NOT NULL,
+                            responsible_user_id BIGINT UNSIGNED NULL
                         );
                         CREATE TABLE project_members(project_id BIGINT UNSIGNED NOT NULL, user_id BIGINT UNSIGNED NOT NULL);
                         CREATE TABLE audit_logs(
@@ -403,8 +409,9 @@ public sealed class FilesRecoveryTests
                         INSERT INTO permissions(id,code) VALUES(1,'file:upload'),(2,'project:list');
                         INSERT INTO user_roles(user_id,role_id) VALUES(1,1);
                         INSERT INTO role_permissions(role_id,permission_id) VALUES(1,1),(1,2);
-                        INSERT INTO projects(id,supplier_id,created_by,status,confirm_side,name)
-                            VALUES(1,1,1,'IN_PROGRESS',NULL,'File Test');
+                        INSERT INTO project_groups(id) VALUES(1);
+                        INSERT INTO projects(id,project_group_id,supplier_id,created_by,status,confirm_side,name,responsible_user_id)
+                            VALUES(1,1,1,1,'IN_PROGRESS',NULL,'File Test',1);
                         """, cancellationToken: ct));
                 }
                 var maintenance = new FilesMaintenanceService(

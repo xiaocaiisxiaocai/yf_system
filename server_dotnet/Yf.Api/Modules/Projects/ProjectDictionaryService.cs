@@ -40,7 +40,8 @@ internal sealed class ProjectDictionaryService(AuditService audit)
             """
             SELECT d.id AS Id,d.type AS Type,d.name AS Name,d.parent_id AS ParentId,
                    parent.name AS ParentName,d.sort_no AS SortNo,d.status AS Status,
-                   EXISTS(SELECT 1 FROM projects p WHERE p.robot_vendor_id=d.id OR p.robot_model_id=d.id OR p.priority_id=d.id) AS ProjectInUse,
+                   (EXISTS(SELECT 1 FROM projects p WHERE p.robot_vendor_id=d.id OR p.robot_model_id=d.id OR p.priority_id=d.id)
+                    OR EXISTS(SELECT 1 FROM project_groups g WHERE g.robot_vendor_id=d.id OR g.robot_model_id=d.id OR g.priority_id=d.id)) AS ProjectInUse,
                    EXISTS(SELECT 1 FROM project_dictionaries child WHERE child.parent_id=d.id) AS HasChildren
             FROM project_dictionaries d
             LEFT JOIN project_dictionaries parent ON parent.id=d.parent_id
@@ -190,7 +191,8 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         var sql = """
             SELECT d.id AS Id,d.type AS Type,d.name AS Name,d.parent_id AS ParentId,
                    parent.name AS ParentName,d.sort_no AS SortNo,d.status AS Status,
-                   EXISTS(SELECT 1 FROM projects p WHERE p.robot_vendor_id=d.id OR p.robot_model_id=d.id OR p.priority_id=d.id) AS ProjectInUse,
+                   (EXISTS(SELECT 1 FROM projects p WHERE p.robot_vendor_id=d.id OR p.robot_model_id=d.id OR p.priority_id=d.id)
+                    OR EXISTS(SELECT 1 FROM project_groups g WHERE g.robot_vendor_id=d.id OR g.robot_model_id=d.id OR g.priority_id=d.id)) AS ProjectInUse,
                    EXISTS(SELECT 1 FROM project_dictionaries child WHERE child.parent_id=d.id) AS HasChildren
             FROM project_dictionaries d LEFT JOIN project_dictionaries parent ON parent.id=d.parent_id
             WHERE d.id=@Id

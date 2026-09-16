@@ -433,7 +433,7 @@ test('hard delete actions require their dedicated delete permission', async () =
       page: 'src/pages/project/ProjectList.tsx',
       pagePermission: 'project:update',
       deletePermission: 'project:delete',
-      row: { id: 1, name: 'p', status: 'DRAFT' },
+      row: { id: 1, name: 'p', status: 'DRAFT', subprojectCount: 0 },
       mocks: (auth) => ({
         '@arco-design/web-react': arco,
         '@arco-design/web-react/icon': iconMock,
@@ -504,12 +504,12 @@ test('hard delete actions require their dedicated delete permission', async () =
   ))).default
   let renderer
   await act(async () => { renderer = create(React.createElement(Project)) })
-  const busy = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, { id: 2, name: 'busy', status: 'IN_PROGRESS' })
-  assert.ok(findActionButton(busy, '删除'), 'in-progress projects may be deleted by users with project:delete')
-  const completed = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, { id: 4, name: 'completed', status: 'COMPLETED' })
-  assert.ok(findActionButton(completed, '删除'), 'completed projects may be deleted by users with project:delete')
-  const terminated = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, { id: 3, name: 'terminated', status: 'TERMINATED' })
-  assert.ok(findActionButton(terminated, '删除'), 'empty terminated projects may be deleted')
+  const busy = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, { id: 2, name: 'busy', status: 'IN_PROGRESS', subprojectCount: 1 })
+  assert.equal(findActionButton(busy, '删除'), undefined, 'main projects with children must be cleared before deletion')
+  const completed = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, { id: 4, name: 'completed', status: 'COMPLETED', subprojectCount: 0 })
+  assert.ok(findActionButton(completed, '删除'), 'empty completed main projects may be deleted')
+  const terminated = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, { id: 3, name: 'terminated', status: 'TERMINATED', subprojectCount: 0 })
+  assert.ok(findActionButton(terminated, '删除'), 'empty terminated main projects may be deleted')
   await act(async () => renderer.unmount())
 })
 
@@ -1193,7 +1193,7 @@ function receiptCountButton(renderer) {
 }
 
 for (const [page, api, props] of [
-  ['pages/project/ProjectList.tsx', '/projects', {}],
+  ['pages/project/ProjectList.tsx', '/project-groups', {}],
   ['pages/supplier/SupplierList.tsx', '/admin/suppliers', {}],
   ['pages/org/UserList.tsx', '/admin/users', {}],
   ['components/FileTable.tsx', '/projects/1/files', { projectId: 1, projectStatus: 'IN_PROGRESS' }],
@@ -1514,7 +1514,7 @@ test('paginated lists and file table expose a retry state after the main GET fai
   ])
   const cases = [
     {
-      file: 'src/pages/project/ProjectList.tsx', api: '/projects', props: {},
+      file: 'src/pages/project/ProjectList.tsx', api: '/project-groups', props: {},
       mocks: (http) => ({
         '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
         'react-router-dom': { useNavigate: () => () => {} }, '../../api/client': http,
@@ -1587,14 +1587,14 @@ test('paginated lists and file table expose a retry state after the main GET fai
 test('list actions cannot let an old refresh overwrite a newer filter result', async () => {
   const iconMock = new Proxy({}, { get: (_, name) => component(name) })
   const auth = authModule({ id: 1, userType: 'INTERNAL', isSystemAdmin: true }, [
-    'project:status', 'project:update', 'supplier:account', 'supplier:manage', 'user:manage', 'role:manage',
+    'project:status', 'project:update', 'project:delete', 'supplier:account', 'supplier:manage', 'user:manage', 'role:manage',
   ])
   const cases = [
     {
-      file: 'src/pages/project/ProjectList.tsx', api: '/projects',
-      row: { id: 1, name: '旧项目', status: 'DRAFT', supplierId: 1 },
-      action: (actions) => findElement(actions, (node) => node.props.placeholder === '状态' && typeof node.props.onChange === 'function'),
-      invoke: (node) => node.props.onChange('IN_PROGRESS'),
+      file: 'src/pages/project/ProjectList.tsx', api: '/project-groups',
+      row: { id: 1, name: '旧主项目', status: 'DRAFT', supplierId: 1, subprojectCount: 0 },
+      action: (actions) => findElement(actions, (node) => typeof node.props.onOk === 'function' && String(node.props.title).includes('删除')),
+      invoke: (node) => node.props.onOk(),
       filter: (renderer) => renderer.root.findByType('Input.Search').props.onSearch('new-filter'),
       matches: (request) => request.params.keyword === 'new-filter',
       mocks: (http) => ({
@@ -1643,12 +1643,13 @@ test('list actions cannot let an old refresh overwrite a newer filter result', a
 
   for (const item of cases) {
     const requests = []
-    const http = {
+      const http = {
       get: async (url, config = {}) => {
         if (url !== item.api) return { data: [] }
         return new Promise((resolve) => requests.push({ params: config.params || {}, resolve }))
       },
       put: async () => ({}),
+      delete: async () => ({}),
     }
     const Page = loadTs(item.file, item.mocks(http)).default
     let renderer
@@ -1792,7 +1793,7 @@ test('dashboard pending projects can retry, navigate, refresh, and recover from 
 
   assert.deepEqual(JSON.parse(JSON.stringify(pendingRequests[0].params)), { page: 1, pageSize: 10 })
   await act(async () => pendingRequests[0].reject(new Error('pending projects unavailable')))
-  assert.ok(renderer.root.findAll((node) => node.props.children === '内部待验收项目加载失败').length > 0)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '内部待验收子项目加载失败').length > 0)
   const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试')
   assert.ok(retry)
   await act(async () => retry.props.onClick())
@@ -1820,7 +1821,7 @@ test('dashboard pending projects can retry, navigate, refresh, and recover from 
   assert.ok(refresh, 'a workflow status change must have a reachable list refresh')
   await act(async () => refresh.props.onClick())
   await act(async () => pendingRequests[4].resolve({ data: { list: [], total: 0, page: 1, pageSize: 10 } }))
-  assert.ok(renderer.root.findAllByType('Empty').some((node) => node.props.description === '暂无内部待验收项目'))
+  assert.ok(renderer.root.findAllByType('Empty').some((node) => node.props.description === '暂无内部待验收子项目'))
   await act(async () => renderer.unmount())
 })
 
@@ -3479,7 +3480,7 @@ test('deleting the only row on a controlled last page reloads the last page allo
   const cases = [
     {
       label: 'projects', page: 'src/pages/project/ProjectList.tsx', pageSize: 10,
-      row: { id: 91, name: '末页项目', status: 'DRAFT' },
+      row: { id: 91, name: '末页主项目', status: 'DRAFT', subprojectCount: 0 },
       props: {},
       mocks: (http) => ({
         '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
@@ -3607,9 +3608,9 @@ test('required option sources expose loading and retry states and block submits 
     let posted = 0
     let optionAttempt = 0
     let rejectFirst
-    const form = { resetFields() {}, validate: async () => ({
+    const form = { resetFields() {}, setFieldValue() {}, validate: async () => ({
       name: '项目', supplierId: 8, workOrderNos: ['WO-1'], machineModel: 'M1', robotVendorId: 11,
-      robotModelId: 12, responsibleUserId: 13, priorityId: 14, expectedCompletionDate: '2026-09-30',
+      robotModelId: 12, responsibleUserId: 13, priorityId: 14, expectedCompletionDate: '2026-09-30', subprojectNames: ['子项目-A'],
     }) }
     const testArco = new Proxy({
       Form: Object.assign(component('Form'), { useForm: () => [form], Item: component('Form.Item') }),
@@ -3617,7 +3618,7 @@ test('required option sources expose loading and retry states and block submits 
     }, { get: (obj, key) => obj[key] ?? component(key) })
     const http = {
       get: async (url) => {
-        if (url === '/projects') return { data: { list: [], total: 0, page: 1, pageSize: 10 } }
+        if (url === '/project-groups') return { data: { list: [], total: 0, page: 1, pageSize: 10 } }
         if (url === '/project-owner-options') return { data: [{ id: 13, employeeNo: 'owner', realName: '负责人', sectionName: '研发课' }] }
         if (url === '/project-dictionaries') return { data: [{ id: 11, name: '字典项', enabled: true }] }
         optionAttempt++
@@ -3634,15 +3635,15 @@ test('required option sources expose loading and retry states and block submits 
     }).default
     let renderer
     await act(async () => { renderer = create(React.createElement(Page)) })
-    const createButton = renderer.root.findAllByType('Button').find((node) => node.props.children === '新建项目')
+    const createButton = renderer.root.findAllByType('Button').find((node) => node.props.children === '新建主项目')
     assert.equal(createButton.props.disabled, true, 'project creation must wait for supplier options')
     await act(async () => { rejectFirst(new Error('supplier options unavailable')); await Promise.resolve() })
     assert.ok(renderer.root.findAllByType('Button').some((node) => String(node.props.children).includes('重试')))
     const retry = renderer.root.findAllByType('Button').find((node) => String(node.props.children).includes('重试'))
     await act(async () => retry.props.onClick())
     assert.equal(optionAttempt, 2)
-    assert.equal(renderer.root.findAllByType('Button').find((node) => node.props.children === '新建项目').props.disabled, false)
-    await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '新建项目').props.onClick())
+    assert.equal(renderer.root.findAllByType('Button').find((node) => node.props.children === '新建主项目').props.disabled, false)
+    await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '新建主项目').props.onClick())
     await act(async () => { await Promise.resolve() })
     await act(async () => renderer.root.findByProps({ placeholder: '选择负责人' }).props.onChange(13))
     await act(async () => renderer.root.findByType('Modal').props.onOk())
@@ -4322,31 +4323,34 @@ test('batch download uses a synchronous in-flight latch against repeated clicks'
   await act(async () => renderer.unmount())
 })
 
-test('project status update uses a per-project synchronous in-flight latch', async () => {
-  const project = { id: 9, name: '项目', supplierName: '供应商', status: 'DRAFT', updatedAt: '' }
+test('subproject status update uses a per-project synchronous in-flight latch', async () => {
+  const project = { id: 9, projectGroupId: 3, projectGroupName: '主项目', name: '子项目', supplierName: '供应商', status: 'DRAFT', updatedAt: '' }
+  const group = { id: 3, name: '主项目', status: 'IN_PROGRESS', subprojectCount: 1, completedCount: 0, pendingCount: 0, terminatedCount: 0 }
   let puts = 0
   let release
   const response = new Promise((resolve) => { release = resolve })
-  const Page = loadTs('src/pages/project/ProjectList.tsx', {
+  const Page = loadTs('src/pages/project/ProjectGroupDetail.tsx', {
     '@arco-design/web-react': arco,
     '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
-    'react-router-dom': { Link: component('Link'), useNavigate: () => () => {} },
+    'react-router-dom': { useNavigate: () => () => {}, useParams: () => ({ id: '3' }) },
     '../../api/client': {
-      get: async (url) => url === '/supplier-options' ? { data: [] } : { data: { list: [project], total: 1, page: 1, pageSize: 10 } },
+      get: async () => ({ data: { group, projects: [project] } }),
       put: async () => { puts++; return response },
     },
     '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:status']),
+    '../../store/collaboration': { useCollaboration: (selector) => selector({ revision: 0, status: 'connected' }) },
     '../../api/types': { PROJECT_STATUS: { DRAFT: { text: '草稿' } }, fmtTime: String },
+    '../../components/ActionSlots': actionSlotsModule,
   }).default
   let renderer
   await act(async () => { renderer = create(React.createElement(Page)) })
   const actions = renderer.root.findByType('Table').props.columns.at(-1).render(null, project)
-  const statusSelect = findElement(actions, (node) => node.props.placeholder === '状态')
+  const statusButton = findActionButton(actions, '开始')
   let first
   let second
   await act(async () => {
-    first = statusSelect.props.onChange('IN_PROGRESS')
-    second = statusSelect.props.onChange('IN_PROGRESS')
+    first = statusButton.props.onClick()
+    second = statusButton.props.onClick()
     await Promise.resolve()
   })
   assert.equal(puts, 1)
@@ -4773,8 +4777,9 @@ test('built-in roles never expose hard delete while custom roles still can', asy
   await act(async () => renderer.unmount())
 })
 
-test('project copy requires a renamed project, blocks duplicate submits and keeps the dialog after failure', async () => {
-  const project = { id: 4, name: '装配线升级', status: 'IN_PROGRESS', workOrderNos: ['WO-1'] }
+test('subproject copy requires a renamed project, blocks duplicate submits and keeps the dialog after failure', async () => {
+  const project = { id: 4, projectGroupId: 3, projectGroupName: '主项目', name: '装配线升级', status: 'IN_PROGRESS', workOrderNos: ['WO-1'] }
+  const group = { id: 3, name: '主项目', status: 'IN_PROGRESS', subprojectCount: 1, completedCount: 0, pendingCount: 0, terminatedCount: 0 }
   let mainFields = {}
   let copyFields = {}
   const mainForm = {
@@ -4802,11 +4807,7 @@ test('project copy requires a renamed project, blocks duplicate submits and keep
   let rejectFirst
   const navigations = []
   const http = {
-    get: async (url) => {
-      if (url === '/projects') return { data: { list: [project], total: 1, page: 1, pageSize: 10 } }
-      if (url === '/supplier-options') return { data: [{ id: 3, name: '供应商' }] }
-      return { data: [] }
-    },
+    get: async (url) => url === '/project-groups/3' ? { data: { group, projects: [project] } } : { data: [] },
     post: async (url, body) => {
       postCalls++
       assert.equal(url, '/projects/4/copy')
@@ -4815,12 +4816,13 @@ test('project copy requires a renamed project, blocks duplicate submits and keep
       return { data: { project: { id: 9, name: body.name }, copy: { fileCount: 3 } } }
     },
   }
-  const Page = loadTs('src/pages/project/ProjectList.tsx', {
+  const Page = loadTs('src/pages/project/ProjectGroupDetail.tsx', {
     '@arco-design/web-react': copyArco,
     '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
-    'react-router-dom': { useNavigate: () => (path) => navigations.push(path) },
+    'react-router-dom': { useNavigate: () => (path) => navigations.push(path), useParams: () => ({ id: '3' }) },
     '../../api/client': http,
     '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:create']),
+    '../../store/collaboration': { useCollaboration: (selector) => selector({ revision: 0, status: 'connected' }) },
     '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中' } }, fmtTime: String },
     '../../components/ActionSlots': actionSlotsModule,
   }).default
@@ -4829,9 +4831,9 @@ test('project copy requires a renamed project, blocks duplicate submits and keep
   const actionColumn = renderer.root.findByType('Table').props.columns.at(-1)
   await act(async () => findActionButton(actionColumn.render(null, project), '复制').props.onClick())
   assert.equal(copyFields.name, '装配线升级 - 副本')
-  let dialog = renderer.root.findAllByType('Modal').find((modal) => modal.props.title === '复制项目')
+  let dialog = renderer.root.findAllByType('Modal').find((modal) => modal.props.title === '复制子项目')
   assert.equal(dialog.props.visible, true)
-  assert.ok(renderer.root.findAll((node) => node.props.children === '留言、流程及验收状态、已读回执和通知').length)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '复制公共资料和项目文件；不复制留言、验收状态、已读回执和通知。').length)
 
   let first
   await act(async () => {
@@ -4841,13 +4843,13 @@ test('project copy requires a renamed project, blocks duplicate submits and keep
   })
   assert.equal(postCalls, 1, 'an in-flight copy must reject repeated submissions')
   await act(async () => { rejectFirst(new Error('simulated copy failure')); await first })
-  dialog = renderer.root.findAllByType('Modal').find((modal) => modal.props.title === '复制项目')
+  dialog = renderer.root.findAllByType('Modal').find((modal) => modal.props.title === '复制子项目')
   assert.equal(dialog.props.visible, true, 'a failed request keeps the entered name and source project')
   assert.equal(copyFields.name, '装配线升级 - 副本')
 
   await act(async () => dialog.props.onOk())
   assert.equal(postCalls, 2)
-  assert.deepEqual(navigations, ['/projects/9'])
+  assert.deepEqual(navigations, [])
   assert.ok(messages.some((message) => String(message).includes('3 个文件')))
   await act(async () => renderer.unmount())
 })

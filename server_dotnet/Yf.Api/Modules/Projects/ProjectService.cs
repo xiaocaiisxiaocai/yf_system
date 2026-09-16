@@ -8,178 +8,9 @@ namespace Yf.Api.Modules.Projects;
 
 internal sealed class ProjectService(
     AuditService audit,
-    AppOptions options)
+    AppOptions options,
+    ProjectGroupStatusService groupStatus)
 {
-    internal async Task<object> ListAsync(
-        MySqlConnection conn,
-        CurrentUser actor,
-        ulong page,
-        ulong pageSize,
-        string? keyword,
-        string? status,
-        ulong? supplierId,
-        CancellationToken ct)
-    {
-        var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
-        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-        await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
-        var clauses = new List<string>();
-        var args = new DynamicParameters();
-        if (!current.IsInternal)
-        {
-            if (current.SupplierId is null)
-            {
-                throw ApiException.OutOfScope();
-            }
-            clauses.Add("p.supplier_id = @ActorSupplierId");
-            args.Add("ActorSupplierId", current.SupplierId.Value);
-        }
-        var canViewAll = false;
-        if (current.IsInternal)
-            canViewAll = await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:view_all", ct);
-        if (current.IsInternal && !canViewAll)
-        {
-            clauses.Add("p.responsible_user_id = @ActorId");
-            args.Add("ActorId", current.Id);
-        }
-        if (!string.IsNullOrWhiteSpace(keyword))
-        {
-            clauses.Add("p.name LIKE CONCAT('%', @Keyword, '%')");
-            args.Add("Keyword", keyword.Trim());
-        }
-        if (status is not null)
-        {
-            clauses.Add("p.status = @Status");
-            args.Add("Status", status);
-        }
-        if (supplierId is not null)
-        {
-            clauses.Add("p.supplier_id = @SupplierId");
-            args.Add("SupplierId", supplierId.Value);
-        }
-        var where = clauses.Count == 0 ? string.Empty : " WHERE " + string.Join(" AND ", clauses);
-        var total = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            "SELECT COUNT(*) FROM projects p" + where,
-            args,
-            tx,
-            cancellationToken: ct));
-        args.Add("Offset", (actualPage - 1) * size);
-        args.Add("Size", size);
-        var rows = (await conn.QueryAsync<ProjectRow>(new CommandDefinition(
-            """
-            SELECT p.id AS Id, p.name AS Name, p.description AS Description,p.machine_model AS MachineModel,
-                   p.supplier_id AS SupplierId, p.status AS Status, p.confirm_side AS ConfirmSide,
-                   p.robot_vendor_id AS RobotVendorId,rv.name AS RobotVendorName,
-                   p.robot_model_id AS RobotModelId,rm.name AS RobotModelName,
-                   p.responsible_user_id AS ResponsibleUserId,owner.employee_no AS ResponsibleUserEmployeeNo,
-                   owner.real_name AS ResponsibleUserName,p.section_id AS SectionId,section.name AS SectionName,
-                   p.priority_id AS PriorityId,priority.name AS PriorityName,
-                   p.expected_completion_date AS ExpectedCompletionDate,
-                   CASE WHEN p.status='PENDING_CONFIRMATION' THEN (
-                       SELECT MAX(psl.id) FROM project_status_logs psl
-                       WHERE psl.project_id=p.id AND psl.action='SUBMIT'
-                   ) ELSE NULL END AS LatestSubmissionId,
-                   p.created_by AS CreatedBy, p.created_at AS CreatedAt, p.updated_at AS UpdatedAt,
-                   s.name AS SupplierName, u.real_name AS CreatedByName
-            FROM projects p
-            LEFT JOIN suppliers s ON s.id = p.supplier_id
-            LEFT JOIN users u ON u.id = p.created_by
-            LEFT JOIN project_dictionaries rv ON rv.id=p.robot_vendor_id
-            LEFT JOIN project_dictionaries rm ON rm.id=p.robot_model_id
-            LEFT JOIN users owner ON owner.id=p.responsible_user_id
-            LEFT JOIN departments section ON section.id=p.section_id AND section.kind='SECTION'
-            LEFT JOIN project_dictionaries priority ON priority.id=p.priority_id
-            """ + where + " ORDER BY p.id DESC LIMIT @Size OFFSET @Offset",
-            args,
-            tx,
-            cancellationToken: ct))).AsList();
-        await LoadWorkOrdersAsync(conn, tx, rows, ct);
-        await LoadCopyLineageAsync(conn, tx, rows, current, canViewAll, ct);
-        await tx.CommitAsync(ct);
-        return ProjectJson.Page(rows.Select(ProjectJson.Project).ToArray(), total, actualPage, size);
-    }
-
-    internal async Task<object> CreateAsync(
-        MySqlConnection conn,
-        CurrentUser actor,
-        ProjectUpsertRequest request,
-        string? ip,
-        CancellationToken ct)
-    {
-        if (!actor.IsInternal)
-        {
-            throw ApiException.Forbidden();
-        }
-        var name = ValidateNameForCreate(request.Name);
-        ValidateDescription(request.Description);
-        var metadata = NormalizeMetadata(request);
-        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        await AccessService.LockManagementAsync(conn, tx, ct);
-        var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
-        await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
-        await AccessService.RequirePermissionAsync(conn, tx, current, "project:create", ct);
-        var supplierStatus = await conn.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
-            "SELECT status FROM suppliers WHERE id = @SupplierId",
-            new { request.SupplierId },
-            tx,
-            cancellationToken: ct));
-        if (supplierStatus is null)
-        {
-            throw ApiException.BadRequest("供应商不存在");
-        }
-        if (supplierStatus != "ACTIVE")
-        {
-            throw ApiException.BadRequest("供应商已被禁用");
-        }
-        await EnsureNameUniqueAsync(conn, tx, name, null, ct);
-        metadata = await ValidateMetadataAsync(conn, tx, metadata, null, ct);
-        try
-        {
-            await conn.ExecuteAsync(new CommandDefinition(
-                """
-                INSERT INTO projects(name,description,supplier_id,status,confirm_side,created_by,created_at,updated_at,
-                    machine_model,robot_vendor_id,robot_model_id,responsible_user_id,section_id,priority_id,expected_completion_date)
-                VALUES(@Name,@Description,@SupplierId,'DRAFT',NULL,@CreatedBy,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),
-                    @MachineModel,@RobotVendorId,@RobotModelId,@ResponsibleUserId,@SectionId,@PriorityId,@ExpectedCompletionDate)
-                """,
-                new { Name = name, request.Description, request.SupplierId, CreatedBy = current.Id,
-                    metadata.MachineModel, metadata.RobotVendorId, metadata.RobotModelId, metadata.ResponsibleUserId,
-                    metadata.SectionId, metadata.PriorityId, metadata.ExpectedCompletionDate },
-                tx,
-                cancellationToken: ct));
-        }
-        catch (MySqlException ex) when (ex.Number == 1062)
-        {
-            throw ApiException.Conflict("项目名称已存在");
-        }
-        var projectId = await LastInsertIdAsync(conn, tx, ct);
-        await ReplaceWorkOrdersAsync(conn, tx, projectId, metadata.WorkOrderNos, ct);
-        await conn.ExecuteAsync(new CommandDefinition(
-            """
-            INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,confirm_side,reason,created_at)
-            VALUES(@ProjectId,NULL,'DRAFT','CREATE',@UserId,NULL,NULL,UTC_TIMESTAMP(3))
-            """,
-            new { ProjectId = projectId, UserId = current.Id },
-            tx,
-            cancellationToken: ct));
-        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_CREATE", "project", projectId, new
-        {
-            name,
-            metadata.WorkOrderNos,
-            metadata.MachineModel,
-            metadata.RobotVendorId,
-            metadata.RobotModelId,
-            metadata.ResponsibleUserId,
-            metadata.SectionId,
-            metadata.PriorityId,
-            metadata.ExpectedCompletionDate,
-        }, ip, ct);
-        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
-        await tx.CommitAsync(ct);
-        return result;
-    }
-
     internal async Task<object> DetailAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
@@ -221,6 +52,8 @@ internal sealed class ProjectService(
         var result = new
         {
             id = project.Id,
+            projectGroupId = project.ProjectGroupId,
+            projectGroupName = project.ProjectGroupName,
             name = project.Name,
             description = project.Description,
             supplierId = project.SupplierId,
@@ -255,17 +88,17 @@ internal sealed class ProjectService(
         return result;
     }
 
-    internal async Task<object> UpdateAsync(
+    internal async Task<object> UpdateSubprojectAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong projectId,
-        ProjectUpsertRequest request,
+        SubprojectUpsertRequest request,
         string? ip,
         CancellationToken ct)
     {
+        if (!actor.IsInternal) throw ApiException.Forbidden();
         var name = ValidateNameForUpdate(request.Name);
         ValidateDescription(request.Description);
-        var metadata = NormalizeMetadata(request);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockManagementAsync(conn, tx, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
@@ -273,49 +106,27 @@ internal sealed class ProjectService(
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:update", ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
         if (project.Status is not (ProjectStatuses.Draft or ProjectStatuses.InProgress))
-        {
-            throw ApiException.Conflict("项目当前状态不可编辑");
-        }
-        if (project.SupplierId != request.SupplierId)
-        {
-            throw ApiException.BadRequest("项目创建后不可更换供应商；请新建项目以避免历史数据越权");
-        }
+            throw ApiException.Conflict("子项目当前状态不可编辑");
         await EnsureNameUniqueAsync(conn, tx, name, projectId, ct);
-        metadata = await ValidateMetadataAsync(conn, tx, metadata, project, ct);
         try
         {
             await conn.ExecuteAsync(new CommandDefinition(
                 """
-                UPDATE projects SET name=@Name,description=@Description,machine_model=@MachineModel,
-                    robot_vendor_id=@RobotVendorId,robot_model_id=@RobotModelId,responsible_user_id=@ResponsibleUserId,
-                    section_id=@SectionId,priority_id=@PriorityId,expected_completion_date=@ExpectedCompletionDate,
-                    updated_at=UTC_TIMESTAMP(3) WHERE id=@ProjectId
-                """,
-                new { Name = name, request.Description, ProjectId = projectId, metadata.MachineModel,
-                    metadata.RobotVendorId, metadata.RobotModelId, metadata.ResponsibleUserId, metadata.SectionId,
-                    metadata.PriorityId, metadata.ExpectedCompletionDate },
-                tx,
-                cancellationToken: ct));
+                UPDATE projects SET name=@Name,description=@Description,updated_at=UTC_TIMESTAMP(3)
+                WHERE id=@ProjectId
+                """, new { Name = name, request.Description, ProjectId = projectId }, tx, cancellationToken: ct));
         }
         catch (MySqlException ex) when (ex.Number == 1062)
         {
-            throw ApiException.Conflict("项目名称已存在");
+            throw ApiException.Conflict("子项目名称已存在");
         }
-        await ReplaceWorkOrdersAsync(conn, tx, projectId, metadata.WorkOrderNos, ct);
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_UPDATE", "project", projectId, new
         {
             name,
+            projectGroupId = project.ProjectGroupId,
             changes = AuditChange.OnlyChanged(
-                new("name", "项目名称", project.Name, name),
-                new("description", "项目说明", project.Description, request.Description),
-                new("workOrderNos", "工令号", project.WorkOrderNos, metadata.WorkOrderNos),
-                new("machineModel", "机台机型", project.MachineModel, metadata.MachineModel),
-                new("robotVendorId", "机器人厂商", project.RobotVendorId, metadata.RobotVendorId),
-                new("robotModelId", "机器人型号", project.RobotModelId, metadata.RobotModelId),
-                new("responsibleUserId", "负责人", project.ResponsibleUserId, metadata.ResponsibleUserId),
-                new("sectionId", "课别", project.SectionId, metadata.SectionId),
-                new("priorityId", "优先级", project.PriorityId, metadata.PriorityId),
-                new("expectedCompletionDate", "预计完成日期", project.ExpectedCompletionDate, metadata.ExpectedCompletionDate)),
+                new("name", "子项目名称", project.Name, name),
+                new("description", "子项目说明", project.Description, request.Description)),
         }, ip, ct);
         var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
@@ -583,6 +394,8 @@ internal sealed class ProjectService(
         {
             throw ApiException.Conflict("项目已被删除，请刷新后重试");
         }
+        if (project.ProjectGroupId != 0)
+            await groupStatus.RecalculateAsync(conn, tx, project.ProjectGroupId, current.Id, null, ct);
         await tx.CommitAsync(ct);
     }
 
@@ -695,6 +508,8 @@ internal sealed class ProjectService(
             reason,
             statusLogId,
         }, ip, ct);
+        if (project.ProjectGroupId != 0)
+            await groupStatus.RecalculateAsync(conn, tx, project.ProjectGroupId, actor.Id, project.Id, ct);
         return statusLogId;
     }
 
@@ -740,6 +555,13 @@ internal sealed class ProjectService(
     {
         if (forUpdate)
         {
+            var groupId = await conn.QuerySingleOrDefaultAsync<ulong>(new CommandDefinition(
+                "SELECT COALESCE(project_group_id,0) FROM projects WHERE id=@ProjectId",
+                new { ProjectId = projectId }, tx, cancellationToken: ct));
+            if (groupId != 0)
+                await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+                    "SELECT id FROM project_groups WHERE id=@GroupId FOR UPDATE",
+                    new { GroupId = groupId }, tx, cancellationToken: ct));
             var lockedId = await conn.QuerySingleOrDefaultAsync<ulong?>(new CommandDefinition(
                 "SELECT id FROM projects WHERE id=@ProjectId FOR UPDATE",
                 new { ProjectId = projectId },
@@ -752,7 +574,8 @@ internal sealed class ProjectService(
         }
 
         const string sql = """
-            SELECT p.id AS Id,p.name AS Name,p.description AS Description,p.supplier_id AS SupplierId,
+            SELECT p.id AS Id,p.project_group_id AS ProjectGroupId,g.name AS ProjectGroupName,
+                   p.name AS Name,p.description AS Description,p.supplier_id AS SupplierId,
                    p.machine_model AS MachineModel,p.robot_vendor_id AS RobotVendorId,
                    rv.name AS RobotVendorName,p.robot_model_id AS RobotModelId,
                    rm.name AS RobotModelName,p.responsible_user_id AS ResponsibleUserId,
@@ -770,6 +593,7 @@ internal sealed class ProjectService(
                    p.created_at AS CreatedAt,p.updated_at AS UpdatedAt,
                    s.name AS SupplierName,u.real_name AS CreatedByName
             FROM projects p
+            LEFT JOIN project_groups g ON g.id=p.project_group_id
             LEFT JOIN suppliers s ON s.id=p.supplier_id
             LEFT JOIN users u ON u.id=p.created_by
             LEFT JOIN project_dictionaries rv ON rv.id=p.robot_vendor_id
@@ -788,7 +612,7 @@ internal sealed class ProjectService(
         return row;
     }
 
-    private static async Task EnsureNameUniqueAsync(
+    internal static async Task EnsureNameUniqueAsync(
         MySqlConnection conn,
         MySqlTransaction tx,
         string name,
@@ -853,7 +677,7 @@ internal sealed class ProjectService(
         return normalized.ToArray();
     }
 
-    private static ProjectMetadataInput NormalizeMetadata(ProjectUpsertRequest request)
+    internal static ProjectMetadataInput NormalizeMetadata(ProjectUpsertRequest request)
     {
         if (NormalizeWorkOrderNos(request.WorkOrderNos).Length == 0)
             throw ApiException.BadRequest("请至少填写一个工令号");
@@ -880,7 +704,7 @@ internal sealed class ProjectService(
             request.RobotModelId, request.ResponsibleUserId, null, request.PriorityId, expectedCompletionDate);
     }
 
-    private static async Task<ProjectMetadataInput> ValidateMetadataAsync(
+    internal static async Task<ProjectMetadataInput> ValidateMetadataAsync(
         MySqlConnection conn,
         MySqlTransaction tx,
         ProjectMetadataInput input,
@@ -939,7 +763,7 @@ internal sealed class ProjectService(
         return row;
     }
 
-    private static async Task ReplaceWorkOrdersAsync(
+    internal static async Task ReplaceWorkOrdersAsync(
         MySqlConnection conn, MySqlTransaction tx, ulong projectId, string[] values, CancellationToken ct)
     {
         await conn.ExecuteAsync(new CommandDefinition("DELETE FROM project_work_orders WHERE project_id=@ProjectId",
@@ -952,7 +776,7 @@ internal sealed class ProjectService(
         }
     }
 
-    private static async Task LoadWorkOrdersAsync(
+    internal static async Task LoadWorkOrdersAsync(
         MySqlConnection conn, MySqlTransaction tx, IReadOnlyCollection<ProjectRow> projects, CancellationToken ct)
     {
         if (projects.Count == 0) return;
@@ -972,7 +796,7 @@ internal sealed class ProjectService(
     private static Task<ulong> LastInsertIdAsync(MySqlConnection conn, MySqlTransaction tx, CancellationToken ct) =>
         conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT LAST_INSERT_ID()", transaction: tx, cancellationToken: ct));
 
-    private static string ValidateNameForCreate(string? value)
+    internal static string ValidateNameForCreate(string? value)
     {
         var name = (value ?? string.Empty).Trim();
         if (name.Length == 0)
@@ -986,7 +810,7 @@ internal sealed class ProjectService(
         return name;
     }
 
-    private static string ValidateNameForUpdate(string? value)
+    internal static string ValidateNameForUpdate(string? value)
     {
         var name = (value ?? string.Empty).Trim();
         if (name.Length == 0 || RuneCount(name) > 128)
@@ -996,7 +820,7 @@ internal sealed class ProjectService(
         return name;
     }
 
-    private static void ValidateDescription(string? description)
+    internal static void ValidateDescription(string? description)
     {
         if (description is not null && RuneCount(description) > 500)
         {
@@ -1045,7 +869,7 @@ internal sealed class ProjectService(
         public ulong UploadCount { get; init; }
     }
 
-    private sealed record ProjectMetadataInput(
+    internal sealed record ProjectMetadataInput(
         string[] WorkOrderNos,
         string? MachineModel,
         ulong? RobotVendorId,

@@ -9,6 +9,8 @@ public static class ProjectsModule
     public static IServiceCollection AddProjectsModule(this IServiceCollection services)
     {
         services.AddScoped<ProjectService>();
+        services.AddScoped<ProjectGroupService>();
+        services.AddScoped<ProjectGroupStatusService>();
         services.AddScoped<ProjectCopyService>();
         services.AddScoped<ProjectDictionaryService>();
         services.AddScoped<MessageService>();
@@ -29,7 +31,7 @@ public static class ProjectsModule
     {
         var api = endpoints.MapGroup("/api/v1");
 
-        api.MapGet("/projects", async (HttpContext context, AppDb db, ProjectService service, CancellationToken ct) =>
+        api.MapGet("/project-groups", async (HttpContext context, AppDb db, ProjectGroupService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             return Results.Ok(await service.ListAsync(
@@ -42,11 +44,33 @@ public static class ProjectsModule
                 QueryNullableUlong(context, "supplierId"),
                 ct));
         });
-        api.MapPost("/projects", async (HttpContext context, ProjectUpsertRequest request, AppDb db, ProjectService service, CancellationToken ct) =>
+        api.MapPost("/project-groups", async (HttpContext context, ProjectUpsertRequest request, AppDb db, ProjectGroupService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             return Results.Ok(await service.CreateAsync(conn, AccessService.GetCurrent(context), request, Ip(context), ct));
         });
+        api.MapGet("/project-groups/{id:long}", async (HttpContext context, ulong id, AppDb db, ProjectGroupService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.DetailAsync(conn, AccessService.GetCurrent(context), id, ct));
+        });
+        api.MapPut("/project-groups/{id:long}", async (HttpContext context, ulong id, ProjectUpsertRequest request, AppDb db, ProjectGroupService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.UpdateAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+        });
+        api.MapDelete("/project-groups/{id:long}", async (HttpContext context, ulong id, AppDb db, ProjectGroupService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            await service.DeleteAsync(conn, AccessService.GetCurrent(context), id, Ip(context), ct);
+            return Results.Ok(new { });
+        });
+        api.MapPost("/project-groups/{id:long}/projects", async (HttpContext context, ulong id, SubprojectUpsertRequest request, AppDb db, ProjectGroupService service, CancellationToken ct) =>
+        {
+            await using var conn = await db.OpenAsync(ct);
+            return Results.Ok(await service.CreateSubprojectAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+        });
+
         api.MapPost("/projects/{id:long}/copy", async (HttpContext context, ulong id, ProjectCopyRequest request, AppDb db, ProjectCopyService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
@@ -68,10 +92,10 @@ public static class ProjectsModule
             await using var conn = await db.OpenAsync(ct);
             return Results.Ok(await service.DetailAsync(conn, AccessService.GetCurrent(context), id, ct));
         });
-        api.MapPut("/projects/{id:long}", async (HttpContext context, ulong id, ProjectUpsertRequest request, AppDb db, ProjectService service, CancellationToken ct) =>
+        api.MapPut("/projects/{id:long}", async (HttpContext context, ulong id, SubprojectUpsertRequest request, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.UpdateAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+            return Results.Ok(await service.UpdateSubprojectAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
         });
         api.MapDelete("/projects/{id:long}", async (HttpContext context, ulong id, AppDb db, ProjectService service, CancellationToken ct) =>
         {

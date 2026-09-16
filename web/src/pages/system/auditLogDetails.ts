@@ -70,6 +70,10 @@ export const ACTIONS: Record<string, ActionMeta> = {
   PASSWORD_CHANGE: action('修改密码', 'AUTH', '认证安全', 'orange'),
   PROFILE_UPDATE: action('更新个人资料', 'AUTH', '认证安全', 'purple'),
   PROJECT_CREATE: action('创建项目', 'PROJECT', '项目协作', 'arcoblue'),
+  PROJECT_GROUP_CREATE: action('创建主项目', 'PROJECT', '项目协作', 'arcoblue'),
+  PROJECT_GROUP_UPDATE: action('更新主项目', 'PROJECT', '项目协作', 'purple'),
+  PROJECT_GROUP_STATUS_AUTO: action('同步主项目状态', 'PROJECT', '项目协作', 'green'),
+  PROJECT_GROUP_DELETE: action('删除主项目', 'PROJECT', '项目协作', 'red'),
   PROJECT_COPY: action('复制项目', 'PROJECT', '项目协作', 'purple'),
   PROJECT_UPDATE: action('更新项目', 'PROJECT', '项目协作', 'arcoblue'),
   PROJECT_DICTIONARY_CREATE: action('新增数据字典', 'SYSTEM', '系统', 'arcoblue'),
@@ -133,7 +137,7 @@ export const CATEGORY_OPTIONS = [
 ] as const
 
 export const TARGET_LABELS: Record<string, string> = {
-  user: '用户', role: '角色', department: '组织', supplier: '供应商', project: '项目',
+  user: '用户', role: '角色', department: '组织', supplier: '供应商', project: '子项目', project_group: '主项目',
   file: '文件', message: '留言', upload_session: '上传任务', audit_log: '操作日志',
   system_config: '系统参数', email_outbox: '邮件队列', project_dictionary: '数据字典',
 }

@@ -358,13 +358,14 @@ function ProjectDetailContent({ id }: { id?: string }) {
       <Card className="page-card project-detail-summary-card">
         <div className="detail-heading">
           <div>
+            <Typography.Text type="secondary">{project.projectGroupName || '主项目'} / 子项目</Typography.Text>
             <h1>{project.name}</h1>
           </div>
           <div className="detail-actions">
             <Tag color={PROJECT_STATUS[project.status]?.color}>
               {PROJECT_STATUS[project.status]?.text || project.status}
             </Tag>
-            <Button onClick={() => navigate('/projects')}>返回项目列表</Button>
+            <Button onClick={() => navigate(project.projectGroupId ? `/project-groups/${project.projectGroupId}` : '/projects')}>返回主项目</Button>
           </div>
         </div>
         <Descriptions
