@@ -157,7 +157,7 @@ test('Excel preview aborts its content request and never posts late bytes after 
   )
 })
 
-test('copied project files expose a compact reference-history action without changing preview behavior', async () => {
+test('copied project files expose a compact copy-history action without changing preview behavior', async () => {
   const FileTable = loadFileTable()
   let opened = 0
   let renderer
@@ -176,11 +176,11 @@ test('copied project files expose a compact reference-history action without cha
     sizeBytes: 100,
     isCopiedReference: true,
   })
-  const historyButton = findElement(referenced, (node) => String(node.props['aria-label'] ?? '').includes('引用履历'))
+  const historyButton = findElement(referenced, (node) => String(node.props['aria-label'] ?? '').includes('复制履历'))
   assert.ok(historyButton)
   historyButton.props.onClick()
   assert.equal(opened, 1)
-  assert.ok(findElement(referenced, (node) => node.props['aria-label'] === '预览文件'), 'reference badge must not replace preview')
+  assert.ok(findElement(referenced, (node) => node.props['aria-label'] === '预览文件'), 'copy badge must not replace preview')
 
   const ordinary = fileNameColumn.render('普通文件.pdf', {
     id: 8,
@@ -189,7 +189,7 @@ test('copied project files expose a compact reference-history action without cha
     sizeBytes: 100,
     isCopiedReference: false,
   })
-  assert.equal(findElement(ordinary, (node) => String(node.props['aria-label'] ?? '').includes('引用履历')), undefined)
+  assert.equal(findElement(ordinary, (node) => String(node.props['aria-label'] ?? '').includes('复制履历')), undefined)
   await act(async () => renderer.unmount())
 })
 

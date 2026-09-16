@@ -36,11 +36,11 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
   }
 
   const isInternal = user?.userType === 'INTERNAL'
+  const isSupplier = user?.userType === 'SUPPLIER'
   const canStatus = isInternal && hasPerm('project:status')
-  const canSubmit = hasPerm('project:submit')
+  const canSubmit = isSupplier && hasPerm('project:submit')
   const canConfirm = isInternal && hasPerm('project:confirm') && project.confirmSide === 'COMPANY'
-  const canWithdraw = hasPerm('project:withdraw')
-    && (project.latestSubmitterId === user?.id || (isInternal && hasPerm('project:view_all')))
+  const canWithdraw = isSupplier && hasPerm('project:withdraw') && project.latestSubmitterId === user?.id
 
   const changeStatus = async (status: 'IN_PROGRESS' | 'TERMINATED') => {
     if (!beginAction()) return
@@ -59,7 +59,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
     if (!beginAction()) return
     try {
       await http.post(`/projects/${project.id}/submit`, { confirmSide: 'COMPANY' })
-      Message.success('项目已提交公司内部验收')
+      Message.success('项目已提交公司验收')
       onChanged()
     } finally {
       finishAction()
@@ -75,7 +75,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
     if (!beginAction()) return
     try {
       await http.post(`/projects/${project.id}/confirm`, { expectedSubmissionId })
-      Message.success('公司内部验收已通过')
+      Message.success('公司验收已通过')
       onChanged()
     } finally {
       finishAction()
@@ -95,7 +95,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
         reason: values.reason.trim(),
         expectedSubmissionId: rejectSubmissionId,
       })
-      Message.success('公司内部验收已驳回')
+      Message.success('公司验收已驳回')
       rejectForm.resetFields()
       setRejectSubmissionId(null)
       setRejectOpen(false)
@@ -114,7 +114,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
     if (!beginAction()) return
     try {
       await http.post(`/projects/${project.id}/withdraw`, { expectedSubmissionId })
-      Message.success('已撤回内部验收申请')
+      Message.success('已撤回验收申请')
       onChanged()
     } finally {
       finishAction()
@@ -143,7 +143,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
         </div>
         {isPending && (
           <Typography.Text type="secondary" className="project-workflow-confirm-side">
-            验收方：公司内部
+            验收方：公司
           </Typography.Text>
         )}
       </div>
@@ -162,10 +162,10 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
           )}
           {canSubmit && project.status === 'IN_PROGRESS' && (
             <Popconfirm
-              title="提交公司内部验收？"
+              title="提交公司验收？"
               onOk={submitConfirmation}
             >
-              <Button type="primary" loading={busy}>提交内部验收</Button>
+              <Button type="primary" loading={busy}>提交公司验收</Button>
             </Popconfirm>
           )}
           {canStatus && project.status === 'IN_PROGRESS' && (
@@ -175,7 +175,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
           )}
           {isPending && canConfirm && (
             <Popconfirm
-              title="确认通过公司内部验收？项目将进入已完成状态。"
+              title="确认通过公司验收？项目将进入已完成状态。"
               onVisibleChange={(visible) => {
                 if (visible) confirmSubmissionRef.current = project.latestSubmissionId ?? null
               }}
@@ -199,7 +199,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
           )}
           {isPending && canWithdraw && (
             <Popconfirm
-              title="撤回内部验收申请后项目将回到进行中，确认撤回？"
+              title="撤回验收申请后项目将回到进行中，确认撤回？"
               onVisibleChange={(visible) => {
                 if (visible) withdrawSubmissionRef.current = project.latestSubmissionId ?? null
               }}
@@ -213,7 +213,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
 
       <Modal
         className="form-dialog"
-        title="内部验收驳回"
+        title="公司验收驳回"
         visible={rejectOpen}
         confirmLoading={busy}
         closable={!busy}

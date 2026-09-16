@@ -5,6 +5,30 @@ const { fs, assert, OUT, s, f, record, api, track } = require(process.env.YF_BRO
 
 const fileListPath = projectId => '/api/v1/projects/' + projectId + '/files';
 
+async function createProjectGroup(context, token, supplierId, ownerId, name) {
+  const vendors = await (await api(context, 'GET', '/project-dictionaries?type=ROBOT_VENDOR&enabledOnly=true', undefined, token)).json();
+  assert(vendors.length > 0, 'file fixture needs a Robot vendor');
+  const models = await (await api(context, 'GET', '/project-dictionaries?type=ROBOT_MODEL&parentId=' + vendors[0].id + '&enabledOnly=true', undefined, token)).json();
+  const priorities = await (await api(context, 'GET', '/project-dictionaries?type=PRIORITY&enabledOnly=true', undefined, token)).json();
+  assert(models.length > 0 && priorities.length > 0, 'file fixture needs model and priority options');
+  const group = await (await api(context, 'POST', '/project-groups', {
+    name,
+    description: 'O26/O28 独立浏览器验收夹具',
+    supplierId,
+    workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
+    machineModel: '文件边界机型',
+    robotVendorId: vendors[0].id,
+    robotModelId: models[0].id,
+    responsibleUserId: ownerId,
+    priorityId: priorities[0].id,
+    expectedCompletionDate: '2099-12-31',
+    subprojectNames: [name + ' 子项目'],
+  }, token)).json();
+  const detail = await (await api(context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
+  assert.equal(detail.projects.length, 1, 'file fixture must contain one subproject');
+  return detail.projects[0];
+}
+
 async function uploadApi(context, token, projectId, fileName, bytes) {
   const fileMd5 = crypto.createHash('md5').update(bytes).digest('hex');
   const initResponse = await api(context, 'POST', '/uploads/init', {
@@ -49,7 +73,7 @@ function workbookBytes(marker) {
       viewport: { width: 1440, height: 1000 },
       storageState: OUT + '/admin.storage.private.json',
     });
-    const memberApi = await browser.newContext();
+    const internalApi = await browser.newContext();
     const supplierApi = await browser.newContext();
     page = await admin.newPage();
     track(page, 'file-edges');
@@ -62,12 +86,8 @@ function workbookBytes(marker) {
     await api(admin, 'PUT', '/admin/system/configs', {
       items: [{ key: 'upload.chunk_size', value: String(1024 * 1024) }],
     }, s.adminToken);
-    const project = await (await api(admin, 'POST', '/projects', {
-      name: '文件边界验收-' + suffix,
-      description: 'O26/O28 独立浏览器验收夹具',
-      supplierId: f.suppliers.a.id,
-    }, s.adminToken)).json();
-    await api(admin, 'PUT', '/projects/' + project.id + '/members', { userIds: [f.users.member.id] }, s.adminToken);
+    const project = await createProjectGroup(
+      admin, s.adminToken, f.suppliers.a.id, f.users.member.id, '文件边界验收-' + suffix);
     await api(admin, 'PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' }, s.adminToken);
 
     const c2sNames = [];
@@ -75,7 +95,7 @@ function workbookBytes(marker) {
     for (let index = 0; index < 7; index++) {
       const name = prefix + '-c2s-' + String(index).padStart(2, '0') + '.zip';
       const bytes = Buffer.from('C2S|' + suffix + '|' + index);
-      await uploadApi(memberApi, f.users.member.token, project.id, name, bytes);
+      await uploadApi(internalApi, f.users.member.token, project.id, name, bytes);
       c2sNames.push(name);
     }
     for (let index = 0; index < 6; index++) {
@@ -310,7 +330,7 @@ function workbookBytes(marker) {
     }, s.adminToken);
     await page.screenshot({ path: OUT + '/file-edges.png', fullPage: true });
     await admin.close();
-    await memberApi.close();
+    await internalApi.close();
     await supplierApi.close();
   } catch (error) {
     if (page) {

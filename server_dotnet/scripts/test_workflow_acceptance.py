@@ -7,7 +7,13 @@ stop at durable PENDING outbox rows.
 
 import secrets
 
-from test_business_acceptance import _activate_user, _download_matches, _password, _upload_chunks
+from test_business_acceptance import (
+    _activate_user,
+    _create_project_group,
+    _download_matches,
+    _password,
+    _upload_chunks,
+)
 
 
 def _project_snapshot(conn, project_id):
@@ -29,11 +35,6 @@ def _project_snapshot(conn, project_id):
             (project_id,),
         )
         outbox = tuple(cursor.fetchall())
-        cursor.execute(
-            "SELECT user_id FROM project_members WHERE project_id=%s ORDER BY user_id",
-            (project_id,),
-        )
-        members = tuple(row[0] for row in cursor.fetchall())
         cursor.execute(
             "SELECT id,status,deleted_at FROM files WHERE project_id=%s ORDER BY id",
             (project_id,),
@@ -59,7 +60,7 @@ def _project_snapshot(conn, project_id):
             (project_id,),
         )
         activities = tuple(cursor.fetchall())
-    return project, history, outbox, members, files, messages, uploads, audit, activities
+    return project, history, outbox, files, messages, uploads, audit, activities
 
 
 def _expect_atomic_rejection(check, conn, actor, project_id, label, method, path,
@@ -110,6 +111,25 @@ def _check_equal(check, label, actual, expected):
     check(label, True)
 
 
+def _create_owner_section(client, suffix):
+    division = client.call("POST", "/api/v1/admin/departments", {
+        "name": "工作流验收事业部-" + suffix,
+        "parentId": None,
+        "sortNo": 100,
+    })
+    department = client.call("POST", "/api/v1/admin/departments", {
+        "name": "工作流验收部门-" + suffix,
+        "parentId": division["id"],
+        "sortNo": 101,
+    })
+    section = client.call("POST", "/api/v1/admin/departments", {
+        "name": "工作流验收课别-" + suffix,
+        "parentId": department["id"],
+        "sortNo": 102,
+    })
+    return section["id"]
+
+
 def _submission_id(project):
     value = project.get("latestSubmissionId")
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
@@ -128,6 +148,7 @@ def _audit_actions(conn, project_id):
 
 def run_workflow_acceptance(client, Client, conn, check):
     suffix = secrets.token_hex(5)
+    owner_section_id = _create_owner_section(client, suffix)
     permissions = client.call("GET", "/api/v1/permissions")
     withdraw_permission_id = next(
         permission["id"] for permission in permissions
@@ -143,9 +164,9 @@ def run_workflow_acceptance(client, Client, conn, check):
         if role["name"] == "供应商人员")
     original_supplier_permission_ids = list(supplier_role["permissionIds"])
     check(
-        "default supplier role excludes confirmation and implicit withdrawal",
+        "default supplier role excludes confirmation and grants explicit withdrawal",
         confirm_permission_id not in original_supplier_permission_ids
-        and withdraw_permission_id not in original_supplier_permission_ids,
+        and withdraw_permission_id in original_supplier_permission_ids,
     )
     supplier = client.call("POST", "/api/v1/admin/suppliers", {
         "name": "工作流完整验收供应商-" + suffix,
@@ -174,7 +195,7 @@ def run_workflow_acceptance(client, Client, conn, check):
         "password": internal_initial,
         "realName": "工作流验收内部成员",
         "email": internal_employee + "@example.invalid",
-        "departmentId": None,
+        "departmentId": owner_section_id,
         "roleId": internal_role["id"],
     })
     internal_client = _activate_user(
@@ -193,27 +214,26 @@ def run_workflow_acceptance(client, Client, conn, check):
     confirm_only_user = client.call("POST", "/api/v1/admin/users", {
         "employeeNo": confirm_only_employee,
         "password": confirm_only_initial,
-        "realName": "仅确认无项目菜单成员",
+        "realName": "仅确认无项目菜单用户",
         "email": confirm_only_employee + "@example.invalid",
-        "departmentId": None,
+        "departmentId": owner_section_id,
         "roleId": confirm_only_role["id"],
     })
     confirm_only_client = _activate_user(
         client, Client, check, confirm_only_employee, confirm_only_initial,
         confirm_only_user["id"], "workflow confirm-only member")
-    confirm_only_client.call("GET", "/api/v1/projects", expected=403)
+    confirm_only_client.call("GET", "/api/v1/project-groups", expected=403)
 
-    created = client.call("POST", "/api/v1/projects", {
-        "name": "工作流完整验收项目-" + suffix,
-        "description": "draft lifecycle fixture",
-        "supplierId": supplier["id"],
-    })
+    group, created = _create_project_group(
+        client, conn, supplier["id"], internal_user["id"],
+        "工作流完整验收项目-" + suffix)
     project_id = created["id"]
+    group_id = group["id"]
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT action,from_status,to_status FROM project_status_logs "
-            "WHERE project_id=%s ORDER BY id",
-            (project_id,),
+            "SELECT action,from_status,to_status FROM project_group_status_logs "
+            "WHERE project_group_id=%s ORDER BY id",
+            (group_id,),
         )
         draft_history = list(cursor.fetchall())
         cursor.execute(
@@ -230,9 +250,6 @@ def run_workflow_acceptance(client, Client, conn, check):
         and draft_outbox == 0,
     )
 
-    client.call("PUT", f"/api/v1/projects/{project_id}/members", {
-        "userIds": [internal_user["id"], confirm_only_user["id"]],
-    })
     started = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
         "status": "IN_PROGRESS",
     })
@@ -276,7 +293,7 @@ def run_workflow_acceptance(client, Client, conn, check):
     file_id, _, _ = _upload_chunks(
         supplier_client, project_id, "workflow-boundary.pdf", payload)
     check(
-        "file upload notifies a visible member but not a member without project:list",
+        "file upload notifies the current owner but not an internal user without project:list",
         _event_count(conn, project_id, "FILE_UPLOADED", internal_user["id"]) == 1
         and _event_count(conn, project_id, "FILE_UPLOADED", confirm_only_user["id"]) == 0,
     )
@@ -284,11 +301,9 @@ def run_workflow_acceptance(client, Client, conn, check):
         "POST", f"/api/v1/projects/{project_id}/messages",
         {"content": "完成前创建，完成后仍应可读但不可删除"})
 
-    no_reviewer_project = client.call("POST", "/api/v1/projects", {
-        "name": "无内部验收人项目-" + suffix,
-        "description": "submission must remain atomic when no reviewer is eligible",
-        "supplierId": supplier["id"],
-    })
+    _, no_reviewer_project = _create_project_group(
+        client, conn, supplier["id"], internal_user["id"],
+        "无内部验收人项目-" + suffix)
     client.call("PUT", f"/api/v1/projects/{no_reviewer_project['id']}/status", {
         "status": "IN_PROGRESS",
     })
@@ -320,14 +335,14 @@ def run_workflow_acceptance(client, Client, conn, check):
         check,
         "submission without a reviewer returns the actionable business error",
         no_reviewer["message"],
-        "项目没有可执行验收的公司内部用户，请先配置项目成员和验收权限",
+        "项目没有可执行验收的公司内部用户，请为项目负责人配置验收权限，或配置具备全局查看权限的验收人员",
     )
 
     _expect_atomic_rejection(
         check, conn, internal_client, project_id,
-        "internal explicit supplier-side project submission",
+        "internal submission is rejected by the supplier-only submission boundary",
         "POST", f"/api/v1/projects/{project_id}/submit",
-        {"confirmSide": "SUPPLIER"}, expected=400)
+        {"confirmSide": "COMPANY"}, expected=403)
     _expect_atomic_rejection(
         check, conn, supplier_client, project_id,
         "supplier explicit supplier-side project submission",
@@ -338,19 +353,23 @@ def run_workflow_acceptance(client, Client, conn, check):
     reject_submission_id = _submission_id(submitted_for_reject)
     pending_detail = supplier_client.call("GET", f"/api/v1/projects/{project_id}")
     pending_summary = supplier_client.call("GET", f"/api/v1/projects/{project_id}/summary")
-    pending_list = supplier_client.call("GET", "/api/v1/projects?page=1&pageSize=100")
-    pending_list_item = next(item for item in pending_list["list"] if item["id"] == project_id)
+    pending_group_detail = supplier_client.call("GET", f"/api/v1/project-groups/{group_id}")
+    pending_list = supplier_client.call("GET", "/api/v1/project-groups?page=1&pageSize=100")
+    pending_group_item = next(item for item in pending_list["list"] if item["id"] == group_id)
+    pending_group_project = next(
+        item for item in pending_group_detail["projects"] if item["id"] == project_id)
     _check_equal(
         check,
-        "pending submission version is consistent across submit detail summary and list",
+        "pending submission version is consistent across subproject detail summary and group detail",
         (
             submitted_for_reject["latestSubmissionId"],
             pending_detail["latestSubmissionId"],
             pending_summary["latestSubmissionId"],
-            pending_list_item["latestSubmissionId"],
+            pending_group_project["latestSubmissionId"],
         ),
         (reject_submission_id,) * 4,
     )
+    check("group list exposes the pending subproject's main project", pending_group_item["id"] == group_id)
     confirm_only_pending = confirm_only_client.call(
         "GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100")
     _check_equal(
@@ -418,12 +437,16 @@ def run_workflow_acceptance(client, Client, conn, check):
     submitted_for_withdraw = supplier_client.call(
         "POST", f"/api/v1/projects/{project_id}/submit", {"confirmSide": "COMPANY"})
     withdraw_submission_id = _submission_id(submitted_for_withdraw)
+    client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
+        "permissionIds": [permission_id for permission_id in original_supplier_permission_ids
+                          if permission_id != withdraw_permission_id],
+    })
     _expect_atomic_rejection(
         check, conn, supplier_client, project_id, "supplier withdrawal without explicit permission",
         "POST", f"/api/v1/projects/{project_id}/withdraw",
         {"expectedSubmissionId": withdraw_submission_id}, expected=403)
     client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
-        "permissionIds": original_supplier_permission_ids + [withdraw_permission_id],
+        "permissionIds": original_supplier_permission_ids,
     })
     try:
         withdrawn = supplier_client.call("POST", f"/api/v1/projects/{project_id}/withdraw", {
@@ -433,7 +456,7 @@ def run_workflow_acceptance(client, Client, conn, check):
         client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
             "permissionIds": original_supplier_permission_ids,
         })
-    submitted_for_confirm = internal_client.call(
+    submitted_for_confirm = supplier_client.call(
         "POST", f"/api/v1/projects/{project_id}/submit", {})
     confirm_submission_id = _submission_id(submitted_for_confirm)
     completed = internal_client.call("POST", f"/api/v1/projects/{project_id}/confirm", {
@@ -485,7 +508,7 @@ def run_workflow_acceptance(client, Client, conn, check):
              "IN_PROGRESS", "PENDING_CONFIRMATION"),
             ("WITHDRAW", supplier_user["id"], "COMPANY", None,
              "PENDING_CONFIRMATION", "IN_PROGRESS"),
-            ("SUBMIT", internal_user["id"], "COMPANY", None,
+            ("SUBMIT", supplier_user["id"], "COMPANY", None,
              "IN_PROGRESS", "PENDING_CONFIRMATION"),
             ("CONFIRM", internal_user["id"], "COMPANY", None,
              "PENDING_CONFIRMATION", "COMPLETED"),
@@ -558,6 +581,9 @@ def run_workflow_acceptance(client, Client, conn, check):
                 (f"project-acceptance:{project_id}:{withdraw_submission_id}:{internal_user['id']}",
                  "CANCELLED", 0, None,
                  "验收申请已失效或收件人已无验收权限，通知已取消"),
+                (f"project-acceptance:{project_id}:{confirm_submission_id}:{internal_user['id']}",
+                 "CANCELLED", 0, None,
+                 "验收申请已失效或收件人已无验收权限，通知已取消"),
             ),
             "submitted_confirm_only": (),
             "submitted_supplier": (),
@@ -578,7 +604,7 @@ def run_workflow_acceptance(client, Client, conn, check):
             "withdrawn_internal": 1,
             "withdrawn_confirm_only": 0,
             "withdrawn_supplier": 1,
-            "confirmed_supplier": 0,
+            "confirmed_supplier": 1,
         },
     )
 
@@ -619,11 +645,6 @@ def run_workflow_acceptance(client, Client, conn, check):
             "name": created["name"],
             "description": "不可编辑",
             "supplierId": supplier["id"],
-        })
-    _expect_atomic_rejection(
-        check, conn, client, project_id, "completed project members",
-        "PUT", f"/api/v1/projects/{project_id}/members", {
-            "userIds": [internal_user["id"]],
         })
     _expect_atomic_rejection(
         check, conn, supplier_client, project_id, "completed project resubmit",

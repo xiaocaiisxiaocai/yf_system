@@ -20,129 +20,24 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
   let page;
   let context;
   let token;
-  let project;
-  const createdUsers = [];
   try {
     browser = await chromium.launch({ channel: 'chrome', headless: true });
     context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     page = await context.newPage();
-    track(page, 'config-member-edges');
+    track(page, 'config-edges');
     const auth = await login(page, 'admin', s.adminPassword);
     await page.waitForURL(s.base + '/');
     token = auth.accessToken;
-    const adminId = auth.user.id;
     const marker = crypto.randomBytes(5).toString('hex');
-    const password = () => 'UiEdge9!' + crypto.randomBytes(6).toString('base64url');
-    const roleId = Number(f.roles && f.roles['内部成员']);
-    assert.ok(roleId > 0, 'fixture must contain the 内部成员 role id');
-    assert.ok(f.suppliers && f.suppliers.a && f.suppliers.a.id, 'fixture must contain supplier a');
     const json = async (method, url, data, expected = 200) => (
       await api(context, method, url, data, token, expected)
     ).json();
-    const createUser = async (suffix, realName) => {
-      const employeeNo = 'edge_' + suffix + '_' + marker;
-      const user = await json('POST', '/admin/users', {
-        employeeNo,
-        password: password(),
-        realName,
-        email: employeeNo + '@example.invalid',
-        departmentId: null,
-        roleId,
-      });
-      createdUsers.push(user.id);
-      return user;
-    };
-
-    const disabledName = '边界停用成员-' + marker;
-    const activeName = '边界候选成员-' + marker;
-    const disabledUser = await createUser('disabled', disabledName);
-    const activeUser = await createUser('active', activeName);
-    project = await json('POST', '/projects', {
-      name: '成员边界项目-' + marker,
-      supplierId: f.suppliers.a.id,
-    });
-    await json('PUT', '/projects/' + project.id + '/members', { userIds: [disabledUser.id] });
-    await json('PUT', '/admin/users/' + disabledUser.id + '/status', { status: 'DISABLED' });
-    await page.goto(s.base + '/projects/' + project.id + '?tab=members');
-    await page.getByRole('button', { name: '设置公司成员', exact: true }).waitFor();
-    await page.getByText(disabledName, { exact: true }).waitFor();
-
-    const picker = () => page.locator('.member-picker-dialog:visible');
-    const option = name => picker().locator('.member-picker-option').filter({ hasText: name });
-    const checked = async name => option(name).getByRole('checkbox').isChecked();
-    const toggle = async name => option(name).click();
-    const memberIds = async () => (await json('GET', '/projects/' + project.id + '/members'))
-      .map(member => member.userId).sort((a, b) => a - b);
-
-    await record('O40 成员选项失败可重试且取消草稿不写入', async () => {
-      const before = await memberIds();
-      page.expectedServerErrors = new Set(['/api/v1/internal-user-options']);
-      await page.route('**/api/v1/internal-user-options', route => route.fulfill({
-        status: 503,
-        contentType: 'application/json',
-        body: JSON.stringify({ code: 50301, message: 'temporary member option failure' }),
-      }), { times: 1 });
-      await page.getByRole('button', { name: '设置公司成员', exact: true }).click();
-      await page.getByText('成员选项加载失败', { exact: true }).waitFor();
-      assert.equal(await picker().count(), 0, 'failed option request must not open picker');
-
-      const retried = page.waitForResponse(response => pathOf(response) === '/api/v1/internal-user-options'
-        && response.request().method() === 'GET' && response.status() === 200);
-      await page.getByRole('button', { name: '设置公司成员', exact: true }).click();
-      await retried;
-      await picker().waitFor();
-      assert.equal(await checked(activeName), false);
-      assert.equal(await checked(disabledName), true);
-      await toggle(activeName);
-      await toggle(auth.user.realName);
-      assert.equal(await checked(activeName), true);
-      assert.equal(await checked(auth.user.realName), false);
-      await picker().getByRole('button', { name: '取消', exact: true }).click();
-      await picker().waitFor({ state: 'hidden' });
-      assert.deepEqual(await memberIds(), before, 'cancel must not write member changes');
-
-      await page.getByRole('button', { name: '设置公司成员', exact: true }).click();
-      await picker().waitFor();
-      assert.equal(await checked(activeName), false, 'cancelled option must reset on reopen');
-      assert.equal(await checked(disabledName), true, 'existing disabled member remains selected for correction');
-      assert.equal(await checked(auth.user.realName), true, 'operator selection resets from persisted members');
-      page.expectedServerErrors.clear();
-    });
-
-    await record('O40 停用既有成员阻止保存且操作人必保留', async () => {
-      let memberWrites = 0;
-      const countWrites = request => {
-        if (pathOf(request) === '/api/v1/projects/' + project.id + '/members'
-          && request.method() === 'PUT') memberWrites += 1;
-      };
-      page.on('request', countWrites);
-      await picker().getByRole('button', { name: '保存成员', exact: true }).click();
-      await page.getByText('请先取消选择已停用的公司成员', { exact: true }).waitFor();
-      assert.equal(memberWrites, 0, 'disabled selected member must block PUT');
-      assert.equal(await picker().isVisible(), true, 'blocked save keeps picker open');
-
-      await toggle(disabledName);
-      await toggle(auth.user.realName);
-      await toggle(activeName);
-      assert.equal(await checked(disabledName), false);
-      assert.equal(await checked(auth.user.realName), false, 'operator is deliberately removed from draft');
-      assert.equal(await checked(activeName), true);
-      const requestPromise = page.waitForRequest(request => pathOf(request) === '/api/v1/projects/' + project.id + '/members'
-        && request.method() === 'PUT');
-      await action(page, '/projects/' + project.id + '/members', 'PUT', () => (
-        picker().getByRole('button', { name: '保存成员', exact: true }).click()
-      ));
-      const request = await requestPromise;
-      const body = request.postDataJSON();
-      assert.deepEqual([...body.userIds].sort((a, b) => a - b), [adminId, activeUser.id].sort((a, b) => a - b));
-      assert.equal(memberWrites, 1, 'corrected draft makes one PUT');
-      page.off('request', countWrites);
-      const companyMembers = page.locator('section.member-group').first();
-      await companyMembers.getByText(activeName, { exact: true }).waitFor();
-      assert.equal(await companyMembers.getByText(disabledName, { exact: true }).count(), 0,
-        'disabled member removed from visible company member list');
-      assert.deepEqual(await memberIds(), [adminId, activeUser.id].sort((a, b) => a - b),
-        'server persistence must retain operator and remove disabled member');
+    const ownerOptions = await json('GET', '/project-owner-options');
+    await record('负责人选项只返回启用且有项目权限的内部用户', async () => {
+      assert(ownerOptions.length > 0, 'project owner options must not be empty');
+      assert(ownerOptions.every(owner => owner.sectionId && owner.sectionName),
+        'every owner must be attached to a section');
+      assert(ownerOptions.every(owner => owner.id !== undefined), 'owner option identity is required');
     });
 
     await page.goto(s.base + '/system/config');
@@ -267,20 +162,19 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
       await assertDirty(0);
     });
 
-    await record('O40 自有成员项目与账号清理生效', async () => {
-      await json('DELETE', '/projects/' + project.id);
-      project = null;
-      for (const id of createdUsers.splice(0)) await json('DELETE', '/admin/users/' + id);
+    await record('负责人选项在系统参数检查后仍可稳定读取', async () => {
+      const refreshed = await json('GET', '/project-owner-options');
+      assert.deepEqual(refreshed.map(owner => owner.id), ownerOptions.map(owner => owner.id));
     });
-    await page.screenshot({ path: OUT + '/config-member-edges-final.png', fullPage: true });
-    await record('O40/O56 浏览器运行无未捕获脚本异常和服务端500', async () => {
+    await page.screenshot({ path: OUT + '/config-edges-final.png', fullPage: true });
+    await record('负责人和系统参数浏览器检查无未捕获脚本异常和服务端500', async () => {
       for (const name of ['page-errors.jsonl', 'http-errors.jsonl']) {
         assert(!fs.existsSync(OUT + '/' + name) || fs.readFileSync(OUT + '/' + name, 'utf8').trim() === '');
       }
     });
   } catch (error) {
     if (page) {
-      await page.screenshot({ path: OUT + '/config-member-edges-failure.png', fullPage: true }).catch(() => {});
+      await page.screenshot({ path: OUT + '/config-edges-failure.png', fullPage: true }).catch(() => {});
       console.log((await page.locator('body').innerText()).slice(-4500));
     }
     console.error(error.stack || error.message);

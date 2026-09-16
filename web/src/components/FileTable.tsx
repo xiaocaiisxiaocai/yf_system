@@ -194,6 +194,9 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
           )}
         </Space>
       </Space>
+      <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+        文件方向按上传账号自动记录；文件当前不统计已读状态。
+      </Typography.Text>
 
       {loadError ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
@@ -220,18 +223,18 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
               <Space size={4} className="file-name-cell">
                 <span className="table-cell-text" title={v}>{v}</span>
                 {r.isCopiedReference && (
-                  <Tooltip content={onOpenCopyHistory ? '由项目复制产生，点击查看引用履历' : '由项目复制产生'}>
+                  <Tooltip content={onOpenCopyHistory ? '由项目复制产生，点击查看复制履历' : '由项目复制产生的独立文件'}>
                     {onOpenCopyHistory ? (
                       <Button
                         className="file-reference-button"
                         size="mini"
                         type="text"
-                        aria-label={`查看文件「${v}」的引用履历`}
+                        aria-label={`查看文件「${v}」的复制履历`}
                         onClick={onOpenCopyHistory}
                       >
-                        引用
+                        复制件
                       </Button>
-                    ) : <Tag className="file-reference-tag" color="arcoblue">引用</Tag>}
+                    ) : <Tag className="file-reference-tag" color="arcoblue">复制件</Tag>}
                   </Tooltip>
                 )}
                 {previewKind(r.ext, r.sizeBytes) !== 'none' && hasPerm('file:preview') && (

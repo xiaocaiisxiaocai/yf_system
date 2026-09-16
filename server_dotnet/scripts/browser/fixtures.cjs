@@ -10,11 +10,14 @@ const XLSX=require(process.env.YF_PROJECT_ROOT+'/web/node_modules/xlsx');
  for(const [key,label] of [['a','自动验收甲公司'],['b','自动验收乙公司']]){
   const supplier=await(await api(c,'POST','/admin/suppliers',{name:label,remark:'本轮独立测试库'},s.adminToken)).json();
   fixtures.suppliers[key]=supplier;const initial=password();
-  const user=await(await api(c,'POST','/admin/suppliers/'+supplier.id+'/accounts',{employeeNo:'auto_supplier_'+key,password:initial,realName:label+'代表',email:key+'@example.invalid'},s.adminToken)).json();
-  fixtures.users[key]={id:user.id,username:user.employeeNo,password:initial,changedPassword:password()};
+ const user=await(await api(c,'POST','/admin/suppliers/'+supplier.id+'/accounts',{employeeNo:'auto_supplier_'+key,password:initial,realName:label+'代表',email:key+'@example.invalid'},s.adminToken)).json();
+ fixtures.users[key]={id:user.id,username:user.employeeNo,password:initial,changedPassword:password()};
  }
+ const division=await(await api(c,'POST','/admin/departments',{name:'自动验收事业部-'+crypto.randomBytes(4).toString('hex'),parentId:null,sortNo:900},s.adminToken)).json();
+ const department=await(await api(c,'POST','/admin/departments',{name:'自动验收部门-'+crypto.randomBytes(4).toString('hex'),parentId:division.id,sortNo:901},s.adminToken)).json();
+ const section=await(await api(c,'POST','/admin/departments',{name:'自动验收课别-'+crypto.randomBytes(4).toString('hex'),parentId:department.id,sortNo:902},s.adminToken)).json();
  for(const [key,label,role] of [['member','自动验收内部员工','内部成员'],['manager','自动验收项目经理','项目管理员']]){
-  const initial=password();const user=await(await api(c,'POST','/admin/users',{employeeNo:'auto_'+key,password:initial,realName:label,email:key+'@example.invalid',departmentId:null,roleId:fixtures.roles[role]},s.adminToken)).json();
+  const initial=password();const user=await(await api(c,'POST','/admin/users',{employeeNo:'auto_'+key,password:initial,realName:label,email:key+'@example.invalid',departmentId:section.id,roleId:fixtures.roles[role]},s.adminToken)).json();
   fixtures.users[key]={id:user.id,username:user.employeeNo,password:initial,changedPassword:password()};
  }
  fs.writeFileSync(OUT+'/fixtures.private.json',JSON.stringify(fixtures));

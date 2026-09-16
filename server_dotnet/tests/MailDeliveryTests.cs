@@ -417,10 +417,6 @@ public sealed class MailDeliveryTests
                         status VARCHAR(32) NOT NULL,
                         confirm_side VARCHAR(16) NULL
                     );
-                    CREATE TABLE project_members(
-                        project_id BIGINT UNSIGNED NOT NULL,
-                        user_id BIGINT UNSIGNED NOT NULL
-                    );
                     INSERT INTO system_configs(cfg_key,cfg_value) VALUES('notify.enabled','true');
                     INSERT INTO email_outbox
                         (id,event_type,recipient_email,subject,body,status,retry_count,next_attempt_at,last_error,sent_at)

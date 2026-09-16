@@ -49,9 +49,10 @@ public sealed class ProjectGroupTests
             VALUES(8101,'主项目供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
             VALUES(8201,NULL,'主项目课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
-            VALUES(8301,'group-owner','unused','主项目负责人','owner@example.test','INTERNAL',8201,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-            INSERT INTO user_roles(user_id,role_id) VALUES(8301,1);
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES(8301,'group-owner','unused','主项目负责人','owner@example.test','INTERNAL',NULL,8201,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8302,'group-supplier','unused','供应商提交人','supplier@example.test','SUPPLIER',8101,NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(8301,1),(8302,4);
             INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status) VALUES
               (8401,'ROBOT_VENDOR','主项目厂商',NULL,1,'ACTIVE'),
               (8402,'ROBOT_MODEL','主项目型号',8401,1,'ACTIVE'),
@@ -126,6 +127,20 @@ public sealed class ProjectGroupTests
         Assert.Equal(["b.txt"], (await conn.QueryAsync<string>(new CommandDefinition(
             "SELECT original_name FROM files WHERE project_id=@ProjectId", new { ProjectId = children[1].Id }))).ToArray());
 
+        var internalSubmission = await Assert.ThrowsAsync<ApiException>(() => projects.SubmitAsync(
+            conn, actor, children[0].Id, new ProjectSubmitRequest(), null, ct));
+        Assert.Equal(403, internalSubmission.Status);
+        var supplier = new CurrentUser(8302, "group-supplier", "SUPPLIER", 8101);
+        using (var submitted = Json(await projects.SubmitAsync(
+                   conn, supplier, children[0].Id, new ProjectSubmitRequest(), null, ct)))
+        {
+            var submissionId = submitted.RootElement.GetProperty("latestSubmissionId").GetUInt64();
+            Assert.Equal(ProjectStatuses.PendingConfirmation,
+                submitted.RootElement.GetProperty("status").GetString());
+            await projects.WithdrawAsync(conn, supplier, children[0].Id,
+                new ProjectDecisionRequest { ExpectedSubmissionId = submissionId }, null, ct);
+        }
+
         var submissions = new List<(ulong ProjectId, ulong SubmissionId)>();
         foreach (var child in children)
         {
@@ -136,7 +151,7 @@ public sealed class ProjectGroupTests
                 """
                 INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,confirm_side,created_at)
                 VALUES(@ProjectId,'IN_PROGRESS','PENDING_CONFIRMATION','SUBMIT',@ActorId,'COMPANY',UTC_TIMESTAMP(3))
-                """, new { ProjectId = child.Id, ActorId = actor.Id }));
+                """, new { ProjectId = child.Id, ActorId = supplier.Id }));
             submissions.Add((child.Id, await conn.ExecuteScalarAsync<ulong>("SELECT LAST_INSERT_ID()")));
         }
         await using (var sync = await AppDb.BeginTransactionAsync(conn, ct))
@@ -144,6 +159,11 @@ public sealed class ProjectGroupTests
             await groupStatus.RecalculateAsync(conn, sync, groupId, actor.Id, null, ct);
             await sync.CommitAsync(ct);
         }
+
+        using (var supplierDashboard = Json(await new DashboardService().SummaryAsync(conn, supplier, ct)))
+            Assert.Equal(2, supplierDashboard.RootElement.GetProperty("pendingConfirmations").GetInt32());
+        using (var supplierPending = Json(await new DashboardService().PendingProjectsAsync(conn, supplier, 1, 20, ct)))
+            Assert.Equal(2, supplierPending.RootElement.GetProperty("total").GetInt32());
 
         await projects.ConfirmAsync(conn, actor, submissions[0].ProjectId,
             new ProjectDecisionRequest { ExpectedSubmissionId = submissions[0].SubmissionId }, null, ct);
@@ -162,6 +182,94 @@ public sealed class ProjectGroupTests
             new { GroupId = groupId })));
     }
 
+    [Fact(Timeout = 90_000)]
+    public async Task UpdatingMainProjectKeepsCompletedSubprojectMetadataAndWorkOrdersFrozen()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_group_freeze", ct);
+        await database.CreateBaselineAsync(legacyV16: false, ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO suppliers(id,name,status,created_at,updated_at)
+            VALUES(8501,'冻结测试供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
+            VALUES(8502,NULL,'冻结测试课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8508,NULL,'新负责人课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES(8503,'freeze-owner','unused','冻结测试负责人','freeze@example.test','INTERNAL',8502,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8507,'new-owner','unused','新负责人','new-owner@example.test','INTERNAL',8508,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(8503,1),(8507,1);
+            INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status) VALUES
+              (8504,'ROBOT_VENDOR','冻结厂商',NULL,1,'ACTIVE'),
+              (8505,'ROBOT_MODEL','冻结型号',8504,1,'ACTIVE'),
+              (8506,'PRIORITY','冻结优先级',NULL,1,'ACTIVE');
+            """, ct);
+
+        var actor = new CurrentUser(8503, "freeze-owner", "INTERNAL", null);
+        var audit = new AuditService([]);
+        var groupStatus = new ProjectGroupStatusService(audit);
+        var groups = new ProjectGroupService(audit, groupStatus);
+        await using var conn = await database.Database.OpenAsync(ct);
+        using var created = Json(await groups.CreateAsync(conn, actor, new ProjectUpsertRequest
+        {
+            Name = "冻结测试主项目",
+            SupplierId = 8501,
+            WorkOrderNos = ["WO-OLD"],
+            MachineModel = "旧机型",
+            RobotVendorId = 8504,
+            RobotModelId = 8505,
+            ResponsibleUserId = 8503,
+            PriorityId = 8506,
+            ExpectedCompletionDate = "2026-12-01",
+            SubprojectNames = ["已完成子项目", "活动子项目"],
+        }, null, ct));
+        var groupId = created.RootElement.GetProperty("id").GetUInt64();
+        var childIds = (await conn.QueryAsync<ulong>(new CommandDefinition(
+            "SELECT id FROM projects WHERE project_group_id=@GroupId ORDER BY id",
+            new { GroupId = groupId }, cancellationToken: ct))).ToArray();
+        await conn.ExecuteAsync(new CommandDefinition("""
+            UPDATE projects SET status='COMPLETED' WHERE id=@CompletedId;
+            DELETE FROM project_work_orders WHERE project_id=@CompletedId;
+            INSERT INTO project_work_orders(project_id,work_order_no,sort_no) VALUES(@CompletedId,'WO-FROZEN',0);
+            """, new { CompletedId = childIds[0] }, cancellationToken: ct));
+        await using (var sync = await AppDb.BeginTransactionAsync(conn, ct))
+        {
+            await groupStatus.RecalculateAsync(conn, sync, groupId, actor.Id, childIds[0], ct);
+            await sync.CommitAsync(ct);
+        }
+
+        await groups.UpdateAsync(conn, actor, groupId, new ProjectUpsertRequest
+        {
+            Name = "冻结测试主项目-更新",
+            SupplierId = 8501,
+            WorkOrderNos = ["WO-NEW"],
+            MachineModel = "新机型",
+            RobotVendorId = 8504,
+            RobotModelId = 8505,
+            ResponsibleUserId = 8507,
+            PriorityId = 8506,
+            ExpectedCompletionDate = "2027-01-01",
+        }, null, ct);
+
+        var rows = (await conn.QueryAsync<FrozenChild>(new CommandDefinition("""
+            SELECT p.id AS Id,p.machine_model AS MachineModel,p.expected_completion_date AS ExpectedCompletionDate,
+                   p.responsible_user_id AS ResponsibleUserId,p.section_id AS SectionId,
+                   (SELECT GROUP_CONCAT(pwo.work_order_no ORDER BY pwo.sort_no,pwo.id)
+                    FROM project_work_orders pwo WHERE pwo.project_id=p.id) AS WorkOrders
+            FROM projects p WHERE p.id IN @Ids ORDER BY p.id
+            """, new { Ids = childIds }, cancellationToken: ct))).ToArray();
+        Assert.Equal("旧机型", rows[0].MachineModel);
+        Assert.Equal(new DateTime(2026, 12, 1), rows[0].ExpectedCompletionDate);
+        Assert.Equal("WO-FROZEN", rows[0].WorkOrders);
+        Assert.Equal(8507UL, rows[0].ResponsibleUserId);
+        Assert.Equal(8508UL, rows[0].SectionId);
+        Assert.Equal("新机型", rows[1].MachineModel);
+        Assert.Equal(new DateTime(2027, 1, 1), rows[1].ExpectedCompletionDate);
+        Assert.Equal("WO-NEW", rows[1].WorkOrders);
+        Assert.Equal(8507UL, rows[1].ResponsibleUserId);
+        Assert.Equal(8508UL, rows[1].SectionId);
+    }
+
     private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, JsonSerializerOptions.Web));
     private sealed class Child
     {
@@ -173,4 +281,13 @@ public sealed class ProjectGroupTests
         public string Status { get; init; } = string.Empty;
     }
     private sealed class GroupState { public string Status { get; init; } = string.Empty; public DateTime? CompletedAt { get; init; } }
+    private sealed class FrozenChild
+    {
+        public ulong Id { get; init; }
+        public string MachineModel { get; init; } = string.Empty;
+        public DateTime ExpectedCompletionDate { get; init; }
+        public ulong ResponsibleUserId { get; init; }
+        public ulong SectionId { get; init; }
+        public string WorkOrders { get; init; } = string.Empty;
+    }
 }

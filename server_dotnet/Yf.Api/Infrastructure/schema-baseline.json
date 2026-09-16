@@ -35,10 +35,6 @@
       "sql": "CREATE TABLE `project_activities` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `project_id` bigint(20) unsigned NOT NULL,\n  `activity_type` varchar(16) NOT NULL,\n  `action` varchar(32) NOT NULL,\n  `actor_id` bigint(20) unsigned DEFAULT NULL,\n  `actor_name` varchar(128) NOT NULL,\n  `occurred_at` datetime(3) NOT NULL,\n  `title` varchar(160) NOT NULL,\n  `summary` varchar(160) DEFAULT NULL,\n  `target_id` bigint(20) unsigned DEFAULT NULL,\n  `source_key` varchar(191) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_project_activities_source` (`source_key`),\n  KEY `idx_project_activities_project_time` (`project_id`,`occurred_at`,`id`),\n  KEY `idx_project_activities_project_type_time` (`project_id`,`activity_type`,`occurred_at`,`id`),\n  CONSTRAINT `fk_project_activities_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
     },
     {
-      "name": "project_members",
-      "sql": "CREATE TABLE `project_members` (\n  `project_id` bigint(20) unsigned NOT NULL,\n  `user_id` bigint(20) unsigned NOT NULL,\n  `created_by` bigint(20) unsigned DEFAULT NULL,\n  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (`project_id`,`user_id`),\n  KEY `idx_pm_user` (`user_id`),\n  CONSTRAINT `fk_pm_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`),\n  CONSTRAINT `fk_pm_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-    },
-    {
       "name": "project_status_logs",
       "sql": "CREATE TABLE `project_status_logs` (\n  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `project_id` bigint(20) unsigned NOT NULL,\n  `from_status` varchar(24) DEFAULT NULL,\n  `to_status` varchar(24) NOT NULL,\n  `action` varchar(16) NOT NULL,\n  `operator_id` bigint(20) unsigned NOT NULL,\n  `confirm_side` varchar(16) DEFAULT NULL,\n  `reason` varchar(1024) DEFAULT NULL,\n  `created_at` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_project_status_logs_project_time` (`project_id`,`created_at`,`id`),\n  KEY `fk_project_status_logs_operator` (`operator_id`),\n  CONSTRAINT `fk_project_status_logs_operator` FOREIGN KEY (`operator_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_project_status_logs_project` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
     },
@@ -218,14 +214,6 @@
         "type": "ACTION",
         "parent_id": 2,
         "sort_no": 3
-      },
-      {
-        "id": 13,
-        "code": "project:member",
-        "name": "管理项目成员",
-        "type": "ACTION",
-        "parent_id": 2,
-        "sort_no": 4
       },
       {
         "id": 14,
@@ -499,14 +487,6 @@
       },
       {
         "role_id": 1,
-        "permission_id": 13
-      },
-      {
-        "role_id": 2,
-        "permission_id": 13
-      },
-      {
-        "role_id": 1,
         "permission_id": 14
       },
       {
@@ -671,6 +651,10 @@
       },
       {
         "role_id": 2,
+        "permission_id": 47
+      },
+      {
+        "role_id": 4,
         "permission_id": 47
       }
     ],

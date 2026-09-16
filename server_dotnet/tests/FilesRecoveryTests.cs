@@ -374,7 +374,6 @@ public sealed class FilesRecoveryTests
                             confirm_side VARCHAR(20) NULL, name VARCHAR(100) NOT NULL,
                             responsible_user_id BIGINT UNSIGNED NULL
                         );
-                        CREATE TABLE project_members(project_id BIGINT UNSIGNED NOT NULL, user_id BIGINT UNSIGNED NOT NULL);
                         CREATE TABLE audit_logs(
                             id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                             user_id BIGINT UNSIGNED NULL, employee_no VARCHAR(50) NULL,

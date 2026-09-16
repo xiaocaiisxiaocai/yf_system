@@ -9,7 +9,7 @@ namespace Yf.Api.Infrastructure;
 internal static class DevelopmentDataReset
 {
     private static readonly string[] ClearedTables = [
-        "collaboration_reads", "message_reads", "message_images", "email_outbox", "project_activities", "project_members",
+        "collaboration_reads", "message_reads", "message_images", "email_outbox", "project_activities",
         "file_copy_refs", "project_copies",
         "project_group_status_logs", "project_status_logs", "upload_sessions", "files", "messages", "projects",
         "project_group_work_orders", "project_groups", "refresh_tokens",

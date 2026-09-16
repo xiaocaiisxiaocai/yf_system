@@ -71,7 +71,7 @@ internal sealed class DashboardService
             current,
             await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct))
             && await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:list", ct);
-        if (!canReceivePendingAcceptance)
+        if (current.IsInternal && !canReceivePendingAcceptance)
         {
             await tx.CommitAsync(ct);
             return ProjectJson.Page(Array.Empty<object>(), 0, actualPage, size);
@@ -167,7 +167,7 @@ internal sealed class DashboardService
         {
             projectCount = groups.Count,
             activeProjectCount = groups.Count(group => group.Status == ProjectStatuses.InProgress),
-            pendingConfirmations = canConfirm
+            pendingConfirmations = !current.IsInternal || canConfirm
                 ? projects.Count(project => project.Status == ProjectStatuses.PendingConfirmation
                     && project.ConfirmSide == ProjectWorkflowRules.InternalAcceptanceSide)
                 : 0,

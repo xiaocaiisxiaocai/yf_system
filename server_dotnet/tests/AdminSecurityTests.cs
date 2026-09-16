@@ -12,6 +12,8 @@ public sealed class AdminSecurityTests
         Assert.False(RoleService.IsSupplierPermissionSetAllowed(true, "供应商人员", ["project:list", "project:confirm"]));
         Assert.False(RoleService.IsSupplierPermissionSetAllowed(true, "供应商人员", ["project:list", "role:manage"]));
         Assert.False(RoleService.IsSupplierPermissionSetAllowed(true, "供应商人员", ["project:list", "project:view_all"]));
+        Assert.Contains("project:withdraw", RoleService.SupplierPermissionCodes.AsEnumerable());
+        Assert.DoesNotContain("project:member", RoleService.SupplierPermissionCodes.AsEnumerable());
     }
 
     [Fact]

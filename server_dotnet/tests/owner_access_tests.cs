@@ -3,6 +3,7 @@ using Dapper;
 using Microsoft.AspNetCore.Http;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Admin;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Projects;
@@ -44,6 +45,9 @@ public sealed class OwnerAccessTests
         var groupStatus = new ProjectGroupStatusService(audit);
         var groups = new ProjectGroupService(audit, groupStatus);
         var projects = new ProjectService(audit, database.Options, groupStatus);
+        var users = new UserService(database.Database, new PermissionService(), audit);
+        var roles = new RoleService(database.Database, new PermissionService(), audit);
+        var admin = Internal(1, "admin");
 
         await using var conn = await database.Database.OpenAsync(ct);
         Assert.Equal(OldOwnerId, (await ProjectAccessService.RequireViewAsync(conn, null, oldOwner, ProjectId, ct)).ResponsibleUserId);
@@ -77,10 +81,13 @@ public sealed class OwnerAccessTests
         await AssertOutOfScopeAsync(() => files.ListAsync(Context(creator), ProjectId, ct));
         await AssertOutOfScopeAsync(() => files.ListAsync(Context(oldMember), ProjectId, ct));
 
-        var historicalMembers = await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM project_members WHERE project_id=@ProjectId",
-            new { ProjectId }, cancellationToken: ct));
-        Assert.Equal(2, historicalMembers);
+        await AssertTransferRequiredAsync(() => users.SetStatusAsync(admin, OldOwnerId, "DISABLED", ct));
+        using (var department = JsonDocument.Parse("7002"))
+            await AssertTransferRequiredAsync(() => users.UpdateAsync(admin, OldOwnerId,
+                new UserUpdate(DepartmentId: department.RootElement.Clone()), ct));
+        await AssertTransferRequiredAsync(() => users.AssignRoleAsync(admin, OldOwnerId, [9_003], ct));
+        await AssertTransferRequiredAsync(() => users.DeleteAsync(admin, OldOwnerId, ct));
+        await AssertTransferRequiredAsync(() => roles.AssignPermissionsAsync(admin, 9_001, [], ct));
 
         await groups.UpdateAsync(conn, oldOwner, ProjectGroupId, UpdateRequest(NewOwnerId), null, ct);
 
@@ -89,21 +96,12 @@ public sealed class OwnerAccessTests
             Assert.Equal(NewOwnerId, detail.RootElement.GetProperty("responsibleUserId").GetUInt64());
         await AssertOutOfScopeAsync(() => files.ListAsync(Context(oldOwner), ProjectId, ct));
         Assert.Equal(0UL, Total(await files.ListAsync(Context(newOwner), ProjectId, ct)));
-        Assert.Equal(historicalMembers, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM project_members WHERE project_id=@ProjectId",
-            new { ProjectId }, cancellationToken: ct)));
-        Assert.False(await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-            "SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id=@ProjectId AND user_id=@NewOwnerId)",
-            new { ProjectId, NewOwnerId }, cancellationToken: ct)));
 
         var createdGroup = await groups.CreateAsync(conn, creator, CreateRequest(NewOwnerId), null, ct);
         var createdGroupId = Id(createdGroup);
         var createdId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
             "SELECT id FROM projects WHERE project_group_id=@GroupId",
             new { GroupId = createdGroupId }, cancellationToken: ct));
-        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM project_members WHERE project_id=@CreatedId",
-            new { CreatedId = createdId }, cancellationToken: ct)));
         await AssertOutOfScopeAsync(() => projects.DetailAsync(conn, creator, createdId, ct));
         await projects.DetailAsync(conn, newOwner, createdId, ct);
     }
@@ -115,11 +113,13 @@ public sealed class OwnerAccessTests
           (8001,'负责人测试供应商','ACTIVE',1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
           (8002,'其他供应商','ACTIVE',1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
         INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
-        VALUES(7001,NULL,'负责人测试课','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+        VALUES(7001,NULL,'负责人测试课','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (7002,NULL,'负责人调岗课','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
         INSERT INTO roles(id,name,description,is_built_in,status)
         VALUES
           (9001,'负责人范围用户','项目列表、创建和更新',0,'ACTIVE'),
-          (9002,'负责人全局查看','项目全局查看',0,'ACTIVE');
+          (9002,'负责人全局查看','项目全局查看',0,'ACTIVE'),
+          (9003,'负责人无项目权限','不含项目列表',0,'ACTIVE');
         INSERT INTO role_permissions(role_id,permission_id)
         SELECT 9001,id FROM permissions WHERE code IN ('project:list','project:create','project:update');
         INSERT INTO role_permissions(role_id,permission_id)
@@ -160,8 +160,6 @@ public sealed class OwnerAccessTests
         VALUES(11001,'WO-OWNER',0),(11002,'WO-OWNERLESS',0),(11003,'WO-NO-LIST',0);
         INSERT INTO project_work_orders(project_id,work_order_no,sort_no)
         VALUES(10001,'WO-OWNER',0),(10002,'WO-OWNERLESS',0),(10003,'WO-NO-LIST',0);
-        INSERT INTO project_members(project_id,user_id,created_by)
-        VALUES(10001,9101,9101),(10001,9102,9101),(10002,9102,9101);
         """;
 
     private static ProjectUpsertRequest UpdateRequest(ulong responsibleUserId) => new()
@@ -243,6 +241,13 @@ public sealed class OwnerAccessTests
         var error = await Assert.ThrowsAsync<ApiException>(action);
         Assert.Equal(403, error.Status);
         Assert.Equal(40301, error.Code);
+    }
+
+    private static async Task AssertTransferRequiredAsync(Func<Task> action)
+    {
+        var error = await Assert.ThrowsAsync<ApiException>(action);
+        Assert.Equal(400, error.Status);
+        Assert.Contains("转交负责人", error.Message, StringComparison.Ordinal);
     }
 
     private static ulong Total(object value)

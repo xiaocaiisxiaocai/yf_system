@@ -98,10 +98,6 @@ public sealed class ProjectMetadataTests
             Assert.Equal("装配课", root.GetProperty("sectionName").GetString());
             Assert.Equal("2026-12-31", root.GetProperty("expectedCompletionDate").GetString());
         }
-        Assert.False(await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-            "SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id=@ProjectId AND user_id=9002)",
-            new { ProjectId = projectId }, cancellationToken: ct)));
-
         await dictionaries.UpdateAsync(conn, actor, vendorId, new()
         {
             Type = "ROBOT_VENDOR", Name = "厂商 A", SortNo = 10, Enabled = false,

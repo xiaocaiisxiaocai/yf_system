@@ -23,7 +23,7 @@ public sealed class FileService(
     {
         var actor = AccessService.GetCurrent(context);
         await using var conn = await db.OpenAsync(ct);
-        await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
+        var project = await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
         var (page, size, offset) = QueryValues.Page(context.Request);
         var direction = context.Request.Query["direction"].ToString();
         var keyword = context.Request.Query["keyword"].ToString().Trim();
@@ -42,7 +42,7 @@ public sealed class FileService(
                    EXISTS(SELECT 1 FROM file_copy_refs fcr WHERE fcr.target_file_id=f.id) AS IsCopiedReference
             FROM files f LEFT JOIN users u ON u.id=f.uploader_id
             """ + where + " ORDER BY f.id DESC LIMIT @Size OFFSET @Offset", args, cancellationToken: ct))).ToArray();
-        var canDelete = await ProjectAccessService.CanDeleteFilesAsync(conn, null, actor, ct);
+        var canDelete = await ProjectAccessService.CanDeleteFilesAsync(conn, null, actor, project.Status, ct);
         var list = rows.Select(row => new
         {
             id = row.Id, projectId = row.ProjectId, uploaderId = row.UploaderId, direction = row.Direction,

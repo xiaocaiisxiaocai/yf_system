@@ -78,6 +78,35 @@ async function uploadFixture(context, token, projectId, fileName, bytes) {
   return { ...merged, sessionId: init.sessionId };
 }
 
+async function createProjectGroup(context, token, supplierId, ownerId, name) {
+  const vendors = await (await api(
+    context, 'GET', '/project-dictionaries?type=ROBOT_VENDOR&enabledOnly=true', undefined, token)).json();
+  assert(vendors.length > 0, 'file controls need a Robot vendor');
+  const models = await (await api(
+    context, 'GET', '/project-dictionaries?type=ROBOT_MODEL&parentId=' + vendors[0].id
+      + '&enabledOnly=true', undefined, token)).json();
+  const priorities = await (await api(
+    context, 'GET', '/project-dictionaries?type=PRIORITY&enabledOnly=true', undefined, token)).json();
+  assert(models.length > 0 && priorities.length > 0, 'file controls need model and priority options');
+  const group = await (await api(context, 'POST', '/project-groups', {
+    name,
+    description: '独立文件控件浏览器验收夹具',
+    supplierId,
+    workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
+    machineModel: '文件控件机型',
+    robotVendorId: vendors[0].id,
+    robotModelId: models[0].id,
+    responsibleUserId: ownerId,
+    priorityId: priorities[0].id,
+    expectedCompletionDate: '2099-12-31',
+    subprojectNames: [name + ' 子项目'],
+  }, token)).json();
+  const detail = await (await api(
+    context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
+  assert.equal(detail.projects.length, 1, 'file controls group must contain one subproject');
+  return detail.projects[0];
+}
+
 async function assertCanvasRendered(canvas) {
   await canvas.waitFor({ state: 'visible' });
   const result = await canvas.evaluate(element => {
@@ -129,11 +158,10 @@ async function assertInsideViewport(locator, page, label) {
       (await api(context, method, path, body, auth.accessToken, expected)).json();
     const suffix = crypto.randomBytes(5).toString('hex');
     const prefix = '文件控件-' + suffix;
-    const project = await json('POST', '/projects', {
-      name: prefix + '-项目',
-      description: '独立文件控件浏览器验收夹具',
-      supplierId: f.suppliers.a.id,
-    });
+    const owners = await json('GET', '/project-owner-options');
+    assert(owners.length > 0, 'file controls need an active project owner');
+    const project = await createProjectGroup(
+      context, auth.accessToken, f.suppliers.a.id, owners[0].id, prefix + '-项目');
     await json('PUT', `/projects/${project.id}/status`, { status: 'IN_PROGRESS' });
     assert.equal((await json('GET', `/projects/${project.id}`)).status, 'IN_PROGRESS');
 

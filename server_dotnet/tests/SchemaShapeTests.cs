@@ -87,6 +87,27 @@ public sealed class SchemaShapeTests
         Assert.True(await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
             "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='collaboration_reads')",
             cancellationToken: ct)));
+        Assert.False(await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='project_members')",
+            cancellationToken: ct)));
+        Assert.False(await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT EXISTS(SELECT 1 FROM permissions WHERE code='project:member')", cancellationToken: ct)));
+        Assert.True(await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+            """
+            SELECT EXISTS(SELECT 1 FROM role_permissions rp
+              JOIN roles r ON r.id=rp.role_id JOIN permissions p ON p.id=rp.permission_id
+              WHERE r.is_built_in=1 AND r.name='供应商人员' AND p.code='project:withdraw')
+            """, cancellationToken: ct)));
+        Assert.Equal(11, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            """
+            SELECT COUNT(*) FROM information_schema.table_constraints
+            WHERE constraint_schema=DATABASE() AND constraint_type='FOREIGN KEY'
+              AND constraint_name IN (
+                'fk_project_groups_created_by','fk_project_groups_robot_vendor','fk_project_groups_robot_model',
+                'fk_project_groups_responsible_user','fk_project_groups_section','fk_project_groups_priority',
+                'fk_projects_robot_vendor','fk_projects_robot_model','fk_projects_responsible_user',
+                'fk_projects_section','fk_projects_priority')
+            """, cancellationToken: ct)));
     }
 
     [Fact(Timeout = 60_000)]

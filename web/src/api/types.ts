@@ -175,22 +175,6 @@ export interface Message {
   readByMe: boolean
 }
 
-export interface Member {
-  userId: number
-  employeeNo: string
-  realName: string
-  deptName?: string | null
-  status: 'ACTIVE' | 'DISABLED'
-  createdAt: string
-}
-
-export interface SupplierMember {
-  userId: number
-  employeeNo: string
-  realName: string
-  status: 'ACTIVE'
-}
-
 export const PROJECT_STATUS: Record<string, { text: string; color: string }> = {
   DRAFT: { text: '草稿', color: 'gray' },
   IN_PROGRESS: { text: '进行中', color: 'arcoblue' },

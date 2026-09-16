@@ -8,6 +8,8 @@ import secrets
 import threading
 import time
 
+from test_business_acceptance import _create_started_project, _project_metadata
+
 
 def _password():
     return "Yf9!" + secrets.token_urlsafe(9)
@@ -26,7 +28,7 @@ def _new_role(client, codes):
     return role["id"]
 
 
-def _new_internal(client, Client, conn, role_id, label):
+def _new_internal(client, Client, conn, role_id, label, section_id):
     employee = "project_" + secrets.token_hex(5)
     password = _password()
     user = client.call("POST", "/api/v1/admin/users", {
@@ -34,7 +36,7 @@ def _new_internal(client, Client, conn, role_id, label):
         "password": password,
         "realName": label,
         "email": employee + "@example.invalid",
-        "departmentId": None,
+        "departmentId": section_id,
         "roleId": role_id,
     })
     with conn.cursor() as cursor:
@@ -64,14 +66,45 @@ def _new_supplier(client, Client, conn):
     return supplier, user, actor
 
 
-def _new_project(client, supplier_id, name):
-    project = client.call("POST", "/api/v1/projects", {
-        "name": name + "-" + secrets.token_hex(5),
-        "description": "owned isolated project remediation fixture",
-        "supplierId": supplier_id,
+def _new_supplier_account(client, Client, conn, supplier_id, label):
+    employee = "project_supplier_" + secrets.token_hex(4)
+    password = _password()
+    user = client.call("POST", f"/api/v1/admin/suppliers/{supplier_id}/accounts", {
+        "employeeNo": employee,
+        "password": password,
+        "realName": label,
+        "email": employee + "@example.invalid",
     })
-    client.call("PUT", f"/api/v1/projects/{project['id']}/status", {"status": "IN_PROGRESS"})
-    return project["id"]
+    with conn.cursor() as cursor:
+        cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (user["id"],))
+    actor = Client(client.base)
+    actor.login(employee, password)
+    return user, actor
+
+
+def _section(client, suffix):
+    division = client.call("POST", "/api/v1/admin/departments", {
+        "name": "项目并发事业部-" + suffix,
+        "parentId": None,
+        "sortNo": 120,
+    })
+    department = client.call("POST", "/api/v1/admin/departments", {
+        "name": "项目并发部门-" + suffix,
+        "parentId": division["id"],
+        "sortNo": 121,
+    })
+    section = client.call("POST", "/api/v1/admin/departments", {
+        "name": "项目并发课别-" + suffix,
+        "parentId": department["id"],
+        "sortNo": 122,
+    })
+    return section["id"]
+
+
+def _new_project(client, conn, supplier_id, responsible_user_id, name):
+    return _create_started_project(
+        client, conn, supplier_id, responsible_user_id,
+        name + "-" + secrets.token_hex(5))
 
 
 def _insert_file(conn, project_id, uploader_id):
@@ -199,57 +232,54 @@ def _assert_no_submit_side_effect(conn, project_id):
 
 
 def run_project_remediation_checks(client, Client, conn, check):
+    section_id = _section(client, secrets.token_hex(5))
     supplier, supplier_user, supplier_client = _new_supplier(client, Client, conn)
     dashboardless_role_id = _new_role(client, ["project:list"])
     dashboardless_user, dashboardless_client = _new_internal(
-        client, Client, conn, dashboardless_role_id, "无工作台权限用户")
-    dashboardless_client.call("GET", "/api/v1/projects")
+        client, Client, conn, dashboardless_role_id, "无工作台权限用户", section_id)
+    dashboardless_client.call("GET", "/api/v1/project-groups")
     dashboardless_client.call("GET", "/api/v1/dashboard/summary", expected=403)
     dashboardless_client.call("GET", "/api/v1/dashboard/pending-projects", expected=403)
     check("dashboard endpoints require the dashboard menu permission", True)
 
-    # Removing the project menu must revoke both the list and resource read paths,
-    # even when the actor remains an explicit member or supplier-side participant.
+    # Removing the project menu must revoke both the list and resource read paths.
     no_project_role_id = _new_role(client, [])
     no_project_user, no_project_client = _new_internal(
-        client, Client, conn, no_project_role_id, "无项目菜单成员")
-    member_manager_role_id = _new_role(client, ["project:list", "project:member"])
-    _, member_manager_client = _new_internal(
-        client, Client, conn, member_manager_role_id, "成员选择控制用户")
+        client, Client, conn, no_project_role_id, "无项目菜单用户", section_id)
     creator_role_id = _new_role(client, ["project:list", "project:create"])
     _, creator_client = _new_internal(
-        client, Client, conn, creator_role_id, "项目创建控制用户")
+        client, Client, conn, creator_role_id, "项目创建控制用户", section_id)
     create_only_role_id = _new_role(client, ["project:create"])
     _, create_only_client = _new_internal(
-        client, Client, conn, create_only_role_id, "缺项目菜单创建用户")
+        client, Client, conn, create_only_role_id, "缺项目菜单创建用户", section_id)
     unrelated_supplier = client.call("POST", "/api/v1/admin/suppliers", {
         "name": "项目选项无关供应商-" + secrets.token_hex(5),
         "remark": "owned isolated project option fixture",
     })
-    access_project = _new_project(client, supplier["id"], "项目菜单撤销")
-    client.call("PUT", f"/api/v1/projects/{access_project}/members", {
-        "userIds": [no_project_user["id"], dashboardless_user["id"]],
-    })
-    no_project_client.call("GET", "/api/v1/projects", expected=403)
+    access_project = _new_project(client, conn, supplier["id"], dashboardless_user["id"], "项目菜单撤销")
+    no_project_client.call("GET", "/api/v1/project-groups", expected=403)
     no_project_client.call("GET", f"/api/v1/projects/{access_project}", expected=403)
     no_project_client.call("GET", f"/api/v1/projects/{access_project}/messages", expected=403)
     no_project_client.call("GET", "/api/v1/supplier-options", expected=403)
-    no_project_client.call("GET", "/api/v1/internal-user-options", expected=403)
-    create_only_client.call("POST", "/api/v1/projects", {
+    no_project_client.call("GET", "/api/v1/project-owner-options", expected=403)
+    create_only_client.call("POST", "/api/v1/project-groups", {
         "name": "不应创建-" + secrets.token_hex(5),
         "description": "project menu gate regression",
         "supplierId": supplier["id"],
+        **_project_metadata(conn, dashboardless_user["id"]),
+        "subprojectNames": ["不应创建-子项目-" + secrets.token_hex(5)],
     }, expected=403)
-    dashboardless_client.call("GET", "/api/v1/internal-user-options", expected=403)
+    dashboardless_client.call("GET", "/api/v1/project-owner-options", expected=403)
     scoped_supplier_options = dashboardless_client.call("GET", "/api/v1/supplier-options")
     creator_supplier_options = creator_client.call("GET", "/api/v1/supplier-options")
-    member_options = member_manager_client.call("GET", "/api/v1/internal-user-options")
+    owner_options = creator_client.call("GET", "/api/v1/project-owner-options")
     check(
         "project options require permissions and only expose the actor's supplier scope",
         {item["id"] for item in scoped_supplier_options} == {supplier["id"]}
         and {supplier["id"], unrelated_supplier["id"]}.issubset(
             {item["id"] for item in creator_supplier_options})
-        and any(item["id"] == no_project_user["id"] for item in member_options),
+        and any(item["id"] == dashboardless_user["id"] for item in owner_options)
+        and all(item["id"] != no_project_user["id"] for item in owner_options),
     )
 
     permissions = client.call("GET", "/api/v1/permissions")
@@ -261,53 +291,32 @@ def run_project_remediation_checks(client, Client, conn, check):
         client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
             "permissionIds": [item for item in supplier_role_permissions if item != project_list_id],
         })
-        supplier_client.call("GET", "/api/v1/projects", expected=403)
+        supplier_client.call("GET", "/api/v1/project-groups", expected=403)
         supplier_client.call("GET", f"/api/v1/projects/{access_project}", expected=403)
         supplier_client.call("GET", f"/api/v1/projects/{access_project}/messages", expected=403)
     finally:
         client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
             "permissionIds": supplier_role_permissions,
         })
-    check("project menu revocation blocks existing internal members and supplier participants", True)
+    check("project menu revocation blocks existing internal users and supplier participants", True)
 
-    role_id = _new_role(client, ["project:list", "project:submit", "project:withdraw"])
+    role_id = _new_role(client, ["project:list", "project:withdraw"])
     view_all_role_id = _new_role(client, ["project:list", "project:view_all", "project:submit"])
     reviewer_role_id = _new_role(
         client, ["dashboard", "project:list", "project:view_all", "project:confirm"])
-    old_user, old_client = _new_internal(client, Client, conn, role_id, "旧提交者")
-    new_user, _ = _new_internal(client, Client, conn, role_id, "新提交者")
+    old_user, old_client = _new_internal(client, Client, conn, role_id, "旧内部用户", section_id)
+    new_user, _ = _new_internal(client, Client, conn, role_id, "新内部用户", section_id)
     view_all_user, view_all_client = _new_internal(
-        client, Client, conn, view_all_role_id, "非成员提交者")
+        client, Client, conn, view_all_role_id, "全局查看用户", section_id)
     reviewer_user, reviewer_client = _new_internal(
-        client, Client, conn, reviewer_role_id, "非成员验收人")
-
-    # The operator is mandatory and counts against the persisted 200-member
-    # limit. Rejection must happen before validating or writing requested users.
-    member_project = _new_project(client, supplier["id"], "成员最终上限")
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT MAX(id) FROM users")
-        first_unused_id = cursor.fetchone()[0] + 1000
-        cursor.execute(
-            "SELECT COUNT(*) FROM project_members WHERE project_id=%s",
-            (member_project,),
-        )
-        members_before = cursor.fetchone()[0]
-    client.call("PUT", f"/api/v1/projects/{member_project}/members", {
-        "userIds": list(range(first_unused_id, first_unused_id + 200)),
-    }, expected=400)
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT COUNT(*) FROM project_members WHERE project_id=%s",
-            (member_project,),
-        )
-        members_after = cursor.fetchone()[0]
-    check("required operator counts against project member limit",
-          members_before == members_after == 1)
+        client, Client, conn, reviewer_role_id, "全局验收用户", section_id)
+    new_supplier_user, new_supplier_client = _new_supplier_account(
+        client, Client, conn, supplier["id"], "项目并发供应商新账号")
 
     # A submit waiting behind the project's row lock must see a just-committed
     # deletion of the final file. Under the former RR snapshot it incorrectly
     # entered PENDING_CONFIRMATION.
-    deleted_project = _new_project(client, supplier["id"], "并发删除文件")
+    deleted_project = _new_project(client, conn, supplier["id"], old_user["id"], "并发删除文件")
     deleted_file = _insert_file(conn, deleted_project, old_user["id"])
     conn.begin()
     try:
@@ -318,7 +327,7 @@ def run_project_remediation_checks(client, Client, conn, check):
                 (deleted_file,),
             )
         submit_client = Client(client.base)
-        submit_client.token = client.token
+        submit_client.token = supplier_client.token
         worker, result = _request_in_thread(
             submit_client, "POST", f"/api/v1/projects/{deleted_project}/submit",
             {}, 409,
@@ -333,7 +342,7 @@ def run_project_remediation_checks(client, Client, conn, check):
           _assert_no_submit_side_effect(conn, deleted_project))
 
     # The same interleaving must observe a newly committed active upload.
-    upload_project = _new_project(client, supplier["id"], "并发活动上传")
+    upload_project = _new_project(client, conn, supplier["id"], old_user["id"], "并发活动上传")
     _insert_file(conn, upload_project, old_user["id"])
     upload_id = str(__import__("uuid").uuid4())
     conn.begin()
@@ -348,7 +357,7 @@ def run_project_remediation_checks(client, Client, conn, check):
                 (upload_id, upload_project, old_user["id"], "owned/" + upload_id),
             )
         submit_client = Client(client.base)
-        submit_client.token = client.token
+        submit_client.token = supplier_client.token
         worker, result = _request_in_thread(
             submit_client, "POST", f"/api/v1/projects/{upload_project}/submit",
             {}, 409,
@@ -364,14 +373,11 @@ def run_project_remediation_checks(client, Client, conn, check):
 
     # A previous submitter must not withdraw a newer submit that becomes visible
     # only after waiting for the project lock.
-    withdraw_project = _new_project(client, supplier["id"], "并发旧提交者撤回")
+    withdraw_project = _new_project(client, conn, supplier["id"], old_user["id"], "并发旧提交者撤回")
     _insert_file(conn, withdraw_project, old_user["id"])
-    client.call("PUT", f"/api/v1/projects/{withdraw_project}/members", {
-        "userIds": [old_user["id"], new_user["id"]],
-    })
-    old_submission = old_client.call(
+    old_submission = supplier_client.call(
         "POST", f"/api/v1/projects/{withdraw_project}/submit", {})
-    client.call("POST", f"/api/v1/projects/{withdraw_project}/reject", {
+    reviewer_client.call("POST", f"/api/v1/projects/{withdraw_project}/reject", {
         "reason": "建立旧提交历史",
         "expectedSubmissionId": old_submission["latestSubmissionId"],
     })
@@ -388,11 +394,11 @@ def run_project_remediation_checks(client, Client, conn, check):
                 "INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,"
                 "confirm_side,reason,created_at) VALUES(%s,'IN_PROGRESS','PENDING_CONFIRMATION','SUBMIT',"
                 "%s,'COMPANY',NULL,UTC_TIMESTAMP(3))",
-                (withdraw_project, new_user["id"]),
+                (withdraw_project, new_supplier_user["id"]),
             )
             current_submission_id = cursor.lastrowid
         worker, result = _request_in_thread(
-            old_client, "POST", f"/api/v1/projects/{withdraw_project}/withdraw",
+            supplier_client, "POST", f"/api/v1/projects/{withdraw_project}/withdraw",
             {"expectedSubmissionId": current_submission_id}, 403,
         )
         _wait_for_project_lock(conn, worker, withdraw_project)
@@ -407,22 +413,12 @@ def run_project_remediation_checks(client, Client, conn, check):
     check("previous submitter cannot withdraw a newer concurrent submission",
           withdraw_state == ("PENDING_CONFIRMATION", "COMPANY"))
 
-    # A view_all user may submit without becoming a project member; the explicit
-    # latest submitter still has to receive the result notification.
-    notice_project = _new_project(client, supplier["id"], "非成员提交结果通知")
+    # A view_all user cannot submit; the supplier submitter still receives the
+    # result notification even when the reviewer is selected by global scope.
+    notice_project = _new_project(client, conn, supplier["id"], old_user["id"], "供应商提交结果通知")
     _insert_file(conn, notice_project, new_user["id"])
-    with conn.cursor() as cursor:
-        cursor.execute("DELETE FROM project_members WHERE project_id=%s", (notice_project,))
-        cursor.execute(
-            "UPDATE projects SET created_by=%s WHERE id=%s",
-            (new_user["id"], notice_project),
-        )
-        cursor.execute(
-            "INSERT INTO project_members(project_id,user_id,created_by,created_at) "
-            "VALUES(%s,%s,%s,UTC_TIMESTAMP(3))",
-            (notice_project, new_user["id"], new_user["id"]),
-        )
-    notice_submission = view_all_client.call(
+    view_all_client.call("POST", f"/api/v1/projects/{notice_project}/submit", {}, expected=403)
+    notice_submission = supplier_client.call(
         "POST", f"/api/v1/projects/{notice_project}/submit", {})
     reviewer_pending = reviewer_client.call(
         "GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100")
@@ -434,7 +430,7 @@ def run_project_remediation_checks(client, Client, conn, check):
         )
         submission_recipients = [row[0] for row in cursor.fetchall()]
     check(
-        "active view_all reviewer receives the submission email and dashboard task",
+        "supplier submission reaches the active global reviewer and dashboard task",
         reviewer_user["id"] in submission_recipients
         and any(item["id"] == notice_project for item in reviewer_pending["list"]),
     )
@@ -448,5 +444,5 @@ def run_project_remediation_checks(client, Client, conn, check):
             (notice_project,),
         )
         recipients = [row[0] for row in cursor.fetchall()]
-    check("view_all nonmember submitter receives project result notification",
-          recipients == [view_all_user["id"]])
+    check("supplier submitter receives project result notification",
+          recipients == [supplier_user["id"]])

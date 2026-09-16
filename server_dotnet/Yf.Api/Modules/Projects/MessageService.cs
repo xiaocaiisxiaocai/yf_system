@@ -359,11 +359,13 @@ internal sealed class MessageService(
         string? ip,
         CancellationToken ct)
     {
+        AccessService.RequireInternal(actor);
         var initial = await LoadMessageAsync(conn, null, messageId, false, false, ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         var project = await LoadProjectAsync(conn, tx, initial.ProjectId, true, ct);
         var message = await LoadMessageAsync(conn, tx, messageId, true, false, ct);
+        AccessService.RequireInternal(current);
         await AccessService.RequirePermissionAsync(conn, tx, current, "message:delete_any", ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, message.ProjectId, false, ct);
         EnsureWritable(project.Status);

@@ -4,7 +4,7 @@ const {fs,assert,OUT,s,f,record,login,track}=require(process.env.YF_BROWSER_SUPP
  b=await chromium.launch({channel:'chrome',headless:true});const c=await b.newContext({viewport:{width:1440,height:1000}});p=await c.newPage();track(p,'layout');
  await login(p,'admin',s.adminPassword);await p.waitForURL(s.base+'/');
  const detail=f.uiProjects?.a?.id;assert(detail,'Run business before layout to cover a real detail route');
- const routes=[['dashboard','/','工作台'],['profile','/profile','个人资料'],['projects','/projects','项目协作'],['detail','/projects/'+detail,'返回项目列表'],['suppliers','/suppliers','供应商管理'],['users','/org/users','用户管理'],['depts','/org/depts','组织架构'],['roles','/rbac/roles','角色与权限'],['logs','/logs','操作日志'],['config','/system/config','系统参数'],['password','/change-password','确认修改'],['not-found','/does-not-exist','页面不存在或已被移除']];
+ const routes=[['dashboard','/','工作台'],['profile','/profile','个人资料'],['projects','/projects','项目协作'],['detail','/projects/'+detail,'返回主项目'],['suppliers','/suppliers','供应商管理'],['users','/org/users','用户管理'],['depts','/org/depts','组织架构'],['roles','/rbac/roles','角色与权限'],['logs','/logs','操作日志'],['config','/system/config','系统参数'],['password','/change-password','确认修改'],['not-found','/does-not-exist','页面不存在或已被移除']];
  const results=[];
  for(const [width,height] of [[1440,1000],[1024,900],[390,844],[1920,1080],[390,600]]){
   await p.setViewportSize({width,height});

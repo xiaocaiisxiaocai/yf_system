@@ -157,6 +157,10 @@ export default function ProjectGroupDetail() {
           { label: '预计完成日期', value: display(group.expectedCompletionDate) }, { label: '供应商', value: display(group.supplierName) },
           ...(group.completedAt ? [{ label: '自动验收时间', value: fmtTime(group.completedAt) }] : []),
         ]} />
+        <div className="project-summary-description">
+          <span className="project-summary-description-label">访问范围</span>
+          <Typography.Text>该供应商的全部启用账号均可访问此主项目及其子项目。</Typography.Text>
+        </div>
         {group.description && <div className="project-summary-description"><span className="project-summary-description-label">主项目说明</span><Typography.Text>{group.description}</Typography.Text></div>}
         <div className="project-group-overview">
           <div className="project-group-progress-main"><span>总体验收进度</span><Progress percent={progress} showText /></div>
@@ -179,7 +183,7 @@ export default function ProjectGroupDetail() {
 
       <Modal className="form-dialog" title="复制子项目" visible={!!copySource} onOk={submitCopy} onCancel={() => { if (!copying) setCopySource(null) }} confirmLoading={copying} closable={!copying} maskClosable={!copying} escToExit={!copying} okText="复制子项目" unmountOnExit>
         <Form form={copyForm} layout="vertical"><Form.Item label="新子项目名称" field="name" rules={[{ required: true, message: '请输入新子项目名称' }, textLengthRule('子项目名称', 128)]}><Input autoFocus placeholder="新子项目名称" /></Form.Item></Form>
-        <div className="dialog-note">复制公共资料和项目文件；不复制留言、验收状态、已读回执和通知。</div>
+        <div className="dialog-note">生成独立复制件，复制公共资料和当前项目文件；不复制留言、验收状态、已读回执和通知。</div>
       </Modal>
     </div>
   )

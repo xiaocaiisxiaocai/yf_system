@@ -105,7 +105,7 @@ internal sealed class ProjectCopyService(
                     VALUES(@ProjectId,@UploaderId,@Direction,@OriginalName,@StoredName,@Ext,@SizeBytes,@MimeType,
                         @Sha256,@StoragePath,'AVAILABLE',NULL,@CreatedAt)
                     """,
-                    new { ProjectId = targetProjectId, UploaderId = current.Id, item.Source.Direction,
+                    new { ProjectId = targetProjectId, item.Source.UploaderId, item.Source.Direction,
                         item.Source.OriginalName, item.StoredName, item.Source.Ext, item.Source.SizeBytes,
                         item.Source.MimeType, item.Source.Sha256, item.StoragePath, CreatedAt = createdAt },
                     tx, cancellationToken: ct));
@@ -343,7 +343,7 @@ internal sealed class ProjectCopyService(
 
     private static async Task<CopyFileRow[]> LoadFilesForUpdateAsync(MySqlConnection conn, MySqlTransaction tx,
         ulong projectId, CancellationToken ct) => (await conn.QueryAsync<CopyFileRow>(new CommandDefinition(
-        "SELECT id AS Id,direction AS Direction,original_name AS OriginalName,ext AS Ext,size_bytes AS SizeBytes,mime_type AS MimeType,sha256 AS Sha256,storage_path AS StoragePath,status AS Status FROM files WHERE project_id=@ProjectId ORDER BY id FOR UPDATE",
+        "SELECT id AS Id,uploader_id AS UploaderId,direction AS Direction,original_name AS OriginalName,ext AS Ext,size_bytes AS SizeBytes,mime_type AS MimeType,sha256 AS Sha256,storage_path AS StoragePath,status AS Status FROM files WHERE project_id=@ProjectId ORDER BY id FOR UPDATE",
         new { ProjectId = projectId }, tx, cancellationToken: ct))).ToArray();
 
     private static Task<ulong> ActiveUploadCountAsync(MySqlConnection conn, MySqlTransaction tx, ulong projectId, CancellationToken ct) =>
@@ -404,7 +404,7 @@ internal sealed class ProjectCopyService(
 
     private sealed record ProjectCopySnapshot(ProjectRow Project, CopyFileRow[] Files, DateTime CopiedAt);
     private sealed record PreparedCopy(CopyFileRow Source, string StoredName, string StoragePath, string TargetPath);
-    private sealed record CopyFileRow(ulong Id, string Direction, string OriginalName, string Ext, ulong SizeBytes,
+    private sealed record CopyFileRow(ulong Id, ulong UploaderId, string Direction, string OriginalName, string Ext, ulong SizeBytes,
         string? MimeType, string? Sha256, string StoragePath, string Status);
     private sealed class CopyHistoryRow
     {

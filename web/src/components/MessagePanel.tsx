@@ -535,6 +535,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
       <div className="section-heading">
         <div>
           <h2>协作留言（{total}）</h2>
+          <Typography.Text type="secondary">已读回执仅统计项目负责人和关联供应商的全部启用账号。</Typography.Text>
         </div>
       </div>
 
@@ -614,7 +615,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
                       <Popover
                         content={
                           <div style={{ maxWidth: 320 }}>
-                            <Typography.Text bold style={{ fontSize: 12 }}>已读人员</Typography.Text>
+                            <Typography.Text bold style={{ fontSize: 12 }}>已读协作账号</Typography.Text>
                             <ReceiptBody id={m.id} refreshKey={receiptRefresh} onLoaded={receiveReceipt} />
                           </div>
                         }
@@ -625,7 +626,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
                           size="mini"
                           type="text"
                           status={m.readCount >= m.totalCount && m.totalCount > 0 ? 'success' : undefined}
-                          aria-label={`查看已读人员：${m.readCount}/${m.totalCount}`}
+                          aria-label={`查看留言回执：${m.readCount}/${m.totalCount}`}
                           icon={<IconCheck />}
                         >
                           已读 {m.readCount}/{m.totalCount}
@@ -670,7 +671,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
 
       <Drawer
         width={420}
-        title="已读回执"
+        title="留言已读回执"
         visible={!!receipt || !!receiptRequest}
         onCancel={() => {
           receiptSeq.current += 1
@@ -688,6 +689,9 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
         )}
         {receipt && (
           <>
+            <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+              统计项目负责人和关联供应商的全部启用账号，不包含仅有全局查看权限的人员。
+            </Typography.Text>
             <Typography.Text bold>已读（{receipt.readers.length}）</Typography.Text>
             <List
               size="small"

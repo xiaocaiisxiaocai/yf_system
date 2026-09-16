@@ -30,7 +30,7 @@ from test_role_fixtures import assert_admin_only_initialization, install_legacy_
 from test_system_contracts import run_system_checks
 from test_project_remediation import run_project_remediation_checks
 from test_collaboration_contracts import run_collaboration_checks
-from test_business_acceptance import run_business_acceptance
+from test_business_acceptance import _create_project_group, run_business_acceptance
 from test_workflow_acceptance import run_workflow_acceptance
 from test_manual_supplier_roles import run_manual_supplier_role_checks
 
@@ -123,6 +123,29 @@ def stop_process(owned):
             owned.wait()
 
 
+def assign_admin_project_section(client, connection, admin_id):
+    """Give the disposable admin fixture a valid v10 project-owner section."""
+    suffix = secrets.token_hex(5)
+    division = client.call("POST", "/api/v1/admin/departments", {
+        "name": "隔离测试事业部-" + suffix,
+        "parentId": None,
+        "sortNo": 130,
+    })
+    department = client.call("POST", "/api/v1/admin/departments", {
+        "name": "隔离测试部门-" + suffix,
+        "parentId": division["id"],
+        "sortNo": 131,
+    })
+    section = client.call("POST", "/api/v1/admin/departments", {
+        "name": "隔离测试课别-" + suffix,
+        "parentId": department["id"],
+        "sortNo": 132,
+    })
+    with connection.cursor() as cursor:
+        cursor.execute("UPDATE users SET department_id=%s WHERE id=%s", (section["id"], admin_id))
+    return admin_id
+
+
 try:
     with conn.cursor() as cursor:
         cursor.execute(f"CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
@@ -174,9 +197,15 @@ try:
             )
             migration_supplier_id = cursor.lastrowid
             cursor.execute(
-                "INSERT INTO projects(name,description,supplier_id,status,confirm_side,created_by) "
-                "VALUES('迁移待验收项目','must move to company',%s,'PENDING_CONFIRMATION','SUPPLIER',%s)",
-                (migration_supplier_id, admin_user_id),
+                "INSERT INTO project_groups(name,description,supplier_id,status,created_by,responsible_user_id) "
+                "VALUES('迁移待验收主项目','must move to company',%s,'IN_PROGRESS',%s,%s)",
+                (migration_supplier_id, admin_user_id, admin_user_id),
+            )
+            pending_migration_group_id = cursor.lastrowid
+            cursor.execute(
+                "INSERT INTO projects(project_group_id,name,description,supplier_id,status,confirm_side,created_by,responsible_user_id) "
+                "VALUES(%s,'迁移待验收项目','must move to company',%s,'PENDING_CONFIRMATION','SUPPLIER',%s,%s)",
+                (pending_migration_group_id, migration_supplier_id, admin_user_id, admin_user_id),
             )
             pending_migration_project_id = cursor.lastrowid
             cursor.execute(
@@ -192,8 +221,12 @@ try:
                 (migration_reviewer_id,),
             )
             cursor.execute(
-                "INSERT INTO project_members(project_id,user_id,created_by) VALUES(%s,%s,%s)",
-                (pending_migration_project_id, migration_reviewer_id, admin_user_id),
+                "UPDATE project_groups SET responsible_user_id=%s WHERE id=%s",
+                (migration_reviewer_id, pending_migration_group_id),
+            )
+            cursor.execute(
+                "UPDATE projects SET responsible_user_id=%s WHERE id=%s",
+                (migration_reviewer_id, pending_migration_project_id),
             )
             cursor.executemany(
                 "INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,"
@@ -221,9 +254,15 @@ try:
                 (pending_migration_project_id, migration_reviewer_id),
             )
             cursor.execute(
-                "INSERT INTO projects(name,description,supplier_id,status,confirm_side,created_by) "
-                "VALUES('迁移已完成项目','must remain unchanged',%s,'COMPLETED',NULL,%s)",
-                (migration_supplier_id, admin_user_id),
+                "INSERT INTO project_groups(name,description,supplier_id,status,created_by,responsible_user_id,completed_at) "
+                "VALUES('迁移已完成主项目','must remain unchanged',%s,'COMPLETED',%s,%s,UTC_TIMESTAMP(3))",
+                (migration_supplier_id, admin_user_id, admin_user_id),
+            )
+            completed_migration_group_id = cursor.lastrowid
+            cursor.execute(
+                "INSERT INTO projects(project_group_id,name,description,supplier_id,status,confirm_side,created_by,responsible_user_id) "
+                "VALUES(%s,'迁移已完成项目','must remain unchanged',%s,'COMPLETED',NULL,%s,%s)",
+                (completed_migration_group_id, migration_supplier_id, admin_user_id, admin_user_id),
             )
             completed_migration_project_id = cursor.lastrowid
             cursor.executemany(
@@ -244,7 +283,7 @@ try:
             cursor.execute("SELECT password_hash FROM users WHERE employee_no='admin'")
             check(".NET migration from baseline 16 is repeatable and preserves users", cursor.fetchone()[0] == preserved_hash)
             cursor.execute("SELECT COUNT(*) FROM yf_schema_migrations")
-            check(".NET owns schema version history", cursor.fetchone()[0] == 7)
+            check(".NET owns schema v10 version history", cursor.fetchone()[0] == 10)
             cursor.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='collaboration_reads'")
             check("collaboration read receipt migration creates its additive table", cursor.fetchone()[0] == 1)
             cursor.execute("SELECT session_id FROM refresh_tokens WHERE id=%s", (legacy_token_id,))
@@ -395,11 +434,11 @@ try:
                     time.sleep(0.1)
             else:
                 raise RuntimeError("Loopback test host health timeout")
-            client.call("GET", "/api/v1/projects", expected=401)
+            client.call("GET", "/api/v1/project-groups", expected=401)
             check("anonymous API denied", True)
             result = client.login("admin", initial)
             check("bootstrap direct login enforces password change without CAPTCHA", result["mustChangePassword"])
-            client.call("GET", "/api/v1/projects", expected=403)
+            client.call("GET", "/api/v1/project-groups", expected=403)
             client.call("PUT", "/api/v1/auth/password", {"oldPassword": initial, "newPassword": changed})
             client.call("GET", "/api/v1/auth/profile", expected=401)
             result = client.login("admin", changed)
@@ -412,7 +451,7 @@ try:
                 run_identity_checks(client, Client, conn, check)
                 run_project_remediation_checks(client, Client, conn, check)
                 run_collaboration_checks(client, Client, conn, check)
-                for path in ("/dashboard/summary", "/dashboard/pending-projects", "/departments", "/permissions", "/supplier-options", "/internal-user-options", "/admin/users", "/admin/roles", "/admin/suppliers", "/admin/user-role-options", "/admin/system/configs", "/admin/system/mail-status", "/admin/audit-logs"):
+                for path in ("/dashboard/summary", "/dashboard/pending-projects", "/departments", "/permissions", "/supplier-options", "/project-owner-options", "/admin/users", "/admin/roles", "/admin/suppliers", "/admin/user-role-options", "/admin/system/configs", "/admin/system/mail-status", "/admin/audit-logs"):
                     client.call("GET", "/api/v1" + path)
                     check("read contract " + path, True)
                 configs = client.call("GET", "/api/v1/admin/system/configs")
@@ -424,7 +463,9 @@ try:
                 run_system_checks(client, conn, check)
             supplier = client.call("POST", "/api/v1/admin/suppliers", {"name": ".NET 隔离供应商", "remark": "temporary"})
             sid = supplier["id"]
-            project = client.call("POST", "/api/v1/projects", {"name": ".NET 隔离项目", "description": "isolated regression", "supplierId": sid})
+            owner_id = assign_admin_project_section(client, conn, admin_user_id)
+            _, project = _create_project_group(
+                client, conn, sid, owner_id, ".NET 隔离项目")
             pid = project["id"]
             client.call("PUT", f"/api/v1/projects/{pid}/status", {"status": "IN_PROGRESS"})
             check("supplier/project creation and project start", True)
@@ -464,7 +505,7 @@ try:
             client.call("POST", "/api/v1/messages/read", {"ids": [mid]})
             client.call("GET", f"/api/v1/messages/{mid}/reads")
             check("message creation/read tracking", True)
-            for suffix in ("", "/summary", "/members", "/supplier-members", "/activities", "/files", "/messages"):
+            for suffix in ("", "/summary", "/activities", "/files", "/messages"):
                 client.call("GET", f"/api/v1/projects/{pid}" + suffix)
             check("project detail and collaboration read routes", True)
             flow_password = "Yf9!" + secrets.token_urlsafe(9)
@@ -472,13 +513,16 @@ try:
             flow_user = client.call("POST", f"/api/v1/admin/suppliers/{sid}/accounts", {"employeeNo": "workflow_supplier", "password": flow_password, "realName": "验收供应商", "email": "workflow@example.invalid"})
             supplier_client = Client(base)
             first_flow_login = supplier_client.login("workflow_supplier", flow_password)
-            supplier_client.call("GET", "/api/v1/projects", expected=403)
+            supplier_client.call("GET", "/api/v1/project-groups", expected=403)
             supplier_client.call("PUT", "/api/v1/auth/password", {"oldPassword": flow_password, "newPassword": changed_flow_password})
             supplier_client.call("GET", "/api/v1/auth/profile", expected=401)
             second_flow_login = supplier_client.login("workflow_supplier", changed_flow_password)
             check("workflow supplier changes initial password through API", first_flow_login["mustChangePassword"] and not second_flow_login["mustChangePassword"] and second_flow_login["user"]["id"] == flow_user["id"])
-            first_submission = client.call("POST", f"/api/v1/projects/{pid}/submit", {})
-            client.call("POST", f"/api/v1/projects/{pid}/withdraw", {
+            supplier_groups = supplier_client.call("GET", "/api/v1/project-groups")
+            check("supplier account sees its supplier enterprise groups",
+                  any(item["id"] == project["projectGroupId"] for item in supplier_groups["list"]))
+            first_submission = supplier_client.call("POST", f"/api/v1/projects/{pid}/submit", {})
+            supplier_client.call("POST", f"/api/v1/projects/{pid}/withdraw", {
                 "expectedSubmissionId": first_submission["latestSubmissionId"],
             })
             supplier_submission = supplier_client.call("POST", f"/api/v1/projects/{pid}/submit", {})
@@ -486,19 +530,19 @@ try:
                 "reason": "回归测试驳回",
                 "expectedSubmissionId": supplier_submission["latestSubmissionId"],
             })
-            self_submission = client.call(
+            final_submission = supplier_client.call(
                 "POST", f"/api/v1/projects/{pid}/submit", {"confirmSide": "COMPANY"})
             completed_project = client.call("POST", f"/api/v1/projects/{pid}/confirm", {
-                "expectedSubmissionId": self_submission["latestSubmissionId"],
+                "expectedSubmissionId": final_submission["latestSubmissionId"],
             })
             check(
                 "internal and supplier submission with internal self-confirm workflow",
                 first_submission["confirmSide"] == "COMPANY"
                 and supplier_submission["confirmSide"] == "COMPANY"
-                and self_submission["confirmSide"] == "COMPANY"
+                and final_submission["confirmSide"] == "COMPANY"
                 and all(
                     isinstance(item["latestSubmissionId"], int)
-                    for item in (first_submission, supplier_submission, self_submission)
+                    for item in (first_submission, supplier_submission, final_submission)
                 )
                 and completed_project["status"] == "COMPLETED"
                 and completed_project["latestSubmissionId"] is None,

@@ -22,7 +22,7 @@ public sealed class MessageReceiptTests
             VALUES(100,'回执供应商','ACTIVE',1),(200,'其他供应商','ACTIVE',1);
             INSERT INTO roles(id,name,description,is_built_in,status)
             VALUES
-                (9001,'回执内部成员','回执测试角色',0,'ACTIVE'),
+                (9001,'回执项目负责人','回执测试角色',0,'ACTIVE'),
                 (9002,'回执供应商人员','回执测试角色',0,'ACTIVE'),
                 (9003,'回执全局查看者','回执测试角色',0,'ACTIVE');
             INSERT INTO role_permissions(role_id,permission_id)
@@ -31,13 +31,14 @@ public sealed class MessageReceiptTests
             CROSS JOIN permissions p
             WHERE p.code='project:list'
                OR (test_roles.role_id IN (9001,9003) AND p.code='project:confirm')
+               OR (test_roles.role_id=9002 AND p.code IN ('file:delete','message:delete_any'))
                OR (test_roles.role_id=9003 AND p.code='project:view_all');
             INSERT INTO users
                 (id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password)
             VALUES
-                (101,'receipt-member','unused','项目成员','','INTERNAL',NULL,'ACTIVE',0),
+                (101,'receipt-owner','unused','项目负责人','','INTERNAL',NULL,'ACTIVE',0),
                 (102,'receipt-outsider','unused','项目外用户','','INTERNAL',NULL,'ACTIVE',0),
-                (103,'receipt-old-member','unused','旧项目成员','','INTERNAL',NULL,'ACTIVE',0),
+                (103,'receipt-unrelated','unused','无关内部用户','','INTERNAL',NULL,'ACTIVE',0),
                 (104,'receipt-view-all','unused','全局查看者','','INTERNAL',NULL,'ACTIVE',0),
                 (201,'receipt-supplier','unused','供应商读者','','SUPPLIER',100,'ACTIVE',0),
                 (202,'receipt-supplier-peer','unused','供应商同事','','SUPPLIER',100,'ACTIVE',0),
@@ -50,8 +51,6 @@ public sealed class MessageReceiptTests
             VALUES
                 (1001,5001,'回执项目',100,'IN_PROGRESS',1,101),
                 (2001,5002,'其他项目',200,'IN_PROGRESS',102,102);
-            INSERT INTO project_members(project_id,user_id,created_by)
-            VALUES(1001,101,1),(1001,103,1);
             INSERT INTO messages(id,project_id,sender_id,content,status)
             VALUES
                 (10001,1001,1,'不可由回执接口返回的正文','NORMAL'),
@@ -65,6 +64,21 @@ public sealed class MessageReceiptTests
         var outsider = new CurrentUser(102, "receipt-outsider", "INTERNAL", null);
 
         await using var conn = await database.Database.OpenAsync(ct);
+        var fileDelete = await Assert.ThrowsAsync<ApiException>(() =>
+            ProjectAccessService.RequireFileDeleteAsync(conn, null, supplier, 1001, ct));
+        Assert.Equal(403, fileDelete.Status);
+        Assert.False(await ProjectAccessService.CanDeleteFilesAsync(
+            conn, null, supplier, ProjectStatuses.InProgress, ct));
+        Assert.True(await ProjectAccessService.CanDeleteFilesAsync(
+            conn, null, admin, ProjectStatuses.InProgress, ct));
+        Assert.False(await ProjectAccessService.CanDeleteFilesAsync(
+            conn, null, admin, ProjectStatuses.Draft, ct));
+        var messageDelete = await Assert.ThrowsAsync<ApiException>(() =>
+            service.DeleteAsync(conn, supplier, 10001, null, ct));
+        Assert.Equal(403, messageDelete.Status);
+        Assert.Equal("NORMAL", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT status FROM messages WHERE id=10001", cancellationToken: ct)));
+
         var project = new ProjectRow { Id = 1001, SupplierId = 100, ResponsibleUserId = 101 };
         var participants = await ProjectNotificationService.ParticipantsAsync(conn, null, project, ct);
         Assert.Equal([101UL, 201UL, 202UL], participants.Select(user => user.Id).ToArray());

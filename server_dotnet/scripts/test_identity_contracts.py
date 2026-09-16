@@ -43,10 +43,13 @@ def run_identity_checks(client, Client, conn, check):
     # role contract, and a reset that revokes sessions.
     roles = client.call("GET", "/api/v1/admin/user-role-options")
     ordinary_role = next(role for role in roles if role["name"] not in ("系统管理员", "供应商人员"))
+    department = client.call("POST", "/api/v1/admin/departments", {
+        "name": "契约测试组织-" + secrets.token_hex(4), "parentId": None, "sortNo": 0
+    })
     boundary_suffix = secrets.token_hex(4)
     boundary_payload = {
         "realName": "密码边界用户", "email": f"password-boundary-{boundary_suffix}@example.invalid",
-        "departmentId": None, "roleId": ordinary_role["id"],
+        "departmentId": department["id"], "roleId": ordinary_role["id"],
     }
     too_short = client.call("POST", "/api/v1/admin/users", {
         **boundary_payload, "employeeNo": "pw5_" + boundary_suffix, "password": "A1!bc",
@@ -78,9 +81,6 @@ def run_identity_checks(client, Client, conn, check):
 
     crud_password = _password()
     employee = "crud_" + secrets.token_hex(5)
-    department = client.call("POST", "/api/v1/admin/departments", {
-        "name": "契约临时组织-" + secrets.token_hex(4), "parentId": None, "sortNo": 0
-    })
     account = client.call("POST", "/api/v1/admin/users", {
         "employeeNo": employee, "password": crud_password, "realName": "契约临时用户",
         "email": employee + "@example.invalid", "departmentId": department["id"],
@@ -99,11 +99,14 @@ def run_identity_checks(client, Client, conn, check):
     invalid_zero_role = client.call("PUT", f"/api/v1/admin/users/{user_id}", {
         "roleId": 0,
     }, expected=400)
+    clearing = client.call("PUT", f"/api/v1/admin/users/{user_id}", {
+        "departmentId": None, "roleId": ordinary_role["id"]
+    }, expected=400)
     updated = client.call("PUT", f"/api/v1/admin/users/{user_id}", {
         "realName": "契约更新用户", "email": employee + ".updated@example.invalid",
-        "departmentId": None, "roleId": ordinary_role["id"]
+        "roleId": ordinary_role["id"]
     })
-    cleared_page = client.call("GET", "/api/v1/admin/users?" + urllib.parse.urlencode({
+    updated_page = client.call("GET", "/api/v1/admin/users?" + urllib.parse.urlencode({
         "keyword": employee,
     }))
     with conn.cursor() as cursor:
@@ -116,14 +119,15 @@ def run_identity_checks(client, Client, conn, check):
           and retained_page["total"] == 1
           and retained_page["list"][0]["departmentId"] == department["id"]
           and retained_department_id == department["id"])
-    check("identity explicit null department update clears the assignment and audit delta",
-          updated["realName"] == "契约更新用户" and updated["roleId"] == ordinary_role["id"]
-          and updated["departmentId"] is None
-          and cleared_page["total"] == 1 and cleared_page["list"][0]["departmentId"] is None
-          and persisted_department_id is None
-          and update_detail["changedFields"] == ["realName", "email", "departmentId"]
+    check("identity explicit null department update is rejected and the required assignment is preserved",
+          clearing["code"] == 40001
+          and updated["realName"] == "契约更新用户" and updated["roleId"] == ordinary_role["id"]
+          and updated["departmentId"] == department["id"]
+          and updated_page["total"] == 1 and updated_page["list"][0]["departmentId"] == department["id"]
+          and persisted_department_id == department["id"]
+          and update_detail["changedFields"] == ["realName", "email"]
           and update_detail["oldDepartmentId"] == department["id"]
-          and update_detail["newDepartmentId"] is None)
+          and update_detail["newDepartmentId"] == department["id"])
     check("identity explicit zero role is rejected", invalid_zero_role["code"] == 40001)
     email_keyword = urllib.parse.quote(updated["email"])
     email_results = client.call("GET", f"/api/v1/admin/users?keyword={email_keyword}")
@@ -133,7 +137,6 @@ def run_identity_checks(client, Client, conn, check):
     client.call("PUT", f"/api/v1/admin/users/{user_id}/password", {"newPassword": _password()})
     client.call("PUT", f"/api/v1/admin/users/{user_id}/roles", {"roleIds": [ordinary_role["id"]]})
     client.call("DELETE", f"/api/v1/admin/users/{user_id}")
-    client.call("DELETE", f"/api/v1/admin/departments/{department['id']}")
     check("identity account status reset role and delete", disabled["status"] == "DISABLED")
 
     # Self-service profile updates are part of the authentication audit category and retain
@@ -183,7 +186,7 @@ def run_identity_checks(client, Client, conn, check):
     limited_role_manager_user = client.call("POST", "/api/v1/admin/users", {
         "employeeNo": limited_role_manager_employee, "password": limited_role_manager_password,
         "realName": "受限角色管理员", "email": limited_role_manager_employee + "@example.invalid",
-        "departmentId": None, "roleId": limited_role_manager["id"]
+        "departmentId": department["id"], "roleId": limited_role_manager["id"]
     })
     with conn.cursor() as cursor:
         cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (limited_role_manager_user["id"],))
@@ -206,7 +209,7 @@ def run_identity_checks(client, Client, conn, check):
     delegated_employee = "delegate_" + secrets.token_hex(4)
     delegated = client.call("POST", "/api/v1/admin/users", {
         "employeeNo": delegated_employee, "password": delegated_password, "realName": "委派管理员",
-        "email": delegated_employee + "@example.invalid", "departmentId": None,
+        "email": delegated_employee + "@example.invalid", "departmentId": department["id"],
         "roleId": delegated_role["id"]
     })
     with conn.cursor() as cursor:
@@ -219,7 +222,7 @@ def run_identity_checks(client, Client, conn, check):
     delegated_client.call("GET", "/api/v1/admin/suppliers", expected=403)
     delegated_client.call("POST", "/api/v1/admin/users", {
         "employeeNo": "ceiling_" + secrets.token_hex(4), "password": _password(), "realName": "越权测试",
-        "email": "ceiling." + secrets.token_hex(4) + "@example.invalid", "departmentId": None,
+        "email": "ceiling." + secrets.token_hex(4) + "@example.invalid", "departmentId": department["id"],
         "roleId": admin_role["id"]
     }, expected=403)
     check("identity delegated read boundaries and permission ceiling",
@@ -229,7 +232,7 @@ def run_identity_checks(client, Client, conn, check):
     secondary_admin = client.call("POST", "/api/v1/admin/users", {
         "employeeNo": "secondary_admin_" + secrets.token_hex(3), "password": _password(),
         "realName": "停用管理员", "email": "secondary.admin." + secrets.token_hex(4) + "@example.invalid",
-        "departmentId": None, "roleId": admin_role["id"]
+        "departmentId": department["id"], "roleId": admin_role["id"]
     })
     client.call("PUT", f"/api/v1/admin/users/{secondary_admin['id']}/status", {"status": "DISABLED"})
     reassigned_secondary = client.call("PUT", f"/api/v1/admin/users/{secondary_admin['id']}/roles", {
@@ -245,7 +248,7 @@ def run_identity_checks(client, Client, conn, check):
     refresh_employee = "refresh_" + secrets.token_hex(4)
     refresh_user = client.call("POST", "/api/v1/admin/users", {
         "employeeNo": refresh_employee, "password": refresh_password, "realName": "刷新重放用户",
-        "email": refresh_employee + "@example.invalid", "departmentId": None, "roleId": ordinary_role["id"]
+        "email": refresh_employee + "@example.invalid", "departmentId": department["id"], "roleId": ordinary_role["id"]
     })
     with conn.cursor() as cursor:
         cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (refresh_user["id"],))
@@ -402,12 +405,14 @@ def run_identity_checks(client, Client, conn, check):
     logout_employee = "logout_" + secrets.token_hex(4)
     logout_user = client.call("POST", "/api/v1/admin/users", {
         "employeeNo": logout_employee, "password": logout_password, "realName": "注销审计用户",
-        "email": logout_employee + "@example.invalid", "departmentId": None, "roleId": ordinary_role["id"]
+        "email": logout_employee + "@example.invalid", "departmentId": department["id"], "roleId": ordinary_role["id"]
     })
     with conn.cursor() as cursor:
         cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (logout_user["id"],))
     logout_client = Client(client.base)
     logout_client.login(logout_employee, logout_password)
+    logout_access = logout_client.token
+    logout_refresh = _refresh_cookie(logout_client)
     logout_client.call("POST", "/api/v1/auth/logout")
     logout_client.call("POST", "/api/v1/auth/logout")
     with conn.cursor() as cursor:
@@ -415,10 +420,14 @@ def run_identity_checks(client, Client, conn, check):
         logout_rows = cursor.fetchall()
         cursor.execute("SELECT COUNT(*) FROM refresh_tokens WHERE user_id=%s AND revoked=0", (logout_user["id"],))
         active_logout_tokens = cursor.fetchone()[0]
+    logout_detail = json.loads(logout_rows[0][2]) if len(logout_rows) == 1 else {}
     check("identity logout audits one valid revocation without credential disclosure",
           active_logout_tokens == 0 and len(logout_rows) == 1
-          and logout_rows[0][0] is None and logout_rows[0][1] is None and logout_rows[0][2] is None
-          and bool(logout_rows[0][3]))
+          and logout_rows[0][0] is None and logout_rows[0][1] is None
+          and logout_detail.get("auditContext", {}).get("source") == "HTTP"
+          and bool(logout_rows[0][3])
+          and all(secret not in logout_rows[0][2]
+                  for secret in (logout_password, logout_access, logout_refresh)))
 
     run_identity_lifecycle_checks(client, Client, conn, check)
 
@@ -431,6 +440,11 @@ def run_identity_lifecycle_checks(client, Client, conn, check):
     user_manage = next(item["id"] for item in permissions if item["code"] == "user:manage")
     ordinary_role = next(role for role in client.call("GET", "/api/v1/admin/user-role-options")
                          if role["name"] == "内部成员")
+    lifecycle_department = client.call("POST", "/api/v1/admin/departments", {
+        "name": "身份生命周期组织-" + suffix,
+        "parentId": None,
+        "sortNo": 0,
+    })
 
     lifecycle_role = client.call("POST", "/api/v1/admin/roles", {
         "name": "身份生命周期角色-" + suffix,
@@ -447,7 +461,7 @@ def run_identity_lifecycle_checks(client, Client, conn, check):
         "password": password0,
         "realName": "身份生命周期用户",
         "email": employee_no + "@example.invalid",
-        "departmentId": None,
+        "departmentId": lifecycle_department["id"],
         "roleId": role_id,
     })
     user_id = lifecycle_user["id"]
@@ -458,7 +472,7 @@ def run_identity_lifecycle_checks(client, Client, conn, check):
     # First-password flow: only profile/password/logout are available, and changing the
     # password revokes both halves of the session before the new password can be used.
     actor, first_login = _login_attempt(Client, client.base, employee_no, password0)
-    forced = actor.call("GET", "/api/v1/projects", expected=403)
+    forced = actor.call("GET", "/api/v1/project-groups", expected=403)
     refresh0 = _refresh_cookie(actor)
     password1 = _password()
     actor.call("PUT", "/api/v1/auth/password", {
@@ -516,11 +530,16 @@ def run_identity_lifecycle_checks(client, Client, conn, check):
         active_after_second_login = cursor.fetchone()[0]
         cursor.execute("SELECT employee_no,detail FROM audit_logs WHERE user_id=%s AND action='PASSWORD_CHANGE' ORDER BY id", (user_id,))
         self_change_logs = cursor.fetchall()
+    self_change_details = [json.loads(row[1]) for row in self_change_logs]
     check("identity ordinary password change invalidates the previous credential and session",
           previous_password_result["code"] == 40101 and normal_login["mustChangePassword"] is False
           and password2_hash != password1_hash and flag_after_second_change == 0
           and active_after_second_login == 1 and len(self_change_logs) == 2
-          and all(row[0] == employee_no and row[1] is None for row in self_change_logs))
+          and all(row[0] == employee_no for row in self_change_logs)
+          and all(detail.get("auditContext", {}).get("source") == "HTTP"
+                  for detail in self_change_details)
+          and all(secret not in " ".join(row[1] for row in self_change_logs)
+                  for secret in (password0, password1, password2)))
 
     # An administrator reset and disable must revoke an already active internal session.
     refresh2 = _refresh_cookie(actor)

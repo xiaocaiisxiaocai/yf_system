@@ -29,21 +29,6 @@ internal static class ProjectWorkflowRules
         }
     }
 
-    internal static ulong[] NormalizeMemberIds(IReadOnlyCollection<ulong> requestedIds, ulong actorId)
-    {
-        if (requestedIds.Count > 200)
-        {
-            throw ApiException.BadRequest("成员数量超过上限");
-        }
-
-        var ids = requestedIds.Append(actorId).Distinct().Order().ToArray();
-        if (ids.Length > 200)
-        {
-            throw ApiException.BadRequest("成员数量超过上限");
-        }
-        return ids;
-    }
-
     internal static string NormalizeConfirmSide(string? value)
     {
         if (value is null)
@@ -63,6 +48,14 @@ internal static class ProjectWorkflowRules
         if (!actor.IsInternal)
         {
             throw ApiException.Forbidden("项目验收确认和驳回仅限公司内部用户");
+        }
+    }
+
+    internal static void RequireSupplierSubmitter(CurrentUser actor)
+    {
+        if (actor.UserType != "SUPPLIER")
+        {
+            throw ApiException.Forbidden("项目验收仅允许供应商用户提交");
         }
     }
 

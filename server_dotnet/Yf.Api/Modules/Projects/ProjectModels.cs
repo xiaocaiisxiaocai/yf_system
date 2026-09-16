@@ -98,12 +98,6 @@ public sealed class ProjectDecisionRequest
     public ulong? ExpectedSubmissionId { get; init; }
 }
 
-public sealed class ProjectMembersRequest
-{
-    [JsonPropertyName("userIds")]
-    public ulong[]? UserIds { get; init; }
-}
-
 public sealed class MessageCreateRequest
 {
     [JsonPropertyName("content")]

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Badge, Button, Card, DatePicker, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Typography,
+  Badge, Button, Card, DatePicker, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
@@ -171,6 +171,10 @@ export default function ProjectList() {
   }
 
   const openEdit = (group: ProjectGroup) => {
+    if (group.pendingCount > 0) {
+      Message.info('存在待公司验收的子项目，验收处理完成后才能编辑主项目资料')
+      return
+    }
     setEditing(group)
     form.setFieldsValue({
       name: group.name, description: group.description, supplierId: group.supplierId, workOrderNos: group.workOrderNos,
@@ -252,10 +256,14 @@ export default function ProjectList() {
     { title: '供应商', dataIndex: 'supplierName', width: 110, ellipsis: true, render: displayText },
     { title: '子项目进度', width: 142, align: 'center' as const, render: (_: unknown, row: ProjectGroup) => <div className="project-group-progress"><span>{row.completedCount}/{row.subprojectCount} 已验收</span>{row.pendingCount > 0 && <Tag size="small" color="orange">待验收 {row.pendingCount}</Tag>}</div> },
     { title: '状态', dataIndex: 'status', width: 90, align: 'center' as const, render: (value: string) => <Tag color={PROJECT_STATUS[value]?.color}>{PROJECT_STATUS[value]?.text || value}</Tag> },
-    { title: '未读', dataIndex: 'unreadMessages', width: 68, align: 'center' as const, render: (value: number) => value > 0 ? <Badge count={value} /> : '-' },
+    { title: '未读留言', dataIndex: 'unreadMessages', width: 88, align: 'center' as const, render: (value: number) => value > 0 ? <Badge count={value} /> : '-' },
     { title: '操作', width: 190, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row: ProjectGroup) => actionSlots([
       <Button key="enter" size="mini" type="text" onClick={() => navigate(`/project-groups/${row.id}`)}>进入</Button>,
-      isInternal && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(row.status) && <Button key="edit" size="mini" type="text" onClick={() => openEdit(row)}>编辑</Button>,
+      isInternal && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(row.status) && (row.pendingCount > 0 ? (
+        <Tooltip key="edit" content={`有 ${row.pendingCount} 个子项目待公司验收，暂不能编辑主项目资料`}>
+          <span><Button size="mini" type="text" disabled>编辑</Button></span>
+        </Tooltip>
+      ) : <Button key="edit" size="mini" type="text" onClick={() => openEdit(row)}>编辑</Button>),
       canDelete && row.subprojectCount === 0 && <Popconfirm key="delete" title={`确认删除空主项目“${row.name}”？`} onOk={() => remove(row)}><Button size="mini" type="text" status="danger">删除</Button></Popconfirm>,
     ], 'project-group') },
   ]
@@ -293,6 +301,7 @@ export default function ProjectList() {
           <Form.Item label="预计完成日期" field="expectedCompletionDate" rules={[{ required: true, message: '请选择预计完成日期' }]}><DatePicker allowClear format="YYYY-MM-DD" placeholder="选择预计完成日期" style={{ width: '100%' }} /></Form.Item>
           <Form.Item label="关联供应商" field="supplierId" rules={[{ required: true, message: '请选择供应商' }]}><Select showSearch placeholder="选择供应商" filterOption={optionFilter} disabled={!!editing}>{suppliers.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select></Form.Item>
           <Form.Item className="form-grid-full" label="主项目说明" field="description"><Input.TextArea rows={3} maxLength={500} showWordLimit wordLimitPosition="outside" placeholder="选填" /></Form.Item>
+          <div className="form-grid-full dialog-note">关联后，该供应商的全部启用账号均可访问此主项目及其子项目。</div>
           {(metadataOptionsError || robotModelsError) && <div className="form-grid-full dialog-note dialog-note--danger">项目字典或负责人选项加载失败，请重试。</div>}
         </Form>
       </Modal>

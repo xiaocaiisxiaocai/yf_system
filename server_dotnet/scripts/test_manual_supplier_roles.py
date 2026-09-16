@@ -10,6 +10,11 @@ def run_manual_supplier_role_checks(admin, conn, check):
     built_in = next(role for role in roles if role['name'] == '供应商人员' and role['isBuiltIn'])
     root_role = next(role for role in roles if role['name'] == '系统管理员' and role['isBuiltIn'])
     supplier = admin.call('POST', '/api/v1/admin/suppliers', {'name': '手工角色-' + secrets.token_hex(4)})
+    department = admin.call('POST', '/api/v1/admin/departments', {
+        'name': '供应商账号管理组织-' + secrets.token_hex(4),
+        'parentId': None,
+        'sortNo': 0,
+    })
 
     account_operator_role = _role(admin, ['supplier:list', 'supplier:account'])
     account_operator_password = _password()
@@ -19,7 +24,7 @@ def run_manual_supplier_role_checks(admin, conn, check):
         'password': account_operator_password,
         'realName': '供应商账号管理员',
         'email': account_operator_employee + '@example.invalid',
-        'departmentId': None,
+        'departmentId': department['id'],
         'roleId': account_operator_role,
     })
     with conn.cursor() as cursor:

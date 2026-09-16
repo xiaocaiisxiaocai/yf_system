@@ -97,31 +97,11 @@ public sealed class ProjectsWorkflowTests
         Assert.Equal("项目仍有上传记录，不能删除", upload.Message);
     }
 
-    [Fact]
-    public void MemberLimitIncludesTheRequiredOperator()
-    {
-        var requested = Enumerable.Range(1, 200).Select(value => (ulong)value).ToArray();
-
-        var error = Assert.Throws<ApiException>(() =>
-            ProjectWorkflowRules.NormalizeMemberIds(requested, 201));
-
-        Assert.Equal(400, error.Status);
-        Assert.Equal("成员数量超过上限", error.Message);
-    }
-
-    [Fact]
-    public void MemberNormalizationDeduplicatesAndKeepsTheOperatorWithinTheLimit()
-    {
-        var normalized = ProjectWorkflowRules.NormalizeMemberIds([3, 2, 2], 1);
-
-        Assert.Equal([1UL, 2UL, 3UL], normalized);
-    }
-
     [Theory]
     [InlineData(null)]
     [InlineData("COMPANY")]
     [InlineData(" COMPANY ")]
-    public void InternalAndSupplierSubmissionsDefaultToCompanyConfirmation(string? requestedSide)
+    public void SubmissionConfirmationSideDefaultsToCompany(string? requestedSide)
     {
         Assert.Equal("COMPANY", ProjectWorkflowRules.NormalizeConfirmSide(requestedSide));
     }
@@ -151,6 +131,19 @@ public sealed class ProjectsWorkflowTests
         var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.RequireInternalDecisionActor(supplierUser));
         Assert.Equal(403, error.Status);
         Assert.Equal("项目验收确认和驳回仅限公司内部用户", error.Message);
+    }
+
+    [Fact]
+    public void OnlySupplierUsersCanSubmitForAcceptance()
+    {
+        var supplierUser = new CurrentUser(2, "supplier", "SUPPLIER", 10);
+        var internalUser = new CurrentUser(1, "internal", "INTERNAL", null);
+
+        ProjectWorkflowRules.RequireSupplierSubmitter(supplierUser);
+        var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.RequireSupplierSubmitter(internalUser));
+
+        Assert.Equal(403, error.Status);
+        Assert.Equal("项目验收仅允许供应商用户提交", error.Message);
     }
 
     [Theory]

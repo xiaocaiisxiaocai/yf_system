@@ -186,29 +186,47 @@ internal sealed class ProjectGroupService(
             """, new { Name = name, request.Description, metadata.MachineModel, metadata.RobotVendorId,
                 metadata.RobotModelId, metadata.ResponsibleUserId, metadata.SectionId, metadata.PriorityId,
                 metadata.ExpectedCompletionDate, GroupId = groupId }, tx, cancellationToken: ct));
+        var childIds = (await conn.QueryAsync<ulong>(new CommandDefinition(
+            """
+            SELECT id FROM projects
+            WHERE project_group_id=@GroupId
+              AND (status<>'COMPLETED'
+                   OR NOT(responsible_user_id <=> @ResponsibleUserId)
+                   OR NOT(section_id <=> @SectionId))
+            ORDER BY id
+            """, new { GroupId = groupId, metadata.ResponsibleUserId, metadata.SectionId },
+            tx, cancellationToken: ct))).ToArray();
+        // Access ownership always follows the main project, including completed
+        // children. Accepted business metadata and work orders remain frozen.
+        await conn.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE projects SET responsible_user_id=@ResponsibleUserId,section_id=@SectionId,
+                updated_at=CASE
+                    WHEN NOT(responsible_user_id <=> @ResponsibleUserId) OR NOT(section_id <=> @SectionId)
+                    THEN UTC_TIMESTAMP(3) ELSE updated_at END
+            WHERE project_group_id=@GroupId
+            """, new { metadata.ResponsibleUserId, metadata.SectionId, GroupId = groupId },
+            tx, cancellationToken: ct));
         await conn.ExecuteAsync(new CommandDefinition(
             """
             UPDATE projects SET machine_model=@MachineModel,robot_vendor_id=@RobotVendorId,robot_model_id=@RobotModelId,
                 responsible_user_id=@ResponsibleUserId,section_id=@SectionId,priority_id=@PriorityId,
                 expected_completion_date=@ExpectedCompletionDate,updated_at=UTC_TIMESTAMP(3)
-            WHERE project_group_id=@GroupId
+            WHERE project_group_id=@GroupId AND status<>'COMPLETED'
             """, new { metadata.MachineModel, metadata.RobotVendorId, metadata.RobotModelId,
                 metadata.ResponsibleUserId, metadata.SectionId, metadata.PriorityId, metadata.ExpectedCompletionDate,
                 GroupId = groupId }, tx, cancellationToken: ct));
         await ReplaceGroupWorkOrdersAsync(conn, tx, groupId, metadata.WorkOrderNos, ct);
         await conn.ExecuteAsync(new CommandDefinition(
-            "DELETE pwo FROM project_work_orders pwo INNER JOIN projects p ON p.id=pwo.project_id WHERE p.project_group_id=@GroupId",
+            "DELETE pwo FROM project_work_orders pwo INNER JOIN projects p ON p.id=pwo.project_id WHERE p.project_group_id=@GroupId AND p.status<>'COMPLETED'",
             new { GroupId = groupId }, tx, cancellationToken: ct));
         await conn.ExecuteAsync(new CommandDefinition(
             """
             INSERT INTO project_work_orders(project_id,work_order_no,sort_no,created_at)
             SELECT p.id,gwo.work_order_no,gwo.sort_no,UTC_TIMESTAMP(3)
             FROM projects p CROSS JOIN project_group_work_orders gwo
-            WHERE p.project_group_id=@GroupId AND gwo.project_group_id=@GroupId
+            WHERE p.project_group_id=@GroupId AND p.status<>'COMPLETED' AND gwo.project_group_id=@GroupId
             """, new { GroupId = groupId }, tx, cancellationToken: ct));
-        var childIds = (await conn.QueryAsync<ulong>(new CommandDefinition(
-            "SELECT id FROM projects WHERE project_group_id=@GroupId ORDER BY id",
-            new { GroupId = groupId }, tx, cancellationToken: ct))).ToArray();
         foreach (var childId in childIds)
             await audit.WriteAsync(conn, tx, current.Id, "PROJECT_UPDATE", "project", childId, new
             {
@@ -482,6 +500,10 @@ internal sealed class ProjectGroupService(
                p.responsible_user_id AS ResponsibleUserId,owner.employee_no AS ResponsibleUserEmployeeNo,
                owner.real_name AS ResponsibleUserName,p.section_id AS SectionId,section.name AS SectionName,
                p.priority_id AS PriorityId,priority.name AS PriorityName,
+               CASE WHEN p.status='PENDING_CONFIRMATION' THEN (
+                   SELECT MAX(psl.id) FROM project_status_logs psl
+                   WHERE psl.project_id=p.id AND psl.action='SUBMIT'
+               ) ELSE NULL END AS LatestSubmissionId,
                p.expected_completion_date AS ExpectedCompletionDate,p.created_at AS CreatedAt,p.updated_at AS UpdatedAt,
                EXISTS(SELECT 1 FROM project_copies copy WHERE copy.source_project_id=p.id OR copy.target_project_id=p.id) AS HasCopyHistory,
                (SELECT COUNT(*) FROM messages message WHERE message.project_id=p.id AND message.status='NORMAL'

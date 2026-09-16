@@ -26,6 +26,8 @@ import uuid
 
 import pymysql
 
+from test_business_acceptance import _create_project_group
+
 
 class CheckFailure(AssertionError):
     pass
@@ -90,20 +92,32 @@ def _permission_shape(items):
     )
 
 
-def _member_shape(items):
-    return all(
-        set(item) >= {"id", "employeeNo", "realName"}
-        and isinstance(item["id"], int)
-        and bool(item["employeeNo"])
-        and bool(item["realName"])
-        for item in items
-    )
+def _assign_admin_section(client, conn, suffix, admin_id):
+    division = client.call("POST", "/api/v1/admin/departments", {
+        "name": "审计事业部-" + suffix,
+        "parentId": None,
+        "sortNo": 140,
+    })
+    department = client.call("POST", "/api/v1/admin/departments", {
+        "name": "审计部门-" + suffix,
+        "parentId": division["id"],
+        "sortNo": 141,
+    })
+    section = client.call("POST", "/api/v1/admin/departments", {
+        "name": "审计课别-" + suffix,
+        "parentId": department["id"],
+        "sortNo": 142,
+    })
+    with conn.cursor() as cursor:
+        cursor.execute("UPDATE users SET department_id=%s WHERE id=%s", (section["id"], admin_id))
 
 
 def run_audit_checks(client, conn, check):
     """Run focused audit assertions using caller-owned isolated resources."""
     profile = client.call("GET", "/api/v1/auth/profile")
     actor_name = profile["user"]["realName"]
+    admin_id = profile["user"]["id"]
+    _assign_admin_section(client, conn, secrets.token_hex(4), admin_id)
 
     role_old_name = "审计历史角色-" + secrets.token_hex(4)
     role_new_name = "审计当前角色-" + secrets.token_hex(4)
@@ -178,27 +192,6 @@ def run_audit_checks(client, conn, check):
           and historical_role["targetName"] == role_old_name
           and historical_role["targetNameSource"] == "snapshot")
 
-    employee_one_name = "审计成员甲-" + secrets.token_hex(3)
-    employee_two_name = "审计成员乙-" + secrets.token_hex(3)
-    employee_one_no = "audit_" + secrets.token_hex(5)
-    employee_two_no = "audit_" + secrets.token_hex(5)
-    employee_password_one = "Yf9!" + secrets.token_urlsafe(9)
-    employee_password_two = "Yf9!" + secrets.token_urlsafe(9)
-    employee_one = client.call("POST", "/api/v1/admin/users", {
-        "employeeNo": employee_one_no,
-        "password": employee_password_one,
-        "realName": employee_one_name,
-        "email": employee_one_no + "@example.invalid",
-        "roleId": role_id,
-    })
-    employee_two = client.call("POST", "/api/v1/admin/users", {
-        "employeeNo": employee_two_no,
-        "password": employee_password_two,
-        "realName": employee_two_name,
-        "email": employee_two_no + "@example.invalid",
-        "roleId": role_id,
-    })
-
     supplier_name = "审计供应商-" + secrets.token_hex(4)
     supplier = client.call("POST", "/api/v1/admin/suppliers", {
         "name": supplier_name,
@@ -206,50 +199,32 @@ def run_audit_checks(client, conn, check):
     })
     project_old_name = "审计旧项目-" + secrets.token_hex(4)
     project_new_name = "审计新项目-" + secrets.token_hex(4)
-    project = client.call("POST", "/api/v1/projects", {
-        "name": project_old_name,
-        "description": "修改前说明",
-        "supplierId": supplier["id"],
-    })
+    group, project = _create_project_group(
+        client, conn, supplier["id"], admin_id, project_old_name)
     project_id = project["id"]
-    client.call("PUT", f"/api/v1/projects/{project_id}", {
+    group_id = group["id"]
+    group_detail = client.call("GET", f"/api/v1/project-groups/{group_id}")
+    current_group = group_detail["group"]
+    client.call("PUT", f"/api/v1/project-groups/{group_id}", {
         "name": project_new_name,
         "description": "修改后说明",
         "supplierId": supplier["id"],
+        "workOrderNos": current_group["workOrderNos"],
+        "machineModel": current_group["machineModel"],
+        "robotVendorId": current_group["robotVendorId"],
+        "robotModelId": current_group["robotModelId"],
+        "responsibleUserId": current_group["responsibleUserId"],
+        "priorityId": current_group["priorityId"],
+        "expectedCompletionDate": current_group["expectedCompletionDate"],
     })
-    project_update = _latest(client, "PROJECT_UPDATE", project_id)
-    check("project update audit reports exact labeled before and after values",
+    project_update = _latest(client, "PROJECT_GROUP_UPDATE", group_id)
+    check("main project update audit reports exact labeled before and after values",
           project_update["targetName"] == project_new_name
           and project_update["detail"]["changes"] == [
-              {"field": "name", "label": "项目名称", "before": project_old_name, "after": project_new_name},
-              {"field": "description", "label": "项目说明", "before": "修改前说明", "after": "修改后说明"},
+              {"field": "name", "label": "主项目名称", "before": project_old_name, "after": project_new_name},
+              {"field": "description", "label": "项目说明",
+               "before": "owned isolated full business acceptance fixture", "after": "修改后说明"},
           ])
-
-    client.call("PUT", f"/api/v1/projects/{project_id}/members", {
-        "userIds": [employee_one["id"], employee_two["id"]],
-    })
-    members_added = _latest(client, "PROJECT_MEMBERS", project_id)["detail"]
-    check("project member audit lists added employee identity snapshots",
-          _member_shape(members_added["addedMembers"])
-          and {item["id"] for item in members_added["addedMembers"]} == {employee_one["id"], employee_two["id"]}
-          and members_added["removedMembers"] == [])
-
-    client.call("PUT", f"/api/v1/projects/{project_id}/members", {
-        "userIds": [employee_two["id"]],
-    })
-    members_removed = _latest(client, "PROJECT_MEMBERS", project_id)["detail"]
-    expected_removed = {"id": employee_one["id"], "employeeNo": employee_one_no, "realName": employee_one_name}
-    check("project member audit lists removed employee number and name",
-          _member_shape(members_removed["removedMembers"])
-          and members_removed["removedMembers"] == [expected_removed]
-          and members_removed["addedMembers"] == [])
-
-    detail_search = client.call("GET", "/api/v1/admin/audit-logs?" + _query(
-        keyword=employee_one_name, page=1, pageSize=100,
-    ))
-    check("audit keyword search includes structured detail snapshots",
-          any(item["action"] == "PROJECT_MEMBERS" and item["targetId"] == str(project_id)
-              for item in detail_search["list"]))
 
     smtp_secret = secrets.token_urlsafe(24)
     smtp_response = client.call("PUT", "/api/v1/admin/system/mail-settings", {

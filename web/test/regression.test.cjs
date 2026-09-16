@@ -123,6 +123,28 @@ test('personal profile submits only own email and keeps password change in the s
   await act(async () => renderer.unmount())
 })
 
+test('project interaction wording and navigation match the current supplier access model', () => {
+  const root = path.resolve(__dirname, '..')
+  const layout = fs.readFileSync(path.join(root, 'src/layouts/AdminLayout.tsx'), 'utf8')
+  const list = fs.readFileSync(path.join(root, 'src/pages/project/ProjectList.tsx'), 'utf8')
+  const group = fs.readFileSync(path.join(root, 'src/pages/project/ProjectGroupDetail.tsx'), 'utf8')
+  const detail = fs.readFileSync(path.join(root, 'src/pages/project/ProjectDetail.tsx'), 'utf8')
+  const files = fs.readFileSync(path.join(root, 'src/components/FileTable.tsx'), 'utf8')
+  const notifications = fs.readFileSync(path.join(root, 'src/components/CollaborationNotifications.tsx'), 'utf8')
+  const types = fs.readFileSync(path.join(root, 'src/api/types.ts'), 'utf8')
+
+  assert.match(layout, /loc\.pathname\.startsWith\('\/project-groups\/'\)/)
+  assert.match(list, /该供应商的全部启用账号均可访问此主项目及其子项目/)
+  assert.match(group, /该供应商的全部启用账号均可访问此主项目及其子项目/)
+  assert.doesNotMatch(`${detail}\n${files}`, /引用履历|暂无引用记录|>引用</)
+  assert.match(files, />\s*复制件\s*</)
+  assert.match(files, /文件当前不统计已读状态/)
+  assert.match(notifications, /item\.type === 'MESSAGE' && item\.action === 'CREATE'\) return '发送留言'/)
+  assert.match(notifications, /不等同于留言已读/)
+  assert.equal(fs.existsSync(path.join(root, 'src/components/MemberPanel.tsx')), false)
+  assert.doesNotMatch(types, /interface (?:Supplier)?Member/)
+})
+
 test('profile locks both forms during save, rejects overlapping requests and unlocks after failure', async () => {
   const calls = []
   let resolveRequest, rejectRequest
@@ -1189,7 +1211,7 @@ function startReceiptTimer(browser, delay) {
 
 function receiptCountButton(renderer) {
   return renderer.root.findAllByType('Button')
-    .find((node) => String(node.props['aria-label'] ?? '').startsWith('查看已读人员'))
+    .find((node) => String(node.props['aria-label'] ?? '').startsWith('查看留言回执'))
 }
 
 for (const [page, api, props] of [
@@ -1260,98 +1282,6 @@ test('supplier account permission revocation removes the open account drawer', a
   assert.equal(renderer.root.findAllByType('Drawer').length,0,'revocation must remove the already-open drawer')
   assert.equal(accountRequests,1,'revocation cannot issue another account read')
   await act(async()=>renderer.unmount())
-})
-
-test('member picker waits for a successful member load and guards loading/error handlers', async () => {
-  const memberRequests = []
-  let optionCalls = 0
-  let releaseOptions
-  let saved
-  const existing = { userId: 42, employeeNo: 'E42', realName: '已有成员', deptName: '研发部', status: 'ACTIVE', createdAt: '' }
-  const disabled = { userId: 99, employeeNo: 'E99', realName: '停用成员', deptName: '旧部门', status: 'DISABLED', createdAt: '' }
-  const options = [{ id: 7, employeeNo: 'E7', realName: '当前用户', deptName: '管理部' }]
-  const supplierMembers = [{ userId: 88, employeeNo: 'S88', realName: '供应商成员', status: 'ACTIVE' }]
-  const http = {
-    get: async (url) => {
-      if (url === '/projects/1/members') {
-        return new Promise((resolve, reject) => memberRequests.push({ resolve, reject }))
-      }
-      if (url === '/projects/1/supplier-members') return { data: supplierMembers }
-      if (url === '/internal-user-options') {
-        optionCalls++
-        return new Promise((resolve) => { releaseOptions = resolve })
-      }
-      throw new Error(`unexpected GET ${url}`)
-    },
-    put: async (_url, body) => { saved = body }
-  }
-  const Page = loadTs('src/components/MemberPanel.tsx', {
-    '@arco-design/web-react': arco,
-    '@arco-design/web-react/icon': new Proxy({}, { get: (_, n) => component(n) }),
-    '../api/client': http,
-    '../store/auth': authModule({ id: 7, userType: 'INTERNAL' }, ['project:member']),
-    '../api/types': { fmtTime: String },
-  }).default
-  let renderer
-  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, supplierName: '供应商' })) })
-  assert.equal(memberRequests.length, 1)
-  let picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置公司成员')
-  assert.equal(picker.props.disabled, true, 'picker must stay disabled before members load')
-  await act(async () => { await picker.props.onClick() })
-  assert.equal(optionCalls, 0, 'the handler must reject calls while the member list is loading')
-
-  await act(async () => { memberRequests.shift().reject(new Error('members unavailable')); await Promise.resolve() })
-  picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置公司成员')
-  assert.equal(picker.props.disabled, true, 'picker must stay disabled after a member load error')
-  await act(async () => { await picker.props.onClick() })
-  assert.equal(optionCalls, 0, 'the handler must reject calls while the member list is in an error state')
-
-  const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试')
-  await act(async () => { retry.props.onClick(); await Promise.resolve() })
-  assert.equal(memberRequests.length, 1)
-  await act(async () => { memberRequests.shift().resolve({ data: [existing, disabled] }); await Promise.resolve() })
-  picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置公司成员')
-  assert.equal(picker.props.disabled, false, 'picker should enable after a successful member load')
-  const headings = renderer.root.findAllByType('h3').map((node) => node.props.children)
-  assert.deepEqual(headings.map((children) => Array.isArray(children) ? children.join('') : String(children)), ['公司成员 2', '供应商成员 1'])
-  assert.equal(renderer.root.findAllByType('Text').some((node) => node.props.children === '关联供应商的启用账号自动参与'), true)
-  let openRequest
-  let duplicateOpen
-  await act(async () => {
-    openRequest = picker.props.onClick()
-    duplicateOpen = picker.props.onClick()
-    await Promise.resolve()
-  })
-  assert.equal(optionCalls, 1, 'double clicking the picker must issue one options request')
-  await act(async () => renderer.root.findByType('Modal').props.onCancel())
-  await act(async () => { releaseOptions({ data: options }); await openRequest; await duplicateOpen })
-  assert.equal(renderer.root.findByType('Modal').props.visible, false, 'closing must invalidate a late options response')
-
-  picker = renderer.root.findAllByType('Button').find((node) => node.props.children === '设置公司成员')
-  await act(async () => { openRequest = picker.props.onClick(); await Promise.resolve() })
-  assert.equal(optionCalls, 2)
-  await act(async () => { releaseOptions({ data: options }); await openRequest })
-  const modal = renderer.root.findByType('Modal')
-  assert.equal(modal.props.visible, true)
-  assert.equal(modal.props.className, 'form-dialog member-picker-dialog')
-  assert.equal(renderer.root.findByType('Input.Search').props.placeholder, '搜索姓名、工号或部门')
-  let checkboxes = renderer.root.findAllByType('Checkbox')
-  assert.equal(checkboxes.length, 3, 'current members must remain visible in the fixed picker list')
-  assert.equal(checkboxes.filter((checkbox) => checkbox.props.checked).length, 2)
-  const disabledCheckbox = checkboxes.find((checkbox) => findElement(checkbox.props.children, (node) => node.props.children === '停用成员'))
-  assert.ok(disabledCheckbox)
-  assert.equal(disabledCheckbox.props.disabled, false, 'disabled members require an explicit user deselection')
-  await act(async () => renderer.root.findByType('Input.Search').props.onChange('E99'))
-  assert.equal(renderer.root.findAllByType('Checkbox').length, 1, 'search must match employee number')
-  await act(async () => renderer.root.findByType('Input.Search').props.onChange(''))
-  checkboxes = renderer.root.findAllByType('Checkbox')
-  await act(async () => renderer.root.findByType('Modal').props.onOk())
-  assert.equal(saved, undefined, 'saving with a disabled member must require explicit deselection')
-  const currentDisabledCheckbox = renderer.root.findAllByType('Checkbox').find((checkbox) => findElement(checkbox.props.children, (node) => node.props.children === '停用成员'))
-  await act(async () => currentDisabledCheckbox.props.onChange(false))
-  await act(async () => renderer.root.findByType('Modal').props.onOk())
-  assert.deepEqual(Array.from(saved.userIds), [42, 7], 'saving must preserve the loaded members and the operator')
-  await act(async () => renderer.unmount())
 })
 
 test('supplier account loading failures stop spinning and can retry', async () => {
@@ -1673,19 +1603,41 @@ test('list actions cannot let an old refresh overwrite a newer filter result', a
   }
 })
 
+test('main projects with pending child acceptance expose a disabled edit action and reason', async () => {
+  const group = {
+    id: 3, name: '待验收主项目', supplierId: 8, status: 'IN_PROGRESS',
+    subprojectCount: 2, completedCount: 0, pendingCount: 1, terminatedCount: 0,
+    workOrderNos: [], unreadMessages: 0,
+  }
+  const Page = loadTs('src/pages/project/ProjectList.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    'react-router-dom': { useNavigate: () => () => {} },
+    '../../api/client': {
+      get: async (url) => url === '/project-groups'
+        ? { data: { list: [group], total: 1, page: 1, pageSize: 10 } }
+        : { data: [] },
+    },
+    '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:update']),
+    '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中' } } },
+    '../../components/ActionSlots': actionSlotsModule,
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const actions = renderer.root.findByType('Table').props.columns.at(-1).render(null, group)
+  const edit = findActionButton(actions, '编辑')
+  const tooltip = findElement(actions, (node) => String(node.props.content ?? '').includes('待公司验收'))
+  assert.ok(edit)
+  assert.equal(edit.props.disabled, true)
+  assert.match(String(tooltip.props.content), /1 个子项目待公司验收/)
+  await act(async () => renderer.unmount())
+})
+
 test('dashboard and project detail panels expose retry instead of a false empty state', async () => {
   const iconMock = new Proxy({}, { get: (_, name) => component(name) })
   const state = { user: { id: 1, realName: '管理员', userType: 'INTERNAL' }, menus: ['dashboard'], hasPerm: () => false }
   const auth = { useAuth: (selector) => selector ? selector(state) : state }
   const cases = [
-    {
-      file: 'src/components/MemberPanel.tsx', api: '/projects/1/members', props: { projectId: 1, supplierName: '供应商' },
-      data: [{ userId: 1, employeeNo: 'A1', realName: '管理员', createdAt: '' }],
-      mocks: (http) => ({
-        '@arco-design/web-react': arco, '@arco-design/web-react/icon': iconMock,
-        '../api/client': http, '../store/auth': auth, '../api/types': { fmtTime: String },
-      }),
-    },
     {
       file: 'src/components/MessagePanel.tsx', api: '/projects/1/messages', props: { projectId: 1, projectStatus: 'IN_PROGRESS' },
       data: { list: [{ id: 1, senderId: 2, senderName: '成员', senderType: 'INTERNAL', content: '消息', readByMe: true, readCount: 1, totalCount: 1, createdAt: '' }], total: 1 },
@@ -1822,6 +1774,41 @@ test('dashboard pending projects can retry, navigate, refresh, and recover from 
   await act(async () => refresh.props.onClick())
   await act(async () => pendingRequests[4].resolve({ data: { list: [], total: 0, page: 1, pageSize: 10 } }))
   assert.ok(renderer.root.findAllByType('Empty').some((node) => node.props.description === '暂无内部待验收子项目'))
+  await act(async () => renderer.unmount())
+})
+
+test('supplier dashboard uses company-acceptance wording while internal wording stays role-specific', async () => {
+  const http = {
+    get: async (url) => {
+      if (url === '/dashboard/summary') return { data: { projectCount: 1, activeProjectCount: 1, pendingConfirmations: 0, unreadMessages: 0, recentMessages: [] } }
+      return { data: { list: [], total: 0, page: 1, pageSize: 10 } }
+    },
+  }
+  const Page = loadTs('src/pages/Dashboard.tsx', {
+    '@arco-design/web-react': new Proxy({
+      Grid: Object.assign(component('Grid'), { Row: component('Grid.Row'), Col: component('Grid.Col') }),
+      List: Object.assign(component('List'), { Item: Object.assign(component('List.Item'), { Meta: component('List.Item.Meta') }) }),
+      Typography: arco.Typography,
+      Message: arco.Message,
+    }, { get: (obj, key) => obj[key] ?? component(key) }),
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': http,
+    '../store/auth': authModule({ id: 2, realName: '供应商用户', userType: 'SUPPLIER' }, [], ['dashboard']),
+    '../api/types': { fmtTime: String },
+    'react-router-dom': { Link: component('Link'), useNavigate: () => () => {} },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const text = renderer.root.findAll((node) => typeof node.props.children === 'string')
+    .map((node) => node.props.children)
+  const pendingCard = renderer.root.findAllByType('Card')
+    .find((node) => String(node.props.className ?? '').includes('dashboard-pending'))
+  const pendingHeading = findElement(pendingCard.props.title, (node) => node.type === 'h2')
+  assert.ok(text.includes('跟进待公司验收与未读留言'))
+  assert.equal(pendingHeading.props.children, '待公司验收子项目')
+  assert.ok(renderer.root.findAllByType('Statistic').some((node) => node.props.title === '待公司验收子项目'))
+  assert.equal(text.includes('公司内部待验收子项目'), false)
+  assert.equal(text.includes('优先处理公司内部验收与未读留言'), false)
   await act(async () => renderer.unmount())
 })
 
@@ -1968,7 +1955,7 @@ test('receipt sync updates visible counts without replacing loaded messages or t
   const receiptRequests = requests.filter(({ url }) => url.endsWith('/message-receipts'))
   assert.equal(receiptRequests.length, 1)
   assert.equal(receiptRequests[0].config.params.ids, '1', 'only the visible message id is polled')
-  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：1/1')
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看留言回执：1/1')
   assert.equal(renderer.root.findAllByProps({ className: 'msg-item' }).length, 2)
   assert.equal(renderer.root.findByType('Input.TextArea').props.value, '正在编辑的草稿')
   assert.equal(renderer.root.findAll((node) => node.props.children === '第一条内容').length, 1)
@@ -2007,7 +1994,7 @@ test('receipt sync pauses while hidden, resumes on focus, and cleans up when ina
   })
   browser.state.nodes = [receiptNode(1, { width: 120, height: 32, top: 12, bottom: 44 })]
   await runReceiptTimer(browser, 5000)
-  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：1/1')
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看留言回执：1/1')
 
   browser.document.visibilityState = 'hidden'
   await act(async () => {
@@ -2023,7 +2010,7 @@ test('receipt sync pauses while hidden, resumes on focus, and cleans up when ina
     await flushReceiptMicrotasks()
   })
   assert.equal(receiptCalls, callsWhileHidden + 1, 'focus resumes polling immediately')
-  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：2/2')
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看留言回执：2/2')
 
   await act(async () => renderer.update(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS', active: false })))
   const callsAfterInactive = receiptCalls
@@ -2089,7 +2076,7 @@ test('receipt sync ignores delayed responses after project switch and aborts on 
     pending[0].resolve({ data: [{ id: 1, readCount: 1, totalCount: 1 }] })
     await flushReceiptMicrotasks()
   })
-  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：0/1')
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看留言回执：0/1')
   assert.equal(renderer.root.findAll((node) => node.props.children === '项目2留言').length, 1)
   await act(async () => renderer.unmount())
 
@@ -2147,13 +2134,13 @@ test('receipt sync keeps the last count after failure and recovers on the backof
   browser.state.nodes = [receiptNode(1, { width: 120, height: 32, top: 12, bottom: 44 })]
   await runReceiptTimer(browser, 5000)
   assert.equal(receiptCalls, 1)
-  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：0/1', 'a failed poll preserves the last count')
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看留言回执：0/1', 'a failed poll preserves the last count')
   assert.ok([...browser.timers.values()].some((timer) => timer.delay === 10000), 'failure backs off the next poll')
 
   fail = false
   await runReceiptTimer(browser, 10000)
   assert.equal(receiptCalls, 2)
-  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：1/1')
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看留言回执：1/1')
   assert.ok([...browser.timers.values()].some((timer) => timer.delay === 5000), 'a successful retry restores the normal interval')
   await act(async () => renderer.unmount())
 })
@@ -2208,7 +2195,7 @@ test('receipt revision refreshes visible counts immediately without a realtime p
   })
   assert.equal(receiptCalls, beforeRevision + 1, 'a receipt revision must trigger an immediate refresh')
   assert.equal(requests.at(-1).config.params.ids, '1', 'the immediate refresh still limits itself to visible ids')
-  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看已读人员：1/1')
+  assert.equal(receiptCountButton(renderer).props['aria-label'], '查看留言回执：1/1')
   assert.equal(renderer.root.findByType('Input.TextArea').props.value, '保留中的实时草稿')
   assert.equal(browser.timers.size, 0)
   await act(async () => renderer.unmount())
@@ -2576,7 +2563,7 @@ test('invalid project route identifiers render a recoverable error without API c
       '../../api/client':{get:async()=>{calls++;throw Error('invalid request')}},
       '../../api/types':{PROJECT_STATUS:{},fmtTime:String},
        '../../components/FileTable':component('Files'),
-       '../../components/MessagePanel':component('Messages'),'../../components/MemberPanel':component('Members'),
+       '../../components/MessagePanel':component('Messages'),
        '../../components/ProjectActivityPanel':component('Activities'),'../../components/ProjectWorkflowPanel':component('Workflow'),
     }).default
     let renderer
@@ -2597,7 +2584,7 @@ test('project navigation ignores late responses across valid and invalid routes'
     '../../api/client':{get:url=>new Promise(resolve=>pending.set(url,resolve))},
     '../../api/types':{PROJECT_STATUS:{IN_PROGRESS:{text:'进行中'}},fmtTime:String},
      '../../components/FileTable':component('Files'),
-     '../../components/MessagePanel':component('Messages'),'../../components/MemberPanel':component('Members'),
+     '../../components/MessagePanel':component('Messages'),
      '../../components/ProjectActivityPanel':component('Activities'),'../../components/ProjectWorkflowPanel':component('Workflow'),
   }).default
   let renderer
@@ -2641,7 +2628,6 @@ test('unknown project tab query falls back to files and keeps description expans
     '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中', color: 'blue' } }, fmtTime: String },
     '../../components/FileTable': component('Files'),
     '../../components/MessagePanel': component('Messages'),
-    '../../components/MemberPanel': component('Members'),
     '../../components/ProjectActivityPanel': component('Activities'),
     '../../components/ProjectWorkflowPanel': component('Workflow'),
   }).default
@@ -2694,7 +2680,6 @@ test('project detail isolates live message revision from summary churn while pre
     '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中', color: 'blue' } }, fmtTime: String },
     '../../components/FileTable': component('Files'),
     '../../components/MessagePanel': component('Messages'),
-    '../../components/MemberPanel': component('Members'),
     '../../components/ProjectActivityPanel': component('Activities'),
     '../../components/ProjectWorkflowPanel': component('Workflow'),
     '../../store/collaboration': { useCollaboration },
@@ -2722,7 +2707,7 @@ test('project detail isolates live message revision from summary churn while pre
   await act(async () => renderer.unmount())
 })
 
-test('project workflow limits acceptance to permissioned internal users while preserving submitter withdrawal', async () => {
+test('project workflow keeps acceptance and management internal while supplier submitters may withdraw', async () => {
   const calls = []
   const http = {
     put: async (url, body) => { calls.push({ method: 'put', url, body }); return { data: {} } },
@@ -2745,7 +2730,7 @@ test('project workflow limits acceptance to permissioned internal users while pr
   })
   assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '验收通过'))
   assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '验收驳回'))
-  assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '撤回'))
+  assert.equal(renderer.root.findAllByType('Button').some((node) => node.props.children === '撤回'), false)
   await act(async () => renderer.unmount())
 
   const SupplierPage = loadTs('src/components/ProjectWorkflowPanel.tsx', {
@@ -2779,7 +2764,7 @@ test('project workflow limits acceptance to permissioned internal users while pr
       onChanged: () => changed.push(true),
     }))
   })
-  assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '撤回'))
+  assert.equal(renderer.root.findAllByType('Button').some((node) => node.props.children === '撤回'), false)
   await act(async () => renderer.unmount())
 })
 
@@ -2814,7 +2799,7 @@ test('project workflow status commands are limited to start, terminate and resta
   await act(async () => renderer.unmount())
 })
 
-test('project submission from either user type always requests company internal acceptance', async () => {
+test('only suppliers can submit a project for company acceptance', async () => {
   const calls = []
   const http = { post: async (url, body) => { calls.push({ url, body }); return { data: {} } } }
   const render = (user) => loadTs('src/components/ProjectWorkflowPanel.tsx', {
@@ -2825,21 +2810,23 @@ test('project submission from either user type always requests company internal 
     '../store/auth': authModule(user, ['project:submit']),
   }).default
 
-  for (const user of [
-    { id: 1, userType: 'INTERNAL' },
-    { id: 2, userType: 'SUPPLIER' },
-  ]) {
+  for (const user of [{ id: 1, userType: 'INTERNAL' }, { id: 2, userType: 'SUPPLIER' }]) {
     const Page = render(user)
     let renderer
     await act(async () => {
       renderer = create(React.createElement(Page, { project: { id: 1, status: 'IN_PROGRESS' }, onChanged() {} }))
     })
-    const submit = renderer.root.findAllByType('Popconfirm').find((node) => node.props.title === '提交公司内部验收？')
-    assert.ok(submit)
-    assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '提交内部验收'))
-    await act(async () => submit.props.onOk())
-    assert.equal(calls.at(-1).url, '/projects/1/submit')
-    assert.equal(calls.at(-1).body.confirmSide, 'COMPANY')
+    const submit = renderer.root.findAllByType('Popconfirm').find((node) => node.props.title === '提交公司验收？')
+    if (user.userType === 'INTERNAL') {
+      assert.equal(submit, undefined)
+      assert.equal(renderer.root.findAllByType('Button').some((node) => node.props.children === '提交公司验收'), false)
+    } else {
+      assert.ok(submit)
+      assert.ok(renderer.root.findAllByType('Button').some((node) => node.props.children === '提交公司验收'))
+      await act(async () => submit.props.onOk())
+      assert.equal(calls.at(-1).url, '/projects/1/submit')
+      assert.equal(calls.at(-1).body.confirmSide, 'COMPANY')
+    }
     await act(async () => renderer.unmount())
   }
 })
@@ -2911,13 +2898,16 @@ test('workflow actions ignore duplicate invocations while validation or the requ
       '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
       '../api/client': { post: request, put: request },
       '../api/types': { PROJECT_STATUS: {} },
-      '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:status', 'project:submit', 'project:confirm', 'project:withdraw']),
+      '../store/auth': authModule(
+        { id: action === 'submit' || action === 'withdraw' ? 2 : 1, userType: action === 'submit' || action === 'withdraw' ? 'SUPPLIER' : 'INTERNAL' },
+        ['project:status', 'project:submit', 'project:confirm', 'project:withdraw'],
+      ),
     }).default
     let renderer
     let changed = 0
     await act(async () => {
       renderer = create(React.createElement(Page, {
-        project: { id: 17, status: action === 'start' ? 'DRAFT' : action === 'submit' ? 'IN_PROGRESS' : 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 1, latestSubmissionId: 51 },
+        project: { id: 17, status: action === 'start' ? 'DRAFT' : action === 'submit' ? 'IN_PROGRESS' : 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', latestSubmitterId: 2, latestSubmissionId: 51 },
         onChanged() { changed += 1 },
       }))
     })
@@ -2928,7 +2918,7 @@ test('workflow actions ignore duplicate invocations while validation or the requ
       await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '验收驳回').props.onClick())
       invoke = modal().props.onOk
     } else {
-      const prefix = { submit: '提交公司内部验收', confirm: '确认通过公司内部验收', withdraw: '撤回内部验收申请' }[action]
+      const prefix = { submit: '提交公司验收', confirm: '确认通过公司验收', withdraw: '撤回验收申请' }[action]
       invoke = renderer.root.findAllByType('Popconfirm').find((node) => String(node.props.title).startsWith(prefix)).props.onOk
     }
     let first
@@ -2981,11 +2971,11 @@ test('project workflow actions keep the submission version shown when confirmati
   })
 
   let confirm = renderer.root.findAllByType('Popconfirm')
-    .find((node) => String(node.props.title).startsWith('确认通过公司内部验收'))
+    .find((node) => String(node.props.title).startsWith('确认通过公司验收'))
   await act(async () => confirm.props.onVisibleChange(true))
   await act(async () => renderer.update(React.createElement(Page, { project: project(62), onChanged() {} })))
   confirm = renderer.root.findAllByType('Popconfirm')
-    .find((node) => String(node.props.title).startsWith('确认通过公司内部验收'))
+    .find((node) => String(node.props.title).startsWith('确认通过公司验收'))
   await act(async () => confirm.props.onOk())
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))), {
     url: '/projects/17/confirm',
@@ -3001,12 +2991,20 @@ test('project workflow actions keep the submission version shown when confirmati
     body: { reason: '需要修改', expectedSubmissionId: 62 },
   })
 
+  const SupplierPage = loadTs('src/components/ProjectWorkflowPanel.tsx', {
+    '@arco-design/web-react': localArco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': { post: async (url, body) => { calls.push({ url, body }); return { data: {} } } },
+    '../api/types': { PROJECT_STATUS: { PENDING_CONFIRMATION: { text: '待确认' } } },
+    '../store/auth': authModule({ id: 2, userType: 'SUPPLIER' }, ['project:withdraw']),
+  }).default
+  await act(async () => renderer.update(React.createElement(SupplierPage, { project: project(63), onChanged() {} })))
   let withdraw = renderer.root.findAllByType('Popconfirm')
-    .find((node) => String(node.props.title).startsWith('撤回内部验收申请'))
+    .find((node) => String(node.props.title).startsWith('撤回验收申请'))
   await act(async () => withdraw.props.onVisibleChange(true))
-  await act(async () => renderer.update(React.createElement(Page, { project: project(64), onChanged() {} })))
+  await act(async () => renderer.update(React.createElement(SupplierPage, { project: project(64), onChanged() {} })))
   withdraw = renderer.root.findAllByType('Popconfirm')
-    .find((node) => String(node.props.title).startsWith('撤回内部验收申请'))
+    .find((node) => String(node.props.title).startsWith('撤回验收申请'))
   await act(async () => withdraw.props.onOk())
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))), {
     url: '/projects/17/withdraw',
@@ -3224,7 +3222,6 @@ test('project detail activity URL tab and target navigation preserve valid tab s
     '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中', color: 'blue' } }, fmtTime: String },
     '../../components/FileTable': component('Files'),
     '../../components/MessagePanel': component('Messages'),
-    '../../components/MemberPanel': component('Members'),
     '../../components/ProjectActivityPanel': component('Activities'),
     '../../components/ProjectWorkflowPanel': component('Workflow'),
   }).default
@@ -3580,8 +3577,8 @@ test('message receipt popover distinguishes failure, retries, and ignores an old
   let pageRenderer
   await act(async () => { pageRenderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
   const receiptTrigger = pageRenderer.root.findByType('Popover').props.children
-  assert.equal(receiptTrigger.props['aria-label'], '查看已读人员：0/1')
-  assert.equal(pageRenderer.root.findByProps({ 'aria-label': '查看已读人员：0/1' }).findAllByType('Button').length > 0, true)
+  assert.equal(receiptTrigger.props['aria-label'], '查看留言回执：0/1')
+  assert.equal(pageRenderer.root.findByProps({ 'aria-label': '查看留言回执：0/1' }).findAllByType('Button').length > 0, true)
   const receiptElement = React.Children.toArray(pageRenderer.root.findByType('Popover').props.content.props.children)[1]
   const Receipt = receiptElement.type
   let renderer
@@ -4684,7 +4681,6 @@ test('project detail ignores an older unread summary after the read refresh comp
     '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中', color: 'blue' } }, fmtTime: String },
     '../../components/FileTable': component('Files'),
     '../../components/MessagePanel': component('Messages'),
-    '../../components/MemberPanel': component('Members'),
     '../../components/ProjectActivityPanel': component('Activities'),
     '../../components/ProjectWorkflowPanel': component('Workflow'),
   }).default
@@ -4833,7 +4829,7 @@ test('subproject copy requires a renamed project, blocks duplicate submits and k
   assert.equal(copyFields.name, '装配线升级 - 副本')
   let dialog = renderer.root.findAllByType('Modal').find((modal) => modal.props.title === '复制子项目')
   assert.equal(dialog.props.visible, true)
-  assert.ok(renderer.root.findAll((node) => node.props.children === '复制公共资料和项目文件；不复制留言、验收状态、已读回执和通知。').length)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '生成独立复制件，复制公共资料和当前项目文件；不复制留言、验收状态、已读回执和通知。').length)
 
   let first
   await act(async () => {
@@ -4917,7 +4913,7 @@ test('project copy history hides restricted relations and pages file mappings on
   assert.ok(calls.some((call) => call.url === '/projects/8/copy-history'))
   const drawer = renderer.root.findByType('Drawer')
   assert.equal(drawer.props.visible, true)
-  assert.ok(renderer.root.findAll((node) => node.props.children === '部分关联项目当前无权查看，已隐藏其名称和文件信息。').length)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '部分复制关联项目当前无权查看，已隐藏其名称和文件信息。').length)
   const mappingToggle = renderer.root.findAllByType('Button').find((button) => button.props.children === '查看文件映射')
   await act(async () => { mappingToggle.props.onClick(); await Promise.resolve() })
   const mappingCall = calls.find((call) => call.url === '/project-copies/16/files')

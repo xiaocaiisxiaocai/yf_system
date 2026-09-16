@@ -187,7 +187,7 @@ async function initializePassword(browser, user) {
     });
     page.off('request', countLogin);
 
-    await page.getByText('暂无内部待验收项目', { exact: true }).waitFor();
+    await page.getByText('暂无内部待验收子项目', { exact: true }).waitFor();
     await record('O08 并发401只刷新一次并分别重放原请求', async () => {
       const attempts = new Map([[summaryPath, 0], [pendingPath, 0]]);
       let refreshRequests = 0;

@@ -31,7 +31,7 @@ function detailText(value?: string | null) {
 
 function expectCopyHistory(value: unknown): ProjectCopyHistory {
   if (!value || typeof value !== 'object' || !Array.isArray((value as ProjectCopyHistory).copies)) {
-    throw new Error('引用履历接口返回格式错误')
+    throw new Error('复制履历接口返回格式错误')
   }
   return value as ProjectCopyHistory
 }
@@ -393,12 +393,12 @@ function ProjectDetailContent({ id }: { id?: string }) {
         {project.hasCopyHistory && (
           <div className="project-copy-reference-bar">
             <div>
-              <Typography.Text bold>引用履历</Typography.Text>
+              <Typography.Text bold>复制履历</Typography.Text>
               <Typography.Text type="secondary">
                 {project.copySource?.name ? `复制自「${project.copySource.name}」` : '可查看项目复制来源和派生副本'}
               </Typography.Text>
             </div>
-            <Button size="small" onClick={() => setHistoryOpen(true)}>查看引用履历</Button>
+            <Button size="small" onClick={() => setHistoryOpen(true)}>查看复制履历</Button>
           </div>
         )}
         {project.description && (
@@ -482,7 +482,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
       <Drawer
         className="project-copy-history-drawer"
         width="min(720px, 100vw)"
-        title="项目引用履历"
+        title="项目复制履历"
         visible={historyOpen}
         onCancel={() => setHistoryOpen(false)}
         footer={null}
@@ -490,20 +490,20 @@ function ProjectDetailContent({ id }: { id?: string }) {
       >
         <div className="project-copy-history">
           <div className="project-copy-history-note">
-            复制项目会保留项目资料、工令号和文件；留言、流程及验收状态、已读回执和通知不会复制。
+            复制项目会生成独立文件副本并保留复制履历；留言、流程及验收状态、已读回执和通知不会复制。
           </div>
           {historyLoading && !copyHistory ? (
             <div className="project-copy-load-state"><Spin size={28} /></div>
           ) : historyError ? (
             <div className="project-copy-load-state" role="status">
-              <Typography.Text type="error">引用履历加载失败</Typography.Text>
+              <Typography.Text type="error">复制履历加载失败</Typography.Text>
               <Button size="small" onClick={() => setHistoryReloadKey((value) => value + 1)}>重试</Button>
             </div>
           ) : copyHistory ? (
             <>
               {copyHistory.hasRestrictedRelations && (
                 <div className="project-copy-restricted" role="status">
-                  部分关联项目当前无权查看，已隐藏其名称和文件信息。
+                  部分复制关联项目当前无权查看，已隐藏其名称和文件信息。
                 </div>
               )}
               {copyHistory.source && (
@@ -532,11 +532,11 @@ function ProjectDetailContent({ id }: { id?: string }) {
                 </section>
               )}
               {!copyHistory.source && copyHistory.copies.length === 0 && (
-                <Empty description={copyHistory.hasRestrictedRelations ? '引用记录受访问权限限制' : '暂无引用记录'} />
+                <Empty description={copyHistory.hasRestrictedRelations ? '复制履历受访问权限限制' : '暂无复制履历'} />
               )}
             </>
           ) : (
-            <Empty description="暂无引用记录" />
+            <Empty description="暂无复制履历" />
           )}
         </div>
       </Drawer>

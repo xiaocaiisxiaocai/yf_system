@@ -29,6 +29,8 @@ import uuid
 
 import pymysql
 
+from test_business_acceptance import _create_project_group
+
 
 class CheckFailure(AssertionError):
     pass
@@ -168,6 +170,26 @@ def _create_role(admin, permission_ids, codes, label):
     return role["id"]
 
 
+def _assign_admin_section(admin, conn, suffix, admin_id):
+    division = admin.call("POST", "/api/v1/admin/departments", {
+        "name": "SignalR事业部-" + suffix,
+        "parentId": None,
+        "sortNo": 150,
+    })
+    department = admin.call("POST", "/api/v1/admin/departments", {
+        "name": "SignalR部门-" + suffix,
+        "parentId": division["id"],
+        "sortNo": 151,
+    })
+    section = admin.call("POST", "/api/v1/admin/departments", {
+        "name": "SignalR课别-" + suffix,
+        "parentId": department["id"],
+        "sortNo": 152,
+    })
+    with conn.cursor() as cursor:
+        cursor.execute("UPDATE users SET department_id=%s WHERE id=%s", (section["id"], admin_id))
+
+
 def _insert_user(conn, employee_no, real_name, user_type, supplier_id, role_id, password_hash, creator_id):
     with conn.cursor() as cursor:
         cursor.execute(
@@ -215,6 +237,7 @@ def _exact_event(event, project_id, kind):
 def run_signalr_checks(admin, supplier, outsider, conn, probe, check, shared_password):
     profile = admin.call("GET", "/api/v1/auth/profile")
     admin_id = profile["user"]["id"]
+    _assign_admin_section(admin, conn, secrets.token_hex(4), admin_id)
     permissions = {item["code"]: item["id"] for item in admin.call("GET", "/api/v1/permissions")}
     supplier_role = _create_role(admin, permissions, ["project:list", "message:create"], "SignalR供应商角色")
     outsider_role = _create_role(admin, permissions, ["project:list"], "SignalR外部项目角色")
@@ -241,13 +264,10 @@ def run_signalr_checks(admin, supplier, outsider, conn, probe, check, shared_pas
     supplier.login(supplier_employee, shared_password)
     outsider.login(outsider_employee, shared_password)
 
-    project = admin.call("POST", "/api/v1/projects", {
-        "name": "SignalR项目-" + secrets.token_hex(5),
-        "description": "owned isolated SignalR fixture",
-        "supplierId": supplier_row["id"],
-    })
+    _, project = _create_project_group(
+        admin, conn, supplier_row["id"], admin_id,
+        "SignalR项目-" + secrets.token_hex(5))
     project_id = project["id"]
-    admin.call("PUT", f"/api/v1/projects/{project_id}/members", {"userIds": [admin_id]})
     supplier.call("GET", f"/api/v1/projects/{project_id}")
     outsider.call("GET", f"/api/v1/projects/{project_id}", expected=403)
     check("project fixture separates supplier visibility from outside project user",

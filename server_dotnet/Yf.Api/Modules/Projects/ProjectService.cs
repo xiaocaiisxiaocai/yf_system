@@ -171,9 +171,11 @@ internal sealed class ProjectService(
         string? ip,
         CancellationToken ct)
     {
+        ProjectWorkflowRules.RequireSupplierSubmitter(actor);
         var side = ProjectWorkflowRules.NormalizeConfirmSide(request.ConfirmSide);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var (project, current) = await LockWorkflowProjectAsync(conn, tx, actor, projectId, "project:submit", ct);
+        ProjectWorkflowRules.RequireSupplierSubmitter(current);
         if (project.Status != ProjectStatuses.InProgress)
         {
             throw ApiException.Conflict("只有进行中的项目可以提交验收");
@@ -378,7 +380,6 @@ internal sealed class ProjectService(
             counts.UploadCount > 0);
         await conn.ExecuteAsync(new CommandDefinition(
             """
-            DELETE FROM project_members WHERE project_id=@ProjectId;
             DELETE FROM email_outbox WHERE project_id=@ProjectId;
             DELETE FROM project_status_logs WHERE project_id=@ProjectId
             """,

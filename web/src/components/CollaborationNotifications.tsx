@@ -37,6 +37,11 @@ const ACTION_LABEL: Record<string, string> = {
   UPDATE: '更新',
 }
 
+function actionLabel(item: CollaborationNotification): string {
+  if (item.type === 'MESSAGE' && item.action === 'CREATE') return '发送留言'
+  return ACTION_LABEL[item.action] || item.action
+}
+
 function notificationRoute(item: CollaborationNotification): string {
   if (item.type === 'PROJECT') return `/projects/${item.projectId}`
   if (!item.targetAvailable || item.targetId === null) return `/projects/${item.projectId}?tab=activity`
@@ -189,7 +194,7 @@ export default function CollaborationNotifications() {
             className="collaboration-bell"
             type="text"
             shape="circle"
-            aria-label={unreadCount > 0 ? `协作通知，${unreadCount} 条未查看` : '协作通知'}
+            aria-label={unreadCount > 0 ? `协作动态通知，${unreadCount} 条未查看` : '协作动态通知'}
             icon={<IconNotification />}
             onClick={openDrawer}
           />
@@ -198,7 +203,7 @@ export default function CollaborationNotifications() {
 
       <Drawer
         className="collaboration-drawer"
-        title="协作通知"
+        title="协作动态通知"
         width={480}
         visible={visible}
         footer={null}
@@ -206,6 +211,11 @@ export default function CollaborationNotifications() {
         onCancel={closeDrawer}
       >
         <div className="collaboration-drawer-content" data-collaboration-drawer="true">
+          <Alert
+            className="collaboration-meaning-note"
+            type="info"
+            content="通知“已查看”仅表示已查看这条协作动态，不等同于留言已读；留言需进入项目后查看。"
+          />
           {newContentAvailable && (
             <Alert
               className="collaboration-new-content"
@@ -266,7 +276,7 @@ export default function CollaborationNotifications() {
                           <Tag size="small" color={item.type === 'MESSAGE' ? 'arcoblue' : item.type === 'FILE' ? 'green' : 'orange'}>
                             {TYPE_LABEL[item.type]}
                           </Tag>
-                          <span>{ACTION_LABEL[item.action] || item.action}</span>
+                          <span>{actionLabel(item)}</span>
                         </div>
                         {!item.read && <span className="collaboration-unread-mark" aria-label="未查看" />}
                       </div>

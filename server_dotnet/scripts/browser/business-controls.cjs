@@ -22,6 +22,43 @@ async function uploadBytes(context, token, projectId, name, bytes) {
   return (await api(context, 'POST', '/uploads/' + initialized.sessionId + '/merge', undefined, token)).json();
 }
 
+async function loadProjectDefaults(context, token, ownerId) {
+  const vendors = await (await api(
+    context, 'GET', '/project-dictionaries?type=ROBOT_VENDOR&enabledOnly=true', undefined, token)).json();
+  assert(vendors.length > 0, 'project controls need a Robot vendor');
+  const models = await (await api(
+    context, 'GET', '/project-dictionaries?type=ROBOT_MODEL&parentId=' + vendors[0].id
+      + '&enabledOnly=true', undefined, token)).json();
+  const priorities = await (await api(
+    context, 'GET', '/project-dictionaries?type=PRIORITY&enabledOnly=true', undefined, token)).json();
+  assert(models.length > 0 && priorities.length > 0, 'project controls need model and priority options');
+  return {
+    workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
+    machineModel: '项目控件机型',
+    robotVendorId: vendors[0].id,
+    robotModelId: models[0].id,
+    responsibleUserId: ownerId,
+    priorityId: priorities[0].id,
+    expectedCompletionDate: '2099-12-31',
+  };
+}
+
+async function createProjectGroup(context, token, supplierId, groupName, defaults) {
+  const group = await (await api(context, 'POST', '/project-groups', {
+    name: groupName,
+    description: '独立工作台、权限和控件验收夹具',
+    supplierId,
+    ...defaults,
+    subprojectNames: [groupName + ' 子项目'],
+  }, token)).json();
+  const detail = await (await api(context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
+  assert.equal(detail.projects.length, 1, 'project controls group must contain one subproject');
+  return { ...detail.projects[0], groupId: group.id, groupName };
+}
+
+const dashboardProjectLabel = project =>
+  `${project.groupName || project.projectGroupName || '主项目'} / ${project.name}`;
+
 async function choose(page, placeholder, optionName) {
   await page.locator('.arco-select').filter({ has: page.getByPlaceholder(placeholder, { exact: true }) }).click();
   await page.getByRole('option', { name: optionName, exact: true }).click();
@@ -49,16 +86,17 @@ async function choose(page, placeholder, optionName) {
     const tinyFile = Buffer.from('browser-dashboard-fixture|' + marker);
     const pendingProjects = [];
     const messageText = '工作台未读键盘跳转-' + marker;
-    let managerName;
+    const ownerOptions = await (await api(
+      adminContext, 'GET', '/project-owner-options', undefined, adminToken)).json();
+    assert(ownerOptions.length > 0, 'project controls need an active project owner');
+    const defaults = await loadProjectDefaults(adminContext, adminToken, ownerOptions[0].id);
 
     // API-only fixture setup: 11 pending projects make the dashboard paginator real.
     // Every project gets a valid available file because submit requires one.
     for (let index = 0; index < 11; index += 1) {
-      const project = await (await api(adminContext, 'POST', '/projects', {
-        name: prefix + '-' + String(index + 1).padStart(2, '0'),
-        description: '独立工作台、权限和控件验收夹具',
-        supplierId: f.suppliers.a.id,
-      }, adminToken)).json();
+      const project = await createProjectGroup(
+        adminContext, adminToken, f.suppliers.a.id,
+        prefix + '-' + String(index + 1).padStart(2, '0'), defaults);
       await api(adminContext, 'PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' }, adminToken);
       await uploadBytes(adminContext, adminToken, project.id, prefix + '-' + index + '.zip', tinyFile);
       if (index === 0) {
@@ -74,14 +112,13 @@ async function choose(page, placeholder, optionName) {
       pendingProjects.push(project);
     }
 
-    await record('项目管理员可见非本人非成员项目且无系统管理菜单', async () => {
+    await record('项目管理员可见非本人负责人项目且无系统管理菜单', async () => {
       const managerContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
       const managerPage = await managerContext.newPage();
       track(managerPage, 'business-controls-manager');
       try {
         const manager = await login(managerPage, f.users.manager.username, f.users.manager.changedPassword);
-        managerName = manager.user.realName;
-        assert.equal(typeof managerName, 'string');
+        assert.equal(typeof manager.user.realName, 'string');
         await managerPage.waitForURL(s.base + '/');
         assert(manager.permissions.includes('project:view_all'), 'project manager fixture must have project:view_all');
         for (const label of ['供应商管理', '用户管理', '组织架构', '角色权限', '操作日志', '系统参数']) {
@@ -90,19 +127,19 @@ async function choose(page, placeholder, optionName) {
         }
         const listed = managerPage.waitForResponse(response => {
           const url = new URL(response.url());
-          return url.pathname === '/api/v1/projects' && url.searchParams.get('keyword') === pendingProjects[0].name
+          return url.pathname === '/api/v1/project-groups' && url.searchParams.get('keyword') === pendingProjects[0].groupName
             && response.status() === 200;
         });
         await managerPage.goto(s.base + '/projects');
-        const search = managerPage.getByPlaceholder('项目名称', { exact: true });
-        await search.fill(pendingProjects[0].name);
+        const search = managerPage.getByPlaceholder('主项目名称', { exact: true });
+        await search.fill(pendingProjects[0].groupName);
         await search.press('Enter');
         const body = await (await listed).json();
-        assert(body.list.some(item => item.id === pendingProjects[0].id),
-          'project:view_all must include a non-member project in the server result');
-        await managerPage.getByRole('link', { name: pendingProjects[0].name, exact: true }).click();
-        await managerPage.waitForURL(s.base + '/projects/' + pendingProjects[0].id);
-        await managerPage.getByText(pendingProjects[0].name, { exact: true }).waitFor();
+        assert(body.list.some(item => item.id === pendingProjects[0].groupId),
+          'project:view_all must include a non-owner main project in the server result');
+        await managerPage.getByRole('link', { name: pendingProjects[0].groupName, exact: true }).click();
+        await managerPage.waitForURL(s.base + '/project-groups/' + pendingProjects[0].groupId);
+        await managerPage.getByText(pendingProjects[0].groupName, { exact: true }).waitFor();
       } finally {
         await managerContext.close();
       }
@@ -122,13 +159,13 @@ async function choose(page, placeholder, optionName) {
       const pendingFirst = await (await pendingFirstPromise).json();
       assert(summary.pendingConfirmations >= 11);
       assert(summary.unreadMessages >= 1);
-      for (const [title, value] of [['待内部验收项目', summary.pendingConfirmations], ['未读留言', summary.unreadMessages]]) {
+      for (const [title, value] of [['待内部验收子项目', summary.pendingConfirmations], ['未读留言', summary.unreadMessages]]) {
         const card = page.locator('.dashboard-stat-card').filter({ hasText: title });
         await card.getByText(String(value), { exact: true }).waitFor();
       }
       assert.equal(pendingFirst.list.length, 10);
       for (const project of pendingFirst.list) {
-        await page.getByRole('link', { name: project.name, exact: true }).waitFor();
+        await page.getByRole('link', { name: dashboardProjectLabel(project), exact: true }).waitFor();
       }
       const pendingSecondPromise = page.waitForResponse(response => {
         const url = new URL(response.url());
@@ -140,7 +177,7 @@ async function choose(page, placeholder, optionName) {
       const pendingSecond = await (await pendingSecondPromise).json();
       assert(pendingSecond.list.length >= 1);
       for (const project of pendingSecond.list) {
-        await page.getByRole('link', { name: project.name, exact: true }).waitFor();
+        await page.getByRole('link', { name: dashboardProjectLabel(project), exact: true }).waitFor();
       }
     });
 
@@ -149,9 +186,9 @@ async function choose(page, placeholder, optionName) {
         '/dashboard/pending-projects?page=2&pageSize=10', undefined, adminToken)).json();
       const target = currentPending.list.find(item => pendingProjects.some(project => project.id === item.id));
       assert(target, 'page 2 must contain a dedicated pending fixture');
-      await page.getByRole('link', { name: target.name, exact: true }).click();
+      await page.getByRole('link', { name: dashboardProjectLabel(target), exact: true }).click();
       await page.waitForURL(s.base + '/projects/' + target.id);
-      await page.getByRole('button', { name: '返回项目列表', exact: true }).waitFor();
+      await page.getByRole('button', { name: '返回主项目', exact: true }).waitFor();
 
       await page.goto(s.base + '/');
       const message = page.locator('.dashboard-message-item').filter({ hasText: messageText });
@@ -256,56 +293,24 @@ async function choose(page, placeholder, optionName) {
       page.expectedServerErrors.clear();
     });
 
-    const memberProject = await (await api(adminContext, 'POST', '/projects', {
-      name: prefix + '-成员保存', supplierId: f.suppliers.a.id,
-    }, adminToken)).json();
-    await api(adminContext, 'PUT', '/projects/' + memberProject.id + '/status', { status: 'IN_PROGRESS' }, adminToken);
-    const memberPath = '/api/v1/projects/' + memberProject.id + '/members';
-
-    await record('成员搜索清空和无匹配状态均可操作', async () => {
-      await page.goto(s.base + '/projects/' + memberProject.id + '?tab=members');
-      await page.getByRole('button', { name: '设置公司成员', exact: true }).click();
-      const dialog = page.locator('.member-picker-dialog:visible');
-      const search = dialog.getByPlaceholder('搜索姓名、工号或部门', { exact: true });
-      await search.fill(f.users.manager.username);
-      await dialog.getByText(managerName, { exact: true }).waitFor();
-      assert.equal(await dialog.locator('.member-picker-option').count(), 1);
-      await search.hover();
-      await dialog.locator('.member-picker-search .arco-input-clear-icon').click();
-      assert.equal(await search.inputValue(), '');
-      assert(await dialog.locator('.member-picker-option').count() > 1);
-      await search.fill('不存在成员-' + marker);
-      await dialog.getByText('没有匹配的公司成员', { exact: true }).waitFor();
-      await search.fill('');
-      await dialog.getByText(managerName, { exact: true }).waitFor();
-    });
-
-    await record('成员保存503保留草稿并重试持久化', async () => {
-      const dialog = page.locator('.member-picker-dialog:visible');
-      const managerOption = dialog.locator('.member-picker-option').filter({ hasText: managerName });
-      const managerCheckbox = managerOption.getByRole('checkbox');
-      assert.equal(await managerCheckbox.isChecked(), false);
-      await managerOption.click();
-      assert.equal(await managerCheckbox.isChecked(), true);
-      page.expectedServerErrors = new Set([memberPath]);
-      await page.route('**' + memberPath, route => route.fulfill({
-        status: 503,
-        contentType: 'application/json',
-        body: JSON.stringify({ code: 50301, message: '成员保存测试暂时不可用' }),
-      }), { times: 1 });
-      const failed = page.waitForResponse(response => apiPath(response) === memberPath && response.status() === 503);
-      await dialog.getByRole('button', { name: '保存成员', exact: true }).click();
-      await failed;
-      assert.equal(await dialog.isVisible(), true);
-      assert.equal(await managerCheckbox.isChecked(), true);
-      await action(page, '/projects/' + memberProject.id + '/members', 'PUT', () => (
-        dialog.getByRole('button', { name: '保存成员', exact: true }).click()
-      ));
-      await dialog.waitFor({ state: 'hidden' });
-      const members = await (await api(adminContext, 'GET', '/projects/' + memberProject.id + '/members', undefined, adminToken)).json();
-      assert(members.some(item => item.userId === f.users.manager.id));
-      assert(members.some(item => item.userId === admin.user.id), 'member save must retain the operator');
-      page.expectedServerErrors.clear();
+    await record('主项目详情显示负责人并在子项目待验收时冻结公共资料', async () => {
+      const group = await (await api(
+        adminContext, 'GET', '/project-groups/' + pendingProjects[0].groupId,
+        undefined, adminToken)).json();
+      assert.equal(group.group.responsibleUserId, defaults.responsibleUserId);
+      assert(group.projects.some(item => item.id === pendingProjects[0].id));
+      await api(adminContext, 'PUT', '/project-groups/' + pendingProjects[0].groupId, {
+        name: group.group.name,
+        description: group.group.description,
+        supplierId: group.group.supplierId,
+        workOrderNos: group.group.workOrderNos,
+        machineModel: group.group.machineModel,
+        robotVendorId: group.group.robotVendorId,
+        robotModelId: group.group.robotModelId,
+        responsibleUserId: group.group.responsibleUserId,
+        priorityId: group.group.priorityId,
+        expectedCompletionDate: group.group.expectedCompletionDate,
+      }, adminToken, 409);
     });
 
     await record('内置角色名称禁止编辑而说明草稿可取消', async () => {

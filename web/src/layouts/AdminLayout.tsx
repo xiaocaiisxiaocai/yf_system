@@ -55,7 +55,11 @@ export default function AdminLayout() {
   )
   const selected =
     items
-      .filter((m) => (m.path === '/' ? loc.pathname === '/' : loc.pathname.startsWith(m.path)))
+      .filter((m) => (m.path === '/'
+        ? loc.pathname === '/'
+        : m.path === '/projects'
+          ? loc.pathname.startsWith('/projects') || loc.pathname.startsWith('/project-groups/')
+          : loc.pathname.startsWith(m.path)))
       .map((m) => m.path)
       .slice(0, 1) || []
 

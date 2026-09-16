@@ -121,11 +121,14 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
         var oldRole = await FindRoleAsync(conn, tx, oldRoleId, ct);
         var oldDepartment = user.DepartmentId is ulong oldDepartmentId ? await FindDepartmentAsync(conn, tx, oldDepartmentId, ct) : null;
         var roleChanged = roleId != 0 && roleId != oldRoleId;
+        var departmentChanged = departmentSpecified && departmentId != user.DepartmentId;
         if (roleChanged)
         {
             await EnsureAdminRemovalSafeAsync(conn, tx, actor.Id, id, roleId, ct); await permissionCeiling.EnsureManageRoleAsync(conn, tx, actor, roleId, ct); await EnsureRoleAssignableAsync(conn, tx, roleId, ct);
         }
         else if (user.Status == "ACTIVE") await EnsureRoleAssignableAsync(conn, tx, oldRoles[0], ct);
+        if (departmentChanged || roleChanged && !await RoleHasPermissionAsync(conn, tx, roleId, "project:list", ct))
+            await EnsureNoActiveProjectResponsibilityAsync(conn, tx, id, ct);
         await conn.ExecuteAsync(new CommandDefinition("UPDATE users SET real_name=COALESCE(@realName,real_name),email=COALESCE(@email,email),department_id=IF(@departmentSpecified,@departmentId,department_id),updated_at=UTC_TIMESTAMP(6) WHERE id=@id",
             new { realName = request.RealName?.Trim(), email = request.Email?.Trim(), departmentSpecified, departmentId, id }, tx, cancellationToken: ct));
         if (roleChanged) { await conn.ExecuteAsync(new CommandDefinition("DELETE FROM user_roles WHERE user_id=@id; INSERT INTO user_roles(user_id,role_id) VALUES(@id,@roleId)", new { id, roleId }, tx, cancellationToken: ct)); }
@@ -163,7 +166,7 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
         status = AdminValidation.Status(status); await using var conn = await db.OpenAsync(ct); await using var tx = await AppDb.BeginTransactionAsync(conn, ct); await ManagementAsync(conn, tx, actor, "user:manage", ct);
         if (id == actor.Id) throw ApiException.BadRequest("不能禁用自己的账号");
         var user = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound(); if (user.UserType != "INTERNAL") throw ApiException.BadRequest("供应商人员请在供应商模块维护"); await permissionCeiling.EnsureManageUserAsync(conn, tx, actor, id, ct);
-        if (status == "DISABLED") await EnsureAdminRemovalSafeAsync(conn, tx, actor.Id, id, null, ct); else { var roleIds = (await conn.QueryAsync<ulong>(new CommandDefinition("SELECT DISTINCT role_id FROM user_roles WHERE user_id=@id", new { id }, tx, cancellationToken: ct))).ToArray(); if (roleIds.Length != 1) throw ApiException.BadRequest("启用的内部用户必须且只能绑定一个角色"); await EnsureRoleAssignableAsync(conn, tx, roleIds[0], ct); }
+        if (status == "DISABLED") { await EnsureNoActiveProjectResponsibilityAsync(conn, tx, id, ct); await EnsureAdminRemovalSafeAsync(conn, tx, actor.Id, id, null, ct); } else { var roleIds = (await conn.QueryAsync<ulong>(new CommandDefinition("SELECT DISTINCT role_id FROM user_roles WHERE user_id=@id", new { id }, tx, cancellationToken: ct))).ToArray(); if (roleIds.Length != 1) throw ApiException.BadRequest("启用的内部用户必须且只能绑定一个角色"); await EnsureRoleAssignableAsync(conn, tx, roleIds[0], ct); }
         await conn.ExecuteAsync(new CommandDefinition("UPDATE users SET status=@status,updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { status, id }, tx, cancellationToken: ct)); if (status == "DISABLED") await IdentityService.RevokeAllAsync(conn, tx, id, ct);
         await audit.WriteAsync(conn, tx, actor.Id, "USER_STATUS", "user", id, new
         {
@@ -197,6 +200,8 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
     {
         var roleId = AdminValidation.OneRole(null, roles, true); await using var conn = await db.OpenAsync(ct); await using var tx = await AppDb.BeginTransactionAsync(conn, ct); await ManagementAsync(conn, tx, actor, "user:manage", ct);
         var user = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound(); if (user.UserType != "INTERNAL") throw ApiException.BadRequest("供应商人员角色固定，不可调整"); await permissionCeiling.EnsureManageUserAsync(conn, tx, actor, id, ct); await permissionCeiling.EnsureManageRoleAsync(conn, tx, actor, roleId, ct); await EnsureAdminRemovalSafeAsync(conn, tx, actor.Id, id, roleId, ct); await EnsureRoleAssignableAsync(conn, tx, roleId, ct);
+        if (!await RoleHasPermissionAsync(conn, tx, roleId, "project:list", ct))
+            await EnsureNoActiveProjectResponsibilityAsync(conn, tx, id, ct);
         var old = await conn.QuerySingleOrDefaultAsync<ulong?>(new CommandDefinition("SELECT role_id FROM user_roles WHERE user_id=@id", new { id }, tx, cancellationToken: ct));
         var oldRole = old.HasValue ? await FindRoleAsync(conn, tx, old.Value, ct) : null;
         var newRole = await FindRoleAsync(conn, tx, roleId, ct) ?? throw ApiException.BadRequest($"角色不存在: {roleId}");
@@ -223,10 +228,35 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
 
     internal static async Task EnsureNoHistoryAsync(MySqlConnection c, MySqlTransaction t, ulong id, CancellationToken ct)
     {
-        var sql = """SELECT EXISTS(SELECT 1 FROM files WHERE uploader_id=@id) OR EXISTS(SELECT 1 FROM messages WHERE sender_id=@id OR deleted_by=@id) OR EXISTS(SELECT 1 FROM upload_sessions WHERE uploader_id=@id) OR EXISTS(SELECT 1 FROM projects WHERE created_by=@id) OR EXISTS(SELECT 1 FROM project_status_logs WHERE operator_id=@id) OR EXISTS(SELECT 1 FROM project_members WHERE created_by=@id) OR EXISTS(SELECT 1 FROM message_reads WHERE user_id=@id) OR EXISTS(SELECT 1 FROM collaboration_reads WHERE user_id=@id) OR EXISTS(SELECT 1 FROM suppliers WHERE created_by=@id) OR EXISTS(SELECT 1 FROM users WHERE created_by=@id) OR EXISTS(SELECT 1 FROM email_outbox WHERE recipient_user_id=@id) OR EXISTS(SELECT 1 FROM audit_logs WHERE user_id=@id)""";
+        var ownerReference = await c.ExecuteScalarAsync<bool>(new CommandDefinition(
+            """
+            SELECT EXISTS(SELECT 1 FROM project_groups WHERE responsible_user_id=@id)
+                OR EXISTS(SELECT 1 FROM projects WHERE responsible_user_id=@id)
+            """, new { id }, t, cancellationToken: ct));
+        if (ownerReference)
+            throw ApiException.BadRequest("该账号仍是主项目或子项目负责人，请先转交负责人");
+        var mainProjectHistory = await c.ExecuteScalarAsync<bool>(new CommandDefinition(
+            """
+            SELECT EXISTS(SELECT 1 FROM project_groups WHERE created_by=@id)
+                OR EXISTS(SELECT 1 FROM project_group_status_logs WHERE operator_id=@id)
+            """, new { id }, t, cancellationToken: ct));
+        if (mainProjectHistory)
+            throw ApiException.BadRequest("该账号仍被主项目创建记录或状态历史引用，请禁用账号并保留历史记录");
+        var sql = """SELECT EXISTS(SELECT 1 FROM files WHERE uploader_id=@id) OR EXISTS(SELECT 1 FROM messages WHERE sender_id=@id OR deleted_by=@id) OR EXISTS(SELECT 1 FROM upload_sessions WHERE uploader_id=@id) OR EXISTS(SELECT 1 FROM projects WHERE created_by=@id) OR EXISTS(SELECT 1 FROM project_status_logs WHERE operator_id=@id) OR EXISTS(SELECT 1 FROM message_reads WHERE user_id=@id) OR EXISTS(SELECT 1 FROM collaboration_reads WHERE user_id=@id) OR EXISTS(SELECT 1 FROM suppliers WHERE created_by=@id) OR EXISTS(SELECT 1 FROM users WHERE created_by=@id) OR EXISTS(SELECT 1 FROM email_outbox WHERE recipient_user_id=@id) OR EXISTS(SELECT 1 FROM audit_logs WHERE user_id=@id) OR EXISTS(SELECT 1 FROM project_activities WHERE actor_id=@id) OR EXISTS(SELECT 1 FROM project_copies WHERE copied_by=@id)""";
         if (await c.ExecuteScalarAsync<int>(new CommandDefinition(sql, new { id }, t, cancellationToken: ct)) == 1) throw ApiException.BadRequest("该账号仍有业务或历史记录，请禁用账号，不要删除");
     }
-    internal static Task RemoveAsync(MySqlConnection c, MySqlTransaction t, ulong id, CancellationToken ct) => c.ExecuteAsync(new CommandDefinition("DELETE FROM user_roles WHERE user_id=@id; DELETE FROM refresh_tokens WHERE user_id=@id; DELETE FROM project_members WHERE user_id=@id; DELETE FROM users WHERE id=@id", new { id }, t, cancellationToken: ct));
+    internal static Task RemoveAsync(MySqlConnection c, MySqlTransaction t, ulong id, CancellationToken ct) => c.ExecuteAsync(new CommandDefinition("DELETE FROM user_roles WHERE user_id=@id; DELETE FROM refresh_tokens WHERE user_id=@id; DELETE FROM users WHERE id=@id", new { id }, t, cancellationToken: ct));
+    internal static async Task EnsureNoActiveProjectResponsibilityAsync(MySqlConnection c, MySqlTransaction t, ulong id, CancellationToken ct)
+    {
+        var count = await c.ExecuteScalarAsync<ulong>(new CommandDefinition(
+            "SELECT COUNT(*) FROM project_groups WHERE responsible_user_id=@id AND status IN ('DRAFT','IN_PROGRESS')",
+            new { id }, t, cancellationToken: ct));
+        if (count > 0) throw ApiException.BadRequest($"该用户仍负责 {count} 个未结束主项目，请先转交负责人");
+    }
+    private static Task<bool> RoleHasPermissionAsync(MySqlConnection c, MySqlTransaction t, ulong roleId, string permission, CancellationToken ct) =>
+        c.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT EXISTS(SELECT 1 FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id WHERE rp.role_id=@roleId AND p.code=@permission)",
+            new { roleId, permission }, t, cancellationToken: ct));
     private static async Task ManagementAsync(MySqlConnection c, MySqlTransaction t, CurrentUser actor, string permission, CancellationToken ct) { await AccessService.LockManagementAsync(c, t, ct); actor = await AccessService.RecheckActorAsync(c, t, actor, ct); AccessService.RequireInternal(actor); await AccessService.RequirePermissionAsync(c, t, actor, permission, ct); }
     private static Task<AdminUserRow?> FindAsync(MySqlConnection c, MySqlTransaction? t, ulong id, CancellationToken ct) => c.QuerySingleOrDefaultAsync<AdminUserRow>(new CommandDefinition(Select + " WHERE id=@id", new { id }, t, cancellationToken: ct));
     private static Task<RoleRow?> FindRoleAsync(MySqlConnection c, MySqlTransaction? t, ulong id, CancellationToken ct) => c.QuerySingleOrDefaultAsync<RoleRow>(new CommandDefinition("SELECT id Id,name Name FROM roles WHERE id=@id", new { id }, t, cancellationToken: ct));

@@ -49,12 +49,17 @@ def _new_internal_with_permissions(client, conn, codes):
     })
     employee = "filepreview_" + secrets.token_hex(5)
     password = _password()
+    department = client.call("POST", "/api/v1/admin/departments", {
+        "name": "文件预览测试组织-" + secrets.token_hex(5),
+        "parentId": None,
+        "sortNo": 0,
+    })
     user = client.call("POST", "/api/v1/admin/users", {
         "employeeNo": employee,
         "password": password,
         "realName": "文件预览契约用户",
         "email": employee + "@example.invalid",
-        "departmentId": None,
+        "departmentId": department["id"],
         "roleId": role["id"],
     })
     with conn.cursor() as cursor:

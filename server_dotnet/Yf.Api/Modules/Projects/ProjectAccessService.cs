@@ -90,6 +90,7 @@ public static class ProjectAccessService
         ulong projectId,
         CancellationToken ct = default)
     {
+        AccessService.RequireInternal(actor);
         if (tx is null)
         {
             await using var owned = await AppDb.BeginTransactionAsync(conn, ct);
@@ -112,18 +113,21 @@ public static class ProjectAccessService
         MySqlConnection conn,
         MySqlTransaction? tx,
         CurrentUser actor,
+        string projectStatus,
         CancellationToken ct = default)
     {
         if (tx is null)
         {
             await using var owned = await AppDb.BeginTransactionAsync(conn, ct);
-            var result = await CanDeleteFilesAsync(conn, owned, actor, ct);
+            var result = await CanDeleteFilesAsync(conn, owned, actor, projectStatus, ct);
             await owned.CommitAsync(ct);
             return result;
         }
 
-        await AccessService.LockActorAsync(conn, tx, actor, ct);
-        return await HasPermissionAsync(conn, tx, actor.Id, "file:delete", ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        return current.IsInternal
+            && projectStatus == ProjectStatuses.InProgress
+            && await HasPermissionAsync(conn, tx, current.Id, "file:delete", ct);
     }
 
     internal static async Task<bool> HasPermissionAsync(

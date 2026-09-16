@@ -29,7 +29,7 @@ public sealed class ProjectCopyTests
             await File.WriteAllBytesAsync(sourcePath, bytes, ct);
             await database.ExecuteAsync($"""
                 INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,mime_type,sha256,storage_path,status,created_at)
-                VALUES(8101,7101,1,'C2S','源文件.txt','source-copy.txt','txt',{bytes.Length},'text/plain','{sha}','{sourceRelative}','AVAILABLE',UTC_TIMESTAMP(3));
+                VALUES(8101,7101,4,'S2C','源文件.txt','source-copy.txt','txt',{bytes.Length},'text/plain','{sha}','{sourceRelative}','AVAILABLE',UTC_TIMESTAMP(3));
                 INSERT INTO messages(id,project_id,sender_id,content,status,created_at)
                 VALUES(8201,7101,1,'不应复制的留言','NORMAL',UTC_TIMESTAMP(3));
                 """, ct);
@@ -50,10 +50,11 @@ public sealed class ProjectCopyTests
             Assert.True(result.RootElement.GetProperty("project").GetProperty("hasCopyHistory").GetBoolean());
 
             var copied = await conn.QuerySingleAsync<CopiedFile>(new CommandDefinition(
-                "SELECT id AS Id,storage_path AS StoragePath,uploader_id AS UploaderId,sha256 AS Sha256 FROM files WHERE project_id=@TargetId",
+                "SELECT id AS Id,storage_path AS StoragePath,uploader_id AS UploaderId,direction AS Direction,sha256 AS Sha256 FROM files WHERE project_id=@TargetId",
                 new { TargetId = targetId }, cancellationToken: ct));
             Assert.NotEqual(sourceRelative, copied.StoragePath);
-            Assert.Equal(1UL, copied.UploaderId);
+            Assert.Equal(4UL, copied.UploaderId);
+            Assert.Equal("S2C", copied.Direction);
             Assert.Equal(sha, copied.Sha256);
             Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(storage,
                 copied.StoragePath.Replace('/', Path.DirectorySeparatorChar)), ct));
@@ -120,13 +121,14 @@ public sealed class ProjectCopyTests
     private const string SeedSql = """
         INSERT INTO suppliers(id,name,status,created_at,updated_at) VALUES(6101,'复制测试供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
         INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at) VALUES(7001,NULL,'复制测试课','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-        INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
-        VALUES(1,'admin','unused','系统管理员','','INTERNAL',7001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (2,'copy-other','unused','其他负责人','','INTERNAL',7001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (3,'copy-owner','unused','受限负责人','','INTERNAL',7001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+        INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+        VALUES(1,'admin','unused','系统管理员','','INTERNAL',NULL,7001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (2,'copy-other','unused','其他负责人','','INTERNAL',NULL,7001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (3,'copy-owner','unused','受限负责人','','INTERNAL',NULL,7001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (4,'copy-supplier','unused','源文件上传人','','SUPPLIER',6101,NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
         INSERT INTO roles(id,name,is_built_in,status) VALUES(6001,'复制受限角色',0,'ACTIVE');
         INSERT INTO role_permissions(role_id,permission_id) SELECT 6001,id FROM permissions WHERE code IN ('project:list','project:create','project:delete');
-        INSERT INTO user_roles(user_id,role_id) VALUES(1,1),(3,6001);
+        INSERT INTO user_roles(user_id,role_id) VALUES(1,1),(3,6001),(4,4);
         INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status) VALUES
           (6201,'ROBOT_VENDOR','复制厂商',NULL,1,'ACTIVE'),
           (6202,'ROBOT_MODEL','复制型号',6201,1,'ACTIVE'),
@@ -143,7 +145,7 @@ public sealed class ProjectCopyTests
 
     private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, JsonSerializerOptions.Web));
     private sealed class CopiedFile { public ulong Id { get; init; } public string StoragePath { get; init; } = "";
-        public ulong UploaderId { get; init; } public string Sha256 { get; init; } = ""; }
+        public ulong UploaderId { get; init; } public string Direction { get; init; } = ""; public string Sha256 { get; init; } = ""; }
     private sealed class RecordingPublisher : IProjectRealtimePublisher
     {
         internal List<ulong> ProjectIds { get; } = [];
