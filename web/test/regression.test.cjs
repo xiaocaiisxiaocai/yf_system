@@ -2571,8 +2571,10 @@ test('document preview branches and message image preview all mount a watermark 
   for (const componentName of ['ExcelPreview', 'PdfPreview', 'ImagePreview', 'PptxPreview']) {
     assert.match(fileTable, new RegExp(`<WatermarkedPreview[\\s\\S]*?<${componentName}\\b`), `${componentName} watermark`)
   }
+  assert.match(fileTable, /const label = `\$\{employeeNo\?\.trim\(\) \|\| '未知'\} \$\{realName\?\.trim\(\) \|\| '未知'\} \$\{formatWatermarkTime\(openedAt\)\}`/)
   const messageImages = fs.readFileSync(path.resolve(__dirname, '../src/components/MessageImages.tsx'), 'utf8')
   assert.match(messageImages, /className="file-preview-surface"[\s\S]*?PreviewWatermark/)
+  assert.match(messageImages, /const label = `\$\{employeeNo\?\.trim\(\) \|\| '未知'\} \$\{realName\?\.trim\(\) \|\| '未知'\} \$\{formatWatermarkTime\(openedAt\)\}`/)
 })
 
 test('invalid project route identifiers render a recoverable error without API calls', async () => {

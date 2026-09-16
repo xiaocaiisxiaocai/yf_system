@@ -120,7 +120,7 @@ async function preview(page, name, kind, label) {
   await watermark.waitFor({ state: 'visible' });
   assert.equal(await watermark.getAttribute('aria-hidden'), 'true');
   assert.match(await watermark.locator('span').first().textContent() || '',
-    /^工号：.+ · \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+    /^\S+ .+ \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
     kind + ' preview watermark');
   await page.screenshot({ path: OUT + '/' + label + '.png', fullPage: true });
   await modal.getByRole('button', { name: '关闭文件预览', exact: true }).click();

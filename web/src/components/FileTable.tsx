@@ -44,18 +44,18 @@ function formatWatermarkTime(value = new Date()) {
   return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`
 }
 
-function PreviewWatermark({ employeeNo }: { employeeNo?: string }) {
+function PreviewWatermark({ employeeNo, realName }: { employeeNo?: string; realName?: string }) {
   const [openedAt] = useState(() => new Date())
-  const label = `工号：${employeeNo?.trim() || '未知'} · ${formatWatermarkTime(openedAt)}`
+  const label = `${employeeNo?.trim() || '未知'} ${realName?.trim() || '未知'} ${formatWatermarkTime(openedAt)}`
   return <div className="preview-watermark" aria-hidden="true">
-    {Array.from({ length: 12 }, (_, index) => <span key={index}>{label}</span>)}
+    {Array.from({ length: 36 }, (_, index) => <span key={index}>{label}</span>)}
   </div>
 }
 
-function WatermarkedPreview({ employeeNo, children }: { employeeNo?: string; children: ReactNode }) {
+function WatermarkedPreview({ employeeNo, realName, children }: { employeeNo?: string; realName?: string; children: ReactNode }) {
   return <div className="file-preview-surface">
     {children}
-    <PreviewWatermark employeeNo={employeeNo} />
+    <PreviewWatermark employeeNo={employeeNo} realName={realName} />
   </div>
 }
 
@@ -334,18 +334,18 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
       >
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'excel' && (
           <Suspense fallback={<div style={{ textAlign: 'center', padding: 60 }}>加载 Excel 渲染器…</div>}>
-            <WatermarkedPreview employeeNo={user?.employeeNo}><ExcelPreview fileId={preview.id} /></WatermarkedPreview>
+            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><ExcelPreview fileId={preview.id} /></WatermarkedPreview>
           </Suspense>
         )}
-        {preview && previewKind(preview.ext, preview.sizeBytes) === 'pdf' && <WatermarkedPreview employeeNo={user?.employeeNo}><PdfPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>}
+        {preview && previewKind(preview.ext, preview.sizeBytes) === 'pdf' && <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><PdfPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'image' && (
           <Suspense fallback={<div role="status">加载图片预览…</div>}>
-            <WatermarkedPreview employeeNo={user?.employeeNo}><ImagePreview fileId={preview.id} name={preview.originalName} toolbarContainer={previewToolbar} /></WatermarkedPreview>
+            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><ImagePreview fileId={preview.id} name={preview.originalName} toolbarContainer={previewToolbar} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'pptx' && (
           <Suspense fallback={<div role="status">加载 PPTX 渲染器…</div>}>
-            <WatermarkedPreview employeeNo={user?.employeeNo}><PptxPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>
+            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><PptxPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'video' && (

@@ -277,12 +277,13 @@ async function createPptx(marker) {
     await page.getByRole('tab', { name: '文件', exact: true, selected: true }).waitFor();
     const row = name => page.getByRole('row').filter({ has: page.getByText(name, { exact: true }) });
     const fileDialog = () => page.locator('.file-preview-modal:visible');
-    const assertWatermark = async (dialog, expectedEmployeeNo = 'admin') => {
+    const assertWatermark = async (dialog, expectedEmployeeNo = 'admin', expectedRealName = '系统管理员') => {
       const layer = dialog.locator('.preview-watermark');
       await layer.waitFor({ state: 'visible' });
       assert.equal(await layer.getAttribute('aria-hidden'), 'true');
       const label = await layer.locator('span').first().textContent();
-      assert.match(label || '', new RegExp('^工号：' + expectedEmployeeNo.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&') + ' · \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$'));
+      const escapeRegExp = value => value.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+      assert.match(label || '', new RegExp('^' + escapeRegExp(expectedEmployeeNo) + ' ' + escapeRegExp(expectedRealName) + ' \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$'));
     };
 
     await record('Playwright截图文件真实渲染且仅图片滚轮缩放，预览无下载入口', async () => {

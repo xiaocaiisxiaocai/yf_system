@@ -29,6 +29,7 @@ interface MessageImagesProps {
   messageId: number
   images: MessageImageItem[]
   watermarkEmployeeNo?: string
+  watermarkRealName?: string
 }
 
 function isAcceptedImage(file: File) {
@@ -164,11 +165,11 @@ function formatWatermarkTime(value = new Date()) {
   return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`
 }
 
-function PreviewWatermark({ employeeNo }: { employeeNo?: string }) {
+function PreviewWatermark({ employeeNo, realName }: { employeeNo?: string; realName?: string }) {
   const [openedAt] = useState(() => new Date())
-  const label = `工号：${employeeNo?.trim() || '未知'} · ${formatWatermarkTime(openedAt)}`
+  const label = `${employeeNo?.trim() || '未知'} ${realName?.trim() || '未知'} ${formatWatermarkTime(openedAt)}`
   return <div className="preview-watermark" aria-hidden="true">
-    {Array.from({ length: 12 }, (_, index) => <span key={index}>{label}</span>)}
+    {Array.from({ length: 36 }, (_, index) => <span key={index}>{label}</span>)}
   </div>
 }
 
@@ -253,7 +254,7 @@ function RemoteImageThumbnail({ messageId, image, onOpen }: {
   </div>
 }
 
-export function MessageImages({ messageId, images, watermarkEmployeeNo }: MessageImagesProps) {
+export function MessageImages({ messageId, images, watermarkEmployeeNo, watermarkRealName }: MessageImagesProps) {
   const [preview, setPreview] = useState<MessageImageItem | null>(null)
   const [previewToolbar, setPreviewToolbar] = useState<HTMLDivElement | null>(null)
 
@@ -295,7 +296,7 @@ export function MessageImages({ messageId, images, watermarkEmployeeNo }: Messag
           name={preview.name}
           toolbarContainer={previewToolbar}
         />
-        <PreviewWatermark employeeNo={watermarkEmployeeNo} />
+        <PreviewWatermark employeeNo={watermarkEmployeeNo} realName={watermarkRealName} />
       </div>}
     </Modal>
   </>
