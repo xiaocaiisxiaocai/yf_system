@@ -1,6 +1,7 @@
 using Dapper;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.SystemManagement;
 
 namespace Yf.Api.Modules.Projects;
 
@@ -146,7 +147,8 @@ internal static class ProjectNotificationService
         AuditService audit,
         CancellationToken ct)
     {
-        if (!await NotificationsEnabledAsync(conn, tx, ct))
+        var policy = await EmailNotificationPolicy.LoadAsync(conn, tx, ct);
+        if (!policy.Allows("PROJECT_SUBMITTED", "INTERNAL"))
         {
             return;
         }
@@ -338,7 +340,8 @@ internal static class ProjectNotificationService
         CancellationToken ct,
         AuditService? audit = null)
     {
-        if (!await NotificationsEnabledAsync(conn, tx, ct))
+        var policy = await EmailNotificationPolicy.LoadAsync(conn, tx, ct);
+        if (!policy.Allows(eventType, null))
         {
             return;
         }
@@ -375,6 +378,11 @@ internal static class ProjectNotificationService
         foreach (var recipient in recipients)
         {
             if (excludeUser == recipient.Id)
+            {
+                continue;
+            }
+
+            if (!policy.Allows(eventType, recipient.UserType))
             {
                 continue;
             }
@@ -481,20 +489,6 @@ internal static class ProjectNotificationService
     }
 
     private static string OppositeSide(CurrentUser actor) => actor.IsInternal ? "SUPPLIER" : "COMPANY";
-
-    private static async Task<bool> NotificationsEnabledAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        CancellationToken ct)
-    {
-        var enabledValue = await conn.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(
-            "SELECT cfg_value FROM system_configs WHERE cfg_key = 'notify.enabled'",
-            transaction: tx,
-            cancellationToken: ct));
-        return enabledValue is null
-            || enabledValue.Trim().Equals("true", StringComparison.OrdinalIgnoreCase)
-            || enabledValue.Trim() == "1";
-    }
 
     private static Task WriteMissingEmailAuditAsync(
         MySqlConnection conn,

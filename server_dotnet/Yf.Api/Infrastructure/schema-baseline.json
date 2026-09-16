@@ -666,6 +666,54 @@
         "updated_at": "2026-09-11T00:00:00"
       },
       {
+        "cfg_key": "notify.internal.enabled",
+        "cfg_value": "true",
+        "description": "是否向公司内部员工发送邮件提醒",
+        "updated_at": "2026-09-16T00:00:00"
+      },
+      {
+        "cfg_key": "notify.supplier.enabled",
+        "cfg_value": "true",
+        "description": "是否向外部企业（供应商）发送邮件提醒",
+        "updated_at": "2026-09-16T00:00:00"
+      },
+      {
+        "cfg_key": "notify.event.message_created",
+        "cfg_value": "true",
+        "description": "新留言邮件提醒",
+        "updated_at": "2026-09-16T00:00:00"
+      },
+      {
+        "cfg_key": "notify.event.file_uploaded",
+        "cfg_value": "true",
+        "description": "新文件邮件提醒",
+        "updated_at": "2026-09-16T00:00:00"
+      },
+      {
+        "cfg_key": "notify.event.project_submitted",
+        "cfg_value": "true",
+        "description": "提交验收邮件提醒",
+        "updated_at": "2026-09-16T00:00:00"
+      },
+      {
+        "cfg_key": "notify.event.project_confirmed",
+        "cfg_value": "true",
+        "description": "验收通过邮件提醒",
+        "updated_at": "2026-09-16T00:00:00"
+      },
+      {
+        "cfg_key": "notify.event.project_rejected",
+        "cfg_value": "true",
+        "description": "验收驳回邮件提醒",
+        "updated_at": "2026-09-16T00:00:00"
+      },
+      {
+        "cfg_key": "notify.event.project_withdrawn",
+        "cfg_value": "true",
+        "description": "撤回验收邮件提醒",
+        "updated_at": "2026-09-16T00:00:00"
+      },
+      {
         "cfg_key": "security.management_lock",
         "cfg_value": "1",
         "description": "权限与高风险操作事务锁",

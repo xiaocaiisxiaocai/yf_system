@@ -24,6 +24,7 @@ public class SystemTests
     [InlineData("storage.warn_percent", "85")]
     [InlineData(" STORAGE.WARN_PERCENT ", "85")]
     [InlineData("notify.enabled", "yes")]
+    [InlineData("notify.internal.enabled", "yes")]
     [InlineData("upload.allowed_exts", "pdf,../exe")]
     [InlineData("security.management_lock", "anything")]
     [InlineData("SECURITY.MANAGEMENT_LOCK", "anything")]
@@ -36,6 +37,24 @@ public class SystemTests
     [Fact]
     public void ExtensionsAreNormalizedAndDeduplicated()
         => Assert.Equal("jpg,pdf", SystemService.NormalizeConfig("upload.allowed_exts", " PDF,jpg,pdf "));
+
+    [Theory]
+    [InlineData("notify.enabled")]
+    [InlineData("notify.internal.enabled")]
+    [InlineData("notify.supplier.enabled")]
+    [InlineData("notify.event.message_created")]
+    [InlineData("notify.event.file_uploaded")]
+    [InlineData("notify.event.project_submitted")]
+    [InlineData("notify.event.project_confirmed")]
+    [InlineData("notify.event.project_rejected")]
+    [InlineData("notify.event.project_withdrawn")]
+    public void NotificationConfigValuesAreCanonicalBooleans(string key)
+    {
+        Assert.Equal("true", SystemService.NormalizeConfig(key, "1"));
+        Assert.Equal("false", SystemService.NormalizeConfig(key, "0"));
+        Assert.Equal("true", SystemService.NormalizeConfig(key, "TrUe"));
+        Assert.Equal("false", SystemService.NormalizeConfig(key, "false"));
+    }
 
     [Fact]
     public async Task UnknownAuditCategoryDoesNotFailOpenToAllLogs()

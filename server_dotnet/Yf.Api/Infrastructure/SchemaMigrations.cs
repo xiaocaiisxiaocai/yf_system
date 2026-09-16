@@ -10,7 +10,7 @@ namespace Yf.Api.Infrastructure;
 /// <summary>Explicit, restartable .NET-owned schema upgrades. Startup never changes schema.</summary>
 public static class SchemaMigrations
 {
-    public const int CurrentVersion = 10;
+    public const int CurrentVersion = 11;
     private const string PreviousBaseline = "m20260910_000016_project_workflow";
     private const string FirstMigrationName = "000001_adopt_schema_sessions_supplier_boundary";
     private const string CollaborationMigrationName = "000002_collaboration_notification_reads";
@@ -22,6 +22,7 @@ public static class SchemaMigrations
     private const string ProjectDictionaryCodeRemovalMigrationName = "000008_remove_project_dictionary_code";
     private const string ProjectGroupsMigrationName = "000009_project_groups";
     private const string ProjectOwnershipMigrationName = "000010_project_ownership_integrity";
+    private const string NotificationSettingsMigrationName = "000011_notification_settings";
     internal const string InternalAcceptanceCancelledMailReason = "项目验收已调整为公司内部确认，旧供应商确认通知已取消";
     internal const string AcceptanceNotificationRebuiltMailReason = "验收通知已按当前待验收申请和验收人重新生成";
     private const string MigrationTableSql = """
@@ -229,6 +230,7 @@ public static class SchemaMigrations
     private static string ProjectDictionaryCodeRemovalChecksum => Checksum(ProjectDictionaryCodeRemovalMigrationName);
     private static string ProjectGroupsChecksum => Checksum(ProjectGroupsMigrationName);
     private static string ProjectOwnershipChecksum => Checksum(ProjectOwnershipMigrationName);
+    private static string NotificationSettingsChecksum => Checksum(NotificationSettingsMigrationName);
 
     public static async Task ApplyAsync(AppDb db, CancellationToken ct = default)
     {
@@ -565,6 +567,21 @@ public static class SchemaMigrations
         await conn.ExecuteAsync(new CommandDefinition(
             "INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (10,@name,@checksum,UTC_TIMESTAMP(6))",
             new { name = ProjectOwnershipMigrationName, checksum = ProjectOwnershipChecksum }, tx, cancellationToken: ct));
+        await conn.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT IGNORE INTO system_configs(cfg_key,cfg_value,description,updated_at) VALUES
+              ('notify.internal.enabled','true','是否向公司内部员工发送邮件提醒',UTC_TIMESTAMP(6)),
+              ('notify.supplier.enabled','true','是否向外部企业（供应商）发送邮件提醒',UTC_TIMESTAMP(6)),
+              ('notify.event.message_created','true','新留言邮件提醒',UTC_TIMESTAMP(6)),
+              ('notify.event.file_uploaded','true','新文件邮件提醒',UTC_TIMESTAMP(6)),
+              ('notify.event.project_submitted','true','提交验收邮件提醒',UTC_TIMESTAMP(6)),
+              ('notify.event.project_confirmed','true','验收通过邮件提醒',UTC_TIMESTAMP(6)),
+              ('notify.event.project_rejected','true','验收驳回邮件提醒',UTC_TIMESTAMP(6)),
+              ('notify.event.project_withdrawn','true','撤回验收邮件提醒',UTC_TIMESTAMP(6))
+            """, transaction: tx, cancellationToken: ct));
+        await conn.ExecuteAsync(new CommandDefinition(
+            "INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (11,@name,@checksum,UTC_TIMESTAMP(6))",
+            new { name = NotificationSettingsMigrationName, checksum = NotificationSettingsChecksum }, tx, cancellationToken: ct));
         await tx.CommitAsync(ct);
         await ValidateLegacyMemberRetirementAsync(conn, ct);
         ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: true);
@@ -683,6 +700,7 @@ public static class SchemaMigrations
             new MigrationRow(8, ProjectDictionaryCodeRemovalMigrationName, ProjectDictionaryCodeRemovalChecksum),
             new MigrationRow(9, ProjectGroupsMigrationName, ProjectGroupsChecksum),
             new MigrationRow(10, ProjectOwnershipMigrationName, ProjectOwnershipChecksum),
+            new MigrationRow(11, NotificationSettingsMigrationName, NotificationSettingsChecksum),
         };
         if (rows.Length > expected.Length || rows.Where((row, index) => row != expected[index]).Any())
             throw new InvalidOperationException("Unknown or modified .NET migration history; upgrade this application or restore the correct migration definitions.");

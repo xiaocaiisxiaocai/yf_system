@@ -4477,17 +4477,17 @@ test('message images submit atomically, retain failed drafts and suppress duplic
 
 test('SMTP editor preserves authorization codes, retries failed saves, and keeps unrelated edits', async () => {
   let stored = { host: 'smtp.example.invalid', port: 465, username: 'sender@example.invalid', from: 'notice@example.invalid', security: 'Auto', hasPassword: true, configured: true, passwordNeedsUpdate: false }
+  let configValue = 'pdf'
   let fail = true
-  let notifyValue = 'true'
   const writes = []
   const Page = loadTs('src/pages/system/SysConfig.tsx', {
     '@arco-design/web-react': arco,
     '../../api/client': {
-      get: async url => ({ data: url.endsWith('/mail-settings') ? stored : url.endsWith('/configs') ? [{ key: 'notify.enabled', value: notifyValue }] : url.endsWith('/storage') ? { totalBytes: 100, availableBytes: 100, usedPercent: 0, warnPercent: 85, root: '/' } : { configured: true } }),
+      get: async url => ({ data: url.endsWith('/mail-settings') ? stored : url.endsWith('/configs') ? [{ key: 'notify.enabled', value: 'true' }, { key: 'upload.allowed_exts', value: configValue }] : url.endsWith('/storage') ? { totalBytes: 100, availableBytes: 100, usedPercent: 0, warnPercent: 85, root: '/' } : { configured: true } }),
       put: async (url, body) => {
         writes.push({ url, body })
         if (fail) throw new Error('simulated save failure')
-        if (url.endsWith('/configs')) { notifyValue = body.items[0].value; return { data: {} } }
+        if (url.endsWith('/configs')) { configValue = body.items.find(item => item.key === 'upload.allowed_exts')?.value || configValue; return { data: {} } }
         const { password: _password, ...fields } = body
         stored = { ...stored, ...fields, hasPassword: true }
         return { data: stored }
@@ -4507,13 +4507,9 @@ test('SMTP editor preserves authorization codes, retries failed saves, and keeps
   assert.equal(security().props.value, 'StartTls')
   const password = () => renderer.root.findByType('PasswordInput')
   const save = () => renderer.root.findAllByType('Button').find(n => n.props.children === '保存邮箱设置')
-  const notification = () => {
-    const table = renderer.root.findAllByType('Table').find(n => n.props.data?.some(row => row.key === 'notify.enabled'))
-    const row = table.props.data.find(row => row.key === 'notify.enabled')
-    return findElement(table.props.columns[1].render(row.value, row), n => n.props['aria-label'] === '邮件通知')
-  }
+  const notification = () => renderer.root.findAllByType('Switch').find(n => n.props['aria-label'] === '内部员工邮件通知')
   assert.equal(password().props.value, '')
-  await act(async () => notification().props.onChange('false'))
+  await act(async () => notification().props.onChange(false))
   await act(async () => port().props.onChange(587))
   await act(async () => save().props.onClick())
   assert.equal(save().props.loading, false)
@@ -4523,7 +4519,7 @@ test('SMTP editor preserves authorization codes, retries failed saves, and keeps
   assert.equal(writes.at(-1).url, '/admin/system/mail-settings')
   assert.equal(writes.at(-1).body.password, null)
   assert.equal(writes.at(-1).body.security, 'StartTls')
-  assert.equal(notification().props.value, 'false')
+  assert.equal(notification().props.checked, false)
   await act(async () => password().props.onChange('new-fixture-code'))
   await act(async () => save().props.onClick())
   assert.equal(writes.at(-1).body.password, 'new-fixture-code')
@@ -4537,9 +4533,16 @@ test('SMTP editor preserves authorization codes, retries failed saves, and keeps
   await act(async () => save().props.onClick())
   assert.equal(writes.at(-1).body.host, 'other.example.invalid')
   await act(async () => password().props.onChange('unsaved-mail-code'))
+  const allowed = () => {
+    const table = renderer.root.findAllByType('Table').find(n => n.props.data?.some(row => row.key === 'upload.allowed_exts'))
+    const row = table.props.data.find(item => item.key === 'upload.allowed_exts')
+    return findElement(table.props.columns[1].render(row.value, row), n => n.props['aria-label'] === '允许上传类型')
+  }
+  await act(async () => allowed().props.onChange('pdf,cfgtest'))
   const configCard = renderer.root.findAllByType('Card').find(n => n.props.title === '系统参数')
   await act(async () => findElement(configCard.props.extra, n => n.props.children === '保存').props.onClick())
   assert.equal(password().props.value, 'unsaved-mail-code', 'saving general parameters keeps the SMTP draft')
+  assert.equal(configValue, 'pdf,cfgtest')
   await act(async () => renderer.unmount())
 })
 
@@ -4593,7 +4596,7 @@ test('system config freezes edits during save and keeps the committed value when
   const refresh = deferred()
   const refreshStarted = deferred()
   const messages = []
-  let configGets = 0
+  let statusGets = 0
   const configArco = new Proxy({
     ...arco,
     Message: {
@@ -4607,20 +4610,18 @@ test('system config freezes edits during save and keeps the committed value when
     '@arco-design/web-react': configArco,
     '../../api/client': {
       get: async (url) => {
-        if (url.endsWith('/configs')) {
-          configGets += 1
-          if (configGets === 1) return { data: [{ key: 'notify.enabled', value: 'true' }] }
-          refreshStarted.resolve()
-          return refresh.promise
-        }
+        if (url.endsWith('/configs')) return { data: [] }
         if (url.endsWith('/mail-settings')) {
           return { data: { host: '', port: 465, username: '', from: '', security: 'Auto', hasPassword: false, configured: false, passwordNeedsUpdate: false } }
         }
-        return { data: { configured: false, notificationsEnabled: true, queue: {}, missingEmailAccounts: [], recent: [] } }
+        statusGets += 1
+        if (statusGets === 1) return { data: { configured: false, notificationsEnabled: true, notificationPolicy: { globalEnabled: true, internalEnabled: true, supplierEnabled: true, events: { messageCreated: true, fileUploaded: true, projectSubmitted: true, projectConfirmed: true, projectRejected: true, projectWithdrawn: true } }, queue: {}, missingEmailAccounts: [], recent: [] } }
+        refreshStarted.resolve()
+        return refresh.promise
       },
       put: async (url, body) => {
         assert.equal(url, '/admin/system/configs')
-        assert.deepEqual(Array.from(body.items, (item) => ({ ...item })), [{ key: 'notify.enabled', value: 'false' }])
+        assert.equal(body.items.find(item => item.key === 'notify.internal.enabled')?.value, 'false')
         return write.promise
       },
     },
@@ -4629,41 +4630,35 @@ test('system config freezes edits during save and keeps the committed value when
   }).default
   let renderer
   await act(async () => { renderer = create(React.createElement(Page)) })
-  const configTable = () => renderer.root.findAllByType('Table').find((node) => node.props.data?.some((row) => row.key === 'notify.enabled'))
-  const notification = () => {
-    const table = configTable()
-    const row = table.props.data.find((item) => item.key === 'notify.enabled')
-    return findElement(table.props.columns[1].render(row.value, row), (node) => node.props['aria-label'] === '邮件通知')
-  }
+  const notification = () => renderer.root.findAllByType('Switch').find(node => node.props['aria-label'] === '内部员工邮件通知')
   const saveButton = () => {
-    const card = renderer.root.findAllByType('Card').find((node) => node.props.title === '系统参数')
-    return findElement(card.props.extra, (node) => node.props.children === '保存')
+    return renderer.root.findAllByType('Button').find(node => node.props.children === '保存邮件提醒')
   }
 
-  await act(async () => notification().props.onChange('false'))
+  await act(async () => notification().props.onChange(false))
   let savePromise
   act(() => {
     savePromise = saveButton().props.onClick()
   })
   assert.equal(notification().props.disabled, true)
   assert.equal(saveButton().props.disabled, true)
-  await act(async () => notification().props.onChange('true'))
-  assert.equal(notification().props.value, 'false', 'a late edit cannot be accepted while the saved snapshot is in flight')
+  await act(async () => notification().props.onChange(true))
+  assert.equal(notification().props.checked, false, 'a late edit cannot be accepted while the saved snapshot is in flight')
 
   await act(async () => {
     write.resolve({ data: {} })
     await refreshStarted.promise
   })
-  assert.equal(configGets, 2, 'a post-save snapshot refresh is attempted')
+  assert.equal(statusGets, 2, 'a post-save status refresh is attempted')
   await act(async () => {
     refresh.reject(new Error('simulated refresh failure after commit'))
     await savePromise
   })
 
-  assert.equal(notification().props.value, 'false', 'the confirmed server value remains visible after refresh failure')
+  assert.equal(notification().props.checked, false, 'the confirmed server value remains visible after refresh failure')
   assert.equal(saveButton().props.disabled, true, 'the committed value is no longer dirty')
   assert.equal(messages.filter(([type]) => type === 'success').length, 0, 'a refresh failure produces one clear committed-but-stale notice')
-  assert.ok(messages.some(([type, message]) => type === 'warning' && message.includes('参数已保存，但最新状态刷新失败')))
+  assert.ok(messages.some(([type, message]) => type === 'warning' && message.includes('邮件提醒设置已保存，但状态刷新失败')))
   await act(async () => renderer.unmount())
 })
 

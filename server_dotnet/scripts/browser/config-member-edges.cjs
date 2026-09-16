@@ -6,11 +6,16 @@ const {
 
 const MB = 1024 * 1024;
 const configLabels = {
-  'notify.enabled': '邮件通知',
   'upload.allowed_exts': '允许上传类型',
   'upload.chunk_size': '上传分片大小',
   'upload.max_file_size': '单文件大小上限',
 };
+const notificationConfigKeys = new Set([
+  'notify.enabled', 'notify.internal.enabled', 'notify.supplier.enabled',
+  'notify.event.message_created', 'notify.event.file_uploaded',
+  'notify.event.project_submitted', 'notify.event.project_confirmed',
+  'notify.event.project_rejected', 'notify.event.project_withdrawn',
+]);
 const pathOf = response => new URL(response.url()).pathname;
 const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
   .map(item => item.trim().toLowerCase()).filter(Boolean))).sort().join(',');
@@ -47,17 +52,13 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
     const readConfigRows = async () => (await json('GET', '/admin/system/configs'));
     const originalRows = await readConfigRows();
     const original = Object.fromEntries(originalRows.map(row => [row.key, row.value]));
-    const keys = originalRows.map(row => row.key);
+    const keys = originalRows.map(row => row.key).filter(key => !notificationConfigKeys.has(key));
     for (const key of Object.keys(configLabels)) assert.ok(keys.includes(key), 'missing public config ' + key);
     assert.ok(keys.length >= Object.keys(configLabels).length, 'public config list must not be empty');
     assert.ok(keys.every(key => typeof original[key] === 'string'), 'editable config values must be strings');
     const extToken = 'cfg' + marker;
     const changes = Object.fromEntries(keys.map(key => {
       const value = original[key];
-      if (key === 'notify.enabled') {
-        const next = value === 'true' ? 'false' : 'true';
-        return [key, { input: next, persisted: next }];
-      }
       if (key === 'upload.chunk_size') {
         const currentMb = Number(value) / MB;
         const display = currentMb >= 64 ? currentMb - 0.25 : currentMb + 0.25;
@@ -78,10 +79,7 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
     const editConfig = async (key, apiValue) => {
       const label = configLabels[key] || key;
       const editor = page.getByLabel(label, { exact: true });
-      if (key === 'notify.enabled') {
-        await editor.click();
-        await page.getByRole('option', { name: apiValue === 'true' ? '启用' : '关闭', exact: true }).click();
-      } else if (key === 'upload.chunk_size' || key === 'upload.max_file_size') {
+      if (key === 'upload.chunk_size' || key === 'upload.max_file_size') {
         await editor.fill(String(Number(apiValue) / MB));
       } else {
         await editor.fill(apiValue);
@@ -117,24 +115,13 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
         dirty += 1;
         await assertDirty(dirty);
       }
-      const deferredKey = 'notify.enabled';
-      await editConfig(deferredKey, original[deferredKey]);
-      dirty -= 1;
-      await assertDirty(dirty);
       let body = await saveConfigs();
       let sent = payloadMap(body);
-      assert.deepEqual(Object.keys(sent).sort(), keys.filter(key => key !== deferredKey).sort(),
-        'first save sends only dirty keys');
+      assert.deepEqual(Object.keys(sent).sort(), keys.sort(), 'first save sends every changed public key');
       for (const key of Object.keys(sent)) assert.equal(sent[key], changes[key].persisted, 'request value ' + key);
       assert.equal(sent['upload.chunk_size'], changes['upload.chunk_size'].persisted, 'chunk MB converted to bytes');
       assert.equal(sent['upload.max_file_size'], changes['upload.max_file_size'].persisted, 'file limit MB converted to bytes');
 
-      await editConfig(deferredKey, changes[deferredKey].persisted);
-      await assertDirty(1);
-      body = await saveConfigs();
-      sent = payloadMap(body);
-      assert.deepEqual(Object.keys(sent), [deferredKey], 'second save sends only deferred dirty key');
-      assert.equal(sent[deferredKey], changes[deferredKey].persisted);
       const persisted = Object.fromEntries((await readConfigRows()).map(row => [row.key, row.value]));
       for (const key of keys) assert.equal(persisted[key], changes[key].persisted, 'persisted config ' + key);
 

@@ -512,6 +512,56 @@ html, body, #root {
 .dashboard-message-extra { display: flex; align-items: center; gap: 12px; color: var(--app-text-muted); white-space: nowrap; }
 .dashboard-message-extra > svg { color: #98a2b3; }
 .system-mail-card { margin-bottom: 16px; }
+.system-notification-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--color-fill-1);
+}
+.system-notification-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.system-notification-heading > div:first-child,
+.system-notification-row > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.system-notification-grid {
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) minmax(300px, 1.4fr);
+  gap: 16px;
+}
+.system-notification-panel {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: #fff;
+}
+.system-notification-panel-title {
+  margin-bottom: 4px;
+  color: var(--app-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.system-notification-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--app-border);
+}
+.system-notification-row:last-child { border-bottom: 0; }
+.system-notification-row .arco-typography-secondary { font-size: 12px; line-height: 18px; }
 .system-config-dirty { color: #165dff; font-size: 13px; white-space: nowrap; }
 .system-config-param { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .system-config-param > strong { color: var(--app-text); font-size: 14px; font-weight: 500; }
@@ -767,6 +817,8 @@ html, body, #root {
 
 @media (max-width: 720px) {
   /* 窄屏保留完整表格横向滚动，避免固定操作列遮住名称和数据列。 */
+  .system-notification-heading { align-items: flex-start; flex-direction: column; }
+  .system-notification-grid { grid-template-columns: 1fr; }
   .layout-content .arco-table-col-fixed-right,
   .arco-drawer .arco-table-col-fixed-right { position: static; }
   .layout-content .arco-table-col-fixed-right-first::after,

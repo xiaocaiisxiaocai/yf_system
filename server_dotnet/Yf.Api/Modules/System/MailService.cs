@@ -58,15 +58,13 @@ public sealed class MailService
     }
 
     public static async Task<bool> EnabledAsync(MySqlConnection conn, CancellationToken ct)
-    {
-        var value = await conn.QuerySingleOrDefaultAsync<string>(new CommandDefinition("SELECT cfg_value FROM system_configs WHERE cfg_key='notify.enabled'", cancellationToken: ct));
-        return value is null || value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase) || value.Trim() == "1";
-    }
+        => (await EmailNotificationPolicy.LoadAsync(conn, null, ct)).GlobalEnabled;
 
     public async Task<object> StatusAsync(CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
         var resolved = await settings.ResolveAsync(conn, null, ct);
+        var notificationPolicy = await EmailNotificationPolicy.LoadAsync(conn, null, ct);
         var cfg = resolved.Options;
         var configured = resolved.Configured;
         var counts = (await conn.QueryAsync<QueueCount>(new CommandDefinition("SELECT status,COUNT(*) AS count FROM email_outbox WHERE event_type <> 'STORAGE_WARNING' GROUP BY status", cancellationToken: ct))).ToDictionary(x => x.Status, x => x.Count);
@@ -76,7 +74,8 @@ public sealed class MailService
         return new
         {
             configured, host = configured ? cfg.Host : null, port = configured ? (int?)cfg.Port : null, from = configured ? MaskEmail(cfg.From) : null,
-            notificationsEnabled = await EnabledAsync(conn, ct),
+            notificationsEnabled = notificationPolicy.GlobalEnabled,
+            notificationPolicy = notificationPolicy.ToResponse(),
             queue = new { pending = counts.GetValueOrDefault("PENDING"), sending = counts.GetValueOrDefault("SENDING"), sent = counts.GetValueOrDefault("SENT"), failed = counts.GetValueOrDefault("FAILED"), cancelled = counts.GetValueOrDefault("CANCELLED") },
             latestSentAt = await conn.ExecuteScalarAsync<DateTime?>(new CommandDefinition("SELECT MAX(sent_at) FROM email_outbox WHERE status='SENT'", cancellationToken: ct)),
             latestFailedAt = await conn.ExecuteScalarAsync<DateTime?>(new CommandDefinition("SELECT MAX(created_at) FROM audit_logs WHERE action='EMAIL_FAILED'", cancellationToken: ct)),
@@ -110,13 +109,26 @@ public sealed class MailService
     public async Task FlushAsync(CancellationToken ct)
     {
         ResolvedSmtpSettings resolved;
+        EmailNotificationPolicy policy;
         MailRow[] pending;
         await using (var conn = await db.OpenAsync(ct))
         {
-            if (!await EnabledAsync(conn, ct)) return;
+            policy = await EmailNotificationPolicy.LoadAsync(conn, null, ct);
+            if (!policy.GlobalEnabled) return;
             resolved = await settings.ResolveAsync(conn, null, ct);
             if (!resolved.Configured) return;
-            pending = (await conn.QueryAsync<MailRow>(new CommandDefinition("SELECT id,event_type AS EventType,project_id AS ProjectId,dedupe_key AS DedupeKey,recipient_user_id AS RecipientUserId,recipient_email AS RecipientEmail,subject,body,status,retry_count AS RetryCount,next_attempt_at AS NextAttemptAt FROM email_outbox WHERE event_type <> 'STORAGE_WARNING' AND sent_at IS NULL AND ((status='PENDING' AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())) OR (status='SENDING' AND next_attempt_at<=UTC_TIMESTAMP())) ORDER BY id LIMIT 10", cancellationToken: ct))).ToArray();
+            pending = (await conn.QueryAsync<MailRow>(new CommandDefinition("""
+                SELECT eo.id,eo.event_type AS EventType,eo.project_id AS ProjectId,eo.dedupe_key AS DedupeKey,
+                       eo.recipient_user_id AS RecipientUserId,recipient.user_type AS RecipientUserType,
+                       eo.recipient_email AS RecipientEmail,eo.subject,eo.body,eo.status,
+                       eo.retry_count AS RetryCount,eo.next_attempt_at AS NextAttemptAt
+                FROM email_outbox eo
+                LEFT JOIN users recipient ON recipient.id=eo.recipient_user_id
+                WHERE eo.event_type <> 'STORAGE_WARNING' AND eo.sent_at IS NULL
+                  AND ((eo.status='PENDING' AND (eo.next_attempt_at IS NULL OR eo.next_attempt_at<=UTC_TIMESTAMP()))
+                    OR (eo.status='SENDING' AND eo.next_attempt_at<=UTC_TIMESTAMP()))
+                ORDER BY eo.id LIMIT 10
+                """, cancellationToken: ct))).ToArray();
         }
         foreach (var mail in pending)
         {
@@ -128,7 +140,14 @@ public sealed class MailService
                 if (claimed != 1) continue;
                 lease = await claimConnection.QuerySingleAsync<DateTime>(new CommandDefinition(
                     "SELECT next_attempt_at FROM email_outbox WHERE id=@Id", new { mail.Id }, claimTransaction, cancellationToken: ct));
-                var recipientAuthorized = mail.EventType == "PROJECT_SUBMITTED"
+                var currentPolicy = await EmailNotificationPolicy.LoadAsync(claimConnection, claimTransaction, ct);
+                var currentRecipientType = mail.RecipientUserId is { } recipientId
+                    ? await claimConnection.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
+                        "SELECT user_type FROM users WHERE id=@RecipientId AND status='ACTIVE'",
+                        new { RecipientId = recipientId }, claimTransaction, cancellationToken: ct))
+                    : mail.RecipientUserType;
+                var notificationAllowed = currentPolicy.Allows(mail.EventType, currentRecipientType);
+                var recipientAuthorized = notificationAllowed && (mail.EventType == "PROJECT_SUBMITTED"
                     ? await IsCurrentPendingAcceptanceAsync(claimConnection, claimTransaction, mail, ct)
                     : mail.ProjectId is null || mail.RecipientUserId is null
                         ? mail.ProjectId is null && mail.RecipientUserId is null
@@ -137,9 +156,10 @@ public sealed class MailService
                             claimTransaction,
                             mail.ProjectId.Value,
                             mail.RecipientUserId.Value,
-                            ct);
+                            ct));
                 if (!recipientAuthorized)
                 {
+                    var policyDisabled = !notificationAllowed;
                     var cancelled = await claimConnection.ExecuteAsync(new CommandDefinition(
                         """
                         UPDATE email_outbox
@@ -150,7 +170,9 @@ public sealed class MailService
                         {
                             mail.Id,
                             Lease = lease,
-                            Reason = mail.EventType == "PROJECT_SUBMITTED"
+                            Reason = policyDisabled
+                                ? EmailNotificationPolicy.DisabledReason
+                                : mail.EventType == "PROJECT_SUBMITTED"
                                 ? ProjectNotificationService.SupersededAcceptanceMailReason
                                 : ProjectNotificationService.StaleProjectMailReason,
                         },
@@ -169,7 +191,9 @@ public sealed class MailService
                             {
                                 eventType = mail.EventType,
                                 status = "CANCELLED",
-                                reason = mail.EventType == "PROJECT_SUBMITTED"
+                                reason = policyDisabled
+                                    ? EmailNotificationPolicy.DisabledAuditReason
+                                    : mail.EventType == "PROJECT_SUBMITTED"
                                     ? "PROJECT_ACCEPTANCE_STALE"
                                     : "PROJECT_RECIPIENT_UNAUTHORIZED",
                             },
@@ -253,6 +277,7 @@ public sealed class MailService
         public ulong? ProjectId { get; set; }
         public string? DedupeKey { get; set; }
         public ulong? RecipientUserId { get; set; }
+        public string? RecipientUserType { get; set; }
         public string RecipientEmail { get; set; } = "";
         public string Subject { get; set; } = "";
         public string Body { get; set; } = "";

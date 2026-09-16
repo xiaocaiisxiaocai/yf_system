@@ -286,7 +286,15 @@ try:
             cursor.execute("SELECT password_hash FROM users WHERE employee_no='admin'")
             check(".NET migration from baseline 16 is repeatable and preserves users", cursor.fetchone()[0] == preserved_hash)
             cursor.execute("SELECT COUNT(*) FROM yf_schema_migrations")
-            check(".NET owns schema v10 version history", cursor.fetchone()[0] == 10)
+            check(".NET owns schema v11 version history", cursor.fetchone()[0] == 11)
+            cursor.execute(
+                "SELECT COUNT(*) FROM system_configs WHERE cfg_key IN "
+                "('notify.enabled','notify.internal.enabled','notify.supplier.enabled',"
+                "'notify.event.message_created','notify.event.file_uploaded',"
+                "'notify.event.project_submitted','notify.event.project_confirmed',"
+                "'notify.event.project_rejected','notify.event.project_withdrawn')"
+            )
+            check("v11 migration installs all independent notification settings", cursor.fetchone()[0] == 9)
             cursor.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='collaboration_reads'")
             check("collaboration read receipt migration creates its additive table", cursor.fetchone()[0] == 1)
             cursor.execute("SELECT session_id FROM refresh_tokens WHERE id=%s", (legacy_token_id,))

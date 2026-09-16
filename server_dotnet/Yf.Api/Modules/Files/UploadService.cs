@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Projects;
+using Yf.Api.Modules.SystemManagement;
 
 namespace Yf.Api.Modules.Files;
 
@@ -551,13 +552,12 @@ public sealed partial class UploadService(
     private async Task EnqueueFileNoticeAsync(MySqlConnection conn, MySqlTransaction tx, ulong projectId,
         ulong fileId, string fileName, CurrentUser uploader, CancellationToken ct)
     {
-        var enabled = await conn.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(
-            "SELECT cfg_value FROM system_configs WHERE cfg_key='notify.enabled'", transaction: tx, cancellationToken: ct));
-        if (enabled is not null && !(enabled.Equals("true", StringComparison.OrdinalIgnoreCase) || enabled == "1")) return;
+        var policy = await EmailNotificationPolicy.LoadAsync(conn, tx, ct);
+        if (!policy.Allows("FILE_UPLOADED", null)) return;
         var projectName = await conn.QuerySingleAsync<string>(new CommandDefinition(
             "SELECT name FROM projects WHERE id=@ProjectId", new { ProjectId = projectId }, tx, cancellationToken: ct));
         var recipients = await conn.QueryAsync<NoticeRecipient>(new CommandDefinition("""
-            SELECT DISTINCT u.id AS Id,u.email AS Email,u.employee_no AS EmployeeNo,u.real_name AS RealName
+            SELECT DISTINCT u.id AS Id,u.email AS Email,u.employee_no AS EmployeeNo,u.real_name AS RealName,u.user_type AS UserType
             FROM users u
             LEFT JOIN projects p ON p.id=@ProjectId
             LEFT JOIN suppliers s ON s.id=p.supplier_id AND s.status='ACTIVE'
@@ -580,6 +580,7 @@ public sealed partial class UploadService(
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var recipient in recipients)
         {
+            if (!policy.Allows("FILE_UPLOADED", recipient.UserType)) continue;
             if (string.IsNullOrWhiteSpace(recipient.Email))
             {
                 await audit.WriteAsync(conn, tx, null, "EMAIL_SKIPPED_MISSING_EMAIL", "user", recipient.Id,
@@ -813,6 +814,7 @@ public sealed partial class UploadService(
         public string Email { get; set; } = "";
         public string EmployeeNo { get; set; } = "";
         public string RealName { get; set; } = "";
+        public string UserType { get; set; } = "";
     }
 
     [GeneratedRegex("^[0-9a-fA-F]{32}$", RegexOptions.CultureInvariant)]

@@ -1,11 +1,55 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card, Input, InputNumber, Message, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
+import { Button, Card, Input, InputNumber, Message, Select, Space, Spin, Switch, Table, Tag, Typography } from '@arco-design/web-react'
 import { useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { fmtTime } from '../../api/types'
 import PasswordInput from '../../components/PasswordInput'
 
 const MB = 1024 * 1024
+
+type NotificationEventKey = 'messageCreated' | 'fileUploaded' | 'projectSubmitted' | 'projectConfirmed' | 'projectRejected' | 'projectWithdrawn'
+
+interface NotificationPolicy {
+  globalEnabled: boolean
+  internalEnabled: boolean
+  supplierEnabled: boolean
+  events: Record<NotificationEventKey, boolean>
+}
+
+const EMPTY_NOTIFICATION_POLICY: NotificationPolicy = {
+  globalEnabled: true,
+  internalEnabled: true,
+  supplierEnabled: true,
+  events: {
+    messageCreated: true,
+    fileUploaded: true,
+    projectSubmitted: true,
+    projectConfirmed: true,
+    projectRejected: true,
+    projectWithdrawn: true,
+  },
+}
+
+const NOTIFICATION_CONFIG_KEYS = new Set([
+  'notify.enabled',
+  'notify.internal.enabled',
+  'notify.supplier.enabled',
+  'notify.event.message_created',
+  'notify.event.file_uploaded',
+  'notify.event.project_submitted',
+  'notify.event.project_confirmed',
+  'notify.event.project_rejected',
+  'notify.event.project_withdrawn',
+])
+
+const NOTIFICATION_EVENT_ITEMS: Array<{ key: NotificationEventKey; title: string; description: string }> = [
+  { key: 'messageCreated', title: '新留言', description: '对方在项目中发表留言时提醒' },
+  { key: 'fileUploaded', title: '新文件', description: '对方在项目中上传文件时提醒' },
+  { key: 'projectSubmitted', title: '提交验收', description: '供应商提交验收申请时提醒内部员工' },
+  { key: 'projectConfirmed', title: '验收通过', description: '验收完成时提醒最近提交人' },
+  { key: 'projectRejected', title: '验收驳回', description: '验收被驳回时提醒最近提交人' },
+  { key: 'projectWithdrawn', title: '撤回验收', description: '验收申请撤回时提醒相关参与人' },
+]
 
 interface SmtpSettings {
   host: string; port: number; username: string; from: string
@@ -15,7 +59,6 @@ interface SmtpSettings {
 const EMPTY_SMTP: SmtpSettings = { host: '', port: 465, username: '', from: '', security: 'Auto', hasPassword: false, configured: false, passwordNeedsUpdate: false }
 
 const CONFIG_META: Record<string, { name: string; description: string; hint?: string }> = {
-  'notify.enabled': { name: '邮件通知', description: '邮件通知总开关' },
   'upload.allowed_exts': { name: '允许上传类型', description: '允许上传的文件扩展名', hint: '使用英文逗号分隔' },
   'upload.chunk_size': { name: '上传分片大小', description: '每个上传分片的大小' },
   'upload.max_file_size': { name: '单文件大小上限', description: '单个文件允许的最大大小' },
@@ -54,6 +97,7 @@ interface MailStatus {
   port?: number | null
   from?: string | null
   notificationsEnabled: boolean
+  notificationPolicy: NotificationPolicy
   queue: { pending: number; sending: number; sent: number; failed: number; cancelled: number }
   latestSentAt?: string | null
   latestFailedAt?: string | null
@@ -71,10 +115,32 @@ interface MailStatus {
 const EMPTY_MAIL_STATUS: MailStatus = {
   configured: false,
   notificationsEnabled: true,
+  notificationPolicy: EMPTY_NOTIFICATION_POLICY,
   queue: { pending: 0, sending: 0, sent: 0, failed: 0, cancelled: 0 },
   missingEmailCount: 0,
   missingEmailAccounts: [],
   recent: [],
+}
+
+function normalizeNotificationPolicy(value: unknown): NotificationPolicy {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return EMPTY_NOTIFICATION_POLICY
+  const raw = value as Partial<NotificationPolicy>
+  const events = raw.events && typeof raw.events === 'object' && !Array.isArray(raw.events)
+    ? raw.events as Partial<Record<NotificationEventKey, boolean>>
+    : {}
+  return {
+    globalEnabled: raw.globalEnabled !== false,
+    internalEnabled: raw.internalEnabled !== false,
+    supplierEnabled: raw.supplierEnabled !== false,
+    events: {
+      messageCreated: events.messageCreated !== false,
+      fileUploaded: events.fileUploaded !== false,
+      projectSubmitted: events.projectSubmitted !== false,
+      projectConfirmed: events.projectConfirmed !== false,
+      projectRejected: events.projectRejected !== false,
+      projectWithdrawn: events.projectWithdrawn !== false,
+    },
+  }
 }
 
 function normalizeMailStatus(value: unknown): MailStatus {
@@ -83,6 +149,7 @@ function normalizeMailStatus(value: unknown): MailStatus {
   return {
     ...EMPTY_MAIL_STATUS,
     ...raw,
+    notificationPolicy: normalizeNotificationPolicy(raw.notificationPolicy),
     queue: { ...EMPTY_MAIL_STATUS.queue, ...(raw.queue || {}) },
     missingEmailAccounts: Array.isArray(raw.missingEmailAccounts) ? raw.missingEmailAccounts : [],
     recent: Array.isArray(raw.recent) ? raw.recent : [],
@@ -130,8 +197,11 @@ export default function SysConfig() {
   const [smtpDraft, setSmtpDraft] = useState<SmtpSettings>(EMPTY_SMTP)
   const [smtpPassword, setSmtpPassword] = useState('')
   const [smtpSaving, setSmtpSaving] = useState(false)
+  const [notificationDraft, setNotificationDraft] = useState<NotificationPolicy>(EMPTY_NOTIFICATION_POLICY)
+  const [notificationSaving, setNotificationSaving] = useState(false)
   const saveInFlight = useRef(false)
   const smtpSaveInFlight = useRef(false)
+  const notificationSaveInFlight = useRef(false)
 
   const fetchSnapshot = useCallback(async () => {
     const [configsResponse, mailResponse, smtpResponse] = await Promise.all([
@@ -140,7 +210,7 @@ export default function SysConfig() {
       http.get('/admin/system/mail-settings', { quietNetworkError: true } as QuietRequestConfig),
     ])
     return {
-      configs: (configsResponse.data as Cfg[]).filter((item) => item.key !== 'storage.warn_percent'),
+      configs: (configsResponse.data as Cfg[]).filter((item) => item.key !== 'storage.warn_percent' && !NOTIFICATION_CONFIG_KEYS.has(item.key)),
       mail: normalizeMailStatus(mailResponse.data),
       smtp: { ...EMPTY_SMTP, ...smtpResponse.data } as SmtpSettings,
     }
@@ -149,6 +219,7 @@ export default function SysConfig() {
   const applySnapshot = useCallback((next: { configs: Cfg[]; mail: MailStatus; smtp: SmtpSettings }) => {
     setConfigs(next.configs)
     setMail(next.mail || EMPTY_MAIL_STATUS)
+    setNotificationDraft(next.mail?.notificationPolicy || EMPTY_NOTIFICATION_POLICY)
     setSmtp(next.smtp)
     setSmtpDraft(next.smtp)
     setSmtpPassword('')
@@ -182,6 +253,11 @@ export default function SysConfig() {
   const dirtyKeys = new Set(dirty.map(([key]) => key))
   const smtpDirty = smtpPassword.length > 0 || (['host', 'port', 'username', 'from', 'security'] as const).some((key) => smtpDraft[key] !== smtp[key])
   const smtpIdentityChanged = smtpDraft.host.trim().toLowerCase() !== smtp.host.toLowerCase() || smtpDraft.username.trim() !== smtp.username
+  const notificationDirty = mail ? JSON.stringify(notificationDraft) !== JSON.stringify(mail.notificationPolicy) : false
+  const updateNotificationDraft = (update: (current: NotificationPolicy) => NotificationPolicy) => {
+    if (notificationSaveInFlight.current) return
+    setNotificationDraft(update)
+  }
 
   const saveSmtp = async () => {
     if (smtpSaveInFlight.current || !smtpDirty) return
@@ -216,6 +292,39 @@ export default function SysConfig() {
       }
     } catch { /* 拦截器已提示，保留输入以便重试。 */ }
     finally { smtpSaveInFlight.current = false; setSmtpSaving(false) }
+  }
+
+  const saveNotifications = async () => {
+    if (notificationSaveInFlight.current || !notificationDirty) return
+    notificationSaveInFlight.current = true
+    setNotificationSaving(true)
+    const items = [
+      { key: 'notify.enabled', value: String(notificationDraft.globalEnabled) },
+      { key: 'notify.internal.enabled', value: String(notificationDraft.internalEnabled) },
+      { key: 'notify.supplier.enabled', value: String(notificationDraft.supplierEnabled) },
+      { key: 'notify.event.message_created', value: String(notificationDraft.events.messageCreated) },
+      { key: 'notify.event.file_uploaded', value: String(notificationDraft.events.fileUploaded) },
+      { key: 'notify.event.project_submitted', value: String(notificationDraft.events.projectSubmitted) },
+      { key: 'notify.event.project_confirmed', value: String(notificationDraft.events.projectConfirmed) },
+      { key: 'notify.event.project_rejected', value: String(notificationDraft.events.projectRejected) },
+      { key: 'notify.event.project_withdrawn', value: String(notificationDraft.events.projectWithdrawn) },
+    ]
+    try {
+      await http.put('/admin/system/configs', { items })
+      setMail((current) => current ? { ...current, notificationsEnabled: notificationDraft.globalEnabled, notificationPolicy: notificationDraft } : current)
+      try {
+        const refreshed = normalizeMailStatus((await http.get('/admin/system/mail-status', { quietNetworkError: true } as QuietRequestConfig)).data)
+        setMail(refreshed)
+        setNotificationDraft(refreshed.notificationPolicy)
+        Message.success('邮件提醒设置已保存')
+      } catch {
+        Message.warning('邮件提醒设置已保存，但状态刷新失败，请稍后刷新页面')
+      }
+    } catch { /* 拦截器已提示，保留草稿以便重试。 */ }
+    finally {
+      notificationSaveInFlight.current = false
+      setNotificationSaving(false)
+    }
   }
 
   const setValue = (key: string, value: string) => {
@@ -338,6 +447,50 @@ export default function SysConfig() {
                   <Button disabled={!smtpDirty || smtpSaving} onClick={() => { setSmtpDraft(smtp); setSmtpPassword('') }}>取消修改</Button>
                   <Typography.Text type="secondary">授权码不回显；邮件是否发送由下方“邮件通知”开关控制。</Typography.Text>
                 </Space>
+                <div className="system-notification-settings">
+                  <div className="system-notification-heading">
+                    <div>
+                      <Typography.Text bold>邮件提醒规则</Typography.Text>
+                      <Typography.Text type="secondary">分别控制通知对象和需要发送邮件的协作消息。</Typography.Text>
+                    </div>
+                    <Space size={8}>
+                      <Typography.Text>邮件通知总开关</Typography.Text>
+                      <Switch
+                        aria-label="邮件通知总开关"
+                        checked={notificationDraft.globalEnabled}
+                        disabled={notificationSaving}
+                        onChange={(checked) => updateNotificationDraft((current) => ({ ...current, globalEnabled: checked }))}
+                      />
+                    </Space>
+                  </div>
+                  <div className="system-notification-grid">
+                    <div className="system-notification-panel">
+                      <div className="system-notification-panel-title">通知对象</div>
+                      <div className="system-notification-row">
+                        <div><Typography.Text>内部员工</Typography.Text><Typography.Text type="secondary">公司内部负责人和验收人员</Typography.Text></div>
+                        <Switch aria-label="内部员工邮件通知" checked={notificationDraft.internalEnabled} disabled={notificationSaving} onChange={(checked) => updateNotificationDraft((current) => ({ ...current, internalEnabled: checked }))} />
+                      </div>
+                      <div className="system-notification-row">
+                        <div><Typography.Text>外部企业（供应商）</Typography.Text><Typography.Text type="secondary">项目关联供应商的启用账号</Typography.Text></div>
+                        <Switch aria-label="外部企业邮件通知" checked={notificationDraft.supplierEnabled} disabled={notificationSaving} onChange={(checked) => updateNotificationDraft((current) => ({ ...current, supplierEnabled: checked }))} />
+                      </div>
+                    </div>
+                    <div className="system-notification-panel">
+                      <div className="system-notification-panel-title">提醒消息</div>
+                      {NOTIFICATION_EVENT_ITEMS.map((item) => (
+                        <div className="system-notification-row" key={item.key}>
+                          <div><Typography.Text>{item.title}</Typography.Text><Typography.Text type="secondary">{item.description}</Typography.Text></div>
+                          <Switch aria-label={`${item.title}邮件提醒`} checked={notificationDraft.events[item.key]} disabled={notificationSaving} onChange={(checked) => updateNotificationDraft((current) => ({ ...current, events: { ...current.events, [item.key]: checked } }))} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <Space wrap>
+                    <Button type="primary" size="small" loading={notificationSaving} disabled={!notificationDirty || notificationSaving} onClick={saveNotifications}>保存邮件提醒</Button>
+                    <Button size="small" disabled={!notificationDirty || notificationSaving} onClick={() => { if (!notificationSaveInFlight.current) setNotificationDraft(mail?.notificationPolicy || EMPTY_NOTIFICATION_POLICY) }}>取消修改</Button>
+                    <Typography.Text type="secondary">关闭后不会创建新的对应邮件；已入队邮件会在发送前再次按规则检查。</Typography.Text>
+                  </Space>
+                </div>
                 <Space wrap size={20}>
                   <Typography.Text type="secondary">
                     SMTP {mail.configured ? `${mail.host || '-'}:${mail.port || '-'}` : '未配置'}

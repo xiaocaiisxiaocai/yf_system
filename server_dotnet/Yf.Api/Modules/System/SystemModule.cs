@@ -77,9 +77,12 @@ public sealed class SystemService(AppDb db, AuditService audit)
                 throw ApiException.BadRequest($"参数 {key} 超出允许范围");
             return number.ToString(CultureInfo.InvariantCulture);
         }
-        if (key == "notify.enabled")
+        if (EmailNotificationPolicy.Keys.Contains(key, StringComparer.Ordinal))
         {
-            if (!bool.TryParse(value, out var enabled)) throw ApiException.BadRequest("notify.enabled 必须为 true 或 false");
+            if (value == "1") return "true";
+            if (value == "0") return "false";
+            if (!bool.TryParse(value, out var enabled))
+                throw ApiException.BadRequest($"{ConfigLabel(key)}必须为 true 或 false");
             return enabled ? "true" : "false";
         }
         if (key == "upload.allowed_exts")
@@ -113,7 +116,8 @@ public sealed class SystemService(AppDb db, AuditService audit)
             var previous = await conn.QuerySingleOrDefaultAsync<string?>(new CommandDefinition("SELECT cfg_value FROM system_configs WHERE cfg_key=@Key", item, tx, cancellationToken: ct));
             if (previous != item.Value)
             {
-                var safe = item.Key is "notify.enabled" or "upload.max_file_size" or "upload.chunk_size" or "upload.allowed_exts";
+                var safe = EmailNotificationPolicy.Keys.Contains(item.Key, StringComparer.Ordinal)
+                    || item.Key is "upload.max_file_size" or "upload.chunk_size" or "upload.allowed_exts";
                 changes.Add(new AuditChange(item.Key, ConfigLabel(item.Key), safe ? previous : "未展示", safe ? item.Value : "已更新"));
             }
             await conn.ExecuteAsync(new CommandDefinition("UPDATE system_configs SET cfg_value=@Value,updated_at=UTC_TIMESTAMP(6) WHERE cfg_key=@Key", item, tx, cancellationToken: ct));
@@ -168,6 +172,14 @@ public sealed class SystemService(AppDb db, AuditService audit)
     private static string ConfigLabel(string key) => key switch
     {
         "notify.enabled" => "邮件通知",
+        "notify.internal.enabled" => "内部员工邮件通知",
+        "notify.supplier.enabled" => "外部企业邮件通知",
+        "notify.event.message_created" => "新留言邮件提醒",
+        "notify.event.file_uploaded" => "新文件邮件提醒",
+        "notify.event.project_submitted" => "提交验收邮件提醒",
+        "notify.event.project_confirmed" => "验收通过邮件提醒",
+        "notify.event.project_rejected" => "验收驳回邮件提醒",
+        "notify.event.project_withdrawn" => "撤回验收邮件提醒",
         "upload.max_file_size" => "单文件大小上限",
         "upload.chunk_size" => "上传分片大小",
         "upload.allowed_exts" => "允许的文件类型",
