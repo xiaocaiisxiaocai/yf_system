@@ -169,7 +169,7 @@ function PreviewWatermark({ employeeNo, realName }: { employeeNo?: string; realN
   const [openedAt] = useState(() => new Date())
   const label = `${employeeNo?.trim() || '未知'} ${realName?.trim() || '未知'} ${formatWatermarkTime(openedAt)}`
   return <div className="preview-watermark" aria-hidden="true">
-    {Array.from({ length: 36 }, (_, index) => <span key={index}>{label}</span>)}
+    {Array.from({ length: 18 }, (_, index) => <span key={index}>{label}</span>)}
   </div>
 }
 
