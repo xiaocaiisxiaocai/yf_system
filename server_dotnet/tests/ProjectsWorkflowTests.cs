@@ -68,31 +68,19 @@ public sealed class ProjectsWorkflowTests
         Assert.Equal("仅允许开始、终止或重新开始项目", error.Message);
     }
 
-    [Theory]
-    [InlineData("IN_PROGRESS")]
-    [InlineData("PENDING_CONFIRMATION")]
-    [InlineData("COMPLETED")]
-    public void ActiveOrCompletedProjectsCannotBeDeleted(string status)
-    {
-        var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.EnsureDeletable(status, false, false));
-        Assert.Equal(400, error.Status);
-        Assert.Equal("进行中、待确认或已完成的项目不能删除", error.Message);
-    }
-
     [Fact]
-    public void EmptyDraftAndTerminatedProjectsCanBeDeleted()
+    public void ProjectsWithoutDeletionDependenciesCanBeDeleted()
     {
-        ProjectWorkflowRules.EnsureDeletable("DRAFT", false, false);
-        ProjectWorkflowRules.EnsureDeletable("TERMINATED", false, false);
+        ProjectWorkflowRules.EnsureNoDeletionDependencies(false, false);
     }
 
     [Fact]
     public void ContentAndUploadHistoryBlockDeletionWithDistinctErrors()
     {
-        var content = Assert.Throws<ApiException>(() => ProjectWorkflowRules.EnsureDeletable("DRAFT", true, false));
+        var content = Assert.Throws<ApiException>(() => ProjectWorkflowRules.EnsureNoDeletionDependencies(true, false));
         Assert.Equal("项目内仍有文件或留言，不能直接删除", content.Message);
 
-        var upload = Assert.Throws<ApiException>(() => ProjectWorkflowRules.EnsureDeletable("DRAFT", false, true));
+        var upload = Assert.Throws<ApiException>(() => ProjectWorkflowRules.EnsureNoDeletionDependencies(false, true));
         Assert.Equal("项目仍有上传记录，不能删除", upload.Message);
     }
 

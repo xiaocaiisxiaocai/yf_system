@@ -565,8 +565,7 @@ internal sealed class ProjectService(
                    (SELECT COUNT(*) FROM upload_sessions WHERE project_id=@ProjectId) AS UploadCount
             """,
             new { ProjectId = projectId }, tx, cancellationToken: ct));
-        ProjectWorkflowRules.EnsureDeletable(
-            project.Status,
+        ProjectWorkflowRules.EnsureNoDeletionDependencies(
             counts.FileCount + counts.MessageCount > 0,
             counts.UploadCount > 0);
         await conn.ExecuteAsync(new CommandDefinition(

@@ -573,8 +573,12 @@ export default function ProjectList() {
               ))}
             </Select>
           ),
-          canDelete && ['DRAFT', 'TERMINATED'].includes(r.status) && (
-            <Popconfirm key="delete" title="仅可删除没有文件和留言的项目，删除后不可恢复。确认？" onOk={() => remove(r)}>
+          canDelete && (
+            <Popconfirm
+              key="delete"
+              title={`确认删除项目“${r.name}”？仅无文件、留言、上传记录和复制履历的项目可删除，删除后不可恢复。`}
+              onOk={() => remove(r)}
+            >
               <Button size="mini" type="text" status="danger">删除</Button>
             </Popconfirm>
           ),

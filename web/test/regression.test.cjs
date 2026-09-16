@@ -505,7 +505,9 @@ test('hard delete actions require their dedicated delete permission', async () =
   let renderer
   await act(async () => { renderer = create(React.createElement(Project)) })
   const busy = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, { id: 2, name: 'busy', status: 'IN_PROGRESS' })
-  assert.equal(findActionButton(busy, '删除'), undefined, 'in-progress projects must not offer delete')
+  assert.ok(findActionButton(busy, '删除'), 'in-progress projects may be deleted by users with project:delete')
+  const completed = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, { id: 4, name: 'completed', status: 'COMPLETED' })
+  assert.ok(findActionButton(completed, '删除'), 'completed projects may be deleted by users with project:delete')
   const terminated = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, { id: 3, name: 'terminated', status: 'TERMINATED' })
   assert.ok(findActionButton(terminated, '删除'), 'empty terminated projects may be deleted')
   await act(async () => renderer.unmount())
