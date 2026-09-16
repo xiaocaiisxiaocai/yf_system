@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Button, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
@@ -39,6 +39,26 @@ function previewKind(ext: string, sizeBytes = 0): 'excel' | 'pdf' | 'pptx' | 'vi
   return 'none'
 }
 
+function formatWatermarkTime(value = new Date()) {
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`
+}
+
+function PreviewWatermark({ employeeNo }: { employeeNo?: string }) {
+  const [openedAt] = useState(() => new Date())
+  const label = `工号：${employeeNo?.trim() || '未知'} · ${formatWatermarkTime(openedAt)}`
+  return <div className="preview-watermark" aria-hidden="true">
+    {Array.from({ length: 12 }, (_, index) => <span key={index}>{label}</span>)}
+  </div>
+}
+
+function WatermarkedPreview({ employeeNo, children }: { employeeNo?: string; children: ReactNode }) {
+  return <div className="file-preview-surface">
+    {children}
+    <PreviewWatermark employeeNo={employeeNo} />
+  </div>
+}
+
 /** 认证下载：拉 blob 后触发浏览器保存（直接拼 URL 会丢 Authorization 头） */
 async function downloadAuthed(id: number, name: string) {
   const r = await http.get(`/files/${id}/download`, { responseType: 'blob' })
@@ -66,7 +86,7 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
   const [preview, setPreview] = useState<FileItem | null>(null)
   const [selected, setSelected] = useState<number[]>([])
   const [batchDownloading, setBatchDownloading] = useState(false)
-  const { hasPerm } = useAuth()
+  const { hasPerm, user } = useAuth()
 
   // 递增序号防止并发加载乱序：快速切换筛选时只允许最后一次请求落地
   const loadSeq = useRef(0)
@@ -314,18 +334,18 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
       >
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'excel' && (
           <Suspense fallback={<div style={{ textAlign: 'center', padding: 60 }}>加载 Excel 渲染器…</div>}>
-            <ExcelPreview fileId={preview.id} />
+            <WatermarkedPreview employeeNo={user?.employeeNo}><ExcelPreview fileId={preview.id} /></WatermarkedPreview>
           </Suspense>
         )}
-        {preview && previewKind(preview.ext, preview.sizeBytes) === 'pdf' && <PdfPreview fileId={preview.id} toolbarContainer={previewToolbar} />}
+        {preview && previewKind(preview.ext, preview.sizeBytes) === 'pdf' && <WatermarkedPreview employeeNo={user?.employeeNo}><PdfPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'image' && (
           <Suspense fallback={<div role="status">加载图片预览…</div>}>
-            <ImagePreview fileId={preview.id} name={preview.originalName} toolbarContainer={previewToolbar} />
+            <WatermarkedPreview employeeNo={user?.employeeNo}><ImagePreview fileId={preview.id} name={preview.originalName} toolbarContainer={previewToolbar} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'pptx' && (
           <Suspense fallback={<div role="status">加载 PPTX 渲染器…</div>}>
-            <PptxPreview fileId={preview.id} toolbarContainer={previewToolbar} />
+            <WatermarkedPreview employeeNo={user?.employeeNo}><PptxPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'video' && (

@@ -277,12 +277,20 @@ async function createPptx(marker) {
     await page.getByRole('tab', { name: '文件', exact: true, selected: true }).waitFor();
     const row = name => page.getByRole('row').filter({ has: page.getByText(name, { exact: true }) });
     const fileDialog = () => page.locator('.file-preview-modal:visible');
+    const assertWatermark = async (dialog, expectedEmployeeNo = 'admin') => {
+      const layer = dialog.locator('.preview-watermark');
+      await layer.waitFor({ state: 'visible' });
+      assert.equal(await layer.getAttribute('aria-hidden'), 'true');
+      const label = await layer.locator('span').first().textContent();
+      assert.match(label || '', new RegExp('^工号：' + expectedEmployeeNo.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&') + ' · \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$'));
+    };
 
     await record('Playwright截图文件真实渲染且仅图片滚轮缩放，预览无下载入口', async () => {
       await row(imageName).getByRole('button', { name: '预览文件', exact: true }).click();
       const dialog = fileDialog();
       const image = dialog.getByRole('img', { name: imageName, exact: true });
       await image.waitFor();
+      await assertWatermark(dialog);
       const dimensions = await image.evaluate(element => ({ width: element.naturalWidth, height: element.naturalHeight }));
       assert.deepEqual(dimensions, { width: 640, height: 360 });
       assert.equal(await dialog.getByRole('button', { name: /下载/ }).count(), 0);
@@ -303,6 +311,7 @@ async function createPptx(marker) {
       const frame = dialog.frameLocator('iframe[title="PPTX 预览内容"]');
       await frame.locator('.pptx-preview-slide-wrapper').waitFor();
       await frame.getByText('PPTX ' + suffix, { exact: true }).waitFor();
+      await assertWatermark(dialog);
       assert.equal(await dialog.getByRole('button', { name: /下载/ }).count(), 0);
       const zoom = dialog.getByLabel('PPTX 缩放', { exact: true });
       const before = await zoom.textContent();
@@ -370,6 +379,7 @@ async function createPptx(marker) {
       await previewButton.click();
       const dialog = page.locator('.message-image-preview-modal:visible');
       const image = dialog.getByRole('img', { name: pasteName, exact: true }); await image.waitFor();
+      await assertWatermark(dialog);
       assert.equal(await image.evaluate(element => element.naturalWidth), 640);
       assert.equal(await dialog.getByRole('button', { name: /下载/ }).count(), 0);
       const scale = dialog.locator('.image-preview-toolbar span[aria-live="polite"]');

@@ -609,7 +609,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
                       </Typography.Text>
                     </Space>
                     <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{m.content}</div>
-                    {!!m.images?.length && <MessageImages messageId={m.id} images={m.images} />}
+                    {!!m.images?.length && <MessageImages messageId={m.id} images={m.images} watermarkEmployeeNo={user?.employeeNo} />}
                     <div className="message-read-marker" aria-hidden="true" />
                     <div style={{ marginTop: 4 }}>
                       <Popover

@@ -2566,6 +2566,15 @@ test('file preview, download and delete icon actions expose accessible names', a
   await act(async () => renderer.unmount())
 })
 
+test('document preview branches and message image preview all mount a watermark layer', () => {
+  const fileTable = fs.readFileSync(path.resolve(__dirname, '../src/components/FileTable.tsx'), 'utf8')
+  for (const componentName of ['ExcelPreview', 'PdfPreview', 'ImagePreview', 'PptxPreview']) {
+    assert.match(fileTable, new RegExp(`<WatermarkedPreview[\\s\\S]*?<${componentName}\\b`), `${componentName} watermark`)
+  }
+  const messageImages = fs.readFileSync(path.resolve(__dirname, '../src/components/MessageImages.tsx'), 'utf8')
+  assert.match(messageImages, /className="file-preview-surface"[\s\S]*?PreviewWatermark/)
+})
+
 test('invalid project route identifiers render a recoverable error without API calls', async () => {
   for(const id of ['not-a-number','0','-1','1.5','9007199254740993']) {
     let calls=0

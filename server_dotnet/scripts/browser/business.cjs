@@ -116,6 +116,12 @@ async function preview(page, name, kind, label) {
   } else {
     await assertExcelGrid(modal, [['公司', '验收结果'], ['甲公司', 'PASS']]);
   }
+  const watermark = modal.locator('.preview-watermark');
+  await watermark.waitFor({ state: 'visible' });
+  assert.equal(await watermark.getAttribute('aria-hidden'), 'true');
+  assert.match(await watermark.locator('span').first().textContent() || '',
+    /^工号：.+ · \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+    kind + ' preview watermark');
   await page.screenshot({ path: OUT + '/' + label + '.png', fullPage: true });
   await modal.getByRole('button', { name: '关闭文件预览', exact: true }).click();
   await modal.waitFor({ state: 'hidden' });
