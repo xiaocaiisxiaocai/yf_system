@@ -245,6 +245,24 @@ test('required business names and emails validate scalar lengths before submitti
   }
 })
 
+test('internal user form requires an organization', async () => {
+  const Page = loadTs('src/pages/org/UserList.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': iconModule(),
+    '../../api/client': { get: async (url) => ({ data: /options|departments/.test(url) ? [] : { list: [], total: 0, page: 1, pageSize: 10 } }) },
+    '../../api/types': { fmtTime: String },
+    '../../store/auth': authModule(['user:delete']),
+    '../../utils/password': { passwordRule: {} },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const item = renderer.root.findAllByType('Form.Item').find((node) => node.props.field === 'departmentId')
+  assert.ok(item, 'user form must render the organization field')
+  assert.ok(item.props.rules.some((rule) => rule.required), 'organization must be required')
+  assert.equal(item.findByType('TreeSelect').props.allowClear, undefined, 'required organization cannot be cleared from the form')
+  await act(async () => renderer.unmount())
+})
+
 test('permission tree keeps menu-only grants, adds a parent for actions and removes actions with an unchecked parent', async () => {
   const role = { id: 7, name: '测试', permissionIds: [5], assignedUserCount: 0, status: 'ACTIVE' }
   const perms = [
@@ -438,7 +456,7 @@ test('disabled users can keep their unavailable role while editing profile, but 
     employeeNo: 'disabled-user',
     realName: '停用用户',
     email: 'disabled@example.invalid',
-    departmentId: null,
+    departmentId: 4,
     roleId: retiredRoleId,
     roleName: '历史角色',
     status: 'DISABLED',
@@ -450,7 +468,7 @@ test('disabled users can keep their unavailable role while editing profile, but 
     validate: async () => ({
       realName: '停用用户已更新',
       email: user.email,
-      departmentId: undefined,
+      departmentId: 4,
       roleId: submittedRoleId,
     }),
   }

@@ -58,16 +58,17 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
     {
         AdminValidation.EmployeeNo(request.EmployeeNo); ValidateName(request.RealName); AdminValidation.Email(request.Email); PasswordService.Validate(request.Password);
         var roleId = AdminValidation.OneRole(request.RoleId, request.RoleIds, true);
+        if (request.DepartmentId is not ulong departmentId) throw ApiException.BadRequest("请选择所属组织");
         await using var conn = await db.OpenAsync(ct); await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await ManagementAsync(conn, tx, actor, "user:manage", ct); await permissionCeiling.EnsureManageRoleAsync(conn, tx, actor, roleId, ct);
-        if (request.DepartmentId is ulong dept) await DepartmentService.EnsureActiveAsync(conn, tx, dept, ct);
+        await DepartmentService.EnsureActiveAsync(conn, tx, departmentId, ct);
         await EnsureRoleAssignableAsync(conn, tx, roleId, ct);
         if (await conn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM users WHERE employee_no=@employeeNo)", new { employeeNo = request.EmployeeNo.Trim() }, tx, cancellationToken: ct)) == 1) throw ApiException.Conflict("工号已存在");
         var hash = await PasswordService.HashAsync(request.Password, ct);
         await conn.ExecuteAsync(new CommandDefinition("""
             INSERT INTO users(employee_no,password_hash,real_name,email,user_type,supplier_id,department_id,status,must_change_password,failed_login_attempts,locked_until,last_login_at,last_login_ip,created_by,created_at,updated_at)
             VALUES(@employeeNo,@hash,@realName,@email,'INTERNAL',NULL,@departmentId,'ACTIVE',1,0,NULL,NULL,NULL,@actorId,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
-            """, new { employeeNo = request.EmployeeNo.Trim(), hash, realName = request.RealName.Trim(), email = request.Email.Trim(), departmentId = request.DepartmentId, actorId = actor.Id }, tx, cancellationToken: ct));
+            """, new { employeeNo = request.EmployeeNo.Trim(), hash, realName = request.RealName.Trim(), email = request.Email.Trim(), departmentId, actorId = actor.Id }, tx, cancellationToken: ct));
         var id = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT LAST_INSERT_ID()", transaction: tx, cancellationToken: ct));
         await conn.ExecuteAsync(new CommandDefinition("INSERT INTO user_roles(user_id,role_id) VALUES(@id,@roleId)", new { id, roleId }, tx, cancellationToken: ct));
         var created = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound();
@@ -109,7 +110,11 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
         await using var conn = await db.OpenAsync(ct); await using var tx = await AppDb.BeginTransactionAsync(conn, ct); await ManagementAsync(conn, tx, actor, "user:manage", ct);
         var user = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound(); if (user.UserType != "INTERNAL") throw ApiException.BadRequest("供应商人员请在供应商模块维护");
         await permissionCeiling.EnsureManageUserAsync(conn, tx, actor, id, ct);
-        if (departmentId is ulong dept) await DepartmentService.EnsureActiveAsync(conn, tx, dept, ct);
+        if (departmentSpecified && departmentId is null) throw ApiException.BadRequest("请选择所属组织");
+        if (!departmentSpecified && user.DepartmentId is null) throw ApiException.BadRequest("请选择所属组织");
+        var effectiveDepartmentId = departmentSpecified ? departmentId : user.DepartmentId;
+        if (effectiveDepartmentId is not ulong dept) throw ApiException.BadRequest("请选择所属组织");
+        await DepartmentService.EnsureActiveAsync(conn, tx, dept, ct);
         var oldRoles = (await conn.QueryAsync<ulong>(new CommandDefinition("SELECT DISTINCT role_id FROM user_roles WHERE user_id=@id", new { id }, tx, cancellationToken: ct))).ToArray();
         if (oldRoles.Length != 1) throw ApiException.BadRequest("启用的内部用户必须且只能绑定一个角色");
         var oldRoleId = oldRoles[0];

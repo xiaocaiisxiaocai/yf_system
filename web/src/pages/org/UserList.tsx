@@ -162,6 +162,11 @@ export default function UserList() {
     if (saving) return
     const v = await form.validate().catch(() => null)
     if (!v) return
+    const selectedDepartmentId = v.departmentId ? Number(v.departmentId) : 0
+    if (!selectedDepartmentId) {
+      Message.error('请选择所属组织')
+      return
+    }
     const selectedRoleId = Number(v.roleId)
     const keepsUnavailableRole = editing?.status === 'DISABLED'
       && editingRoleUnavailable
@@ -173,7 +178,7 @@ export default function UserList() {
     const { roleId, ...values } = v
     const payload = {
       ...values,
-      departmentId: v.departmentId ? Number(v.departmentId) : null,
+      departmentId: selectedDepartmentId,
       roleId: Number(roleId),
     }
     setSaving(true)
@@ -424,8 +429,8 @@ export default function UserList() {
             <Form.Item label="邮箱" field="email" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }, textLengthRule('邮箱', 128)]}>
               <Input placeholder="name@example.com" />
             </Form.Item>
-            <Form.Item label="所属组织" field="departmentId">
-              <TreeSelect allowClear placeholder="选择组织" treeData={toTreeData(depts)} loading={optionsLoading} disabled={optionsError} />
+            <Form.Item label="所属组织" field="departmentId" rules={[{ required: true, message: '请选择所属组织' }]}>
+              <TreeSelect placeholder="选择组织" treeData={toTreeData(depts)} loading={optionsLoading} disabled={optionsError} />
             </Form.Item>
             <Form.Item label="角色" field="roleId" rules={[{ required: true, message: '请选择角色' }]}>
               <Select showSearch placeholder="选择角色" loading={optionsLoading} disabled={optionsError}>

@@ -3654,7 +3654,7 @@ test('required option sources expose loading and retry states and block submits 
     let posted = 0
     let optionRound = 0
     const first = []
-    const form = { resetFields() {}, setFieldsValue() {}, validate: async () => ({ employeeNo: 'new_user', password: '123456', realName: '新用户', email: 'new@example.invalid', roleId: 3 }) }
+    const form = { resetFields() {}, setFieldsValue() {}, validate: async () => ({ employeeNo: 'new_user', password: '123456', realName: '新用户', email: 'new@example.invalid', departmentId: 4, roleId: 3 }) }
     const pwdForm = { resetFields() {}, validate: async () => ({ newPassword: '123456' }) }
     let formIndex = 0
     const testArco = new Proxy({
