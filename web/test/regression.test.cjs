@@ -1847,12 +1847,16 @@ test('system config exposes mail configuration, queue outcomes and missing mailb
         return { data: {
           configured: false,
           notificationsEnabled: true,
-          queue: { pending: 2, sending: 1, sent: 8, failed: 3 },
+          queue: { pending: 2, sending: 1, sent: 8, failed: 3, cancelled: 4 },
           latestSentAt: '2026-09-09T01:00:00Z',
           latestFailedAt: '2026-09-09T02:00:00Z',
           missingEmailCount: 1,
           missingEmailAccounts: [{ userId: 7, employeeNo: 'E7', realName: '未填邮箱', userType: 'INTERNAL', status: 'ACTIVE' }],
-          recent: [{ id: 11, action: 'EMAIL_FAILED', targetType: 'email_outbox', targetId: '11', detail: { error: 'SMTP 连接失败' }, createdAt: '2026-09-09T02:00:00Z' }],
+          recent: [
+            { id: 11, action: 'EMAIL_FAILED', targetType: 'email_outbox', targetId: '11', detail: { error: 'SMTP 连接失败' }, createdAt: '2026-09-09T02:00:00Z' },
+            { id: 12, action: 'EMAIL_CANCELLED_STALE', targetType: 'email_outbox', targetId: '12', detail: { reason: '项目状态已变化' }, createdAt: '2026-09-09T03:00:00Z' },
+            { id: 13, action: 'EMAIL_FUTURE_ACTION', targetType: 'email_outbox', targetId: '13', detail: {}, createdAt: '2026-09-09T04:00:00Z' },
+          ],
         } }
       },
     },
@@ -1868,7 +1872,15 @@ test('system config exposes mail configuration, queue outcomes and missing mailb
   assert.ok(renderer.root.findAll((node) => node.props.title === '邮件发送').length > 0)
   const tables = renderer.root.findAllByType('Table')
   assert.ok(tables.every(table => !table.props.data?.some(row => row.key === 'storage.warn_percent')))
-  assert.ok(tables.some((table) => table.props.data?.some((row) => row.action === 'EMAIL_FAILED')))
+  const mailTable = tables.find((table) => table.props.data?.some((row) => row.action === 'EMAIL_FAILED'))
+  assert.ok(mailTable)
+  const cancelled = mailTable.props.data.find((row) => row.action === 'EMAIL_CANCELLED_STALE')
+  const unknown = mailTable.props.data.find((row) => row.action === 'EMAIL_FUTURE_ACTION')
+  assert.match(String(mailTable.props.columns[1].render(cancelled.action).props.children), /已取消/)
+  assert.equal(mailTable.props.columns[2].render(null, cancelled), '项目状态已变化')
+  assert.match(String(mailTable.props.columns[1].render(unknown.action).props.children), /未知动作/)
+  assert.equal(mailTable.props.columns[2].render(null, unknown), '邮件处理结果未识别')
+  assert.ok(renderer.root.findAll((node) => node.type === 'strong' && node.props.children === 4).length > 0)
   await act(async () => renderer.unmount())
 })
 

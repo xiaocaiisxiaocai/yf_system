@@ -10,6 +10,56 @@ namespace Yf.Api.Tests;
 public sealed class ProjectCopyTests
 {
     [Fact(Timeout = 120_000)]
+    public async Task CompletedSourceCopyUsesCurrentMainDataAndIgnoresRealtimeFailureAfterCommit()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_copy_snapshot", ct);
+        await database.CreateBaselineAsync(legacyV16: false, ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await database.ExecuteAsync(SeedSql + """
+            UPDATE project_groups
+            SET status='IN_PROGRESS',machine_model='主项目当前机型',expected_completion_date='2027-02-01',updated_at=UTC_TIMESTAMP(3)
+            WHERE id=7111;
+            UPDATE projects
+            SET status='COMPLETED',machine_model='已完成快照机型',expected_completion_date='2026-01-01',updated_at=UTC_TIMESTAMP(3)
+            WHERE id=7101;
+            DELETE FROM project_work_orders WHERE project_id=7101;
+            INSERT INTO project_work_orders(project_id,work_order_no,sort_no) VALUES(7101,'WO-FROZEN',0);
+            """, ct);
+        var storage = Path.Combine(Path.GetTempPath(), "yf-project-copy-snapshot-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storage);
+        try
+        {
+            var publisher = new ThrowingPublisher();
+            var audit = new AuditService([]);
+            var service = new ProjectCopyService(database.Database, new AppOptions { StorageRoot = storage }, audit,
+                publisher, new ProjectGroupStatusService(audit));
+            await using var conn = await database.Database.OpenAsync(ct);
+
+            using var result = Json(await service.CopyAsync(conn,
+                new CurrentUser(1, "admin", "INTERNAL", null), 7101,
+                new ProjectCopyRequest { Name = "完成快照复制件" }, null, ct));
+            var targetId = result.RootElement.GetProperty("copy").GetProperty("targetProjectId").GetUInt64();
+            var target = await conn.QuerySingleAsync<CopiedProject>(new CommandDefinition("""
+                SELECT machine_model AS MachineModel,expected_completion_date AS ExpectedCompletionDate,
+                       (SELECT GROUP_CONCAT(work_order_no ORDER BY sort_no,id)
+                        FROM project_work_orders WHERE project_id=p.id) AS WorkOrders
+                FROM projects p WHERE id=@TargetId
+                """, new { TargetId = targetId }, cancellationToken: ct));
+            Assert.Equal("主项目当前机型", target.MachineModel);
+            Assert.Equal(new DateTime(2027, 2, 1), target.ExpectedCompletionDate);
+            Assert.Equal("WO-COPY", target.WorkOrders);
+            Assert.Equal(2, publisher.ProjectIds.Count);
+            Assert.Contains(7101UL, publisher.ProjectIds);
+            Assert.Contains(targetId, publisher.ProjectIds);
+        }
+        finally
+        {
+            try { Directory.Delete(storage, recursive: true); } catch { }
+        }
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task CopyCreatesIndependentFilesAndPermissionFilteredHistory()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -146,10 +196,25 @@ public sealed class ProjectCopyTests
     private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, JsonSerializerOptions.Web));
     private sealed class CopiedFile { public ulong Id { get; init; } public string StoragePath { get; init; } = "";
         public ulong UploaderId { get; init; } public string Direction { get; init; } = ""; public string Sha256 { get; init; } = ""; }
+    private sealed class CopiedProject
+    {
+        public string MachineModel { get; init; } = "";
+        public DateTime ExpectedCompletionDate { get; init; }
+        public string WorkOrders { get; init; } = "";
+    }
     private sealed class RecordingPublisher : IProjectRealtimePublisher
     {
         internal List<ulong> ProjectIds { get; } = [];
         public Task PublishAsync(ulong projectId, string kind, CancellationToken ct = default)
         { ProjectIds.Add(projectId); return Task.CompletedTask; }
+    }
+    private sealed class ThrowingPublisher : IProjectRealtimePublisher
+    {
+        internal List<ulong> ProjectIds { get; } = [];
+        public Task PublishAsync(ulong projectId, string kind, CancellationToken ct = default)
+        {
+            ProjectIds.Add(projectId);
+            throw new InvalidOperationException("simulated realtime failure");
+        }
     }
 }

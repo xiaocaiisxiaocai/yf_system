@@ -166,7 +166,19 @@ public sealed class UserService(AppDb db, PermissionService permissionCeiling, A
         status = AdminValidation.Status(status); await using var conn = await db.OpenAsync(ct); await using var tx = await AppDb.BeginTransactionAsync(conn, ct); await ManagementAsync(conn, tx, actor, "user:manage", ct);
         if (id == actor.Id) throw ApiException.BadRequest("不能禁用自己的账号");
         var user = await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound(); if (user.UserType != "INTERNAL") throw ApiException.BadRequest("供应商人员请在供应商模块维护"); await permissionCeiling.EnsureManageUserAsync(conn, tx, actor, id, ct);
-        if (status == "DISABLED") { await EnsureNoActiveProjectResponsibilityAsync(conn, tx, id, ct); await EnsureAdminRemovalSafeAsync(conn, tx, actor.Id, id, null, ct); } else { var roleIds = (await conn.QueryAsync<ulong>(new CommandDefinition("SELECT DISTINCT role_id FROM user_roles WHERE user_id=@id", new { id }, tx, cancellationToken: ct))).ToArray(); if (roleIds.Length != 1) throw ApiException.BadRequest("启用的内部用户必须且只能绑定一个角色"); await EnsureRoleAssignableAsync(conn, tx, roleIds[0], ct); }
+        if (status == "DISABLED")
+        {
+            await EnsureNoActiveProjectResponsibilityAsync(conn, tx, id, ct);
+            await EnsureAdminRemovalSafeAsync(conn, tx, actor.Id, id, null, ct);
+        }
+        else
+        {
+            if (user.DepartmentId is not ulong departmentId) throw ApiException.BadRequest("请选择所属组织");
+            await DepartmentService.EnsureActiveAsync(conn, tx, departmentId, ct);
+            var roleIds = (await conn.QueryAsync<ulong>(new CommandDefinition("SELECT DISTINCT role_id FROM user_roles WHERE user_id=@id", new { id }, tx, cancellationToken: ct))).ToArray();
+            if (roleIds.Length != 1) throw ApiException.BadRequest("启用的内部用户必须且只能绑定一个角色");
+            await EnsureRoleAssignableAsync(conn, tx, roleIds[0], ct);
+        }
         await conn.ExecuteAsync(new CommandDefinition("UPDATE users SET status=@status,updated_at=UTC_TIMESTAMP(6) WHERE id=@id", new { status, id }, tx, cancellationToken: ct)); if (status == "DISABLED") await IdentityService.RevokeAllAsync(conn, tx, id, ct);
         await audit.WriteAsync(conn, tx, actor.Id, "USER_STATUS", "user", id, new
         {

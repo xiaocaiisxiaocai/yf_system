@@ -77,6 +77,32 @@ async function download(page, name, target) {
   assert.equal(await item.failure(), null);
 }
 
+async function assertExcelGrid(dialog, expectedRows) {
+  const frame = dialog.frameLocator('iframe[title="Excel 预览内容"]');
+  const grid = frame.locator('.x-spreadsheet-overlayer');
+  const selectionInput = frame.locator('.x-spreadsheet-selector .hide-input input');
+  const address = frame.locator('.excel-cell-address');
+  const content = frame.getByLabel('单元格完整内容', { exact: true });
+  await grid.waitFor({ state: 'visible' });
+  // The workbook is canvas-rendered. Select A1 in the grid, then traverse every
+  // fixture cell through the viewer's keyboard selection and read-only content bar.
+  await grid.click({ position: { x: 70, y: 35 } });
+  for (let row = 0; row < expectedRows.length; row += 1) {
+    for (let column = 0; column < expectedRows[row].length; column += 1) {
+      const cellAddress = String.fromCharCode(65 + column) + String(row + 1);
+      await address.filter({ hasText: new RegExp('^' + cellAddress + '$') }).waitFor();
+      assert.equal(await content.inputValue(), expectedRows[row][column], cellAddress + ' rendered value');
+      if (column + 1 < expectedRows[row].length) await selectionInput.press('ArrowRight');
+    }
+    if (row + 1 < expectedRows.length) {
+      for (let column = expectedRows[row].length - 1; column > 0; column -= 1) {
+        await selectionInput.press('ArrowLeft');
+      }
+      await selectionInput.press('ArrowDown');
+    }
+  }
+}
+
 async function preview(page, name, kind, label) {
   const row = page.getByRole('row').filter({ hasText: name });
   await row.getByRole('button', { name: '预览文件', exact: true }).click();
@@ -88,11 +114,10 @@ async function preview(page, name, kind, label) {
       return canvas && canvas.width > 0 && canvas.height > 0;
     });
   } else {
-    await modal.getByText('甲公司', { exact: true }).waitFor();
-    await modal.getByText('PASS', { exact: true }).waitFor();
+    await assertExcelGrid(modal, [['公司', '验收结果'], ['甲公司', 'PASS']]);
   }
   await page.screenshot({ path: OUT + '/' + label + '.png', fullPage: true });
-  await modal.getByRole('button', { name: '关闭弹窗', exact: true }).click();
+  await modal.getByRole('button', { name: '关闭文件预览', exact: true }).click();
   await modal.waitFor({ state: 'hidden' });
 }
 
@@ -102,9 +127,10 @@ async function preview(page, name, kind, label) {
     adminPage = await openUser('admin');
     const admin = sessions.admin;
     const owners = await json(admin.context, admin.token, 'GET', '/project-owner-options');
-    assert(owners.length > 0, 'project owner options must contain an active section owner');
-    const memberOwner = owners.find(owner => owner.id === f.users.member?.id);
-    const owner = memberOwner || owners[0];
+    const sectionOwners = owners.filter(owner => owner.sectionName?.trim());
+    assert(sectionOwners.length > 0, 'project owner options must contain an active owner with a section');
+    const memberOwner = sectionOwners.find(owner => owner.id === f.users.member?.id);
+    const owner = memberOwner || sectionOwners[0];
     const vendors = await json(admin.context, admin.token, 'GET', '/project-dictionaries?type=ROBOT_VENDOR&enabledOnly=true');
     const models = await json(admin.context, admin.token, 'GET',
       '/project-dictionaries?type=ROBOT_MODEL&parentId=' + vendors[0].id + '&enabledOnly=true');

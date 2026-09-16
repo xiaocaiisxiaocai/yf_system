@@ -216,6 +216,7 @@ function flattenDepartments(nodes, result = []) {
       await modal.getByText('请输入初始密码', { exact: true }).waitFor();
       await modal.getByText('请输入姓名', { exact: true }).waitFor();
       await modal.getByText('请输入邮箱', { exact: true }).waitFor();
+      await modal.getByText('请选择所属组织', { exact: true }).waitFor();
       await modal.getByText('请选择角色', { exact: true }).waitFor();
       await modal.getByRole('button', { name: '取消', exact: true }).click();
       await modal.waitFor({ state: 'hidden' });
@@ -514,8 +515,11 @@ function flattenDepartments(nodes, result = []) {
         { id: division.id, name: divisionName, kind: '事业部' },
       ]) {
         await page.getByText(item.name, { exact: true }).first().click();
-        await page.getByRole('button', { name: '删除' + item.kind, exact: true }).click();
-        const removed = await action(page, '/admin/departments/' + item.id, 'DELETE', confirmPop);
+        await page.getByRole('button', { name: '更多', exact: true }).click();
+        await page.getByRole('menuitem', { name: '删除' + item.kind, exact: true }).click();
+        const removed = await action(page, '/admin/departments/' + item.id, 'DELETE', () => (
+          currentModal().getByRole('button', { name: '确认删除', exact: true }).click()
+        ));
         assert.deepEqual(removed, {});
         await page.getByText(item.name, { exact: true }).first().waitFor({ state: 'detached' });
       }

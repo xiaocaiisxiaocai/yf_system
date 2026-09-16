@@ -44,7 +44,15 @@ async function reserveLoginBudget(user,count=1){
   return;
  }
 }
-async function api(c,method,url,data,token,expected=200){const r=await c.request.fetch(s.base+'/api/v1'+url,{method,data,headers:{Origin:s.base,Authorization:'Bearer '+token}});assert.equal(r.status(),expected,method+' '+url);return r;}
+async function api(c,method,url,data,token,expected=200){
+ const r=await c.request.fetch(s.base+'/api/v1'+url,{method,data,headers:{Origin:s.base,Authorization:'Bearer '+token}});
+ if(r.status()!==expected){
+  const body=await r.json().catch(()=>({}));
+  const message=String(body.message||'non-JSON error').replace(/Bearer\s+\S+/gi,'Bearer [redacted]').replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'[redacted-token]').slice(0,400);
+  assert.equal(r.status(),expected,method+' '+url+': '+message);
+ }
+ return r;
+}
 async function navigate(p,url){await p.goto(s.base+url);await p.getByText('收起导航',{exact:true}).waitFor();}
 async function action(p,suffix,method,fn){const [r]=await Promise.all([p.waitForResponse(r=>new URL(r.url()).pathname.endsWith(suffix)&&r.request().method()===method),Promise.resolve().then(fn)]);assert.equal(r.status(),200,suffix);return r.json();}
 function track(p,label){

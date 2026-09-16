@@ -45,14 +45,10 @@ def _internal(admin, Client, conn, role_id, label, section_id):
     return user, actor
 
 
-def _supplier(admin, Client, conn, label):
-    supplier = admin.call("POST", "/api/v1/admin/suppliers", {
-        "name": label + "-" + secrets.token_hex(5),
-        "remark": "owned isolated collaboration fixture",
-    })
+def _supplier_account(admin, Client, conn, supplier_id, label):
     employee = "collab_supplier_" + secrets.token_hex(4)
     password = _password()
-    user = admin.call("POST", f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
+    user = admin.call("POST", f"/api/v1/admin/suppliers/{supplier_id}/accounts", {
         "employeeNo": employee,
         "password": password,
         "realName": label,
@@ -62,6 +58,15 @@ def _supplier(admin, Client, conn, label):
         cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (user["id"],))
     actor = Client(admin.base)
     actor.login(employee, password)
+    return user, actor
+
+
+def _supplier(admin, Client, conn, label):
+    supplier = admin.call("POST", "/api/v1/admin/suppliers", {
+        "name": label + "-" + secrets.token_hex(5),
+        "remark": "owned isolated collaboration fixture",
+    })
+    user, actor = _supplier_account(admin, Client, conn, supplier["id"], label)
     return supplier, user, actor
 
 
@@ -119,6 +124,8 @@ def run_collaboration_checks(admin, Client, conn, check):
     second_user, second = _internal(admin, Client, conn, role_id, "协作乙", section_id)
     first_supplier, first_supplier_user, first_supplier_client = _supplier(
         admin, Client, conn, "协作供应商甲")
+    first_supplier_peer_user, first_supplier_peer_client = _supplier_account(
+        admin, Client, conn, first_supplier["id"], "协作供应商甲同事")
     second_supplier, _, second_supplier_client = _supplier(
         admin, Client, conn, "协作供应商乙")
     project_id = _project(admin, conn, first_supplier["id"], first_user["id"])
@@ -163,14 +170,41 @@ def run_collaboration_checks(admin, Client, conn, check):
           _read_count(conn, visible_activity, first_supplier_user["id"]) == 0
           and _read_count(conn, hidden_activity, first_supplier_user["id"]) == 0)
 
+    peer_before = first_supplier_peer_client.call("GET", "/api/v1/collaboration/summary")
+    peer_notification_before = next(
+        (
+            item
+            for item in first_supplier_peer_client.call(
+                "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false"
+            )["list"]
+            if item["id"] == visible_activity
+        ),
+        None,
+    )
     first_supplier_client.call("POST", "/api/v1/collaboration/reads", {"ids": [visible_activity]})
     stable = first_supplier_client.call("GET", "/api/v1/collaboration/summary")
     first_supplier_client.call("POST", "/api/v1/collaboration/reads", {"ids": [visible_activity, visible_activity]})
     repeated = first_supplier_client.call("GET", "/api/v1/collaboration/summary")
     supplier_summary = first_supplier_client.call("GET", "/api/v1/collaboration/summary")
+    peer_after = first_supplier_peer_client.call("GET", "/api/v1/collaboration/summary")
+    peer_notification_after = next(
+        (
+            item
+            for item in first_supplier_peer_client.call(
+                "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false"
+            )["list"]
+            if item["id"] == visible_activity
+        ),
+        None,
+    )
     check("notification receipts are per-user and idempotent",
           stable == repeated and stable["unreadCount"] + 1 == page["unreadCount"]
-          and supplier_summary == repeated)
+          and supplier_summary == repeated
+          and peer_before == peer_after
+          and peer_notification_before is not None and not peer_notification_before["read"]
+          and peer_notification_after is not None and not peer_notification_after["read"]
+          and _read_count(conn, visible_activity, first_supplier_user["id"]) == 1
+          and _read_count(conn, visible_activity, first_supplier_peer_user["id"]) == 0)
     first_supplier_client.call("POST", "/api/v1/collaboration/reads", {"ids": list(range(1, 102))}, expected=400)
 
     first_supplier_client.call("POST", "/api/v1/messages/read", {"ids": [messages[1]["id"]]})

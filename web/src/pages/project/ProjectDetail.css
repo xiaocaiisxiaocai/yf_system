@@ -14,8 +14,8 @@
 .project-detail-summary-card .arco-descriptions-item-label,
 .project-detail-summary-card .arco-descriptions-item-value { padding-bottom: 2px; }
 .project-detail-summary-card .project-metadata { margin-top: 2px; }
-.project-detail-summary-card .project-metadata .arco-descriptions-item-label { white-space: nowrap; padding-right: 12px; }
-.project-detail-summary-card .project-metadata .arco-descriptions-item-value { min-width: 0; overflow-wrap: anywhere; }
+:is(.project-detail-summary-card, .project-group-summary-card) .project-metadata .arco-descriptions-item-label { white-space: nowrap; padding-right: 12px; }
+:is(.project-detail-summary-card, .project-group-summary-card) .project-metadata .arco-descriptions-item-value { min-width: 0; overflow-wrap: anywhere; }
 .project-copy-reference-bar {
   display: flex;
   align-items: center;

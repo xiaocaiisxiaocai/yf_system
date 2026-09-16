@@ -214,6 +214,7 @@ def run_audit_checks(client, conn, check):
         "robotVendorId": current_group["robotVendorId"],
         "robotModelId": current_group["robotModelId"],
         "responsibleUserId": current_group["responsibleUserId"],
+        "sectionId": current_group["sectionId"],
         "priorityId": current_group["priorityId"],
         "expectedCompletionDate": current_group["expectedCompletionDate"],
     })
@@ -306,6 +307,7 @@ def main():
     created = False
     process = None
     passed = []
+    outcome = 1
 
     def check(name, condition):
         if not condition:
@@ -327,8 +329,11 @@ def main():
             base = f"http://127.0.0.1:{port}"
             initial_password = "Yf9!" + secrets.token_urlsafe(9)
             changed_password = "Yf9!" + secrets.token_urlsafe(9)
-            env = os.environ.copy()
-            env.pop("YF_CONFIG_PATH", None)
+            env = {
+                key: value for key, value in os.environ.items()
+                if not key.lower().startswith(("app__", "app:"))
+                and key.upper() not in {"YF_CONFIG_PATH", "YF_BOOTSTRAP_PASSWORD"}
+            }
             env.update({
                 "App__ConnectionString": (
                     f"Server={_quoted_connection_value(parsed.hostname)};Port={parsed.port or 3306};"
@@ -399,17 +404,13 @@ def main():
             run_audit_checks(client, conn, check)
             _stop_process(process)
             process = None
-        print(f"PASS {len(passed)} audit checks; owned resources only", flush=True)
-        return 0
+        outcome = 0
     except CheckFailure as error:
         print("FAIL " + str(error), file=sys.stderr, flush=True)
-        return 1
     except (OSError, pymysql.MySQLError, subprocess.SubprocessError) as error:
         print("FAIL infrastructure " + type(error).__name__, file=sys.stderr, flush=True)
-        return 1
     except Exception as error:
         print("FAIL unexpected " + type(error).__name__, file=sys.stderr, flush=True)
-        return 1
     finally:
         _stop_process(process)
         if created:
@@ -418,7 +419,11 @@ def main():
                     cursor.execute(f"DROP DATABASE `{db_name}`")
             except pymysql.MySQLError:
                 print("FAIL owned database cleanup", file=sys.stderr, flush=True)
+                outcome = 1
         conn.close()
+    if outcome == 0:
+        print(f"PASS {len(passed)} audit checks; owned resources only", flush=True)
+    return outcome
 
 
 if __name__ == "__main__":

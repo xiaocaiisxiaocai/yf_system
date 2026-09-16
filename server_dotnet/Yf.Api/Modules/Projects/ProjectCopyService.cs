@@ -46,16 +46,16 @@ internal sealed class ProjectCopyService(
             await AccessService.RequirePermissionAsync(conn, tx, current, "project:create", ct);
             await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, sourceProjectId, true, ct);
             var currentSource = await LoadProjectAsync(conn, tx, sourceProjectId, ct);
+            var currentGroup = await LoadGroupAsync(conn, tx, currentSource.ProjectGroupId, ct);
             var currentFiles = await LoadFilesForUpdateAsync(conn, tx, sourceProjectId, ct);
             if (!SameProjectSnapshot(snapshot.Project, currentSource)
+                || !SameGroupSnapshot(snapshot.Group, currentGroup)
                 || !SameFileSnapshot(snapshot.Files, currentFiles)
                 || await ActiveUploadCountAsync(conn, tx, sourceProjectId, ct) != 0)
                 throw ApiException.Conflict("源项目或文件已发生变化，请刷新后重新复制");
             await ValidateSourceAsync(conn, tx, currentSource, ct);
-            var groupState = await conn.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
-                "SELECT status FROM project_groups WHERE id=@GroupId FOR UPDATE",
-                new { GroupId = currentSource.ProjectGroupId }, tx, cancellationToken: ct));
-            if (groupState is ProjectStatuses.Completed or ProjectStatuses.Terminated)
+            await ValidateGroupAsync(conn, tx, currentGroup, ct);
+            if (currentGroup.Status is ProjectStatuses.Completed or ProjectStatuses.Terminated)
                 throw ApiException.Conflict("主项目已结束，不能复制子项目");
             await EnsureNameUniqueAsync(conn, tx, targetName, ct);
             var createdAt = await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
@@ -70,17 +70,18 @@ internal sealed class ProjectCopyService(
                     VALUES(@ProjectGroupId,@TargetName,@Description,@SupplierId,'DRAFT',NULL,@ActorId,@CreatedAt,@CreatedAt,
                         @MachineModel,@RobotVendorId,@RobotModelId,@ResponsibleUserId,@SectionId,@PriorityId,@ExpectedCompletionDate)
                     """,
-                    new { currentSource.ProjectGroupId, TargetName = targetName, currentSource.Description, currentSource.SupplierId, ActorId = current.Id,
-                        CreatedAt = createdAt, currentSource.MachineModel, currentSource.RobotVendorId,
-                        currentSource.RobotModelId, currentSource.ResponsibleUserId, currentSource.SectionId,
-                        currentSource.PriorityId, currentSource.ExpectedCompletionDate }, tx, cancellationToken: ct));
+                    new { ProjectGroupId = currentGroup.Id, TargetName = targetName, currentSource.Description,
+                        currentGroup.SupplierId, ActorId = current.Id, CreatedAt = createdAt,
+                        currentGroup.MachineModel, currentGroup.RobotVendorId, currentGroup.RobotModelId,
+                        currentGroup.ResponsibleUserId, currentGroup.SectionId, currentGroup.PriorityId,
+                        currentGroup.ExpectedCompletionDate }, tx, cancellationToken: ct));
             }
             catch (MySqlException error) when (error.Number == 1062) { throw ApiException.Conflict("项目名称已存在"); }
             targetProjectId = await LastInsertIdAsync(conn, tx, ct);
-            for (var index = 0; index < currentSource.WorkOrderNos.Length; index++)
+            for (var index = 0; index < currentGroup.WorkOrderNos.Length; index++)
                 await conn.ExecuteAsync(new CommandDefinition(
                     "INSERT INTO project_work_orders(project_id,work_order_no,sort_no,created_at) VALUES(@ProjectId,@WorkOrderNo,@SortNo,@CreatedAt)",
-                    new { ProjectId = targetProjectId, WorkOrderNo = currentSource.WorkOrderNos[index], SortNo = index,
+                    new { ProjectId = targetProjectId, WorkOrderNo = currentGroup.WorkOrderNos[index], SortNo = index,
                         CreatedAt = createdAt }, tx, cancellationToken: ct));
 
             var actorName = await conn.QuerySingleAsync<string>(new CommandDefinition(
@@ -129,12 +130,12 @@ internal sealed class ProjectCopyService(
             {
                 copyId, source = Snapshot(currentSource),
                 target = new { id = targetProjectId, name = targetName, status = ProjectStatuses.Draft,
-                    currentSource.SupplierId, currentSource.WorkOrderNos, currentSource.MachineModel,
-                    currentSource.RobotVendorId, currentSource.RobotModelId, currentSource.ResponsibleUserId,
-                    currentSource.SectionId, currentSource.PriorityId, currentSource.ExpectedCompletionDate },
+                    currentGroup.SupplierId, currentGroup.WorkOrderNos, currentGroup.MachineModel,
+                    currentGroup.RobotVendorId, currentGroup.RobotModelId, currentGroup.ResponsibleUserId,
+                    currentGroup.SectionId, currentGroup.PriorityId, currentGroup.ExpectedCompletionDate },
                 fileCount = prepared.Count, totalBytes,
             }, ip, ct);
-            await groupStatus.RecalculateAsync(conn, tx, currentSource.ProjectGroupId, current.Id, targetProjectId, ct);
+            await groupStatus.RecalculateAsync(conn, tx, currentGroup.Id, current.Id, targetProjectId, ct);
 
             var target = await LoadProjectAsync(conn, tx, targetProjectId, ct);
             target.HasCopyHistory = true;
@@ -162,8 +163,8 @@ internal sealed class ProjectCopyService(
                 foreach (var item in prepared) TryDelete(item.TargetPath);
         }
 
-        await realtime.PublishAsync(sourceProjectId, RealtimeChangeKinds.Activity, CancellationToken.None);
-        await realtime.PublishAsync(targetProjectId, RealtimeChangeKinds.Activity, CancellationToken.None);
+        await PublishCommittedAsync(sourceProjectId);
+        await PublishCommittedAsync(targetProjectId);
         return response!;
     }
 
@@ -243,17 +244,21 @@ internal sealed class ProjectCopyService(
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:create", ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, sourceProjectId, true, ct);
         var source = await LoadProjectAsync(conn, tx, sourceProjectId, ct);
+        var group = await LoadGroupAsync(conn, tx, source.ProjectGroupId, ct);
         if (string.Equals(source.Name, targetName, StringComparison.OrdinalIgnoreCase))
             throw ApiException.BadRequest("复制项目必须使用新的项目名称");
         await EnsureNameUniqueAsync(conn, tx, targetName, ct);
         await ValidateSourceAsync(conn, tx, source, ct);
+        await ValidateGroupAsync(conn, tx, group, ct);
+        if (group.Status is ProjectStatuses.Completed or ProjectStatuses.Terminated)
+            throw ApiException.Conflict("主项目已结束，不能复制子项目");
         if (await ActiveUploadCountAsync(conn, tx, sourceProjectId, ct) != 0)
             throw ApiException.Conflict("源项目仍有进行中的文件上传，请上传完成后再复制");
         var files = await LoadFilesForUpdateAsync(conn, tx, sourceProjectId, ct);
         var copiedAt = await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
             "SELECT UTC_TIMESTAMP(6)", transaction: tx, cancellationToken: ct));
         await tx.CommitAsync(ct);
-        return new(source, files, copiedAt);
+        return new(source, group, files, copiedAt);
     }
 
     private static async Task<PreparedCopy> PreparePhysicalCopyAsync(string root, DateTime copiedAt,
@@ -315,6 +320,28 @@ internal sealed class ProjectCopyService(
         if (!valid) throw ApiException.Conflict("源项目关联资料已失效，请先更新负责人、课别、供应商或数据字典后再复制");
     }
 
+    private static async Task ValidateGroupAsync(MySqlConnection conn, MySqlTransaction tx, CopyGroupRow group, CancellationToken ct)
+    {
+        if (group.WorkOrderNos.Length == 0 || string.IsNullOrWhiteSpace(group.MachineModel)
+            || group.RobotVendorId is null or 0 || group.RobotModelId is null or 0
+            || group.ResponsibleUserId is null or 0 || group.SectionId is null or 0
+            || group.PriorityId is null or 0 || group.ExpectedCompletionDate is null)
+            throw ApiException.Conflict("主项目资料不完整，请先补齐必填信息后再复制");
+        var valid = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+            """
+            SELECT EXISTS(SELECT 1 FROM suppliers s
+              JOIN users owner ON owner.id=@OwnerId AND owner.user_type='INTERNAL' AND owner.status='ACTIVE'
+              JOIN departments section ON section.id=owner.department_id AND section.kind='SECTION'
+              JOIN project_dictionaries vendor ON vendor.id=@VendorId AND vendor.type='ROBOT_VENDOR'
+              JOIN project_dictionaries model ON model.id=@ModelId AND model.type='ROBOT_MODEL' AND model.parent_id=vendor.id
+              JOIN project_dictionaries priority ON priority.id=@PriorityId AND priority.type='PRIORITY'
+              WHERE s.id=@SupplierId AND s.status='ACTIVE' AND section.id=@SectionId)
+            """, new { OwnerId = group.ResponsibleUserId, VendorId = group.RobotVendorId,
+                ModelId = group.RobotModelId, group.PriorityId, group.SupplierId, group.SectionId },
+            tx, cancellationToken: ct));
+        if (!valid) throw ApiException.Conflict("主项目关联资料已失效，请先更新负责人、课别、供应商或数据字典后再复制");
+    }
+
     private static async Task<ProjectRow> LoadProjectAsync(MySqlConnection conn, MySqlTransaction tx, ulong projectId, CancellationToken ct)
     {
         var row = await conn.QuerySingleOrDefaultAsync<ProjectRow>(new CommandDefinition(
@@ -341,6 +368,23 @@ internal sealed class ProjectCopyService(
         return row;
     }
 
+    private static async Task<CopyGroupRow> LoadGroupAsync(MySqlConnection conn, MySqlTransaction tx, ulong groupId, CancellationToken ct)
+    {
+        var row = await conn.QuerySingleOrDefaultAsync<CopyGroupRow>(new CommandDefinition(
+            """
+            SELECT id AS Id,supplier_id AS SupplierId,status AS Status,machine_model AS MachineModel,
+              robot_vendor_id AS RobotVendorId,robot_model_id AS RobotModelId,
+              responsible_user_id AS ResponsibleUserId,section_id AS SectionId,priority_id AS PriorityId,
+              expected_completion_date AS ExpectedCompletionDate,updated_at AS UpdatedAt
+            FROM project_groups WHERE id=@GroupId
+            """, new { GroupId = groupId }, tx, cancellationToken: ct));
+        if (row is null) throw ApiException.NotFound("主项目不存在");
+        row.WorkOrderNos = (await conn.QueryAsync<string>(new CommandDefinition(
+            "SELECT work_order_no FROM project_group_work_orders WHERE project_group_id=@GroupId ORDER BY sort_no,id",
+            new { GroupId = groupId }, tx, cancellationToken: ct))).ToArray();
+        return row;
+    }
+
     private static async Task<CopyFileRow[]> LoadFilesForUpdateAsync(MySqlConnection conn, MySqlTransaction tx,
         ulong projectId, CancellationToken ct) => (await conn.QueryAsync<CopyFileRow>(new CommandDefinition(
         "SELECT id AS Id,uploader_id AS UploaderId,direction AS Direction,original_name AS OriginalName,ext AS Ext,size_bytes AS SizeBytes,mime_type AS MimeType,sha256 AS Sha256,storage_path AS StoragePath,status AS Status FROM files WHERE project_id=@ProjectId ORDER BY id FOR UPDATE",
@@ -358,6 +402,14 @@ internal sealed class ProjectCopyService(
         && a.RobotVendorId == b.RobotVendorId && a.RobotModelId == b.RobotModelId
         && a.ResponsibleUserId == b.ResponsibleUserId && a.SectionId == b.SectionId && a.PriorityId == b.PriorityId
         && a.ExpectedCompletionDate == b.ExpectedCompletionDate && a.WorkOrderNos.SequenceEqual(b.WorkOrderNos, StringComparer.Ordinal);
+
+    private static bool SameGroupSnapshot(CopyGroupRow a, CopyGroupRow b) => a.Id == b.Id
+        && a.SupplierId == b.SupplierId && a.Status == b.Status && a.UpdatedAt == b.UpdatedAt
+        && a.MachineModel == b.MachineModel && a.RobotVendorId == b.RobotVendorId
+        && a.RobotModelId == b.RobotModelId && a.ResponsibleUserId == b.ResponsibleUserId
+        && a.SectionId == b.SectionId && a.PriorityId == b.PriorityId
+        && a.ExpectedCompletionDate == b.ExpectedCompletionDate
+        && a.WorkOrderNos.SequenceEqual(b.WorkOrderNos, StringComparer.Ordinal);
 
     private static bool SameFileSnapshot(CopyFileRow[] a, CopyFileRow[] b) =>
         a.Length == b.Length && a.Zip(b).All(pair => pair.First == pair.Second);
@@ -400,9 +452,29 @@ internal sealed class ProjectCopyService(
 
     private static Task<ulong> LastInsertIdAsync(MySqlConnection conn, MySqlTransaction tx, CancellationToken ct) =>
         conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT LAST_INSERT_ID()", transaction: tx, cancellationToken: ct));
+    private async Task PublishCommittedAsync(ulong projectId)
+    {
+        try { await realtime.PublishAsync(projectId, RealtimeChangeKinds.Activity, CancellationToken.None); }
+        catch { }
+    }
     private static void TryDelete(string path) { try { File.Delete(path); } catch { } }
 
-    private sealed record ProjectCopySnapshot(ProjectRow Project, CopyFileRow[] Files, DateTime CopiedAt);
+    private sealed record ProjectCopySnapshot(ProjectRow Project, CopyGroupRow Group, CopyFileRow[] Files, DateTime CopiedAt);
+    private sealed class CopyGroupRow
+    {
+        public ulong Id { get; init; }
+        public ulong SupplierId { get; init; }
+        public string Status { get; init; } = string.Empty;
+        public string[] WorkOrderNos { get; set; } = [];
+        public string? MachineModel { get; init; }
+        public ulong? RobotVendorId { get; init; }
+        public ulong? RobotModelId { get; init; }
+        public ulong? ResponsibleUserId { get; init; }
+        public ulong? SectionId { get; init; }
+        public ulong? PriorityId { get; init; }
+        public DateTime? ExpectedCompletionDate { get; init; }
+        public DateTime UpdatedAt { get; init; }
+    }
     private sealed record PreparedCopy(CopyFileRow Source, string StoredName, string StoragePath, string TargetPath);
     private sealed record CopyFileRow(ulong Id, ulong UploaderId, string Direction, string OriginalName, string Ext, ulong SizeBytes,
         string? MimeType, string? Sha256, string StoragePath, string Status);

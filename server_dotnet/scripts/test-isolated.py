@@ -160,8 +160,11 @@ try:
         base = f"http://127.0.0.1:{port}"
         initial = "Yf9!" + secrets.token_urlsafe(9)
         changed = "Yf9!" + secrets.token_urlsafe(9)
-        env = os.environ.copy()
-        env.pop("YF_CONFIG_PATH", None)
+        env = {
+            key: value for key, value in os.environ.items()
+            if not key.lower().startswith(("app__", "app:"))
+            and key.upper() not in {"YF_CONFIG_PATH", "YF_BOOTSTRAP_PASSWORD"}
+        }
         env.update({"App__ConnectionString": f"Server={cs(url.hostname)};Port={url.port or 3306};Database={name};User ID={cs(user)};Password={cs(password)}",
                     "App__JwtSecret": secrets.token_urlsafe(48), "App__StorageRoot": str(storage),
                     "App__WebBaseUrl": base, "App__CookieSecure": "false", "App__WorkerEnabled": "false",
@@ -536,7 +539,7 @@ try:
                 "expectedSubmissionId": final_submission["latestSubmissionId"],
             })
             check(
-                "internal and supplier submission with internal self-confirm workflow",
+                "supplier submit withdraw resubmit and internal acceptance workflow",
                 first_submission["confirmSide"] == "COMPANY"
                 and supplier_submission["confirmSide"] == "COMPANY"
                 and final_submission["confirmSide"] == "COMPANY"

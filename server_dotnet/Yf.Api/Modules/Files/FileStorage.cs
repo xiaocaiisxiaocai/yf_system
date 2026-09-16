@@ -27,6 +27,38 @@ internal static class FileStorage
     public static string FinalPath(string root, DateTime now, string storedName) =>
         EnsureLexicallyWithin(root, Path.Combine(root, "files", now.ToString("yyyy"), now.ToString("MM"), storedName), false);
 
+    public static string CreateDirectoryWithin(string root, string candidate, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var rootFull = Path.GetFullPath(root);
+        var resolvedRoot = Root(rootFull);
+        var lexical = EnsureLexicallyWithin(rootFull, candidate, allowRoot: false);
+        var relative = Path.GetRelativePath(rootFull, lexical);
+        var current = resolvedRoot;
+        foreach (var component in relative.Split(
+                     new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            ct.ThrowIfCancellationRequested();
+            var next = Path.Combine(current, component);
+            FileSystemInfo info;
+            if (Directory.Exists(next)) info = new DirectoryInfo(next);
+            else if (File.Exists(next)) info = new FileInfo(next);
+            else
+            {
+                Directory.CreateDirectory(next);
+                info = new DirectoryInfo(next);
+            }
+
+            current = ResolveFinalTarget(info);
+            if (!IsWithin(resolvedRoot, current) || PathsEqual(resolvedRoot, current))
+                throw new InvalidOperationException("非法存储路径");
+            if (!Directory.Exists(current))
+                throw new InvalidOperationException("存储目录路径包含文件");
+        }
+        return current;
+    }
+
     public static string EnsureLexicallyWithin(string root, string candidate, bool allowRoot)
     {
         var normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

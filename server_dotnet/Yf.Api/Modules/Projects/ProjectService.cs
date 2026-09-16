@@ -11,6 +11,24 @@ internal sealed class ProjectService(
     AppOptions options,
     ProjectGroupStatusService groupStatus)
 {
+    private const string ValidSectionJoins = """
+        INNER JOIN departments section ON section.id=u.department_id
+        LEFT JOIN departments parent_department ON parent_department.id=section.parent_id
+        LEFT JOIN departments root_department ON root_department.id=parent_department.parent_id
+        """;
+    private const string ValidSectionClause = """
+        section.kind='SECTION' AND section.status='ACTIVE'
+        AND (section.parent_id IS NULL OR (
+          parent_department.id IS NOT NULL
+          AND parent_department.kind='DEPARTMENT'
+          AND parent_department.status='ACTIVE'
+          AND (parent_department.parent_id IS NULL OR (
+            root_department.id IS NOT NULL
+            AND root_department.kind='DIVISION'
+            AND root_department.status='ACTIVE'
+            AND root_department.parent_id IS NULL))))
+        """;
+
     internal async Task<object> DetailAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
@@ -328,13 +346,13 @@ internal sealed class ProjectService(
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await ProjectDictionaryService.RequireOptionReadAsync(conn, tx, current, ct);
         var rows = await conn.QueryAsync(new CommandDefinition(
-            """
+            $"""
             SELECT u.id AS id,u.employee_no AS employeeNo,u.real_name AS realName,
-                   CASE WHEN d.kind='SECTION' THEN d.id ELSE NULL END AS sectionId,
-                   CASE WHEN d.kind='SECTION' THEN d.name ELSE NULL END AS sectionName
+                   section.id AS sectionId,section.name AS sectionName
             FROM users u
-            LEFT JOIN departments d ON d.id=u.department_id
+            {ValidSectionJoins}
             WHERE u.user_type='INTERNAL' AND u.status='ACTIVE'
+              AND {ValidSectionClause}
               AND EXISTS(
                 SELECT 1 FROM user_roles ur
                 JOIN roles r ON r.id=ur.role_id AND r.status='ACTIVE'
@@ -727,11 +745,11 @@ internal sealed class ProjectService(
         if (input.ResponsibleUserId is { } responsibleUserId)
         {
             var owner = await conn.QuerySingleOrDefaultAsync<OwnerSelection>(new CommandDefinition(
-                """
-                SELECT u.id AS Id,
-                       CASE WHEN d.kind='SECTION' THEN d.id ELSE NULL END AS SectionId
-                FROM users u LEFT JOIN departments d ON d.id=u.department_id
+                $"""
+                SELECT u.id AS Id,section.id AS SectionId FROM users u
+                {ValidSectionJoins}
                 WHERE u.id=@Id AND u.user_type='INTERNAL' AND u.status='ACTIVE'
+                  AND {ValidSectionClause}
                   AND EXISTS(
                     SELECT 1 FROM user_roles ur
                     JOIN roles r ON r.id=ur.role_id AND r.status='ACTIVE'
@@ -739,9 +757,8 @@ internal sealed class ProjectService(
                     JOIN permissions permission ON permission.id=rp.permission_id AND permission.code='project:list'
                     WHERE ur.user_id=u.id)
                 """, new { Id = responsibleUserId }, tx, cancellationToken: ct));
-            if (owner is null) throw ApiException.BadRequest("负责人必须是拥有项目列表权限的启用内部用户");
+            if (owner is null) throw ApiException.BadRequest("负责人必须是拥有项目列表权限且直属有效课别的启用内部用户");
             sectionId = owner.SectionId;
-            if (sectionId is null) throw ApiException.BadRequest("负责人未关联课别，请先在用户管理中设置其所属课别");
         }
         return input with { SectionId = sectionId };
     }

@@ -38,6 +38,20 @@ public class SystemTests
         => Assert.Equal("jpg,pdf", SystemService.NormalizeConfig("upload.allowed_exts", " PDF,jpg,pdf "));
 
     [Fact]
+    public async Task UnknownAuditCategoryDoesNotFailOpenToAllLogs()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.QueryString = new QueryString("?category=UNKNOWN");
+        var service = new SystemService(null!, new AuditService([]));
+
+        var error = await Assert.ThrowsAsync<ApiException>(() =>
+            service.ListLogsAsync(context.Request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(400, error.Status);
+        Assert.Equal("日志分类参数无效", error.Message);
+    }
+
+    [Fact]
     public void ForwardedAddressIsTrustedOnlyFromExplicitLoopbackProxy()
     {
         var context = new DefaultHttpContext();

@@ -94,6 +94,13 @@ function validatorError(rule, value) {
   return result
 }
 
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((ok, fail) => { resolve = ok; reject = fail })
+  return { promise, resolve, reject }
+}
+
 test('password contract counts Unicode scalars and is shared by every password-writing form', async () => {
   const password = loadTs('src/utils/password.ts')
   assert.equal(password.PASSWORD_MIN_CHARS, 6)
@@ -261,6 +268,212 @@ test('internal user form requires an organization', async () => {
   assert.ok(item.props.rules.some((rule) => rule.required), 'organization must be required')
   assert.equal(item.findByType('TreeSelect').props.allowClear, undefined, 'required organization cannot be cleared from the form')
   await act(async () => renderer.unmount())
+})
+
+test('password change rejects same-render duplicate submissions and unlocks after completion', async () => {
+  const first = deferred()
+  const requests = []
+  const Page = loadTs('src/pages/ChangePassword.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': iconModule(),
+    'react-router-dom': { useNavigate: () => () => {} },
+    '../api/client': {
+      __esModule: true,
+      default: { put: (...args) => { requests.push(args); return requests.length === 1 ? first.promise : Promise.resolve({ data: {} }) } },
+      withAuthLock: async (operation) => operation(),
+    },
+    '../store/auth': authModule(),
+    '../components/AuthShell': { __esModule: true, default: component('AuthShell') },
+    '../utils/password': { passwordRule: {} },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  const values = { oldPassword: 'Old#123', newPassword: 'New#456', confirm: 'New#456' }
+  const submit = renderer.root.findByType('Form').props.onSubmit
+  let pending
+  await act(async () => {
+    pending = submit(values)
+    await submit(values)
+    await Promise.resolve()
+  })
+  assert.equal(requests.length, 1)
+  await act(async () => { first.resolve({ data: {} }); await pending })
+  await act(async () => { await renderer.root.findByType('Form').props.onSubmit(values) })
+  assert.equal(requests.length, 2)
+  await act(async () => renderer.unmount())
+})
+
+test('user creation rejects same-render duplicate confirmations', async () => {
+  const first = deferred()
+  const form = { validate: async () => ({
+    employeeNo: 'employee_1', password: 'Password#123', realName: '测试用户',
+    email: 'employee@example.invalid', departmentId: '4', roleId: 7,
+  }), resetFields() {}, setFieldsValue() {} }
+  let formIndex = 0
+  const userArco = new Proxy({
+    ...arco,
+    Form: Object.assign(component('Form'), {
+      useForm: () => [formIndex++ % 2 === 0 ? form : {}],
+      Item: component('Form.Item'),
+    }),
+  }, { get: (obj, key) => obj[key] ?? component(key) })
+  const posts = []
+  const Page = loadTs('src/pages/org/UserList.tsx', {
+    '@arco-design/web-react': userArco,
+    '@arco-design/web-react/icon': iconModule(),
+    '../../api/client': {
+      __esModule: true,
+      default: {
+        get: async (url) => ({ data: url === '/admin/users'
+          ? { list: [], total: 0, page: 1, pageSize: 10 }
+          : url === '/admin/user-role-options' ? [{ id: 7, name: '成员' }] : [] }),
+        post: (...args) => { posts.push(args); return first.promise },
+      },
+    },
+    '../../api/types': { fmtTime: String },
+    '../../store/auth': authModule(),
+    '../../utils/password': { passwordRule: {} },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)); await Promise.resolve() })
+  await act(async () => renderer.root.findByProps({ children: '新增用户' }).props.onClick())
+  const modal = renderer.root.findAllByType('Modal').find((node) => node.props.title === '新增用户')
+  let pending
+  await act(async () => {
+    pending = modal.props.onOk()
+    await modal.props.onOk()
+    await Promise.resolve()
+  })
+  assert.equal(posts.length, 1)
+  await act(async () => { first.resolve({ data: {} }); await pending })
+  await act(async () => renderer.unmount())
+})
+
+test('main-project route changes discard the previous project view before the next response', async () => {
+  let routeId = '3'
+  const second = deferred()
+  const group = (id, name) => ({
+    group: { id, name, status: 'IN_PROGRESS', subprojectCount: 0, completedCount: 0, pendingCount: 0, terminatedCount: 0 },
+    projects: [],
+  })
+  const Page = loadTs('src/pages/project/ProjectGroupDetail.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': iconModule(),
+    'react-router-dom': { useNavigate: () => () => {}, useParams: () => ({ id: routeId }) },
+    '../../api/client': { __esModule: true, default: { get: async (url) => url.endsWith('/3') ? { data: group(3, '旧主项目') } : second.promise } },
+    '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中', color: 'blue' } }, fmtTime: String },
+    '../../store/auth': authModule(['project:create', 'project:update']),
+    '../../store/collaboration': { useCollaboration: (selector) => selector({ revision: '', status: 'error' }) },
+    '../../utils/textRules': { textLengthRule: () => ({}) },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)); await Promise.resolve() })
+  assert.ok(renderer.root.findAll((node) => node.type === 'h1' && node.props.children === '旧主项目').length)
+  routeId = '4'
+  await act(async () => { renderer.update(React.createElement(Page)); await Promise.resolve() })
+  assert.equal(renderer.root.findAll((node) => node.type === 'h1' && node.props.children === '旧主项目').length, 0)
+  assert.ok(renderer.root.findAllByType('Spin').length)
+  await act(async () => { second.resolve({ data: group(4, '新主项目') }); await second.promise })
+  assert.ok(renderer.root.findAll((node) => node.type === 'h1' && node.props.children === '新主项目').length)
+  await act(async () => renderer.unmount())
+})
+
+test('main-project authorization loss clears the stale project and its open write dialogs', async () => {
+  for (const status of [403, 404]) {
+    let collaboration = { revision: '1', status: 'ready' }
+    let requests = 0
+    const forms = [
+      { resetFields() {}, setFieldsValue() {} },
+      { resetFields() {}, setFieldsValue() {} },
+    ]
+    let formIndex = 0
+    const groupArco = new Proxy({
+      ...arco,
+      Form: Object.assign(component('Form'), {
+        useForm: () => [forms[formIndex++ % forms.length]],
+        Item: component('Form.Item'),
+      }),
+    }, { get: (obj, key) => obj[key] ?? component(key) })
+    const project = { id: 31, name: '旧子项目', description: '旧说明', status: 'DRAFT' }
+    const Page = loadTs('src/pages/project/ProjectGroupDetail.tsx', {
+      '@arco-design/web-react': groupArco,
+      '@arco-design/web-react/icon': iconModule(),
+      'react-router-dom': { useNavigate: () => () => {}, useParams: () => ({ id: '3' }) },
+      '../../api/client': {
+        __esModule: true,
+        default: { get: async () => {
+          requests += 1
+          if (requests === 1) return { data: {
+            group: { id: 3, name: '旧主项目', status: 'IN_PROGRESS', subprojectCount: 1, completedCount: 0, pendingCount: 0, terminatedCount: 0 },
+            projects: [project],
+          } }
+          throw Object.assign(new Error('access revoked'), { isAxiosError: true, response: { status } })
+        } },
+      },
+      '../../api/types': { PROJECT_STATUS: { DRAFT: { text: '草稿' }, IN_PROGRESS: { text: '进行中' } }, fmtTime: String },
+      '../../store/auth': authModule(['project:create', 'project:update']),
+      '../../store/collaboration': { useCollaboration: (selector) => selector(collaboration) },
+      '../../utils/textRules': { textLengthRule: () => ({}) },
+    }).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)); await Promise.resolve() })
+    const actions = renderer.root.findByType('Table').props.columns.at(-1).render(null, project)
+    await act(async () => {
+      findElement(actions, (node) => node.props.children === '编辑').props.onClick()
+      findElement(actions, (node) => node.props.children === '复制').props.onClick()
+    })
+    assert.ok(renderer.root.findAllByType('Modal').some((modal) => modal.props.visible))
+    collaboration = { ...collaboration, revision: '2' }
+    await act(async () => { renderer.update(React.createElement(Page)); await Promise.resolve(); await Promise.resolve() })
+    assert.equal(renderer.root.findAll((node) => node.type === 'h1' && node.props.children === '旧主项目').length, 0)
+    assert.equal(renderer.root.findAllByType('Modal').length, 0)
+    assert.ok(renderer.root.findAllByType('Empty').length > 0)
+    await act(async () => renderer.unmount())
+  }
+})
+
+test('main-project transient refresh failure preserves the last snapshot with a retry state', async () => {
+  let collaboration = { revision: '1', status: 'ready' }
+  let requests = 0
+  const Page = loadTs('src/pages/project/ProjectGroupDetail.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': iconModule(),
+    'react-router-dom': { useNavigate: () => () => {}, useParams: () => ({ id: '3' }) },
+    '../../api/client': {
+      __esModule: true,
+      default: { get: async () => {
+        requests += 1
+        if (requests === 1) return { data: {
+          group: { id: 3, name: '可重试主项目', status: 'IN_PROGRESS', subprojectCount: 0, completedCount: 0, pendingCount: 0, terminatedCount: 0 },
+          projects: [],
+        } }
+        throw Object.assign(new Error('service unavailable'), { isAxiosError: true, response: { status: 503 } })
+      } },
+    },
+    '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中' } }, fmtTime: String },
+    '../../store/auth': authModule(),
+    '../../store/collaboration': { useCollaboration: (selector) => selector(collaboration) },
+    '../../utils/textRules': { textLengthRule: () => ({}) },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)); await Promise.resolve() })
+  collaboration = { ...collaboration, revision: '2' }
+  await act(async () => { renderer.update(React.createElement(Page)); await Promise.resolve(); await Promise.resolve() })
+  assert.ok(renderer.root.findAll((node) => node.type === 'h1' && node.props.children === '可重试主项目').length)
+  assert.ok(renderer.root.findAll((node) => node.props.children === '刷新失败，当前显示上次数据。').length)
+  await act(async () => renderer.unmount())
+})
+
+test('collaboration summary failure never blocks core project HTTP reads', () => {
+  for (const relativePath of [
+    'src/pages/project/ProjectList.tsx',
+    'src/pages/project/ProjectGroupDetail.tsx',
+    'src/pages/project/ProjectDetail.tsx',
+    'src/components/FileTable.tsx',
+  ]) {
+    const source = fs.readFileSync(path.resolve(__dirname, '..', relativePath), 'utf8')
+    assert.doesNotMatch(source, /syncStatus\s*===\s*['"]error['"]\)\s*return/, relativePath)
+  }
 })
 
 test('permission tree keeps menu-only grants, adds a parent for actions and removes actions with an unchecked parent', async () => {

@@ -24,18 +24,18 @@ async function initializePassword(browser, user) {
   }
 }
 
-async function createAccessUser(context, permissions, marker, key, permissionCodes) {
+async function createAccessUser(context, adminToken, permissions, departmentId, marker, key, permissionCodes) {
   const role = await (await api(context, 'POST', '/admin/roles', {
     name: '访问验收角色-' + key + '-' + marker,
     description: '独立浏览器访问控制验收',
-  }, s.adminToken)).json();
+  }, adminToken)).json();
   await api(context, 'PUT', '/admin/roles/' + role.id + '/permissions', {
     permissionIds: permissionCodes.map(code => {
       const permission = permissions.find(item => item.code === code);
       assert.ok(permission, 'permission fixture ' + code);
       return permission.id;
     }),
-  }, s.adminToken);
+  }, adminToken);
   const employeeNo = 'access_' + key + '_' + marker;
   const initialPassword = 'Access!' + crypto.randomBytes(6).toString('base64url');
   const password = 'Access!' + crypto.randomBytes(6).toString('base64url');
@@ -44,9 +44,9 @@ async function createAccessUser(context, permissions, marker, key, permissionCod
     password: initialPassword,
     realName: '访问验收' + key,
     email: employeeNo + '@example.invalid',
-    departmentId: null,
+    departmentId,
     roleId: role.id,
-  }, s.adminToken)).json();
+  }, adminToken)).json();
   return { ...user, employeeNo, initialPassword, password, roleId: role.id };
 }
 
@@ -56,12 +56,27 @@ async function createAccessUser(context, permissions, marker, key, permissionCod
   try {
     browser = await chromium.launch({ channel: 'chrome', headless: true });
     const adminContext = await browser.newContext();
-    const permissions = await (await api(adminContext, 'GET', '/permissions', undefined, s.adminToken)).json();
+    const adminPage = await adminContext.newPage();
+    const adminAuth = await login(adminPage, 'admin', s.adminPassword);
+    await adminPage.waitForURL(s.base + '/');
+    const adminToken = adminAuth.accessToken;
+    const permissions = await (await api(adminContext, 'GET', '/permissions', undefined, adminToken)).json();
+    const departments = await (await api(adminContext, 'GET', '/departments', undefined, adminToken)).json();
+    const activeDepartments = [];
+    const collectActiveDepartments = nodes => {
+      for (const node of nodes) {
+        if (node.status === 'ACTIVE') activeDepartments.push(node);
+        collectActiveDepartments(node.children || []);
+      }
+    };
+    collectActiveDepartments(departments);
+    const departmentId = activeDepartments.at(-1)?.id;
+    assert.ok(departmentId, 'an active department fixture is required for internal access users');
     const marker = crypto.randomBytes(4).toString('hex');
-    const noMenu = await createAccessUser(adminContext, permissions, marker, 'none', []);
-    const menuOnly = await createAccessUser(adminContext, permissions, marker, 'menu', ['org:user']);
+    const noMenu = await createAccessUser(adminContext, adminToken, permissions, departmentId, marker, 'none', []);
+    const menuOnly = await createAccessUser(adminContext, adminToken, permissions, departmentId, marker, 'menu', ['org:user']);
     const revocable = await createAccessUser(
-      adminContext, permissions, marker, 'revoke', ['org:user', 'user:manage'],
+      adminContext, adminToken, permissions, departmentId, marker, 'revoke', ['org:user', 'user:manage'],
     );
     await adminContext.close();
     for (const user of [noMenu, menuOnly, revocable]) await initializePassword(browser, user);
@@ -130,7 +145,7 @@ async function createAccessUser(context, permissions, marker, key, permissionCod
       assert.equal(dashboardRequests, 0, 'no dashboard API without dashboard menu');
       assert.equal(await page.getByRole('button', { name: '打开导航菜单', exact: true }).count(), 0);
       await page.getByRole('button', { name: '账号菜单：' + noMenu.realName, exact: true }).click();
-      await page.getByRole('menuitem', { name: '个人资料维护', exact: true }).click();
+      await page.getByRole('menuitem', { name: '个人资料', exact: true }).click();
       await page.waitForURL(s.base + '/profile');
       await page.getByText(noMenu.employeeNo, { exact: true }).waitFor();
       page.off('request', countDashboard);
@@ -208,7 +223,7 @@ async function createAccessUser(context, permissions, marker, key, permissionCod
     await record('O08 运行中撤权后403刷新权限并收敛为空菜单壳', async () => {
       await api(revokeContext, 'PUT', '/admin/roles/' + revocable.roleId + '/permissions', {
         permissionIds: [],
-      }, s.adminToken);
+      }, adminToken);
       const denied = page.waitForResponse(response => (
         new URL(response.url()).pathname === '/api/v1/admin/users'
         && response.request().method() === 'GET'

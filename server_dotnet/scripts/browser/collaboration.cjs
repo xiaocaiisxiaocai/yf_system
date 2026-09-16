@@ -57,6 +57,17 @@ async function waitSummary(page, accept, timeout = 12000) {
   throw new Error('collaboration summary did not reach the expected state');
 }
 
+async function waitPendingProject(page, projectId, timeout = 12000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const response = await waitResponse(
+      page, '/dashboard/pending-projects', 'GET', 200, deadline - Date.now());
+    const body = await response.json();
+    if (body.list?.some(item => item.id === projectId)) return body;
+  }
+  throw new Error('pending-project response did not include the submitted project');
+}
+
 async function listNotifications(context, token, unreadOnly) {
   const items = [];
   for (let page = 1; page <= 10; page += 1) {
@@ -75,7 +86,7 @@ async function listDashboardMessages(context, token, unreadOnly) {
 }
 
 async function openNotifications(page) {
-  await page.getByRole('button', { name: /^协作通知(?:，\d+ 条未查看)?$/ }).click();
+  await page.getByRole('button', { name: /^协作动态通知(?:，\d+ 条未查看)?$/ }).click();
   const drawer = page.locator('[data-collaboration-drawer="true"]');
   await drawer.waitFor({ state: 'visible' });
   return drawer;
@@ -125,9 +136,10 @@ async function chooseNotificationTab(drawer, name) {
     const supplierToken = supplierAuth.accessToken;
     const marker = crypto.randomBytes(5).toString('hex');
     const ownerOptions = await json(adminContext, adminToken, 'GET', '/project-owner-options');
-    assert(ownerOptions.length > 0, 'project owner fixture must provide an active section owner');
+    const owner = ownerOptions.find(item => item.sectionName?.trim());
+    assert(owner, 'project owner fixture must provide an active owner with a section');
     const project = await createProjectGroup(
-      adminContext, adminToken, f.suppliers.a.id, ownerOptions[0].id, '协作联动-' + marker);
+      adminContext, adminToken, f.suppliers.a.id, owner.id, '协作联动-' + marker);
     const projectName = project.name;
     await json(adminContext, adminToken, 'PUT', `/projects/${project.id}/status`, {
       status: 'IN_PROGRESS',
@@ -151,7 +163,7 @@ async function chooseNotificationTab(drawer, name) {
       liveMessage = await action(supplierPage, `/projects/${project.id}/messages`, 'POST',
         () => supplierInput().press('Control+Enter'));
       const next = await summaryChanged;
-      await adminPage.getByRole('button', { name: new RegExp(`^协作通知，${next.unreadCount} 条未查看$`) }).waitFor();
+      await adminPage.getByRole('button', { name: new RegExp(`^协作动态通知，${next.unreadCount} 条未查看$`) }).waitFor();
       assert(Date.now() - started <= 12000, 'admin notification badge must update within 12 seconds');
       assert.equal(adminPage.url(), s.base + '/', 'admin stays on the dashboard without a refresh');
     });
@@ -200,13 +212,15 @@ async function chooseNotificationTab(drawer, name) {
       await closeNotifications(adminPage, drawer);
     });
 
-    await record('另一参与人发言时保留供应商草稿并由按钮加载新留言', async () => {
-      const staleButton = supplierPage.getByRole('button', { name: '查看最新留言', exact: true });
-      if (await staleButton.isVisible().catch(() => false)) await staleButton.click();
+    await record('另一参与人发言时实时追加新留言并保留供应商草稿和既有列表', async () => {
+      await supplierPage.getByText(`协作积压-22-${marker}`, { exact: true }).waitFor();
+      const beforeIds = await supplierPage.locator('.msg-item')
+        .evaluateAll(nodes => nodes.map(node => node.dataset.messageId));
+      assert(beforeIds.length >= 23);
       const draft = '尚未发送的供应商草稿-' + marker;
       const adminText = '管理员并发留言-' + marker;
       await supplierInput().fill(draft);
-      const supplierNotified = supplierPage.getByRole('button', { name: '查看最新留言', exact: true });
+      const supplierReload = waitResponse(supplierPage, `/projects/${project.id}/messages`);
       const actorPage = await adminContext.newPage();
       track(actorPage, 'collaboration-admin-actor');
       actorPage.setDefaultTimeout(12000);
@@ -219,12 +233,14 @@ async function chooseNotificationTab(drawer, name) {
       } finally {
         await actorPage.close();
       }
-      await supplierNotified.waitFor();
-      assert.equal(await supplierInput().inputValue(), draft);
-      const refreshed = waitResponse(supplierPage, `/projects/${project.id}/messages`);
-      await supplierNotified.click();
-      await refreshed;
+      await supplierReload;
       await supplierPage.getByText(adminText, { exact: true }).waitFor();
+      assert.equal(await supplierInput().inputValue(), draft);
+      const afterIds = await supplierPage.locator('.msg-item')
+        .evaluateAll(nodes => nodes.map(node => node.dataset.messageId));
+      assert.equal(new Set(afterIds).size, afterIds.length);
+      assert(beforeIds.every(id => afterIds.includes(id)), 'realtime refresh preserves every previously loaded message');
+      assert.equal(afterIds.length, beforeIds.length + 1);
       assert.equal(await supplierInput().inputValue(), draft);
       await supplierInput().fill('');
     });
@@ -268,15 +284,17 @@ async function chooseNotificationTab(drawer, name) {
       await adminPage.goto(s.base + '/');
       await adminPage.getByRole('heading', { name: new RegExp('^工作台 · ') }).waitFor();
       await adminPage.getByRole('heading', { name: '公司内部待验收子项目', exact: true }).waitFor();
-      await adminPage.getByText('暂无内部待验收子项目', { exact: true }).waitFor();
-      const pendingReload = waitResponse(adminPage, '/dashboard/pending-projects');
+      const beforePending = await json(adminContext, adminToken, 'GET',
+        '/dashboard/pending-projects?page=1&pageSize=100');
+      assert(!beforePending.list.some(item => item.id === project.id));
+      const pendingReload = waitPendingProject(adminPage, project.id);
       const submit = action(supplierPage, `/projects/${project.id}/submit`, 'POST', async () => {
         await supplierPage.getByRole('button', { name: '提交公司验收', exact: true }).click();
         await supplierPage.locator('.arco-popconfirm:visible').getByRole('button', { name: '确定', exact: true }).click();
       });
       const submitted = await submit;
       assert(Number.isInteger(submitted.latestSubmissionId) && submitted.latestSubmissionId > 0);
-      const pending = await (await pendingReload).json();
+      const pending = await pendingReload;
       assert(pending.list.some(item => item.id === project.id));
       const projectLabel = project.projectGroupName
         ? `${project.projectGroupName} / ${projectName}` : projectName;
@@ -290,9 +308,13 @@ async function chooseNotificationTab(drawer, name) {
     let markedNotification;
     await record('通知查看状态独立于留言已读和流程待确认并在刷新后持久', async () => {
       const unread = await listNotifications(adminContext, adminToken, true);
-      markedNotification = unread.list.find(item => item.type === 'MESSAGE'
-        && seededMessages.some(message => message.id === item.targetId));
-      assert(markedNotification, 'an unread seeded message notification is available');
+      const unreadMessages = await listDashboardMessages(adminContext, adminToken, true);
+      const unreadMessageIds = new Set(unreadMessages.map(item => item.id));
+      markedNotification = unread.list.slice(0, 20).find(item => item.type === 'MESSAGE'
+        && seededMessages.some(message => message.id === item.targetId)
+        && unreadMessageIds.has(item.targetId));
+      assert(markedNotification,
+        'the first notification page needs a seeded item whose notification and message are both unread');
       const drawer = await openNotifications(adminPage);
       await chooseNotificationTab(drawer, '未查看');
       const row = notificationRow(drawer, markedNotification.id);
@@ -404,7 +426,7 @@ async function chooseNotificationTab(drawer, name) {
       mobilePage.setDefaultTimeout(12000);
       await login(mobilePage, 'admin', s.adminPassword);
       await mobilePage.waitForURL(s.base + '/');
-      const bell = mobilePage.getByRole('button', { name: /^协作通知/ });
+      const bell = mobilePage.getByRole('button', { name: /^协作动态通知/ });
       await bell.focus();
       const drawer = await openNotifications(mobilePage);
       const shell = mobilePage.locator('.collaboration-drawer:visible');

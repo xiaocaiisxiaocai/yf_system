@@ -74,8 +74,7 @@ public sealed partial class UploadService(
             var sessionId = Guid.NewGuid().ToString("D");
             var root = FileStorage.Root(options.StorageRoot);
             var tempDir = FileStorage.SessionDirectory(root, sessionId);
-            Directory.CreateDirectory(tempDir);
-            await FileStorage.ResolveExistingAsync(root, tempDir, requireFile: false, ct);
+            tempDir = FileStorage.CreateDirectoryWithin(root, tempDir, ct);
             SessionCommitRecoveryDecision? commitRecovery = null;
             try
             {
@@ -163,9 +162,8 @@ public sealed partial class UploadService(
 
         var root = FileStorage.Root(options.StorageRoot);
         var directory = FileStorage.SessionDirectory(root, sessionId);
-        Directory.CreateDirectory(directory);
-        await FileStorage.ResolveExistingAsync(root, directory, requireFile: false, ct);
-        var path = FileStorage.ChunkPath(root, sessionId, (uint)index);
+        directory = FileStorage.CreateDirectoryWithin(root, directory, ct);
+        var path = FileStorage.EnsureLexicallyWithin(root, Path.Combine(directory, $"{index}.part"), false);
         var temporary = FileStorage.EnsureLexicallyWithin(root,
             path + $".{Guid.NewGuid():D}.uploading", false);
         try
@@ -288,8 +286,7 @@ public sealed partial class UploadService(
         var root = FileStorage.Root(options.StorageRoot);
         var finalPath = FileStorage.FinalPath(root, now, storedName);
         var finalDirectory = Path.GetDirectoryName(finalPath) ?? throw new InvalidOperationException("存储目录无效");
-        Directory.CreateDirectory(finalDirectory);
-        await FileStorage.ResolveExistingAsync(root, finalDirectory, requireFile: false, ct);
+        FileStorage.CreateDirectoryWithin(root, finalDirectory, ct);
         var mergeTemp = FileStorage.EnsureLexicallyWithin(root,
             Path.Combine(FileStorage.SessionDirectory(root, session.Id), $"{storedName}.tmp"), false);
         TryDeleteFile(mergeTemp);
@@ -643,6 +640,7 @@ public sealed partial class UploadService(
         string root, string sessionId, string relativePath, CancellationToken ct)
     {
         var directory = FileStorage.SessionDirectory(root, sessionId);
+        directory = FileStorage.CreateDirectoryWithin(root, directory, ct);
         var markerId = Guid.NewGuid().ToString("D");
         var marker = FileStorage.EnsureLexicallyWithin(root,
             Path.Combine(directory, PendingFinalMarkerPrefix + markerId), false);

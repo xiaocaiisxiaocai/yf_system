@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Card, Input, InputNumber, Message, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
 import { useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
@@ -41,7 +41,7 @@ interface MailDetail {
 
 interface MailRecent {
   id: number
-  action: 'EMAIL_SENT' | 'EMAIL_FAILED' | 'EMAIL_RETRY' | 'EMAIL_SKIPPED_MISSING_EMAIL' | string
+  action: 'EMAIL_SENT' | 'EMAIL_FAILED' | 'EMAIL_RETRY' | 'EMAIL_SKIPPED_MISSING_EMAIL' | 'EMAIL_CANCELLED_STALE' | string
   targetType?: string | null
   targetId?: string | null
   detail?: MailDetail | null
@@ -54,7 +54,7 @@ interface MailStatus {
   port?: number | null
   from?: string | null
   notificationsEnabled: boolean
-  queue: { pending: number; sending: number; sent: number; failed: number }
+  queue: { pending: number; sending: number; sent: number; failed: number; cancelled: number }
   latestSentAt?: string | null
   latestFailedAt?: string | null
   missingEmailCount: number
@@ -71,7 +71,7 @@ interface MailStatus {
 const EMPTY_MAIL_STATUS: MailStatus = {
   configured: false,
   notificationsEnabled: true,
-  queue: { pending: 0, sending: 0, sent: 0, failed: 0 },
+  queue: { pending: 0, sending: 0, sent: 0, failed: 0, cancelled: 0 },
   missingEmailCount: 0,
   missingEmailAccounts: [],
   recent: [],
@@ -94,6 +94,7 @@ const MAIL_ACTION_LABELS: Record<string, string> = {
   EMAIL_FAILED: '发送失败',
   EMAIL_RETRY: '发送重试',
   EMAIL_SKIPPED_MISSING_EMAIL: '未入队：缺少邮箱',
+  EMAIL_CANCELLED_STALE: '已取消：事件失效',
 }
 
 function mailRecentSummary(row: MailRecent): string {
@@ -107,7 +108,13 @@ function mailRecentSummary(row: MailRecent): string {
   if (row.action === 'EMAIL_FAILED') {
     return `${detail.error || '发送失败'}${detail.retryCount ? `，第 ${detail.retryCount} 次` : ''}`
   }
-  return detail.recipient ? `收件人 ${detail.recipient}` : '邮件已发送'
+  if (row.action === 'EMAIL_CANCELLED_STALE') {
+    return detail.reason || '通知事件已失效，邮件发送已取消'
+  }
+  if (row.action === 'EMAIL_SENT') {
+    return detail.recipient ? `收件人 ${detail.recipient}` : '邮件已发送'
+  }
+  return detail.reason || detail.error || (detail.recipient ? `处理对象 ${detail.recipient}` : '邮件处理结果未识别')
 }
 
 export default function SysConfig() {
@@ -123,6 +130,8 @@ export default function SysConfig() {
   const [smtpDraft, setSmtpDraft] = useState<SmtpSettings>(EMPTY_SMTP)
   const [smtpPassword, setSmtpPassword] = useState('')
   const [smtpSaving, setSmtpSaving] = useState(false)
+  const saveInFlight = useRef(false)
+  const smtpSaveInFlight = useRef(false)
 
   const fetchSnapshot = useCallback(async () => {
     const [configsResponse, mailResponse, smtpResponse] = await Promise.all([
@@ -175,7 +184,7 @@ export default function SysConfig() {
   const smtpIdentityChanged = smtpDraft.host.trim().toLowerCase() !== smtp.host.toLowerCase() || smtpDraft.username.trim() !== smtp.username
 
   const saveSmtp = async () => {
-    if (smtpSaving || !smtpDirty) return
+    if (smtpSaveInFlight.current || !smtpDirty) return
     if (smtp.passwordNeedsUpdate && !smtpPassword) {
       Message.warning('已保存的授权码无法读取，请重新填写并保存')
       return
@@ -188,6 +197,7 @@ export default function SysConfig() {
       Message.warning('请填写 SMTP 服务器、登录账号、发件邮箱和邮箱密码或授权码')
       return
     }
+    smtpSaveInFlight.current = true
     setSmtpSaving(true)
     try {
       const response = await http.put('/admin/system/mail-settings', {
@@ -205,7 +215,7 @@ export default function SysConfig() {
         Message.warning('邮箱设置已保存，但邮件状态刷新失败，请稍后刷新页面')
       }
     } catch { /* 拦截器已提示，保留输入以便重试。 */ }
-    finally { setSmtpSaving(false) }
+    finally { smtpSaveInFlight.current = false; setSmtpSaving(false) }
   }
 
   const setValue = (key: string, value: string) => {
@@ -214,7 +224,8 @@ export default function SysConfig() {
   }
 
   const save = async () => {
-    if (saving || dirty.length === 0) return
+    if (saveInFlight.current || dirty.length === 0) return
+    saveInFlight.current = true
     const items = dirty.map(([key, value]) => ({ key, value }))
     const savedValues = new Map(items.map((item) => [item.key, item.value]))
     setSaving(true)
@@ -241,6 +252,7 @@ export default function SysConfig() {
     } catch {
       /* 拦截器已提示 */
     } finally {
+      saveInFlight.current = false
       setSaving(false)
     }
   }
@@ -335,6 +347,7 @@ export default function SysConfig() {
                   <Typography.Text>发送中 <strong>{mail.queue.sending}</strong></Typography.Text>
                   <Typography.Text type="success">已发送 <strong>{mail.queue.sent}</strong></Typography.Text>
                   <Typography.Text type={mail.queue.failed > 0 ? 'error' : 'secondary'}>失败 <strong>{mail.queue.failed}</strong></Typography.Text>
+                  <Typography.Text type="secondary">已取消 <strong>{mail.queue.cancelled}</strong></Typography.Text>
                 </Space>
                 <Space wrap size={20}>
                   <Typography.Text type="secondary">最近成功：{fmtTime(mail.latestSentAt)}</Typography.Text>
@@ -357,7 +370,7 @@ export default function SysConfig() {
                     scroll={{ x: 620 }}
                     columns={[
                       { title: '时间', dataIndex: 'createdAt', width: 160, render: fmtTime },
-                      { title: '结果', dataIndex: 'action', width: 150, render: (action: string) => <Tag color={action === 'EMAIL_SENT' ? 'green' : action === 'EMAIL_FAILED' ? 'red' : 'orange'}>{MAIL_ACTION_LABELS[action] || action}</Tag> },
+                      { title: '结果', dataIndex: 'action', width: 150, render: (action: string) => <Tag color={action === 'EMAIL_SENT' ? 'green' : action === 'EMAIL_FAILED' ? 'red' : action === 'EMAIL_CANCELLED_STALE' ? 'gray' : 'orange'}>{MAIL_ACTION_LABELS[action] || `未知动作：${action}`}</Tag> },
                       { title: '说明', width: 300, render: (_: unknown, row: MailRecent) => mailRecentSummary(row) },
                     ]}
                   />

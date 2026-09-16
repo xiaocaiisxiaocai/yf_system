@@ -88,7 +88,6 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
   }, [])
 
   useEffect(() => {
-    if (syncStatus === 'error') return
     const seq = ++loadSeq.current
     let active = true
     fetchFiles()

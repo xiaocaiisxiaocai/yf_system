@@ -13,15 +13,26 @@ const pathOf = value => new URL(value.url()).pathname;
 const isLogin = response => pathOf(response) === loginPath
   && response.request().method() === 'POST';
 
-async function createNoMenuUser(context) {
+async function createNoMenuUser(context, adminToken) {
   const marker = crypto.randomBytes(4).toString('hex');
+  const departments = await (await api(context, 'GET', '/departments', undefined, adminToken)).json();
+  const activeDepartments = [];
+  const collectActiveDepartments = nodes => {
+    for (const node of nodes) {
+      if (node.status === 'ACTIVE') activeDepartments.push(node);
+      collectActiveDepartments(node.children || []);
+    }
+  };
+  collectActiveDepartments(departments);
+  const departmentId = activeDepartments.at(-1)?.id;
+  assert.ok(departmentId, 'an active department fixture is required for the internal auth user');
   const role = await (await api(context, 'POST', '/admin/roles', {
     name: '认证边界角色-' + marker,
     description: '独立浏览器认证入口验收',
-  }, s.adminToken)).json();
+  }, adminToken)).json();
   await api(context, 'PUT', '/admin/roles/' + role.id + '/permissions', {
     permissionIds: [],
-  }, s.adminToken);
+  }, adminToken);
 
   const employeeNo = 'auth_edge_' + marker;
   const initialPassword = 'AuthEdge!' + crypto.randomBytes(6).toString('base64url');
@@ -31,9 +42,9 @@ async function createNoMenuUser(context) {
     password: initialPassword,
     realName: '认证边界用户',
     email: employeeNo + '@example.invalid',
-    departmentId: null,
+    departmentId,
     roleId: role.id,
-  }, s.adminToken)).json();
+  }, adminToken)).json();
   return { ...user, employeeNo, initialPassword, password };
 }
 
@@ -166,6 +177,11 @@ async function initializePassword(browser, user) {
         pathOf(request) === loginPath && request.method() === 'POST'
       ));
       const logged = page.waitForResponse(response => isLogin(response) && response.status() === 200);
+      const initialPendingLoaded = page.waitForResponse(response => (
+        pathOf(response) === pendingPath
+        && response.request().method() === 'GET'
+        && response.status() === 200
+      ));
       const password = page.getByRole('textbox', { name: '密码', exact: true });
       await password.focus();
       await page.keyboard.press('Enter');
@@ -174,7 +190,24 @@ async function initializePassword(browser, user) {
       await logged;
       await page.waitForURL(s.base + '/');
       await page.getByRole('heading', { name: /^工作台/ }).waitFor();
-      await page.waitForTimeout(800);
+      const initialPending = await (await initialPendingLoaded).json();
+      assert.ok(Array.isArray(initialPending.list), 'initial pending response must contain a list');
+      const pendingCard = page.locator('#dashboard-pending');
+      await pendingCard.waitFor();
+      if (initialPending.list.length > 0) {
+        await page.waitForFunction(expected => (
+          document.querySelectorAll('#dashboard-pending .dashboard-pending-link').length === expected
+        ), initialPending.list.length);
+        await pendingCard.getByText('共 ' + initialPending.total + ' 项', { exact: true }).waitFor();
+        const firstPending = initialPending.list[0];
+        const firstLabel = firstPending.projectGroupName
+          ? firstPending.projectGroupName + ' / ' + firstPending.name
+          : firstPending.name;
+        await pendingCard.getByRole('link', { name: firstLabel, exact: true }).first().waitFor();
+      } else {
+        assert.equal(initialPending.total, 0, 'empty first pending page must report zero total');
+        await pendingCard.getByText('暂无内部待验收子项目', { exact: true }).waitFor();
+      }
       const payload = loginRequest.postDataJSON();
       assert.equal(payload.employeeNo, 'admin');
       assert.equal(payload.password, s.adminPassword);
@@ -187,7 +220,6 @@ async function initializePassword(browser, user) {
     });
     page.off('request', countLogin);
 
-    await page.getByText('暂无内部待验收子项目', { exact: true }).waitFor();
     await record('O08 并发401只刷新一次并分别重放原请求', async () => {
       const attempts = new Map([[summaryPath, 0], [pendingPath, 0]]);
       let refreshRequests = 0;
@@ -251,7 +283,10 @@ async function initializePassword(browser, user) {
     await loginContext.close();
 
     const fixtureContext = await browser.newContext();
-    const noMenu = await createNoMenuUser(fixtureContext);
+    const fixturePage = await fixtureContext.newPage();
+    const fixtureAdmin = await login(fixturePage, 'admin', s.adminPassword);
+    await fixturePage.waitForURL(s.base + '/');
+    const noMenu = await createNoMenuUser(fixtureContext, fixtureAdmin.accessToken);
     await fixtureContext.close();
     await initializePassword(browser, noMenu);
 
@@ -264,7 +299,7 @@ async function initializePassword(browser, user) {
       assert.deepEqual(noMenuAuth.menus, []);
       assert.equal(await page.getByRole('button', { name: '打开导航菜单', exact: true }).count(), 0);
       await page.getByRole('button', { name: '账号菜单：' + noMenu.realName, exact: true }).click();
-      await page.getByRole('menuitem', { name: '个人资料维护', exact: true }).click();
+      await page.getByRole('menuitem', { name: '个人资料', exact: true }).click();
       await page.waitForURL(s.base + '/profile');
       await page.getByText('登录密码', { exact: true }).waitFor();
       await page.getByRole('button', { name: '修改密码', exact: true }).waitFor();
@@ -284,7 +319,8 @@ async function initializePassword(browser, user) {
   } catch (error) {
     if (page) {
       await page.screenshot({ path: OUT + '/auth-edges-failure.png', fullPage: true }).catch(() => {});
-      console.log((await page.locator('body').innerText()).slice(-4500));
+      const body = await page.locator('body').innerText().catch(() => '');
+      if (body) console.log(body.slice(-4500));
     }
     console.error(error.stack || error.message);
     process.exitCode = 1;

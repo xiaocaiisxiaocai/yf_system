@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Card, Dropdown, Form, Input, InputNumber, Menu, Message, Modal, Spin, Tag, Tree, Typography } from '@arco-design/web-react'
 import { IconDown, IconPlus, IconRight, IconSearch } from '@arco-design/web-react/icon'
 import http from '../../api/client'
@@ -106,6 +106,7 @@ export default function DeptManage() {
   const [expandedKeys, setExpandedKeys] = useState<string[] | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const saveInFlight = useRef(false)
   const [editing, setEditing] = useState<DeptNode | null>(null)
   const [parentForNew, setParentForNew] = useState<DeptNode | null>(null)
   const [form] = Form.useForm()
@@ -161,11 +162,12 @@ export default function DeptManage() {
   }
 
   const submit = async () => {
-    if (saving) return
-    const v = await form.validate().catch(() => null)
-    if (!v) return
-    setSaving(true)
+    if (saveInFlight.current) return
+    saveInFlight.current = true
     try {
+      const v = await form.validate().catch(() => null)
+      if (!v) return
+      setSaving(true)
       if (editing) {
         await http.put(`/admin/departments/${editing.id}`, { name: v.name, parentId: editing.parentId ?? null, sortNo: v.sortNo ?? 0 })
         Message.success(`${ORG_KIND[nodeKind(editing)].label}已更新`)
@@ -177,6 +179,7 @@ export default function DeptManage() {
       form.resetFields()
       load()
     } finally {
+      saveInFlight.current = false
       setSaving(false)
     }
   }

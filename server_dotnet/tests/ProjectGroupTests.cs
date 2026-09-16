@@ -228,7 +228,7 @@ public sealed class ProjectGroupTests
             "SELECT id FROM projects WHERE project_group_id=@GroupId ORDER BY id",
             new { GroupId = groupId }, cancellationToken: ct))).ToArray();
         await conn.ExecuteAsync(new CommandDefinition("""
-            UPDATE projects SET status='COMPLETED' WHERE id=@CompletedId;
+            UPDATE projects SET status='COMPLETED',updated_at='2020-01-01 00:00:00.000' WHERE id=@CompletedId;
             DELETE FROM project_work_orders WHERE project_id=@CompletedId;
             INSERT INTO project_work_orders(project_id,work_order_no,sort_no) VALUES(@CompletedId,'WO-FROZEN',0);
             """, new { CompletedId = childIds[0] }, cancellationToken: ct));
@@ -254,6 +254,7 @@ public sealed class ProjectGroupTests
         var rows = (await conn.QueryAsync<FrozenChild>(new CommandDefinition("""
             SELECT p.id AS Id,p.machine_model AS MachineModel,p.expected_completion_date AS ExpectedCompletionDate,
                    p.responsible_user_id AS ResponsibleUserId,p.section_id AS SectionId,
+                   p.updated_at AS UpdatedAt,
                    (SELECT GROUP_CONCAT(pwo.work_order_no ORDER BY pwo.sort_no,pwo.id)
                     FROM project_work_orders pwo WHERE pwo.project_id=p.id) AS WorkOrders
             FROM projects p WHERE p.id IN @Ids ORDER BY p.id
@@ -263,6 +264,7 @@ public sealed class ProjectGroupTests
         Assert.Equal("WO-FROZEN", rows[0].WorkOrders);
         Assert.Equal(8507UL, rows[0].ResponsibleUserId);
         Assert.Equal(8508UL, rows[0].SectionId);
+        Assert.True(rows[0].UpdatedAt > new DateTime(2020, 1, 1));
         Assert.Equal("新机型", rows[1].MachineModel);
         Assert.Equal(new DateTime(2027, 1, 1), rows[1].ExpectedCompletionDate);
         Assert.Equal("WO-NEW", rows[1].WorkOrders);
@@ -288,6 +290,7 @@ public sealed class ProjectGroupTests
         public DateTime ExpectedCompletionDate { get; init; }
         public ulong ResponsibleUserId { get; init; }
         public ulong SectionId { get; init; }
+        public DateTime UpdatedAt { get; init; }
         public string WorkOrders { get; init; } = string.Empty;
     }
 }

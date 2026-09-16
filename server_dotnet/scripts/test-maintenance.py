@@ -23,6 +23,7 @@ connection = pymysql.connect(host=url.hostname, port=url.port or 3306,
                              charset="utf8mb4", autocommit=True)
 schemas = ["yf_test_maintenance_" + secrets.token_hex(8) for _ in range(3)]
 created = []
+report = None
 try:
     with connection.cursor() as cursor:
         for schema in schemas:
@@ -112,15 +113,20 @@ try:
                   "tablelessRoutineAndEventPreserved": True,
                   "payloadSha256": hashlib.sha256(payload).hexdigest(),
                   "targetIisTested": False}
-        report_path = source / ".runlogs/maintenance-results.json"
-        report_path.parent.mkdir(exist_ok=True)
-        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-        print("PASS real database rows, UTF-8 and binary bytes; IIS was not used")
 finally:
-    with connection.cursor() as cursor:
-        for schema in created:
-            if not schema.startswith("yf_test_maintenance_"):
-                raise RuntimeError("Unexpected cleanup schema")
-            cursor.execute(f"DROP DATABASE `{schema}`")
-    connection.close()
+    try:
+        with connection.cursor() as cursor:
+            for schema in created:
+                if not schema.startswith("yf_test_maintenance_"):
+                    raise RuntimeError("Unexpected cleanup schema")
+                cursor.execute(f"DROP DATABASE `{schema}`")
+    finally:
+        connection.close()
     print("Owned maintenance test schemas removed")
+
+if report is None:
+    raise RuntimeError("Maintenance checks completed without evidence")
+report_path = source / ".runlogs/maintenance-results.json"
+report_path.parent.mkdir(exist_ok=True)
+report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+print("PASS real database rows, UTF-8 and binary bytes; IIS was not used")

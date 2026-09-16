@@ -40,9 +40,10 @@ async function createProjectGroup(context, token, supplierId, ownerId, name) {
     const request = async (method, path, body, expected = 200) =>
       (await api(context, method, path, body, admin.accessToken, expected)).json();
     const owners = await request('GET', '/project-owner-options');
-    assert(owners.length > 0, 'message edges need an active project owner');
+    const owner = owners.find(item => item.sectionName?.trim());
+    assert(owner, 'message edges need an active project owner with a section');
     const project = await createProjectGroup(
-      context, admin.accessToken, f.suppliers.a.id, owners[0].id,
+      context, admin.accessToken, f.suppliers.a.id, owner.id,
       '留言边界-' + crypto.randomBytes(5).toString('hex'));
     await request('PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' });
     const endpoint = '/api/v1/projects/' + project.id + '/messages';
@@ -58,7 +59,7 @@ async function createProjectGroup(context, token, supplierId, ownerId, name) {
 
     await record('已读刷新后的未读角标不会被迟到的首屏摘要覆盖', async () => {
       const raceProject = await createProjectGroup(
-        context, admin.accessToken, f.suppliers.a.id, owners[0].id,
+        context, admin.accessToken, f.suppliers.a.id, owner.id,
         '未读摘要竞态-' + crypto.randomBytes(4).toString('hex'));
       await request('PUT', '/projects/' + raceProject.id + '/status', { status: 'IN_PROGRESS' });
       const supplierContext = await browser.newContext();
@@ -216,20 +217,30 @@ async function createProjectGroup(context, token, supplierId, ownerId, name) {
       const unavailable = feed.locator('.project-activity-item').filter({ hasText: '留言已不可用' });
       assert(await unavailable.count() > 0, 'deleted message activities must remain visible with an unavailable target');
       assert.equal(await unavailable.getByRole('button').count(), 0);
-      const [targetResponse] = await Promise.all([
-        page.waitForResponse(response => {
-          const url = new URL(response.url());
-          return url.pathname === endpoint && url.searchParams.get('targetId') === String(first.id) && response.status() === 200;
-        }),
-        feed.getByRole('button', { name: '查看' + first.content, exact: true }).click(),
-      ]);
-      const targetIds = (await targetResponse.json()).list.map(item => String(item.id));
-      assert.deepEqual(targetIds, [String(first.id)]);
+      const targetRequests = [];
+      const captureTargetLoad = request => {
+        const url = new URL(request.url());
+        if (url.pathname === endpoint && request.method() === 'GET') targetRequests.push(url);
+      };
+      page.on('request', captureTargetLoad);
+      await feed.getByRole('button', { name: '查看' + first.content, exact: true }).click();
       await page.waitForURL(url => url.searchParams.get('tab') === 'messages' && url.searchParams.get('target') === String(first.id));
-      await page.getByText('已定位到目标内容', { exact: true }).waitFor();
-      await page.waitForFunction(ids => JSON.stringify(Array.from(document.querySelectorAll('.msg-item'), node => node.dataset.messageId)) === JSON.stringify(ids), targetIds);
-      await page.getByRole('button', { name: '显示全部', exact: true }).click();
+      const targetMessage = page.locator(
+        `[data-message-id="${first.id}"][aria-label="当前定位留言"]`,
+      );
+      await targetMessage.waitFor();
+      page.off('request', captureTargetLoad);
+      assert(targetRequests.length >= 2, 'target navigation loads contiguous cursor pages through the older message');
+      assert.equal(targetRequests[0].searchParams.has('beforeId'), false);
+      assert(targetRequests.slice(1).every(url => url.searchParams.has('beforeId')));
+      const targetIds = await page.locator('.msg-item').evaluateAll(nodes => nodes.map(node => node.dataset.messageId));
+      assert.equal(targetIds.length, 23);
+      assert.equal(new Set(targetIds).size, 23);
+      assert(targetIds.includes(String(first.id)));
+      await page.getByRole('tab', { name: '文件', exact: true }).click();
       await page.waitForURL(url => !url.searchParams.has('target'));
+      await page.getByRole('tab', { name: '留言', exact: true }).click();
+      await page.waitForURL(url => url.searchParams.get('tab') === 'messages' && !url.searchParams.has('target'));
       await page.getByRole('button', { name: '加载更多（20/23）', exact: true }).waitFor(); page.expectedServerErrors.clear();
     });
 

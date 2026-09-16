@@ -119,9 +119,9 @@ public sealed class IdentityService(
         var user = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(UserSelect + " WHERE id=@id FOR UPDATE", new { id = found.UserId }, tx, cancellationToken: ct))
                    ?? throw ApiException.Unauthorized("账号不存在");
         var row = await conn.QuerySingleOrDefaultAsync<RefreshTokenRow>(new CommandDefinition(
-            "SELECT id Id,user_id UserId,session_id SessionId,token_hash TokenHash,expires_at ExpiresAt,revoked Revoked FROM refresh_tokens WHERE id=@id FOR UPDATE",
+            "SELECT id Id,user_id UserId,session_id SessionId,token_hash TokenHash,expires_at ExpiresAt,revoked Revoked,COALESCE(expires_at<=UTC_TIMESTAMP(6),1) IsExpired FROM refresh_tokens WHERE id=@id FOR UPDATE",
             new { found.Id }, tx, cancellationToken: ct)) ?? throw ApiException.Unauthorized("登录状态无效");
-        if (row.Revoked || row.ExpiresAt <= DateTime.UtcNow)
+        if (row.Revoked || row.IsExpired)
         {
             if (row.Revoked)
             {

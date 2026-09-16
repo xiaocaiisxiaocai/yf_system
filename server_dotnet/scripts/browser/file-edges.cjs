@@ -1,7 +1,7 @@
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const XLSX = require(process.env.YF_PROJECT_ROOT + '/web/node_modules/xlsx');
-const { fs, assert, OUT, s, f, record, api, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
+const { fs, assert, OUT, s, f, record, login, api, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
 const fileListPath = projectId => '/api/v1/projects/' + projectId + '/files';
 
@@ -65,30 +65,61 @@ function workbookBytes(marker) {
   return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
 }
 
+async function assertExcelGrid(dialog, expectedRows) {
+  const frame = dialog.frameLocator('iframe[title="Excel 预览内容"]');
+  const grid = frame.locator('.x-spreadsheet-overlayer');
+  const selectionInput = frame.locator('.x-spreadsheet-selector .hide-input input');
+  const address = frame.locator('.excel-cell-address');
+  const content = frame.getByLabel('单元格完整内容', { exact: true });
+  await grid.waitFor({ state: 'visible' });
+  await grid.click({ position: { x: 70, y: 35 } });
+  for (let row = 0; row < expectedRows.length; row += 1) {
+    for (let column = 0; column < expectedRows[row].length; column += 1) {
+      const cellAddress = String.fromCharCode(65 + column) + String(row + 1);
+      await address.filter({ hasText: new RegExp('^' + cellAddress + '$') }).waitFor();
+      assert.equal(await content.inputValue(), expectedRows[row][column], cellAddress + ' rendered value');
+      if (column + 1 < expectedRows[row].length) await selectionInput.press('ArrowRight');
+    }
+    if (row + 1 < expectedRows.length) {
+      for (let column = expectedRows[row].length - 1; column > 0; column -= 1) {
+        await selectionInput.press('ArrowLeft');
+      }
+      await selectionInput.press('ArrowDown');
+    }
+  }
+}
+
 (async () => {
   let browser, page;
   try {
     browser = await chromium.launch({ channel: 'chrome', headless: true });
     const admin = await browser.newContext({
       viewport: { width: 1440, height: 1000 },
-      storageState: OUT + '/admin.storage.private.json',
     });
     const internalApi = await browser.newContext();
     const supplierApi = await browser.newContext();
     page = await admin.newPage();
     track(page, 'file-edges');
+    const adminAuth = await login(page, 'admin', s.adminPassword);
+    await page.waitForURL(s.base + '/');
+    const adminToken = adminAuth.accessToken;
 
     const suffix = crypto.randomBytes(5).toString('hex');
     const prefix = 'file-edge-' + suffix;
-    const configs = await (await api(admin, 'GET', '/admin/system/configs', undefined, s.adminToken)).json();
+    const configs = await (await api(admin, 'GET', '/admin/system/configs', undefined, adminToken)).json();
     const originalChunkSize = configs.find(item => item.key === 'upload.chunk_size')?.value;
     assert(originalChunkSize, 'upload.chunk_size fixture');
     await api(admin, 'PUT', '/admin/system/configs', {
       items: [{ key: 'upload.chunk_size', value: String(1024 * 1024) }],
-    }, s.adminToken);
+    }, adminToken);
+    const ownerOptions = await (await api(
+      admin, 'GET', '/project-owner-options', undefined, adminToken)).json();
+    const owner = ownerOptions.find(item => item.id === f.users.member?.id && item.sectionName?.trim())
+      || ownerOptions.find(item => item.sectionName?.trim());
+    assert(owner, 'file fixture needs an active project owner with a section');
     const project = await createProjectGroup(
-      admin, s.adminToken, f.suppliers.a.id, f.users.member.id, '文件边界验收-' + suffix);
-    await api(admin, 'PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' }, s.adminToken);
+      admin, adminToken, f.suppliers.a.id, owner.id, '文件边界验收-' + suffix);
+    await api(admin, 'PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' }, adminToken);
 
     const c2sNames = [];
     const s2cNames = [];
@@ -243,13 +274,15 @@ function workbookBytes(marker) {
 
     await record('多工作表Excel预览真实切换', async () => {
       await row(workbookName).getByRole('button', { name: '预览文件', exact: true }).click();
-      const dialog = page.getByRole('dialog');
-      await dialog.getByRole('table', { name: 'Excel 工作表：第一页', exact: true }).waitFor();
-      await dialog.locator('.excel-preview-toolbar .arco-select').click();
-      await page.getByRole('option', { name: '第二页', exact: true }).click();
-      await dialog.getByRole('table', { name: 'Excel 工作表：第二页', exact: true }).waitFor();
-      await dialog.getByText('SECOND-SHEET-PASS', { exact: true }).waitFor();
-      await dialog.getByRole('button', { name: '关闭弹窗', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: `预览：${workbookName}` });
+      await assertExcelGrid(dialog, [['文件边界验收', '第一页'], [suffix, 'FIRST-SHEET-PASS']]);
+      const frame = dialog.frameLocator('iframe[title="Excel 预览内容"]');
+      const secondSheet = frame.locator('.x-spreadsheet-bottombar li').filter({ hasText: /^第二页$/ });
+      await secondSheet.click();
+      await secondSheet.waitFor();
+      await assertExcelGrid(dialog, [['文件边界验收', '第二页'], [suffix, 'SECOND-SHEET-PASS']]);
+      assert((await secondSheet.getAttribute('class') || '').split(/\s+/).includes('active'));
+      await dialog.getByRole('button', { name: '关闭文件预览', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' });
     });
 
@@ -320,14 +353,14 @@ function workbookBytes(marker) {
       await dialog.waitFor({ state: 'hidden' });
       await row(interruptedName).waitFor();
 
-      const persisted = await (await api(admin, 'GET', '/projects/' + project.id + '/files?keyword=' + encodeURIComponent(interruptedName), undefined, s.adminToken)).json();
+      const persisted = await (await api(admin, 'GET', '/projects/' + project.id + '/files?keyword=' + encodeURIComponent(interruptedName), undefined, adminToken)).json();
       assert.equal(persisted.total, 1);
       assert.equal(persisted.list[0].originalName, interruptedName);
     });
 
     await api(admin, 'PUT', '/admin/system/configs', {
       items: [{ key: 'upload.chunk_size', value: originalChunkSize }],
-    }, s.adminToken);
+    }, adminToken);
     await page.screenshot({ path: OUT + '/file-edges.png', fullPage: true });
     await admin.close();
     await internalApi.close();

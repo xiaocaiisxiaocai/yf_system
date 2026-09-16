@@ -540,7 +540,7 @@ def run_business_acceptance(client, Client, conn, check):
     actions_a = {item["action"] for item in activities_a["list"]}
     actions_b = {item["action"] for item in activities_b["list"]}
     check(
-        "internal and supplier submissions both complete through internal acceptance",
+        "two supplier submissions complete through internal acceptance",
         project_a_submission["confirmSide"] == "COMPANY"
         and project_b_submission["confirmSide"] == "COMPANY"
         and isinstance(project_a_submission["latestSubmissionId"], int)

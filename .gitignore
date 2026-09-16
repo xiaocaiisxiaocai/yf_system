@@ -1,5 +1,6 @@
 # Local runtime and acceptance artifacts
 .runlogs/
+.artifacts/
 .acceptance-backups/
 .repair-backups/
 .playwright-cli/

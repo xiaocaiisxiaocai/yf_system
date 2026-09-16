@@ -41,6 +41,8 @@ export default function RoleList() {
   const [permsLoading, setPermsLoading] = useState(true)
   const [permsError, setPermsError] = useState(false)
   const permsSeq = useRef(0)
+  const saveInFlight = useRef(false)
+  const permissionSaveInFlight = useRef(false)
   const [editOpen, setEditOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [savingPerms, setSavingPerms] = useState(false)
@@ -170,11 +172,12 @@ export default function RoleList() {
     .map((group) => group.key)
 
   const submit = async () => {
-    if (saving) return
-    const v = await form.validate().catch(() => null)
-    if (!v) return
-    setSaving(true)
+    if (saveInFlight.current) return
+    saveInFlight.current = true
     try {
+      const v = await form.validate().catch(() => null)
+      if (!v) return
+      setSaving(true)
       if (editing) {
         await http.put(`/admin/roles/${editing.id}`, v)
         Message.success('角色已更新')
@@ -185,12 +188,14 @@ export default function RoleList() {
       setEditOpen(false)
       load()
     } finally {
+      saveInFlight.current = false
       setSaving(false)
     }
   }
 
   const savePerms = async () => {
-    if (savingPerms || permsLoading || permsError || perms.length === 0 || permTarget?.canManage === false) return
+    if (permissionSaveInFlight.current || permsLoading || permsError || perms.length === 0 || permTarget?.canManage === false) return
+    permissionSaveInFlight.current = true
     const ids = Array.from(new Set(checked)).map(Number)
     setSavingPerms(true)
     try {
@@ -201,6 +206,7 @@ export default function RoleList() {
     } catch {
       // 请求层已展示错误；保留抽屉和当前选择，允许用户直接重试。
     } finally {
+      permissionSaveInFlight.current = false
       setSavingPerms(false)
     }
   }

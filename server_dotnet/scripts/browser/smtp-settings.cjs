@@ -206,7 +206,6 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
           await page.unroute('**' + CONFIGS_PATH, handler);
         }
       });
-      await page.getByText('参数已保存', { exact: true }).last().waitFor();
       await page.getByText('参数已保存，但最新状态刷新失败，请稍后刷新页面', { exact: true }).last().waitFor();
       assert.equal(await allowed.inputValue(), configDraft);
       assert.equal(await configSave().isDisabled(), true, 'successful write clears the ordinary dirty state');
@@ -296,7 +295,7 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
           await page.unroute('**' + MAIL_SETTINGS_PATH, writeHandler);
         }
       });
-      await page.getByText('邮箱设置已保存，无需重启', { exact: true }).last().waitFor();
+      await page.getByText('邮箱设置已保存，但邮件状态刷新失败，请稍后刷新页面', { exact: true }).last().waitFor();
       await fields.host().waitFor({ state: 'visible' });
       assert.equal(await fields.host().isEnabled(), true);
       assertSettings(await readSettings(), { ...FIRST, hasPassword: true, configured: true, passwordNeedsUpdate: false });

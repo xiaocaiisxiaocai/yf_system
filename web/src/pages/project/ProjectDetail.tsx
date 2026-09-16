@@ -255,7 +255,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
   }, [searchParams, setSearchParams, tab])
 
   useEffect(() => {
-    if (!validProjectId || syncStatus === 'error') return
+    if (!validProjectId) return
     let active = true
     const controller = new AbortController()
     loadingProjectId.current = pid
@@ -281,7 +281,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
   }, [fetchProject, pid, validProjectId, revision, syncStatus])
 
   useEffect(() => {
-    if (project?.id !== pid || syncStatus === 'error') return
+    if (project?.id !== pid) return
     // Summary is the external server state synchronized after the project becomes available.
     // eslint-disable-next-line react/set-state-in-effect
     void loadSummary()

@@ -21,6 +21,11 @@ const XLSX=require(process.env.YF_PROJECT_ROOT+'/web/node_modules/xlsx');
   fixtures.users[key]={id:user.id,username:user.employeeNo,password:initial,changedPassword:password()};
  }
  fs.writeFileSync(OUT+'/fixtures.private.json',JSON.stringify(fixtures));
+ for(const [type,name,parent] of [['ROBOT_VENDOR','自动验收 Robot 厂商',null],['ROBOT_MODEL','自动验收 Robot 型号','vendor']]){
+  const item=await(await api(c,'POST','/project-dictionaries',{type,name,parentId:parent?fixtures.vendorId:null,sortNo:10,enabled:true},s.adminToken)).json();
+  if(type==='ROBOT_VENDOR')fixtures.vendorId=item.id;
+ }
+ fs.writeFileSync(OUT+'/fixtures.private.json',JSON.stringify(fixtures));
  fs.copyFileSync(process.env.YF_PROJECT_ROOT+'/web/test/fixtures/pdf-compatibility.pdf',OUT+'/valid-preview.pdf');
  const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet([['公司','验收结果'],['甲公司','PASS']]),'验收');
  XLSX.writeFile(book,OUT+'/vendor-response.xlsx');

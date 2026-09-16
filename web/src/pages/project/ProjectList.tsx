@@ -113,7 +113,6 @@ export default function ProjectList() {
   }, [])
 
   useEffect(() => {
-    if (syncStatus === 'error') return
     let active = true
     fetchGroups().then((next) => {
       if (!active) return

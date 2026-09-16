@@ -138,10 +138,14 @@ test('role permission save failure resolves the click handler, keeps selections,
   const saveButton = () => findElement(renderer.root.findByType('Drawer').props.footer,
     node => node.props.children === '保存权限')
   let firstPromise
+  let duplicatePromise
   await act(async () => {
     firstPromise = saveButton().props.onClick()
+    duplicatePromise = saveButton().props.onClick()
     await Promise.resolve()
   })
+  await duplicatePromise
+  assert.equal(saveAttempts, 1, 'same-render duplicate permission saves must share the in-flight lock')
   tree = renderer.root.findByType('Tree')
   assert.ok(tree.props.treeData.every(group => group.disabled
     && group.children.every(child => child.disabled)))

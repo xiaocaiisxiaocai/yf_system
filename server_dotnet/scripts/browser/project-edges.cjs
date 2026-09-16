@@ -63,8 +63,9 @@ async function uploadFixture(context, token, projectId, name, bytes) {
       await api(context, method, url, body, auth.accessToken, expected)
     ).json();
     const ownerOptions = await json('GET', '/project-owner-options');
-    assert(ownerOptions.length > 0, 'project edges need an active project owner');
-    const defaults = await loadProjectDefaults(context, auth.accessToken, ownerOptions[0].id);
+    const owner = ownerOptions.find(item => item.sectionName?.trim());
+    assert(owner, 'project edges need an active project owner with a section');
+    const defaults = await loadProjectDefaults(context, auth.accessToken, owner.id);
     const prefix = '边界主项目-' + crypto.randomBytes(5).toString('hex');
     const groups = [];
     for (let index = 0; index < 12; index += 1) {
@@ -143,16 +144,22 @@ async function uploadFixture(context, token, projectId, name, bytes) {
 
     await record('主项目列表失败可重试，供应商选项失败禁止创建并可恢复', async () => {
       page.expectedServerErrors = new Set([groupsPath, '/api/v1/supplier-options']);
-      await page.route('**/api/v1/project-groups?*', route => route.fulfill({
+      const failGroups = route => route.fulfill({
         status: 503, contentType: 'application/json', body: '{"code":50301,"message":"temporary test failure"}',
-      }), { times: 1 });
-      await page.reload(); await page.getByText('加载失败', { exact: true }).waitFor();
+      });
+      await page.route('**/api/v1/project-groups?*', failGroups);
+      await page.reload();
+      await page.getByText('加载失败', { exact: true }).waitFor();
+      await page.unroute('**/api/v1/project-groups?*', failGroups);
       await listAction({}, () => page.getByRole('button', { name: '重试', exact: true }).click());
-      await page.route('**/api/v1/supplier-options', route => route.fulfill({
+      const failSuppliers = route => route.fulfill({
         status: 503, contentType: 'application/json', body: '{"code":50301,"message":"temporary test failure"}',
-      }), { times: 1 });
-      await page.reload(); await page.getByRole('button', { name: '重试加载供应商', exact: true }).waitFor();
+      });
+      await page.route('**/api/v1/supplier-options', failSuppliers);
+      await page.reload();
+      await page.getByRole('button', { name: '重试加载供应商', exact: true }).waitFor();
       assert(await page.getByRole('button', { name: '新建主项目', exact: true }).isDisabled());
+      await page.unroute('**/api/v1/supplier-options', failSuppliers);
       const restored = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/supplier-options' && response.status() === 200);
       await page.getByRole('button', { name: '重试加载供应商', exact: true }).click(); await restored;
       await page.getByRole('button', { name: '新建主项目', exact: true }).click();
@@ -215,6 +222,8 @@ async function uploadFixture(context, token, projectId, name, bytes) {
       await page.getByRole('button', { name: '返回主项目', exact: true }).click();
       await json('DELETE', '/projects/' + flow.id);
       await json('DELETE', '/project-groups/' + flow.groupId);
+      await page.goto(s.base + '/projects');
+      await page.getByRole('heading', { name: '项目协作', exact: true }).waitFor();
       await search(flow.groupName);
       assert.equal((await json('GET', '/project-groups?keyword=' + encodeURIComponent(flow.groupName))).total, 0);
     });
@@ -246,17 +255,19 @@ async function uploadFixture(context, token, projectId, name, bytes) {
       await page.getByText('主项目地址无效', { exact: true }).waitFor(); assert.equal(invalid.length, 0);
       const target = groupsPath + '/' + groups[9].groupId;
       page.expectedServerErrors = new Set([target]);
-      await page.route('**' + target, route => route.fulfill({
+      const failDetail = route => route.fulfill({
         status: 503, contentType: 'application/json', body: '{"code":50301,"message":"temporary test failure"}',
-      }), { times: 1 });
+      });
+      await page.route('**' + target, failDetail);
       await page.goto(s.base + '/project-groups/' + groups[9].groupId);
       await page.getByText('主项目加载失败或没有访问权限', { exact: true }).waitFor();
+      await page.unroute('**' + target, failDetail);
       await page.getByRole('button', { name: '重试', exact: true }).click();
       await page.getByText(groups[9].groupName, { exact: true }).waitFor();
       page.expectedServerErrors.clear();
     });
 
-    await record('五种子项目状态汇总到主项目，供应商提交且内部确认', async () => {
+    await record('五种子项目状态汇总为四种主项目状态，供应商提交且内部确认', async () => {
       assert(f.users.a.uiFirstChanged, 'run users before project-edges');
       const statusPrefix = '状态主项目-' + crypto.randomBytes(5).toString('hex');
       const pdf = require('node:fs').readFileSync(OUT + '/valid-preview.pdf');
@@ -284,14 +295,25 @@ async function uploadFixture(context, token, projectId, name, bytes) {
       await page.goto(s.base + '/projects');
       await page.getByRole('heading', { name: '项目协作', exact: true }).waitFor();
       await search(statusPrefix);
-      for (const [status, label] of [['DRAFT', '草稿'], ['PENDING_CONFIRMATION', '待内部验收'], ['COMPLETED', '已完成'], ['TERMINATED', '已终止'], ['IN_PROGRESS', '进行中']]) {
+      const groupedStatuses = [
+        ['DRAFT', '草稿', [statuses.DRAFT.groupId]],
+        ['IN_PROGRESS', '进行中', [statuses.IN_PROGRESS.groupId, statuses.PENDING_CONFIRMATION.groupId]],
+        ['COMPLETED', '已完成', [statuses.COMPLETED.groupId]],
+        ['TERMINATED', '已终止', [statuses.TERMINATED.groupId]],
+      ];
+      for (const [status, label, expectedIds] of groupedStatuses) {
         const data = await listAction({ keyword: statusPrefix, status, page: 1 }, async () => {
           await page.locator('.page-toolbar .arco-select').first().click();
           await page.getByRole('option', { name: label, exact: true }).click();
         });
-        assert.equal(data.total, 1); assert.equal(data.list[0].id, statuses[status].groupId);
-        assert.equal(data.list[0].status, status);
+        assert.equal(data.total, expectedIds.length);
+        assert.deepEqual(new Set(data.list.map(item => item.id)), new Set(expectedIds));
+        assert(data.list.every(item => item.status === status));
       }
+      const pendingGroup = await json('GET', '/project-groups/' + statuses.PENDING_CONFIRMATION.groupId);
+      assert.equal(pendingGroup.group.status, 'IN_PROGRESS');
+      assert.equal(pendingGroup.group.pendingCount, 1);
+      assert.equal(pendingGroup.projects[0].status, 'PENDING_CONFIRMATION');
       const active = statuses.IN_PROGRESS;
       await json('PUT', '/project-groups/' + active.groupId, {
         name: active.groupName + '-保存',

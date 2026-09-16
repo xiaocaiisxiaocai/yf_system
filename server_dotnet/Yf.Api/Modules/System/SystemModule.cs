@@ -141,7 +141,13 @@ public sealed class SystemService(AppDb db, AuditService audit)
                 if (!DateTimeOffset.TryParse(request.Query[name], CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)) throw ApiException.BadRequest("日期参数无效");
                 where.Add($"a.created_at {(name == "start" ? ">=" : "<=")} @{name}"); args.Add(name, at.UtcDateTime);
             }
-        if (Categories.TryGetValue(request.Query["category"].ToString().Trim(), out var actions)) { where.Add("a.action IN @actions"); args.Add("actions", actions); }
+        var category = request.Query["category"].ToString().Trim();
+        if (category.Length > 0)
+        {
+            if (!Categories.TryGetValue(category, out var actions)) throw ApiException.BadRequest("日志分类参数无效");
+            where.Add("a.action IN @actions");
+            args.Add("actions", actions);
+        }
         var condition = where.Count == 0 ? "" : " WHERE " + string.Join(" AND ", where);
         const string from = """
             FROM audit_logs a

@@ -74,6 +74,8 @@ export default function UserList() {
   const [optionsLoading, setOptionsLoading] = useState(true)
   const [optionsError, setOptionsError] = useState(false)
   const optionsSeq = useRef(0)
+  const saveInFlight = useRef(false)
+  const passwordResetInFlight = useRef(false)
   const [form] = Form.useForm()
   const [pwdForm] = Form.useForm()
   const editingRoleId = editing?.roleId ?? editing?.roleIds?.[0]
@@ -159,30 +161,31 @@ export default function UserList() {
   }, [])
 
   const submit = async () => {
-    if (saving) return
-    const v = await form.validate().catch(() => null)
-    if (!v) return
-    const selectedDepartmentId = v.departmentId ? Number(v.departmentId) : 0
-    if (!selectedDepartmentId) {
-      Message.error('请选择所属组织')
-      return
-    }
-    const selectedRoleId = Number(v.roleId)
-    const keepsUnavailableRole = editing?.status === 'DISABLED'
-      && editingRoleUnavailable
-      && selectedRoleId === editingRoleId
-    if (optionsLoading || optionsError || (!roles.some((role) => role.id === selectedRoleId) && !keepsUnavailableRole)) {
-      Message.error('组织和角色选项尚未就绪，请重试加载')
-      return
-    }
-    const { roleId, ...values } = v
-    const payload = {
-      ...values,
-      departmentId: selectedDepartmentId,
-      roleId: Number(roleId),
-    }
-    setSaving(true)
+    if (saveInFlight.current) return
+    saveInFlight.current = true
     try {
+      const v = await form.validate().catch(() => null)
+      if (!v) return
+      const selectedDepartmentId = v.departmentId ? Number(v.departmentId) : 0
+      if (!selectedDepartmentId) {
+        Message.error('请选择所属组织')
+        return
+      }
+      const selectedRoleId = Number(v.roleId)
+      const keepsUnavailableRole = editing?.status === 'DISABLED'
+        && editingRoleUnavailable
+        && selectedRoleId === editingRoleId
+      if (optionsLoading || optionsError || (!roles.some((role) => role.id === selectedRoleId) && !keepsUnavailableRole)) {
+        Message.error('组织和角色选项尚未就绪，请重试加载')
+        return
+      }
+      const { roleId, ...values } = v
+      const payload = {
+        ...values,
+        departmentId: selectedDepartmentId,
+        roleId: Number(roleId),
+      }
+      setSaving(true)
       if (editing) {
         // 资料与角色同一接口事务提交，避免两次 PUT 的半失败
         await http.put(`/admin/users/${editing.id}`, {
@@ -199,6 +202,7 @@ export default function UserList() {
       setEditOpen(false)
       load()
     } finally {
+      saveInFlight.current = false
       setSaving(false)
     }
   }
@@ -215,16 +219,18 @@ export default function UserList() {
   }
 
   const resetPwd = async () => {
-    if (resettingPassword) return
-    const v = await pwdForm.validate().catch(() => null)
-    if (!v) return
-    setResettingPassword(true)
+    if (passwordResetInFlight.current) return
+    passwordResetInFlight.current = true
     try {
+      const v = await pwdForm.validate().catch(() => null)
+      if (!v) return
+      setResettingPassword(true)
       await http.put(`/admin/users/${resetTarget!.id}/password`, { newPassword: v.newPassword })
       Message.success('密码已重置，该用户所有登录态已失效')
       setResetTarget(null)
       pwdForm.resetFields()
     } finally {
+      passwordResetInFlight.current = false
       setResettingPassword(false)
     }
   }

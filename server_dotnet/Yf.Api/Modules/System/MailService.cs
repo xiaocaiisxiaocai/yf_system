@@ -72,12 +72,12 @@ public sealed class MailService
         var counts = (await conn.QueryAsync<QueueCount>(new CommandDefinition("SELECT status,COUNT(*) AS count FROM email_outbox WHERE event_type <> 'STORAGE_WARNING' GROUP BY status", cancellationToken: ct))).ToDictionary(x => x.Status, x => x.Count);
         var missingCount = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT COUNT(*) FROM users WHERE status='ACTIVE' AND TRIM(email)=''", cancellationToken: ct));
         var missing = await conn.QueryAsync(new CommandDefinition("SELECT id AS userId,employee_no AS employeeNo,real_name AS realName,user_type AS userType,status FROM users WHERE status='ACTIVE' AND TRIM(email)='' ORDER BY employee_no LIMIT 20", cancellationToken: ct));
-        var recent = await conn.QueryAsync<AuditRow>(new CommandDefinition("SELECT id,action,target_type AS TargetType,target_id AS TargetId,detail,created_at AS CreatedAt FROM audit_logs WHERE action IN ('EMAIL_SENT','EMAIL_FAILED','EMAIL_RETRY','EMAIL_SKIPPED_MISSING_EMAIL') ORDER BY created_at DESC,id DESC LIMIT 10", cancellationToken: ct));
+        var recent = await conn.QueryAsync<AuditRow>(new CommandDefinition("SELECT id,action,target_type AS TargetType,target_id AS TargetId,detail,created_at AS CreatedAt FROM audit_logs WHERE action IN ('EMAIL_SENT','EMAIL_FAILED','EMAIL_RETRY','EMAIL_SKIPPED_MISSING_EMAIL','EMAIL_CANCELLED_STALE') ORDER BY created_at DESC,id DESC LIMIT 10", cancellationToken: ct));
         return new
         {
             configured, host = configured ? cfg.Host : null, port = configured ? (int?)cfg.Port : null, from = configured ? MaskEmail(cfg.From) : null,
             notificationsEnabled = await EnabledAsync(conn, ct),
-            queue = new { pending = counts.GetValueOrDefault("PENDING"), sending = counts.GetValueOrDefault("SENDING"), sent = counts.GetValueOrDefault("SENT"), failed = counts.GetValueOrDefault("FAILED") },
+            queue = new { pending = counts.GetValueOrDefault("PENDING"), sending = counts.GetValueOrDefault("SENDING"), sent = counts.GetValueOrDefault("SENT"), failed = counts.GetValueOrDefault("FAILED"), cancelled = counts.GetValueOrDefault("CANCELLED") },
             latestSentAt = await conn.ExecuteScalarAsync<DateTime?>(new CommandDefinition("SELECT MAX(sent_at) FROM email_outbox WHERE status='SENT'", cancellationToken: ct)),
             latestFailedAt = await conn.ExecuteScalarAsync<DateTime?>(new CommandDefinition("SELECT MAX(created_at) FROM audit_logs WHERE action='EMAIL_FAILED'", cancellationToken: ct)),
             missingEmailCount = missingCount, missingEmailAccounts = missing,

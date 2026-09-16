@@ -5,6 +5,7 @@ using MySqlConnector;
 using System.Text.Json;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Files;
+using Yf.Api.Modules.Identity;
 
 namespace Yf.Api.Tests;
 
@@ -270,6 +271,34 @@ public sealed class FilesRecoveryTests
         Assert.False(Directory.Exists(sessionDirectory));
     }
 
+    [Fact(Timeout = 30_000)]
+    public async Task BatchDownloadChecksProjectScopeBeforeRevealingUnavailableFileName()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var connection = await scope.Database.OpenAsync(ct))
+        {
+            await connection.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO users(id,employee_no,user_type,supplier_id,status,must_change_password,email,real_name)
+                VALUES(2,'T002','INTERNAL',NULL,'ACTIVE',FALSE,NULL,'Outsider');
+                INSERT INTO user_roles(user_id,role_id) VALUES(2,1);
+                INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,
+                                  mime_type,sha256,storage_path,status,deleted_at,created_at)
+                VALUES(1,1,'C2S','private-file-name.pdf','stored.pdf','pdf',1,'application/pdf',NULL,
+                       'files/2026/09/stored.pdf','DELETED',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6));
+                """, cancellationToken: ct));
+        }
+
+        var context = new DefaultHttpContext();
+        context.Items[typeof(CurrentUser)] = new CurrentUser(2, "T002", "INTERNAL", null);
+        var error = await Assert.ThrowsAsync<ApiException>(() => scope.Files.BatchDownloadAsync(
+            context, new BatchDownloadRequest([1]), ct));
+
+        Assert.Equal(403, error.Status);
+        Assert.Equal(40302, error.Code);
+        Assert.DoesNotContain("private-file-name.pdf", error.Message, StringComparison.Ordinal);
+    }
+
     private static Task WriteMarkerAsync(string sessionDirectory, string finalPath) =>
         File.WriteAllTextAsync(
             Path.Combine(sessionDirectory, UploadService.PendingFinalMarkerPrefix + Guid.NewGuid().ToString("D")),
@@ -290,7 +319,8 @@ public sealed class FilesRecoveryTests
             string disposableRoot,
             AppDb database,
             FilesMaintenanceService maintenance,
-            UploadService upload)
+            UploadService upload,
+            FileService files)
         {
             this.administration = administration;
             this.databaseName = databaseName;
@@ -298,12 +328,14 @@ public sealed class FilesRecoveryTests
             Database = database;
             Maintenance = maintenance;
             Upload = upload;
+            Files = files;
             StorageRoot = Path.Combine(disposableRoot, "storage");
         }
 
         public AppDb Database { get; }
         public FilesMaintenanceService Maintenance { get; }
         public UploadService Upload { get; }
+        public FileService Files { get; }
         public string StorageRoot { get; }
 
         public static async Task<FilesDatabaseScope> CreateOrSkipAsync(CancellationToken ct)
@@ -342,7 +374,8 @@ public sealed class FilesRecoveryTests
                 {
                     ConnectionString = appBuilder.ConnectionString,
                     StorageRoot = storageRoot,
-                    WorkerEnabled = false
+                    WorkerEnabled = false,
+                    JwtSecret = "files-recovery-test-secret-at-least-32-bytes"
                 };
                 var database = new AppDb(options);
                 await using (var connection = await database.OpenAsync(ct))
@@ -355,7 +388,9 @@ public sealed class FilesRecoveryTests
                             id BIGINT UNSIGNED PRIMARY KEY, employee_no VARCHAR(50) NOT NULL,
                             user_type VARCHAR(20) NOT NULL, supplier_id BIGINT UNSIGNED NULL,
                             status VARCHAR(20) NOT NULL, must_change_password BOOLEAN NOT NULL,
-                            email VARCHAR(255) NULL, real_name VARCHAR(100) NOT NULL
+                            email VARCHAR(255) NULL, real_name VARCHAR(100) NOT NULL,
+                            password_hash VARCHAR(255) NOT NULL DEFAULT '', department_id BIGINT UNSIGNED NULL,
+                            last_login_at DATETIME(6) NULL, created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                         );
                         CREATE TABLE roles(
                             id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(100) NOT NULL,
@@ -392,8 +427,13 @@ public sealed class FilesRecoveryTests
                         );
                         CREATE TABLE files(
                             id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                            storage_path VARCHAR(1024) NOT NULL, status VARCHAR(20) NOT NULL,
-                            deleted_at DATETIME(6) NULL
+                            project_id BIGINT UNSIGNED NOT NULL, uploader_id BIGINT UNSIGNED NOT NULL,
+                            direction VARCHAR(10) NOT NULL, original_name VARCHAR(255) NOT NULL,
+                            stored_name VARCHAR(255) NOT NULL, ext VARCHAR(32) NOT NULL,
+                            size_bytes BIGINT UNSIGNED NOT NULL, mime_type VARCHAR(255) NULL,
+                            sha256 VARCHAR(64) NULL, storage_path VARCHAR(1024) NOT NULL,
+                            status VARCHAR(20) NOT NULL, deleted_at DATETIME(6) NULL,
+                            created_at DATETIME(6) NOT NULL
                         );
                         INSERT INTO system_configs(cfg_key,cfg_value) VALUES
                             ('security.management_lock','1'),
@@ -405,9 +445,9 @@ public sealed class FilesRecoveryTests
                             (id,employee_no,user_type,supplier_id,status,must_change_password,email,real_name)
                             VALUES(1,'T001','INTERNAL',NULL,'ACTIVE',FALSE,NULL,'Tester');
                         INSERT INTO roles(id,name,status,is_built_in) VALUES(1,'文件测试','ACTIVE',FALSE);
-                        INSERT INTO permissions(id,code) VALUES(1,'file:upload'),(2,'project:list');
+                        INSERT INTO permissions(id,code) VALUES(1,'file:upload'),(2,'project:list'),(3,'file:download');
                         INSERT INTO user_roles(user_id,role_id) VALUES(1,1);
-                        INSERT INTO role_permissions(role_id,permission_id) VALUES(1,1),(1,2);
+                        INSERT INTO role_permissions(role_id,permission_id) VALUES(1,1),(1,2),(1,3);
                         INSERT INTO project_groups(id) VALUES(1);
                         INSERT INTO projects(id,project_group_id,supplier_id,created_by,status,confirm_side,name,responsible_user_id)
                             VALUES(1,1,1,1,'IN_PROGRESS',NULL,'File Test',1);
@@ -418,8 +458,13 @@ public sealed class FilesRecoveryTests
                 var upload = new UploadService(database, options,
                     new AuditService(Array.Empty<IProjectAuditCapture>()),
                     NullLogger<UploadService>.Instance);
+                var audit = new AuditService(Array.Empty<IProjectAuditCapture>());
+                var identity = new IdentityService(database, options, new LoginRateLimiter(),
+                    new TokenService(options), new PermissionService(), audit);
+                var files = new FileService(database, options, audit, new BatchDownloadLimiter(),
+                    new MediaGrantService(options), identity);
                 return new FilesDatabaseScope(
-                    administration, databaseName, disposableRoot, database, maintenance, upload);
+                    administration, databaseName, disposableRoot, database, maintenance, upload, files);
             }
             catch
             {
@@ -500,9 +545,20 @@ public sealed class FilesRecoveryTests
         public async Task ReferenceFileAsync(string finalPath)
         {
             await using var connection = await Database.OpenAsync();
+            var fileName = Path.GetFileName(finalPath);
             await connection.ExecuteAsync(
-                "INSERT INTO files(storage_path,status,deleted_at) VALUES(@Path,'AVAILABLE',NULL)",
-                new { Path = Path.GetRelativePath(StorageRoot, finalPath).Replace(Path.DirectorySeparatorChar, '/') });
+                """
+                INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,
+                                  mime_type,sha256,storage_path,status,deleted_at,created_at)
+                VALUES(1,1,'C2S',@FileName,@FileName,@Ext,1,'application/octet-stream',NULL,
+                       @Path,'AVAILABLE',NULL,UTC_TIMESTAMP(6))
+                """,
+                new
+                {
+                    FileName = fileName,
+                    Ext = Path.GetExtension(fileName).TrimStart('.').ToLowerInvariant(),
+                    Path = Path.GetRelativePath(StorageRoot, finalPath).Replace(Path.DirectorySeparatorChar, '/')
+                });
         }
 
         public async ValueTask DisposeAsync()

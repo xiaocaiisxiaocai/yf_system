@@ -4,6 +4,7 @@ import {
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
+import { isAxiosError } from 'axios'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
@@ -24,6 +25,11 @@ function suggestedCopyName(name: string) {
 
 export default function ProjectGroupDetail() {
   const { id } = useParams()
+  // 同一路由切换主项目时重建全部局部状态，旧请求、弹窗和操作目标不能泄漏到新主项目。
+  return <ProjectGroupDetailContent key={id} id={id} />
+}
+
+function ProjectGroupDetailContent({ id }: { id?: string }) {
   const groupId = Number(id)
   const validId = Number.isSafeInteger(groupId) && groupId > 0
   const navigate = useNavigate()
@@ -53,12 +59,21 @@ export default function ProjectGroupDetail() {
   }, [])
 
   useEffect(() => {
-    if (!validId || syncStatus === 'error') return
+    if (!validId) return
     let active = true
     const controller = new AbortController()
     http.get(`/project-groups/${groupId}`, { signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
       .then((response) => { if (active) { setData(response.data as ProjectGroupDetailData); setLoadError(false) } })
-      .catch(() => { if (active) setLoadError(true) })
+      .catch((error: unknown) => {
+        if (!active) return
+        setLoadError(true)
+        if (isAxiosError(error) && (error.response?.status === 403 || error.response?.status === 404)) {
+          setData(null)
+          setEditing(null)
+          setChildModalOpen(false)
+          setCopySource(null)
+        }
+      })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false; controller.abort() }
   }, [groupId, reloadKey, revision, syncStatus, validId])

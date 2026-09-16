@@ -5,13 +5,11 @@ const {fs,assert,OUT,s,f,record,login,track}=require(process.env.YF_BROWSER_SUPP
  await login(p,'admin',s.adminPassword);await p.waitForURL(s.base+'/');
  const detail=f.uiProjects?.a?.id;assert(detail,'Run business before layout to cover a real detail route');
  const routes=[['dashboard','/','工作台'],['profile','/profile','个人资料'],['projects','/projects','项目协作'],['detail','/projects/'+detail,'返回主项目'],['suppliers','/suppliers','供应商管理'],['users','/org/users','用户管理'],['depts','/org/depts','组织架构'],['roles','/rbac/roles','角色与权限'],['logs','/logs','操作日志'],['config','/system/config','系统参数'],['password','/change-password','确认修改'],['not-found','/does-not-exist','页面不存在或已被移除']];
+ routes.push(['group','/project-groups/'+f.uiProjects.a.groupId,'子项目'],['dictionaries','/system/dictionaries','数据字典']);
  const results=[];
  for(const [width,height] of [[1440,1000],[1024,900],[390,844],[1920,1080],[390,600]]){
   await p.setViewportSize({width,height});
   for(const [name,route,label] of routes){
-   if(width===1024&&!['projects','detail','suppliers','logs','config'].includes(name))continue;
-   if(width===1920&&!['projects','detail'].includes(name))continue;
-   if(height===600&&!['password','detail','config'].includes(name))continue;
    await record('页面布局 '+name+' '+width+'x'+height,async()=>{
      await p.goto(s.base+route);await p.getByText(label,{exact:false}).last().waitFor();
     if(name!=='password')await p.getByRole('button',{name:'账号菜单：系统管理员',exact:true}).waitFor();

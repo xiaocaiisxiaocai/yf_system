@@ -70,4 +70,36 @@ public sealed class FilesStorageSafetyTests
             if (Directory.Exists(sandbox)) Directory.Delete(sandbox, recursive: false);
         }
     }
+
+    [Fact]
+    public void DirectoryCreationRejectsEscapingLinkBeforeCreatingOutsideStorageRoot()
+    {
+        var sandbox = Path.Combine(Path.GetTempPath(), "yf_file_create_" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(sandbox, "storage");
+        var outside = Path.Combine(sandbox, "outside");
+        var tempLink = Path.Combine(root, "tmp");
+        var sessionId = Guid.NewGuid().ToString("D");
+        var outsideSession = Path.Combine(outside, sessionId);
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(outside);
+
+        try
+        {
+            Directory.CreateSymbolicLink(tempLink, outside);
+
+            Assert.Throws<InvalidOperationException>(() => FileStorage.CreateDirectoryWithin(
+                root, FileStorage.SessionDirectory(FileStorage.Root(root), sessionId), CancellationToken.None));
+
+            Assert.False(Directory.Exists(outsideSession));
+        }
+        finally
+        {
+            if (Directory.Exists(tempLink)
+                && (new DirectoryInfo(tempLink).Attributes & FileAttributes.ReparsePoint) != 0)
+                Directory.Delete(tempLink, recursive: false);
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            if (Directory.Exists(outside)) Directory.Delete(outside, recursive: true);
+            if (Directory.Exists(sandbox)) Directory.Delete(sandbox, recursive: false);
+        }
+    }
 }

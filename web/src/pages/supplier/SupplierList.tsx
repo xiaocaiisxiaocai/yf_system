@@ -53,6 +53,7 @@ export default function SupplierList() {
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<Supplier | null>(null)
   const [accTarget, setAccTarget] = useState<Supplier | null>(null)
+  const saveInFlight = useRef(false)
   const togglingSupplierIdsRef = useRef(new Set<number>())
   const [togglingSupplierIds, setTogglingSupplierIds] = useState<ReadonlySet<number>>(new Set())
   const [form] = Form.useForm()
@@ -91,11 +92,12 @@ export default function SupplierList() {
   }, [fetchSuppliers, page, pageSize, reloadKey])
 
   const submit = async () => {
-    if (saving) return
-    const v = await form.validate().catch(() => null)
-    if (!v) return
-    setSaving(true)
+    if (saveInFlight.current) return
+    saveInFlight.current = true
     try {
+      const v = await form.validate().catch(() => null)
+      if (!v) return
+      setSaving(true)
       if (editing) {
         await http.put(`/admin/suppliers/${editing.id}`, v)
         Message.success('供应商已更新')
@@ -106,6 +108,7 @@ export default function SupplierList() {
       setEditOpen(false)
       load()
     } finally {
+      saveInFlight.current = false
       setSaving(false)
     }
   }
@@ -311,6 +314,8 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
   const togglingAccountIdsRef = useRef(new Set<number>())
   const accountsRequestId = useRef(0)
   const roleOptionsRequestId = useRef(0)
+  const saveInFlight = useRef(false)
+  const passwordResetInFlight = useRef(false)
   const [togglingAccountIds, setTogglingAccountIds] = useState<ReadonlySet<number>>(new Set())
   const [form] = Form.useForm()
   const [pwdForm] = Form.useForm()
@@ -375,15 +380,16 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
   }, [])
 
   const submit = async () => {
-    if (saving) return
-    if (!editing && supplier?.status === 'DISABLED') {
-      Message.warning('供应商已禁用，不能新增账号')
-      return
-    }
-    const v = await form.validate().catch(() => null)
-    if (!v) return
-    setSaving(true)
+    if (saveInFlight.current) return
+    saveInFlight.current = true
     try {
+      if (!editing && supplier?.status === 'DISABLED') {
+        Message.warning('供应商已禁用，不能新增账号')
+        return
+      }
+      const v = await form.validate().catch(() => null)
+      if (!v) return
+      setSaving(true)
       if (editing) {
         await http.put(`/admin/supplier-accounts/${editing.id}`, v)
         Message.success('账号已更新')
@@ -394,6 +400,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
       setEditOpen(false)
       load()
     } finally {
+      saveInFlight.current = false
       setSaving(false)
     }
   }
@@ -423,16 +430,18 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
   }
 
   const resetPwd = async () => {
-    if (resettingPassword) return
-    const v = await pwdForm.validate().catch(() => null)
-    if (!v) return
-    setResettingPassword(true)
+    if (passwordResetInFlight.current) return
+    passwordResetInFlight.current = true
     try {
+      const v = await pwdForm.validate().catch(() => null)
+      if (!v) return
+      setResettingPassword(true)
       await http.put(`/admin/supplier-accounts/${resetTarget!.id}/password`, { newPassword: v.newPassword })
       Message.success('密码已重置，下次登录需修改')
       setResetTarget(null)
       pwdForm.resetFields()
     } finally {
+      passwordResetInFlight.current = false
       setResettingPassword(false)
     }
   }

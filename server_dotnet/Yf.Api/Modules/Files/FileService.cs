@@ -199,8 +199,8 @@ public sealed class FileService(
             var row = await conn.QuerySingleOrDefaultAsync<FileRow>(new CommandDefinition(
                 UploadService.FileSelect + " WHERE f.id=@Id", new { Id = id }, cancellationToken: ct))
                 ?? throw ApiException.NotFound();
-            if (row.Status != "AVAILABLE") throw ApiException.BadRequest($"文件 {row.OriginalName} 不可用");
             await ProjectAccessService.RequireViewAsync(conn, null, actor, row.ProjectId, ct);
+            if (row.Status != "AVAILABLE") throw ApiException.BadRequest($"文件 {row.OriginalName} 不可用");
             string path;
             try
             {
@@ -217,8 +217,7 @@ public sealed class FileService(
         var lease = limiter.Acquire(actor.Id, checked(inputBytes + BatchZipOverheadBytes));
         var root = FileStorage.Root(options.StorageRoot);
         var tempDirectory = FileStorage.EnsureLexicallyWithin(root, Path.Combine(root, "tmp"), false);
-        Directory.CreateDirectory(tempDirectory);
-        await FileStorage.ResolveExistingAsync(root, tempDirectory, requireFile: false, ct);
+        tempDirectory = FileStorage.CreateDirectoryWithin(root, tempDirectory, ct);
         var zipName = $"yf_files_{Guid.NewGuid():D}.zip";
         var zipPath = FileStorage.EnsureLexicallyWithin(root, Path.Combine(tempDirectory, zipName), false);
         CleanupFileStream? responseStream = null;

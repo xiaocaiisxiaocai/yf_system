@@ -1,6 +1,7 @@
 using Dapper;
 using Microsoft.Extensions.Logging.Abstractions;
 using MySqlConnector;
+using System.Text.Json;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Projects;
 using Yf.Api.Modules.SystemManagement;
@@ -165,11 +166,18 @@ public sealed class MailDeliveryTests
         await service.FlushAsync(ct);
 
         Assert.Empty(delivery.Seen);
-        await using var check = await scope.Database.OpenAsync(ct);
-        Assert.Equal("CANCELLED", await check.ExecuteScalarAsync<string>(new CommandDefinition(
-            "SELECT status FROM email_outbox WHERE id=1", cancellationToken: ct)));
-        Assert.Equal(1, await check.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM audit_logs WHERE action='EMAIL_CANCELLED_STALE' AND target_id='1'", cancellationToken: ct)));
+        await using (var check = await scope.Database.OpenAsync(ct))
+        {
+            Assert.Equal("CANCELLED", await check.ExecuteScalarAsync<string>(new CommandDefinition(
+                "SELECT status FROM email_outbox WHERE id=1", cancellationToken: ct)));
+            Assert.Equal(1, await check.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM audit_logs WHERE action='EMAIL_CANCELLED_STALE' AND target_id='1'", cancellationToken: ct)));
+        }
+        using var status = JsonDocument.Parse(JsonSerializer.Serialize(
+            await service.StatusAsync(ct), JsonSerializerOptions.Web));
+        Assert.Equal(1, status.RootElement.GetProperty("queue").GetProperty("cancelled").GetInt64());
+        Assert.Contains(status.RootElement.GetProperty("recent").EnumerateArray(),
+            row => row.GetProperty("action").GetString() == "EMAIL_CANCELLED_STALE");
     }
 
     [Fact(Timeout = 30_000)]
@@ -384,6 +392,8 @@ public sealed class MailDeliveryTests
                     CREATE TABLE users(
                         id BIGINT UNSIGNED PRIMARY KEY,
                         employee_no VARCHAR(64) NOT NULL,
+                        real_name VARCHAR(64) NOT NULL DEFAULT '',
+                        email VARCHAR(128) NOT NULL DEFAULT '',
                         user_type VARCHAR(16) NOT NULL,
                         supplier_id BIGINT UNSIGNED NULL,
                         status VARCHAR(16) NOT NULL

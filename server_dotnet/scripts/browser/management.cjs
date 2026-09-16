@@ -80,8 +80,13 @@ await record('组织架构创建事业部和编辑',async()=>{
  await p.getByText(deptName+'已编辑',{exact:true}).first().waitFor();
 });
 await record('组织架构禁用、启用和无引用删除',async()=>{
- for(const label of ['禁用事业部','启用事业部']){await p.getByRole('button',{name:label,exact:true}).click();await action(p,'/admin/departments/'+dept.id+'/status','PUT',()=>p.locator('.arco-popconfirm:visible').last().getByRole('button',{name:'确定',exact:true}).click());}
- await p.getByRole('button',{name:'删除事业部',exact:true}).click();await action(p,'/admin/departments/'+dept.id,'DELETE',()=>p.locator('.arco-popconfirm:visible').last().getByRole('button',{name:'确定',exact:true}).click());await p.getByText(deptName+'已编辑',{exact:true}).waitFor({state:'detached'});
+ for(const verb of ['禁用','启用']){
+  await p.getByRole('button',{name:'更多',exact:true}).click();await p.getByRole('menuitem',{name:verb+'事业部',exact:true}).click();
+  await action(p,'/admin/departments/'+dept.id+'/status','PUT',()=>p.locator('.arco-modal:visible').last().getByRole('button',{name:'确认'+verb,exact:true}).click());
+  await p.locator('.org-view-detail-meta').getByText(verb,{exact:true}).waitFor();
+ }
+ await p.getByRole('button',{name:'更多',exact:true}).click();await p.getByRole('menuitem',{name:'删除事业部',exact:true}).click();
+ await action(p,'/admin/departments/'+dept.id,'DELETE',()=>p.locator('.arco-modal:visible').last().getByRole('button',{name:'确认删除',exact:true}).click());await p.getByText(deptName+'已编辑',{exact:true}).first().waitFor({state:'detached'});
 });
 await navigate(p,'/logs');await p.getByRole('heading',{name:'操作日志',exact:true}).waitFor();await p.getByText('创建角色',{exact:true}).first().waitFor();
 await p.screenshot({path:OUT+'/audit-crud.png',fullPage:true});await record('角色及组织操作在日志页面显示',async()=>{});

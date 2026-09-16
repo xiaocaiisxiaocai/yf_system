@@ -388,6 +388,7 @@ def main():
     process = None
     probe = None
     passed = []
+    outcome = 1
 
     def check(name, condition):
         if not condition:
@@ -409,7 +410,7 @@ def main():
             changed_password = "Zq8!" + secrets.token_hex(6)
             env = {
                 key: value for key, value in os.environ.items()
-                if not key.lower().startswith("app__")
+                if not key.lower().startswith(("app__", "app:"))
                 and key.upper() not in {"YF_CONFIG_PATH", "YF_BOOTSTRAP_PASSWORD"}
             }
             env.update({
@@ -491,17 +492,13 @@ def main():
             probe = None
             _stop_process(process)
             process = None
-        print(f"PASS {len(passed)} SignalR checks; owned resources only", flush=True)
-        return 0
+        outcome = 0
     except CheckFailure as error:
         print("FAIL " + str(error), file=sys.stderr, flush=True)
-        return 1
     except (OSError, pymysql.MySQLError, subprocess.SubprocessError) as error:
         print("FAIL infrastructure " + type(error).__name__, file=sys.stderr, flush=True)
-        return 1
     except Exception as error:
         print("FAIL unexpected " + type(error).__name__, file=sys.stderr, flush=True)
-        return 1
     finally:
         if probe is not None:
             probe.close()
@@ -512,7 +509,11 @@ def main():
                     cursor.execute(f"DROP DATABASE `{db_name}`")
             except pymysql.MySQLError:
                 print("FAIL owned database cleanup", file=sys.stderr, flush=True)
+                outcome = 1
         conn.close()
+    if outcome == 0:
+        print(f"PASS {len(passed)} SignalR checks; owned resources only", flush=True)
+    return outcome
 
 
 if __name__ == "__main__":

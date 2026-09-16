@@ -62,4 +62,5 @@ internal sealed class RefreshTokenRow
     public string TokenHash { get; init; } = "";
     public DateTime ExpiresAt { get; init; }
     public bool Revoked { get; init; }
+    public bool IsExpired { get; init; }
 }

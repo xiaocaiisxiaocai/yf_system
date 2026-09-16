@@ -32,8 +32,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = Path(__file__).resolve().parent / 'browser'
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path)
-parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration'],
-    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration'])
+parser.add_argument('--continue-on-failure', action='store_true', help='Collect independent step failures; the run still fails if any step fails.')
+parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'dictionaries', 'preview-extras', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration'],
+    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'dictionaries', 'preview-extras'])
 args = parser.parse_args()
 if not __debug__:
     raise SystemExit('Do not run the browser suite with Python assertions disabled (-O/PYTHONOPTIMIZE).')
@@ -42,6 +43,7 @@ if args.steps[:2] != ['auth', 'fixtures']:
 if len(args.steps) != len(set(args.steps)):
     raise SystemExit('Run each browser step at most once.')
 for step, dependencies in {'business': ['users'], 'final': ['business'], 'layout': ['business'],
+                           'dictionaries': ['users'], 'preview-extras': ['users'],
                            'project-edges': ['users'], 'file-edges': ['users'], 'message-edges': ['users'],
                            'smtp-settings': ['system'], 'business-controls': ['users'], 'collaboration': ['users']}.items():
     if step in args.steps and any(required not in args.steps[:args.steps.index(step)] for required in dependencies):
@@ -57,8 +59,9 @@ runner = Path(os.environ.get('YF_PLAYWRIGHT_RUNNER', ''))
 if not runner.is_file():
     raise SystemExit('Set YF_PLAYWRIGHT_RUNNER to an existing Playwright run.js; no installation is performed.')
 api = ROOT / 'server_dotnet/Yf.Api'
-dll = api / 'bin/Debug/net10.0/Yf.Api.dll'
-host = ROOT / 'server_dotnet/TestHost/bin/Debug/net10.0/Yf.Api.TestHost.dll'
+host_dir = os.environ.get('YF_BROWSER_HOST_DIR')
+dll = Path(host_dir).resolve() / 'Yf.Api.dll' if host_dir else api / 'bin/Debug/net10.0/Yf.Api.dll'
+host = Path(host_dir).resolve() / 'Yf.Api.TestHost.dll' if host_dir else ROOT / 'server_dotnet/TestHost/bin/Debug/net10.0/Yf.Api.TestHost.dll'
 for required in (dll, host, ROOT / 'web/dist/index.html'):
     if not required.is_file():
         raise SystemExit('Build the API, TestHost and frontend first: ' + str(required))
@@ -96,7 +99,7 @@ created = False
 process = None
 storage_path = None
 result = {'status': 'fail', 'steps': args.steps, 'stepEvidence': [],
-          'businessDatabaseTouched': False, 'smtpUsed': False}
+          'stepFailures': [], 'businessDatabaseTouched': False, 'smtpUsed': False}
 try:
     with connection.cursor() as cursor:
         cursor.execute(f'CREATE DATABASE `{schema}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci')
@@ -157,6 +160,9 @@ try:
                         cwd=ROOT, env=env, stdout=step_log, stderr=subprocess.STDOUT, timeout=600)
                 if step.returncode:
                     print(step_log_path.read_text(encoding='utf-8', errors='replace')[-6000:], flush=True)
+                    result['stepFailures'].append({'step': script, 'log': step_log_path.name})
+                    if args.continue_on_failure and script not in ('auth', 'fixtures', 'users'):
+                        continue
                     raise RuntimeError(f'Browser step failed: {script}; log: {step_log_path}')
                 try:
                     evidence = validate_browser_step_evidence(
@@ -169,6 +175,8 @@ try:
                         f'Browser step evidence failed: {script}; log: {step_log_path}') from error
                 result['stepEvidence'].append(evidence)
                 print('PASS browser ' + script, flush=True)
+            if result['stepFailures']:
+                raise RuntimeError('Browser steps failed: ' + ', '.join(item['step'] for item in result['stepFailures']))
             fixtures = json.loads((output / 'fixtures.private.json').read_text(encoding='utf-8'))
             persisted = []
             for project in fixtures.get('uiProjects', {}).values():

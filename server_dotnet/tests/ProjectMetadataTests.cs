@@ -17,13 +17,23 @@ public sealed class ProjectMetadataTests
         await database.ExecuteAsync("""
             INSERT INTO suppliers(id,name,status,created_at,updated_at)
             VALUES(8001,'测试供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-            INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
-            VALUES(7001,NULL,'装配课','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO departments(id,parent_id,name,kind,status,created_at,updated_at)
+            VALUES(7001,NULL,'装配课','SECTION','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (7002,NULL,'停用课别','SECTION','DISABLED',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (7010,NULL,'停用事业部','DIVISION','DISABLED',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (7011,7010,'停用链部门','DEPARTMENT','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (7012,7011,'停用链课别','SECTION','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (7020,NULL,'有效事业部','DIVISION','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (7021,7020,'有效部门','DEPARTMENT','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (7022,7021,'有效课别','SECTION','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
             VALUES
               (9001,'metadata-admin','test','项目管理员','admin@example.test','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (9002,'metadata-owner','test','项目负责人','owner@example.test','INTERNAL',7001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-            INSERT INTO user_roles(user_id,role_id) VALUES(9001,1),(9002,1);
+              (9002,'metadata-owner','test','项目负责人','owner@example.test','INTERNAL',7001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9003,'metadata-disabled-section','test','停用课别负责人','disabled-section@example.test','INTERNAL',7002,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9004,'metadata-disabled-ancestor','test','停用上级负责人','disabled-ancestor@example.test','INTERNAL',7012,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9005,'metadata-valid-tree','test','有效组织链负责人','valid-tree@example.test','INTERNAL',7022,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(9001,1),(9002,1),(9003,1),(9004,1),(9005,1);
             """, ct);
 
         var actor = new CurrentUser(9001, "metadata-admin", "INTERNAL", null);
@@ -56,6 +66,35 @@ public sealed class ProjectMetadataTests
             ResponsibleUserId = 9002, PriorityId = priorityId, ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["必填校验子项目"],
         };
+        using (var ownerOptions = Json(await projects.ProjectOwnerOptionsAsync(conn, actor, ct)))
+        {
+            var options = ownerOptions.RootElement.EnumerateArray().ToArray();
+            Assert.Equal([9002UL, 9005UL], options.Select(option => option.GetProperty("id").GetUInt64()).Order().ToArray());
+            Assert.All(options, option =>
+            {
+                Assert.Equal(JsonValueKind.Number, option.GetProperty("sectionId").ValueKind);
+                Assert.Equal(JsonValueKind.String, option.GetProperty("sectionName").ValueKind);
+            });
+        }
+        foreach (var invalidOwnerId in new[] { 9003UL, 9004UL })
+        {
+            var invalidOwner = new ProjectUpsertRequest
+            {
+                Name = complete.Name,
+                SupplierId = complete.SupplierId,
+                WorkOrderNos = complete.WorkOrderNos,
+                MachineModel = complete.MachineModel,
+                RobotVendorId = complete.RobotVendorId,
+                RobotModelId = complete.RobotModelId,
+                ResponsibleUserId = invalidOwnerId,
+                PriorityId = complete.PriorityId,
+                ExpectedCompletionDate = complete.ExpectedCompletionDate,
+                SubprojectNames = complete.SubprojectNames,
+            };
+            var invalidOwnerError = await Assert.ThrowsAsync<ApiException>(() =>
+                groups.CreateAsync(conn, actor, invalidOwner, null, ct));
+            Assert.Equal(400, invalidOwnerError.Status);
+        }
         foreach (var field in new[] { "workOrderNos", "machineModel", "robotVendorId", "robotModelId", "responsibleUserId", "priorityId", "expectedCompletionDate" })
         {
             var node = System.Text.Json.JsonSerializer.SerializeToNode(complete)!;

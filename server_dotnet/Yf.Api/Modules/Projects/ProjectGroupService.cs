@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Dapper;
 using MySqlConnector;
@@ -200,11 +201,11 @@ internal sealed class ProjectGroupService(
         // children. Accepted business metadata and work orders remain frozen.
         await conn.ExecuteAsync(new CommandDefinition(
             """
-            UPDATE projects SET responsible_user_id=@ResponsibleUserId,section_id=@SectionId,
-                updated_at=CASE
-                    WHEN NOT(responsible_user_id <=> @ResponsibleUserId) OR NOT(section_id <=> @SectionId)
-                    THEN UTC_TIMESTAMP(3) ELSE updated_at END
+            UPDATE projects SET updated_at=UTC_TIMESTAMP(3),
+                responsible_user_id=@ResponsibleUserId,section_id=@SectionId
             WHERE project_group_id=@GroupId
+              AND (NOT(responsible_user_id <=> @ResponsibleUserId)
+                   OR NOT(section_id <=> @SectionId))
             """, new { metadata.ResponsibleUserId, metadata.SectionId, GroupId = groupId },
             tx, cancellationToken: ct));
         await conn.ExecuteAsync(new CommandDefinition(
@@ -247,7 +248,8 @@ internal sealed class ProjectGroupService(
                 new("responsibleUserId", "负责人", before.ResponsibleUserId, metadata.ResponsibleUserId),
                 new("sectionId", "课别", before.SectionId, metadata.SectionId),
                 new("priorityId", "优先级", before.PriorityId, metadata.PriorityId),
-                new("expectedCompletionDate", "预计完成日期", before.ExpectedCompletionDate, metadata.ExpectedCompletionDate)),
+                new("expectedCompletionDate", "预计完成日期",
+                    DateValue(before.ExpectedCompletionDate), DateValue(metadata.ExpectedCompletionDate))),
         }, ip, ct);
         var result = ProjectJson.ProjectGroup(await LoadGroupAsync(conn, tx, groupId, current.Id, ct));
         await tx.CommitAsync(ct);
@@ -457,6 +459,9 @@ internal sealed class ProjectGroupService(
         group.SectionId,
         group.PriorityId,
         group.ExpectedCompletionDate);
+
+    private static string? DateValue(DateTime? value) =>
+        value?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     private static Task<ulong> LastInsertIdAsync(MySqlConnection conn, MySqlTransaction tx, CancellationToken ct) =>
         conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT LAST_INSERT_ID()", transaction: tx, cancellationToken: ct));

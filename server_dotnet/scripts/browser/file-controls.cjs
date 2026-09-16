@@ -127,6 +127,30 @@ async function assertCanvasRendered(canvas) {
   return result;
 }
 
+async function assertExcelGrid(dialog, expectedRows) {
+  const frame = dialog.frameLocator('iframe[title="Excel 预览内容"]');
+  const grid = frame.locator('.x-spreadsheet-overlayer');
+  const selectionInput = frame.locator('.x-spreadsheet-selector .hide-input input');
+  const address = frame.locator('.excel-cell-address');
+  const content = frame.getByLabel('单元格完整内容', { exact: true });
+  await grid.waitFor({ state: 'visible' });
+  await grid.click({ position: { x: 70, y: 35 } });
+  for (let row = 0; row < expectedRows.length; row += 1) {
+    for (let column = 0; column < expectedRows[row].length; column += 1) {
+      const cellAddress = String.fromCharCode(65 + column) + String(row + 1);
+      await address.filter({ hasText: new RegExp('^' + cellAddress + '$') }).waitFor();
+      assert.equal(await content.inputValue(), expectedRows[row][column], cellAddress + ' rendered value');
+      if (column + 1 < expectedRows[row].length) await selectionInput.press('ArrowRight');
+    }
+    if (row + 1 < expectedRows.length) {
+      for (let column = expectedRows[row].length - 1; column > 0; column -= 1) {
+        await selectionInput.press('ArrowLeft');
+      }
+      await selectionInput.press('ArrowDown');
+    }
+  }
+}
+
 async function assertInsideViewport(locator, page, label) {
   const box = await locator.boundingBox();
   const viewport = page.viewportSize();
@@ -159,9 +183,10 @@ async function assertInsideViewport(locator, page, label) {
     const suffix = crypto.randomBytes(5).toString('hex');
     const prefix = '文件控件-' + suffix;
     const owners = await json('GET', '/project-owner-options');
-    assert(owners.length > 0, 'file controls need an active project owner');
+    const owner = owners.find(item => item.sectionName?.trim());
+    assert(owner, 'file controls need an active project owner with a section');
     const project = await createProjectGroup(
-      context, auth.accessToken, f.suppliers.a.id, owners[0].id, prefix + '-项目');
+      context, auth.accessToken, f.suppliers.a.id, owner.id, prefix + '-项目');
     await json('PUT', `/projects/${project.id}/status`, { status: 'IN_PROGRESS' });
     assert.equal((await json('GET', `/projects/${project.id}`)).status, 'IN_PROGRESS');
 
@@ -196,7 +221,7 @@ async function assertInsideViewport(locator, page, label) {
       return dialog;
     };
     const closePreview = async dialog => {
-      await dialog.getByRole('button', { name: '关闭弹窗', exact: true }).click();
+      await dialog.getByRole('button', { name: '关闭文件预览', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' });
     };
     const withExpectedServerErrors = async (paths, operation) => {
@@ -433,7 +458,7 @@ async function assertInsideViewport(locator, page, label) {
       await closePreview(dialog);
     });
 
-    await record('PDF读取失败显示重试与下载原文件，重试后恢复真实渲染', async () => {
+    await record('PDF读取失败显示重试，恢复渲染且列表仍可下载原文件', async () => {
       const contentPath = apiPath(`/files/${pdfFile.id}/content`);
       await page.route('**' + contentPath, route => route.fulfill({
         status: 503,
@@ -443,23 +468,23 @@ async function assertInsideViewport(locator, page, label) {
       await withExpectedServerErrors([contentPath], async () => {
         const dialog = await openPreview(pdfName);
         await dialog.getByRole('alert').getByText(
-          'PDF 加载失败，文件可能损坏或网络暂时不可用。请重试或下载原文件查看。',
+          'PDF 加载失败，文件可能损坏或网络暂时不可用，请重试。',
           { exact: true },
         ).waitFor();
         const retry = dialog.getByRole('button', { name: '重试 PDF 预览', exact: true });
         await retry.waitFor();
-        const downloadReady = page.waitForEvent('download');
-        await dialog.getByRole('button', { name: '下载原文件', exact: true }).click();
-        const download = await downloadReady;
-        assert.equal(download.suggestedFilename(), pdfName);
-        assert.equal(await download.failure(), null);
         await retry.click();
         await assertCanvasRendered(dialog.getByRole('img', { name: 'PDF 第 1 页', exact: true }));
         await closePreview(dialog);
+        const downloadReady = page.waitForEvent('download');
+        await row(pdfName).getByRole('button', { name: '下载文件', exact: true }).click();
+        const download = await downloadReady;
+        assert.equal(download.suggestedFilename(), pdfName);
+        assert.equal(await download.failure(), null);
       });
     });
 
-    await record('Excel读取失败显示明确警告并可下载原文件兜底', async () => {
+    await record('Excel读取失败显示明确警告，重试恢复真实单元格且列表可下载', async () => {
       const contentPath = apiPath(`/files/${excelFile.id}/content`);
       await page.route('**' + contentPath, route => route.fulfill({
         status: 503,
@@ -469,13 +494,15 @@ async function assertInsideViewport(locator, page, label) {
       await withExpectedServerErrors([contentPath], async () => {
         const dialog = await openPreview(excelName);
         await dialog.getByText('Excel 预览失败', { exact: true }).waitFor();
-        await dialog.getByText('Request failed with status code 503', { exact: true }).waitFor();
+        await dialog.getByText('文件可能损坏、受密码保护，或包含暂不支持的内容。', { exact: true }).waitFor();
+        await dialog.getByRole('button', { name: '重试预览', exact: true }).click();
+        await assertExcelGrid(dialog, [['文件控件验收', '结果'], [suffix, 'DOWNLOAD-FALLBACK']]);
+        await closePreview(dialog);
         const downloadReady = page.waitForEvent('download');
-        await dialog.getByRole('button', { name: '下载原文件', exact: true }).click();
+        await row(excelName).getByRole('button', { name: '下载文件', exact: true }).click();
         const download = await downloadReady;
         assert.equal(download.suggestedFilename(), excelName);
         assert.equal(await download.failure(), null);
-        await closePreview(dialog);
       });
     });
 
@@ -488,12 +515,14 @@ async function assertInsideViewport(locator, page, label) {
         scrollWidth: element.scrollWidth,
       }));
       assert(uploadOverflow.scrollWidth <= uploadOverflow.clientWidth + 1, 'upload modal has no horizontal overflow');
-      const input = upload.getByLabel('选择上传文件');
-      await input.focus();
+      // The native file input is intentionally hidden; the visible picker button
+      // is the keyboard-operable control in the modal's focus order.
+      const picker = upload.getByRole('button', { name: '选择文件', exact: true });
+      await picker.focus();
       await page.keyboard.press('Shift+Tab');
       assert(await upload.evaluate(element => element.contains(document.activeElement)), 'Shift+Tab stays in upload dialog');
       await page.keyboard.press('Tab');
-      assert(await input.evaluate(element => element === document.activeElement), 'Tab returns focus to file input');
+      assert(await picker.evaluate(element => element === document.activeElement), 'Tab returns focus to file picker');
       await page.keyboard.press('Escape');
       await upload.waitFor({ state: 'hidden' });
 
