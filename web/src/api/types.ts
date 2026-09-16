@@ -14,10 +14,8 @@ export interface Project {
   workOrderNos: string[]
   machineModel?: string | null
   robotVendorId?: number | null
-  robotVendorCode?: string | null
   robotVendorName?: string | null
   robotModelId?: number | null
-  robotModelCode?: string | null
   robotModelName?: string | null
   responsibleUserId?: number | null
   responsibleUserEmployeeNo?: string | null
@@ -25,7 +23,6 @@ export interface Project {
   sectionId?: number | null
   sectionName?: string | null
   priorityId?: number | null
-  priorityCode?: string | null
   priorityName?: string | null
   /** 仅包含日期，不进行时区转换。 */
   expectedCompletionDate?: string | null
@@ -90,7 +87,6 @@ export type ProjectDictionaryType = 'ROBOT_VENDOR' | 'ROBOT_MODEL' | 'PRIORITY'
 export interface ProjectDictionaryOption {
   id: number
   type: ProjectDictionaryType
-  code: string
   name: string
   parentId?: number | null
   sortNo: number

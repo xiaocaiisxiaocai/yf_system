@@ -38,7 +38,7 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         await RequireReadAsync(conn, tx, current, ct);
         var rows = await conn.QueryAsync<DictionaryRow>(new CommandDefinition(
             """
-            SELECT d.id AS Id,d.type AS Type,d.code AS Code,d.name AS Name,d.parent_id AS ParentId,
+            SELECT d.id AS Id,d.type AS Type,d.name AS Name,d.parent_id AS ParentId,
                    parent.name AS ParentName,d.sort_no AS SortNo,d.status AS Status,
                    EXISTS(SELECT 1 FROM projects p WHERE p.robot_vendor_id=d.id OR p.robot_model_id=d.id OR p.priority_id=d.id) AS ProjectInUse,
                    EXISTS(SELECT 1 FROM project_dictionaries child WHERE child.parent_id=d.id) AS HasChildren
@@ -64,17 +64,17 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         {
             await conn.ExecuteAsync(new CommandDefinition(
                 """
-                INSERT INTO project_dictionaries(type,code,name,parent_id,sort_no,status,created_at,updated_at)
-                VALUES(@Type,@Code,@Name,@ParentId,@SortNo,@Status,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
+                INSERT INTO project_dictionaries(type,name,parent_id,sort_no,status,created_at,updated_at)
+                VALUES(@Type,@Name,@ParentId,@SortNo,@Status,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
                 """, input, tx, cancellationToken: ct));
         }
         catch (MySqlException error) when (error.Number == 1062)
         {
-            throw ApiException.Conflict("同类型字典编码已存在");
+            throw ApiException.Conflict("同类型字典名称已存在");
         }
         var id = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT LAST_INSERT_ID()", transaction: tx, cancellationToken: ct));
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DICTIONARY_CREATE", "project_dictionary", id,
-            new { input.Type, input.Code, input.Name, input.ParentId, input.SortNo, input.Status }, ip, ct);
+            new { input.Type, input.Name, input.ParentId, input.SortNo, input.Status }, ip, ct);
         var result = Json(await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound());
         await tx.CommitAsync(ct);
         return result;
@@ -95,17 +95,16 @@ internal sealed class ProjectDictionaryService(AuditService audit)
             await conn.ExecuteAsync(new CommandDefinition(
                 """
                 UPDATE project_dictionaries
-                SET code=@Code,name=@Name,parent_id=@ParentId,sort_no=@SortNo,status=@Status,updated_at=UTC_TIMESTAMP(3)
+                SET name=@Name,parent_id=@ParentId,sort_no=@SortNo,status=@Status,updated_at=UTC_TIMESTAMP(3)
                 WHERE id=@Id
-                """, new { Id = id, input.Code, input.Name, input.ParentId, input.SortNo, input.Status }, tx, cancellationToken: ct));
+                """, new { Id = id, input.Name, input.ParentId, input.SortNo, input.Status }, tx, cancellationToken: ct));
         }
         catch (MySqlException error) when (error.Number == 1062)
         {
-            throw ApiException.Conflict("同类型字典编码已存在");
+            throw ApiException.Conflict("同类型字典名称已存在");
         }
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DICTIONARY_UPDATE", "project_dictionary", id,
             new { changes = AuditChange.OnlyChanged(
-                new("code", "编码", before.Code, input.Code),
                 new("name", "名称", before.Name, input.Name),
                 new("parentId", "上级厂商", before.ParentId, input.ParentId),
                 new("sortNo", "排序", before.SortNo, input.SortNo),
@@ -124,7 +123,7 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         if (row.HasChildren) throw ApiException.Conflict("机器人厂商仍有关联型号，可停用但不能删除");
         await conn.ExecuteAsync(new CommandDefinition("DELETE FROM project_dictionaries WHERE id=@Id", new { Id = id }, tx, cancellationToken: ct));
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DICTIONARY_DELETE", "project_dictionary", id,
-            new { row.Type, row.Code, row.Name }, ip, ct);
+            new { row.Type, row.Name }, ip, ct);
         await tx.CommitAsync(ct);
     }
 
@@ -157,17 +156,14 @@ internal sealed class ProjectDictionaryService(AuditService audit)
     private static DictionaryInput Normalize(ProjectDictionaryUpsertRequest request, string? existingType)
     {
         var type = ProjectDictionaryTypes.Normalize(request.Type ?? existingType);
-        var code = (request.Code ?? string.Empty).Trim().ToUpperInvariant();
         var name = (request.Name ?? string.Empty).Trim();
-        if (code.Length is < 1 or > 64 || code.Any(character => !(char.IsAsciiLetterOrDigit(character) || character is '_' or '-')))
-            throw ApiException.BadRequest("code 仅允许 1-64 位字母、数字、下划线或短横线");
         if (name.Length is < 1 or > 128) throw ApiException.BadRequest("name 长度必须为 1-128 个字符");
         if (request.SortNo is < 0 or > 100000) throw ApiException.BadRequest("sortNo 必须为 0-100000");
         if (type == ProjectDictionaryTypes.RobotModel && request.ParentId is null)
             throw ApiException.BadRequest("ROBOT_MODEL 必须指定机器人厂商 parentId");
         if (type != ProjectDictionaryTypes.RobotModel && request.ParentId is not null)
             throw ApiException.BadRequest("仅 ROBOT_MODEL 可以指定 parentId");
-        return new(type, code, name, request.ParentId, request.SortNo, request.Enabled ? "ACTIVE" : "DISABLED");
+        return new(type, name, request.ParentId, request.SortNo, request.Enabled ? "ACTIVE" : "DISABLED");
     }
 
     private static async Task ValidateParentAsync(
@@ -192,7 +188,7 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         MySqlConnection conn, MySqlTransaction tx, ulong id, CancellationToken ct, bool forUpdate = false)
     {
         var sql = """
-            SELECT d.id AS Id,d.type AS Type,d.code AS Code,d.name AS Name,d.parent_id AS ParentId,
+            SELECT d.id AS Id,d.type AS Type,d.name AS Name,d.parent_id AS ParentId,
                    parent.name AS ParentName,d.sort_no AS SortNo,d.status AS Status,
                    EXISTS(SELECT 1 FROM projects p WHERE p.robot_vendor_id=d.id OR p.robot_model_id=d.id OR p.priority_id=d.id) AS ProjectInUse,
                    EXISTS(SELECT 1 FROM project_dictionaries child WHERE child.parent_id=d.id) AS HasChildren
@@ -206,7 +202,6 @@ internal sealed class ProjectDictionaryService(AuditService audit)
     {
         id = row.Id,
         type = row.Type,
-        code = row.Code,
         name = row.Name,
         parentId = row.ParentId,
         parentName = row.ParentName,
@@ -215,12 +210,11 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         inUse = row.ProjectInUse || row.HasChildren,
     };
 
-    private sealed record DictionaryInput(string Type, string Code, string Name, ulong? ParentId, int SortNo, string Status);
+    private sealed record DictionaryInput(string Type, string Name, ulong? ParentId, int SortNo, string Status);
     private sealed class DictionaryRow
     {
         public ulong Id { get; init; }
         public string Type { get; init; } = string.Empty;
-        public string Code { get; init; } = string.Empty;
         public string Name { get; init; } = string.Empty;
         public ulong? ParentId { get; init; }
         public string? ParentName { get; init; }

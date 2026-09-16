@@ -424,7 +424,6 @@ export default function ProjectList() {
     vendorOptions.push({
       id: editing.robotVendorId,
       type: 'ROBOT_VENDOR',
-      code: editing.robotVendorCode ?? '',
       name: editing.robotVendorName || '历史厂商',
       parentId: null,
       sortNo: 0,
@@ -437,7 +436,6 @@ export default function ProjectList() {
     modelOptions.push({
       id: editing.robotModelId,
       type: 'ROBOT_MODEL',
-      code: editing.robotModelCode ?? '',
       name: editing.robotModelName || '历史型号',
       parentId: editing.robotVendorId ?? null,
       sortNo: 0,
@@ -449,7 +447,6 @@ export default function ProjectList() {
     priorityOptions.push({
       id: editing.priorityId,
       type: 'PRIORITY',
-      code: editing.priorityCode ?? '',
       name: editing.priorityName || '历史优先级',
       parentId: null,
       sortNo: 0,

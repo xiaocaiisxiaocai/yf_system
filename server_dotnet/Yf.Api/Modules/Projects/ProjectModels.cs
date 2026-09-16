@@ -46,9 +46,6 @@ public sealed class ProjectDictionaryUpsertRequest
     [JsonPropertyName("type")]
     public string? Type { get; init; }
 
-    [JsonPropertyName("code")]
-    public string? Code { get; init; }
-
     [JsonPropertyName("name")]
     public string? Name { get; init; }
 
@@ -130,10 +127,8 @@ internal sealed class ProjectRow
     public string[] WorkOrderNos { get; set; } = [];
     public string? MachineModel { get; init; }
     public ulong? RobotVendorId { get; init; }
-    public string? RobotVendorCode { get; init; }
     public string? RobotVendorName { get; init; }
     public ulong? RobotModelId { get; init; }
-    public string? RobotModelCode { get; init; }
     public string? RobotModelName { get; init; }
     public ulong? ResponsibleUserId { get; init; }
     public string? ResponsibleUserEmployeeNo { get; init; }
@@ -141,7 +136,6 @@ internal sealed class ProjectRow
     public ulong? SectionId { get; init; }
     public string? SectionName { get; init; }
     public ulong? PriorityId { get; init; }
-    public string? PriorityCode { get; init; }
     public string? PriorityName { get; init; }
     public DateTime? ExpectedCompletionDate { get; init; }
     public bool HasCopyHistory { get; set; }
@@ -264,10 +258,8 @@ internal static class ProjectJson
         workOrderNos = row.WorkOrderNos,
         machineModel = row.MachineModel,
         robotVendorId = row.RobotVendorId,
-        robotVendorCode = row.RobotVendorCode,
         robotVendorName = row.RobotVendorName,
         robotModelId = row.RobotModelId,
-        robotModelCode = row.RobotModelCode,
         robotModelName = row.RobotModelName,
         responsibleUserId = row.ResponsibleUserId,
         responsibleUserEmployeeNo = row.ResponsibleUserEmployeeNo,
@@ -275,7 +267,6 @@ internal static class ProjectJson
         sectionId = row.SectionId,
         sectionName = row.SectionName,
         priorityId = row.PriorityId,
-        priorityCode = row.PriorityCode,
         priorityName = row.PriorityName,
         expectedCompletionDate = row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
         hasCopyHistory = row.HasCopyHistory,

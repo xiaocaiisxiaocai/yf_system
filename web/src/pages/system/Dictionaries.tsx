@@ -8,7 +8,6 @@ type DictionaryType = 'ROBOT_VENDOR' | 'ROBOT_MODEL' | 'PRIORITY'
 interface DictionaryItem {
   id: number
   type: DictionaryType
-  code: string
   name: string
   parentId: number | null
   parentName?: string | null
@@ -59,7 +58,7 @@ export default function Dictionaries() {
     setEditing(item ?? null)
     form.resetFields()
     form.setFieldsValue(item ?? {
-      code: '', name: '', parentId: type === 'ROBOT_MODEL' ? vendorId : undefined,
+      name: '', parentId: type === 'ROBOT_MODEL' ? vendorId : undefined,
       sortNo: Math.min(100000, Math.max(0, ...items.filter(row => row.type === type).map(row => row.sortNo)) + 10),
       enabled: true,
     })
@@ -73,7 +72,7 @@ export default function Dictionaries() {
       const values = await form.validate().catch(() => null)
       if (!values) return
       const body = {
-        type, code: values.code.trim(), name: values.name.trim(),
+        type, name: values.name.trim(),
         parentId: type === 'ROBOT_MODEL' ? values.parentId : null,
         sortNo: values.sortNo ?? 0, enabled: !!values.enabled,
       }
@@ -101,7 +100,7 @@ export default function Dictionaries() {
   const search = keyword.trim().toLowerCase()
   const rows = items.filter(item => item.type === type
     && (!vendorId || type !== 'ROBOT_MODEL' || item.parentId === vendorId)
-    && (!search || `${item.code} ${item.name}`.toLowerCase().includes(search)))
+    && (!search || item.name.toLowerCase().includes(search)))
     .sort((a, b) => a.sortNo - b.sortNo || a.id - b.id)
   const hasFilter = Boolean(search || type === 'ROBOT_MODEL' && vendorId)
   const hasEnabledVendor = vendors.some(item => item.enabled)
@@ -132,7 +131,7 @@ export default function Dictionaries() {
     </Tabs>
     <div className="page-toolbar responsive-toolbar dictionary-toolbar">
       <Space wrap>
-        <Input.Search aria-label="搜索字典" placeholder="搜索编码或名称" value={keyword} onChange={setKeyword} allowClear style={{ width: 240 }} />
+        <Input.Search aria-label="搜索字典" placeholder="搜索名称" value={keyword} onChange={setKeyword} allowClear style={{ width: 240 }} />
         {type === 'ROBOT_MODEL' && <Select aria-label="筛选 Robot 厂商" placeholder="全部厂商" value={vendorId} onChange={setVendorId} allowClear showSearch style={{ width: 180 }}
           options={vendors.map(item => ({ label: item.name, value: item.id }))} />}
       </Space>
@@ -141,10 +140,9 @@ export default function Dictionaries() {
     {error ? <Space style={{ padding: 24 }}><Typography.Text type="error">字典加载失败</Typography.Text><Button onClick={load}>重试</Button></Space> :
       <Table className="page-table" rowKey="id" loading={loading} data={rows} pagination={{ pageSize: 20, showTotal: true }}
         noDataElement={loading ? <span /> : emptyContent}
-        scroll={{ x: type === 'ROBOT_MODEL' ? 740 : 620, y: 'var(--page-table-scroll-y)' }}
+        scroll={{ x: type === 'ROBOT_MODEL' ? 740 : 560, y: 'var(--page-table-scroll-y)' }}
         columns={[
-          { title: '编码', dataIndex: 'code', width: 160, ellipsis: true },
-          { title: '名称', dataIndex: 'name', width: 200, ellipsis: true },
+          { title: '名称', dataIndex: 'name', width: 240, ellipsis: true },
           ...(type === 'ROBOT_MODEL' ? [{ title: 'Robot 厂商', width: 160, render: (_: unknown, item: DictionaryItem) => item.parentName ?? vendors.find(vendor => vendor.id === item.parentId)?.name ?? '—' }] : []),
           { title: '排序号', dataIndex: 'sortNo', width: 90, align: 'center' as const },
           { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: DictionaryItem) => <Tag color={item.enabled ? 'green' : 'gray'}>{item.enabled ? '启用' : '停用'}</Tag> },
@@ -160,9 +158,6 @@ export default function Dictionaries() {
       closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }}
       okText="保存" cancelText="取消">
       <Form form={form} layout="vertical" disabled={saving}>
-        <Form.Item field="code" label="编码" rules={[{ required: true, message: '请输入编码' }, { match: /^[A-Za-z0-9_-]{1,64}$/, message: '编码使用 1–64 位字母、数字、下划线或短横线' }]}>
-          <Input placeholder="例如 FANUC 或 HIGH" maxLength={64} />
-        </Form.Item>
         <Form.Item field="name" label="名称" rules={[{ required: true, message: '请输入名称' }, { validator: (value, callback) => { callback(!value?.trim() || Array.from(value.trim()).length > 128 ? '名称需为 1–128 个字符' : undefined) } }]}>
           <Input placeholder={label} />
         </Form.Item>

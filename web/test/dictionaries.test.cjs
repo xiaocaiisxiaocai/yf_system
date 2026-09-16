@@ -38,10 +38,11 @@ test('dictionary save blocks duplicates and retains failed form before retry',as
   let validated = false
   nameRule.validator('Valid name', error => { assert.equal(error, undefined); validated = true })
   assert.equal(validated, true, 'successful validation must complete rather than leave save pending')
-  values={code:'VENDOR',name:' Vendor ',sortNo:10,enabled:true}
+  values={name:' Vendor ',sortNo:10,enabled:true}
   await act(async()=>{pending=renderer.root.findByType('Modal').props.onOk();await renderer.root.findByType('Modal').props.onOk()})
   assert.equal(writes.length,1)
   assert.equal(writes[0].name,'Vendor')
+  assert.equal('code' in writes[0], false, 'dictionary form must not submit an encoding field')
   await act(async()=>{reject(new Error('conflict'));await pending})
   assert.equal(renderer.root.findByType('Modal').props.visible,true)
   await act(async()=>{pending=renderer.root.findByType('Modal').props.onOk()})

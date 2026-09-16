@@ -34,18 +34,18 @@ public sealed class ProjectMetadataTests
 
         var vendorId = Id(await dictionaries.CreateAsync(conn, actor, new()
         {
-            Type = "ROBOT_VENDOR", Code = "VENDOR_A", Name = "厂商 A", SortNo = 10, Enabled = true,
+            Type = "ROBOT_VENDOR", Name = "厂商 A", SortNo = 10, Enabled = true,
         }, null, ct));
         var otherVendorId = Id(await dictionaries.CreateAsync(conn, actor, new()
         {
-            Type = "ROBOT_VENDOR", Code = "VENDOR_B", Name = "厂商 B", SortNo = 20, Enabled = true,
+            Type = "ROBOT_VENDOR", Name = "厂商 B", SortNo = 20, Enabled = true,
         }, null, ct));
         var modelId = Id(await dictionaries.CreateAsync(conn, actor, new()
         {
-            Type = "ROBOT_MODEL", Code = "MODEL_A", Name = "型号 A", ParentId = vendorId, SortNo = 10, Enabled = true,
+            Type = "ROBOT_MODEL", Name = "型号 A", ParentId = vendorId, SortNo = 10, Enabled = true,
         }, null, ct));
         var priorityId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            "SELECT id FROM project_dictionaries WHERE type='PRIORITY' AND code='HIGH'", cancellationToken: ct));
+            "SELECT id FROM project_dictionaries WHERE type='PRIORITY' AND name='高'", cancellationToken: ct));
 
         var complete = new ProjectUpsertRequest
         {
@@ -98,11 +98,11 @@ public sealed class ProjectMetadataTests
 
         await dictionaries.UpdateAsync(conn, actor, vendorId, new()
         {
-            Type = "ROBOT_VENDOR", Code = "VENDOR_A", Name = "厂商 A", SortNo = 10, Enabled = false,
+            Type = "ROBOT_VENDOR", Name = "厂商 A", SortNo = 10, Enabled = false,
         }, null, ct);
         await dictionaries.UpdateAsync(conn, actor, modelId, new()
         {
-            Type = "ROBOT_MODEL", Code = "MODEL_A", Name = "型号 A", ParentId = vendorId, SortNo = 10, Enabled = false,
+            Type = "ROBOT_MODEL", Name = "型号 A", ParentId = vendorId, SortNo = 10, Enabled = false,
         }, null, ct);
         var updated = await projects.UpdateAsync(conn, actor, projectId, new()
         {
@@ -125,7 +125,7 @@ public sealed class ProjectMetadataTests
 
         var parentChange = await Assert.ThrowsAsync<ApiException>(() => dictionaries.UpdateAsync(conn, actor, modelId, new()
         {
-            Type = "ROBOT_MODEL", Code = "MODEL_A", Name = "型号 A", ParentId = otherVendorId, SortNo = 10, Enabled = false,
+            Type = "ROBOT_MODEL", Name = "型号 A", ParentId = otherVendorId, SortNo = 10, Enabled = false,
         }, null, ct));
         Assert.Equal(409, parentChange.Status);
         var delete = await Assert.ThrowsAsync<ApiException>(() => dictionaries.DeleteAsync(conn, actor, modelId, null, ct));

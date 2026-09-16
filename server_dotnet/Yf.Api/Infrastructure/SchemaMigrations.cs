@@ -10,7 +10,7 @@ namespace Yf.Api.Infrastructure;
 /// <summary>Explicit, restartable .NET-owned schema upgrades. Startup never changes schema.</summary>
 public static class SchemaMigrations
 {
-    public const int CurrentVersion = 7;
+    public const int CurrentVersion = 8;
     private const string PreviousBaseline = "m20260910_000016_project_workflow";
     private const string FirstMigrationName = "000001_adopt_schema_sessions_supplier_boundary";
     private const string CollaborationMigrationName = "000002_collaboration_notification_reads";
@@ -19,6 +19,7 @@ public static class SchemaMigrations
     private const string MessageImagesMigrationName = "000005_message_images";
     private const string ProjectMetadataMigrationName = "000006_project_metadata_dictionaries";
     private const string ProjectCopyMigrationName = "000007_project_copy_history";
+    private const string ProjectDictionaryCodeRemovalMigrationName = "000008_remove_project_dictionary_code";
     internal const string InternalAcceptanceCancelledMailReason = "项目验收已调整为公司内部确认，旧供应商确认通知已取消";
     internal const string AcceptanceNotificationRebuiltMailReason = "验收通知已按当前待验收申请和验收人重新生成";
     private const string MigrationTableSql = """
@@ -59,6 +60,23 @@ public static class SchemaMigrations
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """;
     internal const string ProjectDictionariesTableSql = """
+        CREATE TABLE `project_dictionaries` (
+          `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+          `type` varchar(32) NOT NULL,
+          `name` varchar(128) NOT NULL,
+          `parent_id` bigint unsigned DEFAULT NULL,
+          `sort_no` int NOT NULL DEFAULT 0,
+          `status` varchar(16) NOT NULL DEFAULT 'ACTIVE',
+          `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          `updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `uk_project_dictionaries_type_name` (`type`,`name`),
+          KEY `idx_project_dictionaries_type_status_sort` (`type`,`status`,`sort_no`,`id`),
+          KEY `idx_project_dictionaries_parent` (`parent_id`),
+          CONSTRAINT `fk_project_dictionaries_parent` FOREIGN KEY (`parent_id`) REFERENCES `project_dictionaries` (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """;
+    private const string LegacyProjectDictionariesTableSql = """
         CREATE TABLE `project_dictionaries` (
           `id` bigint unsigned NOT NULL AUTO_INCREMENT,
           `type` varchar(32) NOT NULL,
@@ -135,6 +153,7 @@ public static class SchemaMigrations
     private static string MessageImagesChecksum => Checksum(MessageImagesMigrationName);
     private static string ProjectMetadataChecksum => Checksum(ProjectMetadataMigrationName);
     private static string ProjectCopyChecksum => Checksum(ProjectCopyMigrationName);
+    private static string ProjectDictionaryCodeRemovalChecksum => Checksum(ProjectDictionaryCodeRemovalMigrationName);
 
     public static async Task ApplyAsync(AppDb db, CancellationToken ct = default)
     {
@@ -179,7 +198,10 @@ public static class SchemaMigrations
         if (hasMessageImages)
             await SchemaShapeValidator.ValidateTableAsync(conn, "message_images", MessageImagesTableSql, ct);
         if (hasProjectDictionaries)
-            await SchemaShapeValidator.ValidateTableAsync(conn, "project_dictionaries", ProjectDictionariesTableSql, ct);
+            await SchemaShapeValidator.ValidateTableAsync(conn, "project_dictionaries",
+                migrationRows.Any(row => row.Version >= 8) || !await HasColumnAsync(conn, "project_dictionaries", "code", ct)
+                    ? ProjectDictionariesTableSql
+                    : LegacyProjectDictionariesTableSql, ct);
         if (hasProjectWorkOrders)
             await SchemaShapeValidator.ValidateTableAsync(conn, "project_work_orders", ProjectWorkOrdersTableSql, ct);
         if (hasProjectCopies)
@@ -219,6 +241,8 @@ public static class SchemaMigrations
         await SchemaShapeValidator.ValidateTableAsync(conn, "message_images", MessageImagesTableSql, ct);
         if (!hasProjectDictionaries)
             await conn.ExecuteAsync(new CommandDefinition(ProjectDictionariesTableSql, cancellationToken: ct));
+        else if (!migrationRows.Any(row => row.Version >= 8))
+            await MigrateProjectDictionaryCodeRemovalAsync(conn, ct);
         await SchemaShapeValidator.ValidateTableAsync(conn, "project_dictionaries", ProjectDictionariesTableSql, ct);
         if (!hasProjectWorkOrders)
             await conn.ExecuteAsync(new CommandDefinition(ProjectWorkOrdersTableSql, cancellationToken: ct));
@@ -405,10 +429,10 @@ public static class SchemaMigrations
             new { name = MessageImagesMigrationName, checksum = MessageImagesChecksum }, tx, cancellationToken: ct));
         await conn.ExecuteAsync(new CommandDefinition(
             """
-            INSERT IGNORE INTO project_dictionaries(type,code,name,parent_id,sort_no,status,created_at,updated_at) VALUES
-              ('PRIORITY','HIGH','高',NULL,10,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              ('PRIORITY','NORMAL','普通',NULL,20,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              ('PRIORITY','LOW','低',NULL,30,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
+            INSERT IGNORE INTO project_dictionaries(type,name,parent_id,sort_no,status,created_at,updated_at) VALUES
+              ('PRIORITY','高',NULL,10,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              ('PRIORITY','普通',NULL,20,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              ('PRIORITY','低',NULL,30,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
             """, transaction: tx, cancellationToken: ct));
         await conn.ExecuteAsync(new CommandDefinition(
             "INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (6,@name,@checksum,UTC_TIMESTAMP(6))",
@@ -416,6 +440,9 @@ public static class SchemaMigrations
         await conn.ExecuteAsync(new CommandDefinition(
             "INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (7,@name,@checksum,UTC_TIMESTAMP(6))",
             new { name = ProjectCopyMigrationName, checksum = ProjectCopyChecksum }, tx, cancellationToken: ct));
+        await conn.ExecuteAsync(new CommandDefinition(
+            "INSERT IGNORE INTO yf_schema_migrations(version,name,checksum,applied_at) VALUES (8,@name,@checksum,UTC_TIMESTAMP(6))",
+            new { name = ProjectDictionaryCodeRemovalMigrationName, checksum = ProjectDictionaryCodeRemovalChecksum }, tx, cancellationToken: ct));
         await tx.CommitAsync(ct);
         ValidateMigrationRows(await ReadMigrationRowsAsync(conn, ct), requireCurrent: true);
         Console.WriteLine("Database is at .NET schema version " + CurrentVersion + ". Project copy history is available; no project history was removed.");
@@ -526,6 +553,7 @@ public static class SchemaMigrations
             new MigrationRow(5, MessageImagesMigrationName, MessageImagesChecksum),
             new MigrationRow(6, ProjectMetadataMigrationName, ProjectMetadataChecksum),
             new MigrationRow(7, ProjectCopyMigrationName, ProjectCopyChecksum),
+            new MigrationRow(8, ProjectDictionaryCodeRemovalMigrationName, ProjectDictionaryCodeRemovalChecksum),
         };
         if (rows.Length > expected.Length || rows.Where((row, index) => row != expected[index]).Any())
             throw new InvalidOperationException("Unknown or modified .NET migration history; upgrade this application or restore the correct migration definitions.");
@@ -538,6 +566,26 @@ public static class SchemaMigrations
 
     private static Task<bool> HasTableAsync(MySqlConnection conn, string table, CancellationToken ct) => conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=@table)", new { table }, cancellationToken: ct));
     private static Task<bool> HasColumnAsync(MySqlConnection conn, string table, string column, CancellationToken ct) => conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=@table AND column_name=@column)", new { table, column }, cancellationToken: ct));
+    private static Task<bool> HasIndexAsync(MySqlConnection conn, string table, string index, CancellationToken ct) => conn.ExecuteScalarAsync<bool>(new CommandDefinition("SELECT EXISTS(SELECT 1 FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=@table AND index_name=@index)", new { table, index }, cancellationToken: ct));
+    private static async Task MigrateProjectDictionaryCodeRemovalAsync(MySqlConnection conn, CancellationToken ct)
+    {
+        if (!await HasColumnAsync(conn, "project_dictionaries", "code", ct))
+        {
+            if (await HasIndexAsync(conn, "project_dictionaries", "uk_project_dictionaries_type_name", ct)) return;
+            throw new InvalidOperationException("Project dictionary schema is missing code before migration 8; restore the matching schema before retrying.");
+        }
+        var duplicates = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+            "SELECT COUNT(*) FROM (SELECT type,name FROM project_dictionaries GROUP BY type,name HAVING COUNT(*)>1) duplicates",
+            cancellationToken: ct));
+        if (duplicates > 0)
+            throw new InvalidOperationException("Project dictionary migration 8 found duplicate names within a dictionary type; resolve duplicates before retrying.");
+        if (!await HasIndexAsync(conn, "project_dictionaries", "uk_project_dictionaries_type_name", ct))
+            await conn.ExecuteAsync(new CommandDefinition("ALTER TABLE project_dictionaries ADD UNIQUE KEY uk_project_dictionaries_type_name (type,name)", cancellationToken: ct));
+        if (await HasColumnAsync(conn, "project_dictionaries", "code", ct))
+            await conn.ExecuteAsync(new CommandDefinition("ALTER TABLE project_dictionaries DROP INDEX uk_project_dictionaries_type_code, DROP COLUMN code", cancellationToken: ct));
+        if (await HasColumnAsync(conn, "project_dictionaries", "code", ct))
+            throw new InvalidOperationException("Project dictionary migration 8 did not remove code; no application restart was attempted.");
+    }
     private static async Task EnsureProjectMetadataColumnsAsync(MySqlConnection conn, CancellationToken ct)
     {
         var columns = new (string Name, string Definition)[]

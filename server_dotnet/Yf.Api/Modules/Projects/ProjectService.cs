@@ -70,11 +70,11 @@ internal sealed class ProjectService(
             """
             SELECT p.id AS Id, p.name AS Name, p.description AS Description,p.machine_model AS MachineModel,
                    p.supplier_id AS SupplierId, p.status AS Status, p.confirm_side AS ConfirmSide,
-                   p.robot_vendor_id AS RobotVendorId,rv.code AS RobotVendorCode,rv.name AS RobotVendorName,
-                   p.robot_model_id AS RobotModelId,rm.code AS RobotModelCode,rm.name AS RobotModelName,
+                   p.robot_vendor_id AS RobotVendorId,rv.name AS RobotVendorName,
+                   p.robot_model_id AS RobotModelId,rm.name AS RobotModelName,
                    p.responsible_user_id AS ResponsibleUserId,owner.employee_no AS ResponsibleUserEmployeeNo,
                    owner.real_name AS ResponsibleUserName,p.section_id AS SectionId,section.name AS SectionName,
-                   p.priority_id AS PriorityId,priority.code AS PriorityCode,priority.name AS PriorityName,
+                   p.priority_id AS PriorityId,priority.name AS PriorityName,
                    p.expected_completion_date AS ExpectedCompletionDate,
                    CASE WHEN p.status='PENDING_CONFIRMATION' THEN (
                        SELECT MAX(psl.id) FROM project_status_logs psl
@@ -237,10 +237,8 @@ internal sealed class ProjectService(
             workOrderNos = project.WorkOrderNos,
             machineModel = project.MachineModel,
             robotVendorId = project.RobotVendorId,
-            robotVendorCode = project.RobotVendorCode,
             robotVendorName = project.RobotVendorName,
             robotModelId = project.RobotModelId,
-            robotModelCode = project.RobotModelCode,
             robotModelName = project.RobotModelName,
             responsibleUserId = project.ResponsibleUserId,
             responsibleUserEmployeeNo = project.ResponsibleUserEmployeeNo,
@@ -248,7 +246,6 @@ internal sealed class ProjectService(
             sectionId = project.SectionId,
             sectionName = project.SectionName,
             priorityId = project.PriorityId,
-            priorityCode = project.PriorityCode,
             priorityName = project.PriorityName,
             expectedCompletionDate = project.ExpectedCompletionDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             hasCopyHistory,
@@ -757,11 +754,11 @@ internal sealed class ProjectService(
         const string sql = """
             SELECT p.id AS Id,p.name AS Name,p.description AS Description,p.supplier_id AS SupplierId,
                    p.machine_model AS MachineModel,p.robot_vendor_id AS RobotVendorId,
-                   rv.code AS RobotVendorCode,rv.name AS RobotVendorName,p.robot_model_id AS RobotModelId,
-                   rm.code AS RobotModelCode,rm.name AS RobotModelName,p.responsible_user_id AS ResponsibleUserId,
+                   rv.name AS RobotVendorName,p.robot_model_id AS RobotModelId,
+                   rm.name AS RobotModelName,p.responsible_user_id AS ResponsibleUserId,
                    owner.employee_no AS ResponsibleUserEmployeeNo,owner.real_name AS ResponsibleUserName,
                    p.section_id AS SectionId,section.name AS SectionName,p.priority_id AS PriorityId,
-                   priority.code AS PriorityCode,priority.name AS PriorityName,
+                   priority.name AS PriorityName,
                    p.expected_completion_date AS ExpectedCompletionDate,
                    EXISTS(SELECT 1 FROM project_copies pc
                           WHERE pc.source_project_id=p.id OR pc.target_project_id=p.id) AS HasCopyHistory,

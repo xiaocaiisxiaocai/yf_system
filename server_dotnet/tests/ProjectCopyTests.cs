@@ -126,10 +126,10 @@ public sealed class ProjectCopyTests
         INSERT INTO roles(id,name,is_built_in,status) VALUES(6001,'复制受限角色',0,'ACTIVE');
         INSERT INTO role_permissions(role_id,permission_id) SELECT 6001,id FROM permissions WHERE code IN ('project:list','project:create','project:delete');
         INSERT INTO user_roles(user_id,role_id) VALUES(1,1),(3,6001);
-        INSERT INTO project_dictionaries(id,type,code,name,parent_id,sort_no,status) VALUES
-          (6201,'ROBOT_VENDOR','COPY_VENDOR','复制厂商',NULL,1,'ACTIVE'),
-          (6202,'ROBOT_MODEL','COPY_MODEL','复制型号',6201,1,'ACTIVE'),
-          (6203,'PRIORITY','COPY_PRIORITY','复制优先级',NULL,1,'ACTIVE');
+        INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status) VALUES
+          (6201,'ROBOT_VENDOR','复制厂商',NULL,1,'ACTIVE'),
+          (6202,'ROBOT_MODEL','复制型号',6201,1,'ACTIVE'),
+          (6203,'PRIORITY','复制优先级',NULL,1,'ACTIVE');
         INSERT INTO projects(id,name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,robot_model_id,responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
         VALUES(7101,'源项目','复制来源',6101,'DRAFT',1,'M1',6201,6202,3,7001,6203,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (7102,'空源项目','无文件复制来源',6101,'DRAFT',1,'M1',6201,6202,3,7001,6203,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));

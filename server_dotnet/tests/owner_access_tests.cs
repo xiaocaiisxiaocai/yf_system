@@ -131,11 +131,11 @@ public sealed class OwnerAccessTests
           (9202,'owner-other-supplier','unused','其他供应商用户','','SUPPLIER',8002,NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
         INSERT INTO user_roles(user_id,role_id)
         VALUES(9101,9001),(9102,9001),(9103,9001),(9104,9001),(9105,9002),(9201,9001),(9202,9001);
-        INSERT INTO project_dictionaries(id,type,code,name,parent_id,sort_no,status)
+        INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
         VALUES
-          (6001,'ROBOT_VENDOR','OWNER_VENDOR','负责人测试厂商',NULL,1,'ACTIVE'),
-          (6002,'ROBOT_MODEL','OWNER_MODEL','负责人测试型号',6001,1,'ACTIVE'),
-          (6003,'PRIORITY','OWNER_PRIORITY','负责人测试优先级',NULL,1,'ACTIVE');
+          (6001,'ROBOT_VENDOR','负责人测试厂商',NULL,1,'ACTIVE'),
+          (6002,'ROBOT_MODEL','负责人测试型号',6001,1,'ACTIVE'),
+          (6003,'PRIORITY','负责人测试优先级',NULL,1,'ACTIVE');
         INSERT INTO projects
           (id,name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,robot_model_id,
            responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)

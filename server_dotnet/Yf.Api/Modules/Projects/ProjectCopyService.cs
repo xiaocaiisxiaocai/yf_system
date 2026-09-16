@@ -309,11 +309,11 @@ internal sealed class ProjectCopyService(AppDb database, AppOptions options, Aud
         var row = await conn.QuerySingleOrDefaultAsync<ProjectRow>(new CommandDefinition(
             """
             SELECT p.id AS Id,p.name AS Name,p.description AS Description,p.supplier_id AS SupplierId,
-              p.machine_model AS MachineModel,p.robot_vendor_id AS RobotVendorId,rv.code AS RobotVendorCode,rv.name AS RobotVendorName,
-              p.robot_model_id AS RobotModelId,rm.code AS RobotModelCode,rm.name AS RobotModelName,
+              p.machine_model AS MachineModel,p.robot_vendor_id AS RobotVendorId,rv.name AS RobotVendorName,
+              p.robot_model_id AS RobotModelId,rm.name AS RobotModelName,
               p.responsible_user_id AS ResponsibleUserId,owner.employee_no AS ResponsibleUserEmployeeNo,
               owner.real_name AS ResponsibleUserName,p.section_id AS SectionId,section.name AS SectionName,
-              p.priority_id AS PriorityId,priority.code AS PriorityCode,priority.name AS PriorityName,
+              p.priority_id AS PriorityId,priority.name AS PriorityName,
               p.expected_completion_date AS ExpectedCompletionDate,p.status AS Status,p.confirm_side AS ConfirmSide,
               p.created_by AS CreatedBy,p.created_at AS CreatedAt,p.updated_at AS UpdatedAt,s.name AS SupplierName,u.real_name AS CreatedByName
             FROM projects p LEFT JOIN suppliers s ON s.id=p.supplier_id LEFT JOIN users u ON u.id=p.created_by
