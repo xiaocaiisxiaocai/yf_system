@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card, Empty, Grid, List, Pagination, Result, Spin, Statistic, Tag, Typography } from '@arco-design/web-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Button, Card, Collapse, Empty, Grid, List, Pagination, Result, Spin, Statistic, Tag, Typography } from '@arco-design/web-react'
 import { IconRight } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../api/client'
@@ -30,10 +30,17 @@ interface Summary {
 interface PendingProject {
   id: number
   name: string
+  projectGroupId?: number
   projectGroupName?: string
   status: 'PENDING_CONFIRMATION'
   confirmSide: 'COMPANY'
   updatedAt: string
+}
+
+interface PendingProjectGroup {
+  groupId: number
+  groupName: string
+  items: PendingProject[]
 }
 
 interface PendingProjectPage {
@@ -67,6 +74,22 @@ export default function Dashboard() {
   const [pendingRefreshError, setPendingRefreshError] = useState(false)
   const pendingSeq = useRef(0)
   const hasPendingSnapshot = useRef(false)
+
+  const pendingGroups = useMemo<PendingProjectGroup[]>(() => {
+    const order: number[] = []
+    const groups = new Map<number, PendingProjectGroup>()
+    for (const project of pendingData.list) {
+      const groupId = project.projectGroupId ?? 0
+      let group = groups.get(groupId)
+      if (!group) {
+        group = { groupId, groupName: project.projectGroupName || '未命名主项目', items: [] }
+        groups.set(groupId, group)
+        order.push(groupId)
+      }
+      group.items.push(project)
+    }
+    return order.map((groupId) => groups.get(groupId)!)
+  }, [pendingData.list])
 
   const [messageData, setMessageData] = useState<MessagePage>({ list: [], total: 0, page: 1, pageSize: PAGE_SIZE })
   const [messagePage, setMessagePage] = useState(1)
@@ -324,21 +347,41 @@ export default function Dashboard() {
               </div>
             ) : pendingData.list.length > 0 ? (
               <>
-                <List
-                  className="dashboard-pending-list"
-                  dataSource={pendingData.list}
-                  render={(project) => (
-                    <List.Item
-                      key={project.id}
-                      extra={<Typography.Text type="secondary">更新于 {fmtTime(project.updatedAt)}</Typography.Text>}
+                <Collapse
+                  key={pendingPage}
+                  className="dashboard-pending-groups"
+                  bordered={false}
+                  defaultActiveKey={pendingGroups.map((group) => String(group.groupId))}
+                >
+                  {pendingGroups.map((group) => (
+                    <Collapse.Item
+                      key={group.groupId}
+                      name={String(group.groupId)}
+                      header={(
+                        <span className="dashboard-pending-group-header">
+                          <span className="dashboard-pending-group-name">{group.groupName}</span>
+                          <Tag color="orange">{group.items.length}</Tag>
+                        </span>
+                      )}
                     >
-                      <List.Item.Meta
-                        title={<Link className="dashboard-pending-link" to={`/projects/${project.id}`}>{project.projectGroupName ? `${project.projectGroupName} / ${project.name}` : project.name}</Link>}
-                        description={<Tag color="orange">{acceptanceCopy.status}</Tag>}
+                      <List
+                        className="dashboard-pending-list"
+                        dataSource={group.items}
+                        render={(project) => (
+                          <List.Item
+                            key={project.id}
+                            extra={<Typography.Text type="secondary">更新于 {fmtTime(project.updatedAt)}</Typography.Text>}
+                          >
+                            <List.Item.Meta
+                              title={<Link className="dashboard-pending-link" to={`/projects/${project.id}`}>{project.name}</Link>}
+                              description={<Tag color="orange">{acceptanceCopy.status}</Tag>}
+                            />
+                          </List.Item>
+                        )}
                       />
-                    </List.Item>
-                  )}
-                />
+                    </Collapse.Item>
+                  ))}
+                </Collapse>
                 {pendingData.total > pendingData.pageSize && (
                   <div className="dashboard-pagination">
                     <Pagination

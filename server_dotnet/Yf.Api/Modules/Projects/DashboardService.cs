@@ -95,6 +95,7 @@ internal sealed class DashboardService
         {
             id = row.Id,
             name = row.Name,
+            projectGroupId = row.ProjectGroupId,
             projectGroupName = row.ProjectGroupName,
             status = ProjectStatuses.PendingConfirmation,
             confirmSide = row.ConfirmSide == "COMPANY" ? "COMPANY" : "SUPPLIER",
