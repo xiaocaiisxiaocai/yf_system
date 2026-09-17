@@ -10,7 +10,7 @@ import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import { useCollaboration } from '../../store/collaboration'
 import {
-  type Project, type ProjectCopyResult, type ProjectGroupDetail as ProjectGroupDetailData, PROJECT_STATUS, fmtTime,
+  type ProjectSummary, type ProjectCopyResult, type ProjectGroupDetail as ProjectGroupDetailData, PROJECT_STATUS, fmtTime,
 } from '../../api/types'
 import { textLengthRule } from '../../utils/textRules'
 import './ProjectDetail.css'
@@ -40,11 +40,11 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const [loadError, setLoadError] = useState(false)
   const [summaryExpanded, setSummaryExpanded] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
-  const [editing, setEditing] = useState<Project | null>(null)
+  const [editing, setEditing] = useState<ProjectSummary | null>(null)
   const [childModalOpen, setChildModalOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const saveInFlight = useRef(false)
-  const [copySource, setCopySource] = useState<Project | null>(null)
+  const [copySource, setCopySource] = useState<ProjectSummary | null>(null)
   const [copying, setCopying] = useState(false)
   const copyInFlight = useRef(false)
   const statusInFlight = useRef(new Set<number>())
@@ -85,7 +85,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
 
   const group = data.group
   const openCreate = () => { setEditing(null); form.resetFields(); setChildModalOpen(true) }
-  const openEdit = (project: Project) => {
+  const openEdit = (project: ProjectSummary) => {
     setEditing(project); form.setFieldsValue({ name: project.name, description: project.description }); setChildModalOpen(true)
   }
   const closeChildModal = () => { if (!saving) setChildModalOpen(false) }
@@ -105,7 +105,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       /* 请求错误由统一拦截器提示，保留弹窗内容供重试。 */
     } finally { saveInFlight.current = false; setSaving(false) }
   }
-  const openCopy = (project: Project) => {
+  const openCopy = (project: ProjectSummary) => {
     setCopySource(project); copyForm.setFieldsValue({ name: suggestedCopyName(project.name) })
   }
   const submitCopy = async () => {
@@ -122,29 +122,29 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       /* 请求错误由统一拦截器提示，保留名称和源项目供重试。 */
     } finally { copyInFlight.current = false; setCopying(false) }
   }
-  const changeStatus = async (project: Project, next: string) => {
+  const changeStatus = async (project: ProjectSummary, next: string) => {
     if (statusInFlight.current.has(project.id)) return
     statusInFlight.current.add(project.id); setStatusUpdating(new Set(statusInFlight.current))
     try { await http.put(`/projects/${project.id}/status`, { status: next }); Message.success('子项目状态已更新'); load() }
     catch { /* 请求错误由统一拦截器提示，解除当前行锁后可重试。 */ }
     finally { statusInFlight.current.delete(project.id); setStatusUpdating(new Set(statusInFlight.current)) }
   }
-  const remove = async (project: Project) => {
+  const remove = async (project: ProjectSummary) => {
     try { await http.delete(`/projects/${project.id}`); Message.success('子项目已删除'); load() }
     catch { /* 请求错误由统一拦截器提示。 */ }
   }
-  const statusActions = (project: Project) => {
+  const statusActions = (project: ProjectSummary) => {
     if (project.status === 'DRAFT') return [{ key: 'IN_PROGRESS', text: '开始' }]
     if (project.status === 'IN_PROGRESS') return [{ key: 'TERMINATED', text: '终止' }]
     if (project.status === 'TERMINATED') return [{ key: 'IN_PROGRESS', text: '重新开始' }]
     return []
   }
   const columns = [
-    { title: '子项目', dataIndex: 'name', width: 180, ellipsis: true, render: (value: string, project: Project) => <Button type="text" size="small" onClick={() => navigate(`/projects/${project.id}`)}>{value}</Button> },
+    { title: '子项目', dataIndex: 'name', width: 180, ellipsis: true, render: (value: string, project: ProjectSummary) => <Button type="text" size="small" onClick={() => navigate(`/projects/${project.id}`)}>{value}</Button> },
     { title: '状态', dataIndex: 'status', width: 110, align: 'center' as const, render: (value: string) => <Tag color={PROJECT_STATUS[value]?.color}>{PROJECT_STATUS[value]?.text || value}</Tag> },
     { title: '未读留言', dataIndex: 'unreadMessages', width: 100, align: 'center' as const, render: (value?: number) => value ? <Badge count={value} /> : '-' },
     { title: '项目说明', dataIndex: 'description', ellipsis: true, render: display },
-    { title: '操作', width: 290, align: 'center' as const, fixed: 'right' as const, render: (_: unknown, project: Project) => {
+    { title: '操作', width: 290, align: 'center' as const, fixed: 'right' as const, render: (_: unknown, project: ProjectSummary) => {
       const nextStatuses = statusActions(project)
       return actionSlots([
         <Button key="enter" size="mini" type="text" onClick={() => navigate(`/projects/${project.id}`)}>进入协作</Button>,

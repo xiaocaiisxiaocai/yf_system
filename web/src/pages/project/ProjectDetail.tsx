@@ -8,6 +8,7 @@ import {
   type ProjectCopyFileMapping,
   type ProjectCopyHistory,
   type ProjectCopySummary,
+  type ProjectSummary,
   PROJECT_STATUS,
   fmtSize,
   fmtTime,
@@ -185,7 +186,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const [historyReloadKey, setHistoryReloadKey] = useState(0)
   const [loadErrorFor, setLoadErrorFor] = useState<number | null>(null)
   const loadingProjectId = useRef<number | null>(null)
-  const [siblings, setSiblings] = useState<Project[]>([])
+  const [siblings, setSiblings] = useState<ProjectSummary[]>([])
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
   const tab = requestedTab === 'files' || requestedTab === 'messages' || requestedTab === 'activity'

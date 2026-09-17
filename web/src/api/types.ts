@@ -5,7 +5,14 @@ export interface PageResp<T> {
   pageSize: number
 }
 
-export interface Project {
+/**
+ * 子项目的摘要字段，由 ProjectJson.Project（后端）序列化，
+ * 用于主项目详情的子项目列表（siblings/表格）、复制结果等批量/列表场景。
+ * 不包含 rejectReason / latestSubmitterId —— 这两个字段需要按项目单独查询
+ * project_status_logs，只有 GET /projects/{id} 详情接口才会附带，
+ * 批量场景为避免逐行查询没有提供。需要这两个字段时使用 Project 类型。
+ */
+export interface ProjectSummary {
   id: number
   projectGroupId: number
   projectGroupName: string
@@ -31,11 +38,8 @@ export interface Project {
   status: 'DRAFT' | 'IN_PROGRESS' | 'PENDING_CONFIRMATION' | 'COMPLETED' | 'TERMINATED'
   /** 当前内部验收方；待验收时固定为 COMPANY，项目回到进行中后由后端清空。 */
   confirmSide?: ConfirmSide | null
-  /** 当前待确认提交的提交人；撤回仅由提交人或内部全量查看者发起。 */
-  latestSubmitterId?: number | null
   /** 当前待验收提交的不可变版本标识；确认、驳回和撤回必须回传。 */
   latestSubmissionId?: number | null
-  rejectReason?: string | null
   createdBy: number
   createdByName?: string
   createdAt: string
@@ -45,6 +49,13 @@ export interface Project {
   unreadMessages?: number
   /** 当前项目的可见复制来源；来源无权访问时由后端置空。 */
   copySource?: { projectId: number; name: string } | null
+}
+
+/** 子项目详情，仅 GET /projects/{id} 返回；比 ProjectSummary 多两个单独查询的字段。 */
+export interface Project extends ProjectSummary {
+  /** 当前待确认提交的提交人；撤回仅由提交人或内部全量查看者发起。 */
+  latestSubmitterId?: number | null
+  rejectReason?: string | null
 }
 
 export interface ProjectGroup {
@@ -82,7 +93,7 @@ export interface ProjectGroup {
 
 export interface ProjectGroupDetail {
   group: ProjectGroup
-  projects: Project[]
+  projects: ProjectSummary[]
 }
 
 export interface ProjectCopySummary {
@@ -112,7 +123,7 @@ export interface ProjectCopyFileMapping {
 }
 
 export interface ProjectCopyResult {
-  project: Project
+  project: ProjectSummary
   copy: {
     copyId: number
     sourceProjectId: number
