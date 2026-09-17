@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Badge, Button, Card, Descriptions, Empty, Form, Input, Message, Modal, Popconfirm, Progress, Space, Spin, Table, Tag, Typography,
 } from '@arco-design/web-react'
-import { IconPlus } from '@arco-design/web-react/icon'
+import { IconDown, IconPlus } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
 import { isAxiosError } from 'axios'
 import http, { type QuietRequestConfig } from '../../api/client'
@@ -38,6 +38,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const [data, setData] = useState<ProjectGroupDetailData | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
+  const [summaryExpanded, setSummaryExpanded] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const [editing, setEditing] = useState<Project | null>(null)
   const [childModalOpen, setChildModalOpen] = useState(false)
@@ -155,28 +156,55 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     } },
   ]
   const progress = group.subprojectCount ? Math.round(group.completedCount / group.subprojectCount * 100) : 0
+  const responsible = group.responsibleUserName
+    ? `${group.responsibleUserName}${group.responsibleUserEmployeeNo ? `（${group.responsibleUserEmployeeNo}）` : ''}`
+    : '-'
+  const supplier = display(group.supplierName)
+  const expectedCompletionDate = display(group.expectedCompletionDate)
 
   return (
     <div className="project-group-detail-page">
       {loadError && <div className="page-load-error"><Typography.Text type="warning">刷新失败，当前显示上次数据。</Typography.Text><Button size="small" onClick={load}>重试</Button></div>}
       <Card className="page-card project-group-summary-card">
-        <div className="detail-heading">
-          <div><Typography.Text type="secondary">主项目</Typography.Text><h1>{group.name}</h1></div>
-          <Space><Tag color={PROJECT_STATUS[group.status]?.color}>{PROJECT_STATUS[group.status]?.text}</Tag><Button onClick={() => navigate('/projects')}>返回项目列表</Button></Space>
+        <div className="project-group-summary-heading">
+          <div className="project-group-summary-title">
+            <Typography.Text type="secondary">主项目</Typography.Text>
+            <h1>{group.name}</h1>
+            <div className="project-group-summary-facts">
+              <span><b>供应商</b>{supplier}</span>
+              <span><b>负责人</b>{responsible}</span>
+              <span><b>预计完成</b>{expectedCompletionDate}</span>
+            </div>
+          </div>
+          <Space className="project-group-summary-actions">
+            <Tag color={PROJECT_STATUS[group.status]?.color}>{PROJECT_STATUS[group.status]?.text}</Tag>
+            <Button
+              type="text"
+              size="small"
+              aria-expanded={summaryExpanded}
+              aria-controls="project-group-extra-info"
+              onClick={() => setSummaryExpanded((value) => !value)}
+            >
+              {summaryExpanded ? '收起资料' : '查看资料'}<IconDown className={summaryExpanded ? 'is-expanded' : undefined} />
+            </Button>
+            <Button onClick={() => navigate('/projects')}>返回项目列表</Button>
+          </Space>
         </div>
-        <Descriptions className="project-metadata" column={{ xs: 1, sm: 2, md: 3, lg: 4 }} data={[
-          { label: '工令号', value: display(group.workOrderNos?.join('、')) }, { label: '机型', value: display(group.machineModel) },
-          { label: 'Robot 厂商', value: display(group.robotVendorName) }, { label: 'Robot 型号', value: display(group.robotModelName) },
-          { label: '负责人', value: group.responsibleUserName ? `${group.responsibleUserName}${group.responsibleUserEmployeeNo ? `（${group.responsibleUserEmployeeNo}）` : ''}` : '-' },
-          { label: '课别', value: display(group.sectionName) }, { label: '优先级', value: display(group.priorityName) },
-          { label: '预计完成日期', value: display(group.expectedCompletionDate) }, { label: '供应商', value: display(group.supplierName) },
-          ...(group.completedAt ? [{ label: '自动验收时间', value: fmtTime(group.completedAt) }] : []),
-        ]} />
-        <div className="project-summary-description">
-          <span className="project-summary-description-label">访问范围</span>
-          <Typography.Text>该供应商的全部启用账号均可访问此主项目及其子项目。</Typography.Text>
-        </div>
-        {group.description && <div className="project-summary-description"><span className="project-summary-description-label">主项目说明</span><Typography.Text>{group.description}</Typography.Text></div>}
+        {summaryExpanded && <div id="project-group-extra-info" className="project-group-extra-info">
+          <Descriptions className="project-metadata" column={{ xs: 1, sm: 2, md: 3, lg: 4 }} data={[
+            { label: '工令号', value: display(group.workOrderNos?.join('、')) }, { label: '机型', value: display(group.machineModel) },
+            { label: 'Robot 厂商', value: display(group.robotVendorName) }, { label: 'Robot 型号', value: display(group.robotModelName) },
+            { label: '负责人', value: responsible }, { label: '课别', value: display(group.sectionName) },
+            { label: '优先级', value: display(group.priorityName) }, { label: '预计完成日期', value: expectedCompletionDate },
+            { label: '供应商', value: supplier },
+            ...(group.completedAt ? [{ label: '自动验收时间', value: fmtTime(group.completedAt) }] : []),
+          ]} />
+          <div className="project-summary-description">
+            <span className="project-summary-description-label">访问范围</span>
+            <Typography.Text>该供应商的全部启用账号均可访问此主项目及其子项目。</Typography.Text>
+          </div>
+          {group.description && <div className="project-summary-description"><span className="project-summary-description-label">主项目说明</span><Typography.Text>{group.description}</Typography.Text></div>}
+        </div>}
         <div className="project-group-overview">
           <div className="project-group-progress-main"><span>总体验收进度</span><Progress percent={progress} showText /></div>
           <div className="project-group-metrics"><span>子项目 {group.subprojectCount}</span><span>已验收 {group.completedCount}</span><span>待验收 {group.pendingCount}</span><span>已终止 {group.terminatedCount}</span></div>

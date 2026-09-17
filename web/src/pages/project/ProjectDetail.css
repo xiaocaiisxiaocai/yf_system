@@ -206,6 +206,66 @@
   flex: 0 0 auto;
 }
 
+.project-group-summary-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.project-group-summary-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.project-group-summary-title h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 30px;
+  overflow-wrap: anywhere;
+}
+
+.project-group-summary-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin-top: 6px;
+  color: var(--color-text-2);
+  font-size: 13px;
+}
+
+.project-group-summary-facts span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.project-group-summary-facts b {
+  margin-right: 6px;
+  color: var(--color-text-3);
+  font-weight: 400;
+}
+
+.project-group-summary-actions {
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.project-group-summary-actions .arco-icon-down {
+  margin-left: 4px;
+  transition: transform .2s ease;
+}
+
+.project-group-summary-actions .arco-icon-down.is-expanded {
+  transform: rotate(180deg);
+}
+
+.project-group-extra-info {
+  padding-top: 2px;
+  border-top: 1px solid var(--color-neutral-3);
+}
+
 .project-group-children-card {
   min-height: 0;
   flex: 1;
@@ -295,6 +355,15 @@
     align-items: stretch;
     flex-direction: column;
     gap: 12px;
+  }
+
+  .project-group-summary-heading {
+    gap: 8px;
+  }
+
+  .project-group-summary-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
 
   .project-group-progress-main {
