@@ -290,7 +290,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
     http.get(`/project-groups/${groupId}`, { signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
       .then((response) => {
         if (!active) return
-        const data = response.data as { projects?: Project[] }
+        const data = response.data as { projects?: ProjectSummary[] }
         setSiblings(Array.isArray(data.projects) ? data.projects : [])
       })
       .catch(() => { if (active) setSiblings([]) })
@@ -480,6 +480,10 @@ function ProjectDetailContent({ id }: { id?: string }) {
               projectStatus={project.status}
               targetId={filesTargetId}
               onOpenCopyHistory={project.hasCopyHistory ? () => setHistoryOpen(true) : undefined}
+              onProjectChanged={() => {
+                loadProject()
+                loadSummary()
+              }}
             />
           </Tabs.TabPane>
           <Tabs.TabPane

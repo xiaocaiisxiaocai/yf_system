@@ -22,6 +22,8 @@ interface Props {
   projectStatus: string
   targetId?: number
   onOpenCopyHistory?: () => void
+  /** 供应商选择上传后提交验收时，用于刷新父组件的项目/流程状态。 */
+  onProjectChanged?: () => void
 }
 
 const PDF_PREVIEW_MAX_BYTES = 50 * 1024 * 1024
@@ -70,7 +72,7 @@ async function downloadAuthed(id: number, name: string) {
   URL.revokeObjectURL(url)
 }
 
-export default function FileTable({ projectId, projectStatus, targetId, onOpenCopyHistory }: Props) {
+export default function FileTable({ projectId, projectStatus, targetId, onOpenCopyHistory, onProjectChanged }: Props) {
   const [previewToolbar, setPreviewToolbar] = useState<HTMLDivElement | null>(null)
   const revision = useCollaboration((state) => state.revision)
   const syncStatus = useCollaboration((state) => state.status)
@@ -140,6 +142,22 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
   const startUpload = () => {
     if (projectStatus !== 'IN_PROGRESS') return
     setUploadOpen(true)
+  }
+
+  const isSupplier = user?.userType === 'SUPPLIER'
+
+  /** 供应商显式选择后，整批上传成功才提交验收。 */
+  const submitAfterUpload = async () => {
+    if (!isSupplier || !hasPerm('project:submit') || projectStatus !== 'IN_PROGRESS') return
+    try {
+      await http.post(`/projects/${projectId}/submit`, { confirmSide: 'COMPANY' },
+        { quietNetworkError: true } as QuietRequestConfig)
+      Message.success('文件已全部上传，已提交验收')
+      onProjectChanged?.()
+    } catch {
+      Message.warning('文件已上传，提交验收未成功，请刷新状态后重试提交验收')
+      onProjectChanged?.()
+    }
   }
 
   const batchDownload = async () => {
@@ -314,6 +332,7 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
           visible={uploadOpen}
           onClose={() => setUploadOpen(false)}
           onDone={load}
+          onSubmitForAcceptance={isSupplier && hasPerm('project:submit') && projectStatus === 'IN_PROGRESS' ? submitAfterUpload : undefined}
         />
       )}
       <Modal

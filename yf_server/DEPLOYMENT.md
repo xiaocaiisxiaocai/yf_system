@@ -1,5 +1,7 @@
 # Windows 部署、升级与恢复
 
+> **历史文档：当前版本不要执行以下 Rust 部署步骤。** 当前前端只与 `server_dotnet` 配套；旧 `scripts/deploy-iis.ps1` 已禁用，避免生成混合版本发布包。当前部署请使用 [ASP.NET Core 后端说明](../server_dotnet/README.md)及 `server_dotnet/scripts/publish-iis.ps1` 生成的发布包。
+
 本项目由两个运行边界组成：IIS 托管 `web/dist` 静态文件并把 `/api/*` 反向代理到仅监听本机的 Rust 服务；MySQL 和文件存储必须同时纳入备份。
 
 仓库提供两阶段正式部署流程，适用于“开发机构建、另一台 Windows Server 部署”：

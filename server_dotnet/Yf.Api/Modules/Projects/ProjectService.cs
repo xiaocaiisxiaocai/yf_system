@@ -44,9 +44,6 @@ internal sealed class ProjectService(
             new { ProjectId = projectId },
             tx,
             cancellationToken: ct));
-        var hasCopyHistory = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-            "SELECT EXISTS(SELECT 1 FROM project_copies WHERE source_project_id=@ProjectId OR target_project_id=@ProjectId)",
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
         var sourceCopy = await conn.QuerySingleOrDefaultAsync<ProjectCopySourceRow>(new CommandDefinition(
             """
             SELECT pc.source_project_id AS ProjectId,source.name AS Name
@@ -67,41 +64,12 @@ internal sealed class ProjectService(
                 copySource = null;
             }
         }
-        var result = new
-        {
-            id = project.Id,
-            projectGroupId = project.ProjectGroupId,
-            projectGroupName = project.ProjectGroupName,
-            name = project.Name,
-            description = project.Description,
-            supplierId = project.SupplierId,
-            supplierName = project.SupplierName,
-            status = project.Status,
-            confirmSide = project.ConfirmSide,
-            createdBy = project.CreatedBy,
-            createdByName = project.CreatedByName,
-            createdAt = ProjectJson.Utc(project.CreatedAt),
-            updatedAt = ProjectJson.Utc(project.UpdatedAt),
-            rejectReason = latest?.RejectReason,
-            latestSubmitterId = latest?.LatestSubmitterId,
-            latestSubmissionId = project.LatestSubmissionId,
-            workOrderNos = project.WorkOrderNos,
-            machineModel = project.MachineModel,
-            robotVendorId = project.RobotVendorId,
-            robotVendorName = project.RobotVendorName,
-            robotModelId = project.RobotModelId,
-            robotModelName = project.RobotModelName,
-            responsibleUserId = project.ResponsibleUserId,
-            responsibleUserEmployeeNo = project.ResponsibleUserEmployeeNo,
-            responsibleUserName = project.ResponsibleUserName,
-            sectionId = project.SectionId,
-            sectionName = project.SectionName,
-            priorityId = project.PriorityId,
-            priorityName = project.PriorityName,
-            expectedCompletionDate = project.ExpectedCompletionDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            hasCopyHistory,
-            copySource,
-        };
+        var unreadMessages = await MessageService.UnreadCountAsync(conn, tx, current.Id, projectId, ct);
+        var result = ProjectJson.Project(project);
+        result["rejectReason"] = latest?.RejectReason;
+        result["latestSubmitterId"] = latest?.LatestSubmitterId;
+        result["unreadMessages"] = unreadMessages;
+        result["copySource"] = copySource;
         await tx.CommitAsync(ct);
         return result;
     }

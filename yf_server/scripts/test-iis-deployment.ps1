@@ -20,6 +20,10 @@ function Assert-Rejected([scriptblock]$Operation) {
     try { & $Operation | Out-Null } catch { $rejected = $true }
     Assert-True $rejected 'Expected operation to be rejected'
 }
+# 旧入口必须先于依赖安装、构建、输出目录创建拒绝执行。
+$retiredOutput = Join-Path $repo ('.runlogs\retired-release-' + [guid]::NewGuid().ToString('N'))
+Assert-Rejected { & (Join-Path $repo 'yf_server\scripts\deploy-iis.ps1') -OutputDir $retiredOutput -AllowDirty -SkipChecks }
+Assert-True (-not (Test-Path -LiteralPath $retiredOutput)) 'Retired publisher wrote output'
 $fixture = Join-Path $repo ('.runlogs\iis-script-test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $fixture | Out-Null
 try {

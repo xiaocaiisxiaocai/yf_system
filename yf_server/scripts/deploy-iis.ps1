@@ -47,6 +47,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# 当前 web 依赖 .NET 的主项目/子项目和 SignalR 契约，不能再配套归档 Rust 后端。
+# 必须在工具探测、安装依赖、构建或任何输出写入之前拒绝旧发布入口。
+throw 'Rust IIS 发布入口已停用：当前前端仅配套 server_dotnet。请从仓库根目录运行 pwsh -File .\server_dotnet\scripts\publish-iis.ps1 -FreshOutputDirectory <新的空发布目录>，并使用该发布包内的 install-iis.ps1。'
+
 function Resolve-FullPath([string] $Value) {
     return [System.IO.Path]::GetFullPath(
         $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Value)

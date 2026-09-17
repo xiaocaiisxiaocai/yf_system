@@ -298,7 +298,7 @@ async function assertInsideViewport(locator, page, label) {
           mimeType: 'application/zip',
           buffer: Buffer.from('selected-but-never-uploaded|' + suffix),
         });
-        await dialog.getByText('文件已选择，点击“上传所选文件”后开始上传。', { exact: true }).waitFor();
+        await dialog.getByText('待上传', { exact: true }).waitFor();
         await dialog.getByRole('button', { name: '关闭', exact: true }).click();
         await dialog.waitFor({ state: 'hidden' });
         assert.equal(uploadRequests, 0, 'closing before start must not call upload APIs');
@@ -346,7 +346,7 @@ async function assertInsideViewport(locator, page, label) {
         await withExpectedServerErrors([abortPath], async () => {
           const failedAbort = page.waitForResponse(response =>
             pathOf(response) === abortPath && response.request().method() === 'DELETE');
-          await dialog.getByRole('button', { name: '取消上传', exact: true }).click();
+          await dialog.getByRole('button', { name: '关闭', exact: true }).click();
           releaseChunk();
           assert.equal((await failedAbort).status(), 503);
           await dialog.getByRole('button', { name: '重试取消', exact: true }).waitFor();
@@ -359,6 +359,8 @@ async function assertInsideViewport(locator, page, label) {
           pathOf(response) === abortPath && response.request().method() === 'DELETE');
         await dialog.getByRole('button', { name: '重试取消', exact: true }).click();
         assert.equal((await retriedAbort).status(), 200);
+        await dialog.getByText('已取消', { exact: true }).waitFor();
+        await dialog.getByRole('button', { name: '关闭', exact: true }).click();
         await dialog.waitFor({ state: 'hidden' });
         assert.equal((await json('GET', `/uploads/${sessionId}`)).status, 'ABORTED');
         assert.equal((await listFiles(name)).total, 0, 'aborted session creates no file');
@@ -396,7 +398,7 @@ async function assertInsideViewport(locator, page, label) {
         await dialog.getByRole('button', { name: '上传所选文件', exact: true }).click();
         const firstInit = await (await firstInitReady).json();
         cleanupSessions.add(firstInit.sessionId);
-        await page.getByText('上传中断，可点击开始后从断点续传', { exact: true }).waitFor();
+        await page.getByText(/上传中断，可点击重新上传从断点续传/).waitFor();
         await page.getByText('验收模拟分片上传失败', { exact: true }).waitFor();
         assert(failedChunkPath?.startsWith(apiPath(`/uploads/${firstInit.sessionId}/chunks/`)));
 
@@ -424,6 +426,23 @@ async function assertInsideViewport(locator, page, label) {
       } finally {
         page.expectedServerErrors = previousExpected;
         await page.unroute('**/api/v1/uploads/*/chunks/*', failFirstChunk);
+      }
+    });
+
+    await record('一次选择多个文件后全部持久化且弹窗关闭', async () => {
+      const names = [prefix + '-batch-a.zip', prefix + '-batch-b.zip'];
+      const dialog = await openUpload();
+      await dialog.getByLabel('选择上传文件').setInputFiles(names.map(name => ({
+        name, mimeType: 'application/zip', buffer: Buffer.from(name + suffix),
+      })));
+      assert.equal(await dialog.getByText('待上传', { exact: true }).count(), 2);
+      await dialog.getByRole('button', { name: '上传所选文件', exact: true }).click();
+      await dialog.waitFor({ state: 'hidden' });
+      for (const name of names) {
+        await row(name).waitFor();
+        const persisted = await listFiles(name);
+        assert.equal(persisted.total, 1);
+        assert.equal(persisted.list[0].originalName, name);
       }
     });
 

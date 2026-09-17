@@ -1,5 +1,9 @@
 # 在另一台 Windows 服务器正式部署
 
+> **以下是归档 Rust 版本的历史步骤，不适用于当前代码。** 当前 `web` 需要 .NET 主项目/子项目和 SignalR 接口；旧发布入口已停止执行。
+>
+> 当前版本从仓库根目录使用：`pwsh -File .\server_dotnet\scripts\publish-iis.ps1 -FreshOutputDirectory D:\Releases\YfDotNet-NEW`。目标机使用该包内的 `install-iis.ps1`，配置使用包外 JSON；完整说明见 [server_dotnet/README.md](../../server_dotnet/README.md)。不要混用下面的 TOML、Rust 迁移程序与当前前端。
+
 发布包包含前端、Rust 后端、迁移程序、WinSW 服务包装器和安装脚本。目标机无需 Node.js、npm、Rust、Git 或 Python。构建来源与工具版本见 deploy-manifest.json，逐文件校验见 SHA256SUMS.txt。
 
 ## 1. 在开发机生成发布包

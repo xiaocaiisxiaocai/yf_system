@@ -2328,7 +2328,7 @@ test('lost upload merge response retries only merge on the same session', async 
     footer = renderer.root.findByType('Modal').props.footer
     await footer.props.children[1].props.onClick()
   })
-  const retry = findActionButton(renderer.root.findByType('Modal').props.footer, '重试确认')
+  const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试确认')
   assert.ok(retry, 'an uncertain merge must offer an explicit confirmation retry')
   await act(async () => retry.props.onClick())
   assert.equal(initCalls, 1)
@@ -2381,13 +2381,13 @@ test('a definitive upload integrity failure can discard the damaged session and 
   }) })
   await act(async () => renderer.root.findByType('input').props.onChange({ target: { files: [file] } }))
   await act(async () => renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick())
-  let discard = findActionButton(renderer.root.findByType('Modal').props.footer, '清理并重新选择')
+  let discard = renderer.root.findAllByType('Button').find((node) => node.props.children === '清理并移除')
   assert.ok(discard, 'an explicit integrity failure must not be mislabeled as an uncertain commit')
   await act(async () => discard.props.onClick())
   assert.deepEqual(deletes, ['/uploads/damaged-session'])
-  discard = findActionButton(renderer.root.findByType('Modal').props.footer, '清理并重新选择')
+  discard = renderer.root.findAllByType('Button').find((node) => node.props.children === '清理并移除')
   assert.ok(discard, 'failed cleanup must retain the damaged session for retry')
-  assert.equal(fileInput.value, 'damaged.pdf', 'failed cleanup keeps the selected file until cleanup succeeds')
+  assert.ok(renderer.root.findAllByType('Text').some((node) => String(node.props.children).includes('damaged.pdf')), 'failed cleanup retains the file row for retry')
   await act(async () => discard.props.onClick())
   assert.deepEqual(deletes, ['/uploads/damaged-session', '/uploads/damaged-session'])
   assert.equal(renderer.root.findByType('input').props.disabled, false)
@@ -2435,7 +2435,7 @@ test('concurrent merge confirmation clicks issue only one retry request', async 
     const start = renderer.root.findByType('Modal').props.footer.props.children[1].props.onClick()
     await start
   })
-  const retry = findActionButton(renderer.root.findByType('Modal').props.footer, '重试确认')
+  const retry = renderer.root.findAllByType('Button').find((node) => node.props.children === '重试确认')
   assert.ok(retry)
   let firstRetry
   let secondRetry

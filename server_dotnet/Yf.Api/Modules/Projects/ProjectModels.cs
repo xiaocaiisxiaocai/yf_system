@@ -286,41 +286,46 @@ internal static class ProjectJson
         _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
     };
 
-    internal static object Project(ProjectRow row) => new
+    /// <summary>
+    /// Common project fields shared by list/workflow-result endpoints. Callers needing extra
+    /// detail-only fields (e.g. <c>DetailAsync</c>) should add/override keys on the returned
+    /// dictionary rather than hand-duplicating this field list.
+    /// </summary>
+    internal static Dictionary<string, object?> Project(ProjectRow row) => new()
     {
-        id = row.Id,
-        projectGroupId = row.ProjectGroupId,
-        projectGroupName = row.ProjectGroupName,
-        name = row.Name,
-        description = row.Description,
-        supplierId = row.SupplierId,
-        supplierName = row.SupplierName,
-        status = row.Status,
-        confirmSide = row.ConfirmSide,
-        latestSubmissionId = row.LatestSubmissionId,
-        createdBy = row.CreatedBy,
-        createdByName = row.CreatedByName,
-        workOrderNos = row.WorkOrderNos,
-        machineModel = row.MachineModel,
-        robotVendorId = row.RobotVendorId,
-        robotVendorName = row.RobotVendorName,
-        robotModelId = row.RobotModelId,
-        robotModelName = row.RobotModelName,
-        responsibleUserId = row.ResponsibleUserId,
-        responsibleUserEmployeeNo = row.ResponsibleUserEmployeeNo,
-        responsibleUserName = row.ResponsibleUserName,
-        sectionId = row.SectionId,
-        sectionName = row.SectionName,
-        priorityId = row.PriorityId,
-        priorityName = row.PriorityName,
-        expectedCompletionDate = row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
-        hasCopyHistory = row.HasCopyHistory,
-        unreadMessages = row.UnreadMessages,
-        copySource = row.CopySourceProjectId is { } sourceProjectId && row.CopySourceProjectName is { } sourceProjectName
-            ? (object)new { projectId = sourceProjectId, name = sourceProjectName }
+        ["id"] = row.Id,
+        ["projectGroupId"] = row.ProjectGroupId,
+        ["projectGroupName"] = row.ProjectGroupName,
+        ["name"] = row.Name,
+        ["description"] = row.Description,
+        ["supplierId"] = row.SupplierId,
+        ["supplierName"] = row.SupplierName,
+        ["status"] = row.Status,
+        ["confirmSide"] = row.ConfirmSide,
+        ["latestSubmissionId"] = row.LatestSubmissionId,
+        ["createdBy"] = row.CreatedBy,
+        ["createdByName"] = row.CreatedByName,
+        ["workOrderNos"] = row.WorkOrderNos,
+        ["machineModel"] = row.MachineModel,
+        ["robotVendorId"] = row.RobotVendorId,
+        ["robotVendorName"] = row.RobotVendorName,
+        ["robotModelId"] = row.RobotModelId,
+        ["robotModelName"] = row.RobotModelName,
+        ["responsibleUserId"] = row.ResponsibleUserId,
+        ["responsibleUserEmployeeNo"] = row.ResponsibleUserEmployeeNo,
+        ["responsibleUserName"] = row.ResponsibleUserName,
+        ["sectionId"] = row.SectionId,
+        ["sectionName"] = row.SectionName,
+        ["priorityId"] = row.PriorityId,
+        ["priorityName"] = row.PriorityName,
+        ["expectedCompletionDate"] = row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+        ["hasCopyHistory"] = row.HasCopyHistory,
+        ["unreadMessages"] = row.UnreadMessages,
+        ["copySource"] = row.CopySourceProjectId is { } sourceProjectId && row.CopySourceProjectName is { } sourceProjectName
+            ? new { projectId = sourceProjectId, name = sourceProjectName }
             : null,
-        createdAt = Utc(row.CreatedAt),
-        updatedAt = Utc(row.UpdatedAt),
+        ["createdAt"] = Utc(row.CreatedAt),
+        ["updatedAt"] = Utc(row.UpdatedAt),
     };
 
     internal static object ProjectGroup(ProjectGroupRow row) => new

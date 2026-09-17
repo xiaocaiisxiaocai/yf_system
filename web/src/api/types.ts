@@ -54,8 +54,8 @@ export interface ProjectSummary {
 /** 子项目详情，仅 GET /projects/{id} 返回；比 ProjectSummary 多两个单独查询的字段。 */
 export interface Project extends ProjectSummary {
   /** 当前待确认提交的提交人；撤回仅由提交人或内部全量查看者发起。 */
-  latestSubmitterId?: number | null
-  rejectReason?: string | null
+  latestSubmitterId: number | null
+  rejectReason: string | null
 }
 
 export interface ProjectGroup {
