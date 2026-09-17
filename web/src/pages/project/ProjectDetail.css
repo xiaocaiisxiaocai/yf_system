@@ -16,6 +16,37 @@
 .project-detail-summary-card .project-metadata { margin-top: 2px; }
 :is(.project-detail-summary-card, .project-group-summary-card) .project-metadata .arco-descriptions-item-label { white-space: nowrap; padding-right: 12px; }
 :is(.project-detail-summary-card, .project-group-summary-card) .project-metadata .arco-descriptions-item-value { min-width: 0; overflow-wrap: anywhere; }
+.subproject-switch {
+  display: flex;
+  gap: 4px;
+  margin: 2px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--app-border);
+  overflow-x: auto;
+}
+.subproject-switch-tab {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--color-text-2);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.subproject-switch-tab:hover { background: var(--color-fill-1); color: var(--color-text-1); }
+.subproject-switch-tab.is-active { background: rgb(var(--primary-1)); color: rgb(var(--primary-6)); font-weight: 500; }
+.subproject-switch-tab:focus-visible { outline: 2px solid rgb(var(--primary-5)); outline-offset: -2px; }
+.subproject-switch-name { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subproject-switch-tab .arco-tag { flex: 0 0 auto; }
+
 .project-copy-reference-bar {
   display: flex;
   align-items: center;
@@ -178,6 +209,8 @@
   .project-detail-summary-card > .arco-card-body { padding: 12px; }
   .project-detail-tabs-card > .arco-card-body { padding: 8px 12px 12px; }
   .project-detail-summary-card .detail-heading { gap: 6px; }
+  .subproject-switch-tab { max-width: 180px; }
+  .subproject-switch-name { max-width: 100px; }
   .project-detail-summary-card .project-workflow--compact { gap: 8px; }
   .message-panel > .message-composer { gap: 6px !important; margin-bottom: 8px !important; }
   .message-panel .arco-textarea { max-height: 100px; }
@@ -358,12 +391,15 @@
   }
 
   .project-group-summary-heading {
+    flex-direction: column;
+    align-items: stretch;
     gap: 8px;
   }
 
   .project-group-summary-actions {
     width: 100%;
     justify-content: flex-end;
+    flex-wrap: wrap;
   }
 
   .project-group-progress-main {

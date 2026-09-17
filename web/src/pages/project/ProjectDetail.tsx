@@ -185,6 +185,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const [historyReloadKey, setHistoryReloadKey] = useState(0)
   const [loadErrorFor, setLoadErrorFor] = useState<number | null>(null)
   const loadingProjectId = useRef<number | null>(null)
+  const [siblings, setSiblings] = useState<Project[]>([])
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
   const tab = requestedTab === 'files' || requestedTab === 'messages' || requestedTab === 'activity'
@@ -281,6 +282,26 @@ function ProjectDetailContent({ id }: { id?: string }) {
   }, [fetchProject, pid, validProjectId, revision, syncStatus])
 
   useEffect(() => {
+    const groupId = project?.id === pid ? project.projectGroupId : undefined
+    if (!groupId) { setSiblings([]); return }
+    let active = true
+    const controller = new AbortController()
+    http.get(`/project-groups/${groupId}`, { signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
+      .then((response) => {
+        if (!active) return
+        const data = response.data as { projects?: Project[] }
+        setSiblings(Array.isArray(data.projects) ? data.projects : [])
+      })
+      .catch(() => { if (active) setSiblings([]) })
+    return () => { active = false; controller.abort() }
+  }, [pid, project?.id, project?.projectGroupId, revision, syncStatus])
+
+  const switchProject = useCallback((nextId: number) => {
+    if (nextId === pid) return
+    navigate(tab === 'files' ? `/projects/${nextId}` : `/projects/${nextId}?tab=${tab}`, { replace: true })
+  }, [navigate, pid, tab])
+
+  useEffect(() => {
     if (project?.id !== pid) return
     // Summary is the external server state synchronized after the project becomes available.
     // eslint-disable-next-line react/set-state-in-effect
@@ -368,6 +389,24 @@ function ProjectDetailContent({ id }: { id?: string }) {
             <Button onClick={() => navigate(project.projectGroupId ? `/project-groups/${project.projectGroupId}` : '/projects')}>返回主项目</Button>
           </div>
         </div>
+        {siblings.length > 1 && (
+          <div className="subproject-switch" role="tablist" aria-label="同一主项目下的子项目">
+            {siblings.map((sibling) => (
+              <button
+                key={sibling.id}
+                type="button"
+                role="tab"
+                aria-selected={sibling.id === pid}
+                className={`subproject-switch-tab${sibling.id === pid ? ' is-active' : ''}`}
+                onClick={() => switchProject(sibling.id)}
+              >
+                <span className="subproject-switch-name" title={sibling.name}>{sibling.name}</span>
+                <Tag size="small" color={PROJECT_STATUS[sibling.status]?.color}>{PROJECT_STATUS[sibling.status]?.text || sibling.status}</Tag>
+                {!!sibling.unreadMessages && <Badge count={sibling.unreadMessages} dot={false} />}
+              </button>
+            ))}
+          </div>
+        )}
         <Descriptions
           className="project-metadata"
           column={{ xs: 1, sm: 2, md: 3, lg: 4 }}
