@@ -1,0 +1,6 @@
+先查看部署计划：
+cd D:\Temp\yf_system\yf_server
+pwsh -File .\scripts\deploy-iis.ps1 -Plan
+
+提交代码后正式构建：
+pwsh -File .\scripts\deploy-iis.ps1

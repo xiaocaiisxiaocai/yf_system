@@ -72,7 +72,7 @@ try {
         Where-Object { $_.Name -ne "SHA256SUMS.txt" } |
         ForEach-Object {
             $hash = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
-            $relative = [System.IO.Path]::GetRelativePath($destination, $_.FullName)
+            $relative = Get-BackupRelativePath $destination $_.FullName
             "$($hash.Hash)  $relative"
         }
     [System.IO.File]::WriteAllLines((Join-Path $destination "SHA256SUMS.txt"), $hashes)

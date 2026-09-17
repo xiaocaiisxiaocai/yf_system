@@ -15,3 +15,12 @@ function New-BackupDirectoryName {
     param([datetime] $Time = (Get-Date))
     'yf_system_' + $Time.ToString('yyyyMMdd_HHmmss') + '_' + [guid]::NewGuid().ToString('N')
 }
+
+function Get-BackupRelativePath {
+    param([Parameter(Mandatory)][string] $BasePath, [Parameter(Mandatory)][string] $ChildPath)
+    $base = [System.IO.Path]::GetFullPath($BasePath).TrimEnd([char[]]'\/') + [System.IO.Path]::DirectorySeparatorChar
+    $child = [System.IO.Path]::GetFullPath($ChildPath)
+    $baseUri = New-Object System.Uri($base)
+    $childUri = New-Object System.Uri($child)
+    [System.Uri]::UnescapeDataString($baseUri.MakeRelativeUri($childUri).ToString()).Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+}

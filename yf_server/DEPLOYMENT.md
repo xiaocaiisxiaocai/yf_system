@@ -2,6 +2,29 @@
 
 本项目由两个运行边界组成：IIS 托管 `web/dist` 静态文件并把 `/api/*` 反向代理到仅监听本机的 Rust 服务；MySQL 和文件存储必须同时纳入备份。
 
+仓库提供两阶段正式部署流程，适用于“开发机构建、另一台 Windows Server 部署”：
+
+- `scripts/deploy-iis.ps1` 在开发机一次构建前端和 Rust 后端，输出发布目录、可传输 ZIP、制品清单与 SHA-256；它不会修改开发机的 IIS、服务、数据库或业务存储。
+- 发布包内 `install-iis.ps1` 在目标服务器上先执行只读预检，再在同一停写窗口完成备份、前后端替换、WinSW 服务、IIS HTTPS/ARR 配置、可选迁移和健康检查。目标机无需 Node.js、npm、Cargo 或 Git。
+
+先在开发机检查构建计划：
+
+```powershell
+pwsh -File .\scripts\deploy-iis.ps1 -Plan
+```
+
+正式生成制品时要求 Git 工作区干净；默认输出到仓库已忽略的 `.runlogs\iis-release`，同时生成 `.runlogs\iis-release.zip` 与外部 SHA-256 文件：
+
+```powershell
+pwsh -File .\scripts\deploy-iis.ps1
+```
+
+若输出已经存在，核对后使用 `-Clean`，脚本会先把旧输出改名保留。缓存完整且需要完全离线构建时加 `-Offline`；WinSW 2.12.0 x64 会从官方 GitHub Release 获取并按固定 SHA-256 校验，也可以用 `-WinSWPath` 提供同一文件。Rust 使用隔离的临时 `CARGO_TARGET_DIR`，打包后自动清理，不会在仓库中留下巨大的 `target`。`-SkipChecks`、`-SkipInstall` 只用于已由同一提交的等价门禁覆盖的情况。
+
+把 ZIP 和旁边的 `.sha256` 一起复制到目标服务器，先在服务器上校验外部 SHA-256，再解压到新的临时目录。以管理员身份运行包内脚本的 `-Plan`；完整命令、必填生产参数和正式执行示例见包内 `DEPLOYMENT.md`。目标服务器必须预先安装 IIS 管理服务、URL Rewrite 2、ARR、Visual C++ 2015–2022 x64 Runtime，并导入正式 HTTPS 证书。脚本不会自动安装系统组件，也不会把生产密码或证书写入制品。
+
+可直接照着执行的异机安装命令见 [正式部署操作说明](deploy/README-iis.md)。Plan 为可选的只读预检；正式执行去掉该参数。首次空库使用 MigrationMode Up 配合 InitializeDatabase，隐藏输入初始管理员密码；已迁移数据库使用 MigrationMode Skip。备份失败不删除旧程序，替换开始后失败会停止本次服务并保留现场，不自动回滚数据库或 IIS。
+
 ## 1. 发布前门禁
 
 ```powershell
