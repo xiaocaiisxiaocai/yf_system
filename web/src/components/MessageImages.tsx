@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, type ClipboardEvent } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type ClipboardEvent } from 'react'
 import { Button, Message, Modal, Result, Spin, Tooltip } from '@arco-design/web-react'
 import { IconClose, IconDelete, IconImage } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
-import ImagePreview from './ImagePreview'
 import './MessageImages.css'
+
+// 与 FileTable 的图片预览共用同一按需加载分包，避免此处的静态引用使其失效
+const ImagePreview = lazy(() => import('./ImagePreview'))
 
 export const MESSAGE_IMAGE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,image/bmp,.bmp'
 export const MESSAGE_IMAGE_MAX_COUNT = 9
@@ -291,11 +293,13 @@ export function MessageImages({ messageId, images, watermarkEmployeeNo, watermar
       unmountOnExit
     >
       {preview && <div className="file-preview-surface">
-        <ImagePreview
-          contentUrl={`/messages/${messageId}/images/${preview.id}`}
-          name={preview.name}
-          toolbarContainer={previewToolbar}
-        />
+        <Suspense fallback={<div role="status">加载图片预览…</div>}>
+          <ImagePreview
+            contentUrl={`/messages/${messageId}/images/${preview.id}`}
+            name={preview.name}
+            toolbarContainer={previewToolbar}
+          />
+        </Suspense>
         <PreviewWatermark employeeNo={watermarkEmployeeNo} realName={watermarkRealName} />
       </div>}
     </Modal>
