@@ -157,7 +157,7 @@ internal static class ProjectNotificationService
         var targetUrl = ProjectUrl(baseUrl, project.Id, "activity");
         var subject = $"[协作平台] 项目「{project.Name}」已提交验收";
         var body = $"项目：{project.Name}\n结果：已提交验收\n确认方：公司\n操作人：工号 {submitter.EmployeeNo}\n\n请登录平台查看：{targetUrl}\n\n（本邮件由系统自动发送）";
-        var seenEmails = new HashSet<string>(StringComparer.Ordinal);
+        var seenRecipients = new HashSet<ulong>();
         foreach (var reviewer in reviewers)
         {
             if (reviewer.Id == submitter.Id)
@@ -169,7 +169,7 @@ internal static class ProjectNotificationService
                 await WriteMissingEmailAuditAsync(conn, tx, audit, "PROJECT_SUBMITTED", reviewer, ct);
                 continue;
             }
-            if (!seenEmails.Add(reviewer.Email)) continue;
+            if (!seenRecipients.Add(reviewer.Id)) continue;
 
             const string insert = """
                 INSERT INTO email_outbox
@@ -374,7 +374,7 @@ internal static class ProjectNotificationService
                 }
             }
         }
-        var seenEmails = new HashSet<string>(StringComparer.Ordinal);
+        var seenRecipients = new HashSet<ulong>();
         foreach (var recipient in recipients)
         {
             if (excludeUser == recipient.Id)
@@ -409,7 +409,7 @@ internal static class ProjectNotificationService
                 await WriteMissingEmailAuditAsync(conn, tx, audit, eventType, recipient, ct);
                 continue;
             }
-            if (!seenEmails.Add(recipient.Email))
+            if (!seenRecipients.Add(recipient.Id))
             {
                 continue;
             }

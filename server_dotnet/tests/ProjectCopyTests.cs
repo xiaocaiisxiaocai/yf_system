@@ -117,6 +117,11 @@ public sealed class ProjectCopyTests
 
             using (var history = Json(await service.HistoryAsync(conn, actor, 7101, ct)))
                 Assert.Equal(targetId, history.RootElement.GetProperty("copies")[0].GetProperty("projectId").GetUInt64());
+            await conn.ExecuteAsync(new CommandDefinition(
+                "UPDATE projects SET name='源项目改名' WHERE id=7101; UPDATE projects SET name='复制项目改名' WHERE id=@TargetId",
+                new { TargetId = targetId }, cancellationToken: ct));
+            using (var snapshotHistory = Json(await service.HistoryAsync(conn, actor, 7101, ct)))
+                Assert.Equal("复制项目", snapshotHistory.RootElement.GetProperty("copies")[0].GetProperty("name").GetString());
             using (var mappings = Json(await service.FileHistoryAsync(conn, actor, copyId, 1, 20, ct)))
             {
                 Assert.Equal(1, mappings.RootElement.GetProperty("total").GetInt32());

@@ -49,7 +49,7 @@ internal sealed class ProjectActivityService(
                 await ProjectActivityAsync(db, tx, audit, targetId, ct),
             "FILE_UPLOAD" or "FILE_DELETE" when audit.TargetType == "file" =>
                 await FileActivityAsync(db, tx, audit, targetId, ct),
-            "MESSAGE_CREATE" or "MESSAGE_DELETE" when audit.TargetType == "message" =>
+            "MESSAGE_CREATE" or "MESSAGE_DELETE" or "MESSAGE_READ" when audit.TargetType == "message" =>
                 await MessageActivityAsync(db, tx, audit, targetId, ct),
             _ => null,
         };
@@ -281,11 +281,24 @@ internal sealed class ProjectActivityService(
         {
             return null;
         }
-        var create = audit.Action == "MESSAGE_CREATE";
-        var summary = message.Content.Length == 0 && message.HasImages ? "[图片]" : message.Content;
-        return new(message.ProjectId, "MESSAGE", create ? "CREATE" : "DELETE", create ? "发表留言" : "删除留言",
-            create ? Truncate(summary) : null, create ? message.CreatedAt : message.DeletedAt ?? audit.CreatedAt,
-            messageId, $"message:{messageId}:{(create ? "create" : "delete")}");
+        var (action, title, summary) = audit.Action switch
+        {
+            "MESSAGE_CREATE" => ("CREATE", "发表留言", message.Content.Length == 0 && message.HasImages ? "[图片]" : message.Content),
+            "MESSAGE_DELETE" => ("DELETE", "删除留言", (string?)null),
+            "MESSAGE_READ" => ("READ", "查看留言回执", (string?)null),
+            _ => (string.Empty, string.Empty, (string?)null),
+        };
+        if (action.Length == 0) return null;
+        var sourceKey = action switch
+        {
+            "CREATE" => $"message:{messageId}:create",
+            "DELETE" => $"message:{messageId}:delete",
+            _ => $"message:{messageId}:read:{audit.Id}",
+        };
+        return new(message.ProjectId, "MESSAGE", action, title,
+            action == "CREATE" ? Truncate(summary!) : summary,
+            action == "CREATE" ? message.CreatedAt : message.DeletedAt ?? audit.CreatedAt,
+            messageId, sourceKey);
     }
 
     private static async Task<string> ResolveActorNameAsync(

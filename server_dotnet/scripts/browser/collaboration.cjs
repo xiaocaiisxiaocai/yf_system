@@ -392,24 +392,33 @@ async function chooseNotificationTab(drawer, name) {
     });
 
     await record('协作摘要503显示降级状态并由显式重试恢复', async () => {
-      await adminPage.goto(s.base + '/');
-      await adminPage.getByRole('heading', { name: new RegExp('^工作台 · ') }).waitFor();
       const summaryPath = apiPath('/collaboration/summary');
       adminPage.expectedServerErrors = new Set([summaryPath]);
-      const failOnce = route => route.fulfill({
+      // Keep the injected failure active until the UI has rendered the
+      // degraded state.  The realtime poller may immediately retry after a
+      // single 503, which otherwise makes this assertion race the recovery.
+      const failSummary = route => route.fulfill({
         status: 503,
         contentType: 'application/json',
         body: '{"code":50301,"message":"协作摘要测试暂时不可用"}',
       });
-      await adminPage.route('**' + summaryPath, failOnce, { times: 1 });
+      await adminPage.route('**' + summaryPath, failSummary);
       const failed = waitResponse(adminPage, '/collaboration/summary', 'GET', 503);
-      await adminPage.evaluate(() => window.dispatchEvent(new Event('focus')));
+      // Install the failure before navigation so a long-running realtime
+      // session cannot consume the initial summary before the fault injection.
+      await adminPage.goto(s.base + '/');
+      await adminPage.getByRole('heading', { name: new RegExp('^工作台 · ') }).waitFor();
       await failed;
       await adminPage.getByRole('status').filter({ hasText: '更新暂时中断' }).waitFor();
-      await adminPage.unroute('**' + summaryPath, failOnce);
+      await adminPage.unroute('**' + summaryPath, failSummary);
       const restored = waitResponse(adminPage, '/collaboration/summary');
       const recoveredMessages = waitResponse(adminPage, '/dashboard/messages');
-      await adminPage.getByRole('button', { name: '重新获取协作通知', exact: true }).click();
+      const retrySummary = adminPage.getByRole('button', { name: '重新获取协作通知', exact: true });
+      await retrySummary.waitFor({ state: 'visible' });
+      // SignalR/dashboard revisions may replace the button between the wait
+      // and click. Dispatch on the currently attached semantic control to
+      // avoid a false detached-element failure in the browser contract.
+      await retrySummary.evaluate((button) => button.click());
       await restored;
       await recoveredMessages;
       await adminPage.getByText('更新暂时中断', { exact: true }).waitFor({ state: 'hidden' });

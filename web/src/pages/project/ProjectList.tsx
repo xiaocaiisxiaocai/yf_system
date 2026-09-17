@@ -162,6 +162,11 @@ export default function ProjectList() {
       .finally(() => { if (seq === modelSeq.current) setRobotModelsLoading(false) })
   }, [])
 
+  const retryMetadataOptions = () => {
+    if (metadataOptionsError) loadMetadataOptions()
+    if (robotModelsError && selectedRobotVendorId) loadRobotModels(selectedRobotVendorId)
+  }
+
   const openCreate = () => {
     if (supplierOptionsLoading || supplierOptionsError || suppliers.length === 0) return
     setEditing(null); form.resetFields(); form.setFieldValue('subprojectNames', [])
@@ -301,7 +306,10 @@ export default function ProjectList() {
           <Form.Item label="关联供应商" field="supplierId" rules={[{ required: true, message: '请选择供应商' }]}><Select showSearch placeholder="选择供应商" filterOption={optionFilter} disabled={!!editing}>{suppliers.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select></Form.Item>
           <Form.Item className="form-grid-full" label="主项目说明" field="description"><Input.TextArea rows={3} maxLength={500} showWordLimit wordLimitPosition="outside" placeholder="选填" /></Form.Item>
           <div className="form-grid-full dialog-note">关联后，该供应商的全部启用账号均可访问此主项目及其子项目。</div>
-          {(metadataOptionsError || robotModelsError) && <div className="form-grid-full dialog-note dialog-note--danger">项目字典或负责人选项加载失败，请重试。</div>}
+          {(metadataOptionsError || robotModelsError) && <div className="form-grid-full dialog-note dialog-note--danger">
+            <span>项目字典或负责人选项加载失败，请重试。</span>
+            <Button size="small" onClick={retryMetadataOptions}>重试加载选项</Button>
+          </div>}
         </Form>
       </Modal>
     </Card>

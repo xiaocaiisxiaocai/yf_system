@@ -29,6 +29,14 @@ internal static class ProjectWorkflowRules
         }
     }
 
+    internal static void EnsureDeletable(string status)
+    {
+        if (status is not (ProjectStatuses.Draft or ProjectStatuses.Terminated))
+        {
+            throw ApiException.BadRequest("仅草稿或已终止项目可以删除");
+        }
+    }
+
     internal static string NormalizeConfirmSide(string? value)
     {
         if (value is null)

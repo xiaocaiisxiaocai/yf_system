@@ -29,7 +29,12 @@ public sealed class AppOptions
             throw new InvalidOperationException("App:StorageRoot must be an absolute path to the existing independent storage directory.");
         if (Path.GetFullPath(StorageRoot).TrimEnd(Path.DirectorySeparatorChar) == Path.GetPathRoot(StorageRoot)?.TrimEnd(Path.DirectorySeparatorChar))
             throw new InvalidOperationException("App:StorageRoot cannot be a drive root.");
-        if (!Uri.TryCreate(WebBaseUrl, UriKind.Absolute, out var web) || web.Scheme is not ("http" or "https") || web.UserInfo.Length != 0)
+        if (!Uri.TryCreate(WebBaseUrl, UriKind.Absolute, out var web)
+            || web.Scheme is not ("http" or "https")
+            || web.UserInfo.Length != 0
+            || web.AbsolutePath != "/"
+            || web.Query.Length != 0
+            || web.Fragment.Length != 0)
             throw new InvalidOperationException("App:WebBaseUrl must be an HTTP(S) origin.");
         if (AccessTtlMinutes is < 1 or > 1440 || RefreshTtlDays is < 1 or > 365) throw new InvalidOperationException("Invalid token lifetime.");
         Smtp.Validate();
@@ -37,11 +42,37 @@ public sealed class AppOptions
 
     public void ValidateStorageLocation(string applicationRoot)
     {
-        var app = Path.GetFullPath(applicationRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var storage = Path.GetFullPath(StorageRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        // Compare the resolved paths, not only their textual forms. A junction
+        // or symlink used as StorageRoot must not be able to point back into
+        // the application tree and bypass the isolation check.
+        var app = ResolveComparisonPath(applicationRoot);
+        var storage = ResolveComparisonPath(StorageRoot);
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         if (storage.Equals(app, comparison) || storage.StartsWith(app + Path.DirectorySeparatorChar, comparison) || app.StartsWith(storage + Path.DirectorySeparatorChar, comparison))
             throw new InvalidOperationException("StorageRoot must be separate from the application directory and its public web files.");
+    }
+
+    private static string ResolveComparisonPath(string path)
+    {
+        var full = Path.GetFullPath(path);
+        var missing = new Stack<string>();
+        var existing = full;
+        while (!Directory.Exists(existing) && !File.Exists(existing))
+        {
+            var parent = Directory.GetParent(existing)
+                ?? throw new InvalidOperationException("无法解析存储目录路径。");
+            missing.Push(Path.GetFileName(existing));
+            existing = parent.FullName;
+        }
+
+        if (Directory.Exists(existing))
+        {
+            var resolved = new DirectoryInfo(existing).ResolveLinkTarget(returnFinalTarget: true);
+            if (resolved is not null) existing = resolved.FullName;
+        }
+
+        while (missing.Count > 0) existing = Path.Combine(existing, missing.Pop());
+        return Path.GetFullPath(existing).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 }
 

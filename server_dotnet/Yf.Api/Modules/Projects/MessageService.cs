@@ -212,7 +212,7 @@ internal sealed class MessageService(
             return;
         }
         var rows = (await conn.QueryAsync<ReadTargetRow>(new CommandDefinition(
-            "SELECT id AS Id,project_id AS ProjectId FROM messages WHERE id IN @Ids AND sender_id<>@UserId",
+            "SELECT id AS Id,project_id AS ProjectId FROM messages WHERE id IN @Ids AND status='NORMAL' AND sender_id<>@UserId",
             new { Ids = ids.Distinct().ToArray(), UserId = current.Id }, tx, cancellationToken: ct))).AsList();
         foreach (var group in rows.GroupBy(message => message.ProjectId))
         {
@@ -226,13 +226,17 @@ internal sealed class MessageService(
             }
             foreach (var message in group)
             {
-                await conn.ExecuteAsync(new CommandDefinition(
+                var changed = await conn.ExecuteAsync(new CommandDefinition(
                     """
-                    INSERT INTO message_reads(message_id,user_id,read_at)
+                    INSERT IGNORE INTO message_reads(message_id,user_id,read_at)
                     VALUES(@MessageId,@UserId,UTC_TIMESTAMP(3))
-                    ON DUPLICATE KEY UPDATE read_at=VALUES(read_at)
                     """,
                     new { MessageId = message.Id, UserId = current.Id }, tx, cancellationToken: ct));
+                if (changed == 1)
+                {
+                    await audit.WriteAsync(conn, tx, current.Id, "MESSAGE_READ", "message", message.Id,
+                        new { projectId = group.Key }, null, ct);
+                }
             }
             changedProjects.Add(group.Key);
         }

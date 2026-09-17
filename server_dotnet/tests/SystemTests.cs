@@ -148,6 +148,18 @@ public class SystemTests
         Assert.True(options.Smtp.IsConfigured);
     }
 
+    [Theory]
+    [InlineData("http://127.0.0.1:5273/portal")]
+    [InlineData("http://127.0.0.1:5273/?tenant=demo")]
+    [InlineData("http://127.0.0.1:5273/#dashboard")]
+    public void WebBaseUrlMustBeAnOrigin(string value)
+    {
+        var options = ValidOptions();
+        options.WebBaseUrl = value;
+
+        Assert.Throws<InvalidOperationException>(() => options.Validate());
+    }
+
     private static AppOptions ValidOptions() => new()
     {
         ConnectionString = "Server=127.0.0.1;Database=yf_system;User ID=test;Password=test",

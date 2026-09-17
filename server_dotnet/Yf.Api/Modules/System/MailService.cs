@@ -114,7 +114,11 @@ public sealed class MailService
         await using (var conn = await db.OpenAsync(ct))
         {
             policy = await EmailNotificationPolicy.LoadAsync(conn, null, ct);
-            if (!policy.GlobalEnabled) return;
+            if (!policy.GlobalEnabled)
+            {
+                await CancelPolicyDisabledAsync(conn, ct);
+                return;
+            }
             resolved = await settings.ResolveAsync(conn, null, ct);
             if (!resolved.Configured) return;
             pending = (await conn.QueryAsync<MailRow>(new CommandDefinition("""
@@ -242,7 +246,33 @@ public sealed class MailService
             await tx.CommitAsync(completionToken);
         }
     }
+
+    private async Task CancelPolicyDisabledAsync(MySqlConnection conn, CancellationToken ct)
+    {
+        var rows = (await conn.QueryAsync<DisabledMailRow>(new CommandDefinition("""
+            SELECT id AS Id,event_type AS EventType
+            FROM email_outbox
+            WHERE event_type <> 'STORAGE_WARNING' AND sent_at IS NULL AND status IN ('PENDING','FAILED')
+            ORDER BY id
+            """, cancellationToken: ct))).AsList();
+        foreach (var row in rows)
+        {
+            await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+            var changed = await conn.ExecuteAsync(new CommandDefinition("""
+                UPDATE email_outbox
+                SET status='CANCELLED',next_attempt_at=NULL,last_error=@Reason
+                WHERE id=@Id AND sent_at IS NULL AND status IN ('PENDING','FAILED')
+                """, new { row.Id, Reason = EmailNotificationPolicy.DisabledReason }, tx, cancellationToken: ct));
+            if (changed == 1)
+            {
+                await audit.WriteAsync(conn, tx, null, "EMAIL_CANCELLED_STALE", "email_outbox", row.Id,
+                    new { eventType = row.EventType, status = "CANCELLED", reason = EmailNotificationPolicy.DisabledAuditReason }, null, ct);
+            }
+            await tx.CommitAsync(ct);
+        }
+    }
     private sealed class QueueCount { public string Status { get; set; } = ""; public ulong Count { get; set; } }
+    private sealed class DisabledMailRow { public ulong Id { get; init; } public string EventType { get; init; } = ""; }
     private static async Task<bool> IsCurrentPendingAcceptanceAsync(
         MySqlConnection conn,
         MySqlTransaction tx,

@@ -130,7 +130,7 @@ function ImageDocument({ fileId, contentUrl, name, toolbarContainer }: {
       </div>}
     </div>
     {status === 'loading' && <div className="image-preview-status" role="status"><Spin />正在加载图片…</div>}
-    {status === 'error' && <div className="image-preview-status"><Result status="error" title="图片预览失败"
+    {status === 'error' && <div className="image-preview-status" role="alert"><Result status="error" title="图片预览失败"
       subTitle="图片可能损坏或读取失败，请重试。" extra={<Button onClick={() => {
         setSource(''); setNatural({ width: 0, height: 0 }); setZoom('fit'); setStatus('loading'); setAttempt(value => value + 1)
       }}>重试图片预览</Button>} /></div>}

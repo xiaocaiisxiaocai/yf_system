@@ -55,10 +55,11 @@ public sealed class MessageReceiptTests
             VALUES
                 (10001,1001,1,'不可由回执接口返回的正文','NORMAL'),
                 (10002,1001,201,'供应商自己的留言','NORMAL'),
+                (10003,1001,1,'已删除留言','DELETED'),
                 (20001,2001,102,'其他项目正文','NORMAL');
             """, ct);
 
-        var service = new MessageService(new AuditService([]), database.Options);
+        var service = new MessageService(new AuditService([new ProjectActivityService()]), database.Options);
         var admin = new CurrentUser(1, "admin", "INTERNAL", null);
         var supplier = new CurrentUser(201, "receipt-supplier", "SUPPLIER", 100);
         var outsider = new CurrentUser(102, "receipt-outsider", "INTERNAL", null);
@@ -103,6 +104,16 @@ public sealed class MessageReceiptTests
         Assert.False(initialReceipt.GetProperty("readByMe").GetBoolean());
 
         await service.MarkReadAsync(conn, supplier, new MarkMessagesReadRequest { Ids = [10001, 10002] }, ct);
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='MESSAGE_READ' AND target_id='10001'", cancellationToken: ct)));
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM project_activities WHERE action='READ' AND target_id=10001", cancellationToken: ct)));
+
+        await service.MarkReadAsync(conn, supplier, new MarkMessagesReadRequest { Ids = [10001, 10003] }, ct);
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='MESSAGE_READ' AND target_id='10001'", cancellationToken: ct)));
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM message_reads WHERE message_id=10003", cancellationToken: ct)));
 
         var after = Json(await service.ReceiptsAsync(conn, admin, 1001, [10001, 20001], ct));
         var receipt = Assert.Single(after.EnumerateArray());

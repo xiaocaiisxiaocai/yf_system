@@ -60,7 +60,7 @@ function VideoDocument({ fileId }: { fileId: number }) {
       onError={() => { if (source) { clearTimeout(loadTimer.current); setState('error') } }}
       style={{ visibility: state === 'error' ? 'hidden' : 'visible' }} />
     {state === 'loading' && <div className="video-preview-status" role="status"><Spin />正在加载视频…</div>}
-    {state === 'error' && <div className="video-preview-status"><Result status="error" title="视频无法播放"
+    {state === 'error' && <div className="video-preview-status" role="alert"><Result status="error" title="视频无法播放"
       subTitle="请重试；若仍无法播放，文件可能损坏或视频编码不受当前浏览器支持。"
       extra={<Button onClick={() => { setSource(''); setState('loading'); setAttempt(value => value + 1) }}>重试播放</Button>} /></div>}
   </div>

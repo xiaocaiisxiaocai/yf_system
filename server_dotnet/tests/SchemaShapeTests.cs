@@ -205,7 +205,9 @@ public sealed class SchemaShapeTests
         Assert.Equal(
             [
                 "project-acceptance:9301:9403:9203",
+                "project-acceptance:9301:9403:9205",
                 "project-acceptance:9302:9411:9203",
+                "project-acceptance:9302:9411:9205",
             ],
             (await conn.QueryAsync<string>(new CommandDefinition(
                 "SELECT dedupe_key FROM email_outbox WHERE status='PENDING' AND dedupe_key LIKE 'project-acceptance:%' ORDER BY dedupe_key",

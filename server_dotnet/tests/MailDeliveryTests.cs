@@ -211,6 +211,33 @@ public sealed class MailDeliveryTests
     }
 
     [Fact(Timeout = 30_000)]
+    public async Task QueuedMailIsCancelledWhenGlobalNotificationsAreDisabled()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var conn = await scope.Database.OpenAsync(ct))
+        {
+            await conn.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO system_configs(cfg_key,cfg_value) VALUES('notify.enabled','false')
+                ON DUPLICATE KEY UPDATE cfg_value='false';
+                UPDATE email_outbox SET event_type='MESSAGE_CREATED' WHERE id=1;
+                """, cancellationToken: ct));
+        }
+        var delivery = new CaptureSettingsDelivery();
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]), NullLogger<MailService>.Instance, delivery);
+
+        await service.FlushAsync(ct);
+
+        Assert.Empty(delivery.Seen);
+        await using var check = await scope.Database.OpenAsync(ct);
+        Assert.Equal("CANCELLED", await check.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT status FROM email_outbox WHERE id=1", cancellationToken: ct)));
+        Assert.Contains(EmailNotificationPolicy.DisabledAuditReason,
+            await check.ExecuteScalarAsync<string>(new CommandDefinition(
+                "SELECT detail FROM audit_logs WHERE action='EMAIL_CANCELLED_STALE' AND target_id='1'", cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 30_000)]
     public async Task QueuedKnownMailIsCancelledWhenItsRecipientAudienceIsDisabled()
     {
         var ct = TestContext.Current.CancellationToken;

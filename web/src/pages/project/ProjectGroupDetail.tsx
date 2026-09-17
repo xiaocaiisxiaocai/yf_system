@@ -150,7 +150,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
         canWrite && hasPerm('project:create') && <Button key="copy" size="mini" type="text" onClick={() => openCopy(project)}>复制</Button>,
         canWrite && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(project.status) && <Button key="edit" size="mini" type="text" onClick={() => openEdit(project)}>编辑</Button>,
         isInternal && hasPerm('project:status') && nextStatuses[0] && <Button key={nextStatuses[0].key} size="mini" type="text" status={nextStatuses[0].key === 'TERMINATED' ? 'danger' : undefined} loading={statusUpdating.has(project.id)} disabled={statusUpdating.has(project.id)} onClick={() => changeStatus(project, nextStatuses[0].key)}>{nextStatuses[0].text}</Button>,
-        isInternal && hasPerm('project:delete') && <Popconfirm key="delete" title={`确认删除子项目“${project.name}”？仅无文件、留言、上传和复制履历时可删除。`} onOk={() => remove(project)}><Button size="mini" type="text" status="danger">删除</Button></Popconfirm>,
+        isInternal && hasPerm('project:delete') && ['DRAFT', 'TERMINATED'].includes(project.status) && <Popconfirm key="delete" title={`确认删除子项目“${project.name}”？仅草稿或已终止且无文件、留言、上传和复制履历时可删除。`} onOk={() => remove(project)}><Button size="mini" type="text" status="danger">删除</Button></Popconfirm>,
       ], 'subproject')
     } },
   ]

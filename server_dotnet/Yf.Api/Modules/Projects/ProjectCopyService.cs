@@ -175,9 +175,9 @@ internal sealed class ProjectCopyService(
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
         var rows = (await conn.QueryAsync<CopyHistoryRow>(new CommandDefinition(
             """
-            SELECT pc.id AS CopyId,pc.source_project_id AS SourceProjectId,source.name AS SourceName,
+            SELECT pc.id AS CopyId,pc.source_project_id AS SourceProjectId,pc.source_project_name AS SourceName,
                    source.supplier_id AS SourceSupplierId,source.responsible_user_id AS SourceResponsibleUserId,
-                   pc.target_project_id AS TargetProjectId,target.name AS TargetName,
+                   pc.target_project_id AS TargetProjectId,pc.target_project_name AS TargetName,
                    target.supplier_id AS TargetSupplierId,target.responsible_user_id AS TargetResponsibleUserId,
                    pc.copied_by_name AS CopiedByName,pc.file_count AS FileCount,
                    pc.total_bytes AS TotalBytes,pc.created_at AS CreatedAt

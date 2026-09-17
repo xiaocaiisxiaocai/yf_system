@@ -98,6 +98,24 @@ public sealed class ProjectsWorkflowTests
     }
 
     [Theory]
+    [InlineData("DRAFT")]
+    [InlineData("TERMINATED")]
+    public void DraftAndTerminatedProjectsAreDeletable(string status)
+    {
+        ProjectWorkflowRules.EnsureDeletable(status);
+    }
+
+    [Theory]
+    [InlineData("IN_PROGRESS")]
+    [InlineData("PENDING_CONFIRMATION")]
+    [InlineData("COMPLETED")]
+    public void ActiveAndCompletedProjectsCannotBeDeleted(string status)
+    {
+        var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.EnsureDeletable(status));
+        Assert.Equal(400, error.Status);
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("COMPANY")]
     [InlineData(" COMPANY ")]

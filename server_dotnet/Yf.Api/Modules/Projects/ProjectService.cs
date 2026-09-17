@@ -382,6 +382,7 @@ internal sealed class ProjectService(
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:delete", ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+        ProjectWorkflowRules.EnsureDeletable(project.Status);
         if (await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
                 "SELECT EXISTS(SELECT 1 FROM project_copies WHERE source_project_id=@ProjectId OR target_project_id=@ProjectId)",
                 new { ProjectId = projectId }, tx, cancellationToken: ct)))

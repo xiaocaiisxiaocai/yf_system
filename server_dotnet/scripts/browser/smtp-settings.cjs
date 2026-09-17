@@ -56,7 +56,10 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
       security: () => page.getByLabel('SMTP 连接加密', { exact: true }),
     };
     const smtpSave = () => page.getByRole('button', { name: '保存邮箱设置', exact: true });
-    const smtpCancel = () => page.getByRole('button', { name: '取消修改', exact: true });
+    // The SMTP and notification sections intentionally use the same visible
+    // wording. Keep this locator tied to the first form action so a second
+    // section cannot make the browser contract ambiguous.
+    const smtpCancel = () => page.getByRole('button', { name: '取消修改', exact: true }).first();
     const configReset = () => page.getByRole('button', { name: '重置', exact: true });
     const configSave = () => page.getByRole('button', { name: '保存', exact: true });
 
@@ -69,7 +72,11 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
       await fields.security().click();
       const option = page.getByRole('option', { name: labels[value], exact: true });
       await option.waitFor();
-      await option.click();
+      // Arco repositions the popup while the page is being restored after a
+      // form reset; Playwright's viewport check can race that animation even
+      // though the semantic option is already attached.  Activate the
+      // resolved option directly, preserving the same user-facing event.
+      await option.evaluate(element => element.click());
       assert((await fields.security().innerText()).includes(labels[value]), 'selected SMTP security is visible');
     };
 

@@ -46,7 +46,7 @@ function ExcelDocument({ fileId }: { fileId: number }) {
       onLoad={() => { frameLoaded.current = true; send.current() }}
       style={{ visibility: state === 'ready' ? 'visible' : 'hidden' }} />
     {state === 'loading' && <div className="excel-source-status" role="status"><Spin />正在渲染工作簿…</div>}
-    {state === 'error' && <div className="excel-source-status"><Result status="error" title="Excel 预览失败"
+    {state === 'error' && <div className="excel-source-status" role="alert"><Result status="error" title="Excel 预览失败"
       subTitle="文件可能损坏、受密码保护，或包含暂不支持的内容。"
       extra={<Button onClick={() => { frameLoaded.current = false; setState('loading'); setAttempt(value => value + 1) }}>重试预览</Button>} /></div>}
   </div>

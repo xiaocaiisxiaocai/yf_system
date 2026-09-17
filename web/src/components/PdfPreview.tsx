@@ -121,7 +121,7 @@ function PdfDocument({ fileId, onRetry, toolbarContainer }: {
 
   return <section className="pdf-preview" aria-label="PDF 预览">
     {toolbarContainer ? createPortal(toolbar, toolbarContainer) : toolbar}
-    <div className="pdf-preview-viewport" tabIndex={0} aria-label="PDF 页面内容" style={{ position: 'relative' }}>
+    <div className="pdf-preview-viewport" tabIndex={0} role="region" aria-label="PDF 页面内容" style={{ position: 'relative' }}>
       <div ref={viewportRef} style={{ height: '100%', minHeight: 0 }} />
       {error
         ? <div style={{ background: 'var(--color-fill-2)', inset: 0, position: 'absolute', zIndex: 1 }}><PreviewError message={error} onRetry={onRetry} /></div>
