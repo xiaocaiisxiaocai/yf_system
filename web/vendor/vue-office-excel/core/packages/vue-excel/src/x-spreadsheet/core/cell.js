@@ -50,7 +50,7 @@ const infixExprToSuffixExpr = (src) => {
                 }
               }
               stack.push([c1, rangelen]);
-            } catch (e) {
+            } catch {
               // console.log(e);
             }
           } else if (fnArgType === 1 || fnArgType === 3) {

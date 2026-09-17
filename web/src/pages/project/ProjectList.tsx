@@ -96,6 +96,7 @@ export default function ProjectList() {
   const [sectionName, setSectionName] = useState<string | null>(null)
   const optionsSeq = useRef(0)
   const modelSeq = useRef(0)
+  const supplierOptionsSeq = useRef(0)
   const [form] = Form.useForm()
   const { hasPerm, user } = useAuth()
   const isInternal = user?.userType === 'INTERNAL'
@@ -125,15 +126,25 @@ export default function ProjectList() {
   }, [fetchGroups, page, pageSize, reloadKey, revision, syncStatus])
 
   const loadSupplierOptions = useCallback(() => {
+    const seq = ++supplierOptionsSeq.current
     if (!isInternal) return
     setSupplierOptionsLoading(true); setSupplierOptionsError(false)
     http.get('/supplier-options', { quietNetworkError: true } as QuietRequestConfig)
-      .then((response) => setSuppliers(expectOptionList<SupplierOpt>(response.data)))
-      .catch(() => setSupplierOptionsError(true))
-      .finally(() => setSupplierOptionsLoading(false))
+      .then((response) => {
+        if (seq === supplierOptionsSeq.current) setSuppliers(expectOptionList<SupplierOpt>(response.data))
+      })
+      .catch(() => { if (seq === supplierOptionsSeq.current) setSupplierOptionsError(true) })
+      .finally(() => { if (seq === supplierOptionsSeq.current) setSupplierOptionsLoading(false) })
   }, [isInternal])
 
-  useEffect(() => { loadSupplierOptions() }, [loadSupplierOptions])
+  useEffect(() => {
+    let active = true
+    void Promise.resolve().then(() => { if (active) loadSupplierOptions() })
+    return () => {
+      active = false
+      supplierOptionsSeq.current += 1
+    }
+  }, [loadSupplierOptions])
 
   const loadMetadataOptions = useCallback(() => {
     const seq = ++optionsSeq.current

@@ -129,7 +129,7 @@ export function readExcelData(buffer, xls){
         const wb = new Excel.Workbook();
         return wb.xlsx.load(buffer);
 
-    }catch (e){
+    }catch {
         console.warn(e);
         return Promise.reject(e);
     }
@@ -209,7 +209,7 @@ function getCellText(cell){
 
                 }
                 return value + '';
-            }catch (e){
+            }catch {
                 return value;
             }
 

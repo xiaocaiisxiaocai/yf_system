@@ -187,6 +187,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const [loadErrorFor, setLoadErrorFor] = useState<number | null>(null)
   const loadingProjectId = useRef<number | null>(null)
   const [siblings, setSiblings] = useState<ProjectSummary[]>([])
+  const currentGroupId = project?.id === pid ? project.projectGroupId : undefined
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
   const tab = requestedTab === 'files' || requestedTab === 'messages' || requestedTab === 'activity'
@@ -283,11 +284,10 @@ function ProjectDetailContent({ id }: { id?: string }) {
   }, [fetchProject, pid, validProjectId, revision, syncStatus])
 
   useEffect(() => {
-    const groupId = project?.id === pid ? project.projectGroupId : undefined
-    if (!groupId) { setSiblings([]); return }
+    if (!currentGroupId) return
     let active = true
     const controller = new AbortController()
-    http.get(`/project-groups/${groupId}`, { signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
+    http.get(`/project-groups/${currentGroupId}`, { signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
       .then((response) => {
         if (!active) return
         const data = response.data as { projects?: ProjectSummary[] }
@@ -295,7 +295,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
       })
       .catch(() => { if (active) setSiblings([]) })
     return () => { active = false; controller.abort() }
-  }, [pid, project?.id, project?.projectGroupId, revision, syncStatus])
+  }, [currentGroupId, revision, syncStatus])
 
   const switchProject = useCallback((nextId: number) => {
     if (nextId === pid) return
@@ -390,7 +390,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
             <Button onClick={() => navigate(project.projectGroupId ? `/project-groups/${project.projectGroupId}` : '/projects')}>返回主项目</Button>
           </div>
         </div>
-        {siblings.length > 1 && (
+        {currentGroupId && siblings.length > 1 && (
           <div className="subproject-switch" role="tablist" aria-label="同一主项目下的子项目">
             {siblings.map((sibling) => (
               <button

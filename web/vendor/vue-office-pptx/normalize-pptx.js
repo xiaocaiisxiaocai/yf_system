@@ -35,54 +35,57 @@ const linear = c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
 const srgb = c => c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055
 
 function resolveColor(element, theme, mapping, placeholder, depth = 0) {
-  if (!element || depth > 8) return null
-  let channels, alpha = 1
-  const value = element.getAttribute('val') || ''
-  if (element.localName === 'schemeClr') {
-    if (value === 'phClr') {
-      const resolved = resolveColor(placeholder, theme, mapping, null, depth + 1)
-      if (!resolved) return null
-      channels = resolved.channels; alpha = resolved.alpha
+  const resolve = (node, level) => {
+    if (!node || level > 8) return null
+    let channels, alpha = 1
+    const value = node.getAttribute('val') || ''
+    if (node.localName === 'schemeClr') {
+      if (value === 'phClr') {
+        const resolved = resolve(placeholder, level + 1)
+        if (!resolved) return null
+        channels = resolved.channels; alpha = resolved.alpha
+      } else {
+        const aliases = { bg1: 'lt1', bg2: 'lt2', tx1: 'dk1', tx2: 'dk2' }
+        const key = mapping?.getAttribute(value) || aliases[value] || value
+        const slot = child(descendants(theme, 'clrScheme')[0], key)
+        const resolved = resolve(colorChild(slot), level + 1)
+        if (!resolved) return null
+        channels = resolved.channels; alpha = resolved.alpha
+      }
+    } else if (node.localName === 'scrgbClr') {
+      channels = ['r', 'g', 'b'].map(name => srgb(clamp(Number(node.getAttribute(name)) / 100000)))
     } else {
-      const aliases = { bg1: 'lt1', bg2: 'lt2', tx1: 'dk1', tx2: 'dk2' }
-      const key = mapping?.getAttribute(value) || aliases[value] || value
-      const slot = child(descendants(theme, 'clrScheme')[0], key)
-      const resolved = resolveColor(colorChild(slot), theme, mapping, null, depth + 1)
-      if (!resolved) return null
-      channels = resolved.channels; alpha = resolved.alpha
+      let hex = node.localName === 'sysClr' ? node.getAttribute('lastClr') : value
+      if (node.localName === 'prstClr') {
+        const cssColor = value.replace(/^dk/, 'dark').replace(/^lt/, 'light').replace(/^med/, 'medium')
+        if (!CSS.supports('color', cssColor)) return null
+        const canvas = document.createElement('canvas').getContext('2d')
+        if (!canvas) return null
+        canvas.fillStyle = cssColor
+        hex = canvas.fillStyle.replace('#', '')
+      }
+      if (!/^[0-9a-f]{6}$/i.test(hex || '')) return null
+      channels = [0, 2, 4].map(offset => parseInt(hex.slice(offset, offset + 2), 16) / 255)
     }
-  } else if (element.localName === 'scrgbClr') {
-    channels = ['r', 'g', 'b'].map(name => srgb(clamp(Number(element.getAttribute(name)) / 100000)))
-  } else {
-    let hex = element.localName === 'sysClr' ? element.getAttribute('lastClr') : value
-    if (element.localName === 'prstClr') {
-      const cssColor = value.replace(/^dk/, 'dark').replace(/^lt/, 'light').replace(/^med/, 'medium')
-      if (!CSS.supports('color', cssColor)) return null
-      const canvas = document.createElement('canvas').getContext('2d')
-      if (!canvas) return null
-      canvas.fillStyle = cssColor
-      hex = canvas.fillStyle.replace('#', '')
+    for (const transform of node.children) {
+      const amount = Number(transform.getAttribute('val')) / 100000
+      if (!Number.isFinite(amount)) continue
+      switch (transform.localName) {
+        case 'tint': channels = channels.map(c => srgb(clamp(linear(c) * amount + 1 - amount))); break
+        case 'shade': channels = channels.map(c => srgb(clamp(linear(c) * amount))); break
+        case 'lumMod': { const next = hsl(channels); next[2] *= amount; channels = rgb(next); break }
+        case 'lumOff': { const next = hsl(channels); next[2] += amount; channels = rgb(next); break }
+        case 'satMod': { const next = hsl(channels); next[1] *= amount; channels = rgb(next); break }
+        case 'satOff': { const next = hsl(channels); next[1] += amount; channels = rgb(next); break }
+        case 'alpha': alpha = amount; break
+        case 'alphaMod': alpha *= amount; break
+        case 'alphaOff': alpha += amount; break
+        default: return null // Preserve transforms that this adapter does not understand.
+      }
     }
-    if (!/^[0-9a-f]{6}$/i.test(hex || '')) return null
-    channels = [0, 2, 4].map(offset => parseInt(hex.slice(offset, offset + 2), 16) / 255)
+    return { channels, alpha: clamp(alpha) }
   }
-  for (const transform of element.children) {
-    const amount = Number(transform.getAttribute('val')) / 100000
-    if (!Number.isFinite(amount)) continue
-    switch (transform.localName) {
-      case 'tint': channels = channels.map(c => srgb(clamp(linear(c) * amount + 1 - amount))); break
-      case 'shade': channels = channels.map(c => srgb(clamp(linear(c) * amount))); break
-      case 'lumMod': { const next = hsl(channels); next[2] *= amount; channels = rgb(next); break }
-      case 'lumOff': { const next = hsl(channels); next[2] += amount; channels = rgb(next); break }
-      case 'satMod': { const next = hsl(channels); next[1] *= amount; channels = rgb(next); break }
-      case 'satOff': { const next = hsl(channels); next[1] += amount; channels = rgb(next); break }
-      case 'alpha': alpha = amount; break
-      case 'alphaMod': alpha *= amount; break
-      case 'alphaOff': alpha += amount; break
-      default: return null // Preserve transforms that this adapter does not understand.
-    }
-  }
-  return { channels, alpha: clamp(alpha) }
+  return resolve(element, depth)
 }
 
 function normalizeColors(root, theme, mapping, placeholder) {

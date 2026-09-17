@@ -71,7 +71,7 @@ export default defineComponent({
                     _worksheets:[]
                 };
                 clearCache();
-                xs && xs.loadData({});
+                if (xs) xs.loadData({});
                 emit('error', e);
                 emit('switchSheet', 0);
             });
@@ -135,7 +135,7 @@ export default defineComponent({
                 });
                 let tableRender = xs.sheet.table.render;
                 xs.sheet.table.render = function (...args){
-                    xs && xs.sheet && tableRender.apply(xs.sheet.table, args);
+                    if (xs?.sheet) tableRender.apply(xs.sheet.table, args);
                     renderImageDebounce(ctx, mediasSource, workbookDataSource._worksheets[sheetIndex], offset, props.options);
                 };
 

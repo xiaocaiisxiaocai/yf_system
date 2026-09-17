@@ -74,6 +74,7 @@ export default function Dashboard() {
   const [pendingRefreshError, setPendingRefreshError] = useState(false)
   const pendingSeq = useRef(0)
   const hasPendingSnapshot = useRef(false)
+  const [collapsedPendingGroups, setCollapsedPendingGroups] = useState<Set<number>>(() => new Set())
 
   const pendingGroups = useMemo<PendingProjectGroup[]>(() => {
     const order: number[] = []
@@ -90,6 +91,12 @@ export default function Dashboard() {
     }
     return order.map((groupId) => groups.get(groupId)!)
   }, [pendingData.list])
+  const pendingOpenKeys = useMemo(
+    () => pendingGroups
+      .filter((group) => !collapsedPendingGroups.has(group.groupId))
+      .map((group) => String(group.groupId)),
+    [collapsedPendingGroups, pendingGroups],
+  )
 
   const [messageData, setMessageData] = useState<MessagePage>({ list: [], total: 0, page: 1, pageSize: PAGE_SIZE })
   const [messagePage, setMessagePage] = useState(1)
@@ -351,7 +358,15 @@ export default function Dashboard() {
                   key={pendingPage}
                   className="dashboard-pending-groups"
                   bordered={false}
-                  defaultActiveKey={pendingGroups.map((group) => String(group.groupId))}
+                  activeKey={pendingOpenKeys}
+                  onChange={(_key, keys) => {
+                    const open = new Set(keys)
+                    setCollapsedPendingGroups(new Set(
+                      pendingGroups
+                        .filter((group) => !open.has(String(group.groupId)))
+                        .map((group) => group.groupId),
+                    ))
+                  }}
                 >
                   {pendingGroups.map((group) => (
                     <Collapse.Item
@@ -373,7 +388,15 @@ export default function Dashboard() {
                             extra={<Typography.Text type="secondary">更新于 {fmtTime(project.updatedAt)}</Typography.Text>}
                           >
                             <List.Item.Meta
-                              title={<Link className="dashboard-pending-link" to={`/projects/${project.id}`}>{project.name}</Link>}
+                              title={(
+                                <Link
+                                  className="dashboard-pending-link"
+                                  to={`/projects/${project.id}`}
+                                  aria-label={project.projectGroupName ? `${project.projectGroupName} / ${project.name}` : project.name}
+                                >
+                                  {project.name}
+                                </Link>
+                              )}
                               description={<Tag color="orange">{acceptanceCopy.status}</Tag>}
                             />
                           </List.Item>

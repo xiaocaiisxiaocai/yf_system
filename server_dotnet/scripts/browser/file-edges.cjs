@@ -333,7 +333,7 @@ async function assertExcelGrid(dialog, expectedRows) {
       const firstInit = await (await firstInitReady).json();
       writeUploadEvent({ event: 'init', method: 'POST', path: '/api/v1/uploads/init', status: 200, requestfailed: null,
         totalChunks: firstInit.totalChunks, chunkSize: firstInit.chunkSize });
-      await page.getByText('上传中断，可点击开始后从断点续传', { exact: true }).waitFor();
+      await page.getByText('上传中断，可点击重新上传从断点续传', { exact: true }).waitFor();
       assert(failedChunkPath);
 
       const secondInitReady = page.waitForResponse(response =>

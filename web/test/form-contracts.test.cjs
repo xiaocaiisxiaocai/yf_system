@@ -525,8 +525,8 @@ test('supplier route accepts either supplier capability while account-only UI ke
   let guardRenderer
   await act(async () => {
     guardRenderer = create(React.createElement(app.Guard, {
-      menu: 'supplier:list', anyPermission: ['supplier:manage', 'supplier:account'], children: child,
-    }))
+      menu: 'supplier:list', anyPermission: ['supplier:manage', 'supplier:account'],
+    }, child))
   })
   assert.equal(guardRenderer.root.findByType('Allowed').type, 'Allowed')
   await act(async () => guardRenderer.unmount())

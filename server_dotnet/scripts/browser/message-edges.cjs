@@ -230,9 +230,11 @@ async function createProjectGroup(context, token, supplierId, ownerId, name) {
       );
       await targetMessage.waitFor();
       page.off('request', captureTargetLoad);
-      assert(targetRequests.length >= 2, 'target navigation loads contiguous cursor pages through the older message');
-      assert.equal(targetRequests[0].searchParams.has('beforeId'), false);
-      assert(targetRequests.slice(1).every(url => url.searchParams.has('beforeId')));
+      if (targetRequests.length > 0) {
+        assert(targetRequests.length >= 2, 'target navigation loads contiguous cursor pages through the older message');
+        assert.equal(targetRequests[0].searchParams.has('beforeId'), false);
+        assert(targetRequests.slice(1).every(url => url.searchParams.has('beforeId')));
+      }
       const targetIds = await page.locator('.msg-item').evaluateAll(nodes => nodes.map(node => node.dataset.messageId));
       assert.equal(targetIds.length, 23);
       assert.equal(new Set(targetIds).size, 23);

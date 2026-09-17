@@ -69,8 +69,7 @@ function scrollbarMove() {
 
 function selectorSet(multiple, ri, ci, indexesUpdated = true, moving = false) {
   const {
-    table, selector, toolbar, data,
-    contextMenu,
+    selector, data, contextMenu,
   } = this;
   const cell = data.getCell(ri, ci);
   if (multiple) {

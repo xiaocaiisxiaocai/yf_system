@@ -21,19 +21,6 @@ export interface MessageImageItem {
   mimeType: string
 }
 
-interface MessageImageComposerProps {
-  files: File[]
-  onChange: (files: File[]) => void
-  disabled?: boolean
-}
-
-interface MessageImagesProps {
-  messageId: number
-  images: MessageImageItem[]
-  watermarkEmployeeNo?: string
-  watermarkRealName?: string
-}
-
 function isAcceptedImage(file: File) {
   const type = file.type.toLowerCase()
   if (type) return ACCEPTED_IMAGE_TYPES.has(type)
@@ -68,6 +55,7 @@ function appendFiles(files: File[], candidates: File[]) {
 }
 
 /** Attach this to the composer container. Text-only paste is deliberately left untouched. */
+// eslint-disable-next-line react/only-export-components
 export function pasteMessageImages(
   event: ClipboardEvent<HTMLElement>,
   files: File[],
@@ -86,21 +74,32 @@ export function pasteMessageImages(
   if (next.length !== files.length) onChange(next)
 }
 
+interface MessageImageComposerProps {
+  files: File[]
+  onChange: (files: File[]) => void
+  disabled?: boolean
+}
+
+interface MessageImagesProps {
+  messageId: number
+  images: MessageImageItem[]
+  watermarkEmployeeNo?: string
+  watermarkRealName?: string
+}
+
 function LocalImageThumbnail({ file, onRemove, disabled }: {
   file: File
   onRemove: () => void
   disabled?: boolean
 }) {
-  const [source, setSource] = useState('')
+  const [source] = useState(() => URL.createObjectURL(file))
 
   useEffect(() => {
-    const objectUrl = URL.createObjectURL(file)
-    setSource(objectUrl)
-    return () => URL.revokeObjectURL(objectUrl)
-  }, [file])
+    return () => URL.revokeObjectURL(source)
+  }, [source])
 
   return <div className="message-image-draft" title={file.name}>
-    {source && <img src={source} alt={file.name} />}
+    <img src={source} alt={file.name} />
     <Button
       className="message-image-remove"
       type="primary"
@@ -183,7 +182,9 @@ function RemoteImageThumbnail({ messageId, image, onOpen }: {
   const rootRef = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState(() => typeof IntersectionObserver === 'undefined')
   const [source, setSource] = useState('')
-  const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [sourceAttempt, setSourceAttempt] = useState<number | null>(null)
+  const [loadedAttempt, setLoadedAttempt] = useState<number | null>(null)
+  const [failedAttempt, setFailedAttempt] = useState<number | null>(null)
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
@@ -208,8 +209,6 @@ function RemoteImageThumbnail({ messageId, image, onOpen }: {
     let active = true
     let objectUrl = ''
     const controller = new AbortController()
-    setSource('')
-    setStatus('loading')
     void http.get<Blob>(`/messages/${messageId}/images/${image.id}`, {
       responseType: 'blob',
       signal: controller.signal,
@@ -218,8 +217,9 @@ function RemoteImageThumbnail({ messageId, image, onOpen }: {
       if (!active) return
       objectUrl = URL.createObjectURL(response.data)
       setSource(objectUrl)
+      setSourceAttempt(attempt)
     }).catch(() => {
-      if (active) setStatus('error')
+      if (active) setFailedAttempt(attempt)
     })
     return () => {
       active = false
@@ -228,8 +228,11 @@ function RemoteImageThumbnail({ messageId, image, onOpen }: {
     }
   }, [visible, messageId, image.id, attempt])
 
+  const ready = sourceAttempt === attempt && loadedAttempt === attempt && !!source
+  const failed = failedAttempt === attempt
+
   return <div ref={rootRef} className="message-image-card">
-    {status === 'error' ? <Result
+    {failed ? <Result
       status="error"
       title="加载失败"
       extra={<Button size="mini" onClick={() => setAttempt((value) => value + 1)}>重试</Button>}
@@ -237,17 +240,17 @@ function RemoteImageThumbnail({ messageId, image, onOpen }: {
       type="button"
       className="message-image-open"
       aria-label={`预览图片：${image.name}`}
-      disabled={status !== 'ready'}
+      disabled={!ready}
       onClick={onOpen}
     >
-      {source && <img
+      {source && sourceAttempt === attempt && <img
         src={source}
         alt={image.name}
         onContextMenu={(event) => event.preventDefault()}
-        onLoad={() => setStatus('ready')}
-        onError={() => setStatus('error')}
+        onLoad={() => setLoadedAttempt(attempt)}
+        onError={() => setFailedAttempt(attempt)}
       />}
-      {(status === 'idle' || status === 'loading') && <span className="message-image-loading" role="status"><Spin /></span>}
+      {!ready && <span className="message-image-loading" role="status"><Spin /></span>}
     </button>}
     <div className="message-image-meta">
       <span title={image.name}>{image.name}</span>

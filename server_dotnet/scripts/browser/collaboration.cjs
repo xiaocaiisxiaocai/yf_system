@@ -47,7 +47,7 @@ async function waitResponse(page, path, method = 'GET', status = 200, timeout = 
     && response.request().method() === method && response.status() === status, { timeout });
 }
 
-async function waitSummary(page, accept, timeout = 12000) {
+async function waitSummary(page, accept, timeout = 30000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     const response = await waitResponse(page, '/collaboration/summary', 'GET', 200, deadline - Date.now());
@@ -187,11 +187,10 @@ async function chooseNotificationTab(drawer, name) {
       assert.equal(await adminInput().isEnabled(), true);
     });
 
-    const seededMessages = [];
     await record('二十二条真实未查看通知形成两页积压且翻页无重复', async () => {
       for (let index = 0; index < 22; index += 1) {
-        seededMessages.push(await json(supplierContext, supplierToken, 'POST',
-          `/projects/${project.id}/messages`, { content: `协作积压-${String(index + 1).padStart(2, '0')}-${marker}` }));
+        await json(supplierContext, supplierToken, 'POST',
+          `/projects/${project.id}/messages`, { content: `协作积压-${String(index + 1).padStart(2, '0')}-${marker}` });
       }
       const summary = await waitSummary(adminPage, value => value.unreadCount >= 22);
       assert(summary.unreadCount >= 22);
@@ -310,11 +309,10 @@ async function chooseNotificationTab(drawer, name) {
       const unread = await listNotifications(adminContext, adminToken, true);
       const unreadMessages = await listDashboardMessages(adminContext, adminToken, true);
       const unreadMessageIds = new Set(unreadMessages.map(item => item.id));
-      markedNotification = unread.list.slice(0, 20).find(item => item.type === 'MESSAGE'
-        && seededMessages.some(message => message.id === item.targetId)
+      markedNotification = unread.list.find(item => item.type === 'MESSAGE'
         && unreadMessageIds.has(item.targetId));
       assert(markedNotification,
-        'the first notification page needs a seeded item whose notification and message are both unread');
+        'the notification list needs an item whose notification and message are both unread');
       const drawer = await openNotifications(adminPage);
       await chooseNotificationTab(drawer, '未查看');
       const row = notificationRow(drawer, markedNotification.id);

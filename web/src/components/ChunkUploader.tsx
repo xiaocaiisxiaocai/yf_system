@@ -17,7 +17,7 @@ interface Props {
 }
 
 type Phase =
-  | 'queued' | 'hashing' | 'uploading' | 'merging'
+  | 'queued' | 'interrupted' | 'hashing' | 'uploading' | 'merging'
   | 'merge-uncertain' | 'merge-invalid' | 'cancelling' | 'cancel-failed'
   | 'done' | 'cancelled'
 
@@ -56,6 +56,7 @@ function isDefinitiveIntegrityFailure(error: unknown): boolean {
 function phaseLabel(phase: Phase, percent: number): string {
   switch (phase) {
     case 'queued': return '待上传'
+    case 'interrupted': return '上传中断，可点击重新上传从断点续传'
     case 'hashing': return '正在校验文件内容…'
     case 'uploading': return `分片上传中 ${percent}%（中断后可续传）`
     case 'merging': return '服务端合并校验中…'
@@ -82,8 +83,8 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
   const [submitForAcceptance, setSubmitForAcceptance] = useState(false)
 
   const locking = closing || entries.some((e) => LOCKING_PHASES.includes(e.phase))
-  const hasQueued = entries.some((e) => e.phase === 'queued')
-  const canAddMore = !locking && entries.every((e) => e.phase === 'queued')
+  const hasQueued = entries.some((e) => e.phase === 'queued' || e.phase === 'interrupted')
+  const canAddMore = !locking && entries.every((e) => e.phase === 'queued' || e.phase === 'interrupted')
 
   const patchEntry = (key: string, patch: Partial<Entry>) =>
     setEntries((list) => list.map((e) => (e.key === key ? { ...e, ...patch } : e)))
@@ -100,14 +101,15 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
 
   useEffect(() => {
     mountedRef.current = true
+    const attempts = attemptsRef.current
     return () => {
       mountedRef.current = false
       // 离开页面时中止所有进行中的尝试，但保留服务端会话以便其他页面续传。
-      for (const attempt of attemptsRef.current.values()) {
+      for (const attempt of attempts.values()) {
         attempt.cancelled = true
         attempt.controller.abort()
       }
-      attemptsRef.current.clear()
+      attempts.clear()
     }
   }, [])
 
@@ -229,8 +231,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
       await confirmMerge(key, attempt, file.name)
     } catch {
       if (isCurrent()) {
-        patchEntry(key, { phase: 'queued' })
-        Message.warning(`「${file.name}」上传中断，可点击重新上传从断点续传`)
+        patchEntry(key, { phase: 'interrupted' })
       }
     } finally {
       attempt.running = false
@@ -241,7 +242,9 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
   const startAll = async () => {
     if (closingRef.current || locking) return
     batchStartedRef.current = true
-    await Promise.all(entries.filter((entry) => entry.phase === 'queued').map((entry) => runEntry(entry.key, entry.file)))
+    await Promise.all(entries
+      .filter((entry) => entry.phase === 'queued' || entry.phase === 'interrupted')
+      .map((entry) => runEntry(entry.key, entry.file)))
   }
 
   const cancelEntry = async (key: string): Promise<boolean> => {
@@ -357,7 +360,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
           <>
             <Button onClick={closeAll}>关闭</Button>
             <Button type="primary" aria-label="上传所选文件" disabled={!hasQueued} onClick={startAll} icon={<IconUpload />}>
-              上传所选文件{hasQueued ? `（${entries.filter((e) => e.phase === 'queued').length}）` : ''}
+              上传所选文件{hasQueued ? `（${entries.filter((e) => e.phase === 'queued' || e.phase === 'interrupted').length}）` : ''}
             </Button>
           </>
         )
@@ -409,7 +412,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
                   {(entry.phase === 'hashing' || entry.phase === 'uploading') && (
                     <Button size="mini" status="danger" onClick={() => cancelEntry(entry.key)}>取消</Button>
                   )}
-                  {entry.phase === 'queued' && (
+                  {(entry.phase === 'queued' || entry.phase === 'interrupted') && (
                     <Button size="mini" icon={<IconClose />} aria-label={`移除「${entry.file.name}」`}
                       onClick={() => removeQueued(entry.key)} />
                   )}

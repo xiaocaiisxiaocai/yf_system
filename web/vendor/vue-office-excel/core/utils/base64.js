@@ -7,14 +7,25 @@ function utf16to8(str) {
     for(i = 0; i < len; i++) {
         c = hexIn ? str[i] : str.charCodeAt(i);
         if ((c >= 0x0001) && (c <= 0x007F)) {
-            hexIn ? out.push(str[i]) : out += str.charAt(i);
+            if (hexIn) out.push(str[i]);
+            else out += str.charAt(i);
         } else if (c > 0x07FF) {
-            charCode = (0xE0 | ((c >> 12) & 0x0F)); hexIn ? out.push(charCode) : out += String.fromCharCode(charCode);
-            charCode = (0x80 | ((c >> 6) & 0x3F)); hexIn ? out.push(charCode) : out += String.fromCharCode(charCode);
-            charCode = (0x80 | ((c >> 0) & 0x3F)); hexIn ? out.push(charCode) : out += String.fromCharCode(charCode);
+            charCode = (0xE0 | ((c >> 12) & 0x0F));
+            if (hexIn) out.push(charCode);
+            else out += String.fromCharCode(charCode);
+            charCode = (0x80 | ((c >> 6) & 0x3F));
+            if (hexIn) out.push(charCode);
+            else out += String.fromCharCode(charCode);
+            charCode = (0x80 | ((c >> 0) & 0x3F));
+            if (hexIn) out.push(charCode);
+            else out += String.fromCharCode(charCode);
         } else {
-            charCode = (0xC0 | ((c >> 6) & 0x1F)); hexIn ? out.push(charCode) : out += String.fromCharCode(charCode);
-            charCode = (0x80 | ((c >> 0) & 0x3F)); hexIn ? out.push(charCode) : out += String.fromCharCode(charCode);
+            charCode = (0xC0 | ((c >> 6) & 0x1F));
+            if (hexIn) out.push(charCode);
+            else out += String.fromCharCode(charCode);
+            charCode = (0x80 | ((c >> 0) & 0x3F));
+            if (hexIn) out.push(charCode);
+            else out += String.fromCharCode(charCode);
         }
     }
     return out;
@@ -24,8 +35,6 @@ var base64EncodeChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 function base64encode(str) {
     var out, i, len;
     var c1, c2, c3;
-    var charCode;
-
     len = str.length;
     i = 0;
     out = '';

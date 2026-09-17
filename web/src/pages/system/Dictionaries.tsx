@@ -51,7 +51,14 @@ export default function Dictionaries() {
       if (seq === sequence.current) setLoading(false)
     }
   }, [])
-  useEffect(() => { void load(); return () => { sequence.current += 1 } }, [load])
+  useEffect(() => {
+    let active = true
+    void Promise.resolve().then(() => { if (active) void load() })
+    return () => {
+      active = false
+      sequence.current += 1
+    }
+  }, [load])
 
   const startEdit = (item?: DictionaryItem) => {
     if (loading || error) return
