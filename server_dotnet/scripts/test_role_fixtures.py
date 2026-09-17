@@ -6,14 +6,24 @@ so they opt in to the other three baseline roles after verifying the fresh
 initialization result.
 """
 
-import json
-from pathlib import Path
-
-
-BASELINE = Path(__file__).resolve().parents[1] / "Yf.Api/Infrastructure/schema-baseline.json"
 ADMIN_ROLE_NAME = "系统管理员"
 LEGACY_TEST_ROLE_NAMES = ("项目管理员", "内部成员", "供应商人员")
 TEST_ROLE_DENIED_GRANTS = {"供应商人员": {"project:confirm"}}
+TEST_ROLES = {
+    "项目管理员": {"id": 2, "codes": (
+        "dashboard", "project:list", "project:create", "project:update", "project:status",
+        "project:view_all", "file:upload", "file:download", "file:preview", "message:create",
+        "project:submit", "project:confirm", "project:withdraw",
+    )},
+    "内部成员": {"id": 3, "codes": (
+        "dashboard", "project:list", "file:upload", "file:download", "file:preview",
+        "message:create", "project:submit", "project:confirm",
+    )},
+    "供应商人员": {"id": 4, "codes": (
+        "dashboard", "project:list", "file:upload", "file:download", "file:preview",
+        "message:create", "project:submit", "project:withdraw",
+    )},
+}
 
 
 def _require_disposable_database(connection):
@@ -61,19 +71,6 @@ def assert_admin_only_initialization(connection):
 def install_legacy_test_roles(connection):
     """Add the three historical built-in roles and their baseline grants for tests."""
     _require_disposable_database(connection)
-    baseline = json.loads(BASELINE.read_text(encoding="utf-8-sig"))
-    seeds = baseline["seeds"]
-    baseline_roles = {row["name"]: row for row in seeds["roles"]}
-    if set(baseline_roles) != {ADMIN_ROLE_NAME, *LEGACY_TEST_ROLE_NAMES}:
-        raise RuntimeError("Unexpected role set in schema baseline; update the test fixture explicitly.")
-
-    permission_codes = {row["id"]: row["code"] for row in seeds["permissions"]}
-    grants_by_role = {name: [] for name in LEGACY_TEST_ROLE_NAMES}
-    baseline_role_names_by_id = {row["id"]: row["name"] for row in seeds["roles"]}
-    for grant in seeds["role_permissions"]:
-        role_name = baseline_role_names_by_id.get(grant["role_id"])
-        if role_name in grants_by_role:
-            grants_by_role[role_name].append(permission_codes[grant["permission_id"]])
 
     with connection.cursor() as cursor:
         cursor.execute(
@@ -100,7 +97,7 @@ def install_legacy_test_roles(connection):
         connection.begin()
         with connection.cursor() as cursor:
             for name in LEGACY_TEST_ROLE_NAMES:
-                row = baseline_roles[name]
+                row = TEST_ROLES[name]
                 cursor.execute("SELECT id,is_built_in,status FROM roles WHERE name=%s", (name,))
                 existing = cursor.fetchone()
                 if existing is None:
@@ -112,12 +109,12 @@ def install_legacy_test_roles(connection):
                         """,
                         (
                             row["id"],
-                            row["name"],
-                            row["description"],
-                            row["is_built_in"],
-                            row["status"],
-                            row["created_at"],
-                            row["updated_at"],
+                            name,
+                            None,
+                            1,
+                            "ACTIVE",
+                            "2026-09-11 00:00:00",
+                            "2026-09-11 00:00:00",
                         ),
                     )
                     role_id = row["id"]
@@ -129,11 +126,11 @@ def install_legacy_test_roles(connection):
                         )
 
                 codes = [
-                    code for code in grants_by_role[name]
+                    code for code in row["codes"]
                     if code not in TEST_ROLE_DENIED_GRANTS.get(name, set())
                 ]
                 if not codes:
-                    raise RuntimeError(f"schema baseline has no permissions for test role {name}")
+                    raise RuntimeError(f"test fixture has no permissions for role {name}")
                 placeholders = ",".join(["%s"] * len(codes))
                 cursor.execute(
                     f"SELECT id,code FROM permissions WHERE code IN ({placeholders})",
@@ -195,7 +192,8 @@ def install_legacy_test_roles(connection):
         raise AssertionError("legacy test role setup modified the system administrator role")
     if installed != set(LEGACY_TEST_ROLE_NAMES):
         raise AssertionError("legacy test role setup did not install all three expected roles")
-    for name, expected in grants_by_role.items():
+    for name, row in TEST_ROLES.items():
+        expected = row["codes"]
         expected = [
             code for code in expected
             if code not in TEST_ROLE_DENIED_GRANTS.get(name, set())

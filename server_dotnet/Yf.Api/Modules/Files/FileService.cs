@@ -1,7 +1,8 @@
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using System.IO.Compression;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Projects;
 
@@ -24,24 +25,28 @@ public sealed class FileService(
         var actor = AccessService.GetCurrent(context);
         await using var conn = await db.OpenAsync(ct);
         var project = await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
+        await using var ef = EfDb.Use(conn);
         var (page, size, offset) = QueryValues.Page(context.Request);
         var direction = context.Request.Query["direction"].ToString();
         var keyword = context.Request.Query["keyword"].ToString().Trim();
         var targetId = QueryValues.OptionalUInt64(context.Request, "targetId");
-        var where = " WHERE f.project_id=@ProjectId AND f.status='AVAILABLE'";
-        if (targetId is not null) where += " AND f.id=@TargetId";
-        if (!string.IsNullOrEmpty(direction)) where += " AND f.direction=@Direction";
-        if (!string.IsNullOrEmpty(keyword)) where += " AND LOCATE(@Keyword,f.original_name)>0";
-        var args = new { ProjectId = projectId, TargetId = targetId, Direction = direction, Keyword = keyword, Offset = offset, Size = size };
-        var total = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            "SELECT COUNT(*) FROM files f" + where, args, cancellationToken: ct));
-        var rows = (await conn.QueryAsync<FileListRow>(new CommandDefinition("""
-            SELECT f.id AS Id,f.project_id AS ProjectId,f.uploader_id AS UploaderId,f.direction AS Direction,
-                   f.original_name AS OriginalName,f.ext AS Ext,f.size_bytes AS SizeBytes,f.mime_type AS MimeType,
-                   f.sha256 AS Sha256,f.created_at AS CreatedAt,u.real_name AS UploaderName,
-                   EXISTS(SELECT 1 FROM file_copy_refs fcr WHERE fcr.target_file_id=f.id) AS IsCopiedReference
-            FROM files f LEFT JOIN users u ON u.id=f.uploader_id
-            """ + where + " ORDER BY f.id DESC LIMIT @Size OFFSET @Offset", args, cancellationToken: ct))).ToArray();
+        var query = ef.Files.Where(file => file.ProjectId == projectId && file.Status == "AVAILABLE");
+        if (targetId is not null) query = query.Where(file => file.Id == targetId.Value);
+        if (!string.IsNullOrEmpty(direction)) query = query.Where(file => file.Direction == direction);
+        if (!string.IsNullOrEmpty(keyword))
+        {
+            var pattern = "%" + keyword + "%";
+            query = query.Where(file => EF.Functions.Like(file.OriginalName, pattern));
+        }
+        var total = (ulong)await query.LongCountAsync(ct);
+        var rows = await query.OrderByDescending(file => file.Id).Select(file => new FileListRow
+        {
+            Id = file.Id, ProjectId = file.ProjectId, UploaderId = file.UploaderId, Direction = file.Direction,
+            OriginalName = file.OriginalName, Ext = file.Ext, SizeBytes = file.SizeBytes, MimeType = file.MimeType,
+            Sha256 = file.Sha256, CreatedAt = file.CreatedAt,
+            UploaderName = ef.Users.Where(user => user.Id == file.UploaderId).Select(user => user.RealName).FirstOrDefault(),
+            IsCopiedReference = ef.FileCopyRefs.Any(reference => reference.TargetFileId == file.Id),
+        }).Page(offset, size).ToArrayAsync(ct);
         var canDelete = await ProjectAccessService.CanDeleteFilesAsync(conn, null, actor, project.Status, ct);
         var list = rows.Select(row => new
         {
@@ -165,20 +170,22 @@ public sealed class FileService(
     {
         var actor = AccessService.GetCurrent(context);
         await using var conn = await db.OpenAsync(ct);
-        var initial = await conn.QuerySingleOrDefaultAsync<FileRow>(new CommandDefinition(
-            UploadService.FileSelect + " WHERE f.id=@Id", new { Id = id }, cancellationToken: ct))
-            ?? throw ApiException.NotFound();
+        await using var initialContext = EfDb.Use(conn);
+        var initial = await FileRows(initialContext).SingleOrDefaultAsync(file => file.Id == id, ct) ?? throw ApiException.NotFound();
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await ProjectAccessService.RequireFileDeleteAsync(conn, tx, current, initial.ProjectId, ct);
-        var row = await conn.QuerySingleOrDefaultAsync<FileRow>(new CommandDefinition(
-            UploadService.FileSelect + " WHERE f.id=@Id FOR UPDATE", new { Id = id }, tx, cancellationToken: ct))
-            ?? throw ApiException.NotFound();
+        await using var ef = EfDb.Use(conn, tx);
+        var locked = await ef.Files.FromSqlInterpolated($"SELECT * FROM files WHERE id={id} FOR UPDATE")
+            .AsNoTracking().SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+        var row = ToRow(locked);
         if (row.ProjectId != initial.ProjectId) throw ApiException.Conflict("文件所属项目已变化，请刷新后重试");
         if (row.Status != "AVAILABLE") throw ApiException.NotFound();
-        await conn.ExecuteAsync(new CommandDefinition("""
-            UPDATE files SET status='DELETED',deleted_at=UTC_TIMESTAMP(6) WHERE id=@Id AND status='AVAILABLE'
-            """, new { Id = id }, tx, cancellationToken: ct));
+        var deletedAt = await ef.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        var changed = await ef.Files.Where(file => file.Id == id && file.Status == "AVAILABLE")
+            .ExecuteUpdateAsync(setters => setters.SetProperty(file => file.Status, "DELETED")
+                .SetProperty(file => file.DeletedAt, deletedAt), ct);
+        if (changed != 1) throw ApiException.NotFound();
         await audit.WriteAsync(conn, tx, current.Id, "FILE_DELETE", "file", id,
             new { name = row.OriginalName }, ClientIp.Resolve(context, options), ct);
         await tx.CommitAsync(ct);
@@ -192,13 +199,13 @@ public sealed class FileService(
         if (request.Ids is null || request.Ids.Count is < 1 or > 100)
             throw ApiException.BadRequest("批量下载数量需为 1~100");
         var ids = request.Ids.Distinct().ToArray();
+        await using var ef = EfDb.Use(conn);
+        var available = await FileRows(ef).Where(file => Enumerable.Contains(ids, file.Id)).ToDictionaryAsync(file => file.Id, ct);
         var entries = new List<ArchiveSource>(ids.Length);
         ulong inputBytes = 0;
         foreach (var id in ids)
         {
-            var row = await conn.QuerySingleOrDefaultAsync<FileRow>(new CommandDefinition(
-                UploadService.FileSelect + " WHERE f.id=@Id", new { Id = id }, cancellationToken: ct))
-                ?? throw ApiException.NotFound();
+            if (!available.TryGetValue(id, out var row)) throw ApiException.NotFound();
             await ProjectAccessService.RequireViewAsync(conn, null, actor, row.ProjectId, ct);
             if (row.Status != "AVAILABLE") throw ApiException.BadRequest($"文件 {row.OriginalName} 不可用");
             string path;
@@ -285,8 +292,8 @@ public sealed class FileService(
 
     private static async Task<FileRow> LoadAvailableAsync(MySqlConnection conn, ulong id, CancellationToken ct)
     {
-        var row = await conn.QuerySingleOrDefaultAsync<FileRow>(new CommandDefinition(
-            UploadService.FileSelect + " WHERE f.id=@Id", new { Id = id }, cancellationToken: ct));
+        await using var ef = EfDb.Use(conn);
+        var row = await FileRows(ef).SingleOrDefaultAsync(file => file.Id == id, ct);
         return row is { Status: "AVAILABLE" } ? row : throw ApiException.NotFound();
     }
 
@@ -316,20 +323,37 @@ public sealed class FileService(
 
     private static async Task<CurrentUser> LoadMediaActorAsync(MySqlConnection conn, ulong userId, CancellationToken ct)
     {
-        var row = await conn.QuerySingleOrDefaultAsync<MediaActorRow>(new CommandDefinition("""
-            SELECT id AS Id,employee_no AS EmployeeNo,user_type AS UserType,supplier_id AS SupplierId,
-                   status AS Status,must_change_password AS MustChangePassword
-            FROM users WHERE id=@userId
-            """, new { userId }, cancellationToken: ct));
+        await using var ef = EfDb.Use(conn);
+        var row = await ef.Users.Where(user => user.Id == userId).Select(user => new MediaActorRow
+        {
+            Id = user.Id, EmployeeNo = user.EmployeeNo, UserType = user.UserType, SupplierId = user.SupplierId,
+            Status = user.Status, MustChangePassword = user.MustChangePassword,
+        }).SingleOrDefaultAsync(ct);
         if (row is null || row.Status != "ACTIVE" || row.MustChangePassword)
             throw ApiException.Unauthorized("账号状态已变化，请重新登录");
         if (row.UserType == "SUPPLIER" && (row.SupplierId is not ulong supplierId
-            || await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-                "SELECT EXISTS(SELECT 1 FROM suppliers WHERE id=@supplierId AND status='ACTIVE')",
-                new { supplierId }, cancellationToken: ct)) != 1))
+            || !await ef.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == "ACTIVE", ct)))
             throw ApiException.Unauthorized("所属供应商已被禁用");
         return new(row.Id, row.EmployeeNo, row.UserType, row.SupplierId);
     }
+
+    private static IQueryable<FileRow> FileRows(YfDbContext context) => context.Files.AsNoTracking().Select(ToRowExpression);
+
+    private static readonly System.Linq.Expressions.Expression<Func<FileRecord, FileRow>> ToRowExpression = file => new FileRow
+    {
+        Id = file.Id, ProjectId = file.ProjectId, UploaderId = file.UploaderId, Direction = file.Direction,
+        OriginalName = file.OriginalName, StoredName = file.StoredName, Ext = file.Ext, SizeBytes = file.SizeBytes,
+        MimeType = file.MimeType, Sha256 = file.Sha256, StoragePath = file.StoragePath, Status = file.Status,
+        DeletedAt = file.DeletedAt, CreatedAt = file.CreatedAt,
+    };
+
+    private static FileRow ToRow(FileRecord file) => new()
+    {
+        Id = file.Id, ProjectId = file.ProjectId, UploaderId = file.UploaderId, Direction = file.Direction,
+        OriginalName = file.OriginalName, StoredName = file.StoredName, Ext = file.Ext, SizeBytes = file.SizeBytes,
+        MimeType = file.MimeType, Sha256 = file.Sha256, StoragePath = file.StoragePath, Status = file.Status,
+        DeletedAt = file.DeletedAt, CreatedAt = file.CreatedAt,
+    };
 
     private sealed record ArchiveSource(string Path, string OriginalName);
 

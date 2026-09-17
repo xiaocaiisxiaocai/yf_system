@@ -52,8 +52,8 @@ public sealed class MessageImageTests
         var service = new MessageService(new AuditService([]), database.Options);
         await using var conn = await database.Database.OpenAsync(ct);
 
-        Assert.Equal(SchemaMigrations.CurrentVersion, await conn.ExecuteScalarAsync<int>(
-            "SELECT MAX(version) FROM yf_schema_migrations"));
+        Assert.Equal(EfDatabaseLifecycle.InitialMigrationId, await conn.ExecuteScalarAsync<string>(
+            "SELECT MigrationId FROM __EFMigrationsHistory"));
         Assert.True(await conn.ExecuteScalarAsync<bool>(
             "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='message_images')"));
 
@@ -174,7 +174,7 @@ public sealed class MessageImageTests
             };
             var administration = new MySqlConnection(administrationOptions.ConnectionString);
             await administration.OpenAsync(ct);
-            var databaseName = $"yf_test_dotnet_{purpose}_{Guid.NewGuid():N}";
+            var databaseName = $"yf_t_{Guid.NewGuid():N}";
             var storage = Path.Combine(Path.GetTempPath(), "yf_message_images_" + Guid.NewGuid().ToString("N"));
             try
             {

@@ -57,7 +57,7 @@ public sealed class IdentityConnectionTests
                     """, cancellationToken: ct));
             }
             var tokens = new TokenService(options);
-            var identity = new IdentityService(db, options, new LoginRateLimiter(), tokens,
+            var identity = new IdentityService(EfTestSupport.DbContextFactory(options), options, new LoginRateLimiter(), tokens,
                 new PermissionService(), new AuditService([]));
             var context = new DefaultHttpContext();
             context.Request.Path = "/api/v1/projects";

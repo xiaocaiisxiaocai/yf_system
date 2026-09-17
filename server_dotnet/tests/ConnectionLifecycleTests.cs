@@ -90,7 +90,7 @@ public sealed class ConnectionLifecycleTests
     }
 
     [Fact(Timeout = 120_000)]
-    public async Task EmptyDatabaseInitializationReleasesSeedConnectionBeforeMigrationAdoption()
+    public async Task EmptyDatabaseInitializationReleasesSeedConnectionAfterEfMigration()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await LocalDatabaseScope.CreateOrSkipAsync("bootstrap", ct);
@@ -106,12 +106,12 @@ public sealed class ConnectionLifecycleTests
         }
 
         await using var connection = await database.Database.OpenAsync(ct);
-        Assert.Equal(1, await connection.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM yf_schema_migrations WHERE version=@version",
-            new { version = SchemaMigrations.CurrentVersion }, cancellationToken: ct)));
-        Assert.Equal(1, await connection.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM seaql_migrations WHERE version=@version",
-            new { version = SchemaBootstrap.Version }, cancellationToken: ct)));
+        Assert.Equal(EfDatabaseLifecycle.InitialMigrationId,
+            await connection.ExecuteScalarAsync<string>(new CommandDefinition(
+                "SELECT MigrationId FROM __EFMigrationsHistory", cancellationToken: ct)));
+        Assert.False(await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='yf_schema_migrations')",
+            cancellationToken: ct)));
         Assert.True(await connection.ExecuteScalarAsync<bool>(new CommandDefinition("""
             SELECT EXISTS(
                 SELECT 1 FROM information_schema.columns
@@ -223,7 +223,7 @@ public sealed class ConnectionLifecycleTests
             };
             var administration = new MySqlConnection(administrationOptions.ConnectionString);
             await administration.OpenAsync(ct);
-            var databaseName = $"yf_test_dotnet_{purpose}_{Guid.NewGuid():N}";
+            var databaseName = $"yf_t_{Guid.NewGuid():N}";
             try
             {
                 await administration.ExecuteAsync(new CommandDefinition(

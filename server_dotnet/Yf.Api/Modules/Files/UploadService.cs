@@ -1,9 +1,10 @@
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Projects;
 using Yf.Api.Modules.SystemManagement;
 
@@ -48,17 +49,16 @@ public sealed partial class UploadService(
             UploadSessionRow? existing = null;
             if (fileMd5 is not null)
             {
-                existing = await conn.QuerySingleOrDefaultAsync<UploadSessionRow>(new CommandDefinition("""
-                SELECT id AS Id,project_id AS ProjectId,uploader_id AS UploaderId,file_name AS FileName,
-                       file_size AS FileSize,file_md5 AS FileMd5,chunk_size AS ChunkSize,total_chunks AS TotalChunks,
-                       temp_dir AS TempDir,status AS Status,result_file_id AS ResultFileId,
-                       expires_at AS ExpiresAt,created_at AS CreatedAt,updated_at AS UpdatedAt
-                FROM upload_sessions
-                WHERE project_id=@ProjectId AND uploader_id=@UploaderId AND file_name=@FileName
-                  AND file_size=@FileSize AND file_md5=@FileMd5 AND expires_at>UTC_TIMESTAMP(6)
-                  AND status IN ('UPLOADING','MERGING')
-                ORDER BY created_at DESC LIMIT 1
-                """, new { request.ProjectId, UploaderId = actor.Id, request.FileName, request.FileSize, FileMd5 = fileMd5 }, cancellationToken: ct));
+                await using var ef = EfDb.Use(conn);
+                var dbNow = await DbNowAsync(ef, ct);
+                var resumable = new[] { "UPLOADING", "MERGING" };
+                var entity = await ef.UploadSessions
+                    .Where(session => session.ProjectId == request.ProjectId && session.UploaderId == actor.Id
+                        && session.FileName == request.FileName && session.FileSize == request.FileSize
+                        && session.FileMd5 == fileMd5 && session.ExpiresAt > dbNow
+                        && Enumerable.Contains(resumable, session.Status))
+                    .OrderByDescending(session => session.CreatedAt).FirstOrDefaultAsync(ct);
+                existing = entity is null ? null : ToRow(entity, dbNow);
             }
             if (existing is not null)
             {
@@ -82,18 +82,25 @@ public sealed partial class UploadService(
                 await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
                 var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
                 await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, request.ProjectId, ct);
-                await conn.ExecuteAsync(new CommandDefinition("""
-                INSERT INTO upload_sessions
-                    (id,project_id,uploader_id,file_name,file_size,file_md5,chunk_size,total_chunks,temp_dir,status,result_file_id,expires_at,created_at,updated_at)
-                VALUES
-                    (@Id,@ProjectId,@UploaderId,@FileName,@FileSize,@FileMd5,@ChunkSize,@TotalChunks,@TempDir,'UPLOADING',NULL,
-                     DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 24 HOUR),UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
-                """, new
+                await using var ef = EfDb.Use(conn, tx);
+                var dbNow = await DbNowAsync(ef, ct);
+                ef.UploadSessions.Add(new UploadSession
                 {
-                    Id = sessionId, request.ProjectId, UploaderId = current.Id, request.FileName,
-                    request.FileSize, FileMd5 = fileMd5, ChunkSize = chunkSize, TotalChunks = totalChunks,
-                    TempDir = tempDir
-                }, tx, cancellationToken: ct));
+                    Id = sessionId,
+                    ProjectId = request.ProjectId,
+                    UploaderId = current.Id,
+                    FileName = request.FileName,
+                    FileSize = request.FileSize,
+                    FileMd5 = fileMd5,
+                    ChunkSize = chunkSize,
+                    TotalChunks = totalChunks,
+                    TempDir = tempDir,
+                    Status = "UPLOADING",
+                    ExpiresAt = dbNow.AddHours(24),
+                    CreatedAt = dbNow,
+                    UpdatedAt = dbNow
+                });
+                await ef.SaveChangesAsync(ct);
                 try { await tx.CommitAsync(ct); }
                 catch
                 {
@@ -225,9 +232,11 @@ public sealed partial class UploadService(
                 throw ApiException.Conflict("会话已失效");
             if (session.Status != "ABORTED")
             {
-                await conn.ExecuteAsync(new CommandDefinition(
-                    "UPDATE upload_sessions SET status='ABORTED',updated_at=UTC_TIMESTAMP(6) WHERE id=@Id",
-                    new { Id = sessionId }, tx, cancellationToken: ct));
+                await using var ef = EfDb.Use(conn, tx);
+                var dbNow = await DbNowAsync(ef, ct);
+                await ef.UploadSessions.Where(item => item.Id == sessionId)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Status, "ABORTED")
+                        .SetProperty(item => item.UpdatedAt, dbNow), ct);
                 await WriteUploadAbortAuditAsync(conn, tx, current, sessionId,
                     ClientIp.Resolve(context, options), ct);
             }
@@ -282,8 +291,8 @@ public sealed partial class UploadService(
     {
         var extension = ExtensionOf(session.FileName);
         var storedName = $"{Guid.NewGuid():D}.{extension}";
-        var now = await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
-            "SELECT UTC_TIMESTAMP(6)", cancellationToken: ct));
+        await using var clockContext = EfDb.Use(conn);
+        var now = await DbNowAsync(clockContext, ct);
         var root = FileStorage.Root(options.StorageRoot);
         var finalPath = FileStorage.FinalPath(root, now, storedName);
         var finalDirectory = Path.GetDirectoryName(finalPath) ?? throw new InvalidOperationException("存储目录无效");
@@ -328,26 +337,35 @@ public sealed partial class UploadService(
             await WritePendingFinalMarkerAsync(root, session.Id, relativePath, ct);
             File.Move(mergeTemp, finalPath, overwrite: false);
             var direction = current.IsInternal ? "C2S" : "S2C";
-            await conn.ExecuteAsync(new CommandDefinition("""
-                INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,mime_type,sha256,storage_path,status,deleted_at,created_at)
-                VALUES(@ProjectId,@UploaderId,@Direction,@OriginalName,@StoredName,@Ext,@SizeBytes,@MimeType,@Sha256,@StoragePath,'AVAILABLE',NULL,@CreatedAt)
-                """, new
-                {
-                    ProjectId = session.ProjectId, UploaderId = current.Id, Direction = direction,
-                    OriginalName = session.FileName, StoredName = storedName, Ext = extension,
-                    SizeBytes = session.FileSize, MimeType = FileStorage.MimeType(session.FileName),
-                    Sha256 = hash.Sha256, StoragePath = relativePath, CreatedAt = now
-                }, tx, cancellationToken: ct));
-            var fileId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-                "SELECT LAST_INSERT_ID()", transaction: tx, cancellationToken: ct));
+            await using var ef = EfDb.Use(conn, tx);
+            var file = new FileRecord
+            {
+                ProjectId = session.ProjectId,
+                UploaderId = current.Id,
+                Direction = direction,
+                OriginalName = session.FileName,
+                StoredName = storedName,
+                Ext = extension,
+                SizeBytes = session.FileSize,
+                MimeType = FileStorage.MimeType(session.FileName),
+                Sha256 = hash.Sha256,
+                StoragePath = relativePath,
+                Status = "AVAILABLE",
+                CreatedAt = now
+            };
+            ef.Files.Add(file);
+            await ef.SaveChangesAsync(ct);
+            var fileId = file.Id;
             await EnqueueFileNoticeAsync(conn, tx, project.Id, fileId, session.FileName, current, ct);
             await audit.WriteAsync(conn, tx, current.Id, "FILE_UPLOAD", "file", fileId,
                 new { name = session.FileName, size = session.FileSize, projectId = session.ProjectId },
                 ClientIp.Resolve(context, options), ct);
-            var completed = await conn.ExecuteAsync(new CommandDefinition("""
-                UPDATE upload_sessions SET status='COMPLETED',result_file_id=@FileId,updated_at=UTC_TIMESTAMP(6)
-                WHERE id=@Id AND status='MERGING'
-                """, new { FileId = fileId, Id = session.Id }, tx, cancellationToken: ct));
+            var completedAt = await DbNowAsync(ef, ct);
+            var completed = await ef.UploadSessions
+                .Where(item => item.Id == session.Id && item.Status == "MERGING")
+                .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Status, "COMPLETED")
+                    .SetProperty(item => item.ResultFileId, fileId)
+                    .SetProperty(item => item.UpdatedAt, completedAt), ct);
             if (completed != 1) throw ApiException.Conflict("上传会话已被其他请求变更");
             try { await tx.CommitAsync(ct); }
             catch
@@ -380,12 +398,14 @@ public sealed partial class UploadService(
             throw ApiException.Conflict("上传会话状态已变化，请重新查询");
         if (locked.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
-        var changed = await conn.ExecuteAsync(new CommandDefinition("""
-            UPDATE upload_sessions
-            SET status='MERGING',
-                updated_at=CASE WHEN updated_at>=UTC_TIMESTAMP() THEN DATE_ADD(updated_at,INTERVAL 1 SECOND) ELSE UTC_TIMESTAMP() END
-            WHERE id=@Id AND status IN ('UPLOADING','MERGING') AND expires_at>UTC_TIMESTAMP(6)
-            """, new { Id = session.Id }, tx, cancellationToken: ct));
+        await using var ef = EfDb.Use(conn, tx);
+        var dbNow = await DbNowAsync(ef, ct);
+        var lease = locked.UpdatedAt >= dbNow ? locked.UpdatedAt.AddSeconds(1) : dbNow;
+        var mergeable = new[] { "UPLOADING", "MERGING" };
+        var changed = await ef.UploadSessions
+            .Where(item => item.Id == session.Id && Enumerable.Contains(mergeable, item.Status) && item.ExpiresAt > dbNow)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Status, "MERGING")
+                .SetProperty(item => item.UpdatedAt, lease), ct);
         if (changed != 1) throw ApiException.Conflict("上传会话状态已变化，请重新查询");
         await tx.CommitAsync(ct);
         return await LoadSessionAsync(conn, null, session.Id, false, ct);
@@ -402,12 +422,13 @@ public sealed partial class UploadService(
             throw ApiException.Conflict("会话已变更，请重试");
         if (locked.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
-        var changed = await conn.ExecuteAsync(new CommandDefinition("""
-            UPDATE upload_sessions
-            SET status='UPLOADING',
-                updated_at=CASE WHEN updated_at>=UTC_TIMESTAMP() THEN DATE_ADD(updated_at,INTERVAL 1 SECOND) ELSE UTC_TIMESTAMP() END
-            WHERE id=@Id AND status='MERGING' AND expires_at>UTC_TIMESTAMP(6)
-            """, new { session.Id }, tx, cancellationToken: ct));
+        await using var ef = EfDb.Use(conn, tx);
+        var dbNow = await DbNowAsync(ef, ct);
+        var lease = locked.UpdatedAt >= dbNow ? locked.UpdatedAt.AddSeconds(1) : dbNow;
+        var changed = await ef.UploadSessions
+            .Where(item => item.Id == session.Id && item.Status == "MERGING" && item.ExpiresAt > dbNow)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Status, "UPLOADING")
+                .SetProperty(item => item.UpdatedAt, lease), ct);
         if (changed != 1) throw ApiException.Conflict("会话已变更，请重试");
         await tx.CommitAsync(ct);
         return await LoadSessionAsync(conn, null, session.Id, false, ct);
@@ -450,8 +471,9 @@ public sealed partial class UploadService(
         if (request.FileSize > maximum)
             throw ApiException.BadRequest($"文件超过大小上限 {maximum / 1024 / 1024} MB");
         var extension = ExtensionOf(request.FileName);
-        var configured = await conn.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(
-            "SELECT cfg_value FROM system_configs WHERE cfg_key='upload.allowed_exts'", cancellationToken: ct));
+        await using var context = EfDb.Use(conn);
+        var configured = await context.SystemConfigs.Where(config => config.CfgKey == "upload.allowed_exts")
+            .Select(config => config.CfgValue).SingleOrDefaultAsync(ct);
         var allowed = (configured ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (allowed.Length > 0 && !allowed.Contains(extension, StringComparer.Ordinal))
             throw ApiException.BadRequest($"不支持的文件类型 .{extension}");
@@ -463,8 +485,9 @@ public sealed partial class UploadService(
 
     private static async Task<ulong> ConfigUInt64Async(MySqlConnection conn, string key, ulong fallback, CancellationToken ct)
     {
-        var value = await conn.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(
-            "SELECT cfg_value FROM system_configs WHERE cfg_key=@Key", new { Key = key }, cancellationToken: ct));
+        await using var context = EfDb.Use(conn);
+        var value = await context.SystemConfigs.Where(config => config.CfgKey == key)
+            .Select(config => config.CfgValue).SingleOrDefaultAsync(ct);
         return ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ? parsed : fallback;
     }
 
@@ -472,29 +495,41 @@ public sealed partial class UploadService(
         string id, bool forUpdate, CancellationToken ct)
     {
         if (!Guid.TryParseExact(id, "D", out _)) throw ApiException.NotFound();
-        var session = await conn.QuerySingleOrDefaultAsync<UploadSessionRow>(new CommandDefinition("""
-            SELECT id AS Id,project_id AS ProjectId,uploader_id AS UploaderId,file_name AS FileName,
-                   file_size AS FileSize,file_md5 AS FileMd5,chunk_size AS ChunkSize,total_chunks AS TotalChunks,
-                   temp_dir AS TempDir,status AS Status,result_file_id AS ResultFileId,
-                   expires_at AS ExpiresAt,created_at AS CreatedAt,updated_at AS UpdatedAt,
-                   expires_at<=UTC_TIMESTAMP(6) AS IsExpired
-            FROM upload_sessions WHERE id=@Id
-            """ + (forUpdate ? " FOR UPDATE" : string.Empty), new { Id = id }, tx, cancellationToken: ct));
+        await using var context = EfDb.Use(conn, tx);
+        UploadSession? session;
+        if (forUpdate)
+            session = await context.UploadSessions.FromSqlInterpolated($"SELECT * FROM upload_sessions WHERE id={id} FOR UPDATE")
+                .SingleOrDefaultAsync(ct);
+        else
+            session = await context.UploadSessions.SingleOrDefaultAsync(item => item.Id == id, ct);
         if (session is null) throw ApiException.NotFound();
-        return session;
+        var dbNow = await DbNowAsync(context, ct);
+        return ToRow(session, dbNow);
     }
 
-    private static async Task<FileRow> LoadFileAsync(MySqlConnection conn, ulong id, CancellationToken ct) =>
-        await conn.QuerySingleAsync<FileRow>(new CommandDefinition(FileSelect + " WHERE f.id=@Id", new { Id = id }, cancellationToken: ct));
+    private static async Task<FileRow> LoadFileAsync(MySqlConnection conn, ulong id, CancellationToken ct)
+    {
+        await using var context = EfDb.Use(conn);
+        var file = await context.Files.SingleAsync(item => item.Id == id, ct);
+        return ToRow(file);
+    }
 
     private async Task<object> CompletedFileAsync(MySqlConnection conn, UploadSessionRow session, ulong uploaderId, CancellationToken ct)
     {
         FileRow? file = null;
+        await using var context = EfDb.Use(conn);
         if (session.ResultFileId is ulong resultId)
-            file = await conn.QuerySingleOrDefaultAsync<FileRow>(new CommandDefinition(FileSelect + " WHERE f.id=@Id", new { Id = resultId }, cancellationToken: ct));
-        file ??= await conn.QueryFirstOrDefaultAsync<FileRow>(new CommandDefinition(FileSelect + """
-             WHERE f.project_id=@ProjectId AND f.original_name=@FileName AND f.uploader_id=@UploaderId ORDER BY f.id DESC LIMIT 1
-             """, new { session.ProjectId, session.FileName, UploaderId = uploaderId }, cancellationToken: ct));
+        {
+            var byResult = await context.Files.SingleOrDefaultAsync(item => item.Id == resultId, ct);
+            if (byResult is not null) file = ToRow(byResult);
+        }
+        if (file is null)
+        {
+            var fallback = await context.Files.Where(item => item.ProjectId == session.ProjectId
+                    && item.OriginalName == session.FileName && item.UploaderId == uploaderId)
+                .OrderByDescending(item => item.Id).FirstOrDefaultAsync(ct);
+            if (fallback is not null) file = ToRow(fallback);
+        }
         return file is null ? throw ApiException.Conflict("会话已完成") : FileJson(file);
     }
 
@@ -502,8 +537,8 @@ public sealed partial class UploadService(
         await ProbeSessionExistenceAsync(async cancellationToken =>
         {
             await using var conn = await db.OpenAsync(cancellationToken);
-            return await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-                "SELECT EXISTS(SELECT 1 FROM upload_sessions WHERE id=@Id)", new { Id = id }, cancellationToken: cancellationToken));
+            await using var context = EfDb.Use(conn);
+            return await context.UploadSessions.AnyAsync(session => session.Id == id, cancellationToken);
         }, ct);
 
     internal static async Task<bool?> ProbeSessionExistenceAsync(
@@ -527,10 +562,11 @@ public sealed partial class UploadService(
         {
             await using var conn = await db.OpenAsync(ct);
             await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-            await conn.ExecuteAsync(new CommandDefinition("""
-                UPDATE upload_sessions SET status='UPLOADING',updated_at=UTC_TIMESTAMP(6)
-                WHERE id=@Id AND status='MERGING' AND updated_at=@Lease
-                """, new { Id = id, Lease = lease }, tx, cancellationToken: ct));
+            await using var context = EfDb.Use(conn, tx);
+            var dbNow = await DbNowAsync(context, ct);
+            await context.UploadSessions.Where(session => session.Id == id && session.Status == "MERGING" && session.UpdatedAt == lease)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(session => session.Status, "UPLOADING")
+                    .SetProperty(session => session.UpdatedAt, dbNow), ct);
             await tx.CommitAsync(ct);
         }
         catch { }
@@ -541,10 +577,11 @@ public sealed partial class UploadService(
         try
         {
             await using var conn = await db.OpenAsync(ct);
-            return await conn.QuerySingleOrDefaultAsync<FileRow>(new CommandDefinition(FileSelect + """
-                JOIN upload_sessions s ON s.result_file_id=f.id
-                WHERE s.id=@Id AND s.status='COMPLETED'
-                """, new { Id = sessionId }, cancellationToken: ct));
+            await using var context = EfDb.Use(conn);
+            var file = await context.UploadSessions.Where(session => session.Id == sessionId && session.Status == "COMPLETED")
+                .Join(context.Files, session => session.ResultFileId, file => (ulong?)file.Id, (_, file) => file)
+                .SingleOrDefaultAsync(ct);
+            return file is null ? null : ToRow(file);
         }
         catch { return null; }
     }
@@ -554,30 +591,29 @@ public sealed partial class UploadService(
     {
         var policy = await EmailNotificationPolicy.LoadAsync(conn, tx, ct);
         if (!policy.Allows("FILE_UPLOADED", null)) return;
-        var projectName = await conn.QuerySingleAsync<string>(new CommandDefinition(
-            "SELECT name FROM projects WHERE id=@ProjectId", new { ProjectId = projectId }, tx, cancellationToken: ct));
-        var recipients = await conn.QueryAsync<NoticeRecipient>(new CommandDefinition("""
-            SELECT DISTINCT u.id AS Id,u.email AS Email,u.employee_no AS EmployeeNo,u.real_name AS RealName,u.user_type AS UserType
-            FROM users u
-            LEFT JOIN projects p ON p.id=@ProjectId
-            LEFT JOIN suppliers s ON s.id=p.supplier_id AND s.status='ACTIVE'
-            WHERE u.status='ACTIVE' AND u.id<>@UploaderId
-              AND EXISTS (
-                  SELECT 1
-                  FROM user_roles ur
-                  JOIN roles r ON r.id=ur.role_id AND r.status='ACTIVE'
-                  JOIN role_permissions rp ON rp.role_id=r.id
-                  JOIN permissions perm ON perm.id=rp.permission_id AND perm.code='project:list'
-                  WHERE ur.user_id=u.id
-              ) AND (
-                (@UploaderType='SUPPLIER' AND u.user_type='INTERNAL' AND u.id=p.responsible_user_id) OR
-                (@UploaderType<>'SUPPLIER' AND u.user_type='SUPPLIER' AND u.supplier_id=p.supplier_id AND s.id IS NOT NULL)
-            ) ORDER BY u.id
-            """, new { ProjectId = projectId, UploaderId = uploader.Id, UploaderType = uploader.UserType }, tx, cancellationToken: ct));
+        await using var context = EfDb.Use(conn, tx);
+        var project = await context.Projects.SingleAsync(item => item.Id == projectId, ct);
+        var supplierActive = await context.Suppliers.AnyAsync(item => item.Id == project.SupplierId && item.Status == "ACTIVE", ct);
+        var recipientsQuery = context.Users.Where(user => user.Status == "ACTIVE" && user.Id != uploader.Id
+            && context.UserRoles.Where(userRole => userRole.UserId == user.Id)
+                .Join(context.Roles.Where(role => role.Status == "ACTIVE"), userRole => userRole.RoleId, role => role.Id, (userRole, _) => userRole)
+                .Join(context.RolePermissions, userRole => userRole.RoleId, rolePermission => rolePermission.RoleId, (_, rolePermission) => rolePermission)
+                .Join(context.Permissions.Where(permission => permission.Code == "project:list"),
+                    rolePermission => rolePermission.PermissionId, permission => permission.Id, (_, _) => true).Any());
+        recipientsQuery = uploader.UserType == "SUPPLIER"
+            ? recipientsQuery.Where(user => user.UserType == "INTERNAL" && user.Id == project.ResponsibleUserId)
+            : recipientsQuery.Where(user => user.UserType == "SUPPLIER" && user.SupplierId == project.SupplierId && supplierActive);
+        var recipients = await recipientsQuery.OrderBy(user => user.Id)
+            .Select(user => new NoticeRecipient
+            {
+                Id = user.Id, Email = user.Email, EmployeeNo = user.EmployeeNo, RealName = user.RealName, UserType = user.UserType
+            }).ToArrayAsync(ct);
+        var projectName = project.Name;
         var subject = $"[协作平台] 项目「{projectName}」有新文件上传";
         var targetUrl = $"{options.WebBaseUrl.TrimEnd('/')}/projects/{projectId}?tab=files&target={fileId}";
         var body = $"项目：{projectName}\n文件：{fileName}\n上传人：工号 {uploader.EmployeeNo}\n\n请登录平台查看并下载：{targetUrl}\n\n（本邮件由系统自动发送，附件请登录平台获取）";
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var createdAt = await DbNowAsync(context, ct);
         foreach (var recipient in recipients)
         {
             if (!policy.Allows("FILE_UPLOADED", recipient.UserType)) continue;
@@ -589,20 +625,38 @@ public sealed partial class UploadService(
                 continue;
             }
             if (!seen.Add(recipient.Email)) continue;
-            await conn.ExecuteAsync(new CommandDefinition("""
-                INSERT INTO email_outbox(event_type,project_id,dedupe_key,recipient_user_id,recipient_email,subject,body,status,retry_count,next_attempt_at,last_error,sent_at,created_at)
-                VALUES('FILE_UPLOADED',@ProjectId,NULL,@RecipientUserId,@RecipientEmail,@Subject,@Body,'PENDING',0,NULL,NULL,NULL,UTC_TIMESTAMP(6))
-                """, new { ProjectId = projectId, RecipientUserId = recipient.Id, RecipientEmail = recipient.Email, Subject = subject, Body = body }, tx, cancellationToken: ct));
+            context.EmailOutbox.Add(new EmailOutbox
+            {
+                EventType = "FILE_UPLOADED",
+                ProjectId = projectId,
+                RecipientUserId = recipient.Id,
+                RecipientEmail = recipient.Email,
+                Subject = subject,
+                Body = body,
+                Status = "PENDING",
+                RetryCount = 0,
+                CreatedAt = createdAt
+            });
         }
+        await context.SaveChangesAsync(ct);
     }
 
     private static async Task WriteUploadAbortAuditAsync(MySqlConnection conn, MySqlTransaction tx,
         CurrentUser actor, string sessionId, string ip, CancellationToken ct)
     {
-        await conn.ExecuteAsync(new CommandDefinition("""
-            INSERT INTO audit_logs(user_id,employee_no,action,target_type,target_id,detail,ip,created_at)
-            VALUES(@ActorId,@EmployeeNo,'UPLOAD_ABORT','upload_session',@SessionId,NULL,@Ip,UTC_TIMESTAMP(6))
-            """, new { ActorId = actor.Id, actor.EmployeeNo, SessionId = sessionId, Ip = ip }, tx, cancellationToken: ct));
+        await using var context = EfDb.Use(conn, tx);
+        context.AuditLogs.Add(new AuditLog
+        {
+            UserId = actor.Id,
+            EmployeeNo = actor.EmployeeNo,
+            Action = "UPLOAD_ABORT",
+            TargetType = "upload_session",
+            TargetId = sessionId,
+            Detail = null,
+            Ip = ip,
+            CreatedAt = await DbNowAsync(context, ct)
+        });
+        await context.SaveChangesAsync(ct);
     }
 
     private static async Task WriteExactAsync(Stream source, string destination, ulong expected, CancellationToken ct)
@@ -697,9 +751,8 @@ public sealed partial class UploadService(
 
             // Check the durable database reference before classifying legacy marker text. A committed
             // file must always win, even if a historical marker does not match today's filename rules.
-            var referenced = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-                "SELECT EXISTS(SELECT 1 FROM files WHERE storage_path=@StoragePath)",
-                new { StoragePath = relativePath }, cancellationToken: ct));
+            await using var context = EfDb.Use(conn);
+            var referenced = await context.Files.AnyAsync(file => file.StoragePath == relativePath, ct);
             if (referenced)
             {
                 File.Delete(marker);
@@ -794,12 +847,45 @@ public sealed partial class UploadService(
         }
     }
 
-    internal const string FileSelect = """
-        SELECT f.id AS Id,f.project_id AS ProjectId,f.uploader_id AS UploaderId,f.direction AS Direction,
-               f.original_name AS OriginalName,f.stored_name AS StoredName,f.ext AS Ext,f.size_bytes AS SizeBytes,
-               f.mime_type AS MimeType,f.sha256 AS Sha256,f.storage_path AS StoragePath,f.status AS Status,
-               f.deleted_at AS DeletedAt,f.created_at AS CreatedAt FROM files f
-        """;
+    internal static Task<DateTime> DbNowAsync(YfDbContext context, CancellationToken ct) =>
+        context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+
+    internal static UploadSessionRow ToRow(UploadSession session, DateTime dbNow) => new()
+    {
+        Id = session.Id,
+        ProjectId = session.ProjectId,
+        UploaderId = session.UploaderId,
+        FileName = session.FileName,
+        FileSize = session.FileSize,
+        FileMd5 = session.FileMd5,
+        ChunkSize = session.ChunkSize,
+        TotalChunks = session.TotalChunks,
+        TempDir = session.TempDir,
+        Status = session.Status,
+        ResultFileId = session.ResultFileId,
+        ExpiresAt = session.ExpiresAt,
+        CreatedAt = session.CreatedAt,
+        UpdatedAt = session.UpdatedAt,
+        IsExpired = session.ExpiresAt <= dbNow
+    };
+
+    internal static FileRow ToRow(FileRecord file) => new()
+    {
+        Id = file.Id,
+        ProjectId = file.ProjectId,
+        UploaderId = file.UploaderId,
+        Direction = file.Direction,
+        OriginalName = file.OriginalName,
+        StoredName = file.StoredName,
+        Ext = file.Ext,
+        SizeBytes = file.SizeBytes,
+        MimeType = file.MimeType,
+        Sha256 = file.Sha256,
+        StoragePath = file.StoragePath,
+        Status = file.Status,
+        DeletedAt = file.DeletedAt,
+        CreatedAt = file.CreatedAt
+    };
 
     private static void TryDeleteFile(string path) { try { File.Delete(path); } catch { } }
     private static async Task TryDeleteDirectoryAsync(string root, string path, CancellationToken ct)

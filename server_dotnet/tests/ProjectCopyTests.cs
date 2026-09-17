@@ -14,7 +14,7 @@ public sealed class ProjectCopyTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_copy_snapshot", ct);
-        await database.CreateBaselineAsync(legacyV16: false, ct);
+        await database.InitializeBusinessFixtureAsync(ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await database.ExecuteAsync(SeedSql + """
             UPDATE project_groups
@@ -64,7 +64,7 @@ public sealed class ProjectCopyTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_copy", ct);
-        await database.CreateBaselineAsync(legacyV16: false, ct);
+        await database.InitializeBusinessFixtureAsync(ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         var storage = Path.Combine(Path.GetTempPath(), "yf-project-copy-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(storage);

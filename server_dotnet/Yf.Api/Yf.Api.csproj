@@ -9,14 +9,23 @@
     <UserSecretsId>yf-system-aspnet-development</UserSecretsId>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Dapper" Version="2.1.79" />
     <PackageReference Include="MailKit" Version="4.17.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.0" />
+    <!-- dotnet ef requires this on the startup project with "runtime" included (it
+         reflection-loads Design.dll alongside the built app to run migrations). That
+         pulls in Humanizer.dll, so TestHost.csproj carries the identical reference so
+         its output stays byte-consistent with this project's for the browser/HTTP
+         test harness's dependency check (scripts/test_host_artifacts.py). -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="MySqlConnector" Version="2.6.2" />
     <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
+    <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.22.0" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="Infrastructure/schema-baseline.json" />
     <Content Update="appsettings.Local.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
   </ItemGroup>
 </Project>

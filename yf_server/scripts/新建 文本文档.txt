@@ -1,6 +1,0 @@
-当前版本使用 .NET 发布入口（仅构建发布包，不安装 IIS）：
-cd D:\Temp\yf_system
-pwsh -File .\server_dotnet\scripts\publish-iis.ps1 -FreshOutputDirectory D:\Releases\YfDotNet-NEW
-
-输出目录必须是新的空目录。目标服务器按发布包内 README.md 安装。
-旧 yf_server Rust 发布入口已停用，不能与当前 web 配套。

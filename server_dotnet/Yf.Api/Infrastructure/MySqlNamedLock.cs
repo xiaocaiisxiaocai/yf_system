@@ -1,4 +1,3 @@
-using Dapper;
 using MySqlConnector;
 using System.Security.Cryptography;
 using System.Text;
@@ -40,10 +39,12 @@ internal sealed class MySqlNamedLock : IAsyncDisposable
         int? acquired;
         try
         {
-            acquired = await connection.ExecuteScalarAsync<int?>(new CommandDefinition(
-                "SELECT GET_LOCK(@Name,@WaitSeconds)",
-                new { Name = name, WaitSeconds = waitSeconds },
-                cancellationToken: ct));
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT GET_LOCK(@Name,@WaitSeconds)";
+            command.Parameters.AddWithValue("@Name", name);
+            command.Parameters.AddWithValue("@WaitSeconds", waitSeconds);
+            var value = await command.ExecuteScalarAsync(ct);
+            acquired = value is null or DBNull ? null : Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture);
         }
         catch
         {
@@ -67,8 +68,10 @@ internal sealed class MySqlNamedLock : IAsyncDisposable
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await connection.ExecuteScalarAsync<int?>(new CommandDefinition(
-                "SELECT RELEASE_LOCK(@Name)", new { Name = name }, cancellationToken: timeout.Token));
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT RELEASE_LOCK(@Name)";
+            command.Parameters.AddWithValue("@Name", name);
+            await command.ExecuteScalarAsync(timeout.Token);
         }
         catch
         {

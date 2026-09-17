@@ -13,6 +13,8 @@
     <PackageReference Include="xunit.v3" Version="4.0.0" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.0" />
+    <!-- Fixture setup/verification may use direct SQL; production Yf.Api does not. -->
+    <PackageReference Include="Dapper" Version="2.1.79" />
     <Using Include="Xunit" />
     <None Update="Contracts/api-v1.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

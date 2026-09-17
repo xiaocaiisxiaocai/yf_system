@@ -1,8 +1,9 @@
 using System.Globalization;
 using System.Text.Json;
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 
 namespace Yf.Api.Modules.SystemManagement;
 
@@ -54,7 +55,13 @@ public sealed class SystemService(AppDb db, AuditService audit)
     public async Task<object> ListConfigsAsync(CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
-        return await conn.QueryAsync(new CommandDefinition("SELECT cfg_key AS `key`,cfg_value AS value,description,updated_at AS updatedAt FROM system_configs WHERE cfg_key NOT IN ('security.management_lock','mail.smtp','storage.warn_percent') ORDER BY cfg_key", cancellationToken: ct));
+        await using var context = EfDb.Use(conn);
+        var hidden = new[] { "security.management_lock", "mail.smtp", "storage.warn_percent" };
+        return await context.SystemConfigs.Where(config => !Enumerable.Contains(hidden, config.CfgKey))
+            .OrderBy(config => config.CfgKey).Select(config => new
+            {
+                key = config.CfgKey, value = config.CfgValue, config.Description, updatedAt = config.UpdatedAt,
+            }).ToArrayAsync(ct);
     }
 
     public static string? NormalizeConfig(string key, string? input)
@@ -108,20 +115,24 @@ public sealed class SystemService(AppDb db, AuditService audit)
         actor = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         AccessService.RequireInternal(actor);
         await AccessService.RequirePermissionAsync(conn, tx, actor, "config:manage", ct);
+        await using var context = EfDb.Use(conn, tx);
+        var updatedAt = await context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
         var changes = new List<AuditChange>();
         foreach (var item in normalized)
         {
-            var exists = await conn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COUNT(*) FROM system_configs WHERE cfg_key=@Key", item, tx, cancellationToken: ct));
-            if (exists != 1) throw ApiException.BadRequest($"未知系统参数：{item.Key}");
-            var previous = await conn.QuerySingleOrDefaultAsync<string?>(new CommandDefinition("SELECT cfg_value FROM system_configs WHERE cfg_key=@Key", item, tx, cancellationToken: ct));
+            var config = await context.SystemConfigs.SingleOrDefaultAsync(config => config.CfgKey == item.Key, ct)
+                ?? throw ApiException.BadRequest($"未知系统参数：{item.Key}");
+            var previous = config.CfgValue;
             if (previous != item.Value)
             {
                 var safe = EmailNotificationPolicy.Keys.Contains(item.Key, StringComparer.Ordinal)
                     || item.Key is "upload.max_file_size" or "upload.chunk_size" or "upload.allowed_exts";
                 changes.Add(new AuditChange(item.Key, ConfigLabel(item.Key), safe ? previous : "未展示", safe ? item.Value : "已更新"));
             }
-            await conn.ExecuteAsync(new CommandDefinition("UPDATE system_configs SET cfg_value=@Value,updated_at=UTC_TIMESTAMP(6) WHERE cfg_key=@Key", item, tx, cancellationToken: ct));
+            config.CfgValue = item.Value;
+            config.UpdatedAt = updatedAt;
         }
+        await context.SaveChangesAsync(ct);
         await audit.WriteAsync(conn, tx, actor.Id, "CONFIG_UPDATE", "system_config", null, new { keys = normalized.Select(x => x.Key), changes }, null, ct);
         await tx.CommitAsync(ct);
     }
@@ -129,43 +140,57 @@ public sealed class SystemService(AppDb db, AuditService audit)
     public async Task<object> ListLogsAsync(HttpRequest request, CancellationToken ct)
     {
         var (page, size, offset) = QueryValues.Page(request);
-        var where = new List<string>();
-        var args = new DynamicParameters(new { size, offset });
-        foreach (var (name, column) in new[] { ("action", "a.action"), ("targetType", "a.target_type"), ("targetId", "a.target_id") })
-            if (!string.IsNullOrWhiteSpace(request.Query[name])) { where.Add($"{column}=@{name}"); args.Add(name, request.Query[name].ToString().Trim()); }
-        if (!string.IsNullOrWhiteSpace(request.Query["keyword"]))
+        var category = request.Query["category"].ToString().Trim();
+        string[]? categoryActions = null;
+        if (category.Length > 0 && !Categories.TryGetValue(category, out categoryActions))
+            throw ApiException.BadRequest("日志分类参数无效");
+        await using var conn = await db.OpenAsync(ct);
+        await using var context = EfDb.Use(conn);
+        var query = context.AuditLogs.AsNoTracking();
+        var action = request.Query["action"].ToString().Trim();
+        var targetType = request.Query["targetType"].ToString().Trim();
+        var targetId = request.Query["targetId"].ToString().Trim();
+        if (action.Length > 0) query = query.Where(log => log.Action == action);
+        if (targetType.Length > 0) query = query.Where(log => log.TargetType == targetType);
+        if (targetId.Length > 0) query = query.Where(log => log.TargetId == targetId);
+        var keyword = request.Query["keyword"].ToString().Trim();
+        if (keyword.Length > 0)
         {
-            where.Add("(a.employee_no LIKE @keyword OR u.real_name LIKE @keyword OR a.action LIKE @keyword OR a.target_type LIKE @keyword OR a.target_id LIKE @keyword OR a.detail LIKE @keyword OR p.name LIKE @keyword OR r.name LIKE @keyword OR d.name LIKE @keyword OR s.name LIKE @keyword OR target_user.real_name LIKE @keyword OR f.original_name LIKE @keyword)");
-            args.Add("keyword", "%" + request.Query["keyword"].ToString().Trim() + "%");
+            var pattern = "%" + keyword + "%";
+            query = query.Where(log =>
+                log.EmployeeNo != null && EF.Functions.Like(log.EmployeeNo, pattern)
+                || EF.Functions.Like(log.Action, pattern)
+                || log.TargetType != null && EF.Functions.Like(log.TargetType, pattern)
+                || log.TargetId != null && EF.Functions.Like(log.TargetId, pattern)
+                || log.Detail != null && EF.Functions.Like(EF.Functions.JsonUnquote(log.Detail), pattern)
+                || context.Users.Any(user => user.Id == log.UserId && EF.Functions.Like(user.RealName, pattern)));
         }
-        if (!string.IsNullOrWhiteSpace(request.Query["employeeNo"])) { where.Add("a.employee_no LIKE @employeeNo"); args.Add("employeeNo", "%" + request.Query["employeeNo"].ToString().Trim() + "%"); }
+        var employeeNo = request.Query["employeeNo"].ToString().Trim();
+        if (employeeNo.Length > 0)
+        {
+            var pattern = "%" + employeeNo + "%";
+            query = query.Where(log => log.EmployeeNo != null && EF.Functions.Like(log.EmployeeNo, pattern));
+        }
         foreach (var name in new[] { "start", "end" })
             if (!string.IsNullOrWhiteSpace(request.Query[name]))
             {
                 if (!DateTimeOffset.TryParse(request.Query[name], CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)) throw ApiException.BadRequest("日期参数无效");
-                where.Add($"a.created_at {(name == "start" ? ">=" : "<=")} @{name}"); args.Add(name, at.UtcDateTime);
+                var utc = at.UtcDateTime;
+                query = name == "start" ? query.Where(log => log.CreatedAt >= utc) : query.Where(log => log.CreatedAt <= utc);
             }
-        var category = request.Query["category"].ToString().Trim();
-        if (category.Length > 0)
+        if (categoryActions is not null)
+            query = query.Where(log => Enumerable.Contains(categoryActions, log.Action));
+        var total = (ulong)await query.LongCountAsync(ct);
+        var rows = await query.OrderByDescending(log => log.Id).Select(log => new AuditRow
         {
-            if (!Categories.TryGetValue(category, out var actions)) throw ApiException.BadRequest("日志分类参数无效");
-            where.Add("a.action IN @actions");
-            args.Add("actions", actions);
-        }
-        var condition = where.Count == 0 ? "" : " WHERE " + string.Join(" AND ", where);
-        const string from = """
-            FROM audit_logs a
-            LEFT JOIN users u ON u.id=a.user_id
-            LEFT JOIN projects p ON a.target_type='project' AND p.id=a.target_id
-            LEFT JOIN roles r ON a.target_type='role' AND r.id=a.target_id
-            LEFT JOIN departments d ON a.target_type='department' AND d.id=a.target_id
-            LEFT JOIN suppliers s ON a.target_type='supplier' AND s.id=a.target_id
-            LEFT JOIN users target_user ON a.target_type='user' AND target_user.id=a.target_id
-            LEFT JOIN files f ON a.target_type='file' AND f.id=a.target_id
-            """;
-        await using var conn = await db.OpenAsync(ct);
-        var total = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT COUNT(*) " + from + condition, args, cancellationToken: ct));
-        var rows = await conn.QueryAsync<AuditRow>(new CommandDefinition("SELECT a.id,a.user_id AS UserId,COALESCE(a.employee_no,u.employee_no) AS EmployeeNo,u.real_name CurrentActorName,COALESCE(p.name,r.name,d.name,s.name,target_user.real_name,f.original_name) CurrentTargetName,a.action,a.target_type AS TargetType,a.target_id AS TargetId,a.detail,a.ip,a.created_at AS CreatedAt " + from + condition + " ORDER BY a.id DESC LIMIT @size OFFSET @offset", args, cancellationToken: ct));
+            Id = log.Id, UserId = log.UserId, EmployeeNo = log.EmployeeNo,
+            CurrentActorName = context.Users.Where(user => user.Id == log.UserId).Select(user => user.RealName).FirstOrDefault(),
+            // Every new audit record stores its target-name snapshot in Detail.auditContext.
+            // Keeping the projection snapshot-only avoids cross-table string casts and preserves history.
+            CurrentTargetName = null,
+            Action = log.Action, TargetType = log.TargetType, TargetId = log.TargetId, Detail = log.Detail,
+            Ip = log.Ip, CreatedAt = log.CreatedAt,
+        }).Page(offset, size).ToArrayAsync(ct);
         return new { list = rows.Select(x => x.ToResponse()), total, page, pageSize = size };
     }
 
@@ -196,10 +221,18 @@ public sealed class SystemService(AppDb db, AuditService audit)
         AccessService.RequireInternal(actor);
         await AccessService.RequirePermissionAsync(conn, tx, actor, "log:view", ct);
         await AccessService.RequirePermissionAsync(conn, tx, actor, "log:delete", ct);
-        var rows = (await conn.QueryAsync<AuditRow>(new CommandDefinition("SELECT id,action FROM audit_logs WHERE id IN @ids ORDER BY id FOR UPDATE", new { ids = ids.Distinct().ToArray() }, tx, cancellationToken: ct))).ToArray();
+        await using var context = EfDb.Use(conn, tx);
+        var distinctIds = ids.Distinct().Order().ToArray();
+        var rows = new List<AuditRow>(distinctIds.Length);
+        foreach (var id in distinctIds)
+        {
+            var locked = await context.AuditLogs.FromSqlInterpolated($"SELECT * FROM audit_logs WHERE id={id} FOR UPDATE")
+                .AsNoTracking().SingleOrDefaultAsync(ct);
+            if (locked is not null) rows.Add(new AuditRow { Id = locked.Id, Action = locked.Action });
+        }
         if (rows.Any(x => x.Action == "AUDIT_LOG_DELETE")) throw ApiException.Forbidden("日志清理记录不可删除");
         var actualIds = rows.Select(x => x.Id).ToArray();
-        var deleted = actualIds.Length == 0 ? 0 : await conn.ExecuteAsync(new CommandDefinition("DELETE FROM audit_logs WHERE id IN @actualIds", new { actualIds }, tx, cancellationToken: ct));
+        var deleted = actualIds.Length == 0 ? 0 : await context.AuditLogs.Where(log => Enumerable.Contains(actualIds, log.Id)).ExecuteDeleteAsync(ct);
         if (deleted > 0) await audit.WriteAsync(conn, tx, actor.Id, "AUDIT_LOG_DELETE", "audit_log", null, new { ids = actualIds, deleted }, null, ct);
         await tx.CommitAsync(ct);
         return new { deleted };
@@ -208,7 +241,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
     private static readonly Dictionary<string, string[]> Categories = new(StringComparer.Ordinal)
     {
         ["AUTH"] = "LOGIN LOGIN_FAILED LOGIN_LOCKED LOGOUT PASSWORD_CHANGE PROFILE_UPDATE".Split(' '),
-        ["PROJECT"] = "PROJECT_GROUP_CREATE PROJECT_GROUP_UPDATE PROJECT_GROUP_STATUS_AUTO PROJECT_GROUP_DELETE PROJECT_CREATE PROJECT_COPY PROJECT_UPDATE PROJECT_START PROJECT_SUBMIT PROJECT_CONFIRM PROJECT_REJECT PROJECT_WITHDRAW PROJECT_TERMINATE PROJECT_RESTART PROJECT_MEMBERS PROJECT_DELETE PROJECT_ACCEPTANCE_MIGRATE PROJECT_ACCEPTANCE_NOTIFICATIONS_MIGRATE".Split(' '),
+        ["PROJECT"] = "PROJECT_GROUP_CREATE PROJECT_GROUP_UPDATE PROJECT_GROUP_STATUS_AUTO PROJECT_GROUP_DELETE PROJECT_CREATE PROJECT_COPY PROJECT_UPDATE PROJECT_START PROJECT_SUBMIT PROJECT_CONFIRM PROJECT_REJECT PROJECT_WITHDRAW PROJECT_TERMINATE PROJECT_RESTART PROJECT_MEMBERS PROJECT_DELETE".Split(' '),
         ["FILE"] = "FILE_UPLOAD FILE_DOWNLOAD FILE_BATCH_DOWNLOAD FILE_DELETE UPLOAD_ABORT".Split(' '),
         ["MESSAGE"] = "MESSAGE_CREATE MESSAGE_DELETE".Split(' '),
         ["ORG"] = "USER_CREATE USER_UPDATE USER_STATUS USER_RESET_PASSWORD USER_ASSIGN_ROLE USER_ASSIGN_ROLES DEPT_CREATE DEPT_UPDATE DEPT_STATUS DEPT_DELETE USER_DELETE ROLE_CREATE ROLE_UPDATE ROLE_STATUS ROLE_ASSIGN_PERMS ROLE_DELETE".Split(' '),

@@ -1,6 +1,7 @@
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.SystemManagement;
 
 namespace Yf.Api.Modules.Projects;
@@ -158,6 +159,7 @@ internal static class ProjectNotificationService
         var subject = $"[协作平台] 项目「{project.Name}」已提交验收";
         var body = $"项目：{project.Name}\n结果：已提交验收\n确认方：公司\n操作人：工号 {submitter.EmployeeNo}\n\n请登录平台查看：{targetUrl}\n\n（本邮件由系统自动发送）";
         var seenRecipients = new HashSet<ulong>();
+        await using var db = EfDb.Use(conn, tx);
         foreach (var reviewer in reviewers)
         {
             if (reviewer.Id == submitter.Id)
@@ -171,13 +173,15 @@ internal static class ProjectNotificationService
             }
             if (!seenRecipients.Add(reviewer.Id)) continue;
 
-            const string insert = """
+            // This upsert is intentionally atomic: a cancelled request may be re-submitted
+            // while another process observes the same unique dedupe key.
+            await db.Database.ExecuteSqlInterpolatedAsync($$"""
                 INSERT INTO email_outbox
                     (event_type,project_id,dedupe_key,recipient_user_id,recipient_email,
                      subject,body,status,retry_count,next_attempt_at,last_error,sent_at,created_at)
                 VALUES
-                    ('PROJECT_SUBMITTED',@ProjectId,@DedupeKey,@RecipientUserId,@RecipientEmail,
-                     @Subject,@Body,'PENDING',0,NULL,NULL,NULL,UTC_TIMESTAMP(3))
+                    ('PROJECT_SUBMITTED',{{project.Id}},{{AcceptanceDedupeKey(project.Id, latestSubmissionId, reviewer.Id)}},
+                     {{reviewer.Id}},{{reviewer.Email}},{{subject}},{{body}},'PENDING',0,NULL,NULL,NULL,UTC_TIMESTAMP(3))
                 ON DUPLICATE KEY UPDATE
                     event_type=IF(sent_at IS NULL AND status='CANCELLED',VALUES(event_type),event_type),
                     project_id=IF(sent_at IS NULL AND status='CANCELLED',VALUES(project_id),project_id),
@@ -189,20 +193,7 @@ internal static class ProjectNotificationService
                     next_attempt_at=IF(sent_at IS NULL AND status='CANCELLED',NULL,next_attempt_at),
                     last_error=IF(sent_at IS NULL AND status='CANCELLED',NULL,last_error),
                     status=IF(sent_at IS NULL AND status='CANCELLED','PENDING',status)
-                """;
-            await conn.ExecuteAsync(new CommandDefinition(
-                insert,
-                new
-                {
-                    ProjectId = project.Id,
-                    DedupeKey = AcceptanceDedupeKey(project.Id, latestSubmissionId, reviewer.Id),
-                    RecipientUserId = reviewer.Id,
-                    RecipientEmail = reviewer.Email,
-                    Subject = subject,
-                    Body = body,
-                },
-                tx,
-                cancellationToken: ct));
+                """, ct);
         }
     }
 
@@ -238,25 +229,16 @@ internal static class ProjectNotificationService
         ulong recipientId,
         CancellationToken ct)
     {
-        var project = await conn.QuerySingleOrDefaultAsync<ProjectRow>(new CommandDefinition(
-            """
-            SELECT id AS Id,name AS Name,supplier_id AS SupplierId,status AS Status,
-                   confirm_side AS ConfirmSide,created_by AS CreatedBy,
-                   responsible_user_id AS ResponsibleUserId,
-                   created_at AS CreatedAt,updated_at AS UpdatedAt
-            FROM projects WHERE id=@ProjectId
-            """,
-            new { ProjectId = projectId },
-            tx,
-            cancellationToken: ct));
+        await using var db = EfDb.Use(conn, tx);
+        var project = await ProjectQueries.Rows(db)
+            .SingleOrDefaultAsync(row => row.Id == projectId, ct);
         if (project is null
             || project.Status != ProjectStatuses.PendingConfirmation
             || project.ConfirmSide != ProjectWorkflowRules.InternalAcceptanceSide)
         {
             return false;
         }
-        var latestSubmissionId = await LatestSubmissionIdAsync(conn, tx, projectId, ct);
-        if (latestSubmissionId != submissionId)
+        if (project.LatestSubmissionId != submissionId)
         {
             return false;
         }
@@ -264,25 +246,28 @@ internal static class ProjectNotificationService
         return reviewers.Any(reviewer => reviewer.Id == recipientId);
     }
 
-    internal static Task<int> CancelPendingAcceptanceAsync(
+    internal static async Task<int> CancelPendingAcceptanceAsync(
         MySqlConnection conn,
         MySqlTransaction tx,
         ulong projectId,
         string reason,
-        CancellationToken ct) =>
+        CancellationToken ct)
+    {
         // A SENDING row may already have crossed the SMTP side-effect boundary.
         // Its worker must record the accepted/failure result; an expired lease is
         // re-claimed later and cancelled by the worker's current-request check.
-        conn.ExecuteAsync(new CommandDefinition(
-            """
-            UPDATE email_outbox
-            SET status='CANCELLED',next_attempt_at=NULL,last_error=@Reason
-            WHERE project_id=@ProjectId AND event_type='PROJECT_SUBMITTED'
-              AND sent_at IS NULL AND status IN ('PENDING','FAILED')
-            """,
-            new { ProjectId = projectId, Reason = reason },
-            tx,
-            cancellationToken: ct));
+        await using var db = EfDb.Use(conn, tx);
+        var cancellableStatuses = new[] { "PENDING", "FAILED" };
+        return await db.EmailOutbox
+            .Where(mail => mail.ProjectId == projectId
+                && mail.EventType == "PROJECT_SUBMITTED"
+                && mail.SentAt == null
+                && Enumerable.Contains(cancellableStatuses, mail.Status))
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(mail => mail.Status, "CANCELLED")
+                .SetProperty(mail => mail.NextAttemptAt, (DateTime?)null)
+                .SetProperty(mail => mail.LastError, reason), ct);
+    }
 
     internal static async Task<IReadOnlyList<UserRow>> ParticipantsAsync(
         MySqlConnection conn,
@@ -290,39 +275,37 @@ internal static class ProjectNotificationService
         ProjectRow project,
         CancellationToken ct)
     {
-        const string sql = """
-            SELECT DISTINCT u.id AS Id, u.employee_no AS EmployeeNo, u.real_name AS RealName,
-                   u.email AS Email, u.user_type AS UserType, u.supplier_id AS SupplierId,
-                   u.department_id AS DepartmentId, u.status AS Status
-            FROM users u
-            INNER JOIN projects p ON p.id = @ProjectId
-            WHERE u.status = 'ACTIVE'
-              AND EXISTS(
-                  SELECT 1
-                  FROM user_roles ur
-                  INNER JOIN roles r ON r.id = ur.role_id AND r.status = 'ACTIVE'
-                  INNER JOIN role_permissions rp ON rp.role_id = r.id
-                  INNER JOIN permissions permission ON permission.id = rp.permission_id
-                  WHERE ur.user_id = u.id AND permission.code = 'project:list'
-              )
-              AND (
-                    (u.user_type = 'INTERNAL' AND (
-                        u.id = p.responsible_user_id
-                    ))
-                    OR
-                    (u.user_type = 'SUPPLIER' AND u.supplier_id = p.supplier_id AND EXISTS(
-                        SELECT 1 FROM suppliers s
-                        WHERE s.id = p.supplier_id AND s.status = 'ACTIVE'
-                    ))
-              )
-            ORDER BY u.id
-            """;
-        var rows = await conn.QueryAsync<UserRow>(new CommandDefinition(
-            sql,
-            new { ProjectId = project.Id },
-            tx,
-            cancellationToken: ct));
-        return rows.AsList();
+        await using var db = EfDb.Use(conn, tx);
+        var rows = await db.Users
+            .Where(user => user.Status == "ACTIVE")
+            .Where(user => db.UserRoles.Any(userRole =>
+                userRole.UserId == user.Id
+                && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == "ACTIVE")
+                && db.RolePermissions.Any(rolePermission =>
+                    rolePermission.RoleId == userRole.RoleId
+                    && db.Permissions.Any(permission =>
+                        permission.Id == rolePermission.PermissionId && permission.Code == "project:list"))))
+            .Where(user => db.Projects.Any(currentProject =>
+                currentProject.Id == project.Id
+                && ((user.UserType == "INTERNAL" && user.Id == currentProject.ResponsibleUserId)
+                    || (user.UserType == "SUPPLIER"
+                        && user.SupplierId == currentProject.SupplierId
+                        && db.Suppliers.Any(supplier =>
+                            supplier.Id == currentProject.SupplierId && supplier.Status == "ACTIVE")))))
+            .OrderBy(user => user.Id)
+            .Select(user => new UserRow
+            {
+                Id = user.Id,
+                EmployeeNo = user.EmployeeNo,
+                RealName = user.RealName,
+                Email = user.Email,
+                UserType = user.UserType,
+                SupplierId = user.SupplierId,
+                DepartmentId = user.DepartmentId,
+                Status = user.Status,
+            })
+            .ToArrayAsync(ct);
+        return rows;
     }
 
     private static async Task EnqueueAsync(
@@ -350,18 +333,23 @@ internal static class ProjectNotificationService
         if (targetUsers.Count > 0)
         {
             var participantIds = recipients.Select(user => user.Id).ToHashSet();
-            var explicitUsers = await conn.QueryAsync<UserRow>(new CommandDefinition(
-                """
-                SELECT id AS Id, employee_no AS EmployeeNo, real_name AS RealName,
-                       email AS Email, user_type AS UserType, supplier_id AS SupplierId,
-                       department_id AS DepartmentId, status AS Status
-                FROM users
-                WHERE id IN @TargetUserIds AND status='ACTIVE'
-                ORDER BY id
-                """,
-                new { TargetUserIds = targetUsers.ToArray() },
-                tx,
-                cancellationToken: ct));
+            var targetUserIds = targetUsers.ToArray();
+            await using var db = EfDb.Use(conn, tx);
+            var explicitUsers = await db.Users
+                .Where(user => Enumerable.Contains(targetUserIds, user.Id) && user.Status == "ACTIVE")
+                .OrderBy(user => user.Id)
+                .Select(user => new UserRow
+                {
+                    Id = user.Id,
+                    EmployeeNo = user.EmployeeNo,
+                    RealName = user.RealName,
+                    Email = user.Email,
+                    UserType = user.UserType,
+                    SupplierId = user.SupplierId,
+                    DepartmentId = user.DepartmentId,
+                    Status = user.Status,
+                })
+                .ToArrayAsync(ct);
             foreach (var explicitUser in explicitUsers)
             {
                 if (!participantIds.Add(explicitUser.Id))
@@ -375,6 +363,7 @@ internal static class ProjectNotificationService
             }
         }
         var seenRecipients = new HashSet<ulong>();
+        var pending = new List<EmailOutbox>();
         foreach (var recipient in recipients)
         {
             if (excludeUser == recipient.Id)
@@ -414,27 +403,28 @@ internal static class ProjectNotificationService
                 continue;
             }
 
-            const string insert = """
-                INSERT INTO email_outbox
-                    (event_type, project_id, dedupe_key, recipient_user_id, recipient_email,
-                     subject, body, status, retry_count, next_attempt_at, last_error, sent_at, created_at)
-                VALUES
-                    (@EventType, @ProjectId, NULL, @RecipientUserId, @RecipientEmail,
-                     @Subject, @Body, 'PENDING', 0, NULL, NULL, NULL, UTC_TIMESTAMP(3))
-                """;
-            await conn.ExecuteAsync(new CommandDefinition(
-                insert,
-                new
-                {
-                    EventType = eventType,
-                    ProjectId = project.Id,
-                    RecipientUserId = recipient.Id,
-                    RecipientEmail = recipient.Email,
-                    Subject = subject,
-                    Body = body,
-                },
-                tx,
-                cancellationToken: ct));
+            pending.Add(new EmailOutbox
+            {
+                EventType = eventType,
+                ProjectId = project.Id,
+                RecipientUserId = recipient.Id,
+                RecipientEmail = recipient.Email,
+                Subject = subject,
+                Body = body,
+                Status = "PENDING",
+                RetryCount = 0,
+            });
+        }
+
+        if (pending.Count > 0)
+        {
+            await using var db = EfDb.Use(conn, tx);
+            var databaseNow = await db.Database
+                .SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(3) AS Value")
+                .SingleAsync(ct);
+            foreach (var mail in pending) mail.CreatedAt = databaseNow;
+            db.EmailOutbox.AddRange(pending);
+            await db.SaveChangesAsync(ct);
         }
     }
 
@@ -445,16 +435,18 @@ internal static class ProjectNotificationService
         ulong recipientId,
         CancellationToken ct)
     {
-        var recipient = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(
-            """
-            SELECT id AS Id,employee_no AS EmployeeNo,user_type AS UserType,
-                   supplier_id AS SupplierId,status AS Status
-            FROM users
-            WHERE id=@RecipientId AND status='ACTIVE'
-            """,
-            new { RecipientId = recipientId },
-            tx,
-            cancellationToken: ct));
+        await using var db = EfDb.Use(conn, tx);
+        var recipient = await db.Users
+            .Where(user => user.Id == recipientId && user.Status == "ACTIVE")
+            .Select(user => new UserRow
+            {
+                Id = user.Id,
+                EmployeeNo = user.EmployeeNo,
+                UserType = user.UserType,
+                SupplierId = user.SupplierId,
+                Status = user.Status,
+            })
+            .SingleOrDefaultAsync(ct);
         if (recipient is null)
         {
             return false;
@@ -514,16 +506,18 @@ internal static class ProjectNotificationService
             null,
             ct);
 
-    private static Task<ulong?> LatestSubmissionIdAsync(
+    private static async Task<ulong?> LatestSubmissionIdAsync(
         MySqlConnection conn,
         MySqlTransaction? tx,
         ulong projectId,
-        CancellationToken ct) =>
-        conn.QuerySingleAsync<ulong?>(new CommandDefinition(
-            "SELECT MAX(id) FROM project_status_logs WHERE project_id=@ProjectId AND action='SUBMIT'",
-            new { ProjectId = projectId },
-            tx,
-            cancellationToken: ct));
+        CancellationToken ct)
+    {
+        await using var db = EfDb.Use(conn, tx);
+        return await db.ProjectStatusLogs
+            .Where(log => log.ProjectId == projectId && log.Action == "SUBMIT")
+            .Select(log => (ulong?)log.Id)
+            .MaxAsync(ct);
+    }
 
     private static string SideUserType(string side) => side == "SUPPLIER" ? "SUPPLIER" : "INTERNAL";
 

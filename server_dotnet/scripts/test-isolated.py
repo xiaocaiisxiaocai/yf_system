@@ -102,7 +102,7 @@ if not config_url:
 url = urllib.parse.urlsplit(config_url)
 if url.scheme != "mysql" or url.hostname not in ("127.0.0.1", "localhost", "::1"):
     raise SystemExit("Isolated testing only allows local MySQL")
-name = "yf_test_dotnet_" + uuid.uuid4().hex
+name = "yf_test_" + uuid.uuid4().hex[:24]
 user = urllib.parse.unquote(url.username or "")
 password = urllib.parse.unquote(url.password or "")
 conn = pymysql.connect(host=url.hostname, port=url.port or 3306, user=user, password=password, autocommit=True)
@@ -124,7 +124,7 @@ def stop_process(owned):
 
 
 def assign_admin_project_section(client, connection, admin_id):
-    """Give the disposable admin fixture a valid v10 project-owner section."""
+    """Give the disposable admin fixture a valid project-owner section."""
     suffix = secrets.token_hex(5)
     division = client.call("POST", "/api/v1/admin/departments", {
         "name": "隔离测试事业部-" + suffix,
@@ -181,216 +181,68 @@ try:
         del env["YF_BOOTSTRAP_PASSWORD"]
         # Legacy role fixtures are test-only; production initialization remains admin-only.
         install_legacy_test_roles(conn)
-        # Downgrade only our empty isolated fixture to exercise adoption and the
-        # restartable 16 -> 17 -> .NET v4 upgrade without invoking another backend.
         with conn.cursor() as cursor:
             cursor.execute("SELECT id,password_hash FROM users WHERE employee_no='admin'")
             admin_user_id, preserved_hash = cursor.fetchone()
-            cursor.execute("DROP TABLE collaboration_reads")
-            cursor.execute("DROP TABLE yf_schema_migrations")
-            cursor.execute("DELETE FROM seaql_migrations WHERE version='m20260911_000017_auth_session_families'")
-            cursor.execute("ALTER TABLE refresh_tokens DROP INDEX idx_refresh_tokens_session_state, DROP COLUMN session_id")
-            cursor.execute("INSERT INTO refresh_tokens(user_id,token_hash,expires_at,revoked) SELECT id,%s,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 DAY),0 FROM users WHERE employee_no='admin'", (secrets.token_hex(32),))
-            legacy_token_id = cursor.lastrowid
-            cursor.execute("INSERT IGNORE INTO role_permissions(role_id,permission_id) SELECT r.id,p.id FROM roles r CROSS JOIN permissions p WHERE r.name='供应商人员' AND p.code IN ('user:manage','project:confirm')")
             cursor.execute(
-                "INSERT INTO suppliers(name,remark,status,created_by) "
-                "VALUES('迁移内部验收供应商','owned isolated migration fixture','ACTIVE',%s)",
-                (admin_user_id,),
+                "SELECT MigrationId,ProductVersion FROM __EFMigrationsHistory ORDER BY MigrationId"
             )
-            migration_supplier_id = cursor.lastrowid
+            expected_history = cursor.fetchall()
             cursor.execute(
-                "INSERT INTO project_groups(name,description,supplier_id,status,created_by,responsible_user_id) "
-                "VALUES('迁移待验收主项目','must move to company',%s,'IN_PROGRESS',%s,%s)",
-                (migration_supplier_id, admin_user_id, admin_user_id),
+                "SELECT COUNT(*) FROM project_dictionaries "
+                "WHERE type='PRIORITY' AND name IN ('高','普通','低')"
             )
-            pending_migration_group_id = cursor.lastrowid
-            cursor.execute(
-                "INSERT INTO projects(project_group_id,name,description,supplier_id,status,confirm_side,created_by,responsible_user_id) "
-                "VALUES(%s,'迁移待验收项目','must move to company',%s,'PENDING_CONFIRMATION','SUPPLIER',%s,%s)",
-                (pending_migration_group_id, migration_supplier_id, admin_user_id, admin_user_id),
+            check("fresh EF initialization seeds the default priorities", cursor.fetchone()[0] == 3)
+        check("fresh EF initialization records exactly one InitialCreate migration",
+              len(expected_history) == 1 and expected_history[0][0].endswith("_InitialCreate"))
+
+        for _ in range(2):
+            migration = subprocess.run(
+                ["dotnet", str(DLL), "--migrate-database"],
+                cwd=API, env=env, capture_output=True,
             )
-            pending_migration_project_id = cursor.lastrowid
-            cursor.execute(
-                "INSERT INTO users(employee_no,password_hash,real_name,email,user_type,status,"
-                "must_change_password,created_by) VALUES('migration_reviewer',%s,'迁移验收人',"
-                "'migration-reviewer@example.invalid','INTERNAL','ACTIVE',0,%s)",
-                (preserved_hash, admin_user_id),
-            )
-            migration_reviewer_id = cursor.lastrowid
-            cursor.execute(
-                "INSERT INTO user_roles(user_id,role_id) "
-                "SELECT %s,id FROM roles WHERE name='内部成员'",
-                (migration_reviewer_id,),
-            )
-            cursor.execute(
-                "UPDATE project_groups SET responsible_user_id=%s WHERE id=%s",
-                (migration_reviewer_id, pending_migration_group_id),
-            )
-            cursor.execute(
-                "UPDATE projects SET responsible_user_id=%s WHERE id=%s",
-                (migration_reviewer_id, pending_migration_project_id),
-            )
-            cursor.executemany(
-                "INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,"
-                "confirm_side,reason,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
-                [
-                    (pending_migration_project_id, "IN_PROGRESS", "PENDING_CONFIRMATION", "SUBMIT",
-                     admin_user_id, "SUPPLIER", None, "2026-09-14 00:00:01.000"),
-                    (pending_migration_project_id, "PENDING_CONFIRMATION", "IN_PROGRESS", "REJECT",
-                     admin_user_id, "SUPPLIER", "历史驳回", "2026-09-14 00:00:02.000"),
-                    (pending_migration_project_id, "IN_PROGRESS", "PENDING_CONFIRMATION", "SUBMIT",
-                     admin_user_id, "SUPPLIER", None, "2026-09-14 00:00:03.000"),
-                ],
-            )
-            cursor.execute(
-                "SELECT MAX(id) FROM project_status_logs "
-                "WHERE project_id=%s AND action='SUBMIT'",
-                (pending_migration_project_id,),
-            )
-            pending_migration_submission_id = cursor.fetchone()[0]
-            cursor.execute(
-                "INSERT INTO email_outbox(event_type,dedupe_key,project_id,recipient_user_id,"
-                "recipient_email,subject,body,status,retry_count,created_at) "
-                "VALUES('PROJECT_SUBMITTED',NULL,%s,%s,'migration-reviewer@example.invalid',"
-                "'旧待验收通知','旧通知应取消并按版本重建','PENDING',0,UTC_TIMESTAMP(3))",
-                (pending_migration_project_id, migration_reviewer_id),
-            )
-            cursor.execute(
-                "INSERT INTO project_groups(name,description,supplier_id,status,created_by,responsible_user_id,completed_at) "
-                "VALUES('迁移已完成主项目','must remain unchanged',%s,'COMPLETED',%s,%s,UTC_TIMESTAMP(3))",
-                (migration_supplier_id, admin_user_id, admin_user_id),
-            )
-            completed_migration_group_id = cursor.lastrowid
-            cursor.execute(
-                "INSERT INTO projects(project_group_id,name,description,supplier_id,status,confirm_side,created_by,responsible_user_id) "
-                "VALUES(%s,'迁移已完成项目','must remain unchanged',%s,'COMPLETED',NULL,%s,%s)",
-                (completed_migration_group_id, migration_supplier_id, admin_user_id, admin_user_id),
-            )
-            completed_migration_project_id = cursor.lastrowid
-            cursor.executemany(
-                "INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,"
-                "confirm_side,reason,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
-                [
-                    (completed_migration_project_id, "IN_PROGRESS", "PENDING_CONFIRMATION", "SUBMIT",
-                     admin_user_id, "SUPPLIER", None, "2026-09-14 00:00:04.000"),
-                    (completed_migration_project_id, "PENDING_CONFIRMATION", "COMPLETED", "CONFIRM",
-                     admin_user_id, "SUPPLIER", None, "2026-09-14 00:00:05.000"),
-                ],
-            )
-        for attempt in range(2):
-            migration = subprocess.run(["dotnet", str(DLL), "--migrate-database"], cwd=API, env=env, capture_output=True)
             if migration.returncode:
-                raise RuntimeError(".NET migration failed: " + migration.stderr.decode(errors="replace")[:1500])
+                raise RuntimeError(
+                    "EF migration on current database failed: "
+                    + migration.stderr.decode(errors="replace")[:1500]
+                )
         with conn.cursor() as cursor:
             cursor.execute("SELECT password_hash FROM users WHERE employee_no='admin'")
-            check(".NET migration from baseline 16 is repeatable and preserves users", cursor.fetchone()[0] == preserved_hash)
-            cursor.execute("SELECT COUNT(*) FROM yf_schema_migrations")
-            check(".NET owns schema v11 version history", cursor.fetchone()[0] == 11)
+            check("repeatable EF migration preserves initialized users",
+                  cursor.fetchone()[0] == preserved_hash)
             cursor.execute(
-                "SELECT COUNT(*) FROM system_configs WHERE cfg_key IN "
-                "('notify.enabled','notify.internal.enabled','notify.supplier.enabled',"
-                "'notify.event.message_created','notify.event.file_uploaded',"
-                "'notify.event.project_submitted','notify.event.project_confirmed',"
-                "'notify.event.project_rejected','notify.event.project_withdrawn')"
+                "SELECT MigrationId,ProductVersion FROM __EFMigrationsHistory ORDER BY MigrationId"
             )
-            check("v11 migration installs all independent notification settings", cursor.fetchone()[0] == 9)
-            cursor.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='collaboration_reads'")
-            check("collaboration read receipt migration creates its additive table", cursor.fetchone()[0] == 1)
-            cursor.execute("SELECT session_id FROM refresh_tokens WHERE id=%s", (legacy_token_id,))
-            check("legacy refresh rows get persisted session family", cursor.fetchone()[0] == format(legacy_token_id, 'x').zfill(36))
-            cursor.execute("SELECT p.code FROM role_permissions rp JOIN roles r ON r.id=rp.role_id JOIN permissions p ON p.id=rp.permission_id WHERE r.name='供应商人员' AND p.code IN ('user:manage','project:confirm') ORDER BY p.code")
-            check("migration removes preexisting supplier management and confirmation grants", cursor.fetchall() == ())
-            cursor.execute(
-                "SELECT status,confirm_side FROM projects WHERE id=%s",
-                (pending_migration_project_id,),
-            )
-            pending_project_state = cursor.fetchone()
-            cursor.execute(
-                "SELECT action,confirm_side FROM project_status_logs WHERE project_id=%s ORDER BY id",
-                (pending_migration_project_id,),
-            )
-            pending_history = cursor.fetchall()
-            check(
-                "internal acceptance migration updates only the current pending supplier confirmation",
-                pending_project_state == ("PENDING_CONFIRMATION", "COMPANY")
-                and pending_history == (
-                    ("SUBMIT", "SUPPLIER"),
-                    ("REJECT", "SUPPLIER"),
-                    ("SUBMIT", "COMPANY"),
-                ),
-            )
-            cursor.execute(
-                "SELECT status,confirm_side FROM projects WHERE id=%s",
-                (completed_migration_project_id,),
-            )
-            completed_project_state = cursor.fetchone()
-            cursor.execute(
-                "SELECT action,confirm_side FROM project_status_logs WHERE project_id=%s ORDER BY id",
-                (completed_migration_project_id,),
-            )
-            completed_history = cursor.fetchall()
-            check(
-                "internal acceptance migration preserves completed supplier-confirmation history",
-                completed_project_state == ("COMPLETED", None)
-                and completed_history == (
-                    ("SUBMIT", "SUPPLIER"),
-                    ("CONFIRM", "SUPPLIER"),
-                ),
-            )
-            cursor.execute(
-                "SELECT dedupe_key,recipient_user_id,status,retry_count,sent_at,last_error "
-                "FROM email_outbox WHERE project_id=%s AND event_type='PROJECT_SUBMITTED' ORDER BY id",
-                (pending_migration_project_id,),
-            )
-            migration_notification_rows = cursor.fetchall()
-            expected_migration_notification_rows = (
-                (None, migration_reviewer_id, "CANCELLED", 0, None,
-                 "项目验收已调整为公司内部确认，旧供应商确认通知已取消"),
-                (f"project-acceptance:{pending_migration_project_id}:"
-                 f"{pending_migration_submission_id}:{migration_reviewer_id}",
-                 migration_reviewer_id, "PENDING", 0, None, None),
-            )
-            if migration_notification_rows != expected_migration_notification_rows:
-                raise AssertionError(
-                    "acceptance notification migration rows mismatch: "
-                    f"expected {expected_migration_notification_rows!r}, "
-                    f"got {migration_notification_rows!r}"
-                )
-            check(
-                "acceptance notification migration preserves v3 cancellation and rebuilds the current reviewer request",
-                True,
-            )
-            cursor.execute(
-                "SELECT COUNT(*) FROM audit_logs "
-                "WHERE action='PROJECT_ACCEPTANCE_NOTIFICATIONS_MIGRATE' "
-                "AND target_type='schema' AND target_id='4'"
-            )
-            check("acceptance notification migration records one auditable rebuild", cursor.fetchone()[0] == 1)
-            cursor.execute("DELETE FROM yf_schema_migrations WHERE version>=4")
-        stale_schema = subprocess.run(["dotnet", str(DLL)], cwd=API, env=env, capture_output=True, timeout=20)
-        check("startup refuses an unapplied acceptance notification migration", stale_schema.returncode != 0)
-        migration = subprocess.run(["dotnet", str(DLL), "--migrate-database"], cwd=API, env=env, capture_output=True)
-        if migration.returncode:
-            raise RuntimeError(".NET acceptance notification migration recovery failed: " + migration.stderr.decode(errors="replace")[:1500])
+            check("repeatable EF migration preserves exact history",
+                  cursor.fetchall() == expected_history)
+
+            # Corrupt only this owned disposable fixture to prove startup and
+            # migration refuse an unmanaged nonempty database without applying DDL.
+            cursor.execute("DELETE FROM __EFMigrationsHistory")
+        stale_schema = subprocess.run(
+            ["dotnet", str(DLL)], cwd=API, env=env, capture_output=True, timeout=20,
+        )
+        check("startup refuses missing EF migration history", stale_schema.returncode != 0)
+        refused_migration = subprocess.run(
+            ["dotnet", str(DLL), "--migrate-database"],
+            cwd=API, env=env, capture_output=True, timeout=20,
+        )
+        check("explicit migration refuses empty EF history on a nonempty database",
+              refused_migration.returncode != 0)
         with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT status,retry_count,sent_at,last_error FROM email_outbox "
-                "WHERE dedupe_key=%s",
-                (f"project-acceptance:{pending_migration_project_id}:"
-                 f"{pending_migration_submission_id}:{migration_reviewer_id}",),
+            cursor.executemany(
+                "INSERT INTO __EFMigrationsHistory(MigrationId,ProductVersion) VALUES(%s,%s)",
+                expected_history,
             )
-            check(
-                "acceptance notification migration recovery leaves the current request pending",
-                cursor.fetchall() == (("PENDING", 0, None, None),),
+        current_migration = subprocess.run(
+            ["dotnet", str(DLL), "--migrate-database"],
+            cwd=API, env=env, capture_output=True,
+        )
+        if current_migration.returncode:
+            raise RuntimeError(
+                "EF migration failed after restoring the owned test history: "
+                + current_migration.stderr.decode(errors="replace")[:1500]
             )
-            cursor.execute("SELECT checksum FROM yf_schema_migrations WHERE version=1")
-            checksum = cursor.fetchone()[0]
-            cursor.execute("UPDATE yf_schema_migrations SET checksum=%s WHERE version=1", ('0' * 64,))
-        tampered = subprocess.run(["dotnet", str(DLL)], cwd=API, env=env, capture_output=True, timeout=20)
-        check("startup rejects modified migration history", tampered.returncode != 0)
-        with conn.cursor() as cursor:
-            cursor.execute("UPDATE yf_schema_migrations SET checksum=%s WHERE version=1", (checksum,))
         if not TEST_HOST.is_file():
             raise RuntimeError("Build server_dotnet/TestHost/Yf.Api.TestHost.csproj before HTTP testing")
         test_dll = TEST_HOST
@@ -405,13 +257,15 @@ try:
             test_dll = test_payload / TEST_HOST.name
         verify_test_host_artifacts(API if PUBLISHED else DLL.parent, test_dll)
         check("test host uses exact API assembly and managed runtime dependencies", True)
-        with open(Path(temp) / "api.log", "wb") as log:
+        api_log_path = ROOT / ".runlogs/ef-final/test-isolated-api.log"
+        api_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(api_log_path, "wb") as log:
             process = subprocess.Popen(["dotnet", str(DLL)], cwd=API, env=env, stdout=log, stderr=log)
             stack.callback(stop_process, process)
             client = Client(base)
             for _ in range(100):
                 if process.poll() is not None:
-                    raise RuntimeError("Test API exited: " + (Path(temp) / "api.log").read_text(errors="replace")[-1800:])
+                    raise RuntimeError("Test API exited: " + api_log_path.read_text(errors="replace")[-1800:])
                 try:
                     client.call("GET", "/health")
                     break
@@ -484,6 +338,7 @@ try:
             upload = client.call("POST", "/api/v1/uploads/init", {"projectId": pid, "fileName": "regression.pdf", "fileSize": len(pdf), "fileMd5": hashlib.md5(pdf).hexdigest()})
             session = upload["sessionId"]
             size = upload["chunkSize"]
+            check("upload uses the updated chunk-size setting", size == 262144)
             for index in range(upload["totalChunks"]):
                 client.call("PUT", f"/api/v1/uploads/{session}/chunks/{index}", pdf[index * size:(index + 1) * size], headers={"Content-Type": "application/octet-stream"})
             resumed = client.call("GET", f"/api/v1/uploads/{session}")

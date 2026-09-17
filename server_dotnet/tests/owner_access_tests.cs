@@ -45,8 +45,8 @@ public sealed class OwnerAccessTests
         var groupStatus = new ProjectGroupStatusService(audit);
         var groups = new ProjectGroupService(audit, groupStatus);
         var projects = new ProjectService(audit, database.Options, groupStatus);
-        var users = new UserService(database.Database, new PermissionService(), audit);
-        var roles = new RoleService(database.Database, new PermissionService(), audit);
+        var users = new UserService(EfTestSupport.DbContextFactory(database.Options), new PermissionService(), audit);
+        var roles = new RoleService(EfTestSupport.DbContextFactory(database.Options), new PermissionService(), audit);
         var admin = Internal(1, "admin");
 
         await using var conn = await database.Database.OpenAsync(ct);
@@ -194,7 +194,7 @@ public sealed class OwnerAccessTests
     private static FileService FileService(OwnerAccessDatabase database, AuditService audit)
     {
         var identity = new IdentityService(
-            database.Database,
+            EfTestSupport.DbContextFactory(database.Options),
             database.Options,
             new LoginRateLimiter(),
             new TokenService(database.Options),
@@ -294,7 +294,7 @@ public sealed class OwnerAccessTests
             };
             var administration = new MySqlConnection(adminOptions.ConnectionString);
             await administration.OpenAsync(ct);
-            var databaseName = $"yf_owner_access_{Guid.NewGuid():N}";
+            var databaseName = $"yf_t_{Guid.NewGuid():N}";
             try
             {
                 await administration.ExecuteAsync(new CommandDefinition(

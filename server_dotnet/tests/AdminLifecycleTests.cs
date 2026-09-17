@@ -1,4 +1,5 @@
 using Dapper;
+using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Admin;
@@ -14,7 +15,7 @@ public sealed class AdminLifecycleTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("admin_lifecycle", ct);
-        await database.CreateBaselineAsync(legacyV16: false, ct);
+        await database.InitializeBusinessFixtureAsync(ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await database.ExecuteAsync("""
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password,failed_login_attempts,created_at,updated_at)
@@ -29,7 +30,7 @@ public sealed class AdminLifecycleTests
 
         var actor = new CurrentUser(1, "lifecycle-admin", "INTERNAL", null);
         var audit = new AuditService([]);
-        var users = new UserService(database.Database, new PermissionService(), audit);
+        var users = new UserService(EfTestSupport.DbContextFactory(database.Options), new PermissionService(), audit);
         var departmentError = await Assert.ThrowsAsync<ApiException>(
             () => users.SetStatusAsync(actor, 7002, "ACTIVE", ct));
         Assert.Equal("组织已被禁用", departmentError.Message);
@@ -44,7 +45,7 @@ public sealed class AdminLifecycleTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("department_owner_guard", ct);
-        await database.CreateBaselineAsync(legacyV16: false, ct);
+        await database.InitializeBusinessFixtureAsync(ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await database.ExecuteAsync("""
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password,failed_login_attempts,created_at,updated_at)
@@ -75,7 +76,7 @@ public sealed class AdminLifecycleTests
             """, ct);
 
         var actor = new CurrentUser(1, "department-admin", "INTERNAL", null);
-        var departments = new DepartmentService(database.Database, new AuditService([]));
+        var departments = new DepartmentService(EfTestSupport.DbContextFactory(database.Options), new AuditService([]));
 
         var renamed = Json(await departments.UpdateAsync(actor, 7102,
             new DepartmentUpsert("在用课别（已重命名）", 7101, 8), ct));
@@ -108,10 +109,11 @@ public sealed class AdminLifecycleTests
             departments.SetStatusAsync(actor, 7300, "DISABLED", ct));
         Assert.Contains("请先转交负责人", newAncestorDisable.Message, StringComparison.Ordinal);
 
-        await using var conn = await database.Database.OpenAsync(ct);
-        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        var conn = context.Database.Connection();
         var inactiveAncestor = await Assert.ThrowsAsync<ApiException>(() =>
-            DepartmentService.EnsureActiveAsync(conn, tx, 7202, ct));
+            DepartmentService.EnsureActiveAsync(context, 7202, ct));
         Assert.Equal("组织已被禁用", inactiveAncestor.Message);
         await tx.RollbackAsync(ct);
 

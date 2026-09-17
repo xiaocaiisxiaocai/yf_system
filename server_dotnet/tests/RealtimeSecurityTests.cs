@@ -216,7 +216,7 @@ public sealed class RealtimeSecurityTests
             };
             var administration = new MySqlConnection(adminOptions.ConnectionString);
             await administration.OpenAsync(ct);
-            var databaseName = $"yf_test_dotnet_{purpose}_{Guid.NewGuid():N}";
+            var databaseName = $"yf_t_{Guid.NewGuid():N}";
             try
             {
                 await administration.ExecuteAsync(new CommandDefinition(

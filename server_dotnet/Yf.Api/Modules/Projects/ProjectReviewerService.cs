@@ -1,5 +1,6 @@
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
+using Yf.Api.Infrastructure;
 
 namespace Yf.Api.Modules.Projects;
 
@@ -11,46 +12,44 @@ internal static class ProjectReviewerService
         ProjectRow project,
         CancellationToken ct)
     {
-        const string sql = """
-            SELECT DISTINCT u.id AS Id,u.employee_no AS EmployeeNo,u.real_name AS RealName,
-                   u.email AS Email,u.user_type AS UserType,u.supplier_id AS SupplierId,
-                   u.department_id AS DepartmentId,u.status AS Status
-            FROM users u
-            WHERE u.status='ACTIVE' AND u.user_type='INTERNAL'
-              AND EXISTS(
-                  SELECT 1
-                  FROM user_roles ur
-                  INNER JOIN roles r ON r.id=ur.role_id AND r.status='ACTIVE'
-                  INNER JOIN role_permissions rp ON rp.role_id=r.id
-                  INNER JOIN permissions permission ON permission.id=rp.permission_id
-                  WHERE ur.user_id=u.id AND permission.code='project:list'
-              )
-              AND EXISTS(
-                  SELECT 1
-                  FROM user_roles ur
-                  INNER JOIN roles r ON r.id=ur.role_id AND r.status='ACTIVE'
-                  INNER JOIN role_permissions rp ON rp.role_id=r.id
-                  INNER JOIN permissions permission ON permission.id=rp.permission_id
-                  WHERE ur.user_id=u.id AND permission.code='project:confirm'
-              )
-              AND (
-                  u.id=@ResponsibleUserId
-                  OR EXISTS(
-                      SELECT 1
-                      FROM user_roles ur
-                      INNER JOIN roles r ON r.id=ur.role_id AND r.status='ACTIVE'
-                      INNER JOIN role_permissions rp ON rp.role_id=r.id
-                      INNER JOIN permissions permission ON permission.id=rp.permission_id
-                      WHERE ur.user_id=u.id AND permission.code='project:view_all'
-                  )
-              )
-            ORDER BY u.id
-            """;
-        var rows = await conn.QueryAsync<UserRow>(new CommandDefinition(
-            sql,
-            new { project.ResponsibleUserId, ProjectId = project.Id },
-            tx,
-            cancellationToken: ct));
-        return rows.AsList();
+        await using var db = EfDb.Use(conn, tx);
+        var rows = await db.Users
+            .Where(user => user.Status == "ACTIVE" && user.UserType == "INTERNAL")
+            .Where(user => db.UserRoles.Any(userRole =>
+                userRole.UserId == user.Id
+                && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == "ACTIVE")
+                && db.RolePermissions.Any(rolePermission =>
+                    rolePermission.RoleId == userRole.RoleId
+                    && db.Permissions.Any(permission =>
+                        permission.Id == rolePermission.PermissionId && permission.Code == "project:list"))))
+            .Where(user => db.UserRoles.Any(userRole =>
+                userRole.UserId == user.Id
+                && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == "ACTIVE")
+                && db.RolePermissions.Any(rolePermission =>
+                    rolePermission.RoleId == userRole.RoleId
+                    && db.Permissions.Any(permission =>
+                        permission.Id == rolePermission.PermissionId && permission.Code == "project:confirm"))))
+            .Where(user => user.Id == project.ResponsibleUserId
+                || db.UserRoles.Any(userRole =>
+                    userRole.UserId == user.Id
+                    && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == "ACTIVE")
+                    && db.RolePermissions.Any(rolePermission =>
+                        rolePermission.RoleId == userRole.RoleId
+                        && db.Permissions.Any(permission =>
+                            permission.Id == rolePermission.PermissionId && permission.Code == "project:view_all"))))
+            .OrderBy(user => user.Id)
+            .Select(user => new UserRow
+            {
+                Id = user.Id,
+                EmployeeNo = user.EmployeeNo,
+                RealName = user.RealName,
+                Email = user.Email,
+                UserType = user.UserType,
+                SupplierId = user.SupplierId,
+                DepartmentId = user.DepartmentId,
+                Status = user.Status,
+            })
+            .ToArrayAsync(ct);
+        return rows;
     }
 }

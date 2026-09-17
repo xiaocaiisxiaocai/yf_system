@@ -1,7 +1,8 @@
 using System.Text;
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Files;
 
 namespace Yf.Api.Modules.Projects;
@@ -28,40 +29,48 @@ internal sealed class MessageService(
         await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
         var project = await LoadProjectAsync(conn, null, projectId, false, ct);
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
-        var filter = "m.project_id=@ProjectId AND m.status='NORMAL'";
-        if (targetId is not null)
-        {
-            filter += " AND m.id=@TargetId";
-        }
-        var parameters = new DynamicParameters(new { ProjectId = projectId, TargetId = targetId });
-        var total = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            $"SELECT COUNT(*) FROM messages m WHERE {filter}", parameters, cancellationToken: ct));
+        await using var db = EfDb.Use(conn);
+        var query =
+            from message in db.Messages
+            join sender in db.Users on message.SenderId equals sender.Id
+            where message.ProjectId == projectId && message.Status == "NORMAL"
+            select new MessageRow
+            {
+                Id = message.Id,
+                ProjectId = message.ProjectId,
+                SenderId = message.SenderId,
+                Content = message.Content,
+                Status = message.Status,
+                CreatedAt = message.CreatedAt,
+                SenderName = sender.RealName,
+                SenderType = sender.UserType,
+            };
+        if (targetId is not null) query = query.Where(message => message.Id == targetId.Value);
+        var total = checked((ulong)await query.LongCountAsync(ct));
         if (beforeId is not null)
         {
-            filter += " AND m.id<@BeforeId";
-            parameters.Add("BeforeId", beforeId.Value);
+            query = query.Where(message => message.Id < beforeId.Value);
         }
-        parameters.Add("Size", size);
-        parameters.Add("Offset", beforeId is null ? (actualPage - 1) * size : 0);
-        var rows = (await conn.QueryAsync<MessageRow>(new CommandDefinition(
-            $"""
-            SELECT m.id AS Id,m.project_id AS ProjectId,m.sender_id AS SenderId,m.content AS Content,
-                   m.status AS Status,m.created_at AS CreatedAt,u.real_name AS SenderName,u.user_type AS SenderType
-            FROM messages m INNER JOIN users u ON u.id=m.sender_id
-            WHERE {filter}
-            ORDER BY m.id DESC LIMIT @Size OFFSET @Offset
-            """,
-            parameters,
-            cancellationToken: ct))).AsList();
+        var offset = beforeId is null ? (actualPage - 1) * size : 0;
+        var rows = await query.OrderByDescending(message => message.Id)
+            .Page(offset, size)
+            .ToArrayAsync(ct);
         var participants = await ProjectNotificationService.ParticipantsAsync(conn, null, project, ct);
         var visibleIds = participants.Select(user => user.Id).ToHashSet();
-        var reads = rows.Count == 0
+        var messageIds = rows.Select(message => message.Id).ToArray();
+        var reads = rows.Length == 0
             ? []
-            : (await conn.QueryAsync<MessageReadRow>(new CommandDefinition(
-                "SELECT message_id AS MessageId,user_id AS UserId,read_at AS ReadAt FROM message_reads WHERE message_id IN @Ids",
-                new { Ids = rows.Select(message => message.Id).ToArray() }, cancellationToken: ct))).AsList();
+            : await db.MessageReads
+                .Where(read => Enumerable.Contains(messageIds, read.MessageId))
+                .Select(read => new MessageReadRow
+                {
+                    MessageId = read.MessageId,
+                    UserId = read.UserId,
+                    ReadAt = read.ReadAt,
+                })
+                .ToArrayAsync(ct);
         var readsByMessage = reads.ToLookup(read => read.MessageId);
-        var images = await LoadImagesAsync(conn, null, rows.Select(message => message.Id), ct);
+        var images = await LoadImagesAsync(db, messageIds, ct);
         var imagesByMessage = images.ToLookup(image => image.MessageId);
         var result = rows.Select(message => MessageJson(
             message, readsByMessage[message.Id], imagesByMessage[message.Id], visibleIds, actor.Id)).ToArray();
@@ -128,44 +137,37 @@ internal sealed class MessageService(
                 await AccessService.RequirePermissionAsync(conn, tx, current, "message:create", ct);
                 await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
                 EnsureWritable(project.Status);
-                await conn.ExecuteAsync(new CommandDefinition(
-                    """
-                    INSERT INTO messages(project_id,sender_id,content,status,deleted_by,deleted_at,created_at)
-                    VALUES(@ProjectId,@SenderId,@Content,'NORMAL',NULL,NULL,UTC_TIMESTAMP(3))
-                    """,
-                    new { ProjectId = projectId, SenderId = current.Id, Content = content },
-                    tx,
-                    cancellationToken: ct));
-                var messageId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-                    "SELECT LAST_INSERT_ID()", transaction: tx, cancellationToken: ct));
-                foreach (var image in stored)
+                await using var db = EfDb.Use(conn, tx);
+                var databaseNow = await DatabaseUtcNowAsync(db, ct);
+                var entity = new Message
                 {
-                    await conn.ExecuteAsync(new CommandDefinition(
-                        """
-                        INSERT INTO message_images
-                            (message_id,original_name,stored_name,ext,size_bytes,mime_type,storage_path,created_at)
-                        VALUES
-                            (@MessageId,@OriginalName,@StoredName,@Ext,@SizeBytes,@MimeType,@StoragePath,UTC_TIMESTAMP(3))
-                        """,
-                        new
-                        {
-                            MessageId = messageId,
-                            image.OriginalName,
-                            image.StoredName,
-                            image.Ext,
-                            image.SizeBytes,
-                            image.MimeType,
-                            image.StoragePath,
-                        },
-                        tx,
-                        cancellationToken: ct));
-                }
+                    ProjectId = projectId,
+                    SenderId = current.Id,
+                    Content = content,
+                    Status = "NORMAL",
+                    CreatedAt = databaseNow,
+                };
+                db.Messages.Add(entity);
+                await db.SaveChangesAsync(ct);
+                var messageId = entity.Id;
+                db.MessageImages.AddRange(stored.Select(image => new MessageImage
+                {
+                    MessageId = messageId,
+                    OriginalName = image.OriginalName,
+                    StoredName = image.StoredName,
+                    Ext = image.Ext,
+                    SizeBytes = image.SizeBytes,
+                    MimeType = image.MimeType,
+                    StoragePath = image.StoragePath,
+                    CreatedAt = databaseNow,
+                }));
+                await db.SaveChangesAsync(ct);
                 var notificationContent = content.Length == 0 ? "[图片]" : content;
                 await ProjectNotificationService.EnqueueMessageAsync(conn, tx, project, messageId, notificationContent, current, options.WebBaseUrl, audit, ct);
                 await audit.WriteAsync(conn, tx, current.Id, "MESSAGE_CREATE", "message", messageId,
                     new { projectId, imageCount = stored.Count }, ip, ct);
-                var message = await LoadMessageAsync(conn, tx, messageId, false, false, ct);
-                var persistedImages = await LoadImagesAsync(conn, tx, [messageId], ct);
+                var message = await LoadMessageAsync(db, messageId, false, ct);
+                var persistedImages = await LoadImagesAsync(db, [messageId], ct);
                 var participants = await ProjectNotificationService.ParticipantsAsync(conn, tx, project, ct);
                 var response = MessageJson(message, [], persistedImages,
                     participants.Select(user => user.Id).ToHashSet(), current.Id);
@@ -211,9 +213,18 @@ internal sealed class MessageService(
             await tx.CommitAsync(ct);
             return;
         }
-        var rows = (await conn.QueryAsync<ReadTargetRow>(new CommandDefinition(
-            "SELECT id AS Id,project_id AS ProjectId FROM messages WHERE id IN @Ids AND status='NORMAL' AND sender_id<>@UserId",
-            new { Ids = ids.Distinct().ToArray(), UserId = current.Id }, tx, cancellationToken: ct))).AsList();
+        await using var db = EfDb.Use(conn, tx);
+        var distinctIds = ids.Distinct().ToArray();
+        var rows = await db.Messages
+            .Where(message => Enumerable.Contains(distinctIds, message.Id)
+                && message.Status == "NORMAL"
+                && message.SenderId != current.Id)
+            .Select(message => new ReadTargetRow
+            {
+                Id = message.Id,
+                ProjectId = message.ProjectId,
+            })
+            .ToArrayAsync(ct);
         foreach (var group in rows.GroupBy(message => message.ProjectId))
         {
             try
@@ -226,12 +237,12 @@ internal sealed class MessageService(
             }
             foreach (var message in group)
             {
-                var changed = await conn.ExecuteAsync(new CommandDefinition(
-                    """
+                // The unique key is the receipt contract; INSERT IGNORE keeps concurrent
+                // read acknowledgements idempotent without a check-then-insert race.
+                var changed = await db.Database.ExecuteSqlInterpolatedAsync($"""
                     INSERT IGNORE INTO message_reads(message_id,user_id,read_at)
-                    VALUES(@MessageId,@UserId,UTC_TIMESTAMP(3))
-                    """,
-                    new { MessageId = message.Id, UserId = current.Id }, tx, cancellationToken: ct));
+                    VALUES({message.Id},{current.Id},UTC_TIMESTAMP(3))
+                    """, ct);
                 if (changed == 1)
                 {
                     await audit.WriteAsync(conn, tx, current.Id, "MESSAGE_READ", "message", message.Id,
@@ -255,9 +266,16 @@ internal sealed class MessageService(
         await ProjectAccessService.RequireViewAsync(conn, null, actor, message.ProjectId, ct);
         var project = await LoadProjectAsync(conn, null, message.ProjectId, false, ct);
         var participants = await ProjectNotificationService.ParticipantsAsync(conn, null, project, ct);
-        var reads = (await conn.QueryAsync<MessageReadRow>(new CommandDefinition(
-            "SELECT message_id AS MessageId,user_id AS UserId,read_at AS ReadAt FROM message_reads WHERE message_id=@MessageId",
-            new { MessageId = messageId }, cancellationToken: ct))).ToDictionary(read => read.UserId);
+        await using var db = EfDb.Use(conn);
+        var reads = await db.MessageReads
+            .Where(read => read.MessageId == messageId)
+            .Select(read => new MessageReadRow
+            {
+                MessageId = read.MessageId,
+                UserId = read.UserId,
+                ReadAt = read.ReadAt,
+            })
+            .ToDictionaryAsync(read => read.UserId, ct);
         var readers = new List<object>();
         var unread = new List<object>();
         foreach (var user in participants.Where(user => user.Id != message.SenderId))
@@ -291,23 +309,33 @@ internal sealed class MessageService(
         var project = await LoadProjectAsync(conn, null, projectId, false, ct);
         var participants = await ProjectNotificationService.ParticipantsAsync(conn, null, project, ct);
         var visibleIds = participants.Select(user => user.Id).ToHashSet();
-        var targets = (await conn.QueryAsync<MessageReceiptTargetRow>(new CommandDefinition(
-            """
-            SELECT id AS Id,sender_id AS SenderId
-            FROM messages
-            WHERE project_id=@ProjectId AND status='NORMAL' AND id IN @Ids
-            """,
-            new { ProjectId = projectId, Ids = messageIds.ToArray() },
-            cancellationToken: ct))).ToDictionary(message => message.Id);
+        await using var db = EfDb.Use(conn);
+        var targetIds = messageIds.ToArray();
+        var targets = await db.Messages
+            .Where(message => message.ProjectId == projectId
+                && message.Status == "NORMAL"
+                && Enumerable.Contains(targetIds, message.Id))
+            .Select(message => new MessageReceiptTargetRow
+            {
+                Id = message.Id,
+                SenderId = message.SenderId,
+            })
+            .ToDictionaryAsync(message => message.Id, ct);
         if (targets.Count == 0)
         {
             return [];
         }
 
-        var reads = (await conn.QueryAsync<MessageReadRow>(new CommandDefinition(
-            "SELECT message_id AS MessageId,user_id AS UserId,read_at AS ReadAt FROM message_reads WHERE message_id IN @Ids",
-            new { Ids = targets.Keys.ToArray() },
-            cancellationToken: ct))).ToLookup(read => read.MessageId);
+        var foundIds = targets.Keys.ToArray();
+        var reads = (await db.MessageReads
+            .Where(read => Enumerable.Contains(foundIds, read.MessageId))
+            .Select(read => new MessageReadRow
+            {
+                MessageId = read.MessageId,
+                UserId = read.UserId,
+                ReadAt = read.ReadAt,
+            })
+            .ToArrayAsync(ct)).ToLookup(read => read.MessageId);
         return messageIds
             .Where(targets.ContainsKey)
             .Select(messageId =>
@@ -334,16 +362,22 @@ internal sealed class MessageService(
     {
         var message = await LoadMessageAsync(conn, null, messageId, false, true, ct);
         await ProjectAccessService.RequireViewAsync(conn, null, actor, message.ProjectId, ct);
-        var image = await conn.QuerySingleOrDefaultAsync<MessageImageRow>(new CommandDefinition(
-            """
-            SELECT id AS Id,message_id AS MessageId,original_name AS OriginalName,stored_name AS StoredName,
-                   ext AS Ext,size_bytes AS SizeBytes,mime_type AS MimeType,storage_path AS StoragePath,
-                   created_at AS CreatedAt
-            FROM message_images
-            WHERE id=@ImageId AND message_id=@MessageId
-            """,
-            new { ImageId = imageId, MessageId = messageId },
-            cancellationToken: ct)) ?? throw ApiException.NotFound();
+        await using var db = EfDb.Use(conn);
+        var image = await db.MessageImages
+            .Where(candidate => candidate.Id == imageId && candidate.MessageId == messageId)
+            .Select(candidate => new MessageImageRow
+            {
+                Id = candidate.Id,
+                MessageId = candidate.MessageId,
+                OriginalName = candidate.OriginalName,
+                StoredName = candidate.StoredName,
+                Ext = candidate.Ext,
+                SizeBytes = candidate.SizeBytes,
+                MimeType = candidate.MimeType,
+                StoragePath = candidate.StoragePath,
+                CreatedAt = candidate.CreatedAt,
+            })
+            .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         try
         {
             var path = await FileStorage.ResolveExistingFileAsync(
@@ -377,9 +411,16 @@ internal sealed class MessageService(
         {
             throw ApiException.NotFound();
         }
-        await conn.ExecuteAsync(new CommandDefinition(
-            "UPDATE messages SET status='DELETED',deleted_by=@DeletedBy,deleted_at=UTC_TIMESTAMP(3) WHERE id=@MessageId",
-            new { DeletedBy = current.Id, MessageId = messageId }, tx, cancellationToken: ct));
+        await using (var db = EfDb.Use(conn, tx))
+        {
+            var databaseNow = await DatabaseUtcNowAsync(db, ct);
+            await db.Messages
+                .Where(candidate => candidate.Id == messageId)
+                .ExecuteUpdateAsync(update => update
+                    .SetProperty(candidate => candidate.Status, "DELETED")
+                    .SetProperty(candidate => candidate.DeletedBy, current.Id)
+                    .SetProperty(candidate => candidate.DeletedAt, databaseNow), ct);
+        }
         await audit.WriteAsync(conn, tx, current.Id, "MESSAGE_DELETE", "message", messageId, null, ip, ct);
         await tx.CommitAsync(ct);
         await PublishSafelyAsync(message.ProjectId, RealtimeChangeKinds.Messages);
@@ -390,15 +431,16 @@ internal sealed class MessageService(
         MySqlTransaction? tx,
         ulong userId,
         ulong projectId,
-        CancellationToken ct) =>
-        await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            """
-            SELECT COUNT(*)
-            FROM messages m
-            WHERE m.project_id=@ProjectId AND m.status='NORMAL' AND m.sender_id<>@UserId
-              AND NOT EXISTS(SELECT 1 FROM message_reads mr WHERE mr.message_id=m.id AND mr.user_id=@UserId)
-            """,
-            new { ProjectId = projectId, UserId = userId }, tx, cancellationToken: ct));
+        CancellationToken ct)
+    {
+        await using var db = EfDb.Use(conn, tx);
+        var count = await db.Messages.LongCountAsync(message =>
+            message.ProjectId == projectId
+            && message.Status == "NORMAL"
+            && message.SenderId != userId
+            && !db.MessageReads.Any(read => read.MessageId == message.Id && read.UserId == userId), ct);
+        return checked((ulong)count);
+    }
 
     private static object MessageJson(
         MessageRow message,
@@ -536,9 +578,9 @@ internal sealed class MessageService(
         {
             try
             {
-                var referenced = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-                    "SELECT EXISTS(SELECT 1 FROM message_images WHERE stored_name=@StoredName)",
-                    new { image.StoredName }, cancellationToken: ct));
+                await using var db = EfDb.Use(conn);
+                var referenced = await db.MessageImages.AnyAsync(
+                    candidate => candidate.StoredName == image.StoredName, ct);
                 if (!referenced)
                 {
                     var candidate = FileStorage.EnsureLexicallyWithin(options.StorageRoot,
@@ -564,21 +606,28 @@ internal sealed class MessageService(
     }
 
     private static async Task<MessageImageRow[]> LoadImagesAsync(
-        MySqlConnection conn,
-        MySqlTransaction? tx,
+        YfDbContext db,
         IEnumerable<ulong> messageIds,
         CancellationToken ct)
     {
         var ids = messageIds.Distinct().ToArray();
         if (ids.Length == 0) return [];
-        return (await conn.QueryAsync<MessageImageRow>(new CommandDefinition(
-            """
-            SELECT id AS Id,message_id AS MessageId,original_name AS OriginalName,stored_name AS StoredName,
-                   ext AS Ext,size_bytes AS SizeBytes,mime_type AS MimeType,storage_path AS StoragePath,
-                   created_at AS CreatedAt
-            FROM message_images WHERE message_id IN @Ids ORDER BY id
-            """,
-            new { Ids = ids }, tx, cancellationToken: ct))).ToArray();
+        return await db.MessageImages
+            .Where(image => Enumerable.Contains(ids, image.MessageId))
+            .OrderBy(image => image.Id)
+            .Select(image => new MessageImageRow
+            {
+                Id = image.Id,
+                MessageId = image.MessageId,
+                OriginalName = image.OriginalName,
+                StoredName = image.StoredName,
+                Ext = image.Ext,
+                SizeBytes = image.SizeBytes,
+                MimeType = image.MimeType,
+                StoragePath = image.StoragePath,
+                CreatedAt = image.CreatedAt,
+            })
+            .ToArrayAsync(ct);
     }
 
     private static async Task<ulong> ConfigUInt64Async(
@@ -587,11 +636,16 @@ internal sealed class MessageService(
         ulong fallback,
         CancellationToken ct)
     {
-        var value = await conn.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(
-            "SELECT cfg_value FROM system_configs WHERE cfg_key=@Key",
-            new { Key = key }, cancellationToken: ct));
+        await using var db = EfDb.Use(conn);
+        var value = await db.SystemConfigs
+            .Where(config => config.CfgKey == key)
+            .Select(config => config.CfgValue)
+            .SingleOrDefaultAsync(ct);
         return ulong.TryParse(value, out var parsed) ? parsed : fallback;
     }
+
+    private static Task<DateTime> DatabaseUtcNowAsync(YfDbContext db, CancellationToken ct) =>
+        db.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(3) AS Value").SingleAsync(ct);
 
     private async Task PublishSafelyAsync(ulong projectId, string kind)
     {
@@ -628,14 +682,18 @@ internal sealed class MessageService(
         bool forUpdate,
         CancellationToken ct)
     {
-        var row = await conn.QuerySingleOrDefaultAsync<ProjectRow>(new CommandDefinition(
-            """
-            SELECT id AS Id,name AS Name,description AS Description,supplier_id AS SupplierId,status AS Status,
-                   confirm_side AS ConfirmSide,created_by AS CreatedBy,created_at AS CreatedAt,updated_at AS UpdatedAt
-            FROM projects WHERE id=@ProjectId
-            """ + (forUpdate ? " FOR UPDATE" : string.Empty),
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
-        return row ?? throw ApiException.NotFound();
+        await using var db = EfDb.Use(conn, tx);
+        if (forUpdate)
+        {
+            var locked = await db.Projects
+                .FromSqlInterpolated($"SELECT * FROM projects WHERE id={projectId} FOR UPDATE")
+                .AsNoTracking()
+                .SingleOrDefaultAsync(ct);
+            if (locked is null) throw ApiException.NotFound();
+        }
+        return await ProjectQueries.Rows(db)
+            .SingleOrDefaultAsync(project => project.Id == projectId, ct)
+            ?? throw ApiException.NotFound();
     }
 
     private static async Task<MessageRow> LoadMessageAsync(
@@ -646,15 +704,46 @@ internal sealed class MessageService(
         bool requireNormal,
         CancellationToken ct)
     {
-        var row = await conn.QuerySingleOrDefaultAsync<MessageRow>(new CommandDefinition(
-            """
-            SELECT m.id AS Id,m.project_id AS ProjectId,m.sender_id AS SenderId,m.content AS Content,
-                   m.status AS Status,m.created_at AS CreatedAt,u.real_name AS SenderName,u.user_type AS SenderType
-            FROM messages m INNER JOIN users u ON u.id=m.sender_id
-            WHERE m.id=@MessageId
-            """ + (requireNormal ? " AND m.status='NORMAL'" : string.Empty) + (forUpdate ? " FOR UPDATE" : string.Empty),
-            new { MessageId = messageId }, tx, cancellationToken: ct));
-        return row ?? throw ApiException.NotFound();
+        await using var db = EfDb.Use(conn, tx);
+        if (forUpdate)
+        {
+            var locked = requireNormal
+                ? await db.Messages
+                    .FromSqlInterpolated($"SELECT * FROM messages WHERE id={messageId} AND status='NORMAL' FOR UPDATE")
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(ct)
+                : await db.Messages
+                    .FromSqlInterpolated($"SELECT * FROM messages WHERE id={messageId} FOR UPDATE")
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(ct);
+            if (locked is null) throw ApiException.NotFound();
+        }
+        return await LoadMessageAsync(db, messageId, requireNormal, ct);
+    }
+
+    private static async Task<MessageRow> LoadMessageAsync(
+        YfDbContext db,
+        ulong messageId,
+        bool requireNormal,
+        CancellationToken ct)
+    {
+        var query =
+            from message in db.Messages
+            join sender in db.Users on message.SenderId equals sender.Id
+            where message.Id == messageId
+            select new MessageRow
+            {
+                Id = message.Id,
+                ProjectId = message.ProjectId,
+                SenderId = message.SenderId,
+                Content = message.Content,
+                Status = message.Status,
+                CreatedAt = message.CreatedAt,
+                SenderName = sender.RealName,
+                SenderType = sender.UserType,
+            };
+        if (requireNormal) query = query.Where(message => message.Status == "NORMAL");
+        return await query.SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
     }
 
     private sealed class ReadTargetRow

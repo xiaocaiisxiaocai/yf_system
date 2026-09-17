@@ -1,6 +1,7 @@
-using Dapper;
-using MySqlConnector;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using MySqlConnector;
+using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Files;
 
 namespace Yf.Api.Infrastructure;
@@ -15,8 +16,45 @@ internal static class DevelopmentDataReset
         "project_group_work_orders", "project_groups", "refresh_tokens",
         "user_roles", "role_permissions", "departments", "audit_logs"
     ];
-    internal sealed record Plan(string Database, string StorageRoot, string[] StorageDirectories,
-        Dictionary<string, long> Counts, bool ResetCompleted = false, bool PasswordPreserved = true, bool SettingsPreserved = true);
+
+    private static readonly IReadOnlyDictionary<string, Func<YfDbContext, CancellationToken, Task<long>>> TableCounts =
+        new Dictionary<string, Func<YfDbContext, CancellationToken, Task<long>>>(StringComparer.Ordinal)
+        {
+            ["collaboration_reads"] = (db, ct) => db.CollaborationReads.LongCountAsync(ct),
+            ["message_reads"] = (db, ct) => db.MessageReads.LongCountAsync(ct),
+            ["message_images"] = (db, ct) => db.MessageImages.LongCountAsync(ct),
+            ["email_outbox"] = (db, ct) => db.EmailOutbox.LongCountAsync(ct),
+            ["project_activities"] = (db, ct) => db.ProjectActivities.LongCountAsync(ct),
+            ["file_copy_refs"] = (db, ct) => db.FileCopyRefs.LongCountAsync(ct),
+            ["project_copies"] = (db, ct) => db.ProjectCopies.LongCountAsync(ct),
+            ["project_group_status_logs"] = (db, ct) => db.ProjectGroupStatusLogs.LongCountAsync(ct),
+            ["project_status_logs"] = (db, ct) => db.ProjectStatusLogs.LongCountAsync(ct),
+            ["upload_sessions"] = (db, ct) => db.UploadSessions.LongCountAsync(ct),
+            ["files"] = (db, ct) => db.Files.LongCountAsync(ct),
+            ["messages"] = (db, ct) => db.Messages.LongCountAsync(ct),
+            ["projects"] = (db, ct) => db.Projects.LongCountAsync(ct),
+            ["project_group_work_orders"] = (db, ct) => db.ProjectGroupWorkOrders.LongCountAsync(ct),
+            ["project_groups"] = (db, ct) => db.ProjectGroups.LongCountAsync(ct),
+            ["refresh_tokens"] = (db, ct) => db.RefreshTokens.LongCountAsync(ct),
+            ["user_roles"] = (db, ct) => db.UserRoles.LongCountAsync(ct),
+            ["role_permissions"] = (db, ct) => db.RolePermissions.LongCountAsync(ct),
+            ["departments"] = (db, ct) => db.Departments.LongCountAsync(ct),
+            ["audit_logs"] = (db, ct) => db.AuditLogs.LongCountAsync(ct),
+            ["users"] = (db, ct) => db.Users.LongCountAsync(ct),
+            ["roles"] = (db, ct) => db.Roles.LongCountAsync(ct),
+            ["suppliers"] = (db, ct) => db.Suppliers.LongCountAsync(ct),
+            ["permissions"] = (db, ct) => db.Permissions.LongCountAsync(ct),
+            ["system_configs"] = (db, ct) => db.SystemConfigs.LongCountAsync(ct),
+        };
+
+    internal sealed record Plan(
+        string Database,
+        string StorageRoot,
+        string[] StorageDirectories,
+        Dictionary<string, long> Counts,
+        bool ResetCompleted = false,
+        bool PasswordPreserved = true,
+        bool SettingsPreserved = true);
 
     private static (string Database, string Root) ValidateTarget(AppOptions options)
     {
@@ -35,25 +73,32 @@ internal static class DevelopmentDataReset
     internal static async Task<Plan> InspectAsync(AppOptions options, CancellationToken ct = default)
     {
         var (database, root) = ValidateTarget(options);
-        await SchemaBootstrap.ValidateAsync(new AppDb(options), ct);
+        await ValidateSchemaAsync(options, ct);
         await using var conn = await new AppDb(options).OpenAsync(ct);
-        var counts = new Dictionary<string, long>();
+        await using var db = EfDb.Use(conn);
+        var counts = new Dictionary<string, long>(StringComparer.Ordinal);
         foreach (var table in ClearedTables.Concat(["users", "roles", "suppliers", "permissions", "system_configs"]))
-            counts[table] = await conn.ExecuteScalarAsync<long>(new CommandDefinition($"SELECT COUNT(*) FROM `{table}`", cancellationToken: ct));
+            counts[table] = await TableCounts[table](db, ct);
         return new(database, root,
             [Path.Combine(root, "files"), Path.Combine(root, "message-images"), Path.Combine(root, "tmp")], counts);
     }
 
-    internal static async Task<Plan> ResetAsync(AppOptions options, string? confirmedDatabase,
-        string? confirmedStorageRoot, CancellationToken ct = default)
+    internal static async Task<Plan> ResetAsync(
+        AppOptions options,
+        string? confirmedDatabase,
+        string? confirmedStorageRoot,
+        CancellationToken ct = default)
     {
         var target = ValidateTarget(options);
         if (!string.Equals(confirmedDatabase, target.Database, StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(confirmedStorageRoot)
-            || !string.Equals(Path.GetFullPath(confirmedStorageRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                target.Root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            || !string.Equals(
+                Path.GetFullPath(confirmedStorageRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                target.Root,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             throw new InvalidOperationException("Run --inspect-development-data first, then specify the exact --confirm-database and --confirm-storage-root. Stop the application before resetting.");
         var plan = await InspectAsync(options, ct);
+
         // Verify the exact managed directories and every descendant before any database write.
         foreach (var directory in plan.StorageDirectories)
         {
@@ -64,44 +109,74 @@ internal static class DevelopmentDataReset
             while (pending.TryPop(out var entry))
             {
                 ct.ThrowIfCancellationRequested();
-                if ((entry.Attributes & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("Storage cleanup refuses reparse points.");
+                if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidOperationException("Storage cleanup refuses reparse points.");
                 foreach (var child in entry.EnumerateFileSystemInfos())
                 {
-                    if ((child.Attributes & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("Storage cleanup refuses reparse points.");
+                    if ((child.Attributes & FileAttributes.ReparsePoint) != 0)
+                        throw new InvalidOperationException("Storage cleanup refuses reparse points.");
                     if (child is DirectoryInfo subdirectory) pending.Push(subdirectory);
                 }
             }
         }
 
+        await using (var conn = await new AppDb(options).OpenAsync(ct))
+        await using (var gate = await MySqlNamedLock.TryAcquireAsync(
+            conn, MySqlNamedLock.Name("development-reset", plan.Database), 0, ct)
+            ?? throw new InvalidOperationException("Another development reset is running."))
+        await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+        await using (var db = EfDb.Use(conn, tx))
         {
-            await using var conn = await new AppDb(options).OpenAsync(ct);
-            await using var gate = await MySqlNamedLock.TryAcquireAsync(conn, MySqlNamedLock.Name("development-reset", plan.Database), 0, ct)
-                ?? throw new InvalidOperationException("Another development reset is running.");
-            await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+            await AccessService.LockManagementAsync(conn, tx, ct);
+            var admin = await db.Users
+                .FromSqlInterpolated($"SELECT * FROM users WHERE employee_no='admin' AND user_type='INTERNAL' FOR UPDATE")
+                .AsNoTracking()
+                .SingleOrDefaultAsync(ct)
+                ?? throw new InvalidOperationException("Existing internal admin account is required; reset does not invent a password.");
+            var role = await db.Roles
+                .FromSqlInterpolated($"SELECT * FROM roles WHERE name='系统管理员' AND is_built_in=1 FOR UPDATE")
+                .AsNoTracking()
+                .SingleOrDefaultAsync(ct)
+                ?? throw new InvalidOperationException("Existing system administrator role is required.");
+            var settingsBefore = await SettingsSnapshotAsync(db, ct);
+
+            await DeleteResetDataAsync(db, ct);
+
+            await db.Users.Where(user => user.Id != admin.Id).ExecuteDeleteAsync(ct);
+            await db.Roles.Where(candidate => candidate.Id != role.Id).ExecuteDeleteAsync(ct);
+            await db.Suppliers.ExecuteDeleteAsync(ct);
+
+            var now = DateTime.UtcNow;
+            await db.Users.Where(user => user.Id == admin.Id).ExecuteUpdateAsync(update => update
+                .SetProperty(user => user.DepartmentId, (ulong?)null)
+                .SetProperty(user => user.SupplierId, (ulong?)null)
+                .SetProperty(user => user.Status, "ACTIVE")
+                .SetProperty(user => user.FailedLoginAttempts, 0)
+                .SetProperty(user => user.LockedUntil, (DateTime?)null)
+                .SetProperty(user => user.CreatedBy, (ulong?)null)
+                .SetProperty(user => user.UpdatedAt, now), ct);
+            await db.Roles.Where(candidate => candidate.Id == role.Id).ExecuteUpdateAsync(update => update
+                .SetProperty(candidate => candidate.Status, "ACTIVE")
+                .SetProperty(candidate => candidate.UpdatedAt, now), ct);
+
+            db.UserRoles.Add(new UserRole { UserId = admin.Id, RoleId = role.Id });
+            var permissionIds = await db.Permissions.Select(permission => permission.Id).ToArrayAsync(ct);
+            db.RolePermissions.AddRange(permissionIds.Select(permissionId => new RolePermission
             {
-                await AccessService.LockManagementAsync(conn, tx, ct);
-                var admin = await conn.QuerySingleOrDefaultAsync<Admin>(new CommandDefinition(
-                    "SELECT id AS Id,password_hash AS PasswordHash FROM users WHERE employee_no='admin' AND user_type='INTERNAL' FOR UPDATE", transaction: tx, cancellationToken: ct))
-                    ?? throw new InvalidOperationException("Existing internal admin account is required; reset does not invent a password.");
-                var role = await conn.QuerySingleOrDefaultAsync<ulong?>(new CommandDefinition(
-                    "SELECT id FROM roles WHERE name='系统管理员' AND is_built_in=1 FOR UPDATE", transaction: tx, cancellationToken: ct))
-                    ?? throw new InvalidOperationException("Existing system administrator role is required.");
-                var settingsBefore = await SettingsSnapshotAsync(conn, tx, ct);
-                foreach (var table in ClearedTables)
-                    await conn.ExecuteAsync(new CommandDefinition($"DELETE FROM `{table}`", transaction: tx, cancellationToken: ct));
-                await conn.ExecuteAsync(new CommandDefinition("DELETE FROM users WHERE id<>@Id; DELETE FROM roles WHERE id<>@Role; DELETE FROM suppliers;", new { admin.Id, Role = role }, tx, cancellationToken: ct));
-                await conn.ExecuteAsync(new CommandDefinition("""
-                    UPDATE users SET department_id=NULL,supplier_id=NULL,status='ACTIVE',failed_login_attempts=0,locked_until=NULL,created_by=NULL,updated_at=UTC_TIMESTAMP(6) WHERE id=@Id;
-                    UPDATE roles SET status='ACTIVE',updated_at=UTC_TIMESTAMP(6) WHERE id=@Role;
-                    INSERT INTO user_roles(user_id,role_id) VALUES(@Id,@Role);
-                    INSERT INTO role_permissions(role_id,permission_id) SELECT @Role,id FROM permissions;
-                    """, new { admin.Id, Role = role }, tx, cancellationToken: ct));
-                if (settingsBefore != await SettingsSnapshotAsync(conn, tx, ct)
-                    || admin.PasswordHash != await conn.ExecuteScalarAsync<string>(new CommandDefinition("SELECT password_hash FROM users WHERE id=@Id", new { admin.Id }, tx, cancellationToken: ct)))
-                    throw new InvalidOperationException("Password/settings preservation check failed; transaction will roll back.");
-                await tx.CommitAsync(ct);
-            }
+                RoleId = role.Id,
+                PermissionId = permissionId,
+            }));
+            await db.SaveChangesAsync(ct);
+
+            if (settingsBefore != await SettingsSnapshotAsync(db, ct)
+                || admin.PasswordHash != await db.Users
+                    .Where(user => user.Id == admin.Id)
+                    .Select(user => user.PasswordHash)
+                    .SingleAsync(ct))
+                throw new InvalidOperationException("Password/settings preservation check failed; transaction will roll back.");
+            await tx.CommitAsync(ct);
         }
+
         try
         {
             foreach (var directory in plan.StorageDirectories)
@@ -114,7 +189,40 @@ internal static class DevelopmentDataReset
         return (await InspectAsync(options, ct)) with { ResetCompleted = true };
     }
 
-    private static async Task<string> SettingsSnapshotAsync(MySqlConnection conn, MySqlTransaction tx, CancellationToken ct) =>
-        JsonSerializer.Serialize((await conn.QueryAsync(new CommandDefinition("SELECT * FROM system_configs ORDER BY cfg_key", transaction: tx, cancellationToken: ct))).Select(row => (IDictionary<string, object>)row));
-    private sealed class Admin { public ulong Id { get; init; } public string PasswordHash { get; init; } = ""; }
+    private static async Task DeleteResetDataAsync(YfDbContext db, CancellationToken ct)
+    {
+        // Preserve the existing FK-safe order. ExecuteDelete bypasses tracking and
+        // executes immediately inside the caller-owned transaction.
+        await db.CollaborationReads.ExecuteDeleteAsync(ct);
+        await db.MessageReads.ExecuteDeleteAsync(ct);
+        await db.MessageImages.ExecuteDeleteAsync(ct);
+        await db.EmailOutbox.ExecuteDeleteAsync(ct);
+        await db.ProjectActivities.ExecuteDeleteAsync(ct);
+        await db.FileCopyRefs.ExecuteDeleteAsync(ct);
+        await db.ProjectCopies.ExecuteDeleteAsync(ct);
+        await db.ProjectGroupStatusLogs.ExecuteDeleteAsync(ct);
+        await db.ProjectStatusLogs.ExecuteDeleteAsync(ct);
+        await db.UploadSessions.ExecuteDeleteAsync(ct);
+        await db.Files.ExecuteDeleteAsync(ct);
+        await db.Messages.ExecuteDeleteAsync(ct);
+        await db.Projects.ExecuteDeleteAsync(ct);
+        await db.ProjectGroupWorkOrders.ExecuteDeleteAsync(ct);
+        await db.ProjectGroups.ExecuteDeleteAsync(ct);
+        await db.RefreshTokens.ExecuteDeleteAsync(ct);
+        await db.UserRoles.ExecuteDeleteAsync(ct);
+        await db.RolePermissions.ExecuteDeleteAsync(ct);
+        await db.Departments.ExecuteDeleteAsync(ct);
+        await db.AuditLogs.ExecuteDeleteAsync(ct);
+    }
+
+    private static async Task<string> SettingsSnapshotAsync(YfDbContext db, CancellationToken ct) =>
+        JsonSerializer.Serialize(await db.SystemConfigs
+            .OrderBy(config => config.CfgKey)
+            .Select(config => new { config.CfgKey, config.CfgValue, config.Description, config.UpdatedAt })
+            .ToArrayAsync(ct));
+
+    // Keep schema lifecycle coupling in one place so the migration cutover only
+    // needs to replace this call, without touching reset authorization or cleanup.
+    private static Task ValidateSchemaAsync(AppOptions options, CancellationToken ct) =>
+        SchemaBootstrap.ValidateAsync(new AppDb(options), ct);
 }

@@ -1,7 +1,7 @@
 using System.Text.Json;
-using Dapper;
 using MailKit.Net.Smtp;
 using MailKit.Security;
+using Microsoft.EntityFrameworkCore;
 using MimeKit;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
@@ -67,18 +67,56 @@ public sealed class MailService
         var notificationPolicy = await EmailNotificationPolicy.LoadAsync(conn, null, ct);
         var cfg = resolved.Options;
         var configured = resolved.Configured;
-        var counts = (await conn.QueryAsync<QueueCount>(new CommandDefinition("SELECT status,COUNT(*) AS count FROM email_outbox WHERE event_type <> 'STORAGE_WARNING' GROUP BY status", cancellationToken: ct))).ToDictionary(x => x.Status, x => x.Count);
-        var missingCount = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT COUNT(*) FROM users WHERE status='ACTIVE' AND TRIM(email)=''", cancellationToken: ct));
-        var missing = await conn.QueryAsync(new CommandDefinition("SELECT id AS userId,employee_no AS employeeNo,real_name AS realName,user_type AS userType,status FROM users WHERE status='ACTIVE' AND TRIM(email)='' ORDER BY employee_no LIMIT 20", cancellationToken: ct));
-        var recent = await conn.QueryAsync<AuditRow>(new CommandDefinition("SELECT id,action,target_type AS TargetType,target_id AS TargetId,detail,created_at AS CreatedAt FROM audit_logs WHERE action IN ('EMAIL_SENT','EMAIL_FAILED','EMAIL_RETRY','EMAIL_SKIPPED_MISSING_EMAIL','EMAIL_CANCELLED_STALE') ORDER BY created_at DESC,id DESC LIMIT 10", cancellationToken: ct));
+        await using var context = EfDb.Use(conn);
+        var counts = (await context.EmailOutbox
+            .Where(mail => mail.EventType != "STORAGE_WARNING")
+            .GroupBy(mail => mail.Status)
+            .Select(group => new { Status = group.Key, Count = group.LongCount() })
+            .ToListAsync(ct))
+            .ToDictionary(item => item.Status, item => checked((ulong)item.Count));
+        var missingCount = checked((ulong)await context.Users.LongCountAsync(
+            user => user.Status == "ACTIVE" && user.Email.Trim() == string.Empty, ct));
+        var missing = await context.Users
+            .Where(user => user.Status == "ACTIVE" && user.Email.Trim() == string.Empty)
+            .OrderBy(user => user.EmployeeNo)
+            .Take(20)
+            .Select(user => new
+            {
+                UserId = user.Id,
+                user.EmployeeNo,
+                user.RealName,
+                user.UserType,
+                user.Status,
+            })
+            .ToListAsync(ct);
+        string[] auditActions =
+        [
+            "EMAIL_SENT", "EMAIL_FAILED", "EMAIL_RETRY", "EMAIL_SKIPPED_MISSING_EMAIL", "EMAIL_CANCELLED_STALE",
+        ];
+        var recent = await context.AuditLogs
+            .Where(log => Enumerable.Contains(auditActions, log.Action))
+            .OrderByDescending(log => log.CreatedAt).ThenByDescending(log => log.Id)
+            .Take(10)
+            .Select(log => new MailAuditRow
+            {
+                Id = log.Id,
+                Action = log.Action,
+                TargetType = log.TargetType,
+                TargetId = log.TargetId,
+                Detail = log.Detail,
+                CreatedAt = log.CreatedAt,
+            })
+            .ToListAsync(ct);
         return new
         {
             configured, host = configured ? cfg.Host : null, port = configured ? (int?)cfg.Port : null, from = configured ? MaskEmail(cfg.From) : null,
             notificationsEnabled = notificationPolicy.GlobalEnabled,
             notificationPolicy = notificationPolicy.ToResponse(),
             queue = new { pending = counts.GetValueOrDefault("PENDING"), sending = counts.GetValueOrDefault("SENDING"), sent = counts.GetValueOrDefault("SENT"), failed = counts.GetValueOrDefault("FAILED"), cancelled = counts.GetValueOrDefault("CANCELLED") },
-            latestSentAt = await conn.ExecuteScalarAsync<DateTime?>(new CommandDefinition("SELECT MAX(sent_at) FROM email_outbox WHERE status='SENT'", cancellationToken: ct)),
-            latestFailedAt = await conn.ExecuteScalarAsync<DateTime?>(new CommandDefinition("SELECT MAX(created_at) FROM audit_logs WHERE action='EMAIL_FAILED'", cancellationToken: ct)),
+            latestSentAt = await context.EmailOutbox.Where(mail => mail.Status == "SENT")
+                .Select(mail => mail.SentAt).MaxAsync(ct),
+            latestFailedAt = await context.AuditLogs.Where(log => log.Action == "EMAIL_FAILED")
+                .Select(log => (DateTime?)log.CreatedAt).MaxAsync(ct),
             missingEmailCount = missingCount, missingEmailAccounts = missing,
             recent = recent.Select(x => new { x.Id, x.Action, x.TargetType, x.TargetId, detail = SafeDetail(x.Detail), x.CreatedAt })
         };
@@ -103,7 +141,9 @@ public sealed class MailService
     {
         await using var conn = await db.OpenAsync(ct);
         // Keep rotated hashes beyond their original expiry so replay still revokes the family.
-        await conn.ExecuteAsync(new CommandDefinition("DELETE FROM refresh_tokens WHERE expires_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 DAY)", cancellationToken: ct));
+        await using var context = EfDb.Use(conn);
+        var cutoff = (await DatabaseUtcNowAsync(context, ct)).AddDays(-7);
+        await context.RefreshTokens.Where(token => token.ExpiresAt < cutoff).ExecuteDeleteAsync(ct);
     }
 
     public async Task FlushAsync(CancellationToken ct)
@@ -121,18 +161,33 @@ public sealed class MailService
             }
             resolved = await settings.ResolveAsync(conn, null, ct);
             if (!resolved.Configured) return;
-            pending = (await conn.QueryAsync<MailRow>(new CommandDefinition("""
-                SELECT eo.id,eo.event_type AS EventType,eo.project_id AS ProjectId,eo.dedupe_key AS DedupeKey,
-                       eo.recipient_user_id AS RecipientUserId,recipient.user_type AS RecipientUserType,
-                       eo.recipient_email AS RecipientEmail,eo.subject,eo.body,eo.status,
-                       eo.retry_count AS RetryCount,eo.next_attempt_at AS NextAttemptAt
-                FROM email_outbox eo
-                LEFT JOIN users recipient ON recipient.id=eo.recipient_user_id
-                WHERE eo.event_type <> 'STORAGE_WARNING' AND eo.sent_at IS NULL
-                  AND ((eo.status='PENDING' AND (eo.next_attempt_at IS NULL OR eo.next_attempt_at<=UTC_TIMESTAMP()))
-                    OR (eo.status='SENDING' AND eo.next_attempt_at<=UTC_TIMESTAMP()))
-                ORDER BY eo.id LIMIT 10
-                """, cancellationToken: ct))).ToArray();
+            await using var context = EfDb.Use(conn);
+            var now = await DatabaseUtcNowAsync(context, ct);
+            pending = await (
+                from mail in context.EmailOutbox
+                join recipient in context.Users on mail.RecipientUserId equals (ulong?)recipient.Id into recipients
+                from recipient in recipients.DefaultIfEmpty()
+                where mail.EventType != "STORAGE_WARNING"
+                      && mail.SentAt == null
+                      && ((mail.Status == "PENDING"
+                           && (mail.NextAttemptAt == null || mail.NextAttemptAt <= now))
+                          || (mail.Status == "SENDING" && mail.NextAttemptAt <= now))
+                orderby mail.Id
+                select new MailRow
+                {
+                    Id = mail.Id,
+                    EventType = mail.EventType,
+                    ProjectId = mail.ProjectId,
+                    DedupeKey = mail.DedupeKey,
+                    RecipientUserId = mail.RecipientUserId,
+                    RecipientUserType = recipient == null ? null : recipient.UserType,
+                    RecipientEmail = mail.RecipientEmail,
+                    Subject = mail.Subject,
+                    Body = mail.Body,
+                    Status = mail.Status,
+                    RetryCount = mail.RetryCount,
+                    NextAttemptAt = mail.NextAttemptAt,
+                }).Take(10).ToArrayAsync(ct);
         }
         foreach (var mail in pending)
         {
@@ -140,15 +195,28 @@ public sealed class MailService
             await using (var claimConnection = await db.OpenAsync(ct))
             {
                 await using var claimTransaction = await AppDb.BeginTransactionAsync(claimConnection, ct);
-                var claimed = await claimConnection.ExecuteAsync(new CommandDefinition("UPDATE email_outbox SET status='SENDING',next_attempt_at=UTC_TIMESTAMP()+INTERVAL 10 MINUTE WHERE id=@Id AND sent_at IS NULL AND status=@Status AND retry_count=@RetryCount AND next_attempt_at <=> @NextAttemptAt AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())", new { mail.Id, mail.Status, mail.RetryCount, mail.NextAttemptAt }, claimTransaction, cancellationToken: ct));
+                await using var claimContext = EfDb.Use(claimConnection, claimTransaction);
+                var claimNow = await DatabaseUtcNowAsync(claimContext, ct);
+                lease = claimNow.AddMinutes(10);
+                var claimQuery = claimContext.EmailOutbox.Where(item =>
+                    item.Id == mail.Id
+                    && item.SentAt == null
+                    && item.Status == mail.Status
+                    && item.RetryCount == mail.RetryCount
+                    && (mail.NextAttemptAt == null
+                        ? item.NextAttemptAt == null
+                        : item.NextAttemptAt == mail.NextAttemptAt)
+                    && (item.NextAttemptAt == null || item.NextAttemptAt <= claimNow));
+                var claimed = await claimQuery.ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.Status, "SENDING")
+                    .SetProperty(item => item.NextAttemptAt, lease), ct);
                 if (claimed != 1) continue;
-                lease = await claimConnection.QuerySingleAsync<DateTime>(new CommandDefinition(
-                    "SELECT next_attempt_at FROM email_outbox WHERE id=@Id", new { mail.Id }, claimTransaction, cancellationToken: ct));
                 var currentPolicy = await EmailNotificationPolicy.LoadAsync(claimConnection, claimTransaction, ct);
                 var currentRecipientType = mail.RecipientUserId is { } recipientId
-                    ? await claimConnection.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
-                        "SELECT user_type FROM users WHERE id=@RecipientId AND status='ACTIVE'",
-                        new { RecipientId = recipientId }, claimTransaction, cancellationToken: ct))
+                    ? await claimContext.Users
+                        .Where(user => user.Id == recipientId && user.Status == "ACTIVE")
+                        .Select(user => user.UserType)
+                        .SingleOrDefaultAsync(ct)
                     : mail.RecipientUserType;
                 var notificationAllowed = currentPolicy.Allows(mail.EventType, currentRecipientType);
                 var recipientAuthorized = notificationAllowed && (mail.EventType == "PROJECT_SUBMITTED"
@@ -164,24 +232,19 @@ public sealed class MailService
                 if (!recipientAuthorized)
                 {
                     var policyDisabled = !notificationAllowed;
-                    var cancelled = await claimConnection.ExecuteAsync(new CommandDefinition(
-                        """
-                        UPDATE email_outbox
-                        SET status='CANCELLED',next_attempt_at=NULL,last_error=@Reason
-                        WHERE id=@Id AND status='SENDING' AND next_attempt_at=@Lease
-                        """,
-                        new
-                        {
-                            mail.Id,
-                            Lease = lease,
-                            Reason = policyDisabled
-                                ? EmailNotificationPolicy.DisabledReason
-                                : mail.EventType == "PROJECT_SUBMITTED"
-                                ? ProjectNotificationService.SupersededAcceptanceMailReason
-                                : ProjectNotificationService.StaleProjectMailReason,
-                        },
-                        claimTransaction,
-                        cancellationToken: ct));
+                    var reason = policyDisabled
+                        ? EmailNotificationPolicy.DisabledReason
+                        : mail.EventType == "PROJECT_SUBMITTED"
+                            ? ProjectNotificationService.SupersededAcceptanceMailReason
+                            : ProjectNotificationService.StaleProjectMailReason;
+                    var cancelled = await claimContext.EmailOutbox.Where(item =>
+                            item.Id == mail.Id
+                            && item.Status == "SENDING"
+                            && item.NextAttemptAt == lease)
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(item => item.Status, "CANCELLED")
+                            .SetProperty(item => item.NextAttemptAt, (DateTime?)null)
+                            .SetProperty(item => item.LastError, reason), ct);
                     if (cancelled == 1)
                     {
                         await audit.WriteAsync(
@@ -241,7 +304,25 @@ public sealed class MailService
             var completionToken = completion?.Token ?? ct;
             await using var conn = await db.OpenAsync(completionToken);
             await using var tx = await AppDb.BeginTransactionAsync(conn, completionToken);
-            var changed = await conn.ExecuteAsync(new CommandDefinition("UPDATE email_outbox SET status=@status,retry_count=@retries,last_error=@error,next_attempt_at=IF(@retryDelaySeconds IS NULL,NULL,TIMESTAMPADD(SECOND,@retryDelaySeconds,UTC_TIMESTAMP())),sent_at=IF(@status='SENT',UTC_TIMESTAMP(6),sent_at) WHERE id=@Id AND status='SENDING' AND next_attempt_at=@lease", new { mail.Id, status, retries, error, retryDelaySeconds, lease }, tx, cancellationToken: completionToken));
+            await using var context = EfDb.Use(conn, tx);
+            var completionNow = await DatabaseUtcNowAsync(context, completionToken);
+            var nextAttemptAt = retryDelaySeconds is { } seconds ? completionNow.AddSeconds(seconds) : (DateTime?)null;
+            var completionQuery = context.EmailOutbox.Where(item =>
+                item.Id == mail.Id
+                && item.Status == "SENDING"
+                && item.NextAttemptAt == lease);
+            var changed = status == "SENT"
+                ? await completionQuery.ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.Status, status)
+                    .SetProperty(item => item.RetryCount, retries)
+                    .SetProperty(item => item.LastError, error)
+                    .SetProperty(item => item.NextAttemptAt, (DateTime?)null)
+                    .SetProperty(item => item.SentAt, completionNow), completionToken)
+                : await completionQuery.ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.Status, status)
+                    .SetProperty(item => item.RetryCount, retries)
+                    .SetProperty(item => item.LastError, error)
+                    .SetProperty(item => item.NextAttemptAt, nextAttemptAt), completionToken);
             if (changed == 1) await audit.WriteAsync(conn, tx, null, status == "SENT" ? "EMAIL_SENT" : status == "FAILED" ? "EMAIL_FAILED" : "EMAIL_RETRY", "email_outbox", mail.Id, new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error }, null, completionToken);
             await tx.CommitAsync(completionToken);
         }
@@ -249,20 +330,26 @@ public sealed class MailService
 
     private async Task CancelPolicyDisabledAsync(MySqlConnection conn, CancellationToken ct)
     {
-        var rows = (await conn.QueryAsync<DisabledMailRow>(new CommandDefinition("""
-            SELECT id AS Id,event_type AS EventType
-            FROM email_outbox
-            WHERE event_type <> 'STORAGE_WARNING' AND sent_at IS NULL AND status IN ('PENDING','FAILED')
-            ORDER BY id
-            """, cancellationToken: ct))).AsList();
+        await using var context = EfDb.Use(conn);
+        var rows = await context.EmailOutbox
+            .Where(mail => mail.EventType != "STORAGE_WARNING"
+                           && mail.SentAt == null
+                           && (mail.Status == "PENDING" || mail.Status == "FAILED"))
+            .OrderBy(mail => mail.Id)
+            .Select(mail => new DisabledMailRow { Id = mail.Id, EventType = mail.EventType })
+            .ToListAsync(ct);
         foreach (var row in rows)
         {
             await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-            var changed = await conn.ExecuteAsync(new CommandDefinition("""
-                UPDATE email_outbox
-                SET status='CANCELLED',next_attempt_at=NULL,last_error=@Reason
-                WHERE id=@Id AND sent_at IS NULL AND status IN ('PENDING','FAILED')
-                """, new { row.Id, Reason = EmailNotificationPolicy.DisabledReason }, tx, cancellationToken: ct));
+            await using var itemContext = EfDb.Use(conn, tx);
+            var changed = await itemContext.EmailOutbox.Where(mail =>
+                    mail.Id == row.Id
+                    && mail.SentAt == null
+                    && (mail.Status == "PENDING" || mail.Status == "FAILED"))
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(mail => mail.Status, "CANCELLED")
+                    .SetProperty(mail => mail.NextAttemptAt, (DateTime?)null)
+                    .SetProperty(mail => mail.LastError, EmailNotificationPolicy.DisabledReason), ct);
             if (changed == 1)
             {
                 await audit.WriteAsync(conn, tx, null, "EMAIL_CANCELLED_STALE", "email_outbox", row.Id,
@@ -271,7 +358,6 @@ public sealed class MailService
             await tx.CommitAsync(ct);
         }
     }
-    private sealed class QueueCount { public string Status { get; set; } = ""; public ulong Count { get; set; } }
     private sealed class DisabledMailRow { public ulong Id { get; init; } public string EventType { get; init; } = ""; }
     private static async Task<bool> IsCurrentPendingAcceptanceAsync(
         MySqlConnection conn,
@@ -298,6 +384,19 @@ public sealed class MailService
             submissionId,
             recipientId,
             ct);
+    }
+
+    private static Task<DateTime> DatabaseUtcNowAsync(YfDbContext context, CancellationToken ct) =>
+        context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP() AS Value").SingleAsync(ct);
+
+    private sealed class MailAuditRow
+    {
+        public ulong Id { get; init; }
+        public string Action { get; init; } = string.Empty;
+        public string? TargetType { get; init; }
+        public string? TargetId { get; init; }
+        public string? Detail { get; init; }
+        public DateTime CreatedAt { get; init; }
     }
 
     private sealed class MailRow

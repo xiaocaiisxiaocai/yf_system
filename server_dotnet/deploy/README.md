@@ -8,8 +8,8 @@
 
 1. 将发布 ZIP 与 `.sha256` 一并复制到服务器，核对哈希后解压到独立临时目录。
 2. 将 `appsettings.example.json` 复制到网站、发布包和业务存储目录以外，例如 `D:\YfConfig\appsettings.Production.json`。填入数据库连接、随机 JWT 密钥、独立存储目录、实际 HTTPS 来源和 SMTP（可留空以禁用发送）。不要把机密放入 `wwwroot` 或应用池可写目录。
-3. 创建存储目录，例如 `D:\YfData\storage`。已有系统要使用与数据库匹配的原文件存储。已有第 16/17 版结构或 .NET schema version 1/2/3/4/5/6，必须按下方命令升级到 .NET schema version 7。v2 新增通知查看记录表；v3 将待供应商确认的申请转交公司内部；v4 清理过期验收邮件并按实际验收人重建未发通知；v5 新增私有留言图片元数据表；v6 新增项目元数据、工令号和可维护字典；v7 新增项目复制及文件引用履历。升级保留既有项目、消息、文件、已发送通知、账号和手工角色配置。更早或未知版本会被拒绝，不能直接启动。
-4. 新库可使用本包初始化；已有库不执行此命令。先由 DBA 创建空库，再在包根执行：
+3. 创建存储目录，例如 `D:\YfData\storage`。当前开发阶段不接管旧手写 schema 或旧数据；切换到本版本时创建新的空数据库和空存储目录。后续只有带完整 `__EFMigrationsHistory` 的 EF 管理数据库可以原地升级。
+4. 先由 DBA 创建空库，再在包根执行：
 
 ```powershell
 $env:YF_CONFIG_PATH = 'D:\YfConfig\appsettings.Production.json'
@@ -20,7 +20,7 @@ try { dotnet .\Yf.Api.dll --initialize-database }
 finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret = $null }
 ```
 
-初始化只允许空库，创建 `admin` 并强制首次改密。不会自动创建或删除数据库，不会打印密码。启动不自动执行数据库迁移。已有库请在停写、备份后运行 `dotnet .\Yf.Api.dll --migrate-database`；后续升级也使用这个独立 .NET 命令。命令可重复执行，并由数据库锁防止同时迁移。业务账号运行时还需读写业务表；历史文件迁移清理队列未排空时，应用会先清理并删除该临时表。
+初始化只允许空库，通过 EF Core `InitialCreate` 建表，创建 `admin`、系统管理员权限、默认优先级和系统参数，并强制首次改密。不会自动创建或删除数据库，也不会打印密码。启动只读核对 EF 迁移历史，不自动执行 DDL。后续 EF 模型升级需停写和备份，再运行 `dotnet .\Yf.Api.dll --migrate-database`；该命令只接受已有且非空的 EF 历史，支持重复执行，并由数据库锁防止同时迁移。
 
 ## 安装新站点
 

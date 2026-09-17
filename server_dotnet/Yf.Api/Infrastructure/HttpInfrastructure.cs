@@ -1,4 +1,5 @@
 using MySqlConnector;
+using Microsoft.EntityFrameworkCore;
 using System.Net;
 using System.Text.Json;
 using System.Globalization;
@@ -32,6 +33,7 @@ public sealed class ApiErrorMiddleware(RequestDelegate next, ILogger<ApiErrorMid
                 JsonException => ApiException.BadRequest("请求格式不正确"),
                 BadHttpRequestException bad => new ApiException(bad.StatusCode, 40001, "请求格式不正确"),
                 MySqlException sql when sql.Number == 1062 => ApiException.Conflict("数据已存在，请刷新后重试"),
+                DbUpdateException { InnerException: MySqlException { Number: 1062 } } => ApiException.Conflict("数据已存在，请刷新后重试"),
                 _ => new ApiException(500, 50000, "服务器内部错误")
             };
             if (error.Status == 500) logger.LogError("Request {TraceId} failed: {ErrorType}; database code {DatabaseCode}; stack {StackTrace}",

@@ -1,10 +1,10 @@
 using System.Collections.Concurrent;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
-using Dapper;
 using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Identity;
 
@@ -168,14 +168,21 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
         return ProjectRealtimeAuthorization.Deliver;
     }
 
-    private static Task<bool> HasActiveSessionAsync(
+    private static async Task<bool> HasActiveSessionAsync(
         MySqlConnector.MySqlConnection db,
         MySqlConnector.MySqlTransaction tx,
         RealtimeConnection connection,
-        CancellationToken ct) =>
-        db.ExecuteScalarAsync<bool>(new CommandDefinition(
-            "SELECT EXISTS(SELECT 1 FROM refresh_tokens WHERE user_id=@UserId AND session_id=@SessionId AND revoked=0 AND expires_at>UTC_TIMESTAMP(6))",
-            new { connection.UserId, connection.SessionId }, tx, cancellationToken: ct));
+        CancellationToken ct)
+    {
+        await using var context = EfDb.Use(db, tx);
+        var now = await context.Database.SqlQuery<DateTime>(
+            $"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        return await context.RefreshTokens.AnyAsync(token =>
+            token.UserId == connection.UserId
+            && token.SessionId == connection.SessionId
+            && !token.Revoked
+            && token.ExpiresAt > now, ct);
+    }
 }
 
 internal interface IProjectRealtimePublisher

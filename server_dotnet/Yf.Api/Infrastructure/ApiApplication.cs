@@ -1,6 +1,6 @@
-using Dapper;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Admin;
 using Yf.Api.Modules.Files;
@@ -46,21 +46,23 @@ public static class ApiApplication
         }
         if (initializeDatabase)
         {
-            await SchemaBootstrap.InitializeEmptyAsync(new AppDb(options));
+            await EfDatabaseLifecycle.InitializeEmptyAsync(new AppDb(options));
             return null;
         }
         if (migrateDatabase)
         {
-            await SchemaMigrations.ApplyAsync(new AppDb(options));
+            await EfDatabaseLifecycle.MigrateAsync(new AppDb(options));
             return null;
         }
-        await SchemaBootstrap.ValidateAsync(new AppDb(options));
-        DefaultTypeMap.MatchNamesWithUnderscores = true;
+        await EfDatabaseLifecycle.ValidateReadyAsync(new AppDb(options));
         builder.WebHost.ConfigureKestrel(k => { k.AddServerHeader = false; k.Limits.MaxRequestBodySize = 64L * 1024 * 1024; });
         builder.Services.Configure<IISServerOptions>(o => o.MaxRequestBodySize = 64L * 1024 * 1024);
         builder.Services.Configure<RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton(options).AddSingleton<AppDb>().AddSingleton<AccessService>().AddSingleton<AuditService>();
+        var efConnectionString = AppDb.BuildConnectionString(options);
+        builder.Services.AddPooledDbContextFactory<YfDbContext>(db => db.UseMySql(
+            efConnectionString, ServerVersion.AutoDetect(efConnectionString)));
         builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule();
         builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
             .WithOrigins(new Uri(options.WebBaseUrl).GetLeftPart(UriPartial.Authority))
@@ -93,12 +95,12 @@ public static class ApiApplication
         app.UseCors();
         app.UseMiddleware<IdentityMiddleware>();
         app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime();
-        app.MapGet("/health", async (AppDb db, CancellationToken ct) =>
+        app.MapGet("/health", async (IDbContextFactory<YfDbContext> factory, CancellationToken ct) =>
         {
             try
             {
-                await using var conn = await db.OpenAsync(ct);
-                await conn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT 1", cancellationToken: ct));
+                await using var context = await factory.CreateDbContextAsync(ct);
+                if (!await context.Database.CanConnectAsync(ct)) throw new InvalidOperationException("Database unavailable.");
                 return Results.Json(new { status = "ok", db = "up" });
             }
             catch { return Results.Json(new { status = "degraded", db = "down" }, statusCode: 503); }

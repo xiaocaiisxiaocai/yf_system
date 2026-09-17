@@ -1,6 +1,7 @@
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 
 namespace Yf.Api.Modules.Projects;
 
@@ -12,44 +13,27 @@ internal static class ProjectDictionaryTypes
 
     internal static string Normalize(string? value)
     {
-        var type = (value ?? string.Empty).Trim().ToUpperInvariant();
-        return type is RobotVendor or RobotModel or Priority
-            ? type
-            : throw ApiException.BadRequest("type 必须为 ROBOT_VENDOR、ROBOT_MODEL 或 PRIORITY");
+        var normalized = (value ?? string.Empty).Trim().ToUpperInvariant();
+        if (normalized is not (RobotVendor or RobotModel or Priority))
+            throw ApiException.BadRequest("type 仅支持 ROBOT_VENDOR、ROBOT_MODEL、PRIORITY");
+        return normalized;
     }
 }
 
 internal sealed class ProjectDictionaryService(AuditService audit)
 {
     internal async Task<object> ListAsync(
-        MySqlConnection conn,
-        CurrentUser actor,
-        string? requestedType,
-        bool enabledOnly,
-        ulong? parentId,
-        CancellationToken ct)
+        MySqlConnection conn, CurrentUser actor, string? rawType, bool enabledOnly, ulong? parentId, CancellationToken ct)
     {
-        var type = ProjectDictionaryTypes.Normalize(requestedType);
-        if (type != ProjectDictionaryTypes.RobotModel && parentId is not null)
-            throw ApiException.BadRequest("仅 ROBOT_MODEL 支持 parentId 筛选");
+        var type = ProjectDictionaryTypes.Normalize(rawType);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-        AccessService.RequireInternal(current);
         await RequireReadAsync(conn, tx, current, ct);
-        var rows = await conn.QueryAsync<DictionaryRow>(new CommandDefinition(
-            """
-            SELECT d.id AS Id,d.type AS Type,d.name AS Name,d.parent_id AS ParentId,
-                   parent.name AS ParentName,d.sort_no AS SortNo,d.status AS Status,
-                   (EXISTS(SELECT 1 FROM projects p WHERE p.robot_vendor_id=d.id OR p.robot_model_id=d.id OR p.priority_id=d.id)
-                    OR EXISTS(SELECT 1 FROM project_groups g WHERE g.robot_vendor_id=d.id OR g.robot_model_id=d.id OR g.priority_id=d.id)) AS ProjectInUse,
-                   EXISTS(SELECT 1 FROM project_dictionaries child WHERE child.parent_id=d.id) AS HasChildren
-            FROM project_dictionaries d
-            LEFT JOIN project_dictionaries parent ON parent.id=d.parent_id
-            WHERE d.type=@Type AND (@EnabledOnly=0 OR d.status='ACTIVE')
-              AND (@ParentId IS NULL OR d.parent_id=@ParentId)
-            ORDER BY d.sort_no,d.id
-            """,
-            new { Type = type, EnabledOnly = enabledOnly, ParentId = parentId }, tx, cancellationToken: ct));
+        await using var db = EfDb.Use(conn, tx);
+        var query = db.ProjectDictionaries.Where(item => item.Type == type);
+        if (enabledOnly) query = query.Where(item => item.Status == "ACTIVE");
+        if (parentId is not null) query = query.Where(item => item.ParentId == parentId);
+        var rows = await Rows(db, query).OrderBy(row => row.SortNo).ThenBy(row => row.Id).ToArrayAsync(ct);
         await tx.CommitAsync(ct);
         return rows.Select(Json).ToArray();
     }
@@ -60,23 +44,23 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         var input = Normalize(request, null);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await RequireWriteAsync(conn, tx, actor, ct);
-        await ValidateParentAsync(conn, tx, input.Type, input.ParentId, null, ct);
-        try
+        await using var db = EfDb.Use(conn, tx);
+        await ValidateParentAsync(db, input.Type, input.ParentId, null, ct);
+        var entity = new ProjectDictionary
         {
-            await conn.ExecuteAsync(new CommandDefinition(
-                """
-                INSERT INTO project_dictionaries(type,name,parent_id,sort_no,status,created_at,updated_at)
-                VALUES(@Type,@Name,@ParentId,@SortNo,@Status,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
-                """, input, tx, cancellationToken: ct));
-        }
-        catch (MySqlException error) when (error.Number == 1062)
-        {
-            throw ApiException.Conflict("同类型字典名称已存在");
-        }
-        var id = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT LAST_INSERT_ID()", transaction: tx, cancellationToken: ct));
-        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DICTIONARY_CREATE", "project_dictionary", id,
+            Type = input.Type,
+            Name = input.Name,
+            ParentId = input.ParentId,
+            SortNo = input.SortNo,
+            Status = input.Status,
+        };
+        db.ProjectDictionaries.Add(entity);
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
+        { throw ApiException.Conflict("同类型字典名称已存在"); }
+        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DICTIONARY_CREATE", "project_dictionary", entity.Id,
             new { input.Type, input.Name, input.ParentId, input.SortNo, input.Status }, ip, ct);
-        var result = Json(await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound());
+        var result = Json(await FindAsync(db, entity.Id, ct) ?? throw ApiException.NotFound());
         await tx.CommitAsync(ct);
         return result;
     }
@@ -86,31 +70,29 @@ internal sealed class ProjectDictionaryService(AuditService audit)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await RequireWriteAsync(conn, tx, actor, ct);
-        var before = await FindAsync(conn, tx, id, ct, true) ?? throw ApiException.NotFound();
+        await using var db = EfDb.Use(conn, tx);
+        var before = await FindAsync(db, id, ct, true) ?? throw ApiException.NotFound();
         var input = Normalize(request, before.Type);
         if (input.Type != before.Type) throw ApiException.BadRequest("字典 type 创建后不可修改");
         EnsureReferencedModelParentUnchanged(before.Type, before.ProjectInUse, before.ParentId, input.ParentId);
-        await ValidateParentAsync(conn, tx, input.Type, input.ParentId, id, ct);
+        await ValidateParentAsync(db, input.Type, input.ParentId, id, ct);
         try
         {
-            await conn.ExecuteAsync(new CommandDefinition(
-                """
-                UPDATE project_dictionaries
-                SET name=@Name,parent_id=@ParentId,sort_no=@SortNo,status=@Status,updated_at=UTC_TIMESTAMP(3)
-                WHERE id=@Id
-                """, new { Id = id, input.Name, input.ParentId, input.SortNo, input.Status }, tx, cancellationToken: ct));
+            await db.ProjectDictionaries.Where(item => item.Id == id).ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.Name, input.Name)
+                .SetProperty(item => item.ParentId, input.ParentId)
+                .SetProperty(item => item.SortNo, input.SortNo)
+                .SetProperty(item => item.Status, input.Status), ct);
         }
-        catch (MySqlException error) when (error.Number == 1062)
-        {
-            throw ApiException.Conflict("同类型字典名称已存在");
-        }
+        catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
+        { throw ApiException.Conflict("同类型字典名称已存在"); }
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DICTIONARY_UPDATE", "project_dictionary", id,
             new { changes = AuditChange.OnlyChanged(
                 new("name", "名称", before.Name, input.Name),
                 new("parentId", "上级厂商", before.ParentId, input.ParentId),
                 new("sortNo", "排序", before.SortNo, input.SortNo),
                 new("enabled", "启用", before.Status == "ACTIVE", input.Status == "ACTIVE")) }, ip, ct);
-        var result = Json(await FindAsync(conn, tx, id, ct) ?? throw ApiException.NotFound());
+        var result = Json(await FindAsync(db, id, ct) ?? throw ApiException.NotFound());
         await tx.CommitAsync(ct);
         return result;
     }
@@ -119,10 +101,12 @@ internal sealed class ProjectDictionaryService(AuditService audit)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await RequireWriteAsync(conn, tx, actor, ct);
-        var row = await FindAsync(conn, tx, id, ct, true) ?? throw ApiException.NotFound();
+        await using var db = EfDb.Use(conn, tx);
+        var row = await FindAsync(db, id, ct, true) ?? throw ApiException.NotFound();
         if (row.ProjectInUse) throw ApiException.Conflict("字典项已被项目引用，可停用但不能删除");
         if (row.HasChildren) throw ApiException.Conflict("机器人厂商仍有关联型号，可停用但不能删除");
-        await conn.ExecuteAsync(new CommandDefinition("DELETE FROM project_dictionaries WHERE id=@Id", new { Id = id }, tx, cancellationToken: ct));
+        var deleted = await db.ProjectDictionaries.Where(item => item.Id == id).ExecuteDeleteAsync(ct);
+        if (deleted != 1) throw ApiException.NotFound();
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DICTIONARY_DELETE", "project_dictionary", id,
             new { row.Type, row.Name }, ip, ct);
         await tx.CommitAsync(ct);
@@ -168,14 +152,15 @@ internal sealed class ProjectDictionaryService(AuditService audit)
     }
 
     private static async Task ValidateParentAsync(
-        MySqlConnection conn, MySqlTransaction tx, string type, ulong? parentId, ulong? selfId, CancellationToken ct)
+        YfDbContext db, string type, ulong? parentId, ulong? selfId, CancellationToken ct)
     {
         if (type != ProjectDictionaryTypes.RobotModel) return;
         if (parentId == selfId) throw ApiException.BadRequest("字典项不能以自身作为 parentId");
-        var parentType = await conn.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
-            "SELECT type FROM project_dictionaries WHERE id=@ParentId", new { ParentId = parentId }, tx, cancellationToken: ct));
+        var parentType = await db.ProjectDictionaries.Where(item => item.Id == parentId)
+            .Select(item => item.Type).SingleOrDefaultAsync(ct);
         if (parentType is null) throw ApiException.BadRequest("机器人厂商不存在");
-        if (parentType != ProjectDictionaryTypes.RobotVendor) throw ApiException.BadRequest("ROBOT_MODEL 的 parentId 必须指向 ROBOT_VENDOR");
+        if (parentType != ProjectDictionaryTypes.RobotVendor)
+            throw ApiException.BadRequest("ROBOT_MODEL 的 parentId 必须指向 ROBOT_VENDOR");
     }
 
     internal static void EnsureReferencedModelParentUnchanged(
@@ -185,19 +170,35 @@ internal sealed class ProjectDictionaryService(AuditService audit)
             throw ApiException.Conflict("机器人型号已被项目引用，不能更换所属厂商");
     }
 
+    private static IQueryable<DictionaryRow> Rows(YfDbContext db, IQueryable<ProjectDictionary> query) =>
+        query.Select(item => new DictionaryRow
+        {
+            Id = item.Id,
+            Type = item.Type,
+            Name = item.Name,
+            ParentId = item.ParentId,
+            ParentName = db.ProjectDictionaries.Where(parent => parent.Id == item.ParentId)
+                .Select(parent => parent.Name).FirstOrDefault(),
+            SortNo = item.SortNo,
+            Status = item.Status,
+            ProjectInUse = db.Projects.Any(project => project.RobotVendorId == item.Id
+                    || project.RobotModelId == item.Id || project.PriorityId == item.Id)
+                || db.ProjectGroups.Any(group => group.RobotVendorId == item.Id
+                    || group.RobotModelId == item.Id || group.PriorityId == item.Id),
+            HasChildren = db.ProjectDictionaries.Any(child => child.ParentId == item.Id),
+        });
+
     private static async Task<DictionaryRow?> FindAsync(
-        MySqlConnection conn, MySqlTransaction tx, ulong id, CancellationToken ct, bool forUpdate = false)
+        YfDbContext db, ulong id, CancellationToken ct, bool forUpdate = false)
     {
-        var sql = """
-            SELECT d.id AS Id,d.type AS Type,d.name AS Name,d.parent_id AS ParentId,
-                   parent.name AS ParentName,d.sort_no AS SortNo,d.status AS Status,
-                   (EXISTS(SELECT 1 FROM projects p WHERE p.robot_vendor_id=d.id OR p.robot_model_id=d.id OR p.priority_id=d.id)
-                    OR EXISTS(SELECT 1 FROM project_groups g WHERE g.robot_vendor_id=d.id OR g.robot_model_id=d.id OR g.priority_id=d.id)) AS ProjectInUse,
-                   EXISTS(SELECT 1 FROM project_dictionaries child WHERE child.parent_id=d.id) AS HasChildren
-            FROM project_dictionaries d LEFT JOIN project_dictionaries parent ON parent.id=d.parent_id
-            WHERE d.id=@Id
-            """ + (forUpdate ? " FOR UPDATE" : string.Empty);
-        return await conn.QuerySingleOrDefaultAsync<DictionaryRow>(new CommandDefinition(sql, new { Id = id }, tx, cancellationToken: ct));
+        if (forUpdate)
+        {
+            var locked = await db.ProjectDictionaries
+                .FromSqlInterpolated($"SELECT * FROM project_dictionaries WHERE id={id} FOR UPDATE")
+                .AsNoTracking().SingleOrDefaultAsync(ct);
+            if (locked is null) return null;
+        }
+        return await Rows(db, db.ProjectDictionaries.Where(item => item.Id == id)).SingleOrDefaultAsync(ct);
     }
 
     private static object Json(DictionaryRow row) => new

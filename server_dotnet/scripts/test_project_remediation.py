@@ -152,7 +152,7 @@ def _wait_for_project_lock(conn, worker, project_id):
         holder = cursor.fetchone()
     if holder is None or holder[0] < 1:
         raise AssertionError("fixture transaction does not hold an InnoDB row lock")
-    expected_query = f"select id from projects where id={project_id} for update"
+    expected_query_fragment = f"from projects where id={project_id} for update"
     while time.monotonic() < deadline:
         if not worker.is_alive():
             raise AssertionError("request completed before reaching the held project lock")
@@ -176,17 +176,19 @@ def _wait_for_project_lock(conn, worker, project_id):
                 "WHERE db=DATABASE() AND id<>CONNECTION_ID() AND command='Query'"
             )
             processes = list(cursor.fetchall())
-        matching = [row for row in processes
-                    if " ".join((row[2] or "").lower().split()) == expected_query]
+        matching = [
+            row for row in processes
+            if expected_query_fragment in " ".join((row[2] or "").lower().replace("`", "").split())
+        ]
         if len(matching) == 1:
             if blocked_process_id != matching[0][0]:
                 blocked_process_id = matching[0][0]
                 blocked_query_since = time.monotonic()
             elif time.monotonic() - blocked_query_since >= 0.25:
-                # MySQL 5.7 can keep this exact SELECT ... FOR UPDATE in the
+                # MySQL 5.7 can keep the EF-generated SELECT ... FOR UPDATE in the
                 # optimizer's `statistics` stage without publishing an
                 # INNODB_LOCK_WAITS row. Repeated observation of the exact
-                # project-id lock statement is the synchronization barrier.
+                # project-id lock fragment is the synchronization barrier.
                 return
         else:
             blocked_process_id = None

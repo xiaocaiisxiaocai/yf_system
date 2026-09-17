@@ -9,4 +9,13 @@
   <ItemGroup>
     <ProjectReference Include="../Yf.Api/Yf.Api.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Mirrors Yf.Api.csproj's Microsoft.EntityFrameworkCore.Design reference; PrivateAssets
+         means it does not flow through the ProjectReference above, so this project's output
+         stays byte-identical to Yf.Api's for scripts/test_host_artifacts.py. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
 </Project>

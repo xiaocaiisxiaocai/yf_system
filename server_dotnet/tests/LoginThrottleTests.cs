@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Dapper;
 using Konscious.Security.Cryptography;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Identity;
@@ -154,11 +155,12 @@ public sealed class LoginThrottleTests
     private sealed class LoginDatabase(MySqlConnection admin, string name, AppOptions options, string password, string legacyPassword) : IAsyncDisposable
     {
         private readonly AppDb _db = new(options);
+        private readonly Lazy<IDbContextFactory<YfDbContext>> _dbContextFactory = new(() => EfTestSupport.DbContextFactory(options));
         public string Password { get; } = password;
         public string LegacyPassword { get; } = legacyPassword;
 
         public IdentityService Service() =>
-            new(_db, options, new LoginRateLimiter(), new TokenService(options), new PermissionService(), new AuditService([]));
+            new(_dbContextFactory.Value, options, new LoginRateLimiter(), new TokenService(options), new PermissionService(), new AuditService([]));
 
         public Task<MySqlConnection> OpenAsync(CancellationToken ct) => _db.OpenAsync(ct);
 
@@ -229,7 +231,7 @@ public sealed class LoginThrottleTests
             };
             var admin = new MySqlConnection(builder.ConnectionString);
             await admin.OpenAsync(ct);
-            var name = "yf_test_login_" + Guid.NewGuid().ToString("N");
+            var name = "yf_t_" + Guid.NewGuid().ToString("N");
             var created = false;
             try
             {
@@ -242,12 +244,8 @@ public sealed class LoginThrottleTests
                 const string legacyPassword = "HistoricalPassword#2025!";
                 var scope = new LoginDatabase(admin, name, options, password, legacyPassword);
                 await using var conn = await scope._db.OpenAsync(ct);
-                using var resource = typeof(SchemaBootstrap).Assembly.GetManifestResourceStream("Yf.Api.Infrastructure.schema-baseline.json")!;
-                using var baseline = await JsonDocument.ParseAsync(resource, cancellationToken: ct);
-                await conn.ExecuteAsync(new CommandDefinition("SET FOREIGN_KEY_CHECKS=0", cancellationToken: ct));
-                foreach (var table in baseline.RootElement.GetProperty("tables").EnumerateArray())
-                    await conn.ExecuteAsync(new CommandDefinition(table.GetProperty("sql").GetString()!, cancellationToken: ct));
-                await conn.ExecuteAsync(new CommandDefinition("SET FOREIGN_KEY_CHECKS=1", cancellationToken: ct));
+                await using (var context = EfDb.Use(conn))
+                    await context.Database.MigrateAsync(ct);
                 await conn.ExecuteAsync(new CommandDefinition("""
                     INSERT INTO system_configs(cfg_key,cfg_value) VALUES('security.management_lock','');
                     INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password)

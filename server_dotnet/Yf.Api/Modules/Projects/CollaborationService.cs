@@ -1,21 +1,16 @@
 using System.Security.Cryptography;
 using System.Text;
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 
 namespace Yf.Api.Modules.Projects;
 
 internal sealed class CollaborationService
 {
-    private const string MeaningfulActivity = """
-        ((pa.activity_type='FILE' AND pa.action='UPLOAD')
-          OR (pa.activity_type='MESSAGE' AND pa.action='CREATE')
-          OR (pa.activity_type='PROJECT' AND pa.action IN ('START','RESTART','SUBMIT','CONFIRM','REJECT','WITHDRAW','TERMINATE')))
-        """;
-    private const string InternalAcceptanceVisibility = """
-        (pa.activity_type<>'PROJECT' OR pa.action<>'SUBMIT' OR @CanReceivePendingAcceptance=TRUE)
-        """;
+    private static readonly string[] MeaningfulProjectActions =
+        ["START", "RESTART", "SUBMIT", "CONFIRM", "REJECT", "WITHDRAW", "TERMINATE"];
 
     internal async Task<object> SummaryAsync(
         MySqlConnection conn,
@@ -25,27 +20,36 @@ internal sealed class CollaborationService
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
-        var (scope, parameters) = await ProjectAccessService.VisibleScopeAsync(conn, tx, current, ct);
-        parameters.Add("UserId", current.Id);
-        parameters.Add("CanReceivePendingAcceptance", ProjectWorkflowRules.CanReceivePendingAcceptance(
+        var canReceivePendingAcceptance = ProjectWorkflowRules.CanReceivePendingAcceptance(
             current,
-            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct)));
-        var row = await conn.QuerySingleAsync<CollaborationFingerprintRow>(new CommandDefinition(
-            $"""
+            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
+        if (!current.IsInternal && current.SupplierId is null) throw ApiException.OutOfScope();
+        await using var db = EfDb.Use(conn, tx);
+        var canViewAll = current.IsInternal
+            && await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct);
+        var supplierId = current.SupplierId ?? 0;
+
+        // BIT_XOR has no provider LINQ translation. Keep this one parameterized aggregate in SQL
+        // rather than loading the complete activity/read history just to calculate a revision.
+        var row = await db.Database.SqlQuery<CollaborationFingerprintRow>($"""
             SELECT COUNT(*) AS ActivityCount,COALESCE(MAX(pa.id),0) AS LatestId,
                    CAST(COALESCE(SUM(pa.id),0) AS CHAR) AS ActivitySum,
                    COALESCE(BIT_XOR(pa.id),0) AS ActivityXor,
                    COUNT(cr.activity_id) AS ReadCount,
                    CAST(COALESCE(SUM(CASE WHEN cr.activity_id IS NULL THEN 0 ELSE pa.id END),0) AS CHAR) AS ReadSum,
                    COALESCE(BIT_XOR(CASE WHEN cr.activity_id IS NULL THEN 0 ELSE pa.id END),0) AS ReadXor,
-                   COALESCE(SUM(CASE WHEN {MeaningfulActivity} AND {InternalAcceptanceVisibility}
-                       AND pa.actor_id<>@UserId AND cr.activity_id IS NULL THEN 1 ELSE 0 END),0) AS UnreadCount
+                   COALESCE(SUM(CASE WHEN
+                       ((pa.activity_type='FILE' AND pa.action='UPLOAD')
+                         OR (pa.activity_type='MESSAGE' AND pa.action='CREATE')
+                         OR (pa.activity_type='PROJECT' AND pa.action IN ('START','RESTART','SUBMIT','CONFIRM','REJECT','WITHDRAW','TERMINATE')))
+                       AND (pa.activity_type<>'PROJECT' OR pa.action<>'SUBMIT' OR {canReceivePendingAcceptance})
+                       AND pa.actor_id<>{current.Id} AND cr.activity_id IS NULL THEN 1 ELSE 0 END),0) AS UnreadCount
             FROM project_activities pa
             INNER JOIN projects p ON p.id=pa.project_id
-            LEFT JOIN collaboration_reads cr ON cr.activity_id=pa.id AND cr.user_id=@UserId
-            WHERE {scope}
-            """,
-            parameters, tx, cancellationToken: ct));
+            LEFT JOIN collaboration_reads cr ON cr.activity_id=pa.id AND cr.user_id={current.Id}
+            WHERE (({current.IsInternal} AND ({canViewAll} OR p.responsible_user_id={current.Id}))
+                OR (NOT {current.IsInternal} AND p.supplier_id={supplierId}))
+            """).SingleAsync(ct);
         await tx.CommitAsync(ct);
         return new
         {
@@ -67,74 +71,63 @@ internal sealed class CollaborationService
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
-        var (scope, parameters) = await ProjectAccessService.VisibleScopeAsync(conn, tx, current, ct);
-        parameters.Add("UserId", current.Id);
-        parameters.Add("CanReceivePendingAcceptance", ProjectWorkflowRules.CanReceivePendingAcceptance(
+        var canReceivePendingAcceptance = ProjectWorkflowRules.CanReceivePendingAcceptance(
             current,
-            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct)));
-        parameters.Add("Offset", (actualPage - 1) * size);
-        parameters.Add("Size", size);
-        var baseFilter = $"{scope} AND {MeaningfulActivity} AND {InternalAcceptanceVisibility} AND pa.actor_id<>@UserId";
-        var filter = baseFilter + (unreadOnly ? " AND cr.activity_id IS NULL" : string.Empty);
-        var unreadCount = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            $"""
-            SELECT COUNT(*)
-            FROM project_activities pa
-            INNER JOIN projects p ON p.id=pa.project_id
-            LEFT JOIN collaboration_reads cr ON cr.activity_id=pa.id AND cr.user_id=@UserId
-            WHERE {baseFilter} AND cr.activity_id IS NULL
-            """,
-            parameters, tx, cancellationToken: ct));
-        var total = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            $"""
-            SELECT COUNT(*)
-            FROM project_activities pa
-            INNER JOIN projects p ON p.id=pa.project_id
-            LEFT JOIN collaboration_reads cr ON cr.activity_id=pa.id AND cr.user_id=@UserId
-            WHERE {filter}
-            """,
-            parameters, tx, cancellationToken: ct));
-        var rows = (await conn.QueryAsync<CollaborationNotificationRow>(new CommandDefinition(
-            $"""
-            SELECT pa.id AS Id,pa.activity_type AS ActivityType,pa.action AS Action,
-                   pa.project_id AS ProjectId,p.name AS ProjectName,g.name AS ProjectGroupName,pa.actor_name AS ActorName,
-                   pa.title AS Title,
-                   CASE WHEN pa.activity_type='MESSAGE' AND message_target.id IS NULL THEN NULL ELSE pa.summary END AS Summary,
-                   pa.occurred_at AS OccurredAt,pa.target_id AS TargetId,
-                   CASE
-                       WHEN pa.activity_type='PROJECT' AND pa.target_id=p.id THEN TRUE
-                       WHEN pa.activity_type='FILE' AND file_target.id IS NOT NULL THEN TRUE
-                       WHEN pa.activity_type='MESSAGE' AND message_target.id IS NOT NULL THEN TRUE
-                       ELSE FALSE
-                   END AS TargetAvailable,
-                   cr.activity_id IS NOT NULL AS IsRead
-            FROM project_activities pa
-            INNER JOIN projects p ON p.id=pa.project_id
-            INNER JOIN project_groups g ON g.id=p.project_group_id
-            LEFT JOIN collaboration_reads cr ON cr.activity_id=pa.id AND cr.user_id=@UserId
-            LEFT JOIN files file_target ON pa.activity_type='FILE' AND file_target.id=pa.target_id
-                AND file_target.project_id=pa.project_id AND file_target.status='AVAILABLE'
-            LEFT JOIN messages message_target ON pa.activity_type='MESSAGE' AND message_target.id=pa.target_id
-                AND message_target.project_id=pa.project_id AND message_target.status='NORMAL'
-            WHERE {filter}
-            ORDER BY pa.occurred_at DESC,pa.id DESC
-            LIMIT @Size OFFSET @Offset
-            """,
-            parameters, tx, cancellationToken: ct))).AsList();
+            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
+        await using var db = EfDb.Use(conn, tx);
+        var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
+        var activities = VisibleMeaningfulActivities(db, visibleProjects, current.Id, canReceivePendingAcceptance);
+        var query =
+            from activity in activities
+            join project in visibleProjects on activity.ProjectId equals project.Id
+            join projectGroup in db.ProjectGroups on project.ProjectGroupId equals projectGroup.Id
+            let isRead = db.CollaborationReads.Any(read =>
+                read.ActivityId == activity.Id && read.UserId == current.Id)
+            let fileAvailable = activity.ActivityType == "FILE" && activity.TargetId != null
+                && db.Files.Any(file => file.Id == activity.TargetId
+                    && file.ProjectId == activity.ProjectId && file.Status == "AVAILABLE")
+            let messageAvailable = activity.ActivityType == "MESSAGE" && activity.TargetId != null
+                && db.Messages.Any(message => message.Id == activity.TargetId
+                    && message.ProjectId == activity.ProjectId && message.Status == "NORMAL")
+            select new
+            {
+                Activity = activity,
+                ProjectName = project.Name,
+                ProjectGroupName = projectGroup.Name,
+                IsRead = isRead,
+                FileAvailable = fileAvailable,
+                MessageAvailable = messageAvailable,
+            };
+
+        var unreadCount = (ulong)await query.LongCountAsync(row => !row.IsRead, ct);
+        var filtered = unreadOnly ? query.Where(row => !row.IsRead) : query;
+        var total = (ulong)await filtered.LongCountAsync(ct);
+        var rows = await filtered.OrderByDescending(row => row.Activity.OccurredAt)
+            .ThenByDescending(row => row.Activity.Id)
+            .Page((actualPage - 1) * size, size)
+            .ToArrayAsync(ct);
         var list = rows.Select(row => new
         {
-            id = row.Id,
-            type = row.ActivityType,
-            action = row.Action,
-            projectId = row.ProjectId,
+            id = row.Activity.Id,
+            type = row.Activity.ActivityType,
+            action = row.Activity.Action,
+            projectId = row.Activity.ProjectId,
             projectName = row.ProjectName,
             projectGroupName = row.ProjectGroupName,
-            actorName = row.ActorName,
-            title = row.Title,
-            summary = row.Summary,
-            occurredAt = ProjectJson.Utc(row.OccurredAt),
-            targetId = row.TargetId,
-            targetAvailable = row.TargetAvailable,
+            actorName = row.Activity.ActorName,
+            title = row.Activity.Title,
+            summary = row.Activity.ActivityType == "MESSAGE" && !row.MessageAvailable
+                ? null
+                : row.Activity.Summary,
+            occurredAt = ProjectJson.Utc(row.Activity.OccurredAt),
+            targetId = row.Activity.TargetId,
+            targetAvailable = row.Activity.ActivityType switch
+            {
+                "PROJECT" => row.Activity.TargetId == row.Activity.ProjectId,
+                "FILE" => row.FileAvailable,
+                "MESSAGE" => row.MessageAvailable,
+                _ => false,
+            },
             read = row.IsRead,
         }).ToArray();
         await tx.CommitAsync(ct);
@@ -147,11 +140,9 @@ internal sealed class CollaborationService
         MarkCollaborationReadRequest request,
         CancellationToken ct)
     {
-        var ids = (request.Ids ?? []).Distinct().ToArray();
-        if (ids.Length > 100)
-        {
-            throw ApiException.BadRequest("单次标记数量超过上限（100）");
-        }
+        var ids = (request.Ids ?? []).Distinct().Order().ToArray();
+        if (ids.Length > 100) throw ApiException.BadRequest("单次标记数量超过上限（100）");
+
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
@@ -160,38 +151,66 @@ internal sealed class CollaborationService
             await tx.CommitAsync(ct);
             return;
         }
-        var (scope, parameters) = await ProjectAccessService.VisibleScopeAsync(conn, tx, current, ct);
-        parameters.Add("UserId", current.Id);
-        parameters.Add("CanReceivePendingAcceptance", ProjectWorkflowRules.CanReceivePendingAcceptance(
+
+        var canReceivePendingAcceptance = ProjectWorkflowRules.CanReceivePendingAcceptance(
             current,
-            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct)));
-        parameters.Add("Ids", ids);
-        var validated = (await conn.QueryAsync<ulong>(new CommandDefinition(
-            $"""
-            SELECT pa.id
-            FROM project_activities pa
-            INNER JOIN projects p ON p.id=pa.project_id
-            WHERE pa.id IN @Ids AND {scope} AND {MeaningfulActivity}
-              AND {InternalAcceptanceVisibility} AND pa.actor_id<>@UserId
-            FOR UPDATE
-            """,
-            parameters, tx, cancellationToken: ct))).AsList();
-        if (validated.Count != ids.Length)
+            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
+        await using var db = EfDb.Use(conn, tx);
+
+        // Lock in stable key order before the no-tracking visibility check and insert. EF cannot
+        // translate FOR UPDATE, and interpolating one id at a time keeps every lock parameterized.
+        var projectIds = new HashSet<ulong>();
+        foreach (var id in ids)
         {
-            throw ApiException.OutOfScope("通知不存在或无权访问");
+            var locked = await db.ProjectActivities
+                .FromSqlInterpolated($"SELECT * FROM project_activities WHERE id={id} FOR UPDATE")
+                .AsNoTracking()
+                .SingleOrDefaultAsync(ct);
+            if (locked is not null) projectIds.Add(locked.ProjectId);
         }
-        await conn.ExecuteAsync(new CommandDefinition(
-            $"""
-            INSERT IGNORE INTO collaboration_reads(activity_id,user_id,read_at)
-            SELECT pa.id,@UserId,UTC_TIMESTAMP(3)
-            FROM project_activities pa
-            INNER JOIN projects p ON p.id=pa.project_id
-            WHERE pa.id IN @Ids AND {scope} AND {MeaningfulActivity}
-              AND {InternalAcceptanceVisibility} AND pa.actor_id<>@UserId
-            """,
-            parameters, tx, cancellationToken: ct));
+        foreach (var projectId in projectIds.Order())
+        {
+            await db.Projects
+                .FromSqlInterpolated($"SELECT * FROM projects WHERE id={projectId} FOR UPDATE")
+                .AsNoTracking()
+                .SingleOrDefaultAsync(ct);
+        }
+
+        var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
+        var validated = await VisibleMeaningfulActivities(
+                db, visibleProjects, current.Id, canReceivePendingAcceptance)
+            .Where(activity => Enumerable.Contains(ids, activity.Id))
+            .Select(activity => activity.Id)
+            .ToArrayAsync(ct);
+        if (validated.Length != ids.Length) throw ApiException.OutOfScope("通知不存在或无权访问");
+
+        var existing = await db.CollaborationReads
+            .Where(read => read.UserId == current.Id && Enumerable.Contains(ids, read.ActivityId))
+            .Select(read => read.ActivityId)
+            .ToArrayAsync(ct);
+        var existingSet = existing.ToHashSet();
+        db.CollaborationReads.AddRange(ids
+            .Where(id => !existingSet.Contains(id))
+            .Select(id => new CollaborationRead { ActivityId = id, UserId = current.Id }));
+        await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
     }
+
+    private static IQueryable<ProjectActivity> VisibleMeaningfulActivities(
+        YfDbContext db,
+        IQueryable<Yf.Api.Infrastructure.Entities.Project> visibleProjects,
+        ulong userId,
+        bool canReceivePendingAcceptance) =>
+        from activity in db.ProjectActivities
+        join project in visibleProjects on activity.ProjectId equals project.Id
+        where activity.ActorId != null && activity.ActorId != userId
+            && ((activity.ActivityType == "FILE" && activity.Action == "UPLOAD")
+                || (activity.ActivityType == "MESSAGE" && activity.Action == "CREATE")
+                || (activity.ActivityType == "PROJECT"
+                    && Enumerable.Contains(MeaningfulProjectActions, activity.Action)))
+            && (activity.ActivityType != "PROJECT" || activity.Action != "SUBMIT"
+                || canReceivePendingAcceptance)
+        select activity;
 
     private static string Revision(ulong userId, CollaborationFingerprintRow row)
     {
@@ -210,22 +229,5 @@ internal sealed class CollaborationService
         public string ReadSum { get; init; } = "0";
         public ulong ReadXor { get; init; }
         public ulong UnreadCount { get; init; }
-    }
-
-    private sealed class CollaborationNotificationRow
-    {
-        public ulong Id { get; init; }
-        public string ActivityType { get; init; } = string.Empty;
-        public string Action { get; init; } = string.Empty;
-        public ulong ProjectId { get; init; }
-        public string ProjectName { get; init; } = string.Empty;
-        public string ProjectGroupName { get; init; } = string.Empty;
-        public string ActorName { get; init; } = string.Empty;
-        public string Title { get; init; } = string.Empty;
-        public string? Summary { get; init; }
-        public DateTime OccurredAt { get; init; }
-        public ulong? TargetId { get; init; }
-        public bool TargetAvailable { get; init; }
-        public bool IsRead { get; init; }
     }
 }

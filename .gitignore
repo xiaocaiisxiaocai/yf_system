@@ -14,13 +14,6 @@ web/.playwright-cli/
 web/*.log
 web/*.local
 
-# Rust build output and local config
-yf_server/target/
-yf_server/config.local.toml
-yf_server/server_run.log
-yf_server/__pycache__/
-yf_server/**/__pycache__/
-
 # Generated local test artifacts
 e2e_chunk_*.zip
 e2e_resume_*.zip

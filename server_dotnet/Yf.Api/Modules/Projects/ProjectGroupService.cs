@@ -1,8 +1,9 @@
 using System.Globalization;
 using System.Text;
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 
 namespace Yf.Api.Modules.Projects;
 
@@ -23,33 +24,24 @@ internal sealed class ProjectGroupService(
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-        var (scope, args) = await ProjectGroupAccessService.VisibleScopeAsync(conn, tx, current, ct);
-        var clauses = new List<string> { scope };
+        await using var db = EfDb.Use(conn, tx);
+        var query = await ProjectGroupAccessService.VisibleQueryAsync(db, current, ct);
         if (!string.IsNullOrWhiteSpace(keyword))
         {
-            clauses.Add("g.name LIKE CONCAT('%',@Keyword,'%')");
-            args.Add("Keyword", keyword.Trim());
+            var value = keyword.Trim();
+            query = query.Where(group => group.Name.Contains(value));
         }
         if (!string.IsNullOrWhiteSpace(status))
         {
-            clauses.Add("g.status=@Status");
-            args.Add("Status", status.Trim());
+            var value = status.Trim();
+            query = query.Where(group => group.Status == value);
         }
-        if (supplierId is not null)
-        {
-            clauses.Add("g.supplier_id=@SupplierId");
-            args.Add("SupplierId", supplierId.Value);
-        }
-        args.Add("UserId", current.Id);
-        args.Add("Offset", (actualPage - 1) * size);
-        args.Add("Size", size);
-        var where = string.Join(" AND ", clauses);
-        var total = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            $"SELECT COUNT(*) FROM project_groups g WHERE {where}", args, tx, cancellationToken: ct));
-        var rows = (await conn.QueryAsync<ProjectGroupRow>(new CommandDefinition(
-            GroupSelect + $" WHERE {where} ORDER BY g.id DESC LIMIT @Size OFFSET @Offset",
-            args, tx, cancellationToken: ct))).AsList();
-        await LoadWorkOrdersAsync(conn, tx, rows, ct);
+        if (supplierId is not null) query = query.Where(group => group.SupplierId == supplierId.Value);
+        var total = (ulong)await query.LongCountAsync(ct);
+        var offset = (actualPage - 1) * size;
+        var rows = await GroupRows(db, query, current.Id).OrderByDescending(group => group.Id)
+            .Page(offset, size).ToArrayAsync(ct);
+        await LoadWorkOrdersAsync(db, rows, ct);
         await tx.CommitAsync(ct);
         return ProjectJson.Page(rows.Select(ProjectJson.ProjectGroup).ToArray(), total, actualPage, size);
     }
@@ -63,11 +55,11 @@ internal sealed class ProjectGroupService(
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await ProjectGroupAccessService.RequireViewAsync(conn, tx, current, groupId, false, ct);
-        var group = await LoadGroupAsync(conn, tx, groupId, current.Id, ct);
-        var projects = (await conn.QueryAsync<ProjectRow>(new CommandDefinition(
-            ChildSelect + " WHERE p.project_group_id=@GroupId ORDER BY p.id",
-            new { GroupId = groupId, UserId = current.Id }, tx, cancellationToken: ct))).AsList();
-        await ProjectService.LoadWorkOrdersAsync(conn, tx, projects, ct);
+        await using var db = EfDb.Use(conn, tx);
+        var group = await LoadGroupAsync(db, groupId, current.Id, ct);
+        var projects = await ProjectQueries.Rows(db).Where(project => project.ProjectGroupId == groupId)
+            .OrderBy(project => project.Id).ToArrayAsync(ct);
+        await LoadProjectExtrasAsync(db, projects, current.Id, ct);
         await tx.CommitAsync(ct);
         return new
         {
@@ -93,38 +85,61 @@ internal sealed class ProjectGroupService(
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:create", ct);
-        await EnsureSupplierAsync(conn, tx, request.SupplierId, ct);
-        await EnsureGroupNameUniqueAsync(conn, tx, name, null, ct);
-        foreach (var childName in childNames) await ProjectService.EnsureNameUniqueAsync(conn, tx, childName, null, ct);
+        await using var db = EfDb.Use(conn, tx);
+        await EnsureSupplierAsync(db, request.SupplierId, ct);
+        await EnsureGroupNameUniqueAsync(db, name, null, ct);
+        foreach (var childName in childNames) await EnsureProjectNameUniqueAsync(db, childName, null, ct);
         metadata = await ProjectService.ValidateMetadataAsync(conn, tx, metadata, null, ct);
-        await conn.ExecuteAsync(new CommandDefinition(
-            """
-            INSERT INTO project_groups(name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,
-                robot_model_id,responsible_user_id,section_id,priority_id,expected_completion_date,completed_at,created_at,updated_at)
-            VALUES(@Name,@Description,@SupplierId,'DRAFT',@CreatedBy,@MachineModel,@RobotVendorId,@RobotModelId,
-                @ResponsibleUserId,@SectionId,@PriorityId,@ExpectedCompletionDate,NULL,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
-            """, new { Name = name, request.Description, request.SupplierId, CreatedBy = current.Id,
-                metadata.MachineModel, metadata.RobotVendorId, metadata.RobotModelId, metadata.ResponsibleUserId,
-                metadata.SectionId, metadata.PriorityId, metadata.ExpectedCompletionDate }, tx, cancellationToken: ct));
-        var groupId = await LastInsertIdAsync(conn, tx, ct);
-        await ReplaceGroupWorkOrdersAsync(conn, tx, groupId, metadata.WorkOrderNos, ct);
-        var childIds = new List<ulong>(childNames.Length);
-        foreach (var childName in childNames)
-            childIds.Add(await InsertChildAsync(conn, tx, groupId, childName, null, request.SupplierId, current.Id, metadata, ct));
-        for (var index = 0; index < childIds.Count; index++)
-            await audit.WriteAsync(conn, tx, current.Id, "PROJECT_CREATE", "project", childIds[index], new
+
+        var group = new ProjectGroup
+        {
+            Name = name,
+            Description = request.Description,
+            SupplierId = request.SupplierId,
+            Status = ProjectStatuses.Draft,
+            CreatedBy = current.Id,
+            MachineModel = metadata.MachineModel,
+            RobotVendorId = metadata.RobotVendorId,
+            RobotModelId = metadata.RobotModelId,
+            ResponsibleUserId = metadata.ResponsibleUserId,
+            SectionId = metadata.SectionId,
+            PriorityId = metadata.PriorityId,
+            ExpectedCompletionDate = ToDateOnly(metadata.ExpectedCompletionDate),
+        };
+        db.ProjectGroups.Add(group);
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
+        { throw ApiException.Conflict("主项目名称已存在"); }
+
+        await ReplaceGroupWorkOrdersAsync(db, group.Id, metadata.WorkOrderNos, ct);
+        var children = childNames.Select(childName => NewChild(
+            group.Id, childName, null, request.SupplierId, current.Id, metadata)).ToArray();
+        db.Projects.AddRange(children);
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
+        { throw ApiException.Conflict("项目名称已存在"); }
+        AddChildRecords(db, children, metadata.WorkOrderNos, current.Id, "CREATE");
+        db.ProjectGroupStatusLogs.Add(new ProjectGroupStatusLog
+        {
+            ProjectGroupId = group.Id,
+            FromStatus = null,
+            ToStatus = ProjectStatuses.Draft,
+            Action = "CREATE",
+            TriggerProjectId = children.FirstOrDefault()?.Id,
+            OperatorId = current.Id,
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync(ct);
+
+        for (var index = 0; index < children.Length; index++)
+            await audit.WriteAsync(conn, tx, current.Id, "PROJECT_CREATE", "project", children[index].Id, new
             {
                 name = childNames[index],
-                projectGroupId = groupId,
+                projectGroupId = group.Id,
                 projectGroupName = name,
                 inheritedFromMainProject = true,
             }, ip, ct);
-        await conn.ExecuteAsync(new CommandDefinition(
-            """
-            INSERT INTO project_group_status_logs(project_group_id,from_status,to_status,action,trigger_project_id,operator_id,created_at)
-            VALUES(@GroupId,NULL,'DRAFT','CREATE',@TriggerProjectId,@UserId,UTC_TIMESTAMP(3))
-            """, new { GroupId = groupId, TriggerProjectId = childIds.FirstOrDefault(), UserId = current.Id }, tx, cancellationToken: ct));
-        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_GROUP_CREATE", "project_group", groupId, new
+        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_GROUP_CREATE", "project_group", group.Id, new
         {
             name,
             request.SupplierId,
@@ -136,10 +151,10 @@ internal sealed class ProjectGroupService(
             metadata.SectionId,
             metadata.PriorityId,
             metadata.ExpectedCompletionDate,
-            subprojectIds = childIds,
+            subprojectIds = children.Select(child => child.Id).ToArray(),
             subprojectNames = childNames,
         }, ip, ct);
-        var result = ProjectJson.ProjectGroup(await LoadGroupAsync(conn, tx, groupId, current.Id, ct));
+        var result = ProjectJson.ProjectGroup(await LoadGroupAsync(db, group.Id, current.Id, ct));
         await tx.CommitAsync(ct);
         return result;
     }
@@ -165,69 +180,68 @@ internal sealed class ProjectGroupService(
             throw ApiException.Conflict("主项目已结束，不能修改公共资料");
         if (access.SupplierId != request.SupplierId)
             throw ApiException.BadRequest("主项目创建后不可更换供应商");
-        if (await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-                "SELECT EXISTS(SELECT 1 FROM projects WHERE project_group_id=@GroupId AND status='PENDING_CONFIRMATION')",
-                new { GroupId = groupId }, tx, cancellationToken: ct)))
+        await using var db = EfDb.Use(conn, tx);
+        if (await db.Projects.AnyAsync(project => project.ProjectGroupId == groupId
+                && project.Status == ProjectStatuses.PendingConfirmation, ct))
             throw ApiException.Conflict("存在待验收子项目，暂不能修改主项目资料");
-        var before = await LoadGroupAsync(conn, tx, groupId, current.Id, ct);
-        await EnsureGroupNameUniqueAsync(conn, tx, name, groupId, ct);
+        var before = await LoadGroupAsync(db, groupId, current.Id, ct);
+        await EnsureGroupNameUniqueAsync(db, name, groupId, ct);
         metadata = await ProjectService.ValidateMetadataAsync(conn, tx, metadata, new ProjectRow
         {
             RobotVendorId = before.RobotVendorId,
             RobotModelId = before.RobotModelId,
             PriorityId = before.PriorityId,
         }, ct);
-        await conn.ExecuteAsync(new CommandDefinition(
-            """
-            UPDATE project_groups SET name=@Name,description=@Description,machine_model=@MachineModel,
-                robot_vendor_id=@RobotVendorId,robot_model_id=@RobotModelId,responsible_user_id=@ResponsibleUserId,
-                section_id=@SectionId,priority_id=@PriorityId,expected_completion_date=@ExpectedCompletionDate,
-                updated_at=UTC_TIMESTAMP(3)
-            WHERE id=@GroupId
-            """, new { Name = name, request.Description, metadata.MachineModel, metadata.RobotVendorId,
-                metadata.RobotModelId, metadata.ResponsibleUserId, metadata.SectionId, metadata.PriorityId,
-                metadata.ExpectedCompletionDate, GroupId = groupId }, tx, cancellationToken: ct));
-        var childIds = (await conn.QueryAsync<ulong>(new CommandDefinition(
-            """
-            SELECT id FROM projects
-            WHERE project_group_id=@GroupId
-              AND (status<>'COMPLETED'
-                   OR NOT(responsible_user_id <=> @ResponsibleUserId)
-                   OR NOT(section_id <=> @SectionId))
-            ORDER BY id
-            """, new { GroupId = groupId, metadata.ResponsibleUserId, metadata.SectionId },
-            tx, cancellationToken: ct))).ToArray();
-        // Access ownership always follows the main project, including completed
-        // children. Accepted business metadata and work orders remain frozen.
-        await conn.ExecuteAsync(new CommandDefinition(
-            """
-            UPDATE projects SET updated_at=UTC_TIMESTAMP(3),
-                responsible_user_id=@ResponsibleUserId,section_id=@SectionId
-            WHERE project_group_id=@GroupId
-              AND (NOT(responsible_user_id <=> @ResponsibleUserId)
-                   OR NOT(section_id <=> @SectionId))
-            """, new { metadata.ResponsibleUserId, metadata.SectionId, GroupId = groupId },
-            tx, cancellationToken: ct));
-        await conn.ExecuteAsync(new CommandDefinition(
-            """
-            UPDATE projects SET machine_model=@MachineModel,robot_vendor_id=@RobotVendorId,robot_model_id=@RobotModelId,
-                responsible_user_id=@ResponsibleUserId,section_id=@SectionId,priority_id=@PriorityId,
-                expected_completion_date=@ExpectedCompletionDate,updated_at=UTC_TIMESTAMP(3)
-            WHERE project_group_id=@GroupId AND status<>'COMPLETED'
-            """, new { metadata.MachineModel, metadata.RobotVendorId, metadata.RobotModelId,
-                metadata.ResponsibleUserId, metadata.SectionId, metadata.PriorityId, metadata.ExpectedCompletionDate,
-                GroupId = groupId }, tx, cancellationToken: ct));
-        await ReplaceGroupWorkOrdersAsync(conn, tx, groupId, metadata.WorkOrderNos, ct);
-        await conn.ExecuteAsync(new CommandDefinition(
-            "DELETE pwo FROM project_work_orders pwo INNER JOIN projects p ON p.id=pwo.project_id WHERE p.project_group_id=@GroupId AND p.status<>'COMPLETED'",
-            new { GroupId = groupId }, tx, cancellationToken: ct));
-        await conn.ExecuteAsync(new CommandDefinition(
-            """
-            INSERT INTO project_work_orders(project_id,work_order_no,sort_no,created_at)
-            SELECT p.id,gwo.work_order_no,gwo.sort_no,UTC_TIMESTAMP(3)
-            FROM projects p CROSS JOIN project_group_work_orders gwo
-            WHERE p.project_group_id=@GroupId AND p.status<>'COMPLETED' AND gwo.project_group_id=@GroupId
-            """, new { GroupId = groupId }, tx, cancellationToken: ct));
+
+        try
+        {
+            await db.ProjectGroups.Where(group => group.Id == groupId).ExecuteUpdateAsync(setters => setters
+                .SetProperty(group => group.Name, name)
+                .SetProperty(group => group.Description, request.Description)
+                .SetProperty(group => group.MachineModel, metadata.MachineModel)
+                .SetProperty(group => group.RobotVendorId, metadata.RobotVendorId)
+                .SetProperty(group => group.RobotModelId, metadata.RobotModelId)
+                .SetProperty(group => group.ResponsibleUserId, metadata.ResponsibleUserId)
+                .SetProperty(group => group.SectionId, metadata.SectionId)
+                .SetProperty(group => group.PriorityId, metadata.PriorityId)
+                .SetProperty(group => group.ExpectedCompletionDate, ToDateOnly(metadata.ExpectedCompletionDate)), ct);
+        }
+        catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
+        { throw ApiException.Conflict("主项目名称已存在"); }
+
+        var childIds = await db.Projects
+            .Where(project => project.ProjectGroupId == groupId
+                && (project.Status != ProjectStatuses.Completed
+                    || project.ResponsibleUserId != metadata.ResponsibleUserId
+                    || project.SectionId != metadata.SectionId))
+            .OrderBy(project => project.Id).Select(project => project.Id).ToArrayAsync(ct);
+        await db.Projects.Where(project => project.ProjectGroupId == groupId
+                && (project.ResponsibleUserId != metadata.ResponsibleUserId
+                    || project.SectionId != metadata.SectionId))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(project => project.ResponsibleUserId, metadata.ResponsibleUserId)
+                .SetProperty(project => project.SectionId, metadata.SectionId), ct);
+        await db.Projects.Where(project => project.ProjectGroupId == groupId
+                && project.Status != ProjectStatuses.Completed)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(project => project.MachineModel, metadata.MachineModel)
+                .SetProperty(project => project.RobotVendorId, metadata.RobotVendorId)
+                .SetProperty(project => project.RobotModelId, metadata.RobotModelId)
+                .SetProperty(project => project.ResponsibleUserId, metadata.ResponsibleUserId)
+                .SetProperty(project => project.SectionId, metadata.SectionId)
+                .SetProperty(project => project.PriorityId, metadata.PriorityId)
+                .SetProperty(project => project.ExpectedCompletionDate, ToDateOnly(metadata.ExpectedCompletionDate)), ct);
+        await ReplaceGroupWorkOrdersAsync(db, groupId, metadata.WorkOrderNos, ct);
+        await db.ProjectWorkOrders.Where(order => db.Projects.Any(project => project.Id == order.ProjectId
+                && project.ProjectGroupId == groupId && project.Status != ProjectStatuses.Completed))
+            .ExecuteDeleteAsync(ct);
+        var mutableProjectIds = await db.Projects.Where(project => project.ProjectGroupId == groupId
+                && project.Status != ProjectStatuses.Completed)
+            .Select(project => project.Id).ToArrayAsync(ct);
+        db.ProjectWorkOrders.AddRange(mutableProjectIds.SelectMany(projectId => metadata.WorkOrderNos.Select((value, index) =>
+            new ProjectWorkOrder { ProjectId = projectId, WorkOrderNo = value, SortNo = index })));
+        await db.SaveChangesAsync(ct);
+
         foreach (var childId in childIds)
             await audit.WriteAsync(conn, tx, current.Id, "PROJECT_UPDATE", "project", childId, new
             {
@@ -251,7 +265,7 @@ internal sealed class ProjectGroupService(
                 new("expectedCompletionDate", "预计完成日期",
                     DateValue(before.ExpectedCompletionDate), DateValue(metadata.ExpectedCompletionDate))),
         }, ip, ct);
-        var result = ProjectJson.ProjectGroup(await LoadGroupAsync(conn, tx, groupId, current.Id, ct));
+        var result = ProjectJson.ProjectGroup(await LoadGroupAsync(db, groupId, current.Id, ct));
         await tx.CommitAsync(ct);
         return result;
     }
@@ -274,19 +288,26 @@ internal sealed class ProjectGroupService(
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:create", ct);
         if (access.Status is ProjectStatuses.Completed or ProjectStatuses.Terminated)
             throw ApiException.Conflict("主项目已结束，不能新增子项目");
-        await ProjectService.EnsureNameUniqueAsync(conn, tx, name, null, ct);
-        var group = await LoadGroupAsync(conn, tx, groupId, current.Id, ct);
+        await using var db = EfDb.Use(conn, tx);
+        await EnsureProjectNameUniqueAsync(db, name, null, ct);
+        var group = await LoadGroupAsync(db, groupId, current.Id, ct);
         var metadata = Metadata(group);
-        var projectId = await InsertChildAsync(conn, tx, groupId, name, request.Description, group.SupplierId, current.Id, metadata, ct);
-        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_CREATE", "project", projectId, new
+        var child = NewChild(groupId, name, request.Description, group.SupplierId, current.Id, metadata);
+        db.Projects.Add(child);
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
+        { throw ApiException.Conflict("项目名称已存在"); }
+        AddChildRecords(db, [child], metadata.WorkOrderNos, current.Id, "CREATE");
+        await db.SaveChangesAsync(ct);
+        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_CREATE", "project", child.Id, new
         {
             name,
             projectGroupId = groupId,
             projectGroupName = group.Name,
             inheritedFromMainProject = true,
         }, ip, ct);
-        await groupStatus.RecalculateAsync(conn, tx, groupId, current.Id, projectId, ct);
-        var result = ProjectJson.Project(await LoadChildAsync(conn, tx, projectId, current.Id, ct));
+        await groupStatus.RecalculateAsync(conn, tx, groupId, current.Id, child.Id, ct);
+        var result = ProjectJson.Project(await LoadChildAsync(db, child.Id, current.Id, ct));
         await tx.CommitAsync(ct);
         return result;
     }
@@ -304,134 +325,204 @@ internal sealed class ProjectGroupService(
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await ProjectGroupAccessService.RequireViewAsync(conn, tx, current, groupId, true, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:delete", ct);
-        var group = await LoadGroupAsync(conn, tx, groupId, current.Id, ct);
+        await using var db = EfDb.Use(conn, tx);
+        var group = await LoadGroupAsync(db, groupId, current.Id, ct);
         if (group.SubprojectCount > 0) throw ApiException.Conflict("主项目仍有子项目，请先逐个处理子项目");
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_GROUP_DELETE", "project_group", groupId,
             new { name = group.Name }, ip, ct);
-        var deleted = await conn.ExecuteAsync(new CommandDefinition(
-            "DELETE FROM project_groups WHERE id=@GroupId", new { GroupId = groupId }, tx, cancellationToken: ct));
+        var deleted = await db.ProjectGroups.Where(item => item.Id == groupId).ExecuteDeleteAsync(ct);
         if (deleted != 1) throw ApiException.Conflict("主项目已被删除，请刷新后重试");
         await tx.CommitAsync(ct);
     }
 
-    private static async Task<ulong> InsertChildAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
+    private static Project NewChild(
         ulong groupId,
         string name,
         string? description,
         ulong supplierId,
         ulong actorId,
-        ProjectService.ProjectMetadataInput metadata,
-        CancellationToken ct)
+        ProjectService.ProjectMetadataInput metadata) => new()
     {
-        await conn.ExecuteAsync(new CommandDefinition(
-            """
-            INSERT INTO projects(project_group_id,name,description,supplier_id,status,confirm_side,created_by,created_at,updated_at,
-                machine_model,robot_vendor_id,robot_model_id,responsible_user_id,section_id,priority_id,expected_completion_date)
-            VALUES(@GroupId,@Name,@Description,@SupplierId,'DRAFT',NULL,@ActorId,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),
-                @MachineModel,@RobotVendorId,@RobotModelId,@ResponsibleUserId,@SectionId,@PriorityId,@ExpectedCompletionDate)
-            """, new { GroupId = groupId, Name = name, Description = description, SupplierId = supplierId, ActorId = actorId,
-                metadata.MachineModel, metadata.RobotVendorId, metadata.RobotModelId, metadata.ResponsibleUserId,
-                metadata.SectionId, metadata.PriorityId, metadata.ExpectedCompletionDate }, tx, cancellationToken: ct));
-        var projectId = await LastInsertIdAsync(conn, tx, ct);
-        await ProjectService.ReplaceWorkOrdersAsync(conn, tx, projectId, metadata.WorkOrderNos, ct);
-        await conn.ExecuteAsync(new CommandDefinition(
-            """
-            INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,confirm_side,reason,created_at)
-            VALUES(@ProjectId,NULL,'DRAFT','CREATE',@ActorId,NULL,NULL,UTC_TIMESTAMP(3))
-            """, new { ProjectId = projectId, ActorId = actorId }, tx, cancellationToken: ct));
-        return projectId;
+        ProjectGroupId = groupId,
+        Name = name,
+        Description = description,
+        SupplierId = supplierId,
+        Status = ProjectStatuses.Draft,
+        ConfirmSide = null,
+        CreatedBy = actorId,
+        MachineModel = metadata.MachineModel,
+        RobotVendorId = metadata.RobotVendorId,
+        RobotModelId = metadata.RobotModelId,
+        ResponsibleUserId = metadata.ResponsibleUserId,
+        SectionId = metadata.SectionId,
+        PriorityId = metadata.PriorityId,
+        ExpectedCompletionDate = ToDateOnly(metadata.ExpectedCompletionDate),
+    };
+
+    private static void AddChildRecords(
+        YfDbContext db,
+        IReadOnlyCollection<Project> children,
+        IReadOnlyList<string> workOrderNos,
+        ulong actorId,
+        string action)
+    {
+        db.ProjectWorkOrders.AddRange(children.SelectMany(child => workOrderNos.Select((value, index) =>
+            new ProjectWorkOrder { ProjectId = child.Id, WorkOrderNo = value, SortNo = index })));
+        db.ProjectStatusLogs.AddRange(children.Select(child => new ProjectStatusLog
+        {
+            ProjectId = child.Id,
+            FromStatus = null,
+            ToStatus = ProjectStatuses.Draft,
+            Action = action,
+            OperatorId = actorId,
+            ConfirmSide = null,
+            Reason = null,
+            CreatedAt = DateTime.UtcNow,
+        }));
     }
 
-    private static async Task<ProjectGroupRow> LoadGroupAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        ulong groupId,
-        ulong userId,
-        CancellationToken ct)
+    private static IQueryable<ProjectGroupRow> GroupRows(
+        YfDbContext db,
+        IQueryable<ProjectGroup> query,
+        ulong userId) => query.Select(group => new ProjectGroupRow
     {
-        var row = await conn.QuerySingleOrDefaultAsync<ProjectGroupRow>(new CommandDefinition(
-            GroupSelect + " WHERE g.id=@GroupId",
-            new { GroupId = groupId, UserId = userId }, tx, cancellationToken: ct)) ?? throw ApiException.NotFound();
-        await LoadWorkOrdersAsync(conn, tx, [row], ct);
+        Id = group.Id,
+        Name = group.Name,
+        Description = group.Description,
+        SupplierId = group.SupplierId,
+        SupplierName = db.Suppliers.Where(supplier => supplier.Id == group.SupplierId)
+            .Select(supplier => supplier.Name).FirstOrDefault(),
+        Status = group.Status,
+        CreatedBy = group.CreatedBy,
+        CreatedByName = db.Users.Where(user => user.Id == group.CreatedBy)
+            .Select(user => user.RealName).FirstOrDefault(),
+        MachineModel = group.MachineModel,
+        RobotVendorId = group.RobotVendorId,
+        RobotVendorName = db.ProjectDictionaries.Where(item => item.Id == group.RobotVendorId)
+            .Select(item => item.Name).FirstOrDefault(),
+        RobotModelId = group.RobotModelId,
+        RobotModelName = db.ProjectDictionaries.Where(item => item.Id == group.RobotModelId)
+            .Select(item => item.Name).FirstOrDefault(),
+        ResponsibleUserId = group.ResponsibleUserId,
+        ResponsibleUserEmployeeNo = db.Users.Where(user => user.Id == group.ResponsibleUserId)
+            .Select(user => user.EmployeeNo).FirstOrDefault(),
+        ResponsibleUserName = db.Users.Where(user => user.Id == group.ResponsibleUserId)
+            .Select(user => user.RealName).FirstOrDefault(),
+        SectionId = group.SectionId,
+        SectionName = db.Departments.Where(section => section.Id == group.SectionId && section.Kind == "SECTION")
+            .Select(section => section.Name).FirstOrDefault(),
+        PriorityId = group.PriorityId,
+        PriorityName = db.ProjectDictionaries.Where(item => item.Id == group.PriorityId)
+            .Select(item => item.Name).FirstOrDefault(),
+        ExpectedCompletionDate = group.ExpectedCompletionDate.HasValue
+            ? group.ExpectedCompletionDate.Value.ToDateTime(TimeOnly.MinValue) : null,
+        CompletedAt = group.CompletedAt,
+        CreatedAt = group.CreatedAt,
+        UpdatedAt = group.UpdatedAt,
+        SubprojectCount = (ulong)db.Projects.LongCount(project => project.ProjectGroupId == group.Id),
+        CompletedCount = (ulong)db.Projects.LongCount(project => project.ProjectGroupId == group.Id
+            && project.Status == ProjectStatuses.Completed),
+        PendingCount = (ulong)db.Projects.LongCount(project => project.ProjectGroupId == group.Id
+            && project.Status == ProjectStatuses.PendingConfirmation),
+        TerminatedCount = (ulong)db.Projects.LongCount(project => project.ProjectGroupId == group.Id
+            && project.Status == ProjectStatuses.Terminated),
+        UnreadMessages = (ulong)db.Messages.LongCount(message => message.Status == "NORMAL"
+            && message.SenderId != userId
+            && db.Projects.Any(project => project.Id == message.ProjectId && project.ProjectGroupId == group.Id)
+            && !db.MessageReads.Any(receipt => receipt.MessageId == message.Id && receipt.UserId == userId)),
+    });
+
+    private static async Task<ProjectGroupRow> LoadGroupAsync(
+        YfDbContext db, ulong groupId, ulong userId, CancellationToken ct)
+    {
+        var row = await GroupRows(db, db.ProjectGroups.Where(group => group.Id == groupId), userId)
+            .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+        await LoadWorkOrdersAsync(db, [row], ct);
         return row;
     }
 
     private static async Task<ProjectRow> LoadChildAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        ulong projectId,
-        ulong userId,
-        CancellationToken ct)
+        YfDbContext db, ulong projectId, ulong userId, CancellationToken ct)
     {
-        var row = await conn.QuerySingleOrDefaultAsync<ProjectRow>(new CommandDefinition(
-            ChildSelect + " WHERE p.id=@ProjectId",
-            new { ProjectId = projectId, UserId = userId }, tx, cancellationToken: ct)) ?? throw ApiException.NotFound();
-        await ProjectService.LoadWorkOrdersAsync(conn, tx, [row], ct);
+        var row = await ProjectQueries.Rows(db).SingleOrDefaultAsync(project => project.Id == projectId, ct)
+            ?? throw ApiException.NotFound();
+        await LoadProjectExtrasAsync(db, [row], userId, ct);
         return row;
     }
 
     private static async Task LoadWorkOrdersAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        IReadOnlyCollection<ProjectGroupRow> groups,
-        CancellationToken ct)
+        YfDbContext db, IReadOnlyCollection<ProjectGroupRow> groups, CancellationToken ct)
     {
         if (groups.Count == 0) return;
-        var lookup = (await conn.QueryAsync<GroupWorkOrderRow>(new CommandDefinition(
-            """
-            SELECT project_group_id AS ProjectGroupId,work_order_no AS WorkOrderNo
-            FROM project_group_work_orders WHERE project_group_id IN @Ids
-            ORDER BY project_group_id,sort_no,id
-            """, new { Ids = groups.Select(group => group.Id).ToArray() }, tx, cancellationToken: ct)))
-            .GroupBy(row => row.ProjectGroupId)
+        var ids = groups.Select(group => group.Id).ToArray();
+        var rows = await db.ProjectGroupWorkOrders
+            .Where(order => Enumerable.Contains(ids, order.ProjectGroupId))
+            .OrderBy(order => order.ProjectGroupId).ThenBy(order => order.SortNo).ThenBy(order => order.Id)
+            .Select(order => new GroupWorkOrderRow { ProjectGroupId = order.ProjectGroupId, WorkOrderNo = order.WorkOrderNo })
+            .ToArrayAsync(ct);
+        var lookup = rows.GroupBy(row => row.ProjectGroupId)
             .ToDictionary(group => group.Key, group => group.Select(row => row.WorkOrderNo).ToArray());
         foreach (var group in groups) group.WorkOrderNos = lookup.GetValueOrDefault(group.Id) ?? [];
     }
 
-    private static async Task ReplaceGroupWorkOrdersAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        ulong groupId,
-        string[] values,
-        CancellationToken ct)
+    private static async Task LoadProjectExtrasAsync(
+        YfDbContext db, IReadOnlyCollection<ProjectRow> projects, ulong userId, CancellationToken ct)
     {
-        await conn.ExecuteAsync(new CommandDefinition(
-            "DELETE FROM project_group_work_orders WHERE project_group_id=@GroupId",
-            new { GroupId = groupId }, tx, cancellationToken: ct));
-        for (var index = 0; index < values.Length; index++)
-            await conn.ExecuteAsync(new CommandDefinition(
-                """
-                INSERT INTO project_group_work_orders(project_group_id,work_order_no,sort_no,created_at)
-                VALUES(@GroupId,@Value,@SortNo,UTC_TIMESTAMP(3))
-                """, new { GroupId = groupId, Value = values[index], SortNo = index }, tx, cancellationToken: ct));
+        if (projects.Count == 0) return;
+        var ids = projects.Select(project => project.Id).ToArray();
+        var workOrders = await db.ProjectWorkOrders.Where(order => Enumerable.Contains(ids, order.ProjectId))
+            .OrderBy(order => order.ProjectId).ThenBy(order => order.SortNo).ThenBy(order => order.Id)
+            .Select(order => new ProjectWorkOrderValue(order.ProjectId, order.WorkOrderNo)).ToArrayAsync(ct);
+        var workOrderLookup = workOrders.GroupBy(row => row.ProjectId)
+            .ToDictionary(group => group.Key, group => group.Select(row => row.WorkOrderNo).ToArray());
+        var unreadRows = await db.Messages.Where(message => Enumerable.Contains(ids, message.ProjectId)
+                && message.Status == "NORMAL" && message.SenderId != userId
+                && !db.MessageReads.Any(receipt => receipt.MessageId == message.Id && receipt.UserId == userId))
+            .GroupBy(message => message.ProjectId)
+            .Select(group => new UnreadValue(group.Key, group.LongCount())).ToArrayAsync(ct);
+        var unreadLookup = unreadRows.ToDictionary(row => row.ProjectId, row => (ulong)row.Count);
+        foreach (var project in projects)
+        {
+            project.WorkOrderNos = workOrderLookup.GetValueOrDefault(project.Id) ?? [];
+            project.UnreadMessages = unreadLookup.GetValueOrDefault(project.Id);
+        }
     }
 
-    private static async Task EnsureSupplierAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        ulong supplierId,
-        CancellationToken ct)
+    private static async Task ReplaceGroupWorkOrdersAsync(
+        YfDbContext db, ulong groupId, IReadOnlyList<string> values, CancellationToken ct)
     {
-        var status = await conn.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
-            "SELECT status FROM suppliers WHERE id=@SupplierId",
-            new { SupplierId = supplierId }, tx, cancellationToken: ct));
+        await db.ProjectGroupWorkOrders.Where(order => order.ProjectGroupId == groupId).ExecuteDeleteAsync(ct);
+        db.ProjectGroupWorkOrders.AddRange(values.Select((value, index) => new ProjectGroupWorkOrder
+        {
+            ProjectGroupId = groupId,
+            WorkOrderNo = value,
+            SortNo = index,
+        }));
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static async Task EnsureSupplierAsync(YfDbContext db, ulong supplierId, CancellationToken ct)
+    {
+        var status = await db.Suppliers.Where(supplier => supplier.Id == supplierId)
+            .Select(supplier => supplier.Status).SingleOrDefaultAsync(ct);
         if (status is null) throw ApiException.BadRequest("供应商不存在");
         if (status != "ACTIVE") throw ApiException.BadRequest("供应商已被禁用");
     }
 
     private static async Task EnsureGroupNameUniqueAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        string name,
-        ulong? excludeId,
-        CancellationToken ct)
+        YfDbContext db, string name, ulong? excludeId, CancellationToken ct)
     {
-        if (await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-                "SELECT EXISTS(SELECT 1 FROM project_groups WHERE name=@Name AND (@ExcludeId IS NULL OR id<>@ExcludeId))",
-                new { Name = name, ExcludeId = excludeId }, tx, cancellationToken: ct)))
+        if (await db.ProjectGroups.AnyAsync(group => group.Name == name
+                && (excludeId == null || group.Id != excludeId), ct))
             throw ApiException.Conflict("主项目名称已存在");
+    }
+
+    private static async Task EnsureProjectNameUniqueAsync(
+        YfDbContext db, string name, ulong? excludeId, CancellationToken ct)
+    {
+        if (await db.Projects.AnyAsync(project => project.Name == name
+                && (excludeId == null || project.Id != excludeId), ct))
+            throw ApiException.Conflict("项目名称已存在");
     }
 
     private static string[] NormalizeSubprojectNames(string?[]? values)
@@ -460,74 +551,17 @@ internal sealed class ProjectGroupService(
         group.PriorityId,
         group.ExpectedCompletionDate);
 
+    private static DateOnly? ToDateOnly(DateTime? value) => value is null ? null : DateOnly.FromDateTime(value.Value);
+
     private static string? DateValue(DateTime? value) =>
         value?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-
-    private static Task<ulong> LastInsertIdAsync(MySqlConnection conn, MySqlTransaction tx, CancellationToken ct) =>
-        conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT LAST_INSERT_ID()", transaction: tx, cancellationToken: ct));
-
-    private const string GroupSelect = """
-        SELECT g.id AS Id,g.name AS Name,g.description AS Description,g.supplier_id AS SupplierId,
-               supplier.name AS SupplierName,g.status AS Status,g.created_by AS CreatedBy,
-               creator.real_name AS CreatedByName,g.machine_model AS MachineModel,
-               g.robot_vendor_id AS RobotVendorId,rv.name AS RobotVendorName,
-               g.robot_model_id AS RobotModelId,rm.name AS RobotModelName,
-               g.responsible_user_id AS ResponsibleUserId,owner.employee_no AS ResponsibleUserEmployeeNo,
-               owner.real_name AS ResponsibleUserName,g.section_id AS SectionId,section.name AS SectionName,
-               g.priority_id AS PriorityId,priority.name AS PriorityName,
-               g.expected_completion_date AS ExpectedCompletionDate,g.completed_at AS CompletedAt,
-               g.created_at AS CreatedAt,g.updated_at AS UpdatedAt,
-               (SELECT COUNT(*) FROM projects p WHERE p.project_group_id=g.id) AS SubprojectCount,
-               (SELECT COUNT(*) FROM projects p WHERE p.project_group_id=g.id AND p.status='COMPLETED') AS CompletedCount,
-               (SELECT COUNT(*) FROM projects p WHERE p.project_group_id=g.id AND p.status='PENDING_CONFIRMATION') AS PendingCount,
-               (SELECT COUNT(*) FROM projects p WHERE p.project_group_id=g.id AND p.status='TERMINATED') AS TerminatedCount,
-               (SELECT COUNT(*) FROM messages message
-                INNER JOIN projects p ON p.id=message.project_id
-                WHERE p.project_group_id=g.id AND message.status='NORMAL' AND message.sender_id<>@UserId
-                  AND NOT EXISTS(SELECT 1 FROM message_reads receipt WHERE receipt.message_id=message.id AND receipt.user_id=@UserId)) AS UnreadMessages
-        FROM project_groups g
-        LEFT JOIN suppliers supplier ON supplier.id=g.supplier_id
-        LEFT JOIN users creator ON creator.id=g.created_by
-        LEFT JOIN project_dictionaries rv ON rv.id=g.robot_vendor_id
-        LEFT JOIN project_dictionaries rm ON rm.id=g.robot_model_id
-        LEFT JOIN users owner ON owner.id=g.responsible_user_id
-        LEFT JOIN departments section ON section.id=g.section_id AND section.kind='SECTION'
-        LEFT JOIN project_dictionaries priority ON priority.id=g.priority_id
-        """;
-
-    private const string ChildSelect = """
-        SELECT p.id AS Id,p.project_group_id AS ProjectGroupId,g.name AS ProjectGroupName,
-               p.name AS Name,p.description AS Description,p.supplier_id AS SupplierId,
-               supplier.name AS SupplierName,p.status AS Status,p.confirm_side AS ConfirmSide,
-               p.created_by AS CreatedBy,creator.real_name AS CreatedByName,
-               p.machine_model AS MachineModel,p.robot_vendor_id AS RobotVendorId,rv.name AS RobotVendorName,
-               p.robot_model_id AS RobotModelId,rm.name AS RobotModelName,
-               p.responsible_user_id AS ResponsibleUserId,owner.employee_no AS ResponsibleUserEmployeeNo,
-               owner.real_name AS ResponsibleUserName,p.section_id AS SectionId,section.name AS SectionName,
-               p.priority_id AS PriorityId,priority.name AS PriorityName,
-               CASE WHEN p.status='PENDING_CONFIRMATION' THEN (
-                   SELECT MAX(psl.id) FROM project_status_logs psl
-                   WHERE psl.project_id=p.id AND psl.action='SUBMIT'
-               ) ELSE NULL END AS LatestSubmissionId,
-               p.expected_completion_date AS ExpectedCompletionDate,p.created_at AS CreatedAt,p.updated_at AS UpdatedAt,
-               EXISTS(SELECT 1 FROM project_copies copy WHERE copy.source_project_id=p.id OR copy.target_project_id=p.id) AS HasCopyHistory,
-               (SELECT COUNT(*) FROM messages message WHERE message.project_id=p.id AND message.status='NORMAL'
-                  AND message.sender_id<>@UserId
-                  AND NOT EXISTS(SELECT 1 FROM message_reads receipt WHERE receipt.message_id=message.id AND receipt.user_id=@UserId)) AS UnreadMessages
-        FROM projects p
-        INNER JOIN project_groups g ON g.id=p.project_group_id
-        LEFT JOIN suppliers supplier ON supplier.id=p.supplier_id
-        LEFT JOIN users creator ON creator.id=p.created_by
-        LEFT JOIN project_dictionaries rv ON rv.id=p.robot_vendor_id
-        LEFT JOIN project_dictionaries rm ON rm.id=p.robot_model_id
-        LEFT JOIN users owner ON owner.id=p.responsible_user_id
-        LEFT JOIN departments section ON section.id=p.section_id AND section.kind='SECTION'
-        LEFT JOIN project_dictionaries priority ON priority.id=p.priority_id
-        """;
 
     private sealed class GroupWorkOrderRow
     {
         public ulong ProjectGroupId { get; init; }
         public string WorkOrderNo { get; init; } = string.Empty;
     }
+
+    private sealed record ProjectWorkOrderValue(ulong ProjectId, string WorkOrderNo);
+    private sealed record UnreadValue(ulong ProjectId, long Count);
 }

@@ -12,7 +12,7 @@ public sealed class ProjectMetadataTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_metadata", ct);
-        await database.CreateBaselineAsync(legacyV16: false, ct);
+        await database.InitializeBusinessFixtureAsync(ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await database.ExecuteAsync("""
             INSERT INTO suppliers(id,name,status,created_at,updated_at)

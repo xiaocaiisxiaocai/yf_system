@@ -459,7 +459,7 @@ public sealed class FilesRecoveryTests
                     new AuditService(Array.Empty<IProjectAuditCapture>()),
                     NullLogger<UploadService>.Instance);
                 var audit = new AuditService(Array.Empty<IProjectAuditCapture>());
-                var identity = new IdentityService(database, options, new LoginRateLimiter(),
+                var identity = new IdentityService(EfTestSupport.DbContextFactory(options), options, new LoginRateLimiter(),
                     new TokenService(options), new PermissionService(), audit);
                 var files = new FileService(database, options, audit, new BatchDownloadLimiter(),
                     new MediaGrantService(options), identity);

@@ -4,11 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository layout — read this first
 
-This repo contains **two backends**. Only one is live:
-
-- `server_dotnet/` — **the actively maintained backend.** ASP.NET Core 10 (Minimal API) + Dapper + MySQL. All new features, bug fixes, and DB migrations go here.
-- `yf_server/` — **archived reference only.** Rust + Axum + SeaORM. Not run, tested, or upgraded. Do not port fixes here unless explicitly asked, and never assume the two backends share data, sessions, or contracts.
-- `web/` — React + TypeScript + Vite frontend, shared by whichever backend is running (talks to `/api/v1`).
+- `server_dotnet/` — **the only backend.** ASP.NET Core 10 (Minimal API) + Dapper + MySQL. All new features, bug fixes, and DB migrations go here. An earlier Rust + Axum + SeaORM prototype (`yf_server/`) existed during the initial build-out but has been removed from the repo; its history is still visible via `git log` if needed for archaeology, but nothing in `server_dotnet/` depends on it.
+- `web/` — React + TypeScript + Vite frontend, talks to `/api/v1`.
 - `third_party/vue-office-source-2024-12-30/` — vendored reference source for the Excel/PPTX preview runtime; not part of the build graph directly (see `web/scripts/build-excel-preview.mjs` / `build-pptx-preview.mjs`).
 - `server_dotnet/docs/*.md` — dated contract documents (e.g. `主项目与子项目协作契约-2026-09-16.md`) are the source of truth for business rules like project/subproject workflow, metadata dictionaries, copy semantics, and email notification policy. Check the newest-dated doc for a topic before assuming behavior from code alone.
 
@@ -69,7 +66,7 @@ npm test         # node --test test/*.test.cjs
 
 `npm run dev`/`build` trigger `predev`/`prebuild` hooks that regenerate `.excel-preview-build/` and `.pptx-preview-build/` via `scripts/build-excel-preview.mjs` / `build-pptx-preview.mjs` — don't hand-edit those generated dirs.
 
-Only run one backend at a time against the dev proxy (port 8080); never point the same MySQL database/storage dir at both `yf_server` and `server_dotnet` simultaneously.
+The dev proxy points at port 8080 (`server_dotnet`).
 
 ## Backend architecture (server_dotnet)
 
@@ -84,7 +81,7 @@ Modules under `Yf.Api/Modules/` are the unit of organization; each owns its own 
 
 Cross-cutting rules worth knowing before editing:
 - Authorization is enforced both at the route/middleware layer and **re-checked inside write transactions** (defends against concurrent permission revocation mid-request).
-- Deletion is gated by dedicated permission points per entity (`project:delete`, `file:delete`, `supplier:delete`, etc.) plus entity-specific retention rules (e.g. a project can only be deleted while draft/terminated and with no files/messages/uploads) — see the "删除操作" table in `yf_server/README.md` for the rule table (still accurate for the ported .NET rules) or `server_dotnet/README.md` for the current schema-version-specific notes.
+- Deletion is gated by dedicated permission points per entity (`project:delete`, `file:delete`, `supplier:delete`, etc.) plus entity-specific retention rules (e.g. a project can only be deleted while draft/terminated and with no files/messages/uploads) — see the "删除操作" table in `server_dotnet/README.md`.
 - Supplier accounts share their project scope at the supplier-company level (all enabled accounts under one supplier see the same projects); there is no per-user project-membership model anymore (`project_members` was removed in schema v10).
 - Only supplier accounts can submit (`project:submit`); only internal accounts can confirm/reject (`project:confirm`); acceptance is always handled internally.
 - Passwords: Argon2 PHC, 6–20 Unicode chars, common-weak-password rejection; legacy passwords >20 chars still verify without forced reset.

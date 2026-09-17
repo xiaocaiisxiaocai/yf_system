@@ -1,4 +1,4 @@
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Projects;
@@ -34,14 +34,16 @@ public sealed class IdentityMiddleware(RequestDelegate next)
         await using (var conn = await db.OpenAsync(ct))
         {
             if (!await identity.HasActiveSessionAsync(conn, null, claims.UserId, claims.SessionId, ct)) throw ApiException.Unauthorized("登录状态已失效，请重新登录");
-            var row = await conn.QuerySingleOrDefaultAsync<AuthUser>(new CommandDefinition(
-                "SELECT id Id,employee_no EmployeeNo,user_type UserType,supplier_id SupplierId,status Status,must_change_password MustChangePassword FROM users WHERE id=@id",
-                new { id = claims.UserId }, cancellationToken: ct)) ?? throw ApiException.Unauthorized("账号不存在");
+            await using var ef = EfDb.Use(conn);
+            var row = await ef.Users.Where(user => user.Id == claims.UserId).Select(user => new
+            {
+                user.Id, user.EmployeeNo, user.UserType, user.SupplierId, user.Status, user.MustChangePassword,
+            }).SingleOrDefaultAsync(ct) ?? throw ApiException.Unauthorized("账号不存在");
             if (row.Status != "ACTIVE") throw ApiException.Unauthorized("账号已被禁用");
             if (row.UserType == "SUPPLIER")
             {
-                if (row.SupplierId is not ulong sid || await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-                        "SELECT EXISTS(SELECT 1 FROM suppliers WHERE id=@sid AND status='ACTIVE')", new { sid }, cancellationToken: ct)) != 1)
+                if (row.SupplierId is not ulong supplierId
+                    || !await ef.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == "ACTIVE", ct))
                     throw ApiException.Unauthorized("所属供应商已被禁用");
             }
             if (row.MustChangePassword && path is not ("/api/v1/auth/profile" or "/api/v1/auth/password" or "/api/v1/auth/logout"))
@@ -83,15 +85,5 @@ public sealed class IdentityMiddleware(RequestDelegate next)
         var id = path[prefix.Length..^suffix.Length];
         return id.Length > 0 && long.TryParse(id, System.Globalization.NumberStyles.None,
             System.Globalization.CultureInfo.InvariantCulture, out var value) && value >= 0;
-    }
-
-    private sealed class AuthUser
-    {
-        public ulong Id { get; init; }
-        public string EmployeeNo { get; init; } = "";
-        public string UserType { get; init; } = "";
-        public ulong? SupplierId { get; init; }
-        public string Status { get; init; } = "";
-        public bool MustChangePassword { get; init; }
     }
 }

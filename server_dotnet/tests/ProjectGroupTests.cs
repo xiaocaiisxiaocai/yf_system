@@ -7,38 +7,12 @@ namespace Yf.Api.Tests;
 
 public sealed class ProjectGroupTests
 {
-    [Fact(Timeout = 60_000)]
-    public async Task MigrationWrapsExistingProjectsWithoutChangingTheirBusinessTimestamp()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_group_backfill", ct);
-        await database.CreateBaselineAsync(legacyV16: false, ct);
-        await database.ExecuteAsync("""
-            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password)
-            VALUES(1,'migration-owner','unused','迁移负责人','migration@example.test','INTERNAL','ACTIVE',0);
-            INSERT INTO suppliers(id,name,status,created_at,updated_at)
-            VALUES(8051,'迁移供应商','ACTIVE','2026-01-01 00:00:00.000','2026-01-01 00:00:00.000');
-            INSERT INTO projects(id,name,supplier_id,status,created_by,created_at,updated_at)
-            VALUES(8052,'迁移前项目',8051,'IN_PROGRESS',1,'2026-01-02 03:04:05','2026-01-03 04:05:06');
-            """, ct);
-
-        await SchemaMigrations.ApplyAsync(database.Database, ct);
-        await using var conn = await database.Database.OpenAsync(ct);
-        Assert.Equal("2026-01-03 04:05:06", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
-            "SELECT DATE_FORMAT(updated_at,'%Y-%m-%d %H:%i:%s') FROM projects WHERE id=8052", cancellationToken: ct)));
-        Assert.Equal("迁移前项目", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
-            "SELECT g.name FROM projects p JOIN project_groups g ON g.id=p.project_group_id WHERE p.id=8052", cancellationToken: ct)));
-        Assert.Equal("NO", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
-            "SELECT is_nullable FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='projects' AND column_name='project_group_id'",
-            cancellationToken: ct)));
-    }
-
     [Fact(Timeout = 90_000)]
     public async Task SubprojectsInheritMainDataAndLastConfirmationCompletesMainProject()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_groups", ct);
-        await database.CreateBaselineAsync(legacyV16: false, ct);
+        await database.InitializeBusinessFixtureAsync(ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await using (var schema = await database.Database.OpenAsync(ct))
             Assert.Equal("NO", await schema.ExecuteScalarAsync<string>(new CommandDefinition(
@@ -187,7 +161,7 @@ public sealed class ProjectGroupTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_group_freeze", ct);
-        await database.CreateBaselineAsync(legacyV16: false, ct);
+        await database.InitializeBusinessFixtureAsync(ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await database.ExecuteAsync("""
             INSERT INTO suppliers(id,name,status,created_at,updated_at)

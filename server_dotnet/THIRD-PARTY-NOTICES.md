@@ -7,10 +7,12 @@ license and notice texts are shipped in the adjacent `licenses` directory.
 
 | Package | Version | Type | License and notice files |
 | --- | --- | --- | --- |
-| Dapper | 2.1.79 | Direct | `licenses/Dapper-LICENSE.txt`, `licenses/Apache-2.0.txt` |
 | Konscious.Security.Cryptography.Argon2 | 1.3.1 | Direct | `licenses/Konscious.Security.Cryptography-LICENSE.txt` |
 | MailKit | 4.17.0 | Direct | `licenses/MailKit-LICENSE.txt` |
+| Microsoft.EntityFrameworkCore | 9.0.0 | Direct | `licenses/dotnet-LICENSE.txt`, `licenses/dotnet-THIRD-PARTY-NOTICES.txt` |
+| Microsoft.EntityFrameworkCore.Design | 9.0.0 | Direct | `licenses/dotnet-LICENSE.txt`, `licenses/dotnet-THIRD-PARTY-NOTICES.txt` |
 | MySqlConnector | 2.6.2 | Direct | `licenses/MySqlConnector-LICENSE.txt` |
+| Pomelo.EntityFrameworkCore.MySql | 9.0.0 | Direct | `licenses/Pomelo.EntityFrameworkCore.MySql-LICENSE.txt` |
 | System.IdentityModel.Tokens.Jwt | 8.22.0 | Direct | `licenses/IdentityModel-LICENSE.txt` |
 | BouncyCastle.Cryptography | 2.6.2 | Transitive | `licenses/BouncyCastle-LICENSE.md` |
 | Konscious.Security.Cryptography.Blake2 | 1.1.1 | Transitive | `licenses/Konscious.Security.Cryptography-LICENSE.txt` |
@@ -24,11 +26,12 @@ license and notice texts are shipped in the adjacent `licenses` directory.
 
 ## Provenance
 
-- Dapper 2.1.79 declares Apache-2.0 in its NuGet metadata. Its package repository
-  commit is `72a54c475f75e18cb93cba0809d00a5e6e49efd9`; the bundled Dapper notice is
-  from `https://github.com/DapperLib/Dapper/blob/72a54c475f75e18cb93cba0809d00a5e6e49efd9/License.txt`.
-  The complete Apache License 2.0 text is from
-  `https://www.apache.org/licenses/LICENSE-2.0.txt`.
+- Microsoft.EntityFrameworkCore and Microsoft.EntityFrameworkCore.Design 9.0.0 declare MIT
+  in their NuGet metadata; their package repository commit is
+  `645f3131a5b0a4bf677201cf22773990a5316c89`.
+- Pomelo.EntityFrameworkCore.MySql 9.0.0 declares MIT in its NuGet metadata.
+  Its bundled license is from package repository commit
+  `58dd6883cb9616fe49f671b943a826b459c0117f`.
 - Konscious.Security.Cryptography.Argon2 1.3.1 and Blake2 1.1.1 declare MIT.
   Their shared license is from package repository commit
   `4ed95a5377e411506ca6868409b5c7d7ecaa859b` at

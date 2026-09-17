@@ -1,4 +1,4 @@
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 
 namespace Yf.Api.Infrastructure;
@@ -15,17 +15,28 @@ public sealed class AppDb(AppOptions options)
 
     public async Task<MySqlConnection> OpenAsync(CancellationToken cancellationToken = default)
     {
+        var connection = new MySqlConnection(BuildConnectionString(options));
+        try { await connection.OpenAsync(cancellationToken); return connection; }
+        catch { await connection.DisposeAsync(); throw; }
+    }
+
+    // Shared by raw-connection callers and the EF Core YfDbContext registration
+    // (ApiApplication.cs), so both open connections with identical settings and
+    // pass the same TLS/transport validation.
+    public static string BuildConnectionString(AppOptions options)
+    {
         var builder = new MySqlConnectionStringBuilder(options.ConnectionString)
         {
             DateTimeKind = MySqlDateTimeKind.Utc,
             ConnectionTimeout = 10,
             DefaultCommandTimeout = 30,
-            AllowUserVariables = false
+            // Pomelo requires these settings before a connection is opened;
+            // otherwise it cannot join a transaction owned by a shared helper.
+            AllowUserVariables = true,
+            UseAffectedRows = false
         };
         DatabaseTransportPolicy.Validate(builder);
-        var connection = new MySqlConnection(builder.ConnectionString);
-        try { await connection.OpenAsync(cancellationToken); return connection; }
-        catch { await connection.DisposeAsync(); throw; }
+        return builder.ConnectionString;
     }
 }
 
@@ -59,26 +70,32 @@ public sealed class AccessService
 
     public static async Task LockManagementAsync(MySqlConnection db, MySqlTransaction tx, CancellationToken ct = default)
     {
-        var gate = await db.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
-            "SELECT cfg_key FROM system_configs WHERE cfg_key='security.management_lock' FOR UPDATE", transaction: tx, cancellationToken: ct));
-        if (gate is null) throw new InvalidOperationException("Management gate missing; database migration baseline required.");
+        await using var context = EfDb.Use(db, tx);
+        var gate = await context.Database.SqlQuery<string>(
+            $"SELECT cfg_key AS Value FROM system_configs WHERE cfg_key='security.management_lock' FOR UPDATE")
+            .SingleOrDefaultAsync(ct);
+        if (gate is null) throw new InvalidOperationException("Management gate missing; EF database initialization is required.");
     }
 
     public static async Task LockBusinessAsync(MySqlConnection db, MySqlTransaction tx, CancellationToken ct = default)
     {
-        var gate = await db.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
-            "SELECT cfg_key FROM system_configs WHERE cfg_key='security.management_lock' LOCK IN SHARE MODE", transaction: tx, cancellationToken: ct));
-        if (gate is null) throw new InvalidOperationException("Management gate missing; database migration baseline required.");
+        await using var context = EfDb.Use(db, tx);
+        var gate = await context.Database.SqlQuery<string>(
+            $"SELECT cfg_key AS Value FROM system_configs WHERE cfg_key='security.management_lock' LOCK IN SHARE MODE")
+            .SingleOrDefaultAsync(ct);
+        if (gate is null) throw new InvalidOperationException("Management gate missing; EF database initialization is required.");
     }
 
     public static async Task<CurrentUser> RecheckActorAsync(MySqlConnection db, MySqlTransaction tx, CurrentUser user, CancellationToken ct = default)
     {
-        var row = await db.QuerySingleOrDefaultAsync<ActorRow>(new CommandDefinition(
-            "SELECT id,employee_no AS EmployeeNo,user_type AS UserType,supplier_id AS SupplierId,status,must_change_password AS MustChangePassword FROM users WHERE id=@Id",
-            new { user.Id }, tx, cancellationToken: ct));
+        await using var context = EfDb.Use(db, tx);
+        var row = await context.Users.Where(row => row.Id == user.Id).Select(row => new
+        {
+            row.Id, row.EmployeeNo, row.UserType, row.SupplierId, row.Status, row.MustChangePassword,
+        }).SingleOrDefaultAsync(ct);
         if (row is null || row.Status != "ACTIVE" || row.MustChangePassword) throw ApiException.Forbidden();
-        if (row.UserType == "SUPPLIER" && (row.SupplierId is null || !await db.ExecuteScalarAsync<bool>(new CommandDefinition(
-            "SELECT EXISTS(SELECT 1 FROM suppliers WHERE id=@Id AND status='ACTIVE')", new { Id = row.SupplierId }, tx, cancellationToken: ct))))
+        if (row.UserType == "SUPPLIER" && (row.SupplierId is not ulong supplierId
+            || !await context.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == "ACTIVE", ct)))
             throw ApiException.Forbidden();
         return new(row.Id, row.EmployeeNo, row.UserType, row.SupplierId);
     }
@@ -89,32 +106,27 @@ public sealed class AccessService
         return await RecheckActorAsync(db, tx, user, ct);
     }
 
-    public static async Task<string[]> PermissionCodesAsync(MySqlConnection db, MySqlTransaction? tx, ulong userId, CancellationToken ct = default) =>
-        (await db.QueryAsync<string>(new CommandDefinition("""
-            SELECT DISTINCT p.code FROM permissions p
-            JOIN role_permissions rp ON rp.permission_id=p.id
-            JOIN user_roles ur ON ur.role_id=rp.role_id
-            JOIN roles r ON r.id=ur.role_id AND r.status='ACTIVE' WHERE ur.user_id=@userId
-            """, new { userId }, tx, cancellationToken: ct))).ToArray();
+    public static async Task<string[]> PermissionCodesAsync(MySqlConnection db, MySqlTransaction? tx, ulong userId, CancellationToken ct = default)
+    {
+        await using var context = EfDb.Use(db, tx);
+        return await context.UserRoles.Where(userRole => userRole.UserId == userId)
+            .Join(context.Roles.Where(role => role.Status == "ACTIVE"), userRole => userRole.RoleId, role => role.Id, (userRole, _) => userRole)
+            .Join(context.RolePermissions, userRole => userRole.RoleId, rolePermission => rolePermission.RoleId, (_, rolePermission) => rolePermission)
+            .Join(context.Permissions, rolePermission => rolePermission.PermissionId, permission => permission.Id, (_, permission) => permission.Code)
+            .Distinct().ToArrayAsync(ct);
+    }
 
     public static async Task RequirePermissionAsync(MySqlConnection db, MySqlTransaction? tx, CurrentUser user, string permission, CancellationToken ct = default)
     {
         if (!(await PermissionCodesAsync(db, tx, user.Id, ct)).Contains(permission, StringComparer.Ordinal)) throw ApiException.Forbidden();
     }
 
-    public static Task<bool> IsSystemAdminAsync(MySqlConnection db, MySqlTransaction? tx, ulong userId, CancellationToken ct = default) =>
-        db.ExecuteScalarAsync<bool>(new CommandDefinition("""
-            SELECT EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id
-                WHERE ur.user_id=@userId AND r.status='ACTIVE' AND r.is_built_in=1 AND r.name='系统管理员')
-            """, new { userId }, tx, cancellationToken: ct));
-
-    private sealed class ActorRow
+    public static async Task<bool> IsSystemAdminAsync(MySqlConnection db, MySqlTransaction? tx, ulong userId, CancellationToken ct = default)
     {
-        public ulong Id { get; set; }
-        public string EmployeeNo { get; set; } = "";
-        public string UserType { get; set; } = "";
-        public ulong? SupplierId { get; set; }
-        public string Status { get; set; } = "";
-        public bool MustChangePassword { get; set; }
+        await using var context = EfDb.Use(db, tx);
+        return await context.UserRoles.Where(userRole => userRole.UserId == userId)
+            .Join(context.Roles.Where(role => role.Status == "ACTIVE" && role.IsBuiltIn && role.Name == "系统管理员"),
+                userRole => userRole.RoleId, role => role.Id, (_, _) => true)
+            .AnyAsync(ct);
     }
 }

@@ -280,8 +280,8 @@ public sealed class MailDeliveryTests
                 INSERT INTO users(id,employee_no,user_type,supplier_id,status)
                 VALUES(10,'old-owner','INTERNAL',NULL,'ACTIVE'),(11,'new-owner','INTERNAL',NULL,'ACTIVE');
                 INSERT INTO user_roles(user_id,role_id) VALUES(10,10),(11,10);
-                INSERT INTO projects(id,supplier_id,created_by,responsible_user_id,status,confirm_side)
-                VALUES(7,100,10,11,'IN_PROGRESS',NULL);
+                INSERT INTO projects(id,project_group_id,supplier_id,created_by,responsible_user_id,status,confirm_side)
+                VALUES(7,1,100,10,11,'IN_PROGRESS',NULL);
                 UPDATE email_outbox
                 SET event_type='MESSAGE_CREATED',project_id=7,recipient_user_id=10
                 WHERE id=1;

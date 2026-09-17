@@ -1,9 +1,10 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 
 namespace Yf.Api.Modules.SystemManagement;
 
@@ -28,7 +29,9 @@ public sealed class SmtpSettingsService(AppDb db, AppOptions options, AuditServi
 
     internal async Task<ResolvedSmtpSettings> ResolveAsync(MySqlConnection conn, MySqlTransaction? tx, CancellationToken ct)
     {
-        var json = await conn.QuerySingleOrDefaultAsync<string>(new CommandDefinition("SELECT cfg_value FROM system_configs WHERE cfg_key=@key", new { key = ConfigKey }, tx, cancellationToken: ct));
+        await using var context = EfDb.Use(conn, tx);
+        var json = await context.SystemConfigs.Where(config => config.CfgKey == ConfigKey)
+            .Select(config => config.CfgValue).SingleOrDefaultAsync(ct);
         if (json is null)
         {
             var source = options.Smtp;
@@ -56,11 +59,24 @@ public sealed class SmtpSettingsService(AppDb db, AppOptions options, AuditServi
             throw ApiException.BadRequest("更改 SMTP 服务器或登录账号时，请重新填写授权码");
         var next = Normalize(request, string.IsNullOrEmpty(request.Password) ? previous.Options.Password : request.Password);
         var stored = new StoredSettings(next.Host, next.Port, next.Username, next.From, next.Security, Protect(next.Password));
-        await conn.ExecuteAsync(new CommandDefinition("""
-            INSERT INTO system_configs(cfg_key,cfg_value,description,updated_at)
-            VALUES(@key,@value,'邮件发送连接配置',UTC_TIMESTAMP(6))
-            ON DUPLICATE KEY UPDATE cfg_value=VALUES(cfg_value),updated_at=VALUES(updated_at)
-            """, new { key = ConfigKey, value = JsonSerializer.Serialize(stored) }, tx, cancellationToken: ct));
+        await using var context = EfDb.Use(conn, tx);
+        var serialized = JsonSerializer.Serialize(stored);
+        var updatedAt = await context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        var updated = await context.SystemConfigs.Where(config => config.CfgKey == ConfigKey)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(config => config.CfgValue, serialized)
+                .SetProperty(config => config.Description, "邮件发送连接配置")
+                .SetProperty(config => config.UpdatedAt, updatedAt), ct);
+        if (updated == 0)
+        {
+            context.SystemConfigs.Add(new SystemConfig
+            {
+                CfgKey = ConfigKey,
+                CfgValue = serialized,
+                Description = "邮件发送连接配置",
+                UpdatedAt = updatedAt,
+            });
+            await context.SaveChangesAsync(ct);
+        }
         await audit.WriteAsync(conn, tx, actor.Id, "CONFIG_UPDATE", "system_config", null,
             new
             {

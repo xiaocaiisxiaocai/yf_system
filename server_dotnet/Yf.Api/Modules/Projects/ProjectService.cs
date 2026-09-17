@@ -1,8 +1,9 @@
 using System.Text;
 using System.Globalization;
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 
 namespace Yf.Api.Modules.Projects;
 
@@ -11,45 +12,29 @@ internal sealed class ProjectService(
     AppOptions options,
     ProjectGroupStatusService groupStatus)
 {
-    private const string ValidSectionJoins = """
-        INNER JOIN departments section ON section.id=u.department_id
-        LEFT JOIN departments parent_department ON parent_department.id=section.parent_id
-        LEFT JOIN departments root_department ON root_department.id=parent_department.parent_id
-        """;
-    private const string ValidSectionClause = """
-        section.kind='SECTION' AND section.status='ACTIVE'
-        AND (section.parent_id IS NULL OR (
-          parent_department.id IS NOT NULL
-          AND parent_department.kind='DEPARTMENT'
-          AND parent_department.status='ACTIVE'
-          AND (parent_department.parent_id IS NULL OR (
-            root_department.id IS NOT NULL
-            AND root_department.kind='DIVISION'
-            AND root_department.status='ACTIVE'
-            AND root_department.parent_id IS NULL))))
-        """;
-
     internal async Task<object> DetailAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, true, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
-        var latest = await conn.QuerySingleOrDefaultAsync<ProjectDetailHistory>(new CommandDefinition(
-            """
-            SELECT
-              (SELECT reason FROM project_status_logs WHERE project_id=@ProjectId AND action='REJECT' ORDER BY id DESC LIMIT 1) AS RejectReason,
-              (SELECT operator_id FROM project_status_logs WHERE project_id=@ProjectId AND action='SUBMIT' ORDER BY id DESC LIMIT 1) AS LatestSubmitterId
-            """,
-            new { ProjectId = projectId },
-            tx,
-            cancellationToken: ct));
-        var sourceCopy = await conn.QuerySingleOrDefaultAsync<ProjectCopySourceRow>(new CommandDefinition(
-            """
-            SELECT pc.source_project_id AS ProjectId,source.name AS Name
-            FROM project_copies pc JOIN projects source ON source.id=pc.source_project_id
-            WHERE pc.target_project_id=@ProjectId
-            """, new { ProjectId = projectId }, tx, cancellationToken: ct));
+        await using var db = EfDb.Use(conn, tx);
+        var rejectReason = await db.ProjectStatusLogs
+            .Where(log => log.ProjectId == projectId && log.Action == "REJECT")
+            .OrderByDescending(log => log.Id)
+            .Select(log => log.Reason)
+            .FirstOrDefaultAsync(ct);
+        var latestSubmitterId = await db.ProjectStatusLogs
+            .Where(log => log.ProjectId == projectId && log.Action == "SUBMIT")
+            .OrderByDescending(log => log.Id)
+            .Select(log => (ulong?)log.OperatorId)
+            .FirstOrDefaultAsync(ct);
+        var sourceCopy = await (
+            from copy in db.ProjectCopies
+            join source in db.Projects on copy.SourceProjectId equals source.Id
+            where copy.TargetProjectId == projectId
+            select new ProjectCopySourceRow { ProjectId = source.Id, Name = source.Name })
+            .SingleOrDefaultAsync(ct);
         object? copySource = null;
         if (sourceCopy is not null)
         {
@@ -66,8 +51,8 @@ internal sealed class ProjectService(
         }
         var unreadMessages = await MessageService.UnreadCountAsync(conn, tx, current.Id, projectId, ct);
         var result = ProjectJson.Project(project);
-        result["rejectReason"] = latest?.RejectReason;
-        result["latestSubmitterId"] = latest?.LatestSubmitterId;
+        result["rejectReason"] = rejectReason;
+        result["latestSubmitterId"] = latestSubmitterId;
         result["unreadMessages"] = unreadMessages;
         result["copySource"] = copySource;
         await tx.CommitAsync(ct);
@@ -94,15 +79,22 @@ internal sealed class ProjectService(
         if (project.Status is not (ProjectStatuses.Draft or ProjectStatuses.InProgress))
             throw ApiException.Conflict("子项目当前状态不可编辑");
         await EnsureNameUniqueAsync(conn, tx, name, projectId, ct);
+        await using var db = EfDb.Use(conn, tx);
+        var now = await DatabaseUtcNowAsync(db, ct);
         try
         {
-            await conn.ExecuteAsync(new CommandDefinition(
-                """
-                UPDATE projects SET name=@Name,description=@Description,updated_at=UTC_TIMESTAMP(3)
-                WHERE id=@ProjectId
-                """, new { Name = name, request.Description, ProjectId = projectId }, tx, cancellationToken: ct));
+            var changed = await db.Projects.Where(item => item.Id == projectId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.Name, name)
+                    .SetProperty(item => item.Description, request.Description)
+                    .SetProperty(item => item.UpdatedAt, now), ct);
+            if (changed != 1) throw ApiException.Conflict("项目已被删除，请刷新后重试");
         }
         catch (MySqlException ex) when (ex.Number == 1062)
+        {
+            throw ApiException.Conflict("子项目名称已存在");
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is MySqlException { Number: 1062 })
         {
             throw ApiException.Conflict("子项目名称已存在");
         }
@@ -166,10 +158,9 @@ internal sealed class ProjectService(
         {
             throw ApiException.Conflict("只有进行中的项目可以提交验收");
         }
-        var availableFiles = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            "SELECT COUNT(*) FROM files WHERE project_id=@ProjectId AND status='AVAILABLE'",
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
-        if (availableFiles == 0)
+        await using var db = EfDb.Use(conn, tx);
+        if (!await db.Files.AnyAsync(
+                file => file.ProjectId == projectId && file.Status == "AVAILABLE", ct))
         {
             throw ApiException.Conflict("项目至少上传一个可用文件后才能提交验收");
         }
@@ -243,8 +234,9 @@ internal sealed class ProjectService(
         }
         var latestSubmit = await LatestSubmissionAsync(conn, tx, projectId, ct);
         EnsureExpectedSubmission(latestSubmit, expectedSubmissionId);
+        await using var db = EfDb.Use(conn, tx);
         var privileged = current.IsInternal
-            && await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:view_all", ct);
+            && await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct);
         if (latestSubmit.OperatorId != current.Id && !privileged)
         {
             throw ApiException.Forbidden();
@@ -262,11 +254,12 @@ internal sealed class ProjectService(
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         var project = await ProjectAccessService.RequireViewForValidatedActorAsync(
             conn, tx, current, projectId, true, ct);
+        await using var db = EfDb.Use(conn, tx);
         var unread = await MessageService.UnreadCountAsync(conn, tx, current.Id, projectId, ct);
         var activityRevision = await ProjectActivityService.RevisionAsync(conn, tx, projectId, ct);
         var canConfirm = ProjectWorkflowRules.CanReceivePendingAcceptance(
             current,
-            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
+            await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:confirm", ct));
         var latestSubmissionId = project.Status == ProjectStatuses.PendingConfirmation
             ? (await LatestSubmissionAsync(conn, tx, projectId, ct)).Id
             : (ulong?)null;
@@ -289,23 +282,19 @@ internal sealed class ProjectService(
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         AccessService.RequireInternal(current);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
+        await using var db = EfDb.Use(conn, tx);
         var canListAll = await ProjectAccessService.HasPermissionAsync(
-            conn, tx, current.Id, "project:create", ct)
-            || await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:view_all", ct);
-        var rows = await conn.QueryAsync(new CommandDefinition(
-            canListAll
-                ? "SELECT id, name FROM suppliers WHERE status='ACTIVE' ORDER BY id"
-                : """
-                  SELECT DISTINCT s.id,s.name
-                  FROM suppliers s
-                  INNER JOIN projects p ON p.supplier_id=s.id
-                  WHERE s.status='ACTIVE'
-                    AND p.responsible_user_id=@UserId
-                  ORDER BY s.id
-                  """,
-            new { UserId = current.Id }, tx, cancellationToken: ct));
+            db, current.Id, "project:create", ct)
+            || await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct);
+        var query = db.Suppliers.Where(supplier => supplier.Status == "ACTIVE");
+        if (!canListAll)
+            query = query.Where(supplier => db.Projects.Any(project =>
+                project.SupplierId == supplier.Id && project.ResponsibleUserId == current.Id));
+        var rows = await query.OrderBy(supplier => supplier.Id)
+            .Select(supplier => new { supplier.Id, supplier.Name })
+            .ToListAsync(ct);
         await tx.CommitAsync(ct);
-        return rows.AsList();
+        return rows;
     }
 
     internal async Task<object> ProjectOwnerOptionsAsync(MySqlConnection conn, CurrentUser actor, CancellationToken ct)
@@ -313,24 +302,42 @@ internal sealed class ProjectService(
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await ProjectDictionaryService.RequireOptionReadAsync(conn, tx, current, ct);
-        var rows = await conn.QueryAsync(new CommandDefinition(
-            $"""
-            SELECT u.id AS id,u.employee_no AS employeeNo,u.real_name AS realName,
-                   section.id AS sectionId,section.name AS sectionName
-            FROM users u
-            {ValidSectionJoins}
-            WHERE u.user_type='INTERNAL' AND u.status='ACTIVE'
-              AND {ValidSectionClause}
-              AND EXISTS(
-                SELECT 1 FROM user_roles ur
-                JOIN roles r ON r.id=ur.role_id AND r.status='ACTIVE'
-                JOIN role_permissions rp ON rp.role_id=r.id
-                JOIN permissions permission ON permission.id=rp.permission_id AND permission.code='project:list'
-                WHERE ur.user_id=u.id)
-            ORDER BY u.real_name,u.id
-            """, transaction: tx, cancellationToken: ct));
+        await using var db = EfDb.Use(conn, tx);
+        var rows = await (
+            from user in db.Users
+            join section in db.Departments on user.DepartmentId equals (ulong?)section.Id
+            where user.UserType == "INTERNAL"
+                  && user.Status == "ACTIVE"
+                  && section.Kind == "SECTION"
+                  && section.Status == "ACTIVE"
+                  && (section.ParentId == null || db.Departments.Any(parent =>
+                      parent.Id == section.ParentId
+                      && parent.Kind == "DEPARTMENT"
+                      && parent.Status == "ACTIVE"
+                      && (parent.ParentId == null || db.Departments.Any(root =>
+                          root.Id == parent.ParentId
+                          && root.Kind == "DIVISION"
+                          && root.Status == "ACTIVE"
+                          && root.ParentId == null))))
+                  && (from userRole in db.UserRoles
+                      join role in db.Roles on userRole.RoleId equals role.Id
+                      join rolePermission in db.RolePermissions on role.Id equals rolePermission.RoleId
+                      join permission in db.Permissions on rolePermission.PermissionId equals permission.Id
+                      where userRole.UserId == user.Id
+                            && role.Status == "ACTIVE"
+                            && permission.Code == "project:list"
+                      select permission.Id).Any()
+            orderby user.RealName, user.Id
+            select new
+            {
+                user.Id,
+                user.EmployeeNo,
+                user.RealName,
+                SectionId = section.Id,
+                SectionName = section.Name,
+            }).ToListAsync(ct);
         await tx.CommitAsync(ct);
-        return rows.AsList();
+        return rows;
     }
 
     internal async Task DeleteAsync(
@@ -351,33 +358,19 @@ internal sealed class ProjectService(
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:delete", ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
         ProjectWorkflowRules.EnsureDeletable(project.Status);
-        if (await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-                "SELECT EXISTS(SELECT 1 FROM project_copies WHERE source_project_id=@ProjectId OR target_project_id=@ProjectId)",
-                new { ProjectId = projectId }, tx, cancellationToken: ct)))
+        await using var db = EfDb.Use(conn, tx);
+        if (await db.ProjectCopies.AnyAsync(
+                copy => copy.SourceProjectId == projectId || copy.TargetProjectId == projectId, ct))
             throw ApiException.Conflict("项目存在复制引用履历，不能删除");
-        var counts = await conn.QuerySingleAsync<ContentCount>(new CommandDefinition(
-            """
-            SELECT (SELECT COUNT(*) FROM files WHERE project_id=@ProjectId) AS FileCount,
-                   (SELECT COUNT(*) FROM messages WHERE project_id=@ProjectId) AS MessageCount,
-                   (SELECT COUNT(*) FROM upload_sessions WHERE project_id=@ProjectId) AS UploadCount
-            """,
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
         ProjectWorkflowRules.EnsureNoDeletionDependencies(
-            counts.FileCount + counts.MessageCount > 0,
-            counts.UploadCount > 0);
-        await conn.ExecuteAsync(new CommandDefinition(
-            """
-            DELETE FROM email_outbox WHERE project_id=@ProjectId;
-            DELETE FROM project_status_logs WHERE project_id=@ProjectId
-            """,
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
+            await db.Files.AnyAsync(file => file.ProjectId == projectId, ct)
+                || await db.Messages.AnyAsync(message => message.ProjectId == projectId, ct),
+            await db.UploadSessions.AnyAsync(upload => upload.ProjectId == projectId, ct));
+        await db.EmailOutbox.Where(mail => mail.ProjectId == projectId).ExecuteDeleteAsync(ct);
+        await db.ProjectStatusLogs.Where(log => log.ProjectId == projectId).ExecuteDeleteAsync(ct);
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DELETE", "project", projectId, new { name = project.Name }, ip, ct);
-        await conn.ExecuteAsync(new CommandDefinition(
-            "DELETE FROM project_activities WHERE project_id=@ProjectId",
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
-        var deleted = await conn.ExecuteAsync(new CommandDefinition(
-            "DELETE FROM projects WHERE id=@ProjectId",
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
+        await db.ProjectActivities.Where(activity => activity.ProjectId == projectId).ExecuteDeleteAsync(ct);
+        var deleted = await db.Projects.Where(item => item.Id == projectId).ExecuteDeleteAsync(ct);
         if (deleted != 1)
         {
             throw ApiException.Conflict("项目已被删除，请刷新后重试");
@@ -449,33 +442,31 @@ internal sealed class ProjectService(
         CancellationToken ct)
     {
         var nextConfirmSide = action == "SUBMIT" ? historyConfirmSide : null;
-        var changed = await conn.ExecuteAsync(new CommandDefinition(
-            "UPDATE projects SET status=@To,confirm_side=@NextConfirmSide,updated_at=UTC_TIMESTAMP(3) WHERE id=@ProjectId AND status=@From",
-            new { To = to, NextConfirmSide = nextConfirmSide, ProjectId = project.Id, From = project.Status },
-            tx,
-            cancellationToken: ct));
+        await using var db = EfDb.Use(conn, tx);
+        var now = await DatabaseUtcNowAsync(db, ct);
+        var changed = await db.Projects
+            .Where(item => item.Id == project.Id && item.Status == project.Status)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.Status, to)
+                .SetProperty(item => item.ConfirmSide, nextConfirmSide)
+                .SetProperty(item => item.UpdatedAt, now), ct);
         if (changed == 0)
-        {
             throw ApiException.Conflict("项目状态已被他人变更，请刷新后重试");
-        }
-        await conn.ExecuteAsync(new CommandDefinition(
-            """
-            INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,confirm_side,reason,created_at)
-            VALUES(@ProjectId,@From,@To,@Action,@OperatorId,@ConfirmSide,@Reason,UTC_TIMESTAMP(3))
-            """,
-            new
-            {
-                ProjectId = project.Id,
-                From = project.Status,
-                To = to,
-                Action = action,
-                OperatorId = actor.Id,
-                ConfirmSide = historyConfirmSide,
-                Reason = reason,
-            },
-            tx,
-            cancellationToken: ct));
-        var statusLogId = await LastInsertIdAsync(conn, tx, ct);
+
+        var statusLog = new ProjectStatusLog
+        {
+            ProjectId = project.Id,
+            FromStatus = project.Status,
+            ToStatus = to,
+            Action = action,
+            OperatorId = actor.Id,
+            ConfirmSide = historyConfirmSide,
+            Reason = reason,
+            CreatedAt = now,
+        };
+        db.ProjectStatusLogs.Add(statusLog);
+        await db.SaveChangesAsync(ct);
+        var statusLogId = statusLog.Id;
         var auditAction = action switch
         {
             "START" => "PROJECT_START",
@@ -507,13 +498,18 @@ internal sealed class ProjectService(
         ulong projectId,
         CancellationToken ct)
     {
-        var row = await conn.QuerySingleOrDefaultAsync<ProjectStatusLogRow>(new CommandDefinition(
-            """
-            SELECT id AS Id,project_id AS ProjectId,operator_id AS OperatorId,action AS Action
-            FROM project_status_logs WHERE project_id=@ProjectId AND action='SUBMIT'
-            ORDER BY id DESC LIMIT 1
-            """,
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
+        await using var db = EfDb.Use(conn, tx);
+        var row = await db.ProjectStatusLogs
+            .Where(log => log.ProjectId == projectId && log.Action == "SUBMIT")
+            .OrderByDescending(log => log.Id)
+            .Select(log => new ProjectStatusLogRow
+            {
+                Id = log.Id,
+                ProjectId = log.ProjectId,
+                OperatorId = log.OperatorId,
+                Action = log.Action,
+            })
+            .FirstOrDefaultAsync(ct);
         return row ?? throw new InvalidOperationException("待确认项目缺少提交历史");
     }
 
@@ -541,62 +537,27 @@ internal sealed class ProjectService(
         bool forUpdate,
         CancellationToken ct)
     {
+        await using var db = EfDb.Use(conn, tx);
         if (forUpdate)
         {
-            var groupId = await conn.QuerySingleOrDefaultAsync<ulong>(new CommandDefinition(
-                "SELECT COALESCE(project_group_id,0) FROM projects WHERE id=@ProjectId",
-                new { ProjectId = projectId }, tx, cancellationToken: ct));
-            if (groupId != 0)
-                await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-                    "SELECT id FROM project_groups WHERE id=@GroupId FOR UPDATE",
-                    new { GroupId = groupId }, tx, cancellationToken: ct));
-            var lockedId = await conn.QuerySingleOrDefaultAsync<ulong?>(new CommandDefinition(
-                "SELECT id FROM projects WHERE id=@ProjectId FOR UPDATE",
-                new { ProjectId = projectId },
-                tx,
-                cancellationToken: ct));
-            if (lockedId is null)
-            {
+            var groupId = await db.Projects.Where(item => item.Id == projectId)
+                .Select(item => (ulong?)item.ProjectGroupId).SingleOrDefaultAsync(ct);
+            if (groupId is null) throw ApiException.NotFound();
+            if (await db.ProjectGroups
+                    .FromSqlInterpolated($"SELECT * FROM project_groups WHERE id={groupId.Value} FOR UPDATE")
+                    .AsNoTracking().SingleOrDefaultAsync(ct) is null)
                 throw ApiException.NotFound();
-            }
+            if (await db.Projects
+                    .FromSqlInterpolated($"SELECT * FROM projects WHERE id={projectId} FOR UPDATE")
+                    .AsNoTracking().SingleOrDefaultAsync(ct) is null)
+                throw ApiException.NotFound();
         }
 
-        const string sql = """
-            SELECT p.id AS Id,p.project_group_id AS ProjectGroupId,g.name AS ProjectGroupName,
-                   p.name AS Name,p.description AS Description,p.supplier_id AS SupplierId,
-                   p.machine_model AS MachineModel,p.robot_vendor_id AS RobotVendorId,
-                   rv.name AS RobotVendorName,p.robot_model_id AS RobotModelId,
-                   rm.name AS RobotModelName,p.responsible_user_id AS ResponsibleUserId,
-                   owner.employee_no AS ResponsibleUserEmployeeNo,owner.real_name AS ResponsibleUserName,
-                   p.section_id AS SectionId,section.name AS SectionName,p.priority_id AS PriorityId,
-                   priority.name AS PriorityName,
-                   p.expected_completion_date AS ExpectedCompletionDate,
-                   EXISTS(SELECT 1 FROM project_copies pc
-                          WHERE pc.source_project_id=p.id OR pc.target_project_id=p.id) AS HasCopyHistory,
-                   p.status AS Status,p.confirm_side AS ConfirmSide,p.created_by AS CreatedBy,
-                   CASE WHEN p.status='PENDING_CONFIRMATION' THEN (
-                       SELECT MAX(psl.id) FROM project_status_logs psl
-                       WHERE psl.project_id=p.id AND psl.action='SUBMIT'
-                   ) ELSE NULL END AS LatestSubmissionId,
-                   p.created_at AS CreatedAt,p.updated_at AS UpdatedAt,
-                   s.name AS SupplierName,u.real_name AS CreatedByName
-            FROM projects p
-            LEFT JOIN project_groups g ON g.id=p.project_group_id
-            LEFT JOIN suppliers s ON s.id=p.supplier_id
-            LEFT JOIN users u ON u.id=p.created_by
-            LEFT JOIN project_dictionaries rv ON rv.id=p.robot_vendor_id
-            LEFT JOIN project_dictionaries rm ON rm.id=p.robot_model_id
-            LEFT JOIN users owner ON owner.id=p.responsible_user_id
-            LEFT JOIN departments section ON section.id=p.section_id AND section.kind='SECTION'
-            LEFT JOIN project_dictionaries priority ON priority.id=p.priority_id
-            WHERE p.id=@ProjectId
-            """;
-        var row = await conn.QuerySingleOrDefaultAsync<ProjectRow>(new CommandDefinition(
-            sql, new { ProjectId = projectId }, tx, cancellationToken: ct));
+        var row = await ProjectQueries.Rows(db).SingleOrDefaultAsync(item => item.Id == projectId, ct);
         if (row is null) throw ApiException.NotFound();
-        row.WorkOrderNos = (await conn.QueryAsync<string>(new CommandDefinition(
-            "SELECT work_order_no FROM project_work_orders WHERE project_id=@ProjectId ORDER BY sort_no,id",
-            new { ProjectId = projectId }, tx, cancellationToken: ct))).ToArray();
+        row.WorkOrderNos = await db.ProjectWorkOrders.Where(order => order.ProjectId == projectId)
+            .OrderBy(order => order.SortNo).ThenBy(order => order.Id)
+            .Select(order => order.WorkOrderNo).ToArrayAsync(ct);
         return row;
     }
 
@@ -607,9 +568,9 @@ internal sealed class ProjectService(
         ulong? excludeId,
         CancellationToken ct)
     {
-        var exists = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-            "SELECT EXISTS(SELECT 1 FROM projects WHERE name=@Name AND (@ExcludeId IS NULL OR id<>@ExcludeId))",
-            new { Name = name, ExcludeId = excludeId }, tx, cancellationToken: ct));
+        await using var db = EfDb.Use(conn, tx);
+        var exists = await db.Projects.AnyAsync(
+            project => project.Name == name && (excludeId == null || project.Id != excludeId.Value), ct);
         if (exists)
         {
             throw ApiException.Conflict("项目名称已存在");
@@ -626,14 +587,20 @@ internal sealed class ProjectService(
     {
         if (projects.Count == 0) return;
         var ids = projects.Select(project => project.Id).ToArray();
-        var relations = (await conn.QueryAsync<CopyLineageRow>(new CommandDefinition(
-            """
-            SELECT pc.source_project_id AS SourceProjectId,pc.target_project_id AS TargetProjectId,
-                   source.name AS SourceName,source.supplier_id AS SourceSupplierId,
-                   source.responsible_user_id AS SourceResponsibleUserId
-            FROM project_copies pc JOIN projects source ON source.id=pc.source_project_id
-            WHERE pc.source_project_id IN @Ids OR pc.target_project_id IN @Ids
-            """, new { Ids = ids }, tx, cancellationToken: ct))).AsList();
+        await using var db = EfDb.Use(conn, tx);
+        var relations = await (
+            from copy in db.ProjectCopies
+            join source in db.Projects on copy.SourceProjectId equals source.Id
+            where Enumerable.Contains(ids, copy.SourceProjectId)
+                  || Enumerable.Contains(ids, copy.TargetProjectId)
+            select new CopyLineageRow
+            {
+                SourceProjectId = copy.SourceProjectId,
+                TargetProjectId = copy.TargetProjectId,
+                SourceName = source.Name,
+                SourceSupplierId = source.SupplierId,
+                SourceResponsibleUserId = source.ResponsibleUserId,
+            }).ToListAsync(ct);
         foreach (var project in projects)
         {
             var related = relations.Where(row => row.SourceProjectId == project.Id || row.TargetProjectId == project.Id).ToArray();
@@ -713,19 +680,34 @@ internal sealed class ProjectService(
         ulong? sectionId = null;
         if (input.ResponsibleUserId is { } responsibleUserId)
         {
-            var owner = await conn.QuerySingleOrDefaultAsync<OwnerSelection>(new CommandDefinition(
-                $"""
-                SELECT u.id AS Id,section.id AS SectionId FROM users u
-                {ValidSectionJoins}
-                WHERE u.id=@Id AND u.user_type='INTERNAL' AND u.status='ACTIVE'
-                  AND {ValidSectionClause}
-                  AND EXISTS(
-                    SELECT 1 FROM user_roles ur
-                    JOIN roles r ON r.id=ur.role_id AND r.status='ACTIVE'
-                    JOIN role_permissions rp ON rp.role_id=r.id
-                    JOIN permissions permission ON permission.id=rp.permission_id AND permission.code='project:list'
-                    WHERE ur.user_id=u.id)
-                """, new { Id = responsibleUserId }, tx, cancellationToken: ct));
+            await using var db = EfDb.Use(conn, tx);
+            var owner = await (
+                from user in db.Users
+                join section in db.Departments on user.DepartmentId equals (ulong?)section.Id
+                where user.Id == responsibleUserId
+                      && user.UserType == "INTERNAL"
+                      && user.Status == "ACTIVE"
+                      && section.Kind == "SECTION"
+                      && section.Status == "ACTIVE"
+                      && (section.ParentId == null || db.Departments.Any(parent =>
+                          parent.Id == section.ParentId
+                          && parent.Kind == "DEPARTMENT"
+                          && parent.Status == "ACTIVE"
+                          && (parent.ParentId == null || db.Departments.Any(root =>
+                              root.Id == parent.ParentId
+                              && root.Kind == "DIVISION"
+                              && root.Status == "ACTIVE"
+                              && root.ParentId == null))))
+                      && (from userRole in db.UserRoles
+                          join role in db.Roles on userRole.RoleId equals role.Id
+                          join rolePermission in db.RolePermissions on role.Id equals rolePermission.RoleId
+                          join permission in db.Permissions on rolePermission.PermissionId equals permission.Id
+                          where userRole.UserId == user.Id
+                                && role.Status == "ACTIVE"
+                                && permission.Code == "project:list"
+                          select permission.Id).Any()
+                select new OwnerSelection { Id = user.Id, SectionId = section.Id })
+                .SingleOrDefaultAsync(ct);
             if (owner is null) throw ApiException.BadRequest("负责人必须是拥有项目列表权限且直属有效课别的启用内部用户");
             sectionId = owner.SectionId;
         }
@@ -742,9 +724,16 @@ internal sealed class ProjectService(
         CancellationToken ct)
     {
         if (id is null) return null;
-        var row = await conn.QuerySingleOrDefaultAsync<MetadataDictionaryRow>(new CommandDefinition(
-            "SELECT id AS Id,type AS Type,parent_id AS ParentId,status AS Status FROM project_dictionaries WHERE id=@Id",
-            new { Id = id.Value }, tx, cancellationToken: ct));
+        await using var db = EfDb.Use(conn, tx);
+        var row = await db.ProjectDictionaries.Where(item => item.Id == id.Value)
+            .Select(item => new MetadataDictionaryRow
+            {
+                Id = item.Id,
+                Type = item.Type,
+                ParentId = item.ParentId,
+                Status = item.Status,
+            })
+            .SingleOrDefaultAsync(ct);
         if (row is null || row.Type != expectedType) throw ApiException.BadRequest(label + "不存在或类型不匹配");
         if (row.Status != "ACTIVE" && id != existingId) throw ApiException.BadRequest(label + "已停用");
         return row;
@@ -753,35 +742,51 @@ internal sealed class ProjectService(
     internal static async Task ReplaceWorkOrdersAsync(
         MySqlConnection conn, MySqlTransaction tx, ulong projectId, string[] values, CancellationToken ct)
     {
-        await conn.ExecuteAsync(new CommandDefinition("DELETE FROM project_work_orders WHERE project_id=@ProjectId",
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
-        for (var index = 0; index < values.Length; index++)
+        await using var db = EfDb.Use(conn, tx);
+        await db.ProjectWorkOrders.Where(order => order.ProjectId == projectId).ExecuteDeleteAsync(ct);
+        if (values.Length == 0) return;
+        var now = await DatabaseUtcNowAsync(db, ct);
+        db.ProjectWorkOrders.AddRange(values.Select((value, index) => new ProjectWorkOrder
         {
-            await conn.ExecuteAsync(new CommandDefinition(
-                "INSERT INTO project_work_orders(project_id,work_order_no,sort_no,created_at) VALUES(@ProjectId,@Value,@SortNo,UTC_TIMESTAMP(3))",
-                new { ProjectId = projectId, Value = values[index], SortNo = index }, tx, cancellationToken: ct));
-        }
+            ProjectId = projectId,
+            WorkOrderNo = value,
+            SortNo = index,
+            CreatedAt = now,
+        }));
+        await db.SaveChangesAsync(ct);
     }
 
     internal static async Task LoadWorkOrdersAsync(
         MySqlConnection conn, MySqlTransaction tx, IReadOnlyCollection<ProjectRow> projects, CancellationToken ct)
     {
         if (projects.Count == 0) return;
-        var byProject = (await conn.QueryAsync<ProjectWorkOrderRow>(new CommandDefinition(
-            "SELECT project_id AS ProjectId,work_order_no AS WorkOrderNo FROM project_work_orders WHERE project_id IN @Ids ORDER BY project_id,sort_no,id",
-            new { Ids = projects.Select(project => project.Id).ToArray() }, tx, cancellationToken: ct)))
+        var ids = projects.Select(project => project.Id).ToArray();
+        await using var db = EfDb.Use(conn, tx);
+        var byProject = (await db.ProjectWorkOrders
+            .Where(order => Enumerable.Contains(ids, order.ProjectId))
+            .OrderBy(order => order.ProjectId).ThenBy(order => order.SortNo).ThenBy(order => order.Id)
+            .Select(order => new ProjectWorkOrderRow
+            {
+                ProjectId = order.ProjectId,
+                WorkOrderNo = order.WorkOrderNo,
+            }).ToListAsync(ct))
             .GroupBy(row => row.ProjectId).ToDictionary(group => group.Key, group => group.Select(row => row.WorkOrderNo).ToArray());
         foreach (var project in projects)
             project.WorkOrderNos = byProject.GetValueOrDefault(project.Id) ?? [];
     }
 
-    private static Task<ulong> CountActiveUploadsAsync(MySqlConnection conn, MySqlTransaction tx, ulong projectId, CancellationToken ct) =>
-        conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            "SELECT COUNT(*) FROM upload_sessions WHERE project_id=@ProjectId AND status IN ('UPLOADING','MERGING')",
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
+    private static async Task<ulong> CountActiveUploadsAsync(
+        MySqlConnection conn, MySqlTransaction tx, ulong projectId, CancellationToken ct)
+    {
+        await using var db = EfDb.Use(conn, tx);
+        var count = await db.UploadSessions.LongCountAsync(upload =>
+            upload.ProjectId == projectId
+            && (upload.Status == "UPLOADING" || upload.Status == "MERGING"), ct);
+        return checked((ulong)count);
+    }
 
-    private static Task<ulong> LastInsertIdAsync(MySqlConnection conn, MySqlTransaction tx, CancellationToken ct) =>
-        conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT LAST_INSERT_ID()", transaction: tx, cancellationToken: ct));
+    private static Task<DateTime> DatabaseUtcNowAsync(YfDbContext db, CancellationToken ct) =>
+        db.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(3) AS Value").SingleAsync(ct);
 
     internal static string ValidateNameForCreate(string? value)
     {
@@ -817,12 +822,6 @@ internal sealed class ProjectService(
 
     private static int RuneCount(string value) => value.EnumerateRunes().Count();
 
-    private sealed class ProjectDetailHistory
-    {
-        public string? RejectReason { get; init; }
-        public ulong? LatestSubmitterId { get; init; }
-    }
-
     private sealed class ProjectCopySourceRow
     {
         public ulong ProjectId { get; init; }
@@ -836,24 +835,6 @@ internal sealed class ProjectService(
         public string SourceName { get; init; } = string.Empty;
         public ulong SourceSupplierId { get; init; }
         public ulong? SourceResponsibleUserId { get; init; }
-    }
-
-    private sealed class MemberRow
-    {
-        public ulong UserId { get; init; }
-        public string EmployeeNo { get; init; } = string.Empty;
-        public string RealName { get; init; } = string.Empty;
-        public ulong? DepartmentId { get; init; }
-        public string? DeptName { get; init; }
-        public string Status { get; init; } = string.Empty;
-        public DateTime CreatedAt { get; init; }
-    }
-
-    private sealed class ContentCount
-    {
-        public ulong FileCount { get; init; }
-        public ulong MessageCount { get; init; }
-        public ulong UploadCount { get; init; }
     }
 
     internal sealed record ProjectMetadataInput(

@@ -1,12 +1,13 @@
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
+using Yf.Api.Infrastructure;
 
 namespace Yf.Api.Modules.SystemManagement;
 
 /// <summary>
 /// The persisted email policy is deliberately made up of independent switches.
-/// Missing keys are treated as enabled so a pre-v11 database continues to behave as
-/// it did until the explicit notification-settings migration is applied.
+/// Missing optional rows use the enabled default; fresh databases receive every row
+/// through BootstrapSeedCatalog and administrators can then change each switch.
 /// </summary>
 internal sealed record EmailNotificationPolicy(
     bool GlobalEnabled,
@@ -49,12 +50,10 @@ internal sealed record EmailNotificationPolicy(
         MySqlTransaction? tx,
         CancellationToken ct)
     {
-        var rows = await conn.QueryAsync<ConfigValue>(new CommandDefinition(
-            "SELECT cfg_key AS `Key`,cfg_value AS Value FROM system_configs WHERE cfg_key IN @Keys",
-            new { Keys },
-            tx,
-            cancellationToken: ct));
-        var values = rows.ToDictionary(row => row.Key, row => row.Value, StringComparer.Ordinal);
+        await using var context = EfDb.Use(conn, tx);
+        var values = await context.SystemConfigs.Where(config => Enumerable.Contains(Keys, config.CfgKey))
+            .Select(config => new { config.CfgKey, config.CfgValue })
+            .ToDictionaryAsync(config => config.CfgKey, config => config.CfgValue, StringComparer.Ordinal, ct);
         return new(
             Read(values, GlobalKey),
             Read(values, InternalKey),
@@ -82,12 +81,6 @@ internal sealed record EmailNotificationPolicy(
             var normalized when normalized.Equals("false", StringComparison.OrdinalIgnoreCase) => false,
             _ => true,
         };
-    }
-
-    private sealed class ConfigValue
-    {
-        public string Key { get; set; } = "";
-        public string? Value { get; set; }
     }
 
     internal bool AllowsEvent(string eventType) => eventType switch

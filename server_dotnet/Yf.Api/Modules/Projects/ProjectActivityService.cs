@@ -1,8 +1,9 @@
 using System.Globalization;
 using System.Text.Json;
-using Dapper;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 
 namespace Yf.Api.Modules.Projects;
 
@@ -18,22 +19,30 @@ internal sealed class ProjectActivityService(
         ulong projectId,
         CancellationToken ct)
     {
-        var row = await conn.QuerySingleAsync<ProjectActivityRevisionRow>(new CommandDefinition(
-            "SELECT COUNT(*) AS ActivityCount,COALESCE(MAX(id),0) AS LatestId FROM project_activities WHERE project_id=@ProjectId",
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
-        return $"{row.ActivityCount}:{row.LatestId}";
+        await using var db = EfDb.Use(conn, tx);
+        var row = await db.ProjectActivities.Where(activity => activity.ProjectId == projectId)
+            .GroupBy(_ => 1)
+            .Select(group => new { ActivityCount = group.LongCount(), LatestId = group.Max(x => x.Id) })
+            .SingleOrDefaultAsync(ct);
+        return row is null ? "0:0" : $"{row.ActivityCount}:{row.LatestId}";
     }
 
-    public async Task CaptureAsync(MySqlConnection db, MySqlTransaction? tx, ulong auditId, CancellationToken ct)
+    public async Task CaptureAsync(MySqlConnection connection, MySqlTransaction? tx, ulong auditId, CancellationToken ct)
     {
-        var audit = await db.QuerySingleOrDefaultAsync<AuditRow>(new CommandDefinition(
-            """
-            SELECT id AS Id,user_id AS UserId,employee_no AS EmployeeNo,action AS Action,
-                   target_type AS TargetType,target_id AS TargetId,CAST(detail AS CHAR) AS Detail,
-                   created_at AS CreatedAt
-            FROM audit_logs WHERE id=@AuditId
-            """,
-            new { AuditId = auditId }, tx, cancellationToken: ct));
+        await using var db = EfDb.Use(connection, tx);
+        var audit = await db.AuditLogs.Where(row => row.Id == auditId)
+            .Select(row => new AuditRow
+            {
+                Id = row.Id,
+                UserId = row.UserId,
+                EmployeeNo = row.EmployeeNo,
+                Action = row.Action,
+                TargetType = row.TargetType,
+                TargetId = row.TargetId,
+                Detail = row.Detail,
+                CreatedAt = row.CreatedAt,
+            })
+            .SingleOrDefaultAsync(ct);
         if (audit?.TargetId is null
             || !ulong.TryParse(audit.TargetId, NumberStyles.None, CultureInfo.InvariantCulture, out var targetId)
             || targetId.ToString(CultureInfo.InvariantCulture) != audit.TargetId)
@@ -46,42 +55,41 @@ internal sealed class ProjectActivityService(
             "PROJECT_CREATE" or "PROJECT_UPDATE" or "PROJECT_MEMBERS" or "PROJECT_START"
                 or "PROJECT_SUBMIT" or "PROJECT_CONFIRM" or "PROJECT_REJECT" or "PROJECT_WITHDRAW"
                 or "PROJECT_TERMINATE" or "PROJECT_RESTART" when audit.TargetType == "project" =>
-                await ProjectActivityAsync(db, tx, audit, targetId, ct),
+                await ProjectActivityAsync(db, audit, targetId, ct),
             "FILE_UPLOAD" or "FILE_DELETE" when audit.TargetType == "file" =>
-                await FileActivityAsync(db, tx, audit, targetId, ct),
+                await FileActivityAsync(db, audit, targetId, ct),
             "MESSAGE_CREATE" or "MESSAGE_DELETE" or "MESSAGE_READ" when audit.TargetType == "message" =>
-                await MessageActivityAsync(db, tx, audit, targetId, ct),
+                await MessageActivityAsync(db, audit, targetId, ct),
             _ => null,
         };
-        if (activity is null)
+        if (activity is null) return;
+
+        var actorName = await ResolveActorNameAsync(db, audit.UserId, audit.EmployeeNo, ct);
+        if (await db.ProjectActivities.AnyAsync(row => row.SourceKey == activity.SourceKey, ct)) return;
+        var entity = new ProjectActivity
         {
+            ProjectId = activity.ProjectId,
+            ActivityType = activity.ActivityType,
+            Action = activity.Action,
+            ActorId = audit.UserId,
+            ActorName = actorName,
+            OccurredAt = activity.OccurredAt,
+            Title = activity.Title,
+            Summary = activity.Summary,
+            TargetId = activity.TargetId,
+            SourceKey = activity.SourceKey,
+        };
+        db.ProjectActivities.Add(entity);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (IsDuplicateKey(ex))
+        {
+            db.Entry(entity).State = EntityState.Detached;
             return;
         }
-        var actorName = await ResolveActorNameAsync(db, tx, audit.UserId, audit.EmployeeNo, ct);
-        var inserted = await db.ExecuteAsync(new CommandDefinition(
-            """
-            INSERT IGNORE INTO project_activities
-                (project_id,activity_type,action,actor_id,actor_name,occurred_at,title,summary,target_id,source_key)
-            VALUES
-                (@ProjectId,@ActivityType,@Action,@ActorId,@ActorName,@OccurredAt,@Title,@Summary,@TargetId,@SourceKey)
-            """,
-            new
-            {
-                activity.ProjectId,
-                activity.ActivityType,
-                activity.Action,
-                ActorId = audit.UserId,
-                ActorName = actorName,
-                activity.OccurredAt,
-                activity.Title,
-                activity.Summary,
-                activity.TargetId,
-                activity.SourceKey,
-            },
-            tx,
-            cancellationToken: ct));
-        if (inserted > 0 && activity.ActivityType != "MESSAGE")
-            ScheduleRealtime(activity.ProjectId);
+        if (activity.ActivityType != "MESSAGE") ScheduleRealtime(activity.ProjectId);
     }
 
     private void ScheduleRealtime(ulong projectId)
@@ -115,51 +123,41 @@ internal sealed class ProjectActivityService(
         var project = await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
         var type = string.IsNullOrWhiteSpace(activityType) ? null : activityType.Trim().ToUpperInvariant();
         if (type is not null and not ("PROJECT" or "FILE" or "MESSAGE"))
-        {
             throw ApiException.BadRequest("非法的项目动态类型");
-        }
+
         (DateTime Time, ulong Id)? cursorValue = cursor is null ? null : DecodeCursor(cursor);
         var size = pageSize == 0 ? 20UL : Math.Min(pageSize, 50UL);
-        var clauses = new List<string> { "project_id=@ProjectId" };
-        var parameters = new DynamicParameters(new { ProjectId = projectId, Size = size + 1 });
-        if (type is not null)
-        {
-            clauses.Add("activity_type=@ActivityType");
-            parameters.Add("ActivityType", type);
-        }
+        await using var db = EfDb.Use(conn);
+        var query = db.ProjectActivities.Where(activity => activity.ProjectId == projectId);
+        if (type is not null) query = query.Where(activity => activity.ActivityType == type);
         if (cursorValue is not null)
         {
-            clauses.Add("(occurred_at<@CursorTime OR (occurred_at=@CursorTime AND id<@CursorId))");
-            parameters.Add("CursorTime", cursorValue.Value.Time);
-            parameters.Add("CursorId", cursorValue.Value.Id);
+            var cursorTime = cursorValue.Value.Time;
+            var cursorId = cursorValue.Value.Id;
+            query = query.Where(activity => activity.OccurredAt < cursorTime
+                || (activity.OccurredAt == cursorTime && activity.Id < cursorId));
         }
-        var rows = (await conn.QueryAsync<ActivityRow>(new CommandDefinition(
-            $"""
-            SELECT id AS Id,project_id AS ProjectId,activity_type AS ActivityType,action AS Action,
-                   actor_id AS ActorId,actor_name AS ActorName,occurred_at AS OccurredAt,title AS Title,
-                   summary AS Summary,target_id AS TargetId,source_key AS SourceKey
-            FROM project_activities WHERE {string.Join(" AND ", clauses)}
-            ORDER BY occurred_at DESC,id DESC LIMIT @Size
-            """,
-            parameters,
-            cancellationToken: ct))).AsList();
-        var hasMore = rows.Count > (int)size;
-        if (hasMore)
-        {
-            rows.RemoveAt(rows.Count - 1);
-        }
-        var fileIds = rows.Where(row => row.ActivityType == "FILE" && row.TargetId is not null).Select(row => row.TargetId!.Value).ToArray();
-        var messageIds = rows.Where(row => row.ActivityType == "MESSAGE" && row.TargetId is not null).Select(row => row.TargetId!.Value).ToArray();
+        var rows = await query.OrderByDescending(activity => activity.OccurredAt)
+            .ThenByDescending(activity => activity.Id)
+            .Take((int)size + 1)
+            .ToArrayAsync(ct);
+        var hasMore = rows.Length > (int)size;
+        if (hasMore) rows = rows[..^1];
+
+        var fileIds = rows.Where(row => row.ActivityType == "FILE" && row.TargetId is not null)
+            .Select(row => row.TargetId!.Value).ToArray();
+        var messageIds = rows.Where(row => row.ActivityType == "MESSAGE" && row.TargetId is not null)
+            .Select(row => row.TargetId!.Value).ToArray();
         var availableFiles = fileIds.Length == 0
             ? new HashSet<ulong>()
-            : (await conn.QueryAsync<ulong>(new CommandDefinition(
-                "SELECT id FROM files WHERE id IN @Ids AND project_id=@ProjectId AND status='AVAILABLE'",
-                new { Ids = fileIds, ProjectId = projectId }, cancellationToken: ct))).ToHashSet();
+            : (await db.Files.Where(file => Enumerable.Contains(fileIds, file.Id)
+                    && file.ProjectId == projectId && file.Status == "AVAILABLE")
+                .Select(file => file.Id).ToArrayAsync(ct)).ToHashSet();
         var availableMessages = messageIds.Length == 0
             ? new HashSet<ulong>()
-            : (await conn.QueryAsync<ulong>(new CommandDefinition(
-                "SELECT id FROM messages WHERE id IN @Ids AND project_id=@ProjectId AND status='NORMAL'",
-                new { Ids = messageIds, ProjectId = projectId }, cancellationToken: ct))).ToHashSet();
+            : (await db.Messages.Where(message => Enumerable.Contains(messageIds, message.Id)
+                    && message.ProjectId == projectId && message.Status == "NORMAL")
+                .Select(message => message.Id).ToArrayAsync(ct)).ToHashSet();
         var list = rows.Select(row =>
         {
             var available = row.ActivityType switch
@@ -182,13 +180,16 @@ internal sealed class ProjectActivityService(
                 targetAvailable = available,
             };
         }).ToArray();
-        var lastActivityAt = await conn.QuerySingleOrDefaultAsync<DateTime?>(new CommandDefinition(
-            "SELECT occurred_at FROM project_activities WHERE project_id=@ProjectId ORDER BY occurred_at DESC,id DESC LIMIT 1",
-            new { ProjectId = projectId }, cancellationToken: ct));
+        var lastActivityAt = await db.ProjectActivities
+            .Where(activity => activity.ProjectId == projectId)
+            .OrderByDescending(activity => activity.OccurredAt)
+            .ThenByDescending(activity => activity.Id)
+            .Select(activity => (DateTime?)activity.OccurredAt)
+            .FirstOrDefaultAsync(ct);
         return new
         {
             list,
-            nextCursor = hasMore && rows.Count > 0 ? EncodeCursor(rows[^1].OccurredAt, rows[^1].Id) : null,
+            nextCursor = hasMore && rows.Length > 0 ? EncodeCursor(rows[^1].OccurredAt, rows[^1].Id) : null,
             summary = new
             {
                 status = project.Status,
@@ -200,19 +201,15 @@ internal sealed class ProjectActivityService(
     }
 
     private static async Task<NewActivity?> ProjectActivityAsync(
-        MySqlConnection conn,
-        MySqlTransaction? tx,
+        YfDbContext db,
         AuditRow audit,
         ulong projectId,
         CancellationToken ct)
     {
-        var project = await conn.QuerySingleOrDefaultAsync<ProjectRow>(new CommandDefinition(
-            "SELECT id AS Id,name AS Name,created_at AS CreatedAt FROM projects WHERE id=@ProjectId",
-            new { ProjectId = projectId }, tx, cancellationToken: ct));
-        if (project is null)
-        {
-            return null;
-        }
+        var project = await db.Projects.Where(row => row.Id == projectId)
+            .Select(row => new { row.Name, row.CreatedAt })
+            .SingleOrDefaultAsync(ct);
+        if (project is null) return null;
         var (action, title, summary) = audit.Action switch
         {
             "PROJECT_CREATE" => ("CREATE", "创建项目", Truncate(project.Name)),
@@ -227,63 +224,52 @@ internal sealed class ProjectActivityService(
             "PROJECT_TERMINATE" => ("TERMINATE", "终止项目", WorkflowReason(audit.Detail)),
             _ => (string.Empty, string.Empty, null),
         };
-        if (action.Length == 0)
-        {
-            return null;
-        }
+        if (action.Length == 0) return null;
         var statusLogId = JsonUlong(audit.Detail, "statusLogId");
-        return new(
-            projectId,
-            "PROJECT",
-            action,
-            title,
-            summary,
-            action == "CREATE" ? project.CreatedAt : audit.CreatedAt,
-            projectId,
-            action == "CREATE" ? $"project:{projectId}:create" : statusLogId is not null ? $"project-status-log:{statusLogId}" : $"audit:{audit.Id}");
+        return new(projectId, "PROJECT", action, title, summary,
+            action == "CREATE" ? project.CreatedAt : audit.CreatedAt, projectId,
+            action == "CREATE" ? $"project:{projectId}:create"
+                : statusLogId is not null ? $"project-status-log:{statusLogId}" : $"audit:{audit.Id}");
     }
 
     private static async Task<NewActivity?> FileActivityAsync(
-        MySqlConnection conn,
-        MySqlTransaction? tx,
+        YfDbContext db,
         AuditRow audit,
         ulong fileId,
         CancellationToken ct)
     {
-        var file = await conn.QuerySingleOrDefaultAsync<FileActivityRow>(new CommandDefinition(
-            "SELECT project_id AS ProjectId,original_name AS OriginalName,created_at AS CreatedAt,deleted_at AS DeletedAt FROM files WHERE id=@FileId",
-            new { FileId = fileId }, tx, cancellationToken: ct));
-        if (file is null)
-        {
-            return null;
-        }
+        var file = await db.Files.Where(row => row.Id == fileId)
+            .Select(row => new { row.ProjectId, row.OriginalName, row.CreatedAt, row.DeletedAt })
+            .SingleOrDefaultAsync(ct);
+        if (file is null) return null;
         var upload = audit.Action == "FILE_UPLOAD";
-        return new(file.ProjectId, "FILE", upload ? "UPLOAD" : "DELETE", upload ? "上传文件" : "删除文件",
-            Truncate(file.OriginalName), upload ? file.CreatedAt : file.DeletedAt ?? audit.CreatedAt, fileId,
+        return new(file.ProjectId, "FILE", upload ? "UPLOAD" : "DELETE",
+            upload ? "上传文件" : "删除文件", Truncate(file.OriginalName),
+            upload ? file.CreatedAt : file.DeletedAt ?? audit.CreatedAt, fileId,
             $"file:{fileId}:{(upload ? "upload" : "delete")}");
     }
 
     private static async Task<NewActivity?> MessageActivityAsync(
-        MySqlConnection conn,
-        MySqlTransaction? tx,
+        YfDbContext db,
         AuditRow audit,
         ulong messageId,
         CancellationToken ct)
     {
-        var message = await conn.QuerySingleOrDefaultAsync<MessageActivityRow>(new CommandDefinition(
-            """
-            SELECT m.project_id AS ProjectId,m.content AS Content,m.created_at AS CreatedAt,m.deleted_at AS DeletedAt,
-                   EXISTS(SELECT 1 FROM message_images mi WHERE mi.message_id=m.id) AS HasImages
-            FROM messages m WHERE m.id=@MessageId
-            """,
-            new { MessageId = messageId }, tx, cancellationToken: ct));
-        if (message is null)
-        {
-            return null;
-        }
+        var message = await db.Messages.Where(row => row.Id == messageId)
+            .Select(row => new
+            {
+                row.ProjectId,
+                row.Content,
+                row.CreatedAt,
+                row.DeletedAt,
+                HasImages = db.MessageImages.Any(image => image.MessageId == row.Id),
+            })
+            .SingleOrDefaultAsync(ct);
+        if (message is null) return null;
         var (action, title, summary) = audit.Action switch
         {
-            "MESSAGE_CREATE" => ("CREATE", "发表留言", message.Content.Length == 0 && message.HasImages ? "[图片]" : message.Content),
+            "MESSAGE_CREATE" => ("CREATE", "发表留言",
+                message.Content.Length == 0 && message.HasImages ? "[图片]" : message.Content),
             "MESSAGE_DELETE" => ("DELETE", "删除留言", (string?)null),
             "MESSAGE_READ" => ("READ", "查看留言回执", (string?)null),
             _ => (string.Empty, string.Empty, (string?)null),
@@ -302,22 +288,24 @@ internal sealed class ProjectActivityService(
     }
 
     private static async Task<string> ResolveActorNameAsync(
-        MySqlConnection conn,
-        MySqlTransaction? tx,
+        YfDbContext db,
         ulong? userId,
         string? employeeNo,
         CancellationToken ct)
     {
         if (userId is not null)
         {
-            var user = await conn.QuerySingleOrDefaultAsync<UserRow>(new CommandDefinition(
-                "SELECT real_name AS RealName,employee_no AS EmployeeNo FROM users WHERE id=@UserId",
-                new { UserId = userId.Value }, tx, cancellationToken: ct));
+            var user = await db.Users.Where(row => row.Id == userId.Value)
+                .Select(row => new { row.RealName, row.EmployeeNo })
+                .SingleOrDefaultAsync(ct);
             if (!string.IsNullOrWhiteSpace(user?.RealName)) return user.RealName;
             if (!string.IsNullOrWhiteSpace(user?.EmployeeNo)) return user.EmployeeNo;
         }
         return string.IsNullOrWhiteSpace(employeeNo) ? "未知" : employeeNo;
     }
+
+    private static bool IsDuplicateKey(DbUpdateException exception) =>
+        exception.InnerException is MySqlException { Number: 1062 };
 
     private static string EncodeCursor(DateTime time, ulong id)
     {
@@ -332,30 +320,20 @@ internal sealed class ProjectActivityService(
         if (value.Length != 32
             || !ulong.TryParse(value[..16], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var encoded)
             || !ulong.TryParse(value[16..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var id))
-        {
             throw ApiException.BadRequest("无效的项目动态游标");
-        }
         var micros = unchecked((long)(encoded ^ (1UL << 63)));
         try
         {
             var time = DateTime.UnixEpoch.AddTicks(checked(micros * 10));
-            if (time.Year is < 1000 or > 9999)
-            {
-                throw ApiException.BadRequest("无效的项目动态游标");
-            }
+            if (time.Year is < 1000 or > 9999) throw ApiException.BadRequest("无效的项目动态游标");
             return (time, id);
         }
-        catch (ArgumentOutOfRangeException)
-        {
-            throw ApiException.BadRequest("无效的项目动态游标");
-        }
-        catch (OverflowException)
-        {
-            throw ApiException.BadRequest("无效的项目动态游标");
-        }
+        catch (ArgumentOutOfRangeException) { throw ApiException.BadRequest("无效的项目动态游标"); }
+        catch (OverflowException) { throw ApiException.BadRequest("无效的项目动态游标"); }
     }
 
-    private static string? WorkflowReason(string? detail) => JsonString(detail, "reason") is { } reason ? Truncate(reason) : null;
+    private static string? WorkflowReason(string? detail) =>
+        JsonString(detail, "reason") is { } reason ? Truncate(reason) : null;
 
     private static string? JsonString(string? json, string property)
     {
@@ -363,14 +341,10 @@ internal sealed class ProjectActivityService(
         try
         {
             using var document = JsonDocument.Parse(json);
-            return document.RootElement.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
-                ? value.GetString()
-                : null;
+            return document.RootElement.TryGetProperty(property, out var value)
+                && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
         }
-        catch (JsonException)
-        {
-            return null;
-        }
+        catch (JsonException) { return null; }
     }
 
     private static ulong? JsonUlong(string? json, string property)
@@ -379,12 +353,10 @@ internal sealed class ProjectActivityService(
         try
         {
             using var document = JsonDocument.Parse(json);
-            return document.RootElement.TryGetProperty(property, out var value) && value.TryGetUInt64(out var result) ? result : null;
+            return document.RootElement.TryGetProperty(property, out var value)
+                && value.TryGetUInt64(out var result) ? result : null;
         }
-        catch (JsonException)
-        {
-            return null;
-        }
+        catch (JsonException) { return null; }
     }
 
     private static string? Truncate(string value)
@@ -402,27 +374,4 @@ internal sealed class ProjectActivityService(
         DateTime OccurredAt,
         ulong? TargetId,
         string SourceKey);
-
-    private sealed class FileActivityRow
-    {
-        public ulong ProjectId { get; init; }
-        public string OriginalName { get; init; } = string.Empty;
-        public DateTime CreatedAt { get; init; }
-        public DateTime? DeletedAt { get; init; }
-    }
-
-    private sealed class MessageActivityRow
-    {
-        public ulong ProjectId { get; init; }
-        public string Content { get; init; } = string.Empty;
-        public DateTime CreatedAt { get; init; }
-        public DateTime? DeletedAt { get; init; }
-        public bool HasImages { get; init; }
-    }
-
-    private sealed class ProjectActivityRevisionRow
-    {
-        public ulong ActivityCount { get; init; }
-        public ulong LatestId { get; init; }
-    }
 }
