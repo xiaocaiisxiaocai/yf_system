@@ -1,6 +1,6 @@
 # Dapper → EF Core Code-First 迁移记录
 
-**状态**：现有 `server_dotnet` 后端迁移完成（2026-09-17）。OEM 新表不在本轮范围，待业务模型确认后单独新增 EF Core 迁移。
+**状态**：现有 `server_dotnet` 后端迁移完成（2026-09-17）。OEM 表已由独立迁移 `AddOemPlatform`（2026-09-18）新增，见 `docs/OEM绘图平台-数据库设计与接口规划-2026-09-18.md`。
 
 ## 已完成
 

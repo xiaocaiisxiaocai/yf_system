@@ -54,6 +54,19 @@ if (!(Test-Path -LiteralPath $storage -PathType Container)) { throw 'Create the 
 foreach ($other in @($PackageRoot,$SiteRoot,$ConfigPath)) {
     if ((Within $storage $other) -or (Within $other $storage)) { throw 'Package, destination, external configuration and storage must be separate.' }
 }
+# OEM file storage: optional, local, never backed up, separate from everything else.
+$oemStorage = $null
+$oemProperty = $config.App.PSObject.Properties['OemStorageRoot']
+if ($oemProperty -and ![string]::IsNullOrWhiteSpace($oemProperty.Value)) {
+    $oemStorage = FullPath $oemProperty.Value
+    NoLinks $oemStorage
+    if (!(Test-Path -LiteralPath $oemStorage -PathType Container)) { throw 'Create the OEM storage directory (App:OemStorageRoot) before installation.' }
+    foreach ($other in @($PackageRoot,$SiteRoot,$ConfigPath,$storage)) {
+        if ((Within $oemStorage $other) -or (Within $other $oemStorage)) { throw 'OEM storage must be separate from the package, site, configuration and backed-up storage.' }
+    }
+}
+$oemScanner = $config.App.PSObject.Properties['OemScanner']
+if ($oemScanner -and $oemScanner.Value.PSObject.Properties['Engine'] -and $oemScanner.Value.Engine -eq 'Fake') { throw 'The Fake OEM scanner is for development only and cannot be installed in production.' }
 $origin = 'https://' + $HostName + $(if ($HttpsPort -eq 443) { '' } else { ':'+$HttpsPort })
 if ($config.App.CookieSecure -ne $true -or $config.App.WebBaseUrl.TrimEnd('/') -ne $origin) { throw 'Production configuration requires CookieSecure=true and WebBaseUrl equal to the HTTPS site origin.' }
 if ([string]::IsNullOrWhiteSpace($config.App.ConnectionString) -or [Text.Encoding]::UTF8.GetByteCount($config.App.JwtSecret) -lt 32) { throw 'Database connection and a random JWT secret (at least 32 bytes) are required.' }
@@ -75,6 +88,7 @@ foreach ($required in @('Yf.Api.dll','Yf.Api.runtimeconfig.json','web.config','w
 }
 . (Join-Path $PackageRoot 'maintenance-common.ps1')
 Assert-YfSeparate @($PackageRoot,$SiteRoot,$ConfigPath,$storage)
+if ($oemStorage) { Assert-YfSeparate @($PackageRoot,$SiteRoot,$ConfigPath,$storage,$oemStorage) }
 $maintenanceConfig = Read-YfMaintenanceConfig $ConfigPath
 if ($maintenanceConfig.Storage -ne $storage) { throw 'Configuration storage path changed during validation.' }
 Assert-YfPublishedConfig $PackageRoot
@@ -119,6 +133,10 @@ $identity = 'IIS AppPool\' + $AppPoolName
 if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application read permissions.' }
 & icacls.exe $storage /grant "${identity}:(OI)(CI)M" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Unable to grant storage permissions.' }
+if ($oemStorage) {
+    & icacls.exe $oemStorage /grant "${identity}:(OI)(CI)M" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to grant OEM storage permissions.' }
+}
 Protect-YfConfigurationFile $ConfigPath $identity
 New-Website -Name $SiteName -PhysicalPath $SiteRoot -ApplicationPool $AppPoolName -Port $HttpsPort -HostHeader $HostName -Ssl -SslFlags 1 | Out-Null
 # Browser SignalR handshakes carry a short-lived access_token in the query string.
