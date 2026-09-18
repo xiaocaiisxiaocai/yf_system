@@ -19,9 +19,10 @@ public static class ApiApplication
         var migrateDatabase = args.Contains("--migrate-database", StringComparer.Ordinal);
         var inspectDevelopment = args.Contains("--inspect-development-data", StringComparer.Ordinal);
         var resetDevelopment = args.Contains("--reset-development-data", StringComparer.Ordinal);
-        if (new[] { initializeDatabase, migrateDatabase, inspectDevelopment, resetDevelopment }.Count(value => value) > 1)
+        var oemMarkRestored = args.Contains("--oem-mark-restored", StringComparer.Ordinal);
+        if (new[] { initializeDatabase, migrateDatabase, inspectDevelopment, resetDevelopment, oemMarkRestored }.Count(value => value) > 1)
             throw new ArgumentException("Choose one database operation.");
-        args = args.Where(x => x is not ("--initialize-database" or "--migrate-database" or "--inspect-development-data" or "--reset-development-data")).ToArray();
+        args = args.Where(x => x is not ("--initialize-database" or "--migrate-database" or "--inspect-development-data" or "--reset-development-data" or "--oem-mark-restored")).ToArray();
         var builder = WebApplication.CreateBuilder(args);
         builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
         var externalConfig = Environment.GetEnvironmentVariable("YF_CONFIG_PATH");
@@ -48,6 +49,13 @@ public static class ApiApplication
         if (initializeDatabase)
         {
             await EfDatabaseLifecycle.InitializeEmptyAsync(new AppDb(options));
+            return null;
+        }
+        if (oemMarkRestored)
+        {
+            // After a manual database restore: OEM content stays closed until storage is reconciled.
+            await Modules.Oem.Maintenance.OemReconcileService.MarkRestoredAsync(new AppDb(options));
+            Console.WriteLine("OEM storage reconciliation required; OEM file access stays closed until the reconcile job completes.");
             return null;
         }
         if (migrateDatabase)

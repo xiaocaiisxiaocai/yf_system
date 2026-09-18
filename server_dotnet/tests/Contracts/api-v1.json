@@ -147,5 +147,10 @@
   "GET /api/v1/oem/approvals/pending",
   "POST /api/v1/oem/approvals/{}/approve",
   "POST /api/v1/oem/approvals/{}/reject",
-  "POST /api/v1/oem/approvals/{}/reassign"
+  "POST /api/v1/oem/approvals/{}/reassign",
+  "GET /api/v1/oem/files/{}/content",
+  "POST /api/v1/oem/files/{}/download-sessions",
+  "GET /api/v1/oem/files/{}/download-status",
+  "GET /api/v1/oem/files/{}/download",
+  "GET /api/v1/oem/audit-logs"
 ]

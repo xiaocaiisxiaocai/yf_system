@@ -140,6 +140,19 @@ public sealed class OemScanService(
             var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
             var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {claim.FileId} FOR UPDATE").SingleAsync(ct);
             var settings = await OemSettings.LoadAsync(uow.Db, ct);
+            if (file.PayloadStatus != PayloadStatuses.Quarantined)
+            {
+                // The file was purged or removed while it was being scanned: the verdict is moot.
+                job.Status = ScanJobStatuses.Error;
+                job.LastError = "文件已不在隔离区";
+                job.CompletedAt = uow.Now;
+                job.LeaseOwner = null;
+                job.LeaseUntil = null;
+                job.ConcurrencyVersion++;
+                await uow.Db.SaveChangesAsync(ct);
+                await uow.CommitAsync(ct);
+                return;
+            }
             job.EngineName = result.EngineName;
             job.EngineVersion = result.EngineVersion;
             job.SignatureVersion = result.SignatureVersion;

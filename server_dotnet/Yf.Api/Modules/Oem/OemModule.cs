@@ -3,7 +3,9 @@ using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Oem.Admin;
 using Yf.Api.Modules.Oem.Approval;
 using Yf.Api.Modules.Oem.Common;
+using Yf.Api.Modules.Oem.Delivery;
 using Yf.Api.Modules.Oem.Identity;
+using Yf.Api.Modules.Oem.Maintenance;
 using Yf.Api.Modules.Oem.Notifications;
 using Yf.Api.Modules.Oem.Policies;
 using Yf.Api.Modules.Oem.Scanning;
@@ -62,6 +64,14 @@ public static class OemModule
         services.AddSingleton<OemPromotionService>();
         services.AddSingleton<OemScanService>();
 
+        // Delivery, purge and reconciliation slices.
+        services.AddSingleton<OemDownloadGrantService>();
+        services.AddSingleton<OemDownloadRateLimiter>();
+        services.AddSingleton<OemDeliveryService>();
+        services.AddSingleton<OemPurgeService>();
+        services.AddSingleton<OemReconcileService>();
+        services.AddSingleton<OemAuditQueryService>();
+
         // Background duties, driven by one composite hosted worker.
         services.AddSingleton<IOemBackgroundJob>(provider => new DelegateOemJob("scan", TimeSpan.FromSeconds(3),
             ct => provider.GetRequiredService<OemScanService>().RunOnceAsync(ct)));
@@ -71,6 +81,12 @@ public static class OemModule
             ct => provider.GetRequiredService<OemUploadService>().ExpireStaleSessionsAsync(ct)));
         services.AddSingleton<IOemBackgroundJob>(provider => new DelegateOemJob("approval-health", TimeSpan.FromMinutes(2),
             ct => provider.GetRequiredService<OemApprovalService>().RevalidateActiveInstancesAsync(ct)));
+        services.AddSingleton<IOemBackgroundJob>(provider => new DelegateOemJob("purge", TimeSpan.FromSeconds(30),
+            ct => provider.GetRequiredService<OemPurgeService>().RunOnceAsync(ct)));
+        services.AddSingleton<IOemBackgroundJob>(provider => new DelegateOemJob("draft-expiry", TimeSpan.FromHours(1),
+            ct => provider.GetRequiredService<OemPurgeService>().ExpireDraftsAsync(provider.GetRequiredService<OemTransferService>(), ct)));
+        services.AddSingleton<IOemBackgroundJob>(provider => new DelegateOemJob("reconcile", TimeSpan.FromMinutes(10),
+            ct => provider.GetRequiredService<OemReconcileService>().RunOnceAsync(ct)));
         services.AddHostedService<OemBackgroundWorker>();
         return services;
     }
@@ -79,12 +95,14 @@ public static class OemModule
     {
         var root = endpoints.MapGroup(OemApi.Prefix);
         OemIdentityEndpoints.Map(root);
+        OemDeliveryEndpoints.MapCookieAuthenticated(root);
 
         // Everything except the auth group requires a resolved OEM actor (internal staff or OEM account).
         var secured = root.MapGroup(string.Empty).AddEndpointFilter<OemAccessFilter>();
         OemDirectoryEndpoints.Map(secured);
         OemPolicyEndpoints.Map(secured);
         OemTransferEndpoints.Map(secured);
+        OemDeliveryEndpoints.MapSecured(secured);
         return endpoints;
     }
 }
