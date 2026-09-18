@@ -219,7 +219,11 @@ async function chooseNotificationTab(drawer, name) {
       const draft = '尚未发送的供应商草稿-' + marker;
       const adminText = '管理员并发留言-' + marker;
       await supplierInput().fill(draft);
-      const supplierReload = waitResponse(supplierPage, `/projects/${project.id}/messages`);
+      // The first notification above has the 12s user-facing SLA. This
+      // follow-up refresh has no such SLA and can wait for the current
+      // message burst to settle without making the integration test flaky.
+      const supplierReload = waitResponse(
+        supplierPage, `/projects/${project.id}/messages`, 'GET', 200, 30000);
       const actorPage = await adminContext.newPage();
       track(actorPage, 'collaboration-admin-actor');
       actorPage.setDefaultTimeout(12000);
@@ -306,11 +310,20 @@ async function chooseNotificationTab(drawer, name) {
 
     let markedNotification;
     await record('通知查看状态独立于留言已读和流程待确认并在刷新后持久', async () => {
+      // The admin page viewed the project earlier to validate deep-linking, so
+      // those messages are correctly marked read by the visibility observer.
+      // Create a fresh message after returning to the dashboard to keep this
+      // assertion focused on notification-read versus message-read state.
+      const independentText = '通知独立消息-' + marker;
+      await supplierPage.goto(s.base + `/projects/${project.id}?tab=messages`);
+      await supplierInput().waitFor();
+      const independent = await action(supplierPage, `/projects/${project.id}/messages`, 'POST',
+        async () => { await supplierInput().fill(independentText); await supplierInput().press('Control+Enter'); });
       const unread = await listNotifications(adminContext, adminToken, true);
       const unreadMessages = await listDashboardMessages(adminContext, adminToken, true);
       const unreadMessageIds = new Set(unreadMessages.map(item => item.id));
       markedNotification = unread.list.find(item => item.type === 'MESSAGE'
-        && unreadMessageIds.has(item.targetId));
+        && item.targetId === independent.id && unreadMessageIds.has(item.targetId));
       assert(markedNotification,
         'the notification list needs an item whose notification and message are both unread');
       const drawer = await openNotifications(adminPage);

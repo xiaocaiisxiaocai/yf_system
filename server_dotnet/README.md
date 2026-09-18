@@ -1,6 +1,6 @@
 # ASP.NET Core API 后端
 
-当前维护的独立 .NET 10 后端，配套 React 前端位于 `../web`，接口为 `/api/v1`。原 Rust 归档目录 `yf_server` 已从仓库移除（历史版本仍可通过 git 记录查阅），不作为运行、测试或升级依赖。
+当前维护的独立 .NET 10 后端，配套 React 前端位于 `../web`，接口为 `/api/v1`。原 Rust 归档目录 `yf_server` 已从仓库移除（历史版本仍可通过 git 记录查阅），不作为运行、测试或升级依赖。数据库由 EF Core Code-First 迁移管理；开发阶段不兼容旧 schema 或旧数据。
 
 新库初始化只创建 `admin` 用户和系统管理员角色，其他角色由管理员手工配置。已有开发数据可通过独立清理命令重置，同时保留 SMTP、系统参数和 admin 原密码，见[开发数据初始化说明](../docs/开发数据初始化说明.md)。
 
@@ -223,11 +223,14 @@ Restore 的新数据库名必须不同于当前数据库，执行前由 DBA 确�
 | 组件 | 版本 | 仓库/官方来源 | 用途 |
 |---|---|---|---|
 | ASP.NET Core | .NET 10 | https://github.com/dotnet/aspnetcore | HTTP、路由、IIS、静态文件 |
-| Dapper | 2.1.79 | https://github.com/DapperLib/Dapper | 参数化查询映射 |
+| Microsoft.EntityFrameworkCore | 9.0.0 | https://github.com/dotnet/efcore | Code-First 模型、查询、写入和迁移 |
+| Pomelo.EntityFrameworkCore.MySql | 9.0.0 | https://github.com/PomeloFoundation/Pomelo.EntityFrameworkCore.MySql | MySQL EF Core provider |
 | MySqlConnector | 2.6.2 | https://github.com/mysql-net/MySqlConnector | MySQL 异步驱动 |
 | Konscious Argon2 | 1.3.1 | https://github.com/kmaragon/Konscious.Security.Cryptography | 兼容已有 Argon2 密码 |
 | IdentityModel JWT | 8.22.0 | https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet | JWT 签发校验 |
 | MailKit | 4.17.0 | https://github.com/jstedfast/MailKit | TLS SMTP |
 | xUnit v3 | 4.0.0 | https://github.com/xunit/xunit | 自动化测试 |
+
+测试项目仍保留 Dapper 2.1.79 仅用于少量独立测试夹具和数据库断言，生产 `Yf.Api` 不引用 Dapper。
 
 准确传递依赖版本见各项目 `packages.lock.json`。前端依赖与许可沿用 `web/package-lock.json` 及发布的第三方许可文件。新功能、安全修复、契约与数据库版本以本目录的 .NET 后端为维护入口，不要求同步 Rust。

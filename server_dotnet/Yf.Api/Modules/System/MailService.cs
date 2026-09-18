@@ -126,13 +126,18 @@ public sealed class MailService
     {
         var output = new Dictionary<string, object?>();
         if (detail is null) return output;
-        using var parsed = JsonDocument.Parse(detail);
-        if (parsed.RootElement.ValueKind != JsonValueKind.Object) return output;
-        foreach (var property in parsed.RootElement.EnumerateObject())
+        JsonDocument parsed;
+        try { parsed = JsonDocument.Parse(detail); }
+        catch (JsonException) { return output; }
+        using (parsed)
         {
-            if (new[] { "eventType", "status", "reason", "employeeNo", "realName", "retryCount", "userId" }.Contains(property.Name)) output[property.Name] = property.Value.Clone();
-            if (property.Value.ValueKind == JsonValueKind.String && property.Name == "recipient") output[property.Name] = MaskEmail(property.Value.GetString()!);
-            if (property.Value.ValueKind == JsonValueKind.String && property.Name == "error") output[property.Name] = SanitizeError(property.Value.GetString()!);
+            if (parsed.RootElement.ValueKind != JsonValueKind.Object) return output;
+            foreach (var property in parsed.RootElement.EnumerateObject())
+            {
+                if (new[] { "eventType", "status", "reason", "employeeNo", "realName", "retryCount", "userId" }.Contains(property.Name)) output[property.Name] = property.Value.Clone();
+                if (property.Value.ValueKind == JsonValueKind.String && property.Name == "recipient") output[property.Name] = MaskEmail(property.Value.GetString()!);
+                if (property.Value.ValueKind == JsonValueKind.String && property.Name == "error") output[property.Name] = SanitizeError(property.Value.GetString()!);
+            }
         }
         return output;
     }

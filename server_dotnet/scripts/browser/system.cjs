@@ -36,6 +36,7 @@ const pathOf=r=>new URL(r.url()).pathname;
   await p.getByLabel('允许上传类型',{exact:true}).waitFor();assert.equal(await p.getByLabel('允许上传类型',{exact:true}).inputValue(),original['upload.allowed_exts']);p.expectedServerErrors.clear();
  });
  const originalNotificationPolicy=(await mailStatus()).notificationPolicy;
+ await p.getByRole('tab',{name:'SMTP 配置',exact:true}).click();
  const setSwitch=async(label,target)=>{const control=p.getByRole('switch',{name:label,exact:true});const current=(await control.getAttribute('aria-checked'))==='true';if(current!==target)await control.click();};
  await record('邮件提醒对象和消息规则独立保存并恢复',async()=>{
   await p.getByText('邮件提醒规则',{exact:true}).waitFor();

@@ -205,11 +205,28 @@ internal sealed class ProjectRealtimePublisher(
             SingleWriter = false,
             AllowSynchronousContinuations = false,
         });
+    private readonly ConcurrentDictionary<PendingProjectChange, QueuedChange> queued = new();
 
     public Task PublishAsync(ulong projectId, string kind, CancellationToken ct = default)
     {
         if (!RealtimeChangeKinds.IsValid(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
-        queue.Writer.TryWrite(new PendingProjectChange(projectId, kind));
+        var change = new PendingProjectChange(projectId, kind);
+        var state = queued.GetOrAdd(change, static _ => new QueuedChange());
+        var shouldQueue = false;
+        lock (state)
+        {
+            if (!state.Enqueued) { state.Enqueued = true; shouldQueue = true; }
+            else state.Dirty = true;
+        }
+        if (shouldQueue && !queue.Writer.TryWrite(change))
+        {
+            lock (state)
+            {
+                state.Enqueued = false;
+                state.Dirty = false;
+            }
+            queued.TryRemove(change, out _);
+        }
         return Task.CompletedTask;
     }
 
@@ -224,11 +241,47 @@ internal sealed class ProjectRealtimePublisher(
                 {
                     logger.LogWarning(error, "Realtime dispatch failed for project {ProjectId}", change.ProjectId);
                 }
+                finally { RequeueOrRelease(change, stoppingToken.IsCancellationRequested); }
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
         }
+    }
+
+    private void RequeueOrRelease(PendingProjectChange change, bool stopping)
+    {
+        if (!queued.TryGetValue(change, out var state)) return;
+        var requeue = false;
+        lock (state)
+        {
+            if (!stopping && state.Dirty)
+            {
+                state.Dirty = false;
+                requeue = true;
+            }
+            else
+            {
+                state.Enqueued = false;
+                state.Dirty = false;
+                queued.TryRemove(change, out _);
+            }
+        }
+        if (requeue && !queue.Writer.TryWrite(change))
+        {
+            lock (state)
+            {
+                state.Enqueued = false;
+                state.Dirty = false;
+            }
+            queued.TryRemove(change, out _);
+        }
+    }
+
+    private sealed class QueuedChange
+    {
+        internal bool Enqueued;
+        internal bool Dirty;
     }
 
     private async Task DispatchAsync(PendingProjectChange change, CancellationToken stoppingToken)

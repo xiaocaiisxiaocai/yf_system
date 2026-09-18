@@ -512,11 +512,47 @@ html, body, #root {
 .dashboard-message-extra { display: flex; align-items: center; gap: 12px; color: var(--app-text-muted); white-space: nowrap; }
 .dashboard-message-extra > svg { color: #98a2b3; }
 .system-mail-card { margin-bottom: 16px; }
+.system-page { min-height: 0; }
+.system-config-tabs {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 144px);
+  min-width: 0;
+  min-height: 0;
+}
+.system-config-tabs > .arco-tabs-header { flex: 0 0 auto; }
+.system-config-tabs > .arco-tabs-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding-top: 16px;
+  overflow: hidden;
+}
+.system-config-tabs > .arco-tabs-content > .arco-tabs-content-inner,
+.system-config-tabs .arco-tabs-content-item-active,
+.system-config-tabs .arco-tabs-pane { height: 100%; min-height: 0; }
+.system-config-tabs .system-config-card,
+.system-config-tabs .system-mail-card {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
+  margin-bottom: 0;
+  overflow: hidden;
+}
+.system-config-tabs .system-config-card > .arco-card-body,
+.system-config-tabs .system-mail-card > .arco-card-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.system-mail-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .system-notification-settings {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 16px;
+  gap: 12px;
+  padding: 14px;
   border: 1px solid var(--app-border);
   border-radius: 8px;
   background: var(--color-fill-1);
@@ -525,7 +561,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
 }
 .system-notification-heading > div:first-child,
 .system-notification-row > div {
@@ -537,15 +573,22 @@ html, body, #root {
 .system-notification-grid {
   display: grid;
   grid-template-columns: minmax(230px, 1fr) minmax(300px, 1.4fr);
-  gap: 16px;
+  gap: 12px;
 }
 .system-notification-panel {
   min-width: 0;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border: 1px solid var(--app-border);
   border-radius: 6px;
   background: #fff;
 }
+.system-notification-panel--events {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+  align-content: start;
+}
+.system-notification-panel--events .system-notification-panel-title { grid-column: 1 / -1; }
 .system-notification-panel-title {
   margin-bottom: 4px;
   color: var(--app-text);
@@ -557,7 +600,7 @@ html, body, #root {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 0;
+  padding: 8px 0;
   border-bottom: 1px solid var(--app-border);
 }
 .system-notification-row:last-child { border-bottom: 0; }
@@ -856,8 +899,11 @@ html, body, #root {
   /* 窄屏保留完整表格横向滚动，避免固定操作列遮住名称和数据列。 */
   .preview-watermark { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); grid-auto-rows: minmax(64px, 1fr); }
   .preview-watermark > span { font-size: 11px; }
+  .system-config-tabs { height: calc(100dvh - 120px); }
+  .system-config-tabs > .arco-tabs-content { padding-top: 12px; }
   .system-notification-heading { align-items: flex-start; flex-direction: column; }
   .system-notification-grid { grid-template-columns: 1fr; }
+  .system-notification-panel--events { grid-template-columns: 1fr; }
   .layout-content .arco-table-col-fixed-right,
   .arco-drawer .arco-table-col-fixed-right { position: static; }
   .layout-content .arco-table-col-fixed-right-first::after,
@@ -1096,6 +1142,14 @@ html, body, #root {
   .project-activity-controls > .arco-btn { flex: 0 0 auto; }
   .project-activity-time { width: 100%; margin-left: 0; }
   .project-activity-timeline .arco-timeline-item { padding-bottom: 8px; }
+}
+
+@media (max-height: 700px) {
+  .system-config-tabs { height: calc(100dvh - 120px); }
+  .system-mail-body { gap: 10px; }
+  .system-notification-settings { gap: 10px; padding: 12px; }
+  .system-notification-grid { gap: 10px; }
+  .system-notification-row { padding: 6px 0; }
 }
 
 .smtp-security-popup .arco-select-option { height: auto; line-height: 20px; padding-top: 8px; padding-bottom: 8px; white-space: normal; }

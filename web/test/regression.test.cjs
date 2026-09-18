@@ -1125,6 +1125,7 @@ function loadTs(relativePath, mocks, globals = {}) {
         return loadTs('src/utils/password.ts', {})
       }
       if (name.endsWith('/textRules')) return loadTs('src/utils/textRules.ts', {})
+      if (name.endsWith('/listValues')) return loadTs('src/utils/listValues.ts', {})
       if (name === './auditLogDetails') return loadTs('src/pages/system/auditLogDetails.ts', {})
       return require(name)
     },
@@ -1866,6 +1867,13 @@ test('system config exposes mail configuration, queue outcomes and missing mailb
   let renderer
   await act(async () => { renderer = create(React.createElement(Page)) })
   await act(async () => { await Promise.resolve(); await Promise.resolve() })
+  const settingsTabs = renderer.root.findByType('Tabs')
+  const settingsPanes = React.Children.toArray(settingsTabs.props.children)
+  assert.equal(settingsTabs.props.defaultActiveTab, 'system')
+  assert.deepEqual(settingsPanes.map((pane) => pane.props.title), ['系统参数', 'SMTP 配置'])
+  assert.ok(findElement(settingsPanes[0], (node) => node.props.title === '系统参数'))
+  assert.equal(findElement(settingsPanes[0], (node) => node.props.title === '邮件发送'), undefined)
+  assert.ok(findElement(settingsPanes[1], (node) => node.props.title === '邮件发送'))
   assert.ok(calls.includes('/admin/system/mail-status'))
   assert.ok(!calls.includes('/admin/system/storage'))
   assert.equal(renderer.root.findAll(n => n.props.title === '存储状态').length, 0)
@@ -4340,6 +4348,47 @@ test('batch download uses a synchronous in-flight latch against repeated clicks'
   })
   assert.equal(posts, 1)
   await act(async () => { release({ data: new Blob(['zip']) }); await first; await second })
+  await act(async () => renderer.unmount())
+})
+
+test('authenticated file downloads attach the anchor before clicking and defer blob cleanup', async () => {
+  const scheduled = []
+  const events = []
+  const row = { id: 7, originalName: '图纸.pdf', ext: 'pdf', sizeBytes: 1, direction: 'C2S', createdAt: '', canDelete: false }
+  const Page = loadTs('src/components/FileTable.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../api/client': {
+      get: async (url) => url.endsWith('/download')
+        ? { data: new Blob(['pdf']) }
+        : { data: { list: [row], total: 1, page: 1, pageSize: 10 } },
+    },
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['file:download']),
+    '../api/types': { fmtSize: String, fmtTime: String },
+    './ChunkUploader': component('Uploader'), './PdfPreview': component('PDF'),
+  }, {
+    URL: {
+      createObjectURL: () => 'blob:test',
+      revokeObjectURL: (value) => events.push(['revoke', value]),
+    },
+    document: {
+      body: { appendChild: () => events.push(['append']) },
+      createElement: () => ({
+        click: () => events.push(['click']),
+        remove: () => events.push(['remove']),
+      }),
+    },
+    setTimeout: (callback) => { scheduled.push(callback); return scheduled.length },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' })) })
+  const actions = renderer.root.findByType('Table').props.columns.at(-1).render(null, row)
+  const download = findElement(actions, (node) => node.props['aria-label'] === '下载文件')
+  await act(async () => { await download.props.onClick() })
+  assert.deepEqual(events, [['append'], ['click'], ['remove']], 'download must click only after the anchor is attached')
+  assert.equal(scheduled.length, 1, 'object URL cleanup must be deferred until the click is dispatched')
+  scheduled.shift()()
+  assert.deepEqual(events.at(-1), ['revoke', 'blob:test'])
   await act(async () => renderer.unmount())
 })
 

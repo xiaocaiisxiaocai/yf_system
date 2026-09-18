@@ -219,7 +219,7 @@ test('form limits match the backend character contracts', async () => {
 
 test('required business names and emails validate scalar lengths before submitting', async () => {
   const pages = [
-    ['project/ProjectList.tsx', [['name',128]]],
+    ['project/ProjectList.tsx', [['name',128],['machineModel',128]]],
     ['rbac/RoleList.tsx', [['name',64]]],
     ['supplier/SupplierList.tsx', [['name',64],['realName',32],['email',128]]],
     ['org/UserList.tsx', [['realName',32],['email',128]]],
@@ -235,6 +235,7 @@ test('required business names and emails validate scalar lengths before submitti
       [prefix+'api/types']:{PROJECT_STATUS:{},fmtTime:String},
       [prefix+'store/auth']:authModule(['supplier:account']),
       [prefix+'utils/password']:{passwordRule:{}},
+      [prefix+'utils/listValues']:{ normalizeList: (values = []) => values.map(String).map(value => value.trim()).filter(Boolean) },
     },{window:{matchMedia:()=>({matches:false,addEventListener(){},removeEventListener(){}})}}).default
     let renderer
     await act(async()=>{renderer=create(React.createElement(Page))})
@@ -250,6 +251,11 @@ test('required business names and emails validate scalar lengths before submitti
     }
     await act(async()=>renderer.unmount())
   }
+})
+
+test('project list normalizes work-order and subproject values like the backend', () => {
+  const { normalizeList } = loadTs('src/utils/listValues.ts')
+  assert.deepEqual(Array.from(normalizeList([' WO-1 ', 'wo-1', 'WO-2', '', '  ', 'Wo-2'])), ['WO-1', 'WO-2'])
 })
 
 test('internal user form requires an organization', async () => {

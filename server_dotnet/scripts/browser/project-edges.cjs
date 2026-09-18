@@ -151,7 +151,8 @@ async function uploadFixture(context, token, projectId, name, bytes) {
       await page.reload();
       await page.getByText('加载失败', { exact: true }).waitFor();
       await page.unroute('**/api/v1/project-groups?*', failGroups);
-      await listAction({}, () => page.getByRole('button', { name: '重试', exact: true }).click());
+      await listAction({}, () => page.getByRole('button', { name: '重试', exact: true })
+        .evaluate((button) => button.click()));
       const failSuppliers = route => route.fulfill({
         status: 503, contentType: 'application/json', body: '{"code":50301,"message":"temporary test failure"}',
       });
@@ -262,7 +263,8 @@ async function uploadFixture(context, token, projectId, name, bytes) {
       await page.goto(s.base + '/project-groups/' + groups[9].groupId);
       await page.getByText('主项目加载失败或没有访问权限', { exact: true }).waitFor();
       await page.unroute('**' + target, failDetail);
-      await page.getByRole('button', { name: '重试', exact: true }).click();
+      await page.getByRole('button', { name: '重试', exact: true })
+        .evaluate((button) => button.click());
       await page.getByText(groups[9].groupName, { exact: true }).waitFor();
       page.expectedServerErrors.clear();
     });

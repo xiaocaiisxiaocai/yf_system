@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card, Input, InputNumber, Message, Select, Space, Spin, Switch, Table, Tag, Typography } from '@arco-design/web-react'
+import { Button, Card, Input, InputNumber, Message, Select, Space, Spin, Switch, Table, Tag, Tabs, Typography } from '@arco-design/web-react'
 import { useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { fmtTime } from '../../api/types'
@@ -403,19 +403,7 @@ export default function SysConfig() {
     return <Input aria-label={label} value={value} disabled={saving} onChange={(next) => setValue(cfg.key, next)} />
   }
 
-  return (
-    <div className="system-page">
-      <div className="page-heading"><div><h1>系统参数</h1></div></div>
-      {loadError ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
-          <Typography.Text type="error">加载失败</Typography.Text>
-          <Button size="small" onClick={load}>重试</Button>
-        </div>
-      ) : loading ? (
-        <Spin loading style={{ width: '100%', minHeight: 120 }} />
-      ) : (
-        <>
-          {mail && (
+  const smtpPanel = mail ? (
             <Card
               className="page-card system-mail-card"
               title="邮件发送"
@@ -426,7 +414,7 @@ export default function SysConfig() {
                 </Space>
               }
             >
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div className="system-mail-body">
                 <Typography.Text type="secondary">配置系统通知的发件邮箱，保存后用于后续邮件发送。邮箱服务商要求授权码时，请填写授权码。</Typography.Text>
                 {smtp.passwordNeedsUpdate && <Typography.Text type="warning">已保存的授权码无法读取，请重新填写并保存。</Typography.Text>}
                 <div className="system-smtp-grid">
@@ -475,7 +463,7 @@ export default function SysConfig() {
                         <Switch aria-label="外部企业邮件通知" checked={notificationDraft.supplierEnabled} disabled={notificationSaving} onChange={(checked) => updateNotificationDraft((current) => ({ ...current, supplierEnabled: checked }))} />
                       </div>
                     </div>
-                    <div className="system-notification-panel">
+                    <div className="system-notification-panel system-notification-panel--events">
                       <div className="system-notification-panel-title">提醒消息</div>
                       {NOTIFICATION_EVENT_ITEMS.map((item) => (
                         <div className="system-notification-row" key={item.key}>
@@ -530,7 +518,12 @@ export default function SysConfig() {
                 )}
               </div>
             </Card>
-          )}
+  ) : (
+    <Card className="page-card system-mail-card" title="SMTP 配置与邮件提醒">
+      <Typography.Text type="secondary">邮件配置暂不可用，请刷新页面。</Typography.Text>
+    </Card>
+  )
+  const systemPanel = (
           <Card
             className="page-card system-config-card"
             title="系统参数"
@@ -585,6 +578,28 @@ export default function SysConfig() {
               ]}
             />
           </Card>
+  )
+
+  return (
+    <div className="system-page">
+      <div className="page-heading"><div><h1>系统参数</h1></div></div>
+      {loadError ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
+          <Typography.Text type="error">加载失败</Typography.Text>
+          <Button size="small" onClick={load}>重试</Button>
+        </div>
+      ) : loading ? (
+        <Spin loading style={{ width: '100%', minHeight: 120 }} />
+      ) : (
+        <>
+        <Tabs className="system-config-tabs" defaultActiveTab="system">
+          <Tabs.TabPane key="system" title="系统参数">
+            {systemPanel}
+          </Tabs.TabPane>
+          <Tabs.TabPane key="smtp" title="SMTP 配置">
+            {smtpPanel}
+          </Tabs.TabPane>
+        </Tabs>
         </>
       )}
     </div>

@@ -62,6 +62,9 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
     const smtpCancel = () => page.getByRole('button', { name: '取消修改', exact: true }).first();
     const configReset = () => page.getByRole('button', { name: '重置', exact: true });
     const configSave = () => page.getByRole('button', { name: '保存', exact: true });
+    const selectTab = async (name) => {
+      await page.getByRole('tab', { name, exact: true }).click();
+    };
 
     const selectSecurity = async (value) => {
       const labels = {
@@ -130,6 +133,7 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
       ? originalAllowedItems.filter(item => item !== 'smtpdraft')
       : [...originalAllowedItems, 'smtpdraft']).sort().join(',');
     await navigate(page, '/system/config');
+    await selectTab('SMTP 配置');
     await fields.host().waitFor();
 
     await record('SMTP 六字段与三种连接加密均可通过鼠标编辑且取消不写入', async () => {
@@ -147,14 +151,22 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
 
     await record('普通参数草稿与 SMTP 草稿分别取消重置且互不清除', async () => {
       const allowed = page.getByLabel('允许上传类型', { exact: true });
+      await selectTab('系统参数');
       await allowed.fill(configDraft);
+      await selectTab('SMTP 配置');
       await fields.host().fill(FIRST.host);
       await smtpCancel().click();
+      await selectTab('系统参数');
       assert.equal(await allowed.inputValue(), configDraft, 'canceling SMTP must retain ordinary config draft');
+      await selectTab('SMTP 配置');
       await fields.host().fill(FIRST.host);
+      await selectTab('系统参数');
       await configReset().click();
+      await selectTab('SMTP 配置');
       assert.equal(await fields.host().inputValue(), FIRST.host, 'resetting ordinary configs must retain SMTP draft');
+      await selectTab('系统参数');
       assert.equal(await allowed.inputValue(), originalAllowed);
+      await selectTab('SMTP 配置');
       await smtpCancel().click();
       assert.deepEqual(await configMap(), originalConfigs);
       assert.deepEqual(await readSettings(), originalSettings);
@@ -162,7 +174,9 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
 
     await record('普通参数真实保存仅提交一次，保存锁与刷新失败提示不清除 SMTP 草稿', async () => {
       const allowed = page.getByLabel('允许上传类型', { exact: true });
+      await selectTab('系统参数');
       await allowed.fill(configDraft);
+      await selectTab('SMTP 配置');
       await fields.host().fill(FIRST.host);
       let release = () => {};
       let reached = () => {};
@@ -193,6 +207,7 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
       await page.route('**' + CONFIGS_PATH, handler);
       await withExpectedServerErrors([CONFIGS_PATH], async () => {
         try {
+          await selectTab('系统参数');
           const saved = page.waitForResponse(response => pathOf(response) === CONFIGS_PATH
             && response.request().method() === 'PUT');
           const failedRefresh = page.waitForResponse(response => pathOf(response) === CONFIGS_PATH
@@ -214,17 +229,21 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
         }
       });
       await page.getByText('参数已保存，但最新状态刷新失败，请稍后刷新页面', { exact: true }).last().waitFor();
+      await selectTab('系统参数');
       assert.equal(await allowed.inputValue(), configDraft);
       assert.equal(await configSave().isDisabled(), true, 'successful write clears the ordinary dirty state');
+      await selectTab('SMTP 配置');
       assert.equal(await fields.host().inputValue(), FIRST.host, 'failed refresh must retain SMTP draft');
       assert.equal((await configMap())['upload.allowed_exts'], configDraft);
       assert.deepEqual(await readSettings(), originalSettings);
 
+      await selectTab('系统参数');
       await allowed.fill(originalAllowed);
       await action(page, '/admin/system/configs', 'PUT', () => configSave().click());
       await page.waitForFunction(() => [...document.querySelectorAll('button')]
         .some(button => button.textContent.trim() === '保存' && button.disabled));
       assert.equal(await configSave().isDisabled(), true);
+      await selectTab('SMTP 配置');
       assert.equal(await fields.host().inputValue(), FIRST.host, 'successful ordinary refresh must retain SMTP draft');
       assert.deepEqual(await configMap(), originalConfigs);
       await smtpCancel().click();
@@ -260,7 +279,9 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
 
     await record('SMTP 真实 UI 保存时控件冻结且状态刷新失败仍明确成功', async () => {
       const allowed = page.getByLabel('允许上传类型', { exact: true });
+      await selectTab('系统参数');
       await allowed.fill(configDraft);
+      await selectTab('SMTP 配置');
       await fillSmtp({ ...FIRST, password: AUTH_CODE_A });
       let release = () => {};
       let reached = () => {};
@@ -311,15 +332,18 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
       assert.equal(status.host, FIRST.host);
       assert.equal(status.port, FIRST.port);
       assert.deepEqual(status.queue, originalStatus.queue, 'saving SMTP must not enqueue or send mail');
+      await selectTab('系统参数');
       assert.equal(await allowed.inputValue(), configDraft, 'SMTP save must retain ordinary config draft');
       assert.deepEqual(await configMap(), originalConfigs);
       await configReset().click();
+      await selectTab('SMTP 配置');
     });
 
     await record('SMTP 刷新持久化且授权码不回显，留空可保留原授权码', async () => {
       const loaded = page.waitForResponse(response => pathOf(response) === MAIL_SETTINGS_PATH && response.status() === 200);
       await page.reload();
       await loaded;
+      await selectTab('SMTP 配置');
       await fields.host().waitFor();
       assert.equal(await fields.host().inputValue(), FIRST.host);
       assert.equal(await fields.port().inputValue(), String(FIRST.port));
@@ -403,6 +427,91 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
       assert.equal(finalStatus.host, SECOND_HOST);
       assert.equal(finalStatus.port, 465);
       assert.deepEqual(finalStatus.queue, originalStatus.queue, 'worker-disabled flow must not send mail');
+    });
+
+    await record('SMTP 页面内容保持在视口内，超长内容只在卡片内部滚动', async () => {
+      const metrics = await page.evaluate(() => {
+        const tabs = document.querySelector('.system-config-tabs');
+        const card = document.querySelector('.system-mail-card');
+        const body = card?.querySelector('.arco-card-body');
+        const tabsRect = tabs?.getBoundingClientRect();
+        const cardRect = card?.getBoundingClientRect();
+        const root = document.documentElement;
+        const describe = element => {
+          if (!element) return null;
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return {
+            rect: { top: rect.top, bottom: rect.bottom, height: rect.height },
+            offsetHeight: element.offsetHeight,
+            clientHeight: element.clientHeight,
+            scrollHeight: element.scrollHeight,
+            boxSizing: style.boxSizing,
+            height: style.height,
+            paddingTop: style.paddingTop,
+            paddingBottom: style.paddingBottom,
+            overflow: style.overflow,
+          };
+        };
+        return {
+          viewportHeight: window.innerHeight,
+          documentScrollHeight: root.scrollHeight,
+          tabsBottom: tabsRect?.bottom ?? Number.POSITIVE_INFINITY,
+          cardBottom: cardRect?.bottom ?? Number.POSITIVE_INFINITY,
+          bodyClientHeight: body?.clientHeight ?? 0,
+          bodyScrollHeight: body?.scrollHeight ?? 0,
+          elements: {
+            tabs: describe(tabs),
+            content: describe(tabs?.querySelector(':scope > .arco-tabs-content')),
+            inner: describe(tabs?.querySelector(':scope > .arco-tabs-content > .arco-tabs-content-inner')),
+            pane: describe(tabs?.querySelector('.arco-tabs-content-item-active')),
+            card: describe(card),
+            body: describe(body),
+          },
+        };
+      });
+      const metricSummary = JSON.stringify(metrics);
+      assert(metrics.tabsBottom <= metrics.viewportHeight + 1, `SMTP tabs must stay inside the viewport: ${metricSummary}`);
+      assert(metrics.cardBottom <= metrics.viewportHeight + 1, `SMTP card must stay inside the viewport: ${metricSummary}`);
+      assert(metrics.documentScrollHeight <= metrics.viewportHeight + 1, `SMTP must not create outer page overflow: ${metricSummary}`);
+      assert(metrics.bodyScrollHeight >= metrics.bodyClientHeight, 'SMTP card body must own any overflow');
+    });
+
+    await record('SMTP 窄屏布局不撑高页面且提醒消息自动改为单列', async () => {
+      const previousViewport = page.viewportSize();
+      await page.setViewportSize({ width: 390, height: 600 });
+      try {
+        await selectTab('SMTP 配置');
+        await fields.host().waitFor();
+        const metrics = await page.evaluate(() => {
+          const tabs = document.querySelector('.system-config-tabs');
+          const card = document.querySelector('.system-mail-card');
+          const eventPanel = document.querySelector('.system-notification-panel--events');
+          const body = card?.querySelector('.arco-card-body');
+          const tabsRect = tabs?.getBoundingClientRect();
+          const cardRect = card?.getBoundingClientRect();
+          const root = document.documentElement;
+          return {
+            viewportHeight: window.innerHeight,
+            documentScrollHeight: root.scrollHeight,
+            tabsBottom: tabsRect?.bottom ?? Number.POSITIVE_INFINITY,
+            cardBottom: cardRect?.bottom ?? Number.POSITIVE_INFINITY,
+            bodyClientHeight: body?.clientHeight ?? 0,
+            bodyScrollHeight: body?.scrollHeight ?? 0,
+            eventColumns: eventPanel ? getComputedStyle(eventPanel).gridTemplateColumns : '',
+          };
+        });
+        assert(metrics.tabsBottom <= metrics.viewportHeight + 1, `窄屏 SMTP tabs 必须在视口内: ${JSON.stringify(metrics)}`);
+        assert(metrics.cardBottom <= metrics.viewportHeight + 1, `窄屏 SMTP 卡片必须在视口内: ${JSON.stringify(metrics)}`);
+        assert(metrics.documentScrollHeight <= metrics.viewportHeight + 1, `窄屏 SMTP 不得产生外层滚动: ${JSON.stringify(metrics)}`);
+        assert(metrics.bodyScrollHeight >= metrics.bodyClientHeight, '窄屏 SMTP 卡片 body 必须承载溢出');
+        assert.equal(metrics.eventColumns.split(' ').length, 1, '窄屏提醒消息必须为单列');
+      } finally {
+        await page.setViewportSize(previousViewport);
+        await page.reload();
+        await selectTab('SMTP 配置');
+        await fields.host().waitFor();
+      }
     });
 
     await page.screenshot({ path: OUT + '/smtp-settings-final.png', animations: 'disabled', fullPage: true });

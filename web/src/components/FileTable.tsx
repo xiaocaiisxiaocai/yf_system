@@ -61,15 +61,25 @@ function WatermarkedPreview({ employeeNo, realName, children }: { employeeNo?: s
   </div>
 }
 
+/**
+ * 通过认证接口下载 blob。锚点必须先挂到 document.body，且对象 URL 要等
+ * 浏览器开始处理 click 后再释放，否则部分浏览器会取消下载或保存空文件。
+ */
+function triggerBlobDownload(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = name
+  document.body?.appendChild(anchor)
+  anchor.click()
+  anchor.remove?.()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
 /** 认证下载：拉 blob 后触发浏览器保存（直接拼 URL 会丢 Authorization 头） */
 async function downloadAuthed(id: number, name: string) {
   const r = await http.get(`/files/${id}/download`, { responseType: 'blob' })
-  const url = URL.createObjectURL(r.data as Blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  a.click()
-  URL.revokeObjectURL(url)
+  triggerBlobDownload(r.data as Blob, name)
 }
 
 export default function FileTable({ projectId, projectStatus, targetId, onOpenCopyHistory, onProjectChanged }: Props) {
@@ -166,12 +176,7 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
     setBatchDownloading(true)
     try {
       const r = await http.post('/files/batch-download', { ids: selected }, { responseType: 'blob' })
-      const url = URL.createObjectURL(r.data as Blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `项目文件打包_${Date.now()}.zip`
-      a.click()
-      URL.revokeObjectURL(url)
+      triggerBlobDownload(r.data as Blob, `项目文件打包_${Date.now()}.zip`)
       setSelected([])
     } finally {
       batchDownloadInFlight.current = false

@@ -11,6 +11,7 @@ import {
   type PageResp, type ProjectDictionaryOption, type ProjectGroup, type ProjectOwnerOption, PROJECT_STATUS,
 } from '../../api/types'
 import { textLengthRule } from '../../utils/textRules'
+import { normalizeList } from '../../utils/listValues'
 import { useCollaboration } from '../../store/collaboration'
 
 interface SupplierOpt { id: number; name: string }
@@ -33,15 +34,6 @@ const SUBPROJECT_LIMIT = 50
 
 function optionFilter(input: string, option?: { props?: { children?: unknown } }) {
   return String(option?.props?.children ?? '').toLocaleLowerCase().includes(input.toLocaleLowerCase())
-}
-
-function normalizeList(values?: string[]) {
-  const unique = new Set<string>()
-  for (const value of values ?? []) {
-    const normalized = String(value).trim()
-    if (normalized) unique.add(normalized)
-  }
-  return [...unique]
 }
 
 function listRule(label: string, limit: number, values: unknown, callback: (error?: string) => void) {
@@ -307,7 +299,7 @@ export default function ProjectList() {
           <Form.Item className="form-grid-full" label="主项目名称" field="name" rules={[{ required: true, message: '请输入主项目名称' }, textLengthRule('主项目名称', 128)]}><Input placeholder="主项目名称" /></Form.Item>
           {!editing && <Form.Item className="form-grid-full" label="子项目" field="subprojectNames" rules={[{ required: true, message: '请至少创建一个子项目' }, { validator: (value, callback) => listRule('子项目', SUBPROJECT_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入子项目名称后按回车，可一次创建多个" /></Form.Item>}
           <Form.Item className="form-grid-full" label="工令号" field="workOrderNos" rules={[{ required: true, message: '请至少填写一个工令号' }, { validator: (value, callback) => listRule('工令号', WORK_ORDER_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入工令号后按回车，可填写多个" /></Form.Item>
-          <Form.Item label="机型" field="machineModel" rules={[{ required: true, message: '请填写机型' }]}><Input maxLength={128} showWordLimit placeholder="请输入机型" /></Form.Item>
+          <Form.Item label="机型" field="machineModel" rules={[{ required: true, message: '请填写机型' }, textLengthRule('机型', 128)]}><Input maxLength={128} showWordLimit placeholder="请输入机型" /></Form.Item>
           <Form.Item label="Robot 厂商" field="robotVendorId" rules={[{ required: true, message: '请选择 Robot 厂商' }]}><Select allowClear showSearch placeholder="选择 Robot 厂商" loading={metadataOptionsLoading} disabled={metadataOptionsLoading || metadataOptionsError} filterOption={optionFilter} onChange={(value) => changeRobotVendor(value as number | undefined)}>{vendorOptions.map((item) => <Select.Option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}{item.enabled ? '' : '（已停用）'}</Select.Option>)}</Select></Form.Item>
           <Form.Item label="Robot 型号" field="robotModelId" rules={[{ required: true, message: '请选择 Robot 型号' }]}><Select allowClear showSearch placeholder={selectedRobotVendorId ? '选择 Robot 型号' : '请先选择 Robot 厂商'} loading={robotModelsLoading} disabled={!selectedRobotVendorId || robotModelsLoading || robotModelsError} filterOption={optionFilter}>{modelOptions.map((item) => <Select.Option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}{item.enabled ? '' : '（已停用）'}</Select.Option>)}</Select></Form.Item>
           <Form.Item label="负责人" field="responsibleUserId" rules={[{ required: true, message: '请选择负责人' }]}><Select allowClear showSearch placeholder="选择负责人" loading={metadataOptionsLoading} disabled={metadataOptionsLoading || metadataOptionsError} filterOption={optionFilter} onChange={(value) => { const ownerId = nullableNumber(value); setSelectedResponsibleUserId(ownerId); setSectionName(ownerOptions.find((item) => item.id === ownerId)?.sectionName ?? null) }}>{ownerOptions.map((item) => <Select.Option key={item.id} value={item.id}>{item.realName}（{item.employeeNo}）</Select.Option>)}</Select></Form.Item>
