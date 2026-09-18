@@ -40,6 +40,8 @@ internal static class OemPolicyEndpoints
             s.ReplaceNodesAsync(OemActorAccessor.Get(c), id, r, ct));
         oem.MapPut("/flow-templates/{id:long}/scopes", (ulong id, FlowTemplateScopesUpdate r, HttpContext c, OemFlowTemplateService s, CancellationToken ct) =>
             s.ReplaceScopesAsync(OemActorAccessor.Get(c), id, r, ct));
+        oem.MapGet("/internal-user-options", (HttpContext c, OemFlowTemplateService s, CancellationToken ct) =>
+            s.InternalUserOptionsAsync(OemActorAccessor.Get(c), c.Request.Query["keyword"], ct));
         oem.MapGet("/approver-options", (HttpContext c, OemFlowTemplateService s, CancellationToken ct) =>
             s.ApproverOptionsAsync(OemActorAccessor.Get(c), c.Request.Query["keyword"], ct));
     }

@@ -195,7 +195,9 @@ public sealed class OemNotificationHandler(AppOptions options) : IOemEventHandle
             $"附件：{facts.FileCount} 个，共 {HumanSize(facts.TotalBytes)}",
         };
         if (!string.IsNullOrWhiteSpace(reason)) lines.Add($"说明：{reason}");
-        lines.AddRange([string.Empty, $"请登录 OEM 文件传递平台查看：{options.WebBaseUrl.TrimEnd('/')}/oem/transfers/{transfer.Id}", string.Empty,
+        // Vendors use their own portal; internal staff use the OEM section of the company site.
+        var area = recipient.Realm == OemRealms.Oem ? "oem-portal" : "oem";
+        lines.AddRange([string.Empty, $"请登录 OEM 文件传递平台查看：{options.WebBaseUrl.TrimEnd('/')}/{area}/transfers/{transfer.Id}", string.Empty,
             "此邮件由系统自动发送，请勿直接回复。"]);
         var body = string.Join("\n", lines);
         var fullSubject = Truncate("[OEM 文件传递] " + subject, 255);

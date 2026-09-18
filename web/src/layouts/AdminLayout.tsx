@@ -20,6 +20,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../store/auth'
 import http, { withAuthLock } from '../api/client'
 import CollaborationNotifications from '../components/CollaborationNotifications'
+import { OemEntryButton } from '../oem/layouts/OemLayouts'
 
 const { Sider, Header, Content } = Layout
 
@@ -126,6 +127,7 @@ export default function AdminLayout() {
           <span>供应商协作平台</span>
         </div>
         <div className="layout-header-account">
+          <OemEntryButton />
           {canUseCollaboration && <CollaborationNotifications key={`${generation}:${user?.id}`} />}
           <Dropdown
             trigger="click"

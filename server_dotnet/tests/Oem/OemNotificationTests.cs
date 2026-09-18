@@ -48,7 +48,8 @@ public sealed class OemNotificationTests
         Assert.Equal(["second@vendor.invalid", "vendor_out@vendor.invalid"], released.Select(mail => mail.RecipientEmail).Order());
         Assert.Single(mails, mail => mail.EventType == OemMailEvents.SenderReleased && mail.RecipientAccountId == world.SenderId);
         Assert.All(mails, mail => Assert.DoesNotContain("secret-part-name", mail.Body));
-        Assert.All(mails, mail => Assert.Contains($"/oem/transfers/{id}", mail.Body));
+        Assert.All(released, mail => Assert.Contains($"/oem-portal/transfers/{id}", mail.Body));
+        Assert.Contains($"/oem/transfers/{id}", mails.Single(mail => mail.EventType == OemMailEvents.SenderReleased).Body);
     }
 
     [Fact(Timeout = 240_000)]

@@ -178,6 +178,36 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
         return eligible.Take(100).Select(id => names[id]);
     }
 
+    /// <summary>
+    /// Active internal staff for picking organisation leaders or previewing routing, flagged
+    /// with whether they may currently approve OEM transfers.
+    /// </summary>
+    public async Task<object> InternalUserOptionsAsync(OemActor actor, string? keyword, CancellationToken ct)
+    {
+        await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
+        var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
+        if (!await OemAuthorizer.HasAsync(uow, current, OemPermissions.DepartmentLeaderManage, ct)
+            && !await OemAuthorizer.HasAsync(uow, current, OemPermissions.FlowTemplateManage, ct))
+            throw ApiException.Forbidden();
+        var query = uow.Db.Users.AsNoTracking().Where(user => user.Status == OemStatus.Active && user.UserType == "INTERNAL");
+        if (!string.IsNullOrWhiteSpace(keyword))
+        {
+            var pattern = "%" + keyword.Trim() + "%";
+            query = query.Where(user => EF.Functions.Like(user.RealName, pattern) || EF.Functions.Like(user.EmployeeNo, pattern));
+        }
+        var users = await query.OrderBy(user => user.EmployeeNo).Take(50)
+            .Select(user => new { user.Id, user.EmployeeNo, user.RealName, user.DepartmentId }).ToArrayAsync(ct);
+        var eligible = (await ApprovalPlanningService.EligibleIdsAsync(uow.Db, users.Select(user => user.Id), ct)).ToHashSet();
+        var departmentIds = users.Where(user => user.DepartmentId.HasValue).Select(user => user.DepartmentId!.Value).Distinct().ToArray();
+        var departments = await uow.Db.Departments.AsNoTracking().Where(item => Enumerable.Contains(departmentIds, item.Id))
+            .ToDictionaryAsync(item => item.Id, item => item.Name, ct);
+        return users.Select(user => new
+        {
+            user.Id, user.EmployeeNo, user.RealName, canApprove = eligible.Contains(user.Id),
+            departmentName = user.DepartmentId is ulong id ? departments.GetValueOrDefault(id) : null,
+        });
+    }
+
     private async Task<IReadOnlyList<FlowNodeInput>> ValidateNodesAsync(OemUnitOfWork uow, FlowNodeInput[]? nodes, CancellationToken ct)
     {
         if (nodes is null || nodes.Length is < 1 or > MaximumNodes) throw ApiException.BadRequest($"审批节点数量需为 1~{MaximumNodes} 个");

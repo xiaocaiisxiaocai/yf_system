@@ -24,7 +24,9 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     public async Task<object> ListCompaniesAsync(OemActor actor, ulong page, uint size, ulong offset, string? keyword, string? status, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
-        await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
+        // Account managers need the vendor list to reach the accounts they manage.
+        if (!await OemAuthorizer.HasAsync(uow, await OemAuthorizer.RecheckAsync(uow, actor, ct), OemPermissions.CompanyManage, ct))
+            await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
         var query = uow.Db.OemCompanies.AsNoTracking();
         if (!string.IsNullOrWhiteSpace(keyword))
         {
