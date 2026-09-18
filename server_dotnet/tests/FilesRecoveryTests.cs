@@ -414,7 +414,8 @@ public sealed class FilesRecoveryTests
                             user_id BIGINT UNSIGNED NULL, employee_no VARCHAR(50) NULL,
                             action VARCHAR(100) NOT NULL, target_type VARCHAR(100) NULL,
                             target_id VARCHAR(100) NULL, detail JSON NULL, ip VARCHAR(100) NULL,
-                            created_at DATETIME(6) NOT NULL
+                            created_at DATETIME(6) NOT NULL,
+                            actor_realm VARCHAR(16) NULL, actor_account_id BIGINT UNSIGNED NULL
                         );
                         CREATE TABLE upload_sessions(
                             id VARCHAR(36) PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL,

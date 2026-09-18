@@ -107,10 +107,13 @@ internal static class BootstrapSeedCatalog
         db.Users.Add(administrator);
         await db.SaveChangesAsync(ct);
 
-        db.RolePermissions.AddRange(Permissions.Select(row => new RolePermission
+        // Grant every permission present after migrations, including permissions that
+        // later migrations (for example the OEM business line) insert as reference data.
+        var allPermissionIds = await db.Permissions.Select(permission => permission.Id).ToArrayAsync(ct);
+        db.RolePermissions.AddRange(allPermissionIds.Select(permissionId => new RolePermission
         {
             RoleId = AdministratorRoleId,
-            PermissionId = row.Id,
+            PermissionId = permissionId,
         }));
         db.UserRoles.Add(new UserRole { UserId = administrator.Id, RoleId = AdministratorRoleId });
         await db.SaveChangesAsync(ct);

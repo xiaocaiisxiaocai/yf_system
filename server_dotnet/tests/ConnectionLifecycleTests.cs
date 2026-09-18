@@ -45,7 +45,8 @@ public sealed class ConnectionLifecycleTests
                 user_id BIGINT UNSIGNED NULL, employee_no VARCHAR(64) NULL,
                 action VARCHAR(100) NOT NULL, target_type VARCHAR(100) NULL,
                 target_id VARCHAR(100) NULL, detail JSON NULL, ip VARCHAR(64) NULL,
-                created_at DATETIME(6) NOT NULL
+                created_at DATETIME(6) NOT NULL,
+                actor_realm VARCHAR(16) NULL, actor_account_id BIGINT UNSIGNED NULL
             );
             INSERT INTO roles VALUES(1,'系统管理员','ACTIVE',1);
             INSERT INTO permissions VALUES(1,'config:manage'),(2,'log:view');

@@ -55,6 +55,21 @@ public static class PasswordService
         return $"$argon2id$v=19$m={MemoryKb},t={Iterations},p={Parallelism}${B64(salt)}${B64(hash)}";
     }
 
+    private static readonly Lazy<Task<string>> TimingDummy = new(CreateTimingDummyAsync);
+
+    /// <summary>
+    /// A fixed, same-cost Argon2id hash verified when an account does not exist, so
+    /// unknown and known login names take indistinguishable time in every realm.
+    /// </summary>
+    internal static Task<string> TimingDummyHashAsync() => TimingDummy.Value;
+
+    private static async Task<string> CreateTimingDummyAsync()
+    {
+        var salt = Encoding.ASCII.GetBytes("yf-login-dummy-salt");
+        var argon = new Konscious.Security.Cryptography.Argon2id(Encoding.UTF8.GetBytes("dummy-login#2026")) { Salt = salt, MemorySize = 19456, Iterations = 2, DegreeOfParallelism = 1 };
+        return $"$argon2id$v=19$m=19456,t=2,p=1${Convert.ToBase64String(salt).TrimEnd('=')}${Convert.ToBase64String(await argon.GetBytesAsync(32)).TrimEnd('=')}";
+    }
+
     public static async Task<bool> VerifyAsync(string password, string encodedHash, CancellationToken cancellationToken = default)
     {
         if (Encoding.UTF8.GetByteCount(password) > MaxPasswordBytes || !TryParse(encodedHash, out var phc)) return false;

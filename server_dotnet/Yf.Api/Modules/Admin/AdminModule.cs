@@ -27,6 +27,7 @@ public static class AdminModule
 
         admin.MapPost("/departments", (DepartmentUpsert r, HttpContext c, DepartmentService s, CancellationToken ct) => s.CreateAsync(AccessService.GetCurrent(c), r, ct));
         admin.MapPut("/departments/{id:long}", (ulong id, DepartmentUpsert r, HttpContext c, DepartmentService s, CancellationToken ct) => s.UpdateAsync(AccessService.GetCurrent(c), id, r, ct));
+        admin.MapPut("/departments/{id:long}/leader", (ulong id, DepartmentLeaderRequest r, HttpContext c, DepartmentService s, CancellationToken ct) => s.SetLeaderAsync(AccessService.GetCurrent(c), id, r.LeaderUserId, ct));
         admin.MapPut("/departments/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, DepartmentService s, CancellationToken ct) => s.SetStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
         admin.MapDelete("/departments/{id:long}", async (ulong id, HttpContext c, DepartmentService s, CancellationToken ct) => { await s.DeleteAsync(AccessService.GetCurrent(c), id, ct); return Results.Json(new { }); });
 

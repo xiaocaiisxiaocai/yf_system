@@ -5,6 +5,7 @@ using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Admin;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Identity;
+using Yf.Api.Modules.Oem;
 using Yf.Api.Modules.Projects;
 using Yf.Api.Modules.SystemManagement;
 
@@ -63,7 +64,7 @@ public static class ApiApplication
         var efConnectionString = AppDb.BuildConnectionString(options);
         builder.Services.AddPooledDbContextFactory<YfDbContext>(db => db.UseMySql(
             efConnectionString, ServerVersion.AutoDetect(efConnectionString)));
-        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule();
+        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule();
         builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
             .WithOrigins(new Uri(options.WebBaseUrl).GetLeftPart(UriPartial.Authority))
             .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
@@ -94,7 +95,7 @@ public static class ApiApplication
         });
         app.UseCors();
         app.UseMiddleware<IdentityMiddleware>();
-        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime();
+        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime().MapOemModule();
         app.MapGet("/health", async (IDbContextFactory<YfDbContext> factory, CancellationToken ct) =>
         {
             try

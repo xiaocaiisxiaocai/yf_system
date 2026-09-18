@@ -13,7 +13,6 @@ public sealed class IdentityService(
     PermissionService permissions,
     AuditService audit)
 {
-    private static readonly Lazy<Task<string>> DummyHash = new(() => CreateDummyHashAsync());
     internal const int MaximumFailedLogins = 10;
     internal const int LoginLockMinutes = 15;
 
@@ -30,7 +29,7 @@ public sealed class IdentityService(
             candidate = await lookup.Users.AsNoTracking().SingleOrDefaultAsync(u => u.EmployeeNo == employeeNo, ct);
         // Initialize the same-cost dummy on the first attempt even when the account exists, so the
         // first unknown-account request cannot be distinguished by the extra Argon2 calculation.
-        var dummyHash = await DummyHash.Value;
+        var dummyHash = await PasswordService.TimingDummyHashAsync();
         var matches = await PasswordService.VerifyAsync(request.Password, candidate?.PasswordHash ?? dummyHash, ct);
         if (candidate is null)
         {
@@ -158,7 +157,7 @@ public sealed class IdentityService(
             try
             {
                 var claim = tokens.ParseAccess(bearer);
-                if (await HasActiveSessionAsync(context.Database.Connection(), null, claim.UserId, claim.SessionId, ct)) targets.Add((claim.UserId, claim.SessionId));
+                if (claim.Realm == IdentityRealms.Internal && await HasActiveSessionAsync(context.Database.Connection(), null, claim.UserId, claim.SessionId, ct)) targets.Add((claim.UserId, claim.SessionId));
             }
             catch { }
         }
@@ -284,12 +283,6 @@ public sealed class IdentityService(
         if (value.EnumerateRunes().Count() > 128 || !System.Net.Mail.MailAddress.TryCreate(value, out _)) throw ApiException.BadRequest("邮箱格式不正确或超过 128 字符");
     }
     private static bool TryBearer(string? header, out string token) { token = ""; if (header?.StartsWith("Bearer ", StringComparison.Ordinal) != true) return false; token = header[7..]; return token.Length > 0; }
-    private static async Task<string> CreateDummyHashAsync()
-    {
-        var salt = System.Text.Encoding.ASCII.GetBytes("yf-login-dummy-salt");
-        var argon = new Konscious.Security.Cryptography.Argon2id(System.Text.Encoding.UTF8.GetBytes("dummy-login#2026")) { Salt = salt, MemorySize = 19456, Iterations = 2, DegreeOfParallelism = 1 };
-        return $"$argon2id$v=19$m=19456,t=2,p=1${Convert.ToBase64String(salt).TrimEnd('=')}${Convert.ToBase64String(await argon.GetBytesAsync(32)).TrimEnd('=')}";
-    }
 
     private async Task AuditBestEffortAsync(MySqlConnection conn, ulong? userId, string? employeeNo, string action,
         string? targetType, ulong? targetId, object? detail, string? ip, CancellationToken ct)

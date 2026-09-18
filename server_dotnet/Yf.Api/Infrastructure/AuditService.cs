@@ -11,15 +11,45 @@ public interface IProjectAuditCapture
     Task CaptureAsync(MySqlConnection db, MySqlTransaction? tx, ulong auditId, CancellationToken ct);
 }
 
+/// <summary>
+/// Actor from an identity realm outside the `users` table. Such actors are recorded
+/// with realm + account id and never in UserId, so ids from different tables cannot
+/// be confused when audit rows are read back.
+/// </summary>
+/// <summary>
+/// Business-line partition of the shared audit table. The supplier collaboration
+/// audit views and the OEM audit view each show only their own rows.
+/// </summary>
+public static class AuditScopes
+{
+    public const string OemActionPrefix = "OEM_";
+    public const string OemRealm = "oem";
+    public const string OemConfigPrefix = "oem.";
+
+    public static readonly System.Linq.Expressions.Expression<Func<Entities.AuditLog, bool>> IsOemRow =
+        log => log.ActorRealm == OemRealm || log.Action.StartsWith(OemActionPrefix);
+
+    public static readonly System.Linq.Expressions.Expression<Func<Entities.AuditLog, bool>> IsCollaborationRow =
+        log => (log.ActorRealm == null || log.ActorRealm != OemRealm) && !log.Action.StartsWith(OemActionPrefix);
+
+    public static bool IsOemAction(string action) => action.StartsWith(OemActionPrefix, StringComparison.Ordinal);
+}
+
+public sealed record AuditRealmActor(string Realm, ulong AccountId, string EmployeeNo, string? Name);
+
 public sealed class AuditService(IEnumerable<IProjectAuditCapture> captures, IHttpContextAccessor? accessor = null, AppOptions? options = null)
 {
     public async Task<ulong> WriteAsync(MySqlConnection db, MySqlTransaction? tx, ulong? actorId,
         string action, string? targetType, ulong? targetId, object? detail, string? ip, CancellationToken ct = default,
-        string? employeeNoOverride = null)
+        string? employeeNoOverride = null, AuditRealmActor? realmActor = null)
     {
+        if (realmActor is not null && actorId is not null)
+            throw new ArgumentException("A realm actor is recorded without a users-table actor id.", nameof(actorId));
         await using var ef = EfDb.Use(db, tx);
-        var actor = actorId is null ? null : await ef.Users.Where(user => user.Id == actorId.Value)
-            .Select(user => new AuditActor(user.EmployeeNo, user.RealName)).SingleOrDefaultAsync(ct);
+        var actor = realmActor is not null
+            ? new AuditActor(realmActor.EmployeeNo, realmActor.Name)
+            : actorId is null ? null : await ef.Users.Where(user => user.Id == actorId.Value)
+                .Select(user => new AuditActor(user.EmployeeNo, user.RealName)).SingleOrDefaultAsync(ct);
         var employeeNo = employeeNoOverride ?? actor?.EmployeeNo;
         var payload = detail is null ? new JsonObject() : JsonSerializer.SerializeToNode(detail, JsonSerializerOptions.Web) as JsonObject
             ?? new JsonObject { ["payload"] = JsonSerializer.SerializeToNode(detail, JsonSerializerOptions.Web) };
@@ -47,7 +77,9 @@ public sealed class AuditService(IEnumerable<IProjectAuditCapture> captures, IHt
             TargetId = targetId?.ToString(),
             Detail = payload.ToJsonString(JsonSerializerOptions.Web),
             Ip = ip,
-            CreatedAt = createdAt
+            CreatedAt = createdAt,
+            ActorRealm = realmActor?.Realm,
+            ActorAccountId = realmActor?.AccountId
         };
         ef.AuditLogs.Add(auditLog);
         await ef.SaveChangesAsync(ct);

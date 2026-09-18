@@ -462,7 +462,10 @@ public sealed class MailDeliveryTests
                         retry_count INT NOT NULL,
                         next_attempt_at DATETIME(3) NULL,
                         last_error VARCHAR(1024) NULL,
-                        sent_at DATETIME(6) NULL
+                        sent_at DATETIME(6) NULL,
+                        recipient_realm VARCHAR(16) NULL,
+                        recipient_account_id BIGINT UNSIGNED NULL,
+                        oem_transfer_id BIGINT UNSIGNED NULL
                     );
                     CREATE TABLE audit_logs(
                         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -473,7 +476,9 @@ public sealed class MailDeliveryTests
                         target_id VARCHAR(100) NULL,
                         detail JSON NULL,
                         ip VARCHAR(64) NULL,
-                        created_at DATETIME(6) NOT NULL
+                        created_at DATETIME(6) NOT NULL,
+                        actor_realm VARCHAR(16) NULL,
+                        actor_account_id BIGINT UNSIGNED NULL
                     );
                     CREATE TABLE users(
                         id BIGINT UNSIGNED PRIMARY KEY,

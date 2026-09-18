@@ -17,15 +17,21 @@ public sealed class SchemaShapeTests
         await database.InitializeAsync(ct);
         await using (var conn = await database.Database.OpenAsync(ct))
         {
-            Assert.Equal(EfDatabaseLifecycle.InitialMigrationId, await conn.ExecuteScalarAsync<string>(
-                "SELECT MigrationId FROM __EFMigrationsHistory"));
+            Assert.Equal(new[] { EfDatabaseLifecycle.InitialMigrationId, "20260918153503_AddOemPlatform" },
+                (await conn.QueryAsync<string>("SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId")).ToArray());
             Assert.False(await TableExistsAsync(conn, "yf_schema_migrations", ct));
             Assert.False(await TableExistsAsync(conn, "seaql_migrations", ct));
             Assert.Equal("admin", await conn.ExecuteScalarAsync<string>("SELECT employee_no FROM users"));
             Assert.Equal("系统管理员", await conn.ExecuteScalarAsync<string>("SELECT name FROM roles"));
-            Assert.Equal(35, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
-            Assert.Equal(35, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
-            Assert.Equal(13, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
+            // 35 collaboration permissions plus 14 OEM permissions seeded by AddOemPlatform;
+            // the built-in administrator is granted every one of them.
+            Assert.Equal(49, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
+            Assert.Equal(49, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(13, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key NOT LIKE 'oem.%'"));
+            Assert.Equal(30, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.%'"));
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_templates WHERE is_default=1 AND status='ACTIVE'"));
+            Assert.Equal(2, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_template_nodes WHERE template_id=1"));
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_retention_templates WHERE mode='KEEP'"));
             Assert.Equal(3, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM project_dictionaries WHERE type='PRIORITY'"));
         }
         await SchemaBootstrap.ValidateAsync(database.Database, ct);
@@ -53,7 +59,7 @@ public sealed class SchemaShapeTests
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await using var conn = await database.Database.OpenAsync(ct);
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+        Assert.Equal(2, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM users WHERE employee_no='admin'"));
     }
 

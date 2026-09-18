@@ -53,7 +53,7 @@ public static class IdentityModule
     private static void SetRefreshCookie(HttpContext ctx, string token, AppOptions options) => ctx.Response.Cookies.Append(RefreshCookie, token,
         new CookieOptions { HttpOnly = true, Secure = options.CookieSecure, SameSite = SameSiteMode.Lax, Path = "/api/v1/auth", MaxAge = TimeSpan.FromDays(options.RefreshTtlDays) });
 
-    private static bool OriginAllowed(string origin, string configured)
+    internal static bool OriginAllowed(string origin, string configured)
     {
         if (string.IsNullOrEmpty(origin)) return true;
         return Uri.TryCreate(configured, UriKind.Absolute, out var uri) && origin == uri.GetLeftPart(UriPartial.Authority);

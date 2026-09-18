@@ -16,6 +16,9 @@ public sealed class Department
     // business_parent_scope is a generated column (STORED, GENERATED ALWAYS AS ifnull(parent_id,0));
     // not settable, only used by the uk_departments_parent_kind_name unique index.
     public ulong BusinessParentScope { get; set; }
+    // Current leader used by OEM approval routing. Validated by the application as an
+    // active internal account; deliberately FK-free like other person references.
+    public ulong? LeaderAccountId { get; set; }
 }
 
 public sealed class Supplier
@@ -81,6 +84,7 @@ public sealed class DepartmentConfig : IEntityTypeConfiguration<Department>
             .HasComputedColumnSql("ifnull(`parent_id`,0)", stored: true).ValueGeneratedOnAddOrUpdate();
         b.HasIndex(x => new { x.BusinessParentScope, x.Kind, x.Name }).IsUnique().HasDatabaseName("uk_departments_parent_kind_name");
         b.HasIndex(x => x.ParentId).HasDatabaseName("idx_departments_parent");
+        b.Property(x => x.LeaderAccountId).HasColumnName("leader_account_id");
     }
 }
 
