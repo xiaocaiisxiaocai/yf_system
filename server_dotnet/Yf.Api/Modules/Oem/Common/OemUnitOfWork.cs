@@ -12,9 +12,10 @@ namespace Yf.Api.Modules.Oem.Common;
 /// permission revocation and management changes serialise with business writes
 /// exactly as they do in the rest of the system.
 /// </summary>
-internal sealed class OemUnitOfWork : IAsyncDisposable
+public sealed class OemUnitOfWork : IAsyncDisposable
 {
     private readonly IDbContextTransaction? transaction;
+    private readonly List<IOemEvent> pendingEvents = [];
 
     private OemUnitOfWork(YfDbContext db, IDbContextTransaction? transaction, DateTime now)
     {
@@ -61,6 +62,20 @@ internal sealed class OemUnitOfWork : IAsyncDisposable
             await db.DisposeAsync();
             throw;
         }
+    }
+
+    /// <summary>Records a domain event; handlers run inside this transaction when it is committed through <see cref="OemEventDispatcher"/>.</summary>
+    public void Raise(IOemEvent domainEvent)
+    {
+        if (transaction is null) throw new InvalidOperationException("Domain events require a write unit of work.");
+        pendingEvents.Add(domainEvent);
+    }
+
+    internal IReadOnlyList<IOemEvent> TakeEvents()
+    {
+        var events = pendingEvents.ToArray();
+        pendingEvents.Clear();
+        return events;
     }
 
     public async Task<DateTime> RefreshNowAsync(CancellationToken ct) => Now = await OemClock.NowAsync(Db, ct);

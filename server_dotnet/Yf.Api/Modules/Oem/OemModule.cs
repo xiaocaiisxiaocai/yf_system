@@ -1,9 +1,14 @@
+using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Oem.Admin;
 using Yf.Api.Modules.Oem.Approval;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Identity;
 using Yf.Api.Modules.Oem.Policies;
+using Yf.Api.Modules.Oem.Scanning;
+using Yf.Api.Modules.Oem.Storage;
+using Yf.Api.Modules.Oem.Transfers;
+using Yf.Api.Modules.Oem.Uploads;
 
 namespace Yf.Api.Modules.Oem;
 
@@ -34,6 +39,33 @@ public static class OemModule
         // Approval slice: template administration and planning.
         services.AddSingleton<ApprovalPlanningService>();
         services.AddSingleton<OemFlowTemplateService>();
+        services.AddSingleton<OemApprovalEngine>();
+        services.AddSingleton<OemApprovalService>();
+
+        // Transfer slice: drafts, sending, progression (process manager) and read model.
+        services.AddSingleton<OemEventDispatcher>();
+        services.AddSingleton<OemTransferProgression>();
+        services.AddSingleton<OemTransferService>();
+        services.AddSingleton<OemTransferReader>();
+
+        // Storage, upload and scanning slices.
+        services.AddSingleton<OemStorage>();
+        services.AddSingleton<OemUploadService>();
+        services.AddSingleton<IFileScanner>(provider => FileScannerFactory.Create(provider.GetRequiredService<AppOptions>()));
+        services.AddSingleton<OemScanPipeline>();
+        services.AddSingleton<OemPromotionService>();
+        services.AddSingleton<OemScanService>();
+
+        // Background duties, driven by one composite hosted worker.
+        services.AddSingleton<IOemBackgroundJob>(provider => new DelegateOemJob("scan", TimeSpan.FromSeconds(3),
+            ct => provider.GetRequiredService<OemScanService>().RunOnceAsync(ct)));
+        services.AddSingleton<IOemBackgroundJob>(provider => new DelegateOemJob("promote", TimeSpan.FromSeconds(5),
+            ct => provider.GetRequiredService<OemPromotionService>().RunOnceAsync(ct)));
+        services.AddSingleton<IOemBackgroundJob>(provider => new DelegateOemJob("upload-expiry", TimeSpan.FromMinutes(5),
+            ct => provider.GetRequiredService<OemUploadService>().ExpireStaleSessionsAsync(ct)));
+        services.AddSingleton<IOemBackgroundJob>(provider => new DelegateOemJob("approval-health", TimeSpan.FromMinutes(2),
+            ct => provider.GetRequiredService<OemApprovalService>().RevalidateActiveInstancesAsync(ct)));
+        services.AddHostedService<OemBackgroundWorker>();
         return services;
     }
 
@@ -46,6 +78,7 @@ public static class OemModule
         var secured = root.MapGroup(string.Empty).AddEndpointFilter<OemAccessFilter>();
         OemDirectoryEndpoints.Map(secured);
         OemPolicyEndpoints.Map(secured);
+        OemTransferEndpoints.Map(secured);
         return endpoints;
     }
 }

@@ -17,6 +17,13 @@ public sealed class AppOptions
     public int UploadChunkSize { get; set; } = 10 * 1024 * 1024;
     public SmtpOptions Smtp { get; set; } = new();
 
+    /// <summary>
+    /// Local directory holding OEM file content. Deliberately separate from
+    /// <see cref="StorageRoot"/>: it is never part of any backup. Empty disables OEM file features.
+    /// </summary>
+    public string OemStorageRoot { get; set; } = "";
+    public OemScannerOptions OemScanner { get; set; } = new();
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ConnectionString)) throw new InvalidOperationException("App:ConnectionString must be configured; no database is created automatically.");
@@ -38,6 +45,16 @@ public sealed class AppOptions
             throw new InvalidOperationException("App:WebBaseUrl must be an HTTP(S) origin.");
         if (AccessTtlMinutes is < 1 or > 1440 || RefreshTtlDays is < 1 or > 365) throw new InvalidOperationException("Invalid token lifetime.");
         Smtp.Validate();
+        if (OemStorageRoot.Length > 0)
+        {
+            if (!Path.IsPathFullyQualified(OemStorageRoot))
+                throw new InvalidOperationException("App:OemStorageRoot must be an absolute local path.");
+            if (Path.GetFullPath(OemStorageRoot).TrimEnd(Path.DirectorySeparatorChar) == Path.GetPathRoot(OemStorageRoot)?.TrimEnd(Path.DirectorySeparatorChar))
+                throw new InvalidOperationException("App:OemStorageRoot cannot be a drive root.");
+            if (OemStorageRoot.StartsWith(@"\", StringComparison.Ordinal))
+                throw new InvalidOperationException("App:OemStorageRoot must be a local directory, not a network share.");
+        }
+        OemScanner.Validate();
     }
 
     public void ValidateStorageLocation(string applicationRoot)
@@ -48,9 +65,23 @@ public sealed class AppOptions
         var app = ResolveComparisonPath(applicationRoot);
         var storage = ResolveComparisonPath(StorageRoot);
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        if (storage.Equals(app, comparison) || storage.StartsWith(app + Path.DirectorySeparatorChar, comparison) || app.StartsWith(storage + Path.DirectorySeparatorChar, comparison))
+        if (Overlaps(storage, app, comparison))
             throw new InvalidOperationException("StorageRoot must be separate from the application directory and its public web files.");
+        if (OemStorageRoot.Length > 0)
+        {
+            // OEM content is never backed up, so it must not live inside (or contain)
+            // the backed-up collaboration storage or the application tree.
+            var oem = ResolveComparisonPath(OemStorageRoot);
+            if (Overlaps(oem, app, comparison))
+                throw new InvalidOperationException("OemStorageRoot must be separate from the application directory.");
+            if (Overlaps(oem, storage, comparison))
+                throw new InvalidOperationException("OemStorageRoot must be separate from StorageRoot (OEM files are excluded from backups).");
+        }
     }
+
+    private static bool Overlaps(string left, string right, StringComparison comparison) =>
+        left.Equals(right, comparison) || left.StartsWith(right + Path.DirectorySeparatorChar, comparison)
+        || right.StartsWith(left + Path.DirectorySeparatorChar, comparison);
 
     private static string ResolveComparisonPath(string path)
     {
@@ -73,6 +104,26 @@ public sealed class AppOptions
 
         while (missing.Count > 0) existing = Path.Combine(existing, missing.Pop());
         return Path.GetFullPath(existing).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+}
+
+/// <summary>OEM malware scanner selection. The engine is not decided yet; until one is configured nothing is released.</summary>
+public sealed class OemScannerOptions
+{
+    /// <summary>None (fail closed: files stay unavailable) or Fake (development/testing only).</summary>
+    public string Engine { get; set; } = "None";
+    /// <summary>Must be true to run the Fake engine, so a test configuration cannot reach production by accident.</summary>
+    public bool AcknowledgeInsecureFake { get; set; }
+    public int BaseTimeoutSeconds { get; set; } = 120;
+    public int TimeoutSecondsPerGb { get; set; } = 300;
+
+    public void Validate()
+    {
+        if (Engine is not ("None" or "Fake")) throw new InvalidOperationException("App:OemScanner:Engine must be None or Fake.");
+        if (Engine == "Fake" && !AcknowledgeInsecureFake)
+            throw new InvalidOperationException("The Fake OEM scanner performs no malware scanning; set App:OemScanner:AcknowledgeInsecureFake=true only for development or tests.");
+        if (BaseTimeoutSeconds is < 5 or > 86400 || TimeoutSecondsPerGb is < 0 or > 86400)
+            throw new InvalidOperationException("Invalid OEM scanner timeouts.");
     }
 }
 

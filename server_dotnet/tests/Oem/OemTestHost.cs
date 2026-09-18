@@ -67,6 +67,9 @@ internal sealed class OemTestHost : IAsyncDisposable
                 "--App:WorkerEnabled=false",
                 "--App:CookieSecure=false",
                 "--App:WebBaseUrl=http://127.0.0.1:5273",
+                "--App:OemStorageRoot=" + Path.Combine(storageRoot, "oem"),
+                "--App:OemScanner:Engine=Fake",
+                "--App:OemScanner:AcknowledgeInsecureFake=true",
             };
             extraArgs?.Invoke(args);
             WebApplication? app;
@@ -119,6 +122,55 @@ internal sealed class OemTestHost : IAsyncDisposable
         client.Bearer(body["accessToken"]!.GetValue<string>());
         return client;
     }
+
+    public T Service<T>() where T : notnull => app.Services.GetRequiredService<T>();
+
+    /// <summary>Runs the scan and promotion jobs until no work is left (workers are disabled in tests).</summary>
+    public async Task RunOemJobsAsync(CancellationToken ct)
+    {
+        for (var round = 0; round < 20; round++)
+        {
+            var scanned = await Service<Yf.Api.Modules.Oem.Scanning.OemScanService>().RunOnceAsync(ct);
+            var promoted = await Service<Yf.Api.Modules.Oem.Scanning.OemPromotionService>().RunOnceAsync(ct);
+            if (scanned == 0 && promoted == 0) return;
+        }
+        throw new InvalidOperationException("OEM jobs did not settle");
+    }
+
+    /// <summary>Uploads <paramref name="content"/> through init → chunks → merge and returns the merged file JSON.</summary>
+    public async Task<JsonNode> UploadAsync(ApiClient client, ulong transferId, string fileName, byte[] content, CancellationToken ct)
+    {
+        var init = await client.PostAsync($"/api/v1/oem/transfers/{transferId}/uploads/init", new { fileName, fileSize = (ulong)content.Length }, ct).Ok();
+        var sessionId = init["sessionId"]!.GetValue<string>();
+        var chunkSize = init["chunkSize"]!.GetValue<int>();
+        var total = init["totalChunks"]!.GetValue<int>();
+        for (var index = 0; index < total; index++)
+        {
+            var slice = content.AsMemory(index * chunkSize, Math.Min(chunkSize, content.Length - index * chunkSize)).ToArray();
+            using var request = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/oem/uploads/{sessionId}/chunks/{index}") { Content = new ByteArrayContent(slice) };
+            using var response = await client.Http.SendAsync(request, ct);
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(ct));
+        }
+        return await client.PostAsync($"/api/v1/oem/uploads/{sessionId}/merge", null, ct).Ok();
+    }
+
+    public async Task<ApiClient> CreateVendorAsync(ApiClient admin, string companyName, string employeeNo, CancellationToken ct)
+    {
+        var companyId = (await admin.PostAsync("/api/v1/oem/companies", new { name = companyName }, ct).Ok()).Id();
+        await admin.PostAsync($"/api/v1/oem/companies/{companyId}/accounts",
+            new { employeeNo, realName = "厂商" + employeeNo, email = employeeNo + "@vendor.invalid", password = "Vendor#2026" }, ct).Ok();
+        await using (var conn = await OpenAsync(ct))
+            await conn.ExecuteAsync("UPDATE oem_accounts SET must_change_password=0 WHERE employee_no=@employeeNo", new { employeeNo });
+        return await LoginOemAsync(employeeNo, "Vendor#2026", ct);
+    }
+
+    public async Task<ulong> CompanyIdOfAsync(string employeeNo, CancellationToken ct)
+    {
+        await using var conn = await OpenAsync(ct);
+        return await conn.ExecuteScalarAsync<ulong>("SELECT oem_company_id FROM oem_accounts WHERE employee_no=@employeeNo", new { employeeNo });
+    }
+
+    public static byte[] Pdf(string text) => System.Text.Encoding.ASCII.GetBytes("%PDF-1.4\n" + text + "\n%%EOF\n");
 
     public async Task<MySqlConnection> OpenAsync(CancellationToken ct)
     {
