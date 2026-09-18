@@ -9,10 +9,10 @@ namespace Yf.Api.Tests.Oem;
 /// <summary>End-to-end transfer workflows: upload → send → scan → promote → approve/release, and every fail-closed path.</summary>
 public sealed class OemTransferFlowTests
 {
-    private sealed record OutboundWorld(OemTestHost Host, ApiClient Admin, ApiClient Sender, ApiClient Leader, ApiClient Vendor,
+    internal sealed record OutboundWorld(OemTestHost Host, ApiClient Admin, ApiClient Sender, ApiClient Leader, ApiClient Vendor,
         ApiClient Viewer, ulong CompanyId, ulong KeepTemplateId, (ulong Division, ulong Department, ulong Section) Org, ulong LeaderId, ulong SenderId);
 
-    private static async Task<OutboundWorld> OutboundWorldAsync(OemTestHost host, CancellationToken ct)
+    internal static async Task<OutboundWorld> OutboundWorldAsync(OemTestHost host, CancellationToken ct)
     {
         var admin = await host.LoginAdminAsync(ct);
         var org = await host.CreateOrgPathAsync("装配", ct);
@@ -31,12 +31,12 @@ public sealed class OemTransferFlowTests
             companyId, keep, org, leaderId, senderId);
     }
 
-    private static async Task<JsonNode> CreateOutboundAsync(OutboundWorld world, string title, CancellationToken ct) =>
+    internal static async Task<JsonNode> CreateOutboundAsync(OutboundWorld world, string title, CancellationToken ct) =>
         await world.Sender.PostAsync("/api/v1/oem/transfers",
             new { title, description = "图纸第一版", oemCompanyId = world.CompanyId, retentionTemplateId = world.KeepTemplateId }, ct).Ok();
 
-    private static ulong TransferId(JsonNode detail) => detail["summary"]!.Id();
-    private static ulong Version(JsonNode detail) => detail["summary"]!["version"]!.GetValue<ulong>();
+    internal static ulong TransferId(JsonNode detail) => detail["summary"]!.Id();
+    internal static ulong Version(JsonNode detail) => detail["summary"]!["version"]!.GetValue<ulong>();
     private static string Lifecycle(JsonNode detail) => detail["summary"]!["lifecycleStatus"]!.GetValue<string>();
 
     [Fact(Timeout = 240_000)]

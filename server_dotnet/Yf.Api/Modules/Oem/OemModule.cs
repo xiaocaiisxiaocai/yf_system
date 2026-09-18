@@ -4,6 +4,7 @@ using Yf.Api.Modules.Oem.Admin;
 using Yf.Api.Modules.Oem.Approval;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Identity;
+using Yf.Api.Modules.Oem.Notifications;
 using Yf.Api.Modules.Oem.Policies;
 using Yf.Api.Modules.Oem.Scanning;
 using Yf.Api.Modules.Oem.Storage;
@@ -44,6 +45,11 @@ public static class OemModule
 
         // Transfer slice: drafts, sending, progression (process manager) and read model.
         services.AddSingleton<OemEventDispatcher>();
+
+        // Notification slice: domain events become queued mail; the shared mail worker asks
+        // the OEM policy (not the collaboration switches) whether each OEM mail may still go out.
+        services.AddSingleton<IOemEventHandler, OemNotificationHandler>();
+        services.AddSingleton<Yf.Api.Modules.SystemManagement.IOutboxRecipientPolicy, OemOutboxPolicy>();
         services.AddSingleton<OemTransferProgression>();
         services.AddSingleton<OemTransferService>();
         services.AddSingleton<OemTransferReader>();

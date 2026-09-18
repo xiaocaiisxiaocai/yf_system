@@ -9,6 +9,29 @@ using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Modules.SystemManagement;
 
+/// <summary>Identity and routing facts of one queued mail, handed to an <see cref="IOutboxRecipientPolicy"/>.</summary>
+public sealed record OutboxMailInfo(
+    ulong Id, string EventType, string? DedupeKey, ulong? RecipientUserId, string? RecipientRealm, ulong? RecipientAccountId, ulong? OemTransferId);
+
+public sealed record OutboxDecision(bool Allowed, string? Reason, string? AuditReason)
+{
+    public static readonly OutboxDecision Allow = new(true, null, null);
+    public static OutboxDecision Cancel(string reason, string auditReason) => new(false, reason, auditReason);
+}
+
+/// <summary>
+/// Lets another business line own the send-time rules for its own mail (identified
+/// by an event-type prefix) while sharing this queue and SMTP worker. Mail it owns is
+/// governed only by that line's switches and recipient checks, and its delivery audit
+/// rows carry the line's action prefix so each line's audit view stays separate.
+/// </summary>
+public interface IOutboxRecipientPolicy
+{
+    string EventTypePrefix { get; }
+    string AuditActionPrefix { get; }
+    Task<OutboxDecision> EvaluateAsync(MySqlConnection conn, MySqlTransaction tx, OutboxMailInfo mail, CancellationToken ct);
+}
+
 public sealed class MailService
 {
     private readonly AppDb db;
@@ -16,13 +39,15 @@ public sealed class MailService
     private readonly ILogger<MailService> logger;
     private readonly ISmtpDelivery smtp;
     private readonly SmtpSettingsService settings;
+    private readonly IOutboxRecipientPolicy[] policies;
 
     public MailService(
         AppDb db,
         AppOptions options,
         AuditService audit,
-        ILogger<MailService> logger)
-        : this(db, options, audit, logger, new MailKitSmtpDelivery())
+        ILogger<MailService> logger,
+        IEnumerable<IOutboxRecipientPolicy> policies)
+        : this(db, options, audit, logger, new MailKitSmtpDelivery(), policies)
     {
     }
 
@@ -31,13 +56,31 @@ public sealed class MailService
         AppOptions options,
         AuditService audit,
         ILogger<MailService> logger,
-        ISmtpDelivery smtp)
+        ISmtpDelivery smtp,
+        IEnumerable<IOutboxRecipientPolicy>? policies = null)
     {
         this.db = db;
         this.audit = audit;
         this.logger = logger;
         this.smtp = smtp;
+        this.policies = policies?.ToArray() ?? [];
         settings = new(db, options, audit);
+    }
+
+    private IOutboxRecipientPolicy? PolicyFor(string eventType) =>
+        policies.FirstOrDefault(policy => eventType.StartsWith(policy.EventTypePrefix, StringComparison.Ordinal));
+
+    /// <summary>Delivery audit action for a mail: externally owned mail uses its line's prefix.</summary>
+    private string AuditAction(string eventType, string action) => (PolicyFor(eventType)?.AuditActionPrefix ?? string.Empty) + action;
+
+    private IQueryable<Infrastructure.Entities.EmailOutbox> CollaborationOnly(IQueryable<Infrastructure.Entities.EmailOutbox> query)
+    {
+        foreach (var policy in policies)
+        {
+            var prefix = policy.EventTypePrefix;
+            query = query.Where(mail => !mail.EventType.StartsWith(prefix));
+        }
+        return query;
     }
 
     public static string MaskEmail(string address)
@@ -68,7 +111,7 @@ public sealed class MailService
         var cfg = resolved.Options;
         var configured = resolved.Configured;
         await using var context = EfDb.Use(conn);
-        var counts = (await context.EmailOutbox
+        var counts = (await CollaborationOnly(context.EmailOutbox)
             .Where(mail => mail.EventType != "STORAGE_WARNING")
             .GroupBy(mail => mail.Status)
             .Select(group => new { Status = group.Key, Count = group.LongCount() })
@@ -113,7 +156,7 @@ public sealed class MailService
             notificationsEnabled = notificationPolicy.GlobalEnabled,
             notificationPolicy = notificationPolicy.ToResponse(),
             queue = new { pending = counts.GetValueOrDefault("PENDING"), sending = counts.GetValueOrDefault("SENDING"), sent = counts.GetValueOrDefault("SENT"), failed = counts.GetValueOrDefault("FAILED"), cancelled = counts.GetValueOrDefault("CANCELLED") },
-            latestSentAt = await context.EmailOutbox.Where(mail => mail.Status == "SENT")
+            latestSentAt = await CollaborationOnly(context.EmailOutbox).Where(mail => mail.Status == "SENT")
                 .Select(mail => mail.SentAt).MaxAsync(ct),
             latestFailedAt = await context.AuditLogs.Where(log => log.Action == "EMAIL_FAILED")
                 .Select(log => (DateTime?)log.CreatedAt).MaxAsync(ct),
@@ -161,8 +204,9 @@ public sealed class MailService
             policy = await EmailNotificationPolicy.LoadAsync(conn, null, ct);
             if (!policy.GlobalEnabled)
             {
+                // Only collaboration mail is cancelled; other business lines keep their own switches.
                 await CancelPolicyDisabledAsync(conn, ct);
-                return;
+                if (policies.Length == 0) return;
             }
             resolved = await settings.ResolveAsync(conn, null, ct);
             if (!resolved.Configured) return;
@@ -192,6 +236,9 @@ public sealed class MailService
                     Status = mail.Status,
                     RetryCount = mail.RetryCount,
                     NextAttemptAt = mail.NextAttemptAt,
+                    RecipientRealm = mail.RecipientRealm,
+                    RecipientAccountId = mail.RecipientAccountId,
+                    OemTransferId = mail.OemTransferId,
                 }).Take(10).ToArrayAsync(ct);
         }
         foreach (var mail in pending)
@@ -216,66 +263,79 @@ public sealed class MailService
                     .SetProperty(item => item.Status, "SENDING")
                     .SetProperty(item => item.NextAttemptAt, lease), ct);
                 if (claimed != 1) continue;
-                var currentPolicy = await EmailNotificationPolicy.LoadAsync(claimConnection, claimTransaction, ct);
-                var currentRecipientType = mail.RecipientUserId is { } recipientId
-                    ? await claimContext.Users
-                        .Where(user => user.Id == recipientId && user.Status == "ACTIVE")
-                        .Select(user => user.UserType)
-                        .SingleOrDefaultAsync(ct)
-                    : mail.RecipientUserType;
-                var notificationAllowed = currentPolicy.Allows(mail.EventType, currentRecipientType);
-                var recipientAuthorized = notificationAllowed && (mail.EventType == "PROJECT_SUBMITTED"
-                    ? await IsCurrentPendingAcceptanceAsync(claimConnection, claimTransaction, mail, ct)
-                    : mail.ProjectId is null || mail.RecipientUserId is null
-                        ? mail.ProjectId is null && mail.RecipientUserId is null
-                        : await ProjectNotificationService.IsCurrentProjectRecipientAsync(
-                            claimConnection,
-                            claimTransaction,
-                            mail.ProjectId.Value,
-                            mail.RecipientUserId.Value,
-                            ct));
-                if (!recipientAuthorized)
+                var owner = PolicyFor(mail.EventType);
+                if (owner is not null)
                 {
-                    var policyDisabled = !notificationAllowed;
-                    var reason = policyDisabled
-                        ? EmailNotificationPolicy.DisabledReason
-                        : mail.EventType == "PROJECT_SUBMITTED"
-                            ? ProjectNotificationService.SupersededAcceptanceMailReason
-                            : ProjectNotificationService.StaleProjectMailReason;
-                    var cancelled = await claimContext.EmailOutbox.Where(item =>
-                            item.Id == mail.Id
-                            && item.Status == "SENDING"
-                            && item.NextAttemptAt == lease)
-                        .ExecuteUpdateAsync(setters => setters
-                            .SetProperty(item => item.Status, "CANCELLED")
-                            .SetProperty(item => item.NextAttemptAt, (DateTime?)null)
-                            .SetProperty(item => item.LastError, reason), ct);
-                    if (cancelled == 1)
+                    if (!await AuthorizeExternalAsync(owner, mail, lease, claimConnection, claimTransaction, claimContext, ct))
                     {
-                        await audit.WriteAsync(
-                            claimConnection,
-                            claimTransaction,
-                            null,
-                            "EMAIL_CANCELLED_STALE",
-                            "email_outbox",
-                            mail.Id,
-                            new
-                            {
-                                eventType = mail.EventType,
-                                status = "CANCELLED",
-                                reason = policyDisabled
-                                    ? EmailNotificationPolicy.DisabledAuditReason
-                                    : mail.EventType == "PROJECT_SUBMITTED"
-                                    ? "PROJECT_ACCEPTANCE_STALE"
-                                    : "PROJECT_RECIPIENT_UNAUTHORIZED",
-                            },
-                            null,
-                            ct);
+                        await claimTransaction.CommitAsync(ct);
+                        continue;
                     }
                     await claimTransaction.CommitAsync(ct);
-                    continue;
                 }
-                await claimTransaction.CommitAsync(ct);
+                else
+                {
+                    var currentPolicy = await EmailNotificationPolicy.LoadAsync(claimConnection, claimTransaction, ct);
+                    var currentRecipientType = mail.RecipientUserId is { } recipientId
+                        ? await claimContext.Users
+                            .Where(user => user.Id == recipientId && user.Status == "ACTIVE")
+                            .Select(user => user.UserType)
+                            .SingleOrDefaultAsync(ct)
+                        : mail.RecipientUserType;
+                    var notificationAllowed = currentPolicy.Allows(mail.EventType, currentRecipientType);
+                    var recipientAuthorized = notificationAllowed && (mail.EventType == "PROJECT_SUBMITTED"
+                        ? await IsCurrentPendingAcceptanceAsync(claimConnection, claimTransaction, mail, ct)
+                        : mail.ProjectId is null || mail.RecipientUserId is null
+                            ? mail.ProjectId is null && mail.RecipientUserId is null
+                            : await ProjectNotificationService.IsCurrentProjectRecipientAsync(
+                                claimConnection,
+                                claimTransaction,
+                                mail.ProjectId.Value,
+                                mail.RecipientUserId.Value,
+                                ct));
+                    if (!recipientAuthorized)
+                    {
+                        var policyDisabled = !notificationAllowed;
+                        var reason = policyDisabled
+                            ? EmailNotificationPolicy.DisabledReason
+                            : mail.EventType == "PROJECT_SUBMITTED"
+                                ? ProjectNotificationService.SupersededAcceptanceMailReason
+                                : ProjectNotificationService.StaleProjectMailReason;
+                        var cancelled = await claimContext.EmailOutbox.Where(item =>
+                                item.Id == mail.Id
+                                && item.Status == "SENDING"
+                                && item.NextAttemptAt == lease)
+                            .ExecuteUpdateAsync(setters => setters
+                                .SetProperty(item => item.Status, "CANCELLED")
+                                .SetProperty(item => item.NextAttemptAt, (DateTime?)null)
+                                .SetProperty(item => item.LastError, reason), ct);
+                        if (cancelled == 1)
+                        {
+                            await audit.WriteAsync(
+                                claimConnection,
+                                claimTransaction,
+                                null,
+                                "EMAIL_CANCELLED_STALE",
+                                "email_outbox",
+                                mail.Id,
+                                new
+                                {
+                                    eventType = mail.EventType,
+                                    status = "CANCELLED",
+                                    reason = policyDisabled
+                                        ? EmailNotificationPolicy.DisabledAuditReason
+                                        : mail.EventType == "PROJECT_SUBMITTED"
+                                        ? "PROJECT_ACCEPTANCE_STALE"
+                                        : "PROJECT_RECIPIENT_UNAUTHORIZED",
+                                },
+                                null,
+                                ct);
+                        }
+                        await claimTransaction.CommitAsync(ct);
+                        continue;
+                    }
+                    await claimTransaction.CommitAsync(ct);
+                }
             }
             // SMTP may take a minute. The durable lease protects this message;
             // no pooled database connection is needed while waiting on the network.
@@ -328,7 +388,7 @@ public sealed class MailService
                     .SetProperty(item => item.RetryCount, retries)
                     .SetProperty(item => item.LastError, error)
                     .SetProperty(item => item.NextAttemptAt, nextAttemptAt), completionToken);
-            if (changed == 1) await audit.WriteAsync(conn, tx, null, status == "SENT" ? "EMAIL_SENT" : status == "FAILED" ? "EMAIL_FAILED" : "EMAIL_RETRY", "email_outbox", mail.Id, new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error }, null, completionToken);
+            if (changed == 1) await audit.WriteAsync(conn, tx, null, AuditAction(mail.EventType, status == "SENT" ? "EMAIL_SENT" : status == "FAILED" ? "EMAIL_FAILED" : "EMAIL_RETRY"), "email_outbox", mail.Id, new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error }, null, completionToken);
             await tx.CommitAsync(completionToken);
         }
     }
@@ -343,7 +403,7 @@ public sealed class MailService
             .OrderBy(mail => mail.Id)
             .Select(mail => new DisabledMailRow { Id = mail.Id, EventType = mail.EventType })
             .ToListAsync(ct);
-        foreach (var row in rows)
+        foreach (var row in rows.Where(row => PolicyFor(row.EventType) is null))
         {
             await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
             await using var itemContext = EfDb.Use(conn, tx);
@@ -363,6 +423,24 @@ public sealed class MailService
             await tx.CommitAsync(ct);
         }
     }
+    /// <summary>Send-time decision for mail owned by another business line; cancels (and audits) stale mail in place.</summary>
+    private async Task<bool> AuthorizeExternalAsync(IOutboxRecipientPolicy owner, MailRow mail, DateTime lease,
+        MySqlConnection conn, MySqlTransaction tx, YfDbContext context, CancellationToken ct)
+    {
+        var decision = await owner.EvaluateAsync(conn, tx, new OutboxMailInfo(
+            mail.Id, mail.EventType, mail.DedupeKey, mail.RecipientUserId, mail.RecipientRealm, mail.RecipientAccountId, mail.OemTransferId), ct);
+        if (decision.Allowed) return true;
+        var cancelled = await context.EmailOutbox.Where(item => item.Id == mail.Id && item.Status == "SENDING" && item.NextAttemptAt == lease)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.Status, "CANCELLED")
+                .SetProperty(item => item.NextAttemptAt, (DateTime?)null)
+                .SetProperty(item => item.LastError, decision.Reason), ct);
+        if (cancelled == 1)
+            await audit.WriteAsync(conn, tx, null, owner.AuditActionPrefix + "EMAIL_CANCELLED_STALE", "email_outbox", mail.Id,
+                new { eventType = mail.EventType, status = "CANCELLED", reason = decision.AuditReason }, null, ct);
+        return false;
+    }
+
     private sealed class DisabledMailRow { public ulong Id { get; init; } public string EventType { get; init; } = ""; }
     private static async Task<bool> IsCurrentPendingAcceptanceAsync(
         MySqlConnection conn,
@@ -418,6 +496,9 @@ public sealed class MailService
         public string Status { get; set; } = "";
         public int RetryCount { get; set; }
         public DateTime? NextAttemptAt { get; set; }
+        public string? RecipientRealm { get; set; }
+        public ulong? RecipientAccountId { get; set; }
+        public ulong? OemTransferId { get; set; }
     }
 }
 
