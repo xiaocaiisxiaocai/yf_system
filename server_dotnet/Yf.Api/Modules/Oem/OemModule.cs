@@ -1,7 +1,9 @@
 using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Oem.Admin;
+using Yf.Api.Modules.Oem.Approval;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Identity;
+using Yf.Api.Modules.Oem.Policies;
 
 namespace Yf.Api.Modules.Oem;
 
@@ -24,6 +26,14 @@ public static class OemModule
 
         // Directory slice: vendors and vendor accounts.
         services.AddSingleton<OemDirectoryService>();
+
+        // Policy slice: retention templates and the oem.* parameter pages.
+        services.AddSingleton<OemRetentionTemplateService>();
+        services.AddSingleton<OemSettingsService>();
+
+        // Approval slice: template administration and planning.
+        services.AddSingleton<ApprovalPlanningService>();
+        services.AddSingleton<OemFlowTemplateService>();
         return services;
     }
 
@@ -35,6 +45,7 @@ public static class OemModule
         // Everything except the auth group requires a resolved OEM actor (internal staff or OEM account).
         var secured = root.MapGroup(string.Empty).AddEndpointFilter<OemAccessFilter>();
         OemDirectoryEndpoints.Map(secured);
+        OemPolicyEndpoints.Map(secured);
         return endpoints;
     }
 }

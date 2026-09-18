@@ -113,5 +113,21 @@
   "GET /api/v1/oem/accounts/{}",
   "PUT /api/v1/oem/accounts/{}",
   "PUT /api/v1/oem/accounts/{}/status",
-  "PUT /api/v1/oem/accounts/{}/password"
+  "PUT /api/v1/oem/accounts/{}/password",
+  "GET /api/v1/oem/retention-templates",
+  "GET /api/v1/oem/retention-template-options",
+  "POST /api/v1/oem/retention-templates",
+  "PUT /api/v1/oem/retention-templates/{}",
+  "GET /api/v1/oem/file-policies",
+  "PUT /api/v1/oem/file-policies",
+  "GET /api/v1/oem/notify-policies",
+  "PUT /api/v1/oem/notify-policies",
+  "GET /api/v1/oem/flow-templates",
+  "POST /api/v1/oem/flow-templates",
+  "GET /api/v1/oem/flow-templates/preview",
+  "GET /api/v1/oem/flow-templates/{}",
+  "PUT /api/v1/oem/flow-templates/{}",
+  "PUT /api/v1/oem/flow-templates/{}/nodes",
+  "PUT /api/v1/oem/flow-templates/{}/scopes",
+  "GET /api/v1/oem/approver-options"
 ]
