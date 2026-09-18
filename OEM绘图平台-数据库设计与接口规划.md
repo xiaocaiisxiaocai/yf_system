@@ -1,17 +1,22 @@
 # OEM 绘图平台 - 数据库设计与接口规划
 
-**版本**：V0.4（设计草案，单节点部署与业务线隔离已确认，尚未开发）
+**版本**：V0.5（设计草案，审批流与邮件通知规则已确认，尚未开发）
 **更新日期**：2026-09-18
 **前置文档**：[OEM绘图平台-需求文档.md](./OEM绘图平台-需求文档.md)
 
 本文档覆盖 OEM 平台新增的数据库对象、状态边界和接口。生产后端继续使用 ASP.NET Core 10、EF Core、Pomelo/MySqlConnector、camelCase JSON、Bearer + 刷新会话轮换和 EF Core 迁移；普通业务读写使用 EF Core，只有行锁、命名锁和其他已审查的原子边界使用参数化原生 SQL。
 
+> V0.5 变更：
+> - 审批流增强：模板可按事业部/部门/课别绑定；审批人来源增加事业部主管和指定人员，指定人员支持或签/会签；每个节点可配置“发起人就是本节点审批人”时改由备用审批人审批、本节点免审或禁止发送；全部节点免审时扫描通过后直接发布；
+> - 取消 V0.4 的“同一审批人合并”规则：组织上不存在兼任，同一人出现在多个节点视为模板配置错误，发送失败；
+> - 不在任何课别下的内部员工不能创建和发送公司出站传递单；
+> - 邮件通知审批人和接收人：待审批邮件发给当前审批人；发布邮件发给全部接收人（公司出站为目标厂商全部启用账号，OEM 入站为全部具备查看+下载权限的内部员工），逐人单独发送。
+>
 > V0.4 变更：
 > - 确认单服务器、单端口、单进程部署，删除多机相关表述；租约保留，用于 IIS 回收重叠和进程重启恢复；
 > - 新增 §0.1 业务线双向隔离的实现要求及对应权限点、接口和回归项；
 > - 取消 V0.3 的独立操作凭证目录 `OemOperationJournalRoot`；数据库恢复改为“维护脚本写恢复标记 → 启动核对 → 缺失统一 `MISSING_UNVERIFIED`、孤儿文件删除”；
 > - `oem_file_operations` 收窄为只负责隔离区→正式区移动的 `oem_file_promotions`；删除沿用文件行上的清理租约；
-> - 同一审批人命中多个节点时合并为一个任务；
 > - V0.3 中以段落描述的表全部改为带类型的表格；`approval_status` 明确为接口派生字段，不是数据库列；去掉与清理租约重复的 `purge_claimed_at`；`stored_name` 兼作 V0.3 的 `file_uuid`；
 > - 传递单增加 `ABANDONED` 状态及关闭原因字段。
 
@@ -186,7 +191,7 @@
 
 扫描汇总、审批进度、部分/全部删除及缺失数量按 §2.5 派生，不写入传递单，也不用文件状态覆盖业务结果。
 
-接口返回的 `approvalStatus` 是派生字段，不是数据库列：出站方向由 `oem_flow_instances.status` 映射为 `WAITING_SCAN / PENDING / APPROVAL_BLOCKED / APPROVED / REJECTED / CANCELLED`，草稿阶段为空；入站方向固定为 `NOT_REQUIRED`。
+接口返回的 `approvalStatus` 是派生字段，不是数据库列：出站方向由 `oem_flow_instances.status` 映射为 `WAITING_SCAN / PENDING / APPROVAL_BLOCKED / APPROVED / SKIPPED / REJECTED / CANCELLED`（`SKIPPED` 表示全部节点按策略免审），草稿阶段为空；入站方向固定为 `NOT_REQUIRED`。
 
 接收范围不另建成员表：公司出站按 `oem_company_id` 匹配该厂商全部启用账号；OEM 入站按内部账号是否同时具备 `oem:transfer_view` 和 `oem:file_download` 动态判断。
 
@@ -319,15 +324,32 @@
 
 ### 1.9 审批流
 
+审批流由管理员在模板中配置，支持按组织选用不同模板、多种审批人来源、指定人员或签/会签，以及“发起人本人就是该节点审批人”时的处理策略。不支持加签、退回某节点重审和通用条件表达式。
+
+#### 1.9.1 模板与适用范围
+
 **`oem_flow_templates`**
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | id | BIGINT UNSIGNED PK | |
 | name | VARCHAR(64) NOT NULL | |
+| is_default | TINYINT(1) NOT NULL | 默认模板；启用状态的默认模板有且只有一个 |
 | status | VARCHAR(16) NOT NULL | `ACTIVE / DISABLED` |
 | concurrency_version | BIGINT UNSIGNED NOT NULL | |
 | created_by / created_at / updated_at | | |
+
+**`oem_flow_template_scopes`**（模板适用的组织）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | BIGINT UNSIGNED PK | |
+| template_id | BIGINT UNSIGNED NOT NULL FK | |
+| department_id | BIGINT UNSIGNED NOT NULL UNIQUE | 事业部、部门或课别；一个组织最多绑定一个模板 |
+
+选用规则：按发送人所在课别 → 所属部门 → 所属事业部的顺序，取第一个绑定了启用模板的组织；都没有绑定时用默认模板。没有可用模板时发送失败。
+
+#### 1.9.2 节点
 
 **`oem_flow_template_nodes`**
 
@@ -337,11 +359,38 @@
 | template_id | BIGINT UNSIGNED NOT NULL FK | |
 | sort_no | INT NOT NULL | 唯一索引 `(template_id, sort_no)` |
 | name | VARCHAR(64) NOT NULL | 节点显示名 |
-| approver_source | VARCHAR(32) NOT NULL | 仅 `SECTION_LEADER / DEPARTMENT_LEADER` |
-| approval_mode | VARCHAR(16) NOT NULL | 仅 `SINGLE` |
-| enabled | TINYINT(1) NOT NULL | 部门节点默认 0 |
+| approver_source | VARCHAR(32) NOT NULL | `SECTION_LEADER / DEPARTMENT_LEADER / DIVISION_LEADER / SPECIFIED_USERS` |
+| approval_mode | VARCHAR(16) NOT NULL | 主管类来源固定 `SINGLE`；`SPECIFIED_USERS` 可选 `ANY`（或签，任一人通过即可）/ `ALL`（会签，全部通过） |
+| self_policy | VARCHAR(16) NOT NULL | 发起人本人就是本节点审批人时的处理：`DESIGNATED`（改由本节点备用审批人审批）/ `SKIP`（本节点免审）/ `BLOCK`（禁止发送） |
+| enabled | TINYINT(1) NOT NULL | 关闭的节点彻底跳过 |
 
-被实例引用的模板不得物理删除。
+**`oem_flow_template_node_users`**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | BIGINT UNSIGNED PK | |
+| node_id | BIGINT UNSIGNED NOT NULL FK | |
+| user_id | BIGINT UNSIGNED NOT NULL FK→users | 内部账号 |
+| role | VARCHAR(16) NOT NULL | `APPROVER`（`SPECIFIED_USERS` 节点的审批人）/ `FALLBACK`（`self_policy=DESIGNATED` 时的备用审批人） |
+
+唯一索引 `(node_id, role, user_id)`。每个模板的节点数、每个节点的人数设上限（实施时定值）。保存模板时校验：`SPECIFIED_USERS` 节点至少有一名 `APPROVER`；`self_policy=DESIGNATED` 的节点至少有一名 `FALLBACK`；所有人员必须是启用的内部账号且具备 `oem:flow_approve`。被实例引用的模板和节点不得物理删除。
+
+系统初始默认模板：节点 1 `SECTION_LEADER`、`self_policy=SKIP`、启用；节点 2 `DEPARTMENT_LEADER`、`self_policy=SKIP`、关闭。管理员可改为 `DESIGNATED` 并配置备用审批人。
+
+#### 1.9.3 发送时解析
+
+发送事务内按模板解析全部启用节点，结果写入快照并创建实例、节点和任务：
+
+1. 发起人必须归属一个启用的**课别**。直属部门或事业部、不在任何课别下的内部员工不能创建和发送公司出站传递单，创建草稿和发送时都校验；
+2. 主管类节点取发起人组织路径上对应层级的 `leader_account_id`：
+   - 未配置主管，或主管已禁用/无 `oem:flow_approve`：发送失败，提示管理员维护主管；
+   - 主管就是发起人本人：按 `self_policy` 处理：`DESIGNATED` 改用本节点 `FALLBACK` 人员（按 `ANY` 处理，发起人本人从名单中剔除）；`SKIP` 本节点记为免审；`BLOCK` 发送失败；
+3. `SPECIFIED_USERS` 节点：先从名单中剔除发起人本人和不合格人员；剔除发起人后名单为空时按 `self_policy` 处理；因人员失效导致名单为空、或 `ALL` 模式下有人失效时，发送失败；
+4. 同一审批人出现在同一实例的多个节点中属于模板配置错误，发送失败并提示调整模板（组织上不存在兼任，出现即视为配置问题）；
+5. 全部启用节点都被免审时，实例状态直接为 `SKIPPED`：传递单扫描通过后按无需审批直接发布，快照和审计记录每个节点的免审原因；
+6. 任一步失败时整个发送事务回滚，传递单保持草稿。
+
+#### 1.9.4 实例、节点与任务
 
 **`oem_flow_instances`**
 
@@ -352,25 +401,37 @@
 | template_id | BIGINT UNSIGNED NOT NULL FK | 来源模板 |
 | initiator_user_id | BIGINT UNSIGNED NOT NULL FK→users | 内部发送人 |
 | initiator_section_id | BIGINT UNSIGNED NOT NULL | 发起时课别快照 |
-| status | VARCHAR(24) NOT NULL | `WAITING_SCAN / IN_PROGRESS / APPROVAL_BLOCKED / COMPLETED / REJECTED / CANCELLED` |
-| template_snapshot | JSON NOT NULL | 发送时的模板、组织路径、节点、解析结果及合并关系 |
+| status | VARCHAR(24) NOT NULL | `WAITING_SCAN / IN_PROGRESS / APPROVAL_BLOCKED / COMPLETED / SKIPPED / REJECTED / CANCELLED` |
+| template_snapshot | JSON NOT NULL | 发送时的模板、适用组织、组织路径、节点配置及解析结果 |
 | blocked_reason | VARCHAR(128) NULL | 审批阻断原因 |
-| current_sort_no | INT NULL | 当前任务的 sort_no |
+| current_sort_no | INT NULL | 当前节点 |
 | concurrency_version | BIGINT UNSIGNED NOT NULL | |
 | created_at / updated_at | DATETIME(3) | |
 
-**`oem_flow_tasks`**
+**`oem_flow_instance_nodes`**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | BIGINT UNSIGNED PK | |
+| instance_id | BIGINT UNSIGNED NOT NULL FK | 唯一索引 `(instance_id, sort_no)` |
+| sort_no | INT NOT NULL | |
+| name | VARCHAR(64) NOT NULL | 快照 |
+| approver_source | VARCHAR(32) NOT NULL | 快照 |
+| approval_mode | VARCHAR(16) NOT NULL | 实际生效模式；备用审批人为 `ANY` |
+| status | VARCHAR(16) NOT NULL | `WAITING / PENDING / APPROVED / REJECTED / SKIPPED / CANCELLED` |
+| skip_reason | VARCHAR(32) NULL | `SELF_POLICY_SKIP` |
+| used_fallback | TINYINT(1) NOT NULL | 是否因发起人是主管而改用备用审批人 |
+| completed_at | DATETIME(3) NULL | |
+
+**`oem_flow_tasks`**（每个节点每位审批人一条）
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | id | BIGINT UNSIGNED PK | |
 | instance_id | BIGINT UNSIGNED NOT NULL FK | |
-| sort_no | INT NOT NULL | 该任务所在的首个节点顺序 |
-| covered_sort_nos | VARCHAR(64) NOT NULL | 本任务满足的全部节点顺序（合并时多个，如 `1,2`） |
-| node_name | VARCHAR(128) NOT NULL | 节点名称快照；合并时为多个节点名 |
-| approver_source | VARCHAR(64) NOT NULL | 来源快照；合并时为多个来源 |
+| instance_node_id | BIGINT UNSIGNED NOT NULL FK | |
 | approver_user_id | BIGINT UNSIGNED NOT NULL FK→users | 审批人，任何操作都不改写 |
-| status | VARCHAR(16) NOT NULL | `WAITING / PENDING / APPROVED / REJECTED / SUPERSEDED / CANCELLED` |
+| status | VARCHAR(16) NOT NULL | `WAITING / PENDING / APPROVED / REJECTED / NOT_NEEDED / SUPERSEDED / CANCELLED` |
 | reason | VARCHAR(1024) NULL | 驳回原因 |
 | replaces_task_id | BIGINT UNSIGNED NULL | 改派时指向被替代的旧任务 |
 | reassign_reason | VARCHAR(512) NULL | 改派原因 |
@@ -379,26 +440,28 @@
 | concurrency_version | BIGINT UNSIGNED NOT NULL | |
 | created_at | DATETIME(3) NOT NULL | |
 
-索引：`(instance_id, sort_no)`、`(approver_user_id, status)`。
+索引：`(instance_node_id)`、`(approver_user_id, status)`。
 
-发送事务内解析全部启用节点并创建 `WAITING` 任务：
+#### 1.9.5 推进规则
 
-- 每个节点必须解析为启用、有 `oem:flow_approve` 权限且非发送人的内部账号，任一失败整个发送事务回滚、保留草稿，不得跳过；
-- 多个节点解析为同一人时只建一个任务，`covered_sort_nos` 记录全部被满足的节点，快照中记录合并关系；该任务通过即视为这些节点全部通过；
-- 发起人必须归属有效课别；默认模板下课别主管自发起会被阻断，部门节点关闭时不自动启用，备用路由待业务确认；
-- 模板或组织主管之后变化不改写已创建任务；
-- 只有当前任务能审批，重复或过期操作返回冲突。
-
-发送成功后实例为 `WAITING_SCAN`；全部文件 `CLEAN` 且移动完成后才激活为 `IN_PROGRESS`，首个任务置 `PENDING`。激活和每次决定时重新校验快照人员的启用状态和审批权限，失效则置 `APPROVAL_BLOCKED` 并通知。账号禁用/撤权时主动检查相关实例，巡检兜底。业务版本、快照和活跃上传校验都在发送事务中完成；重复 send 依靠版本和唯一 `transfer_id` 返回已有结果，不重复建实例。
+- 发送成功后实例为 `WAITING_SCAN`（全部免审时为 `SKIPPED`），任务为 `WAITING`；
+- 全部文件 `CLEAN` 且移动完成后，实例激活为 `IN_PROGRESS`，第一个未免审节点置 `PENDING`，其全部任务置 `PENDING` 并给这些审批人发邮件；
+- `SINGLE`/`ANY`：任一任务通过即节点通过，其余任务置 `NOT_NEEDED`；`ALL`：全部任务通过节点才通过；
+- 任一任务驳回：节点、实例置 `REJECTED`，其余未完成任务置 `CANCELLED`，传递单置 `REJECTED`；
+- 节点通过后推进到下一个未免审节点；全部完成后实例 `COMPLETED`，在同一事务中发布传递单、初始化删除期限、为接收方入队通知；
+- 激活和每次决定时重新校验当前节点审批人的启用状态和 `oem:flow_approve` 权限：`ANY` 节点还有至少一名有效审批人时继续，否则置 `APPROVAL_BLOCKED`；`SINGLE`/`ALL` 节点有人失效即 `APPROVAL_BLOCKED`；阻断时通知发送人和 `oem:approval_recover` 管理员。账号禁用/撤权时主动检查相关实例，巡检兜底；
+- 模板、适用范围、组织主管之后的变化不改写已创建的实例；
+- 只有 `PENDING` 任务的指派人能审批，重复或过期操作返回冲突；
+- 重复 send 依靠版本和唯一 `transfer_id` 返回已有结果，不重复建实例。
 
 `oem:approval_recover` 可对异常未完成任务改派，或终止未发布的传递单，必须填写原因：
 
-- 改派：新审批人必须合格且非发送人；旧任务置 `SUPERSEDED`，新建任务并以 `replaces_task_id` 关联，沿用旧任务的 `covered_sort_nos`；改派与迟到审批用行锁和版本号互斥，只允许一次有效决议；已完成节点不变；
-- 改派后重新校验全部未完成任务：扫描未完成继续 `WAITING_SCAN`，扫描完成且无失效任务才恢复 `IN_PROGRESS`，否则保持 `APPROVAL_BLOCKED`；
-- 终止：实例和未完成任务置 `CANCELLED`，传递单置 `CANCELLED`，附件按安全清理期限处理；
-- 管理员不能代替审批人审批通过。
+- 改派：新审批人必须合格、非发送人且不在本实例其他节点中；旧任务置 `SUPERSEDED`，新建任务并以 `replaces_task_id` 关联；改派与迟到审批用行锁和版本号互斥，只允许一次有效决议；已完成节点不变；
+- 改派后重新校验：扫描未完成继续 `WAITING_SCAN`，扫描完成且当前节点有效才恢复 `IN_PROGRESS`，否则保持 `APPROVAL_BLOCKED`；
+- 终止：实例、节点和未完成任务置 `CANCELLED`，传递单置 `CANCELLED`，附件按安全清理期限处理；
+- 管理员不能代替审批人审批通过，也不能把节点改为免审。
 
-扫描最终失败时，等待中的实例和任务置 `CANCELLED`。审批通过、发布、删除期限初始化和通知入队在同一事务中完成。
+扫描最终失败时，等待中的实例、节点和任务置 `CANCELLED`。
 
 ### 1.10 下载会话与首次接收
 
@@ -475,7 +538,22 @@ purge_due_at =
 
 `email_outbox` 增加 `recipient_realm VARCHAR(16) NULL`、`recipient_account_id BIGINT UNSIGNED NULL` 和 `oem_transfer_id BIGINT UNSIGNED NULL`；OEM 收件人仍使用入队时快照的邮箱。发送前按 realm 重新校验账号和厂商是否启用，失效则取消。
 
-还须按事件类型重新校验状态与资格：发布邮件检查 `RELEASED` 及查看/下载权限；审批邮件检查当前任务；异常邮件检查发送人或异常处置资格。所有邮件同时检查 `oem.notify.*` 渠道规则。内部入站范围覆盖所有厂商、不按组织过滤；发布事件在站内可见，但邮件对象和渠道必须显式配置，不能从 view 权限直接推导为全员群发，未配置时默认不群发。审批只通知当前处理人，阻断通知发送人和异常处置管理员；安全告警不向未获得文件访问权的接收方暴露内容。发布通知以 transfer + event + recipient realm/id 去重，在发布事务中入队。
+邮件规则：
+
+| 事件 | 收件人 | 默认 |
+|---|---|---|
+| 待审批（节点激活、改派产生新任务） | 当前节点每位 `PENDING` 任务的审批人 | 开启 |
+| 公司出站发布 | 目标厂商全部启用 OEM 账号 | 开启 |
+| OEM 入站发布 | 全部同时具备 `oem:transfer_view` 和 `oem:file_download` 的启用内部员工 | 开启 |
+| 审批通过/驳回、审批阻断、扫描最终失败、存储丢失/原因待核实 | 发送人（OEM 方向为发送账号本人）；审批阻断另发 `oem:approval_recover` 管理员 | 开启 |
+| 首名接收方完成下载、即将删除、删除失败 | 发送人 | 可配置 |
+
+- 每位收件人单独一封邮件，不使用抄送/群发列表，不向 OEM 收件人暴露其他收件人地址；
+- 邮件只包含传递单标题、方向、发送方（姓名/厂商）、附件数量和总大小，以及 OEM 页面入口链接；不附带附件、文件名、下载令牌或存储路径；
+- 发送前按事件重新校验：发布邮件检查传递单仍为 `RELEASED`、收件人仍启用且仍属于接收范围（OEM 账号还检查所属厂商启用）；审批邮件检查任务仍为 `PENDING` 且指派人未变；不满足时取消该封邮件；
+- 所有邮件同时受 `oem.notify.*` 总开关和按事件开关控制；关闭邮件不影响站内通知；
+- 以 transfer + event + recipient realm/id（审批邮件加 task id）去重，在触发事件的同一事务中入队；
+- 安全告警不向未获得文件访问权的接收方暴露任何内容。
 
 ## 2. 状态与事务边界
 
@@ -487,7 +565,7 @@ DRAFT
 SEALED + 扫描中
   → 全部 CLEAN 且移动完成
 激活审批实例（失效则 APPROVAL_BLOCKED）
-  → 全部任务 APPROVED
+  → 全部未免审节点通过（全部免审时跳过此步）
 RELEASED（OEM 厂商全部启用账号可下载）
   → 文件逐个首次接收或到期
 文件 PURGE_PENDING → PURGED；传递单保留 RELEASED
@@ -581,7 +659,7 @@ transfer.lifecycle_status == RELEASED
 | `oem.download.idle_timeout_seconds` | 无进展取消期限 |
 | `oem.download.max_duration_minutes` | 单请求最长时长 |
 | `oem.download.purge_drain_minutes` | 到期后活动请求排空期限 |
-| `oem.notify.*` | OEM 邮件提醒开关与收件规则，独立于协作平台 `notify.*` |
+| `oem.notify.*` | OEM 邮件提醒总开关及按事件开关，独立于协作平台 `notify.*`；审批人和接收人通知默认开启 |
 | `oem.storage.reconcile_required` | 恢复核对标记，由维护脚本或命令写入，核对完成后由系统清除（非管理员可编辑参数） |
 
 除 `oem.storage.reconcile_required` 外，这些参数由具备 `oem:file_policy_manage` 的内部管理员维护（`oem.notify.*` 由 `oem:notify_manage` 维护）。加密压缩包拒绝规则不是可关闭开关。
@@ -675,8 +753,10 @@ OEM realm 使用固定能力：创建本厂商入站传递、查看本厂商收�
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET / POST | `/oem/flow-templates` | 审批模板列表/创建 |
-| PUT | `/oem/flow-templates/{id}` | 名称、状态 |
-| PUT | `/oem/flow-templates/{id}/nodes` | 整组替换节点，只影响之后的发送 |
+| PUT | `/oem/flow-templates/{id}` | 名称、状态、是否默认 |
+| PUT | `/oem/flow-templates/{id}/nodes` | 整组替换节点（含来源、模式、`self_policy`、指定/备用人员），只影响之后的发送 |
+| PUT | `/oem/flow-templates/{id}/scopes` | 整组替换适用组织；与其他模板冲突时返回冲突 |
+| GET | `/oem/flow-templates/preview?userId=` | 按当前配置预览某内部员工发送时会走的模板、节点和审批人，不创建任何数据 |
 | GET / POST | `/oem/retention-templates` | 删除策略模板列表/创建 |
 | PUT | `/oem/retention-templates/{id}` | 修改名称、时长和状态，只影响之后的发送 |
 
@@ -691,7 +771,7 @@ OEM realm 使用固定能力：创建本厂商入站传递、查看本厂商收�
 | POST | `/oem/transfers/{id}/send` | 冻结清单并启动后续扫描/审批/自动发布 |
 | GET | `/oem/transfers/{id}/files` | 文件列表及扫描、接收和清理状态 |
 
-内部创建必须提交目标 `oemCompanyId`；OEM 创建时服务端使用账号所属厂商，拒绝客户端传入的其他厂商。发送要求至少一个合并完成的文件且没有活跃上传。
+内部创建要求发送人归属启用的课别，否则拒绝（直属部门/事业部员工不能发送）；必须提交目标 `oemCompanyId`；OEM 创建时服务端使用账号所属厂商，拒绝客户端传入的其他厂商。发送要求至少一个合并完成的文件且没有活跃上传。
 
 列表/详情的数据范围按方向和阶段过滤：OEM 只看本厂商发出的单据及公司已发布给本厂商的单据，看不到公司未发布的草稿、扫描或审批详情。内部 view 权限只提供元数据，查看内容还需 download 权限或当前审批任务资格；发送人维护自己的草稿并不因此获得全部入站内容的访问权。同厂商其他员工在发布后共享发送侧文件，未发布草稿只有实际发送人可维护和读取。
 
@@ -752,7 +832,9 @@ OEM realm 使用固定能力：创建本厂商入站传递、查看本厂商收�
 - 公司出站在扫描和审批完成前 OEM 不可见、不可下载；
 - OEM 入站无需人工审批，但扫描未通过时内部不可预览或下载；
 - 上传人自审、缺少课别及任一启用节点解析失败时发送回滚；模板/组织变更不改变发送快照；
-- 同一人命中两个节点时只生成一个任务，一次审批满足两个节点；
+- 模板按课别→部门→事业部→默认的顺序选用；主管发起时 `DESIGNATED`/`SKIP`/`BLOCK` 分别生效；全部免审时扫描通过后直接发布且审计记录免审原因；或签任一人通过即推进、会签需全部通过、任一人驳回即终止；同一人出现在多个节点时发送失败；
+- 不在任何课别下的内部员工创建或发送出站传递单被拒绝；
+- 待审批邮件只发给当前节点审批人；发布邮件发给全部接收人、逐人单发、不暴露其他收件人地址；撤权或禁用的接收人不收邮件；
 - 审批人禁用/撤权会阻断，可以改派或终止；改派与迟到审批竞争时只允许一次有效决议；
 - 发送后附件不能增删替换，模板变化不影响历史实例；
 - 加密 ZIP/RAR/7z、病毒命中、扫描超时和不可扫描均失败关闭；扫描暂时错误能重试，最终错误才阻断；
@@ -770,9 +852,9 @@ OEM realm 使用固定能力：创建本厂商入站传递、查看本厂商收�
 
 ## 8. 已确认决策与待填参数
 
-已确认：单节点部署、业务线双向隔离、核心业务方向、接收范围、审批边界、同一审批人合并、双向扫描、加密压缩包拒绝、管理员策略模板、首次接收触发、不建立版本、OEM 文件不备份、不建独立操作凭证。
+已确认：单节点部署、业务线双向隔离、核心业务方向、接收范围、可配置审批流（按组织选用模板、指定人员或签/会签、主管发起改派或免审）、非课别员工不能发送、审批人及接收人邮件通知、双向扫描、加密压缩包拒绝、管理员策略模板、首次接收触发、不建立版本、OEM 文件不备份、不建独立操作凭证。
 
-实施前补齐：初始白名单、文件/空间/并发上限、宽限及各类租约时长、隔离清理期限、扫描器及更新/超时/重试参数。主管本人和非课别人员的备用路由、邮件收件规则仍需业务确认，确认前采用明确阻断及不自动群发的默认行为。
+实施前补齐：初始白名单、文件/空间/并发上限、宽限及各类租约时长、隔离清理期限、扫描器及更新/超时/重试参数。各组织的审批模板、适用范围和备用审批人由管理员在上线前配置。
 
 ---
 
