@@ -1,6 +1,6 @@
 # OEM 绘图平台 - 数据库设计与接口规划
 
-**版本**：V0.2（设计草案，尚未开发）
+**版本**：V0.3（设计草案，异常与恢复契约已补充，尚未开发）
 **更新日期**：2026-09-18
 **前置文档**：[OEM绘图平台-需求文档.md](./OEM绘图平台-需求文档.md)
 
@@ -61,7 +61,9 @@
 | failed_login_attempts / locked_until | | 复用现有限流语义 |
 | created_by / created_at / updated_at | | |
 
-OEM token 使用 `realm=oem`。刷新会话为 OEM 建立独立表或在统一会话表中加入不可伪造的 realm；无论采用哪种实现，OEM 会话都不能解析成现有内部/供应商用户。
+OEM token 使用 realm=oem，刷新会话与内部/供应商会话隔离，不能解析成现有用户。
+
+V0.3 选定独立 oem_refresh_tokens 表：id、account_id（FK→oem_accounts）、session_id、token_hash（唯一）、expires_at、revoked、轮换关联及创建/撤销时间；复用轮换和重放撤销算法，Cookie 名称/路径独立。现有 LoginRateLimiter 是内存 IP 与 IP+登录名限流，复用时账号桶增加 realm，登录名规范化与账号查找一致，总 IP 桶可共享。数据库失败次数分别锁定 users / oem_accounts 的具体账号行，不按裸登录名共用计数。
 
 ### 1.3 删除策略模板
 
@@ -100,8 +102,7 @@ OEM token 使用 `realm=oem`。刷新会话为 OEM 建立独立表或在统一�
 | internal_sender_user_id | BIGINT UNSIGNED NULL FK→users | 公司出站发送人 |
 | oem_sender_account_id | BIGINT UNSIGNED NULL FK→oem_accounts | OEM 入站发送人 |
 | lifecycle_status | VARCHAR(24) NOT NULL | 见下方状态定义 |
-| scan_status | VARCHAR(16) NOT NULL | `PENDING / SCANNING / CLEAN / INFECTED / ERROR / UNSCANNABLE` |
-| approval_status | VARCHAR(16) NOT NULL | `NOT_REQUIRED / PENDING / APPROVED / REJECTED` |
+| approval_status | 派生字段，不独立写入 | NOT_REQUIRED / WAITING_SCAN / PENDING / APPROVAL_BLOCKED / APPROVED / REJECTED / CANCELLED，由审批实例映射 |
 | retention_template_id | BIGINT UNSIGNED NOT NULL FK | 选择的管理员模板 |
 | retention_mode | VARCHAR(32) NOT NULL | 模板快照 |
 | release_ttl_minutes | INT UNSIGNED NULL | 模板快照 |
@@ -124,11 +125,10 @@ OEM token 使用 `realm=oem`。刷新会话为 OEM 建立独立表或在统一�
 - `SEALED`：已发送并冻结附件，等待扫描、审批或自动发布；
 - `RELEASED`：接收方可下载；
 - `REJECTED`：公司出站审批被驳回；
-- `BLOCKED`：病毒命中、无法扫描或安全失败；
-- `EXPIRED`：策略到期且所有剩余实体已进入清理；
-- `PURGE_PENDING`：传递单内全部剩余文件正在删除；
-- `PURGED`：所有文件实体已删除；
-- `STORAGE_LOST`：数据库记录存在但实体文件非预期丢失。
+- `BLOCKED`：病毒、不可扫描或耗尽重试后的最终安全失败；
+- `CANCELLED`：管理员带原因终止尚未发布的传递。
+
+传递单仅持久化业务状态。扫描汇总、部分/全部删除及缺失数量按 §2.5 派生，不用文件状态覆盖业务结果；移除单据层级 EXPIRED、PURGE_PENDING、PURGED、STORAGE_LOST 状态及独立 scan_status 列。
 
 接收范围不另建成员表：公司出站按 `oem_company_id` 匹配该厂商全部启用账号；OEM 入站按内部账号是否同时具备 `oem:transfer_view` 和 `oem:file_download` 动态判断。
 
@@ -152,15 +152,20 @@ OEM token 使用 `realm=oem`。刷新会话为 OEM 建立独立表或在统一�
 | md5 | CHAR(32) NULL | 客户端完整性校验，可选 |
 | sha256 | CHAR(64) NOT NULL | 服务端合并时计算 |
 | storage_path | VARCHAR(512) NOT NULL | 相对 `OemStorageRoot` |
-| payload_status | VARCHAR(24) NOT NULL | `QUARANTINED / AVAILABLE / PURGE_PENDING / PURGED / STORAGE_LOST` |
+| payload_status | VARCHAR(24) NOT NULL | QUARANTINED / PROMOTING / AVAILABLE / PURGE_PENDING / PURGED / STORAGE_LOST / MISSING_UNVERIFIED |
 | scan_status | VARCHAR(16) NOT NULL | 每文件扫描状态 |
 | first_recipient_download_at | DATETIME(3) NULL | 首名接收方完整下载 |
 | purge_due_at | DATETIME(3) NULL | 按模板计算的删除时间 |
 | purge_claimed_at | DATETIME(3) NULL | 清理租约 |
+| purge_lease_owner / purge_lease_until | VARCHAR(64) / DATETIME(3) NULL | 清理所有者和截止时间 |
+| purge_attempt_count / purge_next_attempt_at | INT / DATETIME(3) NULL | 清理重试 |
+| purge_reason / purge_last_error | VARCHAR(64) / VARCHAR(1024) NULL | 原因及脱敏错误 |
+| file_uuid | CHAR(36) NOT NULL UNIQUE | 不重复的实体标识，防数据库恢复后数值 ID 重用 |
+| concurrency_version | BIGINT UNSIGNED NOT NULL | 条件更新及 fencing |
 | purged_at | DATETIME(3) NULL | 实体删除成功时间 |
 | created_at / updated_at | DATETIME(3) | |
 
-删除策略在每个文件上独立触发：一张传递单有多个文件时，接收方完成下载哪个文件，就只触发该文件的首次接收时间；未下载文件仍按发布期限或自身首次接收时间处理。传递单状态由其文件聚合。
+删除按文件独立触发。未下载文件仍按发布期限或自身首次接收时间处理；页面汇总文件状态，不改变传递单历史业务结果。
 
 ### 1.6 OEM 上传会话
 
@@ -178,6 +183,8 @@ OEM token 使用 `realm=oem`。刷新会话为 OEM 建立独立表或在统一�
 |---|---|---|
 | id | BIGINT UNSIGNED PK | |
 | file_id | BIGINT UNSIGNED NOT NULL FK | |
+| file_sha256 / file_size_bytes | CHAR(64) / BIGINT UNSIGNED NOT NULL | 扫描绑定的哈希及大小快照 |
+| next_attempt_at / concurrency_version | DATETIME(3) NULL / BIGINT UNSIGNED | 退避与旧扫描 worker fencing |
 | status | VARCHAR(16) NOT NULL | `PENDING / RUNNING / CLEAN / INFECTED / ERROR / UNSCANNABLE` |
 | attempt_count | INT NOT NULL | |
 | lease_owner / lease_until | VARCHAR / DATETIME(3) NULL | 多实例安全认领 |
@@ -193,7 +200,7 @@ OEM token 使用 `realm=oem`。刷新会话为 OEM 建立独立表或在统一�
 
 ### 1.8 审批流
 
-流程模板仍由 `oem_flow_templates` 和 `oem_flow_template_nodes` 表示，节点来源当前只允许 `SECTION_LEADER`、`DEPARTMENT_LEADER`，部门节点默认关闭。
+模板表 oem_flow_templates 包含 id、name、status、concurrency_version、created_by、created_at、updated_at；节点表 oem_flow_template_nodes 包含 id、template_id、sort_no、name、approver_source、enabled、approval_mode（V1 仅 SINGLE）。唯一索引 (template_id, sort_no)，引用的模板不得物理删除。节点来源仅 SECTION_LEADER、DEPARTMENT_LEADER，部门节点默认关闭。发送快照用版本校验防止混读。
 
 **`oem_flow_instances`**
 
@@ -204,21 +211,27 @@ OEM token 使用 `realm=oem`。刷新会话为 OEM 建立独立表或在统一�
 | template_id | BIGINT UNSIGNED NOT NULL FK | 来源模板 |
 | initiator_user_id | BIGINT UNSIGNED NOT NULL FK→users | 内部发送人，不再指向 OEM 账号 |
 | initiator_section_id | BIGINT UNSIGNED NOT NULL | 发起时组织快照 |
-| status | VARCHAR(16) NOT NULL | `IN_PROGRESS / COMPLETED / REJECTED` |
+| status | VARCHAR(24) NOT NULL | WAITING_SCAN / IN_PROGRESS / APPROVAL_BLOCKED / COMPLETED / REJECTED / CANCELLED |
+| template_snapshot | JSON NOT NULL | 发送时完整模板、组织路径、节点和解析结果 |
+| blocked_reason | VARCHAR(128) NULL | 审批阻断原因 |
+| concurrency_version | BIGINT UNSIGNED NOT NULL | 乐观并发版本 |
 | current_sort_no | INT NULL | |
 | created_at / updated_at | DATETIME(3) | |
 
 **`oem_flow_tasks`**
 
-除 instance id、approver user id、结果、原因和时间外，还要快照 `sort_no`、`approver_source` 和节点名称。实例创建时一次性解析所有已启用节点：
+任务字段：id、instance_id、sort_no、node_name、approver_source、approver_user_id、status（WAITING/PENDING/APPROVED/REJECTED/SUPERSEDED/CANCELLED）、reason、decided_at、created_at、concurrency_version、replaces_task_id。发送事务内解析全部启用节点并创建 WAITING 任务：
 
-- 解析结果必须是启用内部账号；
-- 审批人等于发送人时该节点无效，继续下一个已启用节点；
-- 没有任何非本人的有效审批人时，整笔创建事务回滚；
+- 每个节点必须解析为启用、有审批权限且非发送人的内部账号，任一失败整个发送事务回滚、保留草稿，不得跳过；
+- 发起人必须归属有效课别；默认模板下课别主管自发起会被阻断，部门节点关闭时不自动启用，备用路由待业务确认；
 - 模板或组织主管之后变化不改写已创建任务；
 - 当前任务才能审批，重复或过期操作返回冲突。
 
-审批实例只在传递单全部文件 `CLEAN` 后创建。审批通过与发布、通知入队在同一事务中完成。
+发送成功已有 WAITING_SCAN 实例；全部文件 CLEAN 且移动完成后才激活为 IN_PROGRESS，首个任务置 PENDING。激活和每个节点处理时重验快照人员资格；失效置 APPROVAL_BLOCKED，通知管理员。账号禁用/撤权时主动阻断，由巡检兜底。业务版本、快照和活跃上传校验均包含在发送事务中；重复 send 使用版本/唯一 transfer_id 返回已有结果，不重复建实例。
+
+oem:approval_recover 可对异常未完成任务重新指派或终止未发布单据。必须填写原因；新人合格且非发送人，旧任务置 SUPERSEDED，新任务用 replaces_task_id 关联；记录操作者、原/新审批人和原因。已完成节点不变，每节点仅一条有效任务，改派和审批通过行锁及版本校验互斥。不得覆盖旧 approver 字段抹除历史。终止将实例与未完成任务置 CANCELLED，按安全清理期限处理附件，管理员不能直接代审批通过。
+
+重新指派后重新校验全部未完成节点；扫描未完成继续 WAITING_SCAN，扫描完成且无失效节点才恢复 IN_PROGRESS，否则仍 APPROVAL_BLOCKED。扫描最终失败将等待实例及任务取消。审批通过、发布、期限初始化与通知入队在同一事务中完成。
 
 ### 1.9 下载会话与首次接收
 
@@ -243,6 +256,7 @@ Range 请求需要在同一逻辑会话下累计不重叠的已完成区间；�
 ```
 first_recipient_download_at = completed_at
 purge_due_at =
+  KEEP                        -> null（仅记录首次接收，不自动删除）
   AFTER_RELEASE                -> expires_at（发布时已计算）
   AFTER_FIRST_RECEIPT          -> completed_at + receipt_grace
   FIRST_RECEIPT_OR_DEADLINE    -> min(completed_at + receipt_grace, expires_at)
@@ -250,11 +264,23 @@ purge_due_at =
 
 发送方、审批人和预览会话可写下载审计，但 `recipient_side=0`，不能触发清理。
 
+发布事务内为全部文件初始化 purge_due_at：KEEP、AFTER_FIRST_RECEIPT 为空；AFTER_RELEASE、FIRST_RECEIPT_OR_DEADLINE 均设为 expires_at。首次接收后组合策略取较早时间，重复回执不能延长。使用数据库 UTC 时间，单条件模板禁止填写无关时长，有效时长必须为正且有上限。纯首次接收模式无人下载时不自动到期，界面明示；绝对期限可以截短宽限期。
+
+下载会话另存 file_uuid、file_sha256、purpose（DOWNLOAD/PREVIEW/REVIEW）、last_progress_at、absolute_deadline、concurrency_version。recipient_side 由身份、方向和 purpose 推导且每次请求重验，不接受客户端声明；不能跨账号或跨会话汇总字节。
+
+oem_download_ranges：id、session_id、start_offset、end_offset（闭区间），索引 (session_id, start_offset)。每次只接受单段合法 Range，完成响应后事务锁定会话，将重叠/相邻区间取并集，不累加重复字节。限制合并后区间数、请求频率和并行数；超过限制拒绝新的请求，不丢弃已有证据或误报完成。HEAD、304、416、部分发送失败均不计完成；完整 GET 也必须完成响应才记全区间。V1 拒绝零字节文件，避免空区间语义。
+
+活动请求建立 oem_download_leases：id、session_id、owner、started_at、last_progress_at、lease_until、hard_deadline、status。请求准入与清理认领锁定同一文件，避免检查与打开之间穿透；租约有 fencing，失去租约立即停止读取。截止时间取会话绝对期限、请求最长时长、到期后排空期限的最早值，心跳不可延长硬截止。应用多实例以数据库租约协调，删除遇到仍被占用的文件应重试，不能冒报 PURGED。
+
+可参考现有 MediaGrantService 的签名及 HttpOnly Cookie 机制，但 OEM 凭证须使用独立用途类型和 Cookie 名称，额外绑定 realm、账号、登录会话、文件 UUID、逻辑下载会话 ID、purpose、有效期。短期凭证续签仍受逻辑会话硬截止限制，不能沿用媒体的五分钟有效期作为数 GB 下载的完整生命周期。
+
 ### 1.10 审计与邮件队列兼容
 
 `audit_logs` 增加或等价保存 `actor_realm`、`actor_account_id` 和账号标识快照，避免内部 user id 与 OEM account id 混淆。OEM 事件使用 `OEM_TRANSFER_*`、`OEM_SCAN_*`、`OEM_DOWNLOAD_*`、`OEM_PURGE_*` 等 action。
 
 `email_outbox` 增加 `recipient_realm`、`recipient_account_id` 和可空 `oem_transfer_id`；OEM 收件人仍使用入队时快照的邮箱。发送前根据 realm 重新校验账号和厂商是否启用，失效则取消，不向被禁用账号发送新通知。
+
+还须按事件类型重验状态与资格：发布邮件检查 RELEASED、查看/下载权限；审批邮件检查当前任务；异常邮件检查发送人或异常处置资格。所有邮件检查渠道规则，不能仅检查启用状态。内部入站范围为所有厂商，不按组织过滤；发布事件站内可见，邮件对象/渠道须显式配置，不能从 view 权限直接推导全员群发。未配置默认不群发邮件；审批只通知当前处理人，阻断通知发送人和异常处置管理员，安全告警不向未获得文件访问权的接收方暴露内容。发布通知以 transfer+event+recipient realm/id 去重并在发布事务中入队。
 
 ## 2. 状态与事务边界
 
@@ -265,14 +291,14 @@ DRAFT
   → 发送并冻结清单
 SEALED + 扫描中
   → 全部 CLEAN
-创建内部审批实例（PENDING）
+激活发送时已建实例（失效则 APPROVAL_BLOCKED）
   → APPROVED
 RELEASED（OEM 厂商全部启用账号可下载）
   → 文件逐个首次接收或到期
-PURGE_PENDING → PURGED
+文件 PURGE_PENDING → PURGED；传递单保留 RELEASED
 ```
 
-扫描失败进入 `BLOCKED`；审批驳回进入 `REJECTED`。两者都不得重新编辑后复用，修正后创建新传递单。
+扫描暂时故障保持 SEALED、有限重试；最终失败才 BLOCKED。审批驳回为 REJECTED，终止为 CANCELLED。终态文件修正须新建传递单。
 
 ### 2.2 OEM → 公司
 
@@ -283,7 +309,7 @@ SEALED + 扫描中（approval_status=NOT_REQUIRED）
   → 全部 CLEAN
 RELEASED（具备 view + download 权限的内部账号可下载）
   → 文件逐个首次接收或到期
-PURGE_PENDING → PURGED
+文件 PURGE_PENDING → PURGED；传递单保留 RELEASED
 ```
 
 ### 2.3 文件访问条件
@@ -299,7 +325,7 @@ transfer.lifecycle_status == RELEASED
 && 当前时间未超过策略有效期
 ```
 
-发送方查看自己的附件、当前有效审批人审阅公司出站附件使用独立规则：文件必须已经 `CLEAN`，账号仍启用并且确为发送人或当前审批任务指派人；传递单可以处于 `DRAFT/SEALED`，但不能是 `BLOCKED/PURGED/STORAGE_LOST`。此类访问写审计且 `recipient_side=0`，不能触发首次接收。
+发送侧及审批审阅同样要求 CLEAN、payload_status=AVAILABLE、未到 purge_due_at、账号/厂商启用且具备对应权限。DRAFT/SEALED 内容只供实际发送人及已激活任务的审批人；RELEASED 后 OEM 同厂商共享发送侧查看，内部发送人仍需 view+download。BLOCKED/REJECTED/CANCELLED 禁止内容访问。发送侧和审批审阅 recipient_side=0，仅实际草稿发送人可修改附件。
 
 任何前端隐藏、旧 token、已生成下载会话或历史通知都不能绕过实时判断。扫描完成前，发送方和审批人同样不能预览或下载。
 
@@ -308,19 +334,43 @@ transfer.lifecycle_status == RELEASED
 数据库事务不能与文件系统删除组成同一原子事务，因此采用可重试状态机：
 
 1. 以条件更新认领到期文件并写 `PURGE_PENDING`、租约和审计；
-2. 新下载立即被拒绝，已开始的活动下载持有短期租约，清理任务等待其结束；
+2. 新下载立即被拒绝，已开始下载限时排空，到达空闲/绝对/排空截止时间即取消请求、释放句柄；
 3. 在 `OemStorageRoot` 边界内解析并删除实体文件；
-4. 文件不存在时区分“已成功重复清理”和“非预期丢失”；只有已认领清理才可幂等完成；
+4. 按 §2.6 校验持久操作凭证；仅数据库认领记录加实体缺失不足以证明正常删除；
 5. 更新 `PURGED`、`purged_at` 并写审计；
 6. 失败保留 `PURGE_PENDING`，按退避重试并告警。
 
+### 2.5 汇总规则与发布互斥
+
+扫描任务使用 PENDING/RUNNING/CLEAN/INFECTED/ERROR/UNSCANNABLE；文件对外状态将 RUNNING 映射为 SCANNING，重试中的 ERROR 不代表终态失败。单据扫描汇总只读派生：存在 INFECTED 优先，其次 UNSCANNABLE，再次耗尽重试的 ERROR；否则存在运行任务为 SCANNING、存在待执行/重试任务为 PENDING，非空附件全部 CLEAN 才为 CLEAN。列表返回各状态数量和失败原因，不靠一个总状态掩盖其他问题。
+
+发布必须在文件集已冻结、无活跃上传、所有文件 CLEAN 且 AVAILABLE、发送账号/厂商有效，以及公司出站审批完成时通过条件更新执行一次。草稿扫描完成不会自动发送；SEALED 时若所有扫描早已完成，send 后可立即推进。扫描完成与 send 竞争由 transfer 行锁和版本检查串行化，不能漏推进或重复发布。
+
+文件 payload_status 是存储事实，业务 lifecycle_status 是流程事实。一个文件进入 PURGE_PENDING/PURGED，不改变 RELEASED；其他未到各自 purge_due_at 的 AVAILABLE 文件继续可下载。详情返回 available_count、purge_pending_count、purged_count、missing_count，全部文件删除也保留 RELEASED 及历史审批结果，并显示“全部文件已清理”。到期接口按文件 purge_due_at 拒绝访问，不等待清理 worker 扫描。发送侧也遵循该规则。
+
+### 2.6 移动恢复与独立操作凭证
+
+oem_file_operations 表：operation_uuid（PK）、file_uuid、file_sha256、size_bytes、kind（PROMOTE/PURGE）、source_path、target_path、status（PREPARED/RUNNING/COMPLETED/FAILED）、lease_owner、lease_until、concurrency_version、attempt_count、next_attempt_at、reason、created_at、completed_at。路径为 OEM 根目录内的服务端相对路径。移动与清理共享文件级锁和 fencing，旧 worker 不得在租约丢失后更新结果。
+
+PROMOTE 先提交 PREPARED 和确定的两处路径，文件置 PROMOTING，再执行同卷不覆盖重命名，最后提交路径和 AVAILABLE。启动/恢复先处理操作再判缺失：只有源存在则继续移动；只有目标存在且大小/哈希一致则补提交；两者都存在则验证后受控去重，不覆盖不同内容；两者都不存在且无删除证据则分类缺失。后台校验与活动移动互斥，扫描结果只能绑定实际哈希一致的文件。
+
+另设 App:OemOperationJournalRoot，保存不含任何文件内容的追加式操作凭证，独立于数据库恢复范围；记录 operation_uuid、file_uuid、哈希、大小、操作类型、意图/完成阶段、原因、UTC 时间与完整性校验。凭证需受限 ACL、持久刷新和备份/保留策略，不能被恢复旧业务数据库的流程回滚。保留时间不得短于允许恢复的最旧数据库备份，凭证不可用或损坏时停止新的物理删除并告警。
+
+PURGE 在删除前持久写入意图，删除成功后持久写入完成凭证，再提交数据库 PURGED。崩溃后的状态判断：完成凭证可重放正常删除；仅意图且实体仍在可重试；仅意图且实体不在只能说明结果不确定，不把意图当完成证据。即使加入日志，也不能把文件系统与日志的非原子窗口描述为完全可判定。
+
+恢复旧数据库后先扫描凭证、核对文件 UUID 与哈希并重放完成操作；已有完成删除凭证的文件不得重新发布。没有证据区分备份后正常删除与异常缺失时置 MISSING_UNVERIFIED，只有明确异常证据才置 STORAGE_LOST。凭证和存储一起损坏时仍可能无法还原原因，这是不备份文件前提下的明确局限。恢复入口在核对结束前不开放 OEM 内容接口。
+
+凭证只留操作元数据，不留原文件、解压内容、分片或可恢复文件密钥。逻辑删除不承诺介质级擦除，也不能撤回接收方已保存副本。
+
 ## 3. 配置与独立存储
+
 
 ### 3.1 应用私有配置
 
 外部 JSON 配置新增：
 
 - `App:OemStorageRoot`：OEM 文件专用根目录；
+- `App:OemOperationJournalRoot`：独立操作凭证目录，与文件存储和业务数据库恢复目标分离；
 - 扫描服务连接、超时和凭据等私有参数；凭据不得进入网页 `system_configs` 或日志。
 
 启动时验证 `OemStorageRoot`：必须为绝对本地路径，不得与网站、程序、配置、现有 `StorageRoot`、备份目录互相包含，不允许重解析点；目录只授予应用池和受控扫描身份所需权限，禁止执行。
@@ -341,10 +391,21 @@ transfer.lifecycle_status == RELEASED
 | `oem.scan.archive_max_entries` | 压缩包条目上限 |
 | `oem.scan.archive_max_depth` | 嵌套层级 |
 | `oem.scan.archive_max_expanded_bytes` | 解压后总量上限 |
+| `oem.scan.archive_max_ratio` | 压缩比上限 |
+| `oem.upload.session_ttl_hours` | 上传会话绝对有效期 |
+| `oem.download.max_ranges_per_session` | 合并后区间数量上限 |
+| `oem.download.max_parallel_per_session` | 每会话并行请求上限 |
+| `oem.download.max_requests_per_minute` | 每账号下载请求速率 |
+| `oem.download.session_ttl_minutes` | 逻辑会话绝对寿命 |
+| `oem.download.idle_timeout_seconds` | 无进展取消期限 |
+| `oem.download.max_duration_minutes` | 单请求最长时长 |
+| `oem.download.purge_drain_minutes` | 到期后活动请求排空期限 |
 | `oem.scan.blocked_retention_hours` | 病毒、不可扫描和最终失败文件的隔离保留时间 |
 | `oem.transfer.draft_ttl_hours` | 长期未发送草稿的清理期限 |
 
 这些参数由具备 `oem:file_policy_manage` 的内部管理员维护。加密压缩包拒绝规则不是可关闭开关。
+
+max_storage_per_company 统计关联该厂商的双向文件，包括草稿、隔离、可用、待物理删除及未完成上传预留额度。init 在事务内原子预留，merge 转移而不重复计费，实际删除完成/放弃上传后才释放；并发上传不可超售。合并、扫描解压和打包另有全局物理空间预留预算，磁盘不足时拒绝新任务，不挪用业务额度充当真实磁盘余量。MISSING_UNVERIFIED 的额度经对账确认后调整，不自动作为正常删除释放。
 
 ### 3.3 不备份要求
 
@@ -352,7 +413,7 @@ transfer.lifecycle_status == RELEASED
 
 部署和运维检查还必须证明操作系统备份、VSS、虚拟机/云盘快照、NAS 同步和第三方备份策略排除了 `OemStorageRoot`。应用代码只能保证自身备份脚本不复制，不能替代基础设施核对。
 
-数据库恢复或应用启动后运行存储一致性检查：对本应存在且未删除的 OEM 文件核对安全路径、实体存在和大小；缺失时标记 `STORAGE_LOST` 并通知发送方。不得因数据库备份恢复而假设文件实体可恢复。
+数据库恢复或启动时先按 §2.6 恢复移动任务并重放独立操作凭证，再检查实体。不把历史正常删除一律标 STORAGE_LOST；证据不足使用 MISSING_UNVERIFIED。OEM 文件不备份不等于不持久保存操作证据。
 
 ## 4. 权限点
 
@@ -366,6 +427,7 @@ transfer.lifecycle_status == RELEASED
 | `oem:transfer_view` | 查看 OEM 传递单；也是 OEM 入站接收范围的一部分 |
 | `oem:file_download` | 下载/预览 OEM 文件；与 view 同时存在才属于 OEM 入站接收方 |
 | `oem:flow_approve` | 处理指派给本人的审批任务 |
+| `oem:approval_recover` | 异常任务改派与终止未发布传递，不允许代审批通过 |
 | `oem:flow_template_manage` | 审批模板管理 |
 | `oem:retention_template_manage` | 删除策略模板管理 |
 | `oem:file_policy_manage` | 格式、大小、配额和压缩包限制管理 |
@@ -390,7 +452,19 @@ OEM realm 使用固定能力：创建本厂商入站传递、查看本厂商收�
 
 ### 5.2 厂商、账号和组织主管
 
-沿用原规划的 `/oem/companies`、`/oem/companies/{id}/accounts`、`/oem/accounts/{id}` 管理接口；内部 Admin 增加 `PUT /departments/{id}/leader`。所有写入在事务内重新校验权限和账号状态。
+下表路径相对于 /api/v1；写入事务内重新校验权限、状态和期望版本。
+
+| 方法 | 路径 | 权限/用途 |
+|---|---|---|
+| GET / POST | /oem/companies | oem:company_manage，列表/创建 |
+| GET / PUT | /oem/companies/{id} | oem:company_manage，详情/编辑 |
+| PUT | /oem/companies/{id}/status | oem:company_manage，启用/禁用 |
+| GET / POST | /oem/companies/{id}/accounts | oem:account_manage，列表/创建 |
+| GET / PUT | /oem/accounts/{id} | oem:account_manage，详情/编辑 |
+| PUT | /oem/accounts/{id}/status | oem:account_manage，启用/禁用 |
+| PUT | /oem/accounts/{id}/password | oem:account_manage，重置并撤销会话 |
+| PUT | /departments/{id}/leader | dept:leader_manage，设置/清空主管 |
+| GET / PUT | /oem/file-policies | oem:file_policy_manage，参数管理 |
 
 ### 5.3 审批与删除策略模板
 
@@ -415,6 +489,8 @@ OEM realm 使用固定能力：创建本厂商入站传递、查看本厂商收�
 
 内部创建必须提交目标 `oemCompanyId`；OEM 创建时服务端使用账号所属厂商，忽略或拒绝客户端传入的其他厂商。发送要求至少一个合并完成的文件且没有活跃上传。
 
+列表/详情/通知的数据范围同样按方向和阶段过滤：OEM 只看本厂商发送侧单据及公司已发布给本厂商的单据，不能看到公司未发布草稿、扫描或审批详情。内部 view 提供元数据访问，内容还需 download 或当前审批任务资格；发送人的草稿维护不因此授权接收全部入站内容。同厂商其他员工在发布后共享发送侧文件，未发布草稿仍仅实际发送人维护和读取。存在历史引用的厂商/账号禁用而非物理删除。
+
 ### 5.5 上传与扫描状态
 
 | 方法 | 路径 | 说明 |
@@ -436,6 +512,8 @@ OEM realm 使用固定能力：创建本厂商入站传递、查看本厂商收�
 | GET | `/oem/approvals/pending` | 当前内部用户待审批 |
 | POST | `/oem/approvals/{taskId}/approve` | 仅当前指派人，携带期望任务/实例版本 |
 | POST | `/oem/approvals/{taskId}/reject` | 必填原因，直接终止 |
+| POST | /oem/approvals/{taskId}/reassign | oem:approval_recover；异常未完成任务，原因、新审批人和任务/实例版本必填 |
+| POST | /oem/transfers/{id}/cancel | oem:approval_recover；未发布传递，原因及传递/实例版本必填 |
 
 ### 5.7 预览、下载与回执
 
@@ -454,9 +532,9 @@ OEM realm 使用固定能力：创建本厂商入站传递、查看本厂商收�
 
 1. **扫描 worker**：认领隔离文件、调用受控扫描器、记录结果并推动审批或发布；
 2. **清理 worker**：计算并认领到期文件、废弃草稿和安全隔离文件，等待活动下载租约，物理删除并重试失败；
-3. **一致性 worker/启动检查**：识别数据库引用但实体缺失的文件并置为 `STORAGE_LOST`。
+3. **一致性 worker/启动检查**：先恢复移动/删除操作，再按证据分类缺失文件，避免移动窗口误判。
 
-worker 关闭或异常时文件保持不可用或待清理状态；健康/就绪信息应暴露扫描队列积压、扫描器不可用和持续清理失败，但不得泄漏文件名、磁盘路径或病毒内容。
+worker 异常时新待扫描文件保持不可用，到期文件由请求时限阻断，已发布且仍有效文件不因清理 worker 停止而一律失效。内部运维就绪检查暴露扫描积压、扫描器不可用、凭证故障和清理失败，不在公共健康响应泄漏文件名、路径或病毒内容。
 
 ## 7. 必要回归与验收
 
@@ -465,7 +543,8 @@ worker 关闭或异常时文件保持不可用或待清理状态；健康/就绪
 - 两个 realm 不能跨业务线、跨 OEM 厂商或伪造方向；
 - 公司出站在扫描和审批完成前 OEM 不可见、不可下载；
 - OEM 入站无需人工审批，但扫描未通过时内部不可预览或下载；
-- 上传人自审被拒绝；无合格审批人时不产生半成品实例；
+- 上传人自审、缺少课别及任一启用节点解析失败时发送回滚；模板/组织变更不改变发送快照；
+- 审批人禁用/撤权可阻断、改派或终止；改派与迟到审批竞争只允许一次有效决议；
 - 发送后附件不能增删替换，模板变化不影响历史实例；
 - 加密 ZIP/RAR/7z、病毒命中、扫描超时和不可扫描均失败关闭；
 - 多 GB 文件使用分片和流式处理，不整文件进入应用内存；
@@ -474,14 +553,16 @@ worker 关闭或异常时文件保持不可用或待清理状态；健康/就绪
 - 宽限期内可重试，`PURGE_PENDING` 后新下载被拒绝，物理删除失败可恢复重试；
 - 病毒/不可扫描文件和长期未发送草稿按独立期限清理，不受发送方选择的保留模板控制；
 - OEM 文件不进入现有离线备份及基础设施快照核对范围；
-- 数据库恢复但文件缺失时进入 `STORAGE_LOST`，不显示可下载；
+- 数据库恢复后，正常删除由凭证重放，已证实丢失与原因不明分别呈现且禁止下载；
 - 文件实体删除后，审批、扫描、下载和删除审计仍可查询且不含秘密。
+
+还须以故障注入验证：移动前/后及数据库提交前后崩溃可幂等恢复；删除意图/完成凭证与旧库恢复的不同组合正确分类；扫描暂时错误能重试、最终错误才阻断；组合策略无人下载也到期；部分删除不影响其他文件；超量/重叠 Range、不同账号零散区间、HEAD、断线不误报收件；慢客户端被绝对截止取消；并发配额预留不超售；跨 realm 同名账号不共享账号限流桶；通知发送前撤权能够取消。
 
 ## 8. 已确认决策与待填参数
 
 核心业务方向、接收范围、审批边界、双向扫描、加密压缩包拒绝、管理员策略模板、首次接收触发、不建立版本和 OEM 文件不备份均已确认。
 
-实施前只需补齐参数值：初始格式白名单、数 GB 的具体上限、并发和厂商配额、默认宽限时长、废弃草稿及隔离文件清理期限、扫描器产品与部署方式、病毒库更新频率、超时和重试次数。参数确认不得改变本文件定义的权限、失败关闭、独立存储和不备份边界。
+实施前补齐初始白名单、文件/空间/并发上限、宽限及各类租约时长、隔离清理期限、扫描器及更新/超时/重试参数。主管本人和非课别人员的备用路由、邮件收件规则仍需业务确认，确认前采用明确阻断及不自动群发的默认行为。操作凭证部署/保留期限须覆盖数据库恢复窗口，不能承诺所有证据一起丢失后仍可还原原因。
 
 ---
 
