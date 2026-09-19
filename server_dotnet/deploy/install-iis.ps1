@@ -67,6 +67,11 @@ if ($oemProperty -and ![string]::IsNullOrWhiteSpace($oemProperty.Value)) {
 }
 $oemScanner = $config.App.PSObject.Properties['OemScanner']
 if ($oemScanner -and $oemScanner.Value.PSObject.Properties['Engine'] -and $oemScanner.Value.Engine -eq 'Fake') { throw 'The Fake OEM scanner is for development only and cannot be installed in production.' }
+if ($oemScanner -and $oemScanner.Value.PSObject.Properties['Engine'] -and $oemScanner.Value.Engine -eq 'OnAccess') {
+    if (!$oemStorage) { throw 'The OnAccess OEM scanner requires App:OemStorageRoot.' }
+    # Real-time scanning (e.g. OfficeScan) must watch the OEM storage; the application verifies it with an EICAR canary.
+    Write-Host "OEM scanning uses the server antivirus real-time scan. Do not exclude $oemStorage from it."
+}
 $origin = 'https://' + $HostName + $(if ($HttpsPort -eq 443) { '' } else { ':'+$HttpsPort })
 if ($config.App.CookieSecure -ne $true -or $config.App.WebBaseUrl.TrimEnd('/') -ne $origin) { throw 'Production configuration requires CookieSecure=true and WebBaseUrl equal to the HTTPS site origin.' }
 if ([string]::IsNullOrWhiteSpace($config.App.ConnectionString) -or [Text.Encoding]::UTF8.GetByteCount($config.App.JwtSecret) -lt 32) { throw 'Database connection and a random JWT secret (at least 32 bytes) are required.' }

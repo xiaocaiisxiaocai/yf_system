@@ -59,7 +59,7 @@ public static class OemModule
         // Storage, upload and scanning slices.
         services.AddSingleton<OemStorage>();
         services.AddSingleton<OemUploadService>();
-        services.AddSingleton<IFileScanner>(provider => FileScannerFactory.Create(provider.GetRequiredService<AppOptions>()));
+        services.AddSingleton<IFileScanner>(provider => FileScannerFactory.Create(provider.GetRequiredService<AppOptions>(), provider.GetRequiredService<ILoggerFactory>()));
         services.AddSingleton<OemScanPipeline>();
         services.AddSingleton<OemPromotionService>();
         services.AddSingleton<OemScanService>();

@@ -13,6 +13,8 @@ namespace Yf.Api.Modules.Oem.Storage;
 public sealed class OemStorage(AppOptions options)
 {
     public const string UploadsArea = "uploads";
+    /// <summary>Scratch area for the on-access antivirus canary; never holds business files.</summary>
+    public const string ScanProbeArea = "scan-probe";
     public const string QuarantineArea = "quarantine";
     public const string AvailableArea = "available";
 

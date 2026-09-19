@@ -144,6 +144,11 @@ public sealed partial class OemUploadService(
             if (File.Exists(path)) File.Delete(path);
             File.Move(temporary, path, overwrite: false);
         }
+        catch (Exception error) when (error is UnauthorizedAccessException or FileNotFoundException)
+        {
+            logger.LogWarning("OEM chunk write was blocked or removed ({ErrorType}).", error.GetType().Name);
+            throw InterceptedUpload();
+        }
         finally
         {
             TryDeleteFile(temporary);
@@ -259,11 +264,17 @@ public sealed partial class OemUploadService(
             await TryDeleteDirectoryAsync(directory);
             return await FileJsonAsync(fileId, ct);
         }
-        catch
+        catch (Exception error)
         {
             if (movedTo is not null && !committed) TryDeleteFile(movedTo);
             TryDeleteFile(mergeTemp);
             await ResetMergeAsync(sessionId);
+            // Chunks were all recorded, so one that vanished or became unreadable was taken by the server's antivirus.
+            if (error is UnauthorizedAccessException or FileNotFoundException)
+            {
+                logger.LogWarning("OEM merge found a removed or blocked chunk ({ErrorType}).", error.GetType().Name);
+                throw InterceptedUpload();
+            }
             throw;
         }
     }
@@ -298,6 +309,9 @@ public sealed partial class OemUploadService(
         var file = await uow.Db.OemTransferFiles.AsNoTracking().SingleAsync(item => item.Id == fileId, ct);
         return new { file.Id, file.TransferId, file.OriginalName, file.Ext, file.SizeBytes, file.Sha256, file.ScanStatus, file.PayloadStatus, file.CreatedAt };
     }
+
+    private static ApiException InterceptedUpload() =>
+        ApiException.BadRequest("文件被删除或拒绝访问，可能已被服务器杀毒软件拦截，请检查文件后重新上传");
 
     private async Task ResetMergeAsync(string sessionId)
     {

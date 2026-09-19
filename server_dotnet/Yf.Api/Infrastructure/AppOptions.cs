@@ -107,11 +107,15 @@ public sealed class AppOptions
     }
 }
 
-/// <summary>OEM malware scanner selection. The engine is not decided yet; until one is configured nothing is released.</summary>
+/// <summary>OEM malware scanner selection. Until an engine is configured nothing is released.</summary>
 public sealed class OemScannerOptions
 {
-    /// <summary>None (fail closed: files stay unavailable) or Fake (development/testing only).</summary>
+    /// <summary>
+    /// None (fail closed: files stay unavailable), OnAccess (the server's endpoint antivirus,
+    /// e.g. OfficeScan, through its real-time scanning) or Fake (development/testing only).
+    /// </summary>
     public string Engine { get; set; } = "None";
+    public OemOnAccessOptions OnAccess { get; set; } = new();
     /// <summary>Must be true to run the Fake engine, so a test configuration cannot reach production by accident.</summary>
     public bool AcknowledgeInsecureFake { get; set; }
     public int BaseTimeoutSeconds { get; set; } = 120;
@@ -119,11 +123,33 @@ public sealed class OemScannerOptions
 
     public void Validate()
     {
-        if (Engine is not ("None" or "Fake")) throw new InvalidOperationException("App:OemScanner:Engine must be None or Fake.");
+        if (Engine is not ("None" or "OnAccess" or "Fake")) throw new InvalidOperationException("App:OemScanner:Engine must be None, OnAccess or Fake.");
+        if (Engine == "OnAccess") OnAccess.Validate();
         if (Engine == "Fake" && !AcknowledgeInsecureFake)
             throw new InvalidOperationException("The Fake OEM scanner performs no malware scanning; set App:OemScanner:AcknowledgeInsecureFake=true only for development or tests.");
         if (BaseTimeoutSeconds is < 5 or > 86400 || TimeoutSecondsPerGb is < 0 or > 86400)
             throw new InvalidOperationException("Invalid OEM scanner timeouts.");
+    }
+}
+
+/// <summary>Real-time (on-access) antivirus integration; see OnAccessFileScanner.</summary>
+public sealed class OemOnAccessOptions
+{
+    /// <summary>Shown in scan results and audit, e.g. "OfficeScan".</summary>
+    public string ProductName { get; set; } = "OfficeScan";
+    /// <summary>Wait after a file was written (and again after it was read) before judging it.</summary>
+    public int SettleSeconds { get; set; } = 5;
+    /// <summary>How long the antivirus has to intercept the EICAR canary.</summary>
+    public int CanaryTimeoutSeconds { get; set; } = 60;
+    /// <summary>How long a successful canary check is trusted.</summary>
+    public int CanaryIntervalMinutes { get; set; } = 60;
+
+    public void Validate()
+    {
+        if (string.IsNullOrWhiteSpace(ProductName) || ProductName.Length > 64) throw new InvalidOperationException("App:OemScanner:OnAccess:ProductName must be 1-64 characters.");
+        if (SettleSeconds is < 0 or > 120) throw new InvalidOperationException("App:OemScanner:OnAccess:SettleSeconds must be 0-120.");
+        if (CanaryTimeoutSeconds is < 5 or > 600) throw new InvalidOperationException("App:OemScanner:OnAccess:CanaryTimeoutSeconds must be 5-600.");
+        if (CanaryIntervalMinutes is < 5 or > 1440) throw new InvalidOperationException("App:OemScanner:OnAccess:CanaryIntervalMinutes must be 5-1440.");
     }
 }
 

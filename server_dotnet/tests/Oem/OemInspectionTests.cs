@@ -153,9 +153,9 @@ public sealed class OemInspectionTests
         {
             var prefix = new byte[1024 * 1024 - 10];
             var infected = prefix.Concat(Encoding.ASCII.GetBytes(FakeFileScanner.EicarSignature)).ToArray();
-            Assert.Equal(ScanVerdict.Infected, (await new FakeFileScanner().ScanAsync(Write(work, "x.bin", infected), ct)).Verdict);
-            Assert.Equal(ScanVerdict.Clean, (await new FakeFileScanner().ScanAsync(Write(work, "y.bin", prefix), ct)).Verdict);
-            Assert.Equal(ScanVerdict.EngineUnavailable, (await new UnavailableFileScanner().ScanAsync(Write(work, "z.bin", prefix), ct)).Verdict);
+            Assert.Equal(ScanVerdict.Infected, (await new FakeFileScanner().ScanAsync(new ScanTarget(Write(work, "x.bin", infected), "", 0), ct)).Verdict);
+            Assert.Equal(ScanVerdict.Clean, (await new FakeFileScanner().ScanAsync(new ScanTarget(Write(work, "y.bin", prefix), "", 0), ct)).Verdict);
+            Assert.Equal(ScanVerdict.EngineUnavailable, (await new UnavailableFileScanner().ScanAsync(new ScanTarget(Write(work, "z.bin", prefix), "", 0), ct)).Verdict);
         }
         finally
         {

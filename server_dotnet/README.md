@@ -28,9 +28,9 @@ OEM 文件传递是与供应商协作平级、互不可见的第二条业务线�
 
 - **隔离**：接口统一在 `/api/v1/oem/*`。OEM 厂商账号使用独立的 `oem_accounts`、刷新会话表、Cookie 和 `realm=oem` 令牌，令牌只能访问 `/api/v1/oem/*`；供应商账号访问 OEM 接口一律 403。协作平台的审计日志、系统参数和邮件状态页不显示 OEM 记录（审计 `OEM_*` 动作、`oem.*` 参数、`OEM_*` 邮件）。前端内部员工从页头“OEM 文件传递”进入独立布局，厂商使用独立门户 `/oem-portal`。
 - **模块结构**（`Modules/Oem`）：`Identity`（厂商登录）、`Admin`（厂商与账号）、`Policies`（删除策略、`oem.*` 参数目录）、`Approval`（纯函数审批规划器、模板管理、审批引擎）、`Transfers`（传递单、访问策略、流程推进）、`Uploads`、`Scanning`（签名/压缩包检查 + 可替换扫描引擎、隔离区到正式区移动）、`Delivery`（预览、下载凭证、Range 回执）、`Maintenance`（物理删除、草稿过期、恢复核对、OEM 审计）、`Notifications`（邮件）。领域事件在同一事务内派发；后台任务由一个组合式 hosted worker 驱动，全部依赖数据库租约。
-- **配置**：外部 JSON 中 `App:OemStorageRoot` 指定 OEM 文件根目录（本机绝对路径，不得与程序、配置和 `StorageRoot` 互相包含；为空时 OEM 文件功能返回 503）。`App:OemScanner:Engine` 目前只有 `None`（未接入扫描引擎，所有文件保持隔离、不放行）和仅限开发测试的 `Fake`（必须同时设置 `AcknowledgeInsecureFake=true`，安装脚本拒绝在生产使用）。其余参数（格式白名单、大小与配额、压缩包限制、下载与清理期限、邮件开关）在 OEM 管理页维护。
+- **配置**：外部 JSON 中 `App:OemStorageRoot` 指定 OEM 文件根目录（本机绝对路径，不得与程序、配置和 `StorageRoot` 互相包含；为空时 OEM 文件功能返回 503）。`App:OemScanner:Engine`：`OnAccess`（生产，使用服务器上的 OfficeScan 实时扫描，见下方“扫描”）、`None`（不放行任何文件）或仅限开发测试的 `Fake`（必须同时设置 `AcknowledgeInsecureFake=true`，安装脚本拒绝在生产使用）。其余参数（格式白名单、大小与配额、压缩包限制、下载与清理期限、邮件开关）在 OEM 管理页维护。
 - **权限**：迁移 `AddOemPlatform` 新增 `oem`（菜单）与 `oem:*`、`dept:leader_manage` 权限点，仅授予系统管理员角色，其余角色按职责分配。组织主管通过 `PUT /api/v1/admin/departments/{id}/leader` 维护。
-- **扫描**：扫描引擎尚未选型。引擎确定后在 `IFileScanner` 后接入，业务流程和表结构不变。
+- **扫描**：企业使用趋势科技 OfficeScan（Apex One），它没有供应用调用的扫描接口，因此 `OnAccess` 引擎借助其实时扫描：隔离文件写入后等待 `SettleSeconds`，再读取并核对上传时记录的 SHA-256，文件被删除、拒绝访问或内容被修改即判定“发现威胁”；上传分片被拦截时接口返回“可能已被服务器杀毒软件拦截”。放行任何文件前，系统先在 `OemStorageRoot\scan-probe` 写入 EICAR 测试文件，必须在 `CanaryTimeoutSeconds` 内被拦截，成功结果信任 `CanaryIntervalMinutes`；未被拦截说明实时扫描未生效，引擎视为不可用，文件继续隔离、不消耗重试次数。OfficeScan 不向应用提供引擎和病毒码版本，扫描记录中这两项为空，病毒码更新由 OfficeScan 服务器负责。IT 需配合（OfficeScan 控制台）：OEM 服务器的实时扫描保持开启，扫描“所有文件”并同时扫描创建/修改和读取；`OemStorageRoot` 不得加入扫描例外；单文件扫描大小上限不得低于 OEM 单文件上限（否则超限文件会被当作未检出）；压缩包扫描层数不低于 OEM 压缩包层数限制；发现威胁时的处理可为清除、删除、隔离或拒绝访问中任一种。系统每小时（有文件待扫描时）写入一次 EICAR 测试文件自检，OfficeScan 控制台会看到对应的“Eicar_test_file”检出记录，属于正常现象，不要为其添加例外。
 
 ## 删除操作
 

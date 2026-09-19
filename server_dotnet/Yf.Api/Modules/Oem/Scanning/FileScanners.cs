@@ -1,5 +1,6 @@
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Oem.Policies;
+using Yf.Api.Modules.Oem.Storage;
 
 namespace Yf.Api.Modules.Oem.Scanning;
 
@@ -20,15 +21,24 @@ public sealed record ScanResult(ScanVerdict Verdict, string EngineName, string? 
     public static ScanResult Unavailable(string engine, string reason) => new(ScanVerdict.EngineUnavailable, engine, null, null, null, reason);
 }
 
+/// <summary>The quarantined file to scan, with the size and SHA-256 recorded at upload.</summary>
+public sealed record ScanTarget(string Path, string Sha256, ulong Size);
+
 /// <summary>
-/// Malware engine abstraction. The engine is not chosen yet; production runs
-/// <see cref="UnavailableFileScanner"/>, which keeps every file quarantined until a
-/// real engine is plugged in behind this interface (no table or workflow changes).
+/// Malware engine abstraction (strategy). Production uses <see cref="OnAccessFileScanner"/>
+/// (the server's endpoint antivirus, e.g. OfficeScan) or <see cref="UnavailableFileScanner"/>,
+/// which keeps every file quarantined; engines plug in without table or workflow changes.
 /// </summary>
 public interface IFileScanner
 {
     string Name { get; }
-    Task<ScanResult> ScanAsync(string path, CancellationToken ct);
+    Task<ScanResult> ScanAsync(ScanTarget target, CancellationToken ct);
+
+    /// <summary>
+    /// Lets an engine attribute a failure to open or read the quarantined file (for example the
+    /// antivirus removed it) to a verdict. Null means an ordinary, retryable error.
+    /// </summary>
+    ScanResult? ExplainAccessFailure(Exception error) => null;
 }
 
 /// <summary>Fail-closed placeholder: nothing is ever reported clean.</summary>
@@ -36,7 +46,7 @@ public sealed class UnavailableFileScanner : IFileScanner
 {
     public string Name => "none";
 
-    public Task<ScanResult> ScanAsync(string path, CancellationToken ct) =>
+    public Task<ScanResult> ScanAsync(ScanTarget target, CancellationToken ct) =>
         Task.FromResult(ScanResult.Unavailable(Name, "扫描引擎未配置"));
 }
 
@@ -52,8 +62,9 @@ public sealed class FakeFileScanner : IFileScanner
 
     public string Name => "fake";
 
-    public async Task<ScanResult> ScanAsync(string path, CancellationToken ct)
+    public async Task<ScanResult> ScanAsync(ScanTarget target, CancellationToken ct)
     {
+        var path = target.Path;
         const int bufferSize = 1024 * 1024;
         var buffer = new byte[bufferSize + Eicar.Length];
         var carry = 0;
@@ -72,9 +83,11 @@ public sealed class FakeFileScanner : IFileScanner
 
 public static class FileScannerFactory
 {
-    public static IFileScanner Create(AppOptions options) => options.OemScanner.Engine switch
+    public static IFileScanner Create(AppOptions options, ILoggerFactory loggers) => options.OemScanner.Engine switch
     {
         "Fake" => new FakeFileScanner(),
+        "OnAccess" when options.OemStorageRoot.Length > 0 => new OnAccessFileScanner(options.OemScanner.OnAccess,
+            Path.Combine(options.OemStorageRoot, OemStorage.ScanProbeArea), TimeProvider.System, loggers.CreateLogger<OnAccessFileScanner>()),
         _ => new UnavailableFileScanner(),
     };
 }
@@ -88,8 +101,11 @@ public sealed class OemScanPipeline(IFileScanner engine)
 {
     public string EngineName => engine.Name;
 
-    public async Task<ScanResult> RunAsync(string path, string extension, ArchiveLimits limits, string workDirectory, CancellationToken ct)
+    public ScanResult? ExplainAccessFailure(Exception error) => engine.ExplainAccessFailure(error);
+
+    public async Task<ScanResult> RunAsync(ScanTarget target, string extension, ArchiveLimits limits, string workDirectory, CancellationToken ct)
     {
+        var path = target.Path;
         var signature = await FileSignatureInspector.InspectFileAsync(path, extension, ct);
         if (!signature.Accepted)
             return new ScanResult(ScanVerdict.Unscannable, engine.Name, null, null, null, signature.Reason);
@@ -98,6 +114,6 @@ public sealed class OemScanPipeline(IFileScanner engine)
         catch (InvalidDataException) { archive = new ArchiveVerdict(ArchiveOutcome.Corrupt, "压缩包内容无效"); }
         if (archive.Outcome is ArchiveOutcome.Encrypted or ArchiveOutcome.LimitExceeded or ArchiveOutcome.Corrupt)
             return new ScanResult(ScanVerdict.Unscannable, engine.Name, null, null, null, archive.Reason);
-        return await engine.ScanAsync(path, ct);
+        return await engine.ScanAsync(target, ct);
     }
 }

@@ -9,6 +9,11 @@
     <UserSecretsId>yf-system-aspnet-development</UserSecretsId>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Test seams (e.g. the on-access scanner's simulated canary) are internal. -->
+    <InternalsVisibleTo Include="Yf.Api.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="MailKit" Version="4.17.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.0" />
     <!-- dotnet ef requires this on the startup project with "runtime" included (it

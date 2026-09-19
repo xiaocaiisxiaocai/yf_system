@@ -93,7 +93,8 @@ public sealed class OemScanService(
         {
             var path = await storage.ResolveExistingFileAsync(claim.StoragePath, ct);
             if ((ulong)new FileInfo(path).Length != claim.Size)
-                return new ScanResult(ScanVerdict.Error, pipeline.EngineName, null, null, null, "隔离文件大小与记录不符");
+                return pipeline.ExplainAccessFailure(new QuarantineContentChangedException())
+                    ?? new ScanResult(ScanVerdict.Error, pipeline.EngineName, null, null, null, "隔离文件大小与记录不符");
             workDirectory = storage.SessionDirectory(Guid.NewGuid().ToString("D"), create: true, ct);
             ArchiveLimits limits;
             await using (var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct))
@@ -102,12 +103,18 @@ public sealed class OemScanService(
             timeout.CancelAfter(Timeout(claim.Size));
             try
             {
-                return await pipeline.RunAsync(path, claim.Extension, limits, workDirectory, timeout.Token);
+                return await pipeline.RunAsync(new ScanTarget(path, claim.Sha256, claim.Size), claim.Extension, limits, workDirectory, timeout.Token);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 return new ScanResult(ScanVerdict.Error, pipeline.EngineName, null, null, null, "扫描超时");
             }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException && pipeline.ExplainAccessFailure(error) is ScanResult explained)
+        {
+            // The engine attributes the failure (e.g. the antivirus removed or locked the file).
+            logger.LogWarning("OEM scan of file {FileId}: quarantined file intercepted ({ErrorType}).", claim.FileId, error.GetType().Name);
+            return pipeline.ExplainAccessFailure(error)!;
         }
         catch (FileNotFoundException)
         {
@@ -372,3 +379,6 @@ public sealed class OemPromotionService(
     private static Task<OemFilePromotion?> LockAsync(OemUnitOfWork uow, string id, CancellationToken ct) =>
         uow.Db.OemFilePromotions.FromSqlInterpolated($"SELECT * FROM oem_file_promotions WHERE id = {id} FOR UPDATE").SingleOrDefaultAsync(ct);
 }
+
+/// <summary>The quarantined file no longer has the size recorded at upload.</summary>
+public sealed class QuarantineContentChangedException() : IOException("隔离文件大小与记录不符");
