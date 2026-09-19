@@ -5,6 +5,7 @@ import {
 import { IconDelete, IconPlus } from '@arco-design/web-react/icon'
 import type { DepartmentNode, FlowNode, FlowNodeInput, FlowTemplate, RoutingPreview } from '../../api/types'
 import { useOem } from '../../OemContext'
+import { useLoadEffect } from '../../useLoadEffect'
 
 const SOURCES = [
   { value: 'SECTION_LEADER', label: '课别主管' },
@@ -23,8 +24,9 @@ interface Person { id: number; employeeNo: string | null; realName: string | nul
 function PeoplePicker({ value, onChange }: { value: Person[]; onChange: (next: Person[]) => void }) {
   const { api } = useOem()
   const [options, setOptions] = useState<Person[]>([])
-  const search = async (keyword: string) => setOptions(await api.approverOptions(keyword))
-  useEffect(() => { void search('') }, [])
+  const search = useCallback(async (keyword: string) => setOptions(await api.approverOptions(keyword)), [api])
+  const loadInitial = useCallback(() => search(''), [search])
+  useLoadEffect(loadInitial)
   const known = [...value, ...options.filter((option) => !value.some((item) => item.id === option.id))]
   return (
     <Select mode="multiple" showSearch filterOption={false} placeholder="搜索具有 OEM 审批权限的员工" value={value.map((item) => item.id)}
@@ -172,7 +174,7 @@ export default function FlowTemplatesPage() {
   const [templates, setTemplates] = useState<FlowTemplate[]>([])
   const [editing, setEditing] = useState<FlowTemplate | 'new' | null>(null)
   const load = useCallback(async () => setTemplates(await api.flowTemplates()), [api])
-  useEffect(() => { void load() }, [load])
+  useLoadEffect(load)
 
   return (
     <div>

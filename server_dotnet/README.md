@@ -185,7 +185,7 @@ python .\scripts\test-browser.py --output ..\.runlogs\browser-NEW
 
 `--steps auth fixtures system` 可单独检查系统参数和日志；`--steps auth fixtures users project-edges access` 检查五态筛选、编辑、分页、终止重启、异常重试和权限变化、多标签换号。`business`、`project-edges`、`file-edges`、`message-edges` 必须在 `users` 后，`final` 和 `layout` 必须在 `business` 后。
 
-默认步骤还包括 `auth-edges`（匿名404、认证失败恢复、键盘、跳转和会话刷新）、`file-edges`（双向文件筛选分页、失败恢复和多表预览）、负责人和项目选项边界（停用负责人、选项加载失败及全部公开配置字段）、`message-edges`（Unicode长度、重复发送、失败重试、游标分页和动态跳转）。可按上述依赖通过 `--steps` 单独执行。故障注入只作用于本轮浏览器路由，成功重试仍调用真实隔离 API。完整默认步骤对应 `scripts/browser` 中的脚本，不代表覆盖所有状态组合、实际移动设备、目标 IIS 或外部 SMTP。
+默认步骤还包括 `auth-edges`（匿名404、认证失败恢复、键盘、跳转和会话刷新）、`file-edges`（双向文件筛选分页、失败恢复和多表预览）、负责人和项目选项边界（停用负责人、选项加载失败及全部公开配置字段）、`message-edges`（Unicode长度、重复发送、失败重试、游标分页和动态跳转）。默认步骤最后的 `oem` 覆盖 OEM 文件传递：从协作平台页头进入、界面设置课别主管、新建厂商和厂商账号、发送人上传发送、主管审批、厂商在 `/oem-portal` 首次改密后下载并核对 SHA-256、厂商令牌访问协作平台接口返回 403（40304）、发送人看到首次接收回执；可用 `--steps auth fixtures oem` 单独执行。浏览器运行关闭全部后台任务，OEM 文件使用临时独立目录和仅限测试的 Fake 扫描引擎，由 TestHost 在 `YF_TESTHOST_OEM_SCAN=1` 时自行驱动扫描与放行（发布包不含 TestHost）。可按上述依赖通过 `--steps` 单独执行。故障注入只作用于本轮浏览器路由，成功重试仍调用真实隔离 API。完整默认步骤对应 `scripts/browser` 中的脚本，不代表覆盖所有状态组合、实际移动设备、目标 IIS 或外部 SMTP。
 
 ## IIS 发布
 

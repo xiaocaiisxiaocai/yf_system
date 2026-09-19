@@ -7,8 +7,10 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
 import type { ApprovalInfo, ApprovalTask, TransferDetail, TransferFile } from '../api/types'
 import OemUploader from '../components/OemUploader'
-import { ApprovalTag, DIRECTION_LABEL, LifecycleTag, PayloadTag, ScanTag } from '../components/StatusTags'
+import { ApprovalTag, LifecycleTag, PayloadTag, ScanTag } from '../components/StatusTags'
+import { DIRECTION_LABEL } from '../components/statusLabels'
 import { useCan, useOem } from '../OemContext'
+import { useLoadEffect } from '../useLoadEffect'
 
 const PREVIEWABLE = new Set(['pdf', 'png', 'jpg', 'jpeg'])
 
@@ -142,7 +144,7 @@ export default function TransferDetailPage() {
     }
   }, [api, id])
 
-  useEffect(() => { void load() }, [load])
+  useLoadEffect(load)
 
   // While files are being scanned or promoted, refresh until the transfer settles.
   const settling = detail && ['DRAFT', 'SEALED'].includes(detail.summary.lifecycleStatus)

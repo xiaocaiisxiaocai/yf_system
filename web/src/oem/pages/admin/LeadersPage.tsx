@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { Button, Card, Message, Modal, Select, Table, Tag, Typography } from '@arco-design/web-react'
 import type { DepartmentNode } from '../../api/types'
 import { useOem } from '../../OemContext'
+import { useLoadEffect } from '../../useLoadEffect'
 
 const KIND_LABEL: Record<DepartmentNode['kind'], string> = { DIVISION: '事业部', DEPARTMENT: '部门', SECTION: '课别' }
 
@@ -14,7 +15,7 @@ export default function LeadersPage() {
   const [selected, setSelected] = useState<number | undefined>()
 
   const load = useCallback(async () => setTree(await api.departments()), [api])
-  useEffect(() => { void load() }, [load])
+  useLoadEffect(load)
 
   const search = async (keyword: string) => setCandidates(await api.internalUsers(keyword))
   const save = async (leaderId: number | null) => {

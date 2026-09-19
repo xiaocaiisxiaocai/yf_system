@@ -85,7 +85,13 @@ export function OemEntryButton() {
   if (!permissions.some((code) => code.startsWith('oem:') || code === 'dept:leader_manage')) return null
   const first = permissions.includes('oem:transfer_create') || permissions.includes('oem:transfer_view') ? '/oem/transfers'
     : permissions.includes('oem:flow_approve') ? '/oem/approvals' : '/oem/admin/companies'
-  return <Button type="text" icon={<IconApps />} style={{ color: 'inherit' }} onClick={() => navigate(first)}>OEM 文件传递</Button>
+  // Collapses to its icon on narrow screens (see collaboration.css); the label stays accessible.
+  return (
+    <Button className="oem-entry-button" type="text" icon={<IconApps />} style={{ color: 'inherit' }}
+      aria-label="OEM 文件传递" title="OEM 文件传递" onClick={() => navigate(first)}>
+      <span className="oem-entry-label">OEM 文件传递</span>
+    </Button>
+  )
 }
 
 const portalApi = new OemApi(portalHttp)

@@ -4,6 +4,7 @@ import { IconPlus } from '@arco-design/web-react/icon'
 import { fmtTime } from '../../../api/types'
 import type { AuditRow, RetentionTemplate, SettingItem } from '../../api/types'
 import { useCan, useOem } from '../../OemContext'
+import { useLoadEffect } from '../../useLoadEffect'
 
 const MODES = [
   { value: 'KEEP', label: '不自动删除' },
@@ -20,7 +21,7 @@ export function RetentionPage() {
   const mode = Form.useWatch('mode', form) as RetentionTemplate['mode'] | undefined
 
   const load = useCallback(async () => setRows(await api.retentionTemplates()), [api])
-  useEffect(() => { void load() }, [load])
+  useLoadEffect(load)
 
   const open = (row: RetentionTemplate | 'new') => {
     form.resetFields()
@@ -81,7 +82,7 @@ function SettingsForm({ group }: { group: 'file' | 'notify' }) {
     setItems(list)
     setValues(Object.fromEntries(list.map((item) => [item.key, item.value])))
   }, [api, group])
-  useEffect(() => { void load() }, [load])
+  useLoadEffect(load)
 
   const save = async () => {
     const changed = items.filter((item) => values[item.key] !== item.value).map((item) => ({ key: item.key, value: values[item.key] }))

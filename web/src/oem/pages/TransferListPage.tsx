@@ -4,8 +4,10 @@ import { IconPlus } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
 import type { Option, RetentionTemplate, TransferSummary } from '../api/types'
-import { ApprovalTag, DIRECTION_LABEL, LIFECYCLE_OPTIONS, LifecycleTag, ScanTag } from '../components/StatusTags'
+import { ApprovalTag, LifecycleTag, ScanTag } from '../components/StatusTags'
+import { DIRECTION_LABEL, LIFECYCLE_OPTIONS } from '../components/statusLabels'
 import { useCan, useOem } from '../OemContext'
+import { useLoadEffect } from '../useLoadEffect'
 
 function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { api, realm, base } = useOem()
@@ -87,7 +89,7 @@ export default function TransferListPage() {
     }
   }, [api, page, direction, status, keyword, mine])
 
-  useEffect(() => { void load() }, [load])
+  useLoadEffect(load)
 
   return (
     <Card

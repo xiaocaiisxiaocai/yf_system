@@ -33,8 +33,8 @@ SCRIPTS = Path(__file__).resolve().parent / 'browser'
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path)
 parser.add_argument('--continue-on-failure', action='store_true', help='Collect independent step failures; the run still fails if any step fails.')
-parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'dictionaries', 'preview-extras', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration'],
-    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'dictionaries', 'preview-extras'])
+parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'dictionaries', 'preview-extras', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'oem'],
+    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'dictionaries', 'preview-extras', 'oem'])
 args = parser.parse_args()
 if not __debug__:
     raise SystemExit('Do not run the browser suite with Python assertions disabled (-O/PYTHONOPTIMIZE).')
@@ -45,7 +45,7 @@ if len(args.steps) != len(set(args.steps)):
 for step, dependencies in {'business': ['users'], 'final': ['business'], 'layout': ['business'],
                            'dictionaries': ['users'], 'preview-extras': ['users'],
                            'project-edges': ['users'], 'file-edges': ['users'], 'message-edges': ['users'],
-                           'smtp-settings': ['system'], 'business-controls': ['users'], 'collaboration': ['users']}.items():
+                           'smtp-settings': ['system'], 'business-controls': ['users'], 'collaboration': ['users'], 'oem': ['fixtures']}.items():
     if step in args.steps and any(required not in args.steps[:args.steps.index(step)] for required in dependencies):
         raise SystemExit(f'{step} requires earlier steps: {", ".join(dependencies)}')
 output = (args.output or ROOT / '.runlogs' / ('browser-' + time.strftime('%Y%m%d-%H%M%S'))).resolve()
@@ -109,6 +109,8 @@ try:
         temporary = scope.enter_context(tempfile.TemporaryDirectory(prefix='yf_browser_'))
         storage_path = Path(temporary).resolve() / 'storage'
         storage_path.mkdir()
+        oem_storage_path = Path(temporary).resolve() / 'oem-storage'
+        oem_storage_path.mkdir()
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', 0))
             port = probe.getsockname()[1]
@@ -120,7 +122,10 @@ try:
             'App__ConnectionString': f'Server={quoted(url.hostname)};Port={url.port or 3306};Database={schema};User ID={quoted(urllib.parse.unquote(url.username or ""))};Password={quoted(urllib.parse.unquote(url.password or ""))}',
             'App__JwtSecret': secrets.token_urlsafe(48), 'App__StorageRoot': str(storage_path),
             'App__WebBaseUrl': base, 'App__CookieSecure': 'false', 'App__WorkerEnabled': 'false',
-            'App__Smtp__Host': '', 'ASPNETCORE_URLS': base, 'URLS': base, 'ASPNETCORE_WEBROOT': str(ROOT / 'web/dist'),
+            'App__Smtp__Host': '',
+            # OEM: separate storage, the insecure fake scanner (test only), and TestHost-driven scan/promotion.
+            'App__OemStorageRoot': str(oem_storage_path), 'App__OemScanner__Engine': 'Fake',
+            'App__OemScanner__AcknowledgeInsecureFake': 'true', 'YF_TESTHOST_OEM_SCAN': '1', 'ASPNETCORE_URLS': base, 'URLS': base, 'ASPNETCORE_WEBROOT': str(ROOT / 'web/dist'),
             'YF_BOOTSTRAP_PASSWORD': initial,
             'YF_PROJECT_ROOT': str(ROOT), 'YF_BROWSER_SUPPORT_DIR': str(SCRIPTS),
             'YF_BROWSER_EVIDENCE_DIR': str(output), 'Logging__LogLevel__Default': 'Warning',

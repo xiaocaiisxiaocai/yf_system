@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Space, Table, Tag } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import { fmtTime } from '../../../api/types'
 import type { Company, VendorAccount } from '../../api/types'
 import { useCan, useOem } from '../../OemContext'
+import { useLoadEffect } from '../../useLoadEffect'
 
 function AccountsDrawer({ company, onClose }: { company: Company | null; onClose: () => void }) {
   const { api } = useOem()
@@ -13,7 +14,7 @@ function AccountsDrawer({ company, onClose }: { company: Company | null; onClose
   const [form] = Form.useForm()
 
   const load = useCallback(async () => { if (company) setRows(await api.accounts(company.id)) }, [api, company])
-  useEffect(() => { void load() }, [load])
+  useLoadEffect(load)
 
   const save = async () => {
     const values = await form.validate()
@@ -106,7 +107,7 @@ export default function CompaniesPage() {
     setRows(result.list)
     setTotal(result.total)
   }, [api, page, keyword, can.manageCompanies])
-  useEffect(() => { void load() }, [load])
+  useLoadEffect(load)
 
   const save = async () => {
     const values = await form.validate()
