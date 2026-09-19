@@ -193,8 +193,13 @@ try:
                 "WHERE type='PRIORITY' AND name IN ('高','普通','低')"
             )
             check("fresh EF initialization seeds the default priorities", cursor.fetchone()[0] == 3)
-        check("fresh EF initialization records exactly one InitialCreate migration",
-              len(expected_history) == 1 and expected_history[0][0].endswith("_InitialCreate"))
+        # Every EF migration in the source tree, in order: InitialCreate first, then later ones (e.g. AddOemPlatform).
+        source_migrations = sorted(
+            path.stem for path in (Path(__file__).resolve().parents[1] / "Yf.Api/Infrastructure/Migrations").glob("*.cs")
+            if path.stem[:14].isdigit() and path.stem[14:15] == "_" and "." not in path.stem)
+        check("fresh EF initialization records every source migration in order, starting with InitialCreate",
+              bool(source_migrations) and source_migrations[0].endswith("_InitialCreate")
+              and [row[0] for row in expected_history] == source_migrations)
 
         for _ in range(2):
             migration = subprocess.run(

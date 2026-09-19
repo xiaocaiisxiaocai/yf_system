@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Card, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag, Typography } from '@arco-design/web-react'
+import type { TableColumnProps } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import './Dictionaries.css'
 
 type DictionaryType = 'ROBOT_VENDOR' | 'ROBOT_MODEL' | 'PRIORITY'
+
+// With a fixed header (scroll.y) Arco renders the header as its own table, which browsers expose as
+// plain cells; scope="col" keeps them announced as column headers.
+const columnHeaderProps = () => ({ scope: 'col' }) as unknown as ReturnType<NonNullable<TableColumnProps['onHeaderCell']>>
+const withColumnHeaders = <T extends TableColumnProps>(columns: T[]) => columns.map((column) => ({ ...column, onHeaderCell: columnHeaderProps }))
 interface DictionaryItem {
   id: number
   type: DictionaryType
@@ -148,7 +154,7 @@ export default function Dictionaries() {
       <Table className="page-table" rowKey="id" loading={loading} data={rows} pagination={{ pageSize: 20, showTotal: true }}
         noDataElement={loading ? <span /> : emptyContent}
         scroll={{ x: type === 'ROBOT_MODEL' ? 740 : 560, y: 'var(--page-table-scroll-y)' }}
-        columns={[
+        columns={withColumnHeaders([
           { title: '名称', dataIndex: 'name', width: 240, ellipsis: true },
           ...(type === 'ROBOT_MODEL' ? [{ title: 'Robot 厂商', width: 160, render: (_: unknown, item: DictionaryItem) => item.parentName ?? vendors.find(vendor => vendor.id === item.parentId)?.name ?? '—' }] : []),
           { title: '排序号', dataIndex: 'sortNo', width: 90, align: 'center' as const },
@@ -159,7 +165,7 @@ export default function Dictionaries() {
               <Button type="text" size="mini" status="danger">删除</Button>
             </Popconfirm>
           </Space> },
-        ]} />}
+        ])} />}
     <Modal className="form-dialog" title={`${editing ? '编辑' : '新增'}${label}`} visible={open}
       onOk={save} onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving}
       closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }}
