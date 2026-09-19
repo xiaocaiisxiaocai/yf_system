@@ -35,6 +35,8 @@ public sealed class OemPurgeService(
             candidates = await uow.Db.OemTransferFiles.AsNoTracking()
                 .Where(file => ((file.PayloadStatus == PayloadStatuses.Quarantined || file.PayloadStatus == PayloadStatuses.Available)
                         && file.PurgeDueAt != null && file.PurgeDueAt <= uow.Now)
+                    || (file.PayloadStatus == PayloadStatuses.Promoting && file.PurgeDueAt != null && file.PurgeDueAt <= uow.Now
+                        && uow.Db.OemFilePromotions.Any(promotion => promotion.FileId == file.Id && promotion.Status == PromotionStatuses.Failed))
                     || (file.PayloadStatus == PayloadStatuses.PurgePending
                         && (file.PurgeLeaseUntil == null || file.PurgeLeaseUntil <= uow.Now)
                         && (file.PurgeNextAttemptAt == null || file.PurgeNextAttemptAt <= uow.Now)))
@@ -49,13 +51,17 @@ public sealed class OemPurgeService(
     private async Task<bool> PurgeOneAsync(ulong fileId, CancellationToken ct)
     {
         ulong claimVersion;
-        string relative;
+        string[] relatives;
         await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))
         {
             var transferId = await uow.Db.OemTransferFiles.Where(item => item.Id == fileId).Select(item => item.TransferId).SingleAsync(ct);
             await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
             var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {fileId} FOR UPDATE").SingleAsync(ct);
-            var due = file.PayloadStatus is PayloadStatuses.Quarantined or PayloadStatuses.Available && file.PurgeDueAt <= uow.Now;
+            var failedPromotions = await uow.Db.OemFilePromotions.AsNoTracking()
+                .Where(promotion => promotion.FileId == fileId && promotion.Status == PromotionStatuses.Failed).ToArrayAsync(ct);
+            var due = (file.PayloadStatus is PayloadStatuses.Quarantined or PayloadStatuses.Available
+                    || file.PayloadStatus == PayloadStatuses.Promoting && failedPromotions.Length > 0)
+                && file.PurgeDueAt <= uow.Now;
             var retry = file.PayloadStatus == PayloadStatuses.PurgePending && (file.PurgeLeaseUntil is null || file.PurgeLeaseUntil <= uow.Now)
                 && (file.PurgeNextAttemptAt is null || file.PurgeNextAttemptAt <= uow.Now);
             if (!due && !retry) return false;
@@ -83,19 +89,26 @@ public sealed class OemPurgeService(
             await uow.Db.SaveChangesAsync(ct);
             await uow.CommitAsync(ct);
             claimVersion = file.ConcurrencyVersion;
-            relative = file.StoragePath;
+            relatives = failedPromotions.SelectMany(promotion => new[] { promotion.SourcePath, promotion.TargetPath })
+                .Append(file.StoragePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
         string? failure = null;
-        try
+        foreach (var relative in relatives)
         {
-            var path = storage.Absolute(relative);
-            if (File.Exists(path)) File.Delete(path);
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            failure = error is UnauthorizedAccessException ? "没有删除权限" : "文件被占用或删除失败";
-            logger.LogWarning("OEM purge of file {FileId} failed ({ErrorType}).", fileId, error.GetType().Name);
+            try
+            {
+                var path = storage.Absolute(relative);
+                // Delete is already idempotent for an absent file. File.Exists would
+                // also return false on access errors and incorrectly acknowledge a purge.
+                File.Delete(path);
+            }
+            catch (DirectoryNotFoundException) { /* The containing directory is already absent. */ }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                failure ??= error is UnauthorizedAccessException ? "没有删除权限" : "文件被占用或删除失败";
+                logger.LogWarning("OEM purge of file {FileId} failed ({ErrorType}).", fileId, error.GetType().Name);
+            }
         }
 
         await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))
@@ -147,15 +160,18 @@ public sealed class OemPurgeService(
                 .Where(transfer => transfer.LifecycleStatus == TransferLifecycle.Draft && transfer.UpdatedAt <= cutoff)
                 .OrderBy(transfer => transfer.Id).Select(transfer => transfer.Id).Take(50).ToArrayAsync(ct);
         }
+        var expired = 0;
         foreach (var id in ids)
         {
             await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
             var transfer = await OemTransferProgression.LockTransferAsync(uow, id, ct);
-            if (transfer.LifecycleStatus != TransferLifecycle.Draft) continue;
+            var cutoff = uow.Now.Subtract((await OemSettings.LoadAsync(uow.Db, ct)).DraftTtl);
+            if (transfer.LifecycleStatus != TransferLifecycle.Draft || transfer.UpdatedAt > cutoff) continue;
             await transfers.AbandonAsync(uow, transfer, null, "草稿超过保留期限", PurgeReasons.DraftExpired, ct);
             await dispatcher.CommitAsync(uow, ct);
+            expired++;
         }
-        return ids.Length;
+        return expired;
     }
 }
 

@@ -127,6 +127,7 @@
   "GET /api/v1/oem/flow-templates/preview",
   "GET /api/v1/oem/flow-templates/{}",
   "PUT /api/v1/oem/flow-templates/{}",
+  "PUT /api/v1/oem/flow-templates/{}/definition",
   "PUT /api/v1/oem/flow-templates/{}/nodes",
   "PUT /api/v1/oem/flow-templates/{}/scopes",
   "GET /api/v1/oem/approver-options",

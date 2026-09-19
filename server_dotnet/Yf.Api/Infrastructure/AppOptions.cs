@@ -83,27 +83,27 @@ public sealed class AppOptions
         left.Equals(right, comparison) || left.StartsWith(right + Path.DirectorySeparatorChar, comparison)
         || right.StartsWith(left + Path.DirectorySeparatorChar, comparison);
 
-    private static string ResolveComparisonPath(string path)
+    private static string ResolveComparisonPath(string path, int remainingLinks = 64)
     {
         var full = Path.GetFullPath(path);
-        var missing = new Stack<string>();
-        var existing = full;
-        while (!Directory.Exists(existing) && !File.Exists(existing))
+        var root = Path.GetPathRoot(full)
+            ?? throw new InvalidOperationException("无法解析存储目录路径。");
+        var resolved = root;
+        // Resolve every existing component. Inspecting only the nearest existing
+        // parent misses links further up when the leaf is an ordinary directory.
+        foreach (var part in full[root.Length..].Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
         {
-            var parent = Directory.GetParent(existing)
-                ?? throw new InvalidOperationException("无法解析存储目录路径。");
-            missing.Push(Path.GetFileName(existing));
-            existing = parent.FullName;
+            resolved = Path.Combine(resolved, part);
+            FileSystemInfo? entry = Directory.Exists(resolved) ? new DirectoryInfo(resolved)
+                : File.Exists(resolved) ? new FileInfo(resolved) : null;
+            if (entry is null || (entry.Attributes & FileAttributes.ReparsePoint) == 0) continue;
+            if (remainingLinks <= 0) throw new InvalidOperationException("存储路径的链接层级过深。");
+            var target = entry.ResolveLinkTarget(returnFinalTarget: true)
+                ?? throw new InvalidOperationException("无法解析存储目录链接。");
+            resolved = ResolveComparisonPath(target.FullName, remainingLinks - 1);
         }
-
-        if (Directory.Exists(existing))
-        {
-            var resolved = new DirectoryInfo(existing).ResolveLinkTarget(returnFinalTarget: true);
-            if (resolved is not null) existing = resolved.FullName;
-        }
-
-        while (missing.Count > 0) existing = Path.Combine(existing, missing.Pop());
-        return Path.GetFullPath(existing).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return Path.GetFullPath(resolved).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 }
 

@@ -223,7 +223,8 @@ async function chooseNotificationTab(drawer, name) {
       // follow-up refresh has no such SLA and can wait for the current
       // message burst to settle without making the integration test flaky.
       const supplierReload = waitResponse(
-        supplierPage, `/projects/${project.id}/messages`, 'GET', 200, 30000);
+        supplierPage, `/projects/${project.id}/messages`, 'GET', 200, 30000).then(
+        response => ({ response }), error => ({ error }));
       const actorPage = await adminContext.newPage();
       track(actorPage, 'collaboration-admin-actor');
       actorPage.setDefaultTimeout(12000);
@@ -236,7 +237,8 @@ async function chooseNotificationTab(drawer, name) {
       } finally {
         await actorPage.close();
       }
-      await supplierReload;
+      const supplierReloadResult = await supplierReload;
+      if (supplierReloadResult.error) throw supplierReloadResult.error;
       await supplierPage.getByText(adminText, { exact: true }).waitFor();
       assert.equal(await supplierInput().inputValue(), draft);
       const afterIds = await supplierPage.locator('.msg-item')

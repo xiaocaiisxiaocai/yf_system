@@ -238,6 +238,8 @@ export interface SettingItem {
   value: string
   min: number | null
   max: number | null
+  readOnly?: boolean
+  unsupportedReason?: string | null
 }
 
 export interface AuditRow {

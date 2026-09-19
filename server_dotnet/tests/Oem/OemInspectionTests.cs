@@ -1,5 +1,8 @@
 using System.IO.Compression;
 using System.Text;
+using SharpCompress.Common;
+using SharpCompress.Writers;
+using SharpCompress.Writers.SevenZip;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Policies;
 using Yf.Api.Modules.Oem.Scanning;
@@ -109,6 +112,14 @@ public sealed class OemInspectionTests
             var hidden = Zip(("inner.zip", EncryptedZip()));
             Assert.Equal(ArchiveOutcome.Encrypted, (await ArchiveInspector.InspectAsync(Write(work, "hidden.zip", hidden), "zip", Limits, work, ct)).Outcome);
 
+            foreach (var name in new[] { "inner.bin", "inner", "drawing.pdf" })
+            {
+                var renamed = Zip((name, EncryptedZip()));
+                Assert.Equal(ArchiveOutcome.Encrypted, (await ArchiveInspector.InspectAsync(Write(work, "renamed.zip", renamed), "zip", Limits, work, ct)).Outcome);
+            }
+            var renamedDeep = Zip(("l4.bin", Zip(("l3.bin", Zip(("l2.bin", level1))))));
+            Assert.Equal(ArchiveOutcome.LimitExceeded, (await ArchiveInspector.InspectAsync(Write(work, "renamed-deep.zip", renamedDeep), "zip", Limits, work, ct)).Outcome);
+
             Assert.Equal(ArchiveOutcome.NotArchive, (await ArchiveInspector.InspectAsync(Write(work, "a.pdf", OemTestHost.Pdf("x")), "pdf", Limits, work, ct)).Outcome);
         }
         finally
@@ -118,30 +129,88 @@ public sealed class OemInspectionTests
     }
 
     [Fact]
-    public void RarAndSevenZipEncryptionMarkersAreDetected()
+    public async Task RarAndSevenZipArchivesAreFullyInspected()
     {
+        var ct = TestContext.Current.CancellationToken;
         var work = Directory.CreateTempSubdirectory("oem-rar-").FullName;
         try
         {
-            // RAR4: marker block, then an archive header with the "headers encrypted" flag (0x0080).
-            byte[] rar4 = [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00, 0x00, 0x00, 0x73, 0x80, 0x00, 0x0D, 0x00, 0, 0, 0, 0, 0, 0];
-            Assert.Equal(ArchiveOutcome.Encrypted, ArchiveInspector.InspectRar(Write(work, "e.rar", rar4)).Outcome);
-            byte[] rar4Plain = [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00, 0x00, 0x00, 0x73, 0x00, 0x00, 0x0D, 0x00, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x7B, 0x00, 0x40, 0x07, 0x00];
-            Assert.Equal(ArchiveOutcome.Accepted, ArchiveInspector.InspectRar(Write(work, "p.rar", rar4Plain)).Outcome);
+            var sevenZip = Write(work, "plain.7z", SevenZip(("a.txt", "hello"u8.ToArray())));
+            Assert.Equal(ArchiveOutcome.Accepted, (await ArchiveInspector.InspectAsync(sevenZip, "7z", Limits, work, ct)).Outcome);
 
-            // 7z: start header pointing at a next-header that names the AES coder.
-            var header = new byte[] { 0x01, 0x04, 0x06, 0x00, 0x06, 0xF1, 0x07, 0x01, 0x00 };
-            var sevenZip = new byte[32 + header.Length];
-            new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04 }.CopyTo(sevenZip, 0);
-            BitConverter.GetBytes(0UL).CopyTo(sevenZip, 12);
-            BitConverter.GetBytes((ulong)header.Length).CopyTo(sevenZip, 20);
-            header.CopyTo(sevenZip, 32);
-            Assert.Equal(ArchiveOutcome.Encrypted, ArchiveInspector.InspectSevenZip(Write(work, "e.7z", sevenZip)).Outcome);
+            var random = new byte[4096];
+            new Random(42).NextBytes(random);
+            var random2 = new byte[4096];
+            new Random(43).NextBytes(random2);
+            var incompressible = Write(work, "incompressible.7z", SevenZip(("a.bin", random), ("b.bin", random2)));
+            Assert.Equal(ArchiveOutcome.Accepted,
+                (await ArchiveInspector.InspectAsync(incompressible, "7z", Limits, work, ct)).Outcome);
+
+            var many = Write(work, "many.7z", SevenZip(Enumerable.Range(0, 101).Select(i => ($"f{i}.txt", Encoding.ASCII.GetBytes("x" + i))).ToArray()));
+            Assert.Equal(ArchiveOutcome.LimitExceeded, (await ArchiveInspector.InspectAsync(many, "7z", Limits, work, ct)).Outcome);
+
+            var large = Write(work, "large.7z", SevenZip(("large.bin", Enumerable.Repeat((byte)0x5A, 1024).ToArray())));
+            Assert.Equal(ArchiveOutcome.LimitExceeded,
+                (await ArchiveInspector.InspectAsync(large, "7z", Limits with { MaxExpandedBytes = 512, MaxRatio = long.MaxValue }, work, ct)).Outcome);
+
+            var highlyCompressed = Write(work, "ratio.7z", SevenZip(("zeros.bin", new byte[2 * 1024 * 1024])));
+            Assert.Equal(ArchiveOutcome.LimitExceeded,
+                (await ArchiveInspector.InspectAsync(highlyCompressed, "7z", Limits, work, ct)).Outcome);
+
+            var level1 = SevenZip(("leaf.txt", "x"u8.ToArray()));
+            var level2 = SevenZip(("l2.bin", level1));
+            var level3 = SevenZip(("l3.bin", level2));
+            Assert.Equal(ArchiveOutcome.Accepted,
+                (await ArchiveInspector.InspectAsync(Write(work, "d3.7z", level3), "7z", Limits, work, ct)).Outcome);
+            var level4 = SevenZip(("l4.bin", level3));
+            Assert.Equal(ArchiveOutcome.LimitExceeded,
+                (await ArchiveInspector.InspectAsync(Write(work, "d4.7z", level4), "7z", Limits, work, ct)).Outcome);
+
+            // Apache Commons Compress test fixture, Apache-2.0:
+            // https://github.com/apache/commons-compress/blob/master/src/test/resources/bla.encrypted.7z
+            var encryptedSevenZip = Convert.FromBase64String(
+                "N3q8ryccAAPOr6vM4AEAAAAAAAA2AAAAAAAAAMPV/c15gWF4/yjZnVseP50CUVynWCTYmSp6Ke098yYgF/M6rarfE3VIk5F/VKhRnpC3g8FD942gEXEDLnd12CRgkhC4qrpznDYACE9oBNV+7PMngR+vT6qzXjm/S08zuAzS7kP6aINNqGgZl3g9JTwGgqDCfkC35h3sjatUkdayb13cMgUiSA0sB7tR2E2lxhH/Hm30QeqD4dRDXT6l81+9PEOeQSNNZkrZfSy8lRJT5MKMAQtwUajG+BlU19/tUokPbvptGnP5PjZAHGEQrlK/avb4U0GKB12F4KU4v0zskuJwfX84UYn8fymldsL2Bn9pKrRQWx9b2AxZ97CUxdydqSv8Cc2U8gw1gJBMqOy7Af8JFTjOleTEou4N+ZdZw29Sf2QM1jKMJPSjGoVkwe2T8BmB4jM1PV+Hn8PAsrwN1K7vIMhOZEQyvSmXQFDSfDudsK6kFCdyZmqJjREA5baUovT+CsnOtEOy65EqnQmHtOh0ZYHPNn2UMuvzje+LVpw5OQaHXLyqSgA9PYSEuy9fqr+exsGfYZ6FE+K7UKPc5XLI60V7z6+4Z7em7vD6qG8IQYWNdQVJDXZbTmpDw/7nk+tXITiSCnowCfCNmLHbVSAubMECBTPUE2kDx01w49txxyIXBoFgAQmAgAAHCwEAAiQG8QcBClMHznmlTwXNceUjAwEBBV0AEAAAAQAMd4CRCgFx7ooQAAA=");
+            Assert.Equal(ArchiveOutcome.Encrypted,
+                (await ArchiveInspector.InspectAsync(Write(work, "encrypted.7z", encryptedSevenZip), "7z", Limits, work, ct)).Outcome);
+            Assert.Equal(ArchiveOutcome.Encrypted,
+                (await ArchiveInspector.InspectAsync(Write(work, "hidden.7z", SevenZip(("payload.bin", encryptedSevenZip))), "7z", Limits, work, ct)).Outcome);
+
+            // Minimal RAR5 fixture from ssokolow/rar-test-files, CC0-1.0:
+            // https://github.com/ssokolow/rar-test-files/blob/master/build/testfile.rar5.rar
+            var tinyRar = Convert.FromBase64String("UmFyIRoHAQAzkrXlCgEFBgAFAQGAgAAkmeyhIgICjAAGjAC2gwLQDlA6/o/BboAAAQx0ZXN0ZmlsZS50eHRUZXN0aW5nIDEyMwodd1ZRAwUEAA==");
+            var rar = Write(work, "tiny.rar", tinyRar);
+            Assert.Equal(ArchiveOutcome.Accepted, (await ArchiveInspector.InspectAsync(rar, "rar", Limits, work, ct)).Outcome);
+            Assert.Equal(ArchiveOutcome.LimitExceeded,
+                (await ArchiveInspector.InspectAsync(rar, "rar", Limits with { MaxEntries = 0 }, work, ct)).Outcome);
+            Assert.Equal(ArchiveOutcome.LimitExceeded,
+                (await ArchiveInspector.InspectAsync(rar, "rar", Limits with { MaxExpandedBytes = 5 }, work, ct)).Outcome);
         }
         finally
         {
             Directory.Delete(work, recursive: true);
         }
+    }
+
+    [Fact]
+    public void ArchiveMagicTakesPrecedenceOverAnEmbeddedPdfMarker()
+    {
+        var bytes = Zip(("%PDF-drawing.txt", "payload"u8.ToArray()));
+        Assert.Equal("zip", FileSignatureInspector.Detect(bytes));
+        Assert.False(FileSignatureInspector.Inspect(bytes, "pdf").Accepted);
+    }
+
+    [Fact]
+    public async Task ADirectoryNameCannotHideNestedArchiveContent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var work = Directory.CreateTempSubdirectory("oem-directory-entry-").FullName;
+        try
+        {
+            var path = Write(work, "directory.zip", Zip(("hidden/", EncryptedZip())));
+            Assert.Equal(ArchiveOutcome.Corrupt,
+                (await ArchiveInspector.InspectAsync(path, "zip", Limits, work, ct)).Outcome);
+        }
+        finally { Directory.Delete(work, recursive: true); }
     }
 
     [Fact]
@@ -172,6 +241,15 @@ public sealed class OemInspectionTests
                 using var stream = archive.CreateEntry(name, CompressionLevel.SmallestSize).Open();
                 stream.Write(content);
             }
+        return buffer.ToArray();
+    }
+
+    internal static byte[] SevenZip(params (string Name, byte[] Content)[] entries)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = WriterFactory.OpenWriter(buffer, ArchiveType.SevenZip, new SevenZipWriterOptions { LeaveStreamOpen = true }))
+            foreach (var (name, content) in entries)
+                writer.Write(name, new MemoryStream(content), null);
         return buffer.ToArray();
     }
 

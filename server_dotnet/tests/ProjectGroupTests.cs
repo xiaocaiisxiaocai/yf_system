@@ -111,6 +111,12 @@ public sealed class ProjectGroupTests
             var submissionId = submitted.RootElement.GetProperty("latestSubmissionId").GetUInt64();
             Assert.Equal(ProjectStatuses.PendingConfirmation,
                 submitted.RootElement.GetProperty("status").GetString());
+            var internalWithdrawal = await Assert.ThrowsAsync<ApiException>(() => projects.WithdrawAsync(
+                conn, actor, children[0].Id,
+                new ProjectDecisionRequest { ExpectedSubmissionId = submissionId }, null, ct));
+            Assert.Equal(403, internalWithdrawal.Status);
+            Assert.Equal(ProjectStatuses.PendingConfirmation, await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+                "SELECT status FROM projects WHERE id=@ProjectId", new { ProjectId = children[0].Id })));
             await projects.WithdrawAsync(conn, supplier, children[0].Id,
                 new ProjectDecisionRequest { ExpectedSubmissionId = submissionId }, null, ct);
         }

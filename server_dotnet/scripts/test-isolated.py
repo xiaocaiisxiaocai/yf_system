@@ -296,7 +296,7 @@ try:
             client = Client(base)
             for _ in range(100):
                 if process.poll() is not None:
-                    raise RuntimeError("Loopback test host exited: " + (Path(temp) / "api.log").read_text(errors="replace")[-1800:])
+                    raise RuntimeError("Loopback test host exited: " + api_log_path.read_text(errors="replace")[-1800:])
                 try:
                     client.call("GET", "/health")
                     break

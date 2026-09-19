@@ -374,7 +374,9 @@ def main():
     if json.loads(signalr_package.read_text(encoding="utf-8"))["version"] != "10.0.11":
         raise SystemExit("web SignalR dependency must be version 10.0.11")
 
-    db_name = "yf_test_signalr_" + uuid.uuid4().hex
+    # Pomelo appends "_EFMigrationsLock" and MySQL limits user lock names to
+    # 64 bytes, so keep owned schema names well below that combined limit.
+    db_name = "yf_t_s_" + uuid.uuid4().hex[:20]
     db_user = urllib.parse.unquote(parsed.username or "")
     db_password = urllib.parse.unquote(parsed.password or "")
     conn = pymysql.connect(
@@ -444,12 +446,15 @@ def main():
                 ["dotnet", str(dll), "--initialize-database"],
                 cwd=api_dir,
                 env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 timeout=60,
             )
             if initialized.returncode != 0:
-                raise CheckFailure("isolated database initialization failed")
+                diagnostic = initialized.stdout.decode(errors="replace")[-6000:]
+                if db_password:
+                    diagnostic = diagnostic.replace(db_password, "[redacted]")
+                raise CheckFailure("isolated database initialization failed: " + diagnostic)
             check("owned database initialized", len(initial_password) <= 17)
             env.pop("YF_BOOTSTRAP_PASSWORD", None)
 

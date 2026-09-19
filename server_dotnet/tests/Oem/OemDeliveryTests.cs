@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Headers;
 using Dapper;
+using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Oem.Data;
 using Yf.Api.Modules.Oem.Delivery;
 using Yf.Api.Modules.Oem.Maintenance;
 using Yf.Api.Modules.Oem.Transfers;
@@ -192,5 +194,96 @@ public sealed class OemDeliveryTests
         Assert.All(oemLogs, row => Assert.True(row!["action"]!.GetValue<string>().StartsWith("OEM_") || row["action"]!.GetValue<string>() == "DEPT_LEADER_CHANGE"));
         Assert.Contains(oemLogs, row => row!["actorRealm"]!.GetValue<string>() == "oem");
         await world.Viewer.GetAsync("/api/v1/oem/audit-logs", ct).Status(HttpStatusCode.Forbidden);
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task DraftExpiryRechecksFreshnessAfterTakingTheTransferLock()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var draft = await CreateOutboundAsync(world, "并发编辑草稿", ct);
+        var transferId = TransferId(draft);
+        await using var blocker = await host.OpenAsync(ct);
+        await blocker.ExecuteAsync("UPDATE oem_transfers SET updated_at=UTC_TIMESTAMP(3) - INTERVAL 40 DAY WHERE id=@transferId", new { transferId });
+        await using var tx = await blocker.BeginTransactionAsync(ct);
+        await blocker.ExecuteScalarAsync<ulong>("SELECT id FROM oem_transfers WHERE id=@transferId FOR UPDATE", new { transferId }, tx);
+
+        var expiry = host.Service<OemPurgeService>().ExpireDraftsAsync(host.Service<OemTransferService>(), ct);
+        await Task.Delay(200, ct);
+        Assert.False(expiry.IsCompleted);
+        await blocker.ExecuteAsync("UPDATE oem_transfers SET updated_at=UTC_TIMESTAMP(3) WHERE id=@transferId", new { transferId }, tx);
+        await tx.CommitAsync(ct);
+
+        Assert.Equal(0, await expiry);
+        await using var verify = await host.OpenAsync(ct);
+        Assert.Equal("DRAFT", await verify.ExecuteScalarAsync<string>(
+            "SELECT lifecycle_status FROM oem_transfers WHERE id=@transferId", new { transferId }));
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task DownloadCompletionTakesTheTransferLockBeforeItsLeaseAndPreservesTheReceipt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var (transferId, fileId, content) = await ReleasedInboundAsync(world, world.KeepTemplateId, ct);
+        var started = await world.Viewer.PostAsync($"/api/v1/oem/files/{fileId}/download-sessions", null, ct).Ok();
+        var sessionId = started["downloadSessionId"]!.GetValue<string>();
+        OemDownloadSession session;
+        OemTransferFile file;
+        await using (var context = await host.Service<IDbContextFactory<YfDbContext>>().CreateDbContextAsync(ct))
+        {
+            session = await context.OemDownloadSessions.AsNoTracking().SingleAsync(item => item.Id == sessionId, ct);
+            file = await context.OemTransferFiles.AsNoTracking().SingleAsync(item => item.Id == fileId, ct);
+        }
+        var leaseId = Guid.NewGuid().ToString("D");
+        await using (var setup = await host.OpenAsync(ct))
+            await setup.ExecuteAsync(@"INSERT INTO oem_download_leases
+                (id,session_id,file_id,owner,started_at,last_progress_at,lease_until,hard_deadline,status)
+                VALUES (@leaseId,@sessionId,@fileId,'test',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),
+                    UTC_TIMESTAMP(3)+INTERVAL 5 MINUTE,UTC_TIMESTAMP(3)+INTERVAL 10 MINUTE,'ACTIVE')",
+                new { leaseId, sessionId, fileId });
+
+        await using var blocker = await host.OpenAsync(ct);
+        await using var blockerTx = await blocker.BeginTransactionAsync(ct);
+        await blocker.ExecuteScalarAsync<ulong>("SELECT id FROM oem_transfers WHERE id=@transferId FOR UPDATE", new { transferId }, blockerTx);
+        var completion = host.Service<OemDeliveryService>().FinishAsync(
+            leaseId, session, file, new ByteRange(0, (ulong)content.Length - 1), delivered: true, ct);
+
+        await using (var observer = await host.OpenAsync(ct))
+        {
+            var waiting = false;
+            for (var attempt = 0; attempt < 200 && !waiting; attempt++)
+            {
+                // MySQL 5.7 does not expose every row-lock wait through
+                // INNODB_LOCK_WAITS. PROCESSLIST still shows the actual blocked
+                // SELECT, which proves FinishAsync reached the transfer lock.
+                waiting = await observer.ExecuteScalarAsync<int>(@"
+                    SELECT COUNT(*) FROM information_schema.processlist
+                    WHERE id <> CONNECTION_ID() AND db=DATABASE() AND command='Query'
+                      AND info LIKE '%oem_transfers%' AND info LIKE '%FOR UPDATE%'") > 0;
+                if (!waiting) await Task.Delay(25, ct);
+            }
+            Assert.True(waiting, "download completion did not reach the blocked transfer-row lock");
+        }
+
+        // If completion had locked the lease first, this creates the inverse
+        // lease -> transfer / transfer -> lease cycle and MySQL aborts one side.
+        Assert.Equal(leaseId, await blocker.ExecuteScalarAsync<string>(
+            "SELECT id FROM oem_download_leases WHERE id=@leaseId FOR UPDATE", new { leaseId }, blockerTx));
+        await blockerTx.CommitAsync(ct);
+        await completion.WaitAsync(TimeSpan.FromSeconds(10), ct);
+
+        await using var verify = await host.OpenAsync(ct);
+        var recorded = await verify.QuerySingleAsync<(string Status, DateTime? Receipt, ulong Delivered)>(@"
+            SELECT s.status AS Status,f.first_recipient_download_at AS Receipt,
+                COALESCE(SUM(r.end_offset-r.start_offset+1),0) AS Delivered
+            FROM oem_download_sessions s JOIN oem_transfer_files f ON f.id=s.file_id
+            LEFT JOIN oem_download_ranges r ON r.session_id=s.id
+            WHERE s.id=@sessionId GROUP BY s.id,f.id", new { sessionId });
+        Assert.Equal("COMPLETED", recorded.Status);
+        Assert.NotNull(recorded.Receipt);
+        Assert.Equal((ulong)content.Length, recorded.Delivered);
     }
 }

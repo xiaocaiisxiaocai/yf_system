@@ -261,16 +261,24 @@ public sealed class OemDeliveryService(
         return true;
     }
 
-    private async Task FinishAsync(string leaseId, OemDownloadSession session, OemTransferFile file, ByteRange range, bool delivered, CancellationToken ct)
+    internal async Task FinishAsync(string leaseId, OemDownloadSession session, OemTransferFile file, ByteRange range, bool delivered, CancellationToken ct)
     {
         try
         {
             await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+            // Keep the same lock order as purge: transfer -> file -> session -> lease.
+            // Otherwise a purge holding the transfer/file rows can deadlock with a
+            // completed download that held its lease before recording the receipt.
+            await OemTransferProgression.LockTransferAsync(uow, file.TransferId, ct);
+            var lockedFile = await uow.Db.OemTransferFiles
+                .FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {file.Id} FOR UPDATE").SingleAsync(ct);
+            var lockedSession = await uow.Db.OemDownloadSessions
+                .FromSqlInterpolated($"SELECT * FROM oem_download_sessions WHERE id = {session.Id} FOR UPDATE").SingleAsync(ct);
             var lease = await uow.Db.OemDownloadLeases.FromSqlInterpolated($"SELECT * FROM oem_download_leases WHERE id = {leaseId} FOR UPDATE").SingleAsync(ct);
             var leaseValid = lease.Status == DownloadLeaseStatuses.Active;
             if (leaseValid) lease.Status = DownloadLeaseStatuses.Released;
             await uow.Db.SaveChangesAsync(ct);
-            if (delivered && leaseValid) await RecordDeliveryAsync(uow, session.Id, file.Id, range, ct);
+            if (delivered && leaseValid) await RecordDeliveryAsync(uow, lockedSession, lockedFile, range, ct);
             await dispatcher.CommitAsync(uow, ct);
         }
         catch (Exception error)
@@ -280,22 +288,21 @@ public sealed class OemDeliveryService(
     }
 
     /// <summary>Merges the delivered range; completes the session and records the first receipt when every byte was delivered.</summary>
-    private async Task RecordDeliveryAsync(OemUnitOfWork uow, string sessionId, ulong fileId, ByteRange range, CancellationToken ct)
+    private async Task RecordDeliveryAsync(OemUnitOfWork uow, OemDownloadSession session, OemTransferFile file, ByteRange range, CancellationToken ct)
     {
-        var session = await uow.Db.OemDownloadSessions.FromSqlInterpolated($"SELECT * FROM oem_download_sessions WHERE id = {sessionId} FOR UPDATE").SingleAsync(ct);
         if (session.Status != DownloadSessionStatuses.Started) return;
         var settings = await OemSettings.LoadAsync(uow.Db, ct);
-        var existing = await uow.Db.OemDownloadRanges.Where(item => item.SessionId == sessionId).ToArrayAsync(ct);
+        var existing = await uow.Db.OemDownloadRanges.Where(item => item.SessionId == session.Id).ToArrayAsync(ct);
         var set = new ByteRangeSet(existing.Select(item => (item.StartOffset, item.EndOffset)));
         set.Add(range.Start, range.End);
         if (set.Ranges.Count > settings.MaxRangesPerSession)
         {
             // Refuse to grow the evidence further, but keep what was already recorded.
-            logger.LogWarning("OEM download session {SessionId} exceeded its range budget.", sessionId);
+            logger.LogWarning("OEM download session {SessionId} exceeded its range budget.", session.Id);
             return;
         }
         uow.Db.OemDownloadRanges.RemoveRange(existing);
-        uow.Db.OemDownloadRanges.AddRange(set.Ranges.Select(item => new OemDownloadRange { SessionId = sessionId, StartOffset = item.Start, EndOffset = item.End }));
+        uow.Db.OemDownloadRanges.AddRange(set.Ranges.Select(item => new OemDownloadRange { SessionId = session.Id, StartOffset = item.Start, EndOffset = item.End }));
         session.LastProgressAt = uow.Now;
         session.ConcurrencyVersion++;
         if (set.Covers(session.ExpectedSize))
@@ -306,13 +313,12 @@ public sealed class OemDeliveryService(
         await uow.Db.SaveChangesAsync(ct);
         if (session.Status != DownloadSessionStatuses.Completed) return;
 
-        var transferId = await uow.Db.OemTransferFiles.Where(item => item.Id == fileId).Select(item => item.TransferId).SingleAsync(ct);
-        var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
-        var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {fileId} FOR UPDATE").SingleAsync(ct);
+        var transferId = file.TransferId;
+        var transfer = await uow.Db.OemTransfers.SingleAsync(item => item.Id == transferId, ct);
         var downloader = await AuditActorOfAsync(uow, session, ct);
-        await audit.WriteAsync(uow, downloader, "OEM_DOWNLOAD_COMPLETE", "oem_file", fileId, new
+        await audit.WriteAsync(uow, downloader, "OEM_DOWNLOAD_COMPLETE", "oem_file", file.Id, new
         {
-            targetName = file.OriginalName, transferId, downloadSessionId = sessionId, session.Purpose, recipientSide = session.RecipientSide,
+            targetName = file.OriginalName, transferId, downloadSessionId = session.Id, session.Purpose, recipientSide = session.RecipientSide,
         }, ct);
         if (!session.RecipientSide || file.FirstRecipientDownloadAt is not null) return;
         var snapshot = new RetentionSnapshot(transfer.RetentionMode!, transfer.ReleaseTtlMinutes, transfer.ReceiptGraceMinutes);
@@ -328,9 +334,9 @@ public sealed class OemDeliveryService(
         file.ConcurrencyVersion++;
         file.UpdatedAt = uow.Now;
         await uow.Db.SaveChangesAsync(ct);
-        await audit.WriteAsync(uow, downloader, "OEM_FILE_FIRST_RECEIPT", "oem_file", fileId,
+        await audit.WriteAsync(uow, downloader, "OEM_FILE_FIRST_RECEIPT", "oem_file", file.Id,
             new { targetName = file.OriginalName, transferId, file.PurgeDueAt }, ct);
-        uow.Raise(new FirstReceiptEvent(transferId, fileId));
+        uow.Raise(new FirstReceiptEvent(transferId, file.Id));
     }
 
     /// <summary>Audit identity of the downloader (bookkeeping runs after the request, so it is rebuilt from the session).</summary>

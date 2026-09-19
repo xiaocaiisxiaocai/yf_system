@@ -11,7 +11,7 @@ namespace Yf.Api.Modules.Oem.Scanning;
 /// Two mechanisms, both fail closed:
 /// <list type="number">
 /// <item>Canary: before any file may be reported clean, an EICAR test file is written to the
-/// probe directory and must be removed, blocked or altered by the antivirus within the
+/// probe directory and must be removed or altered by the antivirus within the
 /// timeout. A canary that survives means real-time scanning is off or the OEM storage is
 /// excluded, and the engine reports itself unavailable (files stay quarantined).</item>
 /// <item>Verification: the quarantined file is re-read after a settle delay. A file that has
@@ -62,6 +62,8 @@ public sealed class OnAccessFileScanner : IFileScanner
         if (first is not null) return first;
         // Some products act asynchronously after the read: look once more after the settle delay.
         if (settle > TimeSpan.Zero) await Task.Delay(settle, time, ct);
+        var second = await VerifyAsync(target, ct);
+        if (second is not null) return second;
         var info = new FileInfo(target.Path);
         if (!info.Exists) return Intercepted("文件在扫描后被清除或隔离");
         if ((ulong)info.Length != target.Size) return Intercepted("文件在扫描后被修改");
@@ -112,11 +114,11 @@ public sealed class OnAccessFileScanner : IFileScanner
 
     private async Task<bool> RunCanaryAsync(CancellationToken ct)
     {
-        Directory.CreateDirectory(probeDirectory);
-        CleanupStaleCanaries();
         var path = Path.Combine(probeDirectory, $"canary-{Guid.NewGuid():N}{canaryExtension}");
         try
         {
+            Directory.CreateDirectory(probeDirectory);
+            CleanupStaleCanaries();
             try
             {
                 await using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
@@ -124,9 +126,10 @@ public sealed class OnAccessFileScanner : IFileScanner
             }
             catch (Exception error) when (error is UnauthorizedAccessException or IOException)
             {
-                // Blocked while writing: the antivirus intercepted it on write.
-                if (!File.Exists(path) || error is UnauthorizedAccessException) return true;
-                throw;
+                // An ACL, full disk or other I/O failure is not evidence of an antivirus verdict.
+                // Only a successfully written probe can establish an observed interception.
+                logger.LogWarning("OEM on-access scan canary could not be written ({ErrorType}); files stay quarantined.", error.GetType().Name);
+                return false;
             }
             var deadline = time.GetUtcNow().AddSeconds(options.CanaryTimeoutSeconds);
             while (true)
@@ -138,6 +141,11 @@ public sealed class OnAccessFileScanner : IFileScanner
             logger.LogWarning("OEM on-access scan canary was not intercepted within {Seconds}s; files stay quarantined.", options.CanaryTimeoutSeconds);
             return false;
         }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning("OEM on-access scan canary could not be verified ({ErrorType}); files stay quarantined.", error.GetType().Name);
+            return false;
+        }
         finally { TryDelete(path); }
     }
 
@@ -145,12 +153,13 @@ public sealed class OnAccessFileScanner : IFileScanner
     {
         try
         {
-            if (!File.Exists(path)) return true;
+            // File.Exists also returns false for access errors; opening distinguishes those
+            // failures from a probe that was actually removed after a successful write.
             var content = File.ReadAllBytes(path);
             return !content.AsSpan().SequenceEqual(canaryContent);
         }
         catch (FileNotFoundException) { return true; }
-        catch (UnauthorizedAccessException) { return true; }
+        catch (UnauthorizedAccessException) { return false; }
         catch (IOException) { return false; } // briefly locked while being scanned: look again
     }
 

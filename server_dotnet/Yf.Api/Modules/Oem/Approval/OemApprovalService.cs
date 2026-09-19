@@ -125,25 +125,32 @@ public sealed class OemApprovalService(
     /// </summary>
     public async Task<int> RevalidateActiveInstancesAsync(CancellationToken ct)
     {
-        ulong[] transferIds;
-        await using (var read = await OemUnitOfWork.ReadAsync(dbFactory, ct))
-            transferIds = await read.Db.OemFlowInstances.AsNoTracking().Where(instance => instance.Status == FlowInstanceStatuses.InProgress)
-                .Select(instance => instance.TransferId).Take(500).ToArrayAsync(ct);
         var blocked = 0;
-        foreach (var transferId in transferIds)
+        var afterTransferId = 0UL;
+        while (true)
         {
-            await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
-            var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
-            var instance = await OemApprovalEngine.LockInstanceByTransferAsync(uow, transferId, ct);
-            if (transfer.LifecycleStatus != TransferLifecycle.Sealed || instance is null) continue;
-            var reason = await engine.RevalidateActiveNodeAsync(uow, instance, ct);
-            if (reason is not null)
+            ulong[] transferIds;
+            await using (var read = await OemUnitOfWork.ReadAsync(dbFactory, ct))
+                transferIds = await read.Db.OemFlowInstances.AsNoTracking()
+                    .Where(instance => instance.Status == FlowInstanceStatuses.InProgress && instance.TransferId > afterTransferId)
+                    .OrderBy(instance => instance.TransferId).Select(instance => instance.TransferId).Take(500).ToArrayAsync(ct);
+            if (transferIds.Length == 0) break;
+            foreach (var transferId in transferIds)
             {
-                await audit.WriteAsync(uow, null, "OEM_APPROVAL_BLOCKED", "oem_transfer", transferId, new { targetName = transfer.Title, reason }, ct);
-                uow.Raise(new ApprovalBlockedEvent(transferId, reason));
-                blocked++;
+                await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+                var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
+                var instance = await OemApprovalEngine.LockInstanceByTransferAsync(uow, transferId, ct);
+                if (transfer.LifecycleStatus != TransferLifecycle.Sealed || instance is null) continue;
+                var reason = await engine.RevalidateActiveNodeAsync(uow, instance, ct);
+                if (reason is not null)
+                {
+                    await audit.WriteAsync(uow, null, "OEM_APPROVAL_BLOCKED", "oem_transfer", transferId, new { targetName = transfer.Title, reason }, ct);
+                    uow.Raise(new ApprovalBlockedEvent(transferId, reason));
+                    blocked++;
+                }
+                await dispatcher.CommitAsync(uow, ct);
             }
-            await dispatcher.CommitAsync(uow, ct);
+            afterTransferId = transferIds[^1];
         }
         return blocked;
     }

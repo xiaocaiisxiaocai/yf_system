@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Yf.Api.Infrastructure;
@@ -97,6 +99,40 @@ public sealed class OemOnAccessScannerTests
         var started = DateTime.UtcNow;
         Assert.Equal(ScanVerdict.EngineUnavailable, (await scanner.ScanAsync(target, ct)).Verdict);
         Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(1));
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task ProbeWritePermissionFailureNeverCountsAsAnAntivirusInterception()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var work = new Workspace();
+        var probe = Directory.CreateDirectory(work.Probe);
+        var deny = new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.CreateFiles,
+            InheritanceFlags.None, PropagationFlags.None, AccessControlType.Deny);
+        var acl = probe.GetAccessControl();
+        acl.AddAccessRule(deny);
+        probe.SetAccessControl(acl);
+        try
+        {
+            Assert.Throws<UnauthorizedAccessException>(() => File.WriteAllText(Path.Combine(work.Probe, "control.bin"), "control"));
+            var result = await Scanner(work).ScanAsync(work.Write("drawing.pdf", Pdf("drawing")), TestContext.Current.CancellationToken);
+            Assert.Equal(ScanVerdict.EngineUnavailable, result.Verdict);
+        }
+        finally
+        {
+            var restore = probe.GetAccessControl();
+            restore.RemoveAccessRuleSpecific(deny);
+            probe.SetAccessControl(restore);
+        }
+    }
+
+    [Fact]
+    public async Task InvalidProbeDirectoryKeepsFilesQuarantined()
+    {
+        using var work = new Workspace();
+        File.WriteAllText(work.Probe, "a file cannot be used as a probe directory");
+        var result = await Scanner(work).ScanAsync(work.Write("drawing.pdf", Pdf("drawing")), TestContext.Current.CancellationToken);
+        Assert.Equal(ScanVerdict.EngineUnavailable, result.Verdict);
     }
 
     [Fact(Timeout = 60_000)]

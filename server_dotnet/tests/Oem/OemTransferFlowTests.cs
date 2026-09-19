@@ -1,8 +1,12 @@
 using System.Net;
+using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using Dapper;
 using Yf.Api.Modules.Oem.Approval;
+using Yf.Api.Modules.Oem.Maintenance;
 using Yf.Api.Modules.Oem.Scanning;
+using Yf.Api.Modules.Oem.Storage;
+using Yf.Api.Modules.Oem.Transfers;
 
 namespace Yf.Api.Tests.Oem;
 
@@ -284,5 +288,126 @@ public sealed class OemTransferFlowTests
         await using var conn = await host.OpenAsync(ct);
         Assert.Equal("ABANDONED", await conn.ExecuteScalarAsync<string>("SELECT lifecycle_status FROM oem_transfers WHERE id=@id", new { id = TransferId(outbound) }));
         Assert.Equal("DRAFT_DELETED", await conn.ExecuteScalarAsync<string>("SELECT purge_reason FROM oem_transfer_files WHERE transfer_id=@id", new { id = TransferId(outbound) }));
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task PromotionRejectsSameSizeContentMismatchAndTerminalFailureBlocksTheTransfer()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var draft = await CreateOutboundAsync(world, "提升完整性失败", ct);
+        var transferId = TransferId(draft);
+        var content = OemTestHost.Pdf(new string('x', 700_000));
+        var uploaded = await host.UploadAsync(world.Sender, transferId, "integrity.pdf", content, ct);
+
+        string promotionId = Guid.NewGuid().ToString("D");
+        string sourcePath;
+        string targetPath;
+        await using (var conn = await host.OpenAsync(ct))
+        {
+            var file = await conn.QuerySingleAsync<(string StoredName, string StoragePath, ulong SizeBytes, string Sha256)>(
+                "SELECT stored_name AS StoredName, storage_path AS StoragePath, size_bytes AS SizeBytes, sha256 AS Sha256 " +
+                "FROM oem_transfer_files WHERE id=@id", new { id = uploaded.Id() });
+            var targetRelative = OemStorage.AvailableRelative(file.StoredName);
+            sourcePath = Path.Combine(host.StorageRoot, "oem", file.StoragePath);
+            targetPath = Path.Combine(host.StorageRoot, "oem", targetRelative);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            var corrupt = content.ToArray();
+            corrupt[^1] ^= 0x5A;
+            await File.WriteAllBytesAsync(targetPath, corrupt, ct);
+            Assert.Equal(content.Length, corrupt.Length);
+            Assert.NotEqual(file.Sha256, Convert.ToHexStringLower(SHA256.HashData(corrupt)));
+
+            await conn.ExecuteAsync("UPDATE oem_transfer_files SET scan_status='CLEAN', payload_status='PROMOTING' WHERE id=@id", new { id = uploaded.Id() });
+            await conn.ExecuteAsync(@"INSERT INTO oem_file_promotions
+                (id,file_id,file_sha256,size_bytes,source_path,target_path,status,attempt_count,concurrency_version,created_at)
+                VALUES (@promotionId,@fileId,@sha256,@sizeBytes,@source,@target,'PREPARED',9,0,UTC_TIMESTAMP(3))",
+                new { promotionId, fileId = uploaded.Id(), sha256 = file.Sha256, sizeBytes = file.SizeBytes, source = file.StoragePath, target = targetRelative });
+        }
+
+        await world.Sender.PostAsync($"/api/v1/oem/transfers/{transferId}/send", new { version = Version(draft) + 1 }, ct).Ok();
+        Assert.False(await host.Service<OemPromotionService>().PromoteAsync(promotionId, ct));
+
+        Assert.True(File.Exists(sourcePath));
+        Assert.True(File.Exists(targetPath));
+        await using (var db = await host.OpenAsync(ct))
+        {
+            Assert.Equal("FAILED", await db.ExecuteScalarAsync<string>("SELECT status FROM oem_file_promotions WHERE id=@promotionId", new { promotionId }));
+            Assert.Equal("ERROR", await db.ExecuteScalarAsync<string>("SELECT scan_status FROM oem_transfer_files WHERE id=@id", new { id = uploaded.Id() }));
+            Assert.Equal("BLOCKED", await db.ExecuteScalarAsync<string>("SELECT lifecycle_status FROM oem_transfers WHERE id=@transferId", new { transferId }));
+            Assert.NotNull(await db.ExecuteScalarAsync<DateTime?>("SELECT purge_due_at FROM oem_transfer_files WHERE id=@id", new { id = uploaded.Id() }));
+            await db.ExecuteAsync("UPDATE oem_transfer_files SET purge_due_at=UTC_TIMESTAMP(3) - INTERVAL 1 MINUTE WHERE id=@id", new { id = uploaded.Id() });
+        }
+
+        Assert.Equal(1, await host.Service<OemPurgeService>().RunOnceAsync(ct));
+        Assert.False(File.Exists(sourcePath));
+        Assert.False(File.Exists(targetPath));
+        await using (var verify = await host.OpenAsync(ct))
+            Assert.Equal("PURGED", await verify.ExecuteScalarAsync<string>("SELECT payload_status FROM oem_transfer_files WHERE id=@id", new { id = uploaded.Id() }));
+
+        // PURGED content no longer consumes the vendor's logical storage quota.
+        await world.Admin.PutAsync("/api/v1/oem/file-policies", new
+        {
+            items = new[] { new { key = "oem.upload.max_storage_per_company", value = "1048576" } },
+        }, ct).Ok();
+        var replacement = await CreateOutboundAsync(world, "清理后重新上传", ct);
+        await world.Sender.PostAsync($"/api/v1/oem/transfers/{TransferId(replacement)}/uploads/init",
+            new { fileName = "replacement.pdf", fileSize = 700_000 }, ct).Ok();
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task UserAssignedToAnOemApprovalTemplateCannotBeHardDeleted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var approverId = await host.CreateInternalUserAsync("template_history", "Template#2026x", ["oem:flow_approve"], world.Org.Section, ct);
+        await using (var conn = await host.OpenAsync(ct))
+            await conn.ExecuteAsync(@"INSERT INTO oem_flow_template_node_users(node_id,role,user_id)
+                SELECT id,'APPROVER',@approverId FROM oem_flow_template_nodes ORDER BY id LIMIT 1", new { approverId });
+
+        await world.Admin.DeleteAsync($"/api/v1/admin/users/{approverId}", ct).Status(HttpStatusCode.BadRequest);
+        await using var verify = await host.OpenAsync(ct);
+        Assert.Equal(1, await verify.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM users WHERE id=@approverId", new { approverId }));
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task TerminalPromotionFailureSchedulesDraftCleanup()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var draft = await CreateOutboundAsync(world, "草稿提升失败", ct);
+        var transferId = TransferId(draft);
+        var content = OemTestHost.Pdf("draft-integrity");
+        var uploaded = await host.UploadAsync(world.Sender, transferId, "draft.pdf", content, ct);
+        var promotionId = Guid.NewGuid().ToString("D");
+        await using (var conn = await host.OpenAsync(ct))
+        {
+            var file = await conn.QuerySingleAsync<(string StoredName, string StoragePath, ulong SizeBytes, string Sha256)>(
+                "SELECT stored_name AS StoredName, storage_path AS StoragePath, size_bytes AS SizeBytes, sha256 AS Sha256 " +
+                "FROM oem_transfer_files WHERE id=@id", new { id = uploaded.Id() });
+            var targetRelative = OemStorage.AvailableRelative(file.StoredName);
+            var targetPath = Path.Combine(host.StorageRoot, "oem", targetRelative);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            var corrupt = content.ToArray();
+            corrupt[^1] ^= 0x3C;
+            await File.WriteAllBytesAsync(targetPath, corrupt, ct);
+            await conn.ExecuteAsync("UPDATE oem_transfer_files SET scan_status='CLEAN', payload_status='PROMOTING' WHERE id=@id", new { id = uploaded.Id() });
+            await conn.ExecuteAsync(@"INSERT INTO oem_file_promotions
+                (id,file_id,file_sha256,size_bytes,source_path,target_path,status,attempt_count,concurrency_version,created_at)
+                VALUES (@promotionId,@fileId,@sha256,@sizeBytes,@source,@target,'PREPARED',9,0,UTC_TIMESTAMP(3))",
+                new { promotionId, fileId = uploaded.Id(), sha256 = file.Sha256, sizeBytes = file.SizeBytes, source = file.StoragePath, target = targetRelative });
+        }
+
+        Assert.False(await host.Service<OemPromotionService>().PromoteAsync(promotionId, ct));
+        await using var verify = await host.OpenAsync(ct);
+        var state = await verify.QuerySingleAsync<(string Lifecycle, string Promotion, DateTime? PurgeDue, string PurgeReason)>(@"
+            SELECT t.lifecycle_status AS Lifecycle,p.status AS Promotion,f.purge_due_at AS PurgeDue,f.purge_reason AS PurgeReason
+            FROM oem_transfers t JOIN oem_transfer_files f ON f.transfer_id=t.id
+            JOIN oem_file_promotions p ON p.file_id=f.id WHERE t.id=@transferId", new { transferId });
+        Assert.Equal(("DRAFT", "FAILED", PurgeReasons.Blocked), (state.Lifecycle, state.Promotion, state.PurgeReason));
+        Assert.NotNull(state.PurgeDue);
     }
 }

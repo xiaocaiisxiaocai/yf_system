@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Oem.Common;
@@ -98,7 +99,14 @@ public sealed class OemScanService(
             workDirectory = storage.SessionDirectory(Guid.NewGuid().ToString("D"), create: true, ct);
             ArchiveLimits limits;
             await using (var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct))
-                limits = (await OemSettings.LoadAsync(uow.Db, ct)).ArchiveLimits;
+            {
+                var settings = await OemSettings.LoadAsync(uow.Db, ct);
+                // The current engines expose no verifiable signature update timestamp.
+                // Do not silently ignore a previously enabled freshness gate.
+                if (settings.BlockOnStaleSignatures)
+                    return ScanResult.Unavailable(pipeline.EngineName, "已启用病毒库新鲜度校验，但当前扫描引擎无法提供可验证的更新时间，文件保持隔离");
+                limits = settings.ArchiveLimits;
+            }
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(Timeout(claim.Size));
             try
@@ -318,14 +326,15 @@ public sealed class OemPromotionService(
             }
             else if (sourceExists && targetExists)
             {
-                if ((ulong)new FileInfo(target).Length != claim.SizeBytes) failure = "正式区已存在内容不同的同名文件";
+                failure = await ValidateTargetAsync(target, claim.SizeBytes, claim.FileSha256, ct);
+                if (failure is not null) failure = "正式区已存在内容不同的同名文件：" + failure;
                 else File.Delete(source);
             }
             else if (!targetExists)
             {
                 lost = true;
             }
-            if (failure is null && !lost && (ulong)new FileInfo(target).Length != claim.SizeBytes) failure = "正式区文件大小与记录不符";
+            if (failure is null && !lost) failure = await ValidateTargetAsync(target, claim.SizeBytes, claim.FileSha256, ct);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
@@ -338,7 +347,7 @@ public sealed class OemPromotionService(
             var promotion = await LockAsync(uow, promotionId, ct);
             if (promotion is null || promotion.ConcurrencyVersion != claim.ConcurrencyVersion || promotion.Status != PromotionStatuses.Prepared) return false;
             var transferId = await uow.Db.OemTransferFiles.Where(item => item.Id == promotion.FileId).Select(item => item.TransferId).SingleAsync(ct);
-            await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
+            var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
             var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {promotion.FileId} FOR UPDATE").SingleAsync(ct);
             promotion.LeaseOwner = null;
             promotion.LeaseUntil = null;
@@ -355,25 +364,48 @@ public sealed class OemPromotionService(
                 promotion.Status = PromotionStatuses.Failed;
                 promotion.LastError = "源文件与目标文件均不存在";
                 file.PayloadStatus = PayloadStatuses.StorageLost;
+                file.ScanStatus = ScanStatuses.Error;
                 uow.Raise(new FileMissingEvent(transferId, file.Id, PayloadStatuses.StorageLost));
             }
             else
             {
                 promotion.AttemptCount++;
                 promotion.LastError = failure;
-                if (promotion.AttemptCount >= MaximumAttempts) promotion.Status = PromotionStatuses.Failed;
+                if (promotion.AttemptCount >= MaximumAttempts)
+                {
+                    promotion.Status = PromotionStatuses.Failed;
+                    file.ScanStatus = ScanStatuses.Error;
+                    if (transfer.LifecycleStatus == TransferLifecycle.Draft)
+                        uow.Raise(new DraftFileScanFailedEvent(transferId, file.Id, ScanStatuses.Error));
+                }
                 else promotion.NextAttemptAt = uow.Now.AddSeconds(Math.Min(3600, 30 * (1 << Math.Min(promotion.AttemptCount, 7))));
             }
             file.ConcurrencyVersion++;
             file.UpdatedAt = uow.Now;
+            if (promotion.Status == PromotionStatuses.Failed && transfer.LifecycleStatus == TransferLifecycle.Draft)
+            {
+                var due = uow.Now.Add((await OemSettings.LoadAsync(uow.Db, ct)).BlockedRetention);
+                if (file.PurgeDueAt is null || file.PurgeDueAt > due) file.PurgeDueAt = due;
+                if (file.PurgeReason != PurgeReasons.FileRemoved) file.PurgeReason = PurgeReasons.Blocked;
+            }
             await uow.Db.SaveChangesAsync(ct);
             if (lost || promotion.Status == PromotionStatuses.Failed)
                 await audit.WriteAsync(uow, null, "OEM_PROMOTION_FAILED", "oem_file", file.Id,
                     new { targetName = file.OriginalName, transferId, reason = promotion.LastError }, ct);
-            if (file.PayloadStatus == PayloadStatuses.Available) await progression.AdvanceAsync(uow, transferId, null, ct);
+            if (file.PayloadStatus == PayloadStatuses.Available || promotion.Status == PromotionStatuses.Failed)
+                await progression.AdvanceAsync(uow, transferId, null, ct);
             await dispatcher.CommitAsync(uow, ct);
             return file.PayloadStatus == PayloadStatuses.Available;
         }
+    }
+
+    internal static async Task<string?> ValidateTargetAsync(string path, ulong sizeBytes, string expectedSha256, CancellationToken ct)
+    {
+        if ((ulong)new FileInfo(path).Length != sizeBytes) return "文件大小与记录不符";
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var sha256 = Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, ct));
+        return sha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase) ? null : "SHA-256 与扫描快照不符";
     }
 
     private static Task<OemFilePromotion?> LockAsync(OemUnitOfWork uow, string id, CancellationToken ct) =>

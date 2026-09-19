@@ -27,6 +27,7 @@ from browser_step_evidence import (
 )
 from test_host_artifacts import verify_test_host_artifacts
 from test_role_fixtures import assert_admin_only_initialization, install_legacy_test_roles
+from script_safety import clean_dotnet_config_environment
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = Path(__file__).resolve().parent / 'browser'
@@ -116,8 +117,7 @@ try:
             port = probe.getsockname()[1]
         base = f'http://127.0.0.1:{port}'
         initial = 'Yf9!' + secrets.token_urlsafe(9)
-        env = os.environ.copy()
-        env.pop('YF_CONFIG_PATH', None)
+        env = clean_dotnet_config_environment()
         env.update({
             'App__ConnectionString': f'Server={quoted(url.hostname)};Port={url.port or 3306};Database={schema};User ID={quoted(urllib.parse.unquote(url.username or ""))};Password={quoted(urllib.parse.unquote(url.password or ""))}',
             'App__JwtSecret': secrets.token_urlsafe(48), 'App__StorageRoot': str(storage_path),

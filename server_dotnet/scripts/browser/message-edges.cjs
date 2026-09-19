@@ -217,28 +217,54 @@ async function createProjectGroup(context, token, supplierId, ownerId, name) {
       const unavailable = feed.locator('.project-activity-item').filter({ hasText: '留言已不可用' });
       assert(await unavailable.count() > 0, 'deleted message activities must remain visible with an unavailable target');
       assert.equal(await unavailable.getByRole('button').count(), 0);
-      const targetRequests = [];
-      const captureTargetLoad = request => {
-        const url = new URL(request.url());
-        if (url.pathname === endpoint && request.method() === 'GET') targetRequests.push(url);
-      };
-      page.on('request', captureTargetLoad);
+      const reusedCursorLoaded = page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname === endpoint && response.request().method() === 'GET'
+          && url.searchParams.has('beforeId') && response.status() === 200;
+      });
       await feed.getByRole('button', { name: '查看' + first.content, exact: true }).click();
       await page.waitForURL(url => url.searchParams.get('tab') === 'messages' && url.searchParams.get('target') === String(first.id));
       const targetMessage = page.locator(
         `[data-message-id="${first.id}"][aria-label="当前定位留言"]`,
       );
       await targetMessage.waitFor();
-      page.off('request', captureTargetLoad);
-      if (targetRequests.length > 0) {
-        assert(targetRequests.length >= 2, 'target navigation loads contiguous cursor pages through the older message');
-        assert.equal(targetRequests[0].searchParams.has('beforeId'), false);
-        assert(targetRequests.slice(1).every(url => url.searchParams.has('beforeId')));
-      }
+      await reusedCursorLoaded;
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const reusedIds = await page.locator('.msg-item').evaluateAll(nodes => nodes.map(node => node.dataset.messageId));
+      assert.equal(reusedIds.length, 23, 'existing complete history remains visible while target mode reloads');
+      assert.equal(new Set(reusedIds).size, 23);
+      assert(reusedIds.includes(String(first.id)));
+
+      // A cached row can acquire aria-label before the target load effect finishes. Force a
+      // cold navigation and verify the returned page chain. Realtime reconciliation may
+      // independently refresh the first page, so global request order is not a cursor chain.
+      const targetResponses = [];
+      const captureTargetLoad = response => {
+        const url = new URL(response.url());
+        if (url.pathname === endpoint && response.request().method() === 'GET' && response.status() === 200) {
+          targetResponses.push(response.json().then(data => ({ url, data }), () => null));
+        }
+      };
+      page.on('response', captureTargetLoad);
+      await page.goto(s.base + `/projects/${project.id}?tab=messages&target=${first.id}`);
+      await page.locator(`[data-message-id="${first.id}"][aria-label="当前定位留言"]`).waitFor();
+      page.off('response', captureTargetLoad);
+      const targetPages = (await Promise.all(targetResponses)).filter(Boolean);
+      assert(targetPages.every(({ url }) => !url.searchParams.has('targetId')), 'target navigation must not filter out surrounding history');
+      const firstPage = targetPages.find(({ url, data }) => !url.searchParams.has('beforeId') && data.list.length === 20);
+      assert(firstPage, 'cold target navigation starts with the latest full page');
+      const cursorPage = targetPages.find(({ url, data }) =>
+        url.searchParams.get('beforeId') === String(firstPage.data.list.at(-1).id)
+        && data.list.some(message => message.id === first.id));
+      assert(cursorPage, 'target cursor page must continue from the first page through the older message');
+      const returnedIds = [...firstPage.data.list, ...cursorPage.data.list].map(message => String(message.id));
+      assert.equal(returnedIds.length, 23);
+      assert.equal(new Set(returnedIds).size, 23);
       const targetIds = await page.locator('.msg-item').evaluateAll(nodes => nodes.map(node => node.dataset.messageId));
       assert.equal(targetIds.length, 23);
       assert.equal(new Set(targetIds).size, 23);
       assert(targetIds.includes(String(first.id)));
+      assert.deepEqual(targetIds, returnedIds, 'rendered history must match the contiguous response pages');
       await page.getByRole('tab', { name: '文件', exact: true }).click();
       await page.waitForURL(url => !url.searchParams.has('target'));
       await page.getByRole('tab', { name: '留言', exact: true }).click();

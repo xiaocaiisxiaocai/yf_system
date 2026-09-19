@@ -266,6 +266,13 @@ public sealed class OemOutboxPolicy : IOutboxRecipientPolicy
                 if (transfer.Direction != TransferDirections.OemToInternal || transfer.LifecycleStatus != TransferLifecycle.Released) return Stale();
                 var holders = await OemRecipients.InternalWithAllAsync(db, ct, OemPermissions.TransferView, OemPermissions.FileDownload);
                 return holders.Any(holder => holder.Id == recipientId) ? OutboxDecision.Allow : Stale();
+            case OemMailEvents.ApprovalBlocked:
+                var stillBlocked = await db.OemFlowInstances.AnyAsync(instance => instance.TransferId == transferId
+                    && instance.Status == Yf.Api.Modules.Oem.Approval.FlowInstanceStatuses.ApprovalBlocked, ct);
+                if (!stillBlocked) return Stale();
+                if (transfer.InternalSenderUserId == recipientId) return OutboxDecision.Allow;
+                var recoverers = await OemRecipients.InternalWithAllAsync(db, ct, OemPermissions.ApprovalRecover);
+                return recoverers.Any(recoverer => recoverer.Id == recipientId) ? OutboxDecision.Allow : Stale();
             default:
                 return OutboxDecision.Allow;
         }

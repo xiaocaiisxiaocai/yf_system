@@ -1,7 +1,10 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using Dapper;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging.Abstractions;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
@@ -166,6 +169,42 @@ public sealed class ProjectCopyTests
             Assert.False(await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
                 "SELECT EXISTS(SELECT 1 FROM projects WHERE name='复制失败项目')", cancellationToken: ct)));
             Assert.Equal(beforeFiles, Directory.EnumerateFiles(storage, "*", SearchOption.AllDirectories).Count());
+
+            await conn.ExecuteAsync(new CommandDefinition(
+                "UPDATE project_dictionaries SET status='DISABLED' WHERE id=6203", cancellationToken: ct));
+            Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() =>
+                service.CopyAsync(conn, actor, 7102, new() { Name = "失效关联复制" }, null, ct))).Status);
+            await conn.ExecuteAsync(new CommandDefinition(
+                "UPDATE project_dictionaries SET status='ACTIVE' WHERE id=6203", cancellationToken: ct));
+
+            var copiedPath = Path.Combine(storage, copied.StoragePath.Replace('/', Path.DirectorySeparatorChar));
+            await conn.ExecuteAsync(new CommandDefinition("""
+                UPDATE files SET status='DELETED',deleted_at=UTC_TIMESTAMP(6)-INTERVAL 31 DAY
+                WHERE id IN (8101,@CopiedId)
+                """, new { CopiedId = copied.Id }, cancellationToken: ct));
+            await conn.CloseAsync();
+            var maintenance = new FilesMaintenanceService(database.Database, options,
+                NullLogger<FilesMaintenanceService>.Instance);
+            await maintenance.RunGarbageCollectionAsync(ct);
+            Assert.False(File.Exists(sourcePath));
+            Assert.False(File.Exists(copiedPath));
+            await conn.OpenAsync(ct);
+            Assert.Equal(2, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM files WHERE id IN (8101,@CopiedId) AND status='PURGED'",
+                new { CopiedId = copied.Id }, cancellationToken: ct)));
+            await conn.CloseAsync();
+            var downloadContext = new DefaultHttpContext();
+            downloadContext.Items[typeof(CurrentUser)] = actor;
+            var files = new FileService(database.Database, options, audit, new BatchDownloadLimiter(),
+                new MediaGrantService(options), null!);
+            Assert.Equal(404, (await Assert.ThrowsAsync<ApiException>(() =>
+                files.StreamAsync(downloadContext, copied.Id, inline: false, ct))).Status);
+            await conn.OpenAsync(ct);
+            using (var purgedHistory = Json(await service.FileHistoryAsync(conn, actor, copyId, 1, 20, ct)))
+            {
+                Assert.True(purgedHistory.RootElement.GetProperty("list")[0].GetProperty("sourceDeleted").GetBoolean());
+                Assert.True(purgedHistory.RootElement.GetProperty("list")[0].GetProperty("targetDeleted").GetBoolean());
+            }
         }
         finally
         {

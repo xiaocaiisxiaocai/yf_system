@@ -9,8 +9,20 @@ public enum OemSettingGroup { File, Notify, System }
 public enum OemSettingKind { Integer, Boolean, Extensions, Text }
 
 /// <summary>One `oem.*` system parameter: its type, bounds, default and the admin page that owns it.</summary>
-public sealed record OemSettingDefinition(string Key, OemSettingKind Kind, OemSettingGroup Group, string Label, string Default, long Min = 0, long Max = long.MaxValue)
+public sealed record OemSettingDefinition(
+    string Key,
+    OemSettingKind Kind,
+    OemSettingGroup Group,
+    string Label,
+    string Default,
+    long Min = 0,
+    long Max = long.MaxValue,
+    bool ReadOnly = false,
+    string? UnsupportedReason = null)
 {
+    private const string StaleSignatureRecoveryReason =
+        "当前 OfficeScan 实时扫描接口无法证明病毒库是否过期，此门禁正在暂停文件放行；可以关闭该不支持的门禁";
+
     public string Normalize(string? input)
     {
         var value = input?.Trim() ?? string.Empty;
@@ -37,6 +49,27 @@ public sealed record OemSettingDefinition(string Key, OemSettingKind Kind, OemSe
             default:
                 return value;
         }
+    }
+
+    public bool IsReadOnly(string currentValue) =>
+        Key == OemSettingCatalog.BlockOnStaleSignatures ? Normalize(currentValue) != "true" : ReadOnly;
+
+    public string? EffectiveUnsupportedReason(string currentValue) =>
+        Key == OemSettingCatalog.BlockOnStaleSignatures && Normalize(currentValue) == "true"
+            ? StaleSignatureRecoveryReason
+            : UnsupportedReason;
+
+    public void EnsureUpdateAllowed(string currentValue, string nextValue)
+    {
+        if (Key == OemSettingCatalog.BlockOnStaleSignatures)
+        {
+            if (Normalize(nextValue) == "true")
+                throw ApiException.BadRequest("当前 OfficeScan 实时扫描接口无法证明病毒库是否过期，不能启用此门禁");
+            if (Normalize(currentValue) != "true")
+                throw ApiException.BadRequest(UnsupportedReason ?? $"{Label}暂不支持修改");
+            return;
+        }
+        if (ReadOnly) throw ApiException.BadRequest(UnsupportedReason ?? $"{Label}暂不支持修改");
     }
 }
 
@@ -96,8 +129,10 @@ public static class OemSettingCatalog
         new(ArchiveMaxExpandedBytes, OemSettingKind.Integer, OemSettingGroup.File, "压缩包解压后总量上限", "21474836480", 1024 * 1024, 1024 * GiB),
         new(ArchiveMaxRatio, OemSettingKind.Integer, OemSettingGroup.File, "压缩比上限", "100", 1, 10_000),
         new(ScanMaxRetries, OemSettingKind.Integer, OemSettingGroup.File, "扫描错误最大重试次数", "5", 0, 50),
-        new(MaxSignatureAgeHours, OemSettingKind.Integer, OemSettingGroup.File, "病毒库最长未更新时间（小时）", "48", 1, 24 * 90),
-        new(BlockOnStaleSignatures, OemSettingKind.Boolean, OemSettingGroup.File, "病毒库过期时暂停放行", "false"),
+        new(MaxSignatureAgeHours, OemSettingKind.Integer, OemSettingGroup.File, "病毒库最长未更新时间（小时）", "48", 1, 24 * 90,
+            ReadOnly: true, UnsupportedReason: "当前 OfficeScan 实时扫描接口无法提供病毒库版本或更新时间，此设置暂不支持修改"),
+        new(BlockOnStaleSignatures, OemSettingKind.Boolean, OemSettingGroup.File, "病毒库过期时暂停放行", "false", ReadOnly: true,
+            UnsupportedReason: "当前 OfficeScan 实时扫描接口无法证明病毒库是否过期；历史值为 true 时系统将按无法证明新鲜度处理并阻止放行"),
         new(BlockedRetentionHours, OemSettingKind.Integer, OemSettingGroup.File, "不安全文件隔离保留时间（小时）", "72", 1, 24 * 90),
         new(DraftTtlHours, OemSettingKind.Integer, OemSettingGroup.File, "未发送草稿保留期限（小时）", "720", 1, 24 * 365),
         new(MaxRangesPerSession, OemSettingKind.Integer, OemSettingGroup.File, "单个下载会话区间数上限", "256", 1, 100_000),
@@ -153,6 +188,8 @@ public sealed class OemSettings(IReadOnlyDictionary<string, string?> values)
     public ulong MaxStoragePerCompany => (ulong)Long(OemSettingCatalog.MaxStoragePerCompany);
     public TimeSpan UploadSessionTtl => TimeSpan.FromHours(Long(OemSettingCatalog.UploadSessionTtlHours));
     public int ScanMaxRetries => (int)Long(OemSettingCatalog.ScanMaxRetries);
+    public TimeSpan MaxSignatureAge => TimeSpan.FromHours(Long(OemSettingCatalog.MaxSignatureAgeHours));
+    public bool BlockOnStaleSignatures => Bool(OemSettingCatalog.BlockOnStaleSignatures);
     public TimeSpan BlockedRetention => TimeSpan.FromHours(Long(OemSettingCatalog.BlockedRetentionHours));
     public TimeSpan DraftTtl => TimeSpan.FromHours(Long(OemSettingCatalog.DraftTtlHours));
     public int MaxRangesPerSession => (int)Long(OemSettingCatalog.MaxRangesPerSession);

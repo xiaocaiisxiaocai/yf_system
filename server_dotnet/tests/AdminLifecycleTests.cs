@@ -11,6 +11,33 @@ namespace Yf.Api.Tests;
 public sealed class AdminLifecycleTests
 {
     [Fact(Timeout = 120_000)]
+    public async Task DepartmentLeaderCannotBeDeletedAndLeaveADanglingApprovalRoute()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("leader_delete_guard", ct);
+        await database.InitializeBusinessFixtureAsync(ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES
+              (1,'leader-delete-admin','unused','主管维护管理员','admin@example.invalid','INTERNAL','ACTIVE',0,0,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+              (7601,'assigned-leader','unused','待删除主管','leader@example.invalid','INTERNAL','ACTIVE',0,0,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6));
+            INSERT INTO user_roles(user_id,role_id) VALUES(1,1),(7601,3);
+            INSERT INTO departments(id,name,parent_id,kind,sort_no,status,leader_account_id,created_at,updated_at)
+            VALUES(7602,'主管仍在使用的课别',NULL,'SECTION',0,'ACTIVE',7601,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6));
+            """, ct);
+
+        var users = new UserService(EfTestSupport.DbContextFactory(database.Options), new PermissionService(), new AuditService([]));
+        var error = await Assert.ThrowsAsync<ApiException>(() => users.DeleteAsync(
+            new CurrentUser(1, "leader-delete-admin", "INTERNAL", null), 7601, ct));
+
+        Assert.Contains("仍是组织主管", error.Message, StringComparison.Ordinal);
+        await using var conn = await database.Database.OpenAsync(ct);
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM users WHERE id=7601"));
+        Assert.Equal((ulong)7601, await conn.ExecuteScalarAsync<ulong>("SELECT leader_account_id FROM departments WHERE id=7602"));
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task DisabledDepartmentBlocksInternalAccountReactivation()
     {
         var ct = TestContext.Current.CancellationToken;

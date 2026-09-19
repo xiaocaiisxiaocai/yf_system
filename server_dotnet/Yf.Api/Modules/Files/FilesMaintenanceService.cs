@@ -168,7 +168,13 @@ public sealed class FilesMaintenanceService(
                 catch (FileNotFoundException) { }
                 await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
                 await using var context = EfDb.Use(conn, tx);
-                await context.Files.Where(file => file.Id == row.Id && file.Status == "DELETED").ExecuteDeleteAsync(ct);
+                var referenced = await context.FileCopyRefs.AnyAsync(reference =>
+                    reference.SourceFileId == row.Id || reference.TargetFileId == row.Id, ct);
+                if (referenced)
+                    await context.Files.Where(file => file.Id == row.Id && file.Status == "DELETED")
+                        .ExecuteUpdateAsync(setters => setters.SetProperty(file => file.Status, "PURGED"), ct);
+                else
+                    await context.Files.Where(file => file.Id == row.Id && file.Status == "DELETED").ExecuteDeleteAsync(ct);
                 await tx.CommitAsync(ct);
             }
             catch (Exception error)

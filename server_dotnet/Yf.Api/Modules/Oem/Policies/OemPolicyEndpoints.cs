@@ -36,6 +36,8 @@ internal static class OemPolicyEndpoints
             s.DetailAsync(OemActorAccessor.Get(c), id, ct));
         oem.MapPut("/flow-templates/{id:long}", (ulong id, FlowTemplateUpdate r, HttpContext c, OemFlowTemplateService s, CancellationToken ct) =>
             s.UpdateAsync(OemActorAccessor.Get(c), id, r, ct));
+        oem.MapPut("/flow-templates/{id:long}/definition", (ulong id, FlowTemplateDefinitionUpdate r, HttpContext c, OemFlowTemplateService s, CancellationToken ct) =>
+            s.UpdateDefinitionAsync(OemActorAccessor.Get(c), id, r, ct));
         oem.MapPut("/flow-templates/{id:long}/nodes", (ulong id, FlowTemplateNodesUpdate r, HttpContext c, OemFlowTemplateService s, CancellationToken ct) =>
             s.ReplaceNodesAsync(OemActorAccessor.Get(c), id, r, ct));
         oem.MapPut("/flow-templates/{id:long}/scopes", (ulong id, FlowTemplateScopesUpdate r, HttpContext c, OemFlowTemplateService s, CancellationToken ct) =>

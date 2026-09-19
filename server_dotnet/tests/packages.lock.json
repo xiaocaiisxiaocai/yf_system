@@ -290,6 +290,11 @@
           "MySqlConnector": "2.4.0"
         }
       },
+      "SharpCompress": {
+        "type": "Transitive",
+        "resolved": "0.50.4",
+        "contentHash": "/hxjUR7DEX6mky8/LQXyrnrKioOL6D6veAID1EZpro+q4s02x5dHEYBV3qjEN6lDYYilDoQQ76BcmQj+lRx51w=="
+      },
       "System.IdentityModel.Tokens.Jwt": {
         "type": "Transitive",
         "resolved": "8.22.0",
@@ -385,6 +390,7 @@
           "Microsoft.EntityFrameworkCore": "[9.0.0, )",
           "MySqlConnector": "[2.6.2, )",
           "Pomelo.EntityFrameworkCore.MySql": "[9.0.0, )",
+          "SharpCompress": "[0.50.4, )",
           "System.IdentityModel.Tokens.Jwt": "[8.22.0, )"
         }
       }

@@ -102,11 +102,11 @@ export default function CompaniesPage() {
   const [form] = Form.useForm()
 
   const load = useCallback(async () => {
-    if (!can.manageCompanies) return
+    if (!can.manageCompanies && !can.manageAccounts) return
     const result = await api.companies({ page, pageSize: 20, keyword: keyword || undefined })
     setRows(result.list)
     setTotal(result.total)
-  }, [api, page, keyword, can.manageCompanies])
+  }, [api, page, keyword, can.manageCompanies, can.manageAccounts])
   useLoadEffect(load)
 
   const save = async () => {
@@ -130,15 +130,15 @@ export default function CompaniesPage() {
         { title: '账号', width: 100, render: (_: unknown, row: Company) => `${row.activeAccountCount ?? 0} / ${row.accountCount ?? 0}` },
         { title: '状态', width: 90, render: (_: unknown, row: Company) => <Tag color={row.status === 'ACTIVE' ? 'green' : 'gray'}>{row.status === 'ACTIVE' ? '启用' : '停用'}</Tag> },
         {
-          title: '操作', width: 230,
+          title: '操作', width: can.manageCompanies && can.manageAccounts ? 230 : 150,
           render: (_: unknown, row: Company) => (
             <Space size={4}>
-              <Button size="mini" onClick={() => setAccountsOf(row)}>账号</Button>
-              <Button size="mini" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>
-              <Popconfirm title={row.status === 'ACTIVE' ? '停用后该厂商所有账号将立即退出登录，确定？' : '确定启用该厂商？'}
+              {can.manageAccounts && <Button size="mini" onClick={() => setAccountsOf(row)}>账号</Button>}
+              {can.manageCompanies && <Button size="mini" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>}
+              {can.manageCompanies && <Popconfirm title={row.status === 'ACTIVE' ? '停用后该厂商所有账号将立即退出登录，确定？' : '确定启用该厂商？'}
                 onOk={async () => { await api.setCompanyStatus(row.id, row.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE'); await load() }}>
                 <Button size="mini" status={row.status === 'ACTIVE' ? 'warning' : 'success'}>{row.status === 'ACTIVE' ? '停用' : '启用'}</Button>
-              </Popconfirm>
+              </Popconfirm>}
             </Space>
           ),
         },

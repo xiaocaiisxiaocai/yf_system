@@ -164,6 +164,18 @@ public sealed class ProjectsWorkflowTests
         Assert.Equal("项目验收仅允许供应商用户提交", error.Message);
     }
 
+    [Fact]
+    public void OnlySupplierUsersCanWithdrawAcceptance()
+    {
+        var supplierUser = new CurrentUser(2, "supplier", "SUPPLIER", 10);
+        var internalUser = new CurrentUser(1, "internal", "INTERNAL", null);
+
+        ProjectWorkflowRules.RequireSupplierWithdrawer(supplierUser);
+        var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.RequireSupplierWithdrawer(internalUser));
+        Assert.Equal(403, error.Status);
+        Assert.Equal("项目验收仅允许供应商用户撤回", error.Message);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData(0UL)]

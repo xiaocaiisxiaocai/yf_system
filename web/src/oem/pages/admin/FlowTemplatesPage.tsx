@@ -76,9 +76,9 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
       if (!existing) {
         await api.createFlowTemplate({ name, isDefault, nodes: inputs(), departmentIds })
       } else {
-        let current = await api.replaceFlowNodes(existing.id, inputs(), existing.version)
-        current = await api.replaceFlowScopes(existing.id, departmentIds, current.version)
-        await api.updateFlowTemplate(existing.id, { name, status: active ? 'ACTIVE' : 'DISABLED', isDefault, version: current.version })
+        await api.updateFlowTemplateDefinition(existing.id, {
+          name, status: active ? 'ACTIVE' : 'DISABLED', isDefault, nodes: inputs(), departmentIds, version: existing.version,
+        })
       }
       Message.success('审批模板已保存，仅影响之后发送的传递单')
       onSaved()

@@ -96,6 +96,8 @@ export class OemApi {
     this.post<FlowTemplate>('/oem/flow-templates', body)
   updateFlowTemplate = (id: number, body: { name: string; status: string; isDefault: boolean; version: number }) =>
     this.put<FlowTemplate>(`/oem/flow-templates/${id}`, body)
+  updateFlowTemplateDefinition = (id: number, body: { name: string; status: string; isDefault: boolean; nodes: FlowNodeInput[]; departmentIds: number[]; version: number }) =>
+    this.put<FlowTemplate>(`/oem/flow-templates/${id}/definition`, body)
   replaceFlowNodes = (id: number, nodes: FlowNodeInput[], version: number) => this.put<FlowTemplate>(`/oem/flow-templates/${id}/nodes`, { nodes, version })
   replaceFlowScopes = (id: number, departmentIds: number[], version: number) =>
     this.put<FlowTemplate>(`/oem/flow-templates/${id}/scopes`, { departmentIds, version })

@@ -389,7 +389,7 @@ def run_workflow_acceptance(client, Client, conn, check):
         "POST", f"/api/v1/projects/{project_id}/reject",
         {"reason": "缺少版本"}, expected=400)
     _expect_atomic_rejection(
-        check, conn, client, project_id,
+        check, conn, supplier_client, project_id,
         "withdrawal without expected submission version",
         "POST", f"/api/v1/projects/{project_id}/withdraw", {}, expected=400)
     _expect_atomic_rejection(
@@ -403,10 +403,15 @@ def run_workflow_acceptance(client, Client, conn, check):
         "POST", f"/api/v1/projects/{project_id}/reject",
         {"reason": "陈旧版本", "expectedSubmissionId": stale_submission_id}, expected=409)
     _expect_atomic_rejection(
-        check, conn, client, project_id,
+        check, conn, supplier_client, project_id,
         "withdrawal with stale submission version",
         "POST", f"/api/v1/projects/{project_id}/withdraw",
         {"expectedSubmissionId": stale_submission_id}, expected=409)
+    _expect_atomic_rejection(
+        check, conn, client, project_id,
+        "internal administrator withdrawal with the current submission version",
+        "POST", f"/api/v1/projects/{project_id}/withdraw",
+        {"expectedSubmissionId": reject_submission_id}, expected=403)
     with conn.cursor() as cursor:
         cursor.execute(
             "INSERT INTO role_permissions(role_id,permission_id) VALUES(%s,%s)",

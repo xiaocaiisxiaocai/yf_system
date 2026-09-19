@@ -11,6 +11,8 @@ public sealed record FlowNodeInput(
 
 public sealed record FlowTemplateCreate(string Name, bool IsDefault, FlowNodeInput[] Nodes, ulong[]? DepartmentIds);
 public sealed record FlowTemplateUpdate(string Name, string Status, bool IsDefault, ulong? Version);
+public sealed record FlowTemplateDefinitionUpdate(
+    string Name, string Status, bool IsDefault, FlowNodeInput[] Nodes, ulong[]? DepartmentIds, ulong? Version);
 public sealed record FlowTemplateNodesUpdate(FlowNodeInput[] Nodes, ulong? Version);
 public sealed record FlowTemplateScopesUpdate(ulong[] DepartmentIds, ulong? Version);
 
@@ -87,6 +89,48 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
         await uow.Db.SaveChangesAsync(ct);
         if (request.IsDefault && !template.IsDefault) await MakeDefaultAsync(uow, template, ct);
         await audit.WriteAsync(uow, current, "OEM_FLOW_TEMPLATE_UPDATE", "oem_flow_template", id, new { targetName = template.Name, changes }, ct);
+        await uow.CommitAsync(ct);
+        return await JsonAsync(uow, template, ct);
+    }
+
+    /// <summary>Replaces metadata, nodes and scopes in one transaction for the web editor.</summary>
+    public async Task<object> UpdateDefinitionAsync(OemActor actor, ulong id, FlowTemplateDefinitionUpdate request, CancellationToken ct)
+    {
+        var name = OemValidation.RequiredText(request.Name, "模板名称", 64);
+        var status = OemStatus.Normalize(request.Status);
+        var version = OemValidation.ExpectedVersion(request.Version);
+        if (request.DepartmentIds is null || request.DepartmentIds.Length > 500) throw ApiException.BadRequest("适用组织数量无效");
+
+        await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+        var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.FlowTemplateManage, ct);
+        var template = await LockAsync(uow, id, version, ct);
+        var nodes = await ValidateNodesAsync(uow, request.Nodes, ct);
+        if (await uow.Db.OemFlowTemplates.AnyAsync(item => item.Name == name && item.Id != id, ct))
+            throw ApiException.Conflict("模板名称已存在");
+        if (template.IsDefault && !request.IsDefault) throw ApiException.BadRequest("请先将其他模板设为默认模板");
+        if (status == OemStatus.Disabled && (template.IsDefault || request.IsDefault)) throw ApiException.BadRequest("默认模板不能停用");
+
+        var beforeNodes = await planning.LoadTemplateAsync(uow, id, ct);
+        var beforeScopes = await uow.Db.OemFlowTemplateScopes.AsNoTracking().Where(scope => scope.TemplateId == id)
+            .Select(scope => scope.DepartmentId).OrderBy(value => value).ToArrayAsync(ct);
+        var changes = AuditChange.OnlyChanged(
+            new AuditChange("name", "模板名称", template.Name, name),
+            new AuditChange("status", "状态", template.Status, status),
+            new AuditChange("isDefault", "默认模板", template.IsDefault, request.IsDefault),
+            new AuditChange("nodes", "审批节点", beforeNodes.Nodes, nodes),
+            new AuditChange("departments", "适用组织", beforeScopes, request.DepartmentIds.Distinct().Order().ToArray()));
+
+        await uow.Db.OemFlowTemplateNodes.Where(node => node.TemplateId == id).ExecuteDeleteAsync(ct);
+        await WriteNodesAsync(uow, id, nodes, ct);
+        await uow.Db.OemFlowTemplateScopes.Where(scope => scope.TemplateId == id).ExecuteDeleteAsync(ct);
+        await WriteScopesAsync(uow, id, request.DepartmentIds, ct);
+        template.Name = name;
+        template.Status = status;
+        Touch(uow, template);
+        await uow.Db.SaveChangesAsync(ct);
+        if (request.IsDefault && !template.IsDefault) await MakeDefaultAsync(uow, template, ct);
+        await audit.WriteAsync(uow, current, "OEM_FLOW_TEMPLATE_UPDATE", "oem_flow_template", id,
+            new { targetName = template.Name, changes }, ct);
         await uow.CommitAsync(ct);
         return await JsonAsync(uow, template, ct);
     }

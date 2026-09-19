@@ -67,6 +67,12 @@ internal static class ProjectWorkflowRules
         }
     }
 
+    internal static void RequireSupplierWithdrawer(CurrentUser actor)
+    {
+        if (actor.UserType != "SUPPLIER")
+            throw ApiException.Forbidden("项目验收仅允许供应商用户撤回");
+    }
+
     internal static bool CanReceivePendingAcceptance(CurrentUser actor, bool hasConfirmPermission) =>
         actor.IsInternal && hasConfirmPermission;
 }

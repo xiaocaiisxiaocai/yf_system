@@ -109,11 +109,15 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
 
   const canWrite = hasPerm('message:create') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
   const canDelete = hasPerm('message:delete_any') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
+  const draftScopeKey = `${user?.id ?? ''}:${projectId}`
+  const draftScope = useRef(draftScopeKey)
 
   useEffect(() => {
+    if (draftScope.current === draftScopeKey) return
+    draftScope.current = draftScopeKey
     setContent('')
     setImages([])
-  }, [projectId, user?.id])
+  }, [draftScopeKey])
 
   const applyReadCounts = useCallback((counts: ReadCounts[]) => {
     const byId = new Map(counts.map((item) => [item.id, item]))

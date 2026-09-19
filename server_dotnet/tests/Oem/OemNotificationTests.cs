@@ -1,6 +1,7 @@
 using Dapper;
 using Microsoft.Extensions.Logging.Abstractions;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Oem.Approval;
 using Yf.Api.Modules.Oem.Notifications;
 using Yf.Api.Modules.SystemManagement;
 using static Yf.Api.Tests.Oem.OemTransferFlowTests;
@@ -106,6 +107,36 @@ public sealed class OemNotificationTests
             Assert.Equal("CANCELLED", await conn.ExecuteScalarAsync<string>("SELECT status FROM email_outbox WHERE event_type='MESSAGE_CREATED'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM email_outbox WHERE event_type LIKE 'OEM\\_%' AND status='CANCELLED'"));
         }
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task RecoveredApprovalBlockMailIsStaleAtSendTime()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var backup = await host.CreateInternalUserAsync("blocked_mail_backup", "Backup#2026x", ["oem:flow_approve"], world.Org.Section, ct);
+        var draft = await CreateOutboundAsync(world, "阻断已恢复", ct);
+        var transferId = TransferId(draft);
+        await host.UploadAsync(world.Sender, transferId, "a.pdf", OemTestHost.Pdf("a"), ct);
+        await world.Sender.PostAsync($"/api/v1/oem/transfers/{transferId}/send", new { version = Version(draft) + 1 }, ct).Ok();
+        await host.RunOemJobsAsync(ct);
+
+        await world.Admin.PutAsync($"/api/v1/admin/users/{world.LeaderId}/status", new { status = "DISABLED" }, ct).Ok();
+        Assert.Equal(1, await host.Service<OemApprovalService>().RevalidateActiveInstancesAsync(ct));
+        var blocked = await world.Admin.GetAsync($"/api/v1/oem/transfers/{transferId}", ct).Ok();
+        var blockedTask = blocked["approval"]!["nodes"]![0]!["tasks"]!.AsArray().Single()!;
+        await world.Admin.PostAsync($"/api/v1/oem/approvals/{blockedTask.Id()}/reassign",
+            new { newApproverUserId = backup, reason = "恢复审批", version = blockedTask["version"]!.GetValue<ulong>() }, ct).Ok();
+
+        var policy = new OemOutboxPolicy();
+        await using var conn = await host.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        var rows = (await conn.QueryAsync<(ulong Id, string EventType, string DedupeKey, ulong AccountId, ulong TransferId)>(
+            "SELECT id, event_type, dedupe_key, recipient_account_id, oem_transfer_id FROM email_outbox " +
+            "WHERE event_type='OEM_APPROVAL_BLOCKED' AND oem_transfer_id=@transferId", new { transferId }, tx)).ToArray();
+        Assert.NotEmpty(rows);
+        foreach (var row in rows) Assert.False((await policy.EvaluateAsync(conn, tx, Info(row), ct)).Allowed);
     }
 
     private static OutboxMailInfo Info((ulong Id, string EventType, string DedupeKey, ulong AccountId, ulong TransferId) row) =>

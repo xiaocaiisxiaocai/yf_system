@@ -1,11 +1,37 @@
 using System.Net;
 using System.Text.Json.Nodes;
+using Dapper;
+using Yf.Api.Modules.Oem.Policies;
 
 namespace Yf.Api.Tests.Oem;
 
 /// <summary>Approval templates, retention templates and OEM parameter pages over HTTP.</summary>
 public sealed class OemPolicyTests
 {
+    [Fact]
+    public void UnsupportedScannerFreshnessSettingsStayReadableForFailClosedRuntime()
+    {
+        var signatureAge = OemSettingCatalog.Get(OemSettingCatalog.MaxSignatureAgeHours);
+        var staleBlocking = OemSettingCatalog.Get(OemSettingCatalog.BlockOnStaleSignatures);
+        Assert.True(signatureAge.ReadOnly);
+        Assert.True(staleBlocking.ReadOnly);
+        Assert.NotNull(signatureAge.UnsupportedReason);
+        Assert.NotNull(staleBlocking.UnsupportedReason);
+        Assert.True(staleBlocking.IsReadOnly("false"));
+        Assert.False(staleBlocking.IsReadOnly("true"));
+        Assert.Contains("可以关闭", staleBlocking.EffectiveUnsupportedReason("true"));
+        Assert.Throws<Yf.Api.Infrastructure.ApiException>(() => staleBlocking.EnsureUpdateAllowed("false", "true"));
+        staleBlocking.EnsureUpdateAllowed("true", "false");
+
+        var settings = new OemSettings(new Dictionary<string, string?>
+        {
+            [OemSettingCatalog.MaxSignatureAgeHours] = "72",
+            [OemSettingCatalog.BlockOnStaleSignatures] = "true",
+        });
+        Assert.Equal(TimeSpan.FromHours(72), settings.MaxSignatureAge);
+        Assert.True(settings.BlockOnStaleSignatures);
+    }
+
     [Fact(Timeout = 180_000)]
     public async Task FlowTemplatesAreValidatedScopedPreviewedAndVersioned()
     {
@@ -81,9 +107,36 @@ public sealed class OemPolicyTests
             name = "冲突模板", isDefault = false, departmentIds = new[] { org.Department },
             nodes = new[] { new { name = "主管", approverSource = "SECTION_LEADER", approvalMode = "SINGLE", selfPolicy = "SKIP", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = Array.Empty<ulong>() } },
         }, ct).Status(HttpStatusCode.Conflict);
+        await admin.PostAsync("/api/v1/oem/flow-templates", new
+        {
+            name = "机加专用", isDefault = false, departmentIds = new[] { otherOrg.Department },
+            nodes = new[] { new { name = "主管", approverSource = "SECTION_LEADER", approvalMode = "SINGLE", selfPolicy = "SKIP", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = Array.Empty<ulong>() } },
+        }, ct).Ok();
 
         // Optimistic concurrency and default-template rules.
         var version = created["version"]!.GetValue<ulong>();
+        await admin.PutAsync($"/api/v1/oem/flow-templates/{templateId}/definition", new
+        {
+            name = "电装专用改", status = "ACTIVE", isDefault = false, version,
+            departmentIds = new[] { otherOrg.Department },
+            nodes = new[] { new { name = "不应落库", approverSource = "SPECIFIED_USERS", approvalMode = "ANY", selfPolicy = "BLOCK", enabled = true, approverUserIds = new[] { reviewer }, fallbackUserIds = Array.Empty<ulong>() } },
+        }, ct).Status(HttpStatusCode.Conflict);
+        var unchanged = await admin.GetAsync($"/api/v1/oem/flow-templates/{templateId}", ct).Ok();
+        Assert.Equal(version, unchanged["version"]!.GetValue<ulong>());
+        Assert.Equal("课别主管", unchanged["nodes"]![0]!["name"]!.GetValue<string>());
+        Assert.Equal(org.Department, unchanged["scopes"]![0]!.Id());
+
+        var replaced = await admin.PutAsync($"/api/v1/oem/flow-templates/{templateId}/definition", new
+        {
+            name = "电装专用", status = "ACTIVE", isDefault = false, version,
+            departmentIds = new[] { org.Department },
+            nodes = new object[]
+            {
+                new { name = "课别主管", approverSource = "SECTION_LEADER", approvalMode = "SINGLE", selfPolicy = "DESIGNATED", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = new[] { reviewer } },
+                new { name = "质量确认", approverSource = "SPECIFIED_USERS", approvalMode = "ANY", selfPolicy = "BLOCK", enabled = true, approverUserIds = new[] { reviewer }, fallbackUserIds = Array.Empty<ulong>() },
+            },
+        }, ct).Ok();
+        version = replaced["version"]!.GetValue<ulong>();
         await admin.PutAsync($"/api/v1/oem/flow-templates/{templateId}/scopes", new { departmentIds = new[] { org.Section }, version = version + 5 }, ct)
             .Status(HttpStatusCode.Conflict);
         var rescoped = await admin.PutAsync($"/api/v1/oem/flow-templates/{templateId}/scopes", new { departmentIds = new[] { org.Section }, version }, ct).Ok();
@@ -146,6 +199,12 @@ public sealed class OemPolicyTests
         var files = (await fileAdmin.GetAsync("/api/v1/oem/file-policies", ct).Ok()).AsArray();
         Assert.Contains(files, item => item!["key"]!.GetValue<string>() == "oem.upload.max_file_size");
         Assert.DoesNotContain(files, item => item!["key"]!.GetValue<string>().StartsWith("oem.notify", StringComparison.Ordinal));
+        var signatureAge = files.Single(item => item!["key"]!.GetValue<string>() == "oem.scan.max_signature_age_hours")!;
+        var staleBlocking = files.Single(item => item!["key"]!.GetValue<string>() == "oem.scan.block_on_stale_signatures")!;
+        Assert.True(signatureAge["readOnly"]!.GetValue<bool>());
+        Assert.True(staleBlocking["readOnly"]!.GetValue<bool>());
+        Assert.Contains("OfficeScan", signatureAge["unsupportedReason"]!.GetValue<string>());
+        Assert.Contains("无法证明", staleBlocking["unsupportedReason"]!.GetValue<string>());
         await fileAdmin.GetAsync("/api/v1/oem/notify-policies", ct).Status(HttpStatusCode.Forbidden);
         var updated = (await fileAdmin.PutAsync("/api/v1/oem/file-policies",
             new { items = new[] { new { key = "oem.upload.allowed_exts.oem_to_internal", value = "STEP, pdf" } } }, ct).Ok()).AsArray();
@@ -154,6 +213,17 @@ public sealed class OemPolicyTests
             .Status(HttpStatusCode.BadRequest);
         await fileAdmin.PutAsync("/api/v1/oem/file-policies", new { items = new[] { new { key = "oem.storage.reconcile_required", value = "x" } } }, ct)
             .Status(HttpStatusCode.BadRequest);
+        await fileAdmin.PutAsync("/api/v1/oem/file-policies", new { items = new[] { new { key = "oem.scan.block_on_stale_signatures", value = "true" } } }, ct)
+            .Status(HttpStatusCode.BadRequest);
+        await using (var conn = await host.OpenAsync(ct))
+            await conn.ExecuteAsync("UPDATE system_configs SET cfg_value='true' WHERE cfg_key='oem.scan.block_on_stale_signatures'");
+        var recovery = (await fileAdmin.GetAsync("/api/v1/oem/file-policies", ct).Ok()).AsArray()
+            .Single(item => item!["key"]!.GetValue<string>() == "oem.scan.block_on_stale_signatures")!;
+        Assert.False(recovery["readOnly"]!.GetValue<bool>());
+        Assert.Contains("可以关闭", recovery["unsupportedReason"]!.GetValue<string>());
+        var recovered = (await fileAdmin.PutAsync("/api/v1/oem/file-policies",
+            new { items = new[] { new { key = "oem.scan.block_on_stale_signatures", value = "false" } } }, ct).Ok()).AsArray();
+        Assert.Equal("false", recovered.Single(item => item!["key"]!.GetValue<string>() == "oem.scan.block_on_stale_signatures")!["value"]!.GetValue<string>());
         var notify = (await admin.PutAsync("/api/v1/oem/notify-policies", new { items = new[] { new { key = "oem.notify.event.receipt", value = "true" } } }, ct).Ok()).AsArray();
         Assert.Equal("true", notify.Single(item => item!["key"]!.GetValue<string>() == "oem.notify.event.receipt")!["value"]!.GetValue<string>());
     }

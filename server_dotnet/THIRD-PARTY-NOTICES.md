@@ -13,6 +13,7 @@ license and notice texts are shipped in the adjacent `licenses` directory.
 | Microsoft.EntityFrameworkCore.Design | 9.0.0 | Direct | `licenses/dotnet-LICENSE.txt`, `licenses/dotnet-THIRD-PARTY-NOTICES.txt` |
 | MySqlConnector | 2.6.2 | Direct | `licenses/MySqlConnector-LICENSE.txt` |
 | Pomelo.EntityFrameworkCore.MySql | 9.0.0 | Direct | `licenses/Pomelo.EntityFrameworkCore.MySql-LICENSE.txt` |
+| SharpCompress | 0.50.4 | Direct | `licenses/SharpCompress-LICENSE.txt` |
 | System.IdentityModel.Tokens.Jwt | 8.22.0 | Direct | `licenses/IdentityModel-LICENSE.txt` |
 | BouncyCastle.Cryptography | 2.6.2 | Transitive | `licenses/BouncyCastle-LICENSE.md` |
 | Konscious.Security.Cryptography.Blake2 | 1.1.1 | Transitive | `licenses/Konscious.Security.Cryptography-LICENSE.txt` |
@@ -26,6 +27,9 @@ license and notice texts are shipped in the adjacent `licenses` directory.
 
 ## Provenance
 
+- SharpCompress 0.50.4 declares MIT in its NuGet metadata. Its license is from
+  package repository commit `c083c6efd843a844b0c8f7878787360e815be781`:
+  `https://github.com/adamhathcock/sharpcompress/blob/c083c6efd843a844b0c8f7878787360e815be781/LICENSE.txt`.
 - Microsoft.EntityFrameworkCore and Microsoft.EntityFrameworkCore.Design 9.0.0 declare MIT
   in their NuGet metadata; their package repository commit is
   `645f3131a5b0a4bf677201cf22773990a5316c89`.
@@ -72,3 +76,14 @@ The publishing script also creates `licenses/frontend/INDEX.json` from
 production/development, optional, and locally installed status. It covers the
 lock file for license review and does not claim that every indexed package is
 present in the production JavaScript bundle.
+
+## OEM archive test fixtures
+
+`tests/Oem/OemInspectionTests.cs` embeds two archive fixtures as Base64; these
+are test inputs and are not included in the application runtime:
+
+- `bla.encrypted.7z` from Apache Commons Compress, Apache License 2.0:
+  `https://github.com/apache/commons-compress/blob/master/src/test/resources/bla.encrypted.7z`.
+  See `licenses/Apache-2.0.txt` and `licenses/Apache-Commons-Compress-NOTICE.txt`.
+- `build/testfile.rar5.rar` from `ssokolow/rar-test-files`, CC0-1.0:
+  `https://github.com/ssokolow/rar-test-files/blob/master/build/testfile.rar5.rar`.

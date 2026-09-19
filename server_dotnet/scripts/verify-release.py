@@ -2,11 +2,17 @@
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import zipfile
+
+from script_safety import (
+    clean_dotnet_config_environment,
+    validate_release_sidecars,
+    validate_zip_entries,
+)
 
 source = Path(__file__).resolve().parents[2]
 archive = Path(sys.argv[1]).resolve()
@@ -23,10 +29,7 @@ def digest(path):
 with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_") as temp:
     extraction = Path(temp).resolve()
     with zipfile.ZipFile(archive) as zipped:
-        for entry in zipped.infolist():
-            path = PurePosixPath(entry.filename)
-            if path.is_absolute() or ".." in path.parts or "\\" in entry.filename or ":" in entry.filename or (entry.external_attr >> 16) & 0o170000 == 0o120000:
-                raise RuntimeError("Unsafe archive path")
+        validate_zip_entries(zipped.infolist())
         if zipped.testzip() is not None:
             raise RuntimeError("ZIP CRC failed")
         zipped.extractall(extraction)
@@ -46,6 +49,11 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_") as temp:
     actual = {path.relative_to(package).as_posix() for path in package.rglob("*") if path.is_file()}
     if actual != expected_paths:
         raise RuntimeError("Manifest does not cover every payload file")
+    actual_files = {
+        name: {"sha256": digest(package / name), "bytes": (package / name).stat().st_size}
+        for name in sorted(actual)
+    }
+    release_manifest = validate_release_sidecars(archive, manifest, actual_files)
     required = {"Yf.Api.dll", "Yf.Api.runtimeconfig.json", "web.config", "wwwroot/index.html",
                 "install-iis.ps1", "maintain-iis.ps1", "maintenance-common.ps1", "README.md"}
     if not required.issubset(actual):
@@ -58,7 +66,7 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_") as temp:
     for path in package.rglob("*"):
         if path.is_file() and (path.name.lower() in ("appsettings.local.json", "secrets.json", ".env") or path.suffix.lower() in (".pfx", ".p12", ".key")):
             raise RuntimeError("Unexpected private file")
-    clean_env = {key: value for key, value in os.environ.items() if not key.lower().startswith("app__") and key.upper() != "YF_CONFIG_PATH"}
+    clean_env = clean_dotnet_config_environment()
     missing = subprocess.run(["dotnet", str(package / "Yf.Api.dll")], cwd=package, env=clean_env, capture_output=True, timeout=20)
     if missing.returncode == 0 or b"App:ConnectionString must be configured" not in missing.stderr:
         raise RuntimeError("Published application did not fail closed with missing configuration")
@@ -71,7 +79,8 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_") as temp:
     http_report = json.loads((source / ".runlogs/dotnet-published-results.json").read_text(encoding="utf-8"))
     report = {"archive": str(archive), "sha256": digest(archive), "bytes": archive.stat().st_size,
               "fileCount": len(actual), "source": manifest["source"], "build": manifest["build"],
-              "zipPathsCrcAndHashes": "passed", "missingConfigurationFailsClosed": True, "testHostExcludedFromPayload": True,
+              "zipPathsCrcAndHashes": "passed", "releaseSidecars": "passed",
+              "releaseManifest": release_manifest, "missingConfigurationFailsClosed": True, "testHostExcludedFromPayload": True,
               "publishedUnitHttp": http_report, "targetIisTested": False, "realSmtpTested": False}
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print("Verified release report: " + str(report_path), flush=True)

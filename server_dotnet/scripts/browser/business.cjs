@@ -251,7 +251,7 @@ async function preview(page, name, kind, label) {
       }
     });
 
-    await record('供应商提交、公司撤回、内部驳回、重新提交并内部验收完成', async () => {
+    await record('供应商提交并自行撤回、内部驳回、重新提交并内部验收完成', async () => {
       const project = projects.a;
       await navigate(vendorA, '/projects/' + project.id);
       const submitted = await confirm(vendorA, '提交公司验收', '/projects/' + project.id + '/submit');
@@ -261,10 +261,13 @@ async function preview(page, name, kind, label) {
       assert.equal(await vendorA.getByRole('button', { name: '验收驳回', exact: true }).count(), 0);
       await navigate(internal, '/projects/' + project.id);
       await internal.getByText('验收方：公司', { exact: true }).waitFor();
-      await json(admin.context, admin.token, 'POST', '/projects/' + project.id + '/withdraw', {
+      assert.equal(await internal.getByRole('button', { name: '撤回', exact: true }).count(), 0);
+      const internalSession = internal === adminPage ? admin : sessions.member;
+      await json(internalSession.context, internalSession.token, 'POST', '/projects/' + project.id + '/withdraw', {
         expectedSubmissionId: submitted.latestSubmissionId,
-      });
+      }, 403);
       await navigate(vendorA, '/projects/' + project.id);
+      await confirm(vendorA, '撤回', '/projects/' + project.id + '/withdraw');
       await confirm(vendorA, '提交公司验收', '/projects/' + project.id + '/submit');
       await navigate(internal, '/projects/' + project.id);
       await internal.getByRole('button', { name: '验收驳回', exact: true }).click();

@@ -23,6 +23,9 @@ const pdf=fs.readFileSync(OUT+'/valid-preview.pdf');
   await api(adminContext,'PUT','/admin/roles/'+created.id+'/permissions',{permissionIds:permissionIds(codes)},token);return created.id;};
  const senderRole=await role('OEM验收发送人',['oem','oem:transfer_create','oem:transfer_view','oem:file_download']);
  const leaderRole=await role('OEM验收主管',['oem','oem:flow_approve','oem:transfer_view','oem:file_download']);
+ const accountRole=await role('OEM验收账号管理员',['oem','oem:account_manage']);
+ const auditRole=await role('OEM验收审计员',['oem','oem:audit_view']);
+ const filePolicyRole=await role('OEM验收文件策略管理员',['oem','oem:file_policy_manage']);
  const org=async(name,parentId,sortNo)=>(await(await api(adminContext,'POST','/admin/departments',{name:name+tag,parentId,sortNo},token)).json());
  const division=await org('OEM验收事业部-',null,950);const department=await org('OEM验收部门-',division.id,951);const section=await org('OEM验收课别-',department.id,952);
  const person=async(key,realName,roleId)=>{const pwd=password();
@@ -30,6 +33,9 @@ const pdf=fs.readFileSync(OUT+'/valid-preview.pdf');
   return {id:user.id,username:user.employeeNo,realName,password:pwd,changed:password()};};
  const sender=await person('sender','OEM验收发送人'+tag,senderRole);
  const leader=await person('leader','OEM验收主管'+tag,leaderRole);
+ const accountManager=await person('account_mgr','OEM验收账号管理员'+tag,accountRole);
+ const auditor=await person('auditor','OEM验收审计员'+tag,auditRole);
+ const filePolicyManager=await person('file_policy','OEM验收文件策略管理员'+tag,filePolicyRole);
 
  // Fresh internal accounts must change their initial password before they can use OEM.
  const firstLogin=async(page,user)=>{
@@ -74,6 +80,41 @@ const pdf=fs.readFileSync(OUT+'/valid-preview.pdf');
   for(const [url,text] of [['/oem/admin/flow-templates','默认审批模板'],['/oem/admin/retention','不自动删除'],['/oem/admin/settings','单文件大小上限'],['/oem/admin/audit','OEM_ACCOUNT_CREATE']]){
    await admin.goto(s.base+url);await admin.getByText(text).first().waitFor({timeout:15000});
   }
+ });
+ await record('OEM 窄屏内部导航可打开并切换页面',async()=>{
+  await admin.setViewportSize({width:390,height:844});
+  await admin.goto(s.base+'/oem/admin/audit');
+  await admin.getByRole('button',{name:'打开导航菜单',exact:true}).click();
+  const drawer=admin.locator('.mobile-nav-drawer:visible');await drawer.waitFor();
+  await drawer.getByText('文件策略与提醒',{exact:true}).click();
+  await admin.waitForURL('**/oem/admin/settings');
+  await admin.getByText('单文件大小上限').first().waitFor();
+ });
+
+ const {p:accountManagerPage}=await open('oem-account-manager');
+ await record('OEM 账号管理员可列出厂商并进入账号管理',async()=>{
+  await firstLogin(accountManagerPage,accountManager);
+  await accountManagerPage.goto(s.base+'/oem');await accountManagerPage.waitForURL('**/oem/admin/companies');
+  const row=accountManagerPage.getByRole('row').filter({hasText:COMPANY});await row.waitFor();
+  assert.equal(await accountManagerPage.getByRole('button',{name:'新增厂商',exact:true}).count(),0);
+  assert.equal(await row.getByRole('button',{name:'编辑',exact:true}).count(),0);
+  await row.getByRole('button',{name:'账号',exact:true}).click();
+  await accountManagerPage.getByRole('button',{name:'新增账号',exact:true}).waitFor();
+  await accountManagerPage.getByText(VENDOR,{exact:true}).waitFor();
+ });
+
+ const {p:auditorPage}=await open('oem-auditor');
+ await record('OEM 审计员从 /oem 落到审计页',async()=>{
+  await firstLogin(auditorPage,auditor);
+  await auditorPage.goto(s.base+'/oem');await auditorPage.waitForURL('**/oem/admin/audit');
+   await auditorPage.getByRole('main').getByText('OEM 审计日志',{exact:true}).waitFor();
+ });
+
+ const {p:filePolicyPage}=await open('oem-file-policy');
+ await record('OEM 文件策略管理员从 /oem 落到设置页',async()=>{
+  await firstLogin(filePolicyPage,filePolicyManager);
+  await filePolicyPage.goto(s.base+'/oem');await filePolicyPage.waitForURL('**/oem/admin/settings');
+  await filePolicyPage.getByText('单文件大小上限').first().waitFor();
  });
 
  const {p:senderPage}=await open('oem-sender');let detailUrl;
@@ -127,6 +168,11 @@ const pdf=fs.readFileSync(OUT+'/valid-preview.pdf');
   await vendor.getByRole('button',{name:'下载'}).click();
   const download=await downloading;const saved=OUT+'/oem-downloaded.pdf';await download.saveAs(saved);
   assert.equal(crypto.createHash('sha256').update(fs.readFileSync(saved)).digest('hex'),crypto.createHash('sha256').update(pdf).digest('hex'));
+  await vendor.setViewportSize({width:390,height:844});
+  await vendor.getByRole('button',{name:'打开导航菜单',exact:true}).click();
+  const drawer=vendor.locator('.mobile-nav-drawer:visible');await drawer.waitFor();
+  await drawer.getByText('文件传递单',{exact:true}).click();
+  await vendor.waitForURL('**/oem-portal/transfers');
  });
  await record('OEM 厂商令牌不能访问协作平台接口',async()=>{
   assert.ok(vendorToken,'vendor token');

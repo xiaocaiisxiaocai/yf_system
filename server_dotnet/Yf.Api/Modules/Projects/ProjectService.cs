@@ -225,19 +225,18 @@ internal sealed class ProjectService(
         string? ip,
         CancellationToken ct)
     {
+        ProjectWorkflowRules.RequireSupplierWithdrawer(actor);
         var expectedSubmissionId = RequireExpectedSubmissionId(request.ExpectedSubmissionId);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var (project, current) = await LockWorkflowProjectAsync(conn, tx, actor, projectId, "project:withdraw", ct);
+        ProjectWorkflowRules.RequireSupplierWithdrawer(current);
         if (project.Status != ProjectStatuses.PendingConfirmation)
         {
             throw ApiException.Conflict("项目当前不在待确认状态");
         }
         var latestSubmit = await LatestSubmissionAsync(conn, tx, projectId, ct);
         EnsureExpectedSubmission(latestSubmit, expectedSubmissionId);
-        await using var db = EfDb.Use(conn, tx);
-        var privileged = current.IsInternal
-            && await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct);
-        if (latestSubmit.OperatorId != current.Id && !privileged)
+        if (latestSubmit.OperatorId != current.Id)
         {
             throw ApiException.Forbidden();
         }

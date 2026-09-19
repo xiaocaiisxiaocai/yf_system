@@ -65,6 +65,21 @@ test('account menu opens personal profile maintenance inside the authenticated l
   assert.match(app, /<Route path="profile" element=\{<Profile \/>\}/)
 })
 
+test('OEM navigation selects an authorised landing page and keeps narrow-screen navigation reachable', () => {
+  const layouts = fs.readFileSync(path.resolve(__dirname, '../src/oem/layouts/OemLayouts.tsx'), 'utf8')
+  const companies = fs.readFileSync(path.resolve(__dirname, '../src/oem/pages/admin/CompaniesPage.tsx'), 'utf8')
+  const module = loadTs('src/oem/oemNavigation.ts', {})
+
+  assert.equal(module.oemHome(['oem:account_manage']), '/oem/admin/companies')
+  assert.equal(module.oemHome(['oem:flow_template_manage']), '/oem/admin/flow-templates')
+  assert.equal(module.oemHome(['oem:audit_view']), '/oem/admin/audit')
+  assert.equal(module.oemHome(['oem:file_download']), null)
+  assert.match(layouts, /className="mobile-menu-trigger"/)
+  assert.match(layouts, /className="mobile-nav-drawer"/)
+  assert.match(companies, /!can\.manageCompanies && !can\.manageAccounts/)
+  assert.match(companies, /can\.manageAccounts && <Button size="mini"[\s\S]*?>账号<\/Button>/)
+})
+
 test('personal profile submits only own email and keeps password change in the same page', async () => {
   const calls = []
   let savedUser
@@ -617,6 +632,24 @@ function createMessageSyncClock() {
     },
   }
 }
+
+test('message composer keeps input typed during first mount but clears it when the project changes', async () => {
+  const Page = loadTs('src/components/MessagePanel.tsx', {
+    '@arco-design/web-react': arco,
+    '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+    '../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['message:create']),
+    '../api/types': { fmtTime: String },
+    '../api/client': { get: async () => ({ data: { list: [], total: 0 } }), post: async () => ({ data: messageFixture(1) }) },
+  }).default
+  const renderer = create(React.createElement(Page, { projectId: 1, projectStatus: 'IN_PROGRESS' }))
+  renderer.root.findByType('Input.TextArea').props.onChange('挂载时立即输入的草稿')
+  await act(async () => { await Promise.resolve() })
+  assert.equal(renderer.root.findByType('Input.TextArea').props.value, '挂载时立即输入的草稿')
+
+  await act(async () => renderer.update(React.createElement(Page, { projectId: 2, projectStatus: 'IN_PROGRESS' })))
+  assert.equal(renderer.root.findByType('Input.TextArea').props.value, '')
+  await act(async () => renderer.unmount())
+})
 
 test('message revision automatically shows the new message while preserving the draft', async () => {
   let rows = [messageFixture(3), messageFixture(2), messageFixture(1)]
@@ -2635,6 +2668,83 @@ test('project navigation ignores late responses across valid and invalid routes'
   await act(async()=>pending.get('/projects/2')({data:project(2)}))
   assert.equal(renderer.root.findByType('Files').props.projectId,3,'a late refresh after a project operation must not replace the new project')
   await act(async()=>renderer.unmount())
+})
+
+test('an operation refresh for the same project supersedes an older background snapshot', async () => {
+  let collaboration = { revision: 'r1', status: 'ready', messageRevisions: {}, receiptRevisions: {}, reconnectRevision: 0, realtimeStatus: 'disconnected' }
+  const projectRequests = []
+  const Workflow = component('Workflow')
+  const project = (status) => ({
+    id: 1, projectGroupId: 10, projectGroupName: '主项目', name: '子项目', status,
+    latestSubmitterId: null, latestSubmissionId: null, rejectReason: null,
+  })
+  const Page = loadTs('src/pages/project/ProjectDetail.tsx', {
+    '@arco-design/web-react': arco,
+    'react-router-dom': { useParams: () => ({ id: '1' }), useSearchParams: () => [new URLSearchParams(), () => {}], useNavigate: () => () => {} },
+    '../../api/client': { get: (url) => {
+      if (url === '/projects/1') return new Promise((resolve) => projectRequests.push(resolve))
+      if (url === '/projects/1/summary') return Promise.resolve({ data: { unreadMessages: 0 } })
+      if (url === '/project-groups/10') return Promise.resolve({ data: { projects: [] } })
+      throw new Error(`unexpected GET ${url}`)
+    } },
+    '../../api/types': { PROJECT_STATUS: { DRAFT: { text: '草稿' }, IN_PROGRESS: { text: '进行中' } }, fmtSize: String, fmtTime: String },
+    '../../components/FileTable': component('Files'),
+    '../../components/MessagePanel': component('Messages'),
+    '../../components/ProjectActivityPanel': component('Activities'),
+    '../../components/ProjectWorkflowPanel': Workflow,
+    '../../store/collaboration': { useCollaboration: (selector) => selector(collaboration) },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)) })
+  await act(async () => projectRequests[0]({ data: project('DRAFT') }))
+
+  collaboration = { ...collaboration, revision: 'r2' }
+  await act(async () => renderer.update(React.createElement(Page)))
+  assert.equal(projectRequests.length, 2, 'the background revision starts a refresh')
+  await act(async () => { renderer.root.findByType(Workflow).props.onChanged(); await Promise.resolve() })
+  assert.equal(projectRequests.length, 3, 'the completed operation must force a newer refresh')
+
+  await act(async () => projectRequests[2]({ data: project('IN_PROGRESS') }))
+  await act(async () => projectRequests[1]({ data: project('DRAFT') }))
+  assert.equal(renderer.root.findByType(Workflow).props.project.status, 'IN_PROGRESS')
+  await act(async () => renderer.unmount())
+})
+
+test('an operation refresh clears stale project content after authorization loss', async () => {
+  let projectCalls = 0
+  let rejectRefresh
+  const Workflow = component('Workflow')
+  const Page = loadTs('src/pages/project/ProjectDetail.tsx', {
+    '@arco-design/web-react': arco,
+    'react-router-dom': { useParams: () => ({ id: '1' }), useSearchParams: () => [new URLSearchParams(), () => {}], useNavigate: () => () => {} },
+    '../../api/client': { get: (url) => {
+      if (url === '/projects/1') {
+        projectCalls += 1
+        if (projectCalls === 1) return Promise.resolve({ data: {
+          id: 1, projectGroupId: 10, projectGroupName: '主项目', name: '已撤权项目', status: 'IN_PROGRESS',
+          latestSubmitterId: null, latestSubmissionId: null, rejectReason: null,
+        } })
+        return new Promise((_resolve, reject) => { rejectRefresh = reject })
+      }
+      if (url === '/projects/1/summary') return Promise.resolve({ data: { unreadMessages: 0 } })
+      if (url === '/project-groups/10') return Promise.resolve({ data: { projects: [] } })
+      throw new Error(`unexpected GET ${url}`)
+    } },
+    '../../api/types': { PROJECT_STATUS: { IN_PROGRESS: { text: '进行中' } }, fmtSize: String, fmtTime: String },
+    '../../components/FileTable': component('Files'),
+    '../../components/MessagePanel': component('Messages'),
+    '../../components/ProjectActivityPanel': component('Activities'),
+    '../../components/ProjectWorkflowPanel': Workflow,
+    '../../store/collaboration': { useCollaboration: (selector) => selector({ revision: '', status: 'ready', messageRevisions: {}, receiptRevisions: {}, reconnectRevision: 0, realtimeStatus: 'disconnected' }) },
+  }).default
+  let renderer
+  await act(async () => { renderer = create(React.createElement(Page)); await Promise.resolve() })
+  assert.equal(renderer.root.findByType(Workflow).props.project.name, '已撤权项目')
+  await act(async () => { renderer.root.findByType(Workflow).props.onChanged(); await Promise.resolve() })
+  await act(async () => rejectRefresh(Object.assign(new Error('access revoked'), { isAxiosError: true, response: { status: 403 } })))
+  assert.equal(renderer.root.findAllByType(Workflow).length, 0)
+  assert.equal(renderer.root.findByType('Empty').props.description, '项目加载失败或没有访问权限')
+  await act(async () => renderer.unmount())
 })
 
 test('unknown project tab query falls back to files and keeps description expansion keyboard accessible', async () => {

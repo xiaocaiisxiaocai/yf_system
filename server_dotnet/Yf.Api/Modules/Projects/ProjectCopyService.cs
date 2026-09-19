@@ -372,16 +372,28 @@ internal sealed class ProjectCopyService(
         if (!await db.Users.AnyAsync(owner => owner.Id == ownerId && owner.UserType == "INTERNAL"
                 && owner.Status == "ACTIVE" && owner.DepartmentId == sectionId, ct))
             return false;
-        if (!await db.Departments.AnyAsync(section => section.Id == sectionId && section.Kind == "SECTION", ct))
+        if (!await db.Departments.AnyAsync(section => section.Id == sectionId && section.Kind == "SECTION"
+                && section.Status == "ACTIVE"
+                && (section.ParentId == null || db.Departments.Any(parent => parent.Id == section.ParentId
+                    && parent.Kind == "DEPARTMENT" && parent.Status == "ACTIVE"
+                    && (parent.ParentId == null || db.Departments.Any(root => root.Id == parent.ParentId
+                        && root.Kind == "DIVISION" && root.Status == "ACTIVE" && root.ParentId == null)))), ct))
+            return false;
+        if (!await (from userRole in db.UserRoles
+                    join role in db.Roles on userRole.RoleId equals role.Id
+                    join rolePermission in db.RolePermissions on role.Id equals rolePermission.RoleId
+                    join permission in db.Permissions on rolePermission.PermissionId equals permission.Id
+                    where userRole.UserId == ownerId && role.Status == "ACTIVE" && permission.Code == "project:list"
+                    select permission.Id).AnyAsync(ct))
             return false;
         if (!await db.ProjectDictionaries.AnyAsync(vendor => vendor.Id == vendorId
-                && vendor.Type == ProjectDictionaryTypes.RobotVendor, ct))
+                && vendor.Type == ProjectDictionaryTypes.RobotVendor && vendor.Status == "ACTIVE", ct))
             return false;
         if (!await db.ProjectDictionaries.AnyAsync(model => model.Id == modelId
-                && model.Type == ProjectDictionaryTypes.RobotModel && model.ParentId == vendorId, ct))
+                && model.Type == ProjectDictionaryTypes.RobotModel && model.ParentId == vendorId && model.Status == "ACTIVE", ct))
             return false;
         return await db.ProjectDictionaries.AnyAsync(priority => priority.Id == priorityId
-            && priority.Type == ProjectDictionaryTypes.Priority, ct);
+            && priority.Type == ProjectDictionaryTypes.Priority && priority.Status == "ACTIVE", ct);
     }
 
     private static async Task<ProjectRow> LoadProjectAsync(YfDbContext db, ulong projectId, CancellationToken ct)

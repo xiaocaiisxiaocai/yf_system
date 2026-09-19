@@ -140,6 +140,9 @@ public sealed class OemSettingsService(IDbContextFactory<YfDbContext> dbFactory,
             throw ApiException.BadRequest("参数不能重复");
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, PermissionFor(group), ct);
+        var currentSettings = await OemSettings.LoadAsync(uow.Db, ct);
+        foreach (var (definition, value) in normalized)
+            definition.EnsureUpdateAllowed(currentSettings.Raw(definition.Key), value);
         var changes = new List<AuditChange>();
         foreach (var (definition, value) in normalized)
         {
@@ -167,11 +170,17 @@ public sealed class OemSettingsService(IDbContextFactory<YfDbContext> dbFactory,
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         await OemAuthorizer.RequireInternalAsync(uow, actor, PermissionFor(group), ct);
         var settings = await OemSettings.LoadAsync(uow.Db, ct);
-        return OemSettingCatalog.All.Where(item => item.Group == group).Select(item => new
+        return OemSettingCatalog.All.Where(item => item.Group == group).Select(item =>
         {
-            item.Key, item.Label, kind = item.Kind.ToString().ToLowerInvariant(), value = settings.Raw(item.Key),
-            min = item.Kind == OemSettingKind.Integer ? item.Min : (long?)null,
-            max = item.Kind == OemSettingKind.Integer ? item.Max : (long?)null,
+            var value = settings.Raw(item.Key);
+            return new
+            {
+                item.Key, item.Label, kind = item.Kind.ToString().ToLowerInvariant(), value,
+                min = item.Kind == OemSettingKind.Integer ? item.Min : (long?)null,
+                max = item.Kind == OemSettingKind.Integer ? item.Max : (long?)null,
+                readOnly = item.IsReadOnly(value),
+                unsupportedReason = item.EffectiveUnsupportedReason(value),
+            };
         });
     }
 

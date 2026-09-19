@@ -70,8 +70,8 @@ async function choose(page, placeholder, optionName) {
   try {
     assert(f.users?.manager?.uiFirstChanged && f.users?.manager?.changedPassword,
       'run users before business-controls: project manager must have completed first password change');
-    assert(f.users?.a?.uiFirstChanged && f.users?.a?.token,
-      'run users before business-controls: supplier A needs a current token');
+    assert(f.users?.a?.uiFirstChanged && f.users?.a?.changedPassword,
+      'run users before business-controls: supplier A must have completed first password change');
     assert(f.suppliers?.a?.id, 'fixtures must contain supplier A');
 
     browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -81,6 +81,12 @@ async function choose(page, placeholder, optionName) {
     const admin = await login(page, 'admin', s.adminPassword);
     await page.waitForURL(s.base + '/');
     const adminToken = admin.accessToken;
+    const supplierContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const supplierPage = await supplierContext.newPage();
+    track(supplierPage, 'business-controls-supplier-a');
+    const supplier = await login(supplierPage, f.users.a.username, f.users.a.changedPassword);
+    await supplierPage.waitForURL(s.base + '/');
+    const supplierToken = supplier.accessToken;
     const marker = crypto.randomBytes(5).toString('hex');
     const prefix = '业务控件补验-' + marker;
     const tinyFile = Buffer.from('browser-dashboard-fixture|' + marker);
@@ -110,13 +116,13 @@ async function choose(page, placeholder, optionName) {
       await api(adminContext, 'PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' }, adminToken);
       await uploadBytes(adminContext, adminToken, project.id, prefix + '-' + index + '.zip', tinyFile);
       if (index === 0) {
-        await api(adminContext, 'POST', '/projects/' + project.id + '/messages', {
+        await api(supplierContext, 'POST', '/projects/' + project.id + '/messages', {
           content: messageText,
-        }, f.users.a.token);
+        }, supplierToken);
       }
-      const submitted = await (await api(adminContext, 'POST', '/projects/' + project.id + '/submit', {
+      const submitted = await (await api(supplierContext, 'POST', '/projects/' + project.id + '/submit', {
         confirmSide: 'COMPANY',
-      }, f.users.a.token)).json();
+      }, supplierToken)).json();
       assert(Number.isInteger(submitted.latestSubmissionId) && submitted.latestSubmissionId > 0);
       project.latestSubmissionId = submitted.latestSubmissionId;
       pendingProjects.push(project);
@@ -251,10 +257,13 @@ async function choose(page, placeholder, optionName) {
       try {
         await api(adminContext, 'POST', '/projects/' + flowProject.id + '/withdraw', {
           expectedSubmissionId: staleSubmissionId,
-        }, adminToken);
-        resubmitted = await (await api(adminContext, 'POST', '/projects/' + flowProject.id + '/submit', {
+        }, adminToken, 403);
+        await api(supplierContext, 'POST', '/projects/' + flowProject.id + '/withdraw', {
+          expectedSubmissionId: staleSubmissionId,
+        }, supplierToken);
+        resubmitted = await (await api(supplierContext, 'POST', '/projects/' + flowProject.id + '/submit', {
           confirmSide: 'COMPANY',
-        }, f.users.a.token)).json();
+        }, supplierToken)).json();
         assert(resubmitted.latestSubmissionId > staleSubmissionId);
         await page.getByRole('button', { name: '验收驳回', exact: true }).click();
         const dialog = page.getByRole('dialog');

@@ -22,6 +22,7 @@ const SysConfig = lazy(() => import('./pages/system/SysConfig'))
 const Dictionaries = lazy(() => import('./pages/system/Dictionaries'))
 // OEM business line: separate entries, layouts and (for vendors) a separate session.
 const OemInternalLayout = lazy(() => import('./oem/layouts/OemLayouts').then((m) => ({ default: m.OemInternalLayout })))
+const OemLanding = lazy(() => import('./oem/layouts/OemLayouts').then((m) => ({ default: m.OemLanding })))
 const PortalLayout = lazy(() => import('./oem/layouts/OemLayouts').then((m) => ({ default: m.PortalLayout })))
 const OemTransferList = lazy(() => import('./oem/pages/TransferListPage'))
 const OemTransferDetail = lazy(() => import('./oem/pages/TransferDetailPage'))
@@ -116,7 +117,7 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/change-password" element={<Authenticated><ChangePassword /></Authenticated>} />
         <Route path="/oem" element={<Guard><OemInternalLayout /></Guard>}>
-          <Route index element={<Navigate to="transfers" replace />} />
+          <Route index element={<OemLanding />} />
           <Route path="transfers" element={<OemTransferList />} />
           <Route path="transfers/:id" element={<OemTransferDetail />} />
           <Route path="approvals" element={<Guard permission="oem:flow_approve"><OemApprovals /></Guard>} />

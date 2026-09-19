@@ -177,6 +177,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const liveReceipts = useCollaboration((state) => state.receiptRevisions?.[pid] ?? 0)
   const reconnected = useCollaboration((state) => state.reconnectRevision ?? 0)
   const realtimeConnected = useCollaboration((state) => state.realtimeStatus === 'connected')
+  const projectSeq = useRef(0)
   const summarySeq = useRef(0)
   const historySeq = useRef(0)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -185,7 +186,6 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const [historyError, setHistoryError] = useState(false)
   const [historyReloadKey, setHistoryReloadKey] = useState(0)
   const [loadErrorFor, setLoadErrorFor] = useState<number | null>(null)
-  const loadingProjectId = useRef<number | null>(null)
   const [siblings, setSiblings] = useState<ProjectSummary[]>([])
   const currentGroupId = project?.id === pid ? project.projectGroupId : undefined
   const [searchParams, setSearchParams] = useSearchParams()
@@ -205,16 +205,17 @@ function ProjectDetailContent({ id }: { id?: string }) {
   }, [pid])
 
   const loadProject = useCallback(async () => {
-    if (loadingProjectId.current === pid) return
-    loadingProjectId.current = pid
+    const seq = ++projectSeq.current
     try {
-      setProject(await fetchProject())
+      const next = await fetchProject()
+      if (seq !== projectSeq.current) return
+      setProject(next)
       setLoadErrorFor(null)
-    } catch {
-      // 403/404/网络错误：拦截器已提示，这里只落错误态避免永久 Spin
+    } catch (error: unknown) {
+      if (seq !== projectSeq.current) return
+      // 权限丢失或资源不存在时清除旧内容；瞬时错误保留快照并提供重试。
       setLoadErrorFor(pid)
-    } finally {
-      if (loadingProjectId.current === pid) loadingProjectId.current = null
+      if (isAxiosError(error) && (error.response?.status === 403 || error.response?.status === 404)) setProject(null)
     }
   }, [fetchProject, pid])
 
@@ -261,24 +262,22 @@ function ProjectDetailContent({ id }: { id?: string }) {
     if (!validProjectId) return
     let active = true
     const controller = new AbortController()
-    loadingProjectId.current = pid
+    const seq = ++projectSeq.current
     fetchProject(controller.signal)
       .then((next) => {
-        if (!active) return
+        if (!active || seq !== projectSeq.current) return
         setProject(next)
         setLoadErrorFor(null)
       })
       .catch((error: unknown) => {
-        if (active) {
+        if (active && seq === projectSeq.current) {
           setLoadErrorFor(pid)
           if (isAxiosError(error) && (error.response?.status === 403 || error.response?.status === 404)) setProject(null)
         }
       })
-      .finally(() => {
-        if (active && loadingProjectId.current === pid) loadingProjectId.current = null
-      })
     return () => {
       active = false
+      if (projectSeq.current === seq) projectSeq.current += 1
       controller.abort()
     }
   }, [fetchProject, pid, validProjectId, revision, syncStatus])
