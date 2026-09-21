@@ -3739,6 +3739,62 @@ test('message receipt popover distinguishes failure, retries, and ignores an old
   await act(async () => pageRenderer.unmount())
 })
 
+test('project creation explains missing prerequisites and refreshes without discarding entered data', async () => {
+  for (const canManage of [true, false]) {
+    let ready = false
+    let posted = 0
+    let resets = 0
+    const form = { resetFields() { resets++ }, setFieldValue() {}, validate: async () => ({
+      name: '保留已填项目', supplierId: 8, workOrderNos: ['WO-1'], machineModel: 'M1', robotVendorId: 11,
+      robotModelId: 12, responsibleUserId: 13, priorityId: 14, expectedCompletionDate: '2026-09-30', subprojectNames: ['子项目-A'],
+    }) }
+    const testArco = new Proxy({
+      Form: Object.assign(component('Form'), { useForm: () => [form], Item: component('Form.Item') }),
+      Alert: (props) => React.createElement('Alert', props, props.content),
+      Typography: arco.Typography, Message: arco.Message,
+    }, { get: (obj, key) => obj[key] ?? component(key) })
+    const http = {
+      get: async (url, config) => {
+        if (url === '/project-groups') return { data: { list: [], total: 0, page: 1, pageSize: 10 } }
+        if (!ready) return { data: [] }
+        if (url === '/supplier-options') return { data: [{ id: 8, name: '已维护供应商' }] }
+        if (url === '/project-owner-options') return { data: [{ id: 13, realName: '负责人', sectionName: '研发课' }] }
+        return { data: config.params.type === 'ROBOT_MODEL' ? [] : [{ id: 11, name: '有效字典项', enabled: true }] }
+      },
+      post: async () => { posted++ },
+    }
+    const Page = loadTs('src/pages/project/ProjectList.tsx', {
+      '@arco-design/web-react': testArco, '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
+      'react-router-dom': { Link: component('Link'), useNavigate: () => () => {} },
+      '../../api/client': http,
+      '../../store/auth': authModule({ id: 1, userType: 'INTERNAL' }, ['project:create', ...(canManage ? ['supplier:manage', 'config:manage', 'user:manage'] : [])]),
+      '../../api/types': { PROJECT_STATUS: {} }, '../../components/ActionSlots': actionSlotsModule,
+    }).default
+    let renderer
+    await act(async () => { renderer = create(React.createElement(Page)) })
+    const button = (label) => renderer.root.findAllByType('Button').find((node) => node.props.children === label)
+    assert.equal(Boolean(button('新建主项目').props.disabled), false)
+    await act(async () => button('新建主项目').props.onClick())
+    assert.equal(renderer.root.findByType('Modal').props.visible, true)
+    assert.equal(renderer.root.findAllByType('li').length, 4, 'supplier, vendor, priority and section-qualified owner are explained')
+    const links = renderer.root.findAllByType('Link')
+    assert.equal(links.length, canManage ? 4 : 0, 'maintenance links require their own permissions')
+    if (canManage) for (const link of links) assert.equal(link.props.target, '_blank', 'maintenance must preserve the unfinished form')
+    assert.equal(renderer.root.findByType('Modal').props.okButtonProps.disabled, true)
+    await act(async () => renderer.root.findByType('Modal').props.onOk())
+    assert.equal(posted, 0, 'empty prerequisites must never submit')
+    ready = true
+    await act(async () => button('刷新基础数据').props.onClick())
+    assert.equal(resets, 1, 'refresh must preserve entered form values')
+    assert.equal(renderer.root.findAllByType('li').length, 0)
+    assert.equal(renderer.root.findByType('Modal').props.okButtonProps.disabled, false)
+    await act(async () => renderer.root.findByProps({ placeholder: '选择 Robot 厂商' }).props.onChange(11))
+    assert.equal(renderer.root.findByType('Modal').props.okButtonProps.disabled, true, 'a vendor without enabled models cannot submit')
+    assert.match(renderer.root.findByType('li').props.children[0], /暂无启用的型号/)
+    await act(async () => renderer.unmount())
+  }
+})
+
 test('required option sources expose loading and retry states and block submits until ready', async () => {
   const iconMock = new Proxy({}, { get: (_, name) => component(name) })
 
@@ -3774,13 +3830,17 @@ test('required option sources expose loading and retry states and block submits 
     let renderer
     await act(async () => { renderer = create(React.createElement(Page)) })
     const createButton = renderer.root.findAllByType('Button').find((node) => node.props.children === '新建主项目')
-    assert.equal(createButton.props.disabled, true, 'project creation must wait for supplier options')
+    assert.equal(Boolean(createButton.props.disabled), false, 'opening the form must not be blocked by supplier loading')
+    await act(async () => createButton.props.onClick())
+    assert.equal(renderer.root.findByType('Modal').props.okButtonProps.disabled, true)
+    await act(async () => renderer.root.findByType('Modal').props.onOk())
+    assert.equal(posted, 0, 'submission must still wait for supplier options')
     await act(async () => { rejectFirst(new Error('supplier options unavailable')); await Promise.resolve() })
     assert.ok(renderer.root.findAllByType('Button').some((node) => String(node.props.children).includes('重试')))
     const retry = renderer.root.findAllByType('Button').find((node) => String(node.props.children).includes('重试'))
     await act(async () => retry.props.onClick())
     assert.equal(optionAttempt, 2)
-    assert.equal(renderer.root.findAllByType('Button').find((node) => node.props.children === '新建主项目').props.disabled, false)
+    assert.equal(Boolean(renderer.root.findAllByType('Button').find((node) => node.props.children === '新建主项目').props.disabled), false)
     await act(async () => renderer.root.findAllByType('Button').find((node) => node.props.children === '新建主项目').props.onClick())
     await act(async () => { await Promise.resolve() })
     await act(async () => renderer.root.findByProps({ placeholder: '选择负责人' }).props.onChange(13))

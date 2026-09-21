@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Badge, Button, Card, DatePicker, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
+  Alert, Badge, Button, Card, DatePicker, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
@@ -171,7 +171,6 @@ export default function ProjectList() {
   }
 
   const openCreate = () => {
-    if (supplierOptionsLoading || supplierOptionsError || suppliers.length === 0) return
     setEditing(null); form.resetFields(); form.setFieldValue('subprojectNames', [])
     setSectionName(null); setSelectedRobotVendorId(null); setSelectedResponsibleUserId(null); setRobotModels([])
     loadMetadataOptions(); setModalOpen(true)
@@ -219,8 +218,28 @@ export default function ProjectList() {
   if (editing?.priorityId && !priorityOptions.some((item) => item.id === editing.priorityId))
     priorityOptions.push({ id: editing.priorityId, type: 'PRIORITY', name: editing.priorityName || '历史优先级', sortNo: 0, enabled: false })
 
+  const missingCreateOptions: { message: string; path: string; permission: string; action: string }[] = []
+  if (!supplierOptionsLoading && !supplierOptionsError && suppliers.length === 0)
+    missingCreateOptions.push({ message: '暂无启用的供应商，请先新增或启用供应商。', path: '/suppliers', permission: 'supplier:manage', action: '维护供应商' })
+  if (!metadataOptionsLoading && !metadataOptionsError) {
+    if (!robotVendors.length)
+      missingCreateOptions.push({ message: '暂无启用的 Robot 厂商，请在数据字典中维护厂商及其型号。', path: '/system/dictionaries', permission: 'config:manage', action: '维护数据字典' })
+    if (!priorities.length)
+      missingCreateOptions.push({ message: '暂无启用的优先级，请在数据字典中维护。', path: '/system/dictionaries', permission: 'config:manage', action: '维护优先级' })
+    if (!owners.some((owner) => owner.sectionName))
+      missingCreateOptions.push({ message: '暂无已关联有效课别的负责人，请在用户管理中设置内部用户的所属课别。', path: '/org/users', permission: 'user:manage', action: '维护负责人' })
+  }
+  if (selectedRobotVendorId && !robotModelsLoading && !robotModelsError && robotModels.length === 0)
+    missingCreateOptions.push({ message: '所选 Robot 厂商暂无启用的型号，请补充型号或选择其他厂商。', path: '/system/dictionaries', permission: 'config:manage', action: '维护 Robot 型号' })
+  const submitOptionsBlocked = metadataOptionsLoading || metadataOptionsError || robotModelsLoading || robotModelsError
+    || (!editing && (supplierOptionsLoading || supplierOptionsError || missingCreateOptions.length > 0))
+  const refreshCreateOptions = () => {
+    loadSupplierOptions(); loadMetadataOptions()
+    if (selectedRobotVendorId) loadRobotModels(selectedRobotVendorId)
+  }
+
   const submit = async () => {
-    if (saveInFlight.current) return
+    if (saveInFlight.current || submitOptionsBlocked) return
     saveInFlight.current = true; setSaving(true)
     try {
       const values = await form.validate().catch(() => null) as ProjectGroupFormValues | null
@@ -288,14 +307,25 @@ export default function ProjectList() {
         </Space>
         <Space>
           {supplierOptionsError && <Button size="small" onClick={loadSupplierOptions}>重试加载供应商</Button>}
-          {isInternal && hasPerm('project:create') && <Button type="primary" icon={<IconPlus />} onClick={openCreate} disabled={supplierOptionsLoading || supplierOptionsError || suppliers.length === 0}>新建主项目</Button>}
+          {isInternal && hasPerm('project:create') && <Button type="primary" icon={<IconPlus />} onClick={openCreate}>新建主项目</Button>}
         </Space>
       </div>
       {loadError ? <div className="page-load-error"><Typography.Text type="error">加载失败</Typography.Text><Button size="small" onClick={load}>重试</Button></div> :
         <Table className="page-table" rowKey="id" loading={loading} columns={columns} data={data.list} scroll={{ x: columns.reduce((sum, column) => sum + column.width, 0), y: 'var(--page-table-scroll-y)' }} pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); load() } }} />}
 
-      <Modal className="form-dialog" style={{ width: 760 }} title={editing ? '编辑主项目' : '新建主项目'} visible={modalOpen} onOk={submit} onCancel={closeModal} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okText={editing ? '保存并同步' : '创建主项目'} unmountOnExit>
+      <Modal className="form-dialog" style={{ width: 760 }} title={editing ? '编辑主项目' : '新建主项目'} visible={modalOpen} onOk={submit} onCancel={closeModal} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okButtonProps={{ disabled: submitOptionsBlocked }} okText={editing ? '保存并同步' : '创建主项目'} unmountOnExit>
         <Form className="form-grid" form={form} layout="vertical">
+          {!editing && <div className="form-grid-full" style={{ display: 'grid', gap: 8 }}>
+            {(supplierOptionsLoading || metadataOptionsLoading) && <Typography.Text type="secondary">正在加载创建所需的基础数据…</Typography.Text>}
+            {supplierOptionsError && <Alert type="error" content="供应商选项加载失败，请刷新基础数据后重试。" />}
+            {missingCreateOptions.length > 0 && <Alert type="warning" title="创建前请补齐基础数据" content={<>
+              <ul>{missingCreateOptions.map((item) => <li key={item.message}>{item.message}{hasPerm(item.permission)
+                ? <> <Link to={item.path} target="_blank" rel="noopener noreferrer" style={{ whiteSpace: 'nowrap' }}>{item.action}（新窗口）</Link></>
+                : ' 请联系具有维护权限的管理员。'}</li>)}</ul>
+              <span>可先填写项目资料，补齐后点击“刷新基础数据”继续。</span>
+            </>} />}
+            <div><Button size="small" onClick={refreshCreateOptions} disabled={saving || supplierOptionsLoading || metadataOptionsLoading || robotModelsLoading}>刷新基础数据</Button></div>
+          </div>}
           <Form.Item className="form-grid-full" label="主项目名称" field="name" rules={[{ required: true, message: '请输入主项目名称' }, textLengthRule('主项目名称', 128)]}><Input placeholder="主项目名称" /></Form.Item>
           {!editing && <Form.Item className="form-grid-full" label="子项目" field="subprojectNames" rules={[{ required: true, message: '请至少创建一个子项目' }, { validator: (value, callback) => listRule('子项目', SUBPROJECT_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入子项目名称后按回车，可一次创建多个" /></Form.Item>}
           <Form.Item className="form-grid-full" label="工令号" field="workOrderNos" rules={[{ required: true, message: '请至少填写一个工令号' }, { validator: (value, callback) => listRule('工令号', WORK_ORDER_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入工令号后按回车，可填写多个" /></Form.Item>
