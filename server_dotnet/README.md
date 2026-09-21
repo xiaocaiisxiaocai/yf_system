@@ -28,9 +28,10 @@ OEM 文件传递是与供应商协作平级、互不可见的第二条业务线�
 
 - **隔离**：接口统一在 `/api/v1/oem/*`。OEM 厂商账号使用独立的 `oem_accounts`、刷新会话表、Cookie 和 `realm=oem` 令牌，令牌只能访问 `/api/v1/oem/*`；供应商账号访问 OEM 接口一律 403。协作平台的审计日志、系统参数和邮件状态页不显示 OEM 记录（审计 `OEM_*` 动作、`oem.*` 参数、`OEM_*` 邮件）。前端内部员工从页头“OEM 文件传递”进入独立布局，厂商使用独立门户 `/oem-portal`。
 - **模块结构**（`Modules/Oem`）：`Identity`（厂商登录）、`Admin`（厂商与账号）、`Policies`（删除策略、`oem.*` 参数目录）、`Approval`（纯函数审批规划器、模板管理、审批引擎）、`Transfers`（传递单、访问策略、流程推进）、`Uploads`、`Scanning`（签名/压缩包检查 + 可替换扫描引擎、隔离区到正式区移动）、`Delivery`（预览、下载凭证、Range 回执）、`Maintenance`（物理删除、草稿过期、恢复核对、OEM 审计）、`Notifications`（邮件）。领域事件在同一事务内派发；后台任务由一个组合式 hosted worker 驱动，全部依赖数据库租约。
-- **配置**：外部 JSON 中 `App:OemStorageRoot` 指定 OEM 文件根目录（本机绝对路径，不得与程序、配置和 `StorageRoot` 互相包含；为空时 OEM 文件功能返回 503）。`App:OemScanner:Engine`：`OnAccess`（生产，使用服务器上的 OfficeScan 实时扫描，见下方“扫描”）、`None`（不放行任何文件）或仅限开发测试的 `Fake`（必须同时设置 `AcknowledgeInsecureFake=true`，安装脚本拒绝在生产使用）。其余参数（格式白名单、大小与配额、压缩包限制、下载与清理期限、邮件开关）在 OEM 管理页维护。
+- **配置**：外部 JSON 中 `App:OemStorageRoot` 指定 OEM 文件根目录（本机绝对路径，不得与程序、配置和 `StorageRoot` 互相包含；为空时 OEM 文件功能返回 503）。新部署推荐 `App:OemScanner:Engine=ClamAV`，通过本机独立扫描进程返回明确结果；`OnAccess` 保留兼容现有 OfficeScan 实时扫描配置，`None` 不放行，`Fake` 仅供显式确认的开发测试。安装脚本拒绝在生产使用 Fake。格式、配额、压缩包、下载与清理期限、邮件参数在 OEM 管理页维护。
 - **权限**：迁移 `AddOemPlatform` 新增 `oem`（菜单）与 `oem:*`、`dept:leader_manage` 权限点，仅授予系统管理员角色，其余角色按职责分配。组织主管通过 `PUT /api/v1/admin/departments/{id}/leader` 维护。
-- **扫描**：企业使用趋势科技 OfficeScan（Apex One），它没有供应用调用的扫描接口，因此 `OnAccess` 引擎借助其实时扫描：隔离文件写入后等待 `SettleSeconds`，再读取并核对上传时记录的 SHA-256，文件被删除、拒绝访问或内容被修改即判定“发现威胁”；上传分片被拦截时接口返回“可能已被服务器杀毒软件拦截”。放行任何文件前，系统先在 `OemStorageRoot\scan-probe` 写入 EICAR 测试文件，必须在 `CanaryTimeoutSeconds` 内被拦截，成功结果信任 `CanaryIntervalMinutes`；未被拦截说明实时扫描未生效，引擎视为不可用，文件继续隔离、不消耗重试次数。OfficeScan 不向应用提供引擎和病毒码版本，扫描记录中这两项为空，病毒码更新由 OfficeScan 服务器负责。IT 需配合（OfficeScan 控制台）：OEM 服务器的实时扫描保持开启，扫描“所有文件”并同时扫描创建/修改和读取；`OemStorageRoot` 不得加入扫描例外；单文件扫描大小上限不得低于 OEM 单文件上限（否则超限文件会被当作未检出）；压缩包扫描层数不低于 OEM 压缩包层数限制；发现威胁时的处理可为清除、删除、隔离或拒绝访问中任一种。系统每小时（有文件待扫描时）写入一次 EICAR 测试文件自检，OfficeScan 控制台会看到对应的“Eicar_test_file”检出记录，属于正常现象，不要为其添加例外。
+- **扫描**：ClamAV 1.4.6 Windows x64 便携组件随发布包分发（完整上游许可证与对应源码归档同时包含），无需给员工或供应商安装软件。服务器独立运行 `clamd`，后端仅向数字回环地址发送 INSTREAM；每次核对实际流的大小和 SHA-256，明确返回 OK 且前后引擎/病毒库版本一致才可放行。服务不可用、超时、超限、加密、未知响应均不放行。默认单文件最多 1 GiB，上传入口会同时检查业务上限和引擎上限；压缩包展开超过引擎限制也会阻断，不能仅提高上传上限。发布包内置三份经过官方数字签名验证的 CVD 病毒库，首次安装直接校验并复制，无需联网下载；`freshclam` 负责后续更新病毒库；在管理页启用“病毒库过期时暂停放行”后，按实际加载的病毒库构建时间检查（默认 48 小时），并记录版本、时间和文件摘要。后台进程与 .NET 使用同一 Windows 本地时区，不单独设置 TZ。具体便携部署、持久目录和更新命令见 [部署说明](deploy/README.md)。
+- **OfficeScan 兼容边界**：`OnAccess` 仍通过本机实时扫描探针和隔离文件读写观察判断拦截，无法取得每个文件的厂商扫描结果或病毒库时间；不应把“经过公司网络”当成扫描通过证据。使用 ClamAV 时不再依赖 OfficeScan 探针，公司终端防护仍由 IT 管理。
 
 ## 删除操作
 
@@ -249,3 +250,17 @@ Restore 的新数据库名必须不同于当前数据库，执行前由 DBA 确�
 测试项目仍保留 Dapper 2.1.79 仅用于少量独立测试夹具和数据库断言，生产 `Yf.Api` 不引用 Dapper。
 
 准确传递依赖版本见各项目 `packages.lock.json`。前端依赖与许可沿用 `web/package-lock.json` 及发布的第三方许可文件。新功能、安全修复、契约与数据库版本以本目录的 .NET 后端为维护入口，不要求同步 Rust。
+
+### ClamAV 真实集成验证
+
+协议测试通过本地 TCP 夹具覆盖错误、断连、超限、内容变化及病毒库时间；它们不能代替真实引擎验证。先在隔离目录使用包内已验签的官方 CVD 快照启动 ClamAV（也可由 FreshClam 更新官方病毒库），再显式指定其回环端口：
+
+```powershell
+$env:YF_TEST_DATABASE_URL = 'mysql://本地测试管理员@127.0.0.1:测试端口/ignored'
+$env:YF_TEST_CLAMAV_PORT = '23310'
+dotnet run --project .\tests\Yf.Api.Tests.csproj -- -class '*OemClamAv*' -class '*OemScannerPolicyTests'
+```
+
+未设置 `YF_TEST_CLAMAV_PORT` 时两项真实引擎测试明确标记为跳过；完整验收必须设置该端口，并检查没有跳过。真实用例只生成无害 EICAR 样本，验证干净 PDF、压缩包内 EICAR，以及上传后扫描、发布和阻断的真实数据库状态。
+
+浏览器也可通过 `python scripts/test-browser.py --steps auth fixtures oem --clamav-port 23310 --output <新的证据目录>` 使用同一受控本地引擎，验证病毒库门禁页面保存、实际扫描后审批及下载回执。该模式会在结果中记录 `oemScanner=ClamAV`；省略参数仍使用测试 Fake 引擎。运行前构建前端和 TestHost，并按上面的浏览器准备要求设置 `YF_PLAYWRIGHT_RUNNER`。测试不安装 Windows 服务、不触碰业务数据库、不发送真实邮件。

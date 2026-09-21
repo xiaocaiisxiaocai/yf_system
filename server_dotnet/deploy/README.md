@@ -22,6 +22,74 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
 
 初始化只允许空库，通过 EF Core `InitialCreate` 建表，创建 `admin`、系统管理员权限、默认优先级和系统参数，并强制首次改密。不会自动创建或删除数据库，也不会打印密码。启动只读核对 EF 迁移历史，不自动执行 DDL。后续 EF 模型升级需停写和备份，再运行 `dotnet .\Yf.Api.dll --migrate-database`；该命令只接受已有且非空的 EF 历史，支持重复执行，并由数据库锁防止同时迁移。
 
+## ClamAV 扫描服务
+
+发布包自带官方 ClamAV 1.4.6 LTS Windows x64 便携 ZIP，不需要安装 GUI
+杀毒软件。`install-iis.ps1` 在生产配置选择 `App:OemScanner:Engine=ClamAV`
+时，先调用 `install-clamav.ps1`，将程序安装到独立程序目录，将病毒库、
+日志和临时文件放入独立持久目录。默认路径分别为
+`C:\Program Files\YfSystem\ClamAV` 和
+`C:\ProgramData\YfSystem\ClamAV`，均不在 IIS 网站或 `wwwroot` 内。
+
+ClamD 只监听 `127.0.0.1:3310`，应用配置必须使用：
+
+```json
+{
+  "App": {
+    "OemScanner": {
+      "Engine": "ClamAV",
+      "ClamAv": {
+        "Host": "127.0.0.1",
+        "Port": 3310,
+        "ConnectTimeoutSeconds": 5,
+        "MaxStreamBytes": 1073741824
+      }
+    }
+  }
+}
+```
+
+发布包内置 `main.cvd`、`daily.cvd` 和 `bytecode.cvd` 官方签名库快照，
+首次安装无需联网下载。`clamav-database.ps1` 使用包内官方 `sigtool` 验签，
+核对 `clamav/database-manifest.json` 中的哈希、大小、版本和 UTC 构建时间，
+复制到独立数据目录后再次校验；缺失、损坏或额外签名文件均不能初始化。
+安装随后创建自动启动的独立 `clamd` 和 `freshclam` Windows 服务。
+FreshClam 配置为每天检查 12 次并在更新后通知 ClamD 重载。需要立即更新时，以管理员身份在发布包
+根运行：
+
+```powershell
+.\update-clamav.ps1 -InstallRoot 'C:\Program Files\YfSystem\ClamAV'
+```
+
+安装脚本拒绝既有 `clamd`/`freshclam` 服务、已占用的 3310 端口、既有程序
+或数据目录；不会覆盖服务或目录，也不会结束未知进程。服务没有可见桌面
+窗口。ClamD 的 `INSTREAM`、单文件上限均为 1 GiB，扫描展开总量上限为
+1536 MiB、递归深度 16；超过限制和加密归档/文档都按告警处理，不能解释为
+扫描正常。Windows 版 ClamAV 的单文件能力约 2 GiB，本系统明确将业务流上限
+固定为 1 GiB；20 GiB 文件必须在进入扫描前拒绝，不能静默跳过后返回 clean。
+
+离线首次安装直接使用包内已验签快照，不调用 FreshClam 下载；后续更新服务
+暂时离线或启动失败不会回滚已加载快照的 ClamD。恢复联网后执行上述更新命令，
+成功更新会启动此前停止的 FreshClam 服务，继续自动更新。
+内置库是打包时的快照，不会因安装或复制而变“新”；若启用“病毒库过期时暂停
+放行”，超过管理员设置的年龄仍会暂停放行，不能用内置库绕过该门禁。
+不要把业务上传文件、配置密钥或客户数据放入 ClamAV 程序/病毒库目录。
+
+构建机默认通过 FreshClam 更新缓存中的完整 CVD 后打包。需要从已有已验证库
+制作离线包时，在 `publish-iis.ps1` 增加 `-ClamAvDatabaseSnapshotDirectory <目录>`；
+该目录需含三份完整 `.cvd`，不能用增量 `.cld` 或自定义签名替代。
+`-UseExistingClamAvCacheOnly` 会禁止下载，使用缓存里的完整 CVD 或显式指定的快照。
+构建和安装均重新执行官方数字签名校验，不仅依赖本地生成的清单。
+
+`clamav/PROVENANCE.json` 记录 GitHub Releases API 发布的固定 SHA-256。
+发布包还保留官方 detached signature、Talos 公钥、上游许可证/依赖说明和匹配
+的完整源代码归档 `clamav-1.4.6.tar.gz`。本机存在 GnuPG 时准备脚本会额外验签；
+没有 GnuPG 时仍强制核对固定上游 SHA-256，并在来源清单中明确记录未执行 GPG。
+
+ClamAV 程序和持久数据目录关闭 ACL 继承，仅允许 `SYSTEM` 与本机
+`Administrators` 完全控制，避免宽松父目录中的普通用户替换服务程序、配置或
+病毒库。`-UseExistingClamAv` 也会只读复核这些 ACL；不符合时拒绝复用。
+
 ## 安装新站点
 
 在目标服务器管理员 PowerShell 中，从发布包根执行：
@@ -35,6 +103,24 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
 ```
 
 脚本核对包文件 SHA-256、程序包/站点/配置/存储独立路径、证书、Hosting Bundle 和运行时，然后创建新应用池、新 HTTPS 站点。它关闭配置文件 ACL 继承，只保留当前管理员、SYSTEM、Administrators 完全控制和应用池身份只读；业务存储只给应用池修改，程序目录只读。前后端同站点、同来源，不需要 ARR、URL Rewrite 或 Rust Windows 服务。
+
+如果 ClamAV 已由本包成功安装，但随后 IIS 站点创建失败，修正 IIS 前置条件后
+按原命令重跑并显式增加 `-UseExistingClamAv`：
+
+```powershell
+.\install-iis.ps1 `
+  -HostName 'yf.example.com' `
+  -CertificateThumbprint '替换为LocalMachine-My证书指纹' `
+  -ConfigPath 'D:\YfConfig\appsettings.Production.json' `
+  -SiteRoot 'C:\inetpub\yf_system_dotnet' `
+  -UseExistingClamAv
+```
+
+该开关只复用已经运行的服务，不安装、重配、启停或覆盖它们。脚本会重新核对
+ClamAV 1.4.6 官方程序哈希、程序和配置路径、回环地址/端口/扫描限制、三个可信
+病毒库、两个服务状态、ClamD 服务 PID 对 3310 监听的归属，以及 PING/VERSION。
+ClamD 必须运行；离线时允许已验证的 FreshClam 服务暂时停止，并提示恢复联网后更新。
+任一项不一致即失败。首次部署或尚未成功安装 ClamAV 时不要使用此开关。
 
 脚本拒绝已存在站点/应用池和非空目标目录，不覆盖其他部署。它不自动开放防火墙、不修改 DNS，也不停止现有后端服务。请按实际网络环境配置 DNS、443/TCP 与 HTTPS 证书，并在停写窗口切换入口。
 

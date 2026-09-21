@@ -192,7 +192,10 @@ public sealed class OemOnAccessScannerTests
     public void OnAccessOptionsAreValidated()
     {
         new OemScannerOptions { Engine = "OnAccess" }.Validate();
-        Assert.Throws<InvalidOperationException>(() => new OemScannerOptions { Engine = "ClamAV" }.Validate());
+        new OemScannerOptions { Engine = "ClamAV" }.Validate();
+        Assert.Throws<InvalidOperationException>(() => new OemScannerOptions { Engine = "ClamAV", ClamAv = { Host = "clamd.example.com" } }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new OemScannerOptions { Engine = "ClamAV", ClamAv = { Host = "192.0.2.10" } }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new OemScannerOptions { Engine = "ClamAV", ClamAv = { MaxStreamBytes = 2_147_483_648 } }.Validate());
         Assert.Throws<InvalidOperationException>(() => new OemScannerOptions { Engine = "OnAccess", OnAccess = { CanaryTimeoutSeconds = 1 } }.Validate());
         Assert.Throws<InvalidOperationException>(() => new OemScannerOptions { Engine = "OnAccess", OnAccess = { ProductName = " " } }.Validate());
         Assert.Throws<InvalidOperationException>(() => new OemScannerOptions { Engine = "OnAccess", OnAccess = { SettleSeconds = 500 } }.Validate());

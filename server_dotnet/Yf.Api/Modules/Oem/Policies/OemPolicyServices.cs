@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Data;
+using Yf.Api.Modules.Oem.Scanning;
 
 namespace Yf.Api.Modules.Oem.Policies;
 
@@ -122,7 +123,7 @@ public sealed class OemRetentionTemplateService(IDbContextFactory<YfDbContext> d
 /// Admin pages for the `oem.*` parameters. The same service serves the file policy
 /// page and the notification page; each page only reads and writes its own group.
 /// </summary>
-public sealed class OemSettingsService(IDbContextFactory<YfDbContext> dbFactory, OemAuditWriter audit)
+public sealed class OemSettingsService(IDbContextFactory<YfDbContext> dbFactory, OemAuditWriter audit, IFileScanner scanner, AppOptions options)
 {
     public Task<object> GetAsync(OemActor actor, OemSettingGroup group, CancellationToken ct) => ReadAsync(actor, group, ct);
 
@@ -142,7 +143,7 @@ public sealed class OemSettingsService(IDbContextFactory<YfDbContext> dbFactory,
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, PermissionFor(group), ct);
         var currentSettings = await OemSettings.LoadAsync(uow.Db, ct);
         foreach (var (definition, value) in normalized)
-            definition.EnsureUpdateAllowed(currentSettings.Raw(definition.Key), value);
+            definition.EnsureUpdateAllowed(currentSettings.Raw(definition.Key), value, scanner.SupportsSignatureFreshness);
         var changes = new List<AuditChange>();
         foreach (var (definition, value) in normalized)
         {
@@ -178,8 +179,12 @@ public sealed class OemSettingsService(IDbContextFactory<YfDbContext> dbFactory,
                 item.Key, item.Label, kind = item.Kind.ToString().ToLowerInvariant(), value,
                 min = item.Kind == OemSettingKind.Integer ? item.Min : (long?)null,
                 max = item.Kind == OemSettingKind.Integer ? item.Max : (long?)null,
-                readOnly = item.IsReadOnly(value),
-                unsupportedReason = item.EffectiveUnsupportedReason(value),
+                readOnly = item.IsReadOnly(value, scanner.SupportsSignatureFreshness),
+                unsupportedReason = item.EffectiveUnsupportedReason(value, scanner.SupportsSignatureFreshness),
+                hint = item.Key == OemSettingCatalog.MaxFileSize && options.OemScanner.Engine == "ClamAV"
+                    ? $"ClamAV 单文件扫描上限为 {options.OemScanner.ClamAv.MaxStreamBytes / 1024 / 1024} MiB；实际上传上限取两者较小值。"
+                    : item.Key == OemSettingCatalog.BlockOnStaleSignatures && scanner.SupportsSignatureFreshness
+                        ? "启用后按 ClamAV 实际加载的病毒库构建时间检查；过期或无法确认时文件保持隔离。" : null,
             };
         });
     }

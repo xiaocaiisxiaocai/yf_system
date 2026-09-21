@@ -98,20 +98,20 @@ public sealed class OemScanService(
                     ?? new ScanResult(ScanVerdict.Error, pipeline.EngineName, null, null, null, "隔离文件大小与记录不符");
             workDirectory = storage.SessionDirectory(Guid.NewGuid().ToString("D"), create: true, ct);
             ArchiveLimits limits;
+            ScanFreshnessPolicy? freshness = null;
             await using (var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct))
             {
                 var settings = await OemSettings.LoadAsync(uow.Db, ct);
-                // The current engines expose no verifiable signature update timestamp.
-                // Do not silently ignore a previously enabled freshness gate.
-                if (settings.BlockOnStaleSignatures)
+                if (settings.BlockOnStaleSignatures && !pipeline.SupportsSignatureFreshness)
                     return ScanResult.Unavailable(pipeline.EngineName, "已启用病毒库新鲜度校验，但当前扫描引擎无法提供可验证的更新时间，文件保持隔离");
+                if (settings.BlockOnStaleSignatures) freshness = new ScanFreshnessPolicy(settings.MaxSignatureAge);
                 limits = settings.ArchiveLimits;
             }
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(Timeout(claim.Size));
             try
             {
-                return await pipeline.RunAsync(new ScanTarget(path, claim.Sha256, claim.Size), claim.Extension, limits, workDirectory, timeout.Token);
+                return await pipeline.RunAsync(new ScanTarget(path, claim.Sha256, claim.Size, freshness), claim.Extension, limits, workDirectory, timeout.Token);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
@@ -235,7 +235,7 @@ public sealed class OemScanService(
                 await audit.WriteAsync(uow, null, "OEM_SCAN_RESULT", "oem_file", file.Id, new
                 {
                     targetName = file.OriginalName, transferId, verdict = file.ScanStatus, job.EngineName, job.EngineVersion,
-                    job.SignatureVersion, job.ThreatName, reason = job.LastError, attempts = job.AttemptCount,
+                    job.SignatureVersion, result.SignatureUpdatedAt, file.Sha256, job.ThreatName, reason = job.LastError, attempts = job.AttemptCount,
                 }, ct);
             if (finalFailure && transfer.LifecycleStatus == TransferLifecycle.Draft && file.PurgeReason != PurgeReasons.FileRemoved)
                 uow.Raise(new DraftFileScanFailedEvent(transferId, file.Id, file.ScanStatus));

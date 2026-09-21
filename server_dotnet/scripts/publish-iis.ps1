@@ -10,7 +10,10 @@ absent or empty. The ZIP and its verification sidecars are written beside it.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$FreshOutputDirectory
+    [string]$FreshOutputDirectory,
+    [string]$ClamAvCacheDirectory,
+    [string]$ClamAvDatabaseSnapshotDirectory,
+    [switch]$UseExistingClamAvCacheOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,6 +105,7 @@ $webLock = Join-Path $webRoot 'package-lock.json'
 $webModules = Join-Path $webRoot 'node_modules'
 $webDist = Join-Path $webRoot 'dist'
 $deployRoot = Join-Path $repoRoot 'server_dotnet\deploy'
+$prepareClamAv = Join-Path $repoRoot 'server_dotnet\scripts\prepare-clamav.ps1'
 $noticesSource = Join-Path $repoRoot 'server_dotnet\THIRD-PARTY-NOTICES.md'
 $licensesSource = Join-Path $repoRoot 'server_dotnet\licenses'
 $runlogsRoot = Join-Path $repoRoot '.runlogs'
@@ -134,11 +138,15 @@ foreach ($required in @(
     $apiProject,
     $webLock,
     (Join-Path $deployRoot 'install-iis.ps1'),
+    (Join-Path $deployRoot 'install-clamav.ps1'),
+    (Join-Path $deployRoot 'update-clamav.ps1'),
+    (Join-Path $deployRoot 'clamav-database.ps1'),
     (Join-Path $deployRoot 'maintain-iis.ps1'),
     (Join-Path $deployRoot 'maintenance-common.ps1'),
     (Join-Path $deployRoot 'README.md'),
     (Join-Path $deployRoot 'appsettings.example.json'),
-    $noticesSource
+    $noticesSource,
+    $prepareClamAv
 )) {
     if (!(Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Required release input is missing: $required"
@@ -204,11 +212,18 @@ foreach ($item in Get-ChildItem -LiteralPath $webDist -Force) {
     Copy-Item -LiteralPath $item.FullName -Destination $wwwRoot -Recurse
 }
 
-foreach ($name in @('install-iis.ps1', 'maintain-iis.ps1', 'maintenance-common.ps1', 'README.md', 'appsettings.example.json')) {
+foreach ($name in @('install-iis.ps1', 'install-clamav.ps1', 'update-clamav.ps1', 'clamav-database.ps1', 'maintain-iis.ps1', 'maintenance-common.ps1', 'README.md', 'appsettings.example.json')) {
     Copy-Item -LiteralPath (Join-Path $deployRoot $name) -Destination (Join-Path $outputRoot $name)
 }
 Copy-Item -LiteralPath $noticesSource -Destination (Join-Path $outputRoot 'THIRD-PARTY-NOTICES.md')
 Copy-Item -LiteralPath $licensesSource -Destination (Join-Path $outputRoot 'licenses') -Recurse
+
+$clamAvArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $prepareClamAv, '-OutputDirectory', (Join-Path $outputRoot 'clamav'))
+if (![string]::IsNullOrWhiteSpace($ClamAvCacheDirectory)) { $clamAvArguments += @('-CacheDirectory', $ClamAvCacheDirectory) }
+if (![string]::IsNullOrWhiteSpace($ClamAvDatabaseSnapshotDirectory)) { $clamAvArguments += @('-DatabaseSnapshotDirectory', $ClamAvDatabaseSnapshotDirectory) }
+if ($UseExistingClamAvCacheOnly) { $clamAvArguments += '-UseExistingCacheOnly' }
+$buildCommands += [ordered]@{ workingDirectory = 'server_dotnet'; executable = 'powershell.exe'; arguments = $clamAvArguments }
+Invoke-Native 'powershell.exe' $clamAvArguments
 
 # Capture license texts for every locally installed package represented in the
 # npm lock. Platform-specific optional packages that npm did not install remain
@@ -350,6 +365,16 @@ $safeSettings = [ordered]@{
         UploadMaxFileSize = 21474836480
         UploadChunkSize = 10485760
         Smtp = [ordered]@{ Host = ''; Port = 465; Username = ''; Password = ''; From = '' }
+        OemStorageRoot = ''
+        OemScanner = [ordered]@{
+            Engine = 'ClamAV'
+            ClamAv = [ordered]@{
+                Host = '127.0.0.1'
+                Port = 3310
+                ConnectTimeoutSeconds = 5
+                MaxStreamBytes = 1073741824
+            }
+        }
     }
     Logging = [ordered]@{ LogLevel = [ordered]@{ Default = 'Information'; 'Microsoft.AspNetCore' = 'Warning' } }
     AllowedHosts = '*'
@@ -375,7 +400,15 @@ if ($packagedSettings.App.ConnectionString -ne '' -or $packagedSettings.App.JwtS
     $packagedSettings.App.StorageRoot -ne '' -or $packagedSettings.App.Smtp.Password -ne '') {
     throw 'Packaged appsettings.json must not contain usable configuration or secrets.'
 }
-foreach ($requiredPayload in @('Yf.Api.dll', 'Yf.Api.runtimeconfig.json', 'web.config', 'wwwroot\index.html', 'install-iis.ps1', 'maintain-iis.ps1', 'maintenance-common.ps1')) {
+foreach ($requiredPayload in @(
+    'Yf.Api.dll', 'Yf.Api.runtimeconfig.json', 'web.config', 'wwwroot\index.html',
+    'install-iis.ps1', 'install-clamav.ps1', 'update-clamav.ps1', 'clamav-database.ps1',
+    'maintain-iis.ps1', 'maintenance-common.ps1',
+    'clamav\PROVENANCE.json', 'clamav\clamd.conf.template', 'clamav\freshclam.conf.template',
+    'clamav\distribution\clamav-1.4.6.win.x64.zip',
+    'clamav\distribution\clamav-1.4.6.tar.gz',
+    'clamav\database-manifest.json', 'clamav\database\main.cvd', 'clamav\database\daily.cvd', 'clamav\database\bytecode.cvd'
+)) {
     if (!(Test-Path -LiteralPath (Join-Path $outputRoot $requiredPayload) -PathType Leaf)) {
         throw "Required published payload is missing: $requiredPayload"
     }

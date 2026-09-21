@@ -5,6 +5,10 @@ This distribution includes the following .NET runtime dependencies resolved by
 below is the Direct or Transitive value recorded in that lock file. Complete
 license and notice texts are shipped in the adjacent `licenses` directory.
 
+The release also bundles ClamAV 1.4.6 LTS as an independent Windows x64
+service process. Yf.Api communicates with it through the loopback ClamD TCP
+protocol and does not link to `libclamav`.
+
 | Package | Version | Type | License and notice files |
 | --- | --- | --- | --- |
 | Konscious.Security.Cryptography.Argon2 | 1.3.1 | Direct | `licenses/Konscious.Security.Cryptography-LICENSE.txt` |
@@ -24,6 +28,7 @@ license and notice texts are shipped in the adjacent `licenses` directory.
 | Microsoft.IdentityModel.Tokens | 8.22.0 | Transitive | `licenses/IdentityModel-LICENSE.txt` |
 | MimeKit | 4.17.0 | Transitive | `licenses/MimeKit-LICENSE.txt` |
 | System.Security.Cryptography.Pkcs | 10.0.0 | Transitive | `licenses/dotnet-LICENSE.txt`, `licenses/dotnet-THIRD-PARTY-NOTICES.txt` |
+| ClamAV portable distribution | 1.4.6 LTS | Separate program | `licenses/ClamAV-NOTICE.md`; upstream `COPYING.txt` and dependency notices remain inside `clamav/distribution/clamav-1.4.6.win.x64.zip` |
 
 ## Provenance
 
@@ -69,6 +74,14 @@ were read from the restored packages under `D:/Net_NuGet/Packages`; that cache
 path is provenance only and is not included in the release payload.
 
 ## Frontend lock-file licenses
+
+ClamAV 1.4.6 LTS is the unmodified official Windows x64 portable archive from
+`https://github.com/Cisco-Talos/clamav/releases/tag/clamav-1.4.6`.
+`clamav/PROVENANCE.json` records the release asset URLs and SHA-256 digests
+published by the GitHub Releases API. The release payload includes the matching
+complete corresponding source as `clamav/distribution/clamav-1.4.6.tar.gz`, its
+detached signature, the binary archive signature and the pinned Cisco Talos
+public key.
 
 The publishing script also creates `licenses/frontend/INDEX.json` from
 `web/package-lock.json` and copies root-level `LICENSE*`, `NOTICE*`, and

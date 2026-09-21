@@ -1,6 +1,6 @@
 // OEM file transfer end to end: staff enter from the collaboration header, the admin maintains a
 // section leader and an OEM vendor, a sender uploads and sends, the leader approves after the
-// (fake, TestHost-driven) scan, the vendor downloads from the separate portal, and the sender sees
+// TestHost-driven scan (Fake by default, or explicitly selected real ClamAV), the vendor downloads from the separate portal, and the sender sees
 // the receipt. Also proves the vendor realm cannot reach collaboration APIs.
 const {chromium}=require('playwright');
 const crypto=require('node:crypto');
@@ -118,6 +118,18 @@ const pdf=fs.readFileSync(OUT+'/valid-preview.pdf');
  });
 
  const {p:senderPage}=await open('oem-sender');let detailUrl;
+ if(s.oemScanner==='ClamAV') await record('OEM ClamAV 病毒库门禁可在页面启用并持久化',async()=>{
+  await filePolicyPage.getByText(/ClamAV 单文件扫描上限为 1024 MiB/).waitFor();
+  const gate=filePolicyPage.getByRole('switch',{name:'病毒库过期时暂停放行',exact:true});
+  assert.equal(await gate.isEnabled(),true);
+  if(await gate.getAttribute('aria-checked')!=='true') await gate.click();
+  const saved=filePolicyPage.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/oem/file-policies'&&r.request().method()==='PUT');
+  await filePolicyPage.getByRole('button',{name:'保存',exact:true}).click();
+  const response=await saved;assert.equal(response.status(),200);
+  assert.equal((await response.json()).find(x=>x.key==='oem.scan.block_on_stale_signatures').value,'true');
+  await filePolicyPage.reload();
+  await filePolicyPage.waitForFunction(()=>document.querySelector('[role="switch"][aria-label="病毒库过期时暂停放行"]')?.getAttribute('aria-checked')==='true');
+ });
  await record('OEM 发送人新建传递单、上传并发送',async()=>{
   await firstLogin(senderPage,sender);
   await senderPage.goto(s.base+'/oem/transfers');

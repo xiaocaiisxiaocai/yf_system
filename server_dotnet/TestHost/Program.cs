@@ -12,7 +12,7 @@ var app = await ApiApplication.BuildAsync(args, builder => builder.WebHost.UseUr
 if (app is not null)
 {
     // Browser runs disable every background worker (App:WorkerEnabled=false) so mail and file GC
-    // stay deterministic. The OEM flow still needs its fake scan and promotion to advance, so an
+    // stay deterministic. The OEM flow still needs its selected scan and promotion to advance, so an
     // explicit opt-in drives only those two jobs, quickly, from this test-only executable.
     Task? oemJobs = null;
     if (Environment.GetEnvironmentVariable("YF_TESTHOST_OEM_SCAN") == "1")

@@ -16,13 +16,16 @@ public static class ScanJobStatuses
 
 public enum ScanVerdict { Clean, Infected, Unscannable, Error, EngineUnavailable }
 
-public sealed record ScanResult(ScanVerdict Verdict, string EngineName, string? EngineVersion, string? SignatureVersion, string? ThreatName, string? Error)
+public sealed record ScanResult(ScanVerdict Verdict, string EngineName, string? EngineVersion, string? SignatureVersion, string? ThreatName, string? Error,
+    DateTimeOffset? SignatureUpdatedAt = null)
 {
     public static ScanResult Unavailable(string engine, string reason) => new(ScanVerdict.EngineUnavailable, engine, null, null, null, reason);
 }
 
 /// <summary>The quarantined file to scan, with the size and SHA-256 recorded at upload.</summary>
-public sealed record ScanTarget(string Path, string Sha256, ulong Size);
+public sealed record ScanFreshnessPolicy(TimeSpan MaximumSignatureAge);
+
+public sealed record ScanTarget(string Path, string Sha256, ulong Size, ScanFreshnessPolicy? Freshness = null);
 
 /// <summary>
 /// Malware engine abstraction (strategy). Production uses <see cref="OnAccessFileScanner"/>
@@ -32,6 +35,7 @@ public sealed record ScanTarget(string Path, string Sha256, ulong Size);
 public interface IFileScanner
 {
     string Name { get; }
+    bool SupportsSignatureFreshness => false;
     Task<ScanResult> ScanAsync(ScanTarget target, CancellationToken ct);
 
     /// <summary>
@@ -86,6 +90,7 @@ public static class FileScannerFactory
     public static IFileScanner Create(AppOptions options, ILoggerFactory loggers) => options.OemScanner.Engine switch
     {
         "Fake" => new FakeFileScanner(),
+        "ClamAV" => new ClamAvFileScanner(options.OemScanner.ClamAv, TimeProvider.System, loggers.CreateLogger<ClamAvFileScanner>()),
         "OnAccess" when options.OemStorageRoot.Length > 0 => new OnAccessFileScanner(options.OemScanner.OnAccess,
             Path.Combine(options.OemStorageRoot, OemStorage.ScanProbeArea), TimeProvider.System, loggers.CreateLogger<OnAccessFileScanner>()),
         _ => new UnavailableFileScanner(),
@@ -100,6 +105,7 @@ public static class FileScannerFactory
 public sealed class OemScanPipeline(IFileScanner engine)
 {
     public string EngineName => engine.Name;
+    public bool SupportsSignatureFreshness => engine.SupportsSignatureFreshness;
 
     public ScanResult? ExplainAccessFailure(Exception error) => engine.ExplainAccessFailure(error);
 

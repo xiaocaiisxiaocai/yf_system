@@ -111,10 +111,11 @@ public sealed class AppOptions
 public sealed class OemScannerOptions
 {
     /// <summary>
-    /// None (fail closed: files stay unavailable), OnAccess (the server's endpoint antivirus,
-    /// e.g. OfficeScan, through its real-time scanning) or Fake (development/testing only).
+    /// None (fail closed: files stay unavailable), ClamAV (a local clamd service), OnAccess
+    /// (the server's endpoint antivirus through real-time scanning) or Fake (development/testing only).
     /// </summary>
     public string Engine { get; set; } = "None";
+    public OemClamAvOptions ClamAv { get; set; } = new();
     public OemOnAccessOptions OnAccess { get; set; } = new();
     /// <summary>Must be true to run the Fake engine, so a test configuration cannot reach production by accident.</summary>
     public bool AcknowledgeInsecureFake { get; set; }
@@ -123,12 +124,38 @@ public sealed class OemScannerOptions
 
     public void Validate()
     {
-        if (Engine is not ("None" or "OnAccess" or "Fake")) throw new InvalidOperationException("App:OemScanner:Engine must be None, OnAccess or Fake.");
+        if (Engine is not ("None" or "ClamAV" or "OnAccess" or "Fake")) throw new InvalidOperationException("App:OemScanner:Engine must be None, ClamAV, OnAccess or Fake.");
+        if (Engine == "ClamAV") ClamAv.Validate();
         if (Engine == "OnAccess") OnAccess.Validate();
         if (Engine == "Fake" && !AcknowledgeInsecureFake)
             throw new InvalidOperationException("The Fake OEM scanner performs no malware scanning; set App:OemScanner:AcknowledgeInsecureFake=true only for development or tests.");
         if (BaseTimeoutSeconds is < 5 or > 86400 || TimeoutSecondsPerGb is < 0 or > 86400)
             throw new InvalidOperationException("Invalid OEM scanner timeouts.");
+    }
+}
+
+/// <summary>Local clamd INSTREAM integration. TCP is deliberately restricted to loopback.</summary>
+public sealed class OemClamAvOptions
+{
+    public string Host { get; set; } = "127.0.0.1";
+    public int Port { get; set; } = 3310;
+    public int ConnectTimeoutSeconds { get; set; } = 5;
+    /// <summary>
+    /// Maximum file size submitted to clamd. ClamAV 1.4 supports at most 2 GiB - 1;
+    /// this must also match clamd's StreamMaxLength/MaxFileSize deployment settings.
+    /// </summary>
+    public long MaxStreamBytes { get; set; } = 1024L * 1024 * 1024;
+
+    public void Validate()
+    {
+        if (!System.Net.IPAddress.TryParse(Host, out var address) || !System.Net.IPAddress.IsLoopback(address))
+            throw new InvalidOperationException("App:OemScanner:ClamAv:Host must be a numeric loopback address (127.0.0.1 or ::1).");
+        if (Port is < 1 or > 65535)
+            throw new InvalidOperationException("App:OemScanner:ClamAv:Port must be between 1 and 65535.");
+        if (ConnectTimeoutSeconds is < 1 or > 60)
+            throw new InvalidOperationException("App:OemScanner:ClamAv:ConnectTimeoutSeconds must be 1-60.");
+        if (MaxStreamBytes is < 1 or > 2_147_483_647)
+            throw new InvalidOperationException("App:OemScanner:ClamAv:MaxStreamBytes must be 1-2147483647.");
     }
 }
 

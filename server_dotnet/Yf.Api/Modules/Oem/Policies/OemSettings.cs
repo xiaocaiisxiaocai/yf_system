@@ -21,7 +21,7 @@ public sealed record OemSettingDefinition(
     string? UnsupportedReason = null)
 {
     private const string StaleSignatureRecoveryReason =
-        "当前 OfficeScan 实时扫描接口无法证明病毒库是否过期，此门禁正在暂停文件放行；可以关闭该不支持的门禁";
+        "当前扫描引擎无法证明病毒库是否过期，此门禁正在暂停文件放行；可以关闭该不支持的门禁";
 
     public string Normalize(string? input)
     {
@@ -51,20 +51,25 @@ public sealed record OemSettingDefinition(
         }
     }
 
-    public bool IsReadOnly(string currentValue) =>
+    private bool IsFreshnessSetting => Key is OemSettingCatalog.BlockOnStaleSignatures or OemSettingCatalog.MaxSignatureAgeHours;
+
+    public bool IsReadOnly(string currentValue, bool supportsSignatureFreshness = false) =>
+        supportsSignatureFreshness && IsFreshnessSetting ? false :
         Key == OemSettingCatalog.BlockOnStaleSignatures ? Normalize(currentValue) != "true" : ReadOnly;
 
-    public string? EffectiveUnsupportedReason(string currentValue) =>
+    public string? EffectiveUnsupportedReason(string currentValue, bool supportsSignatureFreshness = false) =>
+        supportsSignatureFreshness && IsFreshnessSetting ? null :
         Key == OemSettingCatalog.BlockOnStaleSignatures && Normalize(currentValue) == "true"
             ? StaleSignatureRecoveryReason
             : UnsupportedReason;
 
-    public void EnsureUpdateAllowed(string currentValue, string nextValue)
+    public void EnsureUpdateAllowed(string currentValue, string nextValue, bool supportsSignatureFreshness = false)
     {
+        if (supportsSignatureFreshness && IsFreshnessSetting) return;
         if (Key == OemSettingCatalog.BlockOnStaleSignatures)
         {
             if (Normalize(nextValue) == "true")
-                throw ApiException.BadRequest("当前 OfficeScan 实时扫描接口无法证明病毒库是否过期，不能启用此门禁");
+                throw ApiException.BadRequest("当前扫描引擎无法证明病毒库是否过期，不能启用此门禁");
             if (Normalize(currentValue) != "true")
                 throw ApiException.BadRequest(UnsupportedReason ?? $"{Label}暂不支持修改");
             return;
@@ -130,9 +135,9 @@ public static class OemSettingCatalog
         new(ArchiveMaxRatio, OemSettingKind.Integer, OemSettingGroup.File, "压缩比上限", "100", 1, 10_000),
         new(ScanMaxRetries, OemSettingKind.Integer, OemSettingGroup.File, "扫描错误最大重试次数", "5", 0, 50),
         new(MaxSignatureAgeHours, OemSettingKind.Integer, OemSettingGroup.File, "病毒库最长未更新时间（小时）", "48", 1, 24 * 90,
-            ReadOnly: true, UnsupportedReason: "当前 OfficeScan 实时扫描接口无法提供病毒库版本或更新时间，此设置暂不支持修改"),
+            ReadOnly: true, UnsupportedReason: "当前扫描引擎无法提供病毒库版本或更新时间，此设置暂不支持修改"),
         new(BlockOnStaleSignatures, OemSettingKind.Boolean, OemSettingGroup.File, "病毒库过期时暂停放行", "false", ReadOnly: true,
-            UnsupportedReason: "当前 OfficeScan 实时扫描接口无法证明病毒库是否过期；历史值为 true 时系统将按无法证明新鲜度处理并阻止放行"),
+            UnsupportedReason: "当前扫描引擎无法证明病毒库是否过期；历史值为 true 时系统将按无法证明新鲜度处理并阻止放行"),
         new(BlockedRetentionHours, OemSettingKind.Integer, OemSettingGroup.File, "不安全文件隔离保留时间（小时）", "72", 1, 24 * 90),
         new(DraftTtlHours, OemSettingKind.Integer, OemSettingGroup.File, "未发送草稿保留期限（小时）", "720", 1, 24 * 365),
         new(MaxRangesPerSession, OemSettingKind.Integer, OemSettingGroup.File, "单个下载会话区间数上限", "256", 1, 100_000),

@@ -240,6 +240,7 @@ export interface SettingItem {
   max: number | null
   readOnly?: boolean
   unsupportedReason?: string | null
+  hint?: string | null
 }
 
 export interface AuditRow {

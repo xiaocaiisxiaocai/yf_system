@@ -203,7 +203,7 @@ public sealed class OemPolicyTests
         var staleBlocking = files.Single(item => item!["key"]!.GetValue<string>() == "oem.scan.block_on_stale_signatures")!;
         Assert.True(signatureAge["readOnly"]!.GetValue<bool>());
         Assert.True(staleBlocking["readOnly"]!.GetValue<bool>());
-        Assert.Contains("OfficeScan", signatureAge["unsupportedReason"]!.GetValue<string>());
+        Assert.Contains("当前扫描引擎", signatureAge["unsupportedReason"]!.GetValue<string>());
         Assert.Contains("无法证明", staleBlocking["unsupportedReason"]!.GetValue<string>());
         await fileAdmin.GetAsync("/api/v1/oem/notify-policies", ct).Status(HttpStatusCode.Forbidden);
         var updated = (await fileAdmin.PutAsync("/api/v1/oem/file-policies",

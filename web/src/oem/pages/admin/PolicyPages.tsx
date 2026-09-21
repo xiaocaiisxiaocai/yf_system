@@ -98,12 +98,13 @@ function SettingsForm({ group }: { group: 'file' | 'notify' }) {
         <Space key={item.key} style={{ width: '100%' }}>
           <span style={{ display: 'inline-block', width: 260 }}>{item.label}</span>
           {item.kind === 'boolean'
-            ? <Switch disabled={item.readOnly} checked={values[item.key] === 'true'} onChange={(checked) => setValues((v) => ({ ...v, [item.key]: String(checked) }))} />
+            ? <Switch aria-label={item.label} disabled={item.readOnly} checked={values[item.key] === 'true'} onChange={(checked) => setValues((v) => ({ ...v, [item.key]: String(checked) }))} />
             : <Input style={{ width: item.kind === 'extensions' ? 520 : 220 }} value={values[item.key]}
-                disabled={item.readOnly}
+                aria-label={item.label} disabled={item.readOnly}
                 onChange={(value) => setValues((v) => ({ ...v, [item.key]: value }))} />}
           {item.min !== null && <Typography.Text type="secondary">{item.min} ~ {item.max}</Typography.Text>}
           {item.unsupportedReason && <Typography.Text type="warning">{item.unsupportedReason}</Typography.Text>}
+          {item.hint && <Typography.Text type="secondary">{item.hint}</Typography.Text>}
         </Space>
       ))}
       <Button type="primary" onClick={() => void save()}>保存</Button>

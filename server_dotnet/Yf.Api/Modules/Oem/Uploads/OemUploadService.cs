@@ -23,6 +23,7 @@ public sealed record OemUploadInit(string FileName, ulong FileSize, string? File
 public sealed partial class OemUploadService(
     IDbContextFactory<YfDbContext> dbFactory,
     AppDb appDb,
+    AppOptions options,
     OemStorage storage,
     OemAuditWriter audit,
     ILogger<OemUploadService> logger)
@@ -45,6 +46,8 @@ public sealed partial class OemUploadService(
         if (settings.ReconcileRequired) throw new ApiException(503, 50302, "系统正在进行存储核对，暂时不能上传");
         if (!settings.AllowedExtensions(transfer.Direction).Contains(extension)) throw ApiException.BadRequest($"不允许上传 .{extension} 类型的文件");
         if (request.FileSize > settings.MaxFileSize) throw ApiException.BadRequest($"文件超过大小上限 {settings.MaxFileSize / 1024 / 1024} MB");
+        if (options.OemScanner.Engine == "ClamAV" && request.FileSize > (ulong)options.OemScanner.ClamAv.MaxStreamBytes)
+            throw ApiException.BadRequest($"文件超过 ClamAV 可扫描的单文件上限 {options.OemScanner.ClamAv.MaxStreamBytes / 1024 / 1024} MiB，请拆分为较小文件");
 
         if (md5 is not null)
         {
