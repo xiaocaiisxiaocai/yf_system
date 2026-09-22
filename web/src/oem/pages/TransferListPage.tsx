@@ -111,12 +111,13 @@ export default function TransferListPage() {
       </Space>
       <Table
         rowKey="id"
+        scroll={{ x: 1170 }}
         loading={loading}
         data={rows}
         onRow={(row) => ({ onClick: () => navigate(`${base}/transfers/${row.id}`), style: { cursor: 'pointer' } })}
         pagination={{ current: page, total, pageSize: 20, onChange: setPage }}
         columns={[
-          { title: '标题', dataIndex: 'title', render: (value: string) => <Typography.Text bold>{value}</Typography.Text> },
+          { title: '标题', dataIndex: 'title', width: 260, ellipsis: true, render: (value: string) => <Typography.Text bold title={value}>{value}</Typography.Text> },
           { title: '方向', dataIndex: 'direction', width: 120, render: (value: TransferSummary['direction']) => DIRECTION_LABEL[value] },
           { title: '厂商', dataIndex: 'companyName', width: 160 },
           { title: '发送人', width: 120, render: (_: unknown, row: TransferSummary) => row.sender.realName },

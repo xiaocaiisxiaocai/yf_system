@@ -110,7 +110,9 @@ export default function Dashboard() {
   const mounted = useRef(true)
   const observedRevision = useRef<string | null>(null)
   const user = useAuth((s) => s.user)
-  const hasDashboard = useAuth((s) => s.menus.includes('dashboard'))
+  const hasDashboardMenu = useAuth((s) => s.menus.includes('dashboard'))
+  const hasProjectAccess = useAuth((s) => s.permissions.includes('project:list'))
+  const hasDashboard = hasDashboardMenu && hasProjectAccess
   const hasOtherMenus = useAuth((s) => s.menus.some(menu => menu !== 'dashboard'))
   const collaborationRevision = useCollaboration((s) => s.revision)
   const collaborationStatus = useCollaboration((s) => s.status)
@@ -306,7 +308,9 @@ export default function Dashboard() {
       <Result
         status="403"
         title="工作台不可用"
-        subTitle={hasOtherMenus
+        subTitle={hasDashboardMenu && !hasProjectAccess
+          ? '当前账号未分配项目查看权限，请从导航进入已授权功能，或联系管理员调整权限。'
+          : hasOtherMenus
           ? '当前账号未分配工作台菜单权限，请从导航进入已授权功能，或在右上角维护个人资料。'
           : '请联系管理员分配功能权限，或在右上角维护个人资料。'}
       />

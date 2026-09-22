@@ -20,29 +20,39 @@ public sealed class DelegateOemJob(string name, TimeSpan interval, Func<Cancella
 
 /// <summary>
 /// Single hosted service that drives every registered <see cref="IOemBackgroundJob"/>
-/// (composite). Jobs are isolated: one failing job is logged and retried on its next
-/// interval without affecting the others. Correctness never depends on this process
-/// being the only one: every job claims its rows with database leases.
+/// (composite). Each job has an independent, non-overlapping loop: a slow scan cannot
+/// delay approval, purge or reconciliation work, while one job is never invoked again
+/// before its previous attempt completes. Failures are logged and retried after that
+/// job's interval without affecting the others. Correctness never depends on this
+/// process being the only one: every job claims its rows with database leases.
 /// </summary>
 public sealed class OemBackgroundWorker(IEnumerable<IOemBackgroundJob> jobs, AppOptions options, ILogger<OemBackgroundWorker> logger) : BackgroundService
 {
     private readonly IOemBackgroundJob[] jobs = jobs.ToArray();
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!options.WorkerEnabled || jobs.Length == 0) return;
-        var due = jobs.ToDictionary(job => job.Name, _ => DateTime.MinValue, StringComparer.Ordinal);
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
-        do
+        if (!options.WorkerEnabled || jobs.Length == 0) return Task.CompletedTask;
+        return Task.WhenAll(jobs.Select(job => RunLoopAsync(job, stoppingToken)));
+    }
+
+    private async Task RunLoopAsync(IOemBackgroundJob job, CancellationToken stoppingToken)
+    {
+        // Keep one job's synchronous setup from delaying the initial start of the
+        // other independent loops. Production jobs normally yield on database I/O,
+        // but IOemBackgroundJob does not require an asynchronous first operation.
+        await Task.Yield();
+        while (!stoppingToken.IsCancellationRequested)
         {
-            foreach (var job in jobs)
+            try { await job.RunOnceAsync(stoppingToken); }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
+            catch (Exception error)
             {
-                if (DateTime.UtcNow < due[job.Name]) continue;
-                due[job.Name] = DateTime.UtcNow.Add(job.Interval);
-                try { await job.RunOnceAsync(stoppingToken); }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
-                catch (Exception error) { logger.LogWarning("OEM background job {Job} failed ({ErrorType}); retrying next interval.", job.Name, error.GetType().Name); }
+                logger.LogWarning("OEM background job {Job} failed ({ErrorType}); retrying next interval.", job.Name, error.GetType().Name);
             }
-        } while (await timer.WaitForNextTickAsync(stoppingToken));
+
+            try { await Task.Delay(job.Interval, stoppingToken); }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
+        }
     }
 }

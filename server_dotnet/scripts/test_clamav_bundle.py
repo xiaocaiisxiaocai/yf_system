@@ -15,8 +15,10 @@ from pathlib import Path
 
 SERVER_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = SERVER_ROOT.parent
-CACHE_ROOT = Path(os.environ.get("CLAMAV_CACHE_DIR", REPO_ROOT / ".runlogs" / "clamav-cache"))
-BUNDLE_ROOT = Path(os.environ.get("CLAMAV_BUNDLE_ROOT", REPO_ROOT / ".runlogs" / "clamav-bundle-stage-146"))
+ARTIFACTS_ROOT = REPO_ROOT / ".artifacts"
+TEST_TEMP_ROOT = ARTIFACTS_ROOT / "tests" / "tmp"
+CACHE_ROOT = Path(os.environ.get("CLAMAV_CACHE_DIR", ARTIFACTS_ROOT / "cache" / "clamav"))
+BUNDLE_ROOT = Path(os.environ.get("CLAMAV_BUNDLE_ROOT", ARTIFACTS_ROOT / "tests" / "clamav" / "bundle-stage-146"))
 BINARY_NAME = "clamav-1.4.6.win.x64.zip"
 BINARY_SIZE = 191_947_200
 BINARY_SHA256 = "57b6fd1d60cd87bafe800f97407ecdef0576d36b3900b8b7abcfbbabe88295fd"
@@ -89,9 +91,8 @@ class ClamAvBundleTests(unittest.TestCase):
         )
 
     def test_prepare_refuses_existing_output_without_touching_it(self) -> None:
-        runlogs = REPO_ROOT / ".runlogs"
-        runlogs.mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=runlogs) as temporary:
+        TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TEMP_ROOT) as temporary:
             root = Path(temporary)
             output = root / "existing-output"
             output.mkdir()
@@ -103,9 +104,8 @@ class ClamAvBundleTests(unittest.TestCase):
             self.assertEqual([sentinel], list(output.iterdir()))
 
     def test_prepare_rejects_corrupt_offline_cache_without_output(self) -> None:
-        runlogs = REPO_ROOT / ".runlogs"
-        runlogs.mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=runlogs) as temporary:
+        TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TEMP_ROOT) as temporary:
             root = Path(temporary)
             cache = root / "cache"
             cache.mkdir()
@@ -114,6 +114,30 @@ class ClamAvBundleTests(unittest.TestCase):
             completed = self.run_prepare(output, cache)
             self.assertNotEqual(0, completed.returncode)
             self.assertFalse(output.exists())
+
+    def test_prepare_rejects_output_outside_project_artifacts(self) -> None:
+        external = Path(tempfile.gettempdir()) / ("yf-external-output-" + os.urandom(8).hex())
+        completed = self.run_prepare(external, CACHE_ROOT)
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("project artifact root", completed.stdout + completed.stderr)
+        self.assertFalse(external.exists())
+
+    def test_publish_rejects_output_outside_project_artifacts_before_build(self) -> None:
+        external = Path(tempfile.gettempdir()) / ("yf-external-release-" + os.urandom(8).hex())
+        completed = subprocess.run(
+            [
+                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                str(SERVER_ROOT / "scripts" / "publish-iis.ps1"),
+                "-FreshOutputDirectory", str(external),
+                "-UseExistingClamAvCacheOnly",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("project artifact root", completed.stdout + completed.stderr)
+        self.assertFalse(external.exists())
 
     def test_cached_official_archive_when_available(self) -> None:
         archive = CACHE_ROOT / BINARY_NAME

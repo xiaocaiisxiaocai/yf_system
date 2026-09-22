@@ -11,10 +11,13 @@ from browser_step_evidence import (
     validate_browser_step_evidence,
 )
 
+TEST_TEMP_ROOT = Path(__file__).resolve().parents[2] / ".artifacts" / "tests" / "tmp"
+TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+
 
 class BrowserStepEvidenceTests(unittest.TestCase):
     def test_empty_step_is_rejected(self):
-        with tempfile.TemporaryDirectory(prefix="yf_browser_evidence_") as temporary:
+        with tempfile.TemporaryDirectory(prefix="yf_browser_evidence_", dir=TEST_TEMP_ROOT) as temporary:
             output = Path(temporary)
             before = snapshot_browser_evidence(output)
             after = snapshot_browser_evidence(output)
@@ -22,7 +25,7 @@ class BrowserStepEvidenceTests(unittest.TestCase):
                 validate_browser_step_evidence("system", before, after, output)
 
     def test_failed_step_evidence_is_rejected(self):
-        with tempfile.TemporaryDirectory(prefix="yf_browser_evidence_") as temporary:
+        with tempfile.TemporaryDirectory(prefix="yf_browser_evidence_", dir=TEST_TEMP_ROOT) as temporary:
             output = Path(temporary)
             before = snapshot_browser_evidence(output)
             (output / "browser-operations.json").write_text(
@@ -33,7 +36,7 @@ class BrowserStepEvidenceTests(unittest.TestCase):
                 validate_browser_step_evidence("system", before, after, output)
 
     def test_successful_step_reports_only_new_operations(self):
-        with tempfile.TemporaryDirectory(prefix="yf_browser_evidence_") as temporary:
+        with tempfile.TemporaryDirectory(prefix="yf_browser_evidence_", dir=TEST_TEMP_ROOT) as temporary:
             output = Path(temporary)
             operation_file = output / "browser-operations.json"
             operation_file.write_text(json.dumps([{"name": "earlier", "status": "pass"}]), encoding="utf-8")
@@ -49,7 +52,7 @@ class BrowserStepEvidenceTests(unittest.TestCase):
             )
 
     def test_auth_and_fixture_steps_require_their_own_complete_evidence(self):
-        with tempfile.TemporaryDirectory(prefix="yf_browser_evidence_") as temporary:
+        with tempfile.TemporaryDirectory(prefix="yf_browser_evidence_", dir=TEST_TEMP_ROOT) as temporary:
             output = Path(temporary)
             before_auth = snapshot_browser_evidence(output)
             (output / "browser-results.json").write_text(

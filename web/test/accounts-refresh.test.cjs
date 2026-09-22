@@ -80,6 +80,34 @@ const supplier = { id: 8, name: '并发供应商', status: 'ACTIVE', createdAt: 
 const accountA = { id: 11, employeeNo: 'a11', realName: '账号A', email: 'a@example.invalid', status: 'ACTIVE', createdAt: '' }
 const accountB = { id: 12, employeeNo: 'b12', realName: '账号B', email: 'b@example.invalid', status: 'ACTIVE', createdAt: '' }
 
+for (const connected of [true, false]) {
+  test(`closing supplier accounts restores only a connected opener (connected=${connected})`, async () => {
+    let focused = 0
+    const trigger = { isConnected: connected, focus: () => { focused += 1 } }
+    const http = {
+      get: async url => {
+        if (url === '/admin/suppliers') return { data: { list: [supplier], total: 1, page: 1, pageSize: 10 } }
+        if (url === '/admin/suppliers/8/accounts') return { data: [accountA] }
+        throw new Error(`unexpected GET ${url}`)
+      },
+    }
+    const SupplierList = loadSupplierList(http)
+    let renderer
+    try {
+      await act(async () => { renderer = create(React.createElement(SupplierList)) })
+      const actions = renderer.root.findAllByType('Table')[0].props.columns.at(-1).render(null, supplier)
+      const open = findElement(actions, node => node.props.children === '账号管理')
+      await act(async () => { open.props.onClick({ currentTarget: trigger }) })
+      assert.equal(focused, 0, 'opening the drawer must leave focus to its focus lock')
+      const drawer = renderer.root.findByType('Drawer')
+      assert.equal(drawer.props.visible, true)
+      await act(async () => { drawer.props.onCancel() })
+      assert.equal(renderer.root.findByType('Drawer').props.visible, false)
+      assert.equal(focused, connected ? 1 : 0, 'closed drawer restores the active opener without focusing a removed element')
+    } finally { if (renderer) await act(async () => renderer.unmount()) }
+  })
+}
+
 for (const lateOutcome of ['success', 'failure']) {
   test(`an older account refresh ${lateOutcome} cannot replace the latest successful snapshot`, async () => {
     const writes = new Map([[11, deferred()], [12, deferred()]])

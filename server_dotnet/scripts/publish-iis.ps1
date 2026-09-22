@@ -4,29 +4,30 @@
 Build a fresh, verifiable IIS deployment package for Yf.System.
 .DESCRIPTION
 Builds the React frontend and the .NET 10 ASP.NET Core API. It does not install or
-configure IIS. The supplied output directory is the flat package root and must be
-absent or empty. The ZIP and its verification sidecars are written beside it.
+configure IIS. By default it creates one uniquely named package directory below
+repo/deloy. An explicit output must also be a new child directory there.
+Only the deployment directory is produced unless CreateArchive is specified.
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
     [string]$FreshOutputDirectory,
     [string]$ClamAvCacheDirectory,
     [string]$ClamAvDatabaseSnapshotDirectory,
-    [switch]$UseExistingClamAvCacheOnly
+    [switch]$UseExistingClamAvCacheOnly,
+    [switch]$CreateArchive
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
-function Get-FullLocalPath([string]$Value) {
+function Get-FullLocalPath([string]$Value, [string]$Label) {
     if ([string]::IsNullOrWhiteSpace($Value) -or $Value -notmatch '^[A-Za-z]:[\\/]') {
-        throw 'FreshOutputDirectory must be an absolute local disk path.'
+        throw "$Label must be an absolute local disk path."
     }
 
     $full = [IO.Path]::GetFullPath($Value).TrimEnd('\', '/')
     if ($full.Length -le 3) {
-        throw 'A drive root cannot be used as the release output.'
+        throw "$Label cannot be a drive root."
     }
     return $full
 }
@@ -57,6 +58,27 @@ function Invoke-Native([string]$FilePath, [string[]]$Arguments) {
 function Write-Utf8NoBom([string]$Path, [string]$Content) {
     $encoding = New-Object Text.UTF8Encoding($false)
     [IO.File]::WriteAllText($Path, $Content, $encoding)
+}
+
+function Initialize-PublishDefaults([string]$Path) {
+    if (!(Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw 'Local publish defaults file is missing: server_dotnet/deploy/publish-defaults.local.json'
+    }
+    $defaults = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (!$defaults.App -or [string]::IsNullOrWhiteSpace([string]$defaults.App.ConnectionString)) {
+        throw 'Local publish defaults must contain App.ConnectionString.'
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$defaults.App.JwtSecret)) {
+        $bytes = New-Object byte[] 32
+        $random = [Security.Cryptography.RandomNumberGenerator]::Create()
+        try { $random.GetBytes($bytes) } finally { $random.Dispose() }
+        $defaults.App.JwtSecret = [Convert]::ToBase64String($bytes)
+        Write-Utf8NoBom $Path (($defaults | ConvertTo-Json -Depth 8) + "`n")
+    }
+    if ([Text.Encoding]::UTF8.GetByteCount([string]$defaults.App.JwtSecret) -lt 32) {
+        throw 'Local publishing JWT secret must be at least 32 bytes.'
+    }
+    return $defaults
 }
 
 function Get-PayloadFiles([string]$Root, [string[]]$ExcludedNames) {
@@ -105,11 +127,24 @@ $webLock = Join-Path $webRoot 'package-lock.json'
 $webModules = Join-Path $webRoot 'node_modules'
 $webDist = Join-Path $webRoot 'dist'
 $deployRoot = Join-Path $repoRoot 'server_dotnet\deploy'
+$publishDefaultsPath = Join-Path $deployRoot 'publish-defaults.local.json'
 $prepareClamAv = Join-Path $repoRoot 'server_dotnet\scripts\prepare-clamav.ps1'
 $noticesSource = Join-Path $repoRoot 'server_dotnet\THIRD-PARTY-NOTICES.md'
 $licensesSource = Join-Path $repoRoot 'server_dotnet\licenses'
-$runlogsRoot = Join-Path $repoRoot '.runlogs'
-$outputRoot = Get-FullLocalPath $FreshOutputDirectory
+$artifactsRoot = Join-Path $repoRoot '.artifacts'
+$releasesRoot = Join-Path $repoRoot 'deloy'
+
+$gitHead = (& git -C $repoRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or !$gitHead) { throw 'Unable to resolve the Git HEAD.' }
+$gitStatus = @(& git -C $repoRoot status --porcelain=v1 --untracked-files=all)
+if ($LASTEXITCODE -ne 0) { throw 'Unable to read the Git working-tree status.' }
+$isDirty = $gitStatus.Count -gt 0
+
+if ([string]::IsNullOrWhiteSpace($FreshOutputDirectory)) {
+    $releaseId = 'Yf.System-{0}-{1}-{2}' -f [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'), $gitHead.Substring(0, 8), ([Guid]::NewGuid().ToString('N').Substring(0, 8))
+    $FreshOutputDirectory = Join-Path $releasesRoot $releaseId
+}
+$outputRoot = Get-FullLocalPath $FreshOutputDirectory 'FreshOutputDirectory'
 $outputParent = Split-Path -Parent $outputRoot
 $artifactName = Split-Path -Leaf $outputRoot
 $zipPath = Join-Path $outputParent ($artifactName + '.zip')
@@ -117,11 +152,8 @@ $releaseManifestPath = Join-Path $outputParent ($artifactName + '.release-manife
 $zipHashPath = $zipPath + '.sha256'
 
 Assert-NoReparsePoint $outputRoot
-if ((Test-Within $repoRoot $outputRoot) -or $outputRoot.Equals($repoRoot, [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'The release output cannot contain the source repository.'
-}
-if ((Test-Within $outputRoot $repoRoot) -and !(Test-Within $outputRoot $runlogsRoot)) {
-    throw 'Release output inside the source repository is allowed only below repo/.runlogs.'
+if (!(Test-Within $outputRoot $releasesRoot) -or $outputRoot.Equals($releasesRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "FreshOutputDirectory must be a child directory below the project artifact root: $releasesRoot"
 }
 if ((Test-Path -LiteralPath $outputRoot) -and !(Test-Path -LiteralPath $outputRoot -PathType Container)) {
     throw 'FreshOutputDirectory points to a file.'
@@ -129,7 +161,7 @@ if ((Test-Path -LiteralPath $outputRoot) -and !(Test-Path -LiteralPath $outputRo
 if ((Test-Path -LiteralPath $outputRoot) -and @(Get-ChildItem -LiteralPath $outputRoot -Force).Count) {
     throw 'FreshOutputDirectory must be absent or empty; an existing release is never overwritten or cleared.'
 }
-foreach ($sidecar in @($zipPath, $releaseManifestPath, $zipHashPath)) {
+foreach ($sidecar in $(if ($CreateArchive) { @($zipPath, $releaseManifestPath, $zipHashPath) } else { @() })) {
     if (Test-Path -LiteralPath $sidecar) {
         throw "Release sidecar already exists and will not be overwritten: $sidecar"
     }
@@ -157,11 +189,9 @@ if (!(Test-Path -LiteralPath $licensesSource -PathType Container) -or
     throw 'The third-party license source directory is missing or empty.'
 }
 
-$gitHead = (& git -C $repoRoot rev-parse HEAD).Trim()
-if ($LASTEXITCODE -ne 0 -or !$gitHead) { throw 'Unable to resolve the Git HEAD.' }
-$gitStatus = @(& git -C $repoRoot status --porcelain=v1 --untracked-files=all)
-if ($LASTEXITCODE -ne 0) { throw 'Unable to read the Git working-tree status.' }
-$isDirty = $gitStatus.Count -gt 0
+# Generate the project-specific JWT once and reuse it across future releases.
+# Never print these values or include the local defaults file itself in a package.
+$publishDefaults = Initialize-PublishDefaults $publishDefaultsPath
 
 if (!(Test-Path -LiteralPath $outputParent -PathType Container)) {
     New-Item -ItemType Directory -Path $outputParent | Out-Null
@@ -215,6 +245,11 @@ foreach ($item in Get-ChildItem -LiteralPath $webDist -Force) {
 foreach ($name in @('install-iis.ps1', 'install-clamav.ps1', 'update-clamav.ps1', 'clamav-database.ps1', 'maintain-iis.ps1', 'maintenance-common.ps1', 'README.md', 'appsettings.example.json')) {
     Copy-Item -LiteralPath (Join-Path $deployRoot $name) -Destination (Join-Path $outputRoot $name)
 }
+$examplePath = Join-Path $outputRoot 'appsettings.example.json'
+$exampleSettings = Get-Content -LiteralPath $examplePath -Raw -Encoding UTF8 | ConvertFrom-Json
+$exampleSettings.App.ConnectionString = $publishDefaults.App.ConnectionString
+$exampleSettings.App.JwtSecret = $publishDefaults.App.JwtSecret
+Write-Utf8NoBom $examplePath (($exampleSettings | ConvertTo-Json -Depth 8) + "`n")
 Copy-Item -LiteralPath $noticesSource -Destination (Join-Path $outputRoot 'THIRD-PARTY-NOTICES.md')
 Copy-Item -LiteralPath $licensesSource -Destination (Join-Path $outputRoot 'licenses') -Recurse
 
@@ -349,8 +384,8 @@ present in the production JavaScript bundle.
 "@
 Write-Utf8NoBom (Join-Path $frontendLicensesRoot 'README.md') ($frontendLicenseReadme.Trim() + "`n")
 
-# The package carries no usable credentials. The installer supplies an external
-# production JSON through YF_CONFIG_PATH; this file intentionally fails closed.
+# appsettings.json intentionally fails closed. The populated example is copied
+# to an external production config and selected using YF_CONFIG_PATH.
 $safeSettings = [ordered]@{
     App = [ordered]@{
         ConnectionString = ''
@@ -438,6 +473,12 @@ $packageManifest = [ordered]@{
 $packageManifestPath = Join-Path $outputRoot 'manifest.json'
 Write-Utf8NoBom $packageManifestPath (($packageManifest | ConvertTo-Json -Depth 8) + "`n")
 
+Write-Host "Package root: $outputRoot"
+if (!$CreateArchive) {
+    Write-Host 'Deployment folder ready. Copy the whole folder to the IIS server.'
+    return
+}
+
 New-NormalizedZip $outputRoot $zipPath
 $zipInfo = Get-Item -LiteralPath $zipPath
 $zipSha256 = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -458,7 +499,6 @@ $releaseManifest = [ordered]@{
 Write-Utf8NoBom $releaseManifestPath (($releaseManifest | ConvertTo-Json -Depth 8) + "`n")
 Write-Utf8NoBom $zipHashPath ($zipSha256 + '  ' + $zipInfo.Name + "`n")
 
-Write-Host "Package root: $outputRoot"
 Write-Host "Archive: $zipPath"
 Write-Host "Release manifest: $releaseManifestPath"
 Write-Host "Archive SHA256: $zipSha256"

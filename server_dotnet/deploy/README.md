@@ -6,8 +6,8 @@
 
 ## 准备
 
-1. 将发布 ZIP 与 `.sha256` 一并复制到服务器，核对哈希后解压到独立临时目录。
-2. 将 `appsettings.example.json` 复制到网站、发布包和业务存储目录以外，例如 `D:\YfConfig\appsettings.Production.json`。填入数据库连接、随机 JWT 密钥、独立存储目录、实际 HTTPS 来源和 SMTP（可留空以禁用发送）。不要把机密放入 `wwwroot` 或应用池可写目录。
+1. 将 `deloy` 下生成的整个版本文件夹复制到服务器的独立临时目录，保留其中 `manifest.json`，安装脚本会据此检查全部文件。默认不生成 ZIP；如果打包时显式使用了 `-CreateArchive`，则将 ZIP 与 `.sha256` 一并复制到服务器，核对哈希后解压。
+2. 发布时已自动为 `appsettings.example.json` 填入默认数据库连接和 JWT 密钥。将它复制到网站、发布包和业务存储目录以外，例如 `D:\YfConfig\appsettings.Production.json`，再核对实际服务器的数据库地址/库名、独立存储目录和 HTTPS 访问地址；SMTP 可留空以禁用发送。不要把机密放入 `wwwroot` 或应用池可写目录。已有站点升级时继续使用原来的外部配置，不要用新示例覆盖已有 JWT 密钥。
 3. 创建存储目录，例如 `D:\YfData\storage`。当前开发阶段不接管旧手写 schema 或旧数据；切换到本版本时创建新的空数据库和空存储目录。后续只有带完整 `__EFMigrationsHistory` 的 EF 管理数据库可以原地升级。
 4. 先由 DBA 创建空库，再在包根执行：
 

@@ -53,10 +53,18 @@ export default function SupplierList() {
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<Supplier | null>(null)
   const [accTarget, setAccTarget] = useState<Supplier | null>(null)
+  const accountTrigger = useRef<HTMLButtonElement | null>(null)
   const saveInFlight = useRef(false)
   const togglingSupplierIdsRef = useRef(new Set<number>())
   const [togglingSupplierIds, setTogglingSupplierIds] = useState<ReadonlySet<number>>(new Set())
   const [form] = Form.useForm()
+
+  useEffect(() => {
+    if (accTarget !== null) return
+    const trigger = accountTrigger.current
+    accountTrigger.current = null
+    if (trigger?.isConnected) trigger.focus()
+  }, [accTarget])
 
   const fetchSuppliers = useCallback(async () => {
     const r = await http.get('/admin/suppliers', { params: { page, pageSize, keyword: keyword || undefined, status } })
@@ -214,7 +222,10 @@ export default function SupplierList() {
             fixed: 'right' as const,
             align: 'center' as const,
             render: (_: unknown, r: Supplier) => actionSlots([
-              canManageAccounts && <Button key="accounts" size="mini" type="text" onClick={() => setAccTarget(r)}>
+              canManageAccounts && <Button key="accounts" size="mini" type="text" onClick={(event) => {
+                accountTrigger.current = (event?.currentTarget as HTMLButtonElement | undefined) ?? null
+                setAccTarget(r)
+              }}>
                 账号管理
               </Button>,
               canManageSuppliers && <Button

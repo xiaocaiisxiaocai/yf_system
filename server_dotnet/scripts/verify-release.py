@@ -16,7 +16,12 @@ from script_safety import (
 
 source = Path(__file__).resolve().parents[2]
 archive = Path(sys.argv[1]).resolve()
-report_path = archive.with_suffix(".verification.json")
+artifacts = source / ".artifacts"
+test_temp_root = artifacts / "tests" / "tmp"
+report_root = artifacts / "reports" / "releases"
+test_temp_root.mkdir(parents=True, exist_ok=True)
+report_root.mkdir(parents=True, exist_ok=True)
+report_path = report_root / (archive.stem + ".verification.json")
 if report_path.exists():
     raise SystemExit("Verification report already exists; refusing to overwrite it")
 
@@ -26,7 +31,7 @@ def digest(path):
         return hashlib.file_digest(file, "sha256").hexdigest()
 
 
-with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_") as temp:
+with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root) as temp:
     extraction = Path(temp).resolve()
     with zipfile.ZipFile(archive) as zipped:
         validate_zip_entries(zipped.infolist())
@@ -132,10 +137,12 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_") as temp:
     print("PASS extracted ZIP paths, CRC, hashes, safe configuration and missing-config startup", flush=True)
     env = os.environ.copy()
     env["YF_TEST_API_DIR"] = str(package)
+    published_report = Path(temp) / "dotnet-published-results.json"
+    env["YF_TEST_RESULTS_PATH"] = str(published_report)
     run = subprocess.run([sys.executable, str(source / "server_dotnet/scripts/test-isolated.py")], env=env, cwd=source)
     if run.returncode:
         raise SystemExit(run.returncode)
-    http_report = json.loads((source / ".runlogs/dotnet-published-results.json").read_text(encoding="utf-8"))
+    http_report = json.loads(published_report.read_text(encoding="utf-8"))
     report = {"archive": str(archive), "sha256": digest(archive), "bytes": archive.stat().st_size,
               "fileCount": len(actual), "source": manifest["source"], "build": manifest["build"],
               "zipPathsCrcAndHashes": "passed", "releaseSidecars": "passed",

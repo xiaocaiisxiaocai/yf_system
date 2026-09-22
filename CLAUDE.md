@@ -9,7 +9,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `third_party/vue-office-source-2024-12-30/` — vendored reference source for the Excel/PPTX preview runtime; not part of the build graph directly (see `web/scripts/build-excel-preview.mjs` / `build-pptx-preview.mjs`).
 - `server_dotnet/docs/*.md` — dated contract documents (e.g. `主项目与子项目协作契约-2026-09-16.md`) are the source of truth for business rules like project/subproject workflow, metadata dictionaries, copy semantics, and email notification policy. Check the newest-dated doc for a topic before assuming behavior from code alone.
 
-Root-level dated `*.md` files (验收记录, 检查与修复记录, 需求文档, etc.) are point-in-time audit/acceptance records, not living docs — useful for history, not for current behavior.
+`docs/history/` contains the former root-level dated audit/acceptance records. They describe historical behavior and may cite removed scratch paths; use current source and contracts for current behavior. The collaboration requirements are in `docs/公司与供应商协作平台-需求文档.md`.
+
+IIS deployment folders belong under repository-root `deloy/`; archive sidecars are opt-in via `-CreateArchive`. Other development script outputs belong under `.artifacts/`: `cache/` for downloads, `reports/` for retained verification evidence, and `backups/` for private historical backups. Do not generate local release packages in `D:\Releases`. Standard frontend build paths and .NET `bin/obj` stay in their existing project-local locations. Target-server installation/storage paths remain governed by the deployment contract.
 
 ## Backend (server_dotnet) — commands
 
@@ -45,7 +47,7 @@ python .\scripts\test-maintenance.py
 # Browser end-to-end (builds web + TestHost first)
 dotnet build .\TestHost\Yf.Api.TestHost.csproj --no-restore
 Push-Location ..\web; npm run build; Pop-Location
-python .\scripts\test-browser.py --output ..\.runlogs\browser-NEW
+python .\scripts\test-browser.py --output ..\.artifacts\tests\browser-NEW
 ```
 
 Key env vars: `YF_CONFIG_PATH` (external appsettings for local/prod), `YF_BOOTSTRAP_PASSWORD` (init only, unset after use), `YF_TEST_DATABASE_URL` (test suites only — `mysql://user:urlencoded_pass@127.0.0.1:port/ignored`, must be localhost/127.0.0.1/::1 for maintenance tests). Config precedence: `appsettings.json` → environment config → `appsettings.Local.json` → `YF_CONFIG_PATH` file → env vars → CLI args. Production IIS only honors `YF_CONFIG_PATH` and rejects `App__*`/`App:*` overrides.

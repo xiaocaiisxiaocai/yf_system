@@ -15,6 +15,9 @@ from script_safety import (
     validate_zip_entries,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+TEST_TEMP_ROOT = PROJECT_ROOT / ".artifacts" / "tests" / "tmp"
+
 
 class ScriptSafetyTests(unittest.TestCase):
     def test_configuration_environment_is_removed_case_insensitively(self):
@@ -46,7 +49,8 @@ class ScriptSafetyTests(unittest.TestCase):
                     validate_zip_entries(map(zipfile.ZipInfo, names))
 
     def test_release_verifier_rejects_duplicate_members_before_extraction(self):
-        with tempfile.TemporaryDirectory(prefix="yf_verify_duplicate_") as directory:
+        TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="yf_verify_duplicate_", dir=TEST_TEMP_ROOT) as directory:
             archive = Path(directory) / "duplicate.zip"
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
@@ -63,7 +67,8 @@ class ScriptSafetyTests(unittest.TestCase):
             self.assertIn("Duplicate archive path", result.stdout + result.stderr)
 
     def test_release_sidecars_match_archive_provenance_and_payload(self):
-        with tempfile.TemporaryDirectory(prefix="yf_release_sidecars_") as directory:
+        TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="yf_release_sidecars_", dir=TEST_TEMP_ROOT) as directory:
             root = Path(directory)
             archive = root / "release.zip"
             archive.write_bytes(b"release-archive")

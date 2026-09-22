@@ -136,11 +136,20 @@ function Invoke-OptionalGpgVerification([string]$KeyPath, [string]$BinaryPath, [
 }
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')).TrimEnd('\', '/')
-if ([string]::IsNullOrWhiteSpace($CacheDirectory)) { $CacheDirectory = Join-Path $repoRoot '.runlogs\clamav-cache' }
+$artifactsRoot = Join-Path $repoRoot '.artifacts'
+$releasesRoot = Join-Path $repoRoot 'deloy'
+if ([string]::IsNullOrWhiteSpace($CacheDirectory)) { $CacheDirectory = Join-Path $artifactsRoot 'cache\clamav' }
 $cacheRoot = Get-FullLocalPath $CacheDirectory 'CacheDirectory'
 $outputRoot = Get-FullLocalPath $OutputDirectory 'OutputDirectory'
 Assert-NoReparsePoint $cacheRoot
 Assert-NoReparsePoint $outputRoot
+if (!(Test-Within $cacheRoot $artifactsRoot)) {
+    throw "CacheDirectory must be inside the project artifact root: $artifactsRoot"
+}
+if (!((Test-Within $outputRoot $artifactsRoot) -and !$outputRoot.Equals($artifactsRoot, [StringComparison]::OrdinalIgnoreCase)) -and
+    !((Test-Within $outputRoot $releasesRoot) -and !$outputRoot.Equals($releasesRoot, [StringComparison]::OrdinalIgnoreCase))) {
+    throw "OutputDirectory must be below a project artifact root: $artifactsRoot or $releasesRoot"
+}
 if ((Test-Within $cacheRoot $outputRoot) -or (Test-Within $outputRoot $cacheRoot)) {
     throw 'CacheDirectory and OutputDirectory must be separate and cannot contain each other.'
 }

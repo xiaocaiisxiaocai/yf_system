@@ -6,10 +6,13 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_host_artifacts import TestHostArtifactError, verify_test_host_artifacts
 
+TEST_TEMP_ROOT = Path(__file__).resolve().parents[2] / ".artifacts" / "tests" / "tmp"
+TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+
 
 class TestHostArtifactTests(unittest.TestCase):
     def fixture(self):
-        temporary = tempfile.TemporaryDirectory(prefix="yf_test_host_artifacts_")
+        temporary = tempfile.TemporaryDirectory(prefix="yf_test_host_artifacts_", dir=TEST_TEMP_ROOT)
         root = Path(temporary.name)
         api = root / "api"
         host = root / "host"

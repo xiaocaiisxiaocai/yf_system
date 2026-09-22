@@ -236,7 +236,7 @@ export default function TransferDetailPage() {
       <Card title="附件" style={{ marginTop: 16 }}>
         {caps.canEdit && <div style={{ marginBottom: 16 }}><OemUploader transferId={id} onUploaded={() => void load()} /></div>}
         {detail.files.length === 0 ? <Empty description="暂无附件" /> : (
-          <Table rowKey="id" data={detail.files} pagination={false} columns={[
+          <Table rowKey="id" data={detail.files} pagination={false} scroll={{ x: 900 }} columns={[
             { title: '文件名', dataIndex: 'originalName' },
             { title: '大小', width: 110, render: (_: unknown, file: TransferFile) => fmtSize(file.sizeBytes) },
             {

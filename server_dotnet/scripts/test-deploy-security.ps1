@@ -12,7 +12,8 @@ function Reject([scriptblock]$Operation,[string]$Name) {
     Write-Output "PASS $Name"
 }
 
-$tempBase=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'
+$tempBase=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\.artifacts\tests\tmp')).TrimEnd('\')+'\'
+New-Item -ItemType Directory -Path $tempBase -Force | Out-Null
 $root=[IO.Path]::GetFullPath((Join-Path $tempBase ('yf-deploy-security-'+[guid]::NewGuid().ToString('N'))))
 if (!$root.StartsWith($tempBase,[StringComparison]::OrdinalIgnoreCase) -or
     [IO.Path]::GetFileName($root) -notmatch '^yf-deploy-security-[a-f0-9]{32}$') {

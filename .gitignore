@@ -1,6 +1,11 @@
-# Local runtime and acceptance artifacts
-.runlogs/
+# Project-local script output: releases, caches, reports and private backups
 .artifacts/
+# IIS deployment output
+/deloy/
+# Local publishing credentials (included only in the generated external-config example)
+/server_dotnet/deploy/publish-defaults.local.json
+# Legacy runtime directories remain ignored for older local commands
+.runlogs/
 .acceptance-backups/
 .repair-backups/
 .playwright-cli/

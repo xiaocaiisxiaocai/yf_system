@@ -50,7 +50,7 @@ function findActionButton(node, text) {
 }
 
 function authModule(user, permissions = [], menus = []) {
-  const state = { user, menus, hasPerm: (code) => permissions.includes(code) }
+  const state = { user, menus, permissions, hasPerm: (code) => permissions.includes(code) }
   return { useAuth: (selector) => selector ? selector(state) : state }
 }
 
@@ -1669,7 +1669,7 @@ test('main projects with pending child acceptance expose a disabled edit action 
 
 test('dashboard and project detail panels expose retry instead of a false empty state', async () => {
   const iconMock = new Proxy({}, { get: (_, name) => component(name) })
-  const state = { user: { id: 1, realName: '管理员', userType: 'INTERNAL' }, menus: ['dashboard'], hasPerm: () => false }
+  const state = { user: { id: 1, realName: '管理员', userType: 'INTERNAL' }, menus: ['dashboard'], permissions: ['project:list'], hasPerm: () => false }
   const auth = { useAuth: (selector) => selector ? selector(state) : state }
   const cases = [
     {
@@ -1770,7 +1770,7 @@ test('dashboard pending projects can retry, navigate, refresh, and recover from 
     }, { get: (obj, key) => obj[key] ?? component(key) }),
     '@arco-design/web-react/icon': iconMock,
     '../api/client': http,
-    '../store/auth': authModule({ id: 1, realName: '管理员', userType: 'INTERNAL' }, ['project:confirm'], ['dashboard']),
+    '../store/auth': authModule({ id: 1, realName: '管理员', userType: 'INTERNAL' }, ['project:confirm', 'project:list'], ['dashboard']),
     '../api/types': { fmtTime: String },
     'react-router-dom': { Link: component('Link'), useNavigate: () => () => {} },
   }).default
@@ -1827,7 +1827,7 @@ test('supplier dashboard uses company-acceptance wording while internal wording 
     }, { get: (obj, key) => obj[key] ?? component(key) }),
     '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
     '../api/client': http,
-    '../store/auth': authModule({ id: 2, realName: '供应商用户', userType: 'SUPPLIER' }, [], ['dashboard']),
+    '../store/auth': authModule({ id: 2, realName: '供应商用户', userType: 'SUPPLIER' }, ['project:list'], ['dashboard']),
     '../api/types': { fmtTime: String },
     'react-router-dom': { Link: component('Link'), useNavigate: () => () => {} },
   }).default

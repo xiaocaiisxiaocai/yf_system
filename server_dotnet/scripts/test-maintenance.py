@@ -15,6 +15,9 @@ if not __debug__:
 import pymysql
 
 source = Path(__file__).resolve().parents[2]
+test_root = source / ".artifacts" / "tests"
+test_temp_root = test_root / "tmp"
+test_temp_root.mkdir(parents=True, exist_ok=True)
 url = urlsplit(os.environ.get("YF_TEST_DATABASE_URL", ""))
 if url.scheme != "mysql" or url.hostname not in ("localhost", "127.0.0.1", "::1"):
     raise SystemExit("Set YF_TEST_DATABASE_URL to an explicit local test-management connection")
@@ -42,7 +45,7 @@ try:
         cursor.execute("""SELECT event_definition,status FROM information_schema.events
                         WHERE event_schema=%s AND event_name='keep_event'""", (schemas[2],))
         event_before = cursor.fetchone()
-    with tempfile.TemporaryDirectory(prefix="yf_maintenance_") as directory:
+    with tempfile.TemporaryDirectory(prefix="yf_maintenance_", dir=test_temp_root) as directory:
         root = Path(directory)
         app = root / "application"
         (app / "wwwroot").mkdir(parents=True)
@@ -126,7 +129,7 @@ finally:
 
 if report is None:
     raise RuntimeError("Maintenance checks completed without evidence")
-report_path = source / ".runlogs/maintenance-results.json"
-report_path.parent.mkdir(exist_ok=True)
+report_path = test_root / "maintenance-results.json"
+report_path.parent.mkdir(parents=True, exist_ok=True)
 report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 print("PASS real database rows, UTF-8 and binary bytes; IIS was not used")

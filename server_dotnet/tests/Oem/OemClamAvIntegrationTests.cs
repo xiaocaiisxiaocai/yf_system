@@ -58,8 +58,10 @@ public sealed class OemClamAvIntegrationTests
         finally { Directory.Delete(directory, recursive: true); }
     }
 
-    [Fact(Timeout = 240_000)]
-    public async Task RealEngineControlsPromotionAndBlocksInfectedTransfer()
+    [Theory(Timeout = 240_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RealEngineControlsPromotionAndBlocksInfectedTransfer(bool backgroundWorkerEnabled)
     {
         var port = RealPort();
         var ct = TestContext.Current.CancellationToken;
@@ -67,6 +69,7 @@ public sealed class OemClamAvIntegrationTests
         {
             args.Add("--App:OemScanner:Engine=ClamAV");
             args.Add("--App:OemScanner:ClamAv:Port=" + port);
+            args.Add("--App:WorkerEnabled=" + backgroundWorkerEnabled);
         });
         var world = await OemTransferFlowTests.OutboundWorldAsync(host, ct);
         // The configured engine supports this gate; the daemon must have current official definitions.
@@ -85,8 +88,19 @@ public sealed class OemClamAvIntegrationTests
             var file = await host.UploadAsync(world.Vendor, id, name, bytes, ct);
             await world.Vendor.PostAsync($"/api/v1/oem/transfers/{id}/send",
                 new { version = OemTransferFlowTests.Version(draft) + 1 }, ct).Ok();
-            await host.RunOemJobsAsync(ct);
+            if (!backgroundWorkerEnabled) await host.RunOemJobsAsync(ct);
             var detail = await world.Vendor.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
+            if (backgroundWorkerEnabled)
+            {
+                // Exercise the production hosted scheduler, without manually driving its jobs.
+                using var processing = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                processing.CancelAfter(TimeSpan.FromSeconds(45));
+                while (detail["summary"]!["lifecycleStatus"]!.GetValue<string>() == "SEALED")
+                {
+                    await Task.Delay(100, processing.Token);
+                    detail = await world.Vendor.GetAsync($"/api/v1/oem/transfers/{id}", processing.Token).Ok();
+                }
+            }
             Assert.Equal(lifecycle, detail["summary"]!["lifecycleStatus"]!.GetValue<string>());
             Assert.Equal(verdict, detail["files"]![0]!["scanStatus"]!.GetValue<string>());
             await using var conn = await host.OpenAsync(ct);

@@ -515,6 +515,7 @@ test('permission tree keeps menu-only grants, adds a parent for actions and remo
 test('supplier route accepts either supplier capability while account-only UI keeps supplier writes hidden', async () => {
   const child = React.createElement('Allowed')
   const app = loadTs('src/App.tsx', {
+    './features': loadTs('src/features.ts'),
     '@arco-design/web-react': arco,
     './api/client': { bootAuth() {} },
     './store/auth': {

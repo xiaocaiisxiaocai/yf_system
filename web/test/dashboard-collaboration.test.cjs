@@ -24,7 +24,9 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-function loadDashboard(http, collaboration, navigations = []) {
+function loadDashboard(http, collaboration, navigations = [], auth = createStore(() => ({
+  user: { id: 1, realName: '协作用户' }, menus: ['dashboard'], permissions: ['project:list'],
+}))) {
   const filename = path.resolve(__dirname, '../src/pages/Dashboard.tsx')
   const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
     compilerOptions: {
@@ -42,7 +44,7 @@ function loadDashboard(http, collaboration, navigations = []) {
     '../api/client': http,
     '../api/types': { fmtTime: String },
     '../store/auth': {
-      useAuth: selector => selector({ user: { id: 1, realName: '协作用户' }, menus: ['dashboard'] }),
+      useAuth: auth,
     },
     '../store/collaboration': { useCollaboration: collaboration },
   }
@@ -64,6 +66,32 @@ const summary = {
 }
 
 const emptyPage = { list: [], total: 0, page: 1, pageSize: 10 }
+
+test('dashboard menu alone does not request project data, including after project access is revoked', async () => {
+  const calls = []
+  const auth = createStore(() => ({ user: { id: 1, realName: '供应商账号管理员' }, menus: ['dashboard', 'supplier:list'], permissions: ['supplier:account'] }))
+  const collaboration = createStore(() => ({ revision: 'initial', status: 'ready' }))
+  const Dashboard = loadDashboard({ get: async url => {
+    calls.push(url)
+    return { data: url === '/dashboard/summary' ? summary : emptyPage }
+  } }, collaboration, [], auth)
+  let renderer
+  try {
+    await act(async () => { renderer = create(React.createElement(Dashboard)) })
+    assert.deepEqual(calls, [])
+    assert.match(renderer.root.findByType('Result').props.subTitle, /未分配项目查看权限/)
+    await act(async () => collaboration.setState({ revision: 'changed-without-access' }))
+    assert.deepEqual(calls, [])
+    await act(async () => auth.setState({ permissions: ['supplier:account', 'project:list'] }))
+    assert.deepEqual(calls.sort(), ['/dashboard/messages', '/dashboard/pending-projects', '/dashboard/summary'])
+    const count = calls.length
+    await act(async () => auth.setState({ permissions: ['supplier:account'] }))
+    await act(async () => collaboration.setState({ revision: 'changed-after-revocation' }))
+    assert.equal(calls.length, count)
+    assert.equal(renderer.root.findAllByProps({ className: 'dashboard-collaboration' }).length, 0)
+    assert.match(renderer.root.findByType('Result').props.subTitle, /未分配项目查看权限/)
+  } finally { if (renderer) await act(async () => renderer.unmount()) }
+})
 
 test('network recovery reloads dashboard resources even when server revision is unchanged', async () => {
   const collaboration = createStore(() => ({ revision: 'same-server-revision', status: 'ready' }))

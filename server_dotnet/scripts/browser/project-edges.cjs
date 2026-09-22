@@ -142,7 +142,7 @@ async function uploadFixture(context, token, projectId, name, bytes) {
       assert.equal(normal.list.length, 10);
     });
 
-    await record('主项目列表失败可重试，供应商选项失败禁止创建并可恢复', async () => {
+    await record('主项目列表可重试，供应商失败可打开表单但禁止提交并保留草稿恢复', async () => {
       page.expectedServerErrors = new Set([groupsPath, '/api/v1/supplier-options']);
       const failGroups = route => route.fulfill({
         status: 503, contentType: 'application/json', body: '{"code":50301,"message":"temporary test failure"}',
@@ -159,17 +159,69 @@ async function uploadFixture(context, token, projectId, name, bytes) {
       await page.route('**/api/v1/supplier-options', failSuppliers);
       await page.reload();
       await page.getByRole('button', { name: '重试加载供应商', exact: true }).waitFor();
-      assert(await page.getByRole('button', { name: '新建主项目', exact: true }).isDisabled());
-      await page.unroute('**/api/v1/supplier-options', failSuppliers);
-      const restored = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/supplier-options' && response.status() === 200);
-      await page.getByRole('button', { name: '重试加载供应商', exact: true }).click(); await restored;
+      assert(await page.getByRole('button', { name: '新建主项目', exact: true }).isEnabled());
       await page.getByRole('button', { name: '新建主项目', exact: true }).click();
       const dialog = page.getByRole('dialog');
+      await dialog.getByText('供应商选项加载失败，请刷新基础数据后重试。', { exact: true }).waitFor();
+      assert(await dialog.getByRole('button', { name: '创建主项目', exact: true }).isDisabled());
+      await dialog.getByRole('textbox', { name: '主项目名称', exact: true }).fill('恢复后应保留的草稿');
+      await page.unroute('**/api/v1/supplier-options', failSuppliers);
+      const restored = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/supplier-options' && response.status() === 200);
+      await dialog.getByRole('button', { name: '刷新基础数据', exact: true }).click(); await restored;
+      await page.waitForFunction(() => [...document.querySelectorAll('.arco-modal button')].some(button => button.textContent.trim() === '创建主项目' && !button.disabled));
+      assert.equal(await dialog.getByRole('textbox', { name: '主项目名称', exact: true }).inputValue(), '恢复后应保留的草稿');
       await dialog.getByRole('button', { name: '创建主项目', exact: true }).click();
-      await dialog.getByText('请输入主项目名称', { exact: true }).waitFor();
+      await dialog.getByText('请至少创建一个子项目', { exact: true }).waitFor();
       await dialog.getByRole('button', { name: '取消', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' });
       page.expectedServerErrors.clear();
+      await search(flow.groupName);
+    });
+
+    await record('空供应商明确说明创建条件，维护入口和刷新恢复保留已填内容', async () => {
+      const empty = route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+      await page.route('**/api/v1/supplier-options', empty);
+      await page.reload();
+      await page.getByRole('button', { name: '新建主项目', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByText('暂无启用的供应商，请先新增或启用供应商。', { exact: false }).waitFor();
+      assert(await dialog.getByRole('button', { name: '创建主项目', exact: true }).isDisabled());
+      const link = dialog.getByRole('link', { name: '维护供应商（新窗口）', exact: true });
+      assert.equal(await link.getAttribute('href'), '/suppliers');
+      assert.equal(await link.getAttribute('target'), '_blank');
+      await dialog.getByRole('textbox', { name: '主项目名称', exact: true }).fill('空供应商恢复草稿');
+      await page.screenshot({ path: OUT + '/project-empty-supplier.png' });
+      await page.unroute('**/api/v1/supplier-options', empty);
+      await dialog.getByRole('button', { name: '刷新基础数据', exact: true }).click();
+      await dialog.getByText('暂无启用的供应商，请先新增或启用供应商。', { exact: false }).waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => [...document.querySelectorAll('.arco-modal button')].some(button => button.textContent.trim() === '创建主项目' && !button.disabled));
+      assert.equal(await dialog.getByRole('textbox', { name: '主项目名称', exact: true }).inputValue(), '空供应商恢复草稿');
+      await dialog.getByRole('button', { name: '取消', exact: true }).click();
+      await dialog.waitFor({ state: 'hidden' });
+    });
+
+    await record('缺少项目字典和有效课别负责人时展示维护指引且刷新不清空表单', async () => {
+      const empty = route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+      await page.route('**/api/v1/project-dictionaries?*', empty);
+      await page.route('**/api/v1/project-owner-options', empty);
+      await page.getByRole('button', { name: '新建主项目', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByText('暂无启用的 Robot 厂商', { exact: false }).waitFor();
+      await dialog.getByText('暂无启用的优先级', { exact: false }).waitFor();
+      await dialog.getByText('暂无已关联有效课别的负责人', { exact: false }).waitFor();
+      assert(await dialog.getByRole('button', { name: '创建主项目', exact: true }).isDisabled());
+      assert.equal(await dialog.getByRole('link', { name: '维护负责人（新窗口）', exact: true }).getAttribute('href'), '/org/users');
+      assert.equal(await dialog.getByRole('link', { name: '维护数据字典（新窗口）', exact: true }).getAttribute('href'), '/system/dictionaries');
+      await dialog.getByRole('textbox', { name: '主项目名称', exact: true }).fill('字典恢复草稿');
+      await page.screenshot({ path: OUT + '/project-empty-metadata.png' });
+      await page.unroute('**/api/v1/project-dictionaries?*', empty);
+      await page.unroute('**/api/v1/project-owner-options', empty);
+      await dialog.getByRole('button', { name: '刷新基础数据', exact: true }).click();
+      await dialog.getByText('创建前请补齐基础数据', { exact: true }).waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => [...document.querySelectorAll('.arco-modal button')].some(button => button.textContent.trim() === '创建主项目' && !button.disabled));
+      assert.equal(await dialog.getByRole('textbox', { name: '主项目名称', exact: true }).inputValue(), '字典恢复草稿');
+      await dialog.getByRole('button', { name: '取消', exact: true }).click();
+      await dialog.waitFor({ state: 'hidden' });
       await search(flow.groupName);
     });
 

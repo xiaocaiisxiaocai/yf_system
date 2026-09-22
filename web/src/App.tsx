@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Result, Spin } from '@arco-design/web-react'
 import { useAuth } from './store/auth'
 import { bootAuth } from './api/client'
+import { OEM_UI_ENABLED } from './features'
 
 const AdminLayout = lazy(() => import('./layouts/AdminLayout'))
 const Login = lazy(() => import('./pages/Login'))
@@ -116,25 +117,27 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/change-password" element={<Authenticated><ChangePassword /></Authenticated>} />
-        <Route path="/oem" element={<Guard><OemInternalLayout /></Guard>}>
-          <Route index element={<OemLanding />} />
-          <Route path="transfers" element={<OemTransferList />} />
-          <Route path="transfers/:id" element={<OemTransferDetail />} />
-          <Route path="approvals" element={<Guard permission="oem:flow_approve"><OemApprovals /></Guard>} />
-          <Route path="admin/companies" element={<Guard anyPermission={['oem:company_manage', 'oem:account_manage']}><OemCompanies /></Guard>} />
-          <Route path="admin/flow-templates" element={<Guard permission="oem:flow_template_manage"><OemFlowTemplates /></Guard>} />
-          <Route path="admin/leaders" element={<Guard permission="dept:leader_manage"><OemLeaders /></Guard>} />
-          <Route path="admin/retention" element={<Guard permission="oem:retention_template_manage"><OemRetention /></Guard>} />
-          <Route path="admin/settings" element={<Guard anyPermission={['oem:file_policy_manage', 'oem:notify_manage']}><OemSettings /></Guard>} />
-          <Route path="admin/audit" element={<Guard permission="oem:audit_view"><OemAudit /></Guard>} />
-        </Route>
-        <Route path="/oem-portal/login" element={<PortalLogin />} />
-        <Route path="/oem-portal/change-password" element={<PortalChangePassword />} />
-        <Route path="/oem-portal" element={<PortalLayout />}>
-          <Route index element={<Navigate to="transfers" replace />} />
-          <Route path="transfers" element={<OemTransferList />} />
-          <Route path="transfers/:id" element={<OemTransferDetail />} />
-        </Route>
+        {OEM_UI_ENABLED && <>
+          <Route path="/oem" element={<Guard><OemInternalLayout /></Guard>}>
+            <Route index element={<OemLanding />} />
+            <Route path="transfers" element={<OemTransferList />} />
+            <Route path="transfers/:id" element={<OemTransferDetail />} />
+            <Route path="approvals" element={<Guard permission="oem:flow_approve"><OemApprovals /></Guard>} />
+            <Route path="admin/companies" element={<Guard anyPermission={['oem:company_manage', 'oem:account_manage']}><OemCompanies /></Guard>} />
+            <Route path="admin/flow-templates" element={<Guard permission="oem:flow_template_manage"><OemFlowTemplates /></Guard>} />
+            <Route path="admin/leaders" element={<Guard permission="dept:leader_manage"><OemLeaders /></Guard>} />
+            <Route path="admin/retention" element={<Guard permission="oem:retention_template_manage"><OemRetention /></Guard>} />
+            <Route path="admin/settings" element={<Guard anyPermission={['oem:file_policy_manage', 'oem:notify_manage']}><OemSettings /></Guard>} />
+            <Route path="admin/audit" element={<Guard permission="oem:audit_view"><OemAudit /></Guard>} />
+          </Route>
+          <Route path="/oem-portal/login" element={<PortalLogin />} />
+          <Route path="/oem-portal/change-password" element={<PortalChangePassword />} />
+          <Route path="/oem-portal" element={<PortalLayout />}>
+            <Route index element={<Navigate to="transfers" replace />} />
+            <Route path="transfers" element={<OemTransferList />} />
+            <Route path="transfers/:id" element={<OemTransferDetail />} />
+          </Route>
+        </>}
         <Route
           path="/"
           element={

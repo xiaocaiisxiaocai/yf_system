@@ -54,25 +54,56 @@ OEM 文件传递是与供应商协作平级、互不可见的第二条业务线�
 需要 .NET 10 SDK、MySQL（现有结构兼容 MySQL 5.7/8）以及现有数据对应的独立存储目录。
 
 1. 将 `deploy/appsettings.example.json` 复制到 **IIS 网站以外**的私有目录，填写连接串、随机 JWT 密钥、存储绝对路径和网站来源。该文件包含机密，不要提交版本库。
-2. 本地 HTTP 调试设置 `CookieSecure=false`，`WebBaseUrl=http://127.0.0.1:5173`。正式 HTTPS 必须为 `true`。
+2. 本地 HTTP 调试设置 `CookieSecure=false`，`WebBaseUrl=http://127.0.0.1:5180`。正式 HTTPS 必须为 `true`。需要使用 OEM 时，配置独立的 `OemStorageRoot`、`WorkerEnabled=true` 和本机真实 ClamAV 扫描器。
 3. 在 `server_dotnet` 目录执行：
 
 ```powershell
 $env:YF_CONFIG_PATH = 'D:\YfConfig\appsettings.Local.json'
-$env:ASPNETCORE_URLS = 'http://127.0.0.1:8080'
-dotnet run --project .\Yf.Api
+dotnet run --project .\Yf.Api --launch-profile Yf.Local
 ```
 
 另一个终端在 `web` 目录执行：
 
 ```powershell
 npm ci
-npm run dev
+npm run dev -- --host 127.0.0.1 --port 5180 --strictPort
 ```
 
 前端开发代理仍指向 `127.0.0.1:8080`。先停止你确认属于该项目的旧后端，再用新后端占用此端口；不要同时让两个后端写同一套业务库与文件目录。若需并行评估，使用独立数据库、存储、监听端口及前端代理。
 
 配置优先级：`appsettings.json` → 当前环境配置 → `appsettings.Local.json` → `YF_CONFIG_PATH` 指定文件 → 环境变量 → 命令行。本地直接运行时可使用外部配置或进程级 `App__ConnectionString` / `App__JwtSecret` 环境变量，避免在命令行出现密码。正式 IIS 安装和维护只支持 `YF_CONFIG_PATH` 指向的网站外部 JSON 主配置，并拒绝站点、应用池、机器或维护进程中的 `App__*` / `App:*` 高优先级覆盖。配置更改后重启应用。
+
+### 开发启动前检查
+
+`Yf.Local` 启动配置使用 `Development` 环境并监听 `http://127.0.0.1:8080`，不自动打开浏览器。可在仓库根目录先运行：
+
+```powershell
+# 首次使用先还原锁定依赖；之后检查脚本每次重新构建当前后端。
+dotnet restore .\server_dotnet\Yf.Api\Yf.Api.csproj --locked-mode
+powershell -NoProfile -File .\server_dotnet\scripts\check-dev.ps1
+# 使用外部配置时显式指定与启动相同的文件：
+powershell -NoProfile -File .\server_dotnet\scripts\check-dev.ps1 -ConfigPath 'D:\YfConfig\appsettings.Local.json'
+```
+
+脚本默认检查 `Yf.Api/appsettings.Local.json`，输出 JSON，失败返回非零。它先构建源码，再检查实际生效的配置、数据库迁移、两套存储的临时文件读写与清理、后台任务开关，以及真实扫描器和数据库内的病毒库过期策略。检查不执行数据库初始化或清理，不创建业务记录、不发送邮件、不启动后台任务。已有 `App__*` 环境变量仍参与配置覆盖，检查和正常启动应使用相同环境。
+
+`readyForStartup=true` 仅表示本次依赖检查通过，不能证明 API 已监听。启动后还需检查 `http://127.0.0.1:8080/health` 与实际登录/业务接口；现有 `/health` 只检查数据库连接。后台扫描、发布、审批检查、清理和恢复核对各自独立调度，同一任务不会重叠执行。
+
+常见检查结果：
+
+| `issues` 代码 | 处理方向 |
+|---|---|
+| `configuration-invalid` / `non-loopback-target` | 核对 JSON、存储路径隔离及本机数据库/网站地址；本工具仅用于本地开发 |
+| `database-not-ready` | 核对数据库连通性、账号授权及 EF 迁移历史；不要直接清空数据库 |
+| `storage-read-write-failed` / `oem-storage-read-write-failed` | 核对对应目录是否存在、当前用户读写删除权限和磁盘状态 |
+| `oem-storage-not-configured` | 配置独立的 `App:OemStorageRoot` |
+| `worker-disabled` | 将本机开发配置的 `App:WorkerEnabled` 设为 `true` 并重启 |
+| `scanner-must-use-clamav` / `scanner-not-ready` | 核对扫描器选择、clamd 进程、回环端口、病毒库和扫描器日志 |
+| `scanner-signatures-stale` | 用 FreshClam 更新病毒库，并确认 clamd 加载了新版本 |
+| `oem-reconciliation-required` | 存储仍处于恢复核对状态；检查恢复核对任务及其日志，完成后重新检查，勿直接清除标记 |
+| `readiness-timeout` | 依赖检查超过 60 秒；核对数据库响应、存储 I/O 和扫描器日志 |
+
+开发用 ClamAV 可以使用便携组件，无需安装 Windows 服务。让 `clamd.conf` 使用数字回环地址及 `3310` 端口，在其中设置持续保存的病毒库目录，并与后端 `App:OemScanner:ClamAv` 保持一致。当前工作站的便携目录位于 `%LOCALAPPDATA%\YfSystem\Runtime\ClamAV-1.4.6`，日志位于其 `logs` 子目录；重启 Windows 后需重新启动该目录中的 `clamd.exe` 并显式传入同目录 `clamd.conf`。需要更新病毒库时运行同一组件的 `freshclam.exe --config-file=<freshclam.conf 的绝对路径>`。此开发配置未安装自动更新服务；离线病毒库仍受实际业务过期策略约束。配置和具体安装步骤见[部署说明](deploy/README.md)。
 
 ## 数据库初始化与升级
 
@@ -179,7 +210,7 @@ Push-Location ..\web
 try { npm run build } finally { Pop-Location }
 # 显式设置本机测试管理连接 YF_TEST_DATABASE_URL（与 HTTP 测试相同）。
 $env:YF_PLAYWRIGHT_RUNNER = 'C:\你的工具目录\playwright-skill\run.js'
-python .\scripts\test-browser.py --output ..\.runlogs\browser-NEW
+python .\scripts\test-browser.py --output ..\.artifacts\tests\browser\browser-NEW
 ```
 
 每次使用新的空证据目录。结果含实际步骤、源码与被测构建产物 SHA-256、截图、下载完整性及资源清理状态；测试期间修改源码或产物会使本轮校验失败。它创建随机临时数据库、文件目录、账号和独立回环测试宿主，使用工号密码直接登录，保留生产限速，邮件发送关闭。结束只清理本轮资源与私有登录状态。
@@ -191,12 +222,12 @@ python .\scripts\test-browser.py --output ..\.runlogs\browser-NEW
 ## IIS 发布
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\publish-iis.ps1 -FreshOutputDirectory D:\Releases\YfDotNet-NEW
+powershell -ExecutionPolicy Bypass -File .\scripts\publish-iis.ps1
 ```
 
-发布脚本参数以 `Get-Help .\scripts\publish-iis.ps1 -Detailed` 为准。输出目录必须是新目录或空目录。发布包包含后端、`wwwroot` 前端、IIS 配置、安装脚本、说明与 SHA-256 清单。将整个发布包复制到另一台服务器，按包内 `README.md` 安装。不会在开发电脑上自动部署 IIS。
+发布脚本参数以 `Get-Help .\scripts\publish-iis.ps1 -Detailed` 为准。默认在项目根 `deloy` 下创建带 UTC 时间、Git 短提交和随机后缀的唯一版本目录；也可用 `-FreshOutputDirectory` 指定该目录下尚不存在或为空的子目录，项目外路径会被拒绝。ClamAV 下载缓存默认为 `.artifacts/cache/clamav`，显式缓存路径也必须保留在项目 `.artifacts` 内。默认只生成版本文件夹，包含后端、`wwwroot` 前端、IIS 配置、安装脚本、说明及内部 `manifest.json`；内部清单供安装校验使用，请保留。仅显式增加 `-CreateArchive` 时生成旁边的 ZIP、发布清单和 SHA256 文件。将整个发布包复制到另一台服务器，按包内 `README.md` 安装。不会在开发电脑上自动部署 IIS。
 
-开发机可运行 `python .\scripts\verify-release.py D:\Releases\YfDotNet-NEW.zip`，先核对发布脚本同时生成的 `.zip.sha256`、`.release-manifest.json`、解压 ZIP 的全部清单哈希、安全配置与缺配置启动拒绝，实测生产入口、静态页面；三个发布制品缺失或内容不一致都会失败。完整 HTTP 测试由独立宿主加载发布包中的同一 API 二进制与依赖。报告区分这些证据，不将开发机检查表述为目标 IIS/SMTP 验收。
+如需验证 ZIP，先用 `-CreateArchive` 打包，再运行 `python .\scripts\verify-release.py ..\deloy\<版本目录>.zip`，先核对发布脚本同时生成的 `.zip.sha256`、`.release-manifest.json`、解压 ZIP 的全部清单哈希、安全配置与缺配置启动拒绝，实测生产入口、静态页面；三个发布制品缺失或内容不一致都会失败。完整 HTTP 测试由独立宿主加载发布包中的同一 API 二进制与依赖，验证报告写入 `.artifacts/reports/releases`。测试报告、浏览器证据和可清理临时目录写入 `.artifacts/tests`。报告区分这些证据，不将开发机检查表述为目标 IIS/SMTP 验收。
 
 ## IIS 正式服务器维护
 

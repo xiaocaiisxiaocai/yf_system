@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Admin;
 using Yf.Api.Modules.Files;
@@ -20,18 +22,43 @@ public static class ApiApplication
         var inspectDevelopment = args.Contains("--inspect-development-data", StringComparer.Ordinal);
         var resetDevelopment = args.Contains("--reset-development-data", StringComparer.Ordinal);
         var oemMarkRestored = args.Contains("--oem-mark-restored", StringComparer.Ordinal);
-        if (new[] { initializeDatabase, migrateDatabase, inspectDevelopment, resetDevelopment, oemMarkRestored }.Count(value => value) > 1)
-            throw new ArgumentException("Choose one database operation.");
-        args = args.Where(x => x is not ("--initialize-database" or "--migrate-database" or "--inspect-development-data" or "--reset-development-data" or "--oem-mark-restored")).ToArray();
-        var builder = WebApplication.CreateBuilder(args);
-        builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
-        var externalConfig = Environment.GetEnvironmentVariable("YF_CONFIG_PATH");
-        if (!string.IsNullOrWhiteSpace(externalConfig))
+        var checkDevelopmentReadiness = args.Contains("--check-development-readiness", StringComparer.Ordinal);
+        if (new[] { initializeDatabase, migrateDatabase, inspectDevelopment, resetDevelopment, oemMarkRestored, checkDevelopmentReadiness }.Count(value => value) > 1)
         {
-            if (!Path.IsPathFullyQualified(externalConfig)) throw new InvalidOperationException("YF_CONFIG_PATH must be an absolute file path.");
-            builder.Configuration.AddJsonFile(externalConfig, optional: false, reloadOnChange: false);
+            if (checkDevelopmentReadiness)
+            {
+                WriteDevelopmentReadiness(DevelopmentReadiness.ConfigurationFailure("operation-conflict"));
+                return null;
+            }
+            throw new ArgumentException("Choose one database operation.");
         }
-        builder.Configuration.AddEnvironmentVariables().AddCommandLine(args);
+        args = args.Where(x => x is not ("--initialize-database" or "--migrate-database" or "--inspect-development-data" or "--reset-development-data" or "--oem-mark-restored" or "--check-development-readiness")).ToArray();
+        if (checkDevelopmentReadiness)
+        {
+            DevelopmentReadinessReport result;
+            try
+            {
+                var readinessBuilder = CreateConfiguredBuilder(args);
+                configure?.Invoke(readinessBuilder);
+                var readinessOptions = readinessBuilder.Configuration.GetSection("App").Get<AppOptions>() ?? new();
+                using var readinessTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+                result = await DevelopmentReadiness.CheckAsync(
+                    readinessOptions, readinessBuilder.Environment.ContentRootPath, readinessTimeout.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                result = DevelopmentReadiness.TimeoutFailure();
+            }
+            catch
+            {
+                // This diagnostic is intentionally safe to paste into tickets: never emit
+                // configuration values, paths, connection strings, or exception messages.
+                result = DevelopmentReadiness.ConfigurationFailure("configuration-invalid");
+            }
+            WriteDevelopmentReadiness(result);
+            return null;
+        }
+        var builder = CreateConfiguredBuilder(args);
         var options = builder.Configuration.GetSection("App").Get<AppOptions>() ?? new();
         options.Validate();
         options.ValidateStorageLocation(builder.Environment.ContentRootPath);
@@ -40,9 +67,9 @@ public static class ApiApplication
             var result = resetDevelopment
                 ? await DevelopmentDataReset.ResetAsync(options, builder.Configuration["confirm-database"], builder.Configuration["confirm-storage-root"])
                 : await DevelopmentDataReset.InspectAsync(options);
-            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result, new System.Text.Json.JsonSerializerOptions
+            Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions
             {
-                WriteIndented = true, PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+                WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase
             }));
             return null;
         }
@@ -123,5 +150,30 @@ public static class ApiApplication
         if (File.Exists(Path.Combine(app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot"), "index.html")))
             app.MapFallbackToFile("index.html");
         return app;
+    }
+
+    private static WebApplicationBuilder CreateConfiguredBuilder(string[] args)
+    {
+        var builder = WebApplication.CreateBuilder(args);
+        builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
+        var externalConfig = Environment.GetEnvironmentVariable("YF_CONFIG_PATH");
+        if (!string.IsNullOrWhiteSpace(externalConfig))
+        {
+            if (!Path.IsPathFullyQualified(externalConfig)) throw new InvalidOperationException("YF_CONFIG_PATH must be an absolute file path.");
+            builder.Configuration.AddJsonFile(externalConfig, optional: false, reloadOnChange: false);
+        }
+        builder.Configuration.AddEnvironmentVariables().AddCommandLine(args);
+        return builder;
+    }
+
+    private static void WriteDevelopmentReadiness(DevelopmentReadinessReport result)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        }));
+        Environment.ExitCode = result.ReadyForStartup ? 0 : 1;
     }
 }

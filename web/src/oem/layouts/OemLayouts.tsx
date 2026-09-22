@@ -11,6 +11,7 @@ import { OemApi } from '../api/OemApi'
 import { bootPortalSession, portalHttp, portalLogout, PORTAL_BASE, usePortalAuth } from '../api/portalSession'
 import { oemHome } from '../oemNavigation'
 import { OemProvider } from '../OemContext'
+import './OemLayouts.css'
 
 const { Header, Sider, Content } = Layout
 
@@ -31,11 +32,11 @@ function Shell({ title, subtitle, menu, account }: { title: string; subtitle?: s
     </Menu>
   )
   return (
-    <Layout className="layout-shell">
+    <Layout className="layout-shell oem-shell">
       <Header className="layout-header">
         {items.length > 0 && <Button className="mobile-menu-trigger" type="text" aria-label="打开导航菜单"
           icon={<IconMenu />} onClick={() => setMobileMenuOpen(true)} />}
-        <div className="layout-logo" title={title}>
+        <div className="layout-logo" title={subtitle ? `${title} · ${subtitle}` : title}>
           <img src="/saa-logo.svg" alt="SAA" />
           <span>{title}</span>
           {subtitle && <span style={{ marginLeft: 12, fontSize: 13, opacity: 0.8 }}>{subtitle}</span>}
@@ -90,8 +91,8 @@ export function OemInternalLayout() {
     <OemProvider value={{ api: internalApi, realm: 'internal', base: '/oem', permissions: set, userId: user?.id ?? null }}>
       <Shell title="OEM 文件传递" menu={menu} account={
         <Space>
-          <Button type="text" icon={<IconLeft />} style={{ color: 'inherit' }} onClick={() => navigate('/')}>返回协作平台</Button>
-          <span>{user?.realName}</span>
+          <Button type="text" icon={<IconLeft />} aria-label="返回协作平台" title="返回协作平台" style={{ color: 'inherit' }} onClick={() => navigate('/')}><span className="oem-return-label">返回协作平台</span></Button>
+          <span className="oem-account-name" title={user?.realName}>{user?.realName}</span>
         </Space>
       } />
     </OemProvider>
@@ -138,7 +139,7 @@ export function PortalLayout() {
             <Menu.Item key="logout"><IconPoweroff style={{ marginRight: 8 }} />退出登录</Menu.Item>
           </Menu>
         }>
-          <Button type="text" style={{ color: 'inherit' }}>{account?.realName} <IconDown /></Button>
+          <Button className="oem-account-button" type="text" style={{ color: 'inherit' }} title={account?.realName}><span className="oem-account-name">{account?.realName}</span><IconDown /></Button>
         </Dropdown>
       } />
     </OemProvider>

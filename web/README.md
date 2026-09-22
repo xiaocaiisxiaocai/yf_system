@@ -1,40 +1,21 @@
-# React + TypeScript + Vite
+# 供应商协作平台前端
 
-## 本项目 PDF 在线预览
+React、TypeScript、Vite 和 Arco Design。API 通过 `/api/v1` 访问；开发代理指向 `127.0.0.1:8080`，正式环境由 ASP.NET Core 与前端同站点提供服务。
 
-PDF 使用本地 PDF.js 6.3.289 按页渲染，不依赖浏览器内置 PDF 插件。支持翻页、页码跳转、适合宽度、缩放和错误重试；密码保护的 PDF 提示下载查看。
+## 开发与验证
 
-开发/构建使用 Node.js 22.13+ 或 24+（本机验证为24.19.0），运行 `npm ci` 后使用原有 `npm run dev` / `npm run build`。
-`pdf-assets.ts` 为开发服务提供字体、CMap 和图像解码资源，并自动打包到 `dist/pdfjs/<版本>/`；worker 通过 Vite 生成本地资源 URL，渲染引擎按需加载。
-部署时发布整个 `dist`，保留 `pdfjs` 和 `assets` 目录及许可证，确保 `.mjs/.js`、`.wasm` 分别以 JavaScript、`application/wasm` 类型返回。PDF 文档仍通过既有带认证的 `/files/:id/content` 获取。
+在本目录执行 `npm run dev`、`npm run build`、`npm run lint` 和 `npm test`。首次安装依赖使用 `npm ci`；开发环境使用 Node.js 22.13+ 或 24+。
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+`npm run dev` 和 `npm run build` 会先生成 Excel、PPTX 预览页面。`generated/`、`.excel-preview-build/`、`.pptx-preview-build/` 和 `dist/` 均为项目内构建产物，不应手工编辑。
 
-Currently, two official plugins are available:
+## 文件预览
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+PDF 使用本地 PDF.js 6.3.289 按页渲染，支持翻页、页码跳转、适合宽度、缩放和错误重试；加密 PDF 提示下载查看。`pdf-assets.ts` 提供并打包字体、CMap 和图像解码资源，worker 使用本地资源 URL。
 
-## React Compiler
+实际预览源码及来源记录位于 `vendor/`。项目根的 `third_party/` 还包含预览测试所需样本，不能作为无用目录直接删除。
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+正式部署须发布完整 `dist/`，保留 `pdfjs/`、`assets/` 及许可证，确保 `.mjs/.js`、`.wasm` 分别以 JavaScript、`application/wasm` 类型返回。项目统一使用 [IIS 发布脚本](../server_dotnet/scripts/publish-iis.ps1) 打包前后端，输出位于项目内 `deloy/`。
 
-## Expanding the Oxlint configuration
+当前 OEM 界面暂时隐藏，统一开关位于 `src/features.ts`，业务源码与数据保留。
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Windows 浏览器验收须先遵守全局 CORE-19 的账户保护要求；普通构建、Lint 和 Node 回归测试不需要启动浏览器。

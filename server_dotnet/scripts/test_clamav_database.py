@@ -16,11 +16,10 @@ from pathlib import Path
 SERVER_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = SERVER_ROOT.parent
 HELPER = SERVER_ROOT / "deploy" / "clamav-database.ps1"
-REAL_DATABASE = REPO_ROOT / ".runlogs" / "clamav-runtime-smoke" / "database"
+CACHE_ROOT = REPO_ROOT / ".artifacts" / "cache" / "clamav"
+REAL_DATABASE = CACHE_ROOT / "database"
 SIGTOOL = (
-    REPO_ROOT
-    / ".runlogs"
-    / "clamav-runtime-smoke"
+    CACHE_ROOT
     / "clamav-1.4.6.win.x64"
     / "sigtool.exe"
 )
@@ -44,9 +43,9 @@ class ClamAvDatabaseTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         if not SIGTOOL.is_file() or any(not (REAL_DATABASE / name).is_file() for name in NAMES):
             raise unittest.SkipTest("real ClamAV 1.4.6 sigtool/CVD fixtures are unavailable")
-        runlogs = REPO_ROOT / ".runlogs"
-        runlogs.mkdir(exist_ok=True)
-        cls.temporary = tempfile.TemporaryDirectory(dir=runlogs)
+        temporary_root = REPO_ROOT / ".artifacts" / "tests" / "tmp"
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        cls.temporary = tempfile.TemporaryDirectory(prefix="yf_clamav_database_", dir=temporary_root)
         cls.root = Path(cls.temporary.name)
         cls.source = cls.root / "source"
         cls.source.mkdir()

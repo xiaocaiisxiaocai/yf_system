@@ -31,6 +31,9 @@ from script_safety import clean_dotnet_config_environment
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = Path(__file__).resolve().parent / 'browser'
+ARTIFACTS_ROOT = (ROOT / '.artifacts').resolve()
+TEST_ROOT = ARTIFACTS_ROOT / 'tests'
+TEST_TEMP_ROOT = TEST_ROOT / 'tmp'
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path)
 parser.add_argument('--clamav-port', type=int, help='Use an explicitly owned real clamd on 127.0.0.1 at this port instead of Fake for OEM flows.')
@@ -52,10 +55,13 @@ for step, dependencies in {'business': ['users'], 'final': ['business'], 'layout
                            'smtp-settings': ['system'], 'business-controls': ['users'], 'collaboration': ['users'], 'oem': ['fixtures']}.items():
     if step in args.steps and any(required not in args.steps[:args.steps.index(step)] for required in dependencies):
         raise SystemExit(f'{step} requires earlier steps: {", ".join(dependencies)}')
-output = (args.output or ROOT / '.runlogs' / ('browser-' + time.strftime('%Y%m%d-%H%M%S'))).resolve()
+output = (args.output or TEST_ROOT / 'browser' / ('browser-' + time.strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(4))).resolve()
+if not output.is_relative_to(TEST_ROOT) or output == TEST_ROOT:
+    raise SystemExit(f'Browser evidence output must be a child directory below {TEST_ROOT}.')
 if output.exists() and any(output.iterdir()):
     raise SystemExit('Use a new empty evidence directory for each independent run.')
 output.mkdir(parents=True, exist_ok=True)
+TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
 url = urllib.parse.urlsplit(os.environ.get('YF_TEST_DATABASE_URL', ''))
 if url.scheme != 'mysql' or url.hostname not in ('127.0.0.1', 'localhost', '::1'):
     raise SystemExit('Set YF_TEST_DATABASE_URL to an explicit local MySQL administration URL.')
@@ -111,7 +117,7 @@ try:
     created = True
     connection.select_db(schema)
     with contextlib.ExitStack() as scope:
-        temporary = scope.enter_context(tempfile.TemporaryDirectory(prefix='yf_browser_'))
+        temporary = scope.enter_context(tempfile.TemporaryDirectory(prefix='yf_browser_', dir=TEST_TEMP_ROOT))
         storage_path = Path(temporary).resolve() / 'storage'
         storage_path.mkdir()
         oem_storage_path = Path(temporary).resolve() / 'oem-storage'

@@ -35,6 +35,10 @@ from test_workflow_acceptance import run_workflow_acceptance
 from test_manual_supplier_roles import run_manual_supplier_role_checks
 
 ROOT = Path(__file__).resolve().parents[2]
+ARTIFACTS_ROOT = (ROOT / ".artifacts").resolve()
+TEST_ROOT = ARTIFACTS_ROOT / "tests"
+TEST_TEMP_ROOT = TEST_ROOT / "tmp"
+TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
 PUBLISHED = os.environ.get("YF_TEST_API_DIR")
 API = Path(PUBLISHED).resolve() if PUBLISHED else ROOT / "server_dotnet/Yf.Api"
 DLL = API / "Yf.Api.dll" if PUBLISHED else API / "bin/Debug/net10.0/Yf.Api.dll"
@@ -43,6 +47,16 @@ checks = []
 FILES_ONLY = sys.argv[1:] == ["--files-only"]
 if sys.argv[1:] and not FILES_ONLY:
     raise SystemExit("Usage: test-isolated.py [--files-only]")
+
+default_report = TEST_ROOT / (
+    "dotnet-published-results.json" if PUBLISHED else
+    "dotnet-file-results.json" if FILES_ONLY else
+    "dotnet-isolated-results.json"
+)
+report = Path(os.environ.get("YF_TEST_RESULTS_PATH", default_report)).resolve()
+if not report.is_relative_to(ARTIFACTS_ROOT):
+    raise SystemExit(f"YF_TEST_RESULTS_PATH must stay inside the project artifact root: {ARTIFACTS_ROOT}")
+api_log_path = report.with_name(report.stem + ".api.log")
 
 
 class FileContractsComplete(Exception):
@@ -151,7 +165,7 @@ try:
         cursor.execute(f"CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
         created = True
     conn.select_db(name)
-    with tempfile.TemporaryDirectory(prefix="yf_dotnet_test_") as temp, contextlib.ExitStack() as stack:
+    with tempfile.TemporaryDirectory(prefix="yf_dotnet_test_", dir=TEST_TEMP_ROOT) as temp, contextlib.ExitStack() as stack:
         storage = Path(temp) / "storage"
         storage.mkdir()
         with socket.socket() as listener:
@@ -262,7 +276,6 @@ try:
             test_dll = test_payload / TEST_HOST.name
         verify_test_host_artifacts(API if PUBLISHED else DLL.parent, test_dll)
         check("test host uses exact API assembly and managed runtime dependencies", True)
-        api_log_path = ROOT / ".runlogs/ef-final/test-isolated-api.log"
         api_log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(api_log_path, "wb") as log:
             process = subprocess.Popen(["dotnet", str(DLL)], cwd=API, env=env, stdout=log, stderr=log)
@@ -427,13 +440,11 @@ try:
             process.wait(timeout=15)
             process = None
         print(f"PASS {len(checks)} checks; no production data or email used", flush=True)
-        report = ROOT / (".runlogs/dotnet-published-results.json" if PUBLISHED else ".runlogs/dotnet-isolated-results.json")
-        report.parent.mkdir(exist_ok=True)
+        report.parent.mkdir(parents=True, exist_ok=True)
         report.write_text(json.dumps({"passed": len(checks), "checks": checks, "businessDatabaseTouched": False, "smtpUsed": False, "productionEntrySmoke": True, "httpSuiteHost": "loopback-only host using the same API factory and assembly"}, ensure_ascii=False, indent=2), encoding="utf-8")
 except FileContractsComplete:
     print(f"PASS {len(checks)} focused file checks; no production data or email used", flush=True)
-    report = ROOT / ".runlogs/dotnet-file-results.json"
-    report.parent.mkdir(exist_ok=True)
+    report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text(json.dumps({"passed": len(checks), "checks": checks, "businessDatabaseTouched": False, "smtpUsed": False, "productionEntrySmoke": True, "httpSuiteHost": "loopback-only host using the same API factory and assembly"}, ensure_ascii=False, indent=2), encoding="utf-8")
 finally:
     if process is not None:

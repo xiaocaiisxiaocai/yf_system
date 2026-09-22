@@ -322,7 +322,9 @@ def main():
             cursor.execute(f"CREATE DATABASE `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
             created = True
         conn.select_db(db_name)
-        with tempfile.TemporaryDirectory(prefix="yf_audit_test_") as temp, contextlib.ExitStack() as stack:
+        temporary_root = Path(__file__).resolve().parents[2] / ".artifacts" / "tests" / "tmp"
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="yf_audit_test_", dir=temporary_root) as temp, contextlib.ExitStack() as stack:
             storage = Path(temp) / "storage"
             storage.mkdir()
             with socket.socket() as listener:
