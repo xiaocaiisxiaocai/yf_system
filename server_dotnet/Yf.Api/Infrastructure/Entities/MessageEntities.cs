@@ -51,6 +51,8 @@ public sealed class MessageConfig : IEntityTypeConfiguration<Message>
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
         b.HasIndex(x => x.SenderId).HasDatabaseName("fk_msg_sender");
         b.HasIndex(x => new { x.ProjectId, x.CreatedAt }).HasDatabaseName("idx_msg_project_time");
+        // Bounds cross-project unread counts to the recent unread window (see UnreadWindow).
+        b.HasIndex(x => x.CreatedAt).HasDatabaseName("idx_msg_created");
         b.HasOne<Project>().WithMany().HasForeignKey(x => x.ProjectId).HasConstraintName("fk_msg_project").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<User>().WithMany().HasForeignKey(x => x.SenderId).HasConstraintName("fk_msg_sender").OnDelete(DeleteBehavior.Restrict);
     }

@@ -260,3 +260,46 @@ test('poll failures back off and stop cancels the scheduled continuation', async
   poller.stop()
   assert.equal(timers[1].cleared, true)
 })
+
+test('bursts of realtime pushes collapse into one jittered summary refresh', async () => {
+  let live
+  let requests = 0
+  const timers = new Map()
+  let timerId = 0
+  const { collaboration } = loadCollaboration({
+    http: { get: async () => { requests++; return { data: { unreadCount: 0, latestId: 1, revision: 'server-1' } } } },
+    realtimeStart: options => { live = options; return () => {} },
+    globals: {
+      document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
+      window: { addEventListener() {}, removeEventListener() {} },
+      navigator: { onLine: true },
+      setTimeout: (callback, delay) => { const id = ++timerId; timers.set(id, { callback, delay }); return id },
+      clearTimeout: id => timers.delete(id),
+    },
+  })
+  const stop = collaboration.startCollaborationPolling()
+  await new Promise(resolve => setImmediate(resolve))
+  live.onStatus('connected')
+  await new Promise(resolve => setImmediate(resolve))
+  const before = requests
+  const pending = () => [...timers.entries()].filter(([, timer]) => timer.delay < 5000)
+
+  for (const projectId of [1, 2, 3, 4, 5]) live.onEvent({ projectId, kind: 'messages' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(requests, before, 'pushes do not query immediately')
+  const scheduled = pending()
+  assert.equal(scheduled.length, 1, 'five pushes schedule a single refresh')
+  const [[id, timer]] = scheduled
+  assert.ok(timer.delay >= collaboration.EVENT_REFRESH_DELAY_MS
+    && timer.delay < collaboration.EVENT_REFRESH_DELAY_MS + collaboration.EVENT_REFRESH_JITTER_MS, 'delay is jittered')
+
+  timers.delete(id)
+  timer.callback()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(requests, before + 1, 'one summary query for the whole burst')
+
+  live.onEvent({ projectId: 6, kind: 'messages' })
+  assert.equal(pending().length, 1, 'a later push schedules the next refresh')
+  stop()
+  assert.equal(timers.size, 0, 'stopping cancels a pending push refresh')
+})

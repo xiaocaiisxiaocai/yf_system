@@ -28,6 +28,7 @@ internal sealed class CollaborationService
         var canViewAll = current.IsInternal
             && await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct);
         var supplierId = current.SupplierId ?? 0;
+        var cutoff = await UnreadWindow.CutoffAsync(db, ct);
 
         // BIT_XOR has no provider LINQ translation. Keep this one parameterized aggregate in SQL
         // rather than loading the complete activity/read history just to calculate a revision.
@@ -47,7 +48,8 @@ internal sealed class CollaborationService
             FROM project_activities pa
             INNER JOIN projects p ON p.id=pa.project_id
             LEFT JOIN collaboration_reads cr ON cr.activity_id=pa.id AND cr.user_id={current.Id}
-            WHERE (({current.IsInternal} AND ({canViewAll} OR p.responsible_user_id={current.Id}))
+            WHERE pa.occurred_at>={cutoff}
+              AND (({current.IsInternal} AND ({canViewAll} OR p.responsible_user_id={current.Id}))
                 OR (NOT {current.IsInternal} AND p.supplier_id={supplierId}))
             """).SingleAsync(ct);
         await tx.CommitAsync(ct);
@@ -72,6 +74,7 @@ internal sealed class CollaborationService
         await using var db = EfDb.Use(conn, tx);
         var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
         var activities = VisibleMeaningfulActivities(db, visibleProjects, current.Id, canReceivePendingAcceptance);
+        var cutoff = await UnreadWindow.CutoffAsync(db, ct);
         var query =
             from activity in activities
             join project in visibleProjects on activity.ProjectId equals project.Id
@@ -89,7 +92,8 @@ internal sealed class CollaborationService
                 Activity = activity,
                 ProjectName = project.Name,
                 ProjectGroupName = projectGroup.Name,
-                IsRead = isRead,
+                // Outside the unread window an activity counts as read.
+                IsRead = isRead || activity.OccurredAt < cutoff,
                 FileAvailable = fileAvailable,
                 MessageAvailable = messageAvailable,
             };

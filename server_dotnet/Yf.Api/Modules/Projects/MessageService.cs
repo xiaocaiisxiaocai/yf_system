@@ -423,10 +423,12 @@ internal sealed class MessageService(
         CancellationToken ct)
     {
         await using var db = EfDb.Use(conn, tx);
+        var cutoff = await UnreadWindow.CutoffAsync(db, ct);
         var count = await db.Messages.LongCountAsync(message =>
             message.ProjectId == projectId
             && message.Status == "NORMAL"
             && message.SenderId != userId
+            && message.CreatedAt >= cutoff
             && !db.MessageReads.Any(read => read.MessageId == message.Id && read.UserId == userId), ct);
         return checked((ulong)count);
     }

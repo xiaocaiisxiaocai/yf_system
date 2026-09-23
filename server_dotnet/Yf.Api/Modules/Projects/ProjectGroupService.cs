@@ -39,9 +39,10 @@ internal sealed class ProjectGroupService(
         if (supplierId is not null) query = query.Where(group => group.SupplierId == supplierId.Value);
         var total = (ulong)await query.LongCountAsync(ct);
         var offset = (actualPage - 1) * size;
-        var rows = await GroupRows(db, query, current.Id).OrderByDescending(group => group.Id)
+        var rows = await GroupRows(db, query).OrderByDescending(group => group.Id)
             .Page(offset, size).ToArrayAsync(ct);
         await LoadWorkOrdersAsync(db, rows, ct);
+        await LoadGroupUnreadAsync(db, rows, current.Id, ct);
         await tx.CommitAsync(ct);
         return ProjectJson.Page(rows.Select(ProjectJson.ProjectGroup).ToArray(), total, actualPage, size);
     }
@@ -377,10 +378,11 @@ internal sealed class ProjectGroupService(
         }));
     }
 
+    // Unread counts are loaded per page by LoadGroupUnreadAsync: a correlated per-group count here would
+    // scan every message once per group.
     private static IQueryable<ProjectGroupRow> GroupRows(
         YfDbContext db,
-        IQueryable<ProjectGroup> query,
-        ulong userId) => query.Select(group => new ProjectGroupRow
+        IQueryable<ProjectGroup> query) => query.Select(group => new ProjectGroupRow
     {
         Id = group.Id,
         Name = group.Name,
@@ -422,18 +424,34 @@ internal sealed class ProjectGroupService(
             && project.Status == ProjectStatuses.PendingConfirmation),
         TerminatedCount = (ulong)db.Projects.LongCount(project => project.ProjectGroupId == group.Id
             && project.Status == ProjectStatuses.Terminated),
-        UnreadMessages = (ulong)db.Messages.LongCount(message => message.Status == "NORMAL"
-            && message.SenderId != userId
-            && db.Projects.Any(project => project.Id == message.ProjectId && project.ProjectGroupId == group.Id)
-            && !db.MessageReads.Any(receipt => receipt.MessageId == message.Id && receipt.UserId == userId)),
     });
+
+    /// <summary>Unread messages (within the unread window) per group, for all groups in one query.</summary>
+    private static async Task LoadGroupUnreadAsync(
+        YfDbContext db, IReadOnlyCollection<ProjectGroupRow> groups, ulong userId, CancellationToken ct)
+    {
+        if (groups.Count == 0) return;
+        var groupIds = groups.Select(group => group.Id).ToArray();
+        var cutoff = await UnreadWindow.CutoffAsync(db, ct);
+        var counts = await (
+            from message in db.Messages
+            join project in db.Projects on message.ProjectId equals project.Id
+            where Enumerable.Contains(groupIds, project.ProjectGroupId)
+                && message.Status == "NORMAL" && message.SenderId != userId && message.CreatedAt >= cutoff
+                && !db.MessageReads.Any(receipt => receipt.MessageId == message.Id && receipt.UserId == userId)
+            group message by project.ProjectGroupId into perGroup
+            select new { GroupId = perGroup.Key, Count = perGroup.LongCount() })
+            .ToDictionaryAsync(row => row.GroupId, row => (ulong)row.Count, ct);
+        foreach (var group in groups) group.UnreadMessages = counts.GetValueOrDefault(group.Id);
+    }
 
     private static async Task<ProjectGroupRow> LoadGroupAsync(
         YfDbContext db, ulong groupId, ulong userId, CancellationToken ct)
     {
-        var row = await GroupRows(db, db.ProjectGroups.Where(group => group.Id == groupId), userId)
+        var row = await GroupRows(db, db.ProjectGroups.Where(group => group.Id == groupId))
             .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         await LoadWorkOrdersAsync(db, [row], ct);
+        await LoadGroupUnreadAsync(db, [row], userId, ct);
         return row;
     }
 
@@ -471,8 +489,9 @@ internal sealed class ProjectGroupService(
             .Select(order => new ProjectWorkOrderValue(order.ProjectId, order.WorkOrderNo)).ToArrayAsync(ct);
         var workOrderLookup = workOrders.GroupBy(row => row.ProjectId)
             .ToDictionary(group => group.Key, group => group.Select(row => row.WorkOrderNo).ToArray());
+        var cutoff = await UnreadWindow.CutoffAsync(db, ct);
         var unreadRows = await db.Messages.Where(message => Enumerable.Contains(ids, message.ProjectId)
-                && message.Status == "NORMAL" && message.SenderId != userId
+                && message.Status == "NORMAL" && message.SenderId != userId && message.CreatedAt >= cutoff
                 && !db.MessageReads.Any(receipt => receipt.MessageId == message.Id && receipt.UserId == userId))
             .GroupBy(message => message.ProjectId)
             .Select(group => new UnreadValue(group.Key, group.LongCount())).ToArrayAsync(ct);

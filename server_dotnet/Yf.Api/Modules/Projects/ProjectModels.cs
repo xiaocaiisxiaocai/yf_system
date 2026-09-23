@@ -185,7 +185,7 @@ internal sealed class ProjectGroupRow
     public ulong CompletedCount { get; init; }
     public ulong PendingCount { get; init; }
     public ulong TerminatedCount { get; init; }
-    public ulong UnreadMessages { get; init; }
+    public ulong UnreadMessages { get; set; }
 }
 
 internal sealed class UserRow

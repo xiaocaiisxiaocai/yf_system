@@ -366,6 +366,8 @@ public sealed class ProjectActivityConfig : IEntityTypeConfiguration<ProjectActi
         b.HasIndex(x => x.SourceKey).IsUnique().HasDatabaseName("uk_project_activities_source");
         b.HasIndex(x => new { x.ProjectId, x.OccurredAt, x.Id }).HasDatabaseName("idx_project_activities_project_time");
         b.HasIndex(x => new { x.ProjectId, x.ActivityType, x.OccurredAt, x.Id }).HasDatabaseName("idx_project_activities_project_type_time");
+        // Bounds the collaboration summary to the recent unread window (see UnreadWindow).
+        b.HasIndex(x => x.OccurredAt).HasDatabaseName("idx_project_activities_occurred");
         b.HasOne<Project>().WithMany().HasForeignKey(x => x.ProjectId).HasConstraintName("fk_project_activities_project").OnDelete(DeleteBehavior.Restrict);
     }
 }

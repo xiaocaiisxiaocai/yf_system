@@ -337,6 +337,13 @@ function subscribeBrowserResume(wake: () => void): () => void {
   }
 }
 
+/**
+ * 推送触发的概览刷新先合并、再随机延后：一次变更会推给所有相关在线用户，
+ * 合并连发的推送并错开各自的查询时间，避免所有人在同一瞬间一起查询。
+ */
+export const EVENT_REFRESH_DELAY_MS = 500
+export const EVENT_REFRESH_JITTER_MS = 1500
+
 /** AdminLayout 挂载期间唯一的全局协作概览轮询。 */
 export function startCollaborationPolling(): () => void {
   activePoller?.stop()
@@ -352,6 +359,14 @@ export function startCollaborationPolling(): () => void {
   })
   activePoller = poller
   poller.start()
+  let eventRefresh: ReturnType<typeof setTimeout> | null = null
+  const refreshAfterEvent = () => {
+    if (eventRefresh !== null) return
+    eventRefresh = setTimeout(() => {
+      eventRefresh = null
+      void poller.refresh()
+    }, EVENT_REFRESH_DELAY_MS + Math.floor(Math.random() * EVENT_REFRESH_JITTER_MS))
+  }
   const stop = startProjectRealtime({
     getSession: () => { const session = currentPollSession(); return { ...session, key: session.key ?? '' } },
     getAccessToken: async () => {
@@ -376,11 +391,15 @@ export function startCollaborationPolling(): () => void {
       if (kind === 'receipts') useCollaboration.setState((state) => ({ receiptRevisions: {
         ...state.receiptRevisions, [projectId]: (state.receiptRevisions[projectId] ?? 0) + 1,
       } }))
-      if (kind !== 'receipts') void poller.refresh()
+      if (kind !== 'receipts') refreshAfterEvent()
     },
   })
   stopRealtime = stop
   return () => {
+    if (eventRefresh !== null) {
+      clearTimeout(eventRefresh)
+      eventRefresh = null
+    }
     if (activePoller === poller) activePoller = null
     poller.stop()
     if (stopRealtime === stop) stopRealtime = null
