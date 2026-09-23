@@ -31,7 +31,7 @@ internal sealed class DashboardService
             .Page((actualPage - 1) * size, size)
             .Select(message => message.Id)
             .ToArrayAsync(ct);
-        var list = await LoadMessagesAsync(db, ids, current.Id, cutoff, ct);
+        var list = await LoadMessagesAsync(db, query, ids, current.Id, cutoff, ct);
         await tx.CommitAsync(ct);
         return ProjectJson.Page(list, total, actualPage, size);
     }
@@ -112,7 +112,7 @@ internal sealed class DashboardService
         var unreadMessages = (ulong)await Unread(db, messages, current.Id, cutoff).LongCountAsync(ct);
         var recentIds = await messages.OrderByDescending(message => message.Id).Take(5)
             .Select(message => message.Id).ToArrayAsync(ct);
-        var recentMessages = await LoadMessagesAsync(db, recentIds, current.Id, cutoff, ct);
+        var recentMessages = await LoadMessagesAsync(db, messages, recentIds, current.Id, cutoff, ct);
         await tx.CommitAsync(ct);
         return new DashboardSummaryResponse(projectCount, activeProjectCount, pendingConfirmations, unreadMessages, recentMessages);
     }
@@ -132,13 +132,16 @@ internal sealed class DashboardService
         messages.Where(message => message.SenderId != userId && message.CreatedAt >= cutoff
             && !db.MessageReads.Any(read => read.MessageId == message.Id && read.UserId == userId));
 
-    /// <summary>Loads display rows for the given message ids, keeping their order.</summary>
+    /// <summary>
+    /// Loads page details in ID order, reapplying visibility, NORMAL status and any unread filter.
+    /// READ COMMITTED allows deletion, reassignment or a receipt between the two SELECTs.
+    /// </summary>
     private static async Task<DashboardMessage[]> LoadMessagesAsync(
-        YfDbContext db, ulong[] ids, ulong userId, DateTime cutoff, CancellationToken ct)
+        YfDbContext db, IQueryable<Message> eligibleMessages, ulong[] ids, ulong userId, DateTime cutoff, CancellationToken ct)
     {
         if (ids.Length == 0) return [];
         var rows = await (
-            from message in db.Messages
+            from message in eligibleMessages
             join project in db.Projects on message.ProjectId equals project.Id
             join projectGroup in db.ProjectGroups on project.ProjectGroupId equals projectGroup.Id
             join sender in db.Users on message.SenderId equals sender.Id

@@ -301,7 +301,7 @@ export default function Dashboard() {
     { title: '可见主项目', value: data?.projectCount, to: '/projects', action: '查看主项目' },
     { title: '进行中主项目', value: data?.activeProjectCount, to: '/projects', action: '查看主项目' },
     { title: acceptanceCopy.cardTitle, value: data?.pendingConfirmations, href: '#dashboard-pending', action: acceptanceCopy.cardAction },
-    { title: '未读留言', value: data?.unreadMessages, href: '#dashboard-messages', action: '查看留言' },
+    { title: '近30天未读留言', value: data?.unreadMessages, href: '#dashboard-messages', action: '查看留言' },
   ]
 
   if (!hasDashboard) {
@@ -439,7 +439,7 @@ export default function Dashboard() {
               <div className="dashboard-section-title">
                 <div>
                   <h2>项目留言</h2>
-                  <span>{unreadOnly ? `共 ${messageData.total} 条未读` : `共 ${messageData.total} 条留言`}</span>
+                  <span>{unreadOnly ? `近30天共 ${messageData.total} 条未读` : `共 ${messageData.total} 条留言`}</span>
                 </div>
               </div>
             )}
