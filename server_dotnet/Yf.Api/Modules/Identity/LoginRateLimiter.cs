@@ -10,14 +10,6 @@ public sealed class LoginRateLimiter
     public bool AllowLogin(string clientIp, string employeeNo) =>
         AllowIpAndAccount(clientIp, employeeNo) && AllowIp(clientIp);
 
-    /// <summary>
-    /// Realm-scoped variant for identity realms other than the internal/supplier
-    /// `users` realm. Account buckets never collide across realms even when two
-    /// realms contain the same login name; the per-IP bucket stays shared.
-    /// </summary>
-    public bool AllowLogin(string realm, string clientIp, string employeeNo) =>
-        Allow($"login:{realm}:{clientIp}:{employeeNo}", 10) && AllowIp(clientIp);
-
     private bool AllowIpAndAccount(string clientIp, string employeeNo) =>
         Allow($"login:{clientIp}:{employeeNo}", 10);
 

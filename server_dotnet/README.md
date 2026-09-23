@@ -158,7 +158,7 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
 ```powershell
 # 先安全设置当前进程的 YF_TEST_DATABASE_URL，不把密码写入命令历史。
 # 连接格式：mysql://账号:URL编码密码@127.0.0.1:测试端口/ignored
-dotnet test --project .\tests\Yf.Api.Tests.csproj
+dotnet test .\tests\Yf.Api.Tests.csproj
 dotnet build .\TestHost\Yf.Api.TestHost.csproj
 python .\scripts\test-isolated.py
 # 仅运行同一隔离生命周期中的文件 HTTP 合同：

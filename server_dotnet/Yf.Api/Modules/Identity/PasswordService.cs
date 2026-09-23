@@ -59,7 +59,7 @@ public static class PasswordService
 
     /// <summary>
     /// A fixed, same-cost Argon2id hash verified when an account does not exist, so
-    /// unknown and known login names take indistinguishable time in every realm.
+    /// unknown and known login names take indistinguishable time.
     /// </summary>
     internal static Task<string> TimingDummyHashAsync() => TimingDummy.Value;
 

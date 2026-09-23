@@ -66,7 +66,7 @@ internal static partial class EfDatabaseLifecycle
         }
         else
         {
-            // Never auto-upgrade a nonempty database: a pending migration can delete OEM data.
+            // Never auto-upgrade a nonempty database: a pending migration can drop data (e.g. DropOemPlatform).
             // Partial initialization also stops here for inspection instead of overwriting data.
             await ValidateHistoryAsync(db, requireCurrent: true, ct);
         }
