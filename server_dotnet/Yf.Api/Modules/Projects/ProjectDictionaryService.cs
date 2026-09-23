@@ -22,7 +22,7 @@ internal static class ProjectDictionaryTypes
 
 internal sealed class ProjectDictionaryService(AuditService audit)
 {
-    internal async Task<object> ListAsync(
+    internal async Task<ProjectDictionaryResponse[]> ListAsync(
         MySqlConnection conn, CurrentUser actor, string? rawType, bool enabledOnly, ulong? parentId, CancellationToken ct)
     {
         var type = ProjectDictionaryTypes.Normalize(rawType);
@@ -38,7 +38,7 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         return rows.Select(Json).ToArray();
     }
 
-    internal async Task<object> CreateAsync(
+    internal async Task<ProjectDictionaryResponse> CreateAsync(
         MySqlConnection conn, CurrentUser actor, ProjectDictionaryUpsertRequest request, string? ip, CancellationToken ct)
     {
         var input = Normalize(request, null);
@@ -65,7 +65,7 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         return result;
     }
 
-    internal async Task<object> UpdateAsync(
+    internal async Task<ProjectDictionaryResponse> UpdateAsync(
         MySqlConnection conn, CurrentUser actor, ulong id, ProjectDictionaryUpsertRequest request, string? ip, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
@@ -201,17 +201,9 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         return await Rows(db, db.ProjectDictionaries.Where(item => item.Id == id)).SingleOrDefaultAsync(ct);
     }
 
-    private static object Json(DictionaryRow row) => new
-    {
-        id = row.Id,
-        type = row.Type,
-        name = row.Name,
-        parentId = row.ParentId,
-        parentName = row.ParentName,
-        sortNo = row.SortNo,
-        enabled = row.Status == "ACTIVE",
-        inUse = row.ProjectInUse || row.HasChildren,
-    };
+    private static ProjectDictionaryResponse Json(DictionaryRow row) => new(
+        row.Id, row.Type, row.Name, row.ParentId, row.ParentName, row.SortNo,
+        row.Status == "ACTIVE", row.ProjectInUse || row.HasChildren);
 
     private sealed record DictionaryInput(string Type, string Name, ulong? ParentId, int SortNo, string Status);
     private sealed class DictionaryRow

@@ -14,6 +14,7 @@ import {
   type AuditLogRow,
 } from './auditLogDetails'
 import './AuditLog.css'
+import type { ApiResponses } from '../../api/types'
 
 interface Filters {
   keyword: string
@@ -197,7 +198,7 @@ export default function AuditLog() {
 
   const fetchLogs = useCallback(async () => {
     void reloadKey
-    const response = await http.get('/admin/audit-logs', {
+    const response = await http.get<ApiResponses['GET /admin/audit-logs']>('/admin/audit-logs', {
       params: {
         page,
         pageSize,
@@ -249,7 +250,7 @@ export default function AuditLog() {
     setDeleting(true)
     let reload = false
     try {
-      const response = await http.delete(`/admin/audit-logs/${row.id}`)
+      const response = await http.delete<ApiResponses['DELETE /admin/audit-logs/{id}']>(`/admin/audit-logs/${row.id}`)
       Message.success(`已删除 ${Number(response.data?.deleted ?? 0)} 条`)
       if (selected?.id === row.id) setSelected(null)
       beginReload()
@@ -272,7 +273,7 @@ export default function AuditLog() {
     setDeleting(true)
     let reload = false
     try {
-      const response = await http.post('/admin/audit-logs/batch-delete', { ids })
+      const response = await http.post<ApiResponses['POST /admin/audit-logs/batch-delete']>('/admin/audit-logs/batch-delete', { ids })
       Message.success(`已删除 ${Number(response.data?.deleted ?? 0)} 条`)
       setSelected(null)
       beginReload()

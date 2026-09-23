@@ -7,7 +7,7 @@ namespace Yf.Api.Modules.Admin;
 
 public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, PermissionService permissionCeiling, AuditService audit)
 {
-    public async Task<object> ListAsync(CurrentUser actor, ulong page, uint size, ulong offset, string? keyword, ulong? departmentId, string? status, CancellationToken ct)
+    public async Task<PageResponse<UserResponse>> ListAsync(CurrentUser actor, ulong page, uint size, ulong offset, string? keyword, ulong? departmentId, string? status, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -17,8 +17,8 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var term = keyword?.Trim();
         if (!string.IsNullOrWhiteSpace(term))
         {
-            var pattern = "%" + term + "%";
-            query = query.Where(x => EF.Functions.Like(x.EmployeeNo, pattern) || EF.Functions.Like(x.RealName, pattern) || EF.Functions.Like(x.Email, pattern));
+            var pattern = QueryValues.ContainsPattern(term);
+            query = query.Where(x => EF.Functions.Like(x.EmployeeNo, pattern, QueryValues.LikeEscape) || EF.Functions.Like(x.RealName, pattern, QueryValues.LikeEscape) || EF.Functions.Like(x.Email, pattern, QueryValues.LikeEscape));
         }
         if (departmentId.HasValue) query = query.Where(x => x.DepartmentId == departmentId);
         if (!string.IsNullOrWhiteSpace(status)) query = query.Where(x => x.Status == status);
@@ -26,12 +26,12 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var rows = offset > int.MaxValue
             ? []
             : await query.OrderByDescending(x => x.Id).Skip((int)offset).Take(checked((int)size)).ToListAsync(ct);
-        var list = new List<object>(rows.Count);
+        var list = new List<UserResponse>(rows.Count);
         foreach (var row in rows) list.Add(await JsonAsync(context, row, ct));
-        return new { list, total, page, pageSize = size };
+        return new(list, total, page, size);
     }
 
-    public async Task<object> RoleOptionsAsync(CurrentUser actor, string? keyword, CancellationToken ct)
+    public async Task<RoleOption[]> RoleOptionsAsync(CurrentUser actor, string? keyword, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -49,13 +49,13 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
                     .Any(code => !Enumerable.Contains(owned, code)))));
         if (term is not null)
         {
-            var pattern = "%" + term + "%";
-            query = query.Where(role => EF.Functions.Like(role.Name, pattern));
+            var pattern = QueryValues.ContainsPattern(term);
+            query = query.Where(role => EF.Functions.Like(role.Name, pattern, QueryValues.LikeEscape));
         }
-        return await query.OrderBy(role => role.Id).Select(role => new { role.Id, role.Name }).ToArrayAsync(ct);
+        return await query.OrderBy(role => role.Id).Select(role => new RoleOption(role.Id, role.Name)).ToArrayAsync(ct);
     }
 
-    public async Task<object> CreateAsync(CurrentUser actor, UserCreate request, CancellationToken ct)
+    public async Task<UserResponse> CreateAsync(CurrentUser actor, UserCreate request, CancellationToken ct)
     {
         AdminValidation.EmployeeNo(request.EmployeeNo); ValidateName(request.RealName); AdminValidation.Email(request.Email); PasswordService.Validate(request.Password);
         var roleId = AdminValidation.OneRole(request.RoleId, request.RoleIds, true);
@@ -92,7 +92,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var result = await JsonAsync(context, created, ct); await transaction.CommitAsync(ct); return result;
     }
 
-    public async Task<object> UpdateAsync(CurrentUser actor, ulong id, UserUpdate request, CancellationToken ct)
+    public async Task<UserResponse> UpdateAsync(CurrentUser actor, ulong id, UserUpdate request, CancellationToken ct)
     {
         if (request.RealName is not null) ValidateName(request.RealName);
         if (request.Email is not null) AdminValidation.Email(request.Email);
@@ -156,7 +156,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var result = await JsonAsync(context, updated, ct); await transaction.CommitAsync(ct); return result;
     }
 
-    public async Task<object> SetStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
+    public async Task<UserResponse> SetStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
     {
         status = AdminValidation.Status(status);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -331,19 +331,17 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
 
     internal static bool RequiresLastActiveAdminProtection(string targetStatus, int activeAdminCount) => targetStatus == "ACTIVE" && activeAdminCount <= 1;
 
-    private static async Task<object> JsonAsync(YfDbContext context, User user, CancellationToken ct)
+    private static async Task<UserResponse> JsonAsync(YfDbContext context, User user, CancellationToken ct)
     {
         var roles = await context.UserRoles.AsNoTracking().Where(x => x.UserId == user.Id)
             .Join(context.Roles.AsNoTracking(), x => x.RoleId, x => x.Id, (_, role) => new { role.Id, role.Name }).OrderBy(x => x.Id).ToListAsync(ct);
         var departmentName = user.DepartmentId is ulong departmentId
             ? await context.Departments.AsNoTracking().Where(x => x.Id == departmentId).Select(x => x.Name).SingleOrDefaultAsync(ct) : null;
         var firstRole = roles.FirstOrDefault();
-        return new
-        {
+        return new UserResponse(
             user.Id, user.EmployeeNo, user.RealName, user.Email, user.UserType, user.SupplierId, user.DepartmentId, departmentName,
-            user.Status, user.MustChangePassword, user.LastLoginAt, user.CreatedAt, roleId = firstRole?.Id, roleName = firstRole?.Name,
-            roleIds = roles.Select(x => x.Id).ToArray(), roleNames = roles.Select(x => x.Name).ToArray()
-        };
+            user.Status, user.MustChangePassword, user.LastLoginAt, user.CreatedAt, firstRole?.Id, firstRole?.Name,
+            roles.Select(x => x.Id).ToArray(), roles.Select(x => x.Name).ToArray());
     }
 
     private static void ValidateName(string value)

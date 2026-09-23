@@ -302,6 +302,9 @@ async function assertExcelGrid(dialog, expectedRows) {
       });
 
       let failedChunkPath;
+      // The uploader retries transient chunk failures (3 attempts in total), so the reset must
+      // persist across every attempt before the upload is reported as interrupted.
+      let abortedAttempts = 0;
       let committed = false;
       let firstChunkCommitted;
       const committedChunk = new Promise(resolve => { firstChunkCommitted = resolve; });
@@ -315,9 +318,10 @@ async function assertExcelGrid(dialog, expectedRows) {
           committed = true; firstChunkCommitted();
           return;
         }
-        if (index === 1 && !failedChunkPath) {
+        if (index === 1 && abortedAttempts < 3) {
           await committedChunk;
           failedChunkPath = chunkPath;
+          abortedAttempts++;
           writeUploadEvent({ event: 'route-hit', method: route.request().method(), path: chunkPath, status: null, requestfailed: null });
           try { await route.abort('connectionreset'); }
           finally { writeUploadEvent({ event: 'route-exit', method: route.request().method(), path: chunkPath, status: null, requestfailed: null }); }
@@ -335,6 +339,7 @@ async function assertExcelGrid(dialog, expectedRows) {
         totalChunks: firstInit.totalChunks, chunkSize: firstInit.chunkSize });
       await page.getByText('上传中断，可点击重新上传从断点续传', { exact: true }).waitFor();
       assert(failedChunkPath);
+      assert.equal(abortedAttempts, 3, 'a reset chunk is retried automatically before the upload is interrupted');
 
       const secondInitReady = page.waitForResponse(response =>
         new URL(response.url()).pathname === '/api/v1/uploads/init'

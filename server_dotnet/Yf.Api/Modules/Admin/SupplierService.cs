@@ -7,7 +7,7 @@ namespace Yf.Api.Modules.Admin;
 
 public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, PermissionService permissions, AuditService audit)
 {
-    public async Task<object> ListAsync(CurrentUser actor, ulong page, uint size, ulong offset, string? keyword, string? status, CancellationToken ct)
+    public async Task<PageResponse<SupplierResponse>> ListAsync(CurrentUser actor, ulong page, uint size, ulong offset, string? keyword, string? status, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -17,18 +17,18 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var term = keyword?.Trim();
         if (!string.IsNullOrWhiteSpace(term))
         {
-            var pattern = "%" + term + "%";
-            query = query.Where(x => EF.Functions.Like(x.Name, pattern));
+            var pattern = QueryValues.ContainsPattern(term);
+            query = query.Where(x => EF.Functions.Like(x.Name, pattern, QueryValues.LikeEscape));
         }
         if (!string.IsNullOrWhiteSpace(status)) query = query.Where(x => x.Status == status);
         var total = (ulong)await query.LongCountAsync(ct);
         var rows = offset > int.MaxValue
             ? []
             : await query.OrderByDescending(x => x.Id).Skip((int)offset).Take(checked((int)size)).ToListAsync(ct);
-        return new { list = rows.Select(Json).ToArray(), total, page, pageSize = size };
+        return new(rows.Select(Json).ToArray(), total, page, size);
     }
 
-    public async Task<object> DetailAsync(CurrentUser actor, ulong id, CancellationToken ct)
+    public async Task<SupplierResponse> DetailAsync(CurrentUser actor, ulong id, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -37,10 +37,10 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         return Json(await FindAsync(context, id, ct) ?? throw ApiException.NotFound());
     }
 
-    public Task<object> CreateAsync(CurrentUser actor, SupplierUpsert request, CancellationToken ct) => UpsertAsync(actor, null, request, ct);
-    public Task<object> UpdateAsync(CurrentUser actor, ulong id, SupplierUpsert request, CancellationToken ct) => UpsertAsync(actor, id, request, ct);
+    public Task<SupplierResponse> CreateAsync(CurrentUser actor, SupplierUpsert request, CancellationToken ct) => UpsertAsync(actor, null, request, ct);
+    public Task<SupplierResponse> UpdateAsync(CurrentUser actor, ulong id, SupplierUpsert request, CancellationToken ct) => UpsertAsync(actor, id, request, ct);
 
-    private async Task<object> UpsertAsync(CurrentUser actor, ulong? id, SupplierUpsert request, CancellationToken ct)
+    private async Task<SupplierResponse> UpsertAsync(CurrentUser actor, ulong? id, SupplierUpsert request, CancellationToken ct)
     {
         Validate(request);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -72,7 +72,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var result = Json(updated); await transaction.CommitAsync(ct); return result;
     }
 
-    public async Task<object> SetStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
+    public async Task<SupplierResponse> SetStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
     {
         status = AdminValidation.Status(status);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -99,7 +99,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
                 targetName = row.Name, changes = AuditChange.OnlyChanged(new AuditChange("status", "状态", row.Status, status))
             }, null, ct);
         await transaction.CommitAsync(ct);
-        return new { row.Id, row.Name, row.Remark, Status = status, row.CreatedAt };
+        return new SupplierResponse(row.Id, row.Name, row.Remark, status, row.CreatedAt);
     }
 
     public async Task DeleteAsync(CurrentUser actor, ulong id, CancellationToken ct)
@@ -119,7 +119,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await context.Suppliers.Where(x => x.Id == id).ExecuteDeleteAsync(ct); await transaction.CommitAsync(ct);
     }
 
-    public async Task<object> AccountsAsync(CurrentUser actor, ulong supplierId, CancellationToken ct)
+    public async Task<SupplierAccountResponse[]> AccountsAsync(CurrentUser actor, ulong supplierId, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -127,12 +127,12 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await AccessService.RequirePermissionAsync(context.Database.Connection(), null, actor, "supplier:account", ct);
         if (await FindAsync(context, supplierId, ct) is null) throw ApiException.NotFound();
         var users = await context.Users.AsNoTracking().Where(x => x.UserType == "SUPPLIER" && x.SupplierId == supplierId).OrderBy(x => x.Id).ToListAsync(ct);
-        var results = new List<object>(users.Count);
+        var results = new List<SupplierAccountResponse>(users.Count);
         foreach (var user in users) results.Add(AccountJson(await AccountRowAsync(context, user, ct)));
         return results.ToArray();
     }
 
-    public async Task<object> RoleOptionsAsync(CurrentUser actor, string? keyword, CancellationToken ct)
+    public async Task<RoleOption[]> RoleOptionsAsync(CurrentUser actor, string? keyword, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -153,13 +153,13 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
                 .Any(code => !Enumerable.Contains(owned, code))));
         if (term is not null)
         {
-            var pattern = "%" + term + "%";
-            query = query.Where(role => EF.Functions.Like(role.Name, pattern));
+            var pattern = QueryValues.ContainsPattern(term);
+            query = query.Where(role => EF.Functions.Like(role.Name, pattern, QueryValues.LikeEscape));
         }
-        return await query.OrderBy(role => role.Id).Select(role => new { role.Id, role.Name }).ToArrayAsync(ct);
+        return await query.OrderBy(role => role.Id).Select(role => new RoleOption(role.Id, role.Name)).ToArrayAsync(ct);
     }
 
-    public async Task<object> CreateAccountAsync(CurrentUser actor, ulong supplierId, SupplierAccountCreate request, CancellationToken ct)
+    public async Task<SupplierAccountResponse> CreateAccountAsync(CurrentUser actor, ulong supplierId, SupplierAccountCreate request, CancellationToken ct)
     {
         AccessService.RequireInternal(actor); AdminValidation.EmployeeNo(request.EmployeeNo); ValidateName(request.RealName); AdminValidation.Email(request.Email); PasswordService.Validate(request.Password);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -192,7 +192,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var result = AccountJson(created); await transaction.CommitAsync(ct); return result;
     }
 
-    public async Task<object> UpdateAccountAsync(CurrentUser actor, ulong id, SupplierAccountUpdate request, CancellationToken ct)
+    public async Task<SupplierAccountResponse> UpdateAccountAsync(CurrentUser actor, ulong id, SupplierAccountUpdate request, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
         if (request.RealName is not null) ValidateName(request.RealName); if (request.Email is not null) AdminValidation.Email(request.Email);
@@ -211,7 +211,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var result = AccountJson(updated); await transaction.CommitAsync(ct); return result;
     }
 
-    public async Task<object> SetAccountStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
+    public async Task<SupplierAccountResponse> SetAccountStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
     {
         AccessService.RequireInternal(actor); status = AdminValidation.Status(status);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -322,8 +322,8 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         };
     }
 
-    private static object Json(Supplier supplier) => new { supplier.Id, supplier.Name, supplier.Remark, supplier.Status, supplier.CreatedAt };
-    private static object AccountJson(AdminUserRow user) => new { user.Id, user.EmployeeNo, user.RealName, user.Email, user.SupplierId, user.Status, user.LastLoginAt, user.CreatedAt, user.RoleId, user.RoleName };
+    private static SupplierResponse Json(Supplier supplier) => new(supplier.Id, supplier.Name, supplier.Remark, supplier.Status, supplier.CreatedAt);
+    private static SupplierAccountResponse AccountJson(AdminUserRow user) => new(user.Id, user.EmployeeNo, user.RealName, user.Email, user.SupplierId, user.Status, user.LastLoginAt, user.CreatedAt, user.RoleId, user.RoleName);
     private static string AccountAuditName(AdminUserRow user) => $"{user.RealName}（{user.EmployeeNo}）";
     private static void Validate(SupplierUpsert request)
     {

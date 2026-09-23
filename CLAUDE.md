@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `server_dotnet/` — **the only backend.** ASP.NET Core 8 (Minimal API) + EF Core 9/Pomelo + MySQL. All new features, bug fixes, and DB migrations go here. An earlier Rust + Axum + SeaORM prototype (`yf_server/`) existed during the initial build-out but has been removed from the repo; its history is still visible via `git log` if needed for archaeology, but nothing in `server_dotnet/` depends on it. Development uses the current EF-managed schema and does not support legacy schema/data compatibility.
 - `web/` — React 18 + TypeScript 6 + Vite 8 (rolldown) + Arco Design frontend, talks to `/api/v1`. In production the ASP.NET app serves the built SPA from `wwwroot` on the same site.
-- `web/vendor/vue-office-{excel,pptx,pdf}/` — the preview source that is **actually built** (see Frontend architecture). `third_party/vue-office-source-2024-12-30/` is the upstream reference copy **plus sample files used by browser tests** (`scripts/browser/preview-extras.cjs`) — not dead code, don't delete.
+- `web/vendor/vue-office-{excel,pptx,pdf}/` — the preview source that is **actually built** (see Frontend architecture). `third_party/vue-office-source-2024-12-30/` is a git-ignored, locally unpacked upstream reference copy. The PPTX template the browser tests need (`scripts/browser/preview-extras.cjs`) is a trimmed, committed copy at `server_dotnet/scripts/browser/fixtures/pptx-template.zip`.
 - `server_dotnet/docs/*.md` — dated contract documents (e.g. `主项目与子项目协作契约-2026-09-16.md`) are the source of truth for business rules like project/subproject workflow, metadata dictionaries, copy semantics, and email notification policy. Check the newest-dated doc for a topic before assuming behavior from code alone.
 - OEM platform: **paused and removed** from backend, frontend and release packages. Migrations `AddOemPlatform` / `DropOemPlatform` stay in history on purpose (covered by `SchemaShapeTests`) — don't delete or squash them, and don't reintroduce OEM code without re-reading the root `README.md` note.
 
@@ -40,7 +40,7 @@ dotnet run --project .\Yf.Api -- --migrate-database
 # Other one-shot modes (mutually exclusive): --check-development-readiness, --inspect-development-data,
 # --reset-development-data --confirm-database <db> --confirm-storage-root <path>  (loopback only; see docs/开发数据初始化说明.md)
 
-# New EF migration: dotnet-ef is pinned to 9.0.0 (= EF packages) in .config/dotnet-tools.json.
+# New EF migration: dotnet-ef is pinned to 9.0.20 (= EF packages) in .config/dotnet-tools.json.
 # Needs YF_EF_DESIGN_CONNECTION pointing at a DISPOSABLE design-time DB (never a business DB).
 dotnet tool restore
 $env:YF_EF_DESIGN_CONNECTION = 'Server=127.0.0.1;Port=3306;Database=yf_ef_design;User=...;Password=...'
@@ -124,13 +124,15 @@ Cross-cutting rules worth knowing before editing:
 
 ## Frontend architecture (web)
 
-- `src/api/client.ts` — the HTTP client (axios) talking to `/api/v1`; `src/api/types.ts` mirrors backend contracts (kept in sync with `tests/Contracts/api-v1.json` on the backend).
+- `src/api/client.ts` — the HTTP client (axios) talking to `/api/v1`; `src/api/types.ts` builds on `src/api/generated/api-types.ts`, generated from the backend OpenAPI contract (see Testing philosophy).
 - `src/store/` — Zustand stores: `auth.ts` (session/user), `collaboration.ts` (live project/message state).
 - `src/services/projectRealtime.ts` — SignalR client; on a pushed change-kind it refetches the affected data.
 - `src/pages/project/` — main project/subproject list & detail screens; the largest and most actively changed area.
 - `src/pages/{org,rbac,supplier,system}/` — admin-side screens (organizations, roles/permissions, suppliers, system params/mail settings).
 - `src/components/` — shared collaboration UI: `FileTable.tsx` (file list + preview dialog), `ChunkUploader.tsx`, `MessagePanel.tsx`, and the `*Preview.tsx` viewers.
 - Previews: PDF uses local PDF.js 6.3.289 (`PdfPreview.tsx`/`pdfEngine.ts`), page-by-page, assets emitted by the `pdfAssets()` Vite plugin (`pdf-assets.ts`) into `dist/pdfjs/<version>/`. Excel/PPTX run in a sandboxed iframe: `scripts/build-{excel,pptx}-preview.mjs` bundle `web/vendor/vue-office-{excel,pptx}/viewer.js` (with npm `pptx-preview`/`exceljs`/`xlsx`) as an IIFE and inline it into `generated/{excel,pptx}-viewer.html`, which `ExcelPreview.tsx`/`PptxPreview.tsx` import `?raw`. `xlsx` comes from the SheetJS CDN tarball, not the npm registry.
+- CSP: `web/csp.ts` (Vite plugin, build only) injects a `<meta>` Content-Security-Policy into `dist/index.html` — no `unsafe-eval`/general `unsafe-inline` script. The Excel/PPTX srcdoc iframes inherit it, so each generated viewer must keep **exactly one** inline script, allowed by SHA-256 hash (the build fails otherwise). Browser tests' `waitForFunction` is patched in `scripts/browser/ui-lib.cjs` to poll via `page.evaluate`, because Playwright's native one needs eval.
+- Arco styles: `main.tsx` imports `src/styles/arco-components.ts` (generated by `node scripts/generate-arco-styles.mjs`), not the full `dist/css/arco.css`. It lists only the stylesheets the imported components need, in full-bundle order (loading `css.js` per component would reorder the cascade and shift layouts). After importing a new Arco component, rerun the generator — `test/arco-styles.test.cjs` fails while it is stale.
 - Preview watermark (employee no. + name + open time) is `WatermarkedPreview` in `src/components/FileTable.tsx`, styled by `.preview-watermark` in `src/index.css`.
 
 ## Testing philosophy in this repo
@@ -139,3 +141,4 @@ Tests here are deliberately end-to-end and isolation-heavy, not just unit tests:
 - Every DB-touching test suite requires an explicit, separate test MySQL connection (`YF_TEST_DATABASE_URL`); nothing runs against the dev/business database. DB tests **skip** when it is unset, so a bare "exit code 0" does not prove a full pass — check failed/skipped/not-run counts are all zero.
 - Browser tests build real artifacts (web `dist` + `TestHost`) and verify SHA-256 of what's actually under test, rejecting stale builds.
 - `tests/Contracts/api-v1.json` is the authoritative frontend↔backend HTTP contract; update it alongside any route/method change.
+- Typed contract: every JSON endpoint returns a named response record (`*Response`, `PageResponse<T>`, `EmptyResponse` — never `Task<object>` or anonymous objects), so `OpenApiContractTests` can generate `tests/Contracts/openapi-v1.json` (no DB; Swashbuckle lives only in the test project) and fail on any untyped endpoint. After changing a route, request or response type: `YF_UPDATE_OPENAPI=1 dotnet test .\tests\Yf.Api.Tests.csproj --filter OpenApiContractTests`, then in `web/` `npm run generate:api-types` (writes `src/api/generated/api-types.ts`; `test/api-types.test.cjs` fails while stale). Frontend calls are typed as `http.get<ApiResponses['GET /route/{id}']>(...)`; `src/api/types.ts` derives its types from the generated ones and only narrows enum-like string fields. Keep JSON shapes identical when converting: optional-when-null members need `[JsonIgnore(Condition = WhenWritingNull)]`.

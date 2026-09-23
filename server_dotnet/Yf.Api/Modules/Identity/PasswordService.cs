@@ -13,7 +13,12 @@ public static class PasswordService
     private const int Iterations = 2;
     private const int Parallelism = 1;
     private const int HashBytes = 32;
-    private static readonly SemaphoreSlim HashSlots = new(Math.Max(1, Math.Min(2, Environment.ProcessorCount)));
+    // Each Argon2id derivation takes ~19 MiB and one core for ~0.1 s. Use half the cores (2-8) so login
+    // bursts are not serialized, while memory stays bounded (at most 8 x 19 MiB).
+    internal static readonly int HashConcurrency = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
+    private static readonly SemaphoreSlim HashSlots = new(HashConcurrency);
+    // A flood must not queue requests without bound; callers get a retryable busy response instead.
+    internal static readonly TimeSpan HashQueueTimeout = TimeSpan.FromSeconds(15);
     private static readonly string[] BlockedStems =
     [
         "password", "passwd", "admin", "administrator", "qwerty", "qwertyuiop",
@@ -81,7 +86,8 @@ public static class PasswordService
     private static async Task<byte[]> DeriveAsync(string algorithm, string password, byte[] salt, int memoryKb,
         int iterations, int parallelism, int hashBytes, CancellationToken cancellationToken)
     {
-        await HashSlots.WaitAsync(cancellationToken);
+        if (!await HashSlots.WaitAsync(HashQueueTimeout, cancellationToken))
+            throw new ApiException(429, 42901, "登录请求繁忙，请稍后再试");
         try
         {
             Argon2 argon = algorithm switch

@@ -12,6 +12,7 @@ import {
   useCollaboration,
 } from '../store/collaboration'
 import '../styles/collaboration.css'
+import type { ApiResponses } from '../api/types'
 
 const PAGE_SIZE = 20
 
@@ -93,7 +94,7 @@ export default function CollaborationNotifications() {
     setLoading(true)
     setListFailed(false)
     try {
-      const response = await http.get('/collaboration/notifications', {
+      const response = await http.get<ApiResponses['GET /collaboration/notifications']>('/collaboration/notifications', {
         params: { page: nextPage, pageSize: PAGE_SIZE, unreadOnly: nextUnreadOnly },
         signal: controller.signal,
         quietNetworkError: true,
@@ -151,7 +152,7 @@ export default function CollaborationNotifications() {
     pendingIds.forEach((id) => markingIds.current.add(id))
     setMarking((current) => new Set([...current, ...pendingIds]))
     try {
-      await http.post('/collaboration/reads', { ids: pendingIds })
+      await http.post<ApiResponses['POST /collaboration/reads']>('/collaboration/reads', { ids: pendingIds })
       if (useAuth.getState().generation !== requestGeneration) return false
       const selected = new Set(pendingIds)
       setList((current) => current.map((item) => selected.has(item.id) ? { ...item, read: true } : item))

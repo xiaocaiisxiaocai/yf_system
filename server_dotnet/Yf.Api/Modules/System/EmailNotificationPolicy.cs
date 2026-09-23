@@ -109,19 +109,15 @@ internal sealed record EmailNotificationPolicy(
     internal bool Allows(string eventType, string? userType) =>
         GlobalEnabled && AllowsEvent(eventType) && AllowsAudience(userType);
 
-    internal object ToResponse() => new
-    {
-        globalEnabled = GlobalEnabled,
-        internalEnabled = InternalEnabled,
-        supplierEnabled = SupplierEnabled,
-        events = new
-        {
-            messageCreated = MessageCreatedEnabled,
-            fileUploaded = FileUploadedEnabled,
-            projectSubmitted = ProjectSubmittedEnabled,
-            projectConfirmed = ProjectConfirmedEnabled,
-            projectRejected = ProjectRejectedEnabled,
-            projectWithdrawn = ProjectWithdrawnEnabled,
-        },
-    };
+    internal NotificationPolicyResponse ToResponse() => new(
+        GlobalEnabled,
+        InternalEnabled,
+        SupplierEnabled,
+        new NotificationEventsResponse(
+            MessageCreatedEnabled,
+            FileUploadedEnabled,
+            ProjectSubmittedEnabled,
+            ProjectConfirmedEnabled,
+            ProjectRejectedEnabled,
+            ProjectWithdrawnEnabled));
 }

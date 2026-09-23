@@ -55,7 +55,22 @@ async function api(c,method,url,data,token,expected=200){
 }
 async function navigate(p,url){await p.goto(s.base+url);await p.getByText('收起导航',{exact:true}).waitFor();}
 async function action(p,suffix,method,fn){const [r]=await Promise.all([p.waitForResponse(r=>new URL(r.url()).pathname.endsWith(suffix)&&r.request().method()===method),Promise.resolve().then(fn)]);assert.equal(r.status(),200,suffix);return r.json();}
+// The built SPA ships a Content-Security-Policy without 'unsafe-eval'. Playwright's waitForFunction
+// evaluates its predicate as a string inside the page, which that policy blocks; page.evaluate goes
+// through the DevTools protocol and is unaffected. Poll with evaluate so tests run under the real CSP.
+function cspSafeWaitForFunction(pageFunction,arg,options={}){
+ const timeout=options.timeout??30000;const interval=typeof options.polling==='number'?options.polling:100;const deadline=Date.now()+timeout;
+ return (async()=>{
+  for(;;){
+   try{const value=await this.evaluate(pageFunction,arg);if(value)return value;}
+   catch(error){if(!/Execution context was destroyed|navigation|Cannot find context/i.test(String(error?.message)))throw error;}
+   if(Date.now()>=deadline)throw new Error('waitForFunction timed out after '+timeout+'ms');
+   await new Promise(resolve=>setTimeout(resolve,interval));
+  }
+ })();
+}
 function track(p,label){
+ const pagePrototype=Object.getPrototypeOf(p);if(pagePrototype.waitForFunction!==cspSafeWaitForFunction)pagePrototype.waitForFunction=cspSafeWaitForFunction;
  const diagnostic=(kind,detail)=>fs.appendFileSync(OUT+'/browser-diagnostics.jsonl',JSON.stringify({at:new Date().toISOString(),label,operation:activeOperation,kind,...detail})+'\n');
  const safeText=text=>String(text).replace(/Bearer\s+\S+/gi,'Bearer [redacted]').replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'[redacted-token]').slice(0,1200);
  p.on('pageerror',e=>fs.appendFileSync(OUT+'/page-errors.jsonl',JSON.stringify({label,error:safeText(e.message)})+'\n'));

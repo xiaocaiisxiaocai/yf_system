@@ -19,6 +19,13 @@ public static class ClientIp
     }
 }
 
+/// <summary>The body of every error response. RequestId is present only for unexpected (500) errors.</summary>
+public sealed record ApiErrorResponse(
+    int Code,
+    string Message,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? RequestId = null);
+
 public sealed class ApiErrorMiddleware(RequestDelegate next, ILogger<ApiErrorMiddleware> logger)
 {
     public async Task InvokeAsync(HttpContext context)
@@ -36,16 +43,34 @@ public sealed class ApiErrorMiddleware(RequestDelegate next, ILogger<ApiErrorMid
                 DbUpdateException { InnerException: MySqlException { Number: 1062 } } => ApiException.Conflict("数据已存在，请刷新后重试"),
                 _ => new ApiException(500, 50000, "服务器内部错误")
             };
-            if (error.Status == 500) logger.LogError("Request {TraceId} failed: {ErrorType}; database code {DatabaseCode}; stack {StackTrace}",
-                context.TraceIdentifier, exception.GetType().Name, (exception as MySqlException)?.Number, exception.StackTrace);
             context.Response.StatusCode = error.Status;
-            await context.Response.WriteAsJsonAsync(new { code = error.Code, message = error.Message }, context.RequestAborted);
+            if (error.Status == 500)
+            {
+                // Log the full exception (message and inner exceptions) server-side. The path is logged
+                // without its query string, which may carry the realtime hub's access_token.
+                logger.LogError(exception, "Request {TraceId} {Method} {Path} failed; database code {DatabaseCode}",
+                    context.TraceIdentifier, context.Request.Method, context.Request.Path.Value,
+                    (exception as MySqlException)?.Number);
+                // The request id matches the log entry above and the requestId in audit records, so a
+                // user can report it without the response exposing any internal detail.
+                await context.Response.WriteAsJsonAsync(
+                    new ApiErrorResponse(error.Code, error.Message, context.TraceIdentifier), context.RequestAborted);
+                return;
+            }
+            await context.Response.WriteAsJsonAsync(new ApiErrorResponse(error.Code, error.Message), context.RequestAborted);
         }
     }
 }
 
 public static class QueryValues
 {
+    /// <summary>Escape character for patterns built by <see cref="ContainsPattern"/>; pass it to EF.Functions.Like.</summary>
+    public const string LikeEscape = @"\";
+
+    /// <summary>A LIKE pattern that matches <paramref name="term"/> literally, so user input such as "50%" or "a_b" is not treated as wildcards.</summary>
+    public static string ContainsPattern(string term) =>
+        "%" + term.Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_") + "%";
+
     public static ulong? OptionalUInt64(HttpRequest request, string name)
     {
         if (!request.Query.TryGetValue(name, out var values)) return null;

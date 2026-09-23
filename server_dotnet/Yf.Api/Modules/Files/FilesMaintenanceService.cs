@@ -191,6 +191,7 @@ public sealed class FilesMaintenanceService(
         if (!Directory.Exists(temp)) return;
         temp = FileStorage.ResolveExisting(root, temp, requireFile: false, ct);
         var cutoff = DateTime.UtcNow.AddHours(-24);
+        // Batch downloads now stream; this only removes archives staged on disk by earlier versions.
         foreach (var path in Directory.EnumerateFiles(temp, "yf_files_*.zip", SearchOption.TopDirectoryOnly))
         {
             ct.ThrowIfCancellationRequested();

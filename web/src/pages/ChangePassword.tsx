@@ -7,6 +7,7 @@ import { useAuth } from '../store/auth'
 import AuthShell from '../components/AuthShell'
 import PasswordInput from '../components/PasswordInput'
 import { passwordRule } from '../utils/password'
+import type { ApiResponses } from '../api/types'
 
 export default function ChangePassword() {
   const [form] = Form.useForm()
@@ -22,7 +23,7 @@ export default function ChangePassword() {
     try {
       await withAuthLock(async () => {
         try {
-          await http.post('/auth/logout')
+          await http.post<ApiResponses['POST /auth/logout']>('/auth/logout')
         } catch {
           /* 即使服务端会话已失效，也要清空本地登录态 */
         }
@@ -49,7 +50,7 @@ export default function ChangePassword() {
     setLoading(true)
     try {
       await withAuthLock(async () => {
-        await http.put('/auth/password', { oldPassword: v.oldPassword, newPassword: v.newPassword })
+        await http.put<ApiResponses['PUT /auth/password']>('/auth/password', { oldPassword: v.oldPassword, newPassword: v.newPassword })
         logout()
       })
       Message.success('密码已修改，请重新登录')

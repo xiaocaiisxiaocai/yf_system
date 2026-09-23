@@ -111,7 +111,7 @@ internal sealed class ProjectActivityService(
         });
     }
 
-    internal async Task<object> ListAsync(
+    internal async Task<ProjectActivityPage> ListAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong projectId,
@@ -167,18 +167,9 @@ internal sealed class ProjectActivityService(
                 "MESSAGE" when row.TargetId is not null => availableMessages.Contains(row.TargetId.Value),
                 _ => false,
             };
-            return new
-            {
-                id = row.Id,
-                type = row.ActivityType,
-                action = row.Action,
-                actorName = row.ActorName,
-                occurredAt = ProjectJson.Utc(row.OccurredAt),
-                title = row.Title,
-                summary = row.ActivityType == "MESSAGE" && !available ? null : row.Summary,
-                targetId = row.TargetId,
-                targetAvailable = available,
-            };
+            return new ProjectActivityItem(
+                row.Id, row.ActivityType, row.Action, row.ActorName, ProjectJson.Utc(row.OccurredAt), row.Title,
+                row.ActivityType == "MESSAGE" && !available ? null : row.Summary, row.TargetId, available);
         }).ToArray();
         var lastActivityAt = await db.ProjectActivities
             .Where(activity => activity.ProjectId == projectId)
@@ -186,18 +177,14 @@ internal sealed class ProjectActivityService(
             .ThenByDescending(activity => activity.Id)
             .Select(activity => (DateTime?)activity.OccurredAt)
             .FirstOrDefaultAsync(ct);
-        return new
-        {
+        return new ProjectActivityPage(
             list,
-            nextCursor = hasMore && rows.Length > 0 ? EncodeCursor(rows[^1].OccurredAt, rows[^1].Id) : null,
-            summary = new
-            {
-                status = project.Status,
-                pendingConfirmation = project.Status == ProjectStatuses.PendingConfirmation,
-                confirmSide = project.ConfirmSide,
-                lastActivityAt = lastActivityAt is null ? (DateTime?)null : ProjectJson.Utc(lastActivityAt.Value),
-            },
-        };
+            hasMore && rows.Length > 0 ? EncodeCursor(rows[^1].OccurredAt, rows[^1].Id) : null,
+            new ProjectActivitySummary(
+                project.Status,
+                project.Status == ProjectStatuses.PendingConfirmation,
+                project.ConfirmSide,
+                lastActivityAt is null ? null : ProjectJson.Utc(lastActivityAt.Value)));
     }
 
     private static async Task<NewActivity?> ProjectActivityAsync(

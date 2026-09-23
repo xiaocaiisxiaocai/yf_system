@@ -20,6 +20,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../store/auth'
 import http, { withAuthLock } from '../api/client'
 import CollaborationNotifications from '../components/CollaborationNotifications'
+import type { ApiResponses } from '../api/types'
 
 const { Sider, Header, Content } = Layout
 
@@ -66,7 +67,7 @@ export default function AdminLayout() {
   const doLogout = async () => {
     await withAuthLock(async () => {
     try {
-      await http.post('/auth/logout')
+      await http.post<ApiResponses['POST /auth/logout']>('/auth/logout')
     } catch {
       /* 忽略 */
     }

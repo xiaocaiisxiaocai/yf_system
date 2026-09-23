@@ -20,51 +20,55 @@ public static class FilesModule
 
         api.MapGet("/projects/{projectId:long}/files", async (
             HttpContext context, ulong projectId, FileService service, CancellationToken ct) =>
-            Results.Ok(await service.ListAsync(context, projectId, ct)));
+            await service.ListAsync(context, projectId, ct));
 
         api.MapPost("/uploads/init", async (
             HttpContext context, InitUploadRequest request, UploadService service, CancellationToken ct) =>
-            Results.Ok(await service.InitAsync(context, request, ct)));
+            await service.InitAsync(context, request, ct));
         api.MapGet("/uploads/{sessionId}", async (
             HttpContext context, string sessionId, UploadService service, CancellationToken ct) =>
-            Results.Ok(await service.GetAsync(context, sessionId, ct)));
+            await service.GetAsync(context, sessionId, ct));
         api.MapPut("/uploads/{sessionId}/chunks/{index:int}", async (
             HttpContext context, string sessionId, int index, UploadService service, CancellationToken ct) =>
         {
             await service.PutChunkAsync(context, sessionId, index, context.Request.Body, ct);
-            return Results.Ok(new { });
+            return EmptyResponse.Instance;
         }).DisableAntiforgery();
         api.MapPost("/uploads/{sessionId}/merge", async (
             HttpContext context, string sessionId, UploadService service, CancellationToken ct) =>
-            Results.Ok(await service.MergeAsync(context, sessionId, ct)));
+            await service.MergeAsync(context, sessionId, ct));
         api.MapDelete("/uploads/{sessionId}", async (
             HttpContext context, string sessionId, UploadService service, CancellationToken ct) =>
         {
             await service.AbortAsync(context, sessionId, ct);
-            return Results.Ok(new { });
+            return EmptyResponse.Instance;
         });
 
         api.MapGet("/files/{id:long}/download", async (
             HttpContext context, ulong id, FileService service, CancellationToken ct) =>
-            await service.StreamAsync(context, id, inline: false, ct));
+            await service.StreamAsync(context, id, inline: false, ct))
+            .Produces(StatusCodes.Status200OK, contentType: "application/octet-stream");
         api.MapGet("/files/{id:long}/content", async (
             HttpContext context, ulong id, FileService service, CancellationToken ct) =>
-            await service.StreamAsync(context, id, inline: true, ct));
+            await service.StreamAsync(context, id, inline: true, ct))
+            .Produces(StatusCodes.Status200OK, contentType: "application/octet-stream");
         api.MapPost("/files/{id:long}/media-session", async (
             HttpContext context, ulong id, FileService service, CancellationToken ct) =>
-            Results.Ok(await service.CreateMediaSessionAsync(context, id, ct)));
+            await service.CreateMediaSessionAsync(context, id, ct));
         api.MapGet("/files/{id:long}/media", async (
             HttpContext context, ulong id, FileService service, CancellationToken ct) =>
-            await service.StreamMediaAsync(context, id, ct));
+            await service.StreamMediaAsync(context, id, ct))
+            .Produces(StatusCodes.Status200OK, contentType: "video/mp4");
         api.MapDelete("/files/{id:long}", async (
             HttpContext context, ulong id, FileService service, CancellationToken ct) =>
         {
             await service.DeleteAsync(context, id, ct);
-            return Results.Ok(new { });
+            return EmptyResponse.Instance;
         });
         api.MapPost("/files/batch-download", async (
             HttpContext context, BatchDownloadRequest request, FileService service, CancellationToken ct) =>
-            await service.BatchDownloadAsync(context, request, ct));
+            await service.BatchDownloadAsync(context, request, ct))
+            .Produces(StatusCodes.Status200OK, contentType: "application/zip");
 
         return endpoints;
     }

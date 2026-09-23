@@ -109,7 +109,7 @@ http.interceptors.response.use(
     if (!isCurrentSession(resp.config)) throw new Error('登录状态已变化，请重新操作')
     return resp
   },
-  async (error: AxiosError<{ code?: number; message?: string }>) => {
+  async (error: AxiosError<{ code?: number; message?: string; requestId?: string }>) => {
     if (error.code === 'ERR_CANCELED') return Promise.reject(error)
     const cfg = error.config as SessionConfig
     if (!isCurrentSession(cfg)) return Promise.reject(error)
@@ -136,7 +136,10 @@ http.interceptors.response.use(
     const connectionMessage = error.code === 'ERR_NETWORK'
       ? '网络连接失败，请稍后重试'
       : error.code === 'ECONNABORTED' ? '请求超时，请稍后重试' : undefined
-    const msg = error.response?.data?.message || connectionMessage || error.message || '网络错误'
+    const baseMsg = error.response?.data?.message || connectionMessage || error.message || '网络错误'
+    // 服务端 500 附带请求编号，便于用户反馈时对照服务器日志与操作日志。
+    const requestId = status === 500 ? error.response?.data?.requestId : undefined
+    const msg = requestId ? `${baseMsg}（请求编号：${requestId}）` : baseMsg
     const quietTransientError = cfg?.quietNetworkError === true && (
       error.code === 'ERR_NETWORK'
       || error.code === 'ECONNABORTED'

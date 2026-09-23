@@ -13,7 +13,7 @@ React + TypeScript 前端、ASP.NET Core 8 后端、MySQL 数据库。后端唯�
 | `server_dotnet/tests/`、`server_dotnet/TestHost/` | 后端测试和隔离测试宿主 |
 | `server_dotnet/docs/` | 当前业务契约文档 |
 | `docs/`、`docs/history/` | 需求、功能说明及历史验收记录 |
-| `third_party/`、`web/vendor/` | Office 预览来源、必要测试样本和实际使用的预览组件源码 |
+| `third_party/`（本地，不提交）、`web/vendor/` | Office 预览上游参考源码和实际使用的预览组件源码 |
 | `deloy/` | IIS 发布目录，默认只生成可直接复制的版本文件夹 |
 | `.artifacts/cache/` | 可复用的开发下载缓存 |
 | `.artifacts/reports/` | 验证报告和保留的近期验收证据 |

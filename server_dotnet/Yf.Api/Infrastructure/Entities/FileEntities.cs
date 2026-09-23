@@ -74,7 +74,8 @@ public sealed class FileRecordConfig : IEntityTypeConfiguration<FileRecord>
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
         b.HasIndex(x => x.StoredName).IsUnique().HasDatabaseName("stored_name");
         b.HasIndex(x => x.UploaderId).HasDatabaseName("fk_files_uploader");
-        b.HasIndex(x => x.ProjectId).HasDatabaseName("idx_files_project");
+        // Serves the file list: WHERE project_id=? AND status=? ORDER BY id DESC; also backs fk_files_project.
+        b.HasIndex(x => new { x.ProjectId, x.Status, x.Id }).HasDatabaseName("idx_files_project_status");
         b.HasIndex(x => new { x.Status, x.DeletedAt }).HasDatabaseName("idx_files_status_deleted_at");
         b.HasOne<Project>().WithMany().HasForeignKey(x => x.ProjectId).HasConstraintName("fk_files_project").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<User>().WithMany().HasForeignKey(x => x.UploaderId).HasConstraintName("fk_files_uploader").OnDelete(DeleteBehavior.Restrict);

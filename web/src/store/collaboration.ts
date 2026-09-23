@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from './auth'
 import { startProjectRealtime } from '../services/projectRealtime'
+import type { ApiResponses } from '../api/types'
 
 export type CollaborationType = 'FILE' | 'MESSAGE' | 'PROJECT'
 
@@ -172,7 +173,7 @@ export async function refreshCollaborationSummary(signal?: AbortSignal, expected
   useCollaboration.setState((state) => ({ status: state.status === 'idle' ? 'loading' : state.status }))
   const config: QuietRequestConfig = { signal, quietNetworkError: true, timeout: 10_000 }
   try {
-    const response = await http.get('/collaboration/summary', config)
+    const response = await http.get<ApiResponses['GET /collaboration/summary']>('/collaboration/summary', config)
     const summary = parseCollaborationSummary(response.data)
     if (signal?.aborted) return false
     const after = currentPollSession()
@@ -356,7 +357,7 @@ export function startCollaborationPolling(): () => void {
     getAccessToken: async () => {
       const expectedKey = currentPollSession().key
       // Reuse the existing single-flight refresh/rotation instead of keeping a second token.
-      await http.get('/collaboration/summary', { quietNetworkError: true, timeout: 10000 } as QuietRequestConfig)
+      await http.get<ApiResponses['GET /collaboration/summary']>('/collaboration/summary', { quietNetworkError: true, timeout: 10000 } as QuietRequestConfig)
       return expectedKey === currentPollSession().key ? useAuth.getState().token ?? '' : ''
     },
     subscribeSession: (wake) => useAuth.subscribe(wake),

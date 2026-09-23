@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { pdfAssets } from './pdf-assets.ts'
+import { contentSecurityPolicyPlugin } from './csp.ts'
 
 export default defineConfig({
-  plugins: [react(), pdfAssets()],
+  plugins: [react(), pdfAssets(), contentSecurityPolicyPlugin()],
   server: {
     host: '127.0.0.1',
     port: 5173,

@@ -201,8 +201,10 @@ async function createPptxFromScratchUnused(marker) {
 }
 
 async function createPptx(marker) {
+  // Trimmed parts of vue-office's test.pptx (slide 1, master, 11 layouts, theme, table styles),
+  // committed so a fresh clone does not depend on the git-ignored third_party archive.
   const templatePath = process.env.YF_PROJECT_ROOT
-    + '/third_party/vue-office-source-2024-12-30/core/public/static/test-files/test.pptx';
+    + '/server_dotnet/scripts/browser/fixtures/pptx-template.zip';
   assert(fs.existsSync(templatePath), 'repository PPTX template is required');
   const template = await JSZip.loadAsync(fs.readFileSync(templatePath), { checkCRC32: true });
   const output = new JSZip();

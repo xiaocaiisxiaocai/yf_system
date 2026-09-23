@@ -7,6 +7,8 @@ import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from '../store/auth'
 import { type Message as Msg, fmtTime } from '../api/types'
 import { MessageImageComposer, MessageImages, pasteMessageImages } from './MessageImages'
+import { ReceiptBody, loadReadCounts, type Reader, type ReadCounts } from './MessageReceipts'
+import type { ApiResponses } from '../api/types'
 
 interface Props {
   projectId: number
@@ -17,41 +19,6 @@ interface Props {
   active?: boolean
   receiptRevision?: string
   realtimeConnected?: boolean
-}
-
-interface Reader {
-  userId: number
-  realName: string
-  userType: string
-  readAt?: string | null
-}
-
-interface ReadCounts {
-  id: number
-  readCount: number
-  totalCount: number
-}
-
-const RECEIPT_SYNC_CONCURRENCY = 4
-
-async function loadReadCounts(ids: number[]): Promise<ReadCounts[]> {
-  const counts: ReadCounts[] = []
-  for (let start = 0; start < ids.length; start += RECEIPT_SYNC_CONCURRENCY) {
-    const batch = ids.slice(start, start + RECEIPT_SYNC_CONCURRENCY)
-    const results = await Promise.all(batch.map(async (id) => {
-      try {
-        const response = await http.get(`/messages/${id}/reads`)
-        if (!Array.isArray(response.data?.readers) || !Array.isArray(response.data?.unread)) return null
-        const readers = response.data.readers
-        const unread = response.data.unread
-        return { id, readCount: readers.length, totalCount: readers.length + unread.length }
-      } catch {
-        return null
-      }
-    }))
-    counts.push(...results.filter((result): result is ReadCounts => result !== null))
-  }
-  return counts
 }
 
 export default function MessagePanel({ projectId, projectStatus, onRead, targetId, revision = '', active = true, receiptRevision = '', realtimeConnected = false }: Props) {
@@ -171,7 +138,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
           })
           .map((element) => Number(element.dataset.messageId)).slice(0, 500)
         if (listLoading.current || !ids.length) return
-        const response = await http.get(`/projects/${projectId}/message-receipts`, {
+        const response = await http.get<ApiResponses['GET /projects/{id}/message-receipts']>(`/projects/${projectId}/message-receipts`, {
           params: { ids: ids.join(',') }, signal: controller.signal, timeout: 10000, quietNetworkError: true,
         } as QuietRequestConfig)
         if (stopped || controller.signal.aborted || messageScope.current.generation !== generation
@@ -185,7 +152,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
         const detailId = openReceiptId.current
         if (detailId != null) {
           const seq = receiptSeq.current
-          const detail = await http.get(`/messages/${detailId}/reads`, { signal: controller.signal, timeout: 10000, quietNetworkError: true } as QuietRequestConfig)
+          const detail = await http.get<ApiResponses['GET /messages/{id}/reads']>(`/messages/${detailId}/reads`, { signal: controller.signal, timeout: 10000, quietNetworkError: true } as QuietRequestConfig)
           if (!stopped && !controller.signal.aborted && seq === receiptSeq.current
               && openReceiptId.current === detailId && messageScope.current.generation === generation) {
             setReceipt({ id: detailId, readers: detail.data.readers, unread: detail.data.unread })
@@ -239,11 +206,12 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
         let responseTotal = 0
         let lastBatchSize = 0
         for (;;) {
-          const response = await http.get(`/projects/${projectId}/messages`, {
+          const response = await http.get<ApiResponses['GET /projects/{id}/messages']>(`/projects/${projectId}/messages`, {
             params: { page: p, pageSize: 20, beforeId }, signal: controller.signal,
           })
           if (seq !== loadSeq.current || controller.signal.aborted) return
-          const batch: Msg[] = response.data.list
+          // senderType is a plain string in the API schema; the frontend narrows it to the two known values.
+          const batch = response.data.list as Msg[]
           if (!Array.isArray(batch)) throw new Error('Invalid message window')
           responseTotal = response.data.total
           rows.push(...batch)
@@ -339,13 +307,14 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
         // Cover the entire loaded window, including gaps larger than one page.
         // Cursor pagination remains stable when messages arrive during this fetch.
         for (;;) {
-          const response = await http.get(`/projects/${projectId}/messages`, {
+          const response = await http.get<ApiResponses['GET /projects/{id}/messages']>(`/projects/${projectId}/messages`, {
             params: { page: 1, pageSize: 20, beforeId },
             signal: controller.signal, timeout: 10000, quietNetworkError: true,
           } as QuietRequestConfig)
           if (stopped || controller.signal.aborted || generation !== messageScope.current.generation
               || requestLoad !== loadSeq.current || requestMutations !== messageMutations.current) return
-          const batch: Msg[] = response.data.list
+          // senderType is a plain string in the API schema; the frontend narrows it to the two known values.
+          const batch = response.data.list as Msg[]
           if (!Array.isArray(batch) || !Number.isSafeInteger(response.data.total) || response.data.total < 0
               || batch.some((item, index) => !Number.isSafeInteger(item?.id) || item.id <= 0
                 || (index > 0 && item.id >= batch[index - 1].id) || (beforeId !== undefined && item.id >= beforeId))) {
@@ -442,7 +411,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
         if (!ids.length) return
         const scopeGeneration = messageScope.current.generation
         ids.forEach((id) => markingRead.current.add(id))
-        void http.post('/messages/read', { ids }).then(async () => {
+        void http.post<ApiResponses['POST /messages/read']>('/messages/read', { ids }).then(async () => {
           if (!mounted.current || messageScope.current.generation !== scopeGeneration) return
           loadedMessages.current = loadedMessages.current.map((m) => (ids.includes(m.id) ? { ...m, readByMe: true } : m))
           setList(loadedMessages.current)
@@ -512,7 +481,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
     setReceipt(null)
     setReceiptRequest({ id, loading: true, error: false })
     try {
-      const r = await http.get(`/messages/${id}/reads`)
+      const r = await http.get<ApiResponses['GET /messages/{id}/reads']>(`/messages/${id}/reads`)
       if (seq === receiptSeq.current) {
         countsVersion.current += 1
         applyReadCounts([{ id, readCount: r.data.readers.length, totalCount: r.data.readers.length + r.data.unread.length }])
@@ -526,7 +495,7 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
   }
 
   const remove = async (id: number) => {
-    await http.delete(`/messages/${id}`)
+    await http.delete<ApiResponses['DELETE /messages/{id}']>(`/messages/${id}`)
     messageMutations.current += 1
     loadedMessages.current = loadedMessages.current.filter((m) => m.id !== id)
     setList(loadedMessages.current)
@@ -729,78 +698,4 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
       </Drawer>
     </div>
   )
-}
-
-/** 气泡内联的已读名单（轻量版） */
-function ReceiptBody({ id, refreshKey = 0, onLoaded }: {
-  id: number
-  refreshKey?: number
-  onLoaded?: (id: number, readCount: number, totalCount: number) => void
-}) {
-  const [receipt, setReceipt] = useState<{
-    id: number
-    names: string[]
-    loading: boolean
-    error: boolean
-  }>(() => ({ id, names: [], loading: true, error: false }))
-  const requestSeq = useRef(0)
-
-  const retry = () => {
-    setReceipt({ id, names: [], loading: true, error: false })
-    const seq = ++requestSeq.current
-    http.get(`/messages/${id}/reads`)
-      .then((r) => {
-        if (seq !== requestSeq.current) return
-        onLoaded?.(id, r.data.readers.length, r.data.readers.length + r.data.unread.length)
-        setReceipt({
-          id,
-          names: r.data.readers.map((x: Reader) => x.realName),
-          loading: false,
-          error: false,
-        })
-      })
-      .catch(() => {
-        if (seq === requestSeq.current) {
-          setReceipt({ id, names: [], loading: false, error: true })
-        }
-      })
-  }
-
-  useEffect(() => {
-    const seq = ++requestSeq.current
-    http.get(`/messages/${id}/reads`)
-      .then((r) => {
-        if (seq !== requestSeq.current) return
-        onLoaded?.(id, r.data.readers.length, r.data.readers.length + r.data.unread.length)
-        setReceipt({
-          id,
-          names: r.data.readers.map((x: Reader) => x.realName),
-          loading: false,
-          error: false,
-        })
-      })
-      .catch(() => {
-        if (seq === requestSeq.current) {
-          setReceipt({ id, names: [], loading: false, error: true })
-        }
-      })
-    return () => {
-      requestSeq.current += 1
-    }
-  }, [id, refreshKey, onLoaded])
-
-  const current = receipt.id === id
-    ? receipt
-    : { id, names: [], loading: true, error: false }
-
-  if (current.loading) return <div style={{ fontSize: 12 }}>回执加载中…</div>
-  if (current.error) {
-    return (
-      <div style={{ fontSize: 12 }}>
-        <Typography.Text type="error">回执加载失败</Typography.Text>
-        <Button size="mini" type="text" onClick={retry}>重试</Button>
-      </div>
-    )
-  }
-  return <div style={{ fontSize: 12 }}>{current.names.length ? current.names.join('、') : '暂无'}</div>
 }

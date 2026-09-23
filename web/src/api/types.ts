@@ -1,3 +1,7 @@
+import type * as Api from './generated/api-types'
+
+export type { ApiResponses, ApiRoute } from './generated/api-types'
+
 export interface PageResp<T> {
   list: T[]
   total: number
@@ -6,89 +10,31 @@ export interface PageResp<T> {
 }
 
 /**
- * 子项目的摘要字段，由 ProjectJson.Project（后端）序列化，
- * 用于主项目详情的子项目列表（siblings/表格）、复制结果等批量/列表场景。
- * 不包含 rejectReason / latestSubmitterId —— 这两个字段需要按项目单独查询
- * project_status_logs，只有 GET /projects/{id} 详情接口才会附带，
- * 批量场景为避免逐行查询没有提供。需要这两个字段时使用 Project 类型。
+ * 以下业务类型由后端 OpenAPI 生成的 ./generated/api-types 推导（npm run generate:api-types），
+ * 只在生成类型之上收窄状态等枚举字段；后端字段改名或删除时，前端使用处会在编译期报错。
  */
-export interface ProjectSummary {
-  id: number
-  projectGroupId: number
-  projectGroupName: string
-  name: string
-  description?: string
-  supplierId: number
-  supplierName?: string
-  workOrderNos: string[]
-  machineModel?: string | null
-  robotVendorId?: number | null
-  robotVendorName?: string | null
-  robotModelId?: number | null
-  robotModelName?: string | null
-  responsibleUserId?: number | null
-  responsibleUserEmployeeNo?: string | null
-  responsibleUserName?: string | null
-  sectionId?: number | null
-  sectionName?: string | null
-  priorityId?: number | null
-  priorityName?: string | null
-  /** 仅包含日期，不进行时区转换。 */
-  expectedCompletionDate?: string | null
-  status: 'DRAFT' | 'IN_PROGRESS' | 'PENDING_CONFIRMATION' | 'COMPLETED' | 'TERMINATED'
+export type ProjectStatus = 'DRAFT' | 'IN_PROGRESS' | 'PENDING_CONFIRMATION' | 'COMPLETED' | 'TERMINATED'
+
+/** 新申请固定 COMPANY；SUPPLIER 仅用于读取升级前保留的历史数据。 */
+export type ConfirmSide = 'COMPANY' | 'SUPPLIER'
+
+type WithProjectEnums<T> = Omit<T, 'status' | 'confirmSide'> & {
+  status: ProjectStatus
   /** 当前内部验收方；待验收时固定为 COMPANY，项目回到进行中后由后端清空。 */
-  confirmSide?: ConfirmSide | null
-  /** 当前待验收提交的不可变版本标识；确认、驳回和撤回必须回传。 */
-  latestSubmissionId?: number | null
-  createdBy: number
-  createdByName?: string
-  createdAt: string
-  updatedAt: string
-  /** 当前项目存在可查看或受限的复制关系。 */
-  hasCopyHistory?: boolean
-  unreadMessages?: number
-  /** 当前项目的可见复制来源；来源无权访问时由后端置空。 */
-  copySource?: { projectId: number; name: string } | null
+  confirmSide: ConfirmSide | null
 }
+
+/**
+ * 子项目的摘要字段（后端 ProjectResponse），用于主项目详情的子项目列表、复制结果等批量场景。
+ * 不包含 rejectReason / latestSubmitterId —— 只有 GET /projects/{id} 详情接口才会附带。
+ */
+export type ProjectSummary = WithProjectEnums<Api.ProjectResponse>
 
 /** 子项目详情，仅 GET /projects/{id} 返回；比 ProjectSummary 多两个单独查询的字段。 */
-export interface Project extends ProjectSummary {
-  /** 当前待确认提交的提交人；撤回仅由提交人或内部全量查看者发起。 */
-  latestSubmitterId: number | null
-  rejectReason: string | null
-}
+export type Project = WithProjectEnums<Api.ProjectDetailResponse>
 
-export interface ProjectGroup {
-  id: number
-  name: string
-  description?: string | null
-  supplierId: number
-  supplierName?: string | null
-  workOrderNos: string[]
-  machineModel?: string | null
-  robotVendorId?: number | null
-  robotVendorName?: string | null
-  robotModelId?: number | null
-  robotModelName?: string | null
-  responsibleUserId?: number | null
-  responsibleUserEmployeeNo?: string | null
-  responsibleUserName?: string | null
-  sectionId?: number | null
-  sectionName?: string | null
-  priorityId?: number | null
-  priorityName?: string | null
-  expectedCompletionDate?: string | null
+export type ProjectGroup = Omit<Api.ProjectGroupResponse, 'status'> & {
   status: 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED' | 'TERMINATED'
-  completedAt?: string | null
-  createdBy: number
-  createdByName?: string | null
-  createdAt: string
-  updatedAt: string
-  subprojectCount: number
-  completedCount: number
-  pendingCount: number
-  terminatedCount: number
-  unreadMessages: number
 }
 
 export interface ProjectGroupDetail {
@@ -96,95 +42,27 @@ export interface ProjectGroupDetail {
   projects: ProjectSummary[]
 }
 
-export interface ProjectCopySummary {
-  copyId: number
-  /** 从当前项目视角关联的另一项目 ID；仅在关联项目可见时返回。 */
-  projectId: number
-  name: string
-  fileCount: number
-  totalBytes: number
-  copiedByName?: string | null
-  createdAt: string
-}
+/** 从当前项目视角关联的另一项目；仅在关联项目可见时返回。 */
+export type ProjectCopySummary = Api.ProjectCopyHistoryItem
 
-export interface ProjectCopyHistory {
-  source: ProjectCopySummary | null
-  copies: ProjectCopySummary[]
-  hasRestrictedRelations: boolean
-}
+export type ProjectCopyHistory = Api.ProjectCopyHistoryResponse
 
-export interface ProjectCopyFileMapping {
-  sourceFileId: number
-  sourceFileName: string
-  sourceDeleted: boolean
-  targetFileId: number
-  targetFileName: string
-  targetDeleted: boolean
-}
+export type ProjectCopyFileMapping = Api.FileCopyHistoryItem
 
 export interface ProjectCopyResult {
   project: ProjectSummary
-  copy: {
-    copyId: number
-    sourceProjectId: number
-    targetProjectId: number
-    fileCount: number
-    totalBytes: number
-    createdAt: string
-  }
+  copy: Api.ProjectCopyRecord
 }
 
 export type ProjectDictionaryType = 'ROBOT_VENDOR' | 'ROBOT_MODEL' | 'PRIORITY'
 
-export interface ProjectDictionaryOption {
-  id: number
-  type: ProjectDictionaryType
-  name: string
-  parentId?: number | null
-  sortNo: number
-  enabled: boolean
-}
+export type ProjectDictionaryOption = Omit<Api.ProjectDictionaryResponse, 'type'> & { type: ProjectDictionaryType }
 
-export interface ProjectOwnerOption {
-  id: number
-  employeeNo: string
-  realName: string
-  sectionId?: number | null
-  sectionName?: string | null
-}
+export type ProjectOwnerOption = Api.ProjectOwnerOption
 
-/** 新申请固定 COMPANY；SUPPLIER 仅用于读取升级前保留的历史数据。 */
-export type ConfirmSide = 'COMPANY' | 'SUPPLIER'
+export type FileItem = Omit<Api.FileListItem, 'direction'> & { direction: 'C2S' | 'S2C' }
 
-export interface FileItem {
-  id: number
-  projectId: number
-  uploaderId: number
-  uploaderName?: string
-  direction: 'C2S' | 'S2C'
-  originalName: string
-  ext: string
-  sizeBytes: number
-  mimeType?: string
-  createdAt: string
-  canDelete?: boolean
-  /** 该文件由项目复制产生，不暴露不可见来源的文件标识。 */
-  isCopiedReference?: boolean
-}
-
-export interface Message {
-  id: number
-  projectId: number
-  content: string
-  images?: { id: number; name: string; sizeBytes: number; mimeType: string }[]
-  senderId: number
-  senderName: string
-  senderType: 'INTERNAL' | 'SUPPLIER'
-  createdAt: string
-  readCount: number
-  totalCount: number
-  readByMe: boolean
-}
+export type Message = Omit<Api.MessageResponse, 'senderType'> & { senderType: 'INTERNAL' | 'SUPPLIER' }
 
 export const PROJECT_STATUS: Record<string, { text: string; color: string }> = {
   DRAFT: { text: '草稿', color: 'gray' },

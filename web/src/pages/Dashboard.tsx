@@ -7,6 +7,7 @@ import { fmtTime } from '../api/types'
 import { useAuth } from '../store/auth'
 import { useCollaboration } from '../store/collaboration'
 import '../styles/dashboard-collaboration.css'
+import type { ApiResponses } from '../api/types'
 
 interface DashboardMessage {
   id: number
@@ -156,7 +157,7 @@ export default function Dashboard() {
     }
     try {
       const config: QuietRequestConfig = { quietNetworkError: true }
-      const response = await http.get('/dashboard/summary', config)
+      const response = await http.get<ApiResponses['GET /dashboard/summary']>('/dashboard/summary', config)
       if (!mounted.current || seq !== summarySeq.current) return
       setData(response.data as Summary)
       hasSummarySnapshot.current = true
@@ -187,7 +188,7 @@ export default function Dashboard() {
           params: { page, pageSize: PAGE_SIZE },
           quietNetworkError: true,
         }
-        const response = await http.get('/dashboard/pending-projects', config)
+        const response = await http.get<ApiResponses['GET /dashboard/pending-projects']>('/dashboard/pending-projects', config)
         if (!mounted.current || seq !== pendingSeq.current) return
         const next = response.data as PendingProjectPage
         const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || PAGE_SIZE)))
@@ -227,7 +228,7 @@ export default function Dashboard() {
           params: { page, pageSize: PAGE_SIZE, unreadOnly: nextUnreadOnly },
           quietNetworkError: true,
         }
-        const response = await http.get('/dashboard/messages', config)
+        const response = await http.get<ApiResponses['GET /dashboard/messages']>('/dashboard/messages', config)
         if (!mounted.current || seq !== messageSeq.current) return
         const next = response.data as MessagePage
         const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || PAGE_SIZE)))

@@ -8,6 +8,8 @@ import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import { type PageResp } from '../../api/types'
+import type { ApiResponses } from '../../api/types'
+import type { PermissionResponse } from '../../api/generated/api-types'
 
 interface Role {
   id: number
@@ -21,14 +23,8 @@ interface Role {
   supplierRestricted?: boolean
 }
 
-interface Perm {
-  id: number
-  name: string
-  type: 'MENU' | 'ACTION'
-  parentId: number | null
-  grantable?: boolean
-  supplierAssignable?: boolean
-}
+// Permission points from the API, with type narrowed to the two kinds the tree distinguishes.
+type Perm = Omit<PermissionResponse, 'type'> & { type: 'MENU' | 'ACTION' }
 
 export default function RoleList() {
   const canDelete = useAuth((state) => state.hasPerm('role:delete'))
@@ -53,7 +49,7 @@ export default function RoleList() {
   const [form] = Form.useForm()
 
   const fetchRoles = useCallback(async () => {
-    const r = await http.get('/admin/roles', { params: { page, pageSize: 20 } })
+    const r = await http.get<ApiResponses['GET /admin/roles']>('/admin/roles', { params: { page, pageSize: 20 } })
     return r.data as PageResp<Role>
   }, [page])
 
@@ -89,9 +85,9 @@ export default function RoleList() {
     setPermsLoading(true)
     setPermsError(false)
     const seq = ++permsSeq.current
-    http.get('/permissions', { quietNetworkError: true } as QuietRequestConfig)
+    http.get<ApiResponses['GET /permissions']>('/permissions', { quietNetworkError: true } as QuietRequestConfig)
       .then((r) => {
-        if (seq === permsSeq.current) setPerms(r.data)
+        if (seq === permsSeq.current) setPerms(r.data as Perm[])
       })
       .catch(() => {
         if (seq === permsSeq.current) setPermsError(true)
@@ -103,9 +99,9 @@ export default function RoleList() {
 
   useEffect(() => {
     const seq = ++permsSeq.current
-    http.get('/permissions', { quietNetworkError: true } as QuietRequestConfig)
+    http.get<ApiResponses['GET /permissions']>('/permissions', { quietNetworkError: true } as QuietRequestConfig)
       .then((r) => {
-        if (seq === permsSeq.current) setPerms(r.data)
+        if (seq === permsSeq.current) setPerms(r.data as Perm[])
       })
       .catch(() => {
         if (seq === permsSeq.current) setPermsError(true)
@@ -179,10 +175,10 @@ export default function RoleList() {
       if (!v) return
       setSaving(true)
       if (editing) {
-        await http.put(`/admin/roles/${editing.id}`, v)
+        await http.put<ApiResponses['PUT /admin/roles/{id}']>(`/admin/roles/${editing.id}`, v)
         Message.success('角色已更新')
       } else {
-        await http.post('/admin/roles', v)
+        await http.post<ApiResponses['POST /admin/roles']>('/admin/roles', v)
         Message.success('角色已创建')
       }
       setEditOpen(false)
@@ -199,7 +195,7 @@ export default function RoleList() {
     const ids = Array.from(new Set(checked)).map(Number)
     setSavingPerms(true)
     try {
-      await http.put(`/admin/roles/${permTarget!.id}/permissions`, { permissionIds: ids })
+      await http.put<ApiResponses['PUT /admin/roles/{id}/permissions']>(`/admin/roles/${permTarget!.id}/permissions`, { permissionIds: ids })
       Message.success('权限已保存')
       setPermTarget(null)
       load()
@@ -212,12 +208,12 @@ export default function RoleList() {
   }
 
   const toggle = async (r: Role) => {
-    await http.put(`/admin/roles/${r.id}/status`, { status: r.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
+    await http.put<ApiResponses['PUT /admin/roles/{id}/status']>(`/admin/roles/${r.id}/status`, { status: r.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
     load()
   }
 
   const remove = async (r: Role) => {
-    await http.delete(`/admin/roles/${r.id}`)
+    await http.delete<ApiResponses['DELETE /admin/roles/{id}']>(`/admin/roles/${r.id}`)
     Message.success('角色已删除')
     load()
   }

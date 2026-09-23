@@ -10,6 +10,8 @@ import PasswordInput from '../../components/PasswordInput'
 import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
 import { passwordRule } from '../../utils/password'
+import type { ApiResponses } from '../../api/types'
+import type { DepartmentTreeNode as ApiDepartmentTreeNode } from '../../api/generated/api-types'
 
 interface UserRow {
   id: number
@@ -33,11 +35,10 @@ interface RoleOpt {
   name: string
 }
 
-interface DeptNode {
-  id: number
-  name: string
-  kind?: 'DIVISION' | 'DEPARTMENT' | 'SECTION'
-  children?: DeptNode[]
+// Department tree from the API, with kind narrowed to the fixed three-level hierarchy.
+type DeptNode = Omit<ApiDepartmentTreeNode, 'kind' | 'children'> & {
+  kind: 'DIVISION' | 'DEPARTMENT' | 'SECTION'
+  children: DeptNode[]
 }
 
 const ORG_KIND_LABEL = { DIVISION: '事业部', DEPARTMENT: '部门', SECTION: '课别' } as const
@@ -85,7 +86,7 @@ export default function UserList() {
     && !roles.some((role) => role.id === editingRoleId)
 
   const fetchUsers = useCallback(async () => {
-    const r = await http.get('/admin/users', { params: { page, pageSize, keyword: keyword || undefined, departmentId, status } })
+    const r = await http.get<ApiResponses['GET /admin/users']>('/admin/users', { params: { page, pageSize, keyword: keyword || undefined, departmentId, status } })
     return r.data as PageResp<UserRow>
   }, [page, pageSize, keyword, departmentId, status])
 
@@ -122,12 +123,12 @@ export default function UserList() {
     setOptionsError(false)
     const seq = ++optionsSeq.current
     Promise.all([
-      http.get('/departments', { quietNetworkError: true } as QuietRequestConfig),
-      http.get('/admin/user-role-options', { quietNetworkError: true } as QuietRequestConfig),
+      http.get<ApiResponses['GET /departments']>('/departments', { quietNetworkError: true } as QuietRequestConfig),
+      http.get<ApiResponses['GET /admin/user-role-options']>('/admin/user-role-options', { quietNetworkError: true } as QuietRequestConfig),
     ])
       .then(([departmentsResponse, rolesResponse]) => {
         if (seq !== optionsSeq.current) return
-        setDepts(departmentsResponse.data)
+        setDepts(departmentsResponse.data as DeptNode[])
         setRoles(rolesResponse.data)
       })
       .catch(() => {
@@ -141,12 +142,12 @@ export default function UserList() {
   useEffect(() => {
     const seq = ++optionsSeq.current
     Promise.all([
-        http.get('/departments', { quietNetworkError: true } as QuietRequestConfig),
-        http.get('/admin/user-role-options', { quietNetworkError: true } as QuietRequestConfig),
+        http.get<ApiResponses['GET /departments']>('/departments', { quietNetworkError: true } as QuietRequestConfig),
+        http.get<ApiResponses['GET /admin/user-role-options']>('/admin/user-role-options', { quietNetworkError: true } as QuietRequestConfig),
       ])
       .then(([departmentsResponse, rolesResponse]) => {
         if (seq !== optionsSeq.current) return
-        setDepts(departmentsResponse.data)
+        setDepts(departmentsResponse.data as DeptNode[])
         setRoles(rolesResponse.data)
       })
       .catch(() => {
@@ -188,7 +189,7 @@ export default function UserList() {
       setSaving(true)
       if (editing) {
         // 资料与角色同一接口事务提交，避免两次 PUT 的半失败
-        await http.put(`/admin/users/${editing.id}`, {
+        await http.put<ApiResponses['PUT /admin/users/{id}']>(`/admin/users/${editing.id}`, {
           realName: payload.realName,
           email: payload.email,
           departmentId: payload.departmentId,
@@ -196,7 +197,7 @@ export default function UserList() {
         })
         Message.success('用户已更新')
       } else {
-        await http.post('/admin/users', payload)
+        await http.post<ApiResponses['POST /admin/users']>('/admin/users', payload)
         Message.success('用户已创建（首次登录需改密）')
       }
       setEditOpen(false)
@@ -208,12 +209,12 @@ export default function UserList() {
   }
 
   const toggle = async (u: UserRow) => {
-    await http.put(`/admin/users/${u.id}/status`, { status: u.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
+    await http.put<ApiResponses['PUT /admin/users/{id}/status']>(`/admin/users/${u.id}/status`, { status: u.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
     load()
   }
 
   const remove = async (u: UserRow) => {
-    await http.delete(`/admin/users/${u.id}`)
+    await http.delete<ApiResponses['DELETE /admin/users/{id}']>(`/admin/users/${u.id}`)
     Message.success('用户已删除')
     load()
   }
@@ -225,7 +226,7 @@ export default function UserList() {
       const v = await pwdForm.validate().catch(() => null)
       if (!v) return
       setResettingPassword(true)
-      await http.put(`/admin/users/${resetTarget!.id}/password`, { newPassword: v.newPassword })
+      await http.put<ApiResponses['PUT /admin/users/{id}/password']>(`/admin/users/${resetTarget!.id}/password`, { newPassword: v.newPassword })
       Message.success('密码已重置，该用户所有登录态已失效')
       setResetTarget(null)
       pwdForm.resetFields()

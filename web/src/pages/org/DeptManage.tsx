@@ -4,6 +4,7 @@ import { IconDown, IconPlus, IconRight, IconSearch } from '@arco-design/web-reac
 import http from '../../api/client'
 import { useAuth } from '../../store/auth'
 import './DeptManage.css'
+import type { ApiResponses } from '../../api/types'
 
 type OrgKind = 'DIVISION' | 'DEPARTMENT' | 'SECTION'
 
@@ -112,7 +113,7 @@ export default function DeptManage() {
   const [form] = Form.useForm()
 
   const fetchTree = useCallback(async () => {
-    const r = await http.get('/departments')
+    const r = await http.get<ApiResponses['GET /departments']>('/departments')
     return r.data as DeptNode[]
   }, [])
 
@@ -169,10 +170,10 @@ export default function DeptManage() {
       if (!v) return
       setSaving(true)
       if (editing) {
-        await http.put(`/admin/departments/${editing.id}`, { name: v.name, parentId: editing.parentId ?? null, sortNo: v.sortNo ?? 0 })
+        await http.put<ApiResponses['PUT /admin/departments/{id}']>(`/admin/departments/${editing.id}`, { name: v.name, parentId: editing.parentId ?? null, sortNo: v.sortNo ?? 0 })
         Message.success(`${ORG_KIND[nodeKind(editing)].label}已更新`)
       } else {
-        await http.post('/admin/departments', { name: v.name, parentId: parentForNew?.id ?? null, sortNo: v.sortNo ?? 0 })
+        await http.post<ApiResponses['POST /admin/departments']>('/admin/departments', { name: v.name, parentId: parentForNew?.id ?? null, sortNo: v.sortNo ?? 0 })
         Message.success(`${ORG_KIND[creatingKind].label}已创建`)
       }
       setEditOpen(false)
@@ -185,12 +186,12 @@ export default function DeptManage() {
   }
 
   const toggle = async (d: DeptNode) => {
-    await http.put(`/admin/departments/${d.id}/status`, { status: d.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
+    await http.put<ApiResponses['PUT /admin/departments/{id}/status']>(`/admin/departments/${d.id}/status`, { status: d.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
     load()
   }
 
   const remove = async (d: DeptNode) => {
-    await http.delete(`/admin/departments/${d.id}`)
+    await http.delete<ApiResponses['DELETE /admin/departments/{id}']>(`/admin/departments/${d.id}`)
     Message.success(`${ORG_KIND[nodeKind(d)].label}已删除`)
     setSelected((current) => current?.id === d.id ? null : current)
     load()

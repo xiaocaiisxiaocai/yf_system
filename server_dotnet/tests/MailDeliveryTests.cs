@@ -325,6 +325,61 @@ public sealed class MailDeliveryTests
             "SELECT status FROM email_outbox WHERE id=1", cancellationToken: ct)));
     }
 
+    [Fact(Timeout = 60_000)]
+    public async Task EachFlushSharesOneSmtpBatchAndReportsHowManyMessagesItTook()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var seed = await scope.Database.OpenAsync(ct))
+        {
+            for (var id = 2; id <= 12; id++)
+                await seed.ExecuteAsync(new CommandDefinition("""
+                    INSERT INTO email_outbox(id,event_type,recipient_email,subject,body,status,retry_count)
+                    VALUES(@id,'TEST_NOTIFICATION','recipient@example.invalid','subject','body','PENDING',0)
+                    """, new { id }, cancellationToken: ct));
+        }
+        var delivery = new BatchRecordingDelivery();
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]),
+            NullLogger<MailService>.Instance, delivery);
+
+        Assert.Equal(MailService.BatchSize, await service.FlushAsync(ct));
+        Assert.Equal([MailService.BatchSize], delivery.SendsPerBatch);
+        Assert.Equal(2, await service.FlushAsync(ct));
+        Assert.Equal([MailService.BatchSize, 2], delivery.SendsPerBatch);
+        Assert.Equal(0, await service.FlushAsync(ct));
+
+        await using var connection = await scope.Database.OpenAsync(ct);
+        Assert.Equal(12, await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM email_outbox WHERE status='SENT'", cancellationToken: ct)));
+    }
+
+    private sealed class BatchRecordingDelivery : ISmtpDelivery
+    {
+        public List<int> SendsPerBatch { get; } = [];
+        public Task<SmtpDeliveryResult> SendAsync(SmtpOptions options, SmtpEnvelope envelope, CancellationToken ct) =>
+            throw new InvalidOperationException("MailService must send through a batch");
+        public ISmtpBatch OpenBatch() => new Batch(this);
+
+        private sealed class Batch(BatchRecordingDelivery owner) : ISmtpBatch
+        {
+            private int sends;
+            private bool closed;
+            public Task<SmtpDeliveryResult> SendAsync(SmtpOptions options, SmtpEnvelope envelope, CancellationToken ct)
+            {
+                Assert.False(closed);
+                sends++;
+                return Task.FromResult(new SmtpDeliveryResult(null));
+            }
+            public Task<SmtpDeliveryResult> CloseAsync()
+            {
+                Assert.False(closed);
+                closed = true;
+                owner.SendsPerBatch.Add(sends);
+                return Task.FromResult(new SmtpDeliveryResult(null));
+            }
+        }
+    }
+
     private sealed class CaptureSettingsDelivery : ISmtpDelivery
     {
         public List<SmtpOptions> Seen { get; } = [];

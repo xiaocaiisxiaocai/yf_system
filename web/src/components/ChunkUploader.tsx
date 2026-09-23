@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button, Checkbox, Modal, Progress, Typography, Message, Space } from '@arco-design/web-react'
 import { IconUpload, IconClose } from '@arco-design/web-react/icon'
-import http from '../api/client'
+import http, { type QuietRequestConfig } from '../api/client'
 import { fmtSize } from '../api/types'
 import { fileMd5 } from '../api/file-hash'
+import type { ApiResponses } from '../api/types'
 
 interface Props {
   projectId: number
@@ -41,9 +42,65 @@ interface Entry {
   file: File
   phase: Phase
   percent: number
+  /** 已开始但在等待并发名额，尚未计算校验值。 */
+  waiting?: boolean
 }
 
 let nextEntryKey = 0
+
+/** 同一批次最多同时上传的文件数；其余文件排队，避免挤占浏览器连接与主线程。 */
+const MAX_CONCURRENT_FILES = 2
+/** 单个分片遇到网络抖动等暂时性错误时的总尝试次数（含首次）。 */
+const CHUNK_ATTEMPTS = 3
+
+type Release = () => void
+
+/** 可中止的并发名额：等待中的尝试被取消时立即返回 undefined，不占用名额。 */
+function createUploadSlots(limit: number) {
+  let active = 0
+  const waiters = new Set<() => void>()
+  const release = () => {
+    active--
+    const next = waiters.values().next().value
+    if (next) { waiters.delete(next); next() }
+  }
+  const grant = (): Release => {
+    active++
+    let released = false
+    return () => { if (!released) { released = true; release() } }
+  }
+  return {
+    /** immediate 为 false 时表示需要排队等待。 */
+    acquire(signal: AbortSignal, onWait: () => void): Promise<Release | undefined> {
+      if (signal.aborted) return Promise.resolve(undefined)
+      if (active < limit) return Promise.resolve(grant())
+      onWait()
+      return new Promise((resolve) => {
+        const onAbort = () => { waiters.delete(waiter); resolve(undefined) }
+        const waiter = () => { signal.removeEventListener('abort', onAbort); resolve(grant()) }
+        waiters.add(waiter)
+        signal.addEventListener('abort', onAbort, { once: true })
+      })
+    },
+  }
+}
+
+/** 断网、超时、限流和服务端错误可以重试；业务拒绝（4xx）与主动取消不重试。分片写入在服务端是幂等的。 */
+function isTransientUploadError(error: unknown): boolean {
+  const failure = error as { code?: string; response?: { status?: number } }
+  if (failure?.code === 'ERR_CANCELED') return false
+  const status = failure?.response?.status
+  if (typeof status === 'number') return status === 408 || status === 429 || status >= 500
+  return failure?.code === 'ERR_NETWORK' || failure?.code === 'ECONNABORTED' || failure?.code === 'ETIMEDOUT'
+}
+
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve() }
+    const timer = setTimeout(done, ms)
+    signal.addEventListener('abort', done, { once: true })
+  })
+}
 
 function isDefinitiveIntegrityFailure(error: unknown): boolean {
   const response = (error as { response?: { status?: number; data?: { message?: unknown } } })?.response
@@ -53,11 +110,11 @@ function isDefinitiveIntegrityFailure(error: unknown): boolean {
     && /^(合并文件大小不符|文件 MD5 校验失败)/.test(message)
 }
 
-function phaseLabel(phase: Phase, percent: number): string {
+function phaseLabel(phase: Phase, percent: number, waiting = false): string {
   switch (phase) {
-    case 'queued': return '待上传'
+    case 'queued': return waiting ? '排队中，前面的文件完成后自动开始' : '待上传'
     case 'interrupted': return '上传中断，可点击重新上传从断点续传'
-    case 'hashing': return '正在校验文件内容…'
+    case 'hashing': return `正在校验文件内容 ${percent}%`
     case 'uploading': return `分片上传中 ${percent}%（中断后可续传）`
     case 'merging': return '服务端合并校验中…'
     case 'merge-uncertain': return '结果待确认，重试不会重复上传'
@@ -81,6 +138,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
   const mountedRef = useRef(true)
   const [closing, setClosing] = useState(false)
   const [submitForAcceptance, setSubmitForAcceptance] = useState(false)
+  const uploadSlots = useRef(createUploadSlots(MAX_CONCURRENT_FILES)).current
 
   const locking = closing || entries.some((e) => LOCKING_PHASES.includes(e.phase))
   const hasQueued = entries.some((e) => e.phase === 'queued' || e.phase === 'interrupted')
@@ -146,7 +204,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     attempt.mergeInvalid = false
     patchEntry(key, { phase: 'merging' })
     try {
-      await http.post(`/uploads/${attempt.sessionId}/merge`)
+      await http.post<ApiResponses['POST /uploads/{sessionId}/merge']>(`/uploads/${attempt.sessionId}/merge`)
       if (attemptsRef.current.get(key) !== attempt || attempt.cancelled) return
       attempt.mergePending = false
       patchEntry(key, { phase: 'done', percent: 100 })
@@ -177,12 +235,20 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     const attempt: Attempt = { running: true, sessionId: previous?.sessionId, cancelled: false, cancelling: false, merging: false, controller: new AbortController(), finished, finish }
     attemptsRef.current.set(key, attempt)
     const isCurrent = () => attemptsRef.current.get(key) === attempt && !attempt.cancelled
-    patchEntry(key, { phase: 'hashing', percent: 0 })
+    let release: Release | undefined
     try {
-      const digest = await fileMd5(file, () => !isCurrent())
+      release = await uploadSlots.acquire(attempt.controller.signal, () => patchEntry(key, { waiting: true }))
+      if (!release || !isCurrent()) return
+      patchEntry(key, { phase: 'hashing', percent: 0, waiting: false })
+      let hashedPercent = 0
+      const digest = await fileMd5(file, () => !isCurrent(), (fraction) => {
+        const percent = Math.floor(fraction * 100)
+        if (percent !== hashedPercent && isCurrent()) { hashedPercent = percent; patchEntry(key, { percent }) }
+      })
       if (!isCurrent()) return
+      patchEntry(key, { percent: 0 })
       patchEntry(key, { phase: 'uploading' })
-      const init = await http.post('/uploads/init', {
+      const init = await http.post<ApiResponses['POST /uploads/init']>('/uploads/init', {
         projectId,
         fileName: file.name,
         fileSize: file.size,
@@ -204,11 +270,22 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
           const i = missing[cursor++]
           const blob = file.slice(i * chunkSize, Math.min((i + 1) * chunkSize, file.size))
           try {
-            await http.put(`/uploads/${sid}/chunks/${i}`, blob, {
-              headers: { 'Content-Type': 'application/octet-stream' },
-              timeout: 300000,
-              signal: attempt.controller.signal,
-            })
+            for (let attemptNo = 1; ; attemptNo++) {
+              try {
+                await http.put<ApiResponses['PUT /uploads/{sessionId}/chunks/{index}']>(`/uploads/${sid}/chunks/${i}`, blob, {
+                  headers: { 'Content-Type': 'application/octet-stream' },
+                  timeout: 300000,
+                  signal: attempt.controller.signal,
+                  // 仍会自动重试时不弹出错误提示，最后一次失败才提示。
+                  quietNetworkError: attemptNo < CHUNK_ATTEMPTS,
+                } as QuietRequestConfig)
+                break
+              } catch (error) {
+                if (attemptNo >= CHUNK_ATTEMPTS || failed || !isCurrent() || !isTransientUploadError(error)) throw error
+                await abortableDelay(1000 * 2 ** (attemptNo - 1), attempt.controller.signal)
+                if (failed || !isCurrent()) throw error
+              }
+            }
           } catch (error) {
             failed = true
             if (!firstFailure) {
@@ -234,6 +311,8 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
         patchEntry(key, { phase: 'interrupted' })
       }
     } finally {
+      release?.()
+      patchEntry(key, { waiting: false })
       attempt.running = false
       attempt.finish()
     }
@@ -267,7 +346,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     await attempt.finished
     if (attemptsRef.current.get(key) !== attempt) return false
     try {
-      if (attempt.sessionId) await http.delete(`/uploads/${attempt.sessionId}`)
+      if (attempt.sessionId) await http.delete<ApiResponses['DELETE /uploads/{sessionId}']>(`/uploads/${attempt.sessionId}`)
       if (attemptsRef.current.get(key) !== attempt) return false
       attemptsRef.current.delete(key)
       patchEntry(key, { phase: 'cancelled' })
@@ -293,7 +372,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     await attempt.finished
     if (attemptsRef.current.get(key) !== attempt) return
     try {
-      await http.delete(`/uploads/${attempt.sessionId}`)
+      await http.delete<ApiResponses['DELETE /uploads/{sessionId}']>(`/uploads/${attempt.sessionId}`)
       if (attemptsRef.current.get(key) !== attempt) return
       attemptsRef.current.delete(key)
       setEntries((list) => list.filter((e) => e.key !== key))
@@ -426,7 +505,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
                 />
               )}
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {phaseLabel(entry.phase, entry.percent)}
+                {phaseLabel(entry.phase, entry.percent, entry.waiting)}
               </Typography.Text>
             </div>
           ))}

@@ -48,6 +48,7 @@ public sealed class IdentityConnectionTests
                         user_type VARCHAR(16) NOT NULL, supplier_id BIGINT UNSIGNED NULL,
                         status VARCHAR(16) NOT NULL, must_change_password BOOLEAN NOT NULL
                     );
+                    CREATE TABLE suppliers(id BIGINT UNSIGNED PRIMARY KEY, status VARCHAR(16) NOT NULL);
                     CREATE TABLE refresh_tokens(
                         user_id BIGINT UNSIGNED NOT NULL, session_id VARCHAR(36) NOT NULL,
                         revoked BOOLEAN NOT NULL, expires_at DATETIME NOT NULL
@@ -57,8 +58,6 @@ public sealed class IdentityConnectionTests
                     """, cancellationToken: ct));
             }
             var tokens = new TokenService(options);
-            var identity = new IdentityService(EfTestSupport.DbContextFactory(options), options, new LoginRateLimiter(), tokens,
-                new PermissionService(), new AuditService([]));
             var context = new DefaultHttpContext();
             context.Request.Path = "/api/v1/projects";
             context.Request.Headers.Authorization = "Bearer " + tokens.IssueAccess(1, "pool_test", "pool-session").Token;
@@ -76,7 +75,7 @@ public sealed class IdentityConnectionTests
                     new CommandDefinition("SELECT 1", cancellationToken: deadline.Token)));
                 downstreamCompleted = true;
             });
-            await middleware.InvokeAsync(context, db, tokens, identity);
+            await middleware.InvokeAsync(context, db, tokens);
             Assert.True(downstreamCompleted);
         }
         finally

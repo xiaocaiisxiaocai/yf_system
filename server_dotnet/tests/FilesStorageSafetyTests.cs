@@ -4,6 +4,17 @@ namespace Yf.Api.Tests;
 
 public sealed class FilesStorageSafetyTests
 {
+    [Theory]
+    [InlineData("drawing.PDF", "pdf")]
+    [InlineData("archive.tar.gz", "gz")]
+    [InlineData("pdf", "")]
+    [InlineData("README", "")]
+    [InlineData("trailing.", "")]
+    public void ExtensionComesOnlyFromTheLastDotSuffix(string name, string expected)
+    {
+        Assert.Equal(expected, UploadService.ExtensionOf(name));
+    }
+
     [Fact]
     public async Task PendingFinalMarkerIsPublishedAtomicallyAfterPayloadIsDurable()
     {

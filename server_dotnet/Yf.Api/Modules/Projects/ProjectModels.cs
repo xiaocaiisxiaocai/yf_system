@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
 
+using Yf.Api.Infrastructure;
+
 namespace Yf.Api.Modules.Projects;
 
 public sealed class ProjectUpsertRequest
@@ -286,89 +288,78 @@ internal static class ProjectJson
         _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
     };
 
-    /// <summary>
-    /// Common project fields shared by list/workflow-result endpoints. Callers needing extra
-    /// detail-only fields (e.g. <c>DetailAsync</c>) should add/override keys on the returned
-    /// dictionary rather than hand-duplicating this field list.
-    /// </summary>
-    internal static Dictionary<string, object?> Project(ProjectRow row) => new()
+    /// <summary>Common subproject fields shared by list, workflow and write endpoints.</summary>
+    internal static ProjectResponse Project(ProjectRow row) => new()
     {
-        ["id"] = row.Id,
-        ["projectGroupId"] = row.ProjectGroupId,
-        ["projectGroupName"] = row.ProjectGroupName,
-        ["name"] = row.Name,
-        ["description"] = row.Description,
-        ["supplierId"] = row.SupplierId,
-        ["supplierName"] = row.SupplierName,
-        ["status"] = row.Status,
-        ["confirmSide"] = row.ConfirmSide,
-        ["latestSubmissionId"] = row.LatestSubmissionId,
-        ["createdBy"] = row.CreatedBy,
-        ["createdByName"] = row.CreatedByName,
-        ["workOrderNos"] = row.WorkOrderNos,
-        ["machineModel"] = row.MachineModel,
-        ["robotVendorId"] = row.RobotVendorId,
-        ["robotVendorName"] = row.RobotVendorName,
-        ["robotModelId"] = row.RobotModelId,
-        ["robotModelName"] = row.RobotModelName,
-        ["responsibleUserId"] = row.ResponsibleUserId,
-        ["responsibleUserEmployeeNo"] = row.ResponsibleUserEmployeeNo,
-        ["responsibleUserName"] = row.ResponsibleUserName,
-        ["sectionId"] = row.SectionId,
-        ["sectionName"] = row.SectionName,
-        ["priorityId"] = row.PriorityId,
-        ["priorityName"] = row.PriorityName,
-        ["expectedCompletionDate"] = row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
-        ["hasCopyHistory"] = row.HasCopyHistory,
-        ["unreadMessages"] = row.UnreadMessages,
-        ["copySource"] = row.CopySourceProjectId is { } sourceProjectId && row.CopySourceProjectName is { } sourceProjectName
-            ? new { projectId = sourceProjectId, name = sourceProjectName }
+        Id = row.Id,
+        ProjectGroupId = row.ProjectGroupId,
+        ProjectGroupName = row.ProjectGroupName,
+        Name = row.Name,
+        Description = row.Description,
+        SupplierId = row.SupplierId,
+        SupplierName = row.SupplierName,
+        Status = row.Status,
+        ConfirmSide = row.ConfirmSide,
+        LatestSubmissionId = row.LatestSubmissionId,
+        CreatedBy = row.CreatedBy,
+        CreatedByName = row.CreatedByName,
+        WorkOrderNos = row.WorkOrderNos,
+        MachineModel = row.MachineModel,
+        RobotVendorId = row.RobotVendorId,
+        RobotVendorName = row.RobotVendorName,
+        RobotModelId = row.RobotModelId,
+        RobotModelName = row.RobotModelName,
+        ResponsibleUserId = row.ResponsibleUserId,
+        ResponsibleUserEmployeeNo = row.ResponsibleUserEmployeeNo,
+        ResponsibleUserName = row.ResponsibleUserName,
+        SectionId = row.SectionId,
+        SectionName = row.SectionName,
+        PriorityId = row.PriorityId,
+        PriorityName = row.PriorityName,
+        ExpectedCompletionDate = row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+        HasCopyHistory = row.HasCopyHistory,
+        UnreadMessages = row.UnreadMessages,
+        CopySource = row.CopySourceProjectId is { } sourceProjectId && row.CopySourceProjectName is { } sourceProjectName
+            ? new ProjectCopySourceRef(sourceProjectId, sourceProjectName)
             : null,
-        ["createdAt"] = Utc(row.CreatedAt),
-        ["updatedAt"] = Utc(row.UpdatedAt),
+        CreatedAt = Utc(row.CreatedAt),
+        UpdatedAt = Utc(row.UpdatedAt),
     };
 
-    internal static object ProjectGroup(ProjectGroupRow row) => new
-    {
-        id = row.Id,
-        name = row.Name,
-        description = row.Description,
-        supplierId = row.SupplierId,
-        supplierName = row.SupplierName,
-        status = row.Status,
-        createdBy = row.CreatedBy,
-        createdByName = row.CreatedByName,
-        workOrderNos = row.WorkOrderNos,
-        machineModel = row.MachineModel,
-        robotVendorId = row.RobotVendorId,
-        robotVendorName = row.RobotVendorName,
-        robotModelId = row.RobotModelId,
-        robotModelName = row.RobotModelName,
-        responsibleUserId = row.ResponsibleUserId,
-        responsibleUserEmployeeNo = row.ResponsibleUserEmployeeNo,
-        responsibleUserName = row.ResponsibleUserName,
-        sectionId = row.SectionId,
-        sectionName = row.SectionName,
-        priorityId = row.PriorityId,
-        priorityName = row.PriorityName,
-        expectedCompletionDate = row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
-        completedAt = row.CompletedAt is { } completedAt ? Utc(completedAt) : (DateTime?)null,
-        createdAt = Utc(row.CreatedAt),
-        updatedAt = Utc(row.UpdatedAt),
-        subprojectCount = row.SubprojectCount,
-        completedCount = row.CompletedCount,
-        pendingCount = row.PendingCount,
-        terminatedCount = row.TerminatedCount,
-        unreadMessages = row.UnreadMessages,
-    };
+    internal static ProjectGroupResponse ProjectGroup(ProjectGroupRow row) => new(
+        row.Id,
+        row.Name,
+        row.Description,
+        row.SupplierId,
+        row.SupplierName,
+        row.Status,
+        row.CreatedBy,
+        row.CreatedByName,
+        row.WorkOrderNos,
+        row.MachineModel,
+        row.RobotVendorId,
+        row.RobotVendorName,
+        row.RobotModelId,
+        row.RobotModelName,
+        row.ResponsibleUserId,
+        row.ResponsibleUserEmployeeNo,
+        row.ResponsibleUserName,
+        row.SectionId,
+        row.SectionName,
+        row.PriorityId,
+        row.PriorityName,
+        row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+        row.CompletedAt is { } completedAt ? Utc(completedAt) : null,
+        Utc(row.CreatedAt),
+        Utc(row.UpdatedAt),
+        row.SubprojectCount,
+        row.CompletedCount,
+        row.PendingCount,
+        row.TerminatedCount,
+        row.UnreadMessages);
 
-    internal static object Page<T>(IReadOnlyList<T> list, ulong total, ulong page, ulong pageSize) => new
-    {
-        list,
-        total,
-        page,
-        pageSize,
-    };
+    internal static PageResponse<T> Page<T>(IReadOnlyList<T> list, ulong total, ulong page, ulong pageSize) =>
+        new(list, total, page, pageSize);
 
     internal static (ulong Page, ulong Size) ClampPage(ulong page, ulong size)
     {

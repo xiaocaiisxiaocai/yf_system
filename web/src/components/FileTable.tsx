@@ -10,6 +10,7 @@ import { actionSlots } from './ActionSlots'
 import ChunkUploader from './ChunkUploader'
 import PdfPreview from './PdfPreview'
 import { useCollaboration } from '../store/collaboration'
+import type { ApiResponses } from '../api/types'
 
 // Excel 解析器仅在用户真正打开工作簿预览时按需加载
 const ExcelPreview = lazy(() => import('./ExcelPreview'))
@@ -78,7 +79,7 @@ function triggerBlobDownload(blob: Blob, name: string) {
 
 /** 认证下载：拉 blob 后触发浏览器保存（直接拼 URL 会丢 Authorization 头） */
 async function downloadAuthed(id: number, name: string) {
-  const r = await http.get(`/files/${id}/download`, { responseType: 'blob' })
+  const r = await http.get<ApiResponses['GET /files/{id}/download']>(`/files/${id}/download`, { responseType: 'blob' })
   triggerBlobDownload(r.data as Blob, name)
 }
 
@@ -105,7 +106,7 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
   const batchDownloadInFlight = useRef(false)
 
   const fetchFiles = useCallback(async () => {
-    const r = await http.get(`/projects/${projectId}/files`, {
+    const r = await http.get<ApiResponses['GET /projects/{projectId}/files']>(`/projects/${projectId}/files`, {
       params: { page, pageSize, direction, keyword: keyword || undefined, targetId },
       quietNetworkError: true,
     } as QuietRequestConfig)
@@ -160,7 +161,7 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
   const submitAfterUpload = async () => {
     if (!isSupplier || !hasPerm('project:submit') || projectStatus !== 'IN_PROGRESS') return
     try {
-      await http.post(`/projects/${projectId}/submit`, { confirmSide: 'COMPANY' },
+      await http.post<ApiResponses['POST /projects/{id}/submit']>(`/projects/${projectId}/submit`, { confirmSide: 'COMPANY' },
         { quietNetworkError: true } as QuietRequestConfig)
       Message.success('文件已全部上传，已提交验收')
       onProjectChanged?.()
@@ -175,7 +176,7 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
     batchDownloadInFlight.current = true
     setBatchDownloading(true)
     try {
-      const r = await http.post('/files/batch-download', { ids: selected }, { responseType: 'blob' })
+      const r = await http.post<ApiResponses['POST /files/batch-download']>('/files/batch-download', { ids: selected }, { responseType: 'blob' })
       triggerBlobDownload(r.data as Blob, `项目文件打包_${Date.now()}.zip`)
       setSelected([])
     } finally {
@@ -185,7 +186,7 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
   }
 
   const remove = async (f: FileItem) => {
-    await http.delete(`/files/${f.id}`)
+    await http.delete<ApiResponses['DELETE /files/{id}']>(`/files/${f.id}`)
     Message.success('已删除')
     load()
   }

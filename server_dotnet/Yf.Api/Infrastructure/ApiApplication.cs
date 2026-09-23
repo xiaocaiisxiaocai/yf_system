@@ -106,6 +106,9 @@ public static class ApiApplication
             context.Response.Headers.XContentTypeOptions = "nosniff";
             context.Response.Headers["Referrer-Policy"] = "no-referrer";
             context.Response.Headers.XFrameOptions = "DENY";
+            // HTTPS-only deployments: keep browsers from ever downgrading to HTTP. Subdomains are
+            // left out because other intranet services may still share the parent domain over HTTP.
+            if (context.Request.IsHttps) context.Response.Headers.StrictTransportSecurity = "max-age=31536000";
             if (context.Request.Path.StartsWithSegments("/api"))
             {
                 context.Response.Headers.CacheControl = "private, no-store";
@@ -132,11 +135,15 @@ public static class ApiApplication
             }
             catch { return Results.Json(new { status = "degraded", db = "down" }, statusCode: 503); }
         });
-        app.Map("/api/{**path}", () => Results.Json(new { code = 40401, message = "接口不存在" }, statusCode: 404));
+        app.Map("/api/{**path}", () => Results.Json(new ApiErrorResponse(40401, "接口不存在"), statusCode: 404));
         app.UseDefaultFiles();
         app.UseStaticFiles(new StaticFileOptions
         {
-            OnPrepareResponse = context => context.Context.Response.Headers.CacheControl = context.File.Name == "index.html" ? "no-cache" : "public,max-age=3600"
+            // Vite emits content-hashed file names under /assets, so those never change in place.
+            OnPrepareResponse = context => context.Context.Response.Headers.CacheControl =
+                context.File.Name == "index.html" ? "no-cache"
+                : context.Context.Request.Path.StartsWithSegments("/assets") ? "public,max-age=31536000,immutable"
+                : "public,max-age=3600"
         });
         if (File.Exists(Path.Combine(app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot"), "index.html")))
             app.MapFallbackToFile("index.html");

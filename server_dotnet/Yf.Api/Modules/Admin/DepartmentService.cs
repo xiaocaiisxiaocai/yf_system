@@ -6,24 +6,21 @@ namespace Yf.Api.Modules.Admin;
 
 public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, AuditService audit)
 {
-    public async Task<object> ListAsync(CurrentUser actor, CancellationToken ct)
+    public async Task<IReadOnlyList<DepartmentTreeNode>> ListAsync(CurrentUser actor, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         var all = await context.Departments.AsNoTracking().OrderBy(d => d.SortNo).ThenBy(d => d.Id).ToListAsync(ct);
-        List<object> Build(ulong? parent) => all.Where(x => x.ParentId == parent)
-            .Select(x => (object)new
-            {
-                x.Id, x.Name, x.ParentId, x.Kind, x.SortNo, x.Status,
-                children = Build(x.Id)
-            }).ToList();
+        List<DepartmentTreeNode> Build(ulong? parent) => all.Where(x => x.ParentId == parent)
+            .Select(x => new DepartmentTreeNode(x.Id, x.Name, x.ParentId, x.Kind, x.SortNo, x.Status, Build(x.Id)))
+            .ToList();
         return Build(null);
     }
 
-    public Task<object> CreateAsync(CurrentUser actor, DepartmentUpsert request, CancellationToken ct) => WriteAsync(actor, null, request, ct);
-    public Task<object> UpdateAsync(CurrentUser actor, ulong id, DepartmentUpsert request, CancellationToken ct) => WriteAsync(actor, id, request, ct);
+    public Task<DepartmentResponse> CreateAsync(CurrentUser actor, DepartmentUpsert request, CancellationToken ct) => WriteAsync(actor, null, request, ct);
+    public Task<DepartmentResponse> UpdateAsync(CurrentUser actor, ulong id, DepartmentUpsert request, CancellationToken ct) => WriteAsync(actor, id, request, ct);
 
-    private async Task<object> WriteAsync(CurrentUser actor, ulong? id, DepartmentUpsert request, CancellationToken ct)
+    private async Task<DepartmentResponse> WriteAsync(CurrentUser actor, ulong? id, DepartmentUpsert request, CancellationToken ct)
     {
         Validate(request);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -106,12 +103,12 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
                 new AuditChange("sortNo", "排序号", oldSortNo, row.SortNo),
                 new AuditChange("status", "状态", oldStatus, row.Status))
         }, null, ct);
-        var result = new { row.Id, row.Name, row.ParentId, row.Kind, row.SortNo, row.Status };
+        var result = new DepartmentResponse(row.Id, row.Name, row.ParentId, row.Kind, row.SortNo, row.Status);
         await tx.CommitAsync(ct);
         return result;
     }
 
-    public async Task<object> SetStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
+    public async Task<DepartmentResponse> SetStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
     {
         status = AdminValidation.Status(status);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -141,7 +138,7 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
             changes = AuditChange.OnlyChanged(new AuditChange("status", "状态", oldStatus, status))
         }, null, ct);
         await tx.CommitAsync(ct);
-        return new { row.Id, row.Name, row.ParentId, row.Kind, row.SortNo, Status = status };
+        return new DepartmentResponse(row.Id, row.Name, row.ParentId, row.Kind, row.SortNo, status);
     }
 
     public async Task DeleteAsync(CurrentUser actor, ulong id, CancellationToken ct)

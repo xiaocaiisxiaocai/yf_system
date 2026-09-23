@@ -97,6 +97,7 @@ export const ACTIONS: Record<string, ActionMeta> = {
   UPLOAD_ABORT: action('取消上传', 'FILE', '文件', 'orange'),
   MESSAGE_CREATE: action('发送留言', 'MESSAGE', '留言', 'arcoblue'),
   MESSAGE_DELETE: action('删除留言', 'MESSAGE', '留言', 'red'),
+  MESSAGE_READ: action('查看留言回执', 'MESSAGE', '留言', 'cyan'),
   USER_CREATE: action('创建用户', 'ORG', '组织与权限', 'arcoblue'),
   USER_UPDATE: action('更新用户', 'ORG', '组织与权限', 'purple'),
   USER_STATUS: action('变更用户状态', 'ORG', '组织与权限', 'orange'),
@@ -123,6 +124,7 @@ export const ACTIONS: Record<string, ActionMeta> = {
   SUPPLIER_ACCOUNT_RESET_PASSWORD: action('重置供应商密码', 'SUPPLIER', '供应商', 'orange'),
   SUPPLIER_ACCOUNT_DELETE: action('删除供应商账号', 'SUPPLIER', '供应商', 'red'),
   AUDIT_LOG_DELETE: action('删除操作日志', 'SYSTEM', '系统', 'red'),
+  AUDIT_LOG_RETENTION: action('自动清理过期日志', 'SYSTEM', '系统', 'gray'),
   CONFIG_UPDATE: action('更新系统参数', 'SYSTEM', '系统', 'orange'),
   EMAIL_SENT: action('邮件发送成功', 'SYSTEM', '系统', 'green'),
   EMAIL_FAILED: action('邮件发送失败', 'SYSTEM', '系统', 'red'),
@@ -449,6 +451,9 @@ export function detailSummary(row: AuditLogRow): string {
     const changeText = `${first.label}：${formatChangeValue(first, 'before')} → ${formatChangeValue(first, 'after')}${changes.length > 1 ? `；另有 ${changes.length - 1} 项变化` : ''}`
     const reason = detailNotes(row).find((note) => note.label.includes('原因') || note.label.includes('说明'))
     return reason ? `${changeText}；${reason.label}：${reason.value}` : changeText
+  }
+  if (row.action === 'AUDIT_LOG_RETENTION' && typeof detail?.deleted === 'number') {
+    return `已自动清理 ${detail.deleted} 条超过 ${formatAuditValue(detail.retentionDays)} 天的操作日志`
   }
   if (detail?.passwordChanged === true) return '已更新邮箱密码或授权码（不记录具体内容）'
   if (Array.isArray(detail?.changes) && detail.changes.length === 0

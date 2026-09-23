@@ -12,7 +12,7 @@ public sealed class IdentityMiddleware(RequestDelegate next)
         "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/refresh"
     };
 
-    public async Task InvokeAsync(HttpContext context, AppDb db, TokenService tokens, IdentityService identity)
+    public async Task InvokeAsync(HttpContext context, AppDb db, TokenService tokens)
     {
         var ct = context.RequestAborted;
         var path = context.Request.Path.Value ?? "";
@@ -33,19 +33,21 @@ public sealed class IdentityMiddleware(RequestDelegate next)
         // stream or wait for a second connection from the same pool.
         await using (var conn = await db.OpenAsync(ct))
         {
-            if (!await identity.HasActiveSessionAsync(conn, null, claims.UserId, claims.SessionId, ct)) throw ApiException.Unauthorized("登录状态已失效，请重新登录");
+            // One round trip checks the session, the account and its supplier. DateTime.UtcNow is
+            // translated to the database clock (UTC_TIMESTAMP), matching the session checks elsewhere.
             await using var ef = EfDb.Use(conn);
+            var sessionId = claims.SessionId;
             var row = await ef.Users.Where(user => user.Id == claims.UserId).Select(user => new
             {
                 user.Id, user.EmployeeNo, user.UserType, user.SupplierId, user.Status, user.MustChangePassword,
-            }).SingleOrDefaultAsync(ct) ?? throw ApiException.Unauthorized("账号不存在");
+                SessionActive = ef.RefreshTokens.Any(token => token.UserId == user.Id && token.SessionId == sessionId
+                    && !token.Revoked && token.ExpiresAt > DateTime.UtcNow),
+                SupplierActive = user.SupplierId != null
+                    && ef.Suppliers.Any(supplier => supplier.Id == user.SupplierId && supplier.Status == "ACTIVE"),
+            }).SingleOrDefaultAsync(ct);
+            if (row is null || !row.SessionActive) throw ApiException.Unauthorized("登录状态已失效，请重新登录");
             if (row.Status != "ACTIVE") throw ApiException.Unauthorized("账号已被禁用");
-            if (row.UserType == "SUPPLIER")
-            {
-                if (row.SupplierId is not ulong supplierId
-                    || !await ef.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == "ACTIVE", ct))
-                    throw ApiException.Unauthorized("所属供应商已被禁用");
-            }
+            if (row.UserType == "SUPPLIER" && !row.SupplierActive) throw ApiException.Unauthorized("所属供应商已被禁用");
             if (row.MustChangePassword && path is not ("/api/v1/auth/profile" or "/api/v1/auth/password" or "/api/v1/auth/logout"))
                 throw new ApiException(403, 40303, "请先修改初始密码");
             context.Items[typeof(CurrentUser)] = new CurrentUser(row.Id, row.EmployeeNo, row.UserType, row.SupplierId);

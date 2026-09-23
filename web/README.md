@@ -12,7 +12,7 @@ React、TypeScript、Vite 和 Arco Design。API 通过 `/api/v1` 访问；开发
 
 PDF 使用本地 PDF.js 6.3.289 按页渲染，支持翻页、页码跳转、适合宽度、缩放和错误重试；加密 PDF 提示下载查看。`pdf-assets.ts` 提供并打包字体、CMap 和图像解码资源，worker 使用本地资源 URL。
 
-实际预览源码及来源记录位于 `vendor/`。项目根的 `third_party/` 还包含预览测试所需样本，不能作为无用目录直接删除。
+实际预览源码及来源记录位于 `vendor/`。项目根的 `third_party/` 是本地解压、不提交的上游参考源码；浏览器测试所需的 PPTX 样本已裁剪提交到 `server_dotnet/scripts/browser/fixtures/`。
 
 正式部署须发布完整 `dist/`，保留 `pdfjs/`、`assets/` 及许可证，确保 `.mjs/.js`、`.wasm` 分别以 JavaScript、`application/wasm` 类型返回。项目统一使用 [IIS 发布脚本](../server_dotnet/scripts/publish-iis.ps1) 打包前后端，输出位于项目内 `deloy/`。
 

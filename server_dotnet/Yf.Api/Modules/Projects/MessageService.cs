@@ -16,7 +16,7 @@ internal sealed class MessageService(
     internal const ulong MaximumImageBytes = 50UL * 1024 * 1024;
     internal const long MultipartRequestLimitBytes = 52L * 1024 * 1024;
 
-    internal async Task<object> ListAsync(
+    internal async Task<PageResponse<MessageResponse>> ListAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong projectId,
@@ -92,7 +92,7 @@ internal sealed class MessageService(
         await tx.CommitAsync(ct);
     }
 
-    internal async Task<object> CreateAsync(
+    internal async Task<MessageResponse> CreateAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong projectId,
@@ -185,7 +185,7 @@ internal sealed class MessageService(
         }
     }
 
-    internal Task<object> CreateAsync(
+    internal Task<MessageResponse> CreateAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong projectId,
@@ -256,7 +256,7 @@ internal sealed class MessageService(
             await PublishSafelyAsync(projectId, RealtimeChangeKinds.Receipts);
     }
 
-    internal async Task<object> ReadsAsync(
+    internal async Task<MessageReadsResponse> ReadsAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong messageId,
@@ -276,24 +276,19 @@ internal sealed class MessageService(
                 ReadAt = read.ReadAt,
             })
             .ToDictionaryAsync(read => read.UserId, ct);
-        var readers = new List<object>();
-        var unread = new List<object>();
+        var readers = new List<MessageReader>();
+        var unread = new List<MessageReader>();
         foreach (var user in participants.Where(user => user.Id != message.SenderId))
         {
             reads.TryGetValue(user.Id, out var read);
-            var item = new
-            {
-                userId = user.Id,
-                realName = user.RealName,
-                userType = user.UserType,
-                readAt = read is null ? (DateTime?)null : ProjectJson.Utc(read.ReadAt),
-            };
+            var item = new MessageReader(user.Id, user.RealName, user.UserType,
+                read is null ? null : ProjectJson.Utc(read.ReadAt));
             (read is null ? unread : readers).Add(item);
         }
-        return new { readers, unread };
+        return new MessageReadsResponse(readers, unread);
     }
 
-    internal async Task<object[]> ReceiptsAsync(
+    internal async Task<MessageReceiptResponse[]> ReceiptsAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong projectId,
@@ -342,13 +337,7 @@ internal sealed class MessageService(
             {
                 var target = targets[messageId];
                 var counts = ReceiptCounts(target.SenderId, reads[messageId], visibleIds, actor.Id);
-                return (object)new
-                {
-                    id = messageId,
-                    readCount = counts.ReadCount,
-                    totalCount = counts.TotalCount,
-                    readByMe = counts.ReadByMe,
-                };
+                return new MessageReceiptResponse(messageId, counts.ReadCount, counts.TotalCount, counts.ReadByMe);
             })
             .ToArray();
     }
@@ -442,7 +431,7 @@ internal sealed class MessageService(
         return checked((ulong)count);
     }
 
-    private static object MessageJson(
+    private static MessageResponse MessageJson(
         MessageRow message,
         IEnumerable<MessageReadRow> reads,
         IEnumerable<MessageImageRow> images,
@@ -450,27 +439,19 @@ internal sealed class MessageService(
         ulong viewerId)
     {
         var counts = ReceiptCounts(message.SenderId, reads, visibleUserIds, viewerId);
-        return new
-        {
-            id = message.Id,
-            projectId = message.ProjectId,
-            content = message.Content,
-            status = message.Status,
-            senderId = message.SenderId,
-            senderName = message.SenderName,
-            senderType = message.SenderType,
-            createdAt = ProjectJson.Utc(message.CreatedAt),
-            readCount = counts.ReadCount,
-            totalCount = counts.TotalCount,
-            readByMe = counts.ReadByMe,
-            images = images.Select(image => new
-            {
-                id = image.Id,
-                name = image.OriginalName,
-                sizeBytes = image.SizeBytes,
-                mimeType = image.MimeType,
-            }).ToArray(),
-        };
+        return new MessageResponse(
+            message.Id,
+            message.ProjectId,
+            message.Content,
+            message.Status,
+            message.SenderId,
+            message.SenderName,
+            message.SenderType,
+            ProjectJson.Utc(message.CreatedAt),
+            counts.ReadCount,
+            counts.TotalCount,
+            counts.ReadByMe,
+            images.Select(image => new MessageImageResponse(image.Id, image.OriginalName, image.SizeBytes, image.MimeType)).ToArray());
     }
 
     private async Task<MessageImageRow> StoreImageAsync(

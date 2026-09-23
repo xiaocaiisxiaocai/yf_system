@@ -15,8 +15,10 @@ public sealed class AppOptions
     public bool WorkerEnabled { get; set; } = true;
     public int AccessTtlMinutes { get; set; } = 30;
     public int RefreshTtlDays { get; set; } = 7;
-    public long UploadMaxFileSize { get; set; } = 20L * 1024 * 1024 * 1024;
+    public long UploadMaxFileSize { get; set; } = 2L * 1024 * 1024 * 1024; // matches the seeded upload.max_file_size
     public int UploadChunkSize { get; set; } = 10 * 1024 * 1024;
+    /// <summary>Audit log rows older than this many days are deleted by the retention worker.</summary>
+    public int AuditRetentionDays { get; set; } = 30;
     public SmtpOptions Smtp { get; set; } = new();
 
     public void Validate()
@@ -39,6 +41,7 @@ public sealed class AppOptions
             || web.Fragment.Length != 0)
             throw new InvalidOperationException("App:WebBaseUrl must be an HTTP(S) origin.");
         if (AccessTtlMinutes is < 1 or > 1440 || RefreshTtlDays is < 1 or > 365) throw new InvalidOperationException("Invalid token lifetime.");
+        if (AuditRetentionDays is < 1 or > 3650) throw new InvalidOperationException("App:AuditRetentionDays must be between 1 and 3650.");
         Smtp.Validate();
     }
 

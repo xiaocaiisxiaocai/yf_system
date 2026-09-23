@@ -34,7 +34,7 @@ public static class ProjectsModule
         api.MapGet("/project-groups", async (HttpContext context, AppDb db, ProjectGroupService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.ListAsync(
+            return await service.ListAsync(
                 conn,
                 AccessService.GetCurrent(context),
                 QueryUlong(context, "page", 1),
@@ -42,114 +42,114 @@ public static class ProjectsModule
                 QueryString(context, "keyword"),
                 QueryString(context, "status"),
                 QueryNullableUlong(context, "supplierId"),
-                ct));
+                ct);
         });
         api.MapPost("/project-groups", async (HttpContext context, ProjectUpsertRequest request, AppDb db, ProjectGroupService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.CreateAsync(conn, AccessService.GetCurrent(context), request, Ip(context), ct));
+            return await service.CreateAsync(conn, AccessService.GetCurrent(context), request, Ip(context), ct);
         });
         api.MapGet("/project-groups/{id:long}", async (HttpContext context, ulong id, AppDb db, ProjectGroupService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.DetailAsync(conn, AccessService.GetCurrent(context), id, ct));
+            return await service.DetailAsync(conn, AccessService.GetCurrent(context), id, ct);
         });
         api.MapPut("/project-groups/{id:long}", async (HttpContext context, ulong id, ProjectUpsertRequest request, AppDb db, ProjectGroupService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.UpdateAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+            return await service.UpdateAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct);
         });
         api.MapDelete("/project-groups/{id:long}", async (HttpContext context, ulong id, AppDb db, ProjectGroupService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             await service.DeleteAsync(conn, AccessService.GetCurrent(context), id, Ip(context), ct);
-            return Results.Ok(new { });
+            return EmptyResponse.Instance;
         });
         api.MapPost("/project-groups/{id:long}/projects", async (HttpContext context, ulong id, SubprojectUpsertRequest request, AppDb db, ProjectGroupService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.CreateSubprojectAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+            return await service.CreateSubprojectAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct);
         });
 
         api.MapPost("/projects/{id:long}/copy", async (HttpContext context, ulong id, ProjectCopyRequest request, AppDb db, ProjectCopyService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.CopyAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+            return await service.CopyAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct);
         });
         api.MapGet("/projects/{id:long}/copy-history", async (HttpContext context, ulong id, AppDb db, ProjectCopyService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.HistoryAsync(conn, AccessService.GetCurrent(context), id, ct));
+            return await service.HistoryAsync(conn, AccessService.GetCurrent(context), id, ct);
         });
         api.MapGet("/project-copies/{copyId:long}/files", async (HttpContext context, ulong copyId, AppDb db, ProjectCopyService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.FileHistoryAsync(conn, AccessService.GetCurrent(context), copyId,
-                QueryUlong(context, "page", 1), QueryUlong(context, "pageSize", 20), ct));
+            return await service.FileHistoryAsync(conn, AccessService.GetCurrent(context), copyId,
+                QueryUlong(context, "page", 1), QueryUlong(context, "pageSize", 20), ct);
         });
         api.MapGet("/projects/{id:long}", async (HttpContext context, ulong id, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.DetailAsync(conn, AccessService.GetCurrent(context), id, ct));
+            return await service.DetailAsync(conn, AccessService.GetCurrent(context), id, ct);
         });
         api.MapPut("/projects/{id:long}", async (HttpContext context, ulong id, SubprojectUpsertRequest request, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.UpdateSubprojectAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+            return await service.UpdateSubprojectAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct);
         });
         api.MapDelete("/projects/{id:long}", async (HttpContext context, ulong id, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             await service.DeleteAsync(conn, AccessService.GetCurrent(context), id, Ip(context), ct);
-            return Results.Ok(new { });
+            return EmptyResponse.Instance;
         });
         api.MapPut("/projects/{id:long}/status", async (HttpContext context, ulong id, ProjectStatusRequest request, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.SetStatusAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+            return await service.SetStatusAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct);
         });
         api.MapPost("/projects/{id:long}/submit", async (HttpContext context, ulong id, ProjectSubmitRequest request, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.SubmitAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+            return await service.SubmitAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct);
         });
         api.MapPost("/projects/{id:long}/confirm", async (HttpContext context, ulong id, ProjectDecisionRequest request, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.ConfirmAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+            return await service.ConfirmAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct);
         });
         api.MapPost("/projects/{id:long}/reject", async (HttpContext context, ulong id, ProjectRejectRequest request, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.RejectAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+            return await service.RejectAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct);
         });
         api.MapPost("/projects/{id:long}/withdraw", async (HttpContext context, ulong id, ProjectDecisionRequest request, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.WithdrawAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+            return await service.WithdrawAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct);
         });
         api.MapGet("/projects/{id:long}/summary", async (HttpContext context, ulong id, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.SummaryAsync(conn, AccessService.GetCurrent(context), id, ct));
+            return await service.SummaryAsync(conn, AccessService.GetCurrent(context), id, ct);
         });
         api.MapGet("/projects/{id:long}/activities", async (HttpContext context, ulong id, AppDb db, ProjectActivityService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.ListAsync(
+            return await service.ListAsync(
                 conn,
                 AccessService.GetCurrent(context),
                 id,
                 QueryString(context, "type"),
                 QueryString(context, "cursor"),
                 QueryUlong(context, "pageSize", 20),
-                ct));
+                ct);
         });
 
         api.MapGet("/projects/{id:long}/messages", async (HttpContext context, ulong id, AppDb db, MessageService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.ListAsync(
+            return await service.ListAsync(
                 conn,
                 AccessService.GetCurrent(context),
                 id,
@@ -157,18 +157,18 @@ public static class ProjectsModule
                 QueryUlong(context, "pageSize", 20),
                 QueryNullableUlong(context, "beforeId"),
                 QueryNullableUlong(context, "targetId"),
-                ct));
+                ct);
         });
         api.MapGet("/projects/{id:long}/message-receipts", async (HttpContext context, ulong id, AppDb db, MessageService service, CancellationToken ct) =>
         {
             var messageIds = ParseMessageIds(QueryString(context, "ids"));
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.ReceiptsAsync(
+            return await service.ReceiptsAsync(
                 conn,
                 AccessService.GetCurrent(context),
                 id,
                 messageIds,
-                ct));
+                ct);
         });
         api.MapPost("/projects/{id:long}/messages", async (HttpContext context, ulong id, AppDb db, MessageService service, CancellationToken ct) =>
         {
@@ -189,14 +189,14 @@ public static class ProjectsModule
                 if (form.TryGetValue("content", out var contents) && contents.Count > 1)
                     throw ApiException.BadRequest("content 表单字段只能出现一次");
                 var request = new MessageCreateRequest { Content = contents.Count == 0 ? null : contents[0] };
-                return Results.Ok(await service.CreateAsync(
-                    conn, actor, id, request, form.Files.ToArray(), Ip(context), ct));
+                return await service.CreateAsync(
+                    conn, actor, id, request, form.Files.ToArray(), Ip(context), ct);
             }
             if (!context.Request.HasJsonContentType())
                 throw new ApiException(415, 41501, "留言仅支持 JSON 或 multipart/form-data");
             var json = await context.Request.ReadFromJsonAsync<MessageCreateRequest>(cancellationToken: ct)
                 ?? throw ApiException.BadRequest("请求格式不正确");
-            return Results.Ok(await service.CreateAsync(conn, actor, id, json, Ip(context), ct));
+            return await service.CreateAsync(conn, actor, id, json, Ip(context), ct);
         })
         .WithMetadata(new RequestSizeLimitAttribute(MessageService.MultipartRequestLimitBytes))
         .WithMetadata(new RequestFormLimitsAttribute
@@ -209,12 +209,12 @@ public static class ProjectsModule
         {
             await using var conn = await db.OpenAsync(ct);
             await service.MarkReadAsync(conn, AccessService.GetCurrent(context), request, ct);
-            return Results.Ok(new { });
+            return EmptyResponse.Instance;
         });
         api.MapGet("/messages/{id:long}/reads", async (HttpContext context, ulong id, AppDb db, MessageService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.ReadsAsync(conn, AccessService.GetCurrent(context), id, ct));
+            return await service.ReadsAsync(conn, AccessService.GetCurrent(context), id, ct);
         });
         api.MapGet("/messages/{messageId:long}/images/{imageId:long}", async (
             HttpContext context,
@@ -241,93 +241,93 @@ public static class ProjectsModule
                 await stream.DisposeAsync();
                 throw;
             }
-        });
+        }).Produces(StatusCodes.Status200OK, null, "image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp");
         api.MapDelete("/messages/{id:long}", async (HttpContext context, ulong id, AppDb db, MessageService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             await service.DeleteAsync(conn, AccessService.GetCurrent(context), id, Ip(context), ct);
-            return Results.Ok(new { });
+            return EmptyResponse.Instance;
         });
 
         api.MapGet("/dashboard/summary", async (HttpContext context, AppDb db, DashboardService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.SummaryAsync(conn, AccessService.GetCurrent(context), ct));
+            return await service.SummaryAsync(conn, AccessService.GetCurrent(context), ct);
         });
         api.MapGet("/dashboard/pending-projects", async (HttpContext context, AppDb db, DashboardService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.PendingProjectsAsync(
+            return await service.PendingProjectsAsync(
                 conn,
                 AccessService.GetCurrent(context),
                 QueryUlong(context, "page", 1),
                 QueryUlong(context, "pageSize", 20),
-                ct));
+                ct);
         });
         api.MapGet("/dashboard/messages", async (HttpContext context, AppDb db, DashboardService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.MessagesAsync(
+            return await service.MessagesAsync(
                 conn,
                 AccessService.GetCurrent(context),
                 QueryUlong(context, "page", 1),
                 QueryUlong(context, "pageSize", 10),
                 QueryBool(context, "unreadOnly", false),
-                ct));
+                ct);
         });
         api.MapGet("/collaboration/summary", async (HttpContext context, AppDb db, CollaborationService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.SummaryAsync(conn, AccessService.GetCurrent(context), ct));
+            return await service.SummaryAsync(conn, AccessService.GetCurrent(context), ct);
         });
         api.MapGet("/collaboration/notifications", async (HttpContext context, AppDb db, CollaborationService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.NotificationsAsync(
+            return await service.NotificationsAsync(
                 conn,
                 AccessService.GetCurrent(context),
                 QueryUlong(context, "page", 1),
                 QueryUlong(context, "pageSize", 20),
                 QueryBool(context, "unreadOnly", false),
-                ct));
+                ct);
         });
         api.MapPost("/collaboration/reads", async (HttpContext context, MarkCollaborationReadRequest request, AppDb db, CollaborationService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             await service.MarkReadAsync(conn, AccessService.GetCurrent(context), request, ct);
-            return Results.Ok(new { });
+            return EmptyResponse.Instance;
         });
         api.MapGet("/supplier-options", async (HttpContext context, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.SupplierOptionsAsync(conn, AccessService.GetCurrent(context), ct));
+            return await service.SupplierOptionsAsync(conn, AccessService.GetCurrent(context), ct);
         });
         api.MapGet("/project-owner-options", async (HttpContext context, AppDb db, ProjectService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.ProjectOwnerOptionsAsync(conn, AccessService.GetCurrent(context), ct));
+            return await service.ProjectOwnerOptionsAsync(conn, AccessService.GetCurrent(context), ct);
         });
         api.MapGet("/project-dictionaries", async (HttpContext context, AppDb db, ProjectDictionaryService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.ListAsync(conn, AccessService.GetCurrent(context), QueryString(context, "type"),
-                QueryBool(context, "enabledOnly", false), QueryNullableUlong(context, "parentId"), ct));
+            return await service.ListAsync(conn, AccessService.GetCurrent(context), QueryString(context, "type"),
+                QueryBool(context, "enabledOnly", false), QueryNullableUlong(context, "parentId"), ct);
         });
         api.MapPost("/project-dictionaries", async (HttpContext context, ProjectDictionaryUpsertRequest request, AppDb db, ProjectDictionaryService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.CreateAsync(conn, AccessService.GetCurrent(context), request, Ip(context), ct));
+            return await service.CreateAsync(conn, AccessService.GetCurrent(context), request, Ip(context), ct);
         });
         api.MapPut("/project-dictionaries/{id:long}", async (HttpContext context, ulong id, ProjectDictionaryUpsertRequest request, AppDb db, ProjectDictionaryService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
-            return Results.Ok(await service.UpdateAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct));
+            return await service.UpdateAsync(conn, AccessService.GetCurrent(context), id, request, Ip(context), ct);
         });
         api.MapDelete("/project-dictionaries/{id:long}", async (HttpContext context, ulong id, AppDb db, ProjectDictionaryService service, CancellationToken ct) =>
         {
             await using var conn = await db.OpenAsync(ct);
             await service.DeleteAsync(conn, AccessService.GetCurrent(context), id, Ip(context), ct);
-            return Results.NoContent();
+            return TypedResults.NoContent();
         });
 
         return endpoints;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Empty, Select, Spin, Tag, Timeline, Typography } from '@arco-design/web-react'
 import http from '../api/client'
 import { type ConfirmSide, PROJECT_STATUS, fmtTime } from '../api/types'
+import type { ApiResponses } from '../api/types'
 
 type ActivityType = 'PROJECT' | 'FILE' | 'MESSAGE'
 
@@ -183,7 +184,7 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
       const params: { pageSize: number; type?: ActivityType; cursor?: string } = { pageSize: 20 }
       if (filter) params.type = filter
       if (append && cursor.current) params.cursor = cursor.current
-      const response = await http.get(`/projects/${projectId}/activities`, { params })
+      const response = await http.get<ApiResponses['GET /projects/{id}/activities']>(`/projects/${projectId}/activities`, { params })
       if (!mounted.current || seq !== requestSeq.current) return
       const data = parseResponse(response.data)
       setList((current) => {

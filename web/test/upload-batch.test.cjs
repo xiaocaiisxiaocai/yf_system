@@ -18,7 +18,7 @@ const abortedUpload = (_url, _blob, { signal }) => new Promise((_resolve, reject
   else signal.addEventListener('abort', abort, { once: true })
 })
 
-async function fixture(overrides = {}, offerSubmit = false) {
+async function fixture(overrides = {}, offerSubmit = false, context = {}) {
   const calls = { init: [], merge: [], delete: [], closed: 0, done: 0, all: 0, submit: 0 }
   const http = {
     post: async (url, body) => {
@@ -43,7 +43,7 @@ async function fixture(overrides = {}, offerSubmit = false) {
     '../api/client': http, '../api/types': { fmtSize: String },
     '../api/file-hash': { fileMd5: async () => 'digest' },
   }
-  vm.runInNewContext(source, { exports, module: { exports }, console, AbortController,
+  vm.runInNewContext(source, { exports, module: { exports }, console, AbortController, ...context,
     require: name => mocks[name] || require(name) })
   let renderer
   await act(async () => {
@@ -183,5 +183,73 @@ test('duplicate close and start requests cannot overlap pending cancellation', a
     await act(async () => { release(); await first; await second })
     assert.equal(f.calls.init.length, 1)
     assert.equal(f.calls.closed, 1)
+  } finally { await f.dispose() }
+})
+
+// Backoff delays run immediately so retry tests stay fast.
+const instantTimers = { setTimeout: fn => setTimeout(fn, 0), clearTimeout }
+const networkError = () => Object.assign(new Error('Network Error'), { code: 'ERR_NETWORK' })
+
+test('a transient chunk failure is retried quietly and the upload completes without user action', async () => {
+  const puts = []
+  const f = await fixture({
+    put: async (_url, _blob, config) => {
+      puts.push(config.quietNetworkError)
+      if (puts.length === 1) throw networkError()
+    },
+  }, false, instantTimers)
+  try {
+    await f.select(['a'])
+    await act(async () => { await f.start() })
+    assert.deepEqual(puts, [true, true], 'retries stay quiet while another attempt remains')
+    assert.deepEqual(f.calls.merge, ['/uploads/a/merge'])
+    assert.equal(f.calls.delete.length, 0)
+  } finally { await f.dispose() }
+})
+
+test('chunk retries stop after the attempt limit and only the last failure is shown', async () => {
+  const puts = []
+  const f = await fixture({ put: async (_url, _blob, config) => { puts.push(config.quietNetworkError); throw networkError() } },
+    false, instantTimers)
+  try {
+    await f.select(['a'])
+    await act(async () => { await f.start() })
+    assert.deepEqual(puts, [true, true, false])
+    assert.equal(f.calls.merge.length, 0)
+    assert.ok(f.renderer.root.findAllByType('Text').some(node => String(node.props.children).includes('上传中断')))
+  } finally { await f.dispose() }
+})
+
+test('business rejections of a chunk are not retried', async () => {
+  let puts = 0
+  const f = await fixture({ put: async () => { puts++; throw Object.assign(new Error('conflict'), { response: { status: 409 } }) } },
+    false, instantTimers)
+  try {
+    await f.select(['a'])
+    await act(async () => { await f.start() })
+    assert.equal(puts, 1)
+    assert.equal(f.calls.merge.length, 0)
+  } finally { await f.dispose() }
+})
+
+test('at most two files upload at once and a waiting file can be removed before it starts', async () => {
+  const releases = new Map()
+  const f = await fixture({ put: url => new Promise(resolve => releases.set(url.split('/')[2], resolve)) })
+  try {
+    await f.select(['a', 'b', 'c', 'd'])
+    let started
+    await act(async () => { started = f.start() })
+    assert.deepEqual(f.calls.init.sort(), ['a', 'b'], 'only two files may start')
+    const waiting = f.renderer.root.findAllByType('Text').filter(node => String(node.props.children).includes('排队中'))
+    assert.equal(waiting.length, 2)
+
+    await act(async () => { await f.remove('d') })
+    assert.equal(f.renderer.root.findAllByType('Button').some(node => node.props['aria-label'] === '移除「d」'), false)
+
+    await act(async () => { releases.get('a')() })
+    assert.deepEqual(f.calls.init.sort(), ['a', 'b', 'c'], 'a freed slot starts the next waiting file')
+    await act(async () => { releases.get('b')(); releases.get('c')(); await started })
+    assert.deepEqual(f.calls.merge.sort(), ['/uploads/a/merge', '/uploads/b/merge', '/uploads/c/merge'])
+    assert.equal(f.calls.init.includes('d'), false, 'a removed waiting file never reaches the server')
   } finally { await f.dispose() }
 })

@@ -14,7 +14,7 @@ internal sealed class ProjectCopyService(
     IProjectRealtimePublisher realtime,
     ProjectGroupStatusService groupStatus)
 {
-    internal async Task<object> CopyAsync(MySqlConnection conn, CurrentUser actor, ulong sourceProjectId,
+    internal async Task<ProjectCopyResponse> CopyAsync(MySqlConnection conn, CurrentUser actor, ulong sourceProjectId,
         ProjectCopyRequest request, string? ip, CancellationToken ct)
     {
         if (!actor.IsInternal) throw ApiException.Forbidden("仅内部用户可以复制项目");
@@ -32,7 +32,7 @@ internal sealed class ProjectCopyService(
         var commitOutcomeUnknown = false;
         ulong targetProjectId = 0;
         ulong copyId = 0;
-        object? response = null;
+        ProjectCopyResponse? response = null;
         try
         {
             foreach (var sourceFile in availableFiles)
@@ -168,8 +168,8 @@ internal sealed class ProjectCopyService(
             target.HasCopyHistory = true;
             target.CopySourceProjectId = sourceProjectId;
             target.CopySourceProjectName = currentSource.Name;
-            response = new { project = ProjectJson.Project(target), copy = new { copyId, sourceProjectId, targetProjectId,
-                fileCount = prepared.Count, totalBytes, createdAt = ProjectJson.Utc(createdAt) } };
+            response = new ProjectCopyResponse(ProjectJson.Project(target), new ProjectCopyRecord(
+                copyId, sourceProjectId, targetProjectId, prepared.Count, totalBytes, ProjectJson.Utc(createdAt)));
             try { await tx.CommitAsync(ct); committed = true; }
             catch (Exception commitError)
             {
@@ -195,7 +195,7 @@ internal sealed class ProjectCopyService(
         return response!;
     }
 
-    internal async Task<object> HistoryAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
+    internal async Task<ProjectCopyHistoryResponse> HistoryAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
@@ -222,8 +222,8 @@ internal sealed class ProjectCopyService(
                 TotalBytes = copy.TotalBytes,
                 CreatedAt = copy.CreatedAt,
             }).ToArrayAsync(ct);
-        object? sourceItem = null;
-        var copies = new List<object>();
+        ProjectCopyHistoryItem? sourceItem = null;
+        var copies = new List<ProjectCopyHistoryItem>();
         var restricted = false;
         var canViewAll = current.IsInternal
             && await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct);
@@ -240,10 +240,10 @@ internal sealed class ProjectCopyService(
             if (row.TargetProjectId == projectId) sourceItem = item; else copies.Add(item);
         }
         await tx.CommitAsync(ct);
-        return new { source = sourceItem, copies, hasRestrictedRelations = restricted };
+        return new ProjectCopyHistoryResponse(sourceItem, copies, restricted);
     }
 
-    internal async Task<object> FileHistoryAsync(MySqlConnection conn, CurrentUser actor, ulong copyId,
+    internal async Task<PageResponse<FileCopyHistoryItem>> FileHistoryAsync(MySqlConnection conn, CurrentUser actor, ulong copyId,
         ulong page, ulong pageSize, CancellationToken ct)
     {
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
@@ -270,11 +270,11 @@ internal sealed class ProjectCopyService(
                 TargetStatus = db.Files.Where(file => file.Id == reference.TargetFileId)
                     .Select(file => file.Status).FirstOrDefault(),
             }).ToArrayAsync(ct);
-        var list = rows.Select(row => new { row.SourceFileId, row.SourceFileName,
-            sourceDeleted = row.SourceStatus != "AVAILABLE", row.TargetFileId, row.TargetFileName,
-            targetDeleted = row.TargetStatus != "AVAILABLE" }).ToArray();
+        var list = rows.Select(row => new FileCopyHistoryItem(row.SourceFileId, row.SourceFileName,
+            row.SourceStatus != "AVAILABLE", row.TargetFileId, row.TargetFileName,
+            row.TargetStatus != "AVAILABLE")).ToArray();
         await tx.CommitAsync(ct);
-        return new { list, total, page = actualPage, pageSize = size };
+        return new PageResponse<FileCopyHistoryItem>(list, total, actualPage, size);
     }
 
     private static async Task<ProjectCopySnapshot> CaptureSnapshotAsync(MySqlConnection conn, CurrentUser actor,
@@ -504,8 +504,8 @@ internal sealed class ProjectCopyService(
         project.SupplierId, project.WorkOrderNos, project.MachineModel, project.RobotVendorId, project.RobotModelId,
         project.ResponsibleUserId, project.SectionId, project.PriorityId, project.ExpectedCompletionDate };
 
-    private static object HistoryItem(CopyHistoryRow row, ulong projectId, string name) => new { row.CopyId,
-        projectId, name, row.FileCount, row.TotalBytes, row.CopiedByName, createdAt = ProjectJson.Utc(row.CreatedAt) };
+    private static ProjectCopyHistoryItem HistoryItem(CopyHistoryRow row, ulong projectId, string name) => new(row.CopyId,
+        projectId, name, row.FileCount, row.TotalBytes, row.CopiedByName, ProjectJson.Utc(row.CreatedAt));
 
     private static async Task<bool> CanViewAsync(MySqlConnection conn, MySqlTransaction tx, CurrentUser actor,
         ulong projectId, CancellationToken ct)

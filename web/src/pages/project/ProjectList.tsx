@@ -13,6 +13,7 @@ import {
 import { textLengthRule } from '../../utils/textRules'
 import { normalizeList } from '../../utils/listValues'
 import { useCollaboration } from '../../store/collaboration'
+import type { ApiResponses } from '../../api/types'
 
 interface SupplierOpt { id: number; name: string }
 interface ProjectGroupFormValues {
@@ -95,7 +96,7 @@ export default function ProjectList() {
   const canDelete = isInternal && hasPerm('project:delete')
 
   const fetchGroups = useCallback(async () => {
-    const response = await http.get('/project-groups', {
+    const response = await http.get<ApiResponses['GET /project-groups']>('/project-groups', {
       params: { page, pageSize, keyword: keyword || undefined, status, supplierId }, quietNetworkError: true,
     } as QuietRequestConfig)
     return response.data as PageResp<ProjectGroup>
@@ -121,7 +122,7 @@ export default function ProjectList() {
     const seq = ++supplierOptionsSeq.current
     if (!isInternal) return
     setSupplierOptionsLoading(true); setSupplierOptionsError(false)
-    http.get('/supplier-options', { quietNetworkError: true } as QuietRequestConfig)
+    http.get<ApiResponses['GET /supplier-options']>('/supplier-options', { quietNetworkError: true } as QuietRequestConfig)
       .then((response) => {
         if (seq === supplierOptionsSeq.current) setSuppliers(expectOptionList<SupplierOpt>(response.data))
       })
@@ -142,9 +143,9 @@ export default function ProjectList() {
     const seq = ++optionsSeq.current
     setMetadataOptionsLoading(true); setMetadataOptionsError(false)
     Promise.all([
-      http.get('/project-dictionaries', { params: { type: 'ROBOT_VENDOR', enabledOnly: true }, quietNetworkError: true } as QuietRequestConfig),
-      http.get('/project-dictionaries', { params: { type: 'PRIORITY', enabledOnly: true }, quietNetworkError: true } as QuietRequestConfig),
-      http.get('/project-owner-options', { quietNetworkError: true } as QuietRequestConfig),
+      http.get<ApiResponses['GET /project-dictionaries']>('/project-dictionaries', { params: { type: 'ROBOT_VENDOR', enabledOnly: true }, quietNetworkError: true } as QuietRequestConfig),
+      http.get<ApiResponses['GET /project-dictionaries']>('/project-dictionaries', { params: { type: 'PRIORITY', enabledOnly: true }, quietNetworkError: true } as QuietRequestConfig),
+      http.get<ApiResponses['GET /project-owner-options']>('/project-owner-options', { quietNetworkError: true } as QuietRequestConfig),
     ]).then(([vendorResponse, priorityResponse, ownerResponse]) => {
       if (seq !== optionsSeq.current) return
       setRobotVendors(expectOptionList<ProjectDictionaryOption>(vendorResponse.data))
@@ -157,7 +158,7 @@ export default function ProjectList() {
   const loadRobotModels = useCallback((vendorId: number) => {
     const seq = ++modelSeq.current
     setRobotModels([]); setRobotModelsLoading(true); setRobotModelsError(false)
-    http.get('/project-dictionaries', {
+    http.get<ApiResponses['GET /project-dictionaries']>('/project-dictionaries', {
       params: { type: 'ROBOT_MODEL', enabledOnly: true, parentId: vendorId }, quietNetworkError: true,
     } as QuietRequestConfig).then((response) => {
       if (seq === modelSeq.current) setRobotModels(expectOptionList<ProjectDictionaryOption>(response.data))
@@ -205,18 +206,19 @@ export default function ProjectList() {
     if (vendorId) loadRobotModels(vendorId)
   }
 
-  const ownerOptions = [...owners]
+  // 历史负责人可能已不在可选列表中，其课别也可能为空，因此占位项允许空课别。
+  const ownerOptions: Array<Omit<ProjectOwnerOption, 'sectionId' | 'sectionName'> & { sectionId: number | null; sectionName: string | null }> = [...owners]
   if (editing?.responsibleUserId && !ownerOptions.some((item) => item.id === editing.responsibleUserId))
     ownerOptions.push({ id: editing.responsibleUserId, employeeNo: editing.responsibleUserEmployeeNo ?? '', realName: editing.responsibleUserName || '历史负责人', sectionId: editing.sectionId, sectionName: editing.sectionName })
   const vendorOptions = [...robotVendors]
   if (editing?.robotVendorId && !vendorOptions.some((item) => item.id === editing.robotVendorId))
-    vendorOptions.push({ id: editing.robotVendorId, type: 'ROBOT_VENDOR', name: editing.robotVendorName || '历史厂商', sortNo: 0, enabled: false })
+    vendorOptions.push({ id: editing.robotVendorId, type: 'ROBOT_VENDOR', name: editing.robotVendorName || '历史厂商', sortNo: 0, enabled: false, parentId: null, parentName: null, inUse: true })
   const modelOptions = [...robotModels]
   if (editing?.robotModelId && !modelOptions.some((item) => item.id === editing.robotModelId))
-    modelOptions.push({ id: editing.robotModelId, type: 'ROBOT_MODEL', name: editing.robotModelName || '历史型号', parentId: editing.robotVendorId, sortNo: 0, enabled: false })
+    modelOptions.push({ id: editing.robotModelId, type: 'ROBOT_MODEL', name: editing.robotModelName || '历史型号', parentId: editing.robotVendorId, parentName: editing.robotVendorName, sortNo: 0, enabled: false, inUse: true })
   const priorityOptions = [...priorities]
   if (editing?.priorityId && !priorityOptions.some((item) => item.id === editing.priorityId))
-    priorityOptions.push({ id: editing.priorityId, type: 'PRIORITY', name: editing.priorityName || '历史优先级', sortNo: 0, enabled: false })
+    priorityOptions.push({ id: editing.priorityId, type: 'PRIORITY', name: editing.priorityName || '历史优先级', sortNo: 0, enabled: false, parentId: null, parentName: null, inUse: true })
 
   const missingCreateOptions: { message: string; path: string; permission: string; action: string }[] = []
   if (!supplierOptionsLoading && !supplierOptionsError && suppliers.length === 0)
@@ -255,10 +257,10 @@ export default function ProjectList() {
         subprojectNames: editing ? undefined : normalizeList(values.subprojectNames),
       }
       if (editing) {
-        await http.put(`/project-groups/${editing.id}`, payload)
+        await http.put<ApiResponses['PUT /project-groups/{id}']>(`/project-groups/${editing.id}`, payload)
         Message.success('主项目资料已同步到全部子项目')
       } else {
-        await http.post('/project-groups', payload)
+        await http.post<ApiResponses['POST /project-groups']>('/project-groups', payload)
         Message.success('主项目及子项目已创建')
       }
       setModalOpen(false); load()
@@ -266,7 +268,7 @@ export default function ProjectList() {
   }
 
   const remove = async (group: ProjectGroup) => {
-    await http.delete(`/project-groups/${group.id}`); Message.success('主项目已删除'); load()
+    await http.delete<ApiResponses['DELETE /project-groups/{id}']>(`/project-groups/${group.id}`); Message.success('主项目已删除'); load()
   }
 
   const columns = [

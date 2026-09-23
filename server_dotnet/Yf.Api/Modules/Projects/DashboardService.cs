@@ -6,7 +6,7 @@ namespace Yf.Api.Modules.Projects;
 
 internal sealed class DashboardService
 {
-    internal async Task<object> MessagesAsync(
+    internal async Task<PageResponse<DashboardMessage>> MessagesAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong page,
@@ -48,22 +48,14 @@ internal sealed class DashboardService
         var rows = await query.OrderByDescending(row => row.Id)
             .Page((actualPage - 1) * size, size)
             .ToArrayAsync(ct);
-        var list = rows.Select(row => new
-        {
-            id = row.Id,
-            projectId = row.ProjectId,
-            projectName = row.ProjectName,
-            projectGroupName = row.ProjectGroupName,
-            content = MessagePreview(row.Content, row.HasImages),
-            senderName = row.SenderName,
-            createdAt = ProjectJson.Utc(row.CreatedAt),
-            unread = row.SenderId != current.Id && !row.ReadByMe,
-        }).ToArray();
+        var list = rows.Select(row => new DashboardMessage(
+            row.Id, row.ProjectId, row.ProjectName, row.ProjectGroupName, MessagePreview(row.Content, row.HasImages),
+            row.SenderName, ProjectJson.Utc(row.CreatedAt), row.SenderId != current.Id && !row.ReadByMe)).ToArray();
         await tx.CommitAsync(ct);
         return ProjectJson.Page(list, total, actualPage, size);
     }
 
-    internal async Task<object> PendingProjectsAsync(
+    internal async Task<PageResponse<DashboardPendingProject>> PendingProjectsAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong page,
@@ -81,7 +73,7 @@ internal sealed class DashboardService
         if (current.IsInternal && !canReceivePendingAcceptance)
         {
             await tx.CommitAsync(ct);
-            return ProjectJson.Page(Array.Empty<object>(), 0, actualPage, size);
+            return ProjectJson.Page(Array.Empty<DashboardPendingProject>(), 0, actualPage, size);
         }
 
         await using var db = EfDb.Use(conn, tx);
@@ -105,21 +97,14 @@ internal sealed class DashboardService
             .ThenByDescending(row => row.Id)
             .Page((actualPage - 1) * size, size)
             .ToArrayAsync(ct);
-        var list = rows.Select(row => new
-        {
-            id = row.Id,
-            name = row.Name,
-            projectGroupId = row.ProjectGroupId,
-            projectGroupName = row.ProjectGroupName,
-            status = ProjectStatuses.PendingConfirmation,
-            confirmSide = row.ConfirmSide == "COMPANY" ? "COMPANY" : "SUPPLIER",
-            updatedAt = ProjectJson.Utc(row.UpdatedAt),
-        }).ToArray();
+        var list = rows.Select(row => new DashboardPendingProject(
+            row.Id, row.Name, row.ProjectGroupId, row.ProjectGroupName, ProjectStatuses.PendingConfirmation,
+            row.ConfirmSide == "COMPANY" ? "COMPANY" : "SUPPLIER", ProjectJson.Utc(row.UpdatedAt))).ToArray();
         await tx.CommitAsync(ct);
         return ProjectJson.Page(list, total, actualPage, size);
     }
 
-    internal async Task<object> SummaryAsync(MySqlConnection conn, CurrentUser actor, CancellationToken ct)
+    internal async Task<DashboardSummaryResponse> SummaryAsync(MySqlConnection conn, CurrentUser actor, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
@@ -169,26 +154,11 @@ internal sealed class DashboardService
                 HasImages = hasImages,
                 ReadByMe = readByMe,
             }).Take(5).ToArrayAsync(ct);
-        var recentMessages = recentRows.Select(row => (object)new
-        {
-            id = row.Id,
-            projectId = row.ProjectId,
-            projectName = row.ProjectName,
-            projectGroupName = row.ProjectGroupName,
-            content = MessagePreview(row.Content, row.HasImages),
-            senderName = row.SenderName,
-            createdAt = ProjectJson.Utc(row.CreatedAt),
-            unread = row.SenderId != current.Id && !row.ReadByMe,
-        }).ToArray();
+        var recentMessages = recentRows.Select(row => new DashboardMessage(
+            row.Id, row.ProjectId, row.ProjectName, row.ProjectGroupName, MessagePreview(row.Content, row.HasImages),
+            row.SenderName, ProjectJson.Utc(row.CreatedAt), row.SenderId != current.Id && !row.ReadByMe)).ToArray();
         await tx.CommitAsync(ct);
-        return new
-        {
-            projectCount,
-            activeProjectCount,
-            pendingConfirmations,
-            unreadMessages,
-            recentMessages,
-        };
+        return new DashboardSummaryResponse(projectCount, activeProjectCount, pendingConfirmations, unreadMessages, recentMessages);
     }
 
     private static string MessagePreview(string content, bool hasImages) =>

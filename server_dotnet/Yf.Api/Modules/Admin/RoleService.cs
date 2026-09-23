@@ -14,7 +14,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         "message:create", "project:submit", "project:withdraw"
     }.ToFrozenSet(StringComparer.Ordinal);
 
-    public async Task<object> PermissionsAsync(CurrentUser actor, CancellationToken ct)
+    public async Task<PermissionResponse[]> PermissionsAsync(CurrentUser actor, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -22,15 +22,13 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var owned = (await ceiling.GetCodesAsync(context.Database.Connection(), null, actor.Id, ct)).ToHashSet(StringComparer.Ordinal);
         var isAdmin = await AccessService.IsSystemAdminAsync(context.Database.Connection(), null, actor.Id, ct);
         var all = await context.Permissions.AsNoTracking().OrderBy(p => p.SortNo).ThenBy(p => p.Id).ToListAsync(ct);
-        return all.Select(x => new
-        {
+        return all.Select(x => new PermissionResponse(
             x.Id, x.Code, x.Name, x.Type, x.ParentId, x.SortNo,
-            grantable = isAdmin || owned.Contains(x.Code),
-            supplierAssignable = SupplierPermissionCodes.Contains(x.Code)
-        }).ToArray();
+            isAdmin || owned.Contains(x.Code),
+            SupplierPermissionCodes.Contains(x.Code))).ToArray();
     }
 
-    public async Task<object> ListAsync(CurrentUser actor, ulong page, uint size, ulong offset, CancellationToken ct)
+    public async Task<PageResponse<RoleResponse>> ListAsync(CurrentUser actor, ulong page, uint size, ulong offset, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -40,12 +38,12 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var rows = offset > int.MaxValue ? []
             : await context.Roles.AsNoTracking().OrderBy(r => r.Id).Skip((int)offset).Take((int)size).ToArrayAsync(ct);
         var manageable = await ceiling.GetManageableRoleIdsAsync(context.Database.Connection(), null, actor, rows.Select(r => r.Id).ToArray(), ct);
-        var list = new List<object>();
+        var list = new List<RoleResponse>();
         foreach (var r in rows) list.Add(await JsonAsync(context, r, manageable.Contains(r.Id), ct));
-        return new { list, total = (ulong)total, page, pageSize = size };
+        return new(list, (ulong)total, page, size);
     }
 
-    public async Task<object> CreateAsync(CurrentUser actor, RoleUpsert request, CancellationToken ct)
+    public async Task<RoleResponse> CreateAsync(CurrentUser actor, RoleUpsert request, CancellationToken ct)
     {
         Validate(request);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -71,7 +69,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         return result;
     }
 
-    public async Task<object> UpdateAsync(CurrentUser actor, ulong id, RoleUpsert request, CancellationToken ct)
+    public async Task<RoleResponse> UpdateAsync(CurrentUser actor, ulong id, RoleUpsert request, CancellationToken ct)
     {
         Validate(request);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -101,7 +99,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         return result;
     }
 
-    public async Task<object> SetStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
+    public async Task<RoleResponse> SetStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
     {
         status = AdminValidation.Status(status);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -240,20 +238,18 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
     private static object PermissionAuditJson(Permission permission) => new { permission.Id, permission.Code, permission.Name };
     private static Task<Role?> FindAsync(YfDbContext context, ulong id, CancellationToken ct) => context.Roles.AsNoTracking().SingleOrDefaultAsync(r => r.Id == id, ct);
 
-    private static async Task<object> JsonAsync(YfDbContext context, Role r, bool canManage, CancellationToken ct)
+    private static async Task<RoleResponse> JsonAsync(YfDbContext context, Role r, bool canManage, CancellationToken ct)
     {
         var ids = await context.RolePermissions.Where(rp => rp.RoleId == r.Id).Select(rp => rp.PermissionId).ToArrayAsync(ct);
         var assigned = await context.UserRoles.LongCountAsync(ur => ur.RoleId == r.Id, ct);
         var assignedToSupplier = await context.UserRoles.Join(context.Users, ur => ur.UserId, u => u.Id, (ur, u) => new { ur, u })
             .AnyAsync(x => x.ur.RoleId == r.Id && x.u.UserType == "SUPPLIER", ct);
-        return new
-        {
+        return new RoleResponse(
             r.Id, r.Name, r.Description, r.IsBuiltIn, r.Status,
-            permissionIds = ids,
-            assignedUserCount = (ulong)assigned,
+            ids,
+            (ulong)assigned,
             canManage,
-            supplierRestricted = assignedToSupplier || r.IsBuiltIn && r.Name == "供应商人员",
-            r.CreatedAt
-        };
+            assignedToSupplier || r.IsBuiltIn && r.Name == "供应商人员",
+            r.CreatedAt);
     }
 }

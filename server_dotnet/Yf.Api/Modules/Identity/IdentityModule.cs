@@ -10,7 +10,8 @@ public static class IdentityModule
         .AddSingleton<LoginRateLimiter>()
         .AddSingleton<TokenService>()
         .AddSingleton<PermissionService>()
-        .AddSingleton<IdentityService>();
+        .AddSingleton<IdentityService>()
+        .AddHostedService<SessionCleanupService>();
 
     public static IEndpointRouteBuilder MapIdentityModule(this IEndpointRouteBuilder endpoints)
     {
@@ -20,7 +21,7 @@ public static class IdentityModule
             if (!OriginAllowed(ctx.Request.Headers.Origin.ToString(), options.WebBaseUrl)) throw ApiException.Forbidden();
             var result = await service.LoginAsync(request, ClientIp.Resolve(ctx, options), ct);
             SetRefreshCookie(ctx, result.Refresh, options);
-            return Results.Json(result.Response);
+            return result.Response;
         });
         auth.MapPost("/refresh", async (HttpContext ctx, IdentityService service, AppOptions options, CancellationToken ct) =>
         {
@@ -28,7 +29,7 @@ public static class IdentityModule
             if (!ctx.Request.Cookies.TryGetValue(RefreshCookie, out var raw)) throw ApiException.Unauthorized("缺少登录凭证");
             var result = await service.RefreshAsync(raw, ClientIp.Resolve(ctx, options), ct);
             SetRefreshCookie(ctx, result.Refresh, options);
-            return Results.Json(result.Response);
+            return result.Response;
         });
         auth.MapPost("/logout", async (HttpContext ctx, IdentityService service, AppOptions options, CancellationToken ct) =>
         {
@@ -36,16 +37,16 @@ public static class IdentityModule
             ctx.Request.Cookies.TryGetValue(RefreshCookie, out var refresh);
             await service.LogoutAsync(refresh, ctx.Request.Headers.Authorization.ToString(), ClientIp.Resolve(ctx, options), ct);
             ctx.Response.Cookies.Delete(RefreshCookie, new CookieOptions { HttpOnly = true, Path = "/api/v1/auth", Secure = options.CookieSecure, SameSite = SameSiteMode.Lax });
-            return Results.Json(new { });
+            return EmptyResponse.Instance;
         });
         auth.MapGet("/profile", async (HttpContext ctx, IdentityService service, CancellationToken ct) =>
-            Results.Json(await service.ProfileAsync(AccessService.GetCurrent(ctx), ct)));
+            await service.ProfileAsync(AccessService.GetCurrent(ctx), ct));
         auth.MapPut("/profile", async (UpdateProfileRequest request, HttpContext ctx, IdentityService service, CancellationToken ct) =>
-            Results.Json(await service.UpdateProfileAsync(AccessService.GetCurrent(ctx), request, ct)));
+            await service.UpdateProfileAsync(AccessService.GetCurrent(ctx), request, ct));
         auth.MapPut("/password", async (ChangePasswordRequest request, HttpContext ctx, IdentityService service, CancellationToken ct) =>
         {
             await service.ChangePasswordAsync(AccessService.GetCurrent(ctx), request, ct);
-            return Results.Json(new { });
+            return EmptyResponse.Instance;
         });
         return endpoints;
     }

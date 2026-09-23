@@ -111,6 +111,11 @@ foreach ($pair in @(@('YF_CONFIG_PATH',$ConfigPath),@('ASPNETCORE_ENVIRONMENT','
     $node = $webConfig.CreateElement('environmentVariable'); $node.SetAttribute('name',$pair[0]); $node.SetAttribute('value',$pair[1]); $environment.AppendChild($node) | Out-Null
 }
 $webConfig.Save($webConfigPath)
+# Realtime collaboration prefers WebSockets. Without the IIS WebSocket Protocol role service
+# (Windows Server feature Web-WebSockets) SignalR falls back to slower transports or polling.
+if (!(Get-WebGlobalModule -Name 'WebSocketModule' -ErrorAction SilentlyContinue)) {
+    Write-Warning 'IIS WebSocket Protocol is not installed (Install-WindowsFeature Web-WebSockets). Realtime updates will fall back to slower transports.'
+}
 New-WebAppPool -Name $AppPoolName | Out-Null
 Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name managedRuntimeVersion -Value ''
 Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.identityType -Value 'ApplicationPoolIdentity'

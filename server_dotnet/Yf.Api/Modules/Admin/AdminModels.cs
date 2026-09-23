@@ -76,3 +76,57 @@ internal static class AdminValidation
         return roleId ?? legacy?.SingleOrDefault() ?? (required ? throw Yf.Api.Infrastructure.ApiException.BadRequest("请选择角色") : 0UL);
     }
 }
+
+public sealed record DepartmentResponse(ulong Id, string Name, ulong? ParentId, string Kind, int SortNo, string Status);
+
+public sealed record DepartmentTreeNode(
+    ulong Id, string Name, ulong? ParentId, string Kind, int SortNo, string Status, IReadOnlyList<DepartmentTreeNode> Children);
+
+public sealed record PermissionResponse(
+    ulong Id, string Code, string Name, string Type, ulong? ParentId, int SortNo, bool Grantable, bool SupplierAssignable);
+
+public sealed record RoleResponse(
+    ulong Id,
+    string Name,
+    string? Description,
+    bool IsBuiltIn,
+    string Status,
+    IReadOnlyList<ulong> PermissionIds,
+    ulong AssignedUserCount,
+    bool CanManage,
+    bool SupplierRestricted,
+    DateTime CreatedAt);
+
+public sealed record RoleOption(ulong Id, string Name);
+
+public sealed record UserResponse(
+    ulong Id,
+    string EmployeeNo,
+    string RealName,
+    string Email,
+    string UserType,
+    ulong? SupplierId,
+    ulong? DepartmentId,
+    string? DepartmentName,
+    string Status,
+    bool MustChangePassword,
+    DateTime? LastLoginAt,
+    DateTime CreatedAt,
+    ulong? RoleId,
+    string? RoleName,
+    IReadOnlyList<ulong> RoleIds,
+    IReadOnlyList<string> RoleNames);
+
+public sealed record SupplierResponse(ulong Id, string Name, string? Remark, string Status, DateTime CreatedAt);
+
+public sealed record SupplierAccountResponse(
+    ulong Id,
+    string EmployeeNo,
+    string RealName,
+    string Email,
+    ulong? SupplierId,
+    string Status,
+    DateTime? LastLoginAt,
+    DateTime CreatedAt,
+    ulong? RoleId,
+    string? RoleName);

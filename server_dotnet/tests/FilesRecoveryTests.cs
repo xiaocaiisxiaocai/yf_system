@@ -122,8 +122,7 @@ public sealed class FilesRecoveryTests
         var calls = await Task.WhenAll(
             scope.Upload.InitAsync(scope.Context(), request, ct),
             scope.Upload.InitAsync(scope.Context(), request, ct));
-        var ids = calls.Select(result =>
-            JsonSerializer.SerializeToElement(result).GetProperty("sessionId").GetString()).ToArray();
+        var ids = calls.Select(result => result.SessionId).ToArray();
 
         Assert.NotNull(ids[0]);
         Assert.Equal(ids[0], ids[1]);

@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { ConfigProvider } from '@arco-design/web-react'
 import { IconClose } from '@arco-design/web-react/icon'
-import '@arco-design/web-react/dist/css/arco.css'
+import './styles/arco-components'
 import './index.css'
 import App from './App'
 

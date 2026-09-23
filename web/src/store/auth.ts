@@ -1,15 +1,9 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { UserBrief as ApiUserBrief } from '../api/generated/api-types'
 
-export interface UserBrief {
-  id: number
-  employeeNo: string
-  realName: string
-  email: string
-  userType: 'INTERNAL' | 'SUPPLIER'
-  supplierId?: number | null
-  isSystemAdmin?: boolean
-}
+// The signed-in user from the API, with userType narrowed to the two account kinds.
+export type UserBrief = Omit<ApiUserBrief, 'userType'> & { userType: 'INTERNAL' | 'SUPPLIER' }
 
 interface AuthState {
   /** 仅驻留内存，不落 localStorage（XSS 防线）；页面刷新后由 refresh cookie 静默换新 */

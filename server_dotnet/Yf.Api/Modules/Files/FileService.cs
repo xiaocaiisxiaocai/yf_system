@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using System.IO.Compression;
+using System.IO.Pipelines;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Identity;
@@ -20,7 +21,7 @@ public sealed class FileService(
     private const ulong BatchInputMaximumBytes = 256UL * 1024 * 1024;
     private const ulong BatchZipOverheadBytes = 2UL * 1024 * 1024;
 
-    public async Task<object> ListAsync(HttpContext context, ulong projectId, CancellationToken ct)
+    public async Task<PageResponse<FileListItem>> ListAsync(HttpContext context, ulong projectId, CancellationToken ct)
     {
         var actor = AccessService.GetCurrent(context);
         await using var conn = await db.OpenAsync(ct);
@@ -35,8 +36,8 @@ public sealed class FileService(
         if (!string.IsNullOrEmpty(direction)) query = query.Where(file => file.Direction == direction);
         if (!string.IsNullOrEmpty(keyword))
         {
-            var pattern = "%" + keyword + "%";
-            query = query.Where(file => EF.Functions.Like(file.OriginalName, pattern));
+            var pattern = QueryValues.ContainsPattern(keyword);
+            query = query.Where(file => EF.Functions.Like(file.OriginalName, pattern, QueryValues.LikeEscape));
         }
         var total = (ulong)await query.LongCountAsync(ct);
         var rows = await query.OrderByDescending(file => file.Id).Select(file => new FileListRow
@@ -48,14 +49,10 @@ public sealed class FileService(
             IsCopiedReference = ef.FileCopyRefs.Any(reference => reference.TargetFileId == file.Id),
         }).Page(offset, size).ToArrayAsync(ct);
         var canDelete = await ProjectAccessService.CanDeleteFilesAsync(conn, null, actor, project.Status, ct);
-        var list = rows.Select(row => new
-        {
-            id = row.Id, projectId = row.ProjectId, uploaderId = row.UploaderId, direction = row.Direction,
-            originalName = row.OriginalName, ext = row.Ext, sizeBytes = row.SizeBytes, mimeType = row.MimeType,
-            sha256 = row.Sha256, createdAt = row.CreatedAt, uploaderName = row.UploaderName,
-            isCopiedReference = row.IsCopiedReference, canDelete
-        });
-        return new { list, total, page, pageSize = size };
+        var list = rows.Select(row => new FileListItem(
+            row.Id, row.ProjectId, row.UploaderId, row.Direction, row.OriginalName, row.Ext, row.SizeBytes,
+            row.MimeType, row.Sha256, row.CreatedAt, row.UploaderName, row.IsCopiedReference, canDelete)).ToArray();
+        return new(list, total, page, size);
     }
 
     public async Task<IResult> StreamAsync(HttpContext context, ulong id, bool inline, CancellationToken ct)
@@ -100,7 +97,7 @@ public sealed class FileService(
         }
     }
 
-    public async Task<object> CreateMediaSessionAsync(HttpContext context, ulong id, CancellationToken ct)
+    public async Task<MediaSessionResponse> CreateMediaSessionAsync(HttpContext context, ulong id, CancellationToken ct)
     {
         var actor = AccessService.GetCurrent(context);
         var claims = context.Items.TryGetValue(typeof(AccessClaims), out var rawClaims) && rawClaims is AccessClaims accessClaims
@@ -123,7 +120,7 @@ public sealed class FileService(
                 Path = MediaPath(id),
                 MaxAge = TimeSpan.FromSeconds(MediaGrantService.LifetimeSeconds)
             });
-        return new { url = MediaPath(id), expiresInSeconds = MediaGrantService.LifetimeSeconds };
+        return new(MediaPath(id), MediaGrantService.LifetimeSeconds);
     }
 
     public async Task<IResult> StreamMediaAsync(HttpContext context, ulong id, CancellationToken ct)
@@ -222,59 +219,91 @@ public sealed class FileService(
         }
 
         var lease = limiter.Acquire(actor.Id, checked(inputBytes + BatchZipOverheadBytes));
-        var root = FileStorage.Root(options.StorageRoot);
-        var tempDirectory = FileStorage.EnsureLexicallyWithin(root, Path.Combine(root, "tmp"), false);
-        tempDirectory = FileStorage.CreateDirectoryWithin(root, tempDirectory, ct);
-        var zipName = $"yf_files_{Guid.NewGuid():D}.zip";
-        var zipPath = FileStorage.EnsureLexicallyWithin(root, Path.Combine(tempDirectory, zipName), false);
-        CleanupFileStream? responseStream = null;
         try
         {
-            await BuildArchiveAsync(zipPath, entries, ct);
-            responseStream = new CleanupFileStream(zipPath, lease);
-            lease = null;
-            context.Response.Headers.CacheControl = "private, no-store";
             await audit.WriteAsync(conn, null, actor.Id, "FILE_BATCH_DOWNLOAD", "file", null,
                 new { ids, inputBytes }, ClientIp.Resolve(context, options), ct);
-            return Results.File(responseStream, "application/zip", zipName, enableRangeProcessing: false);
         }
         catch
         {
-            responseStream?.Dispose();
-            TryDelete(zipPath);
+            lease.Dispose();
             throw;
         }
-        finally { lease?.Dispose(); }
+        context.Response.Headers.CacheControl = "private, no-store";
+        // Stream the archive as it is compressed instead of staging up to 256 MiB on disk first, so the
+        // download starts immediately. The limiter lease is held until the stream completes.
+        return new ZipStreamResult(entries, $"yf_files_{Guid.NewGuid():D}.zip", lease);
     }
 
-    private static async Task BuildArchiveAsync(string outputPath, IReadOnlyList<ArchiveSource> sources, CancellationToken ct)
+    /// <summary>
+    /// ZipArchive on .NET 8 writes synchronously, which Kestrel forbids on the response body. The archive
+    /// is written into a pipe on a worker thread while the request copies the pipe to the client
+    /// asynchronously; pipe back-pressure bounds memory use.
+    /// </summary>
+    internal sealed class ZipStreamResult(IReadOnlyList<ArchiveSource> sources, string fileName, IDisposable lease) : IResult
+    {
+        public async Task ExecuteAsync(HttpContext httpContext)
+        {
+            using var _ = lease;
+            var ct = httpContext.RequestAborted;
+            httpContext.Response.ContentType = "application/zip";
+            httpContext.Response.Headers.ContentDisposition =
+                new System.Net.Mime.ContentDisposition { FileName = fileName, DispositionType = "attachment" }.ToString();
+            var pipe = new Pipe(new PipeOptions(pauseWriterThreshold: 1024 * 1024, resumeWriterThreshold: 512 * 1024));
+            var producer = Task.Run(async () =>
+            {
+                try
+                {
+                    await using (var output = pipe.Writer.AsStream(leaveOpen: true))
+                        await WriteArchiveAsync(output, sources, ct);
+                    await pipe.Writer.CompleteAsync();
+                }
+                catch (Exception error)
+                {
+                    await pipe.Writer.CompleteAsync(error);
+                    throw;
+                }
+            }, CancellationToken.None);
+            try
+            {
+                await pipe.Reader.CopyToAsync(httpContext.Response.Body, ct);
+                await pipe.Reader.CompleteAsync();
+            }
+            catch (Exception error)
+            {
+                await pipe.Reader.CompleteAsync(error);
+                // Never let a truncated archive look like a finished download.
+                httpContext.Abort();
+                try { await producer; } catch { }
+                if (error is OperationCanceledException && ct.IsCancellationRequested) return;
+                throw;
+            }
+            await producer;
+        }
+    }
+
+    private static async Task WriteArchiveAsync(Stream output, IReadOnlyList<ArchiveSource> sources, CancellationToken ct)
     {
         var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         ulong copiedTotal = 0;
-        try
+        using var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true);
+        foreach (var source in sources)
         {
-            await using var output = new FileStream(outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-            using var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true);
-            foreach (var source in sources)
+            var entryName = UniqueEntryName(Path.GetFileName(source.OriginalName), usedNames);
+            var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
+            await using var entryStream = entry.Open();
+            await using var input = new FileStream(source.Path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            var buffer = new byte[64 * 1024];
+            int read;
+            while ((read = await input.ReadAsync(buffer, ct)) != 0)
             {
-                var entryName = UniqueEntryName(Path.GetFileName(source.OriginalName), usedNames);
-                var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
-                await using var entryStream = entry.Open();
-                await using var input = new FileStream(source.Path, FileMode.Open, FileAccess.Read, FileShare.Read,
-                    64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-                var buffer = new byte[64 * 1024];
-                int read;
-                while ((read = await input.ReadAsync(buffer, ct)) != 0)
-                {
-                    copiedTotal = checked(copiedTotal + (uint)read);
-                    if (copiedTotal > BatchInputMaximumBytes)
-                        throw ApiException.BadRequest($"批量下载文件总大小不能超过 {BatchInputMaximumBytes / 1024 / 1024} MiB");
-                    await entryStream.WriteAsync(buffer.AsMemory(0, read), ct);
-                }
+                copiedTotal = checked(copiedTotal + (uint)read);
+                if (copiedTotal > BatchInputMaximumBytes)
+                    throw new InvalidOperationException("Batch download input grew beyond its validated size.");
+                await entryStream.WriteAsync(buffer.AsMemory(0, read), ct);
             }
         }
-        catch { TryDelete(outputPath); throw; }
     }
 
     private static string UniqueEntryName(string original, HashSet<string> used)
@@ -355,7 +384,7 @@ public sealed class FileService(
         DeletedAt = file.DeletedAt, CreatedAt = file.CreatedAt,
     };
 
-    private sealed record ArchiveSource(string Path, string OriginalName);
+    internal sealed record ArchiveSource(string Path, string OriginalName);
 
     private sealed class FileListRow
     {
@@ -383,7 +412,6 @@ public sealed class FileService(
         public bool MustChangePassword { get; set; }
     }
 
-    private static void TryDelete(string path) { try { File.Delete(path); } catch { } }
 }
 
 public sealed class BatchDownloadLimiter
@@ -425,41 +453,6 @@ public sealed class BatchDownloadLimiter
         public void Dispose()
         {
             if (Interlocked.Exchange(ref disposed, 1) == 0) owner.Release(userId, bytes);
-        }
-    }
-}
-
-internal sealed class CleanupFileStream : FileStream
-{
-    private readonly string path;
-    private IDisposable? lease;
-
-    public CleanupFileStream(string path, IDisposable lease)
-        : base(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
-            FileOptions.Asynchronous | FileOptions.SequentialScan)
-    {
-        this.path = path;
-        this.lease = lease;
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        try { base.Dispose(disposing); }
-        finally
-        {
-            try { File.Delete(path); } catch { }
-            Interlocked.Exchange(ref lease, null)?.Dispose();
-        }
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        try { await base.DisposeAsync(); }
-        finally
-        {
-            try { File.Delete(path); } catch { }
-            Interlocked.Exchange(ref lease, null)?.Dispose();
-            GC.SuppressFinalize(this);
         }
     }
 }

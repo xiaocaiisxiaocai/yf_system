@@ -11,7 +11,7 @@ internal sealed class ProjectGroupService(
     AuditService audit,
     ProjectGroupStatusService groupStatus)
 {
-    internal async Task<object> ListAsync(
+    internal async Task<PageResponse<ProjectGroupResponse>> ListAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong page,
@@ -46,7 +46,7 @@ internal sealed class ProjectGroupService(
         return ProjectJson.Page(rows.Select(ProjectJson.ProjectGroup).ToArray(), total, actualPage, size);
     }
 
-    internal async Task<object> DetailAsync(
+    internal async Task<ProjectGroupDetailResponse> DetailAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong groupId,
@@ -61,14 +61,10 @@ internal sealed class ProjectGroupService(
             .OrderBy(project => project.Id).ToArrayAsync(ct);
         await LoadProjectExtrasAsync(db, projects, current.Id, ct);
         await tx.CommitAsync(ct);
-        return new
-        {
-            group = ProjectJson.ProjectGroup(group),
-            projects = projects.Select(ProjectJson.Project).ToArray(),
-        };
+        return new ProjectGroupDetailResponse(ProjectJson.ProjectGroup(group), projects.Select(ProjectJson.Project).ToArray());
     }
 
-    internal async Task<object> CreateAsync(
+    internal async Task<ProjectGroupResponse> CreateAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ProjectUpsertRequest request,
@@ -159,7 +155,7 @@ internal sealed class ProjectGroupService(
         return result;
     }
 
-    internal async Task<object> UpdateAsync(
+    internal async Task<ProjectGroupResponse> UpdateAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong groupId,
@@ -270,7 +266,7 @@ internal sealed class ProjectGroupService(
         return result;
     }
 
-    internal async Task<object> CreateSubprojectAsync(
+    internal async Task<ProjectResponse> CreateSubprojectAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong groupId,

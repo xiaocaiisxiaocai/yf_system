@@ -42,25 +42,33 @@ function loadMessagePanel(http, observedIds) {
     '../api/types': { fmtTime: String },
     './MessageImages': { MessageImageComposer: component('MessageImageComposer'), MessageImages: component('MessageImages'), pasteMessageImages() {} },
   }
-  const filename = path.resolve(__dirname, '../src/components/MessagePanel.tsx')
-  const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      jsx: ts.JsxEmit.ReactJSX,
-      target: ts.ScriptTarget.ES2022,
-      esModuleInterop: true,
-    },
-  }).outputText
-  const exports = {}
-  const context = {
-    exports,
-    module: { exports },
-    console,
-    AbortController,
-    IntersectionObserver: IntersectionObserverMock,
-    require: name => mocks[name] ?? require(name),
+  // Sibling TypeScript modules (for example ./MessageReceipts) are transpiled with the same mocks.
+  const load = filename => {
+    const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        jsx: ts.JsxEmit.ReactJSX,
+        target: ts.ScriptTarget.ES2022,
+        esModuleInterop: true,
+      },
+    }).outputText
+    const moduleExports = {}
+    vm.runInNewContext(source, {
+      exports: moduleExports,
+      module: { exports: moduleExports },
+      console,
+      AbortController,
+      IntersectionObserver: IntersectionObserverMock,
+      require: name => {
+        if (name in mocks) return mocks[name]
+        const local = name.startsWith('.')
+          && ['.tsx', '.ts'].map(ext => path.resolve(path.dirname(filename), name + ext)).find(fs.existsSync)
+        return local ? load(local) : require(name)
+      },
+    }, { filename })
+    return moduleExports
   }
-  vm.runInNewContext(source, context, { filename })
+  const exports = load(path.resolve(__dirname, '../src/components/MessagePanel.tsx'))
 
   const createNodeMock = element => element.type === 'div' ? {
     querySelectorAll: () => observedIds.current.map(id => ({

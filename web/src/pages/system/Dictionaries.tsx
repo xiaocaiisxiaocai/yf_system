@@ -4,6 +4,7 @@ import type { TableColumnProps } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import './Dictionaries.css'
+import type { ApiResponses } from '../../api/types'
 
 type DictionaryType = 'ROBOT_VENDOR' | 'ROBOT_MODEL' | 'PRIORITY'
 
@@ -89,8 +90,8 @@ export default function Dictionaries() {
         parentId: type === 'ROBOT_MODEL' ? values.parentId : null,
         sortNo: values.sortNo ?? 0, enabled: !!values.enabled,
       }
-      if (editing) await http.put(`/project-dictionaries/${editing.id}`, body)
-      else await http.post('/project-dictionaries', body)
+      if (editing) await http.put<ApiResponses['PUT /project-dictionaries/{id}']>(`/project-dictionaries/${editing.id}`, body)
+      else await http.post<ApiResponses['POST /project-dictionaries']>('/project-dictionaries', body)
       Message.success('字典已保存')
       setOpen(false)
       await load()
@@ -103,7 +104,7 @@ export default function Dictionaries() {
   }
   const remove = async (item: DictionaryItem) => {
     try {
-      await http.delete(`/project-dictionaries/${item.id}`)
+      await http.delete<ApiResponses['DELETE /project-dictionaries/{id}']>(`/project-dictionaries/${item.id}`)
       Message.success('字典已删除')
       await load()
     } catch {

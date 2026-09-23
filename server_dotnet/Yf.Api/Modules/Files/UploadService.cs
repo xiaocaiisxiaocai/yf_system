@@ -19,7 +19,7 @@ public sealed partial class UploadService(
     private const uint MinimumChunkSize = 256 * 1024;
     private const uint MaximumChunkSize = 64 * 1024 * 1024;
 
-    public async Task<object> InitAsync(HttpContext context, InitUploadRequest request, CancellationToken ct)
+    public async Task<UploadInitResponse> InitAsync(HttpContext context, InitUploadRequest request, CancellationToken ct)
     {
         var actor = AccessService.GetCurrent(context);
         await using var conn = await db.OpenAsync(ct);
@@ -123,11 +123,11 @@ public sealed partial class UploadService(
                 throw;
             }
             _ = extension;
-            return new { sessionId, chunkSize, totalChunks, uploadedChunks = Array.Empty<uint>() };
+            return new UploadInitResponse(sessionId, chunkSize, totalChunks, Array.Empty<uint>());
         }
     }
 
-    public async Task<object> GetAsync(HttpContext context, string sessionId, CancellationToken ct)
+    public async Task<UploadSessionResponse> GetAsync(HttpContext context, string sessionId, CancellationToken ct)
     {
         var actor = AccessService.GetCurrent(context);
         await using var conn = await db.OpenAsync(ct);
@@ -138,12 +138,8 @@ public sealed partial class UploadService(
         if (session.Status == "UPLOADING" && session.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
         var chunks = UploadedChunks(session, ct);
-        return new
-        {
-            sessionId = session.Id, status = session.Status, chunkSize = session.ChunkSize,
-            totalChunks = session.TotalChunks, uploadedChunks = chunks, fileName = session.FileName,
-            fileSize = session.FileSize, resultFileId = session.ResultFileId
-        };
+        return new UploadSessionResponse(session.Id, session.Status, session.ChunkSize, session.TotalChunks, chunks,
+            session.FileName, session.FileSize, session.ResultFileId);
     }
 
     public async Task PutChunkAsync(HttpContext context, string sessionId, int index, Stream body, CancellationToken ct)
@@ -245,200 +241,8 @@ public sealed partial class UploadService(
         await TryCleanupSessionArtifactsAsync(conn, sessionId, CancellationToken.None);
     }
 
-    public async Task<object> MergeAsync(HttpContext context, string sessionId, CancellationToken ct)
-    {
-        var actor = AccessService.GetCurrent(context);
-        await using var conn = await db.OpenAsync(ct);
-        var session = await LoadSessionAsync(conn, null, sessionId, false, ct);
-        if (session.UploaderId != actor.Id) throw ApiException.Forbidden();
-        await ProjectAccessService.RequireViewAsync(conn, null, actor, session.ProjectId, ct);
-        await AccessService.RequirePermissionAsync(conn, null, actor, "file:upload", ct);
-        if (session.Status == "COMPLETED") return await CompletedFileAsync(conn, session, actor.Id, ct);
-        if (session.Status is not ("UPLOADING" or "MERGING")) throw ApiException.Conflict("会话已失效");
-        if (session.Status == "UPLOADING" && session.IsExpired)
-            throw ApiException.Conflict("上传会话已过期，请重新发起");
-
-        await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(
-            conn, MergeLockName(conn, sessionId), 0, ct)
-            ?? throw ApiException.Conflict("正在合并中，请稍候");
-        session = await LoadSessionAsync(conn, null, sessionId, false, ct);
-        if (session.Status == "COMPLETED") return await CompletedFileAsync(conn, session, actor.Id, ct);
-        if (session.Status is not ("UPLOADING" or "MERGING")) throw ApiException.Conflict("会话已失效");
-        if (session.IsExpired)
-            throw ApiException.Conflict("上传会话已过期，请重新发起");
-        await ProjectAccessService.RequireFileUploadAsync(conn, null, actor, session.ProjectId, ct);
-        var uploaded = UploadedChunks(session, ct);
-        if ((uint)uploaded.Count != session.TotalChunks)
-            throw ApiException.BadRequest($"分片不完整：已传 {uploaded.Count}/{session.TotalChunks}");
-        FileStorage.EnsureFreeSpace(options.StorageRoot, session.FileSize);
-        session = await ClaimMergeAsync(conn, actor, session, ct);
-        var lease = session.UpdatedAt;
-        try
-        {
-            var result = await DoMergeAsync(conn, context, actor, session, ct);
-            await TryCleanupSessionArtifactsAsync(conn, session.Id, CancellationToken.None);
-            return result;
-        }
-        catch
-        {
-            await ResetMergeLeaseSafelyAsync(session.Id, lease, CancellationToken.None);
-            throw;
-        }
-    }
-
-    private async Task<object> DoMergeAsync(MySqlConnection conn, HttpContext context, CurrentUser actor,
-        UploadSessionRow session, CancellationToken ct)
-    {
-        var extension = ExtensionOf(session.FileName);
-        var storedName = $"{Guid.NewGuid():D}.{extension}";
-        await using var clockContext = EfDb.Use(conn);
-        var now = await DbNowAsync(clockContext, ct);
-        var root = FileStorage.Root(options.StorageRoot);
-        var finalPath = FileStorage.FinalPath(root, now, storedName);
-        var finalDirectory = Path.GetDirectoryName(finalPath) ?? throw new InvalidOperationException("存储目录无效");
-        FileStorage.CreateDirectoryWithin(root, finalDirectory, ct);
-        var mergeTemp = FileStorage.EnsureLexicallyWithin(root,
-            Path.Combine(FileStorage.SessionDirectory(root, session.Id), $"{storedName}.tmp"), false);
-        TryDeleteFile(mergeTemp);
-        var chunks = new List<string>(checked((int)session.TotalChunks));
-        for (uint index = 0; index < session.TotalChunks; index++)
-        {
-            chunks.Add(FileStorage.ResolveExistingFile(root,
-                FileStorage.ChunkPath(root, session.Id, index), ct));
-        }
-        (string Sha256, string Md5, ulong Bytes) hash;
-        try { hash = await FileStorage.HashAndCopyAsync(chunks, mergeTemp, session.FileSize, ct); }
-        catch { TryDeleteFile(mergeTemp); throw; }
-        if (hash.Bytes != session.FileSize)
-        {
-            TryDeleteFile(mergeTemp);
-            throw ApiException.BadRequest($"合并文件大小不符：期望 {session.FileSize}，实际 {hash.Bytes}");
-        }
-        if (!string.IsNullOrWhiteSpace(session.FileMd5)
-            && !hash.Md5.Equals(session.FileMd5.Trim(), StringComparison.OrdinalIgnoreCase))
-        {
-            TryDeleteFile(mergeTemp);
-            throw ApiException.BadRequest("文件 MD5 校验失败，请重新上传");
-        }
-        var relativePath = Path.GetRelativePath(root, finalPath).Replace(Path.DirectorySeparatorChar, '/');
-        var keepFinal = false;
-        try
-        {
-            await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-            var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-            var project = await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, session.ProjectId, ct);
-            var locked = await LoadSessionAsync(conn, tx, session.Id, true, ct);
-            if (locked.Status != "MERGING" || locked.UpdatedAt != session.UpdatedAt)
-                throw ApiException.Conflict("上传会话状态已变化，请重新查询");
-
-            // Final publication happens only after the database connection that owns
-            // the named lease has passed the persisted fencing check. A disconnected
-            // former owner therefore cannot publish after another worker takes over.
-            await WritePendingFinalMarkerAsync(root, session.Id, relativePath, ct);
-            File.Move(mergeTemp, finalPath, overwrite: false);
-            var direction = current.IsInternal ? "C2S" : "S2C";
-            await using var ef = EfDb.Use(conn, tx);
-            var file = new FileRecord
-            {
-                ProjectId = session.ProjectId,
-                UploaderId = current.Id,
-                Direction = direction,
-                OriginalName = session.FileName,
-                StoredName = storedName,
-                Ext = extension,
-                SizeBytes = session.FileSize,
-                MimeType = FileStorage.MimeType(session.FileName),
-                Sha256 = hash.Sha256,
-                StoragePath = relativePath,
-                Status = "AVAILABLE",
-                CreatedAt = now
-            };
-            ef.Files.Add(file);
-            await ef.SaveChangesAsync(ct);
-            var fileId = file.Id;
-            await EnqueueFileNoticeAsync(conn, tx, project.Id, fileId, session.FileName, current, ct);
-            await audit.WriteAsync(conn, tx, current.Id, "FILE_UPLOAD", "file", fileId,
-                new { name = session.FileName, size = session.FileSize, projectId = session.ProjectId },
-                ClientIp.Resolve(context, options), ct);
-            var completedAt = await DbNowAsync(ef, ct);
-            var completed = await ef.UploadSessions
-                .Where(item => item.Id == session.Id && item.Status == "MERGING")
-                .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Status, "COMPLETED")
-                    .SetProperty(item => item.ResultFileId, fileId)
-                    .SetProperty(item => item.UpdatedAt, completedAt), ct);
-            if (completed != 1) throw ApiException.Conflict("上传会话已被其他请求变更");
-            try { await tx.CommitAsync(ct); }
-            catch
-            {
-                using var reconcile = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-                var confirmed = await ConfirmCompletedFileSafelyAsync(session.Id, reconcile.Token);
-                if (confirmed is not null) { keepFinal = true; return FileJson(confirmed); }
-                keepFinal = true;
-                throw;
-            }
-            keepFinal = true;
-            return FileJson(await LoadFileAsync(conn, fileId, ct));
-        }
-        finally
-        {
-            TryDeleteFile(mergeTemp);
-            if (!keepFinal) TryDeleteFile(finalPath);
-        }
-    }
-
-    private async Task<UploadSessionRow> ClaimMergeAsync(
-        MySqlConnection conn, CurrentUser actor, UploadSessionRow session, CancellationToken ct)
-    {
-        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-        await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, session.ProjectId, ct);
-        var locked = await LoadSessionAsync(conn, tx, session.Id, true, ct);
-        if (locked.UploaderId != current.Id) throw ApiException.Forbidden();
-        if (locked.Status is not ("UPLOADING" or "MERGING"))
-            throw ApiException.Conflict("上传会话状态已变化，请重新查询");
-        if (locked.IsExpired)
-            throw ApiException.Conflict("上传会话已过期，请重新发起");
-        await using var ef = EfDb.Use(conn, tx);
-        var dbNow = await DbNowAsync(ef, ct);
-        var lease = locked.UpdatedAt >= dbNow ? locked.UpdatedAt.AddSeconds(1) : dbNow;
-        var mergeable = new[] { "UPLOADING", "MERGING" };
-        var changed = await ef.UploadSessions
-            .Where(item => item.Id == session.Id && Enumerable.Contains(mergeable, item.Status) && item.ExpiresAt > dbNow)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Status, "MERGING")
-                .SetProperty(item => item.UpdatedAt, lease), ct);
-        if (changed != 1) throw ApiException.Conflict("上传会话状态已变化，请重新查询");
-        await tx.CommitAsync(ct);
-        return await LoadSessionAsync(conn, null, session.Id, false, ct);
-    }
-
-    private async Task<UploadSessionRow> ResetOrphanedMergeAsync(MySqlConnection conn, CurrentUser actor,
-        UploadSessionRow session, CancellationToken ct)
-    {
-        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-        await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, session.ProjectId, ct);
-        var locked = await LoadSessionAsync(conn, tx, session.Id, true, ct);
-        if (locked.Status != "MERGING")
-            throw ApiException.Conflict("会话已变更，请重试");
-        if (locked.IsExpired)
-            throw ApiException.Conflict("上传会话已过期，请重新发起");
-        await using var ef = EfDb.Use(conn, tx);
-        var dbNow = await DbNowAsync(ef, ct);
-        var lease = locked.UpdatedAt >= dbNow ? locked.UpdatedAt.AddSeconds(1) : dbNow;
-        var changed = await ef.UploadSessions
-            .Where(item => item.Id == session.Id && item.Status == "MERGING" && item.ExpiresAt > dbNow)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Status, "UPLOADING")
-                .SetProperty(item => item.UpdatedAt, lease), ct);
-        if (changed != 1) throw ApiException.Conflict("会话已变更，请重试");
-        await tx.CommitAsync(ct);
-        return await LoadSessionAsync(conn, null, session.Id, false, ct);
-    }
-
-    private object InitResponse(UploadSessionRow session, bool resumed, CancellationToken ct) => new
-    {
-        sessionId = session.Id, chunkSize = session.ChunkSize, totalChunks = session.TotalChunks,
-        uploadedChunks = UploadedChunks(session, ct), resumed
-    };
+    private UploadInitResponse InitResponse(UploadSessionRow session, bool resumed, CancellationToken ct) =>
+        new(session.Id, session.ChunkSize, session.TotalChunks, UploadedChunks(session, ct), resumed);
 
     private List<uint> UploadedChunks(UploadSessionRow session, CancellationToken ct)
     {
@@ -475,13 +279,15 @@ public sealed partial class UploadService(
         var configured = await context.SystemConfigs.Where(config => config.CfgKey == "upload.allowed_exts")
             .Select(config => config.CfgValue).SingleOrDefaultAsync(ct);
         var allowed = (configured ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (extension.Length == 0) throw ApiException.BadRequest("文件缺少扩展名，无法识别文件类型");
         if (allowed.Length > 0 && !allowed.Contains(extension, StringComparer.Ordinal))
             throw ApiException.BadRequest($"不支持的文件类型 .{extension}");
         return extension;
     }
 
+    // A name without a dot has no extension; it must not be mistaken for one (a file named "pdf").
     internal static string ExtensionOf(string name) =>
-        name.Contains('.') ? name[(name.LastIndexOf('.') + 1)..].ToLowerInvariant() : name.ToLowerInvariant();
+        name.Contains('.') ? name[(name.LastIndexOf('.') + 1)..].ToLowerInvariant() : string.Empty;
 
     private static async Task<ulong> ConfigUInt64Async(MySqlConnection conn, string key, ulong fallback, CancellationToken ct)
     {
@@ -514,25 +320,6 @@ public sealed partial class UploadService(
         return ToRow(file);
     }
 
-    private async Task<object> CompletedFileAsync(MySqlConnection conn, UploadSessionRow session, ulong uploaderId, CancellationToken ct)
-    {
-        FileRow? file = null;
-        await using var context = EfDb.Use(conn);
-        if (session.ResultFileId is ulong resultId)
-        {
-            var byResult = await context.Files.SingleOrDefaultAsync(item => item.Id == resultId, ct);
-            if (byResult is not null) file = ToRow(byResult);
-        }
-        if (file is null)
-        {
-            var fallback = await context.Files.Where(item => item.ProjectId == session.ProjectId
-                    && item.OriginalName == session.FileName && item.UploaderId == uploaderId)
-                .OrderByDescending(item => item.Id).FirstOrDefaultAsync(ct);
-            if (fallback is not null) file = ToRow(fallback);
-        }
-        return file is null ? throw ApiException.Conflict("会话已完成") : FileJson(file);
-    }
-
     private async Task<bool?> SessionExistsSafelyAsync(string id, CancellationToken ct) =>
         await ProbeSessionExistenceAsync(async cancellationToken =>
         {
@@ -556,91 +343,6 @@ public sealed partial class UploadService(
             null => new(Acknowledge: false, DeleteDirectory: false)
         };
 
-    private async Task ResetMergeLeaseSafelyAsync(string id, DateTime lease, CancellationToken ct)
-    {
-        try
-        {
-            await using var conn = await db.OpenAsync(ct);
-            await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-            await using var context = EfDb.Use(conn, tx);
-            var dbNow = await DbNowAsync(context, ct);
-            await context.UploadSessions.Where(session => session.Id == id && session.Status == "MERGING" && session.UpdatedAt == lease)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(session => session.Status, "UPLOADING")
-                    .SetProperty(session => session.UpdatedAt, dbNow), ct);
-            await tx.CommitAsync(ct);
-        }
-        catch { }
-    }
-
-    private async Task<FileRow?> ConfirmCompletedFileSafelyAsync(string sessionId, CancellationToken ct)
-    {
-        try
-        {
-            await using var conn = await db.OpenAsync(ct);
-            await using var context = EfDb.Use(conn);
-            var file = await context.UploadSessions.Where(session => session.Id == sessionId && session.Status == "COMPLETED")
-                .Join(context.Files, session => session.ResultFileId, file => (ulong?)file.Id, (_, file) => file)
-                .SingleOrDefaultAsync(ct);
-            return file is null ? null : ToRow(file);
-        }
-        catch { return null; }
-    }
-
-    private async Task EnqueueFileNoticeAsync(MySqlConnection conn, MySqlTransaction tx, ulong projectId,
-        ulong fileId, string fileName, CurrentUser uploader, CancellationToken ct)
-    {
-        var policy = await EmailNotificationPolicy.LoadAsync(conn, tx, ct);
-        if (!policy.Allows("FILE_UPLOADED", null)) return;
-        await using var context = EfDb.Use(conn, tx);
-        var project = await context.Projects.SingleAsync(item => item.Id == projectId, ct);
-        var supplierActive = await context.Suppliers.AnyAsync(item => item.Id == project.SupplierId && item.Status == "ACTIVE", ct);
-        var recipientsQuery = context.Users.Where(user => user.Status == "ACTIVE" && user.Id != uploader.Id
-            && context.UserRoles.Where(userRole => userRole.UserId == user.Id)
-                .Join(context.Roles.Where(role => role.Status == "ACTIVE"), userRole => userRole.RoleId, role => role.Id, (userRole, _) => userRole)
-                .Join(context.RolePermissions, userRole => userRole.RoleId, rolePermission => rolePermission.RoleId, (_, rolePermission) => rolePermission)
-                .Join(context.Permissions.Where(permission => permission.Code == "project:list"),
-                    rolePermission => rolePermission.PermissionId, permission => permission.Id, (_, _) => true).Any());
-        recipientsQuery = uploader.UserType == "SUPPLIER"
-            ? recipientsQuery.Where(user => user.UserType == "INTERNAL" && user.Id == project.ResponsibleUserId)
-            : recipientsQuery.Where(user => user.UserType == "SUPPLIER" && user.SupplierId == project.SupplierId && supplierActive);
-        var recipients = await recipientsQuery.OrderBy(user => user.Id)
-            .Select(user => new NoticeRecipient
-            {
-                Id = user.Id, Email = user.Email, EmployeeNo = user.EmployeeNo, RealName = user.RealName, UserType = user.UserType
-            }).ToArrayAsync(ct);
-        var projectName = project.Name;
-        var subject = $"[协作平台] 项目「{projectName}」有新文件上传";
-        var targetUrl = $"{options.WebBaseUrl.TrimEnd('/')}/projects/{projectId}?tab=files&target={fileId}";
-        var body = $"项目：{projectName}\n文件：{fileName}\n上传人：工号 {uploader.EmployeeNo}\n\n请登录平台查看并下载：{targetUrl}\n\n（本邮件由系统自动发送，附件请登录平台获取）";
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var createdAt = await DbNowAsync(context, ct);
-        foreach (var recipient in recipients)
-        {
-            if (!policy.Allows("FILE_UPLOADED", recipient.UserType)) continue;
-            if (string.IsNullOrWhiteSpace(recipient.Email))
-            {
-                await audit.WriteAsync(conn, tx, null, "EMAIL_SKIPPED_MISSING_EMAIL", "user", recipient.Id,
-                    new { eventType = "FILE_UPLOADED", reason = "RECIPIENT_EMAIL_MISSING", employeeNo = recipient.EmployeeNo, realName = recipient.RealName },
-                    null, ct);
-                continue;
-            }
-            if (!seen.Add(recipient.Email)) continue;
-            context.EmailOutbox.Add(new EmailOutbox
-            {
-                EventType = "FILE_UPLOADED",
-                ProjectId = projectId,
-                RecipientUserId = recipient.Id,
-                RecipientEmail = recipient.Email,
-                Subject = subject,
-                Body = body,
-                Status = "PENDING",
-                RetryCount = 0,
-                CreatedAt = createdAt
-            });
-        }
-        await context.SaveChangesAsync(ct);
-    }
-
     private static async Task WriteUploadAbortAuditAsync(MySqlConnection conn, MySqlTransaction tx,
         CurrentUser actor, string sessionId, string ip, CancellationToken ct)
     {
@@ -659,193 +361,9 @@ public sealed partial class UploadService(
         await context.SaveChangesAsync(ct);
     }
 
-    private static async Task WriteExactAsync(Stream source, string destination, ulong expected, CancellationToken ct)
-    {
-        await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024,
-            FileOptions.Asynchronous | FileOptions.SequentialScan | FileOptions.WriteThrough);
-        var buffer = new byte[64 * 1024];
-        ulong total = 0;
-        int read;
-        while ((read = await source.ReadAsync(buffer, ct)) != 0)
-        {
-            total = checked(total + (uint)read);
-            if (total > expected) throw ApiException.BadRequest($"分片大小不符：期望 {expected}，实际超过上限");
-            await output.WriteAsync(buffer.AsMemory(0, read), ct);
-        }
-        if (total != expected) throw ApiException.BadRequest($"分片大小不符：期望 {expected}，实际 {total}");
-        await output.FlushAsync(ct);
-        output.Flush(flushToDisk: true);
-    }
-
-    internal static object FileJson(FileRow file) => new
-    {
-        id = file.Id, projectId = file.ProjectId, uploaderId = file.UploaderId, direction = file.Direction,
-        originalName = file.OriginalName, ext = file.Ext, sizeBytes = file.SizeBytes,
-        mimeType = file.MimeType, sha256 = file.Sha256, createdAt = file.CreatedAt
-    };
-
     internal const string PendingFinalMarkerPrefix = ".pending-final-";
     internal const string PendingFinalStagingPrefix = ".writing-pending-final-";
     internal const string InvalidPendingFinalMarkerPrefix = ".invalid-pending-final-";
-
-    internal static string MergeLockName(MySqlConnection conn, string sessionId) =>
-        MySqlNamedLock.Name("upload-merge", conn.Database, sessionId);
-
-    internal static async Task WritePendingFinalMarkerAsync(
-        string root, string sessionId, string relativePath, CancellationToken ct)
-    {
-        var directory = FileStorage.SessionDirectory(root, sessionId);
-        directory = FileStorage.CreateDirectoryWithin(root, directory, ct);
-        var markerId = Guid.NewGuid().ToString("D");
-        var marker = FileStorage.EnsureLexicallyWithin(root,
-            Path.Combine(directory, PendingFinalMarkerPrefix + markerId), false);
-        var staging = FileStorage.EnsureLexicallyWithin(root,
-            Path.Combine(directory, PendingFinalStagingPrefix + markerId), false);
-        var payload = Encoding.UTF8.GetBytes(relativePath);
-        try
-        {
-            await using (var output = new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-                             4096, FileOptions.Asynchronous | FileOptions.WriteThrough))
-            {
-                await output.WriteAsync(payload, ct);
-                await output.FlushAsync(ct);
-                output.Flush(flushToDisk: true);
-            }
-            File.Move(staging, marker, overwrite: false);
-        }
-        finally { TryDeleteFile(staging); }
-    }
-
-    internal static async Task CleanupPendingFinalsAsync(
-        MySqlConnection conn,
-        string configuredRoot,
-        string sessionId,
-        ILogger logger,
-        CancellationToken ct)
-    {
-        var root = FileStorage.Root(configuredRoot);
-        var directory = FileStorage.SessionDirectory(root, sessionId);
-        if (!Directory.Exists(directory)) return;
-        directory = FileStorage.ResolveExisting(root, directory, requireFile: false, ct);
-        foreach (var candidate in Directory.EnumerateFiles(
-                     directory, PendingFinalMarkerPrefix + "*", SearchOption.TopDirectoryOnly))
-        {
-            ct.ThrowIfCancellationRequested();
-            var marker = FileStorage.ResolveExistingFile(root, candidate, ct);
-            if (new FileInfo(marker).Length is <= 0 or > 2048)
-            {
-                QuarantinePendingFinalMarker(root, directory, marker, sessionId, logger, "标记长度无效");
-                continue;
-            }
-
-            string relativePath;
-            try
-            {
-                relativePath = await File.ReadAllTextAsync(marker, new UTF8Encoding(false, true), ct);
-            }
-            catch (DecoderFallbackException)
-            {
-                QuarantinePendingFinalMarker(root, directory, marker, sessionId, logger, "标记不是有效 UTF-8");
-                continue;
-            }
-
-            // Check the durable database reference before classifying legacy marker text. A committed
-            // file must always win, even if a historical marker does not match today's filename rules.
-            await using var context = EfDb.Use(conn);
-            var referenced = await context.Files.AnyAsync(file => file.StoragePath == relativePath, ct);
-            if (referenced)
-            {
-                File.Delete(marker);
-                continue;
-            }
-
-            if (!IsPendingFinalPath(relativePath))
-            {
-                // A truncated marker cannot prove which file was published. Keep every possible
-                // target untouched, move the marker out of the active pattern, and let the owned
-                // session directory cleanup remove the quarantined evidence.
-                QuarantinePendingFinalMarker(root, directory, marker, sessionId, logger, "标记路径格式无效");
-                continue;
-            }
-
-            string finalPath;
-            try { finalPath = FileStorage.ResolveForCleanup(root, relativePath, ct); }
-            catch (InvalidOperationException)
-            {
-                QuarantinePendingFinalMarker(root, directory, marker, sessionId, logger, "标记路径越出存储根目录");
-                continue;
-            }
-
-            if (Directory.Exists(finalPath))
-            {
-                QuarantinePendingFinalMarker(root, directory, marker, sessionId, logger, "标记目标不是文件");
-                continue;
-            }
-            if (File.Exists(finalPath))
-            {
-                finalPath = FileStorage.ResolveExistingFile(root, finalPath, ct);
-                File.Delete(finalPath);
-            }
-            File.Delete(marker);
-        }
-    }
-
-    private static bool IsPendingFinalPath(string relativePath)
-    {
-        if (string.IsNullOrWhiteSpace(relativePath)
-            || relativePath != relativePath.Trim()
-            || relativePath.Contains('\\')
-            || Path.IsPathFullyQualified(relativePath)) return false;
-        var parts = relativePath.Split('/');
-        if (parts.Length != 4 || parts[0] != "files"
-            || parts[1].Length != 4 || !parts[1].All(char.IsAsciiDigit)
-            || parts[2].Length != 2 || !int.TryParse(parts[2], out var month) || month is < 1 or > 12)
-            return false;
-        var extension = Path.GetExtension(parts[3]);
-        return extension.Length is >= 2 and <= 17
-               && extension.AsSpan(1).ToArray().All(char.IsAsciiLetterOrDigit)
-               && Guid.TryParseExact(Path.GetFileNameWithoutExtension(parts[3]), "D", out _);
-    }
-
-    private static void QuarantinePendingFinalMarker(
-        string root,
-        string directory,
-        string marker,
-        string sessionId,
-        ILogger logger,
-        string reason)
-    {
-        var quarantined = FileStorage.EnsureLexicallyWithin(root,
-            Path.Combine(directory, InvalidPendingFinalMarkerPrefix + Guid.NewGuid().ToString("D")), false);
-        try
-        {
-            File.Move(marker, quarantined, overwrite: false);
-            logger.LogWarning("已隔离无效待提交文件标记 {SessionId} {MarkerName}: {Reason}",
-                sessionId, Path.GetFileName(marker), reason);
-        }
-        catch (Exception error)
-        {
-            // Do not interpret or delete a target from invalid marker text. The caller can still
-            // safely delete the owned session directory, including the marker itself.
-            logger.LogWarning(error, "无法隔离无效待提交文件标记 {SessionId} {MarkerName}: {Reason}",
-                sessionId, Path.GetFileName(marker), reason);
-        }
-    }
-
-    private async Task TryCleanupSessionArtifactsAsync(
-        MySqlConnection conn, string sessionId, CancellationToken ct)
-    {
-        try
-        {
-            await CleanupPendingFinalsAsync(conn, options.StorageRoot, sessionId, logger, ct);
-            FileStorage.DeleteDirectoryTree(options.StorageRoot,
-                FileStorage.SessionDirectory(FileStorage.Root(options.StorageRoot), sessionId), ct);
-        }
-        catch
-        {
-            // The maintenance worker retries durable markers and session directories.
-        }
-    }
 
     internal static Task<DateTime> DbNowAsync(YfDbContext context, CancellationToken ct) =>
         context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
@@ -886,13 +404,6 @@ public sealed partial class UploadService(
         DeletedAt = file.DeletedAt,
         CreatedAt = file.CreatedAt
     };
-
-    private static void TryDeleteFile(string path) { try { File.Delete(path); } catch { } }
-    private static void TryDeleteDirectory(string root, string path, CancellationToken ct)
-    {
-        try { FileStorage.DeleteDirectoryTree(root, path, ct); }
-        catch { }
-    }
 
     private sealed class NoticeRecipient
     {

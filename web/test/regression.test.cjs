@@ -1145,6 +1145,12 @@ function loadTs(relativePath, mocks, globals = {}) {
       if (name.endsWith('/textRules')) return loadTs('src/utils/textRules.ts', {})
       if (name.endsWith('/listValues')) return loadTs('src/utils/listValues.ts', {})
       if (name === './auditLogDetails') return loadTs('src/pages/system/auditLogDetails.ts', {})
+      // Unmocked local TypeScript modules are transpiled with the same mocks, so splitting a component
+      // into sibling modules does not require every test to mock the new file.
+      if (typeof name === 'string' && name.startsWith('.')) {
+        const local = ['.tsx', '.ts'].map(ext => path.resolve(path.dirname(filename), name + ext)).find(fs.existsSync)
+        if (local) return loadTs(path.relative(path.resolve(__dirname, '..'), local), mocks, globals)
+      }
       return require(name)
     },
   }, { filename })
@@ -4152,6 +4158,13 @@ test('upload identity is based on bytes rather than filename and size', async ()
   assert.equal(await fileMd5(new Blob(['test'])), '098f6bcd4621d373cade4e832627b4f6')
   assert.notEqual(await fileMd5(a), await fileMd5(b))
   await assert.rejects(fileMd5(a, () => true), /取消/)
+})
+
+test('large-file hashing reports monotonic progress up to completion', async () => {
+  const { fileMd5 } = loadTs('src/api/file-hash.ts', {})
+  const progress = []
+  await fileMd5(new Blob([new Uint8Array(9 * 1024 * 1024)]), () => false, fraction => progress.push(fraction))
+  assert.deepEqual(progress.map(value => Math.round(value * 1000) / 1000), [0.444, 0.889, 1])
 })
 
 test('a failed upload aborts sibling chunks promptly and resumes the same session', async () => {

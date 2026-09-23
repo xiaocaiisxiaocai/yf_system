@@ -12,7 +12,8 @@
     "build:excel-preview": "node scripts/build-excel-preview.mjs",
     "predev": "npm run build:excel-preview && npm run build:pptx-preview",
     "prebuild": "npm run build:excel-preview && npm run build:pptx-preview",
-    "build:pptx-preview": "node scripts/build-pptx-preview.mjs"
+    "build:pptx-preview": "node scripts/build-pptx-preview.mjs",
+    "generate:api-types": "node scripts/generate-api-types.mjs"
   },
   "dependencies": {
     "@arco-design/web-react": "^2.66.16",

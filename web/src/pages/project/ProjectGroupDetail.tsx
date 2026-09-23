@@ -14,6 +14,7 @@ import {
 } from '../../api/types'
 import { textLengthRule } from '../../utils/textRules'
 import './ProjectDetail.css'
+import type { ApiResponses } from '../../api/types'
 
 interface ChildFormValues { name?: string; description?: string }
 
@@ -63,7 +64,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     if (!validId) return
     let active = true
     const controller = new AbortController()
-    http.get(`/project-groups/${groupId}`, { signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
+    http.get<ApiResponses['GET /project-groups/{id}']>(`/project-groups/${groupId}`, { signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
       .then((response) => { if (active) { setData(response.data as ProjectGroupDetailData); setLoadError(false) } })
       .catch((error: unknown) => {
         if (!active) return
@@ -96,9 +97,9 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       const values = await form.validate().catch(() => null) as ChildFormValues | null
       if (!values) return
       if (editing) {
-        await http.put(`/projects/${editing.id}`, values); Message.success('子项目已更新')
+        await http.put<ApiResponses['PUT /projects/{id}']>(`/projects/${editing.id}`, values); Message.success('子项目已更新')
       } else {
-        await http.post(`/project-groups/${groupId}/projects`, values); Message.success('子项目已创建并继承主项目资料')
+        await http.post<ApiResponses['POST /project-groups/{id}/projects']>(`/project-groups/${groupId}/projects`, values); Message.success('子项目已创建并继承主项目资料')
       }
       setChildModalOpen(false); load()
     } catch {
@@ -114,7 +115,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     try {
       const values = await copyForm.validate().catch(() => null) as ChildFormValues | null
       if (!values) return
-      const response = await http.post(`/projects/${copySource.id}/copy`, { name: values.name?.trim() })
+      const response = await http.post<ApiResponses['POST /projects/{id}/copy']>(`/projects/${copySource.id}/copy`, { name: values.name?.trim() })
       const result = response.data as ProjectCopyResult
       Message.success(`子项目已复制，包含 ${result.copy.fileCount} 个文件`)
       setCopySource(null); copyForm.resetFields(); load()
@@ -125,12 +126,12 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const changeStatus = async (project: ProjectSummary, next: string) => {
     if (statusInFlight.current.has(project.id)) return
     statusInFlight.current.add(project.id); setStatusUpdating(new Set(statusInFlight.current))
-    try { await http.put(`/projects/${project.id}/status`, { status: next }); Message.success('子项目状态已更新'); load() }
+    try { await http.put<ApiResponses['PUT /projects/{id}/status']>(`/projects/${project.id}/status`, { status: next }); Message.success('子项目状态已更新'); load() }
     catch { /* 请求错误由统一拦截器提示，解除当前行锁后可重试。 */ }
     finally { statusInFlight.current.delete(project.id); setStatusUpdating(new Set(statusInFlight.current)) }
   }
   const remove = async (project: ProjectSummary) => {
-    try { await http.delete(`/projects/${project.id}`); Message.success('子项目已删除'); load() }
+    try { await http.delete<ApiResponses['DELETE /projects/{id}']>(`/projects/${project.id}`); Message.success('子项目已删除'); load() }
     catch { /* 请求错误由统一拦截器提示。 */ }
   }
   const statusActions = (project: ProjectSummary) => {

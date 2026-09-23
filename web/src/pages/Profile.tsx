@@ -4,9 +4,10 @@ import { Button, Card, Form, Input, Message, Typography } from '@arco-design/web
 import { IconEmail, IconLock, IconSave } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import http, { withAuthLock } from '../api/client'
-import { useAuth } from '../store/auth'
+import { useAuth, type UserBrief } from '../store/auth'
 import { passwordRule } from '../utils/password'
 import PasswordInput from '../components/PasswordInput'
+import type { ApiResponses } from '../api/types'
 
 const { Text } = Typography
 
@@ -25,8 +26,8 @@ export default function Profile() {
     submitting.current = true
     setProfileLoading(true)
     try {
-      const response = await http.put('/auth/profile', { email: values.email })
-      setUser(response.data.user)
+      const response = await http.put<ApiResponses['PUT /auth/profile']>('/auth/profile', { email: values.email })
+      setUser(response.data.user as UserBrief)
       profileForm.setFieldsValue({ email: response.data.user.email })
       Message.success('个人资料已保存')
     } catch {
@@ -51,7 +52,7 @@ export default function Profile() {
     setPasswordLoading(true)
     try {
       await withAuthLock(async () => {
-        await http.put('/auth/password', {
+        await http.put<ApiResponses['PUT /auth/password']>('/auth/password', {
           oldPassword: values.oldPassword,
           newPassword: values.newPassword,
         })

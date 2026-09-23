@@ -20,6 +20,7 @@ import ProjectWorkflowPanel from '../../components/ProjectWorkflowPanel'
 import { useCollaboration } from '../../store/collaboration'
 import { isAxiosError } from 'axios'
 import './ProjectDetail.css'
+import type { ApiResponses } from '../../api/types'
 
 interface Summary {
   unreadMessages: number
@@ -68,7 +69,7 @@ function ProjectCopyRecord({
     // eslint-disable-next-line react/set-state-in-effect
     setLoading(true)
     setError(false)
-    http.get(`/project-copies/${item.copyId}/files`, {
+    http.get<ApiResponses['GET /project-copies/{copyId}/files']>(`/project-copies/${item.copyId}/files`, {
       params: { page, pageSize: 20 },
       signal: controller.signal,
       quietNetworkError: true,
@@ -200,7 +201,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const messagesTargetId = tab === 'messages' ? targetId : undefined
 
   const fetchProject = useCallback(async (signal?: AbortSignal) => {
-    const r = await http.get(`/projects/${pid}`, { signal })
+    const r = await http.get<ApiResponses['GET /projects/{id}']>(`/projects/${pid}`, { signal })
     return r.data as Project
   }, [pid])
 
@@ -220,7 +221,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
   }, [fetchProject, pid])
 
   const fetchSummary = useCallback(async () => {
-    const r = await http.get(`/projects/${pid}/summary`)
+    const r = await http.get<ApiResponses['GET /projects/{id}/summary']>(`/projects/${pid}/summary`)
     return r.data as Summary
   }, [pid])
 
@@ -286,7 +287,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
     if (!currentGroupId) return
     let active = true
     const controller = new AbortController()
-    http.get(`/project-groups/${currentGroupId}`, { signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
+    http.get<ApiResponses['GET /project-groups/{id}']>(`/project-groups/${currentGroupId}`, { signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
       .then((response) => {
         if (!active) return
         const data = response.data as { projects?: ProjectSummary[] }
@@ -318,7 +319,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
     // eslint-disable-next-line react/set-state-in-effect
     setHistoryLoading(true)
     setHistoryError(false)
-    http.get(`/projects/${pid}/copy-history`, {
+    http.get<ApiResponses['GET /projects/{id}/copy-history']>(`/projects/${pid}/copy-history`, {
       signal: controller.signal,
       quietNetworkError: true,
     } as QuietRequestConfig)

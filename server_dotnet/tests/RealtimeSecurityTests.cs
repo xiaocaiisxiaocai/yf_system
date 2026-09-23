@@ -94,6 +94,22 @@ public sealed class RealtimeSecurityTests
         Assert.Equal(ProjectRealtimeAuthorization.Deliver,
             await authorizer.AuthorizeProjectAsync(connection, 1001, ct));
 
+        // One batched call decides every session independently.
+        var batch = await authorizer.AuthorizeProjectAsync(
+        [
+            connection,
+            connection with { ConnectionId = "same-session-second-tab" },
+            connection with { ConnectionId = "unknown-session", SessionId = "missing-session" },
+            connection with { ConnectionId = "expired-access", SessionId = "expired-session",
+                AccessExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeSeconds() },
+        ], 1001, ct);
+        Assert.Equal(3, batch.Count);
+        Assert.Equal(ProjectRealtimeAuthorization.Deliver, batch[(101UL, "realtime-session")]);
+        Assert.Equal(ProjectRealtimeAuthorization.Disconnect, batch[(101UL, "missing-session")]);
+        Assert.Equal(ProjectRealtimeAuthorization.Disconnect, batch[(101UL, "expired-session")]);
+        Assert.Equal(ProjectRealtimeAuthorization.Skip,
+            await authorizer.AuthorizeProjectAsync(connection, 999999, ct));
+
         await database.SeedAsync("""
             UPDATE projects SET responsible_user_id=1 WHERE id=1001;
             """, ct);

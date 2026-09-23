@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { fmtTime } from '../../api/types'
 import PasswordInput from '../../components/PasswordInput'
+import type { ApiResponses } from '../../api/types'
 
 const MB = 1024 * 1024
 
@@ -205,9 +206,9 @@ export default function SysConfig() {
 
   const fetchSnapshot = useCallback(async () => {
     const [configsResponse, mailResponse, smtpResponse] = await Promise.all([
-      http.get('/admin/system/configs', { quietNetworkError: true } as QuietRequestConfig),
-      http.get('/admin/system/mail-status', { quietNetworkError: true } as QuietRequestConfig),
-      http.get('/admin/system/mail-settings', { quietNetworkError: true } as QuietRequestConfig),
+      http.get<ApiResponses['GET /admin/system/configs']>('/admin/system/configs', { quietNetworkError: true } as QuietRequestConfig),
+      http.get<ApiResponses['GET /admin/system/mail-status']>('/admin/system/mail-status', { quietNetworkError: true } as QuietRequestConfig),
+      http.get<ApiResponses['GET /admin/system/mail-settings']>('/admin/system/mail-settings', { quietNetworkError: true } as QuietRequestConfig),
     ])
     return {
       configs: (configsResponse.data as Cfg[]).filter((item) => item.key !== 'storage.warn_percent' && !NOTIFICATION_CONFIG_KEYS.has(item.key)),
@@ -276,7 +277,7 @@ export default function SysConfig() {
     smtpSaveInFlight.current = true
     setSmtpSaving(true)
     try {
-      const response = await http.put('/admin/system/mail-settings', {
+      const response = await http.put<ApiResponses['PUT /admin/system/mail-settings']>('/admin/system/mail-settings', {
         host: smtpDraft.host.trim(), port: smtpDraft.port, username: smtpDraft.username.trim(),
         from: smtpDraft.from.trim(), security: smtpDraft.security, password: smtpPassword || null,
       })
@@ -285,7 +286,7 @@ export default function SysConfig() {
       setSmtpDraft(saved)
       setSmtpPassword('')
       try {
-        setMail(normalizeMailStatus((await http.get('/admin/system/mail-status', { quietNetworkError: true } as QuietRequestConfig)).data))
+        setMail(normalizeMailStatus((await http.get<ApiResponses['GET /admin/system/mail-status']>('/admin/system/mail-status', { quietNetworkError: true } as QuietRequestConfig)).data))
         Message.success('邮箱设置已保存，无需重启')
       } catch {
         Message.warning('邮箱设置已保存，但邮件状态刷新失败，请稍后刷新页面')
@@ -310,10 +311,10 @@ export default function SysConfig() {
       { key: 'notify.event.project_withdrawn', value: String(notificationDraft.events.projectWithdrawn) },
     ]
     try {
-      await http.put('/admin/system/configs', { items })
+      await http.put<ApiResponses['PUT /admin/system/configs']>('/admin/system/configs', { items })
       setMail((current) => current ? { ...current, notificationsEnabled: notificationDraft.globalEnabled, notificationPolicy: notificationDraft } : current)
       try {
-        const refreshed = normalizeMailStatus((await http.get('/admin/system/mail-status', { quietNetworkError: true } as QuietRequestConfig)).data)
+        const refreshed = normalizeMailStatus((await http.get<ApiResponses['GET /admin/system/mail-status']>('/admin/system/mail-status', { quietNetworkError: true } as QuietRequestConfig)).data)
         setMail(refreshed)
         setNotificationDraft(refreshed.notificationPolicy)
         Message.success('邮件提醒设置已保存')
@@ -339,7 +340,7 @@ export default function SysConfig() {
     const savedValues = new Map(items.map((item) => [item.key, item.value]))
     setSaving(true)
     try {
-      await http.put('/admin/system/configs', { items })
+      await http.put<ApiResponses['PUT /admin/system/configs']>('/admin/system/configs', { items })
       setConfigs((current) => current.map((config) => (
         savedValues.has(config.key) ? { ...config, value: savedValues.get(config.key)! } : config
       )))

@@ -377,7 +377,16 @@ async function assertInsideViewport(locator, page, label) {
       const previousExpected = page.expectedServerErrors;
       page.expectedServerErrors = new Set(previousExpected || []);
       let failedChunkPath;
+      let failedAttempts = 0;
+      // Transient chunk failures are retried (3 attempts in total); fail every attempt so the
+      // upload is reported interrupted and the manual resume path is exercised.
       const failFirstChunk = async route => {
+        // Pin the failure to one chunk: sibling chunks upload concurrently and must succeed.
+        if (failedAttempts >= 3 || (failedChunkPath && pathOf(route.request()) !== failedChunkPath)) {
+          await route.continue();
+          return;
+        }
+        failedAttempts++;
         failedChunkPath = pathOf(route.request());
         page.expectedServerErrors.add(failedChunkPath);
         await route.fulfill({
@@ -386,7 +395,7 @@ async function assertInsideViewport(locator, page, label) {
           body: JSON.stringify({ code: 50301, message: '验收模拟分片上传失败' }),
         });
       };
-      await page.route('**/api/v1/uploads/*/chunks/*', failFirstChunk, { times: 1 });
+      await page.route('**/api/v1/uploads/*/chunks/*', failFirstChunk);
       try {
         const dialog = await openUpload();
         await dialog.getByLabel('选择上传文件').setInputFiles({
@@ -401,6 +410,7 @@ async function assertInsideViewport(locator, page, label) {
         await page.getByText(/上传中断，可点击重新上传从断点续传/).waitFor();
         await page.getByText('验收模拟分片上传失败', { exact: true }).waitFor();
         assert(failedChunkPath?.startsWith(apiPath(`/uploads/${firstInit.sessionId}/chunks/`)));
+        assert.equal(failedAttempts, 3, 'a 503 chunk is retried automatically before the upload is interrupted');
 
         const secondInitReady = page.waitForResponse(response =>
           pathOf(response) === '/api/v1/uploads/init'

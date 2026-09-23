@@ -10,6 +10,7 @@ import PasswordInput from '../../components/PasswordInput'
 import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
 import { passwordRule } from '../../utils/password'
+import type { ApiResponses } from '../../api/types'
 
 interface Supplier {
   id: number
@@ -67,7 +68,7 @@ export default function SupplierList() {
   }, [accTarget])
 
   const fetchSuppliers = useCallback(async () => {
-    const r = await http.get('/admin/suppliers', { params: { page, pageSize, keyword: keyword || undefined, status } })
+    const r = await http.get<ApiResponses['GET /admin/suppliers']>('/admin/suppliers', { params: { page, pageSize, keyword: keyword || undefined, status } })
     return r.data as PageResp<Supplier>
   }, [page, pageSize, keyword, status])
 
@@ -107,10 +108,10 @@ export default function SupplierList() {
       if (!v) return
       setSaving(true)
       if (editing) {
-        await http.put(`/admin/suppliers/${editing.id}`, v)
+        await http.put<ApiResponses['PUT /admin/suppliers/{id}']>(`/admin/suppliers/${editing.id}`, v)
         Message.success('供应商已更新')
       } else {
-        await http.post('/admin/suppliers', v)
+        await http.post<ApiResponses['POST /admin/suppliers']>('/admin/suppliers', v)
         Message.success('供应商已创建')
       }
       setEditOpen(false)
@@ -127,7 +128,7 @@ export default function SupplierList() {
     togglingSupplierIdsRef.current = activeIds
     setTogglingSupplierIds(activeIds)
     try {
-      await http.put(`/admin/suppliers/${s.id}/status`, { status: s.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
+      await http.put<ApiResponses['PUT /admin/suppliers/{id}/status']>(`/admin/suppliers/${s.id}/status`, { status: s.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
       Message.success(s.status === 'ACTIVE' ? '已禁用（其账号将全部无法登录）' : '已启用')
       load()
     } finally {
@@ -139,7 +140,7 @@ export default function SupplierList() {
   }
 
   const remove = async (s: Supplier) => {
-    await http.delete(`/admin/suppliers/${s.id}`)
+    await http.delete<ApiResponses['DELETE /admin/suppliers/{id}']>(`/admin/suppliers/${s.id}`)
     Message.success('供应商已删除')
     if (accTarget?.id === s.id) setAccTarget(null)
     load()
@@ -333,7 +334,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
 
   const fetchAccounts = useCallback(async () => {
     if (!supplier) return
-    const r = await http.get(`/admin/suppliers/${supplier.id}/accounts`, { quietNetworkError: true } as QuietRequestConfig)
+    const r = await http.get<ApiResponses['GET /admin/suppliers/{id}/accounts']>(`/admin/suppliers/${supplier.id}/accounts`, { quietNetworkError: true } as QuietRequestConfig)
     return { supplierId: supplier.id, list: r.data as Account[] }
   }, [supplier])
 
@@ -377,7 +378,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
     setRoleOptionsLoading(true)
     setRoleOptionsError(false)
     try {
-      const response = await http.get('/admin/supplier-role-options', { quietNetworkError: true } as QuietRequestConfig)
+      const response = await http.get<ApiResponses['GET /admin/supplier-role-options']>('/admin/supplier-role-options', { quietNetworkError: true } as QuietRequestConfig)
       if (!Array.isArray(response.data)) throw new Error('Invalid supplier role options response')
       if (roleOptionsRequestId.current === requestId) setRoleOptions(response.data as RoleOption[])
     } catch {
@@ -402,10 +403,10 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
       if (!v) return
       setSaving(true)
       if (editing) {
-        await http.put(`/admin/supplier-accounts/${editing.id}`, v)
+        await http.put<ApiResponses['PUT /admin/supplier-accounts/{id}']>(`/admin/supplier-accounts/${editing.id}`, v)
         Message.success('账号已更新')
       } else {
-        await http.post(`/admin/suppliers/${supplier!.id}/accounts`, v)
+        await http.post<ApiResponses['POST /admin/suppliers/{id}/accounts']>(`/admin/suppliers/${supplier!.id}/accounts`, v)
         Message.success('账号已创建（首次登录需改密）')
       }
       setEditOpen(false)
@@ -422,7 +423,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
     togglingAccountIdsRef.current = activeIds
     setTogglingAccountIds(activeIds)
     try {
-      await http.put(`/admin/supplier-accounts/${a.id}/status`, { status: a.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
+      await http.put<ApiResponses['PUT /admin/supplier-accounts/{id}/status']>(`/admin/supplier-accounts/${a.id}/status`, { status: a.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
       load()
     } catch {
       // 请求层已展示错误；保留当前账号快照并恢复按钮供用户重试。
@@ -435,7 +436,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
   }
 
   const removeAccount = async (a: Account) => {
-    await http.delete(`/admin/supplier-accounts/${a.id}`)
+    await http.delete<ApiResponses['DELETE /admin/supplier-accounts/{id}']>(`/admin/supplier-accounts/${a.id}`)
     Message.success('账号已删除')
     load()
   }
@@ -447,7 +448,7 @@ function AccountsDrawer({ supplier, onClose }: { supplier: Supplier | null; onCl
       const v = await pwdForm.validate().catch(() => null)
       if (!v) return
       setResettingPassword(true)
-      await http.put(`/admin/supplier-accounts/${resetTarget!.id}/password`, { newPassword: v.newPassword })
+      await http.put<ApiResponses['PUT /admin/supplier-accounts/{id}/password']>(`/admin/supplier-accounts/${resetTarget!.id}/password`, { newPassword: v.newPassword })
       Message.success('密码已重置，下次登录需修改')
       setResetTarget(null)
       pwdForm.resetFields()

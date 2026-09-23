@@ -207,6 +207,19 @@ test('category selection filters actions and clears an incompatible action', () 
   assert.equal(details.actionForCategory(undefined, 'LOGIN'), 'LOGIN')
 })
 
+test('frontend action categories match the backend category filter', () => {
+  const backend = fs.readFileSync(path.resolve(__dirname, '../../server_dotnet/Yf.Api/Modules/System/SystemModule.cs'), 'utf8')
+  const backendCategory = new Map()
+  for (const [, category, actions] of backend.matchAll(/\["([A-Z]+)"\] = "([A-Z_ ]+)"\.Split/g)) {
+    for (const code of actions.split(' ')) backendCategory.set(code, category)
+  }
+  assert.ok(backendCategory.size > 0, 'backend categories must be parseable')
+  const frontendCategory = new Map(Object.entries(details.ACTIONS).map(([code, meta]) => [code, meta.categoryCode]))
+  for (const code of new Set([...backendCategory.keys(), ...frontendCategory.keys()])) {
+    assert.equal(frontendCategory.get(code), backendCategory.get(code), code)
+  }
+})
+
 test('raw detail copy hides nested secrets and reports writer failures', async () => {
   const detail = {
     auditContext: { requestId: 'req-visible' },
@@ -243,4 +256,11 @@ test('new no-op logs are not described as incomplete history and summaries hide 
   const smtp = { ...baseRow, action: 'CONFIG_UPDATE', detail: { changes: [], passwordChanged: true } }
   assert.match(details.detailSummary(smtp), /已更新邮箱密码/)
   assert.match(details.detailNotes(smtp)[0].value, /不记录密码/)
+})
+
+test('automatic retention records summarize how many expired logs were removed', () => {
+  const row = { ...baseRow, action: 'AUDIT_LOG_RETENTION', targetType: 'audit_log', targetId: null,
+    detail: { deleted: 1250, retentionDays: 30, cutoff: '2026-08-23T00:00:00Z' } }
+  assert.equal(details.ACTIONS.AUDIT_LOG_RETENTION.categoryCode, 'SYSTEM')
+  assert.equal(details.detailSummary(row), '已自动清理 1250 条超过 30 天的操作日志')
 })

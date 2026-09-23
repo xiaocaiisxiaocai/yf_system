@@ -12,7 +12,7 @@ internal sealed class CollaborationService
     private static readonly string[] MeaningfulProjectActions =
         ["START", "RESTART", "SUBMIT", "CONFIRM", "REJECT", "WITHDRAW", "TERMINATE"];
 
-    internal async Task<object> SummaryAsync(
+    internal async Task<CollaborationSummaryResponse> SummaryAsync(
         MySqlConnection conn,
         CurrentUser actor,
         CancellationToken ct)
@@ -51,15 +51,10 @@ internal sealed class CollaborationService
                 OR (NOT {current.IsInternal} AND p.supplier_id={supplierId}))
             """).SingleAsync(ct);
         await tx.CommitAsync(ct);
-        return new
-        {
-            unreadCount = row.UnreadCount,
-            latestId = row.LatestId,
-            revision = Revision(current.Id, row),
-        };
+        return new CollaborationSummaryResponse(row.UnreadCount, row.LatestId, Revision(current.Id, row));
     }
 
-    internal async Task<object> NotificationsAsync(
+    internal async Task<CollaborationNotificationPage> NotificationsAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong page,
@@ -106,32 +101,28 @@ internal sealed class CollaborationService
             .ThenByDescending(row => row.Activity.Id)
             .Page((actualPage - 1) * size, size)
             .ToArrayAsync(ct);
-        var list = rows.Select(row => new
-        {
-            id = row.Activity.Id,
-            type = row.Activity.ActivityType,
-            action = row.Activity.Action,
-            projectId = row.Activity.ProjectId,
-            projectName = row.ProjectName,
-            projectGroupName = row.ProjectGroupName,
-            actorName = row.Activity.ActorName,
-            title = row.Activity.Title,
-            summary = row.Activity.ActivityType == "MESSAGE" && !row.MessageAvailable
-                ? null
-                : row.Activity.Summary,
-            occurredAt = ProjectJson.Utc(row.Activity.OccurredAt),
-            targetId = row.Activity.TargetId,
-            targetAvailable = row.Activity.ActivityType switch
+        var list = rows.Select(row => new CollaborationNotification(
+            row.Activity.Id,
+            row.Activity.ActivityType,
+            row.Activity.Action,
+            row.Activity.ProjectId,
+            row.ProjectName,
+            row.ProjectGroupName,
+            row.Activity.ActorName,
+            row.Activity.Title,
+            row.Activity.ActivityType == "MESSAGE" && !row.MessageAvailable ? null : row.Activity.Summary,
+            ProjectJson.Utc(row.Activity.OccurredAt),
+            row.Activity.TargetId,
+            row.Activity.ActivityType switch
             {
                 "PROJECT" => row.Activity.TargetId == row.Activity.ProjectId,
                 "FILE" => row.FileAvailable,
                 "MESSAGE" => row.MessageAvailable,
                 _ => false,
             },
-            read = row.IsRead,
-        }).ToArray();
+            row.IsRead)).ToArray();
         await tx.CommitAsync(ct);
-        return new { list, total, page = actualPage, pageSize = size, unreadCount };
+        return new CollaborationNotificationPage(list, total, actualPage, size, unreadCount);
     }
 
     internal async Task MarkReadAsync(

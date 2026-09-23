@@ -31,7 +31,7 @@
 | 用户、供应商账号 | 无业务历史或引用；有关联记录时使用禁用，保留创建人、确认人和已读凭证 |
 | 供应商 | 无项目且无账号；不级联删除账号 |
 | 组织、角色 | 有下级组织或绑定用户时拒绝删除；内置角色可分配权限、禁用或删除，名称保持固定 |
-| 操作日志 | 清理与 `AUDIT_LOG_DELETE` 留痕同事务，记录实际删除 ID 和数量；清理记录本身不可删除 |
+| 操作日志 | 手动清理与 `AUDIT_LOG_DELETE` 留痕同事务，记录实际删除 ID 和数量；清理记录本身不可手动删除。后台每小时自动删除超过 `App:AuditRetentionDays`（默认 30 天）的日志（含清理记录），并写入一条 `AUDIT_LOG_RETENTION` 汇总；项目动态另存于 `project_activities`，不受影响 |
 
 系统管理员角色绑定启用用户时必须保留用户管理和角色管理入口，避免管理员在权限分配时锁死系统；角色禁用和删除仍受绑定用户校验约束。删除相关的越权与保留规则回归包含在 `python scripts/test-isolated.py` 完整套件内，脚本只允许本机 MySQL，创建并清理临时测试库，不使用业务库运行删除测试。
 
@@ -253,12 +253,12 @@ Restore 的新数据库名必须不同于当前数据库，执行前由 DBA 确�
 | 组件 | 版本 | 仓库/官方来源 | 用途 |
 |---|---|---|---|
 | ASP.NET Core | .NET 8 | https://github.com/dotnet/aspnetcore | HTTP、路由、IIS、静态文件 |
-| Microsoft.EntityFrameworkCore | 9.0.0 | https://github.com/dotnet/efcore | Code-First 模型、查询、写入和迁移 |
+| Microsoft.EntityFrameworkCore | 9.0.20 | https://github.com/dotnet/efcore | Code-First 模型、查询、写入和迁移 |
 | Pomelo.EntityFrameworkCore.MySql | 9.0.0 | https://github.com/PomeloFoundation/Pomelo.EntityFrameworkCore.MySql | MySQL EF Core provider |
 | MySqlConnector | 2.6.2 | https://github.com/mysql-net/MySqlConnector | MySQL 异步驱动 |
 | Konscious Argon2 | 1.3.1 | https://github.com/kmaragon/Konscious.Security.Cryptography | 兼容已有 Argon2 密码 |
-| IdentityModel JWT | 8.22.0 | https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet | JWT 签发校验 |
-| MailKit | 4.17.0 | https://github.com/jstedfast/MailKit | TLS SMTP |
+| IdentityModel JWT | 8.23.0 | https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet | JWT 签发校验 |
+| MailKit | 4.18.0 | https://github.com/jstedfast/MailKit | TLS SMTP |
 | xUnit v3 | 4.0.0 | https://github.com/xunit/xunit | 自动化测试 |
 
 测试项目仍保留 Dapper 2.1.79 仅用于少量独立测试夹具和数据库断言，生产 `Yf.Api` 不引用 Dapper。

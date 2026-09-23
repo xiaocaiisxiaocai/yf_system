@@ -10,7 +10,8 @@ namespace Yf.Api.Modules.SystemManagement;
 public static class SystemModule
 {
     public static IServiceCollection AddSystemModule(this IServiceCollection services)
-        => services.AddSingleton<SystemService>().AddSingleton<SmtpSettingsService>().AddSingleton<MailService>().AddHostedService<MailWorker>();
+        => services.AddSingleton<SystemService>().AddSingleton<SmtpSettingsService>().AddSingleton<MailService>().AddHostedService<MailWorker>()
+            .AddHostedService<AuditRetentionService>();
 
     public static IEndpointRouteBuilder MapSystemModule(this IEndpointRouteBuilder endpoints)
     {
@@ -25,7 +26,7 @@ public static class SystemModule
         });
         config.MapGet("/configs", (SystemService service, CancellationToken ct) => service.ListConfigsAsync(ct));
         config.MapPut("/configs", async (ConfigBatch body, HttpContext ctx, SystemService service, CancellationToken ct) =>
-        { await service.UpdateConfigsAsync(body, AccessService.GetCurrent(ctx), ct); return Results.Json(new { }); });
+        { await service.UpdateConfigsAsync(body, AccessService.GetCurrent(ctx), ct); return EmptyResponse.Instance; });
         config.MapGet("/mail-status", (MailService service, CancellationToken ct) => service.StatusAsync(ct));
         config.MapGet("/mail-settings", (SmtpSettingsService service, CancellationToken ct) => service.GetAsync(ct));
         config.MapPut("/mail-settings", (SmtpSettingsUpdate body, HttpContext ctx, SmtpSettingsService service, CancellationToken ct) =>
@@ -52,16 +53,15 @@ public sealed record IdList(ulong[] Ids);
 
 public sealed class SystemService(AppDb db, AuditService audit)
 {
-    public async Task<object> ListConfigsAsync(CancellationToken ct)
+    public async Task<SystemConfigResponse[]> ListConfigsAsync(CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
         await using var context = EfDb.Use(conn);
         var hidden = new[] { "security.management_lock", "mail.smtp", "storage.warn_percent" };
         return await context.SystemConfigs.Where(config => !Enumerable.Contains(hidden, config.CfgKey))
-            .OrderBy(config => config.CfgKey).Select(config => new
-            {
-                key = config.CfgKey, value = config.CfgValue, config.Description, updatedAt = config.UpdatedAt,
-            }).ToArrayAsync(ct);
+            .OrderBy(config => config.CfgKey)
+            .Select(config => new SystemConfigResponse(config.CfgKey, config.CfgValue, config.Description, config.UpdatedAt))
+            .ToArrayAsync(ct);
     }
 
     public static string? NormalizeConfig(string key, string? input)
@@ -137,7 +137,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
         await tx.CommitAsync(ct);
     }
 
-    public async Task<object> ListLogsAsync(HttpRequest request, CancellationToken ct)
+    public async Task<PageResponse<AuditLogResponse>> ListLogsAsync(HttpRequest request, CancellationToken ct)
     {
         var (page, size, offset) = QueryValues.Page(request);
         var category = request.Query["category"].ToString().Trim();
@@ -156,20 +156,20 @@ public sealed class SystemService(AppDb db, AuditService audit)
         var keyword = request.Query["keyword"].ToString().Trim();
         if (keyword.Length > 0)
         {
-            var pattern = "%" + keyword + "%";
+            var pattern = QueryValues.ContainsPattern(keyword);
             query = query.Where(log =>
-                log.EmployeeNo != null && EF.Functions.Like(log.EmployeeNo, pattern)
-                || EF.Functions.Like(log.Action, pattern)
-                || log.TargetType != null && EF.Functions.Like(log.TargetType, pattern)
-                || log.TargetId != null && EF.Functions.Like(log.TargetId, pattern)
-                || log.Detail != null && EF.Functions.Like(EF.Functions.JsonUnquote(log.Detail), pattern)
-                || context.Users.Any(user => user.Id == log.UserId && EF.Functions.Like(user.RealName, pattern)));
+                log.EmployeeNo != null && EF.Functions.Like(log.EmployeeNo, pattern, QueryValues.LikeEscape)
+                || EF.Functions.Like(log.Action, pattern, QueryValues.LikeEscape)
+                || log.TargetType != null && EF.Functions.Like(log.TargetType, pattern, QueryValues.LikeEscape)
+                || log.TargetId != null && EF.Functions.Like(log.TargetId, pattern, QueryValues.LikeEscape)
+                || log.Detail != null && EF.Functions.Like(EF.Functions.JsonUnquote(log.Detail), pattern, QueryValues.LikeEscape)
+                || context.Users.Any(user => user.Id == log.UserId && EF.Functions.Like(user.RealName, pattern, QueryValues.LikeEscape)));
         }
         var employeeNo = request.Query["employeeNo"].ToString().Trim();
         if (employeeNo.Length > 0)
         {
-            var pattern = "%" + employeeNo + "%";
-            query = query.Where(log => log.EmployeeNo != null && EF.Functions.Like(log.EmployeeNo, pattern));
+            var pattern = QueryValues.ContainsPattern(employeeNo);
+            query = query.Where(log => log.EmployeeNo != null && EF.Functions.Like(log.EmployeeNo, pattern, QueryValues.LikeEscape));
         }
         foreach (var name in new[] { "start", "end" })
             if (!string.IsNullOrWhiteSpace(request.Query[name]))
@@ -191,7 +191,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
             Action = log.Action, TargetType = log.TargetType, TargetId = log.TargetId, Detail = log.Detail,
             Ip = log.Ip, CreatedAt = log.CreatedAt,
         }).Page(offset, size).ToArrayAsync(ct);
-        return new { list = rows.Select(x => x.ToResponse()), total, page, pageSize = size };
+        return new(rows.Select(x => x.ToResponse()).ToArray(), total, page, size);
     }
 
     private static string ConfigLabel(string key) => key switch
@@ -211,7 +211,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
         _ => key,
     };
 
-    public async Task<object> DeleteLogsAsync(ulong[] ids, CurrentUser actor, CancellationToken ct)
+    public async Task<AuditLogDeleteResponse> DeleteLogsAsync(ulong[] ids, CurrentUser actor, CancellationToken ct)
     {
         if (ids is null || ids.Length is < 1 or > 500) throw ApiException.BadRequest("每次可删除 1–500 条日志");
         await using var conn = await db.OpenAsync(ct);
@@ -235,18 +235,18 @@ public sealed class SystemService(AppDb db, AuditService audit)
         var deleted = actualIds.Length == 0 ? 0 : await context.AuditLogs.Where(log => Enumerable.Contains(actualIds, log.Id)).ExecuteDeleteAsync(ct);
         if (deleted > 0) await audit.WriteAsync(conn, tx, actor.Id, "AUDIT_LOG_DELETE", "audit_log", null, new { ids = actualIds, deleted }, null, ct);
         await tx.CommitAsync(ct);
-        return new { deleted };
+        return new(deleted);
     }
 
     private static readonly Dictionary<string, string[]> Categories = new(StringComparer.Ordinal)
     {
         ["AUTH"] = "LOGIN LOGIN_FAILED LOGIN_LOCKED LOGOUT PASSWORD_CHANGE PROFILE_UPDATE".Split(' '),
-        ["PROJECT"] = "PROJECT_GROUP_CREATE PROJECT_GROUP_UPDATE PROJECT_GROUP_STATUS_AUTO PROJECT_GROUP_DELETE PROJECT_CREATE PROJECT_COPY PROJECT_UPDATE PROJECT_START PROJECT_SUBMIT PROJECT_CONFIRM PROJECT_REJECT PROJECT_WITHDRAW PROJECT_TERMINATE PROJECT_RESTART PROJECT_MEMBERS PROJECT_DELETE".Split(' '),
+        ["PROJECT"] = "PROJECT_GROUP_CREATE PROJECT_GROUP_UPDATE PROJECT_GROUP_STATUS_AUTO PROJECT_GROUP_DELETE PROJECT_CREATE PROJECT_COPY PROJECT_UPDATE PROJECT_START PROJECT_SUBMIT PROJECT_CONFIRM PROJECT_REJECT PROJECT_WITHDRAW PROJECT_ACCEPTANCE_MIGRATE PROJECT_ACCEPTANCE_NOTIFICATIONS_MIGRATE PROJECT_TERMINATE PROJECT_RESTART PROJECT_MEMBERS PROJECT_DELETE".Split(' '),
         ["FILE"] = "FILE_UPLOAD FILE_DOWNLOAD FILE_BATCH_DOWNLOAD FILE_DELETE UPLOAD_ABORT".Split(' '),
-        ["MESSAGE"] = "MESSAGE_CREATE MESSAGE_DELETE".Split(' '),
+        ["MESSAGE"] = "MESSAGE_CREATE MESSAGE_DELETE MESSAGE_READ".Split(' '),
         ["ORG"] = "USER_CREATE USER_UPDATE USER_STATUS USER_RESET_PASSWORD USER_ASSIGN_ROLE USER_ASSIGN_ROLES DEPT_CREATE DEPT_UPDATE DEPT_STATUS DEPT_DELETE USER_DELETE ROLE_CREATE ROLE_UPDATE ROLE_STATUS ROLE_ASSIGN_PERMS ROLE_DELETE".Split(' '),
         ["SUPPLIER"] = "SUPPLIER_CREATE SUPPLIER_UPDATE SUPPLIER_STATUS SUPPLIER_DELETE SUPPLIER_ACCOUNT_CREATE SUPPLIER_ACCOUNT_UPDATE SUPPLIER_ACCOUNT_STATUS SUPPLIER_ACCOUNT_RESET_PASSWORD SUPPLIER_ACCOUNT_DELETE".Split(' '),
-        ["SYSTEM"] = "CONFIG_UPDATE AUDIT_LOG_DELETE EMAIL_SENT EMAIL_FAILED EMAIL_RETRY EMAIL_SKIPPED_MISSING_EMAIL EMAIL_CANCELLED_STALE".Split(' ')
+        ["SYSTEM"] = "CONFIG_UPDATE PROJECT_DICTIONARY_CREATE PROJECT_DICTIONARY_UPDATE PROJECT_DICTIONARY_DELETE AUDIT_LOG_DELETE AUDIT_LOG_RETENTION EMAIL_SENT EMAIL_FAILED EMAIL_RETRY EMAIL_SKIPPED_MISSING_EMAIL EMAIL_CANCELLED_STALE".Split(' ')
     };
 }
 
@@ -263,7 +263,7 @@ public sealed class AuditRow
     public string? Detail { get; set; }
     public string? Ip { get; set; }
     public DateTime CreatedAt { get; set; }
-    public object ToResponse()
+    public AuditLogResponse ToResponse()
     {
         var detail = Detail is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(Detail);
         string? Snapshot(string field) => detail is { ValueKind: JsonValueKind.Object } value
@@ -272,13 +272,11 @@ public sealed class AuditRow
             && !string.IsNullOrWhiteSpace(name.GetString()) ? name.GetString() : null;
         var actorSnapshot = Snapshot("actorName");
         var targetSnapshot = Snapshot("targetName");
-        return new
-        {
+        return new AuditLogResponse(
             Id, UserId, EmployeeNo, Action, TargetType, TargetId, detail, Ip, CreatedAt,
-            actorName = actorSnapshot ?? CurrentActorName,
-            targetName = targetSnapshot ?? CurrentTargetName,
-            actorNameSource = actorSnapshot is not null ? "snapshot" : CurrentActorName is not null ? "current" : "unknown",
-            targetNameSource = targetSnapshot is not null ? "snapshot" : CurrentTargetName is not null ? "current" : "unknown",
-        };
+            actorSnapshot ?? CurrentActorName,
+            targetSnapshot ?? CurrentTargetName,
+            actorSnapshot is not null ? "snapshot" : CurrentActorName is not null ? "current" : "unknown",
+            targetSnapshot is not null ? "snapshot" : CurrentTargetName is not null ? "current" : "unknown");
     }
 }

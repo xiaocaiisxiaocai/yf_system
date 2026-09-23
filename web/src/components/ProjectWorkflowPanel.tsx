@@ -6,6 +6,7 @@ import { IconCheckCircle, IconCloseCircle, IconPlayArrow, IconStop, IconUndo } f
 import http from '../api/client'
 import { type Project, PROJECT_STATUS } from '../api/types'
 import { useAuth } from '../store/auth'
+import type { ApiResponses } from '../api/types'
 
 interface Props {
   project: Project
@@ -45,7 +46,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
   const changeStatus = async (status: 'IN_PROGRESS' | 'TERMINATED') => {
     if (!beginAction()) return
     try {
-      await http.put(`/projects/${project.id}/status`, { status })
+      await http.put<ApiResponses['PUT /projects/{id}/status']>(`/projects/${project.id}/status`, { status })
       Message.success(status === 'IN_PROGRESS'
         ? (project.status === 'TERMINATED' ? '项目已重新开始' : '项目已开始')
         : '项目已终止')
@@ -58,7 +59,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
   const submitConfirmation = async () => {
     if (!beginAction()) return
     try {
-      await http.post(`/projects/${project.id}/submit`, { confirmSide: 'COMPANY' })
+      await http.post<ApiResponses['POST /projects/{id}/submit']>(`/projects/${project.id}/submit`, { confirmSide: 'COMPANY' })
       Message.success('项目已提交公司验收')
       onChanged()
     } finally {
@@ -74,7 +75,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
     }
     if (!beginAction()) return
     try {
-      await http.post(`/projects/${project.id}/confirm`, { expectedSubmissionId })
+      await http.post<ApiResponses['POST /projects/{id}/confirm']>(`/projects/${project.id}/confirm`, { expectedSubmissionId })
       Message.success('公司验收已通过')
       onChanged()
     } finally {
@@ -91,7 +92,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
     try {
       const values = await rejectForm.validate().catch(() => null)
       if (!values) return
-      await http.post(`/projects/${project.id}/reject`, {
+      await http.post<ApiResponses['POST /projects/{id}/reject']>(`/projects/${project.id}/reject`, {
         reason: values.reason.trim(),
         expectedSubmissionId: rejectSubmissionId,
       })
@@ -113,7 +114,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
     }
     if (!beginAction()) return
     try {
-      await http.post(`/projects/${project.id}/withdraw`, { expectedSubmissionId })
+      await http.post<ApiResponses['POST /projects/{id}/withdraw']>(`/projects/${project.id}/withdraw`, { expectedSubmissionId })
       Message.success('已撤回验收申请')
       onChanged()
     } finally {

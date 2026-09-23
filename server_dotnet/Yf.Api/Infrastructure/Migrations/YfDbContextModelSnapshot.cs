@@ -421,9 +421,6 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProjectId")
-                        .HasDatabaseName("idx_files_project");
-
                     b.HasIndex("StoredName")
                         .IsUnique()
                         .HasDatabaseName("stored_name");
@@ -433,6 +430,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.HasIndex("Status", "DeletedAt")
                         .HasDatabaseName("idx_files_status_deleted_at");
+
+                    b.HasIndex("ProjectId", "Status", "Id")
+                        .HasDatabaseName("idx_files_project_status");
 
                     b.ToTable("files", (string)null);
 
