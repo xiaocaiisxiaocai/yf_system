@@ -25,7 +25,8 @@ export default defineConfig({
         codeSplitting: {
           groups: [
             { name: 'excel-parser', test: /node_modules[\\/](?:xlsx|cfb|codepage)[\\/]/ },
-            { name: 'arco', test: /node_modules[\\/]@arco-design[\\/]/ },
+            // Arco is deliberately not grouped: each lazy route then loads only the components it uses
+            // (the login page ships ~550 KB of JS instead of ~1 MB).
             { name: 'vendor', test: /node_modules[\\/](?:react|react-dom|react-router-dom|axios|zustand)[\\/]/ },
           ],
         },

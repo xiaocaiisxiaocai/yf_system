@@ -128,7 +128,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         if (await FindAsync(context, supplierId, ct) is null) throw ApiException.NotFound();
         var users = await context.Users.AsNoTracking().Where(x => x.UserType == "SUPPLIER" && x.SupplierId == supplierId).OrderBy(x => x.Id).ToListAsync(ct);
         var results = new List<SupplierAccountResponse>(users.Count);
-        foreach (var user in users) results.Add(AccountJson(await AccountRowAsync(context, user, ct)));
+        results.AddRange((await AccountRowsAsync(context, users, ct)).Select(AccountJson));
         return results.ToArray();
     }
 
@@ -309,17 +309,30 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         return await AccountRowAsync(context, user, ct);
     }
 
-    private static async Task<AdminUserRow> AccountRowAsync(YfDbContext context, User user, CancellationToken ct)
+    private static async Task<AdminUserRow> AccountRowAsync(YfDbContext context, User user, CancellationToken ct) =>
+        (await AccountRowsAsync(context, [user], ct))[0];
+
+    /// <summary>Supplier accounts carry exactly one role; loads them for every account in one query.</summary>
+    private static async Task<List<AdminUserRow>> AccountRowsAsync(YfDbContext context, IReadOnlyList<User> users, CancellationToken ct)
     {
-        var role = await context.UserRoles.AsNoTracking().Where(x => x.UserId == user.Id)
-            .Join(context.Roles.AsNoTracking(), x => x.RoleId, x => x.Id, (_, item) => new { item.Id, item.Name }).SingleOrDefaultAsync(ct);
-        return new AdminUserRow
+        var userIds = users.Select(user => user.Id).ToArray();
+        var roles = (await context.UserRoles.AsNoTracking().Where(x => Enumerable.Contains(userIds, x.UserId))
+                .Join(context.Roles.AsNoTracking(), x => x.RoleId, x => x.Id, (userRole, item) => new { userRole.UserId, item.Id, item.Name })
+                .ToListAsync(ct))
+            .GroupBy(x => x.UserId)
+            // SingleOrDefault keeps the one-role invariant loud, as the per-account query did.
+            .ToDictionary(group => group.Key, group => group.SingleOrDefault());
+        return users.Select(user =>
         {
-            Id = user.Id, EmployeeNo = user.EmployeeNo, PasswordHash = user.PasswordHash, RealName = user.RealName, Email = user.Email,
-            UserType = user.UserType, SupplierId = user.SupplierId, DepartmentId = user.DepartmentId, Status = user.Status,
-            MustChangePassword = user.MustChangePassword, LastLoginAt = user.LastLoginAt, CreatedAt = user.CreatedAt,
-            RoleId = role?.Id, RoleName = role?.Name
-        };
+            var role = roles.GetValueOrDefault(user.Id);
+            return new AdminUserRow
+            {
+                Id = user.Id, EmployeeNo = user.EmployeeNo, PasswordHash = user.PasswordHash, RealName = user.RealName, Email = user.Email,
+                UserType = user.UserType, SupplierId = user.SupplierId, DepartmentId = user.DepartmentId, Status = user.Status,
+                MustChangePassword = user.MustChangePassword, LastLoginAt = user.LastLoginAt, CreatedAt = user.CreatedAt,
+                RoleId = role?.Id, RoleName = role?.Name
+            };
+        }).ToList();
     }
 
     private static SupplierResponse Json(Supplier supplier) => new(supplier.Id, supplier.Name, supplier.Remark, supplier.Status, supplier.CreatedAt);

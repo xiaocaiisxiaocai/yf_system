@@ -26,8 +26,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var rows = offset > int.MaxValue
             ? []
             : await query.OrderByDescending(x => x.Id).Skip((int)offset).Take(checked((int)size)).ToListAsync(ct);
-        var list = new List<UserResponse>(rows.Count);
-        foreach (var row in rows) list.Add(await JsonAsync(context, row, ct));
+        var list = await ToResponsesAsync(context, rows, ct);
         return new(list, total, page, size);
     }
 
@@ -331,17 +330,32 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
 
     internal static bool RequiresLastActiveAdminProtection(string targetStatus, int activeAdminCount) => targetStatus == "ACTIVE" && activeAdminCount <= 1;
 
-    private static async Task<UserResponse> JsonAsync(YfDbContext context, User user, CancellationToken ct)
+    private static async Task<UserResponse> JsonAsync(YfDbContext context, User user, CancellationToken ct) =>
+        (await ToResponsesAsync(context, [user], ct))[0];
+
+    /// <summary>Builds user responses with a fixed number of queries, however many users are listed.</summary>
+    private static async Task<List<UserResponse>> ToResponsesAsync(YfDbContext context, IReadOnlyList<User> users, CancellationToken ct)
     {
-        var roles = await context.UserRoles.AsNoTracking().Where(x => x.UserId == user.Id)
-            .Join(context.Roles.AsNoTracking(), x => x.RoleId, x => x.Id, (_, role) => new { role.Id, role.Name }).OrderBy(x => x.Id).ToListAsync(ct);
-        var departmentName = user.DepartmentId is ulong departmentId
-            ? await context.Departments.AsNoTracking().Where(x => x.Id == departmentId).Select(x => x.Name).SingleOrDefaultAsync(ct) : null;
-        var firstRole = roles.FirstOrDefault();
-        return new UserResponse(
-            user.Id, user.EmployeeNo, user.RealName, user.Email, user.UserType, user.SupplierId, user.DepartmentId, departmentName,
-            user.Status, user.MustChangePassword, user.LastLoginAt, user.CreatedAt, firstRole?.Id, firstRole?.Name,
-            roles.Select(x => x.Id).ToArray(), roles.Select(x => x.Name).ToArray());
+        var userIds = users.Select(user => user.Id).ToArray();
+        var rolesByUser = (await context.UserRoles.AsNoTracking().Where(x => Enumerable.Contains(userIds, x.UserId))
+                .Join(context.Roles.AsNoTracking(), x => x.RoleId, x => x.Id, (userRole, role) => new { userRole.UserId, role.Id, role.Name })
+                .OrderBy(x => x.Id).ToListAsync(ct))
+            .ToLookup(x => x.UserId);
+        var departmentIds = users.Where(user => user.DepartmentId is not null).Select(user => user.DepartmentId!.Value).Distinct().ToArray();
+        var departmentNames = departmentIds.Length == 0
+            ? new Dictionary<ulong, string>()
+            : await context.Departments.AsNoTracking().Where(x => Enumerable.Contains(departmentIds, x.Id))
+                .ToDictionaryAsync(x => x.Id, x => x.Name, ct);
+        return users.Select(user =>
+        {
+            var roles = rolesByUser[user.Id].ToList();
+            var firstRole = roles.FirstOrDefault();
+            var departmentName = user.DepartmentId is ulong departmentId ? departmentNames.GetValueOrDefault(departmentId) : null;
+            return new UserResponse(
+                user.Id, user.EmployeeNo, user.RealName, user.Email, user.UserType, user.SupplierId, user.DepartmentId, departmentName,
+                user.Status, user.MustChangePassword, user.LastLoginAt, user.CreatedAt, firstRole?.Id, firstRole?.Name,
+                roles.Select(x => x.Id).ToArray(), roles.Select(x => x.Name).ToArray());
+        }).ToList();
     }
 
     private static void ValidateName(string value)

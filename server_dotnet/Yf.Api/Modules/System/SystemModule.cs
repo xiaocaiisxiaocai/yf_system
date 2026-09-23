@@ -223,13 +223,16 @@ public sealed class SystemService(AppDb db, AuditService audit)
         await AccessService.RequirePermissionAsync(conn, tx, actor, "log:delete", ct);
         await using var context = EfDb.Use(conn, tx);
         var distinctIds = ids.Distinct().Order().ToArray();
-        var rows = new List<AuditRow>(distinctIds.Length);
-        foreach (var id in distinctIds)
-        {
-            var locked = await context.AuditLogs.FromSqlInterpolated($"SELECT * FROM audit_logs WHERE id={id} FOR UPDATE")
-                .AsNoTracking().SingleOrDefaultAsync(ct);
-            if (locked is not null) rows.Add(new AuditRow { Id = locked.Id, Action = locked.Action });
-        }
+        // One round trip locks every requested row, in id order like the old per-row loop, so concurrent
+        // deletions still acquire locks in the same order. Ids are bound as parameters ({0}, {1}, ...).
+        var placeholders = string.Join(",", distinctIds.Select((_, index) => "{" + index + "}"));
+        var lockQuery = System.Runtime.CompilerServices.FormattableStringFactory.Create(
+            "SELECT * FROM audit_logs WHERE id IN (" + placeholders + ") ORDER BY id FOR UPDATE",
+            distinctIds.Cast<object?>().ToArray());
+        var rows = (await context.AuditLogs
+                .FromSql(lockQuery)
+                .AsNoTracking().ToListAsync(ct))
+            .Select(locked => new AuditRow { Id = locked.Id, Action = locked.Action }).ToList();
         if (rows.Any(x => x.Action == "AUDIT_LOG_DELETE")) throw ApiException.Forbidden("日志清理记录不可删除");
         var actualIds = rows.Select(x => x.Id).ToArray();
         var deleted = actualIds.Length == 0 ? 0 : await context.AuditLogs.Where(log => Enumerable.Contains(actualIds, log.Id)).ExecuteDeleteAsync(ct);

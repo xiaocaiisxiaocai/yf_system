@@ -38,8 +38,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var rows = offset > int.MaxValue ? []
             : await context.Roles.AsNoTracking().OrderBy(r => r.Id).Skip((int)offset).Take((int)size).ToArrayAsync(ct);
         var manageable = await ceiling.GetManageableRoleIdsAsync(context.Database.Connection(), null, actor, rows.Select(r => r.Id).ToArray(), ct);
-        var list = new List<RoleResponse>();
-        foreach (var r in rows) list.Add(await JsonAsync(context, r, manageable.Contains(r.Id), ct));
+        var list = await ToResponsesAsync(context, rows, manageable.Contains, ct);
         return new(list, (ulong)total, page, size);
     }
 
@@ -238,18 +237,30 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
     private static object PermissionAuditJson(Permission permission) => new { permission.Id, permission.Code, permission.Name };
     private static Task<Role?> FindAsync(YfDbContext context, ulong id, CancellationToken ct) => context.Roles.AsNoTracking().SingleOrDefaultAsync(r => r.Id == id, ct);
 
-    private static async Task<RoleResponse> JsonAsync(YfDbContext context, Role r, bool canManage, CancellationToken ct)
+    private static async Task<RoleResponse> JsonAsync(YfDbContext context, Role r, bool canManage, CancellationToken ct) =>
+        (await ToResponsesAsync(context, [r], _ => canManage, ct))[0];
+
+    /// <summary>Builds role responses with a fixed number of queries, however many roles are listed.</summary>
+    private static async Task<List<RoleResponse>> ToResponsesAsync(
+        YfDbContext context, IReadOnlyList<Role> roles, Func<ulong, bool> canManage, CancellationToken ct)
     {
-        var ids = await context.RolePermissions.Where(rp => rp.RoleId == r.Id).Select(rp => rp.PermissionId).ToArrayAsync(ct);
-        var assigned = await context.UserRoles.LongCountAsync(ur => ur.RoleId == r.Id, ct);
-        var assignedToSupplier = await context.UserRoles.Join(context.Users, ur => ur.UserId, u => u.Id, (ur, u) => new { ur, u })
-            .AnyAsync(x => x.ur.RoleId == r.Id && x.u.UserType == "SUPPLIER", ct);
-        return new RoleResponse(
+        var roleIds = roles.Select(role => role.Id).ToArray();
+        var permissionIds = (await context.RolePermissions.Where(rp => Enumerable.Contains(roleIds, rp.RoleId))
+                .Select(rp => new { rp.RoleId, rp.PermissionId }).ToListAsync(ct))
+            .ToLookup(rp => rp.RoleId, rp => rp.PermissionId);
+        var assignedCounts = await context.UserRoles.Where(ur => Enumerable.Contains(roleIds, ur.RoleId))
+            .GroupBy(ur => ur.RoleId).Select(group => new { RoleId = group.Key, Count = group.LongCount() })
+            .ToDictionaryAsync(row => row.RoleId, row => row.Count, ct);
+        var assignedToSupplier = (await context.UserRoles.Where(ur => Enumerable.Contains(roleIds, ur.RoleId))
+                .Join(context.Users, ur => ur.UserId, u => u.Id, (ur, u) => new { ur.RoleId, u.UserType })
+                .Where(x => x.UserType == "SUPPLIER").Select(x => x.RoleId).Distinct().ToListAsync(ct))
+            .ToHashSet();
+        return roles.Select(r => new RoleResponse(
             r.Id, r.Name, r.Description, r.IsBuiltIn, r.Status,
-            ids,
-            (ulong)assigned,
-            canManage,
-            assignedToSupplier || r.IsBuiltIn && r.Name == "供应商人员",
-            r.CreatedAt);
+            permissionIds[r.Id].ToArray(),
+            (ulong)assignedCounts.GetValueOrDefault(r.Id),
+            canManage(r.Id),
+            assignedToSupplier.Contains(r.Id) || r.IsBuiltIn && r.Name == "供应商人员",
+            r.CreatedAt)).ToList();
     }
 }

@@ -200,10 +200,13 @@ public sealed class FileService(
         var available = await FileRows(ef).Where(file => Enumerable.Contains(ids, file.Id)).ToDictionaryAsync(file => file.Id, ct);
         var entries = new List<ArchiveSource>(ids.Length);
         ulong inputBytes = 0;
+        // Selected files usually share a project; check view access once per project, not once per file.
+        var viewableProjects = new HashSet<ulong>();
         foreach (var id in ids)
         {
             if (!available.TryGetValue(id, out var row)) throw ApiException.NotFound();
-            await ProjectAccessService.RequireViewAsync(conn, null, actor, row.ProjectId, ct);
+            if (viewableProjects.Add(row.ProjectId))
+                await ProjectAccessService.RequireViewAsync(conn, null, actor, row.ProjectId, ct);
             if (row.Status != "AVAILABLE") throw ApiException.BadRequest($"文件 {row.OriginalName} 不可用");
             string path;
             try

@@ -28,3 +28,8 @@ test('the full Arco stylesheet is no longer bundled', () => {
   assert.doesNotMatch(main, /web-react\/dist\/css\/arco\.css/)
   assert.match(main, /import '\.\/styles\/arco-components'/)
 })
+
+test('Arco JavaScript is split per route instead of forced into one up-front chunk', () => {
+  const config = fs.readFileSync(path.join(root, 'vite.config.ts'), 'utf8')
+  assert.doesNotMatch(config, /name:\s*'arco'/, 'grouping all of Arco doubles the login page payload')
+})
