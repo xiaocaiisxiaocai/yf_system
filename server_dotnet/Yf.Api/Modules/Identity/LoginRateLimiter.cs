@@ -10,6 +10,9 @@ public sealed class LoginRateLimiter
     public bool AllowLogin(string clientIp, string employeeNo) =>
         AllowIp(clientIp) && AllowIpAndAccount(clientIp, employeeNo);
 
+    public bool AllowPasswordChange(string clientIp, ulong userId) =>
+        Allow($"password-change:{clientIp}:{userId}", 5);
+
     private bool AllowIpAndAccount(string clientIp, string employeeNo) =>
         Allow($"login:{clientIp}:{employeeNo}", 10);
 

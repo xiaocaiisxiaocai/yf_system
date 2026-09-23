@@ -65,6 +65,7 @@ public sealed class ApiException(int status, int code, string message) : Excepti
     /// <summary>A database lock wait timed out or a deadlock victim was rolled back; the request may simply be retried.</summary>
     public static ApiException Busy(string message = "系统繁忙，数据正被其他操作占用，请稍后重试") => new(409, 40902, message);
     public static ApiException TooManyRequests(string message) => new(429, 42902, message);
+    public static ApiException PasswordRateLimited(string message) => new(429, 42901, message);
 }
 
 public sealed record CurrentUser(ulong Id, string EmployeeNo, string UserType, ulong? SupplierId)

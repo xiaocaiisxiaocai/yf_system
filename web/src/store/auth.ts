@@ -59,8 +59,8 @@ export const useAuth = create<AuthState>()(
       // Older schemas persisted more account data. Discard the complete record instead of
       // carrying any identity, authorization, or forced-password state into the current session.
       migrate: () => ({ user: null, permissions: [], menus: [], mustChangePassword: false }),
-      // Only an account id is needed for boot/cross-tab account-switch detection.
-      // Name, employee number, email and supplier details are fetched after refresh.
+      // Keep only the minimum session snapshot needed to render during boot; the
+      // refresh endpoint remains authoritative for the complete profile and grants.
       partialize: (s) => ({
         user: s.user ? { id: s.user.id } : null,
         permissions: s.permissions,

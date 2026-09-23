@@ -47,6 +47,19 @@ public sealed class DownloadGrantSecurityTests
     }
 
     [Fact]
+    public void DownloadGrantEntriesAreBoundedPerUserAndExpiredEntriesReleaseTheQuota()
+    {
+        var service = new DownloadGrantService();
+        for (var index = 0; index < 32; index++)
+            service.Issue(99, "same-session", [(ulong)index + 1], batch: false, Now);
+
+        Assert.Throws<ApiException>(() => service.Issue(99, "same-session", [999], batch: false, Now));
+        service.Issue(100, "other-session", [1000], batch: false, Now);
+        service.Issue(99, "same-session", [1001], batch: false,
+            Now.AddSeconds(DownloadGrantService.GrantLifetimeSeconds));
+    }
+
+    [Fact]
     public async Task AuditDeduplicationSerializesConcurrentWritesAndIsTimeBounded()
     {
         var service = new DownloadGrantService();

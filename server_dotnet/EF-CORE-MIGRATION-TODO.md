@@ -4,7 +4,7 @@
 
 ## 已完成
 
-- `Yf.Api` 使用 EF Core 9.0.0、Pomelo 9.0.0 和 MySqlConnector；生产项目已移除 Dapper 依赖。
+- `Yf.Api` 使用 EF Core 9.0.20、Pomelo 9.0.20 和 MySqlConnector；生产项目已移除 Dapper 依赖。
 - 27 张现有业务表已建立实体、Fluent 配置、`YfDbContext`、设计时工厂和 `InitialCreate` 迁移。
 - Identity、Admin、Projects、Files、System、权限、审计、后台任务和开发数据重置均已改用 EF LINQ、实体写入、`ExecuteUpdateAsync` 或 `ExecuteDeleteAsync`。
 - `SchemaBootstrap`、`SchemaMigrations` 仅保留调用兼容入口；实际建库、升级和启动校验统一由 `EfDatabaseLifecycle` 与 EF 迁移历史负责。
@@ -18,6 +18,7 @@
 - 普通启动只读校验迁移历史和运行门禁，不执行 DDL。
 - 当前仍在开发阶段，不兼容旧手写 schema、`yf_schema_migrations`、SeaORM 历史或旧业务数据。切换时直接重建空开发库并重新初始化。
 - 后续模型变化使用 `dotnet ef migrations add <Name>` 生成迁移，审查迁移和模型快照后再通过显式迁移命令应用。
+- `20260923235004_AddFileStoragePathIndex` 是本轮性能审查生成的空设计检查点；实际 `storage_path` 前缀清理仍保持低频安全路径，未引入未验证的宽索引。
 
 ## 保留的原生 SQL 边界
 
@@ -38,4 +39,4 @@
 - 隔离 HTTP/业务回归：180/180 通过；使用本机临时数据库和临时存储，未访问业务数据库，未发送真实邮件。
 - 覆盖空库初始化、重复迁移、缺失历史拒绝、权限、登录、项目主子流程、并发锁、留言、通知、文件分片与预览、配置、审计和完整验收流程。
 
-验证证据位于仓库根目录 `.runlogs/ef-final/` 及 `.runlogs/dotnet-isolated-results.json`。
+验证证据保存在本地 `.artifacts/tests/`；`.runlogs/` 已不再作为当前验证输出目录。

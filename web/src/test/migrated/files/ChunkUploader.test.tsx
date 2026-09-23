@@ -317,6 +317,8 @@ describe('ChunkUploader DOM contracts', () => {
     expect(sessionCalls('init')).toHaveLength(1)
     expect(mocks.put).toHaveBeenCalledOnce()
     expect(sessionCalls('merge')).toHaveLength(2)
+    expect(mocks.post.mock.calls.filter(([url]) => String(url).endsWith('/merge'))
+      .every(([, , config]) => (config as { timeout?: number } | undefined)?.timeout === 600000)).toBe(true)
     expect(mocks.delete).not.toHaveBeenCalled()
     expect(callbacks.onDone).toHaveBeenCalledOnce()
   })

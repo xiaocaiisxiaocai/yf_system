@@ -45,7 +45,8 @@ public static class IdentityModule
             await service.UpdateProfileAsync(AccessService.GetCurrent(ctx), request, ct));
         auth.MapPut("/password", async (ChangePasswordRequest request, HttpContext ctx, IdentityService service, CancellationToken ct) =>
         {
-            await service.ChangePasswordAsync(AccessService.GetCurrent(ctx), request, ct);
+            await service.ChangePasswordAsync(AccessService.GetCurrent(ctx), request,
+                ClientIp.Resolve(ctx, ctx.RequestServices.GetRequiredService<AppOptions>()), ct);
             return EmptyResponse.Instance;
         });
         return endpoints;

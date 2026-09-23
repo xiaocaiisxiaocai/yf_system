@@ -15,9 +15,9 @@ public sealed partial class UploadService
 {
     private static async Task WriteExactAsync(Stream source, string destination, ulong expected, CancellationToken ct)
     {
-        await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024,
-            FileOptions.Asynchronous | FileOptions.SequentialScan | FileOptions.WriteThrough);
-        var buffer = new byte[64 * 1024];
+        await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var buffer = new byte[1024 * 1024];
         ulong total = 0;
         int read;
         while ((read = await source.ReadAsync(buffer, ct)) != 0)

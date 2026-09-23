@@ -103,7 +103,7 @@ internal sealed class CollaborationService
         var unread = query.Where(row => row.Activity.OccurredAt >= cutoff && !row.IsRead);
         var unreadCount = (ulong)await unread.LongCountAsync(ct);
         var filtered = unreadOnly ? unread : query;
-        var total = (ulong)await filtered.LongCountAsync(ct);
+        var total = unreadOnly ? unreadCount : (ulong)await filtered.LongCountAsync(ct);
         var rows = await filtered.OrderByDescending(row => row.Activity.OccurredAt)
             .ThenByDescending(row => row.Activity.Id)
             .Page((actualPage - 1) * size, size)

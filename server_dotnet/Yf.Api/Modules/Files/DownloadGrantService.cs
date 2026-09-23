@@ -14,10 +14,12 @@ public sealed class DownloadGrantService
     internal const int GrantLifetimeSeconds = 60;
     internal const int SessionLifetimeSeconds = 15 * 60;
     private const int MaximumEntries = 4096;
+    private const int MaximumEntriesPerUser = 32;
     private static readonly TimeSpan AuditWindow = TimeSpan.FromMinutes(2);
     private readonly object gate = new();
     private readonly Dictionary<string, GrantEntry> grants = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SessionEntry> sessions = new(StringComparer.Ordinal);
+    private readonly Dictionary<ulong, int> entriesByUser = new();
     private readonly Dictionary<string, WindowAuditEntry> auditWindows = new(StringComparer.Ordinal);
 
     internal DownloadGrantIssue Issue(ulong userId, string authSessionId, IReadOnlyList<ulong> fileIds, bool batch) =>
@@ -34,11 +36,14 @@ public sealed class DownloadGrantService
             CleanupExpired(now);
             if (grants.Count + sessions.Count >= MaximumEntries)
                 throw ApiException.TooManyRequests("下载请求繁忙，请稍后重试");
+            if (entriesByUser.GetValueOrDefault(userId) >= MaximumEntriesPerUser)
+                throw ApiException.TooManyRequests("当前账号下载请求过多，请稍后重试");
             string handle;
             do { handle = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant(); }
             while (grants.ContainsKey(handle) || sessions.ContainsKey(handle));
             var secret = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
             grants.Add(handle, new(userId, authSessionId, ids, batch, Hash(secret), now.AddSeconds(GrantLifetimeSeconds)));
+            entriesByUser[userId] = entriesByUser.GetValueOrDefault(userId) + 1;
             return new(handle, secret, GrantLifetimeSeconds);
         }
     }
@@ -54,10 +59,12 @@ public sealed class DownloadGrantService
             // Removing before validation makes every grant a single redemption attempt and avoids races.
             if (!grants.Remove(handle, out var grant) || !Matches(grant.SecretHash, secret))
                 throw InvalidGrant();
+            DecrementUser(grant.UserId);
             var sessionSecret = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
             var expiresAt = now.AddSeconds(SessionLifetimeSeconds);
             sessions[handle] = new(grant.UserId, grant.AuthSessionId, grant.FileIds, grant.Batch,
                 Hash(sessionSecret), expiresAt);
+            entriesByUser[grant.UserId] = entriesByUser.GetValueOrDefault(grant.UserId) + 1;
             return new(handle, sessionSecret, grant.UserId, grant.AuthSessionId, grant.FileIds, grant.Batch,
                 expiresAt.ToUnixTimeSeconds());
         }
@@ -126,9 +133,13 @@ public sealed class DownloadGrantService
     private void CleanupExpired(DateTimeOffset now)
     {
         foreach (var handle in grants.Where(pair => pair.Value.ExpiresAt <= now).Select(pair => pair.Key).ToArray())
-            grants.Remove(handle);
+        {
+            if (grants.Remove(handle, out var grant)) DecrementUser(grant.UserId);
+        }
         foreach (var handle in sessions.Where(pair => pair.Value.ExpiresAt <= now).Select(pair => pair.Key).ToArray())
-            sessions.Remove(handle);
+        {
+            if (sessions.Remove(handle, out var session)) DecrementUser(session.UserId);
+        }
         foreach (var key in auditWindows.Where(pair => pair.Value.ExpiresAt <= now).Select(pair => pair.Key).ToArray())
             auditWindows.Remove(key);
         // Audit keys are best-effort deduplication only; cap them independently so they cannot grow without bound.
@@ -138,6 +149,13 @@ public sealed class DownloadGrantService
     }
 
     private static byte[] Hash(string value) => SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value));
+
+    private void DecrementUser(ulong userId)
+    {
+        if (!entriesByUser.TryGetValue(userId, out var count)) return;
+        if (count <= 1) entriesByUser.Remove(userId);
+        else entriesByUser[userId] = count - 1;
+    }
 
     private static bool Matches(byte[] expected, string value)
     {

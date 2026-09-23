@@ -9,6 +9,8 @@ namespace Yf.Api.Modules.Identity;
 
 public sealed class TokenService(AppOptions options)
 {
+    private readonly JwtSecurityTokenHandler handler = new() { MapInboundClaims = false };
+    private readonly SymmetricSecurityKey signingKey = new(Encoding.UTF8.GetBytes(options.JwtSecret));
     public (string Token, long ExpiresAt) IssueAccess(ulong userId, string employeeNo, string sessionId)
     {
         var now = DateTimeOffset.UtcNow;
@@ -35,11 +37,10 @@ public sealed class TokenService(AppOptions options)
     public AccessClaims ParseAccess(string token)
     {
         // Keep canonical JWT claim names so the API can read its own `sub` contract directly.
-        var handler = new JwtSecurityTokenHandler { MapInboundClaims = false };
         handler.ValidateToken(token, new TokenValidationParameters
         {
             ValidateIssuer = false, ValidateAudience = false, ValidateIssuerSigningKey = true,
-            IssuerSigningKey = Key(), ValidateLifetime = true, ClockSkew = TimeSpan.Zero,
+            IssuerSigningKey = signingKey, ValidateLifetime = true, ClockSkew = TimeSpan.Zero,
             ValidAlgorithms = [SecurityAlgorithms.HmacSha256]
         }, out var validated);
         if (validated is not JwtSecurityToken jwt || !TryReadClaims(jwt.RawPayload, out var claims))
@@ -50,8 +51,6 @@ public sealed class TokenService(AppOptions options)
     public static string NewRefreshToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
         .TrimEnd('=').Replace('+', '-').Replace('/', '_');
     public static string HashRefreshToken(string token) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
-    private SymmetricSecurityKey Key() => new(Encoding.UTF8.GetBytes(options.JwtSecret));
-
     private static bool TryReadClaims(string rawPayload, out AccessClaims claims)
     {
         claims = default!;

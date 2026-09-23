@@ -29,7 +29,8 @@ internal sealed class ProjectGroupService(
         if (!string.IsNullOrWhiteSpace(keyword))
         {
             var value = keyword.Trim();
-            query = query.Where(group => group.Name.Contains(value));
+            query = query.Where(group => EF.Functions.Like(
+                group.Name, QueryValues.ContainsPattern(value), QueryValues.LikeEscape));
         }
         if (!string.IsNullOrWhiteSpace(status))
         {

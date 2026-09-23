@@ -166,11 +166,11 @@ internal static class FileStorage
     public static async Task<(string Sha256, string Md5, ulong Bytes)> HashAndCopyAsync(
         IEnumerable<string> chunks, string outputPath, ulong maximumBytes, CancellationToken ct)
     {
-        await using var output = new FileStream(outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024,
-            FileOptions.Asynchronous | FileOptions.SequentialScan | FileOptions.WriteThrough);
+        await using var output = new FileStream(outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         using var md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
-        var buffer = new byte[64 * 1024];
+        var buffer = new byte[1024 * 1024];
         ulong total = 0;
         foreach (var chunk in chunks)
         {

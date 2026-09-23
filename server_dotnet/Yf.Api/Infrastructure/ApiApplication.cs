@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -87,6 +88,12 @@ public static class ApiApplication
         builder.Services.Configure<RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton(options).AddSingleton<AppDb>().AddSingleton<AccessService>().AddSingleton<AuditService>();
+        builder.Services.AddResponseCompression(compression =>
+        {
+            compression.EnableForHttps = true;
+            compression.MimeTypes = ResponseCompressionDefaults.MimeTypes
+                .Concat(["application/javascript", "text/css", "application/wasm"]);
+        });
         var efConnectionString = AppDb.BuildConnectionString(options);
         builder.Services.AddPooledDbContextFactory<YfDbContext>(db => db.UseMySql(
             efConnectionString, EfDb.ServerVersion));
@@ -139,6 +146,9 @@ public static class ApiApplication
             catch { return Results.Json(new { status = "degraded", db = "down" }, statusCode: 503); }
         });
         app.Map("/api/{**path}", () => Results.Json(new ApiErrorResponse(40401, "接口不存在"), statusCode: 404));
+        // Compress only the SPA/static branch. API responses deliberately bypass compression.
+        app.UseWhen(context => !context.Request.Path.StartsWithSegments("/api"), branch =>
+            branch.UseResponseCompression());
         app.UseDefaultFiles();
         app.UseStaticFiles(new StaticFileOptions
         {

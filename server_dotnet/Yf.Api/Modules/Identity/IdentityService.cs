@@ -180,9 +180,14 @@ public sealed class IdentityService(
         await tx.CommitAsync(ct);
     }
 
-    public async Task ChangePasswordAsync(CurrentUser current, ChangePasswordRequest request, CancellationToken ct)
+    public Task ChangePasswordAsync(CurrentUser current, ChangePasswordRequest request, CancellationToken ct) =>
+        ChangePasswordAsync(current, request, "internal-test", ct);
+
+    public async Task ChangePasswordAsync(CurrentUser current, ChangePasswordRequest request, string clientIp, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(request.OldPassword)) throw ApiException.BadRequest("原密码错误");
+        if (!loginRateLimiter.AllowPasswordChange(clientIp, current.Id))
+            throw ApiException.PasswordRateLimited("密码校验尝试过于频繁，请稍后再试");
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         var user = await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id = {current.Id} FOR UPDATE").SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();

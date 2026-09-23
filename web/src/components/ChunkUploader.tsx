@@ -204,7 +204,11 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     attempt.mergeInvalid = false
     patchEntry(key, { phase: 'merging' })
     try {
-      await http.post<ApiResponses['POST /uploads/{sessionId}/merge']>(`/uploads/${attempt.sessionId}/merge`)
+      await http.post<ApiResponses['POST /uploads/{sessionId}/merge']>(
+        `/uploads/${attempt.sessionId}/merge`,
+        undefined,
+        { timeout: 10 * 60 * 1000 },
+      )
       if (attemptsRef.current.get(key) !== attempt || attempt.cancelled) return
       attempt.mergePending = false
       patchEntry(key, { phase: 'done', percent: 100 })

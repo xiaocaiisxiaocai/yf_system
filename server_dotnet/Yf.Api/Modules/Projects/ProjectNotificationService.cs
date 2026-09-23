@@ -276,15 +276,9 @@ internal static class ProjectNotificationService
         CancellationToken ct)
     {
         await using var db = EfDb.Use(conn, tx);
+        var permittedUsers = AccessService.UsersWithPermission(db, "project:list");
         var rows = await db.Users
-            .Where(user => user.Status == AccountStatuses.Active)
-            .Where(user => db.UserRoles.Any(userRole =>
-                userRole.UserId == user.Id
-                && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == AccountStatuses.Active)
-                && db.RolePermissions.Any(rolePermission =>
-                    rolePermission.RoleId == userRole.RoleId
-                    && db.Permissions.Any(permission =>
-                        permission.Id == rolePermission.PermissionId && permission.Code == "project:list"))))
+            .Where(user => user.Status == AccountStatuses.Active && permittedUsers.Contains(user.Id))
             .Where(user => db.Projects.Any(currentProject =>
                 currentProject.Id == project.Id
                 && ((user.UserType == UserTypes.Internal && user.Id == currentProject.ResponsibleUserId)
