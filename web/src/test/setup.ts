@@ -1,6 +1,9 @@
 import '@testing-library/jest-dom/vitest'
-import { cleanup } from '@testing-library/react'
+import { cleanup, configure } from '@testing-library/react'
 import { afterEach, vi } from 'vitest'
+
+// Parallel workers share the CPU; give findBy*/waitFor more headroom than the 1 s default.
+configure({ asyncUtilTimeout: 5_000 })
 
 afterEach(() => {
   cleanup()

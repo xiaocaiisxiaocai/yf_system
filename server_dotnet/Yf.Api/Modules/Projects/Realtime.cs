@@ -117,7 +117,8 @@ internal sealed record ProjectRealtimeAudience(
     ulong ProjectId,
     ulong SupplierId,
     ulong? ResponsibleUserId,
-    IReadOnlySet<ulong> ViewAllUserIds);
+    IReadOnlySet<ulong> ViewAllUserIds,
+    IReadOnlySet<ulong> SupplierUserIds);
 
 internal sealed class ProjectRealtimeAuthorizer(AppDb database)
 {
@@ -163,36 +164,30 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
         return await AuthorizeProjectAsync(candidates, audience, ct);
     }
 
+    /// <summary>
+    /// Everyone who could currently see the project, read from the database rather than from the identity
+    /// cached when a connection was opened: the owner, internal view-all grantees and the accounts that
+    /// belong to the project's supplier right now. It only narrows candidates; delivery is re-authorized.
+    /// </summary>
     internal async Task<ProjectRealtimeAudience?> ResolveAudienceAsync(ulong projectId, CancellationToken ct)
     {
         await using var db = await database.OpenAsync(ct);
         await using var context = EfDb.Use(db);
-        var rows = await context.Database.SqlQuery<ProjectRealtimeAudienceRow>($"""
-            SELECT p.supplier_id AS SupplierId,p.responsible_user_id AS ResponsibleUserId,
-                   viewers.user_id AS ViewAllUserId
-            FROM projects p
-            LEFT JOIN (
-                SELECT DISTINCT ur.user_id
-                FROM user_roles ur
-                INNER JOIN roles r ON r.id=ur.role_id AND r.status='ACTIVE'
-                INNER JOIN role_permissions rp ON rp.role_id=r.id
-                INNER JOIN permissions permission ON permission.id=rp.permission_id
-                WHERE permission.code='project:view_all'
-            ) viewers ON 1=1
-            WHERE p.id={projectId}
-            """).ToArrayAsync(ct);
-        if (rows.Length == 0) return null;
-        return new(projectId, rows[0].SupplierId, rows[0].ResponsibleUserId,
-            rows.Where(row => row.ViewAllUserId is not null)
-                .Select(row => row.ViewAllUserId!.Value).ToHashSet());
+        var project = await context.Projects.Where(item => item.Id == projectId)
+            .Select(item => new { item.SupplierId, item.ResponsibleUserId })
+            .SingleOrDefaultAsync(ct);
+        if (project is null) return null;
+        var viewAll = await AccessService.UsersWithPermission(context, "project:view_all").ToArrayAsync(ct);
+        var supplierUsers = await context.Users.Where(user => user.SupplierId == project.SupplierId)
+            .Select(user => user.Id).ToArrayAsync(ct);
+        return new(projectId, project.SupplierId, project.ResponsibleUserId, viewAll.ToHashSet(), supplierUsers.ToHashSet());
     }
 
     internal static RealtimeConnection[] SelectCandidates(
         IEnumerable<RealtimeConnection> connections, ProjectRealtimeAudience audience) =>
-        connections.Where(connection => connection.UserType == UserTypes.Supplier
-                ? connection.SupplierId == audience.SupplierId
-                : connection.UserId == audience.ResponsibleUserId
-                  || audience.ViewAllUserIds.Contains(connection.UserId))
+        connections.Where(connection => connection.UserId == audience.ResponsibleUserId
+                || audience.ViewAllUserIds.Contains(connection.UserId)
+                || audience.SupplierUserIds.Contains(connection.UserId))
             .ToArray();
 
     internal async Task<IReadOnlyDictionary<(ulong UserId, string SessionId), ProjectRealtimeAuthorization>> AuthorizeProjectAsync(
@@ -292,13 +287,6 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
             && !token.Revoked
             && token.ExpiresAt > now
             && token.SessionExpiresAt > now, ct);
-    }
-
-    private sealed class ProjectRealtimeAudienceRow
-    {
-        public ulong SupplierId { get; init; }
-        public ulong? ResponsibleUserId { get; init; }
-        public ulong? ViewAllUserId { get; init; }
     }
 
     private sealed class RealtimeAuthorizationFact

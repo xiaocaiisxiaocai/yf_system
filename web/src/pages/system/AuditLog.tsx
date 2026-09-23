@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Button, Card, Collapse, DatePicker, Drawer, Input, Message, Popconfirm, Select, Space, Table, Tag, Typography,
+  Button, Card, Collapse, DatePicker, Drawer, Input, Message, Select, Space, Table, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconCheck, IconCopy, IconEye, IconRefresh, IconSearch } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
-import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
 import {
   ACTIONS, CATEGORY_OPTIONS, TARGET_LABELS, actionForCategory, actionOptionsForCategory,
   actorIdentity, collectionChanges, copySafeDetail, detailNotes, detailSummary, displayChanges, formatChangeValue,
-  historicalNote, isAuditDeletable, safeDetailJson, sourceDetailValue, sourceLabel, targetIdentity,
+  historicalNote, safeDetailJson, sourceDetailValue, sourceLabel, targetIdentity,
   type AuditLogRow,
 } from './auditLogDetails'
 import './AuditLog.css'
@@ -174,28 +173,15 @@ function AuditDetail({ row }: { row: AuditLogRow }) {
 }
 
 export default function AuditLog() {
-  const canDelete = useAuth((state) => state.hasPerm('log:delete'))
   const [draft, setDraft] = useState<Filters>(EMPTY_FILTERS)
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
   const [data, setData] = useState<PageResp<AuditLogRow>>({ list: [], total: 0, page: 1, pageSize: 20 })
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [selected, setSelected] = useState<AuditLogRow | null>(null)
-  const [selectedIds, setSelectedIds] = useState<number[]>([])
-  const [deleting, setDeleting] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [reloadKey, setReloadKey] = useState(0)
-  const deleteState = useRef({ ids: [] as number[], busy: true, allowed: false })
-  const visibleRows = useRef<AuditLogRow[]>([])
-  const deleteBusy = loading || deleting
-
-  useEffect(() => {
-    deleteState.current.busy = deleteBusy
-    deleteState.current.allowed = canDelete
-    visibleRows.current = data.list
-  }, [canDelete, data.list, deleteBusy])
-
   const fetchLogs = useCallback(async () => {
     void reloadKey
     const response = await http.get<ApiResponses['GET /admin/audit-logs']>('/admin/audit-logs', {
@@ -230,60 +216,12 @@ export default function AuditLog() {
   }, [fetchLogs])
 
   const actionOptions = useMemo(() => actionOptionsForCategory(draft.category), [draft.category])
-  const clearSelection = () => {
-    deleteState.current.ids = []
-    setSelectedIds([])
-  }
   const beginReload = () => {
-    clearSelection()
-    deleteState.current.busy = true
     setLoading(true)
     setLoadError(false)
   }
   const applyFilters = () => { beginReload(); setPage(1); setFilters({ ...draft }) }
   const resetFilters = () => { beginReload(); setDraft(EMPTY_FILTERS); setFilters(EMPTY_FILTERS); setPage(1) }
-
-  const removeOne = async (row: AuditLogRow) => {
-    const isCurrentDeletableRow = visibleRows.current.some((current) => current.id === row.id && isAuditDeletable(current))
-    if (!deleteState.current.allowed || deleteState.current.busy || !isCurrentDeletableRow) return
-    deleteState.current.busy = true
-    setDeleting(true)
-    let reload = false
-    try {
-      const response = await http.delete<ApiResponses['DELETE /admin/audit-logs/{id}']>(`/admin/audit-logs/${row.id}`)
-      Message.success(`已删除 ${Number(response.data?.deleted ?? 0)} 条`)
-      if (selected?.id === row.id) setSelected(null)
-      beginReload()
-      setReloadKey((value) => value + 1)
-      reload = true
-    } finally {
-      setDeleting(false)
-      if (!reload) deleteState.current.busy = false
-    }
-  }
-
-  const removeSelected = async () => {
-    const selectableIds = new Set(visibleRows.current.filter(isAuditDeletable).map((row) => row.id))
-    const ids = deleteState.current.ids.slice()
-    if (!deleteState.current.allowed || deleteState.current.busy || ids.length === 0 || ids.some((id) => !selectableIds.has(id))) {
-      clearSelection()
-      return
-    }
-    deleteState.current.busy = true
-    setDeleting(true)
-    let reload = false
-    try {
-      const response = await http.post<ApiResponses['POST /admin/audit-logs/batch-delete']>('/admin/audit-logs/batch-delete', { ids })
-      Message.success(`已删除 ${Number(response.data?.deleted ?? 0)} 条`)
-      setSelected(null)
-      beginReload()
-      setReloadKey((value) => value + 1)
-      reload = true
-    } finally {
-      setDeleting(false)
-      if (!reload) deleteState.current.busy = false
-    }
-  }
 
   return (
     <Card className="page-card page-card--table audit-page">
@@ -315,13 +253,7 @@ export default function AuditLog() {
 
       <div className="audit-result-bar">
         <Typography.Text type="secondary">共 {data.total} 条记录</Typography.Text>
-        {canDelete && (
-          <Popconfirm title={`确认删除选中的 ${selectedIds.length} 条日志？`} disabled={selectedIds.length === 0 || deleteBusy} onOk={removeSelected}>
-            <Button status="danger" disabled={selectedIds.length === 0 || deleteBusy}>删除所选</Button>
-          </Popconfirm>
-        )}
       </div>
-      {canDelete && <Typography.Text type="secondary">仅可手动删除超过保留期限的日志；日志清理记录不可手动删除。</Typography.Text>}
 
       {loadError ? (
         <div className="audit-load-error">
@@ -335,16 +267,6 @@ export default function AuditLog() {
           loading={loading}
           data={data.list}
           scroll={{ x: 1128, y: 'var(--page-table-scroll-y)' }}
-          rowSelection={canDelete ? {
-            selectedRowKeys: selectedIds,
-            checkboxProps: (row?: AuditLogRow) => ({ disabled: deleteBusy || !isAuditDeletable(row) }),
-            onChange: (keys) => {
-              const selectableIds = new Set(data.list.filter(isAuditDeletable).map((row) => row.id))
-              const ids = keys.map(Number).filter((id) => selectableIds.has(id))
-              deleteState.current.ids = ids
-              setSelectedIds(ids)
-            },
-          } : undefined}
           columns={[
             { title: '时间', dataIndex: 'createdAt', width: 160, render: fmtTime },
             {
@@ -373,11 +295,6 @@ export default function AuditLog() {
             },
             { title: '操作', width: 120, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row?: AuditLogRow) => row ? actionSlots([
               <Button key="view" size="mini" type="text" icon={<IconEye />} onClick={() => setSelected(row)}>查看</Button>,
-              canDelete && isAuditDeletable(row) && (
-                <Popconfirm key="delete" title="确认删除这条日志？" disabled={deleteBusy} onOk={() => removeOne(row)}>
-                  <Button size="mini" type="text" status="danger" disabled={deleteBusy}>删除</Button>
-                </Popconfirm>
-              ),
             ], 'single') : null },
           ]}
           pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { beginReload(); setPage(nextPage); setPageSize(nextSize) } }}

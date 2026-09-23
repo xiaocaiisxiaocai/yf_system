@@ -114,6 +114,15 @@ public sealed class BackgroundProjectCopyTests
                 storedPath.Replace('/', Path.DirectorySeparatorChar)))!;
             Assert.Equal(0, await worker.ScavengeOwnedDirectoriesAsync(ct));
             Assert.True(Directory.Exists(resultDirectory));
+
+            // A stale execution of the same finished job is unreferenced and removed; the result stays.
+            var stale = Path.Combine(storage, "copy-jobs", accepted.JobId.ToString(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(stale);
+            await File.WriteAllTextAsync(Path.Combine(stale, "partial.tmp"), "partial", ct);
+            Assert.Equal(1, await worker.ScavengeOwnedDirectoriesAsync(ct));
+            Assert.False(Directory.Exists(stale));
+            Assert.Equal(0, await worker.ScavengeOwnedDirectoriesAsync(ct));
+            Assert.True(Directory.Exists(resultDirectory));
         }
         finally { TryDeleteStorage(storage); }
     }
@@ -299,6 +308,22 @@ public sealed class BackgroundProjectCopyTests
             .AddSingleton<IProjectRealtimePublisher, NoOpPublisher>()
             .AddScoped(_ => new ProjectGroupStatusService(audit))
             .AddScoped<ProjectCopyService>();
+    }
+
+    [Fact]
+    public async Task WakeSignalReleasesAnIdleWaitAndCoalescesRepeatedRings()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var signal = new ProjectCopyWakeSignal();
+        signal.Ring();
+        signal.Ring();
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        await signal.WaitAsync(TimeSpan.FromSeconds(30), ct);
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(5));
+
+        started.Restart();
+        await signal.WaitAsync(TimeSpan.FromMilliseconds(200), ct);
+        Assert.True(started.Elapsed >= TimeSpan.FromMilliseconds(150));
     }
 
     private static ProjectCopyWorker Worker(MigratedTestDatabase database, IServiceProvider provider) => new(

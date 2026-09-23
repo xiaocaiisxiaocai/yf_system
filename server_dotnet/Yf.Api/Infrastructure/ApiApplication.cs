@@ -105,14 +105,17 @@ public static class ApiApplication
         {
             context.Response.Headers.XContentTypeOptions = "nosniff";
             context.Response.Headers["Referrer-Policy"] = "no-referrer";
-            context.Response.Headers.XFrameOptions = "DENY";
+            // Native downloads are navigated in a hidden same-origin frame so the SPA can read a JSON
+            // error page and show its reason; every other response stays unframeable.
+            var sameOriginFrame = IdentityMiddleware.IsNativeDownloadRequest(context.Request);
+            context.Response.Headers.XFrameOptions = sameOriginFrame ? "SAMEORIGIN" : "DENY";
             // HTTPS-only deployments: keep browsers from ever downgrading to HTTP. Subdomains are
             // left out because other intranet services may still share the parent domain over HTTP.
             if (context.Request.IsHttps) context.Response.Headers.StrictTransportSecurity = "max-age=31536000";
             if (context.Request.Path.StartsWithSegments("/api"))
             {
                 context.Response.Headers.CacheControl = "private, no-store";
-                context.Response.Headers.ContentSecurityPolicy = "frame-ancestors 'none'";
+                context.Response.Headers.ContentSecurityPolicy = sameOriginFrame ? "frame-ancestors 'self'" : "frame-ancestors 'none'";
                 var limit = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
                 if (limit is { IsReadOnly: false }
                     && !(HttpMethods.IsPut(context.Request.Method) && context.Request.Path.Value!.Contains("/chunks/", StringComparison.Ordinal)))

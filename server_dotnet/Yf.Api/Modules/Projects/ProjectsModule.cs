@@ -13,6 +13,7 @@ public static class ProjectsModule
         services.AddScoped<ProjectGroupService>();
         services.AddScoped<ProjectGroupStatusService>();
         services.AddScoped<ProjectCopyService>();
+        services.AddSingleton<ProjectCopyWakeSignal>();
         services.AddSingleton<ProjectCopyWorker>();
         services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<ProjectCopyWorker>());
         services.AddScoped<ProjectDictionaryService>();

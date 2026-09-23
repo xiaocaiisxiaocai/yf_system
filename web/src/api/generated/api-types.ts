@@ -7,10 +7,6 @@ export interface ApiErrorResponse {
   requestId?: string | null
 }
 
-export interface AuditLogDeleteResponse {
-  deleted: number
-}
-
 export interface AuditLogResponse {
   id: number
   userId: number | null
@@ -25,7 +21,6 @@ export interface AuditLogResponse {
   targetName: string | null
   actorNameSource: string
   targetNameSource: string
-  canDelete: boolean
 }
 
 export interface BatchDownloadRequest {
@@ -175,10 +170,6 @@ export interface FileResponse {
   mimeType: string | null
   sha256: string | null
   createdAt: string
-}
-
-export interface IdList {
-  ids: Array<number>
 }
 
 export interface InitUploadRequest {
@@ -858,8 +849,6 @@ export interface UserUpdate {
 /** Success body of each endpoint, keyed by "METHOD path" relative to /api/v1 (the axios baseURL). */
 export interface ApiResponses {
   "GET /admin/audit-logs": PageResponseOfAuditLogResponse
-  "POST /admin/audit-logs/batch-delete": AuditLogDeleteResponse
-  "DELETE /admin/audit-logs/{id}": AuditLogDeleteResponse
   "POST /admin/departments": DepartmentResponse
   "DELETE /admin/departments/{id}": EmptyResponse
   "PUT /admin/departments/{id}": DepartmentResponse

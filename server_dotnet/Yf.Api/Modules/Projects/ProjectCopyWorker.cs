@@ -6,13 +6,36 @@ using Yf.Api.Modules.Files;
 
 namespace Yf.Api.Modules.Projects;
 
+/// <summary>
+/// In-process doorbell rung after a copy job is committed, so an idle worker claims it at once instead of
+/// on its next fallback poll. The database queue stays authoritative; a missed ring only delays pickup.
+/// </summary>
+internal sealed class ProjectCopyWakeSignal
+{
+    private readonly SemaphoreSlim signal = new(0, 1);
+
+    internal void Ring()
+    {
+        try { signal.Release(); }
+        catch (SemaphoreFullException) { }
+    }
+
+    internal async Task WaitAsync(TimeSpan timeout, CancellationToken ct) => await signal.WaitAsync(timeout, ct);
+}
+
 /// <summary>Durable database queue with a cross-instance lease and bounded concurrency of one.</summary>
 internal sealed class ProjectCopyWorker(
     AppDb database,
     AppOptions options,
     IServiceScopeFactory scopes,
-    ILogger<ProjectCopyWorker> logger) : BackgroundService
+    ILogger<ProjectCopyWorker> logger,
+    ProjectCopyWakeSignal? wake = null) : BackgroundService
 {
+    /// <summary>Fallback poll while idle (jobs from another process, or a ring that was missed).</summary>
+    internal static readonly TimeSpan IdlePollInterval = TimeSpan.FromSeconds(5);
+    private readonly ProjectCopyWakeSignal wakeSignal = wake ?? new ProjectCopyWakeSignal();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> retainedExecutions = new(StringComparer.Ordinal);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.CopyWorkerEnabled) return;
@@ -61,7 +84,7 @@ internal sealed class ProjectCopyWorker(
                     await ScavengeOwnedDirectoriesAsync(stoppingToken);
                     nextScavenge = DateTime.UtcNow.AddMinutes(10);
                 }
-                await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
+                await wakeSignal.WaitAsync(IdlePollInterval, stoppingToken);
                 continue;
             }
 
@@ -188,49 +211,73 @@ internal sealed class ProjectCopyWorker(
         return recovered.Count;
     }
 
+    /// <summary>
+    /// Deletes staging directories that no running execution owns and no file row references. A directory
+    /// found to be referenced (the stored files of a finished copy) never becomes unreferenced by a copy
+    /// job again, so it is remembered and not re-checked on every scavenging pass.
+    /// </summary>
     internal async Task<int> ScavengeOwnedDirectoriesAsync(CancellationToken ct)
     {
         var root = FileStorage.Root(options.StorageRoot);
         var jobsRoot = Path.Combine(root, "copy-jobs");
         if (!Directory.Exists(jobsRoot)) return 0;
         jobsRoot = FileStorage.ResolveExisting(root, jobsRoot, requireFile: false, ct);
-        var removed = 0;
+        var candidates = new List<(ulong JobId, string Token, string Directory)>();
         foreach (var jobDirectory in Directory.EnumerateDirectories(jobsRoot, "*", SearchOption.TopDirectoryOnly))
         {
             ct.ThrowIfCancellationRequested();
             if (!ulong.TryParse(Path.GetFileName(jobDirectory), out var jobId)) continue;
             foreach (var executionDirectory in Directory.EnumerateDirectories(jobDirectory, "*", SearchOption.TopDirectoryOnly))
             {
-                ct.ThrowIfCancellationRequested();
                 var token = Path.GetFileName(executionDirectory);
                 if (token.Length != 32 || token.Any(character => !Uri.IsHexDigit(character))) continue;
-                var relativePrefix = $"copy-jobs/{jobId}/{token}/";
-                bool keep;
-                await using (var conn = await database.OpenAsync(ct))
-                await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
-                await using (var db = EfDb.Use(conn, tx))
-                {
-                    var active = await db.ProjectCopyJobs.AnyAsync(job => job.Id == jobId
-                        && job.Status == ProjectCopyJobStatuses.Running && job.ExecutionToken == token, ct);
-                    var referenced = await db.Files.AnyAsync(file => file.StoragePath.StartsWith(relativePrefix), ct);
-                    keep = active || referenced;
-                    await tx.CommitAsync(ct);
-                }
-                if (keep) continue;
-                try
-                {
-                    FileStorage.DeleteDirectoryTree(root, executionDirectory, ct);
-                    removed++;
-                }
-                catch (Exception error)
-                {
-                    logger.LogWarning(error,
-                        "Failed to scavenge project copy staging for job {JobId} execution {ExecutionToken}.", jobId, token);
-                }
+                if (retainedExecutions.ContainsKey(RetainedKey(jobId, token))) continue;
+                candidates.Add((jobId, token, executionDirectory));
+            }
+        }
+        if (candidates.Count == 0) return 0;
+
+        var jobIds = candidates.Select(candidate => candidate.JobId).Distinct().ToArray();
+        await using var conn = await database.OpenAsync(ct);
+        await using var db = EfDb.Use(conn);
+        var jobs = await db.ProjectCopyJobs.AsNoTracking()
+            .Where(job => Enumerable.Contains(jobIds, job.Id))
+            .Select(job => new { job.Id, job.Status, job.ExecutionToken, job.ResultProjectId })
+            .ToDictionaryAsync(job => job.Id, ct);
+        var removed = 0;
+        foreach (var (jobId, token, executionDirectory) in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+            jobs.TryGetValue(jobId, out var job);
+            if (job is { Status: ProjectCopyJobStatuses.Running } && job.ExecutionToken == token) continue;
+            var relativePrefix = $"copy-jobs/{jobId}/{token}/";
+            // The result project narrows the lookup to one project's files (idx_files_project_status);
+            // the unscoped check only runs once, right before a directory is deleted.
+            var referenced = job?.ResultProjectId is ulong resultProjectId
+                && await db.Files.AnyAsync(file => file.ProjectId == resultProjectId
+                    && file.StoragePath.StartsWith(relativePrefix), ct);
+            referenced = referenced || await db.Files.AnyAsync(file => file.StoragePath.StartsWith(relativePrefix), ct);
+            if (referenced)
+            {
+                retainedExecutions.TryAdd(RetainedKey(jobId, token), 0);
+                continue;
+            }
+            try
+            {
+                FileStorage.DeleteDirectoryTree(root, executionDirectory, ct);
+                removed++;
+            }
+            catch (Exception error)
+            {
+                logger.LogWarning(error,
+                    "Failed to scavenge project copy staging for job {JobId} execution {ExecutionToken}.", jobId, token);
             }
         }
         return removed;
     }
+
+    private static string RetainedKey(ulong jobId, string token) =>
+        jobId.ToString(System.Globalization.CultureInfo.InvariantCulture) + "/" + token;
 
     private async Task MonitorLeaseAsync(MySqlConnection leaseConnection, string lockName,
         CancellationTokenSource execution, CancellationToken stoppingToken)

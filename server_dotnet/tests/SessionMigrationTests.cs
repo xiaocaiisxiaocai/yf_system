@@ -51,6 +51,37 @@ public sealed class SessionMigrationTests
         Assert.Equal(4, indexes.Length);
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task UpgradeRetiresManualAuditDeletionGrantAndRedundantActionIndex()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("audit_delete_upgrade", ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync("20260923141854_AddProjectCopyJobs", ct);
+        await database.ExecuteAsync("""
+            INSERT INTO permissions(id,code,name,type,parent_id,sort_no) VALUES
+                (7,'log:audit','操作日志','MENU',NULL,6),(34,'log:view','日志查看','ACTION',7,25),
+                (35,'log:delete','删除日志','ACTION',7,26);
+            INSERT INTO roles(id,name,description,is_built_in,status) VALUES(9201,'日志管理员','迁移测试',0,'ACTIVE');
+            INSERT INTO role_permissions(role_id,permission_id) VALUES(9201,34),(9201,35);
+            """, ct);
+        await migrator.MigrateAsync(cancellationToken: ct);
+        await migrator.MigrateAsync(cancellationToken: ct);
+        await using var connection = await database.Database.OpenAsync(ct);
+        Assert.Equal(0, await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='log:delete'"));
+        Assert.Equal(new ulong[] { 34 }, (await connection.QueryAsync<ulong>(
+            "SELECT permission_id FROM role_permissions WHERE role_id=9201")).ToArray());
+        Assert.Equal(0, await connection.ExecuteScalarAsync<int>("""
+            SELECT COUNT(*) FROM information_schema.statistics
+            WHERE table_schema=DATABASE() AND table_name='audit_logs' AND index_name='idx_audit_action'
+            """));
+        Assert.Equal(1, await connection.ExecuteScalarAsync<int>("""
+            SELECT COUNT(DISTINCT index_name) FROM information_schema.statistics
+            WHERE table_schema=DATABASE() AND table_name='audit_logs' AND index_name='idx_audit_action_time'
+            """));
+    }
+
     private sealed class SessionRow
     {
         public string Family { get; set; } = "";

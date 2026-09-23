@@ -264,91 +264,29 @@ def run_audit_checks(client, conn, check):
     with conn.cursor() as cursor:
         cursor.execute(
             "INSERT INTO audit_logs(user_id,employee_no,action,target_type,target_id,detail,ip,created_at) "
-            "VALUES(%s,%s,'AUDIT_DELETE_RECENT_FIXTURE','audit_fixture','recent',"
-            "JSON_OBJECT('fixture','recent'),NULL,UTC_TIMESTAMP(3))",
-            (admin_id, employee_no),
-        )
-        recent_id = cursor.lastrowid
-        cursor.execute(
-            "INSERT INTO audit_logs(user_id,employee_no,action,target_type,target_id,detail,ip,created_at) "
-            "VALUES(%s,%s,'AUDIT_DELETE_OLD_FIXTURE','audit_fixture','old',"
+            "VALUES(%s,%s,'AUDIT_RETAINED_FIXTURE','audit_fixture','old',"
             "JSON_OBJECT('fixture','old'),NULL,DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 31 DAY))",
             (admin_id, employee_no),
         )
         old_id = cursor.lastrowid
 
-    recent_page = client.call(
-        "GET", "/api/v1/admin/audit-logs?" + _query(targetType="audit_fixture", targetId="recent"))
-    recent_item = next(item for item in recent_page["list"] if item["id"] == recent_id)
-    client.call("DELETE", f"/api/v1/admin/audit-logs/{recent_id}", expected=403)
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT COUNT(*) FROM audit_logs WHERE id=%s", (recent_id,))
-        recent_after_rejection = cursor.fetchone()[0]
-    check(
-        "audit deletion rejects rows inside the 30-day retention window without writes",
-        recent_item["canDelete"] is False and recent_after_rejection == 1,
-    )
-
     old_page = client.call(
         "GET", "/api/v1/admin/audit-logs?" + _query(targetType="audit_fixture", targetId="old"))
     old_item = next(item for item in old_page["list"] if item["id"] == old_id)
-    deleted = client.call(
-        "POST", "/api/v1/admin/audit-logs/batch-delete", {"ids": [old_id, old_id]})
-    receipt = _latest(client, "AUDIT_LOG_DELETE")
-    receipt_detail = receipt["detail"]
-    deleted_records = receipt_detail["deletedRecords"]
-    check(
-        "audit deletion allows only expired rows and records a complete immutable summary",
-        old_item["canDelete"] is True
-        and deleted == {"deleted": 1}
-        and receipt_detail["ids"] == [old_id]
-        and receipt_detail["deleted"] == 1
-        and receipt_detail["retentionDays"] == 30
-        and bool(receipt_detail["cutoff"])
-        and deleted_records == [{
-            "id": old_id,
-            "action": "AUDIT_DELETE_OLD_FIXTURE",
-            "actorId": admin_id,
-            "employeeNo": employee_no,
-            "createdAt": old_item["createdAt"],
-            "targetType": "audit_fixture",
-            "targetId": "old",
-        }],
-    )
-
+    single = client.call("DELETE", f"/api/v1/admin/audit-logs/{old_id}", expected=404)
+    batch = client.call(
+        "POST", "/api/v1/admin/audit-logs/batch-delete", {"ids": [old_id]}, expected=404)
     with conn.cursor() as cursor:
-        cursor.execute(
-            "UPDATE audit_logs SET created_at=DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 31 DAY) "
-            "WHERE id=%s",
-            (receipt["id"],),
-        )
-        cursor.execute(
-            "INSERT INTO audit_logs(user_id,employee_no,action,target_type,target_id,detail,ip,created_at) "
-            "VALUES(NULL,NULL,'AUDIT_LOG_RETENTION','audit_log',NULL,"
-            "JSON_OBJECT('deleted',1,'retentionDays',30),NULL,"
-            "DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 31 DAY))"
-        )
-        retention_receipt_id = cursor.lastrowid
-    receipt_rows = client.call(
-        "GET", "/api/v1/admin/audit-logs?" + _query(category="SYSTEM", pageSize=100))["list"]
-    protected_receipts = {
-        item["id"]: item for item in receipt_rows
-        if item["id"] in {receipt["id"], retention_receipt_id}
-    }
-    client.call("POST", "/api/v1/admin/audit-logs/batch-delete", {
-        "ids": [receipt["id"], retention_receipt_id],
-    }, expected=403)
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT COUNT(*) FROM audit_logs WHERE id IN (%s,%s)",
-            (receipt["id"], retention_receipt_id),
-        )
-        protected_after_rejection = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM audit_logs WHERE id=%s", (old_id,))
+        retained = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM permissions WHERE code='log:delete'")
+        delete_grants = cursor.fetchone()[0]
     check(
-        "audit deletion and retention receipts remain non-deletable after the retention window",
-        len(protected_receipts) == 2
-        and all(item["canDelete"] is False for item in protected_receipts.values())
-        and protected_after_rejection == 2,
+        "audit logs have no manual deletion endpoint, grant or deletable flag",
+        "canDelete" not in old_item
+        and single["code"] == 40401 and batch["code"] == 40401
+        and retained == 1 and delete_grants == 0
+        and "log:delete" not in profile["permissions"],
     )
 
 

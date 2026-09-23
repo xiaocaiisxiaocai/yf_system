@@ -41,19 +41,15 @@ public static class SystemModule
             return await next(context);
         });
         logs.MapGet("", (HttpContext ctx, SystemService service, CancellationToken ct) => service.ListLogsAsync(ctx.Request, ct));
-        logs.MapDelete("/{id:long}", (ulong id, HttpContext ctx, SystemService service, CancellationToken ct) => service.DeleteLogsAsync([id], AccessService.GetCurrent(ctx), ct));
-        logs.MapPost("/batch-delete", (IdList body, HttpContext ctx, SystemService service, CancellationToken ct) => service.DeleteLogsAsync(body.Ids, AccessService.GetCurrent(ctx), ct));
         return endpoints;
     }
 }
 
 public sealed record ConfigItem(string Key, string? Value);
 public sealed record ConfigBatch(ConfigItem[] Items);
-public sealed record IdList(ulong[] Ids);
 
-public sealed class SystemService(AppDb db, AuditService audit, AppOptions? options = null)
+public sealed class SystemService(AppDb db, AuditService audit)
 {
-    private readonly int auditRetentionDays = (options ?? new AppOptions()).AuditRetentionDays;
     public async Task<SystemConfigResponse[]> ListConfigsAsync(CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
@@ -148,7 +144,6 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions? opti
         await using var conn = await db.OpenAsync(ct);
         await using var context = EfDb.Use(conn);
         var query = context.AuditLogs.AsNoTracking();
-        var deletionCutoff = (await DbClock.UtcNowAsync(context, ct)).AddDays(-auditRetentionDays);
         var action = request.Query["action"].ToString().Trim();
         var targetType = request.Query["targetType"].ToString().Trim();
         var targetId = request.Query["targetId"].ToString().Trim();
@@ -192,7 +187,6 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions? opti
             CurrentTargetName = null,
             Action = log.Action, TargetType = log.TargetType, TargetId = log.TargetId, Detail = log.Detail,
             Ip = log.Ip, CreatedAt = log.CreatedAt,
-            CanDelete = log.CreatedAt < deletionCutoff && log.Action != "AUDIT_LOG_DELETE" && log.Action != "AUDIT_LOG_RETENTION",
         }).Page(offset, size).ToArrayAsync(ct);
         return new(rows.Select(x => x.ToResponse()).ToArray(), total, page, size);
     }
@@ -213,47 +207,6 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions? opti
         "upload.allowed_exts" => "允许的文件类型",
         _ => key,
     };
-
-    public async Task<AuditLogDeleteResponse> DeleteLogsAsync(ulong[] ids, CurrentUser actor, CancellationToken ct)
-    {
-        if (ids is null || ids.Length is < 1 or > 500) throw ApiException.BadRequest("每次可删除 1–500 条日志");
-        await using var conn = await db.OpenAsync(ct);
-        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        await AccessService.LockManagementAsync(conn, tx, ct);
-        actor = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
-        AccessService.RequireInternal(actor);
-        await AccessService.RequirePermissionAsync(conn, tx, actor, "log:view", ct);
-        await AccessService.RequirePermissionAsync(conn, tx, actor, "log:delete", ct);
-        await using var context = EfDb.Use(conn, tx);
-        var distinctIds = ids.Distinct().Order().ToArray();
-        // One round trip locks every requested row, in id order like the old per-row loop, so concurrent
-        // deletions still acquire locks in the same order. Ids are bound as parameters ({0}, {1}, ...).
-        var placeholders = string.Join(",", distinctIds.Select((_, index) => "{" + index + "}"));
-        var lockQuery = System.Runtime.CompilerServices.FormattableStringFactory.Create(
-            "SELECT * FROM audit_logs WHERE id IN (" + placeholders + ") ORDER BY id FOR UPDATE",
-            distinctIds.Cast<object?>().ToArray());
-        var rows = await context.AuditLogs
-                .FromSql(lockQuery)
-                .AsNoTracking().ToListAsync(ct);
-        if (rows.Any(x => x.Action is "AUDIT_LOG_DELETE" or "AUDIT_LOG_RETENTION"))
-            throw ApiException.Forbidden("日志删除及保留期清理记录不可手动删除");
-        var cutoff = (await DbClock.UtcNowAsync(context, ct)).AddDays(-auditRetentionDays);
-        if (rows.Any(row => row.CreatedAt >= cutoff))
-            throw ApiException.Forbidden($"仅允许手动删除超过 {auditRetentionDays} 天保留期限的日志");
-        var actualIds = rows.Select(x => x.Id).ToArray();
-        var deleted = actualIds.Length == 0 ? 0 : await context.AuditLogs.Where(log => Enumerable.Contains(actualIds, log.Id)).ExecuteDeleteAsync(ct);
-        if (deleted > 0) await audit.WriteAsync(conn, tx, actor.Id, "AUDIT_LOG_DELETE", "audit_log", null, new
-        {
-            ids = actualIds, deleted, retentionDays = auditRetentionDays, cutoff,
-            deletedRecords = rows.Select(row => new
-            {
-                row.Id, row.Action, actorId = row.UserId, row.EmployeeNo,
-                row.CreatedAt, row.TargetType, row.TargetId,
-            }).ToArray(),
-        }, null, ct);
-        await tx.CommitAsync(ct);
-        return new(deleted);
-    }
 
     private static readonly Dictionary<string, string[]> Categories = new(StringComparer.Ordinal)
     {
@@ -280,7 +233,6 @@ public sealed class AuditRow
     public string? Detail { get; set; }
     public string? Ip { get; set; }
     public DateTime CreatedAt { get; set; }
-    public bool CanDelete { get; set; }
     public AuditLogResponse ToResponse()
     {
         var detail = Detail is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(Detail);
@@ -295,6 +247,6 @@ public sealed class AuditRow
             actorSnapshot ?? CurrentActorName,
             targetSnapshot ?? CurrentTargetName,
             actorSnapshot is not null ? "snapshot" : CurrentActorName is not null ? "current" : "unknown",
-            targetSnapshot is not null ? "snapshot" : CurrentTargetName is not null ? "current" : "unknown", CanDelete);
+            targetSnapshot is not null ? "snapshot" : CurrentTargetName is not null ? "current" : "unknown");
     }
 }

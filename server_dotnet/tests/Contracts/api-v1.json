@@ -1,5 +1,4 @@
 [
-  "DELETE /api/v1/admin/audit-logs/{}",
   "DELETE /api/v1/admin/departments/{}",
   "DELETE /api/v1/admin/roles/{}",
   "DELETE /api/v1/admin/supplier-accounts/{}",
@@ -55,7 +54,6 @@
   "GET /api/v1/project-owner-options",
   "GET /api/v1/supplier-options",
   "GET /api/v1/uploads/{}",
-  "POST /api/v1/admin/audit-logs/batch-delete",
   "POST /api/v1/admin/departments",
   "POST /api/v1/admin/roles",
   "POST /api/v1/admin/suppliers",

@@ -10,7 +10,9 @@ export default defineConfig({
     clearMocks: true,
     restoreMocks: true,
     mockReset: true,
-    maxWorkers: 1,
-    minWorkers: 1,
+    // Files run in parallel with per-file isolation. Four workers keep jsdom UI tests stable on a busy
+    // machine; the longer limits absorb CPU contention rather than masking real hangs.
+    maxWorkers: 4,
+    testTimeout: 20_000,
   },
 })

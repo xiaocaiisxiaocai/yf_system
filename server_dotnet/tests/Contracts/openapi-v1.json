@@ -4172,85 +4172,6 @@
           }
         }
       }
-    },
-    "/api/v1/admin/audit-logs/{id}": {
-      "delete": {
-        "tags": [
-          "Yf.Api.Tests"
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AuditLogDeleteResponse"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/audit-logs/batch-delete": {
-      "post": {
-        "tags": [
-          "Yf.Api.Tests"
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/IdList"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AuditLogDeleteResponse"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -4276,25 +4197,11 @@
         },
         "additionalProperties": false
       },
-      "AuditLogDeleteResponse": {
-        "required": [
-          "deleted"
-        ],
-        "type": "object",
-        "properties": {
-          "deleted": {
-            "type": "integer",
-            "format": "int32"
-          }
-        },
-        "additionalProperties": false
-      },
       "AuditLogResponse": {
         "required": [
           "action",
           "actorName",
           "actorNameSource",
-          "canDelete",
           "createdAt",
           "detail",
           "employeeNo",
@@ -4356,9 +4263,6 @@
           },
           "targetNameSource": {
             "type": "string"
-          },
-          "canDelete": {
-            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -4944,22 +4848,6 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
-          }
-        },
-        "additionalProperties": false
-      },
-      "IdList": {
-        "required": [
-          "ids"
-        ],
-        "type": "object",
-        "properties": {
-          "ids": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "int64"
-            }
           }
         },
         "additionalProperties": false

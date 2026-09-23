@@ -25,7 +25,7 @@
 
 ## 删除操作
 
-物理删除由独立权限点控制：`project:delete`、`file:delete`、`supplier:delete`、`supplier:account_delete`、`user:delete`、`dept:delete`、`role:delete`、`log:delete` 和既有的 `message:delete_any`。新增权限只授予系统管理员角色，之后可在角色页按职责分配；管理页访问和其他编辑操作仍使用各自的菜单与管理权限。后端会在删除事务内重新校验权限，防止并发撤权后继续执行。
+物理删除由独立权限点控制：`project:delete`、`file:delete`、`supplier:delete`、`supplier:account_delete`、`user:delete`、`dept:delete`、`role:delete` 和既有的 `message:delete_any`。新增权限只授予系统管理员角色，之后可在角色页按职责分配；管理页访问和其他编辑操作仍使用各自的菜单与管理权限。后端会在删除事务内重新校验权限，防止并发撤权后继续执行。
 
 | 对象 | 删除条件与保留规则 |
 |---|---|
@@ -33,7 +33,7 @@
 | 用户、供应商账号 | 无业务历史或引用；有关联记录时使用禁用，保留创建人、确认人和已读凭证 |
 | 供应商 | 无项目且无账号；不级联删除账号 |
 | 组织、角色 | 有下级组织或绑定用户时拒绝删除；内置角色可分配权限、禁用或删除，名称保持固定 |
-| 操作日志 | 手动清理与 `AUDIT_LOG_DELETE` 留痕同事务，记录实际删除 ID 和数量；清理记录本身不可手动删除。后台每小时自动删除超过 `App:AuditRetentionDays`（默认 30 天）的日志（含清理记录），并写入一条 `AUDIT_LOG_RETENTION` 汇总；项目动态另存于 `project_activities`，不受影响。邮件发件箱中已发送/失败/已取消的记录由邮件后台每小时清理超过 `App:MailRetentionDays`（默认 90 天）的部分，待发送记录不受影响 |
+| 操作日志 | 不提供手动删除接口或权限。后台每小时自动删除超过 `App:AuditRetentionDays`（默认 30 天）的日志，并写入一条 `AUDIT_LOG_RETENTION` 汇总；历史上的 `AUDIT_LOG_DELETE` 记录只读展示，到期后同样自动清理。项目动态另存于 `project_activities`，不受影响。邮件发件箱中已发送/失败/已取消的记录由邮件后台每小时清理超过 `App:MailRetentionDays`（默认 90 天）的部分，待发送记录不受影响 |
 
 系统管理员角色绑定启用用户时必须保留用户管理和角色管理入口，避免管理员在权限分配时锁死系统；角色禁用和删除仍受绑定用户校验约束。删除相关的越权与保留规则回归包含在 `python scripts/test-isolated.py` 完整套件内，脚本只允许本机 MySQL，创建并清理临时测试库，不使用业务库运行删除测试。
 

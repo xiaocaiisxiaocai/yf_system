@@ -39,7 +39,6 @@ internal static class BootstrapSeedCatalog
         (32, "role:manage", "角色管理", "ACTION", 6, 23),
         (33, "role:delete", "删除角色", "ACTION", 6, 24),
         (34, "log:view", "日志查看", "ACTION", 7, 25),
-        (35, "log:delete", "删除日志", "ACTION", 7, 26),
         (36, "config:manage", "系统参数管理", "ACTION", 8, 27),
         (45, "project:submit", "提交项目验收", "ACTION", 2, 40),
         (46, "project:confirm", "确认/驳回项目", "ACTION", 2, 41),

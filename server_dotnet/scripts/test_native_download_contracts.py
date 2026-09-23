@@ -191,6 +191,14 @@ def run_native_download_checks(admin, conn, check, file_id, expected_bytes):
         and f"path={grant['url']}" in session_cookies,
     )
 
+    check(
+        "only native download responses may be framed, and only by the same origin",
+        first_headers.get("X-Frame-Options") == "SAMEORIGIN"
+        and first_headers.get("Content-Security-Policy") == "frame-ancestors 'self'"
+        and grant_headers.get("X-Frame-Options") == "DENY"
+        and grant_headers.get("Content-Security-Policy") == "frame-ancestors 'none'",
+    )
+
     cookie_header = {"Cookie": f"yf_dls_{handle}={session_secret}"}
     offsets = list(range(8, 18))
     with ThreadPoolExecutor(max_workers=10) as pool:

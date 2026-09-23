@@ -49,11 +49,6 @@ export interface AuditLogRow {
   detail?: AuditDetail | null
   ip?: string | null
   createdAt: string
-  canDelete?: boolean
-}
-
-export function isAuditDeletable(row?: AuditLogRow): boolean {
-  return row?.canDelete === true && row.action !== 'AUDIT_LOG_DELETE' && row.action !== 'AUDIT_LOG_RETENTION'
 }
 
 export interface ActionMeta {

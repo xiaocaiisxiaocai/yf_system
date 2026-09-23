@@ -60,22 +60,17 @@ const pathOf=r=>new URL(r.url()).pathname;
  });
  await navigate(p,'/logs');await p.getByRole('button',{name:'查询',exact:true}).waitFor();
  const query=async(expected={})=>{const keyword=(await p.getByPlaceholder('搜索姓名、对象或详情').inputValue()).trim();const ready=p.waitForResponse(r=>{const url=new URL(r.url());return url.pathname==='/api/v1/admin/audit-logs'&&r.status()===200&&(url.searchParams.get('keyword')||'')===keyword&&Object.entries(expected).every(([key,value])=>url.searchParams.get(key)===value);});await p.getByRole('button',{name:'查询',exact:true}).click();return(await ready).json();};
- await record('审计搜索详情与单条删除持久化',async()=>{
+ await record('审计搜索详情且不可手动删除',async()=>{
  await p.getByPlaceholder('搜索姓名、对象或详情').fill('CONFIG_UPDATE');const found=await query();assert(found.total>=2);
   const first=found.list.find(item=>JSON.stringify(item.detail||{}).includes('upload.allowed_exts'))||found.list[0];const row=p.getByRole('row').filter({hasText:'允许的文件类型'}).first();await row.getByRole('button',{name:'查看',exact:true}).click();
   const drawer=p.locator('.arco-drawer:visible');await drawer.getByText('CONFIG_UPDATE',{exact:true}).waitFor();await drawer.getByText('允许的文件类型',{exact:true}).waitFor();
   await drawer.getByText('原始数据',{exact:true}).click();const raw=drawer.locator('.audit-json');await raw.waitFor();assert.match(await raw.innerText(),/upload\.allowed_exts/);
   await drawer.locator('.arco-drawer-close-icon').click();
-  await row.getByRole('button',{name:'删除',exact:true}).click();await action(p,'/admin/audit-logs/'+first.id,'DELETE',()=>p.locator('.arco-popconfirm:visible').last().getByRole('button',{name:'确定',exact:true}).click());
-  const after=await(await api(c,'GET','/admin/audit-logs?action=CONFIG_UPDATE',undefined,auth.accessToken)).json();assert(!after.list.some(x=>x.id===first.id));assert.equal(after.total,found.total-1);
- });
- await record('审计批量删除及清理记录保护',async()=>{
-  const remaining=await query();assert(remaining.total>0);await p.getByRole('checkbox').first().locator('..').click();
-  await p.getByRole('button',{name:'删除所选',exact:true}).click();await action(p,'/admin/audit-logs/batch-delete','POST',()=>p.locator('.arco-popconfirm:visible').last().getByRole('button',{name:'确定',exact:true}).click());
-  assert.equal((await(await api(c,'GET','/admin/audit-logs?action=CONFIG_UPDATE',undefined,auth.accessToken)).json()).total,0);
-  await p.getByPlaceholder('搜索姓名、对象或详情').fill('AUDIT_LOG_DELETE');const protectedRows=await query();assert(protectedRows.total>0);
-  const rows=p.getByRole('row').filter({hasText:'AUDIT_LOG_DELETE'});assert.equal(await rows.getByRole('button',{name:'删除',exact:true}).count(),0);
-  await api(c,'DELETE','/admin/audit-logs/'+protectedRows.list[0].id,undefined,auth.accessToken,403);
+  assert.equal(await p.getByRole('button',{name:'删除',exact:true}).count(),0);assert.equal(await p.getByRole('button',{name:'删除所选',exact:true}).count(),0);
+  assert.equal(await p.locator('.arco-table-th .arco-checkbox').count(),0);
+  await api(c,'DELETE','/admin/audit-logs/'+first.id,undefined,auth.accessToken,404);
+  await api(c,'POST','/admin/audit-logs/batch-delete',{ids:[first.id]},auth.accessToken,404);
+  const after=await(await api(c,'GET','/admin/audit-logs?action=CONFIG_UPDATE',undefined,auth.accessToken)).json();assert(after.list.some(x=>x.id===first.id));assert.equal(after.total,found.total);
  });
  await record('审计分类筛选查询和重置',async()=>{
   const category=p.locator('.arco-select').filter({has:p.getByText('业务分类',{exact:true})});

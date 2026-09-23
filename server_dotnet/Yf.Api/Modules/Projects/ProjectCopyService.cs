@@ -14,7 +14,8 @@ internal sealed class ProjectCopyService(
     AppOptions options,
     AuditService audit,
     IProjectRealtimePublisher realtime,
-    ProjectGroupStatusService groupStatus)
+    ProjectGroupStatusService groupStatus,
+    ProjectCopyWakeSignal? wake = null)
 {
     internal async Task<ProjectCopyJobResponse> EnqueueAsync(MySqlConnection conn, CurrentUser actor,
         ulong sourceProjectId, ProjectCopyRequest request, string? ip, CancellationToken ct)
@@ -82,6 +83,7 @@ internal sealed class ProjectCopyService(
         await db.SaveChangesAsync(ct);
         // Once the durable row exists, finish the commit even if the client disconnected.
         await tx.CommitAsync(CancellationToken.None);
+        wake?.Ring();
         return JobResponse(job);
     }
 
