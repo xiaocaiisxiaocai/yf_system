@@ -104,16 +104,16 @@ async function assertExcelGrid(dialog, expectedRows) {
       items: [{ key: 'upload.chunk_size', value: String(1024 * 1024) }],
     }, adminToken);
     const project = await createProjectGroup(
-      internalApi, f.users.member.token, f.suppliers.a.id, '文件边界验收-' + suffix);
+      internalApi, f.users.manager.token, f.suppliers.a.id, '文件边界验收-' + suffix);
     await api(internalApi, 'PUT', '/projects/' + project.id + '/status',
-      { status: 'IN_PROGRESS' }, f.users.member.token);
+      { status: 'IN_PROGRESS' }, f.users.manager.token);
 
     const c2sNames = [];
     const s2cNames = [];
     for (let index = 0; index < 7; index++) {
       const name = prefix + '-c2s-' + String(index).padStart(2, '0') + '.zip';
       const bytes = Buffer.from('C2S|' + suffix + '|' + index);
-      await uploadApi(internalApi, f.users.member.token, project.id, name, bytes);
+      await uploadApi(internalApi, f.users.manager.token, project.id, name, bytes);
       c2sNames.push(name);
     }
     for (let index = 0; index < 6; index++) {

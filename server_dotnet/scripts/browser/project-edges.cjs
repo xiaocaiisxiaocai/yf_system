@@ -193,6 +193,9 @@ async function uploadFixture(context, token, projectId, name, bytes) {
       await page.route('**/api/v1/robot-parts?*', empty);
       await page.getByRole('button', { name: '新建主项目', exact: true }).click();
       const dialog = page.getByRole('dialog');
+      // Robot parts are loaded per supplier, so the missing-part guidance only appears after one is chosen.
+      await dialog.getByPlaceholder('选择 Robot 厂商', { exact: true }).click();
+      await page.getByRole('option', { name: f.suppliers.a.name, exact: true }).click();
       await dialog.getByText('所选 Robot 厂商暂无启用的料号', { exact: false }).waitFor();
       await dialog.getByText('暂无启用的优先级', { exact: false }).waitFor();
       assert(await dialog.getByRole('button', { name: '创建主项目', exact: true }).isDisabled());

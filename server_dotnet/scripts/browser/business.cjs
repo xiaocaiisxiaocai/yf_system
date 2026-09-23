@@ -14,6 +14,18 @@ async function json(context, token, method, url, body, expected = 200) {
   return (await api(context, method, url, body, token, expected)).json();
 }
 
+// Playwright has no getByDisplayValue; poll the read-only field until the part's model is filled in.
+async function waitForFieldValue(field, expected, timeout = 10000) {
+  const deadline = Date.now() + timeout;
+  let last;
+  while (Date.now() < deadline) {
+    last = await field.inputValue().catch(() => undefined);
+    if (last === expected) return;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.equal(last, expected, 'auto-filled field value');
+}
+
 async function openUser(key) {
   const context = await browser.newContext({
     viewport: { width: 1440, height: 1000 },
@@ -26,7 +38,7 @@ async function openUser(key) {
     : f.users[key];
   const result = await login(page, user.username, user.changedPassword);
   await page.waitForURL(s.base + '/');
-  sessions[key] = { context, page, token: result.accessToken };
+  sessions[key] = { context, page, token: result.accessToken, user: result.user };
   return page;
 }
 
@@ -153,7 +165,9 @@ async function preview(page, name, kind, label) {
         await modal.getByPlaceholder('请输入机型', { exact: true }).fill('自动验收机型');
         await choose(creatorPage, modal, '选择 Robot 厂商', f.suppliers[key].name);
         await choose(creatorPage, modal, '选择 Robot 料号', f.robotParts[key].partNumber);
-        await modal.getByDisplayValue(f.robotParts[key].model, { exact: true }).waitFor();
+        await waitForFieldValue(
+          modal.locator('.arco-form-item').filter({ hasText: 'Robot 型号（自动带出）' }).locator('textarea'),
+          f.robotParts[key].model);
         await choose(creatorPage, modal, '选择优先级', priorities[0].name);
         const date = modal.getByPlaceholder('选择需求完成时间', { exact: true });
         await date.fill('2099-12-31');
@@ -175,7 +189,8 @@ async function preview(page, name, kind, label) {
         await creatorPage.getByRole('button', { name: '开始', exact: true }).waitFor();
         await action(creatorPage, '/projects/' + project.id + '/status', 'PUT',
           () => creatorPage.getByRole('button', { name: '开始', exact: true }).click());
-        await creatorPage.getByText(creator.user.realName, { exact: false }).waitFor();
+        // The creator is the owner; match the owner label (name + employee no.), not the header's own name.
+        await creatorPage.getByText(creator.user.realName + '（' + creator.user.employeeNo + '）', { exact: false }).first().waitFor();
         f.uiProjects = projects;
         save();
       });
