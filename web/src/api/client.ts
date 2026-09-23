@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosError, AxiosRequestConfig } from 'axios'
 import { Message } from '@arco-design/web-react'
-import { useAuth } from '../store/auth'
+import { useAuth, type AuthLoginResponse } from '../store/auth'
 
 export const http = axios.create({ baseURL: '/api/v1', timeout: 60000 })
 
@@ -15,6 +15,29 @@ export type QuietRequestConfig = AxiosRequestConfig & {
 }
 type SessionConfig = QuietRequestConfig & { _retried?: boolean; authGeneration?: number }
 const isCurrentSession = (config?: SessionConfig) => !config || config.authGeneration === useAuth.getState().generation
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === 'string')
+const hasTokenEnvelope = (value: Record<string, unknown>): boolean =>
+  isNonEmptyString(value.accessToken) && typeof value.expiresAt === 'number'
+  && Number.isSafeInteger(value.expiresAt) && value.expiresAt > 0
+
+function isAuthLoginResponse(value: unknown): value is AuthLoginResponse {
+  if (!isRecord(value) || !isRecord(value.user)) return false
+  const user = value.user
+  return typeof user.id === 'number' && Number.isFinite(user.id) && user.id > 0
+    && isNonEmptyString(user.employeeNo) && isNonEmptyString(user.realName)
+    && typeof user.email === 'string' && (user.userType === 'INTERNAL' || user.userType === 'SUPPLIER')
+    && (user.supplierId === null
+      || (typeof user.supplierId === 'number' && Number.isFinite(user.supplierId) && user.supplierId > 0))
+    && typeof user.isSystemAdmin === 'boolean'
+    && typeof value.mustChangePassword === 'boolean'
+    && isStringArray(value.permissions) && isStringArray(value.menus)
+    && hasTokenEnvelope(value)
+}
 
 /**
  * 同源标签共享 refresh cookie，必须在拿到浏览器锁后才发送旋转请求：两个标签同时用同一个旧 cookie 刷新，
@@ -117,15 +140,11 @@ async function tryRefresh(generation = useAuth.getState().generation): Promise<b
     const pending = withAuthLock(async () => {
       if (useAuth.getState().generation !== generation) return false
       return axios
-      .post('/api/v1/auth/refresh', null, { withCredentials: true, timeout: 60000 })
-      .then(async (r) => {
-        const accessToken: string = r.data.accessToken
-        const profile = await axios.get('/api/v1/auth/profile', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-          timeout: 60000,
-        })
+      .post<unknown>('/api/v1/auth/refresh', null, { withCredentials: true, timeout: 60000 })
+      .then((r) => {
         if (useAuth.getState().generation !== generation) return false
-        useAuth.getState().setLogin({ ...profile.data, accessToken }, false)
+        if (!isAuthLoginResponse(r.data)) throw new Error('刷新响应格式无效')
+        useAuth.getState().setLogin(r.data, false)
         return true
       })
     })

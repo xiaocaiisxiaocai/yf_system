@@ -18,7 +18,7 @@ internal sealed class CollaborationService
         CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         var canReceivePendingAcceptance = ProjectWorkflowRules.CanReceivePendingAcceptance(
             current,
@@ -66,7 +66,7 @@ internal sealed class CollaborationService
     {
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         var canReceivePendingAcceptance = ProjectWorkflowRules.CanReceivePendingAcceptance(
             current,
@@ -83,7 +83,7 @@ internal sealed class CollaborationService
                 read.ActivityId == activity.Id && read.UserId == current.Id)
             let fileAvailable = activity.ActivityType == "FILE" && activity.TargetId != null
                 && db.Files.Any(file => file.Id == activity.TargetId
-                    && file.ProjectId == activity.ProjectId && file.Status == "AVAILABLE")
+                    && file.ProjectId == activity.ProjectId && file.Status == FileStatuses.Available)
             let messageAvailable = activity.ActivityType == "MESSAGE" && activity.TargetId != null
                 && db.Messages.Any(message => message.Id == activity.TargetId
                     && message.ProjectId == activity.ProjectId && message.Status == "NORMAL")

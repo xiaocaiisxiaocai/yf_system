@@ -53,10 +53,14 @@ try {
     $poolCreated=$installScript.IndexOf('New-WebAppPool -Name $AppPoolName',[StringComparison]::Ordinal)
     $poolIdentitySet=$installScript.IndexOf("-Name processModel.identityType -Value 'ApplicationPoolIdentity'",[StringComparison]::Ordinal)
     $poolProfileDisabled=$installScript.IndexOf('-Name processModel.loadUserProfile -Value $false',[StringComparison]::Ordinal)
+    $singleWorkerSet=$installScript.IndexOf('-Name processModel.maxProcesses -Value 1',[StringComparison]::Ordinal)
+    $singleWorkerValidated=$installScript.IndexOf('Assert-YfApplicationPoolProcessModel ($installedPool.processModel.identityType.ToString())',[StringComparison]::Ordinal)
     $siteCreated=$installScript.IndexOf('New-Website -Name $SiteName',[StringComparison]::Ordinal)
-    if ($poolCreated -lt 0 -or $poolIdentitySet -le $poolCreated -or $poolProfileDisabled -le $poolCreated -or $siteCreated -lt 0 -or
-        $poolIdentitySet -ge $siteCreated -or $poolProfileDisabled -ge $siteCreated) {
-        throw 'Installer does not fix the dedicated pool identity and profile before creating the site.'
+    if ($poolCreated -lt 0 -or $poolIdentitySet -le $poolCreated -or $poolProfileDisabled -le $poolCreated -or
+        $singleWorkerSet -le $poolCreated -or $singleWorkerValidated -le $singleWorkerSet -or $siteCreated -lt 0 -or
+        $poolIdentitySet -ge $siteCreated -or $poolProfileDisabled -ge $siteCreated -or
+        $singleWorkerSet -ge $siteCreated -or $singleWorkerValidated -ge $siteCreated) {
+        throw 'Installer does not fix and verify the dedicated single-worker pool before creating the site.'
     }
     Write-Output 'PASS installer applies path, configuration, ACL and pre-write environment guards'
 
@@ -125,13 +129,16 @@ try {
     Reject {
         Assert-YfConfigurationEnvironment $effectiveVariables @() @() @() @() 'D:\YfConfig\different.json'
     } 'mismatched effective YF_CONFIG_PATH refused'
-    Assert-YfApplicationPoolProcessModel 'ApplicationPoolIdentity' $false
+    Assert-YfApplicationPoolProcessModel 'ApplicationPoolIdentity' $false 1
     Reject {
-        Assert-YfApplicationPoolProcessModel 'SpecificUser' $false
+        Assert-YfApplicationPoolProcessModel 'SpecificUser' $false 1
     } 'custom application pool identity refused by maintenance guard'
     Reject {
-        Assert-YfApplicationPoolProcessModel 'ApplicationPoolIdentity' $true
+        Assert-YfApplicationPoolProcessModel 'ApplicationPoolIdentity' $true 1
     } 'application pool user profile refused by maintenance guard'
+    Reject {
+        Assert-YfApplicationPoolProcessModel 'ApplicationPoolIdentity' $false 2
+    } 'application pool web garden refused by maintenance guard'
     Write-Output 'PASS shared environment guard covers every IIS installation configuration source'
 
     $aclFixture=Join-Path $root 'acl-fixture.json'

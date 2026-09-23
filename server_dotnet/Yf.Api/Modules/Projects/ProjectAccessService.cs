@@ -90,7 +90,7 @@ public static class ProjectAccessService
             await owned.CommitAsync(ct);
             return result;
         }
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await using var db = EfDb.Use(conn, tx);
         return current.IsInternal
             && projectStatus == ProjectStatuses.InProgress
@@ -111,7 +111,9 @@ public static class ProjectAccessService
         CancellationToken ct)
     {
         if (tx is null) throw new InvalidOperationException("Project access validation requires a transaction.");
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = forUpdate
+            ? await AccessService.LockActorAsync(conn, tx, actor, ct)
+            : await AccessService.ReadActorAsync(conn, tx, actor, ct);
         return await RequireViewForValidatedActorAsync(conn, tx, current, projectId, forUpdate, ct);
     }
 
@@ -159,7 +161,7 @@ public static class ProjectAccessService
             if (current.SupplierId is null || current.SupplierId.Value != access.SupplierId)
                 throw ApiException.OutOfScope();
             if (!await db.Suppliers.AnyAsync(
-                    supplier => supplier.Id == current.SupplierId.Value && supplier.Status == "ACTIVE", ct))
+                    supplier => supplier.Id == current.SupplierId.Value && supplier.Status == AccountStatuses.Active, ct))
                 throw ApiException.OutOfScope();
             return access;
         }

@@ -8,6 +8,7 @@ public static class FilesModule
     {
         services.AddSingleton<BatchDownloadLimiter>();
         services.AddSingleton<MediaGrantService>();
+        services.AddSingleton<DownloadGrantService>();
         services.AddScoped<FileService>();
         services.AddScoped<UploadService>();
         services.AddHostedService<FilesMaintenanceService>();
@@ -48,6 +49,13 @@ public static class FilesModule
             HttpContext context, ulong id, FileService service, CancellationToken ct) =>
             await service.StreamAsync(context, id, inline: false, ct))
             .Produces(StatusCodes.Status200OK, contentType: "application/octet-stream");
+        api.MapPost("/files/{id:long}/download-grant", async (
+            HttpContext context, ulong id, FileService service, CancellationToken ct) =>
+            await service.CreateDownloadGrantAsync(context, id, ct));
+        api.MapGet("/files/{id:long}/native-download/{handle}", async (
+            HttpContext context, ulong id, string handle, FileService service, CancellationToken ct) =>
+            await service.StreamNativeAsync(context, id, handle, ct))
+            .Produces(StatusCodes.Status200OK, contentType: "application/octet-stream");
         api.MapGet("/files/{id:long}/content", async (
             HttpContext context, ulong id, FileService service, CancellationToken ct) =>
             await service.StreamAsync(context, id, inline: true, ct))
@@ -69,6 +77,13 @@ public static class FilesModule
             HttpContext context, BatchDownloadRequest request, FileService service, CancellationToken ct) =>
             await service.BatchDownloadAsync(context, request, ct))
             .Produces(StatusCodes.Status200OK, contentType: "application/zip");
+        api.MapPost("/files/batch-download-grant", async (
+            HttpContext context, BatchDownloadRequest request, FileService service, CancellationToken ct) =>
+            await service.CreateBatchDownloadGrantAsync(context, request, ct));
+        api.MapGet("/files/batch-download/{handle}", async (
+            HttpContext context, string handle, FileService service, CancellationToken ct) =>
+            await service.BatchDownloadNativeAsync(context, handle, ct))
+            .Produces(StatusCodes.Status200OK, contentType: "application/zip");
 
         return endpoints;
     }
@@ -81,6 +96,7 @@ public sealed record InitUploadRequest(
     string? FileMd5);
 
 public sealed record BatchDownloadRequest(IReadOnlyList<ulong> Ids);
+public sealed record DownloadGrantResponse(string Url, int ExpiresInSeconds);
 
 internal sealed class FileRow
 {

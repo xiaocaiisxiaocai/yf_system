@@ -15,7 +15,7 @@ internal sealed partial class ProjectService(
     internal async Task<ProjectDetailResponse> DetailAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
         await using var db = EfDb.Use(conn, tx);
@@ -118,7 +118,7 @@ internal sealed partial class ProjectService(
     internal async Task<ProjectSummaryResponse> SummaryAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         var project = await ProjectAccessService.RequireViewForValidatedActorAsync(
             conn, tx, current, projectId, false, ct);
         await using var db = EfDb.Use(conn, tx);
@@ -144,14 +144,14 @@ internal sealed partial class ProjectService(
     internal async Task<List<SupplierOption>> SupplierOptionsAsync(MySqlConnection conn, CurrentUser actor, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         AccessService.RequireInternal(current);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         await using var db = EfDb.Use(conn, tx);
         var canListAll = await ProjectAccessService.HasPermissionAsync(
             db, current.Id, "project:create", ct)
             || await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct);
-        var query = db.Suppliers.Where(supplier => supplier.Status == "ACTIVE");
+        var query = db.Suppliers.Where(supplier => supplier.Status == AccountStatuses.Active);
         if (!canListAll)
             query = query.Where(supplier => db.Projects.Any(project =>
                 project.SupplierId == supplier.Id && project.ResponsibleUserId == current.Id));
@@ -165,7 +165,7 @@ internal sealed partial class ProjectService(
     internal async Task<List<ProjectOwnerOption>> ProjectOwnerOptionsAsync(MySqlConnection conn, CurrentUser actor, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await ProjectDictionaryService.RequireOptionReadAsync(conn, tx, current, ct);
         await using var db = EfDb.Use(conn, tx);
         var rows = await EligibleOwners(db)
@@ -195,6 +195,9 @@ internal sealed partial class ProjectService(
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
         ProjectWorkflowRules.EnsureDeletable(project.Status);
         await using var db = EfDb.Use(conn, tx);
+        if (await db.ProjectCopyJobs.AnyAsync(job => job.SourceProjectId == projectId
+                && (job.Status == ProjectCopyJobStatuses.Pending || job.Status == ProjectCopyJobStatuses.Running), ct))
+            throw ApiException.Conflict("项目仍有进行中的复制任务，请等待任务完成后再删除");
         if (await db.ProjectCopies.AnyAsync(
                 copy => copy.SourceProjectId == projectId || copy.TargetProjectId == projectId, ct))
             throw ApiException.Conflict("项目存在复制引用履历，不能删除");
@@ -279,16 +282,14 @@ internal sealed partial class ProjectService(
         return normalized.ToArray();
     }
 
-    internal static ProjectMetadataInput NormalizeMetadata(ProjectUpsertRequest request)
+    internal static ProjectMetadataInput NormalizeMetadata(ProjectUpsertRequest request, bool requireRobotPart)
     {
         if (NormalizeWorkOrderNos(request.WorkOrderNos).Length == 0)
             throw ApiException.BadRequest("请至少填写一个工令号");
         if (string.IsNullOrWhiteSpace(request.MachineModel)) throw ApiException.BadRequest("请填写机型");
-        if (request.RobotVendorId is null or 0) throw ApiException.BadRequest("请选择 Robot 厂商");
-        if (request.RobotModelId is null or 0) throw ApiException.BadRequest("请选择 Robot 型号");
-        if (request.ResponsibleUserId is null or 0) throw ApiException.BadRequest("请选择负责人");
+        if (requireRobotPart && request.RobotPartId is null or 0) throw ApiException.BadRequest("请选择 Robot 料号");
         if (request.PriorityId is null or 0) throw ApiException.BadRequest("请选择优先级");
-        if (string.IsNullOrWhiteSpace(request.ExpectedCompletionDate)) throw ApiException.BadRequest("请选择预计完成日期");
+        if (string.IsNullOrWhiteSpace(request.ExpectedCompletionDate)) throw ApiException.BadRequest("请选择需求完成时间");
         var machineModel = string.IsNullOrWhiteSpace(request.MachineModel) ? null : request.MachineModel.Trim();
         if (machineModel is not null && RuneCount(machineModel) > 128)
             throw ApiException.BadRequest("机台机型不能超过 128 个字符");
@@ -299,11 +300,11 @@ internal sealed partial class ProjectService(
             if (!DateOnly.TryParseExact(raw, "yyyy-MM-dd", CultureInfo.InvariantCulture,
                     DateTimeStyles.None, out var parsed)
                 || parsed.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) != raw)
-                throw ApiException.BadRequest("expectedCompletionDate 必须为 yyyy-MM-dd 格式");
+                throw ApiException.BadRequest("需求完成时间必须为 yyyy-MM-dd 格式");
             expectedCompletionDate = parsed.ToDateTime(TimeOnly.MinValue);
         }
-        return new(NormalizeWorkOrderNos(request.WorkOrderNos), machineModel, request.RobotVendorId,
-            request.RobotModelId, request.ResponsibleUserId, null, request.PriorityId, expectedCompletionDate);
+        return new(NormalizeWorkOrderNos(request.WorkOrderNos), machineModel, request.RobotPartId,
+            null, null, null, request.PriorityId, expectedCompletionDate);
     }
 
     /// <summary>
@@ -313,25 +314,25 @@ internal sealed partial class ProjectService(
     private static IQueryable<EligibleOwnerRow> EligibleOwners(YfDbContext db) =>
         from user in db.Users
         join section in db.Departments on user.DepartmentId equals (ulong?)section.Id
-        where user.UserType == "INTERNAL"
-              && user.Status == "ACTIVE"
+        where user.UserType == UserTypes.Internal
+              && user.Status == AccountStatuses.Active
               && section.Kind == "SECTION"
-              && section.Status == "ACTIVE"
+              && section.Status == AccountStatuses.Active
               && (section.ParentId == null || db.Departments.Any(parent =>
                   parent.Id == section.ParentId
                   && parent.Kind == "DEPARTMENT"
-                  && parent.Status == "ACTIVE"
+                  && parent.Status == AccountStatuses.Active
                   && (parent.ParentId == null || db.Departments.Any(root =>
                       root.Id == parent.ParentId
                       && root.Kind == "DIVISION"
-                      && root.Status == "ACTIVE"
+                      && root.Status == AccountStatuses.Active
                       && root.ParentId == null))))
               && (from userRole in db.UserRoles
                   join role in db.Roles on userRole.RoleId equals role.Id
                   join rolePermission in db.RolePermissions on role.Id equals rolePermission.RoleId
                   join permission in db.Permissions on rolePermission.PermissionId equals permission.Id
                   where userRole.UserId == user.Id
-                        && role.Status == "ACTIVE"
+                        && role.Status == AccountStatuses.Active
                         && permission.Code == "project:list"
                   select permission.Id).Any()
         select new EligibleOwnerRow
@@ -345,31 +346,42 @@ internal sealed partial class ProjectService(
         MySqlTransaction tx,
         ProjectMetadataInput input,
         ProjectRow? existing,
+        ulong supplierId,
         CancellationToken ct)
     {
-        var vendor = await ValidateDictionaryAsync(conn, tx, input.RobotVendorId,
-            ProjectDictionaryTypes.RobotVendor, existing?.RobotVendorId, "机器人厂商", ct);
-        var model = await ValidateDictionaryAsync(conn, tx, input.RobotModelId,
-            ProjectDictionaryTypes.RobotModel, existing?.RobotModelId, "机器人型号", ct);
         await ValidateDictionaryAsync(conn, tx, input.PriorityId,
             ProjectDictionaryTypes.Priority, existing?.PriorityId, "优先级", ct);
-        if (model is not null && vendor is null)
-            throw ApiException.BadRequest("选择机器人型号时必须同时选择机器人厂商");
-        if (model is not null && model.ParentId != vendor!.Id)
-            throw ApiException.BadRequest("机器人型号不属于所选厂商");
-
-        ulong? sectionId = null;
-        if (input.ResponsibleUserId is { } responsibleUserId)
+        if (input.RobotPartId is null)
         {
-            await using var db = EfDb.Use(conn, tx);
-            var owner = await EligibleOwners(db).Where(candidate => candidate.Id == responsibleUserId)
-                .Select(candidate => new OwnerSelection { Id = candidate.Id, SectionId = candidate.SectionId })
-                .SingleOrDefaultAsync(ct);
-            if (owner is null) throw ApiException.BadRequest("负责人必须是拥有项目列表权限且直属有效课别的启用内部用户");
-            sectionId = owner.SectionId;
+            if (existing?.RobotPartId is not null)
+                throw ApiException.BadRequest("已选择 Robot 料号的项目不能清空料号");
+            return input;
         }
-        return input with { SectionId = sectionId };
+        await using var db = EfDb.Use(conn, tx);
+        var part = await db.RobotParts.Where(item => item.Id == input.RobotPartId.Value)
+            .Select(item => new { item.Id, item.SupplierId, item.Status }).SingleOrDefaultAsync(ct);
+        if (part is null) throw ApiException.BadRequest("Robot 料号不存在");
+        if (part.SupplierId != supplierId) throw ApiException.BadRequest("Robot 料号不属于所选供应商");
+        if (part.Id != existing?.RobotPartId)
+        {
+            var supplierActive = await db.Suppliers.AnyAsync(supplier => supplier.Id == supplierId
+                && supplier.Status == AccountStatuses.Active, ct);
+            if (!supplierActive) throw ApiException.BadRequest("供应商已被禁用");
+            if (part.Status != AccountStatuses.Active) throw ApiException.BadRequest("Robot 料号已停用");
+        }
+        return input;
     }
+
+    internal static async Task<ulong?> ResolveActorSectionAsync(
+        YfDbContext db, ulong actorId, CancellationToken ct) =>
+        await (from user in db.Users
+               join section in db.Departments on user.DepartmentId equals (ulong?)section.Id
+               where user.Id == actorId && section.Kind == "SECTION" && section.Status == AccountStatuses.Active
+                   && (section.ParentId == null || db.Departments.Any(parent => parent.Id == section.ParentId
+                       && parent.Kind == "DEPARTMENT" && parent.Status == AccountStatuses.Active
+                       && (parent.ParentId == null || db.Departments.Any(root => root.Id == parent.ParentId
+                           && root.Kind == "DIVISION" && root.Status == AccountStatuses.Active && root.ParentId == null))))
+               select (ulong?)section.Id).SingleOrDefaultAsync(ct);
 
     private static async Task<MetadataDictionaryRow?> ValidateDictionaryAsync(
         MySqlConnection conn,
@@ -392,7 +404,7 @@ internal sealed partial class ProjectService(
             })
             .SingleOrDefaultAsync(ct);
         if (row is null || row.Type != expectedType) throw ApiException.BadRequest(label + "不存在或类型不匹配");
-        if (row.Status != "ACTIVE" && id != existingId) throw ApiException.BadRequest(label + "已停用");
+        if (row.Status != AccountStatuses.Active && id != existingId) throw ApiException.BadRequest(label + "已停用");
         return row;
     }
 
@@ -488,8 +500,8 @@ internal sealed partial class ProjectService(
     internal sealed record ProjectMetadataInput(
         string[] WorkOrderNos,
         string? MachineModel,
-        ulong? RobotVendorId,
-        ulong? RobotModelId,
+        ulong? RobotPartId,
+        string? LegacyRobotModelName,
         ulong? ResponsibleUserId,
         ulong? SectionId,
         ulong? PriorityId,

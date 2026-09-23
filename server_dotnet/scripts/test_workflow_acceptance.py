@@ -187,20 +187,20 @@ def run_workflow_acceptance(client, Client, conn, check):
 
     internal_role = next(
         role for role in client.call("GET", "/api/v1/admin/user-role-options")
-        if role["name"] == "内部成员")
+        if role["name"] == "项目管理员")
     internal_employee = "wf_internal_" + suffix
     internal_initial = _password()
     internal_user = client.call("POST", "/api/v1/admin/users", {
         "employeeNo": internal_employee,
         "password": internal_initial,
-        "realName": "工作流验收内部成员",
+        "realName": "工作流验收项目负责人",
         "email": internal_employee + "@example.invalid",
         "departmentId": owner_section_id,
         "roleId": internal_role["id"],
     })
     internal_client = _activate_user(
         client, Client, check, internal_employee, internal_initial,
-        internal_user["id"], "workflow internal member")
+        internal_user["id"], "workflow project owner")
 
     confirm_only_role = client.call("POST", "/api/v1/admin/roles", {
         "name": "仅确认无项目菜单-" + suffix,
@@ -225,7 +225,7 @@ def run_workflow_acceptance(client, Client, conn, check):
     confirm_only_client.call("GET", "/api/v1/project-groups", expected=403)
 
     group, created = _create_project_group(
-        client, conn, supplier["id"], internal_user["id"],
+        internal_client, client, conn, supplier["id"],
         "工作流完整验收项目-" + suffix)
     project_id = created["id"]
     group_id = group["id"]
@@ -302,7 +302,7 @@ def run_workflow_acceptance(client, Client, conn, check):
         {"content": "完成前创建，完成后仍应可读但不可删除"})
 
     _, no_reviewer_project = _create_project_group(
-        client, conn, supplier["id"], internal_user["id"],
+        internal_client, client, conn, supplier["id"],
         "无内部验收人项目-" + suffix)
     client.call("PUT", f"/api/v1/projects/{no_reviewer_project['id']}/status", {
         "status": "IN_PROGRESS",

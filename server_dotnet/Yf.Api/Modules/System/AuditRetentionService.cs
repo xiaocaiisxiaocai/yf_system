@@ -28,7 +28,7 @@ public sealed class AuditRetentionService(AppDb db, AppOptions options, AuditSer
             var ids = await context.AuditLogs.Where(log => log.CreatedAt < cutoff)
                 .OrderBy(log => log.Id).Select(log => log.Id).Take(BatchSize).ToArrayAsync(ct);
             if (ids.Length == 0) break;
-            deleted += await context.AuditLogs.Where(log => Enumerable.Contains(ids, log.Id)).ExecuteDeleteAsync(ct);
+            deleted += await context.AuditLogs.Where(log => Enumerable.Contains(ids, log.Id) && log.CreatedAt < cutoff).ExecuteDeleteAsync(ct);
             if (ids.Length < BatchSize) break;
         }
         if (deleted > 0)

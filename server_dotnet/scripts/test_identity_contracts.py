@@ -254,9 +254,53 @@ def run_identity_checks(client, Client, conn, check):
         cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (refresh_user["id"],))
     rotating = Client(client.base)
     rotating.login(refresh_employee, refresh_password)
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT session_id,session_created_at,session_expires_at,expires_at "
+            "FROM refresh_tokens WHERE user_id=%s AND revoked=0",
+            (refresh_user["id"],),
+        )
+        initial_session = cursor.fetchone()
     old_refresh = _refresh_cookie(rotating)
     rotated = rotating.call("POST", "/api/v1/auth/refresh")
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT session_id,session_created_at,session_expires_at,expires_at "
+            "FROM refresh_tokens WHERE user_id=%s AND revoked=0",
+            (refresh_user["id"],),
+        )
+        rotated_session = cursor.fetchone()
     rotating.token = rotated["accessToken"]
+    check(
+        "identity refresh preserves the database session family window and returns the complete login profile",
+        initial_session is not None
+        and rotated_session is not None
+        and rotated_session[:3] == initial_session[:3]
+        and initial_session[1] < initial_session[2]
+        and initial_session[3] <= initial_session[2]
+        and rotated_session[3] <= rotated_session[2]
+        and set(rotated) == {
+            "accessToken", "expiresAt", "mustChangePassword", "permissions", "menus", "user",
+        }
+        and isinstance(rotated["accessToken"], str)
+        and bool(rotated["accessToken"])
+        and isinstance(rotated["expiresAt"], int)
+        and not isinstance(rotated["expiresAt"], bool)
+        and rotated["expiresAt"] > 0
+        and rotated["mustChangePassword"] is False
+        and isinstance(rotated["permissions"], list)
+        and isinstance(rotated["menus"], list)
+        and set(rotated["user"]) == {
+            "id", "employeeNo", "realName", "email", "userType", "supplierId", "isSystemAdmin",
+        }
+        and rotated["user"]["id"] == refresh_user["id"]
+        and rotated["user"]["employeeNo"] == refresh_employee
+        and rotated["user"]["realName"] == "刷新重放用户"
+        and rotated["user"]["email"] == refresh_employee + "@example.invalid"
+        and rotated["user"]["userType"] == "INTERNAL"
+        and rotated["user"]["supplierId"] is None
+        and rotated["user"]["isSystemAdmin"] is False,
+    )
     replay = Client(client.base)
     replay.call("POST", "/api/v1/auth/refresh", headers={"Cookie": "refresh_token=" + old_refresh}, expected=401)
     rotating.call("GET", "/api/v1/auth/profile", expected=401)

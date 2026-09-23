@@ -21,14 +21,8 @@ public sealed class ProjectUpsertRequest
     [JsonPropertyName("machineModel")]
     public string? MachineModel { get; init; }
 
-    [JsonPropertyName("robotVendorId")]
-    public ulong? RobotVendorId { get; init; }
-
-    [JsonPropertyName("robotModelId")]
-    public ulong? RobotModelId { get; init; }
-
-    [JsonPropertyName("responsibleUserId")]
-    public ulong? ResponsibleUserId { get; init; }
+    [JsonPropertyName("robotPartId")]
+    public ulong? RobotPartId { get; init; }
 
     [JsonPropertyName("priorityId")]
     public ulong? PriorityId { get; init; }
@@ -53,6 +47,9 @@ public sealed class ProjectCopyRequest
 {
     [JsonPropertyName("name")]
     public string? Name { get; init; }
+
+    [JsonPropertyName("idempotencyKey")]
+    public string? IdempotencyKey { get; init; }
 }
 
 public sealed class ProjectDictionaryUpsertRequest
@@ -65,6 +62,24 @@ public sealed class ProjectDictionaryUpsertRequest
 
     [JsonPropertyName("parentId")]
     public ulong? ParentId { get; init; }
+
+    [JsonPropertyName("sortNo")]
+    public int SortNo { get; init; }
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; init; } = true;
+}
+
+public sealed class RobotPartUpsertRequest
+{
+    [JsonPropertyName("supplierId")]
+    public ulong SupplierId { get; init; }
+
+    [JsonPropertyName("partNumber")]
+    public string? PartNumber { get; init; }
+
+    [JsonPropertyName("model")]
+    public string? Model { get; init; }
 
     [JsonPropertyName("sortNo")]
     public int SortNo { get; init; }
@@ -136,10 +151,10 @@ internal sealed class ProjectRow
     public string? CreatedByName { get; init; }
     public string[] WorkOrderNos { get; set; } = [];
     public string? MachineModel { get; init; }
-    public ulong? RobotVendorId { get; init; }
-    public string? RobotVendorName { get; init; }
-    public ulong? RobotModelId { get; init; }
+    public ulong? RobotPartId { get; init; }
+    public string? RobotPartNumber { get; init; }
     public string? RobotModelName { get; init; }
+    public string? LegacyRobotModelName { get; init; }
     public ulong? ResponsibleUserId { get; init; }
     public string? ResponsibleUserEmployeeNo { get; init; }
     public string? ResponsibleUserName { get; init; }
@@ -166,10 +181,10 @@ internal sealed class ProjectGroupRow
     public string? CreatedByName { get; init; }
     public string[] WorkOrderNos { get; set; } = [];
     public string? MachineModel { get; init; }
-    public ulong? RobotVendorId { get; init; }
-    public string? RobotVendorName { get; init; }
-    public ulong? RobotModelId { get; init; }
+    public ulong? RobotPartId { get; init; }
+    public string? RobotPartNumber { get; init; }
     public string? RobotModelName { get; init; }
+    public string? LegacyRobotModelName { get; init; }
     public ulong? ResponsibleUserId { get; init; }
     public string? ResponsibleUserEmployeeNo { get; init; }
     public string? ResponsibleUserName { get; init; }
@@ -305,9 +320,8 @@ internal static class ProjectJson
         CreatedByName = row.CreatedByName,
         WorkOrderNos = row.WorkOrderNos,
         MachineModel = row.MachineModel,
-        RobotVendorId = row.RobotVendorId,
-        RobotVendorName = row.RobotVendorName,
-        RobotModelId = row.RobotModelId,
+        RobotPartId = row.RobotPartId,
+        RobotPartNumber = row.RobotPartNumber,
         RobotModelName = row.RobotModelName,
         ResponsibleUserId = row.ResponsibleUserId,
         ResponsibleUserEmployeeNo = row.ResponsibleUserEmployeeNo,
@@ -337,9 +351,8 @@ internal static class ProjectJson
         row.CreatedByName,
         row.WorkOrderNos,
         row.MachineModel,
-        row.RobotVendorId,
-        row.RobotVendorName,
-        row.RobotModelId,
+        row.RobotPartId,
+        row.RobotPartNumber,
         row.RobotModelName,
         row.ResponsibleUserId,
         row.ResponsibleUserEmployeeNo,

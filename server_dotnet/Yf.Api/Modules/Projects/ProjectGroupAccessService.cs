@@ -66,7 +66,7 @@ internal static class ProjectGroupAccessService
         {
             if (current.SupplierId != access.SupplierId) throw ApiException.OutOfScope();
             if (!await db.Suppliers.AnyAsync(
-                    supplier => supplier.Id == access.SupplierId && supplier.Status == "ACTIVE", ct))
+                    supplier => supplier.Id == access.SupplierId && supplier.Status == AccountStatuses.Active, ct))
                 throw ApiException.OutOfScope();
             return access;
         }

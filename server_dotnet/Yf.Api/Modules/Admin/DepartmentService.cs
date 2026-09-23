@@ -62,7 +62,7 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
         ulong resultId;
         if (id is null)
         {
-            var created = new Department { Name = name, ParentId = request.ParentId, Kind = kind, SortNo = request.SortNo ?? 0, Status = "ACTIVE" };
+            var created = new Department { Name = name, ParentId = request.ParentId, Kind = kind, SortNo = request.SortNo ?? 0, Status = AccountStatuses.Active };
             context.Departments.Add(created);
             await context.SaveChangesAsync(ct);
             resultId = created.Id;
@@ -118,11 +118,11 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
         AccessService.RequireInternal(actor);
         await AccessService.RequirePermissionAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, "dept:manage", ct);
         var row = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
-        if (status == "DISABLED" && row.Status != "DISABLED")
+        if (status == AccountStatuses.Disabled && row.Status != AccountStatuses.Disabled)
         {
             var affected = await ActiveProjectGroupsWithValidOwnerInSubtreeAsync(context, id, ct);
             if (affected.Length > 0)
-                throw ApiException.BadRequest($"该组织范围内仍有 {affected.Length} 个未结束主项目负责人，请先转交负责人");
+                throw ApiException.BadRequest($"该组织范围内仍有 {affected.Length} 个未结束主项目负责人，请先结束相关项目");
         }
         var oldStatus = row.Status;
         context.Attach(row);
@@ -168,7 +168,7 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
             var row = await context.Departments.AsNoTracking().Where(d => d.Id == currentId)
                 .Select(d => new { d.ParentId, d.Status }).SingleOrDefaultAsync(ct);
             if (row is null) throw ApiException.BadRequest(currentId == id ? "组织不存在" : "组织层级无效");
-            if (row.Status != "ACTIVE") throw ApiException.BadRequest("组织已被禁用");
+            if (row.Status != AccountStatuses.Active) throw ApiException.BadRequest("组织已被禁用");
             current = row.ParentId;
         }
     }
@@ -226,11 +226,11 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
     }
 
     private static IQueryable<ulong> ValidSectionIds(YfDbContext context) =>
-        context.Departments.Where(section => section.Kind == "SECTION" && section.Status == "ACTIVE"
+        context.Departments.Where(section => section.Kind == "SECTION" && section.Status == AccountStatuses.Active
             && (section.ParentId == null || context.Departments.Any(parent => parent.Id == section.ParentId
-                && parent.Kind == "DEPARTMENT" && parent.Status == "ACTIVE"
+                && parent.Kind == "DEPARTMENT" && parent.Status == AccountStatuses.Active
                 && (parent.ParentId == null || context.Departments.Any(root => root.Id == parent.ParentId
-                    && root.Kind == "DIVISION" && root.Status == "ACTIVE" && root.ParentId == null)))))
+                    && root.Kind == "DIVISION" && root.Status == AccountStatuses.Active && root.ParentId == null)))))
             .Select(section => section.Id);
 
     private static async Task<ulong[]> ActiveProjectGroupsWithValidOwnerInSubtreeAsync(YfDbContext context, ulong id, CancellationToken ct)
@@ -256,6 +256,6 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
                            where Enumerable.Contains(projectGroupIds, g.Id) && !validSections.Contains(section.Id)
                            select g.Id).Distinct().CountAsync(ct);
         if (count > 0)
-            throw ApiException.BadRequest($"组织调整会使 {count} 个未结束主项目的负责人失去有效课别，请先转交负责人");
+            throw ApiException.BadRequest($"组织调整会使 {count} 个未结束主项目的负责人失去有效课别，请先结束相关项目");
     }
 }

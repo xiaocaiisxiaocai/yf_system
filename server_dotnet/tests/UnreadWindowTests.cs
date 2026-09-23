@@ -34,14 +34,15 @@ public sealed class UnreadWindowTests
         var dashboard = new DashboardService();
         var summary = await dashboard.SummaryAsync(conn, admin, ct);
         Assert.Equal(1UL, summary.UnreadMessages);
-        Assert.Equal([2UL, 1UL], summary.RecentMessages.Select(message => message.Id));
-        Assert.Equal([true, false], summary.RecentMessages.Select(message => message.Unread));
+        Assert.Equal([2UL], summary.RecentMessages.Select(message => message.Id));
+        Assert.Equal([true], summary.RecentMessages.Select(message => message.Unread));
 
         var unreadOnly = await dashboard.MessagesAsync(conn, admin, 1, 10, true, ct);
         Assert.Equal(1UL, unreadOnly.Total);
         Assert.Equal(2UL, Assert.Single(unreadOnly.List).Id);
         var all = await dashboard.MessagesAsync(conn, admin, 1, 10, false, ct);
-        Assert.Equal([2UL, 1UL], all.List.Select(message => message.Id));
+        Assert.Equal(1UL, all.Total);
+        Assert.Equal([2UL], all.List.Select(message => message.Id));
 
         Assert.Equal(1UL, await MessageService.UnreadCountAsync(conn, null, 1, 1, ct));
         var groups = new ProjectGroupService(new AuditService([]), null!);

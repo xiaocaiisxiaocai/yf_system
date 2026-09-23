@@ -29,7 +29,10 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<ProjectWorkOrder> ProjectWorkOrders => Set<ProjectWorkOrder>();
     public DbSet<ProjectStatusLog> ProjectStatusLogs => Set<ProjectStatusLog>();
     public DbSet<ProjectDictionary> ProjectDictionaries => Set<ProjectDictionary>();
+    public DbSet<RobotPart> RobotParts => Set<RobotPart>();
     public DbSet<ProjectCopy> ProjectCopies => Set<ProjectCopy>();
+    public DbSet<ProjectCopyJob> ProjectCopyJobs => Set<ProjectCopyJob>();
+    public DbSet<ProjectCopyWorkerState> ProjectCopyWorkerStates => Set<ProjectCopyWorkerState>();
     public DbSet<ProjectActivity> ProjectActivities => Set<ProjectActivity>();
     public DbSet<CollaborationRead> CollaborationReads => Set<CollaborationRead>();
 

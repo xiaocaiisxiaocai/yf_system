@@ -8,7 +8,7 @@ import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import {
-  type PageResp, type ProjectDictionaryOption, type ProjectGroup, type ProjectOwnerOption, PROJECT_STATUS,
+  type PageResp, type ProjectDictionaryOption, type ProjectGroup, type RobotPart, PROJECT_STATUS,
 } from '../../api/types'
 import { textLengthRule } from '../../utils/textRules'
 import { normalizeList } from '../../utils/listValues'
@@ -22,9 +22,7 @@ interface ProjectGroupFormValues {
   supplierId?: number
   workOrderNos?: string[]
   machineModel?: string
-  robotVendorId?: number
-  robotModelId?: number
-  responsibleUserId?: number
+  robotPartId?: number
   priorityId?: number
   expectedCompletionDate?: string
   subprojectNames?: string[]
@@ -76,19 +74,16 @@ export default function ProjectList() {
   const [suppliers, setSuppliers] = useState<SupplierOpt[]>([])
   const [supplierOptionsLoading, setSupplierOptionsLoading] = useState(true)
   const [supplierOptionsError, setSupplierOptionsError] = useState(false)
-  const [robotVendors, setRobotVendors] = useState<ProjectDictionaryOption[]>([])
   const [priorities, setPriorities] = useState<ProjectDictionaryOption[]>([])
-  const [owners, setOwners] = useState<ProjectOwnerOption[]>([])
   const [metadataOptionsLoading, setMetadataOptionsLoading] = useState(false)
   const [metadataOptionsError, setMetadataOptionsError] = useState(false)
-  const [robotModels, setRobotModels] = useState<ProjectDictionaryOption[]>([])
-  const [robotModelsLoading, setRobotModelsLoading] = useState(false)
-  const [robotModelsError, setRobotModelsError] = useState(false)
-  const [selectedRobotVendorId, setSelectedRobotVendorId] = useState<number | null>(null)
-  const [selectedResponsibleUserId, setSelectedResponsibleUserId] = useState<number | null>(null)
-  const [sectionName, setSectionName] = useState<string | null>(null)
+  const [robotParts, setRobotParts] = useState<RobotPart[]>([])
+  const [robotPartsLoading, setRobotPartsLoading] = useState(false)
+  const [robotPartsError, setRobotPartsError] = useState(false)
+  const [selectedSupplierId, setSelectedSupplierId] = useState<number | null>(null)
+  const [selectedRobotPartId, setSelectedRobotPartId] = useState<number | null>(null)
   const optionsSeq = useRef(0)
-  const modelSeq = useRef(0)
+  const partSeq = useRef(0)
   const supplierOptionsSeq = useRef(0)
   const [form] = Form.useForm()
   const { hasPerm, user } = useAuth()
@@ -142,38 +137,34 @@ export default function ProjectList() {
   const loadMetadataOptions = useCallback(() => {
     const seq = ++optionsSeq.current
     setMetadataOptionsLoading(true); setMetadataOptionsError(false)
-    Promise.all([
-      http.get<ApiResponses['GET /project-dictionaries']>('/project-dictionaries', { params: { type: 'ROBOT_VENDOR', enabledOnly: true }, quietNetworkError: true } as QuietRequestConfig),
-      http.get<ApiResponses['GET /project-dictionaries']>('/project-dictionaries', { params: { type: 'PRIORITY', enabledOnly: true }, quietNetworkError: true } as QuietRequestConfig),
-      http.get<ApiResponses['GET /project-owner-options']>('/project-owner-options', { quietNetworkError: true } as QuietRequestConfig),
-    ]).then(([vendorResponse, priorityResponse, ownerResponse]) => {
+    http.get<ApiResponses['GET /project-dictionaries']>('/project-dictionaries', {
+      params: { type: 'PRIORITY', enabledOnly: true }, quietNetworkError: true,
+    } as QuietRequestConfig).then((priorityResponse) => {
       if (seq !== optionsSeq.current) return
-      setRobotVendors(expectOptionList<ProjectDictionaryOption>(vendorResponse.data))
       setPriorities(expectOptionList<ProjectDictionaryOption>(priorityResponse.data))
-      setOwners(expectOptionList<ProjectOwnerOption>(ownerResponse.data))
     }).catch(() => { if (seq === optionsSeq.current) setMetadataOptionsError(true) })
       .finally(() => { if (seq === optionsSeq.current) setMetadataOptionsLoading(false) })
   }, [])
 
-  const loadRobotModels = useCallback((vendorId: number) => {
-    const seq = ++modelSeq.current
-    setRobotModels([]); setRobotModelsLoading(true); setRobotModelsError(false)
-    http.get<ApiResponses['GET /project-dictionaries']>('/project-dictionaries', {
-      params: { type: 'ROBOT_MODEL', enabledOnly: true, parentId: vendorId }, quietNetworkError: true,
+  const loadRobotParts = useCallback((supplierId: number) => {
+    const seq = ++partSeq.current
+    setRobotParts([]); setRobotPartsLoading(true); setRobotPartsError(false)
+    http.get<ApiResponses['GET /robot-parts']>('/robot-parts', {
+      params: { supplierId, enabledOnly: true }, quietNetworkError: true,
     } as QuietRequestConfig).then((response) => {
-      if (seq === modelSeq.current) setRobotModels(expectOptionList<ProjectDictionaryOption>(response.data))
-    }).catch(() => { if (seq === modelSeq.current) setRobotModelsError(true) })
-      .finally(() => { if (seq === modelSeq.current) setRobotModelsLoading(false) })
+      if (seq === partSeq.current) setRobotParts(expectOptionList<RobotPart>(response.data).filter((part) => part.supplierId === supplierId))
+    }).catch(() => { if (seq === partSeq.current) setRobotPartsError(true) })
+      .finally(() => { if (seq === partSeq.current) setRobotPartsLoading(false) })
   }, [])
 
   const retryMetadataOptions = () => {
     if (metadataOptionsError) loadMetadataOptions()
-    if (robotModelsError && selectedRobotVendorId) loadRobotModels(selectedRobotVendorId)
+    if (robotPartsError && selectedSupplierId) loadRobotParts(selectedSupplierId)
   }
 
   const openCreate = () => {
     setEditing(null); form.resetFields(); form.setFieldValue('subprojectNames', [])
-    setSectionName(null); setSelectedRobotVendorId(null); setSelectedResponsibleUserId(null); setRobotModels([])
+    setSelectedSupplierId(null); setSelectedRobotPartId(null); setRobotParts([])
     loadMetadataOptions(); setModalOpen(true)
   }
 
@@ -185,37 +176,34 @@ export default function ProjectList() {
     setEditing(group)
     form.setFieldsValue({
       name: group.name, description: group.description, supplierId: group.supplierId, workOrderNos: group.workOrderNos,
-      machineModel: group.machineModel ?? undefined, robotVendorId: group.robotVendorId ?? undefined,
-      robotModelId: group.robotModelId ?? undefined, responsibleUserId: group.responsibleUserId ?? undefined,
+      machineModel: group.machineModel ?? undefined, robotPartId: group.robotPartId ?? undefined,
       priorityId: group.priorityId ?? undefined, expectedCompletionDate: group.expectedCompletionDate ?? undefined,
     })
-    setSectionName(group.sectionName ?? null); setSelectedRobotVendorId(group.robotVendorId ?? null)
-    setSelectedResponsibleUserId(group.responsibleUserId ?? null); loadMetadataOptions()
-    if (group.robotVendorId) loadRobotModels(group.robotVendorId)
+    setSelectedSupplierId(group.supplierId); setSelectedRobotPartId(group.robotPartId ?? null); loadMetadataOptions()
+    loadRobotParts(group.supplierId)
     setModalOpen(true)
   }
 
   const closeModal = () => {
     if (saving) return
-    optionsSeq.current += 1; modelSeq.current += 1; setModalOpen(false)
+    optionsSeq.current += 1; partSeq.current += 1; setModalOpen(false)
   }
 
-  const changeRobotVendor = (value?: number) => {
-    const vendorId = nullableNumber(value)
-    setSelectedRobotVendorId(vendorId); form.setFieldValue('robotModelId', undefined); setRobotModels([])
-    if (vendorId) loadRobotModels(vendorId)
+  const changeSupplier = (value?: number) => {
+    const nextSupplierId = nullableNumber(value)
+    partSeq.current += 1
+    setSelectedSupplierId(nextSupplierId); setSelectedRobotPartId(null)
+    form.setFieldValue('robotPartId', undefined); setRobotParts([]); setRobotPartsError(false); setRobotPartsLoading(false)
+    if (nextSupplierId) loadRobotParts(nextSupplierId)
   }
 
-  // 历史负责人可能已不在可选列表中，其课别也可能为空，因此占位项允许空课别。
-  const ownerOptions: Array<Omit<ProjectOwnerOption, 'sectionId' | 'sectionName'> & { sectionId: number | null; sectionName: string | null }> = [...owners]
-  if (editing?.responsibleUserId && !ownerOptions.some((item) => item.id === editing.responsibleUserId))
-    ownerOptions.push({ id: editing.responsibleUserId, employeeNo: editing.responsibleUserEmployeeNo ?? '', realName: editing.responsibleUserName || '历史负责人', sectionId: editing.sectionId, sectionName: editing.sectionName })
-  const vendorOptions = [...robotVendors]
-  if (editing?.robotVendorId && !vendorOptions.some((item) => item.id === editing.robotVendorId))
-    vendorOptions.push({ id: editing.robotVendorId, type: 'ROBOT_VENDOR', name: editing.robotVendorName || '历史厂商', sortNo: 0, enabled: false, parentId: null, parentName: null, inUse: true })
-  const modelOptions = [...robotModels]
-  if (editing?.robotModelId && !modelOptions.some((item) => item.id === editing.robotModelId))
-    modelOptions.push({ id: editing.robotModelId, type: 'ROBOT_MODEL', name: editing.robotModelName || '历史型号', parentId: editing.robotVendorId, parentName: editing.robotVendorName, sortNo: 0, enabled: false, inUse: true })
+  const partOptions = [...robotParts]
+  if (editing?.robotPartId && !partOptions.some((item) => item.id === editing.robotPartId))
+    partOptions.push({ id: editing.robotPartId, supplierId: editing.supplierId, supplierName: editing.supplierName ?? '', partNumber: editing.robotPartNumber || '历史料号', model: editing.robotModelName || '历史型号', sortNo: 0, enabled: false, inUse: true })
+  const selectedPart = partOptions.find((item) => item.id === selectedRobotPartId)
+  const supplierFormOptions = [...suppliers]
+  if (editing && !supplierFormOptions.some((item) => item.id === editing.supplierId))
+    supplierFormOptions.push({ id: editing.supplierId, name: editing.supplierName || '历史 Robot 厂商' })
   const priorityOptions = [...priorities]
   if (editing?.priorityId && !priorityOptions.some((item) => item.id === editing.priorityId))
     priorityOptions.push({ id: editing.priorityId, type: 'PRIORITY', name: editing.priorityName || '历史优先级', sortNo: 0, enabled: false, parentId: null, parentName: null, inUse: true })
@@ -224,20 +212,17 @@ export default function ProjectList() {
   if (!supplierOptionsLoading && !supplierOptionsError && suppliers.length === 0)
     missingCreateOptions.push({ message: '暂无启用的供应商，请先新增或启用供应商。', path: '/suppliers', permission: 'supplier:manage', action: '维护供应商' })
   if (!metadataOptionsLoading && !metadataOptionsError) {
-    if (!robotVendors.length)
-      missingCreateOptions.push({ message: '暂无启用的 Robot 厂商，请在数据字典中维护厂商及其型号。', path: '/system/dictionaries', permission: 'config:manage', action: '维护数据字典' })
     if (!priorities.length)
       missingCreateOptions.push({ message: '暂无启用的优先级，请在数据字典中维护。', path: '/system/dictionaries', permission: 'config:manage', action: '维护优先级' })
-    if (!owners.some((owner) => owner.sectionName))
-      missingCreateOptions.push({ message: '暂无已关联有效课别的负责人，请在用户管理中设置内部用户的所属课别。', path: '/org/users', permission: 'user:manage', action: '维护负责人' })
   }
-  if (selectedRobotVendorId && !robotModelsLoading && !robotModelsError && robotModels.length === 0)
-    missingCreateOptions.push({ message: '所选 Robot 厂商暂无启用的型号，请补充型号或选择其他厂商。', path: '/system/dictionaries', permission: 'config:manage', action: '维护 Robot 型号' })
-  const submitOptionsBlocked = metadataOptionsLoading || metadataOptionsError || robotModelsLoading || robotModelsError
+  if (selectedSupplierId && !robotPartsLoading && !robotPartsError && robotParts.length === 0 && !editing?.robotPartId)
+    missingCreateOptions.push({ message: '所选 Robot 厂商暂无启用的料号，请先维护料号。', path: '/system/dictionaries', permission: 'config:manage', action: '维护 Robot 料号' })
+  const robotPartOptionsRequired = !editing || selectedRobotPartId !== null
+  const submitOptionsBlocked = metadataOptionsLoading || metadataOptionsError || robotPartOptionsRequired && (robotPartsLoading || robotPartsError)
     || (!editing && (supplierOptionsLoading || supplierOptionsError || missingCreateOptions.length > 0))
   const refreshCreateOptions = () => {
     loadSupplierOptions(); loadMetadataOptions()
-    if (selectedRobotVendorId) loadRobotModels(selectedRobotVendorId)
+    if (selectedSupplierId) loadRobotParts(selectedSupplierId)
   }
 
   const submit = async () => {
@@ -246,13 +231,14 @@ export default function ProjectList() {
     try {
       const values = await form.validate().catch(() => null) as ProjectGroupFormValues | null
       if (!values) return
-      if (!sectionName) { Message.error('负责人未关联课别，请先在用户管理中设置其所属课别'); return }
-      const robotVendorId = nullableNumber(values.robotVendorId)
+      const robotPartId = nullableNumber(values.robotPartId)
+      if (robotPartId && !partOptions.some((part) => part.id === robotPartId && part.supplierId === Number(values.supplierId))) {
+        Message.error('所选 Robot 料号与厂商不匹配，请重新选择'); return
+      }
       const payload = {
         name: values.name, description: values.description, supplierId: Number(values.supplierId),
         workOrderNos: normalizeList(values.workOrderNos), machineModel: values.machineModel?.trim() || null,
-        robotVendorId, robotModelId: robotVendorId ? nullableNumber(values.robotModelId) : null,
-        responsibleUserId: nullableNumber(values.responsibleUserId), priorityId: nullableNumber(values.priorityId),
+        robotPartId, priorityId: nullableNumber(values.priorityId),
         expectedCompletionDate: values.expectedCompletionDate || null,
         subprojectNames: editing ? undefined : normalizeList(values.subprojectNames),
       }
@@ -275,13 +261,13 @@ export default function ProjectList() {
     { title: '主项目名称', dataIndex: 'name', width: 145, fixed: 'left' as const, ellipsis: true, render: (value: string, row: ProjectGroup) => <Link to={`/project-groups/${row.id}`}>{value}</Link> },
     { title: '工令号', dataIndex: 'workOrderNos', width: 190, ellipsis: true, render: (values?: string[]) => displayText(values?.join('、')) },
     { title: '机型', dataIndex: 'machineModel', width: 100, ellipsis: true, render: displayText },
-    { title: 'Robot 厂商', dataIndex: 'robotVendorName', width: 105, ellipsis: true, render: displayText },
-    { title: 'Robot 型号', dataIndex: 'robotModelName', width: 105, ellipsis: true, render: displayText },
+    { title: 'Robot 厂商', dataIndex: 'supplierName', width: 110, ellipsis: true, render: displayText },
+    { title: 'Robot 料号', dataIndex: 'robotPartNumber', width: 120, ellipsis: true, render: displayText },
+    { title: 'Robot 型号', dataIndex: 'robotModelName', width: 110, ellipsis: true, render: (value?: string | null) => <Tooltip content={displayText(value)}><span>{displayText(value)}</span></Tooltip> },
     { title: '负责人', dataIndex: 'responsibleUserName', width: 88, ellipsis: true, render: displayText },
     { title: '课别', dataIndex: 'sectionName', width: 88, ellipsis: true, render: displayText },
     { title: '优先级', dataIndex: 'priorityName', width: 76, align: 'center' as const, render: displayText },
-    { title: '预计完成', dataIndex: 'expectedCompletionDate', width: 108, align: 'center' as const, render: displayText },
-    { title: '供应商', dataIndex: 'supplierName', width: 110, ellipsis: true, render: displayText },
+    { title: '需求完成时间', dataIndex: 'expectedCompletionDate', width: 120, align: 'center' as const, render: displayText },
     { title: '子项目进度', width: 142, align: 'center' as const, render: (_: unknown, row: ProjectGroup) => <div className="project-group-progress"><span>{row.completedCount}/{row.subprojectCount} 已验收</span>{row.pendingCount > 0 && <Tag size="small" color="orange">待验收 {row.pendingCount}</Tag>}</div> },
     { title: '状态', dataIndex: 'status', width: 90, align: 'center' as const, render: (value: string) => <Tag color={PROJECT_STATUS[value]?.color}>{PROJECT_STATUS[value]?.text || value}</Tag> },
     { title: '未读留言', dataIndex: 'unreadMessages', width: 88, align: 'center' as const, render: (value: number) => value > 0 ? <Badge count={value} /> : '-' },
@@ -305,7 +291,7 @@ export default function ProjectList() {
           <Select allowClear placeholder="状态" style={{ width: 130 }} value={status} onChange={(value) => { setPage(1); setStatus(value as string | undefined); load() }}>
             {['DRAFT', 'IN_PROGRESS', 'COMPLETED', 'TERMINATED'].map((key) => <Select.Option key={key} value={key}>{PROJECT_STATUS[key]?.text ?? key}</Select.Option>)}
           </Select>
-          {isInternal && <Select allowClear showSearch placeholder="供应商" style={{ width: 180 }} value={supplierId} loading={supplierOptionsLoading} disabled={supplierOptionsError} onChange={(value) => { setPage(1); setSupplierId(value as number | undefined); load() }}>{suppliers.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select>}
+          {isInternal && <Select allowClear showSearch placeholder="Robot 厂商" style={{ width: 180 }} value={supplierId} loading={supplierOptionsLoading} disabled={supplierOptionsError} onChange={(value) => { setPage(1); setSupplierId(value as number | undefined); load() }}>{suppliers.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select>}
         </Space>
         <Space>
           {supplierOptionsError && <Button size="small" onClick={loadSupplierOptions}>重试加载供应商</Button>}
@@ -319,30 +305,30 @@ export default function ProjectList() {
         <Form className="form-grid" form={form} layout="vertical">
           {!editing && <div className="form-grid-full" style={{ display: 'grid', gap: 8 }}>
             {(supplierOptionsLoading || metadataOptionsLoading) && <Typography.Text type="secondary">正在加载创建所需的基础数据…</Typography.Text>}
-            {supplierOptionsError && <Alert type="error" content="供应商选项加载失败，请刷新基础数据后重试。" />}
+            {supplierOptionsError && <Alert type="error" content="Robot 厂商选项加载失败，请刷新基础数据后重试。" />}
             {missingCreateOptions.length > 0 && <Alert type="warning" title="创建前请补齐基础数据" content={<>
               <ul>{missingCreateOptions.map((item) => <li key={item.message}>{item.message}{hasPerm(item.permission)
                 ? <> <Link to={item.path} target="_blank" rel="noopener noreferrer" style={{ whiteSpace: 'nowrap' }}>{item.action}（新窗口）</Link></>
                 : ' 请联系具有维护权限的管理员。'}</li>)}</ul>
               <span>可先填写项目资料，补齐后点击“刷新基础数据”继续。</span>
             </>} />}
-            <div><Button size="small" onClick={refreshCreateOptions} disabled={saving || supplierOptionsLoading || metadataOptionsLoading || robotModelsLoading}>刷新基础数据</Button></div>
+            <div><Button size="small" onClick={refreshCreateOptions} disabled={saving || supplierOptionsLoading || metadataOptionsLoading || robotPartsLoading}>刷新基础数据</Button></div>
           </div>}
           <Form.Item className="form-grid-full" label="主项目名称" field="name" rules={[{ required: true, message: '请输入主项目名称' }, textLengthRule('主项目名称', 128)]}><Input placeholder="主项目名称" /></Form.Item>
           {!editing && <Form.Item className="form-grid-full" label="子项目" field="subprojectNames" rules={[{ required: true, message: '请至少创建一个子项目' }, { validator: (value, callback) => listRule('子项目', SUBPROJECT_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入子项目名称后按回车，可一次创建多个" /></Form.Item>}
           <Form.Item className="form-grid-full" label="工令号" field="workOrderNos" rules={[{ required: true, message: '请至少填写一个工令号' }, { validator: (value, callback) => listRule('工令号', WORK_ORDER_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入工令号后按回车，可填写多个" /></Form.Item>
           <Form.Item label="机型" field="machineModel" rules={[{ required: true, message: '请填写机型' }, textLengthRule('机型', 128)]}><Input maxLength={128} showWordLimit placeholder="请输入机型" /></Form.Item>
-          <Form.Item label="Robot 厂商" field="robotVendorId" rules={[{ required: true, message: '请选择 Robot 厂商' }]}><Select allowClear showSearch placeholder="选择 Robot 厂商" loading={metadataOptionsLoading} disabled={metadataOptionsLoading || metadataOptionsError} filterOption={optionFilter} onChange={(value) => changeRobotVendor(value as number | undefined)}>{vendorOptions.map((item) => <Select.Option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}{item.enabled ? '' : '（已停用）'}</Select.Option>)}</Select></Form.Item>
-          <Form.Item label="Robot 型号" field="robotModelId" rules={[{ required: true, message: '请选择 Robot 型号' }]}><Select allowClear showSearch placeholder={selectedRobotVendorId ? '选择 Robot 型号' : '请先选择 Robot 厂商'} loading={robotModelsLoading} disabled={!selectedRobotVendorId || robotModelsLoading || robotModelsError} filterOption={optionFilter}>{modelOptions.map((item) => <Select.Option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}{item.enabled ? '' : '（已停用）'}</Select.Option>)}</Select></Form.Item>
-          <Form.Item label="负责人" field="responsibleUserId" rules={[{ required: true, message: '请选择负责人' }]}><Select allowClear showSearch placeholder="选择负责人" loading={metadataOptionsLoading} disabled={metadataOptionsLoading || metadataOptionsError} filterOption={optionFilter} onChange={(value) => { const ownerId = nullableNumber(value); setSelectedResponsibleUserId(ownerId); setSectionName(ownerOptions.find((item) => item.id === ownerId)?.sectionName ?? null) }}>{ownerOptions.map((item) => <Select.Option key={item.id} value={item.id}>{item.realName}（{item.employeeNo}）</Select.Option>)}</Select></Form.Item>
-          <Form.Item label="课别（自动带出）" required validateStatus={selectedResponsibleUserId && !sectionName ? 'error' : undefined} help={selectedResponsibleUserId && !sectionName ? '负责人未关联课别，请先在用户管理中设置' : undefined}><Input readOnly value={sectionName ?? ''} placeholder={selectedResponsibleUserId ? '该负责人无直属课别' : '选择负责人后自动带出'} /></Form.Item>
+          <Form.Item label="Robot 厂商" field="supplierId" rules={[{ required: true, message: '请选择 Robot 厂商' }]}><Select showSearch placeholder="选择 Robot 厂商" filterOption={optionFilter} loading={supplierOptionsLoading} disabled={!!editing || supplierOptionsLoading || supplierOptionsError} onChange={(value) => changeSupplier(value as number | undefined)}>{supplierFormOptions.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select></Form.Item>
+          <Form.Item label="Robot 料号" field="robotPartId" rules={editing && !editing.robotPartId ? [] : [{ required: true, message: '请选择 Robot 料号' }]} help={editing && !editing.robotPartId ? '历史项目可保留原型号；选择料号后将使用新料号对应型号。' : undefined}><Select allowClear showSearch placeholder={selectedSupplierId ? '选择 Robot 料号' : '请先选择 Robot 厂商'} loading={robotPartsLoading} disabled={!selectedSupplierId || robotPartsLoading || robotPartsError} filterOption={optionFilter} onChange={(value) => setSelectedRobotPartId(nullableNumber(value))}>{partOptions.map((item) => <Select.Option key={item.id} value={item.id} disabled={!item.enabled}>{item.partNumber}{item.enabled ? '' : '（已停用）'}</Select.Option>)}</Select></Form.Item>
+          <Form.Item label="Robot 型号（自动带出）"><Input.TextArea readOnly autoSize={{ minRows: 2, maxRows: 4 }} value={selectedPart?.model ?? (editing && !selectedRobotPartId ? editing.robotModelName ?? '' : '')} placeholder={selectedRobotPartId ? '所选料号未设置型号' : '选择 Robot 料号后自动带出'} /></Form.Item>
+          <Form.Item label="负责人"><Input readOnly value={editing ? `${editing.responsibleUserName || '未设置'}${editing.responsibleUserEmployeeNo ? `（${editing.responsibleUserEmployeeNo}）` : ''}` : `${user?.realName || '当前用户'}${user?.employeeNo ? `（${user.employeeNo}）` : ''}`} /></Form.Item>
+          <Form.Item label="课别" help={editing ? undefined : '按创建人的课别记录，未设置也可创建'}><Input readOnly value={editing ? editing.sectionName || '未设置' : '自动带出'} /></Form.Item>
           <Form.Item label="优先级" field="priorityId" rules={[{ required: true, message: '请选择优先级' }]}><Select allowClear showSearch placeholder="选择优先级" loading={metadataOptionsLoading} disabled={metadataOptionsLoading || metadataOptionsError} filterOption={optionFilter}>{priorityOptions.map((item) => <Select.Option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}{item.enabled ? '' : '（已停用）'}</Select.Option>)}</Select></Form.Item>
-          <Form.Item label="预计完成日期" field="expectedCompletionDate" rules={[{ required: true, message: '请选择预计完成日期' }]}><DatePicker allowClear format="YYYY-MM-DD" placeholder="选择预计完成日期" style={{ width: '100%' }} /></Form.Item>
-          <Form.Item label="关联供应商" field="supplierId" rules={[{ required: true, message: '请选择供应商' }]}><Select showSearch placeholder="选择供应商" filterOption={optionFilter} disabled={!!editing}>{suppliers.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select></Form.Item>
+          <Form.Item label="需求完成时间" field="expectedCompletionDate" rules={[{ required: true, message: '请选择需求完成时间' }]}><DatePicker allowClear format="YYYY-MM-DD" placeholder="选择需求完成时间" style={{ width: '100%' }} /></Form.Item>
           <Form.Item className="form-grid-full" label="主项目说明" field="description"><Input.TextArea rows={3} maxLength={500} showWordLimit wordLimitPosition="outside" placeholder="选填" /></Form.Item>
-          <div className="form-grid-full dialog-note">关联后，该供应商的全部启用账号均可访问此主项目及其子项目。</div>
-          {(metadataOptionsError || robotModelsError) && <div className="form-grid-full dialog-note dialog-note--danger">
-            <span>项目字典或负责人选项加载失败，请重试。</span>
+          <div className="form-grid-full dialog-note">所选 Robot 厂商的全部启用账号均可访问此主项目及其子项目。</div>
+          {(metadataOptionsError || robotPartsError) && <div className="form-grid-full dialog-note dialog-note--danger">
+            <span>优先级或 Robot 料号选项加载失败，请重试。</span>
             <Button size="small" onClick={retryMetadataOptions}>重试加载选项</Button>
           </div>}
         </Form>

@@ -73,7 +73,7 @@ Excel、PDF 和 PPTX 预览接入用户提供的 `vue-office源码2024-12-30.zip
 
 使用真实 XLSX 测试工作簿验证空白首表、多工作表、合并标题、样式、两种嵌入图片锚点、工作表切换及窗口缩放。PDF 使用真实文档验证实际渲染、顶部控件、放大缩小重置及桌面/窄屏边界。接口采用浏览器隔离夹具，未向业务数据库新增测试项目或文件。
 
-持久回归测试位于 `web/test/excel-source.test.cjs`、`file-security.test.cjs`、`pdf-preview.test.cjs` 和相关 `regression.test.cjs` 用例，运行 `npm test`。
+持久回归测试位于 `web/src/test/migrated/vendor/`、`files/`、`previews/`，使用 Vitest 与 Testing Library，运行 `npm test`。组件与预览引擎直接导入生产实现，不再通过转译源码或伪组件树测试。
 
 本次验证记录（2026-09-14）：
 

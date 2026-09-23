@@ -39,8 +39,8 @@ public sealed class DashboardConcurrencyTests
             """, null, ct);
 
         await using var connection = await database.Database.OpenAsync(ct);
-        // Commit on a second real connection after the page IDs were selected but before
-        // the detail SELECT executes. No sleeps or production test hooks are required.
+        // Commit on a second real connection immediately before the unified detail/count
+        // statement executes. No sleeps or production test hooks are required.
         using var change = new BeforeDetailQuery(connection.Database, () =>
         {
             using var concurrent = new MySqlConnection(AppDb.BuildConnectionString(database.Options));
@@ -65,8 +65,22 @@ public sealed class DashboardConcurrencyTests
         if (endpoint == "summary")
             Assert.Empty((await service.SummaryAsync(connection, actor, ct)).RecentMessages);
         else
-            Assert.Empty((await service.MessagesAsync(connection, actor, 1, 20, endpoint == "unread", ct)).List);
-        Assert.True(change.Fired, "The concurrent mutation must occur between ID selection and detail materialization.");
+        {
+            var page = await service.MessagesAsync(connection, actor, 1, 20, endpoint == "unread", ct);
+            Assert.Equal(0UL, page.Total);
+            Assert.Empty(page.List);
+        }
+        Assert.True(change.Fired, "The concurrent mutation must occur before detail/count materialization.");
+        Assert.Equal(1, CountOccurrences(change.CommandText!, "COUNT(*)"));
+    }
+
+    private static int CountOccurrences(string value, string pattern)
+    {
+        var count = 0;
+        for (var index = 0; (index = value.IndexOf(pattern, index, StringComparison.OrdinalIgnoreCase)) >= 0;
+             index += pattern.Length)
+            count++;
+        return count;
     }
 
     private sealed class BeforeDetailQuery : IDisposable
@@ -75,6 +89,7 @@ public sealed class DashboardConcurrencyTests
         private readonly IDisposable listeners;
         private int fired;
         public bool Fired => Volatile.Read(ref fired) != 0;
+        public string? CommandText { get; private set; }
 
         public BeforeDetailQuery(string database, Action change)
         {
@@ -89,7 +104,11 @@ public sealed class DashboardConcurrencyTests
                     var sql = data.Command.CommandText;
                     if (!sql.Contains("`content`", StringComparison.Ordinal) || !sql.Contains("FROM `messages`", StringComparison.Ordinal))
                         return;
-                    if (Interlocked.Exchange(ref fired, 1) == 0) change();
+                    if (Interlocked.Exchange(ref fired, 1) == 0)
+                    {
+                        CommandText = sql;
+                        change();
+                    }
                 })));
             }));
         }

@@ -58,6 +58,12 @@ public sealed class IdentitySecurityTests
         Assert.True(accountLimiter.AllowLogin("192.0.2.1", "other"));
         Assert.True(accountLimiter.AllowLogin("192.0.2.2", "target"));
 
+        // The rejected 11th attempt still consumes the IP-wide budget. IP limiting must run
+        // before the narrower account bucket so account rotation cannot avoid the total cap.
+        Assert.All(Enumerable.Range(1, 48), attempt =>
+            Assert.True(accountLimiter.AllowLogin("192.0.2.1", "other-" + attempt)));
+        Assert.False(accountLimiter.AllowLogin("192.0.2.1", "ip-limit"));
+
         var ipLimiter = new LoginRateLimiter();
         Assert.All(Enumerable.Range(1, 60), attempt =>
             Assert.True(ipLimiter.AllowLogin("198.51.100.1", "account-" + attempt)));

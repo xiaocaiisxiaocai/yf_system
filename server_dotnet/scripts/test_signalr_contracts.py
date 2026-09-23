@@ -265,7 +265,7 @@ def run_signalr_checks(admin, supplier, outsider, conn, probe, check, shared_pas
     outsider.login(outsider_employee, shared_password)
 
     _, project = _create_project_group(
-        admin, conn, supplier_row["id"], admin_id,
+        admin, admin, conn, supplier_row["id"],
         "SignalR项目-" + secrets.token_hex(5))
     project_id = project["id"]
     supplier.call("GET", f"/api/v1/projects/{project_id}")

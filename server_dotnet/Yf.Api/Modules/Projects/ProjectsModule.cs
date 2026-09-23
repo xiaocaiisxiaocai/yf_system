@@ -13,7 +13,10 @@ public static class ProjectsModule
         services.AddScoped<ProjectGroupService>();
         services.AddScoped<ProjectGroupStatusService>();
         services.AddScoped<ProjectCopyService>();
+        services.AddSingleton<ProjectCopyWorker>();
+        services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<ProjectCopyWorker>());
         services.AddScoped<ProjectDictionaryService>();
+        services.AddScoped<RobotPartService>();
         services.AddScoped<MessageService>();
         services.AddScoped<DashboardService>();
         services.AddScoped<CollaborationService>();
@@ -53,8 +56,17 @@ public static class ProjectsModule
         api.MapPost("/project-groups/{id:long}/projects", (HttpContext context, ulong id, SubprojectUpsertRequest request, ProjectGroupService service) =>
             WithDb(context, (conn, actor, ip, ct) => service.CreateSubprojectAsync(conn, actor, id, request, ip, ct)));
 
-        api.MapPost("/projects/{id:long}/copy", (HttpContext context, ulong id, ProjectCopyRequest request, ProjectCopyService service) =>
-            WithDb(context, (conn, actor, ip, ct) => service.CopyAsync(conn, actor, id, request, ip, ct)));
+        api.MapPost("/projects/{id:long}/copy", async (HttpContext context, ulong id, ProjectCopyRequest request,
+            ProjectCopyService service) =>
+        {
+            var job = await WithDb(context,
+                (conn, actor, ip, ct) => service.EnqueueAsync(conn, actor, id, request, ip, ct));
+            return TypedResults.Accepted($"/api/v1/project-copy-jobs/{job.JobId}", job);
+        });
+        api.MapGet("/project-copy-jobs/{jobId:long}", (HttpContext context, ulong jobId, ProjectCopyService service) =>
+            WithDb(context, (conn, actor, _, ct) => service.GetJobAsync(conn, actor, jobId, ct)));
+        api.MapGet("/project-groups/{groupId:long}/copy-jobs", (HttpContext context, ulong groupId, ProjectCopyService service) =>
+            WithDb(context, (conn, actor, _, ct) => service.ListJobsAsync(conn, actor, groupId, ct)));
         api.MapGet("/projects/{id:long}/copy-history", (HttpContext context, ulong id, ProjectCopyService service) =>
             WithDb(context, (conn, actor, _, ct) => service.HistoryAsync(conn, actor, id, ct)));
         api.MapGet("/project-copies/{copyId:long}/files", (HttpContext context, ulong copyId, ProjectCopyService service) =>
@@ -105,33 +117,39 @@ public static class ProjectsModule
                 id,
                 ParseMessageIds(QueryString(context, "ids")),
                 ct)));
-        api.MapPost("/projects/{id:long}/messages", (HttpContext context, ulong id, MessageService service) =>
-            WithDb(context, async (conn, actor, ip, ct) =>
+        api.MapPost("/projects/{id:long}/messages", async (HttpContext context, ulong id, MessageService service) =>
+        {
+            if (!context.Request.HasFormContentType && !context.Request.HasJsonContentType())
+                throw new ApiException(415, 41501, "留言仅支持 JSON 或 multipart/form-data");
+            // This short preflight releases its pooled connection before waiting for the request body.
+            // CreateAsync rechecks authorization and project state in its own write transaction.
+            await WithDb(context, (conn, actor, _, ct) =>
+                Empty(service.EnsureCreateAllowedAsync(conn, actor, id, ct)));
+            MessageCreateRequest request;
+            IFormFile[] images = [];
+            if (context.Request.HasFormContentType)
             {
-                if (context.Request.HasFormContentType)
+                IFormCollection form;
+                try { form = await context.Request.ReadFormAsync(context.RequestAborted); }
+                catch (InvalidDataException)
                 {
-                    // Reject unauthorized or non-writable projects before ASP.NET buffers a large form.
-                    await service.EnsureCreateAllowedAsync(conn, actor, id, ct);
-                    IFormCollection form;
-                    try { form = await context.Request.ReadFormAsync(ct); }
-                    catch (InvalidDataException)
-                    {
-                        throw ApiException.BadRequest("留言图片表单格式不正确或超过大小上限");
-                    }
-                    if (form.Files.Any(file => file.Name != "images"))
-                        throw ApiException.BadRequest("图片表单字段必须命名为 images");
-                    if (form.TryGetValue("content", out var contents) && contents.Count > 1)
-                        throw ApiException.BadRequest("content 表单字段只能出现一次");
-                    var request = new MessageCreateRequest { Content = contents.Count == 0 ? null : contents[0] };
-                    return await service.CreateAsync(
-                        conn, actor, id, request, form.Files.ToArray(), ip, ct);
+                    throw ApiException.BadRequest("留言图片表单格式不正确或超过大小上限");
                 }
-                if (!context.Request.HasJsonContentType())
-                    throw new ApiException(415, 41501, "留言仅支持 JSON 或 multipart/form-data");
-                var json = await context.Request.ReadFromJsonAsync<MessageCreateRequest>(cancellationToken: ct)
+                if (form.Files.Any(file => file.Name != "images"))
+                    throw ApiException.BadRequest("图片表单字段必须命名为 images");
+                if (form.TryGetValue("content", out var contents) && contents.Count > 1)
+                    throw ApiException.BadRequest("content 表单字段只能出现一次");
+                request = new MessageCreateRequest { Content = contents.Count == 0 ? null : contents[0] };
+                images = form.Files.ToArray();
+            }
+            else
+            {
+                request = await context.Request.ReadFromJsonAsync<MessageCreateRequest>(cancellationToken: context.RequestAborted)
                     ?? throw ApiException.BadRequest("请求格式不正确");
-                return await service.CreateAsync(conn, actor, id, json, ip, ct);
-            }))
+            }
+            return await WithDb(context, (conn, actor, ip, ct) =>
+                service.CreateAsync(conn, actor, id, request, images, ip, ct));
+        })
         .WithMetadata(new RequestSizeLimitAttribute(MessageService.MultipartRequestLimitBytes))
         .WithMetadata(new RequestFormLimitsAttribute
         {
@@ -210,6 +228,17 @@ public static class ProjectsModule
         api.MapPut("/project-dictionaries/{id:long}", (HttpContext context, ulong id, ProjectDictionaryUpsertRequest request, ProjectDictionaryService service) =>
             WithDb(context, (conn, actor, ip, ct) => service.UpdateAsync(conn, actor, id, request, ip, ct)));
         api.MapDelete("/project-dictionaries/{id:long}", (HttpContext context, ulong id, ProjectDictionaryService service) =>
+            WithDb(context, (conn, actor, ip, ct) => Empty(service.DeleteAsync(conn, actor, id, ip, ct))));
+        api.MapGet("/robot-parts", (HttpContext context, RobotPartService service) =>
+            WithDb(context, (conn, actor, _, ct) => service.ListAsync(conn, actor,
+                QueryNullableUlong(context, "supplierId"), QueryBool(context, "enabledOnly", true), ct)));
+        api.MapGet("/robot-part-supplier-options", (HttpContext context, RobotPartService service) =>
+            WithDb(context, (conn, actor, _, ct) => service.SupplierOptionsAsync(conn, actor, ct)));
+        api.MapPost("/robot-parts", (HttpContext context, RobotPartUpsertRequest request, RobotPartService service) =>
+            WithDb(context, (conn, actor, ip, ct) => service.CreateAsync(conn, actor, request, ip, ct)));
+        api.MapPut("/robot-parts/{id:long}", (HttpContext context, ulong id, RobotPartUpsertRequest request, RobotPartService service) =>
+            WithDb(context, (conn, actor, ip, ct) => service.UpdateAsync(conn, actor, id, request, ip, ct)));
+        api.MapDelete("/robot-parts/{id:long}", (HttpContext context, ulong id, RobotPartService service) =>
             WithDb(context, (conn, actor, ip, ct) => Empty(service.DeleteAsync(conn, actor, id, ip, ct))));
 
         return endpoints;

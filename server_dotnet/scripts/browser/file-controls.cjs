@@ -10,7 +10,7 @@ const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const XLSX = require(process.env.YF_PROJECT_ROOT + '/web/node_modules/xlsx');
 const {
-  assert, OUT, s, f, record, login, api, track,
+  assert, OUT, s, f, record, login, api, projectMetadata, track,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
 const apiPath = path => '/api/v1' + path;
@@ -78,27 +78,14 @@ async function uploadFixture(context, token, projectId, fileName, bytes) {
   return { ...merged, sessionId: init.sessionId };
 }
 
-async function createProjectGroup(context, token, supplierId, ownerId, name) {
-  const vendors = await (await api(
-    context, 'GET', '/project-dictionaries?type=ROBOT_VENDOR&enabledOnly=true', undefined, token)).json();
-  assert(vendors.length > 0, 'file controls need a Robot vendor');
-  const models = await (await api(
-    context, 'GET', '/project-dictionaries?type=ROBOT_MODEL&parentId=' + vendors[0].id
-      + '&enabledOnly=true', undefined, token)).json();
-  const priorities = await (await api(
-    context, 'GET', '/project-dictionaries?type=PRIORITY&enabledOnly=true', undefined, token)).json();
-  assert(models.length > 0 && priorities.length > 0, 'file controls need model and priority options');
+async function createProjectGroup(context, token, supplierId, name) {
   const group = await (await api(context, 'POST', '/project-groups', {
     name,
     description: '独立文件控件浏览器验收夹具',
     supplierId,
     workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
     machineModel: '文件控件机型',
-    robotVendorId: vendors[0].id,
-    robotModelId: models[0].id,
-    responsibleUserId: ownerId,
-    priorityId: priorities[0].id,
-    expectedCompletionDate: '2099-12-31',
+    ...await projectMetadata(context, token, supplierId),
     subprojectNames: [name + ' 子项目'],
   }, token)).json();
   const detail = await (await api(
@@ -182,11 +169,8 @@ async function assertInsideViewport(locator, page, label) {
       (await api(context, method, path, body, auth.accessToken, expected)).json();
     const suffix = crypto.randomBytes(5).toString('hex');
     const prefix = '文件控件-' + suffix;
-    const owners = await json('GET', '/project-owner-options');
-    const owner = owners.find(item => item.sectionName?.trim());
-    assert(owner, 'file controls need an active project owner with a section');
     const project = await createProjectGroup(
-      context, auth.accessToken, f.suppliers.a.id, owner.id, prefix + '-项目');
+      context, auth.accessToken, f.suppliers.a.id, prefix + '-项目');
     await json('PUT', `/projects/${project.id}/status`, { status: 'IN_PROGRESS' });
     assert.equal((await json('GET', `/projects/${project.id}`)).status, 'IN_PROGRESS');
 

@@ -49,16 +49,34 @@ export type ProjectCopyHistory = Api.ProjectCopyHistoryResponse
 
 export type ProjectCopyFileMapping = Api.FileCopyHistoryItem
 
-export interface ProjectCopyResult {
-  project: ProjectSummary
-  copy: Api.ProjectCopyRecord
+/** 持久化项目复制任务；任务响应不依赖当前页面是否仍打开。 */
+export type ProjectCopyJobStatus = 'pending' | 'running' | 'succeeded' | 'failed'
+
+export type ProjectCopyJobResult = Api.ProjectCopyJobResult
+
+/** Generated DTO plus narrowed status and nullable result semantics from the runtime contract. */
+export type ProjectCopyJob = Omit<Api.ProjectCopyJobResponse, 'status' | 'result'> & {
+  status: ProjectCopyJobStatus
+  result: ProjectCopyJobResult | null
 }
 
-export type ProjectDictionaryType = 'ROBOT_VENDOR' | 'ROBOT_MODEL' | 'PRIORITY'
+/** POST and single-job GET return this flat record; only the group list wraps { jobs }. */
+export type ProjectCopyJobResponse = ProjectCopyJob
+
+export type ProjectCopyJobsResponse = Omit<Api.ProjectCopyJobListResponse, 'jobs'> & {
+  jobs: ProjectCopyJob[]
+}
+
+export type CreateProjectCopyJobRequest = Omit<Api.ProjectCopyRequest, 'name' | 'idempotencyKey'> & {
+  name: string
+  idempotencyKey: string
+}
+
+export type ProjectDictionaryType = 'PRIORITY'
 
 export type ProjectDictionaryOption = Omit<Api.ProjectDictionaryResponse, 'type'> & { type: ProjectDictionaryType }
 
-export type ProjectOwnerOption = Api.ProjectOwnerOption
+export type RobotPart = Api.RobotPartResponse
 
 export type FileItem = Omit<Api.FileListItem, 'direction'> & { direction: 'C2S' | 'S2C' }
 

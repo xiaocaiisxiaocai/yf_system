@@ -8,7 +8,7 @@ public sealed class LoginRateLimiter
     private readonly ConcurrentDictionary<string, Window> _rates = new();
 
     public bool AllowLogin(string clientIp, string employeeNo) =>
-        AllowIpAndAccount(clientIp, employeeNo) && AllowIp(clientIp);
+        AllowIp(clientIp) && AllowIpAndAccount(clientIp, employeeNo);
 
     private bool AllowIpAndAccount(string clientIp, string employeeNo) =>
         Allow($"login:{clientIp}:{employeeNo}", 10);

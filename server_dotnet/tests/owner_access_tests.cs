@@ -26,7 +26,7 @@ public sealed class OwnerAccessTests
     private const ulong OtherSupplierUserId = 9_202;
 
     [Fact(Timeout = 120_000)]
-    public async Task ResponsibleUserIsTheOnlyNonGlobalInternalProjectScope()
+    public async Task ResponsibleUserScopesAccessAndCreationAssignsCreator()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await OwnerAccessDatabase.CreateOrSkipAsync(ct);
@@ -81,29 +81,33 @@ public sealed class OwnerAccessTests
         await AssertOutOfScopeAsync(() => files.ListAsync(Context(creator), ProjectId, ct));
         await AssertOutOfScopeAsync(() => files.ListAsync(Context(oldMember), ProjectId, ct));
 
-        await AssertTransferRequiredAsync(() => users.SetStatusAsync(admin, OldOwnerId, "DISABLED", ct));
+        await AssertActiveResponsibilityBlocksChangeAsync(() => users.SetStatusAsync(admin, OldOwnerId, "DISABLED", ct));
         using (var department = JsonDocument.Parse("7002"))
-            await AssertTransferRequiredAsync(() => users.UpdateAsync(admin, OldOwnerId,
+            await AssertActiveResponsibilityBlocksChangeAsync(() => users.UpdateAsync(admin, OldOwnerId,
                 new UserUpdate(DepartmentId: department.RootElement.Clone()), ct));
-        await AssertTransferRequiredAsync(() => users.AssignRoleAsync(admin, OldOwnerId, [9_003], ct));
-        await AssertTransferRequiredAsync(() => users.DeleteAsync(admin, OldOwnerId, ct));
-        await AssertTransferRequiredAsync(() => roles.AssignPermissionsAsync(admin, 9_001, [], ct));
+        await AssertActiveResponsibilityBlocksChangeAsync(() => users.AssignRoleAsync(admin, OldOwnerId, [9_003], ct));
+        await AssertActiveResponsibilityBlocksChangeAsync(() => users.DeleteAsync(admin, OldOwnerId, ct));
+        await AssertActiveResponsibilityBlocksChangeAsync(() => roles.AssignPermissionsAsync(admin, 9_001, [], ct));
 
-        await groups.UpdateAsync(conn, oldOwner, ProjectGroupId, UpdateRequest(NewOwnerId), null, ct);
+        await groups.UpdateAsync(conn, oldOwner, ProjectGroupId, UpdateRequest(), null, ct);
 
-        await AssertOutOfScopeAsync(() => projects.DetailAsync(conn, oldOwner, ProjectId, ct));
-        using (var detail = Json(await projects.DetailAsync(conn, newOwner, ProjectId, ct)))
-            Assert.Equal(NewOwnerId, detail.RootElement.GetProperty("responsibleUserId").GetUInt64());
-        await AssertOutOfScopeAsync(() => files.ListAsync(Context(oldOwner), ProjectId, ct));
-        Assert.Equal(0UL, Total(await files.ListAsync(Context(newOwner), ProjectId, ct)));
+        using (var detail = Json(await projects.DetailAsync(conn, oldOwner, ProjectId, ct)))
+            Assert.Equal(OldOwnerId, detail.RootElement.GetProperty("responsibleUserId").GetUInt64());
+        await AssertOutOfScopeAsync(() => projects.DetailAsync(conn, newOwner, ProjectId, ct));
+        Assert.Equal(0UL, Total(await files.ListAsync(Context(oldOwner), ProjectId, ct)));
+        await AssertOutOfScopeAsync(() => files.ListAsync(Context(newOwner), ProjectId, ct));
 
-        var createdGroup = await groups.CreateAsync(conn, creator, CreateRequest(NewOwnerId), null, ct);
+        var createdGroup = await groups.CreateAsync(conn, creator, CreateRequest(), null, ct);
         var createdGroupId = Id(createdGroup);
         var createdId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
             "SELECT id FROM projects WHERE project_group_id=@GroupId",
             new { GroupId = createdGroupId }, cancellationToken: ct));
-        await AssertOutOfScopeAsync(() => projects.DetailAsync(conn, creator, createdId, ct));
-        await projects.DetailAsync(conn, newOwner, createdId, ct);
+        using (var created = Json(await projects.DetailAsync(conn, creator, createdId, ct)))
+        {
+            Assert.Equal(CreatorId, created.RootElement.GetProperty("responsibleUserId").GetUInt64());
+            Assert.Equal(7001UL, created.RootElement.GetProperty("sectionId").GetUInt64());
+        }
+        await AssertOutOfScopeAsync(() => projects.DetailAsync(conn, newOwner, createdId, ct));
     }
 
     private static readonly string SeedSql = """
@@ -137,55 +141,50 @@ public sealed class OwnerAccessTests
           (9202,'owner-other-supplier','unused','其他供应商用户','','SUPPLIER',8002,NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
         INSERT INTO user_roles(user_id,role_id)
         VALUES(9101,9001),(9102,9001),(9103,9001),(9104,9001),(9105,9002),(9201,9001),(9202,9001);
+        INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
+        VALUES(6002,8001,'OWNER-PART','负责人测试型号',1,'ACTIVE');
         INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
-        VALUES
-          (6001,'ROBOT_VENDOR','负责人测试厂商',NULL,1,'ACTIVE'),
-          (6002,'ROBOT_MODEL','负责人测试型号',6001,1,'ACTIVE'),
-          (6003,'PRIORITY','负责人测试优先级',NULL,1,'ACTIVE');
+        VALUES(6003,'PRIORITY','负责人测试优先级',NULL,1,'ACTIVE');
         INSERT INTO project_groups
-          (id,name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,robot_model_id,
+          (id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,
            responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
         VALUES
-          (11001,'负责人范围主项目','范围测试',8001,'DRAFT',9101,'M1',6001,6002,9103,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (11002,'无负责人历史主项目','空负责人测试',8001,'DRAFT',9101,'M1',6001,6002,NULL,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (11003,'无列表权限负责人主项目','权限门禁测试',8001,'DRAFT',9101,'M1',6001,6002,9106,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+          (11001,'负责人范围主项目','范围测试',8001,'DRAFT',9101,'M1',6002,9103,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (11002,'无负责人历史主项目','空负责人测试',8001,'DRAFT',9101,'M1',6002,NULL,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (11003,'无列表权限负责人主项目','权限门禁测试',8001,'DRAFT',9101,'M1',6002,9106,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
         INSERT INTO projects
-          (id,project_group_id,name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,robot_model_id,
+          (id,project_group_id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,
            responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
         VALUES
-          (10001,11001,'负责人范围项目','范围测试',8001,'DRAFT',9101,'M1',6001,6002,9103,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (10002,11002,'无负责人历史项目','空负责人测试',8001,'DRAFT',9101,'M1',6001,6002,NULL,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (10003,11003,'无列表权限负责人项目','权限门禁测试',8001,'DRAFT',9101,'M1',6001,6002,9106,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+          (10001,11001,'负责人范围项目','范围测试',8001,'DRAFT',9101,'M1',6002,9103,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (10002,11002,'无负责人历史项目','空负责人测试',8001,'DRAFT',9101,'M1',6002,NULL,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (10003,11003,'无列表权限负责人项目','权限门禁测试',8001,'DRAFT',9101,'M1',6002,9106,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
         INSERT INTO project_group_work_orders(project_group_id,work_order_no,sort_no)
         VALUES(11001,'WO-OWNER',0),(11002,'WO-OWNERLESS',0),(11003,'WO-NO-LIST',0);
         INSERT INTO project_work_orders(project_id,work_order_no,sort_no)
         VALUES(10001,'WO-OWNER',0),(10002,'WO-OWNERLESS',0),(10003,'WO-NO-LIST',0);
         """;
 
-    private static ProjectUpsertRequest UpdateRequest(ulong responsibleUserId) => new()
+    private static ProjectUpsertRequest UpdateRequest() => new()
     {
         Name = "负责人范围项目",
         Description = "范围测试",
         SupplierId = 8_001,
         WorkOrderNos = ["WO-OWNER"],
         MachineModel = "M1",
-        RobotVendorId = 6_001,
-        RobotModelId = 6_002,
-        ResponsibleUserId = responsibleUserId,
+        RobotPartId = 6_002,
         PriorityId = 6_003,
         ExpectedCompletionDate = "2026-12-31",
     };
 
-    private static ProjectUpsertRequest CreateRequest(ulong responsibleUserId) => new()
+    private static ProjectUpsertRequest CreateRequest() => new()
     {
         Name = "创建后仅负责人可见",
         Description = "不写项目成员",
         SupplierId = 8_001,
         WorkOrderNos = ["WO-CREATED-OWNER"],
         MachineModel = "M2",
-        RobotVendorId = 6_001,
-        RobotModelId = 6_002,
-        ResponsibleUserId = responsibleUserId,
+        RobotPartId = 6_002,
         PriorityId = 6_003,
         ExpectedCompletionDate = "2027-01-31",
         SubprojectNames = ["创建后子项目"],
@@ -206,6 +205,7 @@ public sealed class OwnerAccessTests
             audit,
             new BatchDownloadLimiter(),
             new MediaGrantService(database.Options),
+            new DownloadGrantService(),
             identity);
     }
 
@@ -243,11 +243,11 @@ public sealed class OwnerAccessTests
         Assert.Equal(40301, error.Code);
     }
 
-    private static async Task AssertTransferRequiredAsync(Func<Task> action)
+    private static async Task AssertActiveResponsibilityBlocksChangeAsync(Func<Task> action)
     {
         var error = await Assert.ThrowsAsync<ApiException>(action);
         Assert.Equal(400, error.Status);
-        Assert.Contains("转交负责人", error.Message, StringComparison.Ordinal);
+        Assert.Contains("结束相关项目", error.Message, StringComparison.Ordinal);
     }
 
     private static ulong Total(object value)

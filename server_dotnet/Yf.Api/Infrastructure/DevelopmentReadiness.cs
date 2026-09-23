@@ -77,8 +77,9 @@ internal static class DevelopmentReadiness
         var storageReady = await ProbeRootAsync(options.StorageRoot, ct);
         if (!storageReady) issues.Add("storage-read-write-failed");
 
-        var workerReady = options.WorkerEnabled;
-        if (!workerReady) issues.Add("worker-disabled");
+        var workerReady = options.WorkerEnabled && options.CopyWorkerEnabled;
+        if (!options.WorkerEnabled) issues.Add("worker-disabled");
+        if (!options.CopyWorkerEnabled) issues.Add("copy-worker-disabled");
 
         var checks = new DevelopmentReadinessChecks(
             true, true, databaseReady, storageReady, workerReady);

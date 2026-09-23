@@ -34,7 +34,7 @@ function rgb([h, s, l]) {
 const linear = c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
 const srgb = c => c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055
 
-function resolveColor(element, theme, mapping, placeholder, depth = 0) {
+export function resolveColor(element, theme, mapping, placeholder, depth = 0) {
   const resolve = (node, level) => {
     if (!node || level > 8) return null
     let channels, alpha = 1
@@ -182,7 +182,7 @@ function applyThemeFonts(doc, theme) {
   }
 }
 
-function relativePart(from, target) {
+export function relativePart(from, target) {
   const parts = target.startsWith('/') ? [] : from.split('/').slice(0, -1)
   for (const segment of target.split('/')) {
     if (segment === '..') { if (!parts.length) return null; parts.pop() }

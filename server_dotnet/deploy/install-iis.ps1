@@ -120,9 +120,12 @@ New-WebAppPool -Name $AppPoolName | Out-Null
 Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name managedRuntimeVersion -Value ''
 Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.identityType -Value 'ApplicationPoolIdentity'
 Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.loadUserProfile -Value $false
+Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.maxProcesses -Value 1
 Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name startMode -Value AlwaysRunning
 Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.idleTimeout -Value ([TimeSpan]::Zero)
 Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name enable32BitAppOnWin64 -Value $false
+$installedPool = Get-Item "IIS:\AppPools\$AppPoolName"
+Assert-YfApplicationPoolProcessModel ($installedPool.processModel.identityType.ToString()) ([bool]$installedPool.processModel.loadUserProfile) ([int]$installedPool.processModel.maxProcesses)
 $identity = 'IIS AppPool\' + $AppPoolName
 & icacls.exe $SiteRoot /grant "${identity}:(OI)(CI)RX" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application read permissions.' }

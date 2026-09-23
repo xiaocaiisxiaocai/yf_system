@@ -152,6 +152,65 @@ public sealed class LoginThrottleTests
         }
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task RefreshReturnsProfileAndKeepsTheOriginalAbsoluteSessionDeadline()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await LoginDatabase.CreateAsync(ct);
+        var login = await scope.LoginWithRefreshAsync("target", scope.Password, "192.0.2.210", ct);
+        var original = await scope.RefreshStateAsync(login.Refresh, ct);
+
+        Assert.InRange((original.SessionExpiresAt - original.SessionCreatedAt).TotalDays, 29.99, 30.01);
+        Assert.True(original.ExpiresAt <= original.SessionExpiresAt);
+
+        await scope.ExecuteAsync("""
+            UPDATE refresh_tokens
+            SET session_created_at=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 29 DAY),
+                session_expires_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 DAY),
+                expires_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 2 DAY)
+            WHERE token_hash=@hash
+            """, new { hash = TokenService.HashRefreshToken(login.Refresh) }, ct);
+        var shortened = await scope.RefreshStateAsync(login.Refresh, ct);
+
+        var rotated = await scope.Service().RefreshAsync(login.Refresh, "192.0.2.211", ct);
+        var current = await scope.RefreshStateAsync(rotated.Refresh, ct);
+
+        Assert.Equal((ulong)1, rotated.Response.User.Id);
+        Assert.Equal("target", rotated.Response.User.EmployeeNo);
+        Assert.False(rotated.Response.MustChangePassword);
+        Assert.NotNull(rotated.Response.Permissions);
+        Assert.NotNull(rotated.Response.Menus);
+        Assert.Equal(shortened.SessionId, current.SessionId);
+        Assert.Equal(shortened.SessionCreatedAt, current.SessionCreatedAt);
+        Assert.Equal(shortened.SessionExpiresAt, current.SessionExpiresAt);
+        Assert.Equal(shortened.SessionExpiresAt, current.ExpiresAt);
+
+        // A rotated token is never accepted again. Replaying it immediately revokes the
+        // current generation from the same family as well.
+        var replay = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Service().RefreshAsync(login.Refresh, "192.0.2.212", ct));
+        Assert.Equal(401, replay.Status);
+        Assert.Equal(0, await scope.SessionsAsync(1, ct));
+        await using var connection = await scope.OpenAsync(ct);
+        Assert.False(await scope.Service().HasActiveSessionAsync(
+            connection, null, 1, current.SessionId, ct));
+
+        var expiredLogin = await scope.LoginWithRefreshAsync("target", scope.Password, "192.0.2.213", ct);
+        var expiredState = await scope.RefreshStateAsync(expiredLogin.Refresh, ct);
+        await scope.ExecuteAsync("""
+            UPDATE refresh_tokens
+            SET session_expires_at=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 SECOND),
+                expires_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 DAY)
+            WHERE token_hash=@hash
+            """, new { hash = TokenService.HashRefreshToken(expiredLogin.Refresh) }, ct);
+
+        var absoluteExpiry = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Service().RefreshAsync(expiredLogin.Refresh, "192.0.2.214", ct));
+        Assert.Equal(401, absoluteExpiry.Status);
+        Assert.False(await scope.Service().HasActiveSessionAsync(
+            connection, null, 1, expiredState.SessionId, ct));
+    }
+
     private sealed class LoginDatabase(MySqlConnection admin, string name, AppOptions options, string password, string legacyPassword) : IAsyncDisposable
     {
         private readonly AppDb _db = new(options);
@@ -186,6 +245,10 @@ public sealed class LoginThrottleTests
             return (await Service().LoginAsync(new(employeeNo, supplied), ip, ct)).Response;
         }
 
+        public Task<(LoginResponse Response, string Refresh)> LoginWithRefreshAsync(
+            string employeeNo, string supplied, string ip, CancellationToken ct) =>
+            Service().LoginAsync(new(employeeNo, supplied), ip, ct);
+
         public async Task RejectAsync(string employeeNo, string supplied, string ip, CancellationToken ct)
         {
             var error = await Assert.ThrowsAsync<ApiException>(() => LoginAsync(employeeNo, supplied, ip, ct));
@@ -212,6 +275,22 @@ public sealed class LoginThrottleTests
         {
             await using var conn = await _db.OpenAsync(ct);
             await conn.ExecuteAsync(new CommandDefinition(sql, cancellationToken: ct));
+        }
+
+        public async Task ExecuteAsync(string sql, object parameters, CancellationToken ct)
+        {
+            await using var conn = await _db.OpenAsync(ct);
+            await conn.ExecuteAsync(new CommandDefinition(sql, parameters, cancellationToken: ct));
+        }
+
+        public async Task<RefreshState> RefreshStateAsync(string rawToken, CancellationToken ct)
+        {
+            await using var conn = await _db.OpenAsync(ct);
+            return await conn.QuerySingleAsync<RefreshState>(new CommandDefinition("""
+                SELECT session_id SessionId,session_created_at SessionCreatedAt,
+                       session_expires_at SessionExpiresAt,expires_at ExpiresAt
+                FROM refresh_tokens WHERE token_hash=@hash
+                """, new { hash = TokenService.HashRefreshToken(rawToken) }, cancellationToken: ct));
         }
 
         public static async Task<LoginDatabase> CreateAsync(CancellationToken ct)
@@ -290,5 +369,13 @@ public sealed class LoginThrottleTests
         public int Failures { get; init; }
         public DateTime? LockedUntil { get; init; }
         public DateTime Now { get; init; }
+    }
+
+    private sealed class RefreshState
+    {
+        public string SessionId { get; init; } = "";
+        public DateTime SessionCreatedAt { get; init; }
+        public DateTime SessionExpiresAt { get; init; }
+        public DateTime ExpiresAt { get; init; }
     }
 }

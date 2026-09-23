@@ -62,6 +62,8 @@ public sealed class AuditLogConfig : IEntityTypeConfiguration<AuditLog>
         b.HasIndex(x => x.CreatedAt).HasDatabaseName("idx_audit_time");
         b.HasIndex(x => x.UserId).HasDatabaseName("idx_audit_user");
         b.HasIndex(x => x.Action).HasDatabaseName("idx_audit_action");
+        b.HasIndex(x => new { x.Action, x.CreatedAt, x.Id }).HasDatabaseName("idx_audit_action_time");
+        b.HasIndex(x => new { x.TargetType, x.TargetId, x.Id }).HasDatabaseName("idx_audit_target");
         // Deliberately no FK on user_id: audit rows must survive account deletion/rename (employee_no is a snapshot).
     }
 }

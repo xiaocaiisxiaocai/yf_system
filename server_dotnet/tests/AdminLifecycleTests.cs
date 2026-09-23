@@ -93,7 +93,7 @@ public sealed class AdminLifecycleTests
 
         var disableError = await Assert.ThrowsAsync<ApiException>(() =>
             departments.SetStatusAsync(actor, 7100, "DISABLED", ct));
-        Assert.Contains("请先转交负责人", disableError.Message, StringComparison.Ordinal);
+        Assert.Contains("请先结束相关项目", disableError.Message, StringComparison.Ordinal);
 
         var invalidMove = await Assert.ThrowsAsync<ApiException>(() =>
             departments.UpdateAsync(actor, 7102,
@@ -107,7 +107,7 @@ public sealed class AdminLifecycleTests
 
         var newAncestorDisable = await Assert.ThrowsAsync<ApiException>(() =>
             departments.SetStatusAsync(actor, 7300, "DISABLED", ct));
-        Assert.Contains("请先转交负责人", newAncestorDisable.Message, StringComparison.Ordinal);
+        Assert.Contains("请先结束相关项目", newAncestorDisable.Message, StringComparison.Ordinal);
 
         await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
         await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);

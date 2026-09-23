@@ -53,8 +53,15 @@ async function api(c,method,url,data,token,expected=200){
  }
  return r;
 }
+async function projectMetadata(c,token,supplierId){
+ const parts=await(await api(c,'GET','/robot-parts?supplierId='+supplierId+'&enabledOnly=true',undefined,token)).json();
+ const priorities=await(await api(c,'GET','/project-dictionaries?type=PRIORITY&enabledOnly=true',undefined,token)).json();
+ assert(parts.length>0,'project fixture needs an enabled robot part for supplier '+supplierId);
+ assert(priorities.length>0,'project fixture needs an enabled priority');
+ return {robotPartId:parts[0].id,priorityId:priorities[0].id,expectedCompletionDate:'2099-12-31'};
+}
 async function navigate(p,url){await p.goto(s.base+url);await p.getByText('收起导航',{exact:true}).waitFor();}
-async function action(p,suffix,method,fn){const [r]=await Promise.all([p.waitForResponse(r=>new URL(r.url()).pathname.endsWith(suffix)&&r.request().method()===method),Promise.resolve().then(fn)]);assert.equal(r.status(),200,suffix);return r.json();}
+async function action(p,suffix,method,fn,expectedStatus=200){const [r]=await Promise.all([p.waitForResponse(r=>new URL(r.url()).pathname.endsWith(suffix)&&r.request().method()===method),Promise.resolve().then(fn)]);assert.equal(r.status(),expectedStatus,suffix);return r.json();}
 // The built SPA ships a Content-Security-Policy without 'unsafe-eval'. Playwright's waitForFunction
 // evaluates its predicate as a string inside the page, which that policy blocks; page.evaluate goes
 // through the DevTools protocol and is unaffected. Poll with evaluate so tests run under the real CSP.
@@ -83,4 +90,4 @@ function track(p,label){
   if(r.status()>=500&&!p.expectedServerErrors?.has(entry.path))fs.appendFileSync(OUT+'/http-errors.jsonl',JSON.stringify(entry)+'\n');
  });
 }
-module.exports={fs,path,assert,OUT,s,f,save,record,login,reserveLoginBudget,api,navigate,action,track};
+module.exports={fs,path,assert,OUT,s,f,save,record,login,reserveLoginBudget,api,projectMetadata,navigate,action,track};

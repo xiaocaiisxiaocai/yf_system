@@ -5,9 +5,19 @@ using MySqlConnector;
 
 namespace Yf.Api.Infrastructure;
 
-public sealed class AppDb(AppOptions options)
+public sealed class AppDb
 {
-    internal string WebBaseUrl => options.WebBaseUrl;
+    private readonly string connectionString;
+
+    internal string WebBaseUrl { get; }
+
+    public AppDb(AppOptions options)
+    {
+        // Parse and validate once when the singleton is constructed. Besides failing fast, this
+        // avoids rebuilding the same connection string for every request connection.
+        connectionString = BuildConnectionString(options);
+        WebBaseUrl = options.WebBaseUrl;
+    }
 
     // Business writes serialize on the management gate and then the project/user
     // row. Reads made after waiting for those locks must see the latest commit,
@@ -17,7 +27,7 @@ public sealed class AppDb(AppOptions options)
 
     public async Task<MySqlConnection> OpenAsync(CancellationToken cancellationToken = default)
     {
-        var connection = new MySqlConnection(BuildConnectionString(options));
+        var connection = new MySqlConnection(connectionString);
         try { await connection.OpenAsync(cancellationToken); return connection; }
         catch { await connection.DisposeAsync(); throw; }
     }
@@ -60,7 +70,7 @@ public sealed class ApiException(int status, int code, string message) : Excepti
 public sealed record CurrentUser(ulong Id, string EmployeeNo, string UserType, ulong? SupplierId)
 {
     public ulong UserId => Id;
-    public bool IsInternal => UserType == "INTERNAL";
+    public bool IsInternal => UserType == UserTypes.Internal;
 }
 
 public sealed class AccessService
@@ -97,7 +107,7 @@ public sealed class AccessService
         if (gate is null) throw new InvalidOperationException("Management gate missing; EF database initialization is required.");
         // Every role/permission/user-status change holds the gate exclusively, so while this
         // transaction holds it shared, permission grants cannot change and may be cached.
-        PermissionCache.AddOrUpdate(tx, new ConcurrentDictionary<ulong, string[]>());
+        PermissionCache.GetValue(tx, static _ => new ConcurrentDictionary<ulong, PermissionSnapshot>());
     }
 
     /// <summary>
@@ -105,18 +115,18 @@ public sealed class AccessService
     /// (see <see cref="LockBusinessAsync"/>). A request checks several permission points; each check
     /// would otherwise re-run the same four-table join.
     /// </summary>
-    private static readonly ConditionalWeakTable<MySqlTransaction, ConcurrentDictionary<ulong, string[]>> PermissionCache = new();
+    private static readonly ConditionalWeakTable<MySqlTransaction, ConcurrentDictionary<ulong, PermissionSnapshot>> PermissionCache = new();
 
-    public static async Task<CurrentUser> RecheckActorAsync(MySqlConnection db, MySqlTransaction tx, CurrentUser user, CancellationToken ct = default)
+    public static async Task<CurrentUser> RecheckActorAsync(MySqlConnection db, MySqlTransaction? tx, CurrentUser user, CancellationToken ct = default)
     {
         await using var context = EfDb.Use(db, tx);
         var row = await context.Users.Where(row => row.Id == user.Id).Select(row => new
         {
             row.Id, row.EmployeeNo, row.UserType, row.SupplierId, row.Status, row.MustChangePassword,
         }).SingleOrDefaultAsync(ct);
-        if (row is null || row.Status != "ACTIVE" || row.MustChangePassword) throw ApiException.Forbidden();
-        if (row.UserType == "SUPPLIER" && (row.SupplierId is not ulong supplierId
-            || !await context.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == "ACTIVE", ct)))
+        if (row is null || row.Status != AccountStatuses.Active || row.MustChangePassword) throw ApiException.Forbidden();
+        if (row.UserType == UserTypes.Supplier && (row.SupplierId is not ulong supplierId
+            || !await context.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == AccountStatuses.Active, ct)))
             throw ApiException.Forbidden();
         return new(row.Id, row.EmployeeNo, row.UserType, row.SupplierId);
     }
@@ -127,30 +137,82 @@ public sealed class AccessService
         return await RecheckActorAsync(db, tx, user, ct);
     }
 
+    /// <summary>
+    /// Revalidates the session actor for a read without taking the global management gate. Permission
+    /// and data-scope queries made after this call remain live under READ COMMITTED; they are deliberately
+    /// not transaction-cached unless the caller separately holds <see cref="LockBusinessAsync"/>. This is
+    /// a check at the query boundary, not a lease that can revoke an already-started response stream.
+    /// </summary>
+    public static Task<CurrentUser> ReadActorAsync(
+        MySqlConnection db, MySqlTransaction? tx, CurrentUser user, CancellationToken ct = default) =>
+        RecheckActorAsync(db, tx, user, ct);
+
     public static async Task<string[]> PermissionCodesAsync(MySqlConnection db, MySqlTransaction? tx, ulong userId, CancellationToken ct = default)
+        => (await PermissionSnapshotAsync(db, tx, userId, ct)).Codes;
+
+    internal static async Task<(IReadOnlyList<string> Codes, IReadOnlyList<string> Menus)> PermissionCodesAndMenusAsync(
+        MySqlConnection db, MySqlTransaction? tx, ulong userId, CancellationToken ct = default)
+    {
+        var snapshot = await PermissionSnapshotAsync(db, tx, userId, ct);
+        return (snapshot.Codes, snapshot.Menus);
+    }
+
+    private static async Task<PermissionSnapshot> PermissionSnapshotAsync(
+        MySqlConnection db, MySqlTransaction? tx, ulong userId, CancellationToken ct)
     {
         if (tx is not null && PermissionCache.TryGetValue(tx, out var cache))
         {
             if (cache.TryGetValue(userId, out var cached)) return cached;
-            var loaded = await LoadPermissionCodesAsync(db, tx, userId, ct);
+            var loaded = await LoadPermissionSnapshotAsync(db, tx, userId, ct);
             cache[userId] = loaded;
             return loaded;
         }
-        return await LoadPermissionCodesAsync(db, tx, userId, ct);
+        return await LoadPermissionSnapshotAsync(db, tx, userId, ct);
     }
 
     /// <summary>Whether <paramref name="userId"/> holds <paramref name="permission"/> through an active role.</summary>
     public static async Task<bool> HasPermissionAsync(MySqlConnection db, MySqlTransaction? tx, ulong userId, string permission, CancellationToken ct = default) =>
         (await PermissionCodesAsync(db, tx, userId, ct)).Contains(permission, StringComparer.Ordinal);
 
-    private static async Task<string[]> LoadPermissionCodesAsync(MySqlConnection db, MySqlTransaction? tx, ulong userId, CancellationToken ct)
+    /// <summary>Composable effective grants. Callers can keep recipient authorization in one bulk SQL query.</summary>
+    internal static IQueryable<EffectivePermissionGrant> EffectivePermissionGrants(YfDbContext context) =>
+        context.UserRoles
+            .Join(context.Roles.Where(role => role.Status == AccountStatuses.Active),
+                userRole => userRole.RoleId, role => role.Id, (userRole, _) => userRole)
+            .Join(context.RolePermissions,
+                userRole => userRole.RoleId, rolePermission => rolePermission.RoleId,
+                (userRole, rolePermission) => new { userRole.UserId, rolePermission.PermissionId })
+            .Join(context.Permissions,
+                grant => grant.PermissionId, permission => permission.Id,
+                (grant, permission) => new EffectivePermissionGrant
+                {
+                    UserId = grant.UserId,
+                    PermissionId = permission.Id,
+                    Code = permission.Code,
+                    Type = permission.Type,
+                    SortNo = permission.SortNo,
+                });
+
+    internal static IQueryable<ulong> UsersWithPermission(YfDbContext context, string permission) =>
+        EffectivePermissionGrants(context)
+            .Where(grant => grant.Code == permission)
+            .Select(grant => grant.UserId)
+            .Distinct();
+
+    private static async Task<PermissionSnapshot> LoadPermissionSnapshotAsync(
+        MySqlConnection db, MySqlTransaction? tx, ulong userId, CancellationToken ct)
     {
         await using var context = EfDb.Use(db, tx);
-        return await context.UserRoles.Where(userRole => userRole.UserId == userId)
-            .Join(context.Roles.Where(role => role.Status == "ACTIVE"), userRole => userRole.RoleId, role => role.Id, (userRole, _) => userRole)
-            .Join(context.RolePermissions, userRole => userRole.RoleId, rolePermission => rolePermission.RoleId, (_, rolePermission) => rolePermission)
-            .Join(context.Permissions, rolePermission => rolePermission.PermissionId, permission => permission.Id, (_, permission) => permission.Code)
-            .Distinct().ToArrayAsync(ct);
+        var grants = await EffectivePermissionGrants(context)
+            .Where(grant => grant.UserId == userId)
+            .Select(grant => new { grant.PermissionId, grant.Code, grant.Type, grant.SortNo })
+            .Distinct()
+            .ToArrayAsync(ct);
+        return new(
+            grants.Select(grant => grant.Code).Order(StringComparer.Ordinal).ToArray(),
+            grants.Where(grant => grant.Type == "MENU")
+                .OrderBy(grant => grant.SortNo).ThenBy(grant => grant.PermissionId)
+                .Select(grant => grant.Code).ToArray());
     }
 
     public static async Task RequirePermissionAsync(MySqlConnection db, MySqlTransaction? tx, CurrentUser user, string permission, CancellationToken ct = default)
@@ -162,8 +224,20 @@ public sealed class AccessService
     {
         await using var context = EfDb.Use(db, tx);
         return await context.UserRoles.Where(userRole => userRole.UserId == userId)
-            .Join(context.Roles.Where(role => role.Status == "ACTIVE" && role.IsBuiltIn && role.Name == "系统管理员"),
+            .Join(context.Roles.Where(role => role.Status == AccountStatuses.Active
+                && role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator),
                 userRole => userRole.RoleId, role => role.Id, (_, _) => true)
             .AnyAsync(ct);
     }
+
+    internal sealed class EffectivePermissionGrant
+    {
+        public ulong UserId { get; init; }
+        public ulong PermissionId { get; init; }
+        public string Code { get; init; } = "";
+        public string Type { get; init; } = "";
+        public int SortNo { get; init; }
+    }
+
+    private sealed record PermissionSnapshot(string[] Codes, string[] Menus);
 }

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Yf.Api.Infrastructure;
 
 namespace Yf.Api.Infrastructure.Entities;
 
@@ -30,6 +31,8 @@ public sealed class RefreshToken
     public ulong UserId { get; set; }
     public string SessionId { get; set; } = null!;
     public string TokenHash { get; set; } = null!;
+    public DateTime SessionCreatedAt { get; set; }
+    public DateTime SessionExpiresAt { get; set; }
     public DateTime ExpiresAt { get; set; }
     public bool Revoked { get; set; }
     public string? Ip { get; set; }
@@ -50,7 +53,7 @@ public sealed class UserConfig : IEntityTypeConfiguration<User>
         b.Property(x => x.UserType).HasColumnName("user_type").HasMaxLength(16).IsRequired();
         b.Property(x => x.SupplierId).HasColumnName("supplier_id");
         b.Property(x => x.DepartmentId).HasColumnName("department_id");
-        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue("ACTIVE");
+        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue(AccountStatuses.Active);
         b.Property(x => x.MustChangePassword).HasColumnName("must_change_password").HasDefaultValue(true);
         b.Property(x => x.FailedLoginAttempts).HasColumnName("failed_login_attempts").HasDefaultValue(0);
         b.Property(x => x.LockedUntil).HasColumnName("locked_until").HasColumnType("datetime");
@@ -76,6 +79,8 @@ public sealed class RefreshTokenConfig : IEntityTypeConfiguration<RefreshToken>
         b.Property(x => x.UserId).HasColumnName("user_id");
         b.Property(x => x.SessionId).HasColumnName("session_id").HasMaxLength(36).IsRequired();
         b.Property(x => x.TokenHash).HasColumnName("token_hash").HasMaxLength(64).IsRequired();
+        b.Property(x => x.SessionCreatedAt).HasColumnName("session_created_at").HasColumnType("datetime");
+        b.Property(x => x.SessionExpiresAt).HasColumnName("session_expires_at").HasColumnType("datetime");
         b.Property(x => x.ExpiresAt).HasColumnName("expires_at").HasColumnType("datetime");
         b.Property(x => x.Revoked).HasColumnName("revoked").HasDefaultValue(false);
         b.Property(x => x.Ip).HasColumnName("ip").HasMaxLength(64);
@@ -83,8 +88,10 @@ public sealed class RefreshTokenConfig : IEntityTypeConfiguration<RefreshToken>
         b.HasIndex(x => x.TokenHash).IsUnique().HasDatabaseName("token_hash");
         b.HasIndex(x => x.UserId).HasDatabaseName("fk_rt_user");
         b.HasIndex(x => new { x.SessionId, x.UserId, x.Revoked, x.ExpiresAt }).HasDatabaseName("idx_refresh_tokens_session_state");
-        // SessionCleanupService deletes by expiry alone; without this index every run scans the table.
+        // Supports ordinary active-token lookups and operational expiry inspection.
         b.HasIndex(x => x.ExpiresAt).HasDatabaseName("idx_refresh_tokens_expires");
+        // SessionCleanupService retains rotated hashes until the whole family reaches its absolute deadline.
+        b.HasIndex(x => x.SessionExpiresAt).HasDatabaseName("idx_refresh_tokens_session_expires");
         b.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).HasConstraintName("fk_rt_user").OnDelete(DeleteBehavior.Restrict);
     }
 }

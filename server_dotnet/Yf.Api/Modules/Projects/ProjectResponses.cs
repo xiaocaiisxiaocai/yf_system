@@ -6,6 +6,12 @@ namespace Yf.Api.Modules.Projects;
 public sealed record ProjectDictionaryResponse(
     ulong Id, string Type, string Name, ulong? ParentId, string? ParentName, int SortNo, bool Enabled, bool InUse);
 
+public sealed record RobotPartResponse(
+    ulong Id, ulong SupplierId, string SupplierName, string PartNumber, string Model,
+    int SortNo, bool Enabled, bool InUse);
+
+public sealed record RobotPartSupplierOption(ulong Id, string Name, string Status);
+
 public sealed record CollaborationSummaryResponse(ulong UnreadCount, ulong LatestId, string Revision);
 
 public sealed record CollaborationNotification(
@@ -109,9 +115,8 @@ public record ProjectResponse
     public string? CreatedByName { get; init; }
     public IReadOnlyList<string> WorkOrderNos { get; init; } = [];
     public string? MachineModel { get; init; }
-    public ulong? RobotVendorId { get; init; }
-    public string? RobotVendorName { get; init; }
-    public ulong? RobotModelId { get; init; }
+    public ulong? RobotPartId { get; init; }
+    public string? RobotPartNumber { get; init; }
     public string? RobotModelName { get; init; }
     public ulong? ResponsibleUserId { get; init; }
     public string? ResponsibleUserEmployeeNo { get; init; }
@@ -148,9 +153,8 @@ public sealed record ProjectGroupResponse(
     string? CreatedByName,
     IReadOnlyList<string> WorkOrderNos,
     string? MachineModel,
-    ulong? RobotVendorId,
-    string? RobotVendorName,
-    ulong? RobotModelId,
+    ulong? RobotPartId,
+    string? RobotPartNumber,
     string? RobotModelName,
     ulong? ResponsibleUserId,
     string? ResponsibleUserEmployeeNo,
@@ -183,6 +187,26 @@ public sealed record ProjectCopyRecord(
     ulong CopyId, ulong SourceProjectId, ulong TargetProjectId, int FileCount, ulong TotalBytes, DateTime CreatedAt);
 
 public sealed record ProjectCopyResponse(ProjectResponse Project, ProjectCopyRecord Copy);
+
+public sealed record ProjectCopyJobResult(ulong ProjectId, ulong CopyFileCount);
+
+public sealed record ProjectCopyJobResponse(
+    ulong JobId,
+    ulong SourceProjectId,
+    ulong ProjectGroupId,
+    string TargetName,
+    string Status,
+    ulong FilesTotal,
+    ulong FilesCopied,
+    ulong BytesTotal,
+    ulong BytesCopied,
+    string? Error,
+    ProjectCopyJobResult? Result,
+    DateTime CreatedAt,
+    DateTime? StartedAt,
+    DateTime? CompletedAt);
+
+public sealed record ProjectCopyJobListResponse(IReadOnlyList<ProjectCopyJobResponse> Jobs);
 
 public sealed record ProjectCopyHistoryItem(
     ulong CopyId, ulong ProjectId, string Name, ulong FileCount, ulong TotalBytes, string CopiedByName, DateTime CreatedAt);

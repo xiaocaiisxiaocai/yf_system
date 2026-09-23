@@ -71,61 +71,40 @@ def _download_matches(actor, file_id, expected):
     return hashlib.sha256(downloaded).digest() == hashlib.sha256(expected).digest()
 
 
-def _project_metadata(conn, responsible_user_id):
-    """Return valid v10 main-project metadata for an isolated fixture."""
+def _project_metadata(conn, supplier_id):
+    """Return valid robot-part project metadata for an isolated fixture."""
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT id FROM project_dictionaries "
-            "WHERE type='ROBOT_VENDOR' AND status='ACTIVE' ORDER BY sort_no,id LIMIT 1"
+            "SELECT id FROM robot_parts "
+            "WHERE supplier_id=%s AND status='ACTIVE' ORDER BY sort_no,id LIMIT 1",
+            (supplier_id,),
         )
-        vendor = cursor.fetchone()
-        cursor.execute(
-            "SELECT id FROM project_dictionaries "
-            "WHERE type='ROBOT_MODEL' AND status='ACTIVE' AND parent_id=%s "
-            "ORDER BY sort_no,id LIMIT 1",
-            (vendor[0],) if vendor else (None,),
-        )
-        model = cursor.fetchone()
+        robot_part = cursor.fetchone()
         cursor.execute(
             "SELECT id FROM project_dictionaries "
             "WHERE type='PRIORITY' AND status='ACTIVE' ORDER BY sort_no,id LIMIT 1"
         )
         priority = cursor.fetchone()
-    if vendor is None or model is None or priority is None:
-        raise AssertionError("schema v10 test fixture is missing active project dictionaries")
+    if robot_part is None or priority is None:
+        raise AssertionError("test fixture is missing an active robot part or priority")
     return {
         "workOrderNos": ["WO-" + secrets.token_hex(5)],
         "machineModel": "隔离回归机型",
-        "robotVendorId": vendor[0],
-        "robotModelId": model[0],
-        "responsibleUserId": responsible_user_id,
+        "robotPartId": robot_part[0],
         "priorityId": priority[0],
         "expectedCompletionDate": "2099-12-31",
     }
 
 
-def _ensure_project_dictionaries(admin_client):
-    """Create the minimum public metadata dictionaries in the owned test database."""
-    vendors = admin_client.call(
-        "GET", "/api/v1/project-dictionaries?type=ROBOT_VENDOR&enabledOnly=true")
-    if not vendors:
-        vendors = [admin_client.call("POST", "/api/v1/project-dictionaries", {
-            "type": "ROBOT_VENDOR",
-            "name": "隔离回归 Robot 厂商",
-            "parentId": None,
-            "sortNo": 10,
-            "enabled": True,
-        })]
-    vendor_id = vendors[0]["id"]
-    models = admin_client.call(
-        "GET",
-        f"/api/v1/project-dictionaries?type=ROBOT_MODEL&parentId={vendor_id}&enabledOnly=true",
-    )
-    if not models:
-        admin_client.call("POST", "/api/v1/project-dictionaries", {
-            "type": "ROBOT_MODEL",
-            "name": "隔离回归 Robot 型号",
-            "parentId": vendor_id,
+def _ensure_project_metadata(admin_client, supplier_id):
+    """Create the minimum robot-part and priority metadata in the owned database."""
+    parts = admin_client.call(
+        "GET", f"/api/v1/robot-parts?supplierId={supplier_id}&enabledOnly=true")
+    if not parts:
+        admin_client.call("POST", "/api/v1/robot-parts", {
+            "supplierId": supplier_id,
+            "partNumber": "ISO-" + secrets.token_hex(5).upper(),
+            "model": "隔离回归 Robot 型号",
             "sortNo": 10,
             "enabled": True,
         })
@@ -141,19 +120,30 @@ def _ensure_project_dictionaries(admin_client):
         })
 
 
-def _create_project_group(admin_client, conn, supplier_id, responsible_user_id, name):
-    """Create a v10 main project and return (group, its first subproject)."""
-    _ensure_project_dictionaries(admin_client)
+def _create_project_group(creator_client, admin_client, conn, supplier_id, name):
+    """Create a main project as its actual owner and return it with its first child."""
+    _ensure_project_metadata(admin_client, supplier_id)
     child_name = name + " 子项目"
+    metadata = _project_metadata(conn, supplier_id)
     payload = {
         "name": name,
         "description": "owned isolated full business acceptance fixture",
         "supplierId": supplier_id,
-        **_project_metadata(conn, responsible_user_id),
+        **metadata,
         "subprojectNames": [child_name],
     }
-    group = admin_client.call("POST", "/api/v1/project-groups", payload)
-    detail = admin_client.call("GET", f"/api/v1/project-groups/{group['id']}")
+    group = creator_client.call("POST", "/api/v1/project-groups", payload)
+    detail = creator_client.call("GET", f"/api/v1/project-groups/{group['id']}")
+    current = detail.get("group") or {}
+    if (
+        current.get("robotPartId") != metadata["robotPartId"]
+        or not current.get("robotPartNumber")
+        or not current.get("robotModelName")
+        or "robotVendorId" in current
+        or "robotVendorName" in current
+        or "robotModelId" in current
+    ):
+        raise AssertionError(f"main project robot-part response contract mismatch: {current!r}")
     projects = detail.get("projects") or []
     if len(projects) != 1:
         raise AssertionError(
@@ -198,8 +188,9 @@ def _exchange_messages(internal_client, supplier_client, project_id, internal_id
     return internal_message["id"], supplier_message["id"]
 
 
-def _create_started_project(admin_client, conn, supplier_id, internal_id, name):
-    _, project = _create_project_group(admin_client, conn, supplier_id, internal_id, name)
+def _create_started_project(creator_client, admin_client, conn, supplier_id, name):
+    _, project = _create_project_group(
+        creator_client, admin_client, conn, supplier_id, name)
     admin_client.call("PUT", f"/api/v1/projects/{project['id']}/status", {
         "status": "IN_PROGRESS",
     })
@@ -331,6 +322,44 @@ def run_business_acceptance(client, Client, conn, check):
         and len(accounts) == 1
         and accounts[0]["realName"] == disposable_account["realName"],
     )
+    part_number = "BA-" + secrets.token_hex(5).upper()
+    robot_part = client.call("POST", "/api/v1/robot-parts", {
+        "supplierId": disposable_supplier["id"],
+        "partNumber": part_number,
+        "model": "验收 Robot 型号",
+        "sortNo": 831,
+        "enabled": True,
+    })
+    listed_parts = client.call(
+        "GET",
+        f"/api/v1/robot-parts?supplierId={disposable_supplier['id']}&enabledOnly=true",
+    )
+    robot_part = client.call("PUT", f"/api/v1/robot-parts/{robot_part['id']}", {
+        "supplierId": disposable_supplier["id"],
+        "partNumber": part_number + "-UPDATED",
+        "model": "验收 Robot 型号已更新",
+        "sortNo": 832,
+        "enabled": False,
+    })
+    check(
+        "robot-part CRUD exposes supplier, part, model, state, ordering and usage",
+        len(listed_parts) == 1
+        and listed_parts[0]["supplierId"] == disposable_supplier["id"]
+        and listed_parts[0]["supplierName"] == disposable_supplier["name"]
+        and listed_parts[0]["partNumber"] == part_number
+        and listed_parts[0]["model"] == "验收 Robot 型号"
+        and listed_parts[0]["sortNo"] == 831
+        and listed_parts[0]["enabled"] is True
+        and listed_parts[0]["inUse"] is False
+        and robot_part["partNumber"] == part_number + "-UPDATED"
+        and robot_part["enabled"] is False,
+    )
+    client.call("DELETE", f"/api/v1/robot-parts/{robot_part['id']}")
+    check(
+        "deleted robot part no longer appears in its supplier catalog",
+        all(item["id"] != robot_part["id"] for item in client.call(
+            "GET", f"/api/v1/robot-parts?supplierId={disposable_supplier['id']}")),
+    )
     disposable_supplier_id = disposable_supplier["id"]
     disposable_account_id = disposable_account["id"]
     client.call("DELETE", f"/api/v1/admin/supplier-accounts/{disposable_account_id}")
@@ -352,19 +381,19 @@ def run_business_acceptance(client, Client, conn, check):
         "name": "验收业务课别-" + suffix, "parentId": business_department["id"], "sortNo": 92,
     })
     role_options = client.call("GET", "/api/v1/admin/user-role-options")
-    internal_role = next(role for role in role_options if role["name"] == "内部成员")
+    internal_role = next(role for role in role_options if role["name"] == "项目管理员")
     internal_employee = "ba_internal_" + suffix
     internal_initial = _password()
     internal_user = client.call("POST", "/api/v1/admin/users", {
         "employeeNo": internal_employee,
         "password": internal_initial,
-        "realName": "验收内部成员",
+        "realName": "验收项目负责人",
         "email": internal_employee + "@example.invalid",
         "departmentId": business_section["id"],
         "roleId": internal_role["id"],
     })
     internal_client = _activate_user(
-        client, Client, check, internal_employee, internal_initial, internal_user["id"], "internal member")
+        client, Client, check, internal_employee, internal_initial, internal_user["id"], "project owner")
 
     business_suppliers = []
     supplier_clients = []
@@ -390,9 +419,9 @@ def run_business_acceptance(client, Client, conn, check):
     supplier_b, account_b = business_suppliers[1]
     supplier_a_client, supplier_b_client = supplier_clients
     project_a = _create_started_project(
-        client, conn, supplier_a["id"], internal_user["id"], "验收甲项目-" + suffix)
+        internal_client, client, conn, supplier_a["id"], "验收甲项目-" + suffix)
     project_b = _create_started_project(
-        client, conn, supplier_b["id"], internal_user["id"], "验收乙项目-" + suffix)
+        internal_client, client, conn, supplier_b["id"], "验收乙项目-" + suffix)
 
     internal_a_bytes = (b"company-to-supplier-a\n" * 16000) + b"EOF-A"
     supplier_a_bytes = (b"supplier-a-to-company\n" * 16000) + b"EOF-SA"
@@ -440,6 +469,10 @@ def run_business_acceptance(client, Client, conn, check):
         "GET", "/api/v1/project-groups?pageSize=100")["list"]}
     project_ids_b = {item["id"] for item in supplier_b_client.call(
         "GET", "/api/v1/project-groups?pageSize=100")["list"]}
+    project_group_a = internal_client.call(
+        "GET", f"/api/v1/projects/{project_a}")["projectGroupId"]
+    project_group_b = internal_client.call(
+        "GET", f"/api/v1/projects/{project_b}")["projectGroupId"]
     with conn.cursor() as cursor:
         cursor.execute(
             "SELECT "
@@ -517,8 +550,8 @@ def run_business_acceptance(client, Client, conn, check):
         foreign_write_state_after = cursor.fetchone()
     check(
         "supplier project file upload content download batch and message data is isolated both ways",
-        project_a in project_ids_a and project_b not in project_ids_a
-        and project_b in project_ids_b and project_a not in project_ids_b
+        project_group_a in project_ids_a and project_group_b not in project_ids_a
+        and project_group_b in project_ids_b and project_group_a not in project_ids_b
         and foreign_write_state_after == foreign_write_state_before,
     )
 

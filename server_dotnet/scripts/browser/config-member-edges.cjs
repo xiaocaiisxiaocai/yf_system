@@ -37,12 +37,11 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
     const json = async (method, url, data, expected = 200) => (
       await api(context, method, url, data, token, expected)
     ).json();
-    const ownerOptions = await json('GET', '/project-owner-options');
-    await record('负责人选项只返回启用且有项目权限的内部用户', async () => {
-      assert(ownerOptions.length > 0, 'project owner options must not be empty');
-      assert(ownerOptions.every(owner => owner.sectionId && owner.sectionName),
-        'every owner must be attached to a section');
-      assert(ownerOptions.every(owner => owner.id !== undefined), 'owner option identity is required');
+    const robotParts = await json('GET', '/robot-parts?enabledOnly=true');
+    await record('Robot 料号选项返回启用且包含供应商显示信息的目录项', async () => {
+      assert(robotParts.length > 0, 'robot part options must not be empty');
+      assert(robotParts.every(part => part.supplierId && part.supplierName && part.partNumber),
+        'every robot part must expose supplier and part-number identity');
     });
 
     await page.goto(s.base + '/system/config');
@@ -149,12 +148,12 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
       await assertDirty(0);
     });
 
-    await record('负责人选项在系统参数检查后仍可稳定读取', async () => {
-      const refreshed = await json('GET', '/project-owner-options');
-      assert.deepEqual(refreshed.map(owner => owner.id), ownerOptions.map(owner => owner.id));
+    await record('Robot 料号选项在系统参数检查后仍可稳定读取', async () => {
+      const refreshed = await json('GET', '/robot-parts?enabledOnly=true');
+      assert.deepEqual(refreshed.map(part => part.id), robotParts.map(part => part.id));
     });
     await page.screenshot({ path: OUT + '/config-edges-final.png', fullPage: true });
-    await record('负责人和系统参数浏览器检查无未捕获脚本异常和服务端500', async () => {
+    await record('Robot 料号和系统参数浏览器检查无未捕获脚本异常和服务端500', async () => {
       for (const name of ['page-errors.jsonl', 'http-errors.jsonl']) {
         assert(!fs.existsSync(OUT + '/' + name) || fs.readFileSync(OUT + '/' + name, 'utf8').trim() === '');
       }

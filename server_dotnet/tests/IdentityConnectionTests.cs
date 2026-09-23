@@ -51,10 +51,14 @@ public sealed class IdentityConnectionTests
                     CREATE TABLE suppliers(id BIGINT UNSIGNED PRIMARY KEY, status VARCHAR(16) NOT NULL);
                     CREATE TABLE refresh_tokens(
                         user_id BIGINT UNSIGNED NOT NULL, session_id VARCHAR(36) NOT NULL,
-                        revoked BOOLEAN NOT NULL, expires_at DATETIME NOT NULL
+                        revoked BOOLEAN NOT NULL, expires_at DATETIME NOT NULL,
+                        session_created_at DATETIME NOT NULL, session_expires_at DATETIME NOT NULL
                     );
                     INSERT INTO users VALUES(1,'pool_test','INTERNAL',NULL,'ACTIVE',0);
-                    INSERT INTO refresh_tokens VALUES(1,'pool-session',0,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR));
+                    INSERT INTO refresh_tokens
+                        (user_id,session_id,revoked,expires_at,session_created_at,session_expires_at)
+                    VALUES(1,'pool-session',0,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR),
+                           UTC_TIMESTAMP(),DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 DAY));
                     """, cancellationToken: ct));
             }
             var tokens = new TokenService(options);

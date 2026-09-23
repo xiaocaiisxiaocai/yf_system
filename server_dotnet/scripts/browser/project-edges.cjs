@@ -1,25 +1,12 @@
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
-const { assert, OUT, s, f, record, login, api, action, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
+const { assert, OUT, s, f, record, login, api, projectMetadata, action, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
-async function loadProjectDefaults(context, token, ownerId) {
-  const vendors = await (await api(
-    context, 'GET', '/project-dictionaries?type=ROBOT_VENDOR&enabledOnly=true', undefined, token)).json();
-  assert(vendors.length > 0, 'project edges need a Robot vendor');
-  const models = await (await api(
-    context, 'GET', '/project-dictionaries?type=ROBOT_MODEL&parentId=' + vendors[0].id
-      + '&enabledOnly=true', undefined, token)).json();
-  const priorities = await (await api(
-    context, 'GET', '/project-dictionaries?type=PRIORITY&enabledOnly=true', undefined, token)).json();
-  assert(models.length > 0 && priorities.length > 0, 'project edges need model and priority options');
+async function loadProjectDefaults(context, token, supplierId) {
   return {
     workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
     machineModel: '项目边界机型',
-    robotVendorId: vendors[0].id,
-    robotModelId: models[0].id,
-    responsibleUserId: ownerId,
-    priorityId: priorities[0].id,
-    expectedCompletionDate: '2099-12-31',
+    ...await projectMetadata(context, token, supplierId),
   };
 }
 
@@ -62,16 +49,16 @@ async function uploadFixture(context, token, projectId, name, bytes) {
     const json = async (method, url, body, expected = 200) => (
       await api(context, method, url, body, auth.accessToken, expected)
     ).json();
-    const ownerOptions = await json('GET', '/project-owner-options');
-    const owner = ownerOptions.find(item => item.sectionName?.trim());
-    assert(owner, 'project edges need an active project owner with a section');
-    const defaults = await loadProjectDefaults(context, auth.accessToken, owner.id);
+    const defaults = await loadProjectDefaults(context, auth.accessToken, f.suppliers.a.id);
+    const supplierBDefaults = await loadProjectDefaults(
+      context, auth.accessToken, f.suppliers.b.id);
     const prefix = '边界主项目-' + crypto.randomBytes(5).toString('hex');
     const groups = [];
     for (let index = 0; index < 12; index += 1) {
       groups.push(await createGroup(
         context, auth.accessToken, index === 11 ? f.suppliers.b.id : f.suppliers.a.id,
-        prefix + '-' + String(index).padStart(2, '0'), defaults));
+        prefix + '-' + String(index).padStart(2, '0'),
+        index === 11 ? supplierBDefaults : defaults));
     }
     let flow = await createGroup(context, auth.accessToken, f.suppliers.a.id, prefix + '-流程', defaults);
     const groupsPath = '/api/v1/project-groups';
@@ -100,7 +87,7 @@ async function uploadFixture(context, token, projectId, name, bytes) {
     await page.goto(s.base + '/projects');
     await page.getByRole('heading', { name: '项目协作', exact: true }).waitFor();
 
-    await record('主项目名称清除、状态与供应商筛选保持准确结果', async () => {
+    await record('主项目名称清除、状态与 Robot 厂商筛选保持准确结果', async () => {
       const found = await search(prefix);
       assert.equal(found.total, 13);
       const toolbar = page.locator('.page-toolbar');
@@ -142,7 +129,7 @@ async function uploadFixture(context, token, projectId, name, bytes) {
       assert.equal(normal.list.length, 10);
     });
 
-    await record('主项目列表可重试，供应商失败可打开表单但禁止提交并保留草稿恢复', async () => {
+    await record('主项目列表可重试，Robot 厂商失败可打开表单但禁止提交并保留草稿恢复', async () => {
       page.expectedServerErrors = new Set([groupsPath, '/api/v1/supplier-options']);
       const failGroups = route => route.fulfill({
         status: 503, contentType: 'application/json', body: '{"code":50301,"message":"temporary test failure"}',
@@ -162,7 +149,7 @@ async function uploadFixture(context, token, projectId, name, bytes) {
       assert(await page.getByRole('button', { name: '新建主项目', exact: true }).isEnabled());
       await page.getByRole('button', { name: '新建主项目', exact: true }).click();
       const dialog = page.getByRole('dialog');
-      await dialog.getByText('供应商选项加载失败，请刷新基础数据后重试。', { exact: true }).waitFor();
+      await dialog.getByText('Robot 厂商选项加载失败，请刷新基础数据后重试。', { exact: true }).waitFor();
       assert(await dialog.getByRole('button', { name: '创建主项目', exact: true }).isDisabled());
       await dialog.getByRole('textbox', { name: '主项目名称', exact: true }).fill('恢复后应保留的草稿');
       await page.unroute('**/api/v1/supplier-options', failSuppliers);
@@ -200,22 +187,20 @@ async function uploadFixture(context, token, projectId, name, bytes) {
       await dialog.waitFor({ state: 'hidden' });
     });
 
-    await record('缺少项目字典和有效课别负责人时展示维护指引且刷新不清空表单', async () => {
+    await record('缺少 Robot 料号和优先级时展示维护指引且刷新不清空表单', async () => {
       const empty = route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
       await page.route('**/api/v1/project-dictionaries?*', empty);
-      await page.route('**/api/v1/project-owner-options', empty);
+      await page.route('**/api/v1/robot-parts?*', empty);
       await page.getByRole('button', { name: '新建主项目', exact: true }).click();
       const dialog = page.getByRole('dialog');
-      await dialog.getByText('暂无启用的 Robot 厂商', { exact: false }).waitFor();
+      await dialog.getByText('所选 Robot 厂商暂无启用的料号', { exact: false }).waitFor();
       await dialog.getByText('暂无启用的优先级', { exact: false }).waitFor();
-      await dialog.getByText('暂无已关联有效课别的负责人', { exact: false }).waitFor();
       assert(await dialog.getByRole('button', { name: '创建主项目', exact: true }).isDisabled());
-      assert.equal(await dialog.getByRole('link', { name: '维护负责人（新窗口）', exact: true }).getAttribute('href'), '/org/users');
-      assert.equal(await dialog.getByRole('link', { name: '维护数据字典（新窗口）', exact: true }).getAttribute('href'), '/system/dictionaries');
+      assert.equal(await dialog.getByRole('link', { name: '维护 Robot 料号（新窗口）', exact: true }).getAttribute('href'), '/system/dictionaries');
       await dialog.getByRole('textbox', { name: '主项目名称', exact: true }).fill('字典恢复草稿');
       await page.screenshot({ path: OUT + '/project-empty-metadata.png' });
       await page.unroute('**/api/v1/project-dictionaries?*', empty);
-      await page.unroute('**/api/v1/project-owner-options', empty);
+      await page.unroute('**/api/v1/robot-parts?*', empty);
       await dialog.getByRole('button', { name: '刷新基础数据', exact: true }).click();
       await dialog.getByText('创建前请补齐基础数据', { exact: true }).waitFor({ state: 'hidden' });
       await page.waitForFunction(() => [...document.querySelectorAll('.arco-modal button')].some(button => button.textContent.trim() === '创建主项目' && !button.disabled));
@@ -234,9 +219,7 @@ async function uploadFixture(context, token, projectId, name, bytes) {
         supplierId: detail.group.supplierId,
         workOrderNos: detail.group.workOrderNos,
         machineModel: detail.group.machineModel,
-        robotVendorId: detail.group.robotVendorId,
-        robotModelId: detail.group.robotModelId,
-        responsibleUserId: detail.group.responsibleUserId,
+        robotPartId: detail.group.robotPartId,
         priorityId: detail.group.priorityId,
         expectedCompletionDate: detail.group.expectedCompletionDate,
       });

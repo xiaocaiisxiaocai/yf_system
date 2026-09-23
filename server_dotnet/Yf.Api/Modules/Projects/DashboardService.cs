@@ -17,23 +17,18 @@ internal sealed class DashboardService
     {
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
         await using var db = EfDb.Use(conn, tx);
         var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
         var cutoff = await UnreadWindow.CutoffAsync(db, ct);
 
-        var query = VisibleMessages(db, visibleProjects);
+        var query = VisibleMessages(db, visibleProjects, cutoff);
         if (unreadOnly) query = Unread(db, query, current.Id, cutoff);
-        var total = (ulong)await query.LongCountAsync(ct);
-        // Page over message ids first (newest first, walking the primary key), then load the page's details.
-        var ids = await query.OrderByDescending(message => message.Id)
-            .Page((actualPage - 1) * size, size)
-            .Select(message => message.Id)
-            .ToArrayAsync(ct);
-        var list = await LoadMessagesAsync(db, query, ids, current.Id, cutoff, ct);
+        var pageResult = await LoadMessagePageAsync(
+            db, query, query, (actualPage - 1) * size, size, current.Id, cutoff, ct);
         await tx.CommitAsync(ct);
-        return ProjectJson.Page(list, total, actualPage, size);
+        return ProjectJson.Page(pageResult.List, pageResult.Count, actualPage, size);
     }
 
     internal async Task<PageResponse<DashboardPendingProject>> PendingProjectsAsync(
@@ -45,7 +40,7 @@ internal sealed class DashboardService
     {
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
         var canReceivePendingAcceptance = ProjectWorkflowRules.CanReceivePendingAcceptance(
             current,
@@ -88,7 +83,7 @@ internal sealed class DashboardService
     internal async Task<DashboardSummaryResponse> SummaryAsync(MySqlConnection conn, CurrentUser actor, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
         var canConfirm = ProjectWorkflowRules.CanReceivePendingAcceptance(
             current,
@@ -108,23 +103,24 @@ internal sealed class DashboardService
                 && project.ConfirmSide == ProjectWorkflowRules.InternalAcceptanceSide, ct);
 
         var cutoff = await UnreadWindow.CutoffAsync(db, ct);
-        var messages = VisibleMessages(db, visibleProjects);
-        var unreadMessages = (ulong)await Unread(db, messages, current.Id, cutoff).LongCountAsync(ct);
-        var recentIds = await messages.OrderByDescending(message => message.Id).Take(5)
-            .Select(message => message.Id).ToArrayAsync(ct);
-        var recentMessages = await LoadMessagesAsync(db, messages, recentIds, current.Id, cutoff, ct);
+        var messages = VisibleMessages(db, visibleProjects, cutoff);
+        var messageResult = await LoadMessagePageAsync(
+            db, messages, Unread(db, messages, current.Id, cutoff), 0, 5, current.Id, cutoff, ct);
         await tx.CommitAsync(ct);
-        return new DashboardSummaryResponse(projectCount, activeProjectCount, pendingConfirmations, unreadMessages, recentMessages);
+        return new DashboardSummaryResponse(projectCount, activeProjectCount, pendingConfirmations,
+            messageResult.Count, messageResult.List);
     }
 
     /// <summary>
     /// Normal messages in visible projects. Visibility is a semi-join (project_id IN visible projects) so
     /// MySQL can walk messages by primary key, newest first, and stop after one page.
     /// </summary>
-    private static IQueryable<Message> VisibleMessages(YfDbContext db, IQueryable<Project> visibleProjects)
+    private static IQueryable<Message> VisibleMessages(
+        YfDbContext db, IQueryable<Project> visibleProjects, DateTime cutoff)
     {
         var projectIds = visibleProjects.Select(project => project.Id);
-        return db.Messages.Where(message => message.Status == "NORMAL" && projectIds.Contains(message.ProjectId));
+        return db.Messages.Where(message => message.Status == "NORMAL" && message.CreatedAt >= cutoff
+            && projectIds.Contains(message.ProjectId));
     }
 
     /// <summary>Messages from others, within the unread window, that the user has not read.</summary>
@@ -133,38 +129,115 @@ internal sealed class DashboardService
             && !db.MessageReads.Any(read => read.MessageId == message.Id && read.UserId == userId));
 
     /// <summary>
-    /// Loads page details in ID order, reapplying visibility, NORMAL status and any unread filter.
-    /// READ COMMITTED allows deletion, reassignment or a receipt between the two SELECTs.
+    /// Loads page details and the caller's one required count in one statement. This keeps the filtered
+    /// count and returned details on the same READ COMMITTED statement snapshot without a redundant scan.
     /// </summary>
-    private static async Task<DashboardMessage[]> LoadMessagesAsync(
-        YfDbContext db, IQueryable<Message> eligibleMessages, ulong[] ids, ulong userId, DateTime cutoff, CancellationToken ct)
+    private static async Task<MessagePageResult> LoadMessagePageAsync(
+        YfDbContext db,
+        IQueryable<Message> detailMessages,
+        IQueryable<Message> countMessages,
+        ulong offset,
+        ulong size,
+        ulong userId,
+        DateTime cutoff,
+        CancellationToken ct)
     {
-        if (ids.Length == 0) return [];
-        var rows = await (
-            from message in eligibleMessages
+        var details =
+            from message in detailMessages
             join project in db.Projects on message.ProjectId equals project.Id
             join projectGroup in db.ProjectGroups on project.ProjectGroupId equals projectGroup.Id
             join sender in db.Users on message.SenderId equals sender.Id
-            where Enumerable.Contains(ids, message.Id)
-            select new
+            select new MessageDetailRow
             {
-                message.Id,
-                message.ProjectId,
+                Key = 1,
+                Id = message.Id,
+                ProjectId = message.ProjectId,
                 ProjectName = project.Name,
                 ProjectGroupName = projectGroup.Name,
-                message.Content,
-                message.SenderId,
-                message.CreatedAt,
+                Content = message.Content,
+                SenderId = message.SenderId,
+                CreatedAt = message.CreatedAt,
                 SenderName = sender.RealName,
                 HasImages = db.MessageImages.Any(image => image.MessageId == message.Id),
                 ReadByMe = db.MessageReads.Any(read => read.MessageId == message.Id && read.UserId == userId),
-            }).ToDictionaryAsync(row => row.Id, ct);
-        return ids.Where(rows.ContainsKey).Select(id => rows[id]).Select(row => new DashboardMessage(
-            row.Id, row.ProjectId, row.ProjectName, row.ProjectGroupName, MessagePreview(row.Content, row.HasImages),
-            row.SenderName, ProjectJson.Utc(row.CreatedAt),
-            row.SenderId != userId && !row.ReadByMe && row.CreatedAt >= cutoff)).ToArray();
+            };
+        var page = details.OrderByDescending(row => row.Id).Page(offset, size);
+        // Anchor the one aggregate row on the required management config so even an empty page returns
+        // its count in the same statement. The count subquery is evaluated once, not once per detail row.
+        var counts = countMessages.GroupBy(_ => 1)
+            .Select(group => new MessageCountRow { Key = group.Key, Count = group.LongCount() });
+        var anchor = db.SystemConfigs.OrderBy(config => config.CfgKey).Take(1).Select(_ => 1);
+        var count = from key in anchor
+                    join aggregate in counts on key equals aggregate.Key into matches
+                    from aggregate in matches.DefaultIfEmpty()
+                    select new MessageCountRow { Key = key, Count = aggregate.Count ?? 0 };
+        var rows = await (
+            from aggregate in count
+            join detail in page on aggregate.Key equals detail.Key into pageDetails
+            from detail in pageDetails.DefaultIfEmpty()
+            orderby detail.Id descending
+            select new MessagePageRow
+            {
+                Count = aggregate.Count ?? 0,
+
+                Id = detail.Id,
+                ProjectId = detail.ProjectId,
+                ProjectName = detail == null ? null : detail.ProjectName,
+                ProjectGroupName = detail == null ? null : detail.ProjectGroupName,
+                Content = detail == null ? null : detail.Content,
+                SenderId = detail.SenderId,
+                CreatedAt = detail.CreatedAt,
+                SenderName = detail == null ? null : detail.SenderName,
+                HasImages = detail.HasImages,
+                ReadByMe = detail.ReadByMe,
+            }).ToArrayAsync(ct);
+        var aggregateCount = (ulong)rows[0].Count;
+        var list = rows.Where(row => row.Id.HasValue).Select(row => new DashboardMessage(
+            row.Id!.Value, row.ProjectId!.Value, row.ProjectName!, row.ProjectGroupName!, MessagePreview(row.Content!, row.HasImages ?? false),
+            row.SenderName!, ProjectJson.Utc(row.CreatedAt!.Value),
+            row.SenderId != userId && row.ReadByMe != true && row.CreatedAt >= cutoff)).ToArray();
+        return new(aggregateCount, list);
     }
 
     private static string MessagePreview(string content, bool hasImages) =>
         content.Length == 0 && hasImages ? "[图片]" : string.Concat(content.EnumerateRunes().Take(60));
+
+    private sealed record MessagePageResult(ulong Count, DashboardMessage[] List);
+
+    private sealed class MessageCountRow
+    {
+        public int Key { get; init; }
+        public long? Count { get; init; }
+    }
+
+    private sealed class MessageDetailRow
+    {
+        public int Key { get; init; }
+        public ulong? Id { get; init; }
+        public ulong? ProjectId { get; init; }
+        public string ProjectName { get; init; } = string.Empty;
+        public string ProjectGroupName { get; init; } = string.Empty;
+        public string Content { get; init; } = string.Empty;
+        public ulong? SenderId { get; init; }
+        public DateTime? CreatedAt { get; init; }
+        public string SenderName { get; init; } = string.Empty;
+        public bool? HasImages { get; init; }
+        public bool? ReadByMe { get; init; }
+    }
+
+    private sealed class MessagePageRow
+    {
+        public long Count { get; init; }
+
+        public ulong? Id { get; init; }
+        public ulong? ProjectId { get; init; }
+        public string? ProjectName { get; init; }
+        public string? ProjectGroupName { get; init; }
+        public string? Content { get; init; }
+        public ulong? SenderId { get; init; }
+        public DateTime? CreatedAt { get; init; }
+        public string? SenderName { get; init; }
+        public bool? HasImages { get; init; }
+        public bool? ReadByMe { get; init; }
+    }
 }

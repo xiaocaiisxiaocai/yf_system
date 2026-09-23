@@ -32,6 +32,8 @@ dotnet run --project .\server_dotnet\Yf.Api\Yf.Api.csproj --launch-profile Yf.Lo
 
 启动条件和私有配置见 [后端说明](server_dotnet/README.md)。IIS 发布包的 `appsettings.Production.json` 现已包含目标站点配置及数据库/JWT 凭据；发布目录应作为私有制品保管，不要放入公开下载位置或提交 Git。
 
+项目创建人自动成为负责人；Robot 厂商使用供应商，料号按厂商联动，型号来自料号目录。Excel 初始化和旧项目升级规则见 [Robot 料号与创建人负责制](server_dotnet/docs/Robot料号与创建人负责制-2026-09-23.md)。
+
 ## IIS 打包
 
 在项目根运行，默认生成项目内独立的发布目录：

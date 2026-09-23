@@ -230,7 +230,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish-iis.ps1
 
 ## IIS 正式服务器维护
 
-发布包同时包含 `maintain-iis.ps1` 与 `maintenance-common.ps1`。它们只维护已经存在、使用专属应用池且没有子应用的同名 IIS 站点；应用池必须使用 `ApplicationPoolIdentity` 且不加载用户 profile。正式站点必须通过唯一 `YF_CONFIG_PATH` 使用网站外部 JSON，保持 HTTPS `WebBaseUrl` 和 `CookieSecure=true`，并以 in-process 的 `dotnet .\Yf.Api.dll` 标准形式启动。维护不调用 Rust，也不支持 `App__*` / `App:*`、额外 `YF_CONFIG_PATH` 或命令行配置覆盖。
+发布包同时包含 `maintain-iis.ps1` 与 `maintenance-common.ps1`。它们只维护已经存在、使用专属应用池且没有子应用的同名 IIS 站点；应用池必须使用 `ApplicationPoolIdentity`、不加载用户 profile，并保持 `processModel.maxProcesses=1`。正式站点必须通过唯一 `YF_CONFIG_PATH` 使用网站外部 JSON，保持 HTTPS `WebBaseUrl` 和 `CookieSecure=true`，并以 in-process 的 `dotnet .\Yf.Api.dll` 标准形式启动。维护不调用 Rust，也不支持 `App__*` / `App:*`、额外 `YF_CONFIG_PATH` 或命令行配置覆盖。
+
+当前 SignalR 连接注册表/派发队列与原生下载 grant/session 都是进程内状态，因此一个业务环境只支持一个 API 进程和一个部署副本；sticky session 不能替代共享状态。进程回收会断开实时连接并使未完成下载凭证安全失效。多实例扩容前提、IIS 守卫和验收边界见 [部署单实例与内存状态约束](docs/部署单实例与内存状态约束-2026-09-23.md)。
 
 在目标服务器管理员 Windows PowerShell 5.1 中，从发布包根执行。`mysql.exe`、`mysqldump.exe` 使用与服务器兼容的 5.7 或更高版本；不在 `PATH` 时传绝对路径：
 

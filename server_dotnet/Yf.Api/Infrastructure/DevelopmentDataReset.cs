@@ -11,9 +11,9 @@ internal static class DevelopmentDataReset
 {
     private static readonly string[] ClearedTables = [
         "collaboration_reads", "message_reads", "message_images", "email_outbox", "project_activities",
-        "file_copy_refs", "project_copies",
+        "file_copy_refs", "project_copy_jobs", "project_copies",
         "project_group_status_logs", "project_status_logs", "upload_sessions", "files", "messages", "projects",
-        "project_group_work_orders", "project_groups", "refresh_tokens",
+        "project_group_work_orders", "project_groups", "robot_parts", "refresh_tokens",
         "user_roles", "role_permissions", "departments", "audit_logs"
     ];
 
@@ -26,6 +26,7 @@ internal static class DevelopmentDataReset
             ["email_outbox"] = (db, ct) => db.EmailOutbox.LongCountAsync(ct),
             ["project_activities"] = (db, ct) => db.ProjectActivities.LongCountAsync(ct),
             ["file_copy_refs"] = (db, ct) => db.FileCopyRefs.LongCountAsync(ct),
+            ["project_copy_jobs"] = (db, ct) => db.ProjectCopyJobs.LongCountAsync(ct),
             ["project_copies"] = (db, ct) => db.ProjectCopies.LongCountAsync(ct),
             ["project_group_status_logs"] = (db, ct) => db.ProjectGroupStatusLogs.LongCountAsync(ct),
             ["project_status_logs"] = (db, ct) => db.ProjectStatusLogs.LongCountAsync(ct),
@@ -35,6 +36,7 @@ internal static class DevelopmentDataReset
             ["projects"] = (db, ct) => db.Projects.LongCountAsync(ct),
             ["project_group_work_orders"] = (db, ct) => db.ProjectGroupWorkOrders.LongCountAsync(ct),
             ["project_groups"] = (db, ct) => db.ProjectGroups.LongCountAsync(ct),
+            ["robot_parts"] = (db, ct) => db.RobotParts.LongCountAsync(ct),
             ["refresh_tokens"] = (db, ct) => db.RefreshTokens.LongCountAsync(ct),
             ["user_roles"] = (db, ct) => db.UserRoles.LongCountAsync(ct),
             ["role_permissions"] = (db, ct) => db.RolePermissions.LongCountAsync(ct),
@@ -54,7 +56,10 @@ internal static class DevelopmentDataReset
         Dictionary<string, long> Counts,
         bool ResetCompleted = false,
         bool PasswordPreserved = true,
-        bool SettingsPreserved = true);
+        bool SettingsPreserved = true,
+        bool RobotCatalogWillBeReinitialized = true,
+        int RobotCatalogSupplierCount = 7,
+        int RobotCatalogPartCount = 27);
 
     private static (string Database, string Root) ValidateTarget(AppOptions options)
     {
@@ -80,7 +85,8 @@ internal static class DevelopmentDataReset
         foreach (var table in ClearedTables.Concat(["users", "roles", "suppliers", "permissions", "system_configs"]))
             counts[table] = await TableCounts[table](db, ct);
         return new(database, root,
-            [Path.Combine(root, "files"), Path.Combine(root, "message-images"), Path.Combine(root, "tmp")], counts);
+            [Path.Combine(root, "files"), Path.Combine(root, "message-images"), Path.Combine(root, "tmp"),
+                Path.Combine(root, "copy-jobs")], counts);
     }
 
     internal static async Task<Plan> ResetAsync(
@@ -146,17 +152,39 @@ internal static class DevelopmentDataReset
             await db.Roles.Where(candidate => candidate.Id != role.Id).ExecuteDeleteAsync(ct);
             await db.Suppliers.ExecuteDeleteAsync(ct);
 
+            var catalog = RobotPartCatalogSeed.Load();
+            var supplierNames = catalog.Select(item => item.SupplierName).Distinct(StringComparer.Ordinal).ToArray();
+            var suppliers = supplierNames.Select(name => new Supplier
+            {
+                Name = name,
+                Remark = "Robot 料号目录初始化（2026-09-23）",
+                Status = AccountStatuses.Active,
+                CreatedBy = null,
+            }).ToArray();
+            db.Suppliers.AddRange(suppliers);
+            await db.SaveChangesAsync(ct);
+            var supplierIds = suppliers.ToDictionary(supplier => supplier.Name, supplier => supplier.Id, StringComparer.Ordinal);
+            db.RobotParts.AddRange(catalog.Select((item, index) => new RobotPart
+            {
+                SupplierId = supplierIds[item.SupplierName],
+                PartNumber = item.PartNumber,
+                Model = item.Model,
+                SortNo = index + 1,
+                Status = AccountStatuses.Active,
+            }));
+            await db.SaveChangesAsync(ct);
+
             var now = DateTime.UtcNow;
             await db.Users.Where(user => user.Id == admin.Id).ExecuteUpdateAsync(update => update
                 .SetProperty(user => user.DepartmentId, (ulong?)null)
                 .SetProperty(user => user.SupplierId, (ulong?)null)
-                .SetProperty(user => user.Status, "ACTIVE")
+                .SetProperty(user => user.Status, AccountStatuses.Active)
                 .SetProperty(user => user.FailedLoginAttempts, 0)
                 .SetProperty(user => user.LockedUntil, (DateTime?)null)
                 .SetProperty(user => user.CreatedBy, (ulong?)null)
                 .SetProperty(user => user.UpdatedAt, now), ct);
             await db.Roles.Where(candidate => candidate.Id == role.Id).ExecuteUpdateAsync(update => update
-                .SetProperty(candidate => candidate.Status, "ACTIVE")
+                .SetProperty(candidate => candidate.Status, AccountStatuses.Active)
                 .SetProperty(candidate => candidate.UpdatedAt, now), ct);
 
             db.UserRoles.Add(new UserRole { UserId = admin.Id, RoleId = role.Id });
@@ -199,6 +227,7 @@ internal static class DevelopmentDataReset
         await db.EmailOutbox.ExecuteDeleteAsync(ct);
         await db.ProjectActivities.ExecuteDeleteAsync(ct);
         await db.FileCopyRefs.ExecuteDeleteAsync(ct);
+        await db.ProjectCopyJobs.ExecuteDeleteAsync(ct);
         await db.ProjectCopies.ExecuteDeleteAsync(ct);
         await db.ProjectGroupStatusLogs.ExecuteDeleteAsync(ct);
         await db.ProjectStatusLogs.ExecuteDeleteAsync(ct);
@@ -208,6 +237,7 @@ internal static class DevelopmentDataReset
         await db.Projects.ExecuteDeleteAsync(ct);
         await db.ProjectGroupWorkOrders.ExecuteDeleteAsync(ct);
         await db.ProjectGroups.ExecuteDeleteAsync(ct);
+        await db.RobotParts.ExecuteDeleteAsync(ct);
         await db.RefreshTokens.ExecuteDeleteAsync(ct);
         await db.UserRoles.ExecuteDeleteAsync(ct);
         await db.RolePermissions.ExecuteDeleteAsync(ct);

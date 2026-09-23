@@ -19,15 +19,16 @@ public sealed class ProjectsWorkflowTests
     }
 
     [Fact]
-    public void ReferencedRobotModelCannotMoveToAnotherVendor()
+    public void ProjectDictionaryOnlyAcceptsPriority()
     {
-        var error = Assert.Throws<ApiException>(() =>
-            ProjectDictionaryService.EnsureReferencedModelParentUnchanged("ROBOT_MODEL", true, 10, 11));
+        Assert.Equal("PRIORITY", ProjectDictionaryTypes.Normalize(" priority "));
 
-        Assert.Equal(409, error.Status);
-        Assert.Equal("机器人型号已被项目引用，不能更换所属厂商", error.Message);
-        ProjectDictionaryService.EnsureReferencedModelParentUnchanged("ROBOT_MODEL", false, 10, 11);
-        ProjectDictionaryService.EnsureReferencedModelParentUnchanged("ROBOT_MODEL", true, 10, 10);
+        foreach (var type in new string?[] { null, "ROBOT_VENDOR", "ROBOT_MODEL" })
+        {
+            var error = Assert.Throws<ApiException>(() => ProjectDictionaryTypes.Normalize(type));
+            Assert.Equal(400, error.Status);
+            Assert.Equal("type 仅支持 PRIORITY", error.Message);
+        }
     }
 
     [Fact]

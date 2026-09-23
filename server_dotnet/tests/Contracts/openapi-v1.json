@@ -55,7 +55,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TokenResponse"
+                  "$ref": "#/components/schemas/LoginResponse"
                 }
               }
             }
@@ -1860,12 +1860,92 @@
           "required": true
         },
         "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectCopyJobResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/project-copy-jobs/{jobId}": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
           "200": {
             "description": "OK",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProjectCopyResponse"
+                  "$ref": "#/components/schemas/ProjectCopyJobResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/project-groups/{groupId}/copy-jobs": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "groupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectCopyJobListResponse"
                 }
               }
             }
@@ -3106,6 +3186,195 @@
         }
       }
     },
+    "/api/v1/robot-parts": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RobotPartResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RobotPartUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RobotPartResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/robot-part-supplier-options": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RobotPartSupplierOption"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/robot-parts/{id}": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RobotPartUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RobotPartResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmptyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{projectId}/files": {
       "get": {
         "tags": [
@@ -3381,6 +3650,87 @@
         }
       }
     },
+    "/api/v1/files/{id}/download-grant": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadGrantResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/{id}/native-download/{handle}": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "handle",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/files/{id}/content": {
       "get": {
         "tags": [
@@ -3542,6 +3892,77 @@
           },
           "required": true
         },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/batch-download-grant": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchDownloadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadGrantResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/batch-download/{handle}": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "handle",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK"
@@ -3873,6 +4294,7 @@
           "action",
           "actorName",
           "actorNameSource",
+          "canDelete",
           "createdAt",
           "detail",
           "employeeNo",
@@ -3934,6 +4356,9 @@
           },
           "targetNameSource": {
             "type": "string"
+          },
+          "canDelete": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -4341,6 +4766,23 @@
             "type": "integer",
             "format": "int32",
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "DownloadGrantResponse": {
+        "required": [
+          "expiresInSeconds",
+          "url"
+        ],
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "expiresInSeconds": {
+            "type": "integer",
+            "format": "int32"
           }
         },
         "additionalProperties": false
@@ -5616,18 +6058,41 @@
         },
         "additionalProperties": false
       },
-      "ProjectCopyRecord": {
+      "ProjectCopyJobListResponse": {
         "required": [
-          "copyId",
-          "createdAt",
-          "fileCount",
-          "sourceProjectId",
-          "targetProjectId",
-          "totalBytes"
+          "jobs"
         ],
         "type": "object",
         "properties": {
-          "copyId": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectCopyJobResponse"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProjectCopyJobResponse": {
+        "required": [
+          "bytesCopied",
+          "bytesTotal",
+          "completedAt",
+          "createdAt",
+          "error",
+          "filesCopied",
+          "filesTotal",
+          "jobId",
+          "projectGroupId",
+          "result",
+          "sourceProjectId",
+          "startedAt",
+          "status",
+          "targetName"
+        ],
+        "type": "object",
+        "properties": {
+          "jobId": {
             "type": "integer",
             "format": "int64"
           },
@@ -5635,27 +6100,77 @@
             "type": "integer",
             "format": "int64"
           },
-          "targetProjectId": {
+          "projectGroupId": {
             "type": "integer",
             "format": "int64"
           },
-          "fileCount": {
-            "type": "integer",
-            "format": "int32"
+          "targetName": {
+            "type": "string"
           },
-          "totalBytes": {
+          "status": {
+            "type": "string"
+          },
+          "filesTotal": {
             "type": "integer",
             "format": "int64"
+          },
+          "filesCopied": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "bytesTotal": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "bytesCopied": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "result": {
+            "$ref": "#/components/schemas/ProjectCopyJobResult"
           },
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProjectCopyJobResult": {
+        "required": [
+          "copyFileCount",
+          "projectId"
+        ],
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "copyFileCount": {
+            "type": "integer",
+            "format": "int64"
           }
         },
         "additionalProperties": false
       },
       "ProjectCopyRequest": {
         "required": [
+          "idempotencyKey",
           "name"
         ],
         "type": "object",
@@ -5663,22 +6178,10 @@
           "name": {
             "type": "string",
             "nullable": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "ProjectCopyResponse": {
-        "required": [
-          "copy",
-          "project"
-        ],
-        "type": "object",
-        "properties": {
-          "project": {
-            "$ref": "#/components/schemas/ProjectResponse"
           },
-          "copy": {
-            "$ref": "#/components/schemas/ProjectCopyRecord"
+          "idempotencyKey": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -5737,10 +6240,9 @@
           "responsibleUserEmployeeNo",
           "responsibleUserId",
           "responsibleUserName",
-          "robotModelId",
           "robotModelName",
-          "robotVendorId",
-          "robotVendorName",
+          "robotPartId",
+          "robotPartNumber",
           "sectionId",
           "sectionName",
           "status",
@@ -5808,18 +6310,13 @@
             "type": "string",
             "nullable": true
           },
-          "robotVendorId": {
+          "robotPartId": {
             "type": "integer",
             "format": "int64",
             "nullable": true
           },
-          "robotVendorName": {
+          "robotPartNumber": {
             "type": "string",
-            "nullable": true
-          },
-          "robotModelId": {
-            "type": "integer",
-            "format": "int64",
             "nullable": true
           },
           "robotModelName": {
@@ -6006,10 +6503,9 @@
           "responsibleUserEmployeeNo",
           "responsibleUserId",
           "responsibleUserName",
-          "robotModelId",
           "robotModelName",
-          "robotVendorId",
-          "robotVendorName",
+          "robotPartId",
+          "robotPartNumber",
           "sectionId",
           "sectionName",
           "status",
@@ -6063,18 +6559,13 @@
             "type": "string",
             "nullable": true
           },
-          "robotVendorId": {
+          "robotPartId": {
             "type": "integer",
             "format": "int64",
             "nullable": true
           },
-          "robotVendorName": {
+          "robotPartNumber": {
             "type": "string",
-            "nullable": true
-          },
-          "robotModelId": {
-            "type": "integer",
-            "format": "int64",
             "nullable": true
           },
           "robotModelName": {
@@ -6222,10 +6713,9 @@
           "responsibleUserEmployeeNo",
           "responsibleUserId",
           "responsibleUserName",
-          "robotModelId",
           "robotModelName",
-          "robotVendorId",
-          "robotVendorName",
+          "robotPartId",
+          "robotPartNumber",
           "sectionId",
           "sectionName",
           "status",
@@ -6293,18 +6783,13 @@
             "type": "string",
             "nullable": true
           },
-          "robotVendorId": {
+          "robotPartId": {
             "type": "integer",
             "format": "int64",
             "nullable": true
           },
-          "robotVendorName": {
+          "robotPartNumber": {
             "type": "string",
-            "nullable": true
-          },
-          "robotModelId": {
-            "type": "integer",
-            "format": "int64",
             "nullable": true
           },
           "robotModelName": {
@@ -6427,9 +6912,7 @@
           "machineModel",
           "name",
           "priorityId",
-          "responsibleUserId",
-          "robotModelId",
-          "robotVendorId",
+          "robotPartId",
           "subprojectNames",
           "supplierId",
           "workOrderNos"
@@ -6459,17 +6942,7 @@
             "type": "string",
             "nullable": true
           },
-          "robotVendorId": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          },
-          "robotModelId": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          },
-          "responsibleUserId": {
+          "robotPartId": {
             "type": "integer",
             "format": "int64",
             "nullable": true
@@ -6489,6 +6962,102 @@
               "type": "string"
             },
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "RobotPartResponse": {
+        "required": [
+          "enabled",
+          "id",
+          "inUse",
+          "model",
+          "partNumber",
+          "sortNo",
+          "supplierId",
+          "supplierName"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "supplierId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "supplierName": {
+            "type": "string"
+          },
+          "partNumber": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "sortNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "inUse": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RobotPartSupplierOption": {
+        "required": [
+          "id",
+          "name",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RobotPartUpsertRequest": {
+        "required": [
+          "enabled",
+          "model",
+          "partNumber",
+          "sortNo",
+          "supplierId"
+        ],
+        "type": "object",
+        "properties": {
+          "supplierId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "partNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          },
+          "sortNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "enabled": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -6897,23 +7466,6 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
-          }
-        },
-        "additionalProperties": false
-      },
-      "TokenResponse": {
-        "required": [
-          "accessToken",
-          "expiresAt"
-        ],
-        "type": "object",
-        "properties": {
-          "accessToken": {
-            "type": "string"
-          },
-          "expiresAt": {
-            "type": "integer",
-            "format": "int64"
           }
         },
         "additionalProperties": false

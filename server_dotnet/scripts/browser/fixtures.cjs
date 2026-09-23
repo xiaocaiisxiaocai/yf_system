@@ -21,9 +21,10 @@ const XLSX=require(process.env.YF_PROJECT_ROOT+'/web/node_modules/xlsx');
   fixtures.users[key]={id:user.id,username:user.employeeNo,password:initial,changedPassword:password()};
  }
  fs.writeFileSync(OUT+'/fixtures.private.json',JSON.stringify(fixtures));
- for(const [type,name,parent] of [['ROBOT_VENDOR','自动验收 Robot 厂商',null],['ROBOT_MODEL','自动验收 Robot 型号','vendor']]){
-  const item=await(await api(c,'POST','/project-dictionaries',{type,name,parentId:parent?fixtures.vendorId:null,sortNo:10,enabled:true},s.adminToken)).json();
-  if(type==='ROBOT_VENDOR')fixtures.vendorId=item.id;
+ fixtures.robotParts={};
+ for(const [key,label] of [['a','自动验收料号甲'],['b','自动验收料号乙']]){
+  const item=await(await api(c,'POST','/robot-parts',{supplierId:fixtures.suppliers[key].id,partNumber:label+'-'+crypto.randomBytes(3).toString('hex').toUpperCase(),model:'自动验收 Robot 型号 '+key.toUpperCase(),sortNo:10,enabled:true},s.adminToken)).json();
+  fixtures.robotParts[key]=item;
  }
  fs.writeFileSync(OUT+'/fixtures.private.json',JSON.stringify(fixtures));
  fs.copyFileSync(process.env.YF_PROJECT_ROOT+'/web/test/fixtures/pdf-compatibility.pdf',OUT+'/valid-preview.pdf');

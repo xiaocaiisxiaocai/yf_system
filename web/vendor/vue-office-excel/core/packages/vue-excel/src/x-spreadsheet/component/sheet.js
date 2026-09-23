@@ -67,7 +67,7 @@ function scrollbarMove() {
   }
 }
 
-function selectorSet(multiple, ri, ci, indexesUpdated = true, moving = false) {
+export function selectorSet(multiple, ri, ci, indexesUpdated = true, moving = false) {
   const {
     selector, data, contextMenu,
   } = this;
@@ -593,7 +593,7 @@ function sortFilterChange(ci, order, operator, value) {
   sheetReset.call(this);
 }
 
-function sheetInitEvents() {
+export function sheetInitEvents() {
   const {
     selector,
     overlayerEl,

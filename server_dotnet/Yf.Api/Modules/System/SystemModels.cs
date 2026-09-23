@@ -19,7 +19,8 @@ public sealed record AuditLogResponse(
     // snapshot | current | unknown
     string ActorNameSource,
     // snapshot | current | unknown
-    string TargetNameSource);
+    string TargetNameSource,
+    bool CanDelete = false);
 
 public sealed record AuditLogDeleteResponse(int Deleted);
 

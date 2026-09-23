@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "file": "web/src/test/migration/previous-cases.json",
+    "total": 299,
+    "groups": {
+      "messages": 46,
+      "projects": 30,
+      "admin": 50,
+      "auth": 36,
+      "files": 38,
+      "audit_dashboard": 39,
+      "previews": 25,
+      "core": 35
+    }
+  },
+  "vitestSnapshot": {
+    "file": ".artifacts/tests/frontend-migration/vitest-final.json",
+    "total": 314,
+    "passed": 314,
+    "failed": 0,
+    "success": true
+  },
+  "coverage": {
+    "mappedLegacyCases": 299,
+    "unresolvedLegacyCases": 0,
+    "ambiguousLegacyCases": 0,
+    "uniqueMigratedTargets": 299,
+    "failedMappedTargets": 0,
+    "resolutionCounts": {
+      "auth-exact": 33,
+      "auth-title-map": 3,
+      "exact-title": 225,
+      "files-map": 38
+    }
+  },
+  "integrity": {
+    "duplicateLegacyIds": [],
+    "unexpectedFileMappings": [],
+    "unexpectedManualMappings": [],
+    "sharedTargets": []
+  },
+  "unresolved": [],
+  "ambiguous": [],
+  "failedTargets": []
+}

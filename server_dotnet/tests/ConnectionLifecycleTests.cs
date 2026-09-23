@@ -31,7 +31,12 @@ public sealed class ConnectionLifecycleTests
                 id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(64) NOT NULL,
                 status VARCHAR(16) NOT NULL, is_built_in BOOLEAN NOT NULL
             );
-            CREATE TABLE permissions(id BIGINT UNSIGNED PRIMARY KEY, code VARCHAR(64) NOT NULL);
+            CREATE TABLE permissions(
+                id BIGINT UNSIGNED PRIMARY KEY,
+                code VARCHAR(64) NOT NULL,
+                type VARCHAR(16) NOT NULL DEFAULT 'BUTTON',
+                sort_no INT NOT NULL DEFAULT 0
+            );
             CREATE TABLE role_permissions(role_id BIGINT UNSIGNED NOT NULL, permission_id BIGINT UNSIGNED NOT NULL);
             CREATE TABLE user_roles(user_id BIGINT UNSIGNED NOT NULL, role_id BIGINT UNSIGNED NOT NULL);
             CREATE TABLE users(id BIGINT UNSIGNED PRIMARY KEY, employee_no VARCHAR(64) NOT NULL, real_name VARCHAR(64) NOT NULL);
@@ -49,7 +54,7 @@ public sealed class ConnectionLifecycleTests
                 actor_realm VARCHAR(16) NULL, actor_account_id BIGINT UNSIGNED NULL
             );
             INSERT INTO roles VALUES(1,'系统管理员','ACTIVE',1);
-            INSERT INTO permissions VALUES(1,'config:manage'),(2,'log:view');
+            INSERT INTO permissions(id,code) VALUES(1,'config:manage'),(2,'log:view');
             INSERT INTO role_permissions VALUES(1,1),(1,2);
             INSERT INTO user_roles VALUES(1,1);
             INSERT INTO users VALUES(1,'pool_admin','连接池测试员');
@@ -156,7 +161,9 @@ public sealed class ConnectionLifecycleTests
                     INSERT INTO users(employee_no,password_hash,real_name,email,user_type,status) SELECT 'discard',password_hash,'待清理用户','','INTERNAL','ACTIVE' FROM users WHERE employee_no='admin';
                     INSERT INTO user_roles(user_id,role_id) SELECT u.id,r.id FROM users u JOIN roles r ON r.name='待清理角色' WHERE u.employee_no='discard';
                     INSERT INTO suppliers(name) VALUES('待清理供应商');
-                    INSERT INTO project_groups(name,supplier_id,created_by) SELECT '待清理主项目',s.id,u.id FROM suppliers s JOIN users u ON u.employee_no='discard';
+                    INSERT INTO project_groups(name,supplier_id,created_by)
+                    SELECT '待清理主项目',s.id,u.id FROM suppliers s JOIN users u ON u.employee_no='discard'
+                    WHERE s.name='待清理供应商';
                     INSERT INTO projects(project_group_id,name,supplier_id,created_by)
                     SELECT g.id,'待清理子项目',s.id,u.id
                     FROM project_groups g JOIN suppliers s ON s.name='待清理供应商' JOIN users u ON u.employee_no='discard'
@@ -167,13 +174,23 @@ public sealed class ConnectionLifecycleTests
                     """);
             }
             var plan = await DevelopmentDataReset.InspectAsync(database.Options, ct);
+            Assert.True(plan.RobotCatalogWillBeReinitialized);
+            Assert.Equal(7, plan.RobotCatalogSupplierCount);
+            Assert.Equal(27, plan.RobotCatalogPartCount);
+            Assert.Equal(8, plan.Counts["suppliers"]);
+            Assert.Equal(27, plan.Counts["robot_parts"]);
             await Assert.ThrowsAsync<InvalidOperationException>(() => DevelopmentDataReset.ResetAsync(database.Options, "wrong-db", plan.StorageRoot, ct));
             Assert.True(File.Exists(Path.Combine(root, "files", "2026", "sample.pdf")));
             var result = await DevelopmentDataReset.ResetAsync(database.Options, plan.Database, plan.StorageRoot, ct);
             Assert.True(result.ResetCompleted);
             Assert.Equal(1, result.Counts["users"]);
             Assert.Equal(1, result.Counts["roles"]);
-            foreach (var table in new[] { "projects", "messages", "suppliers", "departments", "refresh_tokens", "audit_logs" }) Assert.Equal(0, result.Counts[table]);
+            foreach (var table in new[] { "projects", "messages", "departments", "refresh_tokens", "audit_logs" }) Assert.Equal(0, result.Counts[table]);
+            Assert.Equal(7, result.Counts["suppliers"]);
+            Assert.Equal(27, result.Counts["robot_parts"]);
+            Assert.True(result.RobotCatalogWillBeReinitialized);
+            Assert.Equal(7, result.RobotCatalogSupplierCount);
+            Assert.Equal(27, result.RobotCatalogPartCount);
             Assert.Equal(permissionCount, result.Counts["permissions"]);
             Assert.Equal(permissionCount, result.Counts["role_permissions"]);
             Assert.Equal(1, result.Counts["user_roles"]);
@@ -185,8 +202,13 @@ public sealed class ConnectionLifecycleTests
                 Assert.Equal(passwordHash, await conn.ExecuteScalarAsync<string>("SELECT password_hash FROM users WHERE employee_no='admin'"));
                 Assert.Equal("retained-test-value", await conn.ExecuteScalarAsync<string>("SELECT cfg_value FROM system_configs WHERE cfg_key='smtp.reset-test-secret'"));
                 Assert.Equal("false", await conn.ExecuteScalarAsync<string>("SELECT cfg_value FROM system_configs WHERE cfg_key='notify.enabled'"));
+                Assert.Equal(7, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
+                Assert.Equal(27, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
             }
-            Assert.True((await DevelopmentDataReset.ResetAsync(database.Options, plan.Database, plan.StorageRoot, ct)).ResetCompleted);
+            var repeated = await DevelopmentDataReset.ResetAsync(database.Options, plan.Database, plan.StorageRoot, ct);
+            Assert.True(repeated.ResetCompleted);
+            Assert.Equal(7, repeated.Counts["suppliers"]);
+            Assert.Equal(27, repeated.Counts["robot_parts"]);
             await SchemaBootstrap.ValidateAsync(database.Database, ct);
         }
         finally

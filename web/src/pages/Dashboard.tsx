@@ -439,7 +439,7 @@ export default function Dashboard() {
               <div className="dashboard-section-title">
                 <div>
                   <h2>项目留言</h2>
-                  <span>{unreadOnly ? `近30天共 ${messageData.total} 条未读` : `共 ${messageData.total} 条留言`}</span>
+                  <span>{unreadOnly ? `近30天共 ${messageData.total} 条未读` : `近30天共 ${messageData.total} 条留言`}</span>
                 </div>
               </div>
             )}

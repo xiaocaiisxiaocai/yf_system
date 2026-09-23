@@ -1,9 +1,11 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { UserBrief as ApiUserBrief } from '../api/generated/api-types'
+import type { LoginResponse, ProfileResponse, UserBrief as ApiUserBrief } from '../api/generated/api-types'
 
 // The signed-in user from the API, with userType narrowed to the two account kinds.
 export type UserBrief = Omit<ApiUserBrief, 'userType'> & { userType: 'INTERNAL' | 'SUPPLIER' }
+export type AuthLoginResponse = Omit<LoginResponse, 'user'> & { user: UserBrief }
+export type AuthProfileResponse = Omit<ProfileResponse, 'user'> & { user: UserBrief }
 
 interface AuthState {
   /** 仅驻留内存，不落 localStorage（XSS 防线）；页面刷新后由 refresh cookie 静默换新 */
@@ -18,13 +20,7 @@ interface AuthState {
   setToken: (t: string) => void
   setBooted: (v: boolean) => void
   setUser: (user: UserBrief) => void
-  setLogin: (payload: {
-    accessToken: string
-    user: UserBrief
-    permissions: string[]
-    menus: string[]
-    mustChangePassword: boolean
-  }, replaceSession?: boolean) => void
+  setLogin: (payload: AuthLoginResponse, replaceSession?: boolean) => void
   clearMustChange: () => void
   logout: () => void
   hasPerm: (code: string) => boolean
@@ -60,10 +56,9 @@ export const useAuth = create<AuthState>()(
     {
       name: 'yf-auth',
       version: 1,
-      migrate: (persisted) => {
-        const previous = persisted as { user?: { id?: number } } | undefined
-        return { user: typeof previous?.user?.id === 'number' ? { id: previous.user.id } : null }
-      },
+      // Older schemas persisted more account data. Discard the complete record instead of
+      // carrying any identity, authorization, or forced-password state into the current session.
+      migrate: () => ({ user: null, permissions: [], menus: [], mustChangePassword: false }),
       // Only an account id is needed for boot/cross-tab account-switch detection.
       // Name, employee number, email and supplier details are fetched after refresh.
       partialize: (s) => ({

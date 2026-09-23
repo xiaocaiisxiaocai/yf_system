@@ -6,7 +6,7 @@
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const {
-  fs, assert, OUT, s, f, record, login, api, action, track,
+  fs, assert, OUT, s, f, record, login, api, projectMetadata, action, track,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
 const apiPath = path => '/api/v1' + path;
@@ -17,24 +17,14 @@ async function json(context, token, method, path, body, expected = 200) {
   return (await api(context, method, path, body, token, expected)).json();
 }
 
-async function createProjectGroup(context, token, supplierId, ownerId, name) {
-  const vendors = await json(context, token, 'GET', '/project-dictionaries?type=ROBOT_VENDOR&enabledOnly=true');
-  assert(vendors.length > 0, 'project fixture needs a Robot vendor');
-  const models = await json(context, token, 'GET',
-    `/project-dictionaries?type=ROBOT_MODEL&parentId=${vendors[0].id}&enabledOnly=true`);
-  const priorities = await json(context, token, 'GET', '/project-dictionaries?type=PRIORITY&enabledOnly=true');
-  assert(models.length > 0 && priorities.length > 0, 'project fixture needs model and priority options');
+async function createProjectGroup(context, token, supplierId, name) {
   const group = await json(context, token, 'POST', '/project-groups', {
     name,
     description: '浏览器协作通知独立夹具',
     supplierId,
     workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
     machineModel: '浏览器协作机型',
-    robotVendorId: vendors[0].id,
-    robotModelId: models[0].id,
-    responsibleUserId: ownerId,
-    priorityId: priorities[0].id,
-    expectedCompletionDate: '2099-12-31',
+    ...await projectMetadata(context, token, supplierId),
     subprojectNames: [name + ' 子项目'],
   });
   const detail = await json(context, token, 'GET', `/project-groups/${group.id}`);
@@ -135,11 +125,8 @@ async function chooseNotificationTab(drawer, name) {
     const adminToken = adminAuth.accessToken;
     const supplierToken = supplierAuth.accessToken;
     const marker = crypto.randomBytes(5).toString('hex');
-    const ownerOptions = await json(adminContext, adminToken, 'GET', '/project-owner-options');
-    const owner = ownerOptions.find(item => item.sectionName?.trim());
-    assert(owner, 'project owner fixture must provide an active owner with a section');
     const project = await createProjectGroup(
-      adminContext, adminToken, f.suppliers.a.id, owner.id, '协作联动-' + marker);
+      adminContext, adminToken, f.suppliers.a.id, '协作联动-' + marker);
     const projectName = project.name;
     await json(adminContext, adminToken, 'PUT', `/projects/${project.id}/status`, {
       status: 'IN_PROGRESS',

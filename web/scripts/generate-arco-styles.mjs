@@ -15,8 +15,8 @@ const target = join(web, 'src/styles/arco-components.ts')
 function sourceFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
     const full = join(directory, entry.name)
-    if (entry.isDirectory()) return sourceFiles(full)
-    return /\.(ts|tsx)$/.test(entry.name) ? [full] : []
+    if (entry.isDirectory()) return ['test', '__tests__'].includes(entry.name) ? [] : sourceFiles(full)
+    return /\.(ts|tsx)$/.test(entry.name) && !/\.(test|spec)\.(ts|tsx)$/.test(entry.name) ? [full] : []
   })
 }
 

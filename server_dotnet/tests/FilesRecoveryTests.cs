@@ -396,7 +396,10 @@ public sealed class FilesRecoveryTests
                             status VARCHAR(20) NOT NULL, is_built_in BOOLEAN NOT NULL
                         );
                         CREATE TABLE permissions(
-                            id BIGINT UNSIGNED PRIMARY KEY, code VARCHAR(100) NOT NULL
+                            id BIGINT UNSIGNED PRIMARY KEY,
+                            code VARCHAR(100) NOT NULL,
+                            type VARCHAR(16) NOT NULL DEFAULT 'BUTTON',
+                            sort_no INT NOT NULL DEFAULT 0
                         );
                         CREATE TABLE user_roles(user_id BIGINT UNSIGNED NOT NULL, role_id BIGINT UNSIGNED NOT NULL);
                         CREATE TABLE role_permissions(role_id BIGINT UNSIGNED NOT NULL, permission_id BIGINT UNSIGNED NOT NULL);
@@ -479,7 +482,7 @@ public sealed class FilesRecoveryTests
                 var identity = new IdentityService(EfTestSupport.DbContextFactory(options), options, new LoginRateLimiter(),
                     new TokenService(options), new PermissionService(), audit);
                 var files = new FileService(database, options, audit, new BatchDownloadLimiter(),
-                    new MediaGrantService(options), identity);
+                    new MediaGrantService(options), new DownloadGrantService(), identity);
                 return new FilesDatabaseScope(
                     administration, databaseName, disposableRoot, database, maintenance, upload, files);
             }

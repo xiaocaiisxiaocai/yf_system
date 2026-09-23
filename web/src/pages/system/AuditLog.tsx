@@ -10,7 +10,7 @@ import { type PageResp, fmtTime } from '../../api/types'
 import {
   ACTIONS, CATEGORY_OPTIONS, TARGET_LABELS, actionForCategory, actionOptionsForCategory,
   actorIdentity, collectionChanges, copySafeDetail, detailNotes, detailSummary, displayChanges, formatChangeValue,
-  historicalNote, safeDetailJson, sourceDetailValue, sourceLabel, targetIdentity,
+  historicalNote, isAuditDeletable, safeDetailJson, sourceDetailValue, sourceLabel, targetIdentity,
   type AuditLogRow,
 } from './auditLogDetails'
 import './AuditLog.css'
@@ -244,7 +244,7 @@ export default function AuditLog() {
   const resetFilters = () => { beginReload(); setDraft(EMPTY_FILTERS); setFilters(EMPTY_FILTERS); setPage(1) }
 
   const removeOne = async (row: AuditLogRow) => {
-    const isCurrentDeletableRow = visibleRows.current.some((current) => current.id === row.id && current.action !== 'AUDIT_LOG_DELETE')
+    const isCurrentDeletableRow = visibleRows.current.some((current) => current.id === row.id && isAuditDeletable(current))
     if (!deleteState.current.allowed || deleteState.current.busy || !isCurrentDeletableRow) return
     deleteState.current.busy = true
     setDeleting(true)
@@ -263,7 +263,7 @@ export default function AuditLog() {
   }
 
   const removeSelected = async () => {
-    const selectableIds = new Set(visibleRows.current.filter((row) => row.action !== 'AUDIT_LOG_DELETE').map((row) => row.id))
+    const selectableIds = new Set(visibleRows.current.filter(isAuditDeletable).map((row) => row.id))
     const ids = deleteState.current.ids.slice()
     if (!deleteState.current.allowed || deleteState.current.busy || ids.length === 0 || ids.some((id) => !selectableIds.has(id))) {
       clearSelection()
@@ -321,6 +321,7 @@ export default function AuditLog() {
           </Popconfirm>
         )}
       </div>
+      {canDelete && <Typography.Text type="secondary">仅可手动删除超过保留期限的日志；日志清理记录不可手动删除。</Typography.Text>}
 
       {loadError ? (
         <div className="audit-load-error">
@@ -336,9 +337,9 @@ export default function AuditLog() {
           scroll={{ x: 1128, y: 'var(--page-table-scroll-y)' }}
           rowSelection={canDelete ? {
             selectedRowKeys: selectedIds,
-            checkboxProps: (row?: AuditLogRow) => ({ disabled: deleteBusy || row?.action === 'AUDIT_LOG_DELETE' }),
+            checkboxProps: (row?: AuditLogRow) => ({ disabled: deleteBusy || !isAuditDeletable(row) }),
             onChange: (keys) => {
-              const selectableIds = new Set(data.list.filter((row) => row.action !== 'AUDIT_LOG_DELETE').map((row) => row.id))
+              const selectableIds = new Set(data.list.filter(isAuditDeletable).map((row) => row.id))
               const ids = keys.map(Number).filter((id) => selectableIds.has(id))
               deleteState.current.ids = ids
               setSelectedIds(ids)
@@ -372,7 +373,7 @@ export default function AuditLog() {
             },
             { title: '操作', width: 120, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row?: AuditLogRow) => row ? actionSlots([
               <Button key="view" size="mini" type="text" icon={<IconEye />} onClick={() => setSelected(row)}>查看</Button>,
-              canDelete && row.action !== 'AUDIT_LOG_DELETE' && (
+              canDelete && isAuditDeletable(row) && (
                 <Popconfirm key="delete" title="确认删除这条日志？" disabled={deleteBusy} onOk={() => removeOne(row)}>
                   <Button size="mini" type="text" status="danger" disabled={deleteBusy}>删除</Button>
                 </Popconfirm>

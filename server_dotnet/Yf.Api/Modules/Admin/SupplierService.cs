@@ -52,7 +52,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         ulong resultId;
         if (id is null)
         {
-            var created = new Supplier { Name = name, Remark = request.Remark, Status = "ACTIVE", CreatedBy = actor.Id };
+            var created = new Supplier { Name = name, Remark = request.Remark, Status = AccountStatuses.Active, CreatedBy = actor.Id };
             context.Suppliers.Add(created); await context.SaveChangesAsync(ct); resultId = created.Id;
         }
         else
@@ -82,7 +82,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
             .AsNoTracking().SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         await context.Suppliers.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, status), ct);
         var revokedSessionCount = 0;
-        if (status == "DISABLED")
+        if (status == AccountStatuses.Disabled)
         {
             var lockedAccounts = await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE user_type='SUPPLIER' AND supplier_id={id} ORDER BY id FOR UPDATE")
                 .AsNoTracking().ToListAsync(ct);
@@ -95,7 +95,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, "SUPPLIER_STATUS", "supplier", id,
             new
             {
-                row.Name, oldStatus = row.Status, newStatus = status, sessionsRevoked = status == "DISABLED", revokedSessionCount,
+                row.Name, oldStatus = row.Status, newStatus = status, sessionsRevoked = status == AccountStatuses.Disabled, revokedSessionCount,
                 targetName = row.Name, changes = AuditChange.OnlyChanged(new AuditChange("status", "状态", row.Status, status))
             }, null, ct);
         await transaction.CommitAsync(ct);
@@ -112,7 +112,9 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var row = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
         if (await context.Projects.AnyAsync(x => x.SupplierId == id, ct) || await context.ProjectGroups.AnyAsync(x => x.SupplierId == id, ct))
             throw ApiException.BadRequest("该供应商仍有关联项目，请先删除项目");
-        var accounts = await context.Users.CountAsync(x => x.UserType == "SUPPLIER" && x.SupplierId == id, ct);
+        if (await context.RobotParts.AnyAsync(x => x.SupplierId == id, ct))
+            throw ApiException.BadRequest("该供应商仍有关联 Robot 料号，请先处理料号");
+        var accounts = await context.Users.CountAsync(x => x.UserType == UserTypes.Supplier && x.SupplierId == id, ct);
         if (accounts > 0) throw ApiException.BadRequest($"该供应商仍有 {accounts} 个账号，请先逐个处理账号");
         await audit.WriteAsync(connection, dbTransaction, actor.Id, "SUPPLIER_DELETE", "supplier", id,
             new { row.Name, accountCount = 0, targetName = row.Name, changes = Array.Empty<AuditChange>() }, null, ct);
@@ -126,7 +128,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await context.Database.OpenConnectionAsync(ct);
         await AccessService.RequirePermissionAsync(context.Database.Connection(), null, actor, "supplier:account", ct);
         if (await FindAsync(context, supplierId, ct) is null) throw ApiException.NotFound();
-        var users = await context.Users.AsNoTracking().Where(x => x.UserType == "SUPPLIER" && x.SupplierId == supplierId).OrderBy(x => x.Id).ToListAsync(ct);
+        var users = await context.Users.AsNoTracking().Where(x => x.UserType == UserTypes.Supplier && x.SupplierId == supplierId).OrderBy(x => x.Id).ToListAsync(ct);
         var results = new List<SupplierAccountResponse>(users.Count);
         results.AddRange((await AccountRowsAsync(context, users, ct)).Select(AccountJson));
         return results.ToArray();
@@ -143,8 +145,8 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var allowed = RoleService.SupplierPermissionCodes.ToArray();
         var isAdmin = await AccessService.IsSystemAdminAsync(connection, null, actor.Id, ct);
         var term = string.IsNullOrWhiteSpace(keyword) ? null : keyword.Trim();
-        var query = context.Roles.AsNoTracking().Where(role => role.Status == "ACTIVE"
-            && !(role.IsBuiltIn && role.Name == "系统管理员")
+        var query = context.Roles.AsNoTracking().Where(role => role.Status == AccountStatuses.Active
+            && !(role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator)
             && !context.RolePermissions.Where(rp => rp.RoleId == role.Id)
                 .Join(context.Permissions, rp => rp.PermissionId, p => p.Id, (_, p) => p.Code)
                 .Any(code => !Enumerable.Contains(allowed, code))
@@ -166,7 +168,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         await GateAsync(context, actor, "supplier:account", ct);
         var supplier = await FindAsync(context, supplierId, ct) ?? throw ApiException.NotFound();
-        if (supplier.Status != "ACTIVE") throw ApiException.BadRequest("供应商已被禁用");
+        if (supplier.Status != AccountStatuses.Active) throw ApiException.BadRequest("供应商已被禁用");
         var employeeNo = request.EmployeeNo.Trim();
         if (await context.Users.AnyAsync(x => x.EmployeeNo == employeeNo, ct)) throw ApiException.Conflict("工号已存在");
         var roleId = request.RoleId ?? await FallbackSupplierRoleIdAsync(context, ct);
@@ -174,7 +176,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var user = new User
         {
             EmployeeNo = employeeNo, PasswordHash = await PasswordService.HashAsync(request.Password, ct), RealName = request.RealName.Trim(),
-            Email = request.Email.Trim(), UserType = "SUPPLIER", SupplierId = supplierId, Status = "ACTIVE",
+            Email = request.Email.Trim(), UserType = UserTypes.Supplier, SupplierId = supplierId, Status = AccountStatuses.Active,
             MustChangePassword = true, FailedLoginAttempts = 0, CreatedBy = actor.Id
         };
         context.Users.Add(user); await context.SaveChangesAsync(ct);
@@ -219,17 +221,17 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await GateAsync(context, actor, "supplier:account", ct);
         var locked = await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id={id} FOR UPDATE").AsNoTracking().SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         var user = await AccountRowAsync(context, locked, ct);
-        if (user.UserType != "SUPPLIER") throw ApiException.BadRequest("该账号不是供应商人员");
-        if (status == "ACTIVE")
+        if (user.UserType != UserTypes.Supplier) throw ApiException.BadRequest("该账号不是供应商人员");
+        if (status == AccountStatuses.Active)
         {
             if (!user.RoleId.HasValue) throw ApiException.BadRequest("供应商账号必须绑定一个角色");
             await EnsureSupplierRoleAssignableAsync(context, actor, user.RoleId.Value, ct);
         }
         await context.Users.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, status), ct);
-        if (status == "DISABLED") await IdentityService.RevokeAllAsync(context.Database.Connection(), context.Database.RequireTransaction(), id, ct);
+        if (status == AccountStatuses.Disabled) await IdentityService.RevokeAllAsync(context.Database.Connection(), context.Database.RequireTransaction(), id, ct);
         await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, "SUPPLIER_ACCOUNT_STATUS", "user", id, new
         {
-            user.EmployeeNo, oldStatus = user.Status, newStatus = status, sessionsRevoked = status == "DISABLED", targetName = AccountAuditName(user),
+            user.EmployeeNo, oldStatus = user.Status, newStatus = status, sessionsRevoked = status == AccountStatuses.Disabled, targetName = AccountAuditName(user),
             changes = AuditChange.OnlyChanged(new AuditChange("status", "状态", user.Status, status))
         }, null, ct);
         var result = AccountJson(await FindAccountAsync(context, id, ct) ?? throw ApiException.NotFound()); await transaction.CommitAsync(ct); return result;
@@ -262,7 +264,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await AccessService.RequirePermissionAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, "supplier:account_delete", ct);
         var locked = await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id={id} FOR UPDATE").AsNoTracking().SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         var user = await AccountRowAsync(context, locked, ct);
-        if (user.UserType != "SUPPLIER") throw ApiException.BadRequest("该账号不是供应商人员");
+        if (user.UserType != UserTypes.Supplier) throw ApiException.BadRequest("该账号不是供应商人员");
         await UserService.EnsureNoHistoryAsync(context, id, ct);
         await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, "SUPPLIER_ACCOUNT_DELETE", "user", id,
             new { user.EmployeeNo, user.RealName, targetName = AccountAuditName(user), changes = Array.Empty<AuditChange>() }, null, ct);
@@ -290,8 +292,8 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
     {
         if (roleId == 0) throw ApiException.BadRequest("请选择供应商角色");
         var role = await context.Roles.AsNoTracking().SingleOrDefaultAsync(x => x.Id == roleId, ct) ?? throw ApiException.BadRequest($"角色不存在: {roleId}");
-        if (role.IsBuiltIn && role.Name == "系统管理员") throw ApiException.BadRequest("系统管理员角色不能绑定供应商账号");
-        if (role.Status != "ACTIVE") throw ApiException.BadRequest("不能绑定已禁用的角色");
+        if (role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator) throw ApiException.BadRequest("系统管理员角色不能绑定供应商账号");
+        if (role.Status != AccountStatuses.Active) throw ApiException.BadRequest("不能绑定已禁用的角色");
         var codes = await context.RolePermissions.Where(x => x.RoleId == roleId)
             .Join(context.Permissions, x => x.PermissionId, x => x.Id, (_, permission) => permission.Code).ToArrayAsync(ct);
         if (!RoleService.IsSupplierAccountPermissionSetAllowed(codes)) throw ApiException.BadRequest("供应商账号角色只能包含供应商自有项目所需权限");
@@ -305,7 +307,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
     {
         var user = await context.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, ct);
         if (user is null) return null;
-        if (user.UserType != "SUPPLIER") throw ApiException.BadRequest("该账号不是供应商人员");
+        if (user.UserType != UserTypes.Supplier) throw ApiException.BadRequest("该账号不是供应商人员");
         return await AccountRowAsync(context, user, ct);
     }
 

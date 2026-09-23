@@ -24,7 +24,7 @@ public sealed partial class UploadService(
         var actor = AccessService.GetCurrent(context);
         await using var conn = await db.OpenAsync(ct);
         await ProjectAccessService.RequireFileUploadAsync(conn, null, actor, request.ProjectId, ct);
-        var extension = await ValidateFileAsync(conn, request, ct);
+        await ValidateFileAsync(conn, request, ct);
         if (request.FileMd5 is not null && !Md5Pattern().IsMatch(request.FileMd5))
             throw ApiException.BadRequest("文件 MD5 摘要格式无效");
         var fileMd5 = request.FileMd5?.ToLowerInvariant();
@@ -122,7 +122,6 @@ public sealed partial class UploadService(
                     TryDeleteDirectory(options.StorageRoot, tempDir, CancellationToken.None);
                 throw;
             }
-            _ = extension;
             return new UploadInitResponse(sessionId, chunkSize, totalChunks, Array.Empty<uint>());
         }
     }
@@ -387,23 +386,7 @@ public sealed partial class UploadService(
         IsExpired = session.ExpiresAt <= dbNow
     };
 
-    internal static FileRow ToRow(FileRecord file) => new()
-    {
-        Id = file.Id,
-        ProjectId = file.ProjectId,
-        UploaderId = file.UploaderId,
-        Direction = file.Direction,
-        OriginalName = file.OriginalName,
-        StoredName = file.StoredName,
-        Ext = file.Ext,
-        SizeBytes = file.SizeBytes,
-        MimeType = file.MimeType,
-        Sha256 = file.Sha256,
-        StoragePath = file.StoragePath,
-        Status = file.Status,
-        DeletedAt = file.DeletedAt,
-        CreatedAt = file.CreatedAt
-    };
+    internal static FileRow ToRow(FileRecord file) => FileRowMapping.Map(file);
 
     private sealed class NoticeRecipient
     {

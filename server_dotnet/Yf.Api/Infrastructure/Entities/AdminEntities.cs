@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Yf.Api.Infrastructure;
 
 namespace Yf.Api.Infrastructure.Entities;
 
@@ -72,7 +73,7 @@ public sealed class DepartmentConfig : IEntityTypeConfiguration<Department>
         b.Property(x => x.Name).HasColumnName("name").HasMaxLength(64).IsRequired();
         b.Property(x => x.ParentId).HasColumnName("parent_id");
         b.Property(x => x.SortNo).HasColumnName("sort_no").HasDefaultValue(0);
-        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue("ACTIVE");
+        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue(AccountStatuses.Active);
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP").ValueGeneratedOnAddOrUpdate();
         b.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(16).IsRequired().HasDefaultValue("DIVISION");
@@ -93,7 +94,7 @@ public sealed class SupplierConfig : IEntityTypeConfiguration<Supplier>
         b.HasKey(x => x.Id);
         b.Property(x => x.Name).HasColumnName("name").HasMaxLength(128).IsRequired();
         b.Property(x => x.Remark).HasColumnName("remark").HasMaxLength(512);
-        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue("ACTIVE");
+        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue(AccountStatuses.Active);
         b.Property(x => x.CreatedBy).HasColumnName("created_by");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP").ValueGeneratedOnAddOrUpdate();
@@ -111,7 +112,7 @@ public sealed class RoleConfig : IEntityTypeConfiguration<Role>
         b.Property(x => x.Name).HasColumnName("name").HasMaxLength(64).IsRequired();
         b.Property(x => x.Description).HasColumnName("description").HasMaxLength(255);
         b.Property(x => x.IsBuiltIn).HasColumnName("is_built_in").HasDefaultValue(false);
-        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue("ACTIVE");
+        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue(AccountStatuses.Active);
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP").ValueGeneratedOnAddOrUpdate();
         b.HasIndex(x => x.Name).IsUnique().HasDatabaseName("uk_roles_name");

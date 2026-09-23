@@ -49,9 +49,9 @@ async function addToken(scope, placeholder, value) {
   await input.press('Enter');
 }
 
-async function choose(scope, placeholder, optionName) {
+async function choose(page, scope, placeholder, optionName) {
   await scope.getByPlaceholder(placeholder, { exact: true }).click();
-  await adminPage.getByRole('option', { name: optionName, exact: true }).click();
+  await page.getByRole('option', { name: optionName, exact: true }).click();
 }
 
 async function upload(page, projectId, file) {
@@ -132,57 +132,50 @@ async function preview(page, name, kind, label) {
     browser = await chromium.launch({ channel: 'chrome', headless: true });
     adminPage = await openUser('admin');
     const admin = sessions.admin;
-    const owners = await json(admin.context, admin.token, 'GET', '/project-owner-options');
-    const sectionOwners = owners.filter(owner => owner.sectionName?.trim());
-    assert(sectionOwners.length > 0, 'project owner options must contain an active owner with a section');
-    const memberOwner = sectionOwners.find(owner => owner.id === f.users.member?.id);
-    const owner = memberOwner || sectionOwners[0];
-    const vendors = await json(admin.context, admin.token, 'GET', '/project-dictionaries?type=ROBOT_VENDOR&enabledOnly=true');
-    const models = await json(admin.context, admin.token, 'GET',
-      '/project-dictionaries?type=ROBOT_MODEL&parentId=' + vendors[0].id + '&enabledOnly=true');
     const priorities = await json(admin.context, admin.token, 'GET', '/project-dictionaries?type=PRIORITY&enabledOnly=true');
-    assert(vendors.length > 0 && models.length > 0 && priorities.length > 0,
+    assert(f.robotParts?.a?.id && f.robotParts?.b?.id && priorities.length > 0,
       'project creation options must be available');
-    const internal = owner.id === f.users.member?.id ? await openUser('member') : adminPage;
+    const creatorPage = await openUser('manager');
+    const creator = sessions.manager;
+    const internal = creatorPage;
     const projects = {};
 
     for (const key of ['a', 'b']) {
       await record(key + ' 主项目及子项目通过页面创建、启动并显示负责人', async () => {
-        await navigate(adminPage, '/projects');
-        await adminPage.getByRole('button', { name: '新建主项目', exact: true }).click();
-        const modal = adminPage.getByRole('dialog');
+        await navigate(creatorPage, '/projects');
+        await creatorPage.getByRole('button', { name: '新建主项目', exact: true }).click();
+        const modal = creatorPage.getByRole('dialog');
         const groupName = '自动验收' + key + '主项目-' + Date.now();
         const childName = groupName + ' 子项目';
         await modal.getByPlaceholder('主项目名称', { exact: true }).fill(groupName);
         await addToken(modal, '输入子项目名称后按回车，可一次创建多个', childName);
         await addToken(modal, '输入工令号后按回车，可填写多个', 'WO-' + crypto.randomBytes(4).toString('hex'));
         await modal.getByPlaceholder('请输入机型', { exact: true }).fill('自动验收机型');
-        await choose(modal, '选择 Robot 厂商', vendors[0].name);
-        await choose(modal, '选择 Robot 型号', models[0].name);
-        await choose(modal, '选择负责人', owner.realName + '（' + owner.employeeNo + '）');
-        await choose(modal, '选择优先级', priorities[0].name);
-        const date = modal.getByPlaceholder('选择预计完成日期', { exact: true });
+        await choose(creatorPage, modal, '选择 Robot 厂商', f.suppliers[key].name);
+        await choose(creatorPage, modal, '选择 Robot 料号', f.robotParts[key].partNumber);
+        await modal.getByDisplayValue(f.robotParts[key].model, { exact: true }).waitFor();
+        await choose(creatorPage, modal, '选择优先级', priorities[0].name);
+        const date = modal.getByPlaceholder('选择需求完成时间', { exact: true });
         await date.fill('2099-12-31');
         await date.press('Enter');
-        await choose(modal, '选择供应商', f.suppliers[key].name);
         const group = await action(
-          adminPage,
+          creatorPage,
           '/project-groups',
           'POST',
           () => modal.getByRole('button', { name: '创建主项目', exact: true }).click(),
         );
-        const detail = await json(admin.context, admin.token, 'GET', '/project-groups/' + group.id);
+        const detail = await json(creator.context, creator.token, 'GET', '/project-groups/' + group.id);
         assert.equal(detail.projects.length, 1);
         const project = detail.projects[0];
         projects[key] = { id: project.id, groupId: group.id, groupName, name: project.name };
-        await adminPage.getByRole('link', { name: groupName, exact: true }).waitFor();
-        await adminPage.getByRole('link', { name: groupName, exact: true }).click();
-        await adminPage.getByRole('button', { name: childName, exact: true }).waitFor();
-        await adminPage.getByRole('button', { name: childName, exact: true }).click();
-        await adminPage.getByRole('button', { name: '开始', exact: true }).waitFor();
-        await action(adminPage, '/projects/' + project.id + '/status', 'PUT',
-          () => adminPage.getByRole('button', { name: '开始', exact: true }).click());
-        await adminPage.getByText(owner.realName, { exact: false }).waitFor();
+        await creatorPage.getByRole('link', { name: groupName, exact: true }).waitFor();
+        await creatorPage.getByRole('link', { name: groupName, exact: true }).click();
+        await creatorPage.getByRole('button', { name: childName, exact: true }).waitFor();
+        await creatorPage.getByRole('button', { name: childName, exact: true }).click();
+        await creatorPage.getByRole('button', { name: '开始', exact: true }).waitFor();
+        await action(creatorPage, '/projects/' + project.id + '/status', 'PUT',
+          () => creatorPage.getByRole('button', { name: '开始', exact: true }).click());
+        await creatorPage.getByText(creator.user.realName, { exact: false }).waitFor();
         f.uiProjects = projects;
         save();
       });
@@ -262,7 +255,7 @@ async function preview(page, name, kind, label) {
       await navigate(internal, '/projects/' + project.id);
       await internal.getByText('验收方：公司', { exact: true }).waitFor();
       assert.equal(await internal.getByRole('button', { name: '撤回', exact: true }).count(), 0);
-      const internalSession = internal === adminPage ? admin : sessions.member;
+      const internalSession = creator;
       await json(internalSession.context, internalSession.token, 'POST', '/projects/' + project.id + '/withdraw', {
         expectedSubmissionId: submitted.latestSubmissionId,
       }, 403);

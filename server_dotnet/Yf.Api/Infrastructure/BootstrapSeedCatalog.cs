@@ -70,9 +70,9 @@ internal static class BootstrapSeedCatalog
         db.Roles.Add(new Role
         {
             Id = AdministratorRoleId,
-            Name = "系统管理员",
+            Name = BuiltInRoleNames.SystemAdministrator,
             IsBuiltIn = true,
-            Status = "ACTIVE",
+            Status = AccountStatuses.Active,
         });
         db.Permissions.AddRange(Permissions.Select(row => new Permission
         {
@@ -90,17 +90,17 @@ internal static class BootstrapSeedCatalog
             Description = row.Description,
         }));
         db.ProjectDictionaries.AddRange(
-            new ProjectDictionary { Type = "PRIORITY", Name = "高", SortNo = 10, Status = "ACTIVE" },
-            new ProjectDictionary { Type = "PRIORITY", Name = "普通", SortNo = 20, Status = "ACTIVE" },
-            new ProjectDictionary { Type = "PRIORITY", Name = "低", SortNo = 30, Status = "ACTIVE" });
+            new ProjectDictionary { Type = "PRIORITY", Name = "高", SortNo = 10, Status = AccountStatuses.Active },
+            new ProjectDictionary { Type = "PRIORITY", Name = "普通", SortNo = 20, Status = AccountStatuses.Active },
+            new ProjectDictionary { Type = "PRIORITY", Name = "低", SortNo = 30, Status = AccountStatuses.Active });
         var administrator = new User
         {
             EmployeeNo = "admin",
             PasswordHash = passwordHash,
             RealName = "系统管理员",
             Email = string.Empty,
-            UserType = "INTERNAL",
-            Status = "ACTIVE",
+            UserType = UserTypes.Internal,
+            Status = AccountStatuses.Active,
             MustChangePassword = true,
             FailedLoginAttempts = 0,
         };

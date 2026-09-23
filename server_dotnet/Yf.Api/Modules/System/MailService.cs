@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using MailKit.Net.Smtp;
 using MailKit.Security;
@@ -77,9 +79,9 @@ public sealed class MailService
             .ToListAsync(ct))
             .ToDictionary(item => item.Status, item => checked((ulong)item.Count));
         var missingCount = checked((ulong)await context.Users.LongCountAsync(
-            user => user.Status == "ACTIVE" && user.Email.Trim() == string.Empty, ct));
+            user => user.Status == AccountStatuses.Active && user.Email.Trim() == string.Empty, ct));
         var missing = await context.Users
-            .Where(user => user.Status == "ACTIVE" && user.Email.Trim() == string.Empty)
+            .Where(user => user.Status == AccountStatuses.Active && user.Email.Trim() == string.Empty)
             .OrderBy(user => user.EmployeeNo)
             .Take(20)
             .Select(user => new MissingEmailAccount(user.Id, user.EmployeeNo, user.RealName, user.UserType, user.Status))
@@ -253,17 +255,40 @@ public sealed class MailService
                 && (item.NextAttemptAt == null || item.NextAttemptAt <= claimNow));
             var claimed = await claimQuery.ExecuteUpdateAsync(setters => setters
                 .SetProperty(item => item.Status, "SENDING")
+                .SetProperty(item => item.DedupeKey,
+                    item => item.EventType == "FILE_UPLOADED" ? null : item.DedupeKey)
                 .SetProperty(item => item.NextAttemptAt, lease), ct);
             if (claimed != 1) return;
+            var claimedMail = await claimContext.EmailOutbox.AsNoTracking()
+                .Where(item => item.Id == mail.Id && item.Status == "SENDING" && item.NextAttemptAt == lease)
+                .Select(item => new
+                {
+                    item.RecipientEmail,
+                    item.Subject,
+                    item.Body,
+                })
+                .SingleAsync(ct);
+            // Enqueue and claim serialize on the outbox row. Reload after claiming so
+            // a file appended immediately before this claim is included in this send.
+            mail.RecipientEmail = claimedMail.RecipientEmail;
+            mail.Subject = claimedMail.Subject;
+            mail.Body = claimedMail.Body;
             var currentPolicy = await EmailNotificationPolicy.LoadAsync(claimConnection, claimTransaction, ct);
-            var currentRecipientType = mail.RecipientUserId is { } recipientId
+            var currentRecipient = mail.RecipientUserId is { } recipientId
                 ? await claimContext.Users
-                    .Where(user => user.Id == recipientId && user.Status == "ACTIVE")
-                    .Select(user => user.UserType)
+                    .Where(user => user.Id == recipientId && user.Status == AccountStatuses.Active)
+                    .Select(user => new CurrentRecipient { UserType = user.UserType, Email = user.Email })
                     .SingleOrDefaultAsync(ct)
-                : mail.RecipientUserType;
+                : null;
+            var currentRecipientType = currentRecipient?.UserType ?? mail.RecipientUserType;
+            var recipientAddressValid = mail.RecipientUserId is null
+                ? MailboxAddress.TryParse(mail.RecipientEmail, out _)
+                : currentRecipient is not null
+                  && !string.IsNullOrWhiteSpace(currentRecipient.Email)
+                  && string.Equals(currentRecipient.Email.Trim(), mail.RecipientEmail.Trim(), StringComparison.OrdinalIgnoreCase)
+                  && MailboxAddress.TryParse(currentRecipient.Email, out _);
             var notificationAllowed = currentPolicy.Allows(mail.EventType, currentRecipientType);
-            var recipientAuthorized = notificationAllowed && (mail.EventType == "PROJECT_SUBMITTED"
+            var recipientAuthorized = notificationAllowed && recipientAddressValid && (mail.EventType == "PROJECT_SUBMITTED"
                 ? await IsCurrentPendingAcceptanceAsync(claimConnection, claimTransaction, mail, ct)
                 : mail.ProjectId is null || mail.RecipientUserId is null
                     ? mail.ProjectId is null && mail.RecipientUserId is null
@@ -278,6 +303,8 @@ public sealed class MailService
                 var policyDisabled = !notificationAllowed;
                 var reason = policyDisabled
                     ? EmailNotificationPolicy.DisabledReason
+                    : !recipientAddressValid
+                        ? "收件账号或地址已失效"
                     : mail.EventType == "PROJECT_SUBMITTED"
                         ? ProjectNotificationService.SupersededAcceptanceMailReason
                         : ProjectNotificationService.StaleProjectMailReason;
@@ -287,6 +314,8 @@ public sealed class MailService
                         && item.NextAttemptAt == lease)
                     .ExecuteUpdateAsync(setters => setters
                         .SetProperty(item => item.Status, "CANCELLED")
+                        .SetProperty(item => item.DedupeKey,
+                            item => item.EventType == "FILE_UPLOADED" ? null : item.DedupeKey)
                         .SetProperty(item => item.NextAttemptAt, (DateTime?)null)
                         .SetProperty(item => item.LastError, reason), ct);
                 if (cancelled == 1)
@@ -304,6 +333,8 @@ public sealed class MailService
                             status = "CANCELLED",
                             reason = policyDisabled
                                 ? EmailNotificationPolicy.DisabledAuditReason
+                                : !recipientAddressValid
+                                ? "RECIPIENT_ADDRESS_STALE"
                                 : mail.EventType == "PROJECT_SUBMITTED"
                                 ? "PROJECT_ACCEPTANCE_STALE"
                                 : "PROJECT_RECIPIENT_UNAUTHORIZED",
@@ -337,6 +368,9 @@ public sealed class MailService
         {
             retries++;
             error = ex is OperationCanceledException ? "SMTP 连接超时" : SanitizeError(ex.Message);
+            logger.LogWarning(
+                "SMTP delivery for outbox {OutboxId} failed ({ErrorType}, {SafeError}); sanitized stack: {SanitizedStack}",
+                mail.Id, ex.GetType().Name, error, SanitizedExceptionTrace(ex));
             var terminal = retries >= 3 || ex is FormatException || ex is SmtpCommandException command && (int)command.StatusCode >= 500;
             status = terminal ? "FAILED" : "PENDING";
             if (!terminal) retryDelaySeconds = 30 * (1 << Math.Clamp(retries - 1, 0, 6));
@@ -371,34 +405,60 @@ public sealed class MailService
         await tx.CommitAsync(completionToken);
     }
 
+    internal const int CancellationBatchSize = 1000;
+
     private async Task CancelPolicyDisabledAsync(MySqlConnection conn, CancellationToken ct)
     {
-        await using var context = EfDb.Use(conn);
-        var rows = await context.EmailOutbox
-            .Where(mail => mail.EventType != "STORAGE_WARNING"
-                           && mail.SentAt == null
-                           && (mail.Status == "PENDING" || mail.Status == "FAILED"))
-            .OrderBy(mail => mail.Id)
-            .Select(mail => new DisabledMailRow { Id = mail.Id, EventType = mail.EventType })
-            .ToListAsync(ct);
-        foreach (var row in rows)
+        while (true)
         {
             await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+            await using var select = conn.CreateCommand();
+            select.Transaction = tx;
+            select.CommandText = $"""
+                SELECT id,event_type
+                FROM email_outbox
+                WHERE event_type<>'STORAGE_WARNING' AND sent_at IS NULL AND status='PENDING'
+                ORDER BY id
+                LIMIT {CancellationBatchSize}
+                FOR UPDATE
+                """;
+            var rows = new List<DisabledMailRow>(CancellationBatchSize);
+            await using (var reader = await select.ExecuteReaderAsync(ct))
+            {
+                while (await reader.ReadAsync(ct))
+                    rows.Add(new DisabledMailRow { Id = reader.GetUInt64(0), EventType = reader.GetString(1) });
+            }
+            if (rows.Count == 0)
+            {
+                await tx.CommitAsync(ct);
+                break;
+            }
+
             await using var itemContext = EfDb.Use(conn, tx);
+            var ids = rows.Select(row => row.Id).ToArray();
             var changed = await itemContext.EmailOutbox.Where(mail =>
-                    mail.Id == row.Id
+                    Enumerable.Contains(ids, mail.Id)
                     && mail.SentAt == null
-                    && (mail.Status == "PENDING" || mail.Status == "FAILED"))
+                    && mail.Status == "PENDING")
                 .ExecuteUpdateAsync(setters => setters
                     .SetProperty(mail => mail.Status, "CANCELLED")
+                    .SetProperty(mail => mail.DedupeKey,
+                        mail => mail.EventType == "FILE_UPLOADED" ? null : mail.DedupeKey)
                     .SetProperty(mail => mail.NextAttemptAt, (DateTime?)null)
                     .SetProperty(mail => mail.LastError, EmailNotificationPolicy.DisabledReason), ct);
-            if (changed == 1)
-            {
-                await audit.WriteAsync(conn, tx, null, "EMAIL_CANCELLED_STALE", "email_outbox", row.Id,
-                    new { eventType = row.EventType, status = "CANCELLED", reason = EmailNotificationPolicy.DisabledAuditReason }, null, ct);
-            }
+            if (changed != rows.Count)
+                throw new InvalidOperationException("待发送邮件批量取消数量不一致");
+            await audit.WriteBatchAsync(conn, tx, null,
+                rows.Select(row => new AuditWrite(
+                    "EMAIL_CANCELLED_STALE",
+                    "email_outbox",
+                    row.Id,
+                    new { eventType = row.EventType, status = "CANCELLED", reason = EmailNotificationPolicy.DisabledAuditReason }))
+                    .ToArray(),
+                null,
+                ct);
             await tx.CommitAsync(ct);
+            if (rows.Count < CancellationBatchSize) break;
         }
     }
     private sealed class DisabledMailRow { public ulong Id { get; init; } public string EventType { get; init; } = ""; }
@@ -432,6 +492,34 @@ public sealed class MailService
     private static Task<DateTime> DatabaseUtcNowAsync(YfDbContext context, CancellationToken ct) =>
         DbClock.UtcNowAsync(context, ct, 0);
 
+    internal static string SanitizedExceptionTrace(Exception error)
+    {
+        var output = new StringBuilder();
+        for (var current = error; current is not null; current = current.InnerException)
+        {
+            if (output.Length > 0) output.Append(" <- ");
+            output.Append(current.GetType().FullName);
+            var frames = new StackTrace(current, false).GetFrames();
+            if (frames is null) continue;
+            foreach (var frame in frames)
+            {
+                var method = frame.GetMethod();
+                if (method is null) continue;
+                output.Append(" at ")
+                    .Append(method.DeclaringType?.FullName ?? "<unknown>")
+                    .Append('.')
+                    .Append(method.Name);
+            }
+        }
+        return output.Length == 0 ? error.GetType().FullName ?? "Exception" : output.ToString();
+    }
+
+    internal static void LogWorkerFailure(ILogger logger, Exception error) =>
+        logger.LogWarning(
+            "Mail worker batch failed ({ErrorType}); queue retained for retry. Sanitized stack: {SanitizedStack}",
+            error.GetType().Name,
+            SanitizedExceptionTrace(error));
+
     private sealed class MailAuditRow
     {
         public ulong Id { get; init; }
@@ -456,6 +544,11 @@ public sealed class MailService
         public string Status { get; set; } = "";
         public int RetryCount { get; set; }
         public DateTime? NextAttemptAt { get; set; }
+    }
+    private sealed class CurrentRecipient
+    {
+        public string UserType { get; init; } = "";
+        public string Email { get; init; } = "";
     }
 }
 
@@ -625,7 +718,10 @@ public sealed class MailWorker(MailService mail, AppOptions options, ILogger<Mai
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
-            catch (Exception ex) { logger.LogWarning("Mail worker batch failed ({ErrorType}); queue retained for retry.", ex.GetType().Name); }
+            catch (Exception ex)
+            {
+                MailService.LogWorkerFailure(logger, ex);
+            }
         } while (await timer.WaitForNextTickAsync(stoppingToken));
     }
 }

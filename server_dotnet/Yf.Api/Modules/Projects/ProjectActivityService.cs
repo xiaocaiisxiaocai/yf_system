@@ -12,6 +12,34 @@ internal sealed class ProjectActivityService(
     IProjectRealtimePublisher? realtime = null) : IProjectAuditCapture
 {
     private static readonly object ScheduledRealtimeKey = new();
+    internal static IReadOnlyDictionary<(string TargetType, string AuditAction), AuditActivityMapping> AuditActionMappings { get; } =
+        new Dictionary<(string, string), AuditActivityMapping>
+        {
+            [("project", "PROJECT_CREATE")] = new("PROJECT", "CREATE", "创建项目"),
+            [("project", "PROJECT_UPDATE")] = new("PROJECT", "UPDATE", "编辑项目"),
+            [("project", "PROJECT_MEMBERS")] = new("PROJECT", "MEMBERS_CHANGE", "调整项目成员"),
+            [("project", "PROJECT_START")] = new("PROJECT", "START", "开始项目"),
+            [("project", "PROJECT_RESTART")] = new("PROJECT", "RESTART", "重新开始项目"),
+            [("project", "PROJECT_SUBMIT")] = new("PROJECT", "SUBMIT", "提交项目验收"),
+            [("project", "PROJECT_CONFIRM")] = new("PROJECT", "CONFIRM", "确认项目完成"),
+            [("project", "PROJECT_REJECT")] = new("PROJECT", "REJECT", "驳回项目验收"),
+            [("project", "PROJECT_WITHDRAW")] = new("PROJECT", "WITHDRAW", "撤回项目验收"),
+            [("project", "PROJECT_TERMINATE")] = new("PROJECT", "TERMINATE", "终止项目"),
+            [("file", "FILE_UPLOAD")] = new("FILE", "UPLOAD", "上传文件"),
+            [("file", "FILE_DELETE")] = new("FILE", "DELETE", "删除文件"),
+            [("message", "MESSAGE_CREATE")] = new("MESSAGE", "CREATE", "发表留言"),
+            [("message", "MESSAGE_DELETE")] = new("MESSAGE", "DELETE", "删除留言"),
+        };
+    internal static IReadOnlySet<(string TargetType, string AuditAction)> KnownIgnoredAuditActions { get; } =
+        new HashSet<(string, string)>
+        {
+            ("project", "PROJECT_COPY"),
+            ("project", "PROJECT_DELETE"),
+            ("project", "MESSAGE_READ"),
+            ("file", "FILE_PREVIEW"),
+            ("file", "FILE_DOWNLOAD"),
+            ("file", "FILE_BATCH_DOWNLOAD"),
+        };
 
     internal static async Task<string> RevisionAsync(
         MySqlConnection conn,
@@ -27,9 +55,14 @@ internal sealed class ProjectActivityService(
         return row is null ? "0:0" : $"{row.ActivityCount}:{row.LatestId}";
     }
 
-    public async Task CaptureAsync(MySqlConnection connection, MySqlTransaction? tx, AuditLog auditLog, string? auditActorName, CancellationToken ct)
+    public Task CaptureAsync(MySqlConnection connection, MySqlTransaction? tx, AuditLog auditLog,
+        string? auditActorName, CancellationToken ct) =>
+        CaptureBatchAsync(connection, tx, [auditLog], auditActorName, ct);
+
+    public async Task CaptureBatchAsync(MySqlConnection connection, MySqlTransaction? tx,
+        IReadOnlyList<AuditLog> auditLogs, string? auditActorName, CancellationToken ct)
     {
-        var audit = new AuditRow
+        var captured = auditLogs.Select(auditLog => new AuditRow
         {
             Id = auditLog.Id,
             UserId = auditLog.UserId,
@@ -39,64 +72,104 @@ internal sealed class ProjectActivityService(
             TargetId = auditLog.TargetId,
             Detail = auditLog.Detail,
             CreatedAt = auditLog.CreatedAt,
-        };
-        if (!IsCapturedAction(audit.Action)) return;
-        if (audit.TargetId is null
-            || !ulong.TryParse(audit.TargetId, NumberStyles.None, CultureInfo.InvariantCulture, out var targetId)
-            || targetId.ToString(CultureInfo.InvariantCulture) != audit.TargetId)
-        {
-            return;
-        }
+        }).Select(audit => TryCapturedAudit(audit, out var targetId)
+            ? new CapturedAudit(audit, targetId)
+            : null).OfType<CapturedAudit>().ToArray();
+        if (captured.Length == 0) return;
 
         await using var db = EfDb.Use(connection, tx);
-        NewActivity? activity = audit.Action switch
-        {
-            "PROJECT_CREATE" or "PROJECT_UPDATE" or "PROJECT_MEMBERS" or "PROJECT_START"
-                or "PROJECT_SUBMIT" or "PROJECT_CONFIRM" or "PROJECT_REJECT" or "PROJECT_WITHDRAW"
-                or "PROJECT_TERMINATE" or "PROJECT_RESTART" when audit.TargetType == "project" =>
-                await ProjectActivityAsync(db, audit, targetId, ct),
-            "FILE_UPLOAD" or "FILE_DELETE" when audit.TargetType == "file" =>
-                await FileActivityAsync(db, audit, targetId, ct),
-            "MESSAGE_CREATE" or "MESSAGE_DELETE" when audit.TargetType == "message" =>
-                await MessageActivityAsync(db, audit, targetId, ct),
-            _ => null,
-        };
-        if (activity is null) return;
+        var projectIds = captured.Where(item => item.Audit.TargetType == "project")
+            .Select(item => item.TargetId).Distinct().ToArray();
+        var projects = projectIds.Length == 0
+            ? new Dictionary<ulong, ProjectActivityTarget>()
+            : await db.Projects.Where(row => Enumerable.Contains(projectIds, row.Id))
+                .Select(row => new ProjectActivityTarget(row.Id, row.Name, row.CreatedAt))
+                .ToDictionaryAsync(row => row.Id, ct);
+        var fileIds = captured.Where(item => item.Audit.TargetType == "file")
+            .Select(item => item.TargetId).Distinct().ToArray();
+        var files = fileIds.Length == 0
+            ? new Dictionary<ulong, FileActivityTarget>()
+            : await db.Files.Where(row => Enumerable.Contains(fileIds, row.Id))
+                .Select(row => new FileActivityTarget(row.Id, row.ProjectId, row.OriginalName, row.CreatedAt, row.DeletedAt))
+                .ToDictionaryAsync(row => row.Id, ct);
+        var messageIds = captured.Where(item => item.Audit.TargetType == "message")
+            .Select(item => item.TargetId).Distinct().ToArray();
+        var messages = messageIds.Length == 0
+            ? new Dictionary<ulong, MessageActivityTarget>()
+            : await db.Messages.Where(row => Enumerable.Contains(messageIds, row.Id))
+                .Select(row => new MessageActivityTarget(row.Id, row.ProjectId, row.Content, row.CreatedAt,
+                    row.DeletedAt, db.MessageImages.Any(image => image.MessageId == row.Id)))
+                .ToDictionaryAsync(row => row.Id, ct);
 
+        var activities = captured.Select(item => NewActivityFor(item, projects, files, messages))
+            .OfType<NewActivity>().ToArray();
+        if (activities.Length == 0) return;
         var actorName = string.IsNullOrWhiteSpace(auditActorName)
-            ? await ResolveActorNameAsync(db, audit.UserId, audit.EmployeeNo, ct)
+            ? await ResolveActorNameAsync(db, captured[0].Audit.UserId, captured[0].Audit.EmployeeNo, ct)
             : auditActorName;
-        if (await db.ProjectActivities.AnyAsync(row => row.SourceKey == activity.SourceKey, ct)) return;
-        var entity = new ProjectActivity
+        var sourceKeys = activities.Select(activity => activity.SourceKey).Distinct().ToArray();
+        var existing = (await db.ProjectActivities.Where(row => Enumerable.Contains(sourceKeys, row.SourceKey))
+                .Select(row => row.SourceKey).ToArrayAsync(ct)).ToHashSet(StringComparer.Ordinal);
+        var entities = activities.Where(activity => !existing.Contains(activity.SourceKey)).Select(activity => new ProjectActivity
         {
             ProjectId = activity.ProjectId,
             ActivityType = activity.ActivityType,
             Action = activity.Action,
-            ActorId = audit.UserId,
+            ActorId = captured[0].Audit.UserId,
             ActorName = actorName,
             OccurredAt = activity.OccurredAt,
             Title = activity.Title,
             Summary = activity.Summary,
             TargetId = activity.TargetId,
             SourceKey = activity.SourceKey,
-        };
-        db.ProjectActivities.Add(entity);
+        }).ToArray();
+        if (entities.Length == 0) return;
+        db.ProjectActivities.AddRange(entities);
+        IReadOnlyCollection<ProjectActivity> inserted = entities;
         try
         {
             await db.SaveChangesAsync(ct);
         }
         catch (DbUpdateException ex) when (IsDuplicateKey(ex))
         {
-            db.Entry(entity).State = EntityState.Detached;
-            return;
+            foreach (var entity in entities) db.Entry(entity).State = EntityState.Detached;
+            var recovered = new List<ProjectActivity>();
+            foreach (var entity in entities)
+            {
+                if (await db.ProjectActivities.AnyAsync(row => row.SourceKey == entity.SourceKey, ct)) continue;
+                db.ProjectActivities.Add(entity);
+                try
+                {
+                    await db.SaveChangesAsync(ct);
+                    recovered.Add(entity);
+                }
+                catch (DbUpdateException retry) when (IsDuplicateKey(retry))
+                {
+                    db.Entry(entity).State = EntityState.Detached;
+                }
+            }
+            inserted = recovered;
         }
-        if (activity.ActivityType != "MESSAGE") ScheduleRealtime(activity.ProjectId);
+        foreach (var projectId in inserted.Where(activity => activity.ActivityType != "MESSAGE")
+                     .Select(activity => activity.ProjectId).Distinct())
+            ScheduleRealtime(projectId);
     }
 
-    private static bool IsCapturedAction(string action) => action is
-        "PROJECT_CREATE" or "PROJECT_UPDATE" or "PROJECT_MEMBERS" or "PROJECT_START" or "PROJECT_SUBMIT"
-        or "PROJECT_CONFIRM" or "PROJECT_REJECT" or "PROJECT_WITHDRAW" or "PROJECT_TERMINATE" or "PROJECT_RESTART"
-        or "FILE_UPLOAD" or "FILE_DELETE" or "MESSAGE_CREATE" or "MESSAGE_DELETE";
+    private static bool TryCapturedAudit(AuditRow audit, out ulong targetId)
+    {
+        targetId = 0;
+        if (audit.TargetType is not ("project" or "file" or "message")) return false;
+        var key = (audit.TargetType, audit.Action);
+        if (!AuditActionMappings.ContainsKey(key))
+        {
+            if (KnownIgnoredAuditActions.Contains(key)) return false;
+            throw new InvalidOperationException(
+                $"Audit action '{audit.Action}' for target '{audit.TargetType}' has no ProjectActivity mapping or explicit ignore contract.");
+        }
+        return audit.TargetId is not null
+            && ulong.TryParse(audit.TargetId, NumberStyles.None, CultureInfo.InvariantCulture, out targetId)
+            && targetId.ToString(CultureInfo.InvariantCulture) == audit.TargetId;
+    }
 
     private void ScheduleRealtime(ulong projectId)
     {
@@ -157,7 +230,7 @@ internal sealed class ProjectActivityService(
         var availableFiles = fileIds.Length == 0
             ? new HashSet<ulong>()
             : (await db.Files.Where(file => Enumerable.Contains(fileIds, file.Id)
-                    && file.ProjectId == projectId && file.Status == "AVAILABLE")
+                    && file.ProjectId == projectId && file.Status == FileStatuses.Available)
                 .Select(file => file.Id).ToArrayAsync(ct)).ToHashSet();
         var availableMessages = messageIds.Length == 0
             ? new HashSet<ulong>()
@@ -193,85 +266,42 @@ internal sealed class ProjectActivityService(
                 lastActivityAt is null ? null : ProjectJson.Utc(lastActivityAt.Value)));
     }
 
-    private static async Task<NewActivity?> ProjectActivityAsync(
-        YfDbContext db,
-        AuditRow audit,
-        ulong projectId,
-        CancellationToken ct)
+    private static NewActivity? NewActivityFor(
+        CapturedAudit captured,
+        IReadOnlyDictionary<ulong, ProjectActivityTarget> projects,
+        IReadOnlyDictionary<ulong, FileActivityTarget> files,
+        IReadOnlyDictionary<ulong, MessageActivityTarget> messages)
     {
-        var project = await db.Projects.Where(row => row.Id == projectId)
-            .Select(row => new { row.Name, row.CreatedAt })
-            .SingleOrDefaultAsync(ct);
-        if (project is null) return null;
-        var (action, title, summary) = audit.Action switch
+        var audit = captured.Audit;
+        var mapping = AuditActionMappings[(audit.TargetType!, audit.Action)];
+        if (mapping.ActivityType == "PROJECT")
         {
-            "PROJECT_CREATE" => ("CREATE", "创建项目", Truncate(project.Name)),
-            "PROJECT_UPDATE" => ("UPDATE", "编辑项目", Truncate(project.Name)),
-            "PROJECT_MEMBERS" => ("MEMBERS_CHANGE", "调整项目成员", null),
-            "PROJECT_START" => ("START", "开始项目", WorkflowReason(audit.Detail)),
-            "PROJECT_RESTART" => ("RESTART", "重新开始项目", WorkflowReason(audit.Detail)),
-            "PROJECT_SUBMIT" => ("SUBMIT", "提交项目验收", WorkflowReason(audit.Detail)),
-            "PROJECT_CONFIRM" => ("CONFIRM", "确认项目完成", WorkflowReason(audit.Detail)),
-            "PROJECT_REJECT" => ("REJECT", "驳回项目验收", WorkflowReason(audit.Detail)),
-            "PROJECT_WITHDRAW" => ("WITHDRAW", "撤回项目验收", WorkflowReason(audit.Detail)),
-            "PROJECT_TERMINATE" => ("TERMINATE", "终止项目", WorkflowReason(audit.Detail)),
-            _ => (string.Empty, string.Empty, null),
-        };
-        if (action.Length == 0) return null;
-        var statusLogId = JsonUlong(audit.Detail, "statusLogId");
-        return new(projectId, "PROJECT", action, title, summary,
-            action == "CREATE" ? project.CreatedAt : audit.CreatedAt, projectId,
-            action == "CREATE" ? $"project:{projectId}:create"
+            if (!projects.TryGetValue(captured.TargetId, out var project)) return null;
+            var summary = mapping.Action is "CREATE" or "UPDATE"
+                ? Truncate(project.Name)
+                : mapping.Action == "MEMBERS_CHANGE" ? null : WorkflowReason(audit.Detail);
+            var statusLogId = JsonUlong(audit.Detail, "statusLogId");
+            return new(captured.TargetId, mapping.ActivityType, mapping.Action, mapping.Title, summary,
+                mapping.Action == "CREATE" ? project.CreatedAt : audit.CreatedAt, captured.TargetId,
+                mapping.Action == "CREATE" ? $"project:{captured.TargetId}:create"
                 : statusLogId is not null ? $"project-status-log:{statusLogId}" : $"audit:{audit.Id}");
-    }
-
-    private static async Task<NewActivity?> FileActivityAsync(
-        YfDbContext db,
-        AuditRow audit,
-        ulong fileId,
-        CancellationToken ct)
-    {
-        var file = await db.Files.Where(row => row.Id == fileId)
-            .Select(row => new { row.ProjectId, row.OriginalName, row.CreatedAt, row.DeletedAt })
-            .SingleOrDefaultAsync(ct);
-        if (file is null) return null;
-        var upload = audit.Action == "FILE_UPLOAD";
-        return new(file.ProjectId, "FILE", upload ? "UPLOAD" : "DELETE",
-            upload ? "上传文件" : "删除文件", Truncate(file.OriginalName),
-            upload ? file.CreatedAt : file.DeletedAt ?? audit.CreatedAt, fileId,
-            $"file:{fileId}:{(upload ? "upload" : "delete")}");
-    }
-
-    private static async Task<NewActivity?> MessageActivityAsync(
-        YfDbContext db,
-        AuditRow audit,
-        ulong messageId,
-        CancellationToken ct)
-    {
-        var message = await db.Messages.Where(row => row.Id == messageId)
-            .Select(row => new
-            {
-                row.ProjectId,
-                row.Content,
-                row.CreatedAt,
-                row.DeletedAt,
-                HasImages = db.MessageImages.Any(image => image.MessageId == row.Id),
-            })
-            .SingleOrDefaultAsync(ct);
-        if (message is null) return null;
-        var (action, title, summary) = audit.Action switch
+        }
+        if (mapping.ActivityType == "FILE")
         {
-            "MESSAGE_CREATE" => ("CREATE", "发表留言",
-                message.Content.Length == 0 && message.HasImages ? "[图片]" : message.Content),
-            "MESSAGE_DELETE" => ("DELETE", "删除留言", (string?)null),
-            _ => (string.Empty, string.Empty, (string?)null),
-        };
-        if (action.Length == 0) return null;
-        var sourceKey = $"message:{messageId}:{action.ToLowerInvariant()}";
-        return new(message.ProjectId, "MESSAGE", action, title,
-            action == "CREATE" ? Truncate(summary!) : summary,
-            action == "CREATE" ? message.CreatedAt : message.DeletedAt ?? audit.CreatedAt,
-            messageId, sourceKey);
+            if (!files.TryGetValue(captured.TargetId, out var file)) return null;
+            var upload = mapping.Action == "UPLOAD";
+            return new(file.ProjectId, mapping.ActivityType, mapping.Action, mapping.Title,
+                Truncate(file.OriginalName), upload ? file.CreatedAt : file.DeletedAt ?? audit.CreatedAt,
+                captured.TargetId, $"file:{captured.TargetId}:{mapping.Action.ToLowerInvariant()}");
+        }
+        if (!messages.TryGetValue(captured.TargetId, out var message)) return null;
+        var create = mapping.Action == "CREATE";
+        var messageSummary = create
+            ? Truncate(message.Content.Length == 0 && message.HasImages ? "[图片]" : message.Content)
+            : null;
+        return new(message.ProjectId, mapping.ActivityType, mapping.Action, mapping.Title, messageSummary,
+            create ? message.CreatedAt : message.DeletedAt ?? audit.CreatedAt,
+            captured.TargetId, $"message:{captured.TargetId}:{mapping.Action.ToLowerInvariant()}");
     }
 
     private static async Task<string> ResolveActorNameAsync(
@@ -361,4 +391,12 @@ internal sealed class ProjectActivityService(
         DateTime OccurredAt,
         ulong? TargetId,
         string SourceKey);
+
+    internal sealed record AuditActivityMapping(string ActivityType, string Action, string Title);
+    private sealed record CapturedAudit(AuditRow Audit, ulong TargetId);
+    private sealed record ProjectActivityTarget(ulong Id, string Name, DateTime CreatedAt);
+    private sealed record FileActivityTarget(
+        ulong Id, ulong ProjectId, string OriginalName, DateTime CreatedAt, DateTime? DeletedAt);
+    private sealed record MessageActivityTarget(
+        ulong Id, ulong ProjectId, string Content, DateTime CreatedAt, DateTime? DeletedAt, bool HasImages);
 }

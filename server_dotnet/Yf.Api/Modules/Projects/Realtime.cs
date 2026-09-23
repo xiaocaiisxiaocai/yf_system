@@ -23,7 +23,9 @@ internal sealed record RealtimeConnection(
     string ConnectionId,
     ulong UserId,
     string SessionId,
-    long AccessExpiresAt);
+    long AccessExpiresAt,
+    string UserType = UserTypes.Internal,
+    ulong? SupplierId = null);
 
 internal sealed class RealtimeConnectionRegistry : IDisposable
 {
@@ -111,6 +113,12 @@ internal enum ProjectRealtimeAuthorization
     Disconnect,
 }
 
+internal sealed record ProjectRealtimeAudience(
+    ulong ProjectId,
+    ulong SupplierId,
+    ulong? ResponsibleUserId,
+    IReadOnlySet<ulong> ViewAllUserIds);
+
 internal sealed class ProjectRealtimeAuthorizer(AppDb database)
 {
     internal async Task<bool> ValidateIdentityAsync(RealtimeConnection connection, CancellationToken ct)
@@ -121,8 +129,8 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
         if (!await HasActiveSessionAsync(db, tx, connection, ct)) return false;
         try
         {
-            await AccessService.LockActorAsync(db, tx,
-                new CurrentUser(connection.UserId, string.Empty, "INTERNAL", null), ct);
+            await AccessService.ReadActorAsync(db, tx,
+                new CurrentUser(connection.UserId, string.Empty, connection.UserType, connection.SupplierId), ct);
         }
         catch (ApiException)
         {
@@ -150,6 +158,48 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
         ulong projectId,
         CancellationToken ct)
     {
+        var audience = await ResolveAudienceAsync(projectId, ct);
+        if (audience is null) return InitialDecisions(candidates);
+        return await AuthorizeProjectAsync(candidates, audience, ct);
+    }
+
+    internal async Task<ProjectRealtimeAudience?> ResolveAudienceAsync(ulong projectId, CancellationToken ct)
+    {
+        await using var db = await database.OpenAsync(ct);
+        await using var context = EfDb.Use(db);
+        var rows = await context.Database.SqlQuery<ProjectRealtimeAudienceRow>($"""
+            SELECT p.supplier_id AS SupplierId,p.responsible_user_id AS ResponsibleUserId,
+                   viewers.user_id AS ViewAllUserId
+            FROM projects p
+            LEFT JOIN (
+                SELECT DISTINCT ur.user_id
+                FROM user_roles ur
+                INNER JOIN roles r ON r.id=ur.role_id AND r.status='ACTIVE'
+                INNER JOIN role_permissions rp ON rp.role_id=r.id
+                INNER JOIN permissions permission ON permission.id=rp.permission_id
+                WHERE permission.code='project:view_all'
+            ) viewers ON 1=1
+            WHERE p.id={projectId}
+            """).ToArrayAsync(ct);
+        if (rows.Length == 0) return null;
+        return new(projectId, rows[0].SupplierId, rows[0].ResponsibleUserId,
+            rows.Where(row => row.ViewAllUserId is not null)
+                .Select(row => row.ViewAllUserId!.Value).ToHashSet());
+    }
+
+    internal static RealtimeConnection[] SelectCandidates(
+        IEnumerable<RealtimeConnection> connections, ProjectRealtimeAudience audience) =>
+        connections.Where(connection => connection.UserType == UserTypes.Supplier
+                ? connection.SupplierId == audience.SupplierId
+                : connection.UserId == audience.ResponsibleUserId
+                  || audience.ViewAllUserIds.Contains(connection.UserId))
+            .ToArray();
+
+    internal async Task<IReadOnlyDictionary<(ulong UserId, string SessionId), ProjectRealtimeAuthorization>> AuthorizeProjectAsync(
+        IReadOnlyCollection<RealtimeConnection> candidates,
+        ProjectRealtimeAudience audience,
+        CancellationToken ct)
+    {
         var decisions = new Dictionary<(ulong UserId, string SessionId), ProjectRealtimeAuthorization>();
         var nowSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var pending = new List<(ulong UserId, string SessionId)>();
@@ -168,68 +218,64 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
         if (pending.Count == 0) return decisions;
 
         var userIds = pending.Select(key => key.UserId).Distinct().ToArray();
-        string[] viewCodes = ["project:list", "project:view_all"];
+        var sessionIds = pending.Select(key => key.SessionId).Distinct().ToArray();
         await using var db = await database.OpenAsync(ct);
-        await using var tx = await AppDb.BeginTransactionAsync(db, ct);
-        await AccessService.LockBusinessAsync(db, tx, ct);
-        await using var context = EfDb.Use(db, tx);
-        var now = await DbClock.UtcNowAsync(context, ct);
-        var activeSessions = (await context.RefreshTokens
-                .Where(token => Enumerable.Contains(userIds, token.UserId) && !token.Revoked && token.ExpiresAt > now)
-                .Select(token => new { token.UserId, token.SessionId })
-                .Distinct()
-                .ToListAsync(ct))
-            .Select(token => (token.UserId, token.SessionId))
-            .ToHashSet();
-        var users = await context.Users
-            .Where(user => Enumerable.Contains(userIds, user.Id))
-            .Select(user => new { user.Id, user.UserType, user.SupplierId, user.Status, user.MustChangePassword })
-            .ToDictionaryAsync(user => user.Id, ct);
-        var supplierIds = users.Values.Where(user => user.SupplierId is not null)
-            .Select(user => user.SupplierId!.Value).Distinct().ToArray();
-        var activeSuppliers = supplierIds.Length == 0
-            ? []
-            : (await context.Suppliers
-                .Where(supplier => Enumerable.Contains(supplierIds, supplier.Id) && supplier.Status == "ACTIVE")
-                .Select(supplier => supplier.Id)
-                .ToListAsync(ct)).ToHashSet();
-        var grants = (await (
-                from userRole in context.UserRoles
-                join role in context.Roles on userRole.RoleId equals role.Id
-                join rolePermission in context.RolePermissions on role.Id equals rolePermission.RoleId
-                join permission in context.Permissions on rolePermission.PermissionId equals permission.Id
-                where Enumerable.Contains(userIds, userRole.UserId) && role.Status == "ACTIVE"
-                      && Enumerable.Contains(viewCodes, permission.Code)
-                select new { userRole.UserId, permission.Code })
-            .Distinct()
-            .ToListAsync(ct))
-            .Select(grant => (grant.UserId, grant.Code))
-            .ToHashSet();
-        var project = await context.Projects.Where(item => item.Id == projectId)
-            .Select(item => new { item.SupplierId, item.ResponsibleUserId })
-            .SingleOrDefaultAsync(ct);
-        await tx.CommitAsync(ct);
+        await using var context = EfDb.Use(db);
+        var facts = await (
+            from token in context.RefreshTokens
+            join user in context.Users on token.UserId equals user.Id
+            where Enumerable.Contains(userIds, token.UserId)
+                  && Enumerable.Contains(sessionIds, token.SessionId)
+            select new RealtimeAuthorizationFact
+            {
+                UserId = token.UserId,
+                SessionId = token.SessionId,
+                SessionActive = !token.Revoked && token.ExpiresAt > DateTime.UtcNow
+                    && token.SessionExpiresAt > DateTime.UtcNow,
+                UserType = user.UserType,
+                SupplierId = user.SupplierId,
+                UserActive = user.Status == AccountStatuses.Active && !user.MustChangePassword,
+                SupplierActive = user.UserType != UserTypes.Supplier
+                    || user.SupplierId != null && context.Suppliers.Any(supplier =>
+                        supplier.Id == user.SupplierId && supplier.Status == AccountStatuses.Active),
+                HasProjectList = AccessService.UsersWithPermission(context, "project:list").Contains(user.Id),
+                HasViewAll = AccessService.UsersWithPermission(context, "project:view_all").Contains(user.Id),
+                ProjectSupplierId = context.Projects.Where(project => project.Id == audience.ProjectId)
+                    .Select(project => (ulong?)project.SupplierId).SingleOrDefault(),
+                ProjectResponsibleUserId = context.Projects.Where(project => project.Id == audience.ProjectId)
+                    .Select(project => project.ResponsibleUserId).SingleOrDefault(),
+            }).ToArrayAsync(ct);
+        var factsBySession = facts.GroupBy(fact => (fact.UserId, fact.SessionId))
+            .ToDictionary(group => group.Key, group => group.ToArray());
 
         foreach (var key in pending)
         {
-            if (!activeSessions.Contains(key)
-                || !users.TryGetValue(key.UserId, out var user)
-                || user.Status != "ACTIVE"
-                || user.MustChangePassword
-                || (user.UserType == "SUPPLIER"
-                    && (user.SupplierId is not ulong ownSupplier || !activeSuppliers.Contains(ownSupplier))))
+            if (!factsBySession.TryGetValue(key, out var sessionFacts)
+                || !sessionFacts.Any(fact => fact.SessionActive)
+                || !sessionFacts[0].UserActive
+                || !sessionFacts[0].SupplierActive)
             {
                 decisions[key] = ProjectRealtimeAuthorization.Disconnect;
                 continue;
             }
-            if (project is null || !grants.Contains((key.UserId, "project:list"))) continue;
-            var visible = user.UserType == "INTERNAL"
-                ? grants.Contains((key.UserId, "project:view_all")) || project.ResponsibleUserId == key.UserId
-                : user.SupplierId is ulong supplierId && supplierId == project.SupplierId
-                  && activeSuppliers.Contains(supplierId);
+            var fact = sessionFacts[0];
+            if (!fact.HasProjectList || fact.ProjectSupplierId is null) continue;
+            var visible = fact.UserType == UserTypes.Internal
+                ? fact.HasViewAll || fact.ProjectResponsibleUserId == key.UserId
+                : fact.SupplierId is ulong supplierId && supplierId == fact.ProjectSupplierId;
             if (visible) decisions[key] = ProjectRealtimeAuthorization.Deliver;
         }
         return decisions;
+    }
+
+    private static IReadOnlyDictionary<(ulong UserId, string SessionId), ProjectRealtimeAuthorization> InitialDecisions(
+        IReadOnlyCollection<RealtimeConnection> candidates)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        return candidates.GroupBy(connection => (connection.UserId, connection.SessionId))
+            .ToDictionary(group => group.Key, group => group.First().AccessExpiresAt <= now
+                ? ProjectRealtimeAuthorization.Disconnect
+                : ProjectRealtimeAuthorization.Skip);
     }
 
     private static async Task<bool> HasActiveSessionAsync(
@@ -244,7 +290,30 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
             token.UserId == connection.UserId
             && token.SessionId == connection.SessionId
             && !token.Revoked
-            && token.ExpiresAt > now, ct);
+            && token.ExpiresAt > now
+            && token.SessionExpiresAt > now, ct);
+    }
+
+    private sealed class ProjectRealtimeAudienceRow
+    {
+        public ulong SupplierId { get; init; }
+        public ulong? ResponsibleUserId { get; init; }
+        public ulong? ViewAllUserId { get; init; }
+    }
+
+    private sealed class RealtimeAuthorizationFact
+    {
+        public ulong UserId { get; init; }
+        public string SessionId { get; init; } = string.Empty;
+        public bool SessionActive { get; init; }
+        public string UserType { get; init; } = string.Empty;
+        public ulong? SupplierId { get; init; }
+        public bool UserActive { get; init; }
+        public bool SupplierActive { get; init; }
+        public bool HasProjectList { get; init; }
+        public bool HasViewAll { get; init; }
+        public ulong? ProjectSupplierId { get; init; }
+        public ulong? ProjectResponsibleUserId { get; init; }
     }
 }
 
@@ -360,7 +429,11 @@ internal sealed class ProjectRealtimePublisher(
                 authorizationDeadline.CancelAfter(TimeSpan.FromSeconds(5));
                 try
                 {
-                    decisions = await authorizer.AuthorizeProjectAsync(active, change.ProjectId, authorizationDeadline.Token);
+                    var audience = await authorizer.ResolveAudienceAsync(change.ProjectId, authorizationDeadline.Token);
+                    active = audience is null ? [] : ProjectRealtimeAuthorizer.SelectCandidates(active, audience);
+                    decisions = active.Length == 0 || audience is null
+                        ? new Dictionary<(ulong UserId, string SessionId), ProjectRealtimeAuthorization>()
+                        : await authorizer.AuthorizeProjectAsync(active, audience, authorizationDeadline.Token);
                 }
                 catch (Exception error) when (error is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
                 {
@@ -433,7 +506,8 @@ internal sealed class ProjectRealtimeHub(
             throw new HubException("连接未获授权");
         }
 
-        var connection = new RealtimeConnection(Context.ConnectionId, claims.UserId, claims.SessionId, claims.ExpiresAt);
+        var connection = new RealtimeConnection(Context.ConnectionId, claims.UserId, claims.SessionId,
+            claims.ExpiresAt, current.UserType, current.SupplierId);
         if (!await authorizer.ValidateIdentityAsync(connection, Context.ConnectionAborted))
         {
             Context.Abort();

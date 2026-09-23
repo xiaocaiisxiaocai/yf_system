@@ -89,9 +89,9 @@ def _section(admin, suffix):
     return section["id"]
 
 
-def _project(admin, conn, supplier_id, responsible_user_id):
+def _project(creator, admin, conn, supplier_id):
     return _create_started_project(
-        admin, conn, supplier_id, responsible_user_id, "协作通知项目-" + secrets.token_hex(5))
+        creator, admin, conn, supplier_id, "协作通知项目-" + secrets.token_hex(5))
 
 
 def _activity_id(conn, activity_type, target_id):
@@ -118,7 +118,8 @@ def _read_count(conn, activity_id, user_id):
 def run_collaboration_checks(admin, Client, conn, check):
     section_id = _section(admin, secrets.token_hex(5))
     role_id = _role(admin, [
-        "project:list", "dashboard", "message:create", "file:upload", "project:submit",
+        "project:list", "project:create", "dashboard",
+        "message:create", "file:upload", "project:submit",
     ])
     first_user, first = _internal(admin, Client, conn, role_id, "协作甲", section_id)
     second_user, second = _internal(admin, Client, conn, role_id, "协作乙", section_id)
@@ -128,7 +129,7 @@ def run_collaboration_checks(admin, Client, conn, check):
         admin, Client, conn, first_supplier["id"], "协作供应商甲同事")
     second_supplier, _, second_supplier_client = _supplier(
         admin, Client, conn, "协作供应商乙")
-    project_id = _project(admin, conn, first_supplier["id"], first_user["id"])
+    project_id = _project(first, admin, conn, first_supplier["id"])
 
     before_own = first.call("GET", "/api/v1/collaboration/summary")
     messages = []
@@ -156,7 +157,7 @@ def run_collaboration_checks(admin, Client, conn, check):
           and page["total"] == page["unreadCount"] >= 5
           and all(message["id"] in message_activity_ids for message in messages))
 
-    hidden_project = _project(admin, conn, second_supplier["id"], second_user["id"])
+    hidden_project = _project(second, admin, conn, second_supplier["id"])
     hidden_message = admin.call(
         "POST", f"/api/v1/projects/{hidden_project}/messages",
         {"content": "另一供应商不可见正文"},

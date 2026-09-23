@@ -4,7 +4,7 @@
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const {
-  assert, OUT, s, f, record, login, api, action, track,
+  assert, OUT, s, f, record, login, api, projectMetadata, action, track,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
 const apiPath = value => new URL(value.url()).pathname;
@@ -22,24 +22,11 @@ async function uploadBytes(context, token, projectId, name, bytes) {
   return (await api(context, 'POST', '/uploads/' + initialized.sessionId + '/merge', undefined, token)).json();
 }
 
-async function loadProjectDefaults(context, token, ownerId) {
-  const vendors = await (await api(
-    context, 'GET', '/project-dictionaries?type=ROBOT_VENDOR&enabledOnly=true', undefined, token)).json();
-  assert(vendors.length > 0, 'project controls need a Robot vendor');
-  const models = await (await api(
-    context, 'GET', '/project-dictionaries?type=ROBOT_MODEL&parentId=' + vendors[0].id
-      + '&enabledOnly=true', undefined, token)).json();
-  const priorities = await (await api(
-    context, 'GET', '/project-dictionaries?type=PRIORITY&enabledOnly=true', undefined, token)).json();
-  assert(models.length > 0 && priorities.length > 0, 'project controls need model and priority options');
+async function loadProjectDefaults(context, token, supplierId) {
   return {
     workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
     machineModel: '项目控件机型',
-    robotVendorId: vendors[0].id,
-    robotModelId: models[0].id,
-    responsibleUserId: ownerId,
-    priorityId: priorities[0].id,
-    expectedCompletionDate: '2099-12-31',
+    ...await projectMetadata(context, token, supplierId),
   };
 }
 
@@ -54,6 +41,31 @@ async function createProjectGroup(context, token, supplierId, groupName, default
   const detail = await (await api(context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
   assert.equal(detail.projects.length, 1, 'project controls group must contain one subproject');
   return { ...detail.projects[0], groupId: group.id, groupName };
+}
+
+async function waitForCopyJob(context, token, groupId, jobId, timeout = 120000) {
+  const deadline = Date.now() + timeout;
+  let latest;
+  for (;;) {
+    const list = await (await api(
+      context, 'GET', '/project-groups/' + groupId + '/copy-jobs', undefined, token,
+    )).json();
+    assert(Array.isArray(list.jobs), 'copy job list must contain jobs');
+    latest = list.jobs.find(item => item.jobId === jobId);
+    assert(latest, 'copy job ' + jobId + ' must remain visible in its project group');
+    if (latest.status === 'succeeded') break;
+    assert.notEqual(latest.status, 'failed', latest.error || 'copy job failed');
+    assert(['pending', 'running'].includes(latest.status), 'unexpected copy job status ' + latest.status);
+    assert(Date.now() < deadline, 'copy job ' + jobId + ' timed out');
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  const detail = await (await api(
+    context, 'GET', '/project-copy-jobs/' + jobId, undefined, token,
+  )).json();
+  assert.equal(detail.jobId, jobId);
+  assert.equal(detail.status, 'succeeded');
+  assert.deepEqual(detail.result, latest.result);
+  return detail;
 }
 
 const dashboardProjectLabel = project =>
@@ -92,11 +104,7 @@ async function choose(page, placeholder, optionName) {
     const tinyFile = Buffer.from('browser-dashboard-fixture|' + marker);
     const pendingProjects = [];
     const messageText = '工作台未读键盘跳转-' + marker;
-    const ownerOptions = await (await api(
-      adminContext, 'GET', '/project-owner-options', undefined, adminToken)).json();
-    const owner = ownerOptions.find(item => item.sectionName?.trim());
-    assert(owner, 'project controls need an active project owner with a section');
-    const defaults = await loadProjectDefaults(adminContext, adminToken, owner.id);
+    const defaults = await loadProjectDefaults(adminContext, adminToken, f.suppliers.a.id);
     const childControlSource = await createProjectGroup(
       adminContext, adminToken, f.suppliers.a.id, prefix + '-子项目控件', defaults);
     const copiedFileName = prefix + '-复制源文件.zip';
@@ -312,12 +320,12 @@ async function choose(page, placeholder, optionName) {
       page.expectedServerErrors.clear();
     });
 
-    await record('主项目详情显示负责人并在子项目待验收时冻结公共资料', async () => {
+    await record('主项目详情显示服务端创建者并在子项目待验收时冻结公共资料', async () => {
       const pendingProject = pendingProjects[1];
       const group = await (await api(
         adminContext, 'GET', '/project-groups/' + pendingProject.groupId,
         undefined, adminToken)).json();
-      assert.equal(group.group.responsibleUserId, defaults.responsibleUserId);
+      assert.equal(group.group.responsibleUserId, admin.user.id);
       assert(group.projects.some(item => item.id === pendingProject.id && item.status === 'PENDING_CONFIRMATION'));
       await api(adminContext, 'PUT', '/project-groups/' + pendingProject.groupId, {
         name: group.group.name,
@@ -325,9 +333,7 @@ async function choose(page, placeholder, optionName) {
         supplierId: group.group.supplierId,
         workOrderNos: group.group.workOrderNos,
         machineModel: group.group.machineModel,
-        robotVendorId: group.group.robotVendorId,
-        robotModelId: group.group.robotModelId,
-        responsibleUserId: group.group.responsibleUserId,
+        robotPartId: group.group.robotPartId,
         priorityId: group.group.priorityId,
         expectedCompletionDate: group.group.expectedCompletionDate,
       }, adminToken, 409);
@@ -363,20 +369,30 @@ async function choose(page, placeholder, optionName) {
 
       await row(childControlSource.name).getByRole('button', { name: '复制', exact: true }).click();
       dialog = page.getByRole('dialog', { name: '复制子项目' });
-      await dialog.getByText(
-        '生成独立复制件，复制公共资料和当前项目文件；不复制留言、验收状态、已读回执和通知。',
-        { exact: true },
-      ).waitFor();
       await dialog.getByPlaceholder('新子项目名称', { exact: true }).fill(copyName);
-      const copied = await action(page, '/projects/' + childControlSource.id + '/copy', 'POST',
-        () => dialog.getByRole('button', { name: '复制子项目', exact: true }).click());
-      assert.equal(copied.copy.fileCount, 1);
-      assert.equal(copied.project.status, 'DRAFT');
-      assert.equal(copied.project.hasCopyHistory, true);
+      const acceptedJob = await action(page, '/projects/' + childControlSource.id + '/copy', 'POST',
+        () => dialog.getByRole('button', { name: '创建复制任务', exact: true }).click(), 202);
+      assert(Number.isSafeInteger(acceptedJob.jobId) && acceptedJob.jobId > 0);
+      assert.equal(acceptedJob.sourceProjectId, childControlSource.id);
+      assert.equal(acceptedJob.projectGroupId, childControlSource.groupId);
+      assert.equal(acceptedJob.targetName, copyName);
+      assert(['pending', 'running', 'succeeded'].includes(acceptedJob.status));
+      assert.equal(acceptedJob.filesTotal, 1);
+      assert.equal(acceptedJob.result, null);
+      const jobCard = page.locator('[data-copy-job-id="' + acceptedJob.jobId + '"]');
+      await jobCard.waitFor();
+      await jobCard.getByText(copyName, { exact: true }).waitFor();
+      const copied = await waitForCopyJob(
+        adminContext, adminToken, childControlSource.groupId, acceptedJob.jobId,
+      );
+      assert.equal(copied.result.copyFileCount, 1);
+      assert(Number.isSafeInteger(copied.result.projectId) && copied.result.projectId > 0);
+      await jobCard.getByText('已完成', { exact: true }).waitFor();
+      await jobCard.getByText('已复制 1 个文件', { exact: true }).waitFor();
       await row(copyName).waitFor();
 
       await row(copyName).getByRole('button', { name: copyName, exact: true }).click();
-      await page.waitForURL(s.base + '/projects/' + copied.project.id);
+      await page.waitForURL(s.base + '/projects/' + copied.result.projectId);
       await page.getByRole('row').filter({ hasText: copiedFileName }).waitFor();
       await page.getByRole('button', { name: '查看复制履历', exact: true }).click();
       const history = page.locator('.project-copy-history-drawer');
@@ -390,7 +406,7 @@ async function choose(page, placeholder, optionName) {
       await page.getByText('暂无留言', { exact: true }).waitFor();
       assert.equal(await page.getByText(sourceOnlyMessage, { exact: true }).count(), 0);
       const copiedMessages = await (await api(
-        adminContext, 'GET', '/projects/' + copied.project.id + '/messages?page=1&pageSize=20',
+        adminContext, 'GET', '/projects/' + copied.result.projectId + '/messages?page=1&pageSize=20',
         undefined, adminToken)).json();
       assert.equal(copiedMessages.total, 0);
 

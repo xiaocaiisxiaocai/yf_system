@@ -6,11 +6,14 @@ import { IconDown, IconPlus } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
 import { isAxiosError } from 'axios'
 import http, { type QuietRequestConfig } from '../../api/client'
+import { createProjectCopyJob, unwrapCopyJob } from '../../api/copyJobs'
 import { actionSlots } from '../../components/ActionSlots'
+import ProjectCopyJobsPanel from '../../components/project-copy-jobs/ProjectCopyJobsPanel'
+import { useProjectCopyJobs } from '../../hooks/useProjectCopyJobs'
 import { useAuth } from '../../store/auth'
 import { useCollaboration } from '../../store/collaboration'
 import {
-  type ProjectSummary, type ProjectCopyResult, type ProjectGroupDetail as ProjectGroupDetailData, PROJECT_STATUS, fmtTime,
+  type ProjectSummary, type ProjectGroupDetail as ProjectGroupDetailData, PROJECT_STATUS, fmtTime,
 } from '../../api/types'
 import { textLengthRule } from '../../utils/textRules'
 import './ProjectDetail.css'
@@ -47,7 +50,12 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const saveInFlight = useRef(false)
   const [copySource, setCopySource] = useState<ProjectSummary | null>(null)
   const [copying, setCopying] = useState(false)
+  const [copyOutcomeUnknown, setCopyOutcomeUnknown] = useState(false)
   const copyInFlight = useRef(false)
+  const copyIdempotencyKey = useRef<string | null>(null)
+  const pendingUnknownCopies = useRef(new Map<number, { idempotencyKey: string; name: string }>())
+  const knownSucceededCopyJobs = useRef<Set<number>>(new Set())
+  const copyJobsInitialized = useRef(false)
   const statusInFlight = useRef(new Set<number>())
   const [statusUpdating, setStatusUpdating] = useState<Set<number>>(() => new Set())
   const [form] = Form.useForm()
@@ -55,6 +63,8 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const { user, hasPerm } = useAuth()
   const isInternal = user?.userType === 'INTERNAL'
   const canWrite = isInternal && data && ['DRAFT', 'IN_PROGRESS'].includes(data.group.status)
+  const canReadCopyJobs = Boolean(validId && data && isInternal && hasPerm('project:create'))
+  const copyJobs = useProjectCopyJobs(groupId, canReadCopyJobs, reloadKey)
 
   const load = useCallback(() => {
     setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
@@ -79,6 +89,34 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false; controller.abort() }
   }, [groupId, reloadKey, revision, syncStatus, validId])
+
+  useEffect(() => {
+    if (!canReadCopyJobs || copyJobs.unavailable) {
+      knownSucceededCopyJobs.current.clear()
+      copyJobsInitialized.current = false
+      copyIdempotencyKey.current = null
+      pendingUnknownCopies.current.clear()
+      setCopyOutcomeUnknown(false)
+      setCopySource(null)
+      return
+    }
+    if (!copyJobs.ready || copyJobs.loading) return
+    if (!copyJobsInitialized.current) {
+      copyJobs.jobs.forEach((job) => {
+        if (job.status === 'succeeded') knownSucceededCopyJobs.current.add(job.jobId)
+      })
+      copyJobsInitialized.current = true
+      return
+    }
+    let newSuccess = false
+    copyJobs.jobs.forEach((job) => {
+      if (job.status === 'succeeded' && !knownSucceededCopyJobs.current.has(job.jobId)) {
+        knownSucceededCopyJobs.current.add(job.jobId)
+        newSuccess = true
+      }
+    })
+    if (newSuccess) load()
+  }, [canReadCopyJobs, copyJobs.jobs, copyJobs.loading, copyJobs.ready, copyJobs.unavailable, load])
 
   if (!validId) return <div className="project-group-load-state"><Empty description="主项目地址无效" /><Button type="primary" onClick={() => navigate('/projects')}>返回项目列表</Button></div>
   if (loading && !data) return <div className="project-group-load-state"><Spin size={36} /></div>
@@ -107,21 +145,54 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     } finally { saveInFlight.current = false; setSaving(false) }
   }
   const openCopy = (project: ProjectSummary) => {
+    if (!copyJobs.ready || copyJobs.loading) return
+    const pending = pendingUnknownCopies.current.get(project.id)
+    setCopyOutcomeUnknown(Boolean(pending))
+    copyIdempotencyKey.current = pending?.idempotencyKey || null
     setCopySource(project); copyForm.setFieldsValue({ name: suggestedCopyName(project.name) })
+    if (pending) copyForm.setFieldsValue({ name: pending.name })
   }
   const submitCopy = async () => {
     if (!copySource || copyInFlight.current) return
+    if (!copyOutcomeUnknown && (!copyJobs.ready || copyJobs.loading)) return
     copyInFlight.current = true; setCopying(true)
+    let preserveIdempotencyKey = false
     try {
       const values = await copyForm.validate().catch(() => null) as ChildFormValues | null
       if (!values) return
-      const response = await http.post<ApiResponses['POST /projects/{id}/copy']>(`/projects/${copySource.id}/copy`, { name: values.name?.trim() })
-      const result = response.data as ProjectCopyResult
-      Message.success(`子项目已复制，包含 ${result.copy.fileCount} 个文件`)
-      setCopySource(null); copyForm.resetFields(); load()
-    } catch {
-      /* 请求错误由统一拦截器提示，保留名称和源项目供重试。 */
-    } finally { copyInFlight.current = false; setCopying(false) }
+      const name = values.name?.trim() || ''
+      const idempotencyKey = copyIdempotencyKey.current || (() => {
+        const generated = typeof globalThis.crypto?.randomUUID === 'function'
+          ? globalThis.crypto.randomUUID()
+          : `copy-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+        copyIdempotencyKey.current = generated.slice(0, 64)
+        return copyIdempotencyKey.current
+      })()
+      const response = await createProjectCopyJob(copySource.id, { name, idempotencyKey })
+      const job = unwrapCopyJob(response.data)
+      copyJobs.upsert(job)
+      Message.success('复制任务已创建，可在复制任务中查看进度')
+      pendingUnknownCopies.current.delete(copySource.id)
+      setCopyOutcomeUnknown(false)
+      setCopySource(null); copyForm.resetFields(); copyIdempotencyKey.current = null
+    } catch (error) {
+      const status = isAxiosError(error) ? error.response?.status : undefined
+      const knownBusinessRejection = typeof status === 'number' && status >= 400 && status < 500
+      if (!knownBusinessRejection) {
+        preserveIdempotencyKey = true
+        pendingUnknownCopies.current.set(copySource.id, { idempotencyKey: copyIdempotencyKey.current || '', name: copyForm.getFieldValue('name') || '' })
+        setCopyOutcomeUnknown(true)
+        Message.warning('复制请求结果尚未确认，重试不会重复创建副本。')
+        void copyJobs.refresh()
+      } else {
+        pendingUnknownCopies.current.delete(copySource.id)
+        setCopyOutcomeUnknown(false)
+      }
+      /* 明确的业务错误由统一拦截器提示；网络中断不代表服务器复制失败。 */
+    } finally {
+      if (!preserveIdempotencyKey) copyIdempotencyKey.current = null
+      copyInFlight.current = false; setCopying(false)
+    }
   }
   const changeStatus = async (project: ProjectSummary, next: string) => {
     if (statusInFlight.current.has(project.id)) return
@@ -149,7 +220,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       const nextStatuses = statusActions(project)
       return actionSlots([
         <Button key="enter" size="mini" type="text" onClick={() => navigate(`/projects/${project.id}`)}>进入协作</Button>,
-        canWrite && hasPerm('project:create') && <Button key="copy" size="mini" type="text" onClick={() => openCopy(project)}>复制</Button>,
+        canWrite && hasPerm('project:create') && <Button key="copy" size="mini" type="text" disabled={!copyJobs.ready || copyJobs.loading} loading={copyJobs.loading} onClick={() => openCopy(project)}>复制</Button>,
         canWrite && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(project.status) && <Button key="edit" size="mini" type="text" onClick={() => openEdit(project)}>编辑</Button>,
         isInternal && hasPerm('project:status') && nextStatuses[0] && <Button key={nextStatuses[0].key} size="mini" type="text" status={nextStatuses[0].key === 'TERMINATED' ? 'danger' : undefined} loading={statusUpdating.has(project.id)} disabled={statusUpdating.has(project.id)} onClick={() => changeStatus(project, nextStatuses[0].key)}>{nextStatuses[0].text}</Button>,
         isInternal && hasPerm('project:delete') && ['DRAFT', 'TERMINATED'].includes(project.status) && <Popconfirm key="delete" title={`确认删除子项目“${project.name}”？仅草稿或已终止且无文件、留言、上传和复制履历时可删除。`} onOk={() => remove(project)}><Button size="mini" type="text" status="danger">删除</Button></Popconfirm>,
@@ -162,6 +233,15 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     : '-'
   const supplier = display(group.supplierName)
   const expectedCompletionDate = display(group.expectedCompletionDate)
+  const copyModalVisible = Boolean(copySource) && canReadCopyJobs && !copyJobs.unavailable
+  const closeCopyModal = () => {
+    if (copying) return
+    setCopySource(null)
+    if (!copyOutcomeUnknown) {
+      copyForm.resetFields()
+      copyIdempotencyKey.current = null
+    }
+  }
 
   return (
     <div className="project-group-detail-page">
@@ -172,9 +252,9 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
             <Typography.Text type="secondary">主项目</Typography.Text>
             <h1>{group.name}</h1>
             <div className="project-group-summary-facts">
-              <span><b>供应商</b>{supplier}</span>
+              <span><b>Robot 厂商</b>{supplier}</span>
               <span><b>负责人</b>{responsible}</span>
-              <span><b>预计完成</b>{expectedCompletionDate}</span>
+              <span><b>需求完成时间</b>{expectedCompletionDate}</span>
             </div>
           </div>
           <Space className="project-group-summary-actions">
@@ -194,15 +274,14 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
         {summaryExpanded && <div id="project-group-extra-info" className="project-group-extra-info">
           <Descriptions className="project-metadata" column={{ xs: 1, sm: 2, md: 3, lg: 4 }} data={[
             { label: '工令号', value: display(group.workOrderNos?.join('、')) }, { label: '机型', value: display(group.machineModel) },
-            { label: 'Robot 厂商', value: display(group.robotVendorName) }, { label: 'Robot 型号', value: display(group.robotModelName) },
+            { label: 'Robot 厂商', value: supplier }, { label: 'Robot 料号', value: display(group.robotPartNumber) }, { label: 'Robot 型号', value: display(group.robotModelName) },
             { label: '负责人', value: responsible }, { label: '课别', value: display(group.sectionName) },
-            { label: '优先级', value: display(group.priorityName) }, { label: '预计完成日期', value: expectedCompletionDate },
-            { label: '供应商', value: supplier },
+            { label: '优先级', value: display(group.priorityName) }, { label: '需求完成时间', value: expectedCompletionDate },
             ...(group.completedAt ? [{ label: '自动验收时间', value: fmtTime(group.completedAt) }] : []),
           ]} />
           <div className="project-summary-description">
             <span className="project-summary-description-label">访问范围</span>
-            <Typography.Text>该供应商的全部启用账号均可访问此主项目及其子项目。</Typography.Text>
+            <Typography.Text>该 Robot 厂商的全部启用账号均可访问此主项目及其子项目。</Typography.Text>
           </div>
           {group.description && <div className="project-summary-description"><span className="project-summary-description-label">主项目说明</span><Typography.Text>{group.description}</Typography.Text></div>}
         </div>}
@@ -217,17 +296,43 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
         <Table className="page-table" rowKey="id" columns={columns} data={data.projects} pagination={false} scroll={{ x: 900, y: 'var(--page-table-scroll-y)' }} noDataElement={<Empty description="暂无子项目" />} />
       </Card>
 
+      {canReadCopyJobs && !copyJobs.unavailable && (
+        <ProjectCopyJobsPanel
+          jobs={copyJobs.jobs}
+          loading={copyJobs.loading}
+          error={copyJobs.error}
+          onRetry={copyJobs.refresh}
+          onOpenResult={(projectId) => navigate(`/projects/${projectId}`)}
+        />
+      )}
+
       <Modal className="form-dialog" title={editing ? '编辑子项目' : '新增子项目'} visible={childModalOpen} onOk={submitChild} onCancel={closeChildModal} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} okText={editing ? '保存子项目' : '创建子项目'} unmountOnExit>
         <Form form={form} layout="vertical">
           <Form.Item label="子项目名称" field="name" rules={[{ required: true, message: '请输入子项目名称' }, textLengthRule('子项目名称', 128)]}><Input autoFocus placeholder="子项目名称" /></Form.Item>
           <Form.Item label="子项目说明" field="description"><Input.TextArea rows={3} maxLength={500} showWordLimit placeholder="选填" /></Form.Item>
-          {!editing && <div className="dialog-note">供应商、工令号、机型、Robot 信息、负责人、课别、优先级和预计完成日期将从主项目继承。</div>}
+          {!editing && <div className="dialog-note">Robot 厂商、工令号、机型、Robot 料号与型号、负责人、课别、优先级和需求完成时间将从主项目继承。</div>}
         </Form>
       </Modal>
 
-      <Modal className="form-dialog" title="复制子项目" visible={!!copySource} onOk={submitCopy} onCancel={() => { if (!copying) setCopySource(null) }} confirmLoading={copying} closable={!copying} maskClosable={!copying} escToExit={!copying} okText="复制子项目" unmountOnExit>
-        <Form form={copyForm} layout="vertical"><Form.Item label="新子项目名称" field="name" rules={[{ required: true, message: '请输入新子项目名称' }, textLengthRule('子项目名称', 128)]}><Input autoFocus placeholder="新子项目名称" /></Form.Item></Form>
-        <div className="dialog-note">生成独立复制件，复制公共资料和当前项目文件；不复制留言、验收状态、已读回执和通知。</div>
+      <Modal
+        className="form-dialog"
+        title="复制子项目"
+        visible={copyModalVisible}
+        onOk={submitCopy}
+        onCancel={closeCopyModal}
+        confirmLoading={copying}
+        closable={!copying}
+        maskClosable={!copying}
+        escToExit={!copying}
+        cancelText={copyOutcomeUnknown ? '暂时关闭' : '取消'}
+        okText={copying ? '提交任务中…' : copyOutcomeUnknown ? '确认并重试' : '创建复制任务'}
+        okButtonProps={{ disabled: !copyOutcomeUnknown && (!copyJobs.ready || copyJobs.loading) }}
+        unmountOnExit
+      >
+        <Form form={copyForm} layout="vertical"><Form.Item label="新子项目名称" field="name" rules={[{ required: true, message: '请输入新子项目名称' }, textLengthRule('子项目名称', 128)]}><Input autoFocus disabled={copyOutcomeUnknown} placeholder="新子项目名称" /></Form.Item></Form>
+        <div className="dialog-note">提交后台复制任务后可关闭弹窗；复制公共资料和当前项目文件，不复制留言、验收状态、已读回执和通知。</div>
+        {copying && <div className="dialog-note" role="status">正在创建复制任务，请稍候。</div>}
+        {copyOutcomeUnknown && <div className="dialog-note" role="alert">提交结果尚未确认，重试不会重复创建副本。任务会在后台继续执行；可暂时关闭，稍后从同一来源恢复。</div>}
       </Modal>
     </div>
   )

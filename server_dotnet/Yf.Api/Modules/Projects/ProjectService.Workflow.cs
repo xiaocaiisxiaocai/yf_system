@@ -59,7 +59,7 @@ internal sealed partial class ProjectService
         }
         await using var db = EfDb.Use(conn, tx);
         if (!await db.Files.AnyAsync(
-                file => file.ProjectId == projectId && file.Status == "AVAILABLE", ct))
+                file => file.ProjectId == projectId && file.Status == FileStatuses.Available, ct))
         {
             throw ApiException.Conflict("项目至少上传一个可用文件后才能提交验收");
         }

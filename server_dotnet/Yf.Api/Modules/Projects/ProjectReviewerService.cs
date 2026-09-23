@@ -14,17 +14,17 @@ internal static class ProjectReviewerService
     {
         await using var db = EfDb.Use(conn, tx);
         var rows = await db.Users
-            .Where(user => user.Status == "ACTIVE" && user.UserType == "INTERNAL")
+            .Where(user => user.Status == AccountStatuses.Active && user.UserType == UserTypes.Internal)
             .Where(user => db.UserRoles.Any(userRole =>
                 userRole.UserId == user.Id
-                && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == "ACTIVE")
+                && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == AccountStatuses.Active)
                 && db.RolePermissions.Any(rolePermission =>
                     rolePermission.RoleId == userRole.RoleId
                     && db.Permissions.Any(permission =>
                         permission.Id == rolePermission.PermissionId && permission.Code == "project:list"))))
             .Where(user => db.UserRoles.Any(userRole =>
                 userRole.UserId == user.Id
-                && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == "ACTIVE")
+                && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == AccountStatuses.Active)
                 && db.RolePermissions.Any(rolePermission =>
                     rolePermission.RoleId == userRole.RoleId
                     && db.Permissions.Any(permission =>
@@ -32,7 +32,7 @@ internal static class ProjectReviewerService
             .Where(user => user.Id == project.ResponsibleUserId
                 || db.UserRoles.Any(userRole =>
                     userRole.UserId == user.Id
-                    && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == "ACTIVE")
+                    && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == AccountStatuses.Active)
                     && db.RolePermissions.Any(rolePermission =>
                         rolePermission.RoleId == userRole.RoleId
                         && db.Permissions.Any(permission =>

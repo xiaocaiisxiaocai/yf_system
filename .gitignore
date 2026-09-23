@@ -11,6 +11,7 @@
 .playwright-cli/
 
 # Frontend dependencies and builds
+/node_modules/
 web/node_modules/
 web/dist/
 web/dist-ssr/

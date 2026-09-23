@@ -9,9 +9,9 @@ function Assert-YfEnvironmentNames([string[]]$Names, [switch]$AllowConfigPath) {
         }
     }
 }
-function Assert-YfApplicationPoolProcessModel([string]$IdentityType,[bool]$LoadUserProfile) {
-    if ($IdentityType -ne 'ApplicationPoolIdentity' -or $LoadUserProfile) {
-        throw 'Deployment requires ApplicationPoolIdentity without a loaded user profile.'
+function Assert-YfApplicationPoolProcessModel([string]$IdentityType,[bool]$LoadUserProfile,[int]$MaxProcesses) {
+    if ($IdentityType -ne 'ApplicationPoolIdentity' -or $LoadUserProfile -or $MaxProcesses -ne 1) {
+        throw 'Deployment requires ApplicationPoolIdentity without a loaded user profile and exactly one worker process (maxProcesses=1).'
     }
 }
 function Assert-YfLaunch([string]$ProcessPath,[string]$Arguments,[string]$HostingModel) {
@@ -101,7 +101,7 @@ function Assert-YfEffectiveConfiguration([string]$Name,[string]$Pool,[string]$Ex
             throw 'Maintenance requires one root IIS application and an HTTPS binding matching the configured site origin.'
         }
         $applicationPool=$manager.ApplicationPools[$Pool]
-        Assert-YfApplicationPoolProcessModel ($applicationPool.ProcessModel.IdentityType.ToString()) ([bool]$applicationPool.ProcessModel.LoadUserProfile)
+        Assert-YfApplicationPoolProcessModel ($applicationPool.ProcessModel.IdentityType.ToString()) ([bool]$applicationPool.ProcessModel.LoadUserProfile) ([int]$applicationPool.ProcessModel.MaxProcesses)
         $asp=$manager.GetWebConfiguration($Name).GetSection('system.webServer/aspNetCore')
         Assert-YfLaunch ([string]$asp['processPath']) ([string]$asp['arguments']) ([string]$asp['hostingModel'])
         $variables=@($asp.GetCollection('environmentVariables'))

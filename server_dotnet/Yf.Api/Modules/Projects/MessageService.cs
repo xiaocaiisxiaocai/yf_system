@@ -84,7 +84,7 @@ internal sealed class MessageService(
         CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "message:create", ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);

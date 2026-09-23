@@ -60,6 +60,26 @@ public sealed class RealtimeSecurityTests
         Assert.Empty(registry.Snapshot());
     }
 
+    [Fact]
+    public void DispatchCandidatesAreLimitedToProjectAudienceBeforeExactAuthorization()
+    {
+        var expires = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeSeconds();
+        var connections = new[]
+        {
+            new RealtimeConnection("owner", 10, "s1", expires),
+            new RealtimeConnection("view-all", 11, "s2", expires),
+            new RealtimeConnection("unrelated-internal", 12, "s3", expires),
+            new RealtimeConnection("supplier", 20, "s4", expires, "SUPPLIER", 100),
+            new RealtimeConnection("other-supplier", 21, "s5", expires, "SUPPLIER", 200),
+        };
+        var audience = new ProjectRealtimeAudience(999, 100, 10, new HashSet<ulong> { 11 });
+
+        var candidates = ProjectRealtimeAuthorizer.SelectCandidates(connections, audience);
+
+        Assert.Equal(["owner", "view-all", "supplier"],
+            candidates.Select(connection => connection.ConnectionId).ToArray());
+    }
+
     [Fact(Timeout = 60_000)]
     public async Task DeliveryRechecksPermissionAndSessionAndPushFailureDoesNotUndoCommittedMessage()
     {
@@ -81,8 +101,9 @@ public sealed class RealtimeSecurityTests
             VALUES(5001,'实时主项目',100,'IN_PROGRESS',1,101);
             INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
             VALUES(1001,5001,'实时项目',100,'IN_PROGRESS',1,101);
-            INSERT INTO refresh_tokens(user_id,session_id,token_hash,expires_at,revoked,ip)
-            VALUES(101,'realtime-session',REPEAT('a',64),DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR),0,NULL);
+            INSERT INTO refresh_tokens(user_id,session_id,token_hash,expires_at,session_created_at,session_expires_at,revoked,ip)
+            VALUES(101,'realtime-session',REPEAT('a',64),DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR),
+                   UTC_TIMESTAMP(),DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 DAY),0,NULL);
             INSERT INTO messages(id,project_id,sender_id,content,status)
             VALUES(10001,1001,101,'待删除留言','NORMAL');
             """, ct);
@@ -134,6 +155,15 @@ public sealed class RealtimeSecurityTests
         Assert.Equal(ProjectRealtimeAuthorization.Disconnect,
             await authorizer.AuthorizeProjectAsync(connection, 1001, ct));
 
+        await database.SeedAsync("""
+            UPDATE refresh_tokens
+            SET expires_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR),
+                session_expires_at=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 SECOND),revoked=0
+            WHERE session_id='realtime-session';
+            """, ct);
+        Assert.Equal(ProjectRealtimeAuthorization.Disconnect,
+            await authorizer.AuthorizeProjectAsync(connection, 1001, ct));
+
         var failingPublisher = new ThrowingPublisher();
         var messages = new MessageService(new AuditService([]), database.Options, failingPublisher);
         await using (var db = await database.Database.OpenAsync(ct))
@@ -147,7 +177,9 @@ public sealed class RealtimeSecurityTests
         Assert.Equal(RealtimeChangeKinds.Messages, call.Kind);
 
         await database.SeedAsync("""
-            UPDATE refresh_tokens SET expires_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR),revoked=0
+            UPDATE refresh_tokens
+            SET expires_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR),
+                session_expires_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 DAY),revoked=0
             WHERE session_id='realtime-session';
             INSERT INTO messages(id,project_id,sender_id,content,status)
             VALUES(10002,1001,101,'连接池派发留言','NORMAL');

@@ -13,8 +13,11 @@ public sealed class AppOptions
     public bool CookieSecure { get; set; } = true;
     public bool TrustLoopbackProxy { get; set; }
     public bool WorkerEnabled { get; set; } = true;
+    /// <summary>Runs durable user-requested project copy jobs independently of maintenance workers.</summary>
+    public bool CopyWorkerEnabled { get; set; } = true;
     public int AccessTtlMinutes { get; set; } = 30;
     public int RefreshTtlDays { get; set; } = 7;
+    public int AbsoluteSessionLifetimeDays { get; set; } = 30;
     public long UploadMaxFileSize { get; set; } = 2L * 1024 * 1024 * 1024; // matches the seeded upload.max_file_size
     public int UploadChunkSize { get; set; } = 10 * 1024 * 1024;
     /// <summary>Audit log rows older than this many days are deleted by the retention worker.</summary>
@@ -42,7 +45,9 @@ public sealed class AppOptions
             || web.Query.Length != 0
             || web.Fragment.Length != 0)
             throw new InvalidOperationException("App:WebBaseUrl must be an HTTP(S) origin.");
-        if (AccessTtlMinutes is < 1 or > 1440 || RefreshTtlDays is < 1 or > 365) throw new InvalidOperationException("Invalid token lifetime.");
+        if (AccessTtlMinutes is < 1 or > 1440 || RefreshTtlDays is < 1 or > 365
+            || AbsoluteSessionLifetimeDays is < 1 or > 365)
+            throw new InvalidOperationException("Invalid token lifetime.");
         if (AuditRetentionDays is < 1 or > 3650) throw new InvalidOperationException("App:AuditRetentionDays must be between 1 and 3650.");
         if (MailRetentionDays is < 1 or > 3650) throw new InvalidOperationException("App:MailRetentionDays must be between 1 and 3650.");
         Smtp.Validate();

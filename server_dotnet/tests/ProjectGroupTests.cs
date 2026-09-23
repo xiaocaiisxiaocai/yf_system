@@ -27,10 +27,10 @@ public sealed class ProjectGroupTests
             VALUES(8301,'group-owner','unused','主项目负责人','owner@example.test','INTERNAL',NULL,8201,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
                   (8302,'group-supplier','unused','供应商提交人','supplier@example.test','SUPPLIER',8101,NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO user_roles(user_id,role_id) VALUES(8301,1),(8302,4);
-            INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status) VALUES
-              (8401,'ROBOT_VENDOR','主项目厂商',NULL,1,'ACTIVE'),
-              (8402,'ROBOT_MODEL','主项目型号',8401,1,'ACTIVE'),
-              (8403,'PRIORITY','主项目优先级',NULL,1,'ACTIVE');
+            INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
+            VALUES(8402,8101,'GROUP-PART','主项目型号',1,'ACTIVE');
+            INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
+            VALUES(8403,'PRIORITY','主项目优先级',NULL,1,'ACTIVE');
             """, ct);
 
         var actor = new CurrentUser(8301, "group-owner", "INTERNAL", null);
@@ -46,9 +46,7 @@ public sealed class ProjectGroupTests
             SupplierId = 8101,
             WorkOrderNos = ["WO-GROUP-1", "WO-GROUP-2"],
             MachineModel = "机型-G",
-            RobotVendorId = 8401,
-            RobotModelId = 8402,
-            ResponsibleUserId = 8301,
+            RobotPartId = 8402,
             PriorityId = 8403,
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["子项目-A", "子项目-B"],
@@ -179,10 +177,10 @@ public sealed class ProjectGroupTests
             VALUES(8503,'freeze-owner','unused','冻结测试负责人','freeze@example.test','INTERNAL',8502,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
                   (8507,'new-owner','unused','新负责人','new-owner@example.test','INTERNAL',8508,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO user_roles(user_id,role_id) VALUES(8503,1),(8507,1);
-            INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status) VALUES
-              (8504,'ROBOT_VENDOR','冻结厂商',NULL,1,'ACTIVE'),
-              (8505,'ROBOT_MODEL','冻结型号',8504,1,'ACTIVE'),
-              (8506,'PRIORITY','冻结优先级',NULL,1,'ACTIVE');
+            INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
+            VALUES(8505,8501,'FREEZE-PART','冻结型号',1,'ACTIVE');
+            INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
+            VALUES(8506,'PRIORITY','冻结优先级',NULL,1,'ACTIVE');
             """, ct);
 
         var actor = new CurrentUser(8503, "freeze-owner", "INTERNAL", null);
@@ -196,9 +194,7 @@ public sealed class ProjectGroupTests
             SupplierId = 8501,
             WorkOrderNos = ["WO-OLD"],
             MachineModel = "旧机型",
-            RobotVendorId = 8504,
-            RobotModelId = 8505,
-            ResponsibleUserId = 8503,
+            RobotPartId = 8505,
             PriorityId = 8506,
             ExpectedCompletionDate = "2026-12-01",
             SubprojectNames = ["已完成子项目", "活动子项目"],
@@ -224,9 +220,7 @@ public sealed class ProjectGroupTests
             SupplierId = 8501,
             WorkOrderNos = ["WO-NEW"],
             MachineModel = "新机型",
-            RobotVendorId = 8504,
-            RobotModelId = 8505,
-            ResponsibleUserId = 8507,
+            RobotPartId = 8505,
             PriorityId = 8506,
             ExpectedCompletionDate = "2027-01-01",
         }, null, ct);
@@ -242,14 +236,14 @@ public sealed class ProjectGroupTests
         Assert.Equal("旧机型", rows[0].MachineModel);
         Assert.Equal(new DateTime(2026, 12, 1), rows[0].ExpectedCompletionDate);
         Assert.Equal("WO-FROZEN", rows[0].WorkOrders);
-        Assert.Equal(8507UL, rows[0].ResponsibleUserId);
-        Assert.Equal(8508UL, rows[0].SectionId);
-        Assert.True(rows[0].UpdatedAt > new DateTime(2020, 1, 1));
+        Assert.Equal(8503UL, rows[0].ResponsibleUserId);
+        Assert.Equal(8502UL, rows[0].SectionId);
+        Assert.Equal(new DateTime(2020, 1, 1), rows[0].UpdatedAt);
         Assert.Equal("新机型", rows[1].MachineModel);
         Assert.Equal(new DateTime(2027, 1, 1), rows[1].ExpectedCompletionDate);
         Assert.Equal("WO-NEW", rows[1].WorkOrders);
-        Assert.Equal(8507UL, rows[1].ResponsibleUserId);
-        Assert.Equal(8508UL, rows[1].SectionId);
+        Assert.Equal(8503UL, rows[1].ResponsibleUserId);
+        Assert.Equal(8502UL, rows[1].SectionId);
     }
 
     private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web)));

@@ -4,36 +4,17 @@ import { useAuth } from './auth'
 import { startProjectRealtime } from '../services/projectRealtime'
 import type { ApiResponses } from '../api/types'
 
-export type CollaborationType = 'FILE' | 'MESSAGE' | 'PROJECT'
+type CollaborationSummaryResponse = ApiResponses['GET /collaboration/summary']
+type CollaborationNotificationPageResponse = ApiResponses['GET /collaboration/notifications']
+type CollaborationNotificationResponse = CollaborationNotificationPageResponse['list'][number]
 
-export interface CollaborationSummary {
-  unreadCount: number
-  latestId: number
-  revision: string
-}
-
-export interface CollaborationNotification {
-  id: number
+export type CollaborationType = CollaborationNotificationResponse['type'] & ('FILE' | 'MESSAGE' | 'PROJECT')
+export type CollaborationSummary = CollaborationSummaryResponse
+export type CollaborationNotification = Omit<CollaborationNotificationResponse, 'type'> & {
   type: CollaborationType
-  action: string
-  projectId: number
-  projectName: string
-  projectGroupName?: string
-  actorName: string
-  title: string
-  summary: string | null
-  occurredAt: string
-  targetId: number | null
-  targetAvailable: boolean
-  read: boolean
 }
-
-export interface CollaborationNotificationPage {
+export type CollaborationNotificationPage = Omit<CollaborationNotificationPageResponse, 'list'> & {
   list: CollaborationNotification[]
-  total: number
-  page: number
-  pageSize: number
-  unreadCount: number
 }
 
 export type CollaborationRefreshStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -86,7 +67,7 @@ function parseCollaborationNotification(value: unknown): CollaborationNotificati
     || typeof value.action !== 'string'
     || !isPositiveInteger(value.projectId)
     || typeof value.projectName !== 'string'
-    || (value.projectGroupName !== undefined && typeof value.projectGroupName !== 'string')
+    || typeof value.projectGroupName !== 'string'
     || typeof value.actorName !== 'string'
     || typeof value.title !== 'string'
     || (value.summary !== null && typeof value.summary !== 'string')
@@ -100,7 +81,7 @@ function parseCollaborationNotification(value: unknown): CollaborationNotificati
     action: value.action,
     projectId: value.projectId,
     projectName: value.projectName,
-    projectGroupName: value.projectGroupName as string | undefined,
+    projectGroupName: value.projectGroupName,
     actorName: value.actorName,
     title: value.title,
     summary: value.summary,

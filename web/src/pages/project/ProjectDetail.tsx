@@ -414,7 +414,8 @@ function ProjectDetailContent({ id }: { id?: string }) {
           data={[
             { label: '工令号', value: detailText(project.workOrderNos?.join('、')) },
             { label: '机型', value: detailText(project.machineModel) },
-            { label: 'Robot 厂商', value: detailText(project.robotVendorName) },
+            { label: 'Robot 厂商', value: detailText(project.supplierName) },
+            { label: 'Robot 料号', value: detailText(project.robotPartNumber) },
             { label: 'Robot 型号', value: detailText(project.robotModelName) },
             {
               label: '负责人',
@@ -424,8 +425,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
             },
             { label: '课别', value: detailText(project.sectionName) },
             { label: '优先级', value: detailText(project.priorityName) },
-            { label: '预计完成日期', value: detailText(project.expectedCompletionDate) },
-            { label: '供应商', value: project.supplierName || '-' },
+            { label: '需求完成时间', value: detailText(project.expectedCompletionDate) },
             { label: '创建人', value: project.createdByName || '-' },
             { label: '更新时间', value: fmtTime(project.updatedAt) },
           ]}

@@ -1,28 +1,15 @@
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
-const { assert, OUT, s, f, record, login, api, action, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
+const { assert, OUT, s, f, record, login, api, projectMetadata, action, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
-async function createProjectGroup(context, token, supplierId, ownerId, name) {
-  const vendors = await (await api(
-    context, 'GET', '/project-dictionaries?type=ROBOT_VENDOR&enabledOnly=true', undefined, token)).json();
-  assert(vendors.length > 0, 'message edges need a Robot vendor');
-  const models = await (await api(
-    context, 'GET', '/project-dictionaries?type=ROBOT_MODEL&parentId=' + vendors[0].id
-      + '&enabledOnly=true', undefined, token)).json();
-  const priorities = await (await api(
-    context, 'GET', '/project-dictionaries?type=PRIORITY&enabledOnly=true', undefined, token)).json();
-  assert(models.length > 0 && priorities.length > 0, 'message edges need model and priority options');
+async function createProjectGroup(context, token, supplierId, name) {
   const group = await (await api(context, 'POST', '/project-groups', {
     name,
     description: '独立留言边界浏览器验收夹具',
     supplierId,
     workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
     machineModel: '留言边界机型',
-    robotVendorId: vendors[0].id,
-    robotModelId: models[0].id,
-    responsibleUserId: ownerId,
-    priorityId: priorities[0].id,
-    expectedCompletionDate: '2099-12-31',
+    ...await projectMetadata(context, token, supplierId),
     subprojectNames: [name + ' 子项目'],
   }, token)).json();
   const detail = await (await api(context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
@@ -39,11 +26,8 @@ async function createProjectGroup(context, token, supplierId, ownerId, name) {
     const admin = await login(page, 'admin', s.adminPassword); await page.waitForURL(s.base + '/');
     const request = async (method, path, body, expected = 200) =>
       (await api(context, method, path, body, admin.accessToken, expected)).json();
-    const owners = await request('GET', '/project-owner-options');
-    const owner = owners.find(item => item.sectionName?.trim());
-    assert(owner, 'message edges need an active project owner with a section');
     const project = await createProjectGroup(
-      context, admin.accessToken, f.suppliers.a.id, owner.id,
+      context, admin.accessToken, f.suppliers.a.id,
       '留言边界-' + crypto.randomBytes(5).toString('hex'));
     await request('PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' });
     const endpoint = '/api/v1/projects/' + project.id + '/messages';
@@ -59,7 +43,7 @@ async function createProjectGroup(context, token, supplierId, ownerId, name) {
 
     await record('已读刷新后的未读角标不会被迟到的首屏摘要覆盖', async () => {
       const raceProject = await createProjectGroup(
-        context, admin.accessToken, f.suppliers.a.id, owner.id,
+        context, admin.accessToken, f.suppliers.a.id,
         '未读摘要竞态-' + crypto.randomBytes(4).toString('hex'));
       await request('PUT', '/projects/' + raceProject.id + '/status', { status: 'IN_PROGRESS' });
       const supplierContext = await browser.newContext();

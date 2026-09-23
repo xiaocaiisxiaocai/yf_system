@@ -4,11 +4,15 @@
 
 实时协作使用 SignalR，建议在目标服务器的 IIS 角色服务中启用 **WebSocket Protocol**（Windows Server 功能名 `Web-WebSockets`）。反向代理也需允许 WebSocket Upgrade；Hub 路径为 `/api/v1/collaboration/live`，前后端保持同源。未启用 WebSocket 时 SignalR 可尝试其他传输，连接失败时前端恢复轮询。不要记录 Hub 的 `access_token` 查询参数，IIS 日志应移除 URI Query（`cs-uri-query`）字段或配置等效的脱敏日志；它用于浏览器的 WebSocket/SSE 握手，包含短期访问令牌。
 
+当前版本只支持**一个 API 进程、一个部署副本**。SignalR 连接注册表、实时事件队列/去重和原生下载 grant 都在进程内存中：IIS 应用池必须保持 `processModel.maxProcesses=1`，不得启用 web garden，也不得让同一业务环境同时运行第二个 IIS 站点、Windows 服务、容器或服务器副本。负载均衡粘性会话不能补齐跨实例事件传播，也不能让另一进程读取本进程签发的下载 grant，因此不足以支持多副本。进程回收、升级和重启会使尚未兑换的下载 grant、已兑换的短时下载 session 失效，并断开 SignalR；客户端应重新连接并重新申请下载。扩容前必须同时实现 SignalR backplane、跨实例业务事件传播/去重，以及下载 grant/session 的共享原子存储，完成故障切换与撤销回归后才能增加 worker 或副本。
+
+项目复制由持久化 `ProjectCopyWorker` 执行，`App.CopyWorkerEnabled` 默认值为 `true`，并独立于维护任务的 `App.WorkerEnabled`。worker 用数据库命名锁保证同一数据库只有一个领取者，并在 `project_copy_worker_state` 递增 epoch 以阻止失去租约的旧 worker 提交；任务和进度保存在 `project_copy_jobs`。重启时，遗留的 `running` 任务会恢复为 `pending`，旧 execution token 的暂存目录会清理，再以新 token 和 epoch 执行。若显式关闭 `CopyWorkerEnabled`，复制提交返回 503，不能形成无人处理的排队任务。
+
 ## 准备
 
 1. 将 `deloy` 下生成的整个版本文件夹复制到服务器的独立临时目录，保留其中 `manifest.json`，安装脚本会据此检查全部文件。默认不生成 ZIP；如果打包时显式使用了 `-CreateArchive`，则将 ZIP 与 `.sha256` 一并复制到服务器，核对哈希后解压。
 2. 发布时已将本机私有默认值写入 `appsettings.Production.json`，包括数据库连接、JWT、实际访问地址及存储目录；`appsettings.json` 仅保留日志等基础设置，不再生成 `appsettings.example.json`。IIS 的 `web.config` 已明确指定 Production 环境。将发布包作为含凭据的私有制品保管，不要放入公开下载位置或给应用池写权限。直接把包作为现有 IIS 站点物理目录时，程序会读取包内 `appsettings.Production.json`，不需要另设 `YF_CONFIG_PATH`；先核对目标服务器上的数据库地址、存储目录及站点绑定确实与包内配置一致。若使用下文的正式安装脚本，则先将包内 `appsettings.Production.json` 复制到网站外的 `D:\YfConfig\appsettings.Production.json`，复核实际环境后作为 `-ConfigPath` 传入。已有站点升级须保留原 JWT 和数据库配置。SMTP 在系统「系统参数」页面保存到数据库，尚未设置时不发送邮件。
-3. 发布包默认开启 `App.AutoInitializeDatabase=true`。第一次启动时，如果配置的数据库不存在，会自动创建；如果是空库，会执行 EF Core 迁移建表并创建 `admin`。MySQL 账号需要目标库的创建、建表及数据读写权限；协作文件使用网站外的 `StorageRoot`，应用池身份需要该目录的修改权限。
+3. 发布包默认开启 `App.AutoInitializeDatabase=true` 和项目复制 worker。第一次启动时，如果配置的数据库不存在，会自动创建；如果是空库，会执行 EF Core 迁移建表并创建 `admin`。MySQL 账号需要目标库的创建、建表及数据读写权限；协作文件和复制任务暂存目录使用网站外的 `StorageRoot`，应用池身份需要该目录的修改权限。
 4. 初始登录账号为 `admin`，初始密码查看 `appsettings.Production.json` 中的 `App.BootstrapPassword`。发布脚本首次随机生成并保存在本机私有默认值文件，后续发布复用；密码不会输出到日志，首次登录必须修改。已初始化的数据库在重启或升级时不会重建、重新播种或重置管理员密码；初始化完成后可以从部署配置中移除初始密码。
 
 自动初始化只处理不存在或完全为空的数据库，并以数据库锁协调并发启动。非空数据库只检查 EF 迁移历史和必要种子，绝不自动执行升级迁移。历史不匹配、旧版待迁移或初始化中断留下的部分表都会停止并报错，不会删除现有数据或自动重试 DDL。已有数据库升级仍需先备份，再显式运行 `dotnet .\Yf.Api.dll --migrate-database`。
@@ -17,9 +21,11 @@
 
 本版本的升级迁移会删除 OEM 表、权限和专属配置，其中 OEM 业务数据不可恢复；对已有数据库执行 `--migrate-database` 前必须完成可验证的备份。只复制新程序而不迁移时，启动校验会拒绝旧的迁移状态。
 
+当前升级还包含第 9 个 EF 迁移 `20260923141854_AddProjectCopyJobs`，创建持久化 `project_copy_jobs` 队列、`project_copy_worker_state` epoch 状态，以及幂等、领取、主项目任务列表索引。已有非空数据库不会在普通启动时自动升级；必须在停写、备份后执行 `dotnet .\Yf.Api.dll --migrate-database`，再启动启用复制 worker 的新版本。迁移未完成时不能先开放新前端的复制入口。
+
 ## 绑定现有开发 IIS 站点
 
-若站点已经创建，网站物理目录可直接指向本包根目录；`appsettings.Production.json` 已写入发布时的配置，`web.config` 无需再设置 `YF_CONFIG_PATH`。应用池使用“无托管代码”、64 位，并给其身份对程序目录只读、对独立存储目录修改权限。首次回收应用池会自动初始化新库，之后检查 `/health`。不要把包根目录开放为下载目录，也不要给应用池写入 `appsettings.Production.json` 的权限。本方式只解决当前开发站点直接绑定问题；下述安装和维护脚本仍使用站点外的生产配置。
+若站点已经创建，网站物理目录可直接指向本包根目录；`appsettings.Production.json` 已写入发布时的配置，`web.config` 无需再设置 `YF_CONFIG_PATH`。应用池使用“无托管代码”、64 位，且 `processModel.maxProcesses=1`，并给其身份对程序目录只读、对独立存储目录修改权限。首次回收应用池会自动初始化新库，之后检查 `/health`。不要把包根目录开放为下载目录，也不要给应用池写入 `appsettings.Production.json` 的权限。本方式只解决当前开发站点直接绑定问题；下述安装和维护脚本仍使用站点外的生产配置。
 
 ## 安装新站点
 
@@ -33,7 +39,7 @@
   -SiteRoot 'C:\inetpub\yf_system_dotnet'
 ```
 
-脚本核对包文件 SHA-256、程序包/站点/配置/存储独立路径、证书、Hosting Bundle 和运行时，然后创建新应用池、新 HTTPS 站点。复制包后会清空站点内 `appsettings.json` 和 `appsettings.Production.json` 的凭据回退，正式站点只使用 `YF_CONFIG_PATH` 指向的外部配置；升级和恢复也执行同样处理。它关闭配置文件 ACL 继承，只保留当前管理员、SYSTEM、Administrators 完全控制和应用池身份只读；业务存储只给应用池修改，程序目录只读。前后端同站点、同来源，不需要 ARR、URL Rewrite 或 Rust Windows 服务。
+脚本核对包文件 SHA-256、程序包/站点/配置/存储独立路径、证书、Hosting Bundle 和运行时，然后创建新应用池、新 HTTPS 站点。应用池会被明确设置并回读验证为 `processModel.maxProcesses=1`；无法保持单 worker 时安装停止。复制包后会清空站点内 `appsettings.json` 和 `appsettings.Production.json` 的凭据回退，正式站点只使用 `YF_CONFIG_PATH` 指向的外部配置；升级和恢复也执行同样处理。它关闭配置文件 ACL 继承，只保留当前管理员、SYSTEM、Administrators 完全控制和应用池身份只读；业务存储只给应用池修改，程序目录只读。前后端同站点、同来源，不需要 ARR、URL Rewrite 或 Rust Windows 服务。
 
 脚本拒绝已存在站点/应用池和非空目标目录，不覆盖其他部署。它不自动开放防火墙、不修改 DNS，也不停止现有后端服务。请按实际网络环境配置 DNS、443/TCP 与 HTTPS 证书，并在停写窗口切换入口。
 
@@ -43,7 +49,7 @@
 
 以下命令必须在**目标服务器的管理员 Windows PowerShell 5.1** 中执行，并保持 `maintain-iis.ps1` 与同一发布包中的 `maintenance-common.ps1` 位于同一目录。示例站点名为安装脚本默认值 `YfSystemDotNet`；如果安装时使用了其他名称，三种操作都必须传入该实际名称。
 
-维护只支持由独立应用池承载、没有子应用的现有 IIS 站点。应用池必须使用 `ApplicationPoolIdentity` 且不加载用户 profile。站点必须使用外部 JSON 作为唯一主配置，由 `web.config` 中唯一的 `YF_CONFIG_PATH` 指向该文件，并以 in-process 的 `dotnet .\Yf.Api.dll` 标准形式启动。执行前移除站点、应用池、应用池默认值、机器和当前 PowerShell 中的 `App__*` / `App:*` 高优先级覆盖；维护脚本会拒绝这些覆盖和继承的额外 `YF_CONFIG_PATH`，防止备份、迁移或健康检查连接到另一套资源。正式配置的 `WebBaseUrl` 必须是实际 HTTPS 来源，`CookieSecure` 必须为 `true`。
+维护只支持由独立应用池承载、没有子应用的现有 IIS 站点。应用池必须使用 `ApplicationPoolIdentity`、不加载用户 profile，并保持 `processModel.maxProcesses=1`；维护脚本在停止任何进程前检查这些条件，web garden 配置会被拒绝。站点必须使用外部 JSON 作为唯一主配置，由 `web.config` 中唯一的 `YF_CONFIG_PATH` 指向该文件，并以 in-process 的 `dotnet .\Yf.Api.dll` 标准形式启动。执行前移除站点、应用池、应用池默认值、机器和当前 PowerShell 中的 `App__*` / `App:*` 高优先级覆盖；维护脚本会拒绝这些覆盖和继承的额外 `YF_CONFIG_PATH`，防止备份、迁移或健康检查连接到另一套资源。正式配置的 `WebBaseUrl` 必须是实际 HTTPS 来源，`CookieSecure` 必须为 `true`。
 
 服务器需安装与目标 MySQL 兼容的 5.7 或更高版本 `mysql.exe`、`mysqldump.exe` 客户端；若不在 `PATH`，按下例传绝对路径。脚本只检查客户端可执行文件存在，版本和服务器兼容性需在维护窗口前确认。所有目录必须是互不包含的本地绝对路径，不能经过 junction/symlink 等重解析点；备份目录、新程序目录和恢复存储目录必须不存在或为空。
 
@@ -117,8 +123,9 @@ Restore 使用备份内的程序和 schema，不接受 `-MigrateDatabase`。若�
 
 - 检查 `https://实际主机名/health` 返回 `status=ok, db=up`。
 - 打开根页面，首次改密后检查菜单、权限、项目提交/确认，以及真实 PDF 预览和下载。
+- 从主项目提交一次复制，确认 `POST /api/v1/projects/{id}/copy` 返回 202，主项目复制任务列表显示文件/字节进度；回收应用池后确认未完成任务从持久队列恢复，成功任务可进入目标子项目。同一 `idempotencyKey` 重试必须指向同一任务。
 - 配置 SMTP 后检查管理员邮件状态与实际收件；后台邮件有持久队列、认领租约和重试。发送采用至少一次语义，极端断电可能重复，不能当作严格一次投递。
-- 应用池使用 AlwaysRunning、无空闲退出和站点预加载；仍需监控应用池、数据库、磁盘和邮件失败。
+- 应用池使用 `maxProcesses=1`、AlwaysRunning、无空闲退出和站点预加载；同时核对同一业务环境没有第二个 API 副本。仍需监控应用池、数据库、磁盘和邮件失败。
 - 每次备份、升级或恢复后检查受保护备份的清单和日志；升级/恢复还要完成浏览器业务验收。若执行过数据库迁移，回退必须按该版本的数据库备份计划成套处理。
 
 应用只公开 `wwwroot` 静态资源，配置、DLL 和数据库不作为静态文件暴露。部署脚本在开发阶段只做语法与包检查；当前开发机没有创建或操作真实 IIS 站点，仅可读取 Microsoft.Web.Administration 默认配置。开发机的构建/隔离测试不能证明目标服务器的 IIS 站点、专属应用池、证书、网络或 SMTP 已验收。

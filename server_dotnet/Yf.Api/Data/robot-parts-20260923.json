@@ -1,0 +1,182 @@
+{
+  "source": {
+    "fileName": "SAC常用六軸手臂料號規格-2026-9-23.xlsx",
+    "sha256": "aa2256021de680a4b03c8bff32d9df2684ef56d5b47efadb86c47583429b11ab",
+    "sheet": "六軸",
+    "columns": {
+      "supplierName": "品牌",
+      "partNumber": "料號",
+      "model": "SAP品名規格（最新）"
+    },
+    "normalizations": [
+      {
+        "cell": "B11",
+        "operation": "trim leading/trailing whitespace"
+      }
+    ]
+  },
+  "parts": [
+    {
+      "supplierName": "發那科",
+      "partNumber": "C-T200ID7LA",
+      "model": "發那科六軸機械人200iD/7L-7KG(無CC-LINK)",
+      "sourceRow": 2
+    },
+    {
+      "supplierName": "發那科",
+      "partNumber": "C-TM10ID12A",
+      "model": "發那科六軸機器人M-10iD-12KG(無CC-LINK)",
+      "sourceRow": 3
+    },
+    {
+      "supplierName": "發那科",
+      "partNumber": "C-TM20ID25A",
+      "model": "發那科六軸機器人M-20iD-25KG(無CC-LINK)",
+      "sourceRow": 4
+    },
+    {
+      "supplierName": "發那科",
+      "partNumber": "C-TM20ID35A",
+      "model": "發那科六軸機器人M-20iD-35KG(無CC-LINK)",
+      "sourceRow": 5
+    },
+    {
+      "supplierName": "發那科",
+      "partNumber": "C-TM20ID35AA",
+      "model": "發那科六軸機器人M-20iD-35KG(無CC-LINK)配A柜",
+      "sourceRow": 6
+    },
+    {
+      "supplierName": "海康",
+      "partNumber": "C-THAR15144015AA",
+      "model": "海康六軸機器人 HAR15-1440-15KG(無CC-LINK)統一為緊湊型電櫃",
+      "sourceRow": 8
+    },
+    {
+      "supplierName": "海康",
+      "partNumber": "C-THAR251830A",
+      "model": "海康六軸機器人 HAR25-1830-25KG(無CC-LINK)只有標準大電櫃",
+      "sourceRow": 9
+    },
+    {
+      "supplierName": "海康",
+      "partNumber": "C-THAR351830A",
+      "model": "海康六軸機器人 HAR35-1830-35KG(無CC-LINK)只有標準大電櫃",
+      "sourceRow": 10
+    },
+    {
+      "supplierName": "海康",
+      "partNumber": "C-THAR251830S",
+      "model": "海康HAR251830-S-25KG-3PH220V無CCLINK只有標準大電櫃",
+      "sourceRow": 11
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TXB7LR9066B",
+      "model": "珞石六軸機器人XB7L-7KG-R906-6(無CC-LINK)重載連接器彎頭",
+      "sourceRow": 13
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TNB1215A",
+      "model": "珞石六軸機器人NB12-15KG-1.4米臂展(無CC-LINK)",
+      "sourceRow": 14
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TXB25A",
+      "model": "珞石六軸機器人升級成NB25-30KG-1.6米臂展(無CC-LINK)",
+      "sourceRow": 15
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TNB252518A",
+      "model": "珞石六軸機器人NB25-25KG-1.8米臂展(無CC-LINK)",
+      "sourceRow": 16
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TNB35A",
+      "model": "珞石六軸機器人NB25-35KG-1.8米臂展(無CC-LINK)",
+      "sourceRow": 17
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TNB25H2518",
+      "model": "珞石六軸機器人NB25h-2518(25KG)1.8米臂展無CC-LINK中空軸",
+      "sourceRow": 18
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TNB12H1514",
+      "model": "珞石六軸機器人NB12h-1514(15KG)1.4米臂展無CC-LINK中空軸",
+      "sourceRow": 19
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TNB101009A",
+      "model": "珞石六軸機器人NB10-10KG-0.9米臂展-折彎線-無CC-LINK",
+      "sourceRow": 20
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TNB101009",
+      "model": "珞石六軸機器人NB10-10KG-0.9米臂展-直出線-無CC-LINK",
+      "sourceRow": 21
+    },
+    {
+      "supplierName": "川崎",
+      "partNumber": "C-TRS013N",
+      "model": "川崎六軸機器人 RS013N-13KG-1.4米臂展(CC-LINK)",
+      "sourceRow": 23
+    },
+    {
+      "supplierName": "川崎",
+      "partNumber": "C-TRS020N",
+      "model": "川崎六軸機器人 RS020N-20KG-1.7米臂展(CC-LINK)",
+      "sourceRow": 24
+    },
+    {
+      "supplierName": "川崎",
+      "partNumber": "C-TRS025N",
+      "model": "川崎六軸機器人 RS025N-25KG-1.8米臂展(CC-LINK)",
+      "sourceRow": 25
+    },
+    {
+      "supplierName": "川崎",
+      "partNumber": "C-TRS025NA",
+      "model": "川崎六軸RS025N-25KG-1.8米(CC-LINK無示教器，需下堵頭)僅越南健鼎用",
+      "sourceRow": 26
+    },
+    {
+      "supplierName": "安川",
+      "partNumber": "C-TGP251730",
+      "model": "安川六軸機械手GP25-25KG-1730臂展",
+      "sourceRow": 27
+    },
+    {
+      "supplierName": "埃斯顿",
+      "partNumber": "C-TER151430MI",
+      "model": "埃斯顿六軸機器人 ER15-1430-15KG-MI 潔淨型(無CC-LINK)",
+      "sourceRow": 29
+    },
+    {
+      "supplierName": "埃斯顿",
+      "partNumber": "C-TER20B1760HI",
+      "model": "埃斯顿六軸機器人 ER20B-1760-20KG-HI 立式電櫃(無CC-LINK)",
+      "sourceRow": 30
+    },
+    {
+      "supplierName": "匯川",
+      "partNumber": "C-TIRCR10140S5",
+      "model": "匯川六軸機器人IR-CR10-140S5-10KG",
+      "sourceRow": 32
+    },
+    {
+      "supplierName": "匯川",
+      "partNumber": "C-TIRR35185S7",
+      "model": "匯川六軸機器人IR-R35-185-S7-35KG(無CC-LINK和變壓器)",
+      "sourceRow": 33
+    }
+  ]
+}

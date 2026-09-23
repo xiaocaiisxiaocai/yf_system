@@ -25,6 +25,8 @@ public sealed class OpenApiContractTests
     private static readonly HashSet<string> BinaryEndpoints = new(StringComparer.Ordinal)
     {
         "GET /api/v1/files/{id}/download",
+        "GET /api/v1/files/{id}/native-download/{handle}",
+        "GET /api/v1/files/batch-download/{handle}",
         "GET /api/v1/files/{id}/content",
         "GET /api/v1/files/{id}/media",
         "POST /api/v1/files/batch-download",

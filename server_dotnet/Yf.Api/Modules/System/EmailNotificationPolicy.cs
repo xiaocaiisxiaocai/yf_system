@@ -98,8 +98,8 @@ internal sealed record EmailNotificationPolicy(
 
     internal bool AllowsAudience(string? userType) => userType switch
     {
-        "INTERNAL" => InternalEnabled,
-        "SUPPLIER" => SupplierEnabled,
+        UserTypes.Internal => InternalEnabled,
+        UserTypes.Supplier => SupplierEnabled,
         // Rows without a recipient user (for example maintenance test mail)
         // are governed by the event/global switch only.
         null or "" => true,

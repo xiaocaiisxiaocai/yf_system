@@ -8,26 +8,13 @@ public sealed class PermissionService
 {
     public async Task<IReadOnlyList<string>> GetCodesAsync(MySqlConnection conn, MySqlTransaction? tx, ulong userId, CancellationToken ct)
     {
-        await using var context = EfDb.Use(conn, tx);
-        return await context.UserRoles.Where(userRole => userRole.UserId == userId)
-            .Join(context.Roles.Where(role => role.Status == "ACTIVE"), userRole => userRole.RoleId, role => role.Id, (userRole, _) => userRole)
-            .Join(context.RolePermissions, userRole => userRole.RoleId, rolePermission => rolePermission.RoleId, (_, rolePermission) => rolePermission)
-            .Join(context.Permissions, rolePermission => rolePermission.PermissionId, permission => permission.Id, (_, permission) => permission.Code)
-            .Distinct().OrderBy(code => code).ToArrayAsync(ct);
+        return await AccessService.PermissionCodesAsync(conn, tx, userId, ct);
     }
 
     public async Task<(IReadOnlyList<string> Permissions, IReadOnlyList<string> Menus)> GetCodesAndMenusAsync(
         MySqlConnection conn, MySqlTransaction? tx, ulong userId, CancellationToken ct)
     {
-        var codes = await GetCodesAsync(conn, tx, userId, ct);
-        if (codes.Count == 0) return (codes, Array.Empty<string>());
-        await using var context = EfDb.Use(conn, tx);
-        var codeArray = codes.ToArray();
-        var menus = await context.Permissions
-            .Where(permission => permission.Type == "MENU" && Enumerable.Contains(codeArray, permission.Code))
-            .OrderBy(permission => permission.SortNo).ThenBy(permission => permission.Id)
-            .Select(permission => permission.Code).ToArrayAsync(ct);
-        return (codes, menus);
+        return await AccessService.PermissionCodesAndMenusAsync(conn, tx, userId, ct);
     }
 
     public async Task EnsureGrantableAsync(MySqlConnection conn, MySqlTransaction tx, CurrentUser actor, IReadOnlyCollection<ulong> ids, CancellationToken ct)
@@ -51,7 +38,7 @@ public sealed class PermissionService
         await using var context = EfDb.Use(conn, tx);
         var role = await context.Roles.SingleOrDefaultAsync(role => role.Id == roleId, ct);
         if (role is null) throw ApiException.NotFound();
-        if (role.IsBuiltIn && role.Name == "系统管理员") throw ApiException.Forbidden();
+        if (role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator) throw ApiException.Forbidden();
         var ids = await context.RolePermissions.Where(rolePermission => rolePermission.RoleId == roleId)
             .Select(rolePermission => rolePermission.PermissionId).ToArrayAsync(ct);
         await EnsureGrantableAsync(conn, tx, actor, ids, ct);
@@ -68,7 +55,7 @@ public sealed class PermissionService
         var owned = (await GetCodesAsync(conn, tx, actor.Id, ct)).ToArray();
         var manageable = await context.Roles
             .Where(role => Enumerable.Contains(distinct, role.Id)
-                && !(role.IsBuiltIn && role.Name == "系统管理员")
+                && !(role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator)
                 && !context.RolePermissions.Where(rolePermission => rolePermission.RoleId == role.Id)
                     .Join(context.Permissions, rolePermission => rolePermission.PermissionId, permission => permission.Id, (_, permission) => permission.Code)
                     .Any(code => !Enumerable.Contains(owned, code)))

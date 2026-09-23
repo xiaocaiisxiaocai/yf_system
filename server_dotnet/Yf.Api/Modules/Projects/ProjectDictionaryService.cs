@@ -7,15 +7,13 @@ namespace Yf.Api.Modules.Projects;
 
 internal static class ProjectDictionaryTypes
 {
-    internal const string RobotVendor = "ROBOT_VENDOR";
-    internal const string RobotModel = "ROBOT_MODEL";
     internal const string Priority = "PRIORITY";
 
     internal static string Normalize(string? value)
     {
         var normalized = (value ?? string.Empty).Trim().ToUpperInvariant();
-        if (normalized is not (RobotVendor or RobotModel or Priority))
-            throw ApiException.BadRequest("type 仅支持 ROBOT_VENDOR、ROBOT_MODEL、PRIORITY");
+        if (normalized != Priority)
+            throw ApiException.BadRequest("type 仅支持 PRIORITY");
         return normalized;
     }
 }
@@ -27,11 +25,11 @@ internal sealed class ProjectDictionaryService(AuditService audit)
     {
         var type = ProjectDictionaryTypes.Normalize(rawType);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await RequireReadAsync(conn, tx, current, ct);
         await using var db = EfDb.Use(conn, tx);
         var query = db.ProjectDictionaries.Where(item => item.Type == type);
-        if (enabledOnly) query = query.Where(item => item.Status == "ACTIVE");
+        if (enabledOnly) query = query.Where(item => item.Status == AccountStatuses.Active);
         if (parentId is not null) query = query.Where(item => item.ParentId == parentId);
         var rows = await Rows(db, query).OrderBy(row => row.SortNo).ThenBy(row => row.Id).ToArrayAsync(ct);
         await tx.CommitAsync(ct);
@@ -45,7 +43,6 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await RequireWriteAsync(conn, tx, actor, ct);
         await using var db = EfDb.Use(conn, tx);
-        await ValidateParentAsync(db, input.Type, input.ParentId, null, ct);
         var entity = new ProjectDictionary
         {
             Type = input.Type,
@@ -74,8 +71,6 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         var before = await FindAsync(db, id, ct, true) ?? throw ApiException.NotFound();
         var input = Normalize(request, before.Type);
         if (input.Type != before.Type) throw ApiException.BadRequest("字典 type 创建后不可修改");
-        EnsureReferencedModelParentUnchanged(before.Type, before.ProjectInUse, before.ParentId, input.ParentId);
-        await ValidateParentAsync(db, input.Type, input.ParentId, id, ct);
         try
         {
             await db.ProjectDictionaries.Where(item => item.Id == id).ExecuteUpdateAsync(setters => setters
@@ -91,7 +86,7 @@ internal sealed class ProjectDictionaryService(AuditService audit)
                 new("name", "名称", before.Name, input.Name),
                 new("parentId", "上级厂商", before.ParentId, input.ParentId),
                 new("sortNo", "排序", before.SortNo, input.SortNo),
-                new("enabled", "启用", before.Status == "ACTIVE", input.Status == "ACTIVE")) }, ip, ct);
+                new("enabled", "启用", before.Status == AccountStatuses.Active, input.Status == AccountStatuses.Active)) }, ip, ct);
         var result = Json(await FindAsync(db, id, ct) ?? throw ApiException.NotFound());
         await tx.CommitAsync(ct);
         return result;
@@ -104,7 +99,6 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         await using var db = EfDb.Use(conn, tx);
         var row = await FindAsync(db, id, ct, true) ?? throw ApiException.NotFound();
         if (row.ProjectInUse) throw ApiException.Conflict("字典项已被项目引用，可停用但不能删除");
-        if (row.HasChildren) throw ApiException.Conflict("机器人厂商仍有关联型号，可停用但不能删除");
         var deleted = await db.ProjectDictionaries.Where(item => item.Id == id).ExecuteDeleteAsync(ct);
         if (deleted != 1) throw ApiException.NotFound();
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DICTIONARY_DELETE", "project_dictionary", id,
@@ -122,13 +116,14 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         if (!allowed) throw ApiException.Forbidden();
     }
 
-    private static async Task RequireReadAsync(MySqlConnection conn, MySqlTransaction tx, CurrentUser current, CancellationToken ct)
+    internal static async Task RequireReadAsync(MySqlConnection conn, MySqlTransaction tx, CurrentUser current, CancellationToken ct)
     {
+        AccessService.RequireInternal(current);
         if (await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "config:manage", ct)) return;
         await RequireOptionReadAsync(conn, tx, current, ct);
     }
 
-    private static async Task<CurrentUser> RequireWriteAsync(
+    internal static async Task<CurrentUser> RequireWriteAsync(
         MySqlConnection conn, MySqlTransaction tx, CurrentUser actor, CancellationToken ct)
     {
         await AccessService.LockManagementAsync(conn, tx, ct);
@@ -144,30 +139,10 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         var name = (request.Name ?? string.Empty).Trim();
         if (name.Length is < 1 or > 128) throw ApiException.BadRequest("name 长度必须为 1-128 个字符");
         if (request.SortNo is < 0 or > 100000) throw ApiException.BadRequest("sortNo 必须为 0-100000");
-        if (type == ProjectDictionaryTypes.RobotModel && request.ParentId is null)
-            throw ApiException.BadRequest("ROBOT_MODEL 必须指定机器人厂商 parentId");
-        if (type != ProjectDictionaryTypes.RobotModel && request.ParentId is not null)
-            throw ApiException.BadRequest("仅 ROBOT_MODEL 可以指定 parentId");
-        return new(type, name, request.ParentId, request.SortNo, request.Enabled ? "ACTIVE" : "DISABLED");
-    }
-
-    private static async Task ValidateParentAsync(
-        YfDbContext db, string type, ulong? parentId, ulong? selfId, CancellationToken ct)
-    {
-        if (type != ProjectDictionaryTypes.RobotModel) return;
-        if (parentId == selfId) throw ApiException.BadRequest("字典项不能以自身作为 parentId");
-        var parentType = await db.ProjectDictionaries.Where(item => item.Id == parentId)
-            .Select(item => item.Type).SingleOrDefaultAsync(ct);
-        if (parentType is null) throw ApiException.BadRequest("机器人厂商不存在");
-        if (parentType != ProjectDictionaryTypes.RobotVendor)
-            throw ApiException.BadRequest("ROBOT_MODEL 的 parentId 必须指向 ROBOT_VENDOR");
-    }
-
-    internal static void EnsureReferencedModelParentUnchanged(
-        string type, bool projectInUse, ulong? beforeParentId, ulong? afterParentId)
-    {
-        if (type == ProjectDictionaryTypes.RobotModel && projectInUse && beforeParentId != afterParentId)
-            throw ApiException.Conflict("机器人型号已被项目引用，不能更换所属厂商");
+        if (request.ParentId is not null)
+            throw ApiException.BadRequest("PRIORITY 不支持 parentId");
+        return new(type, name, request.ParentId, request.SortNo,
+            request.Enabled ? AccountStatuses.Active : AccountStatuses.Disabled);
     }
 
     private static IQueryable<DictionaryRow> Rows(YfDbContext db, IQueryable<ProjectDictionary> query) =>
@@ -181,11 +156,8 @@ internal sealed class ProjectDictionaryService(AuditService audit)
                 .Select(parent => parent.Name).FirstOrDefault(),
             SortNo = item.SortNo,
             Status = item.Status,
-            ProjectInUse = db.Projects.Any(project => project.RobotVendorId == item.Id
-                    || project.RobotModelId == item.Id || project.PriorityId == item.Id)
-                || db.ProjectGroups.Any(group => group.RobotVendorId == item.Id
-                    || group.RobotModelId == item.Id || group.PriorityId == item.Id),
-            HasChildren = db.ProjectDictionaries.Any(child => child.ParentId == item.Id),
+            ProjectInUse = db.Projects.Any(project => project.PriorityId == item.Id)
+                || db.ProjectGroups.Any(group => group.PriorityId == item.Id),
         });
 
     private static async Task<DictionaryRow?> FindAsync(
@@ -203,7 +175,7 @@ internal sealed class ProjectDictionaryService(AuditService audit)
 
     private static ProjectDictionaryResponse Json(DictionaryRow row) => new(
         row.Id, row.Type, row.Name, row.ParentId, row.ParentName, row.SortNo,
-        row.Status == "ACTIVE", row.ProjectInUse || row.HasChildren);
+        row.Status == AccountStatuses.Active, row.ProjectInUse);
 
     private sealed record DictionaryInput(string Type, string Name, ulong? ParentId, int SortNo, string Status);
     private sealed class DictionaryRow
@@ -216,6 +188,5 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         public int SortNo { get; init; }
         public string Status { get; init; } = string.Empty;
         public bool ProjectInUse { get; init; }
-        public bool HasChildren { get; init; }
     }
 }

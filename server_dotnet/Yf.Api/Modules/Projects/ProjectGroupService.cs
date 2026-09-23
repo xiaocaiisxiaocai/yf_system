@@ -23,7 +23,7 @@ internal sealed class ProjectGroupService(
     {
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await using var db = EfDb.Use(conn, tx);
         var query = await ProjectGroupAccessService.VisibleQueryAsync(db, current, ct);
         if (!string.IsNullOrWhiteSpace(keyword))
@@ -54,7 +54,7 @@ internal sealed class ProjectGroupService(
         CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await ProjectGroupAccessService.RequireViewAsync(conn, tx, current, groupId, false, ct);
         await using var db = EfDb.Use(conn, tx);
         var group = await LoadGroupAsync(db, groupId, current.Id, ct);
@@ -76,7 +76,7 @@ internal sealed class ProjectGroupService(
         var name = ProjectService.ValidateNameForCreate(request.Name);
         ProjectService.ValidateDescription(request.Description);
         var childNames = NormalizeSubprojectNames(request.SubprojectNames);
-        var metadata = ProjectService.NormalizeMetadata(request);
+        var metadata = ProjectService.NormalizeMetadata(request, true);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockBusinessAsync(conn, tx, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
@@ -85,8 +85,14 @@ internal sealed class ProjectGroupService(
         await using var db = EfDb.Use(conn, tx);
         await EnsureSupplierAsync(db, request.SupplierId, ct);
         await EnsureGroupNameUniqueAsync(db, name, null, ct);
-        foreach (var childName in childNames) await EnsureProjectNameUniqueAsync(db, childName, null, ct);
-        metadata = await ProjectService.ValidateMetadataAsync(conn, tx, metadata, null, ct);
+        if (await db.Projects.AnyAsync(project => Enumerable.Contains(childNames, project.Name), ct))
+            throw ApiException.Conflict("项目名称已存在");
+        metadata = metadata with
+        {
+            ResponsibleUserId = current.Id,
+            SectionId = await ProjectService.ResolveActorSectionAsync(db, current.Id, ct),
+        };
+        metadata = await ProjectService.ValidateMetadataAsync(conn, tx, metadata, null, request.SupplierId, ct);
 
         var group = new ProjectGroup
         {
@@ -96,8 +102,8 @@ internal sealed class ProjectGroupService(
             Status = ProjectStatuses.Draft,
             CreatedBy = current.Id,
             MachineModel = metadata.MachineModel,
-            RobotVendorId = metadata.RobotVendorId,
-            RobotModelId = metadata.RobotModelId,
+            RobotPartId = metadata.RobotPartId,
+            LegacyRobotModelName = null,
             ResponsibleUserId = metadata.ResponsibleUserId,
             SectionId = metadata.SectionId,
             PriorityId = metadata.PriorityId,
@@ -129,29 +135,28 @@ internal sealed class ProjectGroupService(
         });
         await db.SaveChangesAsync(ct);
 
-        for (var index = 0; index < children.Length; index++)
-            await audit.WriteAsync(conn, tx, current.Id, "PROJECT_CREATE", "project", children[index].Id, new
+        var createAudits = children.Select((child, index) => new AuditWrite(
+            "PROJECT_CREATE", "project", child.Id, new
             {
                 name = childNames[index],
                 projectGroupId = group.Id,
                 projectGroupName = name,
                 inheritedFromMainProject = true,
-            }, ip, ct);
-        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_GROUP_CREATE", "project_group", group.Id, new
+            })).Append(new AuditWrite("PROJECT_GROUP_CREATE", "project_group", group.Id, new
         {
             name,
             request.SupplierId,
             metadata.WorkOrderNos,
             metadata.MachineModel,
-            metadata.RobotVendorId,
-            metadata.RobotModelId,
+            metadata.RobotPartId,
             metadata.ResponsibleUserId,
             metadata.SectionId,
             metadata.PriorityId,
             metadata.ExpectedCompletionDate,
             subprojectIds = children.Select(child => child.Id).ToArray(),
             subprojectNames = childNames,
-        }, ip, ct);
+        })).ToArray();
+        await audit.WriteBatchAsync(conn, tx, current.Id, createAudits, ip, ct);
         var result = ProjectJson.ProjectGroup(await LoadGroupAsync(db, group.Id, current.Id, ct));
         await tx.CommitAsync(ct);
         return result;
@@ -168,7 +173,7 @@ internal sealed class ProjectGroupService(
         if (!actor.IsInternal) throw ApiException.Forbidden();
         var name = ProjectService.ValidateNameForUpdate(request.Name);
         ProjectService.ValidateDescription(request.Description);
-        var metadata = ProjectService.NormalizeMetadata(request);
+        var metadata = ProjectService.NormalizeMetadata(request, false);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockBusinessAsync(conn, tx, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
@@ -186,10 +191,14 @@ internal sealed class ProjectGroupService(
         await EnsureGroupNameUniqueAsync(db, name, groupId, ct);
         metadata = await ProjectService.ValidateMetadataAsync(conn, tx, metadata, new ProjectRow
         {
-            RobotVendorId = before.RobotVendorId,
-            RobotModelId = before.RobotModelId,
+            RobotPartId = before.RobotPartId,
             PriorityId = before.PriorityId,
-        }, ct);
+        }, access.SupplierId, ct);
+        metadata = metadata with
+        {
+            ResponsibleUserId = before.ResponsibleUserId,
+            SectionId = before.SectionId,
+        };
 
         try
         {
@@ -197,8 +206,7 @@ internal sealed class ProjectGroupService(
                 .SetProperty(group => group.Name, name)
                 .SetProperty(group => group.Description, request.Description)
                 .SetProperty(group => group.MachineModel, metadata.MachineModel)
-                .SetProperty(group => group.RobotVendorId, metadata.RobotVendorId)
-                .SetProperty(group => group.RobotModelId, metadata.RobotModelId)
+                .SetProperty(group => group.RobotPartId, metadata.RobotPartId)
                 .SetProperty(group => group.ResponsibleUserId, metadata.ResponsibleUserId)
                 .SetProperty(group => group.SectionId, metadata.SectionId)
                 .SetProperty(group => group.PriorityId, metadata.PriorityId)
@@ -223,12 +231,19 @@ internal sealed class ProjectGroupService(
                 && project.Status != ProjectStatuses.Completed)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(project => project.MachineModel, metadata.MachineModel)
-                .SetProperty(project => project.RobotVendorId, metadata.RobotVendorId)
-                .SetProperty(project => project.RobotModelId, metadata.RobotModelId)
+                .SetProperty(project => project.RobotPartId, metadata.RobotPartId)
                 .SetProperty(project => project.ResponsibleUserId, metadata.ResponsibleUserId)
                 .SetProperty(project => project.SectionId, metadata.SectionId)
                 .SetProperty(project => project.PriorityId, metadata.PriorityId)
                 .SetProperty(project => project.ExpectedCompletionDate, ToDateOnly(metadata.ExpectedCompletionDate)), ct);
+        if (metadata.RobotPartId is not null)
+        {
+            await db.ProjectGroups.Where(group => group.Id == groupId)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(group => group.LegacyRobotModelName, (string?)null), ct);
+            await db.Projects.Where(project => project.ProjectGroupId == groupId
+                    && project.Status != ProjectStatuses.Completed)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(project => project.LegacyRobotModelName, (string?)null), ct);
+        }
         await ReplaceGroupWorkOrdersAsync(db, groupId, metadata.WorkOrderNos, ct);
         await db.ProjectWorkOrders.Where(order => db.Projects.Any(project => project.Id == order.ProjectId
                 && project.ProjectGroupId == groupId && project.Status != ProjectStatuses.Completed))
@@ -240,14 +255,13 @@ internal sealed class ProjectGroupService(
             new ProjectWorkOrder { ProjectId = projectId, WorkOrderNo = value, SortNo = index })));
         await db.SaveChangesAsync(ct);
 
-        foreach (var childId in childIds)
-            await audit.WriteAsync(conn, tx, current.Id, "PROJECT_UPDATE", "project", childId, new
+        var updateAudits = childIds.Select(childId => new AuditWrite(
+            "PROJECT_UPDATE", "project", childId, new
             {
                 projectGroupId = groupId,
                 inheritedFromMainProject = true,
                 changedByMainProject = true,
-            }, ip, ct);
-        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_GROUP_UPDATE", "project_group", groupId, new
+            })).Append(new AuditWrite("PROJECT_GROUP_UPDATE", "project_group", groupId, new
         {
             name,
             changes = AuditChange.OnlyChanged(
@@ -255,14 +269,12 @@ internal sealed class ProjectGroupService(
                 new("description", "项目说明", before.Description, request.Description),
                 new("workOrderNos", "工令号", before.WorkOrderNos, metadata.WorkOrderNos),
                 new("machineModel", "机型", before.MachineModel, metadata.MachineModel),
-                new("robotVendorId", "Robot 厂商", before.RobotVendorId, metadata.RobotVendorId),
-                new("robotModelId", "Robot 型号", before.RobotModelId, metadata.RobotModelId),
-                new("responsibleUserId", "负责人", before.ResponsibleUserId, metadata.ResponsibleUserId),
-                new("sectionId", "课别", before.SectionId, metadata.SectionId),
+                new("robotPartId", "Robot 料号", before.RobotPartId, metadata.RobotPartId),
                 new("priorityId", "优先级", before.PriorityId, metadata.PriorityId),
                 new("expectedCompletionDate", "预计完成日期",
                     DateValue(before.ExpectedCompletionDate), DateValue(metadata.ExpectedCompletionDate))),
-        }, ip, ct);
+        })).ToArray();
+        await audit.WriteBatchAsync(conn, tx, current.Id, updateAudits, ip, ct);
         var result = ProjectJson.ProjectGroup(await LoadGroupAsync(db, groupId, current.Id, ct));
         await tx.CommitAsync(ct);
         return result;
@@ -349,8 +361,8 @@ internal sealed class ProjectGroupService(
         ConfirmSide = null,
         CreatedBy = actorId,
         MachineModel = metadata.MachineModel,
-        RobotVendorId = metadata.RobotVendorId,
-        RobotModelId = metadata.RobotModelId,
+        RobotPartId = metadata.RobotPartId,
+        LegacyRobotModelName = metadata.LegacyRobotModelName,
         ResponsibleUserId = metadata.ResponsibleUserId,
         SectionId = metadata.SectionId,
         PriorityId = metadata.PriorityId,
@@ -397,12 +409,12 @@ internal sealed class ProjectGroupService(
         CreatedByName = db.Users.Where(user => user.Id == group.CreatedBy)
             .Select(user => user.RealName).FirstOrDefault(),
         MachineModel = group.MachineModel,
-        RobotVendorId = group.RobotVendorId,
-        RobotVendorName = db.ProjectDictionaries.Where(item => item.Id == group.RobotVendorId)
-            .Select(item => item.Name).FirstOrDefault(),
-        RobotModelId = group.RobotModelId,
-        RobotModelName = db.ProjectDictionaries.Where(item => item.Id == group.RobotModelId)
-            .Select(item => item.Name).FirstOrDefault(),
+        RobotPartId = group.RobotPartId,
+        RobotPartNumber = db.RobotParts.Where(item => item.Id == group.RobotPartId)
+            .Select(item => item.PartNumber).FirstOrDefault(),
+        RobotModelName = db.RobotParts.Where(item => item.Id == group.RobotPartId)
+            .Select(item => item.Model).FirstOrDefault() ?? group.LegacyRobotModelName,
+        LegacyRobotModelName = group.LegacyRobotModelName,
         ResponsibleUserId = group.ResponsibleUserId,
         ResponsibleUserEmployeeNo = db.Users.Where(user => user.Id == group.ResponsibleUserId)
             .Select(user => user.EmployeeNo).FirstOrDefault(),
@@ -523,7 +535,7 @@ internal sealed class ProjectGroupService(
         var status = await db.Suppliers.Where(supplier => supplier.Id == supplierId)
             .Select(supplier => supplier.Status).SingleOrDefaultAsync(ct);
         if (status is null) throw ApiException.BadRequest("供应商不存在");
-        if (status != "ACTIVE") throw ApiException.BadRequest("供应商已被禁用");
+        if (status != AccountStatuses.Active) throw ApiException.BadRequest("供应商已被禁用");
     }
 
     private static async Task EnsureGroupNameUniqueAsync(
@@ -561,8 +573,8 @@ internal sealed class ProjectGroupService(
     private static ProjectService.ProjectMetadataInput Metadata(ProjectGroupRow group) => new(
         group.WorkOrderNos,
         group.MachineModel,
-        group.RobotVendorId,
-        group.RobotModelId,
+        group.RobotPartId,
+        group.LegacyRobotModelName,
         group.ResponsibleUserId,
         group.SectionId,
         group.PriorityId,

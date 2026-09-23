@@ -58,6 +58,33 @@ public sealed class BatchDownloadStreamingTests
         Assert.Equal(1, lease.Disposals);
     }
 
+    [Fact]
+    public async Task AlreadyCompressedExtensionsAreStoredWithoutRecompression()
+    {
+        var directory = Directory.CreateTempSubdirectory("yf_zip_level_");
+        try
+        {
+            var repeated = Enumerable.Repeat((byte)'A', 256 * 1024).ToArray();
+            var pdf = Path.Combine(directory.FullName, "drawing.pdf");
+            var text = Path.Combine(directory.FullName, "notes.txt");
+            await File.WriteAllBytesAsync(pdf, repeated, TestContext.Current.CancellationToken);
+            await File.WriteAllBytesAsync(text, repeated, TestContext.Current.CancellationToken);
+            var result = new FileService.ZipStreamResult(
+                [new(pdf, "drawing.pdf"), new(text, "notes.txt")], "levels.zip", new CountingLease());
+            var context = new DefaultHttpContext();
+            using var body = new MemoryStream();
+            context.Response.Body = body;
+
+            await result.ExecuteAsync(context);
+
+            body.Position = 0;
+            using var archive = new ZipArchive(body, ZipArchiveMode.Read);
+            Assert.Equal(repeated.Length, archive.GetEntry("drawing.pdf")!.CompressedLength);
+            Assert.True(archive.GetEntry("notes.txt")!.CompressedLength < repeated.Length / 10);
+        }
+        finally { directory.Delete(recursive: true); }
+    }
+
     private sealed class CountingLease : IDisposable
     {
         public int Disposals { get; private set; }

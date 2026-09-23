@@ -79,7 +79,7 @@ public sealed class IdentityService(
                 null, null, lockedNow ? new { failedAttempts = failures, lockMinutes = LoginLockMinutes } : null, clientIp, ct);
             throw ApiException.Unauthorized("工号或密码错误");
         }
-        if (user.Status != "ACTIVE" || !await IsSupplierActiveAsync(context, user, ct))
+        if (user.Status != AccountStatuses.Active || !await IsSupplierActiveAsync(context, user, ct))
         {
             await tx.RollbackAsync(ct);
             await AuditBestEffortAsync(context.Database.Connection(), user.Id, employeeNo, "LOGIN_FAILED", null, null, null, clientIp, ct);
@@ -91,7 +91,9 @@ public sealed class IdentityService(
         user.LastLoginIp = clientIp;
         await context.SaveChangesAsync(ct);
         var sessionId = Guid.NewGuid().ToString();
-        var refresh = await IssueRefreshAsync(context, user.Id, sessionId, clientIp, dbNow, ct);
+        var sessionExpiresAt = dbNow.AddDays(options.AbsoluteSessionLifetimeDays);
+        var refresh = await IssueRefreshAsync(context, user.Id, sessionId, clientIp, dbNow,
+            dbNow, sessionExpiresAt, ct);
         var accessToken = tokens.IssueAccess(user.Id, user.EmployeeNo, sessionId);
         var grants = await permissions.GetCodesAndMenusAsync(context.Database.Connection(), context.Database.Transaction(), user.Id, ct);
         var response = new LoginResponse(accessToken.Token, accessToken.ExpiresAt, user.MustChangePassword,
@@ -101,7 +103,7 @@ public sealed class IdentityService(
         return (response, refresh);
     }
 
-    public async Task<(TokenResponse Response, string Refresh)> RefreshAsync(string refreshToken, string clientIp, CancellationToken ct)
+    public async Task<(LoginResponse Response, string Refresh)> RefreshAsync(string refreshToken, string clientIp, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(refreshToken)) throw ApiException.Unauthorized("缺少登录凭证");
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -115,7 +117,7 @@ public sealed class IdentityService(
         var row = await context.RefreshTokens.FromSqlInterpolated($"SELECT * FROM refresh_tokens WHERE id = {found.Id} FOR UPDATE").SingleOrDefaultAsync(ct)
                   ?? throw ApiException.Unauthorized("登录状态无效");
         var dbNow = await DbClock.UtcNowAsync(context, ct);
-        var isExpired = row.ExpiresAt <= dbNow;
+        var isExpired = row.ExpiresAt <= dbNow || row.SessionExpiresAt <= dbNow;
         if (row.Revoked || isExpired)
         {
             if (row.Revoked)
@@ -127,16 +129,20 @@ public sealed class IdentityService(
             }
             throw ApiException.Unauthorized("登录状态已失效，请重新登录");
         }
-        if (user.Status != "ACTIVE") throw ApiException.Unauthorized("账号已被禁用");
+        if (user.Status != AccountStatuses.Active) throw ApiException.Unauthorized("账号已被禁用");
         if (!await IsSupplierActiveAsync(context, user, ct)) throw ApiException.Unauthorized("所属供应商已被禁用");
         // Already exclusively locked by the FOR UPDATE read above, so nothing else
         // could have raced this revoke between that read and this write.
         row.Revoked = true;
         await context.SaveChangesAsync(ct);
-        var next = await IssueRefreshAsync(context, user.Id, row.SessionId, clientIp, dbNow, ct);
+        var next = await IssueRefreshAsync(context, user.Id, row.SessionId, clientIp, dbNow,
+            row.SessionCreatedAt, row.SessionExpiresAt, ct);
         var accessToken = tokens.IssueAccess(user.Id, user.EmployeeNo, row.SessionId);
+        var grants = await permissions.GetCodesAndMenusAsync(context.Database.Connection(), context.Database.Transaction(), user.Id, ct);
+        var response = new LoginResponse(accessToken.Token, accessToken.ExpiresAt, user.MustChangePassword,
+            grants.Permissions, grants.Menus, await BriefAsync(context, user, ct));
         await tx.CommitAsync(ct);
-        return (new(accessToken.Token, accessToken.ExpiresAt), next);
+        return (response, next);
     }
 
     public async Task LogoutAsync(string? refreshToken, string? authorization, string clientIp, CancellationToken ct)
@@ -180,7 +186,7 @@ public sealed class IdentityService(
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         var user = await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id = {current.Id} FOR UPDATE").SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
-        if (user.Status != "ACTIVE") throw ApiException.Forbidden();
+        if (user.Status != AccountStatuses.Active) throw ApiException.Forbidden();
         if (!await PasswordService.VerifyAsync(request.OldPassword, user.PasswordHash, ct)) throw ApiException.BadRequest("原密码错误");
         if (string.Equals(request.OldPassword, request.NewPassword, StringComparison.Ordinal))
             throw ApiException.BadRequest("新密码不能与当前密码相同");
@@ -210,7 +216,7 @@ public sealed class IdentityService(
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         var user = await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id = {current.Id} FOR UPDATE").SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
-        if (user.Status != "ACTIVE") throw ApiException.Forbidden();
+        if (user.Status != AccountStatuses.Active) throw ApiException.Forbidden();
         if (user.Email != email)
         {
             var oldEmail = user.Email;
@@ -236,7 +242,7 @@ public sealed class IdentityService(
         await using var context = EfDb.Use(conn, tx);
         var dbNow = await DbClock.UtcNowAsync(context, ct);
         return await context.RefreshTokens.AnyAsync(token => token.UserId == userId && token.SessionId == sessionId
-            && !token.Revoked && token.ExpiresAt > dbNow, ct);
+            && !token.Revoked && token.ExpiresAt > dbNow && token.SessionExpiresAt > dbNow, ct);
     }
 
     internal static async Task RevokeAllAsync(MySqlConnection conn, MySqlTransaction tx, ulong userId, CancellationToken ct)
@@ -246,7 +252,8 @@ public sealed class IdentityService(
             .ExecuteUpdateAsync(setters => setters.SetProperty(token => token.Revoked, true), ct);
     }
 
-    private async Task<string> IssueRefreshAsync(YfDbContext context, ulong userId, string sessionId, string clientIp, DateTime dbNow, CancellationToken ct)
+    private async Task<string> IssueRefreshAsync(YfDbContext context, ulong userId, string sessionId, string clientIp,
+        DateTime dbNow, DateTime sessionCreatedAt, DateTime sessionExpiresAt, CancellationToken ct)
     {
         var raw = TokenService.NewRefreshToken();
         context.RefreshTokens.Add(new RefreshToken
@@ -254,7 +261,9 @@ public sealed class IdentityService(
             UserId = userId,
             SessionId = sessionId,
             TokenHash = TokenService.HashRefreshToken(raw),
-            ExpiresAt = dbNow.AddDays(options.RefreshTtlDays),
+            SessionCreatedAt = sessionCreatedAt,
+            SessionExpiresAt = sessionExpiresAt,
+            ExpiresAt = Min(dbNow.AddDays(options.RefreshTtlDays), sessionExpiresAt),
             Revoked = false,
             Ip = clientIp,
             CreatedAt = dbNow
@@ -263,19 +272,21 @@ public sealed class IdentityService(
         return raw;
     }
 
+    private static DateTime Min(DateTime left, DateTime right) => left <= right ? left : right;
+
     private static async Task<int> RevokeSessionAsync(YfDbContext context, ulong userId, string sessionId, CancellationToken ct) =>
         await context.RefreshTokens.Where(t => t.UserId == userId && t.SessionId == sessionId && !t.Revoked)
             .ExecuteUpdateAsync(s => s.SetProperty(t => t.Revoked, true), ct);
 
     private static async Task<bool> IsSupplierActiveAsync(YfDbContext context, User user, CancellationToken ct)
     {
-        if (user.UserType == "INTERNAL") return true;
-        return user.SupplierId is ulong id && await context.Suppliers.AnyAsync(s => s.Id == id && s.Status == "ACTIVE", ct);
+        if (user.UserType == UserTypes.Internal) return true;
+        return user.SupplierId is ulong id && await context.Suppliers.AnyAsync(s => s.Id == id && s.Status == AccountStatuses.Active, ct);
     }
 
     private async Task<UserBrief> BriefAsync(YfDbContext context, User user, CancellationToken ct) =>
         new(user.Id, user.EmployeeNo, user.RealName, user.Email, user.UserType, user.SupplierId,
-            user.Status == "ACTIVE" && user.UserType == "INTERNAL"
+            user.Status == AccountStatuses.Active && user.UserType == UserTypes.Internal
                 && await AccessService.IsSystemAdminAsync(context.Database.Connection(), context.Database.Transaction(), user.Id, ct));
 
     private static void ValidateEmail(string? email)

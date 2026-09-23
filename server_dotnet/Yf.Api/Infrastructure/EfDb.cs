@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 
@@ -17,11 +18,17 @@ internal static class EfDb
     /// </summary>
     internal static readonly ServerVersion ServerVersion = Microsoft.EntityFrameworkCore.ServerVersion.Parse("5.7.44-mysql");
 
+    // DbContextOptions is immutable after construction and may safely be shared. The connection itself
+    // is the cache key and is also embedded in the options, so contexts from different connections (or
+    // databases) can never cross. Context instances and transaction enlistment remain per call.
+    private static readonly ConditionalWeakTable<MySqlConnection, DbContextOptions<YfDbContext>> OptionsByConnection = new();
+
     internal static YfDbContext Use(MySqlConnection connection, MySqlTransaction? transaction = null)
     {
-        var options = new DbContextOptionsBuilder<YfDbContext>()
-            .UseMySql(connection, ServerVersion)
-            .Options;
+        var options = OptionsByConnection.GetValue(connection, static item =>
+            new DbContextOptionsBuilder<YfDbContext>()
+                .UseMySql(item, ServerVersion)
+                .Options);
         var context = new YfDbContext(options);
         if (transaction is not null) context.Database.UseTransaction(transaction);
         return context;

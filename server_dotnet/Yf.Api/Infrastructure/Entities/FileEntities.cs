@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Yf.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace Yf.Api.Infrastructure.Entities;
@@ -69,7 +70,7 @@ public sealed class FileRecordConfig : IEntityTypeConfiguration<FileRecord>
         b.Property(x => x.MimeType).HasColumnName("mime_type").HasMaxLength(128);
         b.Property(x => x.Sha256).HasColumnName("sha256").HasMaxLength(64);
         b.Property(x => x.StoragePath).HasColumnName("storage_path").HasMaxLength(512).IsRequired();
-        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue("AVAILABLE");
+        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue(FileStatuses.Available);
         b.Property(x => x.DeletedAt).HasColumnName("deleted_at").HasColumnType("datetime(3)");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
         b.HasIndex(x => x.StoredName).IsUnique().HasDatabaseName("stored_name");

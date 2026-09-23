@@ -221,6 +221,12 @@ public sealed class MailDeliveryTests
                 INSERT INTO system_configs(cfg_key,cfg_value) VALUES('notify.enabled','false')
                 ON DUPLICATE KEY UPDATE cfg_value='false';
                 UPDATE email_outbox SET event_type='MESSAGE_CREATED' WHERE id=1;
+                INSERT INTO email_outbox(id,event_type,recipient_email,subject,body,status,retry_count,next_attempt_at,last_error,sent_at)
+                VALUES(2,'MESSAGE_CREATED','failed@example.invalid','failed','body','FAILED',3,NULL,'original terminal failure',NULL);
+                INSERT INTO email_outbox(id,event_type,dedupe_key,recipient_email,subject,body,status,retry_count,next_attempt_at,last_error,sent_at)
+                VALUES(3,'FILE_UPLOADED','file-summary:7:20:C2S','pending@example.invalid','pending','body','PENDING',0,UTC_TIMESTAMP()+INTERVAL 2 MINUTE,NULL,NULL);
+                INSERT INTO email_outbox(id,event_type,dedupe_key,recipient_email,subject,body,status,retry_count,next_attempt_at,last_error,sent_at)
+                VALUES(4,'FILE_UPLOADED',NULL,'sending@example.invalid','sending','body','SENDING',0,UTC_TIMESTAMP()+INTERVAL 10 MINUTE,'existing lease info',NULL);
                 """, cancellationToken: ct));
         }
         var delivery = new CaptureSettingsDelivery();
@@ -235,6 +241,22 @@ public sealed class MailDeliveryTests
         Assert.Contains(EmailNotificationPolicy.DisabledAuditReason,
             await check.ExecuteScalarAsync<string>(new CommandDefinition(
                 "SELECT detail FROM audit_logs WHERE action='EMAIL_CANCELLED_STALE' AND target_id='1'", cancellationToken: ct)));
+        var failed = await check.QuerySingleAsync<OutboxState>(new CommandDefinition(
+            "SELECT status AS Status,last_error AS LastError FROM email_outbox WHERE id=2", cancellationToken: ct));
+        Assert.Equal("FAILED", failed.Status);
+        Assert.Equal("original terminal failure", failed.LastError);
+        var pending = await check.QuerySingleAsync<OutboxState>(new CommandDefinition(
+            "SELECT status AS Status,dedupe_key AS DedupeKey FROM email_outbox WHERE id=3", cancellationToken: ct));
+        Assert.Equal("CANCELLED", pending.Status);
+        Assert.Null(pending.DedupeKey);
+        var sending = await check.QuerySingleAsync<OutboxState>(new CommandDefinition(
+            "SELECT status AS Status,last_error AS LastError FROM email_outbox WHERE id=4", cancellationToken: ct));
+        Assert.Equal("SENDING", sending.Status);
+        Assert.Equal("existing lease info", sending.LastError);
+        Assert.Equal(0, await check.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='EMAIL_CANCELLED_STALE' AND target_id='2'", cancellationToken: ct)));
+        Assert.Equal(2, await check.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='EMAIL_CANCELLED_STALE'", cancellationToken: ct)));
     }
 
     [Fact(Timeout = 30_000)]
@@ -277,13 +299,15 @@ public sealed class MailDeliveryTests
                 INSERT INTO permissions(id,code) VALUES(10,'project:list');
                 INSERT INTO roles(id,status) VALUES(10,'ACTIVE');
                 INSERT INTO role_permissions(role_id,permission_id) VALUES(10,10);
-                INSERT INTO users(id,employee_no,user_type,supplier_id,status)
-                VALUES(10,'old-owner','INTERNAL',NULL,'ACTIVE'),(11,'new-owner','INTERNAL',NULL,'ACTIVE');
+                INSERT INTO users(id,employee_no,email,user_type,supplier_id,status)
+                VALUES(10,'old-owner','old-owner@example.invalid','INTERNAL',NULL,'ACTIVE'),
+                      (11,'new-owner','new-owner@example.invalid','INTERNAL',NULL,'ACTIVE');
                 INSERT INTO user_roles(user_id,role_id) VALUES(10,10),(11,10);
                 INSERT INTO projects(id,project_group_id,supplier_id,created_by,responsible_user_id,status,confirm_side)
                 VALUES(7,1,100,10,11,'IN_PROGRESS',NULL);
                 UPDATE email_outbox
-                SET event_type='MESSAGE_CREATED',project_id=7,recipient_user_id=10
+                SET event_type='MESSAGE_CREATED',project_id=7,recipient_user_id=10,
+                    recipient_email='old-owner@example.invalid'
                 WHERE id=1;
                 """, cancellationToken: ct));
         }
@@ -299,6 +323,43 @@ public sealed class MailDeliveryTests
         Assert.Equal(ProjectNotificationService.StaleProjectMailReason,
             await check.ExecuteScalarAsync<string>(new CommandDefinition(
                 "SELECT last_error FROM email_outbox WHERE id=1", cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task QueuedProjectMailIsCancelledWhenRecipientAddressChangedBeforeSend()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var conn = await scope.Database.OpenAsync(ct))
+        {
+            await conn.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO permissions(id,code) VALUES(10,'project:list');
+                INSERT INTO roles(id,status) VALUES(10,'ACTIVE');
+                INSERT INTO role_permissions(role_id,permission_id) VALUES(10,10);
+                INSERT INTO users(id,employee_no,email,user_type,supplier_id,status)
+                VALUES(10,'owner','changed@example.invalid','INTERNAL',NULL,'ACTIVE');
+                INSERT INTO user_roles(user_id,role_id) VALUES(10,10);
+                INSERT INTO projects(id,project_group_id,supplier_id,created_by,responsible_user_id,status,confirm_side)
+                VALUES(7,1,100,10,10,'IN_PROGRESS',NULL);
+                UPDATE email_outbox
+                SET event_type='MESSAGE_CREATED',project_id=7,recipient_user_id=10
+                WHERE id=1;
+                """, cancellationToken: ct));
+        }
+        var delivery = new CaptureSettingsDelivery();
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]),
+            NullLogger<MailService>.Instance, delivery);
+
+        await service.FlushAsync(ct);
+
+        Assert.Empty(delivery.Seen);
+        await using var check = await scope.Database.OpenAsync(ct);
+        Assert.Equal("CANCELLED", await check.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT status FROM email_outbox WHERE id=1", cancellationToken: ct)));
+        Assert.Equal("收件账号或地址已失效", await check.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT last_error FROM email_outbox WHERE id=1", cancellationToken: ct)));
+        Assert.Contains("RECIPIENT_ADDRESS_STALE", await check.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT detail FROM audit_logs WHERE action='EMAIL_CANCELLED_STALE' AND target_id='1'", cancellationToken: ct)));
     }
 
     [Fact(Timeout = 30_000)]
@@ -441,9 +502,11 @@ public sealed class MailDeliveryTests
         public int RetryCount { get; init; }
         public DateTime? NextAttemptAt { get; init; }
         public DateTime? SentAt { get; init; }
+        public string? LastError { get; init; }
+        public string? DedupeKey { get; init; }
     }
 
-    private sealed class MailDatabaseScope(
+    internal sealed class MailDatabaseScope(
         MySqlConnection administration,
         string databaseName,
         AppDb database,
@@ -517,7 +580,9 @@ public sealed class MailDeliveryTests
                         retry_count INT NOT NULL,
                         next_attempt_at DATETIME(3) NULL,
                         last_error VARCHAR(1024) NULL,
-                        sent_at DATETIME(6) NULL
+                        sent_at DATETIME(6) NULL,
+                        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+                        UNIQUE KEY uk_outbox_dedupe_key(dedupe_key)
                     );
                     CREATE TABLE audit_logs(
                         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -541,7 +606,9 @@ public sealed class MailDeliveryTests
                     );
                     CREATE TABLE permissions(
                         id BIGINT UNSIGNED PRIMARY KEY,
-                        code VARCHAR(100) NOT NULL
+                        code VARCHAR(100) NOT NULL,
+                        type VARCHAR(16) NOT NULL DEFAULT 'BUTTON',
+                        sort_no INT NOT NULL DEFAULT 0
                     );
                     CREATE TABLE roles(
                         id BIGINT UNSIGNED PRIMARY KEY,

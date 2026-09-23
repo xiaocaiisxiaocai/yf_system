@@ -28,15 +28,19 @@ public sealed class DevelopmentReadinessTests
         Assert.DoesNotContain("secret", string.Join(',', report.Issues), StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public async Task MissingStorageAndDisabledWorkerAreReportedWithoutDatabaseFailure()
+    [Theory]
+    [InlineData(false, true, "worker-disabled")]
+    [InlineData(true, false, "copy-worker-disabled")]
+    public async Task MissingStorageAndDisabledWorkerAreReportedWithoutDatabaseFailure(
+        bool workerEnabled, bool copyWorkerEnabled, string expectedIssue)
     {
         var sandbox = Directory.CreateTempSubdirectory("yf_readiness_").FullName;
         try
         {
             var applicationRoot = Directory.CreateDirectory(Path.Combine(sandbox, "app")).FullName;
             var options = ValidOptions(Path.Combine(sandbox, "missing-collab"));
-            options.WorkerEnabled = false;
+            options.WorkerEnabled = workerEnabled;
+            options.CopyWorkerEnabled = copyWorkerEnabled;
 
             var report = await DevelopmentReadiness.CheckAsync(options, applicationRoot,
                 _ => Task.CompletedTask, TestContext.Current.CancellationToken);
@@ -49,7 +53,7 @@ public sealed class DevelopmentReadinessTests
             Assert.False(report.Checks.Worker);
             Assert.Equal([
                 "storage-read-write-failed",
-                "worker-disabled",
+                expectedIssue,
             ], report.Issues);
         }
         finally

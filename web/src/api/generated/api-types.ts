@@ -25,6 +25,7 @@ export interface AuditLogResponse {
   targetName: string | null
   actorNameSource: string
   targetNameSource: string
+  canDelete: boolean
 }
 
 export interface BatchDownloadRequest {
@@ -127,6 +128,11 @@ export interface DepartmentUpsert {
   name: string
   parentId?: number | null
   sortNo?: number | null
+}
+
+export interface DownloadGrantResponse {
+  url: string
+  expiresInSeconds: number
 }
 
 export interface EmptyResponse {
@@ -443,22 +449,35 @@ export interface ProjectCopyHistoryResponse {
   hasRestrictedRelations: boolean
 }
 
-export interface ProjectCopyRecord {
-  copyId: number
+export interface ProjectCopyJobListResponse {
+  jobs: Array<ProjectCopyJobResponse>
+}
+
+export interface ProjectCopyJobResponse {
+  jobId: number
   sourceProjectId: number
-  targetProjectId: number
-  fileCount: number
-  totalBytes: number
+  projectGroupId: number
+  targetName: string
+  status: string
+  filesTotal: number
+  filesCopied: number
+  bytesTotal: number
+  bytesCopied: number
+  error: string | null
+  result: ProjectCopyJobResult
   createdAt: string
+  startedAt: string | null
+  completedAt: string | null
+}
+
+export interface ProjectCopyJobResult {
+  projectId: number
+  copyFileCount: number
 }
 
 export interface ProjectCopyRequest {
   name?: string | null
-}
-
-export interface ProjectCopyResponse {
-  project: ProjectResponse
-  copy: ProjectCopyRecord
+  idempotencyKey?: string | null
 }
 
 export interface ProjectCopySourceRef {
@@ -485,9 +504,8 @@ export interface ProjectDetailResponse {
   createdByName: string | null
   workOrderNos: Array<string>
   machineModel: string | null
-  robotVendorId: number | null
-  robotVendorName: string | null
-  robotModelId: number | null
+  robotPartId: number | null
+  robotPartNumber: string | null
   robotModelName: string | null
   responsibleUserId: number | null
   responsibleUserEmployeeNo: string | null
@@ -541,9 +559,8 @@ export interface ProjectGroupResponse {
   createdByName: string | null
   workOrderNos: Array<string>
   machineModel: string | null
-  robotVendorId: number | null
-  robotVendorName: string | null
-  robotModelId: number | null
+  robotPartId: number | null
+  robotPartNumber: string | null
   robotModelName: string | null
   responsibleUserId: number | null
   responsibleUserEmployeeNo: string | null
@@ -591,9 +608,8 @@ export interface ProjectResponse {
   createdByName: string | null
   workOrderNos: Array<string>
   machineModel: string | null
-  robotVendorId: number | null
-  robotVendorName: string | null
-  robotModelId: number | null
+  robotPartId: number | null
+  robotPartNumber: string | null
   robotModelName: string | null
   responsibleUserId: number | null
   responsibleUserEmployeeNo: string | null
@@ -631,12 +647,35 @@ export interface ProjectUpsertRequest {
   supplierId: number
   workOrderNos?: Array<string> | null
   machineModel?: string | null
-  robotVendorId?: number | null
-  robotModelId?: number | null
-  responsibleUserId?: number | null
+  robotPartId?: number | null
   priorityId?: number | null
   expectedCompletionDate?: string | null
   subprojectNames?: Array<string> | null
+}
+
+export interface RobotPartResponse {
+  id: number
+  supplierId: number
+  supplierName: string
+  partNumber: string
+  model: string
+  sortNo: number
+  enabled: boolean
+  inUse: boolean
+}
+
+export interface RobotPartSupplierOption {
+  id: number
+  name: string
+  status: string
+}
+
+export interface RobotPartUpsertRequest {
+  supplierId: number
+  partNumber?: string | null
+  model?: string | null
+  sortNo: number
+  enabled: boolean
 }
 
 export interface RoleAssign {
@@ -744,11 +783,6 @@ export interface SystemConfigResponse {
   value: string | null
   description: string | null
   updatedAt: string
-}
-
-export interface TokenResponse {
-  accessToken: string
-  expiresAt: number
 }
 
 export interface UpdateProfileRequest {
@@ -867,7 +901,7 @@ export interface ApiResponses {
   "PUT /auth/password": EmptyResponse
   "GET /auth/profile": ProfileResponse
   "PUT /auth/profile": ProfileResponse
-  "POST /auth/refresh": TokenResponse
+  "POST /auth/refresh": LoginResponse
   "GET /collaboration/notifications": CollaborationNotificationPage
   "POST /collaboration/reads": EmptyResponse
   "GET /collaboration/summary": CollaborationSummaryResponse
@@ -876,23 +910,29 @@ export interface ApiResponses {
   "GET /dashboard/summary": DashboardSummaryResponse
   "GET /departments": Array<DepartmentTreeNode>
   "POST /files/batch-download": Blob
+  "POST /files/batch-download-grant": DownloadGrantResponse
+  "GET /files/batch-download/{handle}": Blob
   "DELETE /files/{id}": EmptyResponse
   "GET /files/{id}/content": Blob
   "GET /files/{id}/download": Blob
+  "POST /files/{id}/download-grant": DownloadGrantResponse
   "GET /files/{id}/media": Blob
   "POST /files/{id}/media-session": MediaSessionResponse
+  "GET /files/{id}/native-download/{handle}": Blob
   "POST /messages/read": EmptyResponse
   "DELETE /messages/{id}": EmptyResponse
   "GET /messages/{id}/reads": MessageReadsResponse
   "GET /messages/{messageId}/images/{imageId}": Blob
   "GET /permissions": Array<PermissionResponse>
   "GET /project-copies/{copyId}/files": PageResponseOfFileCopyHistoryItem
+  "GET /project-copy-jobs/{jobId}": ProjectCopyJobResponse
   "GET /project-dictionaries": Array<ProjectDictionaryResponse>
   "POST /project-dictionaries": ProjectDictionaryResponse
   "DELETE /project-dictionaries/{id}": EmptyResponse
   "PUT /project-dictionaries/{id}": ProjectDictionaryResponse
   "GET /project-groups": PageResponseOfProjectGroupResponse
   "POST /project-groups": ProjectGroupResponse
+  "GET /project-groups/{groupId}/copy-jobs": ProjectCopyJobListResponse
   "DELETE /project-groups/{id}": EmptyResponse
   "GET /project-groups/{id}": ProjectGroupDetailResponse
   "PUT /project-groups/{id}": ProjectGroupResponse
@@ -903,7 +943,7 @@ export interface ApiResponses {
   "PUT /projects/{id}": ProjectResponse
   "GET /projects/{id}/activities": ProjectActivityPage
   "POST /projects/{id}/confirm": ProjectResponse
-  "POST /projects/{id}/copy": ProjectCopyResponse
+  "POST /projects/{id}/copy": ProjectCopyJobResponse
   "GET /projects/{id}/copy-history": ProjectCopyHistoryResponse
   "GET /projects/{id}/message-receipts": Array<MessageReceiptResponse>
   "GET /projects/{id}/messages": PageResponseOfMessageResponse
@@ -914,6 +954,11 @@ export interface ApiResponses {
   "GET /projects/{id}/summary": ProjectSummaryResponse
   "POST /projects/{id}/withdraw": ProjectResponse
   "GET /projects/{projectId}/files": PageResponseOfFileListItem
+  "GET /robot-part-supplier-options": Array<RobotPartSupplierOption>
+  "GET /robot-parts": Array<RobotPartResponse>
+  "POST /robot-parts": RobotPartResponse
+  "DELETE /robot-parts/{id}": EmptyResponse
+  "PUT /robot-parts/{id}": RobotPartResponse
   "GET /supplier-options": Array<SupplierOption>
   "POST /uploads/init": UploadInitResponse
   "DELETE /uploads/{sessionId}": EmptyResponse

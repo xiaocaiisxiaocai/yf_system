@@ -2,7 +2,7 @@ const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const JSZip = require(process.env.YF_PROJECT_ROOT + '/web/node_modules/jszip');
-const { fs, assert, OUT, s, f, record, login, api, action, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
+const { fs, assert, OUT, s, f, record, login, api, projectMetadata, action, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
 async function uploadApi(context, token, projectId, fileName, bytes) {
   const fileMd5 = crypto.createHash('md5').update(bytes).digest('hex');
@@ -26,26 +26,14 @@ async function uploadApi(context, token, projectId, fileName, bytes) {
   return (await api(context, 'POST', '/uploads/' + initialized.sessionId + '/merge', undefined, token)).json();
 }
 
-async function createProject(context, token, supplierId, ownerId, name) {
-  const vendors = await (await api(context, 'GET',
-    '/project-dictionaries?type=ROBOT_VENDOR&enabledOnly=true', undefined, token)).json();
-  assert(vendors.length > 0, 'preview fixtures need an enabled Robot vendor');
-  const models = await (await api(context, 'GET',
-    '/project-dictionaries?type=ROBOT_MODEL&parentId=' + vendors[0].id + '&enabledOnly=true', undefined, token)).json();
-  const priorities = await (await api(context, 'GET',
-    '/project-dictionaries?type=PRIORITY&enabledOnly=true', undefined, token)).json();
-  assert(models.length > 0 && priorities.length > 0, 'preview fixtures need model and priority options');
+async function createProject(context, token, supplierId, name) {
   const group = await (await api(context, 'POST', '/project-groups', {
     name,
     description: '图片、PPTX、视频和留言图片浏览器预览夹具',
     supplierId,
     workOrderNos: ['PREVIEW-' + crypto.randomBytes(4).toString('hex')],
     machineModel: '预览验收机型',
-    robotVendorId: vendors[0].id,
-    robotModelId: models[0].id,
-    responsibleUserId: ownerId,
-    priorityId: priorities[0].id,
-    expectedCompletionDate: '2099-12-31',
+    ...await projectMetadata(context, token, supplierId),
     subprojectNames: [name + ' 子项目'],
   }, token)).json();
   const detail = await (await api(context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
@@ -263,7 +251,7 @@ async function createPptx(marker) {
     const archive = await JSZip.loadAsync(pptx);
     assert(archive.file('ppt/slides/slide1.xml'), 'generated PPTX must contain slide1.xml');
 
-    const project = await createProject(admin, adminToken, f.suppliers.a.id, f.users.member.id,
+    const project = await createProject(admin, adminToken, f.suppliers.a.id,
       '附加预览验收-' + suffix);
     await api(admin, 'PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' }, adminToken);
     const imageName = 'browser-image-' + suffix + '.png';

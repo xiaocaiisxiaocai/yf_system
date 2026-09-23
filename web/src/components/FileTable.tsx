@@ -11,6 +11,7 @@ import ChunkUploader from './ChunkUploader'
 import PdfPreview from './PdfPreview'
 import { useCollaboration } from '../store/collaboration'
 import type { ApiResponses } from '../api/types'
+import { downloadFile, downloadFiles } from '../api/download'
 
 // Excel 解析器仅在用户真正打开工作簿预览时按需加载
 const ExcelPreview = lazy(() => import('./ExcelPreview'))
@@ -60,27 +61,6 @@ function WatermarkedPreview({ employeeNo, realName, children }: { employeeNo?: s
     {children}
     <PreviewWatermark employeeNo={employeeNo} realName={realName} />
   </div>
-}
-
-/**
- * 通过认证接口下载 blob。锚点必须先挂到 document.body，且对象 URL 要等
- * 浏览器开始处理 click 后再释放，否则部分浏览器会取消下载或保存空文件。
- */
-function triggerBlobDownload(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = name
-  document.body?.appendChild(anchor)
-  anchor.click()
-  anchor.remove?.()
-  setTimeout(() => URL.revokeObjectURL(url), 0)
-}
-
-/** 认证下载：拉 blob 后触发浏览器保存（直接拼 URL 会丢 Authorization 头） */
-async function downloadAuthed(id: number, name: string) {
-  const r = await http.get<ApiResponses['GET /files/{id}/download']>(`/files/${id}/download`, { responseType: 'blob' })
-  triggerBlobDownload(r.data as Blob, name)
 }
 
 export default function FileTable({ projectId, projectStatus, targetId, onOpenCopyHistory, onProjectChanged }: Props) {
@@ -176,9 +156,10 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
     batchDownloadInFlight.current = true
     setBatchDownloading(true)
     try {
-      const r = await http.post<ApiResponses['POST /files/batch-download']>('/files/batch-download', { ids: selected }, { responseType: 'blob' })
-      triggerBlobDownload(r.data as Blob, `项目文件打包_${Date.now()}.zip`)
+      await downloadFiles(selected)
       setSelected([])
+    } catch {
+      // 请求错误由统一 HTTP 拦截器提示；交给浏览器后不假定下载已经完成。
     } finally {
       batchDownloadInFlight.current = false
       setBatchDownloading(false)
@@ -306,7 +287,8 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
             align: 'center' as const,
             render: (_: unknown, r: FileItem) => actionSlots([
               hasPerm('file:download') && (
-                <Button key="download" size="mini" type="text" icon={<IconDownload />} aria-label="下载文件" onClick={() => downloadAuthed(r.id, r.originalName)}>
+                <Button key="download" size="mini" type="text" icon={<IconDownload />} aria-label="下载文件"
+                  onClick={() => { void downloadFile(r.id).catch(() => undefined) }}>
                   下载
                 </Button>
               ),

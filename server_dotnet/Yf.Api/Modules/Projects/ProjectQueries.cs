@@ -18,10 +18,8 @@ internal static class ProjectQueries
         from supplier in suppliers.DefaultIfEmpty()
         join creator in db.Users on project.CreatedBy equals creator.Id into creators
         from creator in creators.DefaultIfEmpty()
-        join robotVendor in db.ProjectDictionaries on project.RobotVendorId equals (ulong?)robotVendor.Id into robotVendors
-        from robotVendor in robotVendors.DefaultIfEmpty()
-        join robotModel in db.ProjectDictionaries on project.RobotModelId equals (ulong?)robotModel.Id into robotModels
-        from robotModel in robotModels.DefaultIfEmpty()
+        join robotPart in db.RobotParts on project.RobotPartId equals (ulong?)robotPart.Id into robotParts
+        from robotPart in robotParts.DefaultIfEmpty()
         join responsibleUser in db.Users on project.ResponsibleUserId equals (ulong?)responsibleUser.Id into responsibleUsers
         from responsibleUser in responsibleUsers.DefaultIfEmpty()
         join section in db.Departments.Where(department => department.Kind == "SECTION")
@@ -49,10 +47,9 @@ internal static class ProjectQueries
             CreatedAt = project.CreatedAt,
             UpdatedAt = project.UpdatedAt,
             MachineModel = project.MachineModel,
-            RobotVendorId = project.RobotVendorId,
-            RobotVendorName = robotVendor.Name,
-            RobotModelId = project.RobotModelId,
-            RobotModelName = robotModel.Name,
+            RobotPartId = project.RobotPartId,
+            RobotPartNumber = robotPart.PartNumber,
+            RobotModelName = robotPart.Model ?? project.LegacyRobotModelName,
             ResponsibleUserId = project.ResponsibleUserId,
             ResponsibleUserEmployeeNo = responsibleUser.EmployeeNo,
             ResponsibleUserName = responsibleUser.RealName,

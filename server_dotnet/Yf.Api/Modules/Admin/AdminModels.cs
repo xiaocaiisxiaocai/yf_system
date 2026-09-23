@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+using Yf.Api.Infrastructure;
+
 namespace Yf.Api.Modules.Admin;
 
 public sealed record StatusRequest([property: JsonRequired] string Status);
@@ -56,7 +58,8 @@ internal sealed class SupplierRow { public ulong Id { get; init; } public string
 
 internal static class AdminValidation
 {
-    public static string Status(string? value) => value is "ACTIVE" or "DISABLED" ? value : throw Yf.Api.Infrastructure.ApiException.BadRequest("非法状态");
+    public static string Status(string? value) => value is AccountStatuses.Active or AccountStatuses.Disabled
+        ? value : throw ApiException.BadRequest("非法状态");
     public static void EmployeeNo(string? value)
     {
         var v = value?.Trim() ?? "";

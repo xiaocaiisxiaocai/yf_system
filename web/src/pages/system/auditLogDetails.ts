@@ -49,6 +49,11 @@ export interface AuditLogRow {
   detail?: AuditDetail | null
   ip?: string | null
   createdAt: string
+  canDelete?: boolean
+}
+
+export function isAuditDeletable(row?: AuditLogRow): boolean {
+  return row?.canDelete === true && row.action !== 'AUDIT_LOG_DELETE' && row.action !== 'AUDIT_LOG_RETENTION'
 }
 
 export interface ActionMeta {
@@ -92,6 +97,7 @@ export const ACTIONS: Record<string, ActionMeta> = {
   PROJECT_MEMBERS: action('调整项目成员', 'PROJECT', '项目协作', 'purple'),
   FILE_UPLOAD: action('上传文件', 'FILE', '文件', 'arcoblue'),
   FILE_DOWNLOAD: action('下载文件', 'FILE', '文件', 'cyan'),
+  FILE_PREVIEW: action('预览文件', 'FILE', '文件', 'cyan'),
   FILE_BATCH_DOWNLOAD: action('批量下载', 'FILE', '文件', 'cyan'),
   FILE_DELETE: action('删除文件', 'FILE', '文件', 'red'),
   UPLOAD_ABORT: action('取消上传', 'FILE', '文件', 'orange'),
@@ -123,6 +129,9 @@ export const ACTIONS: Record<string, ActionMeta> = {
   SUPPLIER_ACCOUNT_STATUS: action('变更供应商账号状态', 'SUPPLIER', '供应商', 'orange'),
   SUPPLIER_ACCOUNT_RESET_PASSWORD: action('重置供应商密码', 'SUPPLIER', '供应商', 'orange'),
   SUPPLIER_ACCOUNT_DELETE: action('删除供应商账号', 'SUPPLIER', '供应商', 'red'),
+  ROBOT_PART_CREATE: action('创建 Robot 料号', 'SYSTEM', '系统', 'arcoblue'),
+  ROBOT_PART_UPDATE: action('更新 Robot 料号', 'SYSTEM', '系统', 'purple'),
+  ROBOT_PART_DELETE: action('删除 Robot 料号', 'SYSTEM', '系统', 'red'),
   AUDIT_LOG_DELETE: action('删除操作日志', 'SYSTEM', '系统', 'red'),
   AUDIT_LOG_RETENTION: action('自动清理过期日志', 'SYSTEM', '系统', 'gray'),
   CONFIG_UPDATE: action('更新系统参数', 'SYSTEM', '系统', 'orange'),
@@ -141,12 +150,13 @@ export const CATEGORY_OPTIONS = [
 export const TARGET_LABELS: Record<string, string> = {
   user: '用户', role: '角色', department: '组织', supplier: '供应商', project: '子项目', project_group: '主项目',
   file: '文件', message: '留言', upload_session: '上传任务', audit_log: '操作日志',
-  system_config: '系统参数', email_outbox: '邮件队列', project_dictionary: '数据字典',
+  system_config: '系统参数', email_outbox: '邮件队列', project_dictionary: '数据字典', robot_part: 'Robot 料号',
 }
 
 const FIELD_LABELS: Record<string, string> = {
   realName: '姓名', email: '邮箱', phone: '电话', departmentId: '组织', roleId: '角色',
   name: '名称', description: '说明', status: '状态', permissions: '权限', members: '成员',
+  partNumber: 'Robot 料号', model: 'Robot 型号', robotPartId: 'Robot 料号', expectedCompletionDate: '需求完成时间',
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -279,7 +289,8 @@ function explicitChanges(detail?: AuditDetail | null): DisplayChange[] {
     if (!isRecord(item)) return []
     const field = cleanText(item.field)
     if (!field || !Object.hasOwn(item, 'before') || !Object.hasOwn(item, 'after')) return []
-    return [{ field, label: cleanText(item.label) || FIELD_LABELS[field] || field, before: item.before, after: item.after }]
+    const contractLabel = ['partNumber', 'model', 'robotPartId', 'expectedCompletionDate'].includes(field) ? FIELD_LABELS[field] : undefined
+    return [{ field, label: contractLabel || cleanText(item.label) || FIELD_LABELS[field] || field, before: item.before, after: item.after }]
   })
 }
 
@@ -394,6 +405,15 @@ export function detailNotes(row: AuditLogRow): DetailNote[] {
   const detail = row.detail
   if (!detail) return []
   const notes: DetailNote[] = []
+  if (row.action === 'AUDIT_LOG_DELETE' && Array.isArray(detail.deletedRecords)) {
+    const records = detail.deletedRecords.filter(isRecord)
+    for (const record of records.slice(0, 20)) {
+      notes.push({ label: `原日志 #${formatAuditValue(record.id)}`,
+        value: `${formatAuditValue(record.action)}；操作人 ${formatAuditValue(record.employeeNo ?? record.actorId)}；时间 ${formatAuditValue(record.createdAt)}`,
+        tone: 'normal' })
+    }
+    if (records.length > 20) notes.push({ label: '完整摘要', value: `共 ${records.length} 条，可复制详情查看全部记录`, tone: 'normal' })
+  }
   if (row.action === 'PROJECT_COPY') {
     notes.push({ label: '复制文件', value: `${formatAuditValue(detail.fileCount)} 个`, tone: 'normal' })
     notes.push({ label: '文件总大小', value: formatByteSize(detail.totalBytes), tone: 'normal' })
@@ -433,6 +453,8 @@ function countSummary(added: number, removed: number, noun: string) {
 
 export function detailSummary(row: AuditLogRow): string {
   const detail = row.detail
+  if (row.action === 'AUDIT_LOG_DELETE' && typeof detail?.deleted === 'number')
+    return `已手动删除 ${detail.deleted} 条过期日志，原操作摘要保留在详情中`
   if (row.action === 'PROJECT_COPY' && isRecord(detail?.source) && isRecord(detail?.target)) {
     const sourceName = cleanText(detail.source.name) || '原项目'
     const targetName = cleanText(detail.target.name) || '新项目'

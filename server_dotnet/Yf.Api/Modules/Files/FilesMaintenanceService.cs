@@ -153,7 +153,7 @@ public sealed class FilesMaintenanceService(
         await using (var context = EfDb.Use(conn))
         {
             var cutoff = (await UploadService.DbNowAsync(context, ct)).AddDays(-30);
-            rows = await context.Files.Where(file => file.Status == "DELETED" && file.DeletedAt != null && file.DeletedAt < cutoff)
+            rows = await context.Files.Where(file => file.Status == FileStatuses.Deleted && file.DeletedAt != null && file.DeletedAt < cutoff)
                 .Select(file => new DeletedFile { Id = file.Id, StoragePath = file.StoragePath }).ToArrayAsync(ct);
         }
         foreach (var row in rows)
@@ -172,10 +172,10 @@ public sealed class FilesMaintenanceService(
                 var referenced = await context.FileCopyRefs.AnyAsync(reference =>
                     reference.SourceFileId == row.Id || reference.TargetFileId == row.Id, ct);
                 if (referenced)
-                    await context.Files.Where(file => file.Id == row.Id && file.Status == "DELETED")
+                    await context.Files.Where(file => file.Id == row.Id && file.Status == FileStatuses.Deleted)
                         .ExecuteUpdateAsync(setters => setters.SetProperty(file => file.Status, "PURGED"), ct);
                 else
-                    await context.Files.Where(file => file.Id == row.Id && file.Status == "DELETED").ExecuteDeleteAsync(ct);
+                    await context.Files.Where(file => file.Id == row.Id && file.Status == FileStatuses.Deleted).ExecuteDeleteAsync(ct);
                 await tx.CommitAsync(ct);
             }
             catch (Exception error)

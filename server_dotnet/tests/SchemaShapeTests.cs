@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text.Json;
 using Dapper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -11,6 +13,36 @@ namespace Yf.Api.Tests;
 [Collection(ConnectionLifecycleCollection.Name)]
 public sealed class SchemaShapeTests
 {
+    [Fact]
+    public async Task RobotPartCatalogEmbeddedSnapshotIsCompleteAndPinned()
+    {
+        var assembly = typeof(AppDb).Assembly;
+        var resourceName = Assert.Single(assembly.GetManifestResourceNames(),
+            name => name.EndsWith("robot-parts-20260923.json", StringComparison.Ordinal));
+        await using var resource = assembly.GetManifestResourceStream(resourceName);
+        Assert.NotNull(resource);
+        using var buffer = new MemoryStream();
+        await resource.CopyToAsync(buffer, TestContext.Current.CancellationToken);
+        var bytes = buffer.ToArray();
+
+        Assert.Equal("daced1ae638796f5a4f097b9e1025834ab6abe409266d20096f0ff73d26de384",
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+        using var document = JsonDocument.Parse(bytes);
+        Assert.Equal("aa2256021de680a4b03c8bff32d9df2684ef56d5b47efadb86c47583429b11ab",
+            document.RootElement.GetProperty("source").GetProperty("sha256").GetString());
+        var parts = document.RootElement.GetProperty("parts").EnumerateArray().ToArray();
+        Assert.Equal(27, parts.Length);
+        Assert.Equal(7, parts.Select(part => part.GetProperty("supplierName").GetString())
+            .Distinct(StringComparer.Ordinal).Count());
+        Assert.All(parts, part =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(part.GetProperty("supplierName").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(part.GetProperty("partNumber").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(part.GetProperty("model").GetString()));
+            Assert.True(part.GetProperty("sourceRow").GetInt32() > 1);
+        });
+    }
+
     [Theory(Timeout = 120_000)]
     [InlineData(false)]
     [InlineData(true)]
@@ -62,7 +94,7 @@ public sealed class SchemaShapeTests
         Assert.Equal(hash, await conn.ExecuteScalarAsync<string>("SELECT password_hash FROM users WHERE employee_no='admin'"));
         Assert.Equal("RestartSentinel", await conn.ExecuteScalarAsync<string>("SELECT real_name FROM users WHERE employee_no='admin'"));
         Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT must_change_password FROM users WHERE employee_no='admin'"));
-        Assert.Equal(6, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+        Assert.Equal(9, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
     }
 
     [Fact(Timeout = 120_000)]
@@ -80,7 +112,6 @@ public sealed class SchemaShapeTests
             Assert.False(await TableExistsAsync(conn, "__EFMigrationsHistory", ct));
         }
         await database.ExecuteAsync("DROP TABLE sentinel", ct);
-        await database.InitializeAsync(ct);
         await using (var db = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct))
             await db.GetService<IMigrator>().MigrateAsync("20260918153503_AddOemPlatform", ct);
         await Assert.ThrowsAsync<InvalidOperationException>(() => EfDatabaseLifecycle.PrepareStartupAsync(database.Options, ct));
@@ -157,6 +188,9 @@ public sealed class SchemaShapeTests
                     "20260923032837_FileListIndex",
                     "20260923064746_UnreadWindowIndexes",
                     "20260923071427_RefreshTokenExpiryIndex",
+                    "20260923094642_AddRobotPartCatalog",
+                    "20260923131700_HardenSessionsAndQueryIndexes",
+                    "20260923141854_AddProjectCopyJobs",
                 },
                 (await conn.QueryAsync<string>("SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId")).ToArray());
             Assert.False(await TableExistsAsync(conn, "yf_schema_migrations", ct));
@@ -171,8 +205,96 @@ public sealed class SchemaShapeTests
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
                 "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND (column_name LIKE 'oem\\_%' OR column_name IN ('recipient_realm','recipient_account_id','actor_realm','actor_account_id','leader_account_id'))"));
             Assert.Equal(3, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM project_dictionaries WHERE type='PRIORITY'"));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM project_dictionaries WHERE type IN ('ROBOT_VENDOR','ROBOT_MODEL')"));
+            Assert.Equal(7, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
+            Assert.Equal(27, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
+            Assert.Equal(9, await conn.ExecuteScalarAsync<int>("""
+                SELECT COUNT(*) FROM robot_parts rp
+                INNER JOIN suppliers s ON s.id=rp.supplier_id
+                WHERE BINARY s.name=BINARY '珞石'
+                """));
         }
         await SchemaBootstrap.ValidateAsync(database.Database, ct);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task RobotPartCatalogUpgradePreservesLegacyProjectsAndExactSupplierIdentity()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("robot_catalog_upgrade", ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync("20260923071427_RefreshTokenExpiryIndex", ct);
+        await database.ExecuteAsync("""
+            INSERT INTO suppliers(id,name,status,created_at,updated_at)
+            VALUES(8101,'珞石','DISABLED','2026-01-01 00:00:00','2026-01-01 00:00:00'),
+                  (8102,'络石','ACTIVE','2026-01-01 00:00:00','2026-01-01 00:00:00');
+            INSERT INTO departments(id,name,parent_id,sort_no,status,kind,created_at,updated_at)
+            VALUES(8103,'旧项目课别',NULL,0,'ACTIVE','SECTION','2026-01-01 00:00:00','2026-01-01 00:00:00');
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES(8104,'legacy-owner','unused','旧项目负责人','legacy@example.test','INTERNAL',8103,'ACTIVE',0,0,'2026-01-01 00:00:00','2026-01-01 00:00:00');
+            INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
+            VALUES(8105,'ROBOT_VENDOR','络石',NULL,1,'ACTIVE'),
+                  (8106,'ROBOT_MODEL','旧 Robot 型号原文',8105,1,'ACTIVE'),
+                  (8107,'PRIORITY','旧项目优先级',NULL,1,'ACTIVE');
+            INSERT INTO project_groups
+              (id,name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,robot_model_id,
+               responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
+            VALUES(8108,'旧主项目','升级保护',8102,'DRAFT',8104,'旧机型',8105,8106,8104,8103,8107,
+                   '2026-12-31','2026-01-02 03:04:05','2026-01-02 03:04:05');
+            INSERT INTO projects
+              (id,project_group_id,name,description,supplier_id,status,created_by,machine_model,robot_vendor_id,robot_model_id,
+               responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
+            VALUES(8109,8108,'旧子项目','升级保护',8102,'DRAFT',8104,'旧机型',8105,8106,8104,8103,8107,
+                   '2026-12-31','2026-01-02 03:04:05','2026-01-02 03:04:05');
+            """, ct);
+
+        await migrator.MigrateAsync("20260923094642_AddRobotPartCatalog", ct);
+        await migrator.MigrateAsync("20260923094642_AddRobotPartCatalog", ct);
+
+        await using var conn = await database.Database.OpenAsync(ct);
+        Assert.Equal(7, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+        Assert.Equal(27, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
+        Assert.Equal(8, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
+        Assert.Equal(8101UL, await conn.ExecuteScalarAsync<ulong>("SELECT id FROM suppliers WHERE BINARY name=BINARY '珞石'"));
+        Assert.Equal("DISABLED", await conn.ExecuteScalarAsync<string>("SELECT status FROM suppliers WHERE id=8101"));
+        Assert.Equal(8102UL, await conn.ExecuteScalarAsync<ulong>("SELECT id FROM suppliers WHERE BINARY name=BINARY '络石'"));
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>("""
+            SELECT COUNT(*) FROM robot_parts rp INNER JOIN suppliers s ON s.id=rp.supplier_id
+            WHERE BINARY s.name=BINARY '络石'
+            """));
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM project_dictionaries WHERE type IN ('ROBOT_VENDOR','ROBOT_MODEL')"));
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM project_dictionaries WHERE id=8107 AND type='PRIORITY'"));
+        Assert.False(await ColumnExistsAsync(conn, "projects", "robot_vendor_id", ct));
+        Assert.False(await ColumnExistsAsync(conn, "projects", "robot_model_id", ct));
+        Assert.False(await ColumnExistsAsync(conn, "project_groups", "robot_vendor_id", ct));
+        Assert.False(await ColumnExistsAsync(conn, "project_groups", "robot_model_id", ct));
+
+        var group = await conn.QuerySingleAsync<LegacyProjectState>(new CommandDefinition("""
+            SELECT supplier_id AS SupplierId,responsible_user_id AS ResponsibleUserId,section_id AS SectionId,
+                   robot_part_id AS RobotPartId,legacy_robot_model_name AS LegacyRobotModelName,
+                   expected_completion_date AS ExpectedCompletionDate,updated_at AS UpdatedAt
+            FROM project_groups WHERE id=8108
+            """, cancellationToken: ct));
+        var project = await conn.QuerySingleAsync<LegacyProjectState>(new CommandDefinition("""
+            SELECT supplier_id AS SupplierId,responsible_user_id AS ResponsibleUserId,section_id AS SectionId,
+                   robot_part_id AS RobotPartId,legacy_robot_model_name AS LegacyRobotModelName,
+                   expected_completion_date AS ExpectedCompletionDate,updated_at AS UpdatedAt
+            FROM projects WHERE id=8109
+            """, cancellationToken: ct));
+        foreach (var row in new[] { group, project })
+        {
+            Assert.Equal(8102UL, row.SupplierId);
+            Assert.Equal(8104UL, row.ResponsibleUserId);
+            Assert.Equal(8103UL, row.SectionId);
+            Assert.Null(row.RobotPartId);
+            Assert.Equal("旧 Robot 型号原文", row.LegacyRobotModelName);
+            Assert.Equal(new DateTime(2026, 12, 31), row.ExpectedCompletionDate);
+            Assert.Equal(new DateTime(2026, 1, 2, 3, 4, 5), row.UpdatedAt);
+        }
     }
 
     [Fact(Timeout = 120_000)]
@@ -197,8 +319,10 @@ public sealed class SchemaShapeTests
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await using var conn = await database.Database.OpenAsync(ct);
-        Assert.Equal(6, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+        Assert.Equal(9, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM users WHERE employee_no='admin'"));
+        Assert.Equal(27, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
+        Assert.Equal(7, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
     }
 
     [Fact(Timeout = 120_000)]
@@ -240,6 +364,23 @@ public sealed class SchemaShapeTests
         await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
             "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=@table)",
             new { table }, cancellationToken: ct));
+
+    private static async Task<bool> ColumnExistsAsync(
+        MySqlConnection connection, string table, string column, CancellationToken ct) =>
+        await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=@table AND column_name=@column)",
+            new { table, column }, cancellationToken: ct));
+
+    private sealed class LegacyProjectState
+    {
+        public ulong SupplierId { get; init; }
+        public ulong ResponsibleUserId { get; init; }
+        public ulong SectionId { get; init; }
+        public ulong? RobotPartId { get; init; }
+        public string? LegacyRobotModelName { get; init; }
+        public DateTime ExpectedCompletionDate { get; init; }
+        public DateTime UpdatedAt { get; init; }
+    }
 
     internal sealed class SchemaDatabaseScope(
         MySqlConnection administration,

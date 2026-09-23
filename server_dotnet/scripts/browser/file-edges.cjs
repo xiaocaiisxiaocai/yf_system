@@ -1,27 +1,18 @@
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const XLSX = require(process.env.YF_PROJECT_ROOT + '/web/node_modules/xlsx');
-const { fs, assert, OUT, s, f, record, login, api, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
+const { fs, assert, OUT, s, f, record, login, api, projectMetadata, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
 const fileListPath = projectId => '/api/v1/projects/' + projectId + '/files';
 
-async function createProjectGroup(context, token, supplierId, ownerId, name) {
-  const vendors = await (await api(context, 'GET', '/project-dictionaries?type=ROBOT_VENDOR&enabledOnly=true', undefined, token)).json();
-  assert(vendors.length > 0, 'file fixture needs a Robot vendor');
-  const models = await (await api(context, 'GET', '/project-dictionaries?type=ROBOT_MODEL&parentId=' + vendors[0].id + '&enabledOnly=true', undefined, token)).json();
-  const priorities = await (await api(context, 'GET', '/project-dictionaries?type=PRIORITY&enabledOnly=true', undefined, token)).json();
-  assert(models.length > 0 && priorities.length > 0, 'file fixture needs model and priority options');
+async function createProjectGroup(context, token, supplierId, name) {
   const group = await (await api(context, 'POST', '/project-groups', {
     name,
     description: 'O26/O28 独立浏览器验收夹具',
     supplierId,
     workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
     machineModel: '文件边界机型',
-    robotVendorId: vendors[0].id,
-    robotModelId: models[0].id,
-    responsibleUserId: ownerId,
-    priorityId: priorities[0].id,
-    expectedCompletionDate: '2099-12-31',
+    ...await projectMetadata(context, token, supplierId),
     subprojectNames: [name + ' 子项目'],
   }, token)).json();
   const detail = await (await api(context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
@@ -112,14 +103,10 @@ async function assertExcelGrid(dialog, expectedRows) {
     await api(admin, 'PUT', '/admin/system/configs', {
       items: [{ key: 'upload.chunk_size', value: String(1024 * 1024) }],
     }, adminToken);
-    const ownerOptions = await (await api(
-      admin, 'GET', '/project-owner-options', undefined, adminToken)).json();
-    const owner = ownerOptions.find(item => item.id === f.users.member?.id && item.sectionName?.trim())
-      || ownerOptions.find(item => item.sectionName?.trim());
-    assert(owner, 'file fixture needs an active project owner with a section');
     const project = await createProjectGroup(
-      admin, adminToken, f.suppliers.a.id, owner.id, '文件边界验收-' + suffix);
-    await api(admin, 'PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' }, adminToken);
+      internalApi, f.users.member.token, f.suppliers.a.id, '文件边界验收-' + suffix);
+    await api(internalApi, 'PUT', '/projects/' + project.id + '/status',
+      { status: 'IN_PROGRESS' }, f.users.member.token);
 
     const c2sNames = [];
     const s2cNames = [];

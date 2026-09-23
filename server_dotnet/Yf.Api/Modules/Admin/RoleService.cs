@@ -50,18 +50,18 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         await GateAsync(context, actor, "role:manage", ct);
         var name = request.Name.Trim();
         await UniqueAsync(context, name, null, ct);
-        var created = new Role { Name = name, Description = request.Description, IsBuiltIn = false, Status = "ACTIVE" };
+        var created = new Role { Name = name, Description = request.Description, IsBuiltIn = false, Status = AccountStatuses.Active };
         context.Roles.Add(created);
         await context.SaveChangesAsync(ct);
         await audit.WriteAsync(context.Database.Connection(), context.Database.Transaction(), actor.Id, "ROLE_CREATE", "role", created.Id, new
         {
             name,
-            status = "ACTIVE",
+            status = AccountStatuses.Active,
             targetName = name,
             changes = AuditChange.OnlyChanged(
                 new AuditChange("name", "角色名称", null, name),
                 new AuditChange("description", "角色说明", null, request.Description),
-                new AuditChange("status", "状态", null, "ACTIVE"))
+                new AuditChange("status", "状态", null, AccountStatuses.Active))
         }, null, ct);
         var result = await JsonAsync(context, created, true, ct);
         await tx.CommitAsync(ct);
@@ -106,11 +106,11 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         await GateAsync(context, actor, "role:manage", ct);
         await ceiling.EnsureManageRoleAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, id, ct);
         var role = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
-        if (status == "DISABLED")
+        if (status == AccountStatuses.Disabled)
         {
             await EnsureProjectListRemovalSafeAsync(context, id, ct);
             var count = await context.Users.Join(context.UserRoles, u => u.Id, ur => ur.UserId, (u, ur) => new { u, ur })
-                .CountAsync(x => x.ur.RoleId == id && x.u.Status == "ACTIVE", ct);
+                .CountAsync(x => x.ur.RoleId == id && x.u.Status == AccountStatuses.Active, ct);
             if (count > 0) throw ApiException.BadRequest($"该角色仍绑定 {count} 个启用用户，请先为这些用户更换角色或禁用账号");
         }
         await context.Roles.Where(r => r.Id == id).ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, status), ct);
@@ -142,14 +142,15 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var valid = ids.Length == 0 ? [] : await context.Permissions.AsNoTracking().Where(p => Enumerable.Contains(ids, p.Id)).ToArrayAsync(ct);
         if (valid.Length != ids.Length) throw ApiException.BadRequest("权限点不存在");
         var assignedToSupplier = await context.UserRoles.Join(context.Users, ur => ur.UserId, u => u.Id, (ur, u) => new { ur, u })
-            .AnyAsync(x => x.ur.RoleId == id && x.u.UserType == "SUPPLIER", ct);
+            .AnyAsync(x => x.ur.RoleId == id && x.u.UserType == UserTypes.Supplier, ct);
         if (!IsSupplierPermissionSetAllowed(role.IsBuiltIn, role.Name, valid.Select(x => x.Code)) ||
             assignedToSupplier && !IsSupplierAccountPermissionSetAllowed(valid.Select(x => x.Code)))
             throw ApiException.BadRequest("供应商账号角色只能授予供应商自有项目所需权限");
-        if (role.IsBuiltIn && role.Name == "系统管理员")
+        if (role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator)
         {
             var boundActiveInternal = await context.UserRoles.Join(context.Users, ur => ur.UserId, u => u.Id, (ur, u) => new { ur, u })
-                .CountAsync(x => x.ur.RoleId == id && x.u.UserType == "INTERNAL" && x.u.Status == "ACTIVE", ct);
+                .CountAsync(x => x.ur.RoleId == id && x.u.UserType == UserTypes.Internal
+                    && x.u.Status == AccountStatuses.Active, ct);
             if (boundActiveInternal > 0)
             {
                 var requiredCodes = new[] { "rbac:role", "role:manage", "org:user", "user:manage" };
@@ -216,7 +217,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
                            join ur in context.UserRoles on g.ResponsibleUserId equals (ulong?)ur.UserId
                            where ur.RoleId == roleId && (g.Status == "DRAFT" || g.Status == "IN_PROGRESS")
                            select g.Id).Distinct().CountAsync(ct);
-        if (count > 0) throw ApiException.BadRequest($"该角色仍有用户负责 {count} 个未结束主项目，请先转交负责人再移除项目列表权限");
+        if (count > 0) throw ApiException.BadRequest($"该角色仍有用户负责 {count} 个未结束主项目，请先结束相关项目再移除项目列表权限");
     }
 
     private static async Task GateAsync(YfDbContext context, CurrentUser actor, string permission, CancellationToken ct)
@@ -253,7 +254,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
             .ToDictionaryAsync(row => row.RoleId, row => row.Count, ct);
         var assignedToSupplier = (await context.UserRoles.Where(ur => Enumerable.Contains(roleIds, ur.RoleId))
                 .Join(context.Users, ur => ur.UserId, u => u.Id, (ur, u) => new { ur.RoleId, u.UserType })
-                .Where(x => x.UserType == "SUPPLIER").Select(x => x.RoleId).Distinct().ToListAsync(ct))
+                .Where(x => x.UserType == UserTypes.Supplier).Select(x => x.RoleId).Distinct().ToListAsync(ct))
             .ToHashSet();
         return roles.Select(r => new RoleResponse(
             r.Id, r.Name, r.Description, r.IsBuiltIn, r.Status,

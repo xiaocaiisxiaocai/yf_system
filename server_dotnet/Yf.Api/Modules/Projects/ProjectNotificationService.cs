@@ -149,7 +149,7 @@ internal static class ProjectNotificationService
         CancellationToken ct)
     {
         var policy = await EmailNotificationPolicy.LoadAsync(conn, tx, ct);
-        if (!policy.Allows("PROJECT_SUBMITTED", "INTERNAL"))
+        if (!policy.Allows("PROJECT_SUBMITTED", UserTypes.Internal))
         {
             return;
         }
@@ -277,21 +277,21 @@ internal static class ProjectNotificationService
     {
         await using var db = EfDb.Use(conn, tx);
         var rows = await db.Users
-            .Where(user => user.Status == "ACTIVE")
+            .Where(user => user.Status == AccountStatuses.Active)
             .Where(user => db.UserRoles.Any(userRole =>
                 userRole.UserId == user.Id
-                && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == "ACTIVE")
+                && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == AccountStatuses.Active)
                 && db.RolePermissions.Any(rolePermission =>
                     rolePermission.RoleId == userRole.RoleId
                     && db.Permissions.Any(permission =>
                         permission.Id == rolePermission.PermissionId && permission.Code == "project:list"))))
             .Where(user => db.Projects.Any(currentProject =>
                 currentProject.Id == project.Id
-                && ((user.UserType == "INTERNAL" && user.Id == currentProject.ResponsibleUserId)
-                    || (user.UserType == "SUPPLIER"
+                && ((user.UserType == UserTypes.Internal && user.Id == currentProject.ResponsibleUserId)
+                    || (user.UserType == UserTypes.Supplier
                         && user.SupplierId == currentProject.SupplierId
                         && db.Suppliers.Any(supplier =>
-                            supplier.Id == currentProject.SupplierId && supplier.Status == "ACTIVE")))))
+                            supplier.Id == currentProject.SupplierId && supplier.Status == AccountStatuses.Active)))))
             .OrderBy(user => user.Id)
             .Select(user => new UserRow
             {
@@ -336,7 +336,7 @@ internal static class ProjectNotificationService
             var targetUserIds = targetUsers.ToArray();
             await using var db = EfDb.Use(conn, tx);
             var explicitUsers = await db.Users
-                .Where(user => Enumerable.Contains(targetUserIds, user.Id) && user.Status == "ACTIVE")
+                .Where(user => Enumerable.Contains(targetUserIds, user.Id) && user.Status == AccountStatuses.Active)
                 .OrderBy(user => user.Id)
                 .Select(user => new UserRow
                 {
@@ -435,7 +435,7 @@ internal static class ProjectNotificationService
     {
         await using var db = EfDb.Use(conn, tx);
         var recipient = await db.Users
-            .Where(user => user.Id == recipientId && user.Status == "ACTIVE")
+            .Where(user => user.Id == recipientId && user.Status == AccountStatuses.Active)
             .Select(user => new UserRow
             {
                 Id = user.Id,
@@ -517,7 +517,7 @@ internal static class ProjectNotificationService
             .MaxAsync(ct);
     }
 
-    private static string SideUserType(string side) => side == "SUPPLIER" ? "SUPPLIER" : "INTERNAL";
+    private static string SideUserType(string side) => side == "SUPPLIER" ? UserTypes.Supplier : UserTypes.Internal;
 
     private static string ProjectUrl(string baseUrl, ulong projectId, string tab, ulong? targetId = null) =>
         $"{baseUrl.TrimEnd('/')}/projects/{projectId}?tab={tab}" + (targetId is null ? string.Empty : $"&target={targetId.Value}");

@@ -118,13 +118,13 @@ public sealed partial class UploadService
                 MimeType = FileStorage.MimeType(session.FileName),
                 Sha256 = hash.Sha256,
                 StoragePath = relativePath,
-                Status = "AVAILABLE",
+                Status = FileStatuses.Available,
                 CreatedAt = now
             };
             ef.Files.Add(file);
             await ef.SaveChangesAsync(ct);
             var fileId = file.Id;
-            await EnqueueFileNoticeAsync(conn, tx, project.Id, fileId, session.FileName, current, ct);
+            await EnqueueFileNoticeAsync(conn, tx, project.Id, fileId, session.FileName, direction, current, ct);
             await audit.WriteAsync(conn, tx, current.Id, "FILE_UPLOAD", "file", fileId,
                 new { name = session.FileName, size = session.FileSize, projectId = session.ProjectId },
                 ClientIp.Resolve(context, options), ct);
@@ -251,32 +251,28 @@ public sealed partial class UploadService
         catch { return null; }
     }
 
+    private const int FileSummaryDelayMinutes = 2;
+    private const int FileSummaryMaximumBodyBytes = 60_000;
+
     private async Task EnqueueFileNoticeAsync(MySqlConnection conn, MySqlTransaction tx, ulong projectId,
-        ulong fileId, string fileName, CurrentUser uploader, CancellationToken ct)
+        ulong fileId, string fileName, string direction, CurrentUser uploader, CancellationToken ct)
     {
         var policy = await EmailNotificationPolicy.LoadAsync(conn, tx, ct);
         if (!policy.Allows("FILE_UPLOADED", null)) return;
         await using var context = EfDb.Use(conn, tx);
         var project = await context.Projects.SingleAsync(item => item.Id == projectId, ct);
-        var supplierActive = await context.Suppliers.AnyAsync(item => item.Id == project.SupplierId && item.Status == "ACTIVE", ct);
-        var recipientsQuery = context.Users.Where(user => user.Status == "ACTIVE" && user.Id != uploader.Id
-            && context.UserRoles.Where(userRole => userRole.UserId == user.Id)
-                .Join(context.Roles.Where(role => role.Status == "ACTIVE"), userRole => userRole.RoleId, role => role.Id, (userRole, _) => userRole)
-                .Join(context.RolePermissions, userRole => userRole.RoleId, rolePermission => rolePermission.RoleId, (_, rolePermission) => rolePermission)
-                .Join(context.Permissions.Where(permission => permission.Code == "project:list"),
-                    rolePermission => rolePermission.PermissionId, permission => permission.Id, (_, _) => true).Any());
-        recipientsQuery = uploader.UserType == "SUPPLIER"
-            ? recipientsQuery.Where(user => user.UserType == "INTERNAL" && user.Id == project.ResponsibleUserId)
-            : recipientsQuery.Where(user => user.UserType == "SUPPLIER" && user.SupplierId == project.SupplierId && supplierActive);
+        var supplierActive = await context.Suppliers.AnyAsync(item => item.Id == project.SupplierId && item.Status == AccountStatuses.Active, ct);
+        var permittedUserIds = AccessService.UsersWithPermission(context, "project:list");
+        var recipientsQuery = context.Users.Where(user => user.Status == AccountStatuses.Active && user.Id != uploader.Id
+            && permittedUserIds.Contains(user.Id));
+        recipientsQuery = uploader.UserType == UserTypes.Supplier
+            ? recipientsQuery.Where(user => user.UserType == UserTypes.Internal && user.Id == project.ResponsibleUserId)
+            : recipientsQuery.Where(user => user.UserType == UserTypes.Supplier && user.SupplierId == project.SupplierId && supplierActive);
         var recipients = await recipientsQuery.OrderBy(user => user.Id)
             .Select(user => new NoticeRecipient
             {
                 Id = user.Id, Email = user.Email, EmployeeNo = user.EmployeeNo, RealName = user.RealName, UserType = user.UserType
             }).ToArrayAsync(ct);
-        var projectName = project.Name;
-        var subject = $"[协作平台] 项目「{projectName}」有新文件上传";
-        var targetUrl = $"{options.WebBaseUrl.TrimEnd('/')}/projects/{projectId}?tab=files&target={fileId}";
-        var body = $"项目：{projectName}\n文件：{fileName}\n上传人：工号 {uploader.EmployeeNo}\n\n请登录平台查看并下载：{targetUrl}\n\n（本邮件由系统自动发送，附件请登录平台获取）";
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var createdAt = await DbNowAsync(context, ct);
         foreach (var recipient in recipients)
@@ -290,20 +286,78 @@ public sealed partial class UploadService
                 continue;
             }
             if (!seen.Add(recipient.Email)) continue;
-            context.EmailOutbox.Add(new EmailOutbox
-            {
-                EventType = "FILE_UPLOADED",
-                ProjectId = projectId,
-                RecipientUserId = recipient.Id,
-                RecipientEmail = recipient.Email,
-                Subject = subject,
-                Body = body,
-                Status = "PENDING",
-                RetryCount = 0,
-                CreatedAt = createdAt
-            });
+            await EnqueueFileSummaryForRecipientAsync(
+                conn, tx, projectId, project.Name, fileId, fileName, direction, uploader.EmployeeNo,
+                recipient.Id, recipient.Email, options.WebBaseUrl, createdAt, ct);
         }
-        await context.SaveChangesAsync(ct);
+    }
+
+    internal static async Task EnqueueFileSummaryForRecipientAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        ulong projectId,
+        string projectName,
+        ulong fileId,
+        string fileName,
+        string direction,
+        string uploaderEmployeeNo,
+        ulong recipientUserId,
+        string recipientEmail,
+        string webBaseUrl,
+        DateTime createdAt,
+        CancellationToken ct)
+    {
+        if (direction is not ("C2S" or "S2C"))
+            throw new InvalidOperationException("文件通知方向无效");
+
+        var safeProjectName = SafeMailLine(projectName, 100);
+        var safeFileName = SafeMailLine(fileName, 240);
+        var safeEmployeeNo = SafeMailLine(uploaderEmployeeNo, 64);
+        var target = $"{webBaseUrl.Trim().TrimEnd('/')}/projects/{projectId}?tab=files&target={fileId}";
+        if (!Uri.TryCreate(target, UriKind.Absolute, out var targetUrl)
+            || !targetUrl.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+               && !targetUrl.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("邮件文件链接配置无效");
+
+        var directionText = direction == "C2S" ? "公司 → 供应商" : "供应商 → 公司";
+        var entry = $"- {safeFileName}\n  {targetUrl.AbsoluteUri}\n  上传人：工号 {safeEmployeeNo}\n";
+        var body = $"项目：{safeProjectName}\n方向：{directionText}\n以下文件请登录平台查看并下载（邮件不含附件）：\n\n{entry}";
+        var subject = $"[协作平台] 项目「{safeProjectName}」文件上传摘要";
+        var dedupeKey = FileSummaryDedupeKey(projectId, recipientUserId, direction);
+        var nextAttemptAt = createdAt.AddMinutes(FileSummaryDelayMinutes);
+
+        await using var context = EfDb.Use(conn, tx);
+        // A stable unique key identifies only the currently mergeable window. Stale,
+        // oversized, claimed and retried rows release it so a fresh window can start.
+        await context.Database.ExecuteSqlInterpolatedAsync($$"""
+            UPDATE email_outbox
+            SET dedupe_key=NULL
+            WHERE dedupe_key={{dedupeKey}}
+              AND (status<>'PENDING' OR retry_count<>0 OR sent_at IS NOT NULL OR next_attempt_at IS NULL
+                   OR OCTET_LENGTH(body)+OCTET_LENGTH({{entry}})>{{FileSummaryMaximumBodyBytes}})
+            """, ct);
+        await context.Database.ExecuteSqlInterpolatedAsync($$"""
+            INSERT INTO email_outbox
+                (event_type,project_id,dedupe_key,recipient_user_id,recipient_email,
+                 subject,body,status,retry_count,next_attempt_at,last_error,sent_at,created_at)
+            VALUES
+                ('FILE_UPLOADED',{{projectId}},{{dedupeKey}},{{recipientUserId}},{{recipientEmail}},
+                 {{subject}},{{body}},'PENDING',0,{{nextAttemptAt}},NULL,NULL,{{createdAt}})
+            ON DUPLICATE KEY UPDATE
+                recipient_email=IF(status='PENDING' AND retry_count=0 AND sent_at IS NULL AND next_attempt_at IS NOT NULL,
+                                   VALUES(recipient_email),recipient_email),
+                body=IF(status='PENDING' AND retry_count=0 AND sent_at IS NULL AND next_attempt_at IS NOT NULL,
+                        CONCAT(body,{{entry}}),body)
+            """, ct);
+    }
+
+    internal static string FileSummaryDedupeKey(ulong projectId, ulong recipientUserId, string direction) =>
+        $"file-summary:{projectId}:{recipientUserId}:{direction}";
+
+    internal static string SafeMailLine(string value, int maximumRunes)
+    {
+        var normalized = Regex.Replace(value, @"[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\s]+", " ").Trim();
+        return string.Concat(normalized.EnumerateRunes().Take(maximumRunes));
     }
 
     internal static FileResponse FileJson(FileRow file) => new(

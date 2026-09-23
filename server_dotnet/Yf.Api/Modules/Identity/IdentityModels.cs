@@ -30,8 +30,6 @@ public sealed record LoginResponse(
     IReadOnlyList<string> Menus,
     UserBrief User);
 
-public sealed record TokenResponse(string AccessToken, long ExpiresAt);
-
 public sealed record ProfileResponse(
     UserBrief User,
     bool MustChangePassword,

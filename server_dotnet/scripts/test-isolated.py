@@ -5,6 +5,7 @@ Connection credentials stay in process memory; only test names/results are print
 """
 import hashlib
 import contextlib
+from collections import defaultdict, deque
 import http.cookiejar
 import io
 import json
@@ -16,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -26,6 +28,8 @@ import pymysql
 from test_host_artifacts import verify_test_host_artifacts
 from test_identity_contracts import run_identity_checks
 from test_file_contracts import run_file_checks
+from test_native_download_contracts import run_native_download_checks
+from test_background_copy_contracts import run_background_copy_checks
 from test_role_fixtures import assert_admin_only_initialization, install_legacy_test_roles
 from test_system_contracts import run_system_checks
 from test_project_remediation import run_project_remediation_checks
@@ -39,10 +43,22 @@ ARTIFACTS_ROOT = (ROOT / ".artifacts").resolve()
 TEST_ROOT = ARTIFACTS_ROOT / "tests"
 TEST_TEMP_ROOT = TEST_ROOT / "tmp"
 TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+CONFIGURATION = os.environ.get("YF_TEST_CONFIGURATION", "Debug").strip()
+if CONFIGURATION not in {"Debug", "Release", "Hardening", "Migration"}:
+    raise SystemExit("YF_TEST_CONFIGURATION must be exactly Debug, Release, Hardening, or Migration")
 PUBLISHED = os.environ.get("YF_TEST_API_DIR")
 API = Path(PUBLISHED).resolve() if PUBLISHED else ROOT / "server_dotnet/Yf.Api"
-DLL = API / "Yf.Api.dll" if PUBLISHED else API / "bin/Debug/net8.0/Yf.Api.dll"
-TEST_HOST = ROOT / "server_dotnet/TestHost/bin/Debug/net8.0/Yf.Api.TestHost.dll"
+DLL = API / "Yf.Api.dll" if PUBLISHED else API / f"bin/{CONFIGURATION}/net8.0/Yf.Api.dll"
+TEST_HOST_SETTING = os.environ.get("YF_TEST_HOST_PATH")
+if TEST_HOST_SETTING:
+    configured_test_host = Path(TEST_HOST_SETTING)
+    TEST_HOST = (
+        configured_test_host.resolve()
+        if configured_test_host.is_absolute()
+        else (ROOT / "server_dotnet" / configured_test_host).resolve()
+    )
+else:
+    TEST_HOST = ROOT / f"server_dotnet/TestHost/bin/{CONFIGURATION}/net8.0/Yf.Api.TestHost.dll"
 checks = []
 FILES_ONLY = sys.argv[1:] == ["--files-only"]
 if sys.argv[1:] and not FILES_ONLY:
@@ -76,6 +92,112 @@ def check(name, condition):
     print("PASS " + name, flush=True)
 
 
+class LoginRequestBudget:
+    """Process-local rolling budget shared by every HTTP fixture client."""
+
+    def __init__(self, ip_limit=50, account_limit=8, window_seconds=60.0,
+                 clock=time.monotonic, sleep=time.sleep):
+        self.ip_limit = ip_limit
+        self.account_limit = account_limit
+        self.window_seconds = window_seconds
+        self.clock = clock
+        self.sleep = sleep
+        self.lock = threading.Lock()
+        self.by_base = defaultdict(deque)
+        self.by_account = defaultdict(deque)
+
+    def wait(self, base, employee_no):
+        account_key = (base, employee_no.strip().casefold())
+        while True:
+            with self.lock:
+                now = self.clock()
+                cutoff = now - self.window_seconds
+                base_attempts = self.by_base[base]
+                account_attempts = self.by_account[account_key]
+                while base_attempts and base_attempts[0] <= cutoff:
+                    base_attempts.popleft()
+                while account_attempts and account_attempts[0] <= cutoff:
+                    account_attempts.popleft()
+                delays = []
+                if len(base_attempts) >= self.ip_limit:
+                    delays.append(base_attempts[0] + self.window_seconds - now)
+                if len(account_attempts) >= self.account_limit:
+                    delays.append(account_attempts[0] + self.window_seconds - now)
+                if not delays:
+                    base_attempts.append(now)
+                    account_attempts.append(now)
+                    return
+                delay = max(delays)
+            self.sleep(max(delay, 0.001))
+
+    def record_without_waiting(self, base, employee_no):
+        """Track an intentional 429 probe without delaying the probe itself."""
+        account_key = (base, employee_no.strip().casefold())
+        with self.lock:
+            now = self.clock()
+            cutoff = now - self.window_seconds
+            base_attempts = self.by_base[base]
+            account_attempts = self.by_account[account_key]
+            while base_attempts and base_attempts[0] <= cutoff:
+                base_attempts.popleft()
+            while account_attempts and account_attempts[0] <= cutoff:
+                account_attempts.popleft()
+            base_attempts.append(now)
+            account_attempts.append(now)
+
+
+LOGIN_REQUEST_BUDGET = LoginRequestBudget()
+
+
+def login_employee_no(method, path, body):
+    if (method == "POST" and path == "/api/v1/auth/login"
+            and isinstance(body, dict) and isinstance(body.get("employeeNo"), str)):
+        return body["employeeNo"]
+    return None
+
+
+def login_pacing_mode(method, path, body, expected):
+    employee_no = login_employee_no(method, path, body)
+    if employee_no is None:
+        return None, None
+    return ("record" if expected == 429 else "wait"), employee_no
+
+
+def verify_login_request_budget():
+    class FakeClock:
+        def __init__(self):
+            self.now = 0.0
+            self.sleeps = []
+
+        def clock(self):
+            return self.now
+
+        def sleep(self, delay):
+            self.sleeps.append(delay)
+            self.now += delay
+
+    ip_clock = FakeClock()
+    ip_budget = LoginRequestBudget(2, 2, 10.0, ip_clock.clock, ip_clock.sleep)
+    ip_budget.wait("http://fixture", "first")
+    ip_budget.wait("http://fixture", "second")
+    ip_budget.wait("http://fixture", "third")
+    account_clock = FakeClock()
+    account_budget = LoginRequestBudget(10, 1, 10.0, account_clock.clock, account_clock.sleep)
+    account_budget.wait("http://fixture", "same")
+    account_budget.wait("http://fixture", " SAME ")
+    probe_clock = FakeClock()
+    probe_budget = LoginRequestBudget(1, 1, 10.0, probe_clock.clock, probe_clock.sleep)
+    probe_budget.record_without_waiting("http://fixture", "probe")
+    probe_budget.wait("http://fixture", "probe")
+    check("HTTP fixture login budget is shared, rolling, and skips explicit 429 probes",
+          ip_clock.sleeps == [10.0] and account_clock.sleeps == [10.0]
+          and probe_clock.sleeps == [10.0]
+          and login_pacing_mode("POST", "/api/v1/auth/login", {"employeeNo": "a"}, 200) == ("wait", "a")
+          and login_pacing_mode("POST", "/api/v1/auth/login", {"employeeNo": "a"}, 401) == ("wait", "a")
+          and login_pacing_mode("POST", "/api/v1/auth/login", {"employeeNo": "a"}, 429) == ("record", "a")
+          and login_pacing_mode("GET", "/api/v1/auth/login", {"employeeNo": "a"}, 200) == (None, None))
+
+
 class Client:
     def __init__(self, base):
         self.base = base
@@ -84,6 +206,11 @@ class Client:
         self.token = None
 
     def call(self, method, path, body=None, expected=200, headers=None, raw=False):
+        pacing_mode, login_account = login_pacing_mode(method, path, body, expected)
+        if pacing_mode == "record":
+            LOGIN_REQUEST_BUDGET.record_without_waiting(self.base, login_account)
+        elif pacing_mode == "wait":
+            LOGIN_REQUEST_BUDGET.wait(self.base, login_account)
         req_headers = {"Origin": self.base}
         if self.token:
             req_headers["Authorization"] = "Bearer " + self.token
@@ -108,6 +235,9 @@ class Client:
         result = self.call("POST", "/api/v1/auth/login", {"employeeNo": username, "password": password})
         self.token = result["accessToken"]
         return result
+
+
+verify_login_request_budget()
 
 
 config_url = os.environ.get("YF_TEST_DATABASE_URL")
@@ -137,29 +267,6 @@ def stop_process(owned):
             owned.wait()
 
 
-def assign_admin_project_section(client, connection, admin_id):
-    """Give the disposable admin fixture a valid project-owner section."""
-    suffix = secrets.token_hex(5)
-    division = client.call("POST", "/api/v1/admin/departments", {
-        "name": "隔离测试事业部-" + suffix,
-        "parentId": None,
-        "sortNo": 130,
-    })
-    department = client.call("POST", "/api/v1/admin/departments", {
-        "name": "隔离测试部门-" + suffix,
-        "parentId": division["id"],
-        "sortNo": 131,
-    })
-    section = client.call("POST", "/api/v1/admin/departments", {
-        "name": "隔离测试课别-" + suffix,
-        "parentId": department["id"],
-        "sortNo": 132,
-    })
-    with connection.cursor() as cursor:
-        cursor.execute("UPDATE users SET department_id=%s WHERE id=%s", (section["id"], admin_id))
-    return admin_id
-
-
 try:
     with conn.cursor() as cursor:
         cursor.execute(f"CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
@@ -182,6 +289,7 @@ try:
         env.update({"App__ConnectionString": f"Server={cs(url.hostname)};Port={url.port or 3306};Database={name};User ID={cs(user)};Password={cs(password)}",
                     "App__JwtSecret": secrets.token_urlsafe(48), "App__StorageRoot": str(storage),
                     "App__WebBaseUrl": base, "App__CookieSecure": "false", "App__WorkerEnabled": "false",
+                    "App__CopyWorkerEnabled": "true",
                     "App__Smtp__Host": "", "ASPNETCORE_URLS": base, "URLS": base, "YF_BOOTSTRAP_PASSWORD": initial,
                     "Logging__LogLevel__Default": "Warning"})
         initialized = subprocess.run(["dotnet", str(DLL), "--initialize-database"], cwd=API, env=env, capture_output=True)
@@ -196,8 +304,8 @@ try:
         # Legacy role fixtures are test-only; production initialization remains admin-only.
         install_legacy_test_roles(conn)
         with conn.cursor() as cursor:
-            cursor.execute("SELECT id,password_hash FROM users WHERE employee_no='admin'")
-            admin_user_id, preserved_hash = cursor.fetchone()
+            cursor.execute("SELECT password_hash FROM users WHERE employee_no='admin'")
+            preserved_hash = cursor.fetchone()[0]
             cursor.execute(
                 "SELECT MigrationId,ProductVersion FROM __EFMigrationsHistory ORDER BY MigrationId"
             )
@@ -336,7 +444,7 @@ try:
                 run_identity_checks(client, Client, conn, check)
                 run_project_remediation_checks(client, Client, conn, check)
                 run_collaboration_checks(client, Client, conn, check)
-                for path in ("/dashboard/summary", "/dashboard/pending-projects", "/departments", "/permissions", "/supplier-options", "/project-owner-options", "/admin/users", "/admin/roles", "/admin/suppliers", "/admin/user-role-options", "/admin/system/configs", "/admin/system/mail-status", "/admin/audit-logs"):
+                for path in ("/dashboard/summary", "/dashboard/pending-projects", "/departments", "/permissions", "/supplier-options", "/robot-parts?enabledOnly=true", "/admin/users", "/admin/roles", "/admin/suppliers", "/admin/user-role-options", "/admin/system/configs", "/admin/system/mail-status", "/admin/audit-logs"):
                     client.call("GET", "/api/v1" + path)
                     check("read contract " + path, True)
                 configs = client.call("GET", "/api/v1/admin/system/configs")
@@ -348,9 +456,8 @@ try:
                 run_system_checks(client, conn, check)
             supplier = client.call("POST", "/api/v1/admin/suppliers", {"name": ".NET 隔离供应商", "remark": "temporary"})
             sid = supplier["id"]
-            owner_id = assign_admin_project_section(client, conn, admin_user_id)
             _, project = _create_project_group(
-                client, conn, sid, owner_id, ".NET 隔离项目")
+                client, client, conn, sid, ".NET 隔离项目")
             pid = project["id"]
             client.call("PUT", f"/api/v1/projects/{pid}/status", {"status": "IN_PROGRESS"})
             check("supplier/project creation and project start", True)
@@ -375,8 +482,10 @@ try:
             with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
                 check("batch ZIP member integrity", zipped.testzip() is None and zipped.read(zipped.namelist()[0]) == pdf)
             run_file_checks(client, conn, check, pid, fid)
+            run_native_download_checks(client, conn, check, fid, pdf)
             if FILES_ONLY:
                 raise FileContractsComplete()
+            run_background_copy_checks(client, conn, check, sid)
             recovery_bytes = b"%PDF-1.4\nowned interrupted merge regression\n%%EOF\n"
             recovery = client.call("POST", "/api/v1/uploads/init", {"projectId": pid, "fileName": "recovery.pdf", "fileSize": len(recovery_bytes)})
             recovery_id = recovery["sessionId"]

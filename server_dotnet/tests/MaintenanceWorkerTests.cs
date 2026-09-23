@@ -50,21 +50,23 @@ public sealed class MaintenanceWorkerTests
     }
 
     [Fact(Timeout = 120_000)]
-    public async Task SessionCleanupKeepsRotatedTokensThroughTheReplayGrace()
+    public async Task SessionCleanupKeepsRotatedTokensUntilTheFamilyCannotBeReplayed()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
         await database.ExecuteAsync("""
-            INSERT INTO refresh_tokens(user_id,session_id,token_hash,expires_at,revoked) VALUES
-            (1,'old-session',REPEAT('a',64),DATE_SUB(UTC_TIMESTAMP(), INTERVAL 8 DAY),1),
-            (1,'grace-session',REPEAT('b',64),DATE_SUB(UTC_TIMESTAMP(), INTERVAL 6 DAY),1),
-            (1,'live-session',REPEAT('c',64),DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 DAY),0)
+            INSERT INTO refresh_tokens(
+              user_id,session_id,token_hash,session_created_at,session_expires_at,expires_at,revoked) VALUES
+            (1,'old-family',REPEAT('a',64),DATE_SUB(UTC_TIMESTAMP(), INTERVAL 38 DAY),DATE_SUB(UTC_TIMESTAMP(), INTERVAL 8 DAY),DATE_SUB(UTC_TIMESTAMP(), INTERVAL 31 DAY),1),
+            (1,'grace-family',REPEAT('b',64),DATE_SUB(UTC_TIMESTAMP(), INTERVAL 36 DAY),DATE_SUB(UTC_TIMESTAMP(), INTERVAL 6 DAY),DATE_SUB(UTC_TIMESTAMP(), INTERVAL 29 DAY),1),
+            (1,'live-family-old-token',REPEAT('c',64),DATE_SUB(UTC_TIMESTAMP(), INTERVAL 20 DAY),DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 DAY),DATE_SUB(UTC_TIMESTAMP(), INTERVAL 13 DAY),1),
+            (1,'live-family-current-token',REPEAT('d',64),DATE_SUB(UTC_TIMESTAMP(), INTERVAL 20 DAY),DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 DAY),DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 DAY),0)
             """, null, ct);
         var service = new SessionCleanupService(database.Database, database.Options,
             NullLogger<SessionCleanupService>.Instance);
 
         Assert.Equal(1, await service.PurgeExpiredSessionsAsync(ct));
-        Assert.Equal("grace-session,live-session", await database.ScalarAsync<string>(
+        Assert.Equal("grace-family,live-family-current-token,live-family-old-token", await database.ScalarAsync<string>(
             "SELECT GROUP_CONCAT(session_id ORDER BY session_id) FROM refresh_tokens", ct));
     }
 }

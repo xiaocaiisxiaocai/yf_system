@@ -86,7 +86,9 @@ def run_system_checks(client, conn, check):
         cursor.execute("INSERT INTO audit_logs(action,target_type,target_id,detail,created_at) VALUES('DOTNET_TEST','test','42',%s,UTC_TIMESTAMP())", ('{"reason":"owned fixture"}',))
         aid = cursor.lastrowid
     filtered = client.call("GET", "/api/v1/admin/audit-logs?action=DOTNET_TEST&targetType=test&targetId=42")
-    check("audit filters and JSON detail contract", filtered["total"] == 1 and filtered["list"][0]["detail"]["reason"] == "owned fixture")
+    check("audit filters and JSON detail contract", filtered["total"] == 1
+          and filtered["list"][0]["detail"]["reason"] == "owned fixture"
+          and filtered["list"][0]["canDelete"] is False)
     padded = client.call("GET", "/api/v1/admin/audit-logs?" + urlencode({
         "action": " DOTNET_TEST ", "targetType": " test ", "targetId": " 42 ", "keyword": " DOTNET_TEST "
     }))
@@ -95,8 +97,19 @@ def run_system_checks(client, conn, check):
         "action": "DOTNET_TEST", "category": " AUTH "
     }))
     check("audit category trims whitespace without widening results", categorized["total"] == 0)
+    client.call("POST", "/api/v1/admin/audit-logs/batch-delete", {"ids": [aid, aid]}, expected=403)
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM audit_logs WHERE id=%s", (aid,))
+        recent_preserved = cursor.fetchone()[0]
+        cursor.execute(
+            "UPDATE audit_logs SET created_at=DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 31 DAY) WHERE id=%s",
+            (aid,),
+        )
+    expired = client.call("GET", "/api/v1/admin/audit-logs?action=DOTNET_TEST&targetType=test&targetId=42")
     deleted = client.call("POST", "/api/v1/admin/audit-logs/batch-delete", {"ids": [aid, aid]})
-    check("audit deletion deduplicates IDs", deleted["deleted"] == 1)
+    check("audit deletion preserves recent rows and deduplicates eligible expired IDs",
+          recent_preserved == 1 and expired["list"][0]["canDelete"] is True
+          and deleted["deleted"] == 1)
     protected = client.call("GET", "/api/v1/admin/audit-logs?action=AUDIT_LOG_DELETE")
     client.call("DELETE", f"/api/v1/admin/audit-logs/{protected['list'][0]['id']}", expected=403)
-    check("audit cleanup record cannot be deleted", True)
+    check("audit cleanup record cannot be deleted", protected["list"][0]["canDelete"] is False)
