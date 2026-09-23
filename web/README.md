@@ -16,6 +16,6 @@ PDF 使用本地 PDF.js 6.3.289 按页渲染，支持翻页、页码跳转、适
 
 正式部署须发布完整 `dist/`，保留 `pdfjs/`、`assets/` 及许可证，确保 `.mjs/.js`、`.wasm` 分别以 JavaScript、`application/wasm` 类型返回。项目统一使用 [IIS 发布脚本](../server_dotnet/scripts/publish-iis.ps1) 打包前后端，输出位于项目内 `deloy/`。
 
-当前 OEM 界面暂时隐藏，统一开关位于 `src/features.ts`，业务源码与数据保留。
+OEM 前端界面、路由、独立门户和客户端已暂时移除；后端 OEM 接口也已移除。数据库删除迁移需单独执行，后续可从保留的历史版本评估恢复。
 
 Windows 浏览器验收须先遵守全局 CORE-19 的账户保护要求；普通构建、Lint 和 Node 回归测试不需要启动浏览器。

@@ -5,10 +5,8 @@ using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Modules.Identity;
 
-public sealed class IdentityMiddleware(RequestDelegate next, IEnumerable<IRealmIdentityExtension> realms)
+public sealed class IdentityMiddleware(RequestDelegate next)
 {
-    private readonly IRealmIdentityExtension[] realmExtensions = realms.ToArray();
-
     private static readonly HashSet<string> PublicPaths = new(StringComparer.Ordinal)
     {
         "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/refresh"
@@ -18,8 +16,7 @@ public sealed class IdentityMiddleware(RequestDelegate next, IEnumerable<IRealmI
     {
         var ct = context.RequestAborted;
         var path = context.Request.Path.Value ?? "";
-        if (!context.Request.Path.StartsWithSegments("/api/v1") || PublicPaths.Contains(path) || IsMediaRequest(context.Request)
-            || realmExtensions.Any(realm => realm.IsAnonymousPath(context.Request)))
+        if (!context.Request.Path.StartsWithSegments("/api/v1") || PublicPaths.Contains(path) || IsMediaRequest(context.Request))
         {
             await next(context);
             return;
@@ -30,19 +27,6 @@ public sealed class IdentityMiddleware(RequestDelegate next, IEnumerable<IRealmI
         catch (SecurityTokenExpiredException) { throw new ApiException(401, 40102, "登录状态已过期"); }
         catch (ApiException) { throw; }
         catch { throw ApiException.Unauthorized("登录状态无效"); }
-
-        if (claims.Realm != IdentityRealms.Internal)
-        {
-            // A non-internal realm is confined to its own API prefix and is resolved by
-            // its owner. It can never reach the `users` lookup below.
-            var realm = realmExtensions.SingleOrDefault(extension => extension.Realm == claims.Realm)
-                ?? throw ApiException.Unauthorized("登录状态无效");
-            if (!context.Request.Path.StartsWithSegments(realm.PathPrefix))
-                throw new ApiException(403, 40304, "该账号无权访问此系统");
-            await realm.AuthenticateAsync(context, claims, ct);
-            await next(context);
-            return;
-        }
 
         // Authentication owns only its lookups, not the downstream request. In
         // particular, uploads/downloads must not pin this connection while they

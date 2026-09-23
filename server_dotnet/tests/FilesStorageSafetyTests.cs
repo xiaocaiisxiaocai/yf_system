@@ -48,13 +48,13 @@ public sealed class FilesStorageSafetyTests
         try
         {
             var candidate = FileStorage.SessionDirectory(FileStorage.Root(root), sessionId);
-            Assert.False(await FileStorage.DeleteDirectoryTreeAsync(
+            Assert.False(FileStorage.DeleteDirectoryTree(
                 root, candidate, CancellationToken.None));
 
             Directory.CreateSymbolicLink(tempLink, outside);
 
-            await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                FileStorage.DeleteDirectoryTreeAsync(root, candidate, CancellationToken.None));
+            Assert.Throws<InvalidOperationException>(() =>
+                FileStorage.DeleteDirectoryTree(root, candidate, CancellationToken.None));
 
             Assert.True(File.Exists(outsidePayload));
             Assert.Equal("must survive", await File.ReadAllTextAsync(outsidePayload, TestContext.Current.CancellationToken));

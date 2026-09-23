@@ -15,7 +15,7 @@ def _digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def verify_test_host_artifacts(api_directory: Path, test_host_dll: Path) -> dict[Path, str]:
+def verify_test_host_artifacts(api_directory: Path, test_host_dll: Path, *, use_api_runtime: bool = False) -> dict[Path, str]:
     """Return hashes of the actual TestHost payload after proving build identity.
 
     A framework-dependent .NET executable resolves project-reference assemblies and
@@ -55,15 +55,21 @@ def verify_test_host_artifacts(api_directory: Path, test_host_dll: Path) -> dict
             )
         actual_hashes[actual] = actual_hash
 
-    # Keep the entry point and its resolution metadata in the evidence manifest too.
+    # Published verification explicitly launches dotnet exec with the production
+    # deps/runtimeconfig, rather than reintroducing development-only dependencies.
+    resolution_name = "Yf.Api" if use_api_runtime else test_host_dll.stem
     for name in (
         test_host_dll.name,
-        test_host_dll.stem + ".deps.json",
-        test_host_dll.stem + ".runtimeconfig.json",
+        resolution_name + ".deps.json",
+        resolution_name + ".runtimeconfig.json",
     ):
         artifact = host_directory / name
         if not artifact.is_file():
             raise TestHostArtifactError(f"TestHost launch artifact is missing: {name}")
+        if use_api_runtime and name != test_host_dll.name:
+            intended = api_directory / name
+            if not intended.is_file() or _digest(intended) != _digest(artifact):
+                raise TestHostArtifactError(f"TestHost production resolution metadata differs: {name}")
         actual_hashes[artifact] = _digest(artifact)
 
     return actual_hashes

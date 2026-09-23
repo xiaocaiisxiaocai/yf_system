@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text;
+using Microsoft.Extensions.Configuration;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.SystemManagement;
 
@@ -7,6 +9,27 @@ namespace Yf.Api.Tests;
 
 public sealed class SmtpSettingsTests
 {
+    [Fact]
+    public void OmittedSmtpSectionBindsToDisabledFallbackAndPassesStartupValidation()
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            App = new
+            {
+                ConnectionString = "Server=127.0.0.1;Database=fixture;User ID=fixture",
+                JwtSecret = "smtp-omitted-section-private-key-for-tests",
+                StorageRoot = Path.Combine(Path.GetTempPath(), "yf-smtp-config-fixture"),
+                WebBaseUrl = "https://fixture.example.invalid",
+            },
+        });
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+        var configuration = new ConfigurationBuilder().AddJsonStream(stream).Build();
+        var options = configuration.GetSection("App").Get<AppOptions>()!;
+        options.Validate();
+        Assert.False(options.Smtp.IsConfigured);
+        Assert.Empty(options.Smtp.Password);
+    }
+
     [Fact]
     public void CredentialEncryptionSurvivesNewServiceInstanceAndRejectsTampering()
     {
@@ -52,7 +75,7 @@ public sealed class SmtpSettingsTests
     public void PublicViewAndGenericConfigDoNotExposeCredential()
     {
         var resolved = new ResolvedSmtpSettings(new SmtpOptions { Host = "smtp.example.invalid", Password = "authorization-code" }, false);
-        var json = JsonSerializer.Serialize(resolved.View, JsonSerializerOptions.Web);
+        var json = JsonSerializer.Serialize(resolved.View, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         Assert.DoesNotContain("authorization-code", json);
         Assert.DoesNotContain("\"password\":", json);
         Assert.True(resolved.View.HasPassword);

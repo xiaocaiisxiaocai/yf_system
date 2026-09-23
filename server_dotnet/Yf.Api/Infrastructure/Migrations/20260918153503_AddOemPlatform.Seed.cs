@@ -61,7 +61,7 @@ namespace Yf.Api.Infrastructure.Migrations
             ("oem.storage.reconcile_required", "", "OEM 存储恢复核对标记（系统维护）"),
         ];
 
-        private static void SeedOemReferenceData(MigrationBuilder migrationBuilder)
+        internal static void SeedOemReferenceData(MigrationBuilder migrationBuilder)
         {
             foreach (var p in OemPermissions)
             {
@@ -94,7 +94,7 @@ namespace Yf.Api.Infrastructure.Migrations
                 "VALUES(1,'不自动删除','KEEP',NULL,NULL,'ACTIVE',0,NULL,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))");
         }
 
-        private static void RemoveOemReferenceData(MigrationBuilder migrationBuilder)
+        internal static void RemoveOemReferenceData(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.Sql("DELETE FROM role_permissions WHERE permission_id BETWEEN 100 AND 113");
             migrationBuilder.Sql("DELETE FROM permissions WHERE id BETWEEN 100 AND 113");

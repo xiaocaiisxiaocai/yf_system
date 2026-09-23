@@ -63,6 +63,29 @@ class TestHostArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(TestHostArtifactError, "missing: Dependency.dll"):
                 verify_test_host_artifacts(api, entry)
 
+    def test_published_host_uses_exact_production_resolution_metadata(self):
+        temporary, api, entry = self.fixture()
+        with temporary:
+            for suffix in (".deps.json", ".runtimeconfig.json"):
+                name = "Yf.Api" + suffix
+                (api / name).write_text('{"production":true}', encoding="utf-8")
+                (entry.parent / name).write_bytes((api / name).read_bytes())
+                (entry.parent / ("Yf.Api.TestHost" + suffix)).unlink()
+            evidence = verify_test_host_artifacts(api, entry, use_api_runtime=True)
+            self.assertIn(entry.parent / "Yf.Api.deps.json", evidence)
+            self.assertIn(entry.parent / "Yf.Api.runtimeconfig.json", evidence)
+            self.assertNotIn(entry.parent / "Yf.Api.TestHost.deps.json", evidence)
+
+    def test_published_host_rejects_different_resolution_metadata(self):
+        temporary, api, entry = self.fixture()
+        with temporary:
+            for suffix in (".deps.json", ".runtimeconfig.json"):
+                name = "Yf.Api" + suffix
+                (api / name).write_text('{"production":true}', encoding="utf-8")
+                (entry.parent / name).write_text('{"development":true}', encoding="utf-8")
+            with self.assertRaisesRegex(TestHostArtifactError, "production resolution metadata differs"):
+                verify_test_host_artifacts(api, entry, use_api_runtime=True)
+
 
 if __name__ == "__main__":
     unittest.main()

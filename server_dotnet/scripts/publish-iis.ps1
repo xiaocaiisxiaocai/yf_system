@@ -3,7 +3,7 @@
 .SYNOPSIS
 Build a fresh, verifiable IIS deployment package for Yf.System.
 .DESCRIPTION
-Builds the React frontend and the .NET 10 ASP.NET Core API. It does not install or
+Builds the React frontend and the .NET 8 ASP.NET Core API. It does not install or
 configure IIS. By default it creates one uniquely named package directory below
 repo/deloy. An explicit output must also be a new child directory there.
 Only the deployment directory is produced unless CreateArchive is specified.
@@ -11,9 +11,6 @@ Only the deployment directory is produced unless CreateArchive is specified.
 [CmdletBinding()]
 param(
     [string]$FreshOutputDirectory,
-    [string]$ClamAvCacheDirectory,
-    [string]$ClamAvDatabaseSnapshotDirectory,
-    [switch]$UseExistingClamAvCacheOnly,
     [switch]$CreateArchive
 )
 
@@ -78,6 +75,14 @@ function Initialize-PublishDefaults([string]$Path) {
     if ([Text.Encoding]::UTF8.GetByteCount([string]$defaults.App.JwtSecret) -lt 32) {
         throw 'Local publishing JWT secret must be at least 32 bytes.'
     }
+    $bootstrap = $defaults.App.PSObject.Properties['BootstrapPassword']
+    if (!$bootstrap -or [string]::IsNullOrWhiteSpace([string]$bootstrap.Value)) {
+        $bytes = New-Object byte[] 12
+        $random = [Security.Cryptography.RandomNumberGenerator]::Create()
+        try { $random.GetBytes($bytes) } finally { $random.Dispose() }
+        $defaults.App | Add-Member -NotePropertyName BootstrapPassword -NotePropertyValue ([Convert]::ToBase64String($bytes)) -Force
+        Write-Utf8NoBom $Path (($defaults | ConvertTo-Json -Depth 8) + "`n")
+    }
     return $defaults
 }
 
@@ -121,14 +126,15 @@ function New-NormalizedZip([string]$SourceRoot, [string]$DestinationPath) {
 }
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')).TrimEnd('\', '/')
+$serverRoot = Join-Path $repoRoot 'server_dotnet'
 $apiProject = Join-Path $repoRoot 'server_dotnet\Yf.Api\Yf.Api.csproj'
+$globalJsonPath = Join-Path $serverRoot 'global.json'
 $webRoot = Join-Path $repoRoot 'web'
 $webLock = Join-Path $webRoot 'package-lock.json'
 $webModules = Join-Path $webRoot 'node_modules'
 $webDist = Join-Path $webRoot 'dist'
 $deployRoot = Join-Path $repoRoot 'server_dotnet\deploy'
 $publishDefaultsPath = Join-Path $deployRoot 'publish-defaults.local.json'
-$prepareClamAv = Join-Path $repoRoot 'server_dotnet\scripts\prepare-clamav.ps1'
 $noticesSource = Join-Path $repoRoot 'server_dotnet\THIRD-PARTY-NOTICES.md'
 $licensesSource = Join-Path $repoRoot 'server_dotnet\licenses'
 $artifactsRoot = Join-Path $repoRoot '.artifacts'
@@ -168,17 +174,14 @@ foreach ($sidecar in $(if ($CreateArchive) { @($zipPath, $releaseManifestPath, $
 }
 foreach ($required in @(
     $apiProject,
+    $globalJsonPath,
     $webLock,
     (Join-Path $deployRoot 'install-iis.ps1'),
-    (Join-Path $deployRoot 'install-clamav.ps1'),
-    (Join-Path $deployRoot 'update-clamav.ps1'),
-    (Join-Path $deployRoot 'clamav-database.ps1'),
     (Join-Path $deployRoot 'maintain-iis.ps1'),
     (Join-Path $deployRoot 'maintenance-common.ps1'),
     (Join-Path $deployRoot 'README.md'),
     (Join-Path $deployRoot 'appsettings.example.json'),
-    $noticesSource,
-    $prepareClamAv
+    $noticesSource
 )) {
     if (!(Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Required release input is missing: $required"
@@ -187,6 +190,23 @@ foreach ($required in @(
 if (!(Test-Path -LiteralPath $licensesSource -PathType Container) -or
     !@(Get-ChildItem -LiteralPath $licensesSource -Force -File).Count) {
     throw 'The third-party license source directory is missing or empty.'
+}
+
+$globalJson = Get-Content -LiteralPath $globalJsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$pinnedDotnetSdk = [string]$globalJson.sdk.version
+if ($pinnedDotnetSdk -notmatch '^8\.') {
+    throw "server_dotnet/global.json must select a .NET 8 SDK; found: $pinnedDotnetSdk"
+}
+Push-Location $serverRoot
+try {
+    $selectedDotnetSdk = (@(& dotnet --version) -join "`n").Trim()
+    $dotnetVersionExitCode = $LASTEXITCODE
+}
+finally {
+    Pop-Location
+}
+if ($dotnetVersionExitCode -ne 0 -or $selectedDotnetSdk -notmatch '^8\.') {
+    throw "The publishing process must select a .NET 8 SDK from server_dotnet/global.json; selected: $selectedDotnetSdk"
 }
 
 # Generate the project-specific JWT once and reuse it across future releases.
@@ -218,14 +238,15 @@ if (!(Test-Path -LiteralPath (Join-Path $webDist 'index.html') -PathType Leaf)) 
 $publishArguments = @(
     'publish', $apiProject,
     '--configuration', 'Release',
-    '--framework', 'net10.0',
+    '--framework', 'net8.0',
     '--runtime', 'win-x64',
     '--no-self-contained',
     '-p:RestoreLockedMode=true',
     '--output', $outputRoot
 )
-$buildCommands += [ordered]@{ workingDirectory = '.'; executable = 'dotnet'; arguments = $publishArguments }
-Invoke-Native 'dotnet' $publishArguments
+$buildCommands += [ordered]@{ workingDirectory = 'server_dotnet'; executable = 'dotnet'; arguments = $publishArguments }
+Push-Location $serverRoot
+try { Invoke-Native 'dotnet' $publishArguments } finally { Pop-Location }
 
 $wwwRoot = Join-Path $outputRoot 'wwwroot'
 if (Test-Path -LiteralPath $wwwRoot) {
@@ -242,23 +263,41 @@ foreach ($item in Get-ChildItem -LiteralPath $webDist -Force) {
     Copy-Item -LiteralPath $item.FullName -Destination $wwwRoot -Recurse
 }
 
-foreach ($name in @('install-iis.ps1', 'install-clamav.ps1', 'update-clamav.ps1', 'clamav-database.ps1', 'maintain-iis.ps1', 'maintenance-common.ps1', 'README.md', 'appsettings.example.json')) {
+foreach ($name in @('install-iis.ps1', 'maintain-iis.ps1', 'maintenance-common.ps1', 'README.md')) {
     Copy-Item -LiteralPath (Join-Path $deployRoot $name) -Destination (Join-Path $outputRoot $name)
 }
-$examplePath = Join-Path $outputRoot 'appsettings.example.json'
-$exampleSettings = Get-Content -LiteralPath $examplePath -Raw -Encoding UTF8 | ConvertFrom-Json
-$exampleSettings.App.ConnectionString = $publishDefaults.App.ConnectionString
-$exampleSettings.App.JwtSecret = $publishDefaults.App.JwtSecret
-Write-Utf8NoBom $examplePath (($exampleSettings | ConvertTo-Json -Depth 8) + "`n")
+$productionPath = Join-Path $outputRoot 'appsettings.Production.json'
+$productionSettings = Get-Content -LiteralPath (Join-Path $deployRoot 'appsettings.example.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$productionSettings.App.ConnectionString = $publishDefaults.App.ConnectionString
+$productionSettings.App.JwtSecret = $publishDefaults.App.JwtSecret
+$productionSettings.App.BootstrapPassword = $publishDefaults.App.BootstrapPassword
+foreach ($name in @('StorageRoot', 'WebBaseUrl')) {
+    $override = $publishDefaults.App.PSObject.Properties[$name]
+    if ($override -and ![string]::IsNullOrWhiteSpace([string]$override.Value)) {
+        $productionSettings.App.$name = [string]$override.Value
+    }
+}
+if ($publishDefaults.App.PSObject.Properties['CookieSecure']) {
+    $productionSettings.App.CookieSecure = [bool]$publishDefaults.App.CookieSecure
+}
+$origin = $null
+if (![Uri]::TryCreate([string]$productionSettings.App.WebBaseUrl, [UriKind]::Absolute, [ref]$origin) -or
+    $origin.Scheme -notin @('http', 'https') -or $origin.AbsolutePath -ne '/' -or
+    $origin.Query -or $origin.Fragment -or $origin.UserInfo -or
+    $origin.Host -eq 'yf.example.com' -or
+    [string]::IsNullOrWhiteSpace([string]$productionSettings.App.StorageRoot)) {
+    throw 'Set the real WebBaseUrl and StorageRoot in publish-defaults.local.json before publishing a directly usable IIS package.'
+}
+if ($origin.Scheme -eq 'https' -and !$productionSettings.App.CookieSecure) {
+    throw 'HTTPS publication requires CookieSecure=true.'
+}
+if ($origin.Scheme -eq 'http' -and $productionSettings.App.CookieSecure) {
+    throw 'HTTP publication requires CookieSecure=false for login cookies.'
+}
+$storageRoot = Get-FullLocalPath ([string]$productionSettings.App.StorageRoot) 'App.StorageRoot'
+Write-Utf8NoBom $productionPath (($productionSettings | ConvertTo-Json -Depth 8) + "`n")
 Copy-Item -LiteralPath $noticesSource -Destination (Join-Path $outputRoot 'THIRD-PARTY-NOTICES.md')
 Copy-Item -LiteralPath $licensesSource -Destination (Join-Path $outputRoot 'licenses') -Recurse
-
-$clamAvArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $prepareClamAv, '-OutputDirectory', (Join-Path $outputRoot 'clamav'))
-if (![string]::IsNullOrWhiteSpace($ClamAvCacheDirectory)) { $clamAvArguments += @('-CacheDirectory', $ClamAvCacheDirectory) }
-if (![string]::IsNullOrWhiteSpace($ClamAvDatabaseSnapshotDirectory)) { $clamAvArguments += @('-DatabaseSnapshotDirectory', $ClamAvDatabaseSnapshotDirectory) }
-if ($UseExistingClamAvCacheOnly) { $clamAvArguments += '-UseExistingCacheOnly' }
-$buildCommands += [ordered]@{ workingDirectory = 'server_dotnet'; executable = 'powershell.exe'; arguments = $clamAvArguments }
-Invoke-Native 'powershell.exe' $clamAvArguments
 
 # Capture license texts for every locally installed package represented in the
 # npm lock. Platform-specific optional packages that npm did not install remain
@@ -384,37 +423,36 @@ present in the production JavaScript bundle.
 "@
 Write-Utf8NoBom (Join-Path $frontendLicensesRoot 'README.md') ($frontendLicenseReadme.Trim() + "`n")
 
-# appsettings.json intentionally fails closed. The populated example is copied
-# to an external production config and selected using YF_CONFIG_PATH.
-$safeSettings = [ordered]@{
-    App = [ordered]@{
-        ConnectionString = ''
-        JwtSecret = ''
-        StorageRoot = ''
-        WebBaseUrl = 'https://replace.example.invalid'
-        CookieSecure = $true
-        TrustLoopbackProxy = $false
-        WorkerEnabled = $false
-        AccessTtlMinutes = 30
-        RefreshTtlDays = 7
-        UploadMaxFileSize = 21474836480
-        UploadChunkSize = 10485760
-        Smtp = [ordered]@{ Host = ''; Port = 465; Username = ''; Password = ''; From = '' }
-        OemStorageRoot = ''
-        OemScanner = [ordered]@{
-            Engine = 'ClamAV'
-            ClamAv = [ordered]@{
-                Host = '127.0.0.1'
-                Port = 3310
-                ConnectTimeoutSeconds = 5
-                MaxStreamBytes = 1073741824
-            }
-        }
-    }
+# Keep environment-specific values only in appsettings.Production.json.
+# IIS explicitly selects Production; the base file contains non-secret shared settings.
+$activeSettings = [ordered]@{
     Logging = [ordered]@{ LogLevel = [ordered]@{ Default = 'Information'; 'Microsoft.AspNetCore' = 'Warning' } }
     AllowedHosts = '*'
 }
-Write-Utf8NoBom (Join-Path $outputRoot 'appsettings.json') (($safeSettings | ConvertTo-Json -Depth 8) + "`n")
+Write-Utf8NoBom (Join-Path $outputRoot 'appsettings.json') (($activeSettings | ConvertTo-Json -Depth 8) + "`n")
+
+# Use the launch form required by the IIS installation and maintenance scripts.
+$webConfigPath = Join-Path $outputRoot 'web.config'
+[xml]$webConfig = Get-Content -LiteralPath $webConfigPath -Raw -Encoding UTF8
+$aspNetCore = $webConfig.SelectSingleNode('//aspNetCore')
+if (!$aspNetCore) { throw 'Published IIS configuration is missing aspNetCore.' }
+$aspNetCore.SetAttribute('processPath', 'dotnet')
+$aspNetCore.SetAttribute('arguments', '.\Yf.Api.dll')
+$environmentVariables = $aspNetCore.SelectSingleNode('environmentVariables')
+if (!$environmentVariables) {
+    $environmentVariables = $webConfig.CreateElement('environmentVariables')
+    [void]$aspNetCore.AppendChild($environmentVariables)
+}
+foreach ($name in @('ASPNETCORE_ENVIRONMENT', 'DOTNET_ENVIRONMENT')) {
+    $variable = $environmentVariables.SelectSingleNode("environmentVariable[@name='$name']")
+    if (!$variable) {
+        $variable = $webConfig.CreateElement('environmentVariable')
+        $variable.SetAttribute('name', $name)
+        [void]$environmentVariables.AppendChild($variable)
+    }
+    $variable.SetAttribute('value', 'Production')
+}
+$webConfig.Save($webConfigPath)
 
 $forbiddenNames = @('secrets.json', '.env')
 $forbiddenExtensions = @('.pfx', '.p12', '.key')
@@ -423,26 +461,23 @@ foreach ($file in @(Get-ChildItem -LiteralPath $outputRoot -Recurse -Force -File
         throw "Forbidden local or secret-bearing file in release payload: $($file.FullName)"
     }
 }
-$allowedAppSettings = @('appsettings.json', 'appsettings.example.json')
+$allowedAppSettings = @('appsettings.json', 'appsettings.Production.json')
 foreach ($file in @(Get-ChildItem -LiteralPath $outputRoot -Recurse -Force -File -Filter 'appsettings*.json')) {
     $relative = $file.FullName.Substring($outputRoot.Length).TrimStart('\', '/').Replace('\', '/')
     if ($allowedAppSettings -notcontains $relative) {
         throw "Unexpected appsettings JSON in release payload: $relative"
     }
 }
-$packagedSettings = Get-Content -LiteralPath (Join-Path $outputRoot 'appsettings.json') -Raw | ConvertFrom-Json
-if ($packagedSettings.App.ConnectionString -ne '' -or $packagedSettings.App.JwtSecret -ne '' -or
-    $packagedSettings.App.StorageRoot -ne '' -or $packagedSettings.App.Smtp.Password -ne '') {
-    throw 'Packaged appsettings.json must not contain usable configuration or secrets.'
+$packagedSettings = Get-Content -LiteralPath $productionPath -Raw | ConvertFrom-Json
+if ($packagedSettings.App.ConnectionString -ne $productionSettings.App.ConnectionString -or
+    $packagedSettings.App.JwtSecret -ne $productionSettings.App.JwtSecret -or
+    $packagedSettings.App.StorageRoot -ne $productionSettings.App.StorageRoot -or
+    $packagedSettings.App.WebBaseUrl -ne $productionSettings.App.WebBaseUrl) {
+    throw 'Packaged appsettings.Production.json does not match the configured publish defaults.'
 }
 foreach ($requiredPayload in @(
     'Yf.Api.dll', 'Yf.Api.runtimeconfig.json', 'web.config', 'wwwroot\index.html',
-    'install-iis.ps1', 'install-clamav.ps1', 'update-clamav.ps1', 'clamav-database.ps1',
-    'maintain-iis.ps1', 'maintenance-common.ps1',
-    'clamav\PROVENANCE.json', 'clamav\clamd.conf.template', 'clamav\freshclam.conf.template',
-    'clamav\distribution\clamav-1.4.6.win.x64.zip',
-    'clamav\distribution\clamav-1.4.6.tar.gz',
-    'clamav\database-manifest.json', 'clamav\database\main.cvd', 'clamav\database\daily.cvd', 'clamav\database\bytecode.cvd'
+    'install-iis.ps1', 'maintain-iis.ps1', 'maintenance-common.ps1'
 )) {
     if (!(Test-Path -LiteralPath (Join-Path $outputRoot $requiredPayload) -PathType Leaf)) {
         throw "Required published payload is missing: $requiredPayload"
@@ -462,9 +497,11 @@ $packageManifest = [ordered]@{
     }
     build = [ordered]@{
         configuration = 'Release'
-        targetFramework = 'net10.0'
+        targetFramework = 'net8.0'
         runtimeIdentifier = 'win-x64'
         selfContained = $false
+        sdkVersion = $selectedDotnetSdk
+        globalJsonSdkVersion = $pinnedDotnetSdk
         frontendDependencyInstall = $frontendDependencyInstall
         commands = $buildCommands
     }

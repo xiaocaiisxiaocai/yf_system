@@ -107,8 +107,6 @@ internal static class BootstrapSeedCatalog
         db.Users.Add(administrator);
         await db.SaveChangesAsync(ct);
 
-        // Grant every permission present after migrations, including permissions that
-        // later migrations (for example the OEM business line) insert as reference data.
         var allPermissionIds = await db.Permissions.Select(permission => permission.Id).ToArrayAsync(ct);
         db.RolePermissions.AddRange(allPermissionIds.Select(permissionId => new RolePermission
         {

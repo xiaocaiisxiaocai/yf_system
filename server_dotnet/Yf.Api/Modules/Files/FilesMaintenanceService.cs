@@ -47,7 +47,7 @@ public sealed class FilesMaintenanceService(
         await RecoverAbandonedMergesAsync(ct);
         await ExpireUploadsAsync(ct);
         await PurgeDeletedFilesAsync(ct);
-        await PurgeTemporaryArchivesAsync(ct);
+        PurgeTemporaryArchives(ct);
         await PurgeOrphanUploadDirectoriesAsync(ct);
     }
 
@@ -99,7 +99,7 @@ public sealed class FilesMaintenanceService(
                 {
                     await UploadService.CleanupPendingFinalsAsync(
                         conn, options.StorageRoot, candidate.Id, logger, ct);
-                    await FileStorage.DeleteDirectoryTreeAsync(options.StorageRoot,
+                    FileStorage.DeleteDirectoryTree(options.StorageRoot,
                         FileStorage.SessionDirectory(FileStorage.Root(options.StorageRoot), candidate.Id), ct);
                 }
             }
@@ -139,7 +139,7 @@ public sealed class FilesMaintenanceService(
             try
             {
                 await UploadService.CleanupPendingFinalsAsync(conn, root, session.Id, logger, ct);
-                await FileStorage.DeleteDirectoryTreeAsync(root, directory, ct);
+                FileStorage.DeleteDirectoryTree(root, directory, ct);
             }
             catch (Exception error) { logger.LogWarning(error, "清理过期上传目录失败 {SessionId}", session.Id); }
         }
@@ -161,7 +161,7 @@ public sealed class FilesMaintenanceService(
             {
                 try
                 {
-                    var path = await FileStorage.ResolveExistingFileAsync(options.StorageRoot,
+                    var path = FileStorage.ResolveExistingFile(options.StorageRoot,
                         Path.Combine(options.StorageRoot, row.StoragePath), ct);
                     File.Delete(path);
                 }
@@ -184,12 +184,12 @@ public sealed class FilesMaintenanceService(
         }
     }
 
-    private async Task PurgeTemporaryArchivesAsync(CancellationToken ct)
+    private void PurgeTemporaryArchives(CancellationToken ct)
     {
         var root = FileStorage.Root(options.StorageRoot);
         var temp = Path.Combine(root, "tmp");
         if (!Directory.Exists(temp)) return;
-        temp = await FileStorage.ResolveExistingAsync(root, temp, requireFile: false, ct);
+        temp = FileStorage.ResolveExisting(root, temp, requireFile: false, ct);
         var cutoff = DateTime.UtcNow.AddHours(-24);
         foreach (var path in Directory.EnumerateFiles(temp, "yf_files_*.zip", SearchOption.TopDirectoryOnly))
         {
@@ -209,7 +209,7 @@ public sealed class FilesMaintenanceService(
         var root = FileStorage.Root(options.StorageRoot);
         var temp = Path.Combine(root, "tmp");
         if (!Directory.Exists(temp)) return;
-        temp = await FileStorage.ResolveExistingAsync(root, temp, requireFile: false, ct);
+        temp = FileStorage.ResolveExisting(root, temp, requireFile: false, ct);
         var cutoff = DateTime.UtcNow.AddHours(-24);
         foreach (var directory in Directory.EnumerateDirectories(temp, "*", SearchOption.TopDirectoryOnly))
         {
@@ -235,11 +235,11 @@ public sealed class FilesMaintenanceService(
                         session => session.Id == info.Name && Enumerable.Contains(activeStatuses, session.Status), ct);
                     if (isNowActive) continue;
                     await UploadService.CleanupPendingFinalsAsync(conn, root, info.Name, logger, ct);
-                    await FileStorage.DeleteDirectoryTreeAsync(root, directory, ct);
+                    FileStorage.DeleteDirectoryTree(root, directory, ct);
                 }
                 else
                 {
-                    await FileStorage.DeleteDirectoryTreeAsync(root, directory, ct);
+                    FileStorage.DeleteDirectoryTree(root, directory, ct);
                 }
             }
             catch (Exception error) { logger.LogWarning(error, "清理孤儿上传目录失败 {Directory}", info.Name); }

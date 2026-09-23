@@ -107,6 +107,25 @@ class ScriptSafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "file manifest mismatch"):
                 validate_release_sidecars(archive, package_manifest, actual_files)
 
+    def test_release_directory_tampering_is_rejected_without_modifying_source(self):
+        TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="yf_verify_directory_", dir=TEST_TEMP_ROOT) as directory:
+            package = Path(directory) / "directory-fixture"
+            package.mkdir()
+            payload = package / "Yf.Api.dll"
+            payload.write_bytes(b"tampered fixture")
+            (package / "manifest.json").write_text(json.dumps({"files": [
+                {"path": "Yf.Api.dll", "sha256": "0" * 64, "bytes": payload.stat().st_size},
+            ]}), encoding="utf-8")
+            before = {p.name: p.read_bytes() for p in package.iterdir()}
+            result = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("verify-release.py")), str(package)],
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Payload digest mismatch", result.stdout + result.stderr)
+            self.assertEqual(before, {p.name: p.read_bytes() for p in package.iterdir()})
+
 
 if __name__ == "__main__":
     unittest.main()

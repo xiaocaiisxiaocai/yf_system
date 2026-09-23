@@ -1,94 +1,25 @@
 # ASP.NET Core + React IIS 正式安装
 
-本包在**目标 Windows 服务器**使用，不需要 Rust、Node.js 或源码。程序使用 .NET 10 x64 framework-dependent 发布；需要先安装 IIS、IIS Application Initialization、.NET 10 Hosting Bundle、MySQL，以及带私钥且主机名匹配的 HTTPS 证书。
+本包在**目标 Windows 服务器**使用，不需要 Rust、Node.js 或源码。程序使用 .NET 8 x64 framework-dependent 发布；需要先安装 IIS、IIS Application Initialization、.NET 8 Hosting Bundle 和 MySQL。正式对外使用应配置 HTTPS 证书；现有开发站点若暂用 HTTP，发布配置中的 `WebBaseUrl` 必须与实际地址一致且 `CookieSecure=false`。
 
 实时协作使用 SignalR，建议在目标服务器的 IIS 角色服务中启用 **WebSocket Protocol**（Windows Server 功能名 `Web-WebSockets`）。反向代理也需允许 WebSocket Upgrade；Hub 路径为 `/api/v1/collaboration/live`，前后端保持同源。未启用 WebSocket 时 SignalR 可尝试其他传输，连接失败时前端恢复轮询。不要记录 Hub 的 `access_token` 查询参数，IIS 日志应移除 URI Query（`cs-uri-query`）字段或配置等效的脱敏日志；它用于浏览器的 WebSocket/SSE 握手，包含短期访问令牌。
 
 ## 准备
 
 1. 将 `deloy` 下生成的整个版本文件夹复制到服务器的独立临时目录，保留其中 `manifest.json`，安装脚本会据此检查全部文件。默认不生成 ZIP；如果打包时显式使用了 `-CreateArchive`，则将 ZIP 与 `.sha256` 一并复制到服务器，核对哈希后解压。
-2. 发布时已自动为 `appsettings.example.json` 填入默认数据库连接和 JWT 密钥。将它复制到网站、发布包和业务存储目录以外，例如 `D:\YfConfig\appsettings.Production.json`，再核对实际服务器的数据库地址/库名、独立存储目录和 HTTPS 访问地址；SMTP 可留空以禁用发送。不要把机密放入 `wwwroot` 或应用池可写目录。已有站点升级时继续使用原来的外部配置，不要用新示例覆盖已有 JWT 密钥。
-3. 创建存储目录，例如 `D:\YfData\storage`。当前开发阶段不接管旧手写 schema 或旧数据；切换到本版本时创建新的空数据库和空存储目录。后续只有带完整 `__EFMigrationsHistory` 的 EF 管理数据库可以原地升级。
-4. 先由 DBA 创建空库，再在包根执行：
+2. 发布时已将本机私有默认值写入 `appsettings.Production.json`，包括数据库连接、JWT、实际访问地址及存储目录；`appsettings.json` 仅保留日志等基础设置，不再生成 `appsettings.example.json`。IIS 的 `web.config` 已明确指定 Production 环境。将发布包作为含凭据的私有制品保管，不要放入公开下载位置或给应用池写权限。直接把包作为现有 IIS 站点物理目录时，程序会读取包内 `appsettings.Production.json`，不需要另设 `YF_CONFIG_PATH`；先核对目标服务器上的数据库地址、存储目录及站点绑定确实与包内配置一致。若使用下文的正式安装脚本，则先将包内 `appsettings.Production.json` 复制到网站外的 `D:\YfConfig\appsettings.Production.json`，复核实际环境后作为 `-ConfigPath` 传入。已有站点升级须保留原 JWT 和数据库配置。SMTP 在系统「系统参数」页面保存到数据库，尚未设置时不发送邮件。
+3. 发布包默认开启 `App.AutoInitializeDatabase=true`。第一次启动时，如果配置的数据库不存在，会自动创建；如果是空库，会执行 EF Core 迁移建表并创建 `admin`。MySQL 账号需要目标库的创建、建表及数据读写权限；协作文件使用网站外的 `StorageRoot`，应用池身份需要该目录的修改权限。
+4. 初始登录账号为 `admin`，初始密码查看 `appsettings.Production.json` 中的 `App.BootstrapPassword`。发布脚本首次随机生成并保存在本机私有默认值文件，后续发布复用；密码不会输出到日志，首次登录必须修改。已初始化的数据库在重启或升级时不会重建、重新播种或重置管理员密码；初始化完成后可以从部署配置中移除初始密码。
 
-```powershell
-$env:YF_CONFIG_PATH = 'D:\YfConfig\appsettings.Production.json'
-$secret = Read-Host '初始管理员密码' -AsSecureString
-$credential = New-Object System.Net.NetworkCredential('', $secret)
-$env:YF_BOOTSTRAP_PASSWORD = $credential.Password
-try { dotnet .\Yf.Api.dll --initialize-database }
-finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret = $null }
-```
+自动初始化只处理不存在或完全为空的数据库，并以数据库锁协调并发启动。非空数据库只检查 EF 迁移历史和必要种子，绝不自动执行升级迁移。历史不匹配、旧版待迁移或初始化中断留下的部分表都会停止并报错，不会删除现有数据或自动重试 DDL。已有数据库升级仍需先备份，再显式运行 `dotnet .\Yf.Api.dll --migrate-database`。
 
-初始化只允许空库，通过 EF Core `InitialCreate` 建表，创建 `admin`、系统管理员权限、默认优先级和系统参数，并强制首次改密。不会自动创建或删除数据库，也不会打印密码。启动只读核对 EF 迁移历史，不自动执行 DDL。后续 EF 模型升级需停写和备份，再运行 `dotnet .\Yf.Api.dll --migrate-database`；该命令只接受已有且非空的 EF 历史，支持重复执行，并由数据库锁防止同时迁移。
+如果禁用 `App.AutoInitializeDatabase`，仍可先手动创建空库，设置进程环境变量 `YF_BOOTSTRAP_PASSWORD`，再执行 `dotnet .\Yf.Api.dll --initialize-database`。正式安装脚本使用的外部配置也应包含上述初始化选项；启动后已存在的数据库不会要求保留初始密码。
 
-## ClamAV 扫描服务
+本版本的升级迁移会删除 OEM 表、权限和专属配置，其中 OEM 业务数据不可恢复；对已有数据库执行 `--migrate-database` 前必须完成可验证的备份。只复制新程序而不迁移时，启动校验会拒绝旧的迁移状态。
 
-发布包自带官方 ClamAV 1.4.6 LTS Windows x64 便携 ZIP，不需要安装 GUI
-杀毒软件。`install-iis.ps1` 在生产配置选择 `App:OemScanner:Engine=ClamAV`
-时，先调用 `install-clamav.ps1`，将程序安装到独立程序目录，将病毒库、
-日志和临时文件放入独立持久目录。默认路径分别为
-`C:\Program Files\YfSystem\ClamAV` 和
-`C:\ProgramData\YfSystem\ClamAV`，均不在 IIS 网站或 `wwwroot` 内。
+## 绑定现有开发 IIS 站点
 
-ClamD 只监听 `127.0.0.1:3310`，应用配置必须使用：
-
-```json
-{
-  "App": {
-    "OemScanner": {
-      "Engine": "ClamAV",
-      "ClamAv": {
-        "Host": "127.0.0.1",
-        "Port": 3310,
-        "ConnectTimeoutSeconds": 5,
-        "MaxStreamBytes": 1073741824
-      }
-    }
-  }
-}
-```
-
-发布包内置 `main.cvd`、`daily.cvd` 和 `bytecode.cvd` 官方签名库快照，
-首次安装无需联网下载。`clamav-database.ps1` 使用包内官方 `sigtool` 验签，
-核对 `clamav/database-manifest.json` 中的哈希、大小、版本和 UTC 构建时间，
-复制到独立数据目录后再次校验；缺失、损坏或额外签名文件均不能初始化。
-安装随后创建自动启动的独立 `clamd` 和 `freshclam` Windows 服务。
-FreshClam 配置为每天检查 12 次并在更新后通知 ClamD 重载。需要立即更新时，以管理员身份在发布包
-根运行：
-
-```powershell
-.\update-clamav.ps1 -InstallRoot 'C:\Program Files\YfSystem\ClamAV'
-```
-
-安装脚本拒绝既有 `clamd`/`freshclam` 服务、已占用的 3310 端口、既有程序
-或数据目录；不会覆盖服务或目录，也不会结束未知进程。服务没有可见桌面
-窗口。ClamD 的 `INSTREAM`、单文件上限均为 1 GiB，扫描展开总量上限为
-1536 MiB、递归深度 16；超过限制和加密归档/文档都按告警处理，不能解释为
-扫描正常。Windows 版 ClamAV 的单文件能力约 2 GiB，本系统明确将业务流上限
-固定为 1 GiB；20 GiB 文件必须在进入扫描前拒绝，不能静默跳过后返回 clean。
-
-离线首次安装直接使用包内已验签快照，不调用 FreshClam 下载；后续更新服务
-暂时离线或启动失败不会回滚已加载快照的 ClamD。恢复联网后执行上述更新命令，
-成功更新会启动此前停止的 FreshClam 服务，继续自动更新。
-内置库是打包时的快照，不会因安装或复制而变“新”；若启用“病毒库过期时暂停
-放行”，超过管理员设置的年龄仍会暂停放行，不能用内置库绕过该门禁。
-不要把业务上传文件、配置密钥或客户数据放入 ClamAV 程序/病毒库目录。
-
-构建机默认通过 FreshClam 更新缓存中的完整 CVD 后打包。需要从已有已验证库
-制作离线包时，在 `publish-iis.ps1` 增加 `-ClamAvDatabaseSnapshotDirectory <目录>`；
-该目录需含三份完整 `.cvd`，不能用增量 `.cld` 或自定义签名替代。
-`-UseExistingClamAvCacheOnly` 会禁止下载，使用缓存里的完整 CVD 或显式指定的快照。
-构建和安装均重新执行官方数字签名校验，不仅依赖本地生成的清单。
-
-`clamav/PROVENANCE.json` 记录 GitHub Releases API 发布的固定 SHA-256。
-发布包还保留官方 detached signature、Talos 公钥、上游许可证/依赖说明和匹配
-的完整源代码归档 `clamav-1.4.6.tar.gz`。本机存在 GnuPG 时准备脚本会额外验签；
-没有 GnuPG 时仍强制核对固定上游 SHA-256，并在来源清单中明确记录未执行 GPG。
-
-ClamAV 程序和持久数据目录关闭 ACL 继承，仅允许 `SYSTEM` 与本机
-`Administrators` 完全控制，避免宽松父目录中的普通用户替换服务程序、配置或
-病毒库。`-UseExistingClamAv` 也会只读复核这些 ACL；不符合时拒绝复用。
+若站点已经创建，网站物理目录可直接指向本包根目录；`appsettings.Production.json` 已写入发布时的配置，`web.config` 无需再设置 `YF_CONFIG_PATH`。应用池使用“无托管代码”、64 位，并给其身份对程序目录只读、对独立存储目录修改权限。首次回收应用池会自动初始化新库，之后检查 `/health`。不要把包根目录开放为下载目录，也不要给应用池写入 `appsettings.Production.json` 的权限。本方式只解决当前开发站点直接绑定问题；下述安装和维护脚本仍使用站点外的生产配置。
 
 ## 安装新站点
 
@@ -102,25 +33,7 @@ ClamAV 程序和持久数据目录关闭 ACL 继承，仅允许 `SYSTEM` 与本�
   -SiteRoot 'C:\inetpub\yf_system_dotnet'
 ```
 
-脚本核对包文件 SHA-256、程序包/站点/配置/存储独立路径、证书、Hosting Bundle 和运行时，然后创建新应用池、新 HTTPS 站点。它关闭配置文件 ACL 继承，只保留当前管理员、SYSTEM、Administrators 完全控制和应用池身份只读；业务存储只给应用池修改，程序目录只读。前后端同站点、同来源，不需要 ARR、URL Rewrite 或 Rust Windows 服务。
-
-如果 ClamAV 已由本包成功安装，但随后 IIS 站点创建失败，修正 IIS 前置条件后
-按原命令重跑并显式增加 `-UseExistingClamAv`：
-
-```powershell
-.\install-iis.ps1 `
-  -HostName 'yf.example.com' `
-  -CertificateThumbprint '替换为LocalMachine-My证书指纹' `
-  -ConfigPath 'D:\YfConfig\appsettings.Production.json' `
-  -SiteRoot 'C:\inetpub\yf_system_dotnet' `
-  -UseExistingClamAv
-```
-
-该开关只复用已经运行的服务，不安装、重配、启停或覆盖它们。脚本会重新核对
-ClamAV 1.4.6 官方程序哈希、程序和配置路径、回环地址/端口/扫描限制、三个可信
-病毒库、两个服务状态、ClamD 服务 PID 对 3310 监听的归属，以及 PING/VERSION。
-ClamD 必须运行；离线时允许已验证的 FreshClam 服务暂时停止，并提示恢复联网后更新。
-任一项不一致即失败。首次部署或尚未成功安装 ClamAV 时不要使用此开关。
+脚本核对包文件 SHA-256、程序包/站点/配置/存储独立路径、证书、Hosting Bundle 和运行时，然后创建新应用池、新 HTTPS 站点。复制包后会清空站点内 `appsettings.json` 和 `appsettings.Production.json` 的凭据回退，正式站点只使用 `YF_CONFIG_PATH` 指向的外部配置；升级和恢复也执行同样处理。它关闭配置文件 ACL 继承，只保留当前管理员、SYSTEM、Administrators 完全控制和应用池身份只读；业务存储只给应用池修改，程序目录只读。前后端同站点、同来源，不需要 ARR、URL Rewrite 或 Rust Windows 服务。
 
 脚本拒绝已存在站点/应用池和非空目标目录，不覆盖其他部署。它不自动开放防火墙、不修改 DNS，也不停止现有后端服务。请按实际网络环境配置 DNS、443/TCP 与 HTTPS 证书，并在停写窗口切换入口。
 

@@ -1,27 +1,33 @@
-"""Validate and smoke-test the exact distributed ZIP in owned temporary directories."""
+"""Validate and smoke-test a deployment directory or ZIP in owned temporary directories."""
 import hashlib
 import json
+import ntpath
 import os
+import shutil
+import stat
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import zipfile
+from urllib.parse import urlparse
+from xml.etree import ElementTree
 
 from script_safety import (
-    clean_dotnet_config_environment,
     validate_release_sidecars,
     validate_zip_entries,
 )
+from test_first_start import verify_first_start
 
 source = Path(__file__).resolve().parents[2]
 archive = Path(sys.argv[1]).resolve()
+directory_input = archive.is_dir()
 artifacts = source / ".artifacts"
 test_temp_root = artifacts / "tests" / "tmp"
 report_root = artifacts / "reports" / "releases"
 test_temp_root.mkdir(parents=True, exist_ok=True)
 report_root.mkdir(parents=True, exist_ok=True)
-report_path = report_root / (archive.stem + ".verification.json")
+report_path = report_root / ((archive.name if directory_input else archive.stem) + ".verification.json")
 if report_path.exists():
     raise SystemExit("Verification report already exists; refusing to overwrite it")
 
@@ -31,13 +37,37 @@ def digest(path):
         return hashlib.file_digest(file, "sha256").hexdigest()
 
 
+def validate_net8_runtime_config(path):
+    runtime_options = json.loads(path.read_text(encoding="utf-8-sig")).get("runtimeOptions", {})
+    if runtime_options.get("tfm") != "net8.0":
+        raise RuntimeError("Published runtimeconfig does not target net8.0")
+    frameworks = runtime_options.get("frameworks")
+    if frameworks is None:
+        framework = runtime_options.get("framework")
+        frameworks = [framework] if framework else []
+    versions = {item.get("name"): item.get("version", "") for item in frameworks if isinstance(item, dict)}
+    for name in ("Microsoft.NETCore.App", "Microsoft.AspNetCore.App"):
+        if not versions.get(name, "").startswith("8."):
+            raise RuntimeError(f"Published runtimeconfig does not require {name} 8.x")
+    return versions
+
+
 with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root) as temp:
     extraction = Path(temp).resolve()
-    with zipfile.ZipFile(archive) as zipped:
-        validate_zip_entries(zipped.infolist())
-        if zipped.testzip() is not None:
-            raise RuntimeError("ZIP CRC failed")
-        zipped.extractall(extraction)
+    if directory_input:
+        # Verify an isolated copy, preserving the deployable source directory.
+        if extraction.is_relative_to(archive):
+            raise RuntimeError("Deployment directory cannot contain the verification workspace")
+        for path in archive.rglob("*"):
+            if path.is_symlink() or getattr(path.lstat(), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                raise RuntimeError("Linked paths are not allowed in a deployment directory")
+        shutil.copytree(archive, extraction / archive.name)
+    else:
+        with zipfile.ZipFile(archive) as zipped:
+            validate_zip_entries(zipped.infolist())
+            if zipped.testzip() is not None:
+                raise RuntimeError("ZIP CRC failed")
+            zipped.extractall(extraction)
     roots = list(extraction.iterdir())
     if len(roots) != 1 or not roots[0].is_dir():
         raise RuntimeError("Expected one named package directory")
@@ -48,7 +78,7 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
         path = (package / item["path"]).resolve()
         if not path.is_relative_to(package):
             raise RuntimeError("Unsafe manifest path")
-        if not path.is_file() or digest(path) != item["sha256"].lower():
+        if not path.is_file() or digest(path) != item["sha256"].lower() or path.stat().st_size != item["bytes"]:
             raise RuntimeError("Payload digest mismatch: " + item["path"])
         expected_paths.add(path.relative_to(package).as_posix())
     actual = {path.relative_to(package).as_posix() for path in package.rglob("*") if path.is_file()}
@@ -58,84 +88,61 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
         name: {"sha256": digest(package / name), "bytes": (package / name).stat().st_size}
         for name in sorted(actual)
     }
-    release_manifest = validate_release_sidecars(archive, manifest, actual_files)
+    release_manifest = None if directory_input else validate_release_sidecars(archive, manifest, actual_files)
     required = {"Yf.Api.dll", "Yf.Api.runtimeconfig.json", "web.config", "wwwroot/index.html",
-                "install-iis.ps1", "maintain-iis.ps1", "maintenance-common.ps1", "README.md",
-                "install-clamav.ps1", "update-clamav.ps1", "clamav-database.ps1", "clamav/PROVENANCE.json",
-                "clamav/clamd.conf.template", "clamav/freshclam.conf.template",
-                "clamav/distribution/clamav-1.4.6.win.x64.zip", "clamav/distribution/clamav-1.4.6.tar.gz",
-                "clamav/database-manifest.json", "clamav/database/main.cvd", "clamav/database/daily.cvd", "clamav/database/bytecode.cvd"}
+                "install-iis.ps1", "maintain-iis.ps1", "maintenance-common.ps1", "README.md"}
     if not required.issubset(actual):
         raise RuntimeError("Required application or maintenance payload is missing")
+    if any(name.lower().startswith("clamav/") or "/oem" in name.lower()
+           or name.lower() in {"install-clamav.ps1", "update-clamav.ps1", "clamav-database.ps1", "sharpcompress.dll"}
+           for name in actual):
+        raise RuntimeError("OEM or antivirus payload is still included")
+    build = manifest.get("build", {})
+    if (build.get("targetFramework") != "net8.0" or build.get("runtimeIdentifier") != "win-x64"
+            or build.get("selfContained") is not False or not str(build.get("sdkVersion", "")).startswith("8.")):
+        raise RuntimeError("Release manifest does not describe a .NET 8 win-x64 framework-dependent build")
+    runtime_frameworks = validate_net8_runtime_config(package / "Yf.Api.runtimeconfig.json")
     if any("testhost" in Path(name).stem.lower() and Path(name).suffix.lower() in (".dll", ".exe") for name in actual):
         raise RuntimeError("A test host was included in the production payload")
-    settings = json.loads((package / "appsettings.json").read_text(encoding="utf-8-sig"))["App"]
-    if settings.get("OemScanner", {}).get("Engine") != "ClamAV":
-        raise RuntimeError("Published OEM scanner is not configured for ClamAV")
-    clam_archive = package / "clamav/distribution/clamav-1.4.6.win.x64.zip"
-    clam_digest = digest(clam_archive)
-    if clam_digest != "57b6fd1d60cd87bafe800f97407ecdef0576d36b3900b8b7abcfbbabe88295fd":
-        raise RuntimeError("ClamAV archive does not match the pinned upstream release")
-    if digest(package / "clamav/distribution/clamav-1.4.6.tar.gz") != "06dbc7adf96e2f6a27c548a841ce83c95360d1e121b106a6f7cf56f282a3c61b":
-        raise RuntimeError("ClamAV matching source archive is missing or changed")
-    clam_runtime = extraction / "clamav-runtime"
-    with zipfile.ZipFile(clam_archive) as nested:
-        validate_zip_entries(nested.infolist())
-        if nested.testzip() is not None:
-            raise RuntimeError("ClamAV portable ZIP CRC failed")
-        nested.extractall(clam_runtime)
-    # clamd --version still requires clamd.conf; clamscan exposes the same
-    # bundled engine version without requiring a configured database/service.
-    clam_exe = list(clam_runtime.rglob("clamscan.exe"))
-    if len(clam_exe) != 1:
-        raise RuntimeError("Unexpected portable ClamAV layout")
-    clam_version = subprocess.run([str(clam_exe[0]), "--version"], cwd=clam_exe[0].parent,
-                                  capture_output=True, text=True, timeout=30, check=True)
-    if not clam_version.stdout.strip().startswith("ClamAV 1.4.6"):
-        raise RuntimeError("Packaged ClamAV executable did not report the pinned version")
-    # Exercise the exact shared initializer used by install-clamav.ps1. It only
-    # copies/verifies bundled files: no FreshClam, network download or service install.
-    snapshot_check = extraction / "check-database.ps1"
-    snapshot_check.write_text(
-        "param($Helper,$Source,$Manifest,$Destination,$Sigtool)\n"
-        "$ErrorActionPreference='Stop'\n. $Helper\n"
-        "$snapshot = Copy-ClamAvDatabaseSnapshot -SourceDirectory $Source -ManifestPath $Manifest "
-        "-DestinationDirectory $Destination -SigtoolPath $Sigtool\n"
-        "$snapshot | ConvertTo-Json -Depth 8\n", encoding="utf-8")
-    initialized_database = extraction / "installed-database"
-    checked_database = subprocess.run([
-        "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(snapshot_check),
-        "-Helper", str(package / "clamav-database.ps1"),
-        "-Source", str(package / "clamav/database"), "-Manifest", str(package / "clamav/database-manifest.json"),
-        "-Destination", str(initialized_database), "-Sigtool", str(clam_exe[0].parent / "sigtool.exe"),
-    ], capture_output=True, text=True, timeout=180)
-    if checked_database.returncode:
-        raise RuntimeError("Bundled database initialization failed: " + checked_database.stderr[-2000:])
-    snapshot = json.loads(checked_database.stdout.lstrip("\ufeff"))
-    clean_sample = extraction / "clean-sample.txt"
-    clean_sample.write_text("A harmless OEM scan smoke test.\n", encoding="ascii")
-    eicar_archive = extraction / "eicar-smoke.zip"
-    with zipfile.ZipFile(eicar_archive, "w") as test_archive:
-        # EICAR is an intentionally harmless antivirus test string.
-        test_archive.writestr("eicar.com", b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*")
-    for sample, expected in ((clean_sample, 0), (eicar_archive, 1)):
-        scanned = subprocess.run([str(clam_exe[0]), "--database=" + str(initialized_database),
-                                  "--no-summary", "--stdout", str(sample)],
-                                 cwd=clam_exe[0].parent, capture_output=True, text=True, timeout=180)
-        if scanned.returncode != expected or (expected == 1 and "FOUND" not in scanned.stdout):
-            raise RuntimeError("Offline bundled database scan failed: " + scanned.stdout[-1000:] + scanned.stderr[-1000:])
-    print("PASS bundled signed database initialization and offline clean/EICAR archive scans", flush=True)
-    if any(settings[key] for key in ("ConnectionString", "JwtSecret", "StorageRoot")) or settings["Smtp"]["Password"]:
-        raise RuntimeError("Packaged defaults contain usable private configuration")
+    config_names = {name for name in actual if Path(name).name.lower().startswith("appsettings") and name.lower().endswith(".json")}
+    if config_names != {"appsettings.json", "appsettings.Production.json"}:
+        raise RuntimeError("Expected only base and Production configuration; no example or local settings")
+    base_settings = json.loads((package / "appsettings.json").read_text(encoding="utf-8-sig"))
+    if base_settings.get("App"):
+        raise RuntimeError("Application configuration must exist only in Production settings")
+    settings = json.loads((package / "appsettings.Production.json").read_text(encoding="utf-8-sig"))["App"]
+    for key in ("ConnectionString", "JwtSecret", "StorageRoot", "WebBaseUrl", "BootstrapPassword"):
+        if not settings.get(key):
+            raise RuntimeError(f"Packaged Production {key} is missing")
+    if settings.get("AutoInitializeDatabase") is not True or not 6 <= len(settings["BootstrapPassword"]) <= 20:
+        raise RuntimeError("Release must enable first-start initialization with a valid-length bootstrap password")
+    origin = urlparse(settings["WebBaseUrl"])
+    if (origin.scheme not in ("http", "https") or not origin.hostname or origin.path not in ("", "/")
+            or origin.params or origin.query or origin.fragment or origin.username
+            or origin.hostname == "yf.example.com"):
+        raise RuntimeError("Packaged WebBaseUrl is not the real site origin")
+    if not ntpath.isabs(settings["StorageRoot"]):
+        raise RuntimeError("Packaged storage root must be an absolute Windows path")
+    if any(key in settings for key in ("OemStorageRoot", "OemScanner")):
+        raise RuntimeError("Packaged application still contains OEM settings")
+    if (origin.scheme == "http") == bool(settings.get("CookieSecure")):
+        raise RuntimeError("Packaged CookieSecure does not match the site scheme")
+    if len(settings["JwtSecret"].encode("utf-8")) < 32:
+        raise RuntimeError("Packaged JWT secret is too short")
+    web_config = ElementTree.parse(package / "web.config")
+    asp = web_config.find(".//aspNetCore")
+    if asp is None or asp.get("processPath") != "dotnet" or asp.get("arguments") != r".\Yf.Api.dll" or asp.get("hostingModel") != "inprocess":
+        raise RuntimeError("Published IIS launch configuration is inconsistent")
+    environment = {node.get("name"): node.get("value") for node in asp.findall("environmentVariables/environmentVariable")}
+    if any(environment.get(name) != "Production" for name in ("ASPNETCORE_ENVIRONMENT", "DOTNET_ENVIRONMENT")):
+        raise RuntimeError("Published IIS configuration must select Production")
     for path in package.rglob("*"):
         if path.is_file() and (path.name.lower() in ("appsettings.local.json", "secrets.json", ".env") or path.suffix.lower() in (".pfx", ".p12", ".key")):
             raise RuntimeError("Unexpected private file")
-    clean_env = clean_dotnet_config_environment()
-    missing = subprocess.run(["dotnet", str(package / "Yf.Api.dll")], cwd=package, env=clean_env, capture_output=True, timeout=20)
-    if missing.returncode == 0 or b"App:ConnectionString must be configured" not in missing.stderr:
-        raise RuntimeError("Published application did not fail closed with missing configuration")
-    print("PASS extracted ZIP paths, CRC, hashes, safe configuration and missing-config startup", flush=True)
+    print("PASS deployment payload hashes, .NET 8 runtime and bundled IIS configuration", flush=True)
+    first_start = verify_first_start(package, test_temp_root)
     env = os.environ.copy()
+    env["ASPNETCORE_ENVIRONMENT"] = env["DOTNET_ENVIRONMENT"] = "Production"
     env["YF_TEST_API_DIR"] = str(package)
     published_report = Path(temp) / "dotnet-published-results.json"
     env["YF_TEST_RESULTS_PATH"] = str(published_report)
@@ -143,14 +150,18 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
     if run.returncode:
         raise SystemExit(run.returncode)
     http_report = json.loads(published_report.read_text(encoding="utf-8"))
-    report = {"archive": str(archive), "sha256": digest(archive), "bytes": archive.stat().st_size,
+    report = {"input": str(archive), "inputType": "directory" if directory_input else "zip",
+              "archive": None if directory_input else str(archive),
+              "sha256": digest(package / "manifest.json") if directory_input else digest(archive),
+              "sha256Target": "manifest.json" if directory_input else "archive",
+              "bytes": sum(item["bytes"] for item in actual_files.values()) if directory_input else archive.stat().st_size,
               "fileCount": len(actual), "source": manifest["source"], "build": manifest["build"],
-              "zipPathsCrcAndHashes": "passed", "releaseSidecars": "passed",
-              "releaseManifest": release_manifest, "missingConfigurationFailsClosed": True, "testHostExcludedFromPayload": True,
-              "clamAvPayload": {"version": "1.4.6", "upstreamSha256": clam_digest,
-                                "sourceArchiveHash": "passed", "extractedExecutableVersion": "passed",
-                                "bundledDatabase": snapshot, "offlineInitializationAndScanning": "passed",
-                                "installedWindowsServiceTested": False},
+              "payloadHashes": "passed",
+              "zipPathsCrcAndHashes": "not-applicable" if directory_input else "passed",
+              "releaseSidecars": "not-applicable" if directory_input else "passed",
+              "runtimeConfig": {"tfm": "net8.0", "frameworks": runtime_frameworks},
+              "releaseManifest": release_manifest, "bundledConfigurationValidated": True, "testHostExcludedFromPayload": True,
+              "publishedFirstStart": first_start,
               "publishedUnitHttp": http_report, "targetIisTested": False, "realSmtpTested": False}
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print("Verified release report: " + str(report_path), flush=True)

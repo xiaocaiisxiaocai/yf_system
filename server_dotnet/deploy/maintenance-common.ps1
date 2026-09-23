@@ -27,6 +27,21 @@ function Assert-YfPublishedConfig([string]$Root,[switch]$AllowConfigPath) {
     Assert-YfLaunch $asp.GetAttribute('processPath') $asp.GetAttribute('arguments') $asp.GetAttribute('hostingModel')
     Assert-YfEnvironmentNames @($asp.SelectNodes('environmentVariables/environmentVariable') | ForEach-Object { $_.GetAttribute('name') }) -AllowConfigPath:$AllowConfigPath
 }
+function Set-YfExternalConfigurationFallback([string]$Root) {
+    # A direct-bind package has usable appsettings.Production.json. Formal IIS installation
+    # and maintenance use YF_CONFIG_PATH instead and must fail closed if it is lost.
+    $settings = Join-Path $Root 'appsettings.json'
+    if (!(Test-Path -LiteralPath $settings -PathType Leaf)) { throw 'Published appsettings.json is missing.' }
+    $empty = '{"App":{"ConnectionString":"","JwtSecret":"","StorageRoot":"","AutoInitializeDatabase":false,"BootstrapPassword":""}}' + "`n"
+    $encoding = New-Object Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($settings, $empty, $encoding)
+    foreach ($name in @('appsettings.Production.json', 'appsettings.example.json')) {
+        $environmentSettings = Join-Path $Root $name
+        if (Test-Path -LiteralPath $environmentSettings -PathType Leaf) {
+            [IO.File]::WriteAllText($environmentSettings, $empty, $encoding)
+        }
+    }
+}
 function Assert-YfConfigurationEnvironment(
     [object[]]$AspNetCoreVariables,
     [string[]]$ApplicationPoolVariableNames,
@@ -195,10 +210,6 @@ function Read-YfMaintenanceConfig([string]$Path) {
         $builder = New-Object System.Data.Common.DbConnectionStringBuilder
         $builder.set_ConnectionString($config.App.ConnectionString)
         $storage = Get-YfFullPath $config.App.StorageRoot
-        # OEM file content is never backed up; it only has to stay apart from everything that is.
-        $oemProperty = $config.App.PSObject.Properties['OemStorageRoot']
-        $oemStorage = if (!$oemProperty -or [string]::IsNullOrWhiteSpace($oemProperty.Value)) { $null } else { Get-YfFullPath $oemProperty.Value }
-        if ($oemStorage) { Assert-YfSeparate @($Path,$storage,$oemStorage) }
         $database = Get-YfDbOption $builder @('Database','Initial Catalog')
         $server = Get-YfDbOption $builder @('Server','Host','Data Source','DataSource','Address','Addr','Network Address') 'localhost'
         $port = [int](Get-YfDbOption $builder @('Port') '3306')
@@ -224,7 +235,7 @@ function Read-YfMaintenanceConfig([string]$Path) {
         $origin = [Uri]$config.App.WebBaseUrl
         if (!$origin.IsAbsoluteUri -or $origin.Scheme -notin @('http','https')) { throw 'Invalid origin.' }
     } catch { throw 'Unable to read maintenance configuration. Check paths, TCP database settings and JSON; credentials are not printed.' }
-    return [pscustomobject]@{ Path=$Path; Storage=$storage; OemStorage=$oemStorage; Database=$database; Server=$server; Port=$port; User=$user; Password=$password; SslMode=$sslModes[$ssl]; CaFile=$caFile; Origin=$config.App.WebBaseUrl; Config=$config }
+    return [pscustomobject]@{ Path=$Path; Storage=$storage; Database=$database; Server=$server; Port=$port; User=$user; Password=$password; SslMode=$sslModes[$ssl]; CaFile=$caFile; Origin=$config.App.WebBaseUrl; Config=$config }
 }
 function ConvertTo-YfMySqlOption([string]$Value) {
     return '"'+$Value.Replace('\','\\').Replace('"','\"').Replace("`r",'\r').Replace("`n",'\n')+'"'
@@ -305,8 +316,6 @@ function New-YfBackup([string]$ApplicationRoot,$Config,[string]$Destination,[str
     $Destination = Get-YfFullPath $Destination
     $paths = @($ApplicationRoot,$Config.Storage,$Config.Path,$Destination)
     if ($Config.CaFile) { $paths += $Config.CaFile }
-    # The OEM storage root must never end up inside a backup (nor a backup inside it).
-    if ($Config.OemStorage) { $paths += $Config.OemStorage }
     Assert-YfSeparate $paths
     Assert-YfEmptyDirectory $Destination
     Assert-YfNoLinks $ApplicationRoot
@@ -339,7 +348,6 @@ function Restore-YfBackup([string]$BackupRoot,$Config,[string]$NewApplicationRoo
     }
     $paths = @($BackupRoot,$Config.Storage,$Config.Path,$NewApplicationRoot)
     if ($Config.CaFile) { $paths += $Config.CaFile }
-    if ($Config.OemStorage) { $paths += $Config.OemStorage }
     Assert-YfSeparate $paths
     Assert-YfEmptyDirectory $NewApplicationRoot
     Assert-YfEmptyDirectory $Config.Storage
@@ -373,14 +381,6 @@ function Restore-YfBackup([string]$BackupRoot,$Config,[string]$NewApplicationRoo
             $null = $stderr.GetAwaiter().GetResult()
             if ($process.ExitCode -ne 0) { throw 'Database import failed. The new database may be partial; the original database is unchanged.' }
         } finally { $process.Dispose() }
-        # A restored database cannot know which OEM files were purged after the backup: keep OEM
-        # content closed until the application has reconciled storage (see OEM design doc §3.3).
-        $hasConfigs = @(& $MySql "--defaults-file=$defaults" --batch --skip-column-names "--database=$($Config.Database)" "--execute=SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='system_configs'" 2> (Join-Path $scratch 'oem-probe.stderr.log'))
-        if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect the restored database for OEM reconciliation.' }
-        if ($hasConfigs.Count -eq 1 -and $hasConfigs[0].Trim() -eq '1') {
-            & $MySql "--defaults-file=$defaults" "--database=$($Config.Database)" "--execute=UPDATE system_configs SET cfg_value='RESTORED' WHERE cfg_key='oem.storage.reconcile_required'" 2> (Join-Path $scratch 'oem-marker.stderr.log')
-            if ($LASTEXITCODE -ne 0) { throw 'Unable to mark OEM storage for reconciliation after restore.' }
-        }
         Copy-YfTree (Join-Path $BackupRoot 'storage') $Config.Storage
         Copy-YfTree (Join-Path $BackupRoot 'application') $NewApplicationRoot
     } finally {

@@ -157,7 +157,8 @@ public sealed class IdentityService(
             try
             {
                 var claim = tokens.ParseAccess(bearer);
-                if (claim.Realm == IdentityRealms.Internal && await HasActiveSessionAsync(context.Database.Connection(), null, claim.UserId, claim.SessionId, ct)) targets.Add((claim.UserId, claim.SessionId));
+                if (await HasActiveSessionAsync(context.Database.Connection(), null, claim.UserId, claim.SessionId, ct))
+                    targets.Add((claim.UserId, claim.SessionId));
             }
             catch { }
         }

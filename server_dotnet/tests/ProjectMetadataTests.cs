@@ -185,5 +185,5 @@ public sealed class ProjectMetadataTests
         return json.RootElement.GetProperty("id").GetUInt64();
     }
 
-    private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, JsonSerializerOptions.Web));
+    private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
 }

@@ -252,7 +252,7 @@ public sealed class ProjectGroupTests
         Assert.Equal(8508UL, rows[1].SectionId);
     }
 
-    private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, JsonSerializerOptions.Web));
+    private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     private sealed class Child
     {
         public ulong Id { get; init; }

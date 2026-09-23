@@ -380,7 +380,7 @@ internal sealed class MessageService(
             .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         try
         {
-            var path = await FileStorage.ResolveExistingFileAsync(
+            var path = FileStorage.ResolveExistingFile(
                 options.StorageRoot, Path.Combine(options.StorageRoot, image.StoragePath), ct);
             return new(path, image.OriginalName, image.MimeType, image.SizeBytes);
         }
@@ -504,7 +504,7 @@ internal sealed class MessageService(
         var directory = FileStorage.EnsureLexicallyWithin(root,
             Path.Combine(root, "message-images", now.ToString("yyyy"), now.ToString("MM")), false);
         Directory.CreateDirectory(directory);
-        directory = await FileStorage.ResolveExistingAsync(root, directory, requireFile: false, ct);
+        directory = FileStorage.ResolveExisting(root, directory, requireFile: false, ct);
         var path = FileStorage.EnsureLexicallyWithin(root, Path.Combine(directory, storedName), false);
         ulong total = 0;
         var header = new byte[12];
@@ -533,7 +533,7 @@ internal sealed class MessageService(
                 throw ApiException.BadRequest("图片内容与扩展名不匹配或文件已损坏");
             await output.FlushAsync(ct);
             output.Flush(flushToDisk: true);
-            await FileStorage.ResolveExistingFileAsync(root, path, ct);
+            FileStorage.ResolveExistingFile(root, path, ct);
         }
         catch
         {
@@ -585,7 +585,7 @@ internal sealed class MessageService(
                 {
                     var candidate = FileStorage.EnsureLexicallyWithin(options.StorageRoot,
                         Path.Combine(options.StorageRoot, image.StoragePath), false);
-                    var path = await FileStorage.ResolveExistingFileAsync(options.StorageRoot, candidate, ct);
+                    var path = FileStorage.ResolveExistingFile(options.StorageRoot, candidate, ct);
                     TryDelete(path);
                 }
             }

@@ -69,7 +69,7 @@ public sealed partial class UploadService(
                         ?? throw ApiException.Conflict("该文件正在合并，请稍候");
                     existing = await ResetOrphanedMergeAsync(conn, actor, existing, ct);
                 }
-                return await InitResponseAsync(existing, resumed: true, ct);
+                return InitResponse(existing, resumed: true, ct);
             }
 
             var sessionId = Guid.NewGuid().ToString("D");
@@ -119,7 +119,7 @@ public sealed partial class UploadService(
                 var recovery = commitRecovery
                     ?? SessionCommitRecovery(await SessionExistsSafelyAsync(sessionId, ct));
                 if (recovery.DeleteDirectory)
-                    await TryDeleteDirectoryAsync(options.StorageRoot, tempDir, CancellationToken.None);
+                    TryDeleteDirectory(options.StorageRoot, tempDir, CancellationToken.None);
                 throw;
             }
             _ = extension;
@@ -137,7 +137,7 @@ public sealed partial class UploadService(
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:upload", ct);
         if (session.Status == "UPLOADING" && session.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
-        var chunks = await UploadedChunksAsync(session, ct);
+        var chunks = UploadedChunks(session, ct);
         return new
         {
             sessionId = session.Id, status = session.Status, chunkSize = session.ChunkSize,
@@ -267,7 +267,7 @@ public sealed partial class UploadService(
         if (session.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
         await ProjectAccessService.RequireFileUploadAsync(conn, null, actor, session.ProjectId, ct);
-        var uploaded = await UploadedChunksAsync(session, ct);
+        var uploaded = UploadedChunks(session, ct);
         if ((uint)uploaded.Count != session.TotalChunks)
             throw ApiException.BadRequest($"分片不完整：已传 {uploaded.Count}/{session.TotalChunks}");
         FileStorage.EnsureFreeSpace(options.StorageRoot, session.FileSize);
@@ -303,7 +303,7 @@ public sealed partial class UploadService(
         var chunks = new List<string>(checked((int)session.TotalChunks));
         for (uint index = 0; index < session.TotalChunks; index++)
         {
-            chunks.Add(await FileStorage.ResolveExistingFileAsync(root,
+            chunks.Add(FileStorage.ResolveExistingFile(root,
                 FileStorage.ChunkPath(root, session.Id, index), ct));
         }
         (string Sha256, string Md5, ulong Bytes) hash;
@@ -434,13 +434,13 @@ public sealed partial class UploadService(
         return await LoadSessionAsync(conn, null, session.Id, false, ct);
     }
 
-    private async Task<object> InitResponseAsync(UploadSessionRow session, bool resumed, CancellationToken ct) => new
+    private object InitResponse(UploadSessionRow session, bool resumed, CancellationToken ct) => new
     {
         sessionId = session.Id, chunkSize = session.ChunkSize, totalChunks = session.TotalChunks,
-        uploadedChunks = await UploadedChunksAsync(session, ct), resumed
+        uploadedChunks = UploadedChunks(session, ct), resumed
     };
 
-    private async Task<List<uint>> UploadedChunksAsync(UploadSessionRow session, CancellationToken ct)
+    private List<uint> UploadedChunks(UploadSessionRow session, CancellationToken ct)
     {
         var root = FileStorage.Root(options.StorageRoot);
         var result = new List<uint>();
@@ -453,7 +453,7 @@ public sealed partial class UploadService(
                 : session.ChunkSize;
             try
             {
-                var resolved = await FileStorage.ResolveExistingFileAsync(root, path, ct);
+                var resolved = FileStorage.ResolveExistingFile(root, path, ct);
                 if ((ulong)new FileInfo(resolved).Length == expected) result.Add(index);
             }
             catch (FileNotFoundException) { }
@@ -726,12 +726,12 @@ public sealed partial class UploadService(
         var root = FileStorage.Root(configuredRoot);
         var directory = FileStorage.SessionDirectory(root, sessionId);
         if (!Directory.Exists(directory)) return;
-        directory = await FileStorage.ResolveExistingAsync(root, directory, requireFile: false, ct);
+        directory = FileStorage.ResolveExisting(root, directory, requireFile: false, ct);
         foreach (var candidate in Directory.EnumerateFiles(
                      directory, PendingFinalMarkerPrefix + "*", SearchOption.TopDirectoryOnly))
         {
             ct.ThrowIfCancellationRequested();
-            var marker = await FileStorage.ResolveExistingFileAsync(root, candidate, ct);
+            var marker = FileStorage.ResolveExistingFile(root, candidate, ct);
             if (new FileInfo(marker).Length is <= 0 or > 2048)
             {
                 QuarantinePendingFinalMarker(root, directory, marker, sessionId, logger, "标记长度无效");
@@ -769,7 +769,7 @@ public sealed partial class UploadService(
             }
 
             string finalPath;
-            try { finalPath = await FileStorage.ResolveForCleanupAsync(root, relativePath, ct); }
+            try { finalPath = FileStorage.ResolveForCleanup(root, relativePath, ct); }
             catch (InvalidOperationException)
             {
                 QuarantinePendingFinalMarker(root, directory, marker, sessionId, logger, "标记路径越出存储根目录");
@@ -783,7 +783,7 @@ public sealed partial class UploadService(
             }
             if (File.Exists(finalPath))
             {
-                finalPath = await FileStorage.ResolveExistingFileAsync(root, finalPath, ct);
+                finalPath = FileStorage.ResolveExistingFile(root, finalPath, ct);
                 File.Delete(finalPath);
             }
             File.Delete(marker);
@@ -838,7 +838,7 @@ public sealed partial class UploadService(
         try
         {
             await CleanupPendingFinalsAsync(conn, options.StorageRoot, sessionId, logger, ct);
-            await FileStorage.DeleteDirectoryTreeAsync(options.StorageRoot,
+            FileStorage.DeleteDirectoryTree(options.StorageRoot,
                 FileStorage.SessionDirectory(FileStorage.Root(options.StorageRoot), sessionId), ct);
         }
         catch
@@ -888,9 +888,9 @@ public sealed partial class UploadService(
     };
 
     private static void TryDeleteFile(string path) { try { File.Delete(path); } catch { } }
-    private static async Task TryDeleteDirectoryAsync(string root, string path, CancellationToken ct)
+    private static void TryDeleteDirectory(string root, string path, CancellationToken ct)
     {
-        try { await FileStorage.DeleteDirectoryTreeAsync(root, path, ct); }
+        try { FileStorage.DeleteDirectoryTree(root, path, ct); }
         catch { }
     }
 

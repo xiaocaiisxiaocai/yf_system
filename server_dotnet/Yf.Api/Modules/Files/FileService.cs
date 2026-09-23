@@ -70,7 +70,7 @@ public sealed class FileService(
         string path;
         try
         {
-            path = await FileStorage.ResolveExistingFileAsync(options.StorageRoot,
+            path = FileStorage.ResolveExistingFile(options.StorageRoot,
                 Path.Combine(options.StorageRoot, row.StoragePath), ct);
         }
         catch (FileNotFoundException) { throw ApiException.NotFound(); }
@@ -146,7 +146,7 @@ public sealed class FileService(
         string path;
         try
         {
-            path = await FileStorage.ResolveExistingFileAsync(options.StorageRoot,
+            path = FileStorage.ResolveExistingFile(options.StorageRoot,
                 Path.Combine(options.StorageRoot, row.StoragePath), ct);
         }
         catch (FileNotFoundException) { throw ApiException.NotFound(); }
@@ -211,7 +211,7 @@ public sealed class FileService(
             string path;
             try
             {
-                path = await FileStorage.ResolveExistingFileAsync(options.StorageRoot,
+                path = FileStorage.ResolveExistingFile(options.StorageRoot,
                     Path.Combine(options.StorageRoot, row.StoragePath), ct);
             }
             catch (FileNotFoundException) { throw ApiException.NotFound(); }

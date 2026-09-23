@@ -41,8 +41,8 @@ TEST_TEMP_ROOT = TEST_ROOT / "tmp"
 TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
 PUBLISHED = os.environ.get("YF_TEST_API_DIR")
 API = Path(PUBLISHED).resolve() if PUBLISHED else ROOT / "server_dotnet/Yf.Api"
-DLL = API / "Yf.Api.dll" if PUBLISHED else API / "bin/Debug/net10.0/Yf.Api.dll"
-TEST_HOST = ROOT / "server_dotnet/TestHost/bin/Debug/net10.0/Yf.Api.TestHost.dll"
+DLL = API / "Yf.Api.dll" if PUBLISHED else API / "bin/Debug/net8.0/Yf.Api.dll"
+TEST_HOST = ROOT / "server_dotnet/TestHost/bin/Debug/net8.0/Yf.Api.TestHost.dll"
 checks = []
 FILES_ONLY = sys.argv[1:] == ["--files-only"]
 if sys.argv[1:] and not FILES_ONLY:
@@ -207,7 +207,7 @@ try:
                 "WHERE type='PRIORITY' AND name IN ('高','普通','低')"
             )
             check("fresh EF initialization seeds the default priorities", cursor.fetchone()[0] == 3)
-        # Every EF migration in the source tree, in order: InitialCreate first, then later ones (e.g. AddOemPlatform).
+        # Every EF migration in the source tree, in order: InitialCreate first, then subsequent migrations.
         source_migrations = sorted(
             path.stem for path in (Path(__file__).resolve().parents[1] / "Yf.Api/Infrastructure/Migrations").glob("*.cs")
             if path.stem[:14].isdigit() and path.stem[14:15] == "_" and "." not in path.stem)
@@ -270,11 +270,13 @@ try:
             # the loopback-only test host, in a disposable copy. Never modify ZIP.
             test_payload = Path(temp) / "test-payload"
             shutil.copytree(API, test_payload)
-            for suffix in (".dll", ".deps.json", ".runtimeconfig.json"):
-                source = TEST_HOST.parent / ("Yf.Api.TestHost" + suffix)
-                shutil.copy2(source, test_payload / source.name)
+            shutil.copy2(TEST_HOST, test_payload / TEST_HOST.name)
             test_dll = test_payload / TEST_HOST.name
-        verify_test_host_artifacts(API if PUBLISHED else DLL.parent, test_dll)
+        verify_test_host_artifacts(API if PUBLISHED else DLL.parent, test_dll, use_api_runtime=bool(PUBLISHED))
+        host_command = ["dotnet", str(test_dll)]
+        if PUBLISHED:
+            host_command = ["dotnet", "exec", "--depsfile", str(test_dll.parent / "Yf.Api.deps.json"),
+                            "--runtimeconfig", str(test_dll.parent / "Yf.Api.runtimeconfig.json"), str(test_dll)]
         check("test host uses exact API assembly and managed runtime dependencies", True)
         api_log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(api_log_path, "wb") as log:
@@ -304,7 +306,7 @@ try:
                 unknown = client.call("GET", "/api/unknown", expected=404)
                 check("published config binaries and unknown API are not exposed", unknown["code"] == 40401)
             stop_process(process)
-            process = subprocess.Popen(["dotnet", str(test_dll)], cwd=API, env=env, stdout=log, stderr=log)
+            process = subprocess.Popen(host_command, cwd=API, env=env, stdout=log, stderr=log)
             stack.callback(stop_process, process)
             client = Client(base)
             for _ in range(100):

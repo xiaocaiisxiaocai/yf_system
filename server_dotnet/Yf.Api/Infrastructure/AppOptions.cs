@@ -7,6 +7,8 @@ public sealed class AppOptions
     public string ConnectionString { get; set; } = "";
     public string StorageRoot { get; set; } = "";
     public string JwtSecret { get; set; } = "";
+    public bool AutoInitializeDatabase { get; set; }
+    public string BootstrapPassword { get; set; } = "";
     public string WebBaseUrl { get; set; } = "http://127.0.0.1:5273";
     public bool CookieSecure { get; set; } = true;
     public bool TrustLoopbackProxy { get; set; }
@@ -17,16 +19,9 @@ public sealed class AppOptions
     public int UploadChunkSize { get; set; } = 10 * 1024 * 1024;
     public SmtpOptions Smtp { get; set; } = new();
 
-    /// <summary>
-    /// Local directory holding OEM file content. Deliberately separate from
-    /// <see cref="StorageRoot"/>: it is never part of any backup. Empty disables OEM file features.
-    /// </summary>
-    public string OemStorageRoot { get; set; } = "";
-    public OemScannerOptions OemScanner { get; set; } = new();
-
     public void Validate()
     {
-        if (string.IsNullOrWhiteSpace(ConnectionString)) throw new InvalidOperationException("App:ConnectionString must be configured; no database is created automatically.");
+        if (string.IsNullOrWhiteSpace(ConnectionString)) throw new InvalidOperationException("App:ConnectionString must be configured.");
         MySqlConnectionStringBuilder database;
         try { database = new MySqlConnectionStringBuilder(ConnectionString); }
         catch { throw new InvalidOperationException("Invalid App:ConnectionString."); }
@@ -45,16 +40,6 @@ public sealed class AppOptions
             throw new InvalidOperationException("App:WebBaseUrl must be an HTTP(S) origin.");
         if (AccessTtlMinutes is < 1 or > 1440 || RefreshTtlDays is < 1 or > 365) throw new InvalidOperationException("Invalid token lifetime.");
         Smtp.Validate();
-        if (OemStorageRoot.Length > 0)
-        {
-            if (!Path.IsPathFullyQualified(OemStorageRoot))
-                throw new InvalidOperationException("App:OemStorageRoot must be an absolute local path.");
-            if (Path.GetFullPath(OemStorageRoot).TrimEnd(Path.DirectorySeparatorChar) == Path.GetPathRoot(OemStorageRoot)?.TrimEnd(Path.DirectorySeparatorChar))
-                throw new InvalidOperationException("App:OemStorageRoot cannot be a drive root.");
-            if (OemStorageRoot.StartsWith(@"\", StringComparison.Ordinal))
-                throw new InvalidOperationException("App:OemStorageRoot must be a local directory, not a network share.");
-        }
-        OemScanner.Validate();
     }
 
     public void ValidateStorageLocation(string applicationRoot)
@@ -67,16 +52,6 @@ public sealed class AppOptions
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         if (Overlaps(storage, app, comparison))
             throw new InvalidOperationException("StorageRoot must be separate from the application directory and its public web files.");
-        if (OemStorageRoot.Length > 0)
-        {
-            // OEM content is never backed up, so it must not live inside (or contain)
-            // the backed-up collaboration storage or the application tree.
-            var oem = ResolveComparisonPath(OemStorageRoot);
-            if (Overlaps(oem, app, comparison))
-                throw new InvalidOperationException("OemStorageRoot must be separate from the application directory.");
-            if (Overlaps(oem, storage, comparison))
-                throw new InvalidOperationException("OemStorageRoot must be separate from StorageRoot (OEM files are excluded from backups).");
-        }
     }
 
     private static bool Overlaps(string left, string right, StringComparison comparison) =>
@@ -104,79 +79,6 @@ public sealed class AppOptions
             resolved = ResolveComparisonPath(target.FullName, remainingLinks - 1);
         }
         return Path.GetFullPath(resolved).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-    }
-}
-
-/// <summary>OEM malware scanner selection. Until an engine is configured nothing is released.</summary>
-public sealed class OemScannerOptions
-{
-    /// <summary>
-    /// None (fail closed: files stay unavailable), ClamAV (a local clamd service), OnAccess
-    /// (the server's endpoint antivirus through real-time scanning) or Fake (development/testing only).
-    /// </summary>
-    public string Engine { get; set; } = "None";
-    public OemClamAvOptions ClamAv { get; set; } = new();
-    public OemOnAccessOptions OnAccess { get; set; } = new();
-    /// <summary>Must be true to run the Fake engine, so a test configuration cannot reach production by accident.</summary>
-    public bool AcknowledgeInsecureFake { get; set; }
-    public int BaseTimeoutSeconds { get; set; } = 120;
-    public int TimeoutSecondsPerGb { get; set; } = 300;
-
-    public void Validate()
-    {
-        if (Engine is not ("None" or "ClamAV" or "OnAccess" or "Fake")) throw new InvalidOperationException("App:OemScanner:Engine must be None, ClamAV, OnAccess or Fake.");
-        if (Engine == "ClamAV") ClamAv.Validate();
-        if (Engine == "OnAccess") OnAccess.Validate();
-        if (Engine == "Fake" && !AcknowledgeInsecureFake)
-            throw new InvalidOperationException("The Fake OEM scanner performs no malware scanning; set App:OemScanner:AcknowledgeInsecureFake=true only for development or tests.");
-        if (BaseTimeoutSeconds is < 5 or > 86400 || TimeoutSecondsPerGb is < 0 or > 86400)
-            throw new InvalidOperationException("Invalid OEM scanner timeouts.");
-    }
-}
-
-/// <summary>Local clamd INSTREAM integration. TCP is deliberately restricted to loopback.</summary>
-public sealed class OemClamAvOptions
-{
-    public string Host { get; set; } = "127.0.0.1";
-    public int Port { get; set; } = 3310;
-    public int ConnectTimeoutSeconds { get; set; } = 5;
-    /// <summary>
-    /// Maximum file size submitted to clamd. ClamAV 1.4 supports at most 2 GiB - 1;
-    /// this must also match clamd's StreamMaxLength/MaxFileSize deployment settings.
-    /// </summary>
-    public long MaxStreamBytes { get; set; } = 1024L * 1024 * 1024;
-
-    public void Validate()
-    {
-        if (!System.Net.IPAddress.TryParse(Host, out var address) || !System.Net.IPAddress.IsLoopback(address))
-            throw new InvalidOperationException("App:OemScanner:ClamAv:Host must be a numeric loopback address (127.0.0.1 or ::1).");
-        if (Port is < 1 or > 65535)
-            throw new InvalidOperationException("App:OemScanner:ClamAv:Port must be between 1 and 65535.");
-        if (ConnectTimeoutSeconds is < 1 or > 60)
-            throw new InvalidOperationException("App:OemScanner:ClamAv:ConnectTimeoutSeconds must be 1-60.");
-        if (MaxStreamBytes is < 1 or > 2_147_483_647)
-            throw new InvalidOperationException("App:OemScanner:ClamAv:MaxStreamBytes must be 1-2147483647.");
-    }
-}
-
-/// <summary>Real-time (on-access) antivirus integration; see OnAccessFileScanner.</summary>
-public sealed class OemOnAccessOptions
-{
-    /// <summary>Shown in scan results and audit, e.g. "OfficeScan".</summary>
-    public string ProductName { get; set; } = "OfficeScan";
-    /// <summary>Wait after a file was written (and again after it was read) before judging it.</summary>
-    public int SettleSeconds { get; set; } = 5;
-    /// <summary>How long the antivirus has to intercept the EICAR canary.</summary>
-    public int CanaryTimeoutSeconds { get; set; } = 60;
-    /// <summary>How long a successful canary check is trusted.</summary>
-    public int CanaryIntervalMinutes { get; set; } = 60;
-
-    public void Validate()
-    {
-        if (string.IsNullOrWhiteSpace(ProductName) || ProductName.Length > 64) throw new InvalidOperationException("App:OemScanner:OnAccess:ProductName must be 1-64 characters.");
-        if (SettleSeconds is < 0 or > 120) throw new InvalidOperationException("App:OemScanner:OnAccess:SettleSeconds must be 0-120.");
-        if (CanaryTimeoutSeconds is < 5 or > 600) throw new InvalidOperationException("App:OemScanner:OnAccess:CanaryTimeoutSeconds must be 5-600.");
-        if (CanaryIntervalMinutes is < 5 or > 1440) throw new InvalidOperationException("App:OemScanner:OnAccess:CanaryIntervalMinutes must be 5-1440.");
     }
 }
 

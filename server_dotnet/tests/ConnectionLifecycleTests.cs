@@ -191,7 +191,7 @@ public sealed class ConnectionLifecycleTests
         }
         finally
         {
-            await Yf.Api.Modules.Files.FileStorage.DeleteDirectoryTreeAsync(Path.GetTempPath(), root, CancellationToken.None);
+            Yf.Api.Modules.Files.FileStorage.DeleteDirectoryTree(Path.GetTempPath(), root, CancellationToken.None);
         }
     }
 

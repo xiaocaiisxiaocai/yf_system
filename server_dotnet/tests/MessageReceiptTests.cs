@@ -169,7 +169,7 @@ public sealed class MessageReceiptTests
     }
 
     private static JsonElement Json(object value) =>
-        JsonSerializer.SerializeToElement(value, JsonSerializerOptions.Web);
+        JsonSerializer.SerializeToElement(value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
     private sealed class LocalDatabaseScope(
         MySqlConnection administration,

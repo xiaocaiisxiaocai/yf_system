@@ -75,7 +75,7 @@ public sealed class ProjectCopyTests
         {
             await database.ExecuteAsync(SeedSql, ct);
             var bytes = "independent-copy-content"u8.ToArray();
-            var sha = Convert.ToHexStringLower(SHA256.HashData(bytes));
+            var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             var sourceRelative = "files/2026/09/source-copy.txt";
             var sourcePath = Path.Combine(storage, sourceRelative.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
@@ -237,7 +237,7 @@ public sealed class ProjectCopyTests
         INSERT INTO project_work_orders(project_id,work_order_no,sort_no) VALUES(7101,'WO-COPY',0),(7102,'WO-EMPTY',0);
         """;
 
-    private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, JsonSerializerOptions.Web));
+    private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     private sealed class CopiedFile { public ulong Id { get; init; } public string StoragePath { get; init; } = "";
         public ulong UploaderId { get; init; } public string Direction { get; init; } = ""; public string Sha256 { get; init; } = ""; }
     private sealed class CopiedProject

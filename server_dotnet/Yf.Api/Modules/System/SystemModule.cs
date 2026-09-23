@@ -57,8 +57,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
         await using var conn = await db.OpenAsync(ct);
         await using var context = EfDb.Use(conn);
         var hidden = new[] { "security.management_lock", "mail.smtp", "storage.warn_percent" };
-        return await context.SystemConfigs.Where(config => !Enumerable.Contains(hidden, config.CfgKey)
-                && !config.CfgKey.StartsWith(AuditScopes.OemConfigPrefix))
+        return await context.SystemConfigs.Where(config => !Enumerable.Contains(hidden, config.CfgKey))
             .OrderBy(config => config.CfgKey).Select(config => new
             {
                 key = config.CfgKey, value = config.CfgValue, config.Description, updatedAt = config.UpdatedAt,
@@ -72,7 +71,6 @@ public sealed class SystemService(AppDb db, AuditService audit)
             throw ApiException.BadRequest("系统参数名称无效");
         var value = input?.Trim();
         if (key is "security.management_lock" or "mail.smtp") throw ApiException.BadRequest("请使用对应的专用配置入口");
-        if (key.StartsWith(AuditScopes.OemConfigPrefix, StringComparison.Ordinal)) throw ApiException.BadRequest($"未知系统参数：{key}");
         if (key == "storage.warn_percent") throw ApiException.BadRequest("存储告警阈值已停用");
         (long min, long max)? range = key switch
         {
@@ -148,8 +146,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
             throw ApiException.BadRequest("日志分类参数无效");
         await using var conn = await db.OpenAsync(ct);
         await using var context = EfDb.Use(conn);
-        // The collaboration audit view never shows the OEM business line's rows.
-        var query = context.AuditLogs.AsNoTracking().Where(AuditScopes.IsCollaborationRow);
+        var query = context.AuditLogs.AsNoTracking();
         var action = request.Query["action"].ToString().Trim();
         var targetType = request.Query["targetType"].ToString().Trim();
         var targetId = request.Query["targetId"].ToString().Trim();
@@ -231,9 +228,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
         {
             var locked = await context.AuditLogs.FromSqlInterpolated($"SELECT * FROM audit_logs WHERE id={id} FOR UPDATE")
                 .AsNoTracking().SingleOrDefaultAsync(ct);
-            // OEM rows are not addressable from the collaboration audit view.
-            if (locked is not null && locked.ActorRealm != AuditScopes.OemRealm && !AuditScopes.IsOemAction(locked.Action))
-                rows.Add(new AuditRow { Id = locked.Id, Action = locked.Action });
+            if (locked is not null) rows.Add(new AuditRow { Id = locked.Id, Action = locked.Action });
         }
         if (rows.Any(x => x.Action == "AUDIT_LOG_DELETE")) throw ApiException.Forbidden("日志清理记录不可删除");
         var actualIds = rows.Select(x => x.Id).ToArray();

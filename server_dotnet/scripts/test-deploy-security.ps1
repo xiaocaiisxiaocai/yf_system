@@ -60,6 +60,26 @@ try {
     }
     Write-Output 'PASS installer applies path, configuration, ACL and pre-write environment guards'
 
+    $maintainScript=Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\deploy\maintain-iis.ps1') -Raw -Encoding UTF8
+    if ($installScript -notmatch [regex]::Escape('Set-YfExternalConfigurationFallback $SiteRoot') -or
+        $maintainScript -notmatch [regex]::Escape('Set-YfExternalConfigurationFallback $Root')) {
+        throw 'Formal IIS installation or maintenance does not clear bundled configuration fallback.'
+    }
+    $externalSite=Join-Path $root 'external-site'
+    New-Item -ItemType Directory -Path $externalSite | Out-Null
+    $bundled='{"App":{"ConnectionString":"fixture-db","JwtSecret":"fixture-jwt","StorageRoot":"D:\\fixture","AutoInitializeDatabase":true,"BootstrapPassword":"fixture-bootstrap"}}'
+    [IO.File]::WriteAllText((Join-Path $externalSite 'appsettings.json'),$bundled,(New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText((Join-Path $externalSite 'appsettings.example.json'),$bundled,(New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText((Join-Path $externalSite 'appsettings.Production.json'),$bundled,(New-Object Text.UTF8Encoding($false)))
+    Set-YfExternalConfigurationFallback $externalSite
+    foreach ($name in @('appsettings.json','appsettings.Production.json','appsettings.example.json')) {
+        $app=(Get-Content -LiteralPath (Join-Path $externalSite $name) -Raw | ConvertFrom-Json).App
+        if ($app.ConnectionString -or $app.JwtSecret -or $app.StorageRoot -or $app.AutoInitializeDatabase -or $app.BootstrapPassword) {
+            throw 'Formal IIS site retained bundled credentials or storage configuration.'
+        }
+    }
+    Write-Output 'PASS formal IIS install and maintenance clear bundled credential fallback'
+
     $externalConfig='D:\YfConfig\appsettings.Production.json'
     $effectiveVariables=@(
         [pscustomobject]@{Name='YF_CONFIG_PATH';Value=$externalConfig},

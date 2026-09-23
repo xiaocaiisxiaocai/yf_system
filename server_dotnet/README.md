@@ -1,6 +1,6 @@
 # ASP.NET Core API 后端
 
-当前维护的独立 .NET 10 后端，配套 React 前端位于 `../web`，接口为 `/api/v1`。原 Rust 归档目录 `yf_server` 已从仓库移除（历史版本仍可通过 git 记录查阅），不作为运行、测试或升级依赖。数据库由 EF Core Code-First 迁移管理；开发阶段不兼容旧 schema 或旧数据。
+当前维护的独立 .NET 8 后端，配套 React 前端位于 `../web`，接口为 `/api/v1`。原 Rust 归档目录 `yf_server` 已从仓库移除（历史版本仍可通过 git 记录查阅），不作为运行、测试或升级依赖。数据库由 EF Core Code-First 迁移管理；开发阶段不兼容旧 schema 或旧数据。
 
 新库初始化只创建 `admin` 用户和系统管理员角色，其他角色由管理员手工配置。已有开发数据可通过独立清理命令重置，同时保留 SMTP、系统参数和 admin 原密码，见[开发数据初始化说明](../docs/开发数据初始化说明.md)。
 
@@ -11,7 +11,6 @@
 - `Yf.Api/Modules/Projects`：主项目、子项目、提交/确认/驳回/撤回、留言/已读、动态、工作台。
 - `Yf.Api/Modules/Files`：分片上传与续传、合并校验、下载、文档/视频 Range 预览、批量 ZIP、软删除和垃圾清理。
 - `Yf.Api/Modules/System`：参数、日志、邮件 outbox 与 TLS SMTP 后台发送。
-- `Yf.Api/Modules/Oem`：OEM 文件传递业务线（与供应商协作双向隔离），见下方“OEM 文件传递”。
 - `Yf.Api/Infrastructure`：EF Core/MySQL、统一错误、事务权限门禁、审计及空库初始化。
 
 当前协作模型是“主项目 + 子项目”。主项目集中维护供应商、工令号、机型、Robot 信息、负责人、课别、优先级和预计完成日期；创建时至少同时创建一个子项目。文件、留言、动态与验收只属于子项目。普通内部用户按唯一当前负责人访问，拥有 `project:view_all` 的内部管理员可全局查看；供应商企业下全部启用账号共享该企业的项目范围，系统不再使用项目成员关系。
@@ -21,17 +20,6 @@
 后续业务逻辑复查补齐了申请版本、防止无验收人提交、通知与授权范围一致性、负责人完整性和旧成员模型清理。确认、驳回、撤回必须带所查看申请的 `expectedSubmissionId`；旧版本返回 409。数据库结构由 EF Core Code-First 迁移维护。见[主项目与子项目协作契约](docs/主项目与子项目协作契约-2026-09-16.md)。
 
 采用 ASP.NET Core Minimal API；按业务模块拆分，普通业务查询和写入使用 EF Core，必须使用的 MySQL 行锁和命名锁采用参数化原生 SQL。后续接口、数据库升级与测试均由 .NET 独立维护。
-
-## OEM 文件传递
-
-OEM 文件传递是与供应商协作平级、互不可见的第二条业务线，设计契约见 [OEM 需求文档](docs/OEM绘图平台-需求文档-2026-09-18.md) 与 [OEM 数据库设计与接口规划](docs/OEM绘图平台-数据库设计与接口规划-2026-09-18.md)。
-
-- **隔离**：接口统一在 `/api/v1/oem/*`。OEM 厂商账号使用独立的 `oem_accounts`、刷新会话表、Cookie 和 `realm=oem` 令牌，令牌只能访问 `/api/v1/oem/*`；供应商账号访问 OEM 接口一律 403。协作平台的审计日志、系统参数和邮件状态页不显示 OEM 记录（审计 `OEM_*` 动作、`oem.*` 参数、`OEM_*` 邮件）。前端内部员工从页头“OEM 文件传递”进入独立布局，厂商使用独立门户 `/oem-portal`。
-- **模块结构**（`Modules/Oem`）：`Identity`（厂商登录）、`Admin`（厂商与账号）、`Policies`（删除策略、`oem.*` 参数目录）、`Approval`（纯函数审批规划器、模板管理、审批引擎）、`Transfers`（传递单、访问策略、流程推进）、`Uploads`、`Scanning`（签名/压缩包检查 + 可替换扫描引擎、隔离区到正式区移动）、`Delivery`（预览、下载凭证、Range 回执）、`Maintenance`（物理删除、草稿过期、恢复核对、OEM 审计）、`Notifications`（邮件）。领域事件在同一事务内派发；后台任务由一个组合式 hosted worker 驱动，全部依赖数据库租约。
-- **配置**：外部 JSON 中 `App:OemStorageRoot` 指定 OEM 文件根目录（本机绝对路径，不得与程序、配置和 `StorageRoot` 互相包含；为空时 OEM 文件功能返回 503）。新部署推荐 `App:OemScanner:Engine=ClamAV`，通过本机独立扫描进程返回明确结果；`OnAccess` 保留兼容现有 OfficeScan 实时扫描配置，`None` 不放行，`Fake` 仅供显式确认的开发测试。安装脚本拒绝在生产使用 Fake。格式、配额、压缩包、下载与清理期限、邮件参数在 OEM 管理页维护。
-- **权限**：迁移 `AddOemPlatform` 新增 `oem`（菜单）与 `oem:*`、`dept:leader_manage` 权限点，仅授予系统管理员角色，其余角色按职责分配。组织主管通过 `PUT /api/v1/admin/departments/{id}/leader` 维护。
-- **扫描**：ClamAV 1.4.6 Windows x64 便携组件随发布包分发（完整上游许可证与对应源码归档同时包含），无需给员工或供应商安装软件。服务器独立运行 `clamd`，后端仅向数字回环地址发送 INSTREAM；每次核对实际流的大小和 SHA-256，明确返回 OK 且前后引擎/病毒库版本一致才可放行。服务不可用、超时、超限、加密、未知响应均不放行。默认单文件最多 1 GiB，上传入口会同时检查业务上限和引擎上限；压缩包展开超过引擎限制也会阻断，不能仅提高上传上限。发布包内置三份经过官方数字签名验证的 CVD 病毒库，首次安装直接校验并复制，无需联网下载；`freshclam` 负责后续更新病毒库；在管理页启用“病毒库过期时暂停放行”后，按实际加载的病毒库构建时间检查（默认 48 小时），并记录版本、时间和文件摘要。后台进程与 .NET 使用同一 Windows 本地时区，不单独设置 TZ。具体便携部署、持久目录和更新命令见 [部署说明](deploy/README.md)。
-- **OfficeScan 兼容边界**：`OnAccess` 仍通过本机实时扫描探针和隔离文件读写观察判断拦截，无法取得每个文件的厂商扫描结果或病毒库时间；不应把“经过公司网络”当成扫描通过证据。使用 ClamAV 时不再依赖 OfficeScan 探针，公司终端防护仍由 IT 管理。
 
 ## 删除操作
 
@@ -44,17 +32,15 @@ OEM 文件传递是与供应商协作平级、互不可见的第二条业务线�
 | 供应商 | 无项目且无账号；不级联删除账号 |
 | 组织、角色 | 有下级组织或绑定用户时拒绝删除；内置角色可分配权限、禁用或删除，名称保持固定 |
 | 操作日志 | 清理与 `AUDIT_LOG_DELETE` 留痕同事务，记录实际删除 ID 和数量；清理记录本身不可删除 |
-| OEM 厂商、OEM 账号、删除策略、审批模板 | 不提供物理删除，只能停用；历史传递单和审计引用它们 |
-| OEM 传递单与附件 | 草稿删除或过期时记录保留为“已废弃”；附件内容按删除策略、安全期限由后台物理删除，文件元数据和审计永久保留 |
 
 系统管理员角色绑定启用用户时必须保留用户管理和角色管理入口，避免管理员在权限分配时锁死系统；角色禁用和删除仍受绑定用户校验约束。删除相关的越权与保留规则回归包含在 `python scripts/test-isolated.py` 完整套件内，脚本只允许本机 MySQL，创建并清理临时测试库，不使用业务库运行删除测试。
 
 ## 本地运行
 
-需要 .NET 10 SDK、MySQL（现有结构兼容 MySQL 5.7/8）以及现有数据对应的独立存储目录。
+需要 .NET 8 SDK、MySQL（现有结构兼容 MySQL 5.7/8）以及现有数据对应的独立存储目录。
 
 1. 将 `deploy/appsettings.example.json` 复制到 **IIS 网站以外**的私有目录，填写连接串、随机 JWT 密钥、存储绝对路径和网站来源。该文件包含机密，不要提交版本库。
-2. 本地 HTTP 调试设置 `CookieSecure=false`，`WebBaseUrl=http://127.0.0.1:5180`。正式 HTTPS 必须为 `true`。需要使用 OEM 时，配置独立的 `OemStorageRoot`、`WorkerEnabled=true` 和本机真实 ClamAV 扫描器。
+2. 本地 HTTP 调试设置 `CookieSecure=false`，`WebBaseUrl=http://127.0.0.1:5180`。正式 HTTPS 必须为 `true`。
 3. 在 `server_dotnet` 目录执行：
 
 ```powershell
@@ -85,9 +71,9 @@ powershell -NoProfile -File .\server_dotnet\scripts\check-dev.ps1
 powershell -NoProfile -File .\server_dotnet\scripts\check-dev.ps1 -ConfigPath 'D:\YfConfig\appsettings.Local.json'
 ```
 
-脚本默认检查 `Yf.Api/appsettings.Local.json`，输出 JSON，失败返回非零。它先构建源码，再检查实际生效的配置、数据库迁移、两套存储的临时文件读写与清理、后台任务开关，以及真实扫描器和数据库内的病毒库过期策略。检查不执行数据库初始化或清理，不创建业务记录、不发送邮件、不启动后台任务。已有 `App__*` 环境变量仍参与配置覆盖，检查和正常启动应使用相同环境。
+脚本默认检查 `Yf.Api/appsettings.Local.json`，输出 JSON，失败返回非零。它先构建源码，再检查实际生效的配置、数据库迁移和存储目录的临时文件读写与清理。检查不执行数据库初始化或清理，不创建业务记录、不发送邮件、不启动后台任务。已有 `App__*` 环境变量仍参与配置覆盖，检查和正常启动应使用相同环境。
 
-`readyForStartup=true` 仅表示本次依赖检查通过，不能证明 API 已监听。启动后还需检查 `http://127.0.0.1:8080/health` 与实际登录/业务接口；现有 `/health` 只检查数据库连接。后台扫描、发布、审批检查、清理和恢复核对各自独立调度，同一任务不会重叠执行。
+`readyForStartup=true` 仅表示本次依赖检查通过，不能证明 API 已监听。启动后还需检查 `http://127.0.0.1:8080/health` 与实际登录/业务接口；现有 `/health` 只检查数据库连接。
 
 常见检查结果：
 
@@ -95,15 +81,9 @@ powershell -NoProfile -File .\server_dotnet\scripts\check-dev.ps1 -ConfigPath 'D
 |---|---|
 | `configuration-invalid` / `non-loopback-target` | 核对 JSON、存储路径隔离及本机数据库/网站地址；本工具仅用于本地开发 |
 | `database-not-ready` | 核对数据库连通性、账号授权及 EF 迁移历史；不要直接清空数据库 |
-| `storage-read-write-failed` / `oem-storage-read-write-failed` | 核对对应目录是否存在、当前用户读写删除权限和磁盘状态 |
-| `oem-storage-not-configured` | 配置独立的 `App:OemStorageRoot` |
-| `worker-disabled` | 将本机开发配置的 `App:WorkerEnabled` 设为 `true` 并重启 |
-| `scanner-must-use-clamav` / `scanner-not-ready` | 核对扫描器选择、clamd 进程、回环端口、病毒库和扫描器日志 |
-| `scanner-signatures-stale` | 用 FreshClam 更新病毒库，并确认 clamd 加载了新版本 |
-| `oem-reconciliation-required` | 存储仍处于恢复核对状态；检查恢复核对任务及其日志，完成后重新检查，勿直接清除标记 |
-| `readiness-timeout` | 依赖检查超过 60 秒；核对数据库响应、存储 I/O 和扫描器日志 |
+| `storage-read-write-failed` | 核对存储目录是否存在、当前用户读写删除权限和磁盘状态 |
+| `readiness-timeout` | 依赖检查超过 60 秒；核对数据库响应和存储 I/O |
 
-开发用 ClamAV 可以使用便携组件，无需安装 Windows 服务。让 `clamd.conf` 使用数字回环地址及 `3310` 端口，在其中设置持续保存的病毒库目录，并与后端 `App:OemScanner:ClamAv` 保持一致。当前工作站的便携目录位于 `%LOCALAPPDATA%\YfSystem\Runtime\ClamAV-1.4.6`，日志位于其 `logs` 子目录；重启 Windows 后需重新启动该目录中的 `clamd.exe` 并显式传入同目录 `clamd.conf`。需要更新病毒库时运行同一组件的 `freshclam.exe --config-file=<freshclam.conf 的绝对路径>`。此开发配置未安装自动更新服务；离线病毒库仍受实际业务过期策略约束。配置和具体安装步骤见[部署说明](deploy/README.md)。
 
 ## 数据库初始化与升级
 
@@ -117,7 +97,7 @@ powershell -NoProfile -File .\server_dotnet\scripts\check-dev.ps1 -ConfigPath 'D
 
 ### 初始化与升级命令
 
-启动只读核对 `__EFMigrationsHistory` 是否与当前程序集的迁移集合完全一致，不自动执行 DDL。开发阶段不接管旧的手写 schema 或历史数据；数据库缺少 EF 历史、历史为空或包含未知迁移时会拒绝启动和升级，应重建空开发库。
+对已有非空数据库，启动只读核对 `__EFMigrationsHistory` 是否与当前程序集的迁移集合完全一致，不自动执行升级 DDL。开启 `AutoInitializeDatabase` 时，不存在的数据库或空库会在首次启动执行建库和初始化迁移。开发阶段不接管旧的手写 schema 或历史数据；数据库缺少 EF 历史、历史为空或包含未知迁移时会拒绝启动和升级，应重建空开发库。
 
 已有 EF 管理的开发库应用新增迁移时运行：
 
@@ -125,6 +105,8 @@ powershell -NoProfile -File .\server_dotnet\scripts\check-dev.ps1 -ConfigPath 'D
 $env:YF_CONFIG_PATH = 'D:\YfConfig\appsettings.Local.json'
 dotnet run --project .\Yf.Api -- --migrate-database
 ```
+
+当前移除 OEM 的升级迁移会删除 OEM 表和专属数据。对已有数据库执行前必须完成可验证的备份；仅更新程序而不执行迁移时，启动校验会因迁移未完成而拒绝启动。
 
 升级命令使用数据库命名锁防止并发迁移，只接受已经由 EF 历史管理的非空数据库，然后调用当前程序集内的生成迁移。空数据库必须使用 `--initialize-database`，由 `InitialCreate` 建表后在一个 EF 事务内创建 `admin`、系统管理员角色、35 个权限及 13 个系统参数。MySQL DDL 不能完整回滚；迁移中断后不要手工补历史，应检查现场并重建开发库。
 
@@ -146,7 +128,9 @@ dotnet run --project .\Yf.Api -- --migrate-database
 
 `Yf.Api/Infrastructure/Migrations` 及 `YfDbContextModelSnapshot` 是唯一 schema 权威。不要使用 `EnsureCreated`、手写建表脚本或直接修改 `__EFMigrationsHistory`；模型变化通过 `dotnet ef migrations add` 生成迁移并审查差异。
 
-新安装可由 DBA 先创建空库和专用账号，然后执行独立初始化：
+IIS 发布包默认启用 `App.AutoInitializeDatabase=true`：首次启动自动创建不存在的数据库、对空库执行 EF 迁移并创建管理员。初始密码在发布包 `appsettings.Production.json` 的 `App.BootstrapPassword`，首次登录强制修改；后续重启不会重置账号。非空数据库仍只校验，不自动执行升级迁移（包括删除 OEM 数据的迁移）。MySQL 账号必须具备目标库创建和建表权限。
+
+不开启自动初始化时，也可由 DBA 先创建空库和专用账号，然后执行独立初始化：
 
 ```powershell
 $env:YF_CONFIG_PATH = 'D:\YfConfig\appsettings.Local.json'
@@ -217,7 +201,7 @@ python .\scripts\test-browser.py --output ..\.artifacts\tests\browser\browser-NE
 
 `--steps auth fixtures system` 可单独检查系统参数和日志；`--steps auth fixtures users project-edges access` 检查五态筛选、编辑、分页、终止重启、异常重试和权限变化、多标签换号。`business`、`project-edges`、`file-edges`、`message-edges` 必须在 `users` 后，`final` 和 `layout` 必须在 `business` 后。
 
-默认步骤还包括 `auth-edges`（匿名404、认证失败恢复、键盘、跳转和会话刷新）、`file-edges`（双向文件筛选分页、失败恢复和多表预览）、负责人和项目选项边界（停用负责人、选项加载失败及全部公开配置字段）、`message-edges`（Unicode长度、重复发送、失败重试、游标分页和动态跳转）。默认步骤最后的 `oem` 覆盖 OEM 文件传递：从协作平台页头进入、界面设置课别主管、新建厂商和厂商账号、发送人上传发送、主管审批、厂商在 `/oem-portal` 首次改密后下载并核对 SHA-256、厂商令牌访问协作平台接口返回 403（40304）、发送人看到首次接收回执；可用 `--steps auth fixtures oem` 单独执行。浏览器运行关闭全部后台任务，OEM 文件使用临时独立目录和仅限测试的 Fake 扫描引擎，由 TestHost 在 `YF_TESTHOST_OEM_SCAN=1` 时自行驱动扫描与放行（发布包不含 TestHost）。可按上述依赖通过 `--steps` 单独执行。故障注入只作用于本轮浏览器路由，成功重试仍调用真实隔离 API。完整默认步骤对应 `scripts/browser` 中的脚本，不代表覆盖所有状态组合、实际移动设备、目标 IIS 或外部 SMTP。
+默认步骤还包括 `auth-edges`（匿名 404、认证失败恢复、键盘、跳转和会话刷新）、`file-edges`（双向文件筛选分页、失败恢复和多表预览）、负责人和项目选项边界、`message-edges`（Unicode 长度、重复发送、失败重试、游标分页和动态跳转）。故障注入只作用于本轮浏览器路由，成功重试仍调用真实隔离 API。完整默认步骤对应 `scripts/browser` 中的脚本，不代表覆盖所有状态组合、实际移动设备、目标 IIS 或外部 SMTP。
 
 ## IIS 发布
 
@@ -225,9 +209,9 @@ python .\scripts\test-browser.py --output ..\.artifacts\tests\browser\browser-NE
 powershell -ExecutionPolicy Bypass -File .\scripts\publish-iis.ps1
 ```
 
-发布脚本参数以 `Get-Help .\scripts\publish-iis.ps1 -Detailed` 为准。默认在项目根 `deloy` 下创建带 UTC 时间、Git 短提交和随机后缀的唯一版本目录；也可用 `-FreshOutputDirectory` 指定该目录下尚不存在或为空的子目录，项目外路径会被拒绝。ClamAV 下载缓存默认为 `.artifacts/cache/clamav`，显式缓存路径也必须保留在项目 `.artifacts` 内。默认只生成版本文件夹，包含后端、`wwwroot` 前端、IIS 配置、安装脚本、说明及内部 `manifest.json`；内部清单供安装校验使用，请保留。仅显式增加 `-CreateArchive` 时生成旁边的 ZIP、发布清单和 SHA256 文件。将整个发布包复制到另一台服务器，按包内 `README.md` 安装。不会在开发电脑上自动部署 IIS。
+发布脚本参数以 `Get-Help .\scripts\publish-iis.ps1 -Detailed` 为准。默认在项目根 `deloy` 下创建唯一版本目录；也可用 `-FreshOutputDirectory` 指定该目录下尚不存在或为空的子目录，项目外路径会被拒绝。默认只生成版本文件夹，包含后端、`wwwroot` 前端、IIS 配置、安装脚本、说明及内部 `manifest.json`；仅显式增加 `-CreateArchive` 时生成 ZIP、发布清单和 SHA256 文件。发布脚本从被 Git 忽略的 `deploy/publish-defaults.local.json` 写出可直接供 IIS 读取的 `appsettings.Production.json`，其中包含数据库和 JWT 凭据；必须先填写实际 `WebBaseUrl`，必要时覆盖 `StorageRoot` 与 `CookieSecure`。将整个发布包作为私有制品复制到目标服务器，按包内 `README.md` 部署。不会在开发电脑上自动部署 IIS。
 
-如需验证 ZIP，先用 `-CreateArchive` 打包，再运行 `python .\scripts\verify-release.py ..\deloy\<版本目录>.zip`，先核对发布脚本同时生成的 `.zip.sha256`、`.release-manifest.json`、解压 ZIP 的全部清单哈希、安全配置与缺配置启动拒绝，实测生产入口、静态页面；三个发布制品缺失或内容不一致都会失败。完整 HTTP 测试由独立宿主加载发布包中的同一 API 二进制与依赖，验证报告写入 `.artifacts/reports/releases`。测试报告、浏览器证据和可清理临时目录写入 `.artifacts/tests`。报告区分这些证据，不将开发机检查表述为目标 IIS/SMTP 验收。
+开发机可直接运行 `python .\scripts\verify-release.py ..\deloy\<版本目录>` 验证默认发布文件夹；无需创建 ZIP。验证会在项目内临时目录复制制品，核对全部文件哈希与大小、实际 .NET 8 runtimeconfig、打包 SDK、IIS 启动配置及包内配置字段，再用该发布二进制执行隔离 HTTP 检查。若已用 `-CreateArchive` 生成 ZIP，也可传入 ZIP 路径；ZIP 模式额外核对 CRC、`.zip.sha256` 和 `.release-manifest.json`，不会跳过其校验。报告写入 `.artifacts/reports/releases`。测试报告、浏览器证据和可清理临时目录写入 `.artifacts/tests`。这些是开发机真实运行证据，不代表目标 IIS 或外部 SMTP 验收。
 
 ## IIS 正式服务器维护
 
@@ -261,7 +245,6 @@ Restore 的新数据库名必须不同于当前数据库，执行前由 DBA 确�
 
 维护期间脚本只停止该命名站点的专属应用池，并等待其 worker 全部退出；它不能排除其他 IIS 站点、服务、计划任务或远程实例写同一数据库和存储，管理员必须在维护窗口前停止所有外部写入者。任一步骤或恢复启动后的 HTTPS `/health` 检查失败，应用池保持停止。旧数据库、存储和程序不会被删除，新数据库导入失败时可能留有部分数据；调查后换新的空目标重试。完整参数、路径隔离、回退和灾难恢复步骤见发布包内 `README.md`。新机器必须先用备份对应版本的 `install-iis.ps1` 创建同名站点，再运行 Restore；该流程不承诺从裸机一键恢复。
 
-**OEM 文件不进入备份。** `maintain-iis.ps1` 只复制 `StorageRoot`，并校验 `OemStorageRoot` 与备份目录互不包含；操作系统备份、VSS、虚拟机快照、NAS 同步和第三方备份策略也必须排除 `OemStorageRoot`，这一点需运维核对。Restore 导入数据库后会写入 OEM 恢复核对标记：应用启动后先关闭 OEM 文件读取与上传，恢复未完成的移动，把实体缺失的文件标为“原因待核实”，删除备份之后上传的孤儿文件，再重新开放。不经维护脚本手工恢复数据库时，必须执行 `dotnet .\Yf.Api.dll --oem-mark-restored`（使用同一外部配置）写入该标记。
 
 当前开发机未创建或操作真实 IIS 站点，只能读取 Microsoft.Web.Administration 默认配置；维护测试不构成目标服务器 IIS、证书、权限或网络验收。
 
@@ -269,7 +252,7 @@ Restore 的新数据库名必须不同于当前数据库，执行前由 DBA 确�
 
 | 组件 | 版本 | 仓库/官方来源 | 用途 |
 |---|---|---|---|
-| ASP.NET Core | .NET 10 | https://github.com/dotnet/aspnetcore | HTTP、路由、IIS、静态文件 |
+| ASP.NET Core | .NET 8 | https://github.com/dotnet/aspnetcore | HTTP、路由、IIS、静态文件 |
 | Microsoft.EntityFrameworkCore | 9.0.0 | https://github.com/dotnet/efcore | Code-First 模型、查询、写入和迁移 |
 | Pomelo.EntityFrameworkCore.MySql | 9.0.0 | https://github.com/PomeloFoundation/Pomelo.EntityFrameworkCore.MySql | MySQL EF Core provider |
 | MySqlConnector | 2.6.2 | https://github.com/mysql-net/MySqlConnector | MySQL 异步驱动 |
@@ -281,17 +264,3 @@ Restore 的新数据库名必须不同于当前数据库，执行前由 DBA 确�
 测试项目仍保留 Dapper 2.1.79 仅用于少量独立测试夹具和数据库断言，生产 `Yf.Api` 不引用 Dapper。
 
 准确传递依赖版本见各项目 `packages.lock.json`。前端依赖与许可沿用 `web/package-lock.json` 及发布的第三方许可文件。新功能、安全修复、契约与数据库版本以本目录的 .NET 后端为维护入口，不要求同步 Rust。
-
-### ClamAV 真实集成验证
-
-协议测试通过本地 TCP 夹具覆盖错误、断连、超限、内容变化及病毒库时间；它们不能代替真实引擎验证。先在隔离目录使用包内已验签的官方 CVD 快照启动 ClamAV（也可由 FreshClam 更新官方病毒库），再显式指定其回环端口：
-
-```powershell
-$env:YF_TEST_DATABASE_URL = 'mysql://本地测试管理员@127.0.0.1:测试端口/ignored'
-$env:YF_TEST_CLAMAV_PORT = '23310'
-dotnet run --project .\tests\Yf.Api.Tests.csproj -- -class '*OemClamAv*' -class '*OemScannerPolicyTests'
-```
-
-未设置 `YF_TEST_CLAMAV_PORT` 时两项真实引擎测试明确标记为跳过；完整验收必须设置该端口，并检查没有跳过。真实用例只生成无害 EICAR 样本，验证干净 PDF、压缩包内 EICAR，以及上传后扫描、发布和阻断的真实数据库状态。
-
-浏览器也可通过 `python scripts/test-browser.py --steps auth fixtures oem --clamav-port 23310 --output <新的证据目录>` 使用同一受控本地引擎，验证病毒库门禁页面保存、实际扫描后审批及下载回执。该模式会在结果中记录 `oemScanner=ClamAV`；省略参数仍使用测试 Fake 引擎。运行前构建前端和 TestHost，并按上面的浏览器准备要求设置 `YF_PLAYWRIGHT_RUNNER`。测试不安装 Windows 服务、不触碰业务数据库、不发送真实邮件。

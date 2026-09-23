@@ -75,7 +75,7 @@ public sealed class IdentityConnectionTests
                 Assert.Equal(1, await business.ExecuteScalarAsync<int>(
                     new CommandDefinition("SELECT 1", cancellationToken: deadline.Token)));
                 downstreamCompleted = true;
-            }, Array.Empty<IRealmIdentityExtension>());
+            });
             await middleware.InvokeAsync(context, db, tokens, identity);
             Assert.True(downstreamCompleted);
         }

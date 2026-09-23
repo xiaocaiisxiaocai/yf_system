@@ -54,8 +54,6 @@ internal sealed class RoleRow { public ulong Id { get; init; } public string Nam
 internal sealed class DeptRow { public ulong Id { get; init; } public string Name { get; init; } = ""; public ulong? ParentId { get; init; } public string Kind { get; init; } = ""; public int SortNo { get; init; } public string Status { get; init; } = ""; }
 internal sealed class SupplierRow { public ulong Id { get; init; } public string Name { get; init; } = ""; public string? Remark { get; init; } public string Status { get; init; } = ""; public DateTime CreatedAt { get; init; } }
 
-public sealed record DepartmentLeaderRequest(ulong? LeaderUserId);
-
 internal static class AdminValidation
 {
     public static string Status(string? value) => value is "ACTIVE" or "DISABLED" ? value : throw Yf.Api.Infrastructure.ApiException.BadRequest("非法状态");

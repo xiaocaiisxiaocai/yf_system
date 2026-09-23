@@ -36,13 +36,10 @@ TEST_ROOT = ARTIFACTS_ROOT / 'tests'
 TEST_TEMP_ROOT = TEST_ROOT / 'tmp'
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path)
-parser.add_argument('--clamav-port', type=int, help='Use an explicitly owned real clamd on 127.0.0.1 at this port instead of Fake for OEM flows.')
 parser.add_argument('--continue-on-failure', action='store_true', help='Collect independent step failures; the run still fails if any step fails.')
-parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'dictionaries', 'preview-extras', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'oem'],
-    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'dictionaries', 'preview-extras', 'oem'])
+parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'dictionaries', 'preview-extras', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration'],
+    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'dictionaries', 'preview-extras'])
 args = parser.parse_args()
-if args.clamav_port is not None and not 1 <= args.clamav_port <= 65535:
-    raise SystemExit('--clamav-port must be between 1 and 65535.')
 if not __debug__:
     raise SystemExit('Do not run the browser suite with Python assertions disabled (-O/PYTHONOPTIMIZE).')
 if args.steps[:2] != ['auth', 'fixtures']:
@@ -52,7 +49,7 @@ if len(args.steps) != len(set(args.steps)):
 for step, dependencies in {'business': ['users'], 'final': ['business'], 'layout': ['business'],
                            'dictionaries': ['users'], 'preview-extras': ['users'],
                            'project-edges': ['users'], 'file-edges': ['users'], 'message-edges': ['users'],
-                           'smtp-settings': ['system'], 'business-controls': ['users'], 'collaboration': ['users'], 'oem': ['fixtures']}.items():
+                           'smtp-settings': ['system'], 'business-controls': ['users'], 'collaboration': ['users']}.items():
     if step in args.steps and any(required not in args.steps[:args.steps.index(step)] for required in dependencies):
         raise SystemExit(f'{step} requires earlier steps: {", ".join(dependencies)}')
 output = (args.output or TEST_ROOT / 'browser' / ('browser-' + time.strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(4))).resolve()
@@ -70,8 +67,8 @@ if not runner.is_file():
     raise SystemExit('Set YF_PLAYWRIGHT_RUNNER to an existing Playwright run.js; no installation is performed.')
 api = ROOT / 'server_dotnet/Yf.Api'
 host_dir = os.environ.get('YF_BROWSER_HOST_DIR')
-dll = Path(host_dir).resolve() / 'Yf.Api.dll' if host_dir else api / 'bin/Debug/net10.0/Yf.Api.dll'
-host = Path(host_dir).resolve() / 'Yf.Api.TestHost.dll' if host_dir else ROOT / 'server_dotnet/TestHost/bin/Debug/net10.0/Yf.Api.TestHost.dll'
+dll = Path(host_dir).resolve() / 'Yf.Api.dll' if host_dir else api / 'bin/Debug/net8.0/Yf.Api.dll'
+host = Path(host_dir).resolve() / 'Yf.Api.TestHost.dll' if host_dir else ROOT / 'server_dotnet/TestHost/bin/Debug/net8.0/Yf.Api.TestHost.dll'
 for required in (dll, host, ROOT / 'web/dist/index.html'):
     if not required.is_file():
         raise SystemExit('Build the API, TestHost and frontend first: ' + str(required))
@@ -109,8 +106,7 @@ created = False
 process = None
 storage_path = None
 result = {'status': 'fail', 'steps': args.steps, 'stepEvidence': [],
-          'stepFailures': [], 'businessDatabaseTouched': False, 'smtpUsed': False,
-          'oemScanner': 'ClamAV' if args.clamav_port else 'Fake'}
+          'stepFailures': [], 'businessDatabaseTouched': False, 'smtpUsed': False}
 try:
     with connection.cursor() as cursor:
         cursor.execute(f'CREATE DATABASE `{schema}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci')
@@ -120,8 +116,6 @@ try:
         temporary = scope.enter_context(tempfile.TemporaryDirectory(prefix='yf_browser_', dir=TEST_TEMP_ROOT))
         storage_path = Path(temporary).resolve() / 'storage'
         storage_path.mkdir()
-        oem_storage_path = Path(temporary).resolve() / 'oem-storage'
-        oem_storage_path.mkdir()
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', 0))
             port = probe.getsockname()[1]
@@ -133,17 +127,11 @@ try:
             'App__JwtSecret': secrets.token_urlsafe(48), 'App__StorageRoot': str(storage_path),
             'App__WebBaseUrl': base, 'App__CookieSecure': 'false', 'App__WorkerEnabled': 'false',
             'App__Smtp__Host': '',
-            # OEM: separate storage and TestHost-driven scan/promotion. Fake is explicit unless a real port is supplied.
-            'App__OemStorageRoot': str(oem_storage_path), 'App__OemScanner__Engine': 'Fake',
-            'App__OemScanner__AcknowledgeInsecureFake': 'true', 'YF_TESTHOST_OEM_SCAN': '1', 'ASPNETCORE_URLS': base, 'URLS': base, 'ASPNETCORE_WEBROOT': str(ROOT / 'web/dist'),
+            'ASPNETCORE_URLS': base, 'URLS': base, 'ASPNETCORE_WEBROOT': str(ROOT / 'web/dist'),
             'YF_BOOTSTRAP_PASSWORD': initial,
             'YF_PROJECT_ROOT': str(ROOT), 'YF_BROWSER_SUPPORT_DIR': str(SCRIPTS),
             'YF_BROWSER_EVIDENCE_DIR': str(output), 'Logging__LogLevel__Default': 'Warning',
         })
-        if args.clamav_port:
-            env.update({'App__OemScanner__Engine': 'ClamAV', 'App__OemScanner__ClamAv__Host': '127.0.0.1',
-                        'App__OemScanner__ClamAv__Port': str(args.clamav_port),
-                        'App__OemScanner__AcknowledgeInsecureFake': 'false'})
         initialized = subprocess.run(['dotnet', str(dll), '--initialize-database'], cwd=api, env=env, capture_output=True)
         if initialized.returncode:
             raise RuntimeError('Owned database initialization failed; no business database was used.')
@@ -168,8 +156,7 @@ try:
             else:
                 raise RuntimeError('Owned TestHost health check timed out.')
             (output / 'state.private.json').write_text(json.dumps({'base': base,
-                'initialPassword': initial, 'adminChangedPassword': 'Yf9!' + secrets.token_urlsafe(9),
-                'oemScanner': result['oemScanner']}), encoding='utf-8')
+                'initialPassword': initial, 'adminChangedPassword': 'Yf9!' + secrets.token_urlsafe(9)}), encoding='utf-8')
             print(f'Owned browser host ready: {base}; no business data or SMTP', flush=True)
             for script in args.steps:
                 print('RUN browser ' + script, flush=True)

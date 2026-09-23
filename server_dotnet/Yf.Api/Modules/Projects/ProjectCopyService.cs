@@ -309,14 +309,14 @@ internal sealed class ProjectCopyService(
         if (string.IsNullOrWhiteSpace(sourceFile.Sha256) || sourceFile.Sha256.Length != 64)
             throw ApiException.Conflict($"源文件“{sourceFile.OriginalName}”缺少完整性校验值，无法复制");
         string sourcePath;
-        try { sourcePath = await FileStorage.ResolveExistingFileAsync(root, Path.Combine(root, sourceFile.StoragePath), ct); }
+        try { sourcePath = FileStorage.ResolveExistingFile(root, Path.Combine(root, sourceFile.StoragePath), ct); }
         catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException or InvalidOperationException)
         { throw ApiException.Conflict($"源文件“{sourceFile.OriginalName}”缺失或存储路径异常，无法复制"); }
         var storedName = $"{Guid.NewGuid():D}.{sourceFile.Ext}";
         var targetPath = FileStorage.FinalPath(root, copiedAt, storedName);
         var directory = Path.GetDirectoryName(targetPath) ?? throw new InvalidOperationException("存储目录无效");
         Directory.CreateDirectory(directory);
-        await FileStorage.ResolveExistingAsync(root, directory, false, ct);
+        FileStorage.ResolveExisting(root, directory, false, ct);
         try
         {
             var hash = await FileStorage.HashAndCopyAsync([sourcePath], targetPath, sourceFile.SizeBytes, ct);

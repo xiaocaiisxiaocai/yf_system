@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository layout — read this first
 
-- `server_dotnet/` — **the only backend.** ASP.NET Core 10 (Minimal API) + EF Core 9/Pomelo + MySQL. All new features, bug fixes, and DB migrations go here. An earlier Rust + Axum + SeaORM prototype (`yf_server/`) existed during the initial build-out but has been removed from the repo; its history is still visible via `git log` if needed for archaeology, but nothing in `server_dotnet/` depends on it. Development uses the current EF-managed schema and does not support legacy schema/data compatibility.
+- `server_dotnet/` — **the only backend.** ASP.NET Core 8 (Minimal API) + EF Core 9/Pomelo + MySQL. All new features, bug fixes, and DB migrations go here. An earlier Rust + Axum + SeaORM prototype (`yf_server/`) existed during the initial build-out but has been removed from the repo; its history is still visible via `git log` if needed for archaeology, but nothing in `server_dotnet/` depends on it. Development uses the current EF-managed schema and does not support legacy schema/data compatibility.
 - `web/` — React + TypeScript + Vite frontend, talks to `/api/v1`.
 - `third_party/vue-office-source-2024-12-30/` — vendored reference source for the Excel/PPTX preview runtime; not part of the build graph directly (see `web/scripts/build-excel-preview.mjs` / `build-pptx-preview.mjs`).
 - `server_dotnet/docs/*.md` — dated contract documents (e.g. `主项目与子项目协作契约-2026-09-16.md`) are the source of truth for business rules like project/subproject workflow, metadata dictionaries, copy semantics, and email notification policy. Check the newest-dated doc for a topic before assuming behavior from code alone.
@@ -15,7 +15,7 @@ IIS deployment folders belong under repository-root `deloy/`; archive sidecars a
 
 ## Backend (server_dotnet) — commands
 
-Run from `server_dotnet/`. Requires .NET 10 SDK (`global.json` pins `10.0.300`) and MySQL 5.7/8.
+Run from `server_dotnet/`. Requires .NET 8 SDK (`global.json` selects `8.0.412`) and MySQL 5.7/8.
 
 ```powershell
 # Local run (config must live outside the IIS site dir; never commit secrets)
@@ -79,7 +79,6 @@ Modules under `Yf.Api/Modules/` are the unit of organization; each owns its own 
 - **Projects** — the core domain. Current model is **main project + subproject**: the main project (`ProjectGroup*`) holds supplier, work-order number, machine/robot info, responsible user, section, priority, due date; files/messages/activity/acceptance all belong to the *subproject*. Read `docs/主项目与子项目协作契约-2026-09-16.md` before changing workflow, submit/confirm/reject/withdraw, or ownership-transfer logic — it documents `expectedSubmissionId` optimistic-concurrency requirements and freeze rules for completed subprojects.
 - **Files** — chunked upload/resume, merge+checksum, download, in-browser preview (PDF/XLS/XLSX/PPTX/images via `GET /files/{id}/content`, 50 MiB cap) and video streaming (MP4/WebM/OGV via short-lived media-session cookie + Range requests on `/files/{id}/media`), batch ZIP, soft delete + GC.
 - **System** — system parameters, audit log, mail outbox + background TLS SMTP sender, email notification policy toggles (`notify.enabled`, per-audience, per-event-type — see `docs/邮件提醒规则契约-2026-09-16.md`).
-- **Oem** — OEM file-transfer line, a second business line mutually invisible to supplier collaboration (design: `docs/OEM绘图平台-需求文档-2026-09-18.md` + `docs/OEM绘图平台-数据库设计与接口规划-2026-09-18.md`, implementation notes in the latter's §9). All routes under `/api/v1/oem`; OEM vendor accounts get `realm=oem` tokens confined to that prefix, supplier accounts are rejected. `OemModule.cs` is the composition root; sub-slices `Common` (unit of work, actor, authorizer, events, composite background worker), `Identity`, `Admin`, `Policies` (retention strategies, `oem.*` settings), `Approval` (pure planner + engine), `Transfers` (state machine, access policy, progression), `Uploads`, `Scanning` (`IFileScanner`; production uses `OnAccess` = the server's Trend Micro OfficeScan real-time scan, verified by an EICAR canary in `scan-probe` and a post-settle SHA-256 re-read — see `OnAccessFileScanner`; `None` keeps files quarantined, `Fake` is dev/test only), `Delivery` (cookie-scoped Range downloads + receipts), `Maintenance` (purge, draft expiry, restore reconciliation, OEM audit), `Notifications`. Files live under `App:OemStorageRoot`, which is never backed up; restore sets the `oem.storage.reconcile_required` marker (`--oem-mark-restored` for manual restores). Tests in `tests/Oem/` use `OemTestHost`.
 - **Infrastructure** — cross-cutting: `AppDb`/`YfDbContext` (EF Core and MySqlConnector connection/transaction interop), `EfDatabaseLifecycle` (explicit EF migration initialization and current-schema validation), `AuditService`, `MySqlNamedLock` (migration locking), `DatabaseTransportPolicy` (enforces `SslMode=VerifyFull` for non-loopback MySQL hosts). Raw SQL is limited to database-clock reads, row/advisory locks, and other documented atomic boundaries; ordinary business queries and writes use EF Core. Test-only fixtures may still use Dapper.
 
 Cross-cutting rules worth knowing before editing:
@@ -97,7 +96,6 @@ Cross-cutting rules worth knowing before editing:
 - `src/services/projectRealtime.ts` — SignalR client for pushed collaboration updates (new messages, activity, status changes).
 - `src/pages/project/` — main project/subproject list & detail screens; this is the largest and most actively changed area (see recent git history: watermarking, notification policy UI, collaboration contract changes).
 - `src/pages/{org,rbac,supplier,system}/` — admin-side screens (organizations, roles/permissions, suppliers, system params/mail settings).
-- `src/oem/` — OEM UI: internal staff at `/oem/*` (own layout, entered from the collaboration header), OEM vendors at the separate portal `/oem-portal/*` with its own login, session storage and HTTP client (`api/portalSession.ts`).
 - PDF preview is custom: local PDF.js 6.3.289, page-by-page rendering, assets emitted by the `pdfAssets()` Vite plugin (`pdf-assets.ts`) into `dist/pdfjs/<version>/`. Excel/PPTX preview bundles are separately built (see build:excel-preview / build:pptx-preview scripts) from vendored `pptx-preview`/`exceljs`/`xlsx` (sheetjs CDN tarball) sources — don't assume standard npm resolution for `xlsx`.
 - Document previews are watermarked (recent feature area — see `web/src/pages/project/ProjectDetail.css` and related components for density/spacing tuning).
 

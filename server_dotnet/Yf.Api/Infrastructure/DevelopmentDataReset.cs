@@ -10,9 +10,6 @@ namespace Yf.Api.Infrastructure;
 internal static class DevelopmentDataReset
 {
     private static readonly string[] ClearedTables = [
-        "oem_download_ranges", "oem_download_leases", "oem_download_sessions", "oem_file_promotions", "oem_file_scan_jobs",
-        "oem_flow_tasks", "oem_flow_instance_nodes", "oem_flow_instances", "oem_upload_sessions", "oem_transfer_files",
-        "oem_transfers", "oem_refresh_tokens", "oem_accounts", "oem_companies", "oem_flow_template_node_users", "oem_flow_template_scopes",
         "collaboration_reads", "message_reads", "message_images", "email_outbox", "project_activities",
         "file_copy_refs", "project_copies",
         "project_group_status_logs", "project_status_logs", "upload_sessions", "files", "messages", "projects",
@@ -23,22 +20,6 @@ internal static class DevelopmentDataReset
     private static readonly IReadOnlyDictionary<string, Func<YfDbContext, CancellationToken, Task<long>>> TableCounts =
         new Dictionary<string, Func<YfDbContext, CancellationToken, Task<long>>>(StringComparer.Ordinal)
         {
-            ["oem_download_ranges"] = (db, ct) => db.OemDownloadRanges.LongCountAsync(ct),
-            ["oem_download_leases"] = (db, ct) => db.OemDownloadLeases.LongCountAsync(ct),
-            ["oem_download_sessions"] = (db, ct) => db.OemDownloadSessions.LongCountAsync(ct),
-            ["oem_file_promotions"] = (db, ct) => db.OemFilePromotions.LongCountAsync(ct),
-            ["oem_file_scan_jobs"] = (db, ct) => db.OemFileScanJobs.LongCountAsync(ct),
-            ["oem_flow_tasks"] = (db, ct) => db.OemFlowTasks.LongCountAsync(ct),
-            ["oem_flow_instance_nodes"] = (db, ct) => db.OemFlowInstanceNodes.LongCountAsync(ct),
-            ["oem_flow_instances"] = (db, ct) => db.OemFlowInstances.LongCountAsync(ct),
-            ["oem_upload_sessions"] = (db, ct) => db.OemUploadSessions.LongCountAsync(ct),
-            ["oem_transfer_files"] = (db, ct) => db.OemTransferFiles.LongCountAsync(ct),
-            ["oem_transfers"] = (db, ct) => db.OemTransfers.LongCountAsync(ct),
-            ["oem_refresh_tokens"] = (db, ct) => db.OemRefreshTokens.LongCountAsync(ct),
-            ["oem_accounts"] = (db, ct) => db.OemAccounts.LongCountAsync(ct),
-            ["oem_companies"] = (db, ct) => db.OemCompanies.LongCountAsync(ct),
-            ["oem_flow_template_node_users"] = (db, ct) => db.OemFlowTemplateNodeUsers.LongCountAsync(ct),
-            ["oem_flow_template_scopes"] = (db, ct) => db.OemFlowTemplateScopes.LongCountAsync(ct),
             ["collaboration_reads"] = (db, ct) => db.CollaborationReads.LongCountAsync(ct),
             ["message_reads"] = (db, ct) => db.MessageReads.LongCountAsync(ct),
             ["message_images"] = (db, ct) => db.MessageImages.LongCountAsync(ct),
@@ -187,10 +168,6 @@ internal static class DevelopmentDataReset
             }));
             await db.SaveChangesAsync(ct);
 
-            // OEM files live outside StorageRoot: instead of deleting them here, mark storage for
-            // reconciliation so the application removes every file the database no longer knows.
-            await db.SystemConfigs.Where(config => config.CfgKey == "oem.storage.reconcile_required")
-                .ExecuteUpdateAsync(update => update.SetProperty(config => config.CfgValue, "RESTORED"), ct);
             if (settingsBefore != await SettingsSnapshotAsync(db, ct)
                 || admin.PasswordHash != await db.Users
                     .Where(user => user.Id == admin.Id)
@@ -203,7 +180,7 @@ internal static class DevelopmentDataReset
         try
         {
             foreach (var directory in plan.StorageDirectories)
-                await FileStorage.DeleteDirectoryTreeAsync(plan.StorageRoot, directory, ct);
+                FileStorage.DeleteDirectoryTree(plan.StorageRoot, directory, ct);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
@@ -216,24 +193,6 @@ internal static class DevelopmentDataReset
     {
         // Preserve the existing FK-safe order. ExecuteDelete bypasses tracking and
         // executes immediately inside the caller-owned transaction.
-        // OEM business data first (children before parents). Approval and retention
-        // templates are settings and survive; their people/organisation references do not.
-        await db.OemDownloadRanges.ExecuteDeleteAsync(ct);
-        await db.OemDownloadLeases.ExecuteDeleteAsync(ct);
-        await db.OemDownloadSessions.ExecuteDeleteAsync(ct);
-        await db.OemFilePromotions.ExecuteDeleteAsync(ct);
-        await db.OemFileScanJobs.ExecuteDeleteAsync(ct);
-        await db.OemFlowTasks.ExecuteDeleteAsync(ct);
-        await db.OemFlowInstanceNodes.ExecuteDeleteAsync(ct);
-        await db.OemFlowInstances.ExecuteDeleteAsync(ct);
-        await db.OemUploadSessions.ExecuteDeleteAsync(ct);
-        await db.OemTransferFiles.ExecuteDeleteAsync(ct);
-        await db.OemTransfers.ExecuteDeleteAsync(ct);
-        await db.OemRefreshTokens.ExecuteDeleteAsync(ct);
-        await db.OemAccounts.ExecuteDeleteAsync(ct);
-        await db.OemCompanies.ExecuteDeleteAsync(ct);
-        await db.OemFlowTemplateNodeUsers.ExecuteDeleteAsync(ct);
-        await db.OemFlowTemplateScopes.ExecuteDeleteAsync(ct);
         await db.CollaborationReads.ExecuteDeleteAsync(ct);
         await db.MessageReads.ExecuteDeleteAsync(ct);
         await db.MessageImages.ExecuteDeleteAsync(ct);
@@ -258,8 +217,6 @@ internal static class DevelopmentDataReset
 
     private static async Task<string> SettingsSnapshotAsync(YfDbContext db, CancellationToken ct) =>
         JsonSerializer.Serialize(await db.SystemConfigs
-            // The OEM reconcile marker is maintenance state, not a setting (reset sets it on purpose).
-            .Where(config => config.CfgKey != "oem.storage.reconcile_required")
             .OrderBy(config => config.CfgKey)
             .Select(config => new { config.CfgKey, config.CfgValue, config.Description, config.UpdatedAt })
             .ToArrayAsync(ct));

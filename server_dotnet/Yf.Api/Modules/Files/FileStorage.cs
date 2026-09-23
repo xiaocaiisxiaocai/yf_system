@@ -68,10 +68,10 @@ internal static class FileStorage
         return normalized;
     }
 
-    public static Task<string> ResolveExistingFileAsync(string root, string candidate, CancellationToken ct) =>
-        ResolveExistingAsync(root, candidate, requireFile: true, ct);
+    public static string ResolveExistingFile(string root, string candidate, CancellationToken ct) =>
+        ResolveExisting(root, candidate, requireFile: true, ct);
 
-    public static async Task<string> ResolveExistingAsync(string root, string candidate, bool requireFile, CancellationToken ct)
+    public static string ResolveExisting(string root, string candidate, bool requireFile, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var resolvedRoot = Root(root);
@@ -99,7 +99,7 @@ internal static class FileStorage
         return current;
     }
 
-    public static async Task<string> ResolveForCleanupAsync(string root, string raw, CancellationToken ct)
+    public static string ResolveForCleanup(string root, string raw, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(raw)) throw new InvalidOperationException("迁移清理队列包含空路径");
         var rawPath = raw.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
@@ -133,7 +133,7 @@ internal static class FileStorage
         return current;
     }
 
-    public static async Task<bool> DeleteDirectoryTreeAsync(
+    public static bool DeleteDirectoryTree(
         string root, string candidate, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -141,7 +141,7 @@ internal static class FileStorage
 
         var resolvedRoot = Root(root);
         var lexical = EnsureLexicallyWithin(root, candidate, allowRoot: false);
-        var resolved = await ResolveExistingAsync(root, lexical, requireFile: false, ct);
+        var resolved = ResolveExisting(root, lexical, requireFile: false, ct);
         if (!IsWithin(resolvedRoot, resolved) || PathsEqual(resolvedRoot, resolved))
             throw new InvalidOperationException("递归删除目录位于存储根目录之外");
 

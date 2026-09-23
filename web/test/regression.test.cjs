@@ -65,21 +65,6 @@ test('account menu opens personal profile maintenance inside the authenticated l
   assert.match(app, /<Route path="profile" element=\{<Profile \/>\}/)
 })
 
-test('OEM navigation selects an authorised landing page and keeps narrow-screen navigation reachable', () => {
-  const layouts = fs.readFileSync(path.resolve(__dirname, '../src/oem/layouts/OemLayouts.tsx'), 'utf8')
-  const companies = fs.readFileSync(path.resolve(__dirname, '../src/oem/pages/admin/CompaniesPage.tsx'), 'utf8')
-  const module = loadTs('src/oem/oemNavigation.ts', {})
-
-  assert.equal(module.oemHome(['oem:account_manage']), '/oem/admin/companies')
-  assert.equal(module.oemHome(['oem:flow_template_manage']), '/oem/admin/flow-templates')
-  assert.equal(module.oemHome(['oem:audit_view']), '/oem/admin/audit')
-  assert.equal(module.oemHome(['oem:file_download']), null)
-  assert.match(layouts, /className="mobile-menu-trigger"/)
-  assert.match(layouts, /className="mobile-nav-drawer"/)
-  assert.match(companies, /!can\.manageCompanies && !can\.manageAccounts/)
-  assert.match(companies, /can\.manageAccounts && <Button size="mini"[\s\S]*?>账号<\/Button>/)
-})
-
 test('personal profile submits only own email and keeps password change in the same page', async () => {
   const calls = []
   let savedUser

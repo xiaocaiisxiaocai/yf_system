@@ -30,6 +30,7 @@ function Test-YfWorkersStopped([string]$Pool) {
     finally { $manager.Dispose() }
 }
 function Set-YfSiteConfig([string]$Root,[string]$ExternalConfig) {
+    Set-YfExternalConfigurationFallback $Root
     $file = Join-Path $Root 'web.config'
     [xml]$xml = Get-Content -LiteralPath $file -Raw -Encoding UTF8
     $asp = $xml.SelectSingleNode('//aspNetCore')

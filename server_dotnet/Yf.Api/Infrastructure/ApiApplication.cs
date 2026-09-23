@@ -7,7 +7,6 @@ using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Admin;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Identity;
-using Yf.Api.Modules.Oem;
 using Yf.Api.Modules.Projects;
 using Yf.Api.Modules.SystemManagement;
 
@@ -21,9 +20,8 @@ public static class ApiApplication
         var migrateDatabase = args.Contains("--migrate-database", StringComparer.Ordinal);
         var inspectDevelopment = args.Contains("--inspect-development-data", StringComparer.Ordinal);
         var resetDevelopment = args.Contains("--reset-development-data", StringComparer.Ordinal);
-        var oemMarkRestored = args.Contains("--oem-mark-restored", StringComparer.Ordinal);
         var checkDevelopmentReadiness = args.Contains("--check-development-readiness", StringComparer.Ordinal);
-        if (new[] { initializeDatabase, migrateDatabase, inspectDevelopment, resetDevelopment, oemMarkRestored, checkDevelopmentReadiness }.Count(value => value) > 1)
+        if (new[] { initializeDatabase, migrateDatabase, inspectDevelopment, resetDevelopment, checkDevelopmentReadiness }.Count(value => value) > 1)
         {
             if (checkDevelopmentReadiness)
             {
@@ -32,7 +30,7 @@ public static class ApiApplication
             }
             throw new ArgumentException("Choose one database operation.");
         }
-        args = args.Where(x => x is not ("--initialize-database" or "--migrate-database" or "--inspect-development-data" or "--reset-development-data" or "--oem-mark-restored" or "--check-development-readiness")).ToArray();
+        args = args.Where(x => x is not ("--initialize-database" or "--migrate-database" or "--inspect-development-data" or "--reset-development-data" or "--check-development-readiness")).ToArray();
         if (checkDevelopmentReadiness)
         {
             DevelopmentReadinessReport result;
@@ -78,19 +76,12 @@ public static class ApiApplication
             await EfDatabaseLifecycle.InitializeEmptyAsync(new AppDb(options));
             return null;
         }
-        if (oemMarkRestored)
-        {
-            // After a manual database restore: OEM content stays closed until storage is reconciled.
-            await Modules.Oem.Maintenance.OemReconcileService.MarkRestoredAsync(new AppDb(options));
-            Console.WriteLine("OEM storage reconciliation required; OEM file access stays closed until the reconcile job completes.");
-            return null;
-        }
         if (migrateDatabase)
         {
             await EfDatabaseLifecycle.MigrateAsync(new AppDb(options));
             return null;
         }
-        await EfDatabaseLifecycle.ValidateReadyAsync(new AppDb(options));
+        await EfDatabaseLifecycle.PrepareStartupAsync(options);
         builder.WebHost.ConfigureKestrel(k => { k.AddServerHeader = false; k.Limits.MaxRequestBodySize = 64L * 1024 * 1024; });
         builder.Services.Configure<IISServerOptions>(o => o.MaxRequestBodySize = 64L * 1024 * 1024);
         builder.Services.Configure<RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
@@ -99,7 +90,7 @@ public static class ApiApplication
         var efConnectionString = AppDb.BuildConnectionString(options);
         builder.Services.AddPooledDbContextFactory<YfDbContext>(db => db.UseMySql(
             efConnectionString, ServerVersion.AutoDetect(efConnectionString)));
-        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule();
+        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule();
         builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
             .WithOrigins(new Uri(options.WebBaseUrl).GetLeftPart(UriPartial.Authority))
             .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
@@ -130,7 +121,7 @@ public static class ApiApplication
         });
         app.UseCors();
         app.UseMiddleware<IdentityMiddleware>();
-        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime().MapOemModule();
+        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime();
         app.MapGet("/health", async (IDbContextFactory<YfDbContext> factory, CancellationToken ct) =>
         {
             try

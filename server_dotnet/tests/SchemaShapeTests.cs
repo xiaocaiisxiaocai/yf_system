@@ -1,5 +1,7 @@
 using Dapper;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
@@ -9,6 +11,110 @@ namespace Yf.Api.Tests;
 [Collection(ConnectionLifecycleCollection.Name)]
 public sealed class SchemaShapeTests
 {
+    [Theory(Timeout = 120_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FirstStartupInitializesMissingOrEmptyDatabaseOnce(bool createDatabase)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("auto_init", ct, createDatabase: createDatabase);
+        database.Options.AutoInitializeDatabase = true;
+        database.Options.BootstrapPassword = "FirstStart#2026";
+        var cs = new MySqlConnectionStringBuilder(database.Options.ConnectionString) { MaximumPoolSize = 5 };
+        database.Options.ConnectionString = cs.ConnectionString;
+        await Task.WhenAll(EfDatabaseLifecycle.PrepareStartupAsync(database.Options, ct),
+            EfDatabaseLifecycle.PrepareStartupAsync(database.Options, ct));
+        await using var conn = await database.Database.OpenAsync(ct);
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM users"));
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT must_change_password FROM users WHERE employee_no='admin'"));
+        var hash = await conn.ExecuteScalarAsync<string>("SELECT password_hash FROM users WHERE employee_no='admin'");
+        Assert.True(await Yf.Api.Modules.Identity.PasswordService.VerifyAsync("FirstStart#2026", hash!, ct));
+        await conn.ExecuteAsync("UPDATE users SET real_name='RestartSentinel', must_change_password=0 WHERE employee_no='admin'");
+        database.Options.BootstrapPassword = ""; // Existing installs no longer require bootstrap credentials.
+        await EfDatabaseLifecycle.PrepareStartupAsync(database.Options, ct);
+        Assert.Equal(hash, await conn.ExecuteScalarAsync<string>("SELECT password_hash FROM users WHERE employee_no='admin'"));
+        Assert.Equal("RestartSentinel", await conn.ExecuteScalarAsync<string>("SELECT real_name FROM users WHERE employee_no='admin'"));
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT must_change_password FROM users WHERE employee_no='admin'"));
+        Assert.Equal(3, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task AutomaticStartupRefusesUnmanagedAndPendingMigrationWithoutChangingData()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("auto_refuse", ct);
+        database.Options.AutoInitializeDatabase = true;
+        database.Options.BootstrapPassword = "FirstStart#2026";
+        await database.ExecuteAsync("CREATE TABLE sentinel(id INT PRIMARY KEY); INSERT INTO sentinel VALUES (17)", ct);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => EfDatabaseLifecycle.PrepareStartupAsync(database.Options, ct));
+        await using (var conn = await database.Database.OpenAsync(ct))
+        {
+            Assert.Equal(17, await conn.ExecuteScalarAsync<int>("SELECT id FROM sentinel"));
+            Assert.False(await TableExistsAsync(conn, "__EFMigrationsHistory", ct));
+        }
+        await database.ExecuteAsync("DROP TABLE sentinel", ct);
+        await database.InitializeAsync(ct);
+        await using (var db = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct))
+            await db.GetService<IMigrator>().MigrateAsync("20260918153503_AddOemPlatform", ct);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => EfDatabaseLifecycle.PrepareStartupAsync(database.Options, ct));
+        await using var after = await database.Database.OpenAsync(ct);
+        Assert.True(await TableExistsAsync(after, "oem_transfers", ct));
+        Assert.Equal(2, await after.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task DisabledInitializationOrInvalidPasswordDoesNotCreateDatabase()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("auto_disabled", ct, createDatabase: false);
+        var missing = await Assert.ThrowsAsync<MySqlException>(() => EfDatabaseLifecycle.PrepareStartupAsync(database.Options, ct));
+        Assert.Equal(1049, missing.Number);
+        database.Options.AutoInitializeDatabase = true;
+        database.Options.BootstrapPassword = "bad";
+        await Assert.ThrowsAsync<ApiException>(() => EfDatabaseLifecycle.PrepareStartupAsync(database.Options, ct));
+        missing = await Assert.ThrowsAsync<MySqlException>(async () => { await using var conn = await database.Database.OpenAsync(ct); });
+        Assert.Equal(1049, missing.Number);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task DropMigrationRemovesOnlyOemSharedRowsAndCanRestoreHistoricalSchema()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("ef_drop_oem", ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync("20260918153503_AddOemPlatform", ct);
+        await database.ExecuteAsync("""
+            INSERT INTO audit_logs(employee_no,action,target_type,target_id,detail,ip,created_at,actor_realm,actor_account_id)
+            VALUES
+              ('internal-user','PROJECT_CREATE','project','1',NULL,NULL,UTC_TIMESTAMP(6),NULL,NULL),
+              ('oem-user','OEM_TRANSFER_CREATE','oem_transfer','1',NULL,NULL,UTC_TIMESTAMP(6),'oem',1);
+            INSERT INTO email_outbox(event_type,dedupe_key,project_id,recipient_user_id,recipient_email,subject,body,status,retry_count,next_attempt_at,last_error,sent_at,created_at,recipient_realm,recipient_account_id,oem_transfer_id)
+            VALUES
+              ('PROJECT_SUBMITTED','normal-mail',NULL,NULL,'normal@example.invalid','normal','normal','PENDING',0,NULL,NULL,NULL,UTC_TIMESTAMP(6),NULL,NULL,NULL),
+              ('OEM_TRANSFER_RELEASED','oem-mail',NULL,NULL,'oem@example.invalid','oem','oem','PENDING',0,NULL,NULL,NULL,UTC_TIMESTAMP(6),'oem',1,1);
+            """, ct);
+
+        await migrator.MigrateAsync("20260923005853_DropOemPlatform", ct);
+        await using (var connection = await database.Database.OpenAsync(ct))
+        {
+            Assert.Equal(1, await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM audit_logs"));
+            Assert.Equal("PROJECT_CREATE", await connection.ExecuteScalarAsync<string>("SELECT action FROM audit_logs"));
+            Assert.Equal(1, await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM email_outbox"));
+            Assert.Equal("PROJECT_SUBMITTED", await connection.ExecuteScalarAsync<string>("SELECT event_type FROM email_outbox"));
+            Assert.Equal(0, await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='oem' OR code LIKE 'oem:%' OR code='dept:leader_manage'"));
+            Assert.Equal(0, await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.%'"));
+            Assert.Equal(0, await connection.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'oem\\_%'"));
+        }
+
+        await migrator.MigrateAsync("20260918153503_AddOemPlatform", ct);
+        await using var restored = await database.Database.OpenAsync(ct);
+        Assert.True(await TableExistsAsync(restored, "oem_transfers", ct));
+        Assert.Equal(14, await restored.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='oem' OR code LIKE 'oem:%' OR code='dept:leader_manage'"));
+        Assert.Equal(30, await restored.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.%'"));
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task EmptyDatabaseInitializationUsesEfHistoryAndAdminOnlySeeds()
     {
@@ -17,21 +123,23 @@ public sealed class SchemaShapeTests
         await database.InitializeAsync(ct);
         await using (var conn = await database.Database.OpenAsync(ct))
         {
-            Assert.Equal(new[] { EfDatabaseLifecycle.InitialMigrationId, "20260918153503_AddOemPlatform" },
+            Assert.Equal(new[] {
+                    EfDatabaseLifecycle.InitialMigrationId,
+                    "20260918153503_AddOemPlatform",
+                    "20260923005853_DropOemPlatform",
+                },
                 (await conn.QueryAsync<string>("SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId")).ToArray());
             Assert.False(await TableExistsAsync(conn, "yf_schema_migrations", ct));
             Assert.False(await TableExistsAsync(conn, "seaql_migrations", ct));
             Assert.Equal("admin", await conn.ExecuteScalarAsync<string>("SELECT employee_no FROM users"));
             Assert.Equal("系统管理员", await conn.ExecuteScalarAsync<string>("SELECT name FROM roles"));
-            // 35 collaboration permissions plus 14 OEM permissions seeded by AddOemPlatform;
-            // the built-in administrator is granted every one of them.
-            Assert.Equal(49, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
-            Assert.Equal(49, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
-            Assert.Equal(13, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key NOT LIKE 'oem.%'"));
-            Assert.Equal(30, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.%'"));
-            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_templates WHERE is_default=1 AND status='ACTIVE'"));
-            Assert.Equal(2, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_template_nodes WHERE template_id=1"));
-            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_retention_templates WHERE mode='KEEP'"));
+            Assert.Equal(35, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
+            Assert.Equal(35, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(13, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'oem\\_%'"));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND (column_name LIKE 'oem\\_%' OR column_name IN ('recipient_realm','recipient_account_id','actor_realm','actor_account_id','leader_account_id'))"));
             Assert.Equal(3, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM project_dictionaries WHERE type='PRIORITY'"));
         }
         await SchemaBootstrap.ValidateAsync(database.Database, ct);
@@ -59,7 +167,7 @@ public sealed class SchemaShapeTests
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await using var conn = await database.Database.OpenAsync(ct);
-        Assert.Equal(2, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+        Assert.Equal(3, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM users WHERE employee_no='admin'"));
     }
 
@@ -116,7 +224,8 @@ public sealed class SchemaShapeTests
         public static async Task<SchemaDatabaseScope> CreateOrSkipAsync(
             string purpose,
             CancellationToken ct,
-            string databaseCollation = "utf8mb4_unicode_ci")
+            string databaseCollation = "utf8mb4_unicode_ci",
+            bool createDatabase = true)
         {
             var raw = Environment.GetEnvironmentVariable("YF_TEST_DATABASE_URL");
             if (string.IsNullOrWhiteSpace(raw)) Assert.Skip("YF_TEST_DATABASE_URL is not set");
@@ -144,7 +253,7 @@ public sealed class SchemaShapeTests
             var databaseName = $"yf_t_{Guid.NewGuid():N}";
             try
             {
-                await administration.ExecuteAsync(new CommandDefinition(
+                if (createDatabase) await administration.ExecuteAsync(new CommandDefinition(
                     $"CREATE DATABASE `{databaseName}` CHARACTER SET utf8mb4 COLLATE {databaseCollation}",
                     cancellationToken: ct));
                 var options = new AppOptions

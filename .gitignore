@@ -2,7 +2,7 @@
 .artifacts/
 # IIS deployment output
 /deloy/
-# Local publishing credentials (included only in the generated external-config example)
+# Local publishing credentials (included only in generated Production configuration)
 /server_dotnet/deploy/publish-defaults.local.json
 # Legacy runtime directories remain ignored for older local commands
 .runlogs/

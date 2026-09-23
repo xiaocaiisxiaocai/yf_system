@@ -9,15 +9,7 @@ namespace Yf.Api.Modules.Identity;
 
 public sealed class TokenService(AppOptions options)
 {
-    public (string Token, long ExpiresAt) IssueAccess(ulong userId, string employeeNo, string sessionId) =>
-        IssueAccess(userId, employeeNo, sessionId, IdentityRealms.Internal);
-
-    /// <summary>
-    /// Issues an access token for a specific identity realm. The internal realm keeps
-    /// the historical claim set (no `rlm` claim) so existing tokens stay byte-compatible;
-    /// every other realm is stamped explicitly and can never parse as an internal user.
-    /// </summary>
-    public (string Token, long ExpiresAt) IssueAccess(ulong userId, string employeeNo, string sessionId, string realm)
+    public (string Token, long ExpiresAt) IssueAccess(ulong userId, string employeeNo, string sessionId)
     {
         var now = DateTimeOffset.UtcNow;
         var expires = now.AddMinutes(options.AccessTtlMinutes);
@@ -33,7 +25,6 @@ public sealed class TokenService(AppOptions options)
             ["iat"] = now.ToUnixTimeSeconds(),
             ["exp"] = expires.ToUnixTimeSeconds()
         };
-        if (realm != IdentityRealms.Internal) claims["rlm"] = realm;
         var payload = Base64UrlEncoder.Encode(JsonSerializer.Serialize(claims));
         var signingInput = header + "." + payload;
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(options.JwtSecret));
@@ -58,7 +49,7 @@ public sealed class TokenService(AppOptions options)
 
     public static string NewRefreshToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
         .TrimEnd('=').Replace('+', '-').Replace('/', '_');
-    public static string HashRefreshToken(string token) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+    public static string HashRefreshToken(string token) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
     private SymmetricSecurityKey Key() => new(Encoding.UTF8.GetBytes(options.JwtSecret));
 
     private static bool TryReadClaims(string rawPayload, out AccessClaims claims)
@@ -77,16 +68,7 @@ public sealed class TokenService(AppOptions options)
             var employeeNo = subValue.GetString();
             var sessionId = sidValue.GetString();
             if (string.IsNullOrWhiteSpace(employeeNo) || string.IsNullOrWhiteSpace(sessionId)) return false;
-            var realm = IdentityRealms.Internal;
-            if (root.TryGetProperty("rlm", out var realmValue))
-            {
-                if (realmValue.ValueKind != JsonValueKind.String) return false;
-                realm = realmValue.GetString() ?? string.Empty;
-                // An explicit claim equal to the implicit default is never issued; reject it
-                // so there is exactly one encoding per realm.
-                if (realm.Length == 0 || realm == IdentityRealms.Internal) return false;
-            }
-            claims = new(uid, employeeNo, sessionId, expiresAt, realm);
+            claims = new(uid, employeeNo, sessionId, expiresAt);
             return true;
         }
         catch (JsonException) { return false; }
@@ -94,10 +76,4 @@ public sealed class TokenService(AppOptions options)
     }
 }
 
-public sealed record AccessClaims(ulong UserId, string EmployeeNo, string SessionId, long ExpiresAt, string Realm = IdentityRealms.Internal);
-
-public static class IdentityRealms
-{
-    /// <summary>The historical `users` table realm (internal staff and supplier accounts).</summary>
-    public const string Internal = "internal";
-}
+public sealed record AccessClaims(ulong UserId, string EmployeeNo, string SessionId, long ExpiresAt);

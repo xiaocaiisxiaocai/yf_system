@@ -216,7 +216,7 @@ internal sealed class CollaborationService
     {
         var value = $"{userId}:{row.ActivityCount}:{row.LatestId}:{row.ActivitySum}:" +
             $"{row.ActivityXor}:{row.ReadCount}:{row.ReadSum}:{row.ReadXor}:{row.UnreadCount}";
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     }
 
     private sealed class CollaborationFingerprintRow

@@ -27,7 +27,7 @@ public class AuditLogTests
                 """
         };
 
-        var response = JsonSerializer.SerializeToElement(row.ToResponse(), JsonSerializerOptions.Web);
+        var response = JsonSerializer.SerializeToElement(row.ToResponse(), new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
         Assert.Equal("操作时姓名", response.GetProperty("actorName").GetString());
         Assert.Equal("操作时对象名", response.GetProperty("targetName").GetString());
@@ -49,7 +49,7 @@ public class AuditLogTests
             Detail = "{\"reason\":\"旧格式日志\"}"
         };
 
-        var response = JsonSerializer.SerializeToElement(row.ToResponse(), JsonSerializerOptions.Web);
+        var response = JsonSerializer.SerializeToElement(row.ToResponse(), new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
         Assert.Equal("当前操作人", response.GetProperty("actorName").GetString());
         Assert.Equal("当前对象名", response.GetProperty("targetName").GetString());
@@ -63,7 +63,7 @@ public class AuditLogTests
     {
         var row = new AuditRow { Detail = "{\"auditContext\":{\"actorName\":\"  \",\"targetName\":null}}" };
 
-        var response = JsonSerializer.SerializeToElement(row.ToResponse(), JsonSerializerOptions.Web);
+        var response = JsonSerializer.SerializeToElement(row.ToResponse(), new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
         Assert.Equal(JsonValueKind.Null, response.GetProperty("actorName").ValueKind);
         Assert.Equal(JsonValueKind.Null, response.GetProperty("targetName").ValueKind);

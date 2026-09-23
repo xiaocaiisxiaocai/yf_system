@@ -25,7 +25,7 @@ try {
         $env:ASPNETCORE_ENVIRONMENT = 'Development'
         # Preserve App environment overrides, exactly as normal startup does.
         # The backend reuses its actual configuration, storage and scanner contracts.
-        & dotnet .\bin\Debug\net10.0\Yf.Api.dll --check-development-readiness
+        & dotnet .\bin\Debug\net8.0\Yf.Api.dll --check-development-readiness
         $resultCode = $LASTEXITCODE
     } finally { Pop-Location }
 } catch {

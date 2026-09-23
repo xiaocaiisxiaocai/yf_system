@@ -6,7 +6,7 @@ using Yf.Api.Modules.Identity;
 
 namespace Yf.Api.Infrastructure;
 
-internal static class EfDatabaseLifecycle
+internal static partial class EfDatabaseLifecycle
 {
     internal const string InitialMigrationId = "20260917071123_InitialCreate";
 
