@@ -61,7 +61,7 @@ public sealed class SmtpSettingsService(AppDb db, AppOptions options, AuditServi
         var stored = new StoredSettings(next.Host, next.Port, next.Username, next.From, next.Security, Protect(next.Password));
         await using var context = EfDb.Use(conn, tx);
         var serialized = JsonSerializer.Serialize(stored);
-        var updatedAt = await context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        var updatedAt = await DbClock.UtcNowAsync(context, ct);
         var updated = await context.SystemConfigs.Where(config => config.CfgKey == ConfigKey)
             .ExecuteUpdateAsync(setters => setters.SetProperty(config => config.CfgValue, serialized)
                 .SetProperty(config => config.Description, "邮件发送连接配置")

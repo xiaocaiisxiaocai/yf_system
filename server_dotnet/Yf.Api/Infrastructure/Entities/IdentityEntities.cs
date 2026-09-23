@@ -83,6 +83,8 @@ public sealed class RefreshTokenConfig : IEntityTypeConfiguration<RefreshToken>
         b.HasIndex(x => x.TokenHash).IsUnique().HasDatabaseName("token_hash");
         b.HasIndex(x => x.UserId).HasDatabaseName("fk_rt_user");
         b.HasIndex(x => new { x.SessionId, x.UserId, x.Revoked, x.ExpiresAt }).HasDatabaseName("idx_refresh_tokens_session_state");
+        // SessionCleanupService deletes by expiry alone; without this index every run scans the table.
+        b.HasIndex(x => x.ExpiresAt).HasDatabaseName("idx_refresh_tokens_expires");
         b.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).HasConstraintName("fk_rt_user").OnDelete(DeleteBehavior.Restrict);
     }
 }

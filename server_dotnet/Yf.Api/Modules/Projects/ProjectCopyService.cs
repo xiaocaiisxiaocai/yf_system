@@ -39,9 +39,9 @@ internal sealed class ProjectCopyService(
                 prepared.Add(await PreparePhysicalCopyAsync(root, snapshot.CopiedAt, sourceFile, ct));
 
             // File I/O stays outside the transaction. This short second transaction
-            // fences management changes and proves the source snapshot is unchanged.
+            // fences permission changes (shared business gate) and proves the source snapshot is unchanged.
             await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-            await AccessService.LockManagementAsync(conn, tx, ct);
+            await AccessService.LockBusinessAsync(conn, tx, ct);
             var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
             await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
             await AccessService.RequirePermissionAsync(conn, tx, current, "project:create", ct);
@@ -496,7 +496,7 @@ internal sealed class ProjectCopyService(
     }
 
     private static async Task<DateTime> DatabaseUtcNowAsync(YfDbContext db, CancellationToken ct) =>
-        await db.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        await DbClock.UtcNowAsync(db, ct);
 
     private static DateOnly? ToDateOnly(DateTime? value) => value is null ? null : DateOnly.FromDateTime(value.Value);
 

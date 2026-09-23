@@ -235,20 +235,25 @@ internal sealed class MessageService(
             {
                 continue;
             }
-            foreach (var message in group)
-            {
-                // The unique key is the receipt contract; INSERT IGNORE keeps concurrent
-                // read acknowledgements idempotent without a check-then-insert race.
-                var changed = await db.Database.ExecuteSqlInterpolatedAsync($"""
-                    INSERT IGNORE INTO message_reads(message_id,user_id,read_at)
-                    VALUES({message.Id},{current.Id},UTC_TIMESTAMP(3))
-                    """, ct);
-                if (changed == 1)
-                {
-                    await audit.WriteAsync(conn, tx, current.Id, "MESSAGE_READ", "message", message.Id,
-                        new { projectId = group.Key }, null, ct);
-                }
-            }
+            // Skip receipts that already exist, then insert the rest in one statement. The primary key is
+            // the receipt contract; INSERT IGNORE keeps a concurrent acknowledgement of the same message idempotent.
+            var groupIds = group.Select(message => message.Id).ToArray();
+            var alreadyRead = (await db.MessageReads
+                .Where(read => read.UserId == current.Id && Enumerable.Contains(groupIds, read.MessageId))
+                .Select(read => read.MessageId).ToArrayAsync(ct)).ToHashSet();
+            var newlyRead = groupIds.Where(id => !alreadyRead.Contains(id)).Order().ToArray();
+            if (newlyRead.Length == 0) continue;
+            var values = string.Join(",", newlyRead.Select((_, index) => $"(@m{index},@u,UTC_TIMESTAMP(3))"));
+            var parameters = newlyRead.Select((id, index) => (object)new MySqlParameter($"@m{index}", id))
+                .Append(new MySqlParameter("@u", current.Id)).ToArray();
+            // Only generated parameter placeholders are concatenated; every value is a MySqlParameter.
+            var sql = "INSERT IGNORE INTO message_reads(message_id,user_id,read_at) VALUES " + values;
+            var inserted = await db.Database.ExecuteSqlRawAsync(sql, parameters, ct);
+            if (inserted == 0) continue;
+            // One audit entry per project and request (not per message): read receipts are high volume and
+            // are deliberately not turned into project activity.
+            await audit.WriteAsync(conn, tx, current.Id, "MESSAGE_READ", "project", group.Key,
+                new { projectId = group.Key, messageIds = newlyRead, count = newlyRead.Length }, null, ct);
             changedProjects.Add(group.Key);
         }
         await tx.CommitAsync(ct);
@@ -628,7 +633,7 @@ internal sealed class MessageService(
     }
 
     private static Task<DateTime> DatabaseUtcNowAsync(YfDbContext db, CancellationToken ct) =>
-        db.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(3) AS Value").SingleAsync(ct);
+        DbClock.UtcNowAsync(db, ct, 3);
 
     private async Task PublishSafelyAsync(ulong projectId, string kind)
     {

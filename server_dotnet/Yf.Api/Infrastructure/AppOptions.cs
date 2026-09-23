@@ -19,6 +19,8 @@ public sealed class AppOptions
     public int UploadChunkSize { get; set; } = 10 * 1024 * 1024;
     /// <summary>Audit log rows older than this many days are deleted by the retention worker.</summary>
     public int AuditRetentionDays { get; set; } = 30;
+    /// <summary>Sent, failed and cancelled outbox rows older than this many days are deleted by the mail worker.</summary>
+    public int MailRetentionDays { get; set; } = 90;
     public SmtpOptions Smtp { get; set; } = new();
 
     public void Validate()
@@ -42,6 +44,7 @@ public sealed class AppOptions
             throw new InvalidOperationException("App:WebBaseUrl must be an HTTP(S) origin.");
         if (AccessTtlMinutes is < 1 or > 1440 || RefreshTtlDays is < 1 or > 365) throw new InvalidOperationException("Invalid token lifetime.");
         if (AuditRetentionDays is < 1 or > 3650) throw new InvalidOperationException("App:AuditRetentionDays must be between 1 and 3650.");
+        if (MailRetentionDays is < 1 or > 3650) throw new InvalidOperationException("App:MailRetentionDays must be between 1 and 3650.");
         Smtp.Validate();
     }
 

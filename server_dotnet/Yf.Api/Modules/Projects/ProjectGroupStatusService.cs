@@ -40,7 +40,7 @@ internal sealed class ProjectGroupStatusService(AuditService audit)
             ProjectStatuses.InProgress when group.Status is ProjectStatuses.Completed or ProjectStatuses.Terminated => "AUTO_REOPEN",
             _ => "AUTO_SYNC",
         };
-        var now = await db.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(3) AS Value").SingleAsync(ct);
+        var now = await DbClock.UtcNowAsync(db, ct, 3);
         var changed = await db.ProjectGroups
             .Where(item => item.Id == groupId && item.Status == group.Status)
             .ExecuteUpdateAsync(setters => setters

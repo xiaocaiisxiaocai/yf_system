@@ -11,6 +11,7 @@ internal static partial class EfDatabaseLifecycle
         if (!options.AutoInitializeDatabase)
         {
             await ValidateReadyAsync(new AppDb(options), ct);
+            WarnAboutBootstrapPassword(options);
             return;
         }
 
@@ -69,8 +70,16 @@ internal static partial class EfDatabaseLifecycle
             // Never auto-upgrade a nonempty database: a pending migration can drop data (e.g. DropOemPlatform).
             // Partial initialization also stops here for inspection instead of overwriting data.
             await ValidateHistoryAsync(db, requireCurrent: true, ct);
+            WarnAboutBootstrapPassword(options);
         }
         await BootstrapSeedCatalog.ValidateRuntimeSeedAsync(db, ct);
+    }
+
+    private static void WarnAboutBootstrapPassword(AppOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(options.BootstrapPassword)
+            || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD")))
+            Console.Error.WriteLine("WARNING: Database is already initialized. Remove the unused App:BootstrapPassword configuration and YF_BOOTSTRAP_PASSWORD environment variable. Existing account passwords are unchanged.");
     }
 
     private static Task<string> HashBootstrapPasswordAsync(AppOptions options, CancellationToken ct)

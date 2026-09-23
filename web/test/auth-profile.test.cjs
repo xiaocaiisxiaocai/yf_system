@@ -200,3 +200,37 @@ test('an old profile request cannot clear a newer session request', async () => 
   assert.equal(harness.applied.length, 1)
   assert.equal(harness.applied[0].payload.user.id, 'B')
 })
+
+test('without Web Locks, concurrent refreshes in two tabs are serialized by the storage lease', async () => {
+  const store = new Map()
+  const localStorage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => { store.set(key, String(value)) },
+    removeItem: (key) => { store.delete(key) },
+  }
+  const noopHttp = { interceptors: { request: { use() {} }, response: { use() {} } } }
+  const mocks = {
+    axios: { __esModule: true, default: { create: () => noopHttp } },
+    '@arco-design/web-react': { Message: { error() {} } },
+    '../store/auth': { __esModule: true, useAuth: { getState: () => ({ generation: 0 }) } },
+  }
+  // Two tabs: separate module instances sharing one origin's localStorage.
+  const tabA = loadClient(mocks, { window: { localStorage }, Date, Math })
+  const tabB = loadClient(mocks, { window: { localStorage }, Date, Math })
+  let running = 0
+  let overlapped = false
+  const order = []
+  const refresh = (name) => async () => {
+    running += 1
+    if (running > 1) overlapped = true
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    order.push(name)
+    running -= 1
+    return name
+  }
+  const results = await Promise.all([tabA.withAuthLock(refresh('A')), tabB.withAuthLock(refresh('B'))])
+  assert.deepEqual(results, ['A', 'B'])
+  assert.equal(overlapped, false, 'the second tab must wait for the first rotation to finish')
+  assert.equal(order.length, 2)
+  assert.equal(store.size, 0, 'the lease is released after use')
+})

@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 
@@ -50,6 +52,9 @@ public sealed class ApiException(int status, int code, string message) : Excepti
     public static ApiException OutOfScope(string message = "无权访问该数据") => new(403, 40302, message);
     public static ApiException NotFound(string message = "资源不存在") => new(404, 40401, message);
     public static ApiException Conflict(string message) => new(409, 40901, message);
+    /// <summary>A database lock wait timed out or a deadlock victim was rolled back; the request may simply be retried.</summary>
+    public static ApiException Busy(string message = "系统繁忙，数据正被其他操作占用，请稍后重试") => new(409, 40902, message);
+    public static ApiException TooManyRequests(string message) => new(429, 42902, message);
 }
 
 public sealed record CurrentUser(ulong Id, string EmployeeNo, string UserType, ulong? SupplierId)
@@ -68,6 +73,12 @@ public sealed class AccessService
     public static CurrentUser GetCurrent(HttpContext context) =>
         context.Items.TryGetValue(typeof(CurrentUser), out var actor) && actor is CurrentUser user ? user : throw ApiException.Unauthorized();
 
+    /// <summary>
+    /// Exclusive gate: only for writes that change who may do what (accounts, roles, permissions,
+    /// organizations, suppliers, security/system settings, dictionaries). It waits for, and blocks,
+    /// every business transaction. Project data writes take <see cref="LockBusinessAsync"/> plus the
+    /// project-group/project row locks instead, so they do not stall the whole system.
+    /// </summary>
     public static async Task LockManagementAsync(MySqlConnection db, MySqlTransaction tx, CancellationToken ct = default)
     {
         await using var context = EfDb.Use(db, tx);
@@ -84,7 +95,17 @@ public sealed class AccessService
             $"SELECT cfg_key AS Value FROM system_configs WHERE cfg_key='security.management_lock' LOCK IN SHARE MODE")
             .SingleOrDefaultAsync(ct);
         if (gate is null) throw new InvalidOperationException("Management gate missing; EF database initialization is required.");
+        // Every role/permission/user-status change holds the gate exclusively, so while this
+        // transaction holds it shared, permission grants cannot change and may be cached.
+        PermissionCache.AddOrUpdate(tx, new ConcurrentDictionary<ulong, string[]>());
     }
+
+    /// <summary>
+    /// Permission codes per user, scoped to one transaction that holds the business gate in share mode
+    /// (see <see cref="LockBusinessAsync"/>). A request checks several permission points; each check
+    /// would otherwise re-run the same four-table join.
+    /// </summary>
+    private static readonly ConditionalWeakTable<MySqlTransaction, ConcurrentDictionary<ulong, string[]>> PermissionCache = new();
 
     public static async Task<CurrentUser> RecheckActorAsync(MySqlConnection db, MySqlTransaction tx, CurrentUser user, CancellationToken ct = default)
     {
@@ -108,6 +129,22 @@ public sealed class AccessService
 
     public static async Task<string[]> PermissionCodesAsync(MySqlConnection db, MySqlTransaction? tx, ulong userId, CancellationToken ct = default)
     {
+        if (tx is not null && PermissionCache.TryGetValue(tx, out var cache))
+        {
+            if (cache.TryGetValue(userId, out var cached)) return cached;
+            var loaded = await LoadPermissionCodesAsync(db, tx, userId, ct);
+            cache[userId] = loaded;
+            return loaded;
+        }
+        return await LoadPermissionCodesAsync(db, tx, userId, ct);
+    }
+
+    /// <summary>Whether <paramref name="userId"/> holds <paramref name="permission"/> through an active role.</summary>
+    public static async Task<bool> HasPermissionAsync(MySqlConnection db, MySqlTransaction? tx, ulong userId, string permission, CancellationToken ct = default) =>
+        (await PermissionCodesAsync(db, tx, userId, ct)).Contains(permission, StringComparer.Ordinal);
+
+    private static async Task<string[]> LoadPermissionCodesAsync(MySqlConnection db, MySqlTransaction? tx, ulong userId, CancellationToken ct)
+    {
         await using var context = EfDb.Use(db, tx);
         return await context.UserRoles.Where(userRole => userRole.UserId == userId)
             .Join(context.Roles.Where(role => role.Status == "ACTIVE"), userRole => userRole.RoleId, role => role.Id, (userRole, _) => userRole)
@@ -118,7 +155,7 @@ public sealed class AccessService
 
     public static async Task RequirePermissionAsync(MySqlConnection db, MySqlTransaction? tx, CurrentUser user, string permission, CancellationToken ct = default)
     {
-        if (!(await PermissionCodesAsync(db, tx, user.Id, ct)).Contains(permission, StringComparer.Ordinal)) throw ApiException.Forbidden();
+        if (!await HasPermissionAsync(db, tx, user.Id, permission, ct)) throw ApiException.Forbidden();
     }
 
     public static async Task<bool> IsSystemAdminAsync(MySqlConnection db, MySqlTransaction? tx, ulong userId, CancellationToken ct = default)

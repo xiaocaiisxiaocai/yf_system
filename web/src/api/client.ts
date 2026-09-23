@@ -16,12 +16,70 @@ export type QuietRequestConfig = AxiosRequestConfig & {
 type SessionConfig = QuietRequestConfig & { _retried?: boolean; authGeneration?: number }
 const isCurrentSession = (config?: SessionConfig) => !config || config.authGeneration === useAuth.getState().generation
 
-/** 同源标签共享 refresh cookie，必须在拿到浏览器锁后才发送旋转请求。生产使用 HTTPS。 */
+/**
+ * 同源标签共享 refresh cookie，必须在拿到浏览器锁后才发送旋转请求：两个标签同时用同一个旧 cookie 刷新，
+ * 后到的一次会被服务端判为令牌重放并吊销整个会话。优先使用 Web Locks；它只在安全上下文（HTTPS/localhost）
+ * 可用，内网 HTTP 部署时退回基于 localStorage 的租约锁。
+ */
 export function withAuthLock<T>(operation: () => Promise<T>): Promise<T> {
   if (typeof navigator !== 'undefined' && navigator.locks) {
     return navigator.locks.request('yf-auth-session', operation)
   }
-  return operation()
+  return withStorageLease(operation)
+}
+
+const STORAGE_LOCK_KEY = 'yf:auth-refresh-lock'
+/** 租约上限：持有者崩溃或标签关闭后，其他标签最多等这么久即可接管。 */
+const STORAGE_LEASE_MS = 15_000
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+function readLease(): { owner: string; expires: number } | null {
+  const raw = window.localStorage.getItem(STORAGE_LOCK_KEY)
+  if (!raw) return null
+  try {
+    const value = JSON.parse(raw) as { owner?: unknown; expires?: unknown }
+    return typeof value.owner === 'string' && typeof value.expires === 'number'
+      ? { owner: value.owner, expires: value.expires }
+      : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * localStorage 没有原子比较交换：写入后稍等再读回，只有读回仍是自己时才算拿到锁，
+ * 足以把并发刷新串行化。存储不可用（隐私模式等）时直接执行，行为与改动前一致。
+ */
+export async function withStorageLease<T>(operation: () => Promise<T>): Promise<T> {
+  if (typeof window === 'undefined') return operation()
+  const owner = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  const giveUpAt = Date.now() + STORAGE_LEASE_MS
+  for (;;) {
+    let acquired = false
+    try {
+      const held = readLease()
+      if (!held || held.expires <= Date.now()) {
+        window.localStorage.setItem(STORAGE_LOCK_KEY, JSON.stringify({ owner, expires: Date.now() + STORAGE_LEASE_MS }))
+        await sleep(40)
+        acquired = readLease()?.owner === owner
+      }
+    } catch {
+      return operation()
+    }
+    if (acquired) {
+      try {
+        return await operation()
+      } finally {
+        try {
+          if (readLease()?.owner === owner) window.localStorage.removeItem(STORAGE_LOCK_KEY)
+        } catch {
+          // 租约到期后自然失效。
+        }
+      }
+    }
+    if (Date.now() >= giveUpAt) return operation()
+    await sleep(60 + Math.random() * 120)
+  }
 }
 
 /** 权限被管理员调整后，403 会触发一次资料刷新，让菜单和按钮及时收敛到服务端状态。 */

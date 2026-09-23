@@ -435,6 +435,23 @@ public sealed class FilesRecoveryTests
                             status VARCHAR(20) NOT NULL, deleted_at DATETIME(6) NULL,
                             created_at DATETIME(6) NOT NULL
                         );
+                        -- The maintenance entry point also sweeps soft-deleted message images.
+                        -- Keep these empty in file-recovery fixtures; image retention has dedicated tests.
+                        CREATE TABLE messages(
+                            id BIGINT UNSIGNED PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL,
+                            sender_id BIGINT UNSIGNED NOT NULL, content TEXT NOT NULL,
+                            status VARCHAR(16) NOT NULL, deleted_by BIGINT UNSIGNED NULL,
+                            deleted_at DATETIME NULL, created_at DATETIME NOT NULL
+                        );
+                        CREATE TABLE message_images(
+                            id BIGINT UNSIGNED PRIMARY KEY, message_id BIGINT UNSIGNED NOT NULL,
+                            original_name VARCHAR(255) NOT NULL, stored_name VARCHAR(64) NOT NULL,
+                            ext VARCHAR(8) NOT NULL, size_bytes BIGINT UNSIGNED NOT NULL,
+                            mime_type VARCHAR(32) NOT NULL, storage_path VARCHAR(512) NOT NULL,
+                            created_at DATETIME(3) NOT NULL,
+                            UNIQUE KEY uk_message_images_stored_name(stored_name),
+                            KEY idx_message_images_message(message_id,id)
+                        );
                         INSERT INTO system_configs(cfg_key,cfg_value) VALUES
                             ('security.management_lock','1'),
                             ('upload.chunk_size','262144'),

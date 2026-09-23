@@ -16,7 +16,7 @@ internal sealed partial class ProjectService(
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, true, ct);
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
         await using var db = EfDb.Use(conn, tx);
         var rejectReason = await db.ProjectStatusLogs
@@ -75,7 +75,7 @@ internal sealed partial class ProjectService(
         var name = ValidateNameForUpdate(request.Name);
         ValidateDescription(request.Description);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        await AccessService.LockManagementAsync(conn, tx, ct);
+        await AccessService.LockBusinessAsync(conn, tx, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:update", ct);
@@ -120,7 +120,7 @@ internal sealed partial class ProjectService(
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         var project = await ProjectAccessService.RequireViewForValidatedActorAsync(
-            conn, tx, current, projectId, true, ct);
+            conn, tx, current, projectId, false, ct);
         await using var db = EfDb.Use(conn, tx);
         var unread = await MessageService.UnreadCountAsync(conn, tx, current.Id, projectId, ct);
         var activityRevision = await ProjectActivityService.RevisionAsync(conn, tx, projectId, ct);
@@ -168,32 +168,9 @@ internal sealed partial class ProjectService(
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await ProjectDictionaryService.RequireOptionReadAsync(conn, tx, current, ct);
         await using var db = EfDb.Use(conn, tx);
-        var rows = await (
-            from user in db.Users
-            join section in db.Departments on user.DepartmentId equals (ulong?)section.Id
-            where user.UserType == "INTERNAL"
-                  && user.Status == "ACTIVE"
-                  && section.Kind == "SECTION"
-                  && section.Status == "ACTIVE"
-                  && (section.ParentId == null || db.Departments.Any(parent =>
-                      parent.Id == section.ParentId
-                      && parent.Kind == "DEPARTMENT"
-                      && parent.Status == "ACTIVE"
-                      && (parent.ParentId == null || db.Departments.Any(root =>
-                          root.Id == parent.ParentId
-                          && root.Kind == "DIVISION"
-                          && root.Status == "ACTIVE"
-                          && root.ParentId == null))))
-                  && (from userRole in db.UserRoles
-                      join role in db.Roles on userRole.RoleId equals role.Id
-                      join rolePermission in db.RolePermissions on role.Id equals rolePermission.RoleId
-                      join permission in db.Permissions on rolePermission.PermissionId equals permission.Id
-                      where userRole.UserId == user.Id
-                            && role.Status == "ACTIVE"
-                            && permission.Code == "project:list"
-                      select permission.Id).Any()
-            orderby user.RealName, user.Id
-            select new ProjectOwnerOption(user.Id, user.EmployeeNo, user.RealName, section.Id, section.Name))
+        var rows = await EligibleOwners(db)
+            .OrderBy(owner => owner.RealName).ThenBy(owner => owner.Id)
+            .Select(owner => new ProjectOwnerOption(owner.Id, owner.EmployeeNo, owner.RealName, owner.SectionId, owner.SectionName))
             .ToListAsync(ct);
         await tx.CommitAsync(ct);
         return rows;
@@ -211,7 +188,7 @@ internal sealed partial class ProjectService(
             throw ApiException.Forbidden();
         }
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        await AccessService.LockManagementAsync(conn, tx, ct);
+        await AccessService.LockBusinessAsync(conn, tx, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:delete", ct);
@@ -286,45 +263,6 @@ internal sealed partial class ProjectService(
         }
     }
 
-    private static async Task LoadCopyLineageAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        IReadOnlyList<ProjectRow> projects,
-        CurrentUser actor,
-        bool canViewAll,
-        CancellationToken ct)
-    {
-        if (projects.Count == 0) return;
-        var ids = projects.Select(project => project.Id).ToArray();
-        await using var db = EfDb.Use(conn, tx);
-        var relations = await (
-            from copy in db.ProjectCopies
-            join source in db.Projects on copy.SourceProjectId equals source.Id
-            where Enumerable.Contains(ids, copy.SourceProjectId)
-                  || Enumerable.Contains(ids, copy.TargetProjectId)
-            select new CopyLineageRow
-            {
-                SourceProjectId = copy.SourceProjectId,
-                TargetProjectId = copy.TargetProjectId,
-                SourceName = source.Name,
-                SourceSupplierId = source.SupplierId,
-                SourceResponsibleUserId = source.ResponsibleUserId,
-            }).ToListAsync(ct);
-        foreach (var project in projects)
-        {
-            var related = relations.Where(row => row.SourceProjectId == project.Id || row.TargetProjectId == project.Id).ToArray();
-            project.HasCopyHistory = related.Length > 0;
-            var source = related.SingleOrDefault(row => row.TargetProjectId == project.Id);
-            if (source is null) continue;
-            var canViewSource = actor.IsInternal
-                ? canViewAll || source.SourceResponsibleUserId == actor.Id
-                : actor.SupplierId is not null && actor.SupplierId == source.SourceSupplierId;
-            if (!canViewSource) continue;
-            project.CopySourceProjectId = source.SourceProjectId;
-            project.CopySourceProjectName = source.SourceName;
-        }
-    }
-
     internal static string[] NormalizeWorkOrderNos(string?[]? values)
     {
         if (values is null) return [];
@@ -368,6 +306,40 @@ internal sealed partial class ProjectService(
             request.RobotModelId, request.ResponsibleUserId, null, request.PriorityId, expectedCompletionDate);
     }
 
+    /// <summary>
+    /// Users who may own a project: active internal accounts with project:list, placed directly in an
+    /// active section whose department and division (when present) are active too.
+    /// </summary>
+    private static IQueryable<EligibleOwnerRow> EligibleOwners(YfDbContext db) =>
+        from user in db.Users
+        join section in db.Departments on user.DepartmentId equals (ulong?)section.Id
+        where user.UserType == "INTERNAL"
+              && user.Status == "ACTIVE"
+              && section.Kind == "SECTION"
+              && section.Status == "ACTIVE"
+              && (section.ParentId == null || db.Departments.Any(parent =>
+                  parent.Id == section.ParentId
+                  && parent.Kind == "DEPARTMENT"
+                  && parent.Status == "ACTIVE"
+                  && (parent.ParentId == null || db.Departments.Any(root =>
+                      root.Id == parent.ParentId
+                      && root.Kind == "DIVISION"
+                      && root.Status == "ACTIVE"
+                      && root.ParentId == null))))
+              && (from userRole in db.UserRoles
+                  join role in db.Roles on userRole.RoleId equals role.Id
+                  join rolePermission in db.RolePermissions on role.Id equals rolePermission.RoleId
+                  join permission in db.Permissions on rolePermission.PermissionId equals permission.Id
+                  where userRole.UserId == user.Id
+                        && role.Status == "ACTIVE"
+                        && permission.Code == "project:list"
+                  select permission.Id).Any()
+        select new EligibleOwnerRow
+        {
+            Id = user.Id, EmployeeNo = user.EmployeeNo, RealName = user.RealName,
+            SectionId = section.Id, SectionName = section.Name,
+        };
+
     internal static async Task<ProjectMetadataInput> ValidateMetadataAsync(
         MySqlConnection conn,
         MySqlTransaction tx,
@@ -390,32 +362,8 @@ internal sealed partial class ProjectService(
         if (input.ResponsibleUserId is { } responsibleUserId)
         {
             await using var db = EfDb.Use(conn, tx);
-            var owner = await (
-                from user in db.Users
-                join section in db.Departments on user.DepartmentId equals (ulong?)section.Id
-                where user.Id == responsibleUserId
-                      && user.UserType == "INTERNAL"
-                      && user.Status == "ACTIVE"
-                      && section.Kind == "SECTION"
-                      && section.Status == "ACTIVE"
-                      && (section.ParentId == null || db.Departments.Any(parent =>
-                          parent.Id == section.ParentId
-                          && parent.Kind == "DEPARTMENT"
-                          && parent.Status == "ACTIVE"
-                          && (parent.ParentId == null || db.Departments.Any(root =>
-                              root.Id == parent.ParentId
-                              && root.Kind == "DIVISION"
-                              && root.Status == "ACTIVE"
-                              && root.ParentId == null))))
-                      && (from userRole in db.UserRoles
-                          join role in db.Roles on userRole.RoleId equals role.Id
-                          join rolePermission in db.RolePermissions on role.Id equals rolePermission.RoleId
-                          join permission in db.Permissions on rolePermission.PermissionId equals permission.Id
-                          where userRole.UserId == user.Id
-                                && role.Status == "ACTIVE"
-                                && permission.Code == "project:list"
-                          select permission.Id).Any()
-                select new OwnerSelection { Id = user.Id, SectionId = section.Id })
+            var owner = await EligibleOwners(db).Where(candidate => candidate.Id == responsibleUserId)
+                .Select(candidate => new OwnerSelection { Id = candidate.Id, SectionId = candidate.SectionId })
                 .SingleOrDefaultAsync(ct);
             if (owner is null) throw ApiException.BadRequest("负责人必须是拥有项目列表权限且直属有效课别的启用内部用户");
             sectionId = owner.SectionId;
@@ -495,7 +443,7 @@ internal sealed partial class ProjectService(
     }
 
     private static Task<DateTime> DatabaseUtcNowAsync(YfDbContext db, CancellationToken ct) =>
-        db.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(3) AS Value").SingleAsync(ct);
+        DbClock.UtcNowAsync(db, ct, 3);
 
     internal static string ValidateNameForCreate(string? value)
     {
@@ -537,15 +485,6 @@ internal sealed partial class ProjectService(
         public string Name { get; init; } = string.Empty;
     }
 
-    private sealed class CopyLineageRow
-    {
-        public ulong SourceProjectId { get; init; }
-        public ulong TargetProjectId { get; init; }
-        public string SourceName { get; init; } = string.Empty;
-        public ulong SourceSupplierId { get; init; }
-        public ulong? SourceResponsibleUserId { get; init; }
-    }
-
     internal sealed record ProjectMetadataInput(
         string[] WorkOrderNos,
         string? MachineModel,
@@ -562,6 +501,15 @@ internal sealed partial class ProjectService(
         public string Type { get; init; } = string.Empty;
         public ulong? ParentId { get; init; }
         public string Status { get; init; } = string.Empty;
+    }
+
+    private sealed class EligibleOwnerRow
+    {
+        public ulong Id { get; init; }
+        public string EmployeeNo { get; init; } = string.Empty;
+        public string RealName { get; init; } = string.Empty;
+        public ulong SectionId { get; init; }
+        public string SectionName { get; init; } = string.Empty;
     }
 
     private sealed class OwnerSelection

@@ -14,6 +14,33 @@ public sealed class SchemaShapeTests
     [Theory(Timeout = 120_000)]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task ExistingDatabaseWarnsAboutBootstrapSecretWithoutPrintingIt(bool autoInitialize)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("bootstrap_warning", ct);
+        await database.InitializeAsync(ct);
+        database.Options.AutoInitializeDatabase = autoInitialize;
+        database.Options.BootstrapPassword = "PrivateBootstrap#42";
+        var original = Console.Error;
+        using var captured = new StringWriter();
+        try
+        {
+            Console.SetError(captured);
+            await EfDatabaseLifecycle.PrepareStartupAsync(database.Options, ct);
+            Assert.Contains("WARNING", captured.ToString());
+            Assert.Contains("App:BootstrapPassword", captured.ToString());
+            Assert.DoesNotContain(database.Options.BootstrapPassword, captured.ToString());
+            captured.GetStringBuilder().Clear();
+            database.Options.BootstrapPassword = "";
+            await EfDatabaseLifecycle.PrepareStartupAsync(database.Options, ct);
+            Assert.Empty(captured.ToString());
+        }
+        finally { Console.SetError(original); }
+    }
+
+    [Theory(Timeout = 120_000)]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task FirstStartupInitializesMissingOrEmptyDatabaseOnce(bool createDatabase)
     {
         var ct = TestContext.Current.CancellationToken;
@@ -35,7 +62,7 @@ public sealed class SchemaShapeTests
         Assert.Equal(hash, await conn.ExecuteScalarAsync<string>("SELECT password_hash FROM users WHERE employee_no='admin'"));
         Assert.Equal("RestartSentinel", await conn.ExecuteScalarAsync<string>("SELECT real_name FROM users WHERE employee_no='admin'"));
         Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT must_change_password FROM users WHERE employee_no='admin'"));
-        Assert.Equal(5, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+        Assert.Equal(6, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
     }
 
     [Fact(Timeout = 120_000)]
@@ -129,6 +156,7 @@ public sealed class SchemaShapeTests
                     "20260923005853_DropOemPlatform",
                     "20260923032837_FileListIndex",
                     "20260923064746_UnreadWindowIndexes",
+                    "20260923071427_RefreshTokenExpiryIndex",
                 },
                 (await conn.QueryAsync<string>("SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId")).ToArray());
             Assert.False(await TableExistsAsync(conn, "yf_schema_migrations", ct));
@@ -169,7 +197,7 @@ public sealed class SchemaShapeTests
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await using var conn = await database.Database.OpenAsync(ct);
-        Assert.Equal(5, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+        Assert.Equal(6, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM users WHERE employee_no='admin'"));
     }
 

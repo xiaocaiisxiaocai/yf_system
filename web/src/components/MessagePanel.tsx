@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import {
-  Avatar, Button, Drawer, Empty, Input, List, Popconfirm, Popover, Space, Spin, Tag, Typography,
-} from '@arco-design/web-react'
-import { IconCheck, IconDelete, IconSend } from '@arco-design/web-react/icon'
+import { Button, Typography } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from '../store/auth'
 import { type Message as Msg, fmtTime } from '../api/types'
 import { MessageImageComposer, MessageImages, pasteMessageImages } from './MessageImages'
 import { ReceiptBody, loadReadCounts, type Reader, type ReadCounts } from './MessageReceipts'
 import type { ApiResponses } from '../api/types'
+import { MessageComposer } from './message-panel/MessageComposer'
+import { MessageList } from './message-panel/MessageList'
+import { MessageReceiptDrawer } from './message-panel/MessageReceiptDrawer'
 
 interface Props {
   projectId: number
@@ -520,182 +520,55 @@ export default function MessagePanel({ projectId, projectStatus, onRead, targetI
       )}
 
       {canWrite && (
-        <div className="message-composer message-composer--images" onPaste={event => {
-          if (!sending) pasteMessageImages(event, images, setImages)
-        }}>
-          <div className="message-composer-input-row">
-            <Input.TextArea
-              placeholder="输入留言，Ctrl+Enter 发送"
-              value={content}
-              onChange={(value) => setContent(Array.from(value).slice(0, 4000).join(''))}
-              autoSize={{ minRows: 2, maxRows: 5 }}
-              style={{ flex: 1 }}
-              onKeyDown={(e) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') send()
-              }}
-            />
-            <Button type="primary" icon={<IconSend />} onClick={send} disabled={(!content.trim() && !images.length) || loading && list.length === 0} loading={sending}>
-              发送
-            </Button>
-          </div>
-          <MessageImageComposer files={images} onChange={setImages} disabled={sending} />
-        </div>
+        <MessageComposer
+          content={content}
+          images={images}
+          sending={sending}
+          loading={loading}
+          listLength={list.length}
+          onContentChange={(value) => setContent(Array.from(value).slice(0, 4000).join(''))}
+          onImagesChange={setImages}
+          onSend={send}
+          pasteMessageImages={pasteMessageImages}
+          ImageComposer={MessageImageComposer}
+        />
       )}
 
-      <div className="message-scroll-area" tabIndex={0} aria-label="留言列表">
-      {loadError ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
-          <Typography.Text type="error">加载失败</Typography.Text>
-          <Button size="small" onClick={() => load(1, false)}>重试</Button>
-        </div>
-      ) : (
-        <Spin loading={loading && list.length === 0} style={{ width: '100%' }}>
-          {list.length === 0 && !loading && !hasMore ? (
-            <Empty description="暂无留言" />
-          ) : (
-            <div ref={listRef}>
-              {list.map((m) => (
-              <div
-                className="msg-item"
-                key={m.id}
-                data-message-id={m.id}
-                aria-label={m.id === targetId ? '当前定位留言' : undefined}
-                style={m.id === targetId ? { borderLeft: '3px solid rgb(var(--primary-6))', paddingLeft: 12, background: 'var(--color-fill-1)' } : undefined}
-                data-unread={!m.readByMe && m.senderId !== user?.id ? 'true' : 'false'}
-              >
-                <Space align="start">
-                  <Avatar
-                    size={32}
-                    style={{ background: m.senderType === 'SUPPLIER' ? '#7b61ff' : '#165dff' }}
-                  >
-                    {m.senderName.slice(0, 1)}
-                  </Avatar>
-                  <div style={{ flex: 1 }}>
-                    <Space size={8}>
-                      <Typography.Text bold>{m.senderName}</Typography.Text>
-                      <Tag size="small" color={m.senderType === 'SUPPLIER' ? 'purple' : 'arcoblue'}>
-                        {m.senderType === 'SUPPLIER' ? '供应商' : '公司'}
-                      </Tag>
-                      <Tag size="small" color="gray">项目留言</Tag>
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        {fmtTime(m.createdAt)}
-                      </Typography.Text>
-                    </Space>
-                    <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{m.content}</div>
-                    {!!m.images?.length && <MessageImages messageId={m.id} images={m.images} watermarkEmployeeNo={user?.employeeNo} watermarkRealName={user?.realName} />}
-                    <div className="message-read-marker" aria-hidden="true" />
-                    <div style={{ marginTop: 4 }}>
-                      <Popover
-                        content={
-                          <div style={{ maxWidth: 320 }}>
-                            <Typography.Text bold style={{ fontSize: 12 }}>已读协作账号</Typography.Text>
-                            <ReceiptBody id={m.id} refreshKey={receiptRefresh} onLoaded={receiveReceipt} />
-                          </div>
-                        }
-                        trigger="click"
-                        triggerProps={{ escToClose: true, unmountOnExit: true }}
-                      >
-                        <Button
-                          size="mini"
-                          type="text"
-                          status={m.readCount >= m.totalCount && m.totalCount > 0 ? 'success' : undefined}
-                          aria-label={`查看留言回执：${m.readCount}/${m.totalCount}`}
-                          icon={<IconCheck />}
-                        >
-                          已读 {m.readCount}/{m.totalCount}
-                        </Button>
-                      </Popover>
-                      {m.senderId === user?.id && (
-                        <Button size="mini" type="text" onClick={() => openReceipt(m.id)} style={{ marginLeft: 8 }}>
-                          回执详情
-                        </Button>
-                      )}
-                      {canDelete && (
-                        <Popconfirm title="删除这条留言？删除后双方均不可见。" onOk={() => remove(m.id)}>
-                          <Button size="mini" type="text" status="danger" icon={<IconDelete />} style={{ marginLeft: 8 }}>
-                            删除
-                          </Button>
-                        </Popconfirm>
-                      )}
-                    </div>
-                  </div>
-                </Space>
-              </div>
-              ))}
-              {appendError && (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 12 }}>
-                  <Typography.Text type="error">加载失败</Typography.Text>
-                  <Button size="small" onClick={() => load(page + 1, true)}>重试</Button>
-                </div>
-              )}
-              {hasMore && (
-                <div style={{ textAlign: 'center', padding: 12 }}>
-                  <Button onClick={() => load(page + 1, true)} loading={loading}>
-                    加载更多（{list.length}/{total}）
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
-        </Spin>
-      )}
+      <MessageList
+        list={list}
+        total={total}
+        hasMore={hasMore}
+        loading={loading}
+        loadError={loadError}
+        appendError={appendError}
+        targetId={targetId}
+        userId={user?.id}
+        watermarkEmployeeNo={user?.employeeNo}
+        watermarkRealName={user?.realName}
+        canDelete={canDelete}
+        receiptRefresh={receiptRefresh}
+        listRef={listRef}
+        fmtTime={fmtTime}
+        onRetryInitial={() => load(1, false)}
+        onLoadMore={() => load(page + 1, true)}
+        onReceiveReceipt={receiveReceipt}
+        onOpenReceipt={openReceipt}
+        onRemove={remove}
+        MessageImages={MessageImages}
+        ReceiptBody={ReceiptBody}
+      />
 
-      </div>
-
-      <Drawer
-        width={420}
-        title="留言已读回执"
-        visible={!!receipt || !!receiptRequest}
+      <MessageReceiptDrawer
+        receipt={receipt}
+        receiptRequest={receiptRequest}
+        fmtTime={fmtTime}
         onCancel={() => {
           receiptSeq.current += 1
           setReceipt(null)
           setReceiptRequest(null)
         }}
-        footer={null}
-      >
-        {receiptRequest?.loading && !receipt && <Typography.Text type="secondary">回执加载中…</Typography.Text>}
-        {receiptRequest?.error && !receipt && (
-          <Space>
-            <Typography.Text type="error">回执加载失败</Typography.Text>
-            <Button size="small" onClick={() => openReceipt(receiptRequest.id)}>重试</Button>
-          </Space>
-        )}
-        {receipt && (
-          <>
-            <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-              统计项目负责人和关联供应商的全部启用账号，不包含仅有全局查看权限的人员。
-            </Typography.Text>
-            <Typography.Text bold>已读（{receipt.readers.length}）</Typography.Text>
-            <List
-              size="small"
-              dataSource={receipt.readers}
-              render={(r) => (
-                <List.Item key={r.userId} extra={fmtTime(r.readAt)}>
-                  {r.realName}
-                  <Tag size="small" color={r.userType === 'SUPPLIER' ? 'purple' : 'arcoblue'} style={{ marginLeft: 6 }}>
-                    {r.userType === 'SUPPLIER' ? '供应商' : '公司'}
-                  </Tag>
-                </List.Item>
-              )}
-            />
-            <Typography.Text bold style={{ display: 'block', marginTop: 12 }}>
-              未读（{receipt.unread.length}）
-            </Typography.Text>
-            <List
-              size="small"
-              dataSource={receipt.unread}
-              render={(r) => (
-                <List.Item key={r.userId}>
-                  {r.realName}
-                  <Tag size="small" color={r.userType === 'SUPPLIER' ? 'purple' : 'arcoblue'} style={{ marginLeft: 6 }}>
-                    {r.userType === 'SUPPLIER' ? '供应商' : '公司'}
-                  </Tag>
-                </List.Item>
-              )}
-            />
-          </>
-        )}
-      </Drawer>
+        onRetry={openReceipt}
+      />
     </div>
   )
 }

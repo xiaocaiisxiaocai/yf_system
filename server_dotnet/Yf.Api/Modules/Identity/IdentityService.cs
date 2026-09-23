@@ -22,7 +22,7 @@ public sealed class IdentityService(
         if (employeeNo.Length == 0 || string.IsNullOrEmpty(request.Password)) throw ApiException.BadRequest("工号和密码不能为空");
         if (employeeNo.EnumerateRunes().Count() > 64 || System.Text.Encoding.UTF8.GetByteCount(request.Password) > PasswordService.MaxPasswordBytes)
             throw ApiException.BadRequest("工号或密码错误");
-        if (!loginRateLimiter.AllowLogin(clientIp, employeeNo)) throw ApiException.BadRequest("请求过于频繁，请稍后再试");
+        if (!loginRateLimiter.AllowLogin(clientIp, employeeNo)) throw ApiException.TooManyRequests("请求过于频繁，请稍后再试");
 
         User? candidate;
         await using (var lookup = await dbFactory.CreateDbContextAsync(ct))
@@ -54,7 +54,7 @@ public sealed class IdentityService(
         // The account row lock shares failure state across IPs, processes and restarts.
         // Use the database clock (fetched once per transaction below); attempts during a
         // lock must not extend its expiry.
-        var dbNow = await context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        var dbNow = await DbClock.UtcNowAsync(context, ct);
         var isLocked = user.LockedUntil is DateTime lockedUntil && lockedUntil > dbNow;
         var lockExpired = user.LockedUntil is DateTime lu && lu <= dbNow;
         if (isLocked)
@@ -114,7 +114,7 @@ public sealed class IdentityService(
                    ?? throw ApiException.Unauthorized("账号不存在");
         var row = await context.RefreshTokens.FromSqlInterpolated($"SELECT * FROM refresh_tokens WHERE id = {found.Id} FOR UPDATE").SingleOrDefaultAsync(ct)
                   ?? throw ApiException.Unauthorized("登录状态无效");
-        var dbNow = await context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        var dbNow = await DbClock.UtcNowAsync(context, ct);
         var isExpired = row.ExpiresAt <= dbNow;
         if (row.Revoked || isExpired)
         {
@@ -142,7 +142,7 @@ public sealed class IdentityService(
     public async Task LogoutAsync(string? refreshToken, string? authorization, string clientIp, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        var dbNow = await context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        var dbNow = await DbClock.UtcNowAsync(context, ct);
         var targets = new HashSet<(ulong UserId, string SessionId)>();
         if (!string.IsNullOrWhiteSpace(refreshToken))
         {
@@ -234,7 +234,7 @@ public sealed class IdentityService(
     internal async Task<bool> HasActiveSessionAsync(MySqlConnection conn, MySqlTransaction? tx, ulong userId, string sessionId, CancellationToken ct)
     {
         await using var context = EfDb.Use(conn, tx);
-        var dbNow = await context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        var dbNow = await DbClock.UtcNowAsync(context, ct);
         return await context.RefreshTokens.AnyAsync(token => token.UserId == userId && token.SessionId == sessionId
             && !token.Revoked && token.ExpiresAt > dbNow, ct);
     }

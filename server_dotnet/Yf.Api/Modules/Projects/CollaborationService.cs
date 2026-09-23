@@ -98,8 +98,11 @@ internal sealed class CollaborationService
                 MessageAvailable = messageAvailable,
             };
 
-        var unreadCount = (ulong)await query.LongCountAsync(row => !row.IsRead, ct);
-        var filtered = unreadOnly ? query.Where(row => !row.IsRead) : query;
+        // The explicit window bound gives MySQL a range predicate on occurred_at, so the unread
+        // count and filter scan only the last UnreadWindow.Days instead of the whole history.
+        var unread = query.Where(row => row.Activity.OccurredAt >= cutoff && !row.IsRead);
+        var unreadCount = (ulong)await unread.LongCountAsync(ct);
+        var filtered = unreadOnly ? unread : query;
         var total = (ulong)await filtered.LongCountAsync(ct);
         var rows = await filtered.OrderByDescending(row => row.Activity.OccurredAt)
             .ThenByDescending(row => row.Activity.Id)
@@ -152,25 +155,9 @@ internal sealed class CollaborationService
             await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
         await using var db = EfDb.Use(conn, tx);
 
-        // Lock in stable key order before the no-tracking visibility check and insert. EF cannot
-        // translate FOR UPDATE, and interpolating one id at a time keeps every lock parameterized.
-        var projectIds = new HashSet<ulong>();
-        foreach (var id in ids)
-        {
-            var locked = await db.ProjectActivities
-                .FromSqlInterpolated($"SELECT * FROM project_activities WHERE id={id} FOR UPDATE")
-                .AsNoTracking()
-                .SingleOrDefaultAsync(ct);
-            if (locked is not null) projectIds.Add(locked.ProjectId);
-        }
-        foreach (var projectId in projectIds.Order())
-        {
-            await db.Projects
-                .FromSqlInterpolated($"SELECT * FROM projects WHERE id={projectId} FOR UPDATE")
-                .AsNoTracking()
-                .SingleOrDefaultAsync(ct);
-        }
-
+        // Marking read only writes the caller's own receipt rows, so no activity or project row is
+        // locked: the shared gate (LockActorAsync) already fences permission changes, and the
+        // (activity_id,user_id) primary key makes a concurrent duplicate a no-op via INSERT IGNORE.
         var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
         var validated = await VisibleMeaningfulActivities(
                 db, visibleProjects, current.Id, canReceivePendingAcceptance)
@@ -179,15 +166,20 @@ internal sealed class CollaborationService
             .ToArrayAsync(ct);
         if (validated.Length != ids.Length) throw ApiException.OutOfScope("通知不存在或无权访问");
 
-        var existing = await db.CollaborationReads
+        var existing = (await db.CollaborationReads
             .Where(read => read.UserId == current.Id && Enumerable.Contains(ids, read.ActivityId))
             .Select(read => read.ActivityId)
-            .ToArrayAsync(ct);
-        var existingSet = existing.ToHashSet();
-        db.CollaborationReads.AddRange(ids
-            .Where(id => !existingSet.Contains(id))
-            .Select(id => new CollaborationRead { ActivityId = id, UserId = current.Id }));
-        await db.SaveChangesAsync(ct);
+            .ToArrayAsync(ct)).ToHashSet();
+        var unread = ids.Where(id => !existing.Contains(id)).ToArray();
+        if (unread.Length > 0)
+        {
+            // Only generated parameter placeholders are concatenated; every value is a MySqlParameter.
+            var sql = "INSERT IGNORE INTO collaboration_reads(activity_id,user_id,read_at) VALUES "
+                + string.Join(",", unread.Select((_, index) => $"(@a{index},@u,UTC_TIMESTAMP(3))"));
+            var parameters = unread.Select((id, index) => (object)new MySqlParameter($"@a{index}", id))
+                .Append(new MySqlParameter("@u", current.Id)).ToArray();
+            await db.Database.ExecuteSqlRawAsync(sql, parameters, ct);
+        }
         await tx.CommitAsync(ct);
     }
 

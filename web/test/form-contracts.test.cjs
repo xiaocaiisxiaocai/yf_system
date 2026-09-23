@@ -48,11 +48,20 @@ function loadTs(relativePath, mocks = {}, globals = {}) {
     require: (name) => {
       if (name.endsWith('.css')) return {}
       if (name in mocks) return mocks[name]
+      if (typeof name === 'string') {
+        const normalizedName = name.replace(/\\/g, '/')
+        const mock = Object.entries(mocks).find(([key]) => normalizedName.endsWith(key.replace(/\\/g, '/')))
+        if (mock) return mock[1]
+      }
       if (name.endsWith('/store/collaboration')) return { useCollaboration: (selector) => selector({ revision: '' }) }
       if (name.endsWith('.json')) return JSON.parse(fs.readFileSync(path.resolve(path.dirname(filename), name), 'utf8'))
       if (name.replace(/\\/g, '/').endsWith('/ActionSlots')) return actionSlots
       if (name.replace(/\\/g, '/').endsWith('/PasswordInput')) return component('PasswordInput')
       if (name.endsWith('/textRules')) return loadTs('src/utils/textRules.ts', {})
+      if (typeof name === 'string' && name.startsWith('.')) {
+        const local = ['.tsx', '.ts'].map((ext) => path.resolve(path.dirname(filename), name + ext)).find(fs.existsSync)
+        if (local) return loadTs(path.relative(path.resolve(__dirname, '..'), local), mocks, globals)
+      }
       return require(name)
     },
   }, { filename })

@@ -1132,6 +1132,11 @@ function loadTs(relativePath, mocks, globals = {}) {
     exports, module: { exports }, console, setTimeout, clearTimeout, URL, URLSearchParams, AbortController, FormData, ...globals,
     require: (name) => {
       if (typeof name === 'string' && name in mocks) return name === 'react-router-dom' ? { Link: component('Link'), ...mocks[name] } : mocks[name]
+      if (typeof name === 'string') {
+        const normalizedName = name.replace(/\\/g, '/')
+        const mock = Object.entries(mocks).find(([key]) => normalizedName.endsWith(key.replace(/\\/g, '/')))
+        if (mock) return mock[1]
+      }
       if (name.endsWith('/store/collaboration')) return { useCollaboration: (selector) => selector({ revision: '', unreadCount: 0, refresh: async () => {} }) }
       if (name.endsWith('/CollaborationNotifications')) return component('CollaborationNotifications')
       if (name === './MessageImages') return { MessageImageComposer: component('MessageImageComposer'), MessageImages: component('MessageImages'), pasteMessageImages() {} }
@@ -4153,7 +4158,7 @@ test('workbook parser retains merged cells and Chinese text', () => {
 })
 
 test('upload identity is based on bytes rather than filename and size', async () => {
-  const { fileMd5 } = loadTs('src/api/file-hash.ts', {})
+  const { fileMd5 } = loadTs('src/api/file-hash-core.ts', {})
   const a = new Blob(['one!']), b = new Blob(['two!'])
   assert.equal(await fileMd5(new Blob(['test'])), '098f6bcd4621d373cade4e832627b4f6')
   assert.notEqual(await fileMd5(a), await fileMd5(b))
@@ -4161,7 +4166,7 @@ test('upload identity is based on bytes rather than filename and size', async ()
 })
 
 test('large-file hashing reports monotonic progress up to completion', async () => {
-  const { fileMd5 } = loadTs('src/api/file-hash.ts', {})
+  const { fileMd5 } = loadTs('src/api/file-hash-core.ts', {})
   const progress = []
   await fileMd5(new Blob([new Uint8Array(9 * 1024 * 1024)]), () => false, fraction => progress.push(fraction))
   assert.deepEqual(progress.map(value => Math.round(value * 1000) / 1000), [0.444, 0.889, 1])

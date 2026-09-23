@@ -10,6 +10,69 @@ namespace Yf.Api.Tests;
 [Collection(ConnectionLifecycleCollection.Name)]
 public sealed class MessageImageTests
 {
+    [Fact(Timeout = 120_000)]
+    public async Task DeletedImageCollectionHonorsRetentionPathsAndRetriesWithoutDeletingMessages()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await LocalDatabaseScope.CreateOrSkipAsync("image_gc", ct);
+        await database.InitializeAsync(ct);
+        await database.SeedAsync("""
+            INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'GC supplier','ACTIVE',1);
+            INSERT INTO project_groups(id,name,supplier_id,status,created_by) VALUES(5001,'GC group',100,'IN_PROGRESS',1);
+            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by) VALUES(1001,5001,'GC project',100,'IN_PROGRESS',1);
+            """, ct);
+        var root = database.Options.StorageRoot;
+        var images = Directory.CreateDirectory(Path.Combine(root, "message-images")).FullName;
+        var normal = Path.Combine(images, "2.png");
+        var protectedFile = Path.Combine(root, "keep.png");
+        await System.IO.File.WriteAllTextAsync(protectedFile, "keep", ct);
+        var link = Path.Combine(images, "8.png");
+        System.IO.File.CreateSymbolicLink(link, protectedFile);
+        try
+        {
+            await using (var conn = await database.Database.OpenAsync(ct))
+            {
+                for (var id = 1; id <= 115; id++)
+                {
+                    var status = id is 2 or 10 ? "NORMAL" : "DELETED";
+                    var relative = id switch { 6 => "keep.png", 9 or 10 => "message-images/shared.png", _ => $"message-images/{id}.png" };
+                    await conn.ExecuteAsync("""
+                        INSERT INTO messages(id,project_id,sender_id,content,status,deleted_at)
+                        VALUES(@id,1001,1,'retained text',@status,IF(@id=4,NULL,DATE_SUB(UTC_TIMESTAMP(),INTERVAL IF(@id=3,29,31) DAY)));
+                        INSERT INTO message_images(id,message_id,original_name,stored_name,ext,size_bytes,mime_type,storage_path)
+                        VALUES(@id,@id,'image.png',@stored,'png',4,'image/png',@relative)
+                        """, new { id, status, stored = $"gc-{id}.png", relative });
+                    if (id is 1 or 2 or 3 or 4 or 9)
+                        await System.IO.File.WriteAllTextAsync(Path.Combine(root, relative), "test", ct);
+                }
+            }
+            // A directory where a file should be is an I/O failure, not permission to drop metadata.
+            var blocked = Directory.CreateDirectory(Path.Combine(images, "7.png")).FullName;
+            using var service = new Yf.Api.Modules.Files.FilesMaintenanceService(database.Database, database.Options,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<Yf.Api.Modules.Files.FilesMaintenanceService>.Instance);
+            await service.PurgeDeletedMessageImagesAsync(ct);
+            await using (var conn = await database.Database.OpenAsync(ct))
+            {
+                Assert.Equal(new ulong[] { 2, 3, 4, 6, 7, 8, 9, 10 },
+                    (await conn.QueryAsync<ulong>("SELECT id FROM message_images ORDER BY id")).ToArray());
+                Assert.Equal(115, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM messages"));
+            }
+            Assert.False(System.IO.File.Exists(Path.Combine(images, "1.png")));
+            Assert.True(System.IO.File.Exists(normal));
+            Assert.Equal("keep", await System.IO.File.ReadAllTextAsync(protectedFile, ct));
+            Assert.True(System.IO.File.Exists(Path.Combine(images, "shared.png")));
+            Directory.Delete(blocked);
+            await System.IO.File.WriteAllTextAsync(blocked, "retry", ct);
+            await service.PurgeDeletedMessageImagesAsync(ct);
+            await service.PurgeDeletedMessageImagesAsync(ct);
+            Assert.False(System.IO.File.Exists(blocked));
+            await using var after = await database.Database.OpenAsync(ct);
+            Assert.Equal(new ulong[] { 2, 3, 4, 6, 8, 9, 10 },
+                (await after.QueryAsync<ulong>("SELECT id FROM message_images ORDER BY id")).ToArray());
+        }
+        finally { System.IO.File.Delete(link); }
+    }
+
     [Theory]
     [InlineData("png", "89504e470d0a1a0a", true)]
     [InlineData("jpg", "ffd8ffe0", true)]

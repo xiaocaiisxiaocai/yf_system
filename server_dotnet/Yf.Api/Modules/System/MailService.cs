@@ -16,6 +16,7 @@ public sealed class MailService
     private readonly ILogger<MailService> logger;
     private readonly ISmtpDelivery smtp;
     private readonly SmtpSettingsService settings;
+    private readonly AppOptions options;
 
     public MailService(
         AppDb db,
@@ -37,6 +38,7 @@ public sealed class MailService
         this.audit = audit;
         this.logger = logger;
         this.smtp = smtp;
+        this.options = options;
         settings = new(db, options, audit);
     }
 
@@ -138,6 +140,34 @@ public sealed class MailService
             }
         }
         return output;
+    }
+
+    internal const int PurgeBatchSize = 1000;
+
+    /// <summary>
+    /// Deletes finished (sent, failed or cancelled) outbox rows older than <see cref="AppOptions.MailRetentionDays"/>.
+    /// Pending rows are never touched. Small id batches keep each delete short.
+    /// </summary>
+    public async Task<long> PurgeFinishedAsync(CancellationToken ct)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        DateTime cutoff;
+        await using (var clock = EfDb.Use(conn))
+            cutoff = (await DbClock.UtcNowAsync(clock, ct, 0)).AddDays(-options.MailRetentionDays);
+        long deleted = 0;
+        while (true)
+        {
+            await using var context = EfDb.Use(conn);
+            var ids = await context.EmailOutbox
+                .Where(mail => (mail.Status == "SENT" || mail.Status == "FAILED" || mail.Status == "CANCELLED")
+                    && mail.CreatedAt < cutoff)
+                .OrderBy(mail => mail.Id).Select(mail => mail.Id).Take(PurgeBatchSize).ToArrayAsync(ct);
+            if (ids.Length == 0) break;
+            deleted += await context.EmailOutbox.Where(mail => Enumerable.Contains(ids, mail.Id)).ExecuteDeleteAsync(ct);
+            if (ids.Length < PurgeBatchSize) break;
+        }
+        if (deleted > 0) logger.LogInformation("Purged {Count} finished outbox rows older than {Days} days.", deleted, options.MailRetentionDays);
+        return deleted;
     }
 
     internal const int BatchSize = 10;
@@ -400,7 +430,7 @@ public sealed class MailService
     }
 
     private static Task<DateTime> DatabaseUtcNowAsync(YfDbContext context, CancellationToken ct) =>
-        context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP() AS Value").SingleAsync(ct);
+        DbClock.UtcNowAsync(context, ct, 0);
 
     private sealed class MailAuditRow
     {
@@ -581,12 +611,18 @@ public sealed class MailWorker(MailService mail, AppOptions options, ILogger<Mai
     {
         if (!options.WorkerEnabled) return;
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+        var nextPurge = DateTime.MinValue;
         do
         {
             try
             {
                 for (var round = 0; round < MaximumBatchesPerTick; round++)
                     if (await mail.FlushAsync(stoppingToken) < MailService.BatchSize) break;
+                if (DateTime.UtcNow >= nextPurge)
+                {
+                    nextPurge = DateTime.UtcNow.AddHours(1);
+                    await mail.PurgeFinishedAsync(stoppingToken);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception ex) { logger.LogWarning("Mail worker batch failed ({ErrorType}); queue retained for retry.", ex.GetType().Name); }

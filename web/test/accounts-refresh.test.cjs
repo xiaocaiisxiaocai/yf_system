@@ -39,16 +39,6 @@ function findElement(node, predicate) {
 }
 
 function loadSupplierList(http) {
-  const filename = path.resolve(__dirname, '../src/pages/supplier/SupplierList.tsx')
-  const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      jsx: ts.JsxEmit.ReactJSX,
-      target: ts.ScriptTarget.ES2022,
-      esModuleInterop: true,
-    },
-  }).outputText
-  const exports = {}
   const mocks = {
     '@arco-design/web-react': arco,
     '@arco-design/web-react/icon': new Proxy({}, { get: (_, name) => component(name) }),
@@ -67,13 +57,37 @@ function loadSupplierList(http) {
     '../../utils/password': { passwordRule: {} },
     '../../utils/textRules': { textLengthRule: () => ({}) },
   }
-  vm.runInNewContext(source, {
-    exports,
-    module: { exports },
-    console,
-    require: name => mocks[name] ?? require(name),
-  }, { filename })
-  return exports.default
+
+  function loadModule(filename) {
+    const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        jsx: ts.JsxEmit.ReactJSX,
+        target: ts.ScriptTarget.ES2022,
+        esModuleInterop: true,
+      },
+    }).outputText
+    const exports = {}
+    vm.runInNewContext(source, {
+      exports,
+      module: { exports },
+      console,
+      require: name => {
+        if (name in mocks) return mocks[name]
+        const normalizedName = name.replace(/\\/g, '/')
+        const mock = Object.entries(mocks).find(([key]) => normalizedName.endsWith(key.replace(/\\/g, '/')))
+        if (mock) return mock[1]
+        if (name.startsWith('.')) {
+          const local = ['.tsx', '.ts'].map((ext) => path.resolve(path.dirname(filename), name + ext)).find(fs.existsSync)
+          if (local) return loadModule(local)
+        }
+        return require(name)
+      },
+    }, { filename })
+    return exports
+  }
+
+  return loadModule(path.resolve(__dirname, '../src/pages/supplier/SupplierList.tsx')).default
 }
 
 const supplier = { id: 8, name: '并发供应商', status: 'ACTIVE', createdAt: '' }

@@ -64,3 +64,49 @@ public sealed class ApiErrorMiddlewareTests
             Func<TState, Exception?, string> formatter) => Entries.Add((logLevel, exception, formatter(state, exception)));
     }
 }
+
+[Collection(ConnectionLifecycleCollection.Name)]
+public sealed class ApiErrorMiddlewareLockTests
+{
+    [Fact]
+    public async Task LockWaitTimeoutsAreReportedAsRetryableConflicts()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
+        await using var holder = await database.Database.OpenAsync(ct);
+        await using var holderTx = await AppDb.BeginTransactionAsync(holder, ct);
+        await AccessService.LockManagementAsync(holder, holderTx, ct);
+
+        await using var waiter = await database.Database.OpenAsync(ct);
+        await using (var timeout = waiter.CreateCommand())
+        {
+            timeout.CommandText = "SET SESSION innodb_lock_wait_timeout=1";
+            await timeout.ExecuteNonQueryAsync(ct);
+        }
+        await using var waiterTx = await AppDb.BeginTransactionAsync(waiter, ct);
+        var error = await Assert.ThrowsAnyAsync<Exception>(() => AccessService.LockBusinessAsync(waiter, waiterTx, ct));
+
+        var logger = new NullRecordingLogger();
+        var middleware = new ApiErrorMiddleware(_ => throw error, logger);
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/api/v1/projects/1";
+        using var output = new MemoryStream();
+        context.Response.Body = output;
+        await middleware.InvokeAsync(context);
+        output.Position = 0;
+        using var body = await JsonDocument.ParseAsync(output, cancellationToken: ct);
+
+        Assert.Equal(409, context.Response.StatusCode);
+        Assert.Equal(40902, body.RootElement.GetProperty("code").GetInt32());
+        Assert.False(logger.Logged);
+    }
+
+    private sealed class NullRecordingLogger : ILogger<ApiErrorMiddleware>
+    {
+        public bool Logged { get; private set; }
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Logged = true;
+    }
+}

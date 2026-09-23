@@ -27,29 +27,28 @@ internal sealed class ProjectActivityService(
         return row is null ? "0:0" : $"{row.ActivityCount}:{row.LatestId}";
     }
 
-    public async Task CaptureAsync(MySqlConnection connection, MySqlTransaction? tx, ulong auditId, CancellationToken ct)
+    public async Task CaptureAsync(MySqlConnection connection, MySqlTransaction? tx, AuditLog auditLog, string? auditActorName, CancellationToken ct)
     {
-        await using var db = EfDb.Use(connection, tx);
-        var audit = await db.AuditLogs.Where(row => row.Id == auditId)
-            .Select(row => new AuditRow
-            {
-                Id = row.Id,
-                UserId = row.UserId,
-                EmployeeNo = row.EmployeeNo,
-                Action = row.Action,
-                TargetType = row.TargetType,
-                TargetId = row.TargetId,
-                Detail = row.Detail,
-                CreatedAt = row.CreatedAt,
-            })
-            .SingleOrDefaultAsync(ct);
-        if (audit?.TargetId is null
+        var audit = new AuditRow
+        {
+            Id = auditLog.Id,
+            UserId = auditLog.UserId,
+            EmployeeNo = auditLog.EmployeeNo,
+            Action = auditLog.Action,
+            TargetType = auditLog.TargetType,
+            TargetId = auditLog.TargetId,
+            Detail = auditLog.Detail,
+            CreatedAt = auditLog.CreatedAt,
+        };
+        if (!IsCapturedAction(audit.Action)) return;
+        if (audit.TargetId is null
             || !ulong.TryParse(audit.TargetId, NumberStyles.None, CultureInfo.InvariantCulture, out var targetId)
             || targetId.ToString(CultureInfo.InvariantCulture) != audit.TargetId)
         {
             return;
         }
 
+        await using var db = EfDb.Use(connection, tx);
         NewActivity? activity = audit.Action switch
         {
             "PROJECT_CREATE" or "PROJECT_UPDATE" or "PROJECT_MEMBERS" or "PROJECT_START"
@@ -58,13 +57,15 @@ internal sealed class ProjectActivityService(
                 await ProjectActivityAsync(db, audit, targetId, ct),
             "FILE_UPLOAD" or "FILE_DELETE" when audit.TargetType == "file" =>
                 await FileActivityAsync(db, audit, targetId, ct),
-            "MESSAGE_CREATE" or "MESSAGE_DELETE" or "MESSAGE_READ" when audit.TargetType == "message" =>
+            "MESSAGE_CREATE" or "MESSAGE_DELETE" when audit.TargetType == "message" =>
                 await MessageActivityAsync(db, audit, targetId, ct),
             _ => null,
         };
         if (activity is null) return;
 
-        var actorName = await ResolveActorNameAsync(db, audit.UserId, audit.EmployeeNo, ct);
+        var actorName = string.IsNullOrWhiteSpace(auditActorName)
+            ? await ResolveActorNameAsync(db, audit.UserId, audit.EmployeeNo, ct)
+            : auditActorName;
         if (await db.ProjectActivities.AnyAsync(row => row.SourceKey == activity.SourceKey, ct)) return;
         var entity = new ProjectActivity
         {
@@ -91,6 +92,11 @@ internal sealed class ProjectActivityService(
         }
         if (activity.ActivityType != "MESSAGE") ScheduleRealtime(activity.ProjectId);
     }
+
+    private static bool IsCapturedAction(string action) => action is
+        "PROJECT_CREATE" or "PROJECT_UPDATE" or "PROJECT_MEMBERS" or "PROJECT_START" or "PROJECT_SUBMIT"
+        or "PROJECT_CONFIRM" or "PROJECT_REJECT" or "PROJECT_WITHDRAW" or "PROJECT_TERMINATE" or "PROJECT_RESTART"
+        or "FILE_UPLOAD" or "FILE_DELETE" or "MESSAGE_CREATE" or "MESSAGE_DELETE";
 
     private void ScheduleRealtime(ulong projectId)
     {
@@ -258,16 +264,10 @@ internal sealed class ProjectActivityService(
             "MESSAGE_CREATE" => ("CREATE", "发表留言",
                 message.Content.Length == 0 && message.HasImages ? "[图片]" : message.Content),
             "MESSAGE_DELETE" => ("DELETE", "删除留言", (string?)null),
-            "MESSAGE_READ" => ("READ", "查看留言回执", (string?)null),
             _ => (string.Empty, string.Empty, (string?)null),
         };
         if (action.Length == 0) return null;
-        var sourceKey = action switch
-        {
-            "CREATE" => $"message:{messageId}:create",
-            "DELETE" => $"message:{messageId}:delete",
-            _ => $"message:{messageId}:read:{audit.Id}",
-        };
+        var sourceKey = $"message:{messageId}:{action.ToLowerInvariant()}";
         return new(message.ProjectId, "MESSAGE", action, title,
             action == "CREATE" ? Truncate(summary!) : summary,
             action == "CREATE" ? message.CreatedAt : message.DeletedAt ?? audit.CreatedAt,

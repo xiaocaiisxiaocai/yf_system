@@ -47,6 +47,7 @@ public sealed class FilesMaintenanceService(
         await RecoverAbandonedMergesAsync(ct);
         await ExpireUploadsAsync(ct);
         await PurgeDeletedFilesAsync(ct);
+        await PurgeDeletedMessageImagesAsync(ct);
         PurgeTemporaryArchives(ct);
         await PurgeOrphanUploadDirectoriesAsync(ct);
     }
@@ -183,6 +184,84 @@ public sealed class FilesMaintenanceService(
             }
         }
     }
+
+    internal async Task PurgeDeletedMessageImagesAsync(CancellationToken ct)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        DateTime cutoff;
+        await using (var clock = EfDb.Use(conn))
+            cutoff = (await DbClock.UtcNowAsync(clock, ct)).AddDays(-30);
+        ulong afterId = 0;
+        while (true)
+        {
+            // Keyset batches bound memory and let later records progress past a damaged path.
+            DeletedMessageImage[] candidates;
+            await using (var scan = EfDb.Use(conn))
+                candidates = await (from image in scan.MessageImages
+                    join message in scan.Messages on image.MessageId equals message.Id
+                    where image.Id > afterId && message.Status == "DELETED"
+                        && message.DeletedAt != null && message.DeletedAt < cutoff
+                    orderby image.Id
+                    select new DeletedMessageImage(image.Id, image.MessageId)).Take(100).ToArrayAsync(ct);
+            if (candidates.Length == 0) return;
+            foreach (var candidate in candidates)
+            {
+                ct.ThrowIfCancellationRequested();
+                afterId = candidate.Id;
+                try
+                {
+                    await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+                    await using var context = EfDb.Use(conn, tx);
+                    // Match the message-before-image order and recheck eligibility under locks.
+                    var message = await context.Messages.FromSqlInterpolated(
+                        $"SELECT * FROM messages WHERE id={candidate.MessageId} FOR UPDATE").SingleOrDefaultAsync(ct);
+                    if (message is null || message.Status != "DELETED" || message.DeletedAt is null || message.DeletedAt >= cutoff)
+                        continue;
+                    var image = await context.MessageImages.FromSqlInterpolated(
+                        $"SELECT * FROM message_images WHERE id={candidate.Id} FOR UPDATE").SingleOrDefaultAsync(ct);
+                    if (image is null || image.MessageId != message.Id) continue;
+                    if (await context.MessageImages.AnyAsync(other => other.Id != image.Id && other.StoragePath == image.StoragePath, ct))
+                        throw new InvalidOperationException("留言图片存储路径被其他记录引用，拒绝清理");
+                    var path = MessageImageCleanupPath(options.StorageRoot, image.StoragePath, ct);
+                    try { File.Delete(path); }
+                    catch (FileNotFoundException) { }
+                    catch (DirectoryNotFoundException) { }
+                    // Delete disk first. A crash before commit leaves a retryable missing-file row.
+                    context.MessageImages.Remove(image);
+                    await context.SaveChangesAsync(ct);
+                    await tx.CommitAsync(ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception error)
+                {
+                    logger.LogWarning(error, "拒绝或无法清理已删除留言图片 {ImageId}", candidate.Id);
+                }
+            }
+        }
+    }
+
+    private static string MessageImageCleanupPath(string configuredRoot, string storagePath, CancellationToken ct)
+    {
+        var root = FileStorage.Root(configuredRoot);
+        var imageRoot = Path.Combine(root, "message-images");
+        var path = FileStorage.EnsureLexicallyWithin(imageRoot, Path.Combine(root, storagePath), allowRoot: false);
+        var current = root;
+        foreach (var component in Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            ct.ThrowIfCancellationRequested();
+            current = Path.Combine(current, component);
+            try
+            {
+                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidOperationException("留言图片清理路径包含符号链接，拒绝清理");
+            }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+        }
+        return path;
+    }
+
+    private sealed record DeletedMessageImage(ulong Id, ulong MessageId);
 
     private void PurgeTemporaryArchives(CancellationToken ct)
     {

@@ -11,39 +11,58 @@ namespace Yf.Api.Modules.Projects;
 internal static class ProjectQueries
 {
     internal static IQueryable<ProjectRow> Rows(YfDbContext db) =>
-        db.Projects.AsNoTracking().Select(p => new ProjectRow
+        from project in db.Projects.AsNoTracking()
+        join projectGroup in db.ProjectGroups on project.ProjectGroupId equals projectGroup.Id into projectGroups
+        from projectGroup in projectGroups.DefaultIfEmpty()
+        join supplier in db.Suppliers on project.SupplierId equals supplier.Id into suppliers
+        from supplier in suppliers.DefaultIfEmpty()
+        join creator in db.Users on project.CreatedBy equals creator.Id into creators
+        from creator in creators.DefaultIfEmpty()
+        join robotVendor in db.ProjectDictionaries on project.RobotVendorId equals (ulong?)robotVendor.Id into robotVendors
+        from robotVendor in robotVendors.DefaultIfEmpty()
+        join robotModel in db.ProjectDictionaries on project.RobotModelId equals (ulong?)robotModel.Id into robotModels
+        from robotModel in robotModels.DefaultIfEmpty()
+        join responsibleUser in db.Users on project.ResponsibleUserId equals (ulong?)responsibleUser.Id into responsibleUsers
+        from responsibleUser in responsibleUsers.DefaultIfEmpty()
+        join section in db.Departments.Where(department => department.Kind == "SECTION")
+            on project.SectionId equals (ulong?)section.Id into sections
+        from section in sections.DefaultIfEmpty()
+        join priority in db.ProjectDictionaries on project.PriorityId equals (ulong?)priority.Id into priorities
+        from priority in priorities.DefaultIfEmpty()
+        select new ProjectRow
         {
-            Id = p.Id,
-            ProjectGroupId = p.ProjectGroupId,
-            ProjectGroupName = db.ProjectGroups.Where(g => g.Id == p.ProjectGroupId).Select(g => g.Name).FirstOrDefault() ?? "",
-            Name = p.Name,
-            Description = p.Description,
-            SupplierId = p.SupplierId,
-            SupplierName = db.Suppliers.Where(s => s.Id == p.SupplierId).Select(s => s.Name).FirstOrDefault(),
-            Status = p.Status,
-            ConfirmSide = p.ConfirmSide,
-            LatestSubmissionId = p.Status == ProjectStatuses.PendingConfirmation
-                ? db.ProjectStatusLogs.Where(l => l.ProjectId == p.Id && l.Action == "SUBMIT")
+            Id = project.Id,
+            ProjectGroupId = project.ProjectGroupId,
+            ProjectGroupName = projectGroup.Name ?? "",
+            Name = project.Name,
+            Description = project.Description,
+            SupplierId = project.SupplierId,
+            SupplierName = supplier.Name,
+            Status = project.Status,
+            ConfirmSide = project.ConfirmSide,
+            LatestSubmissionId = project.Status == ProjectStatuses.PendingConfirmation
+                ? db.ProjectStatusLogs.Where(log => log.ProjectId == project.Id && log.Action == "SUBMIT")
                     .Select(l => (ulong?)l.Id).Max()
                 : null,
-            CreatedBy = p.CreatedBy,
-            CreatedByName = db.Users.Where(u => u.Id == p.CreatedBy).Select(u => u.RealName).FirstOrDefault(),
-            CreatedAt = p.CreatedAt,
-            UpdatedAt = p.UpdatedAt,
-            MachineModel = p.MachineModel,
-            RobotVendorId = p.RobotVendorId,
-            RobotVendorName = db.ProjectDictionaries.Where(d => d.Id == p.RobotVendorId).Select(d => d.Name).FirstOrDefault(),
-            RobotModelId = p.RobotModelId,
-            RobotModelName = db.ProjectDictionaries.Where(d => d.Id == p.RobotModelId).Select(d => d.Name).FirstOrDefault(),
-            ResponsibleUserId = p.ResponsibleUserId,
-            ResponsibleUserEmployeeNo = db.Users.Where(u => u.Id == p.ResponsibleUserId).Select(u => u.EmployeeNo).FirstOrDefault(),
-            ResponsibleUserName = db.Users.Where(u => u.Id == p.ResponsibleUserId).Select(u => u.RealName).FirstOrDefault(),
-            SectionId = p.SectionId,
-            SectionName = db.Departments.Where(d => d.Id == p.SectionId && d.Kind == "SECTION").Select(d => d.Name).FirstOrDefault(),
-            PriorityId = p.PriorityId,
-            PriorityName = db.ProjectDictionaries.Where(d => d.Id == p.PriorityId).Select(d => d.Name).FirstOrDefault(),
-            ExpectedCompletionDate = p.ExpectedCompletionDate.HasValue
-                ? p.ExpectedCompletionDate.Value.ToDateTime(TimeOnly.MinValue) : null,
-            HasCopyHistory = db.ProjectCopies.Any(c => c.SourceProjectId == p.Id || c.TargetProjectId == p.Id),
-        });
+            CreatedBy = project.CreatedBy,
+            CreatedByName = creator.RealName,
+            CreatedAt = project.CreatedAt,
+            UpdatedAt = project.UpdatedAt,
+            MachineModel = project.MachineModel,
+            RobotVendorId = project.RobotVendorId,
+            RobotVendorName = robotVendor.Name,
+            RobotModelId = project.RobotModelId,
+            RobotModelName = robotModel.Name,
+            ResponsibleUserId = project.ResponsibleUserId,
+            ResponsibleUserEmployeeNo = responsibleUser.EmployeeNo,
+            ResponsibleUserName = responsibleUser.RealName,
+            SectionId = project.SectionId,
+            SectionName = section.Name,
+            PriorityId = project.PriorityId,
+            PriorityName = priority.Name,
+            ExpectedCompletionDate = project.ExpectedCompletionDate.HasValue
+                ? project.ExpectedCompletionDate.GetValueOrDefault().ToDateTime(TimeOnly.MinValue) : null,
+            HasCopyHistory = db.ProjectCopies.Any(copy =>
+                copy.SourceProjectId == project.Id || copy.TargetProjectId == project.Id),
+        };
 }

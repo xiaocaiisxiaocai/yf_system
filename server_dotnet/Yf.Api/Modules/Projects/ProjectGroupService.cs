@@ -78,7 +78,7 @@ internal sealed class ProjectGroupService(
         var childNames = NormalizeSubprojectNames(request.SubprojectNames);
         var metadata = ProjectService.NormalizeMetadata(request);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        await AccessService.LockManagementAsync(conn, tx, ct);
+        await AccessService.LockBusinessAsync(conn, tx, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:create", ct);
@@ -115,7 +115,8 @@ internal sealed class ProjectGroupService(
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
         { throw ApiException.Conflict("项目名称已存在"); }
-        AddChildRecords(db, children, metadata.WorkOrderNos, current.Id, "CREATE");
+        var createdAt = await DbClock.UtcNowAsync(db, ct, 3);
+        AddChildRecords(db, children, metadata.WorkOrderNos, current.Id, "CREATE", createdAt);
         db.ProjectGroupStatusLogs.Add(new ProjectGroupStatusLog
         {
             ProjectGroupId = group.Id,
@@ -124,7 +125,7 @@ internal sealed class ProjectGroupService(
             Action = "CREATE",
             TriggerProjectId = children.FirstOrDefault()?.Id,
             OperatorId = current.Id,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = createdAt,
         });
         await db.SaveChangesAsync(ct);
 
@@ -169,7 +170,7 @@ internal sealed class ProjectGroupService(
         ProjectService.ValidateDescription(request.Description);
         var metadata = ProjectService.NormalizeMetadata(request);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        await AccessService.LockManagementAsync(conn, tx, ct);
+        await AccessService.LockBusinessAsync(conn, tx, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         var access = await ProjectGroupAccessService.RequireViewAsync(conn, tx, current, groupId, true, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:update", ct);
@@ -279,7 +280,7 @@ internal sealed class ProjectGroupService(
         var name = ProjectService.ValidateNameForCreate(request.Name);
         ProjectService.ValidateDescription(request.Description);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        await AccessService.LockManagementAsync(conn, tx, ct);
+        await AccessService.LockBusinessAsync(conn, tx, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         var access = await ProjectGroupAccessService.RequireViewAsync(conn, tx, current, groupId, true, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:create", ct);
@@ -294,7 +295,7 @@ internal sealed class ProjectGroupService(
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
         { throw ApiException.Conflict("项目名称已存在"); }
-        AddChildRecords(db, [child], metadata.WorkOrderNos, current.Id, "CREATE");
+        AddChildRecords(db, [child], metadata.WorkOrderNos, current.Id, "CREATE", await DbClock.UtcNowAsync(db, ct, 3));
         await db.SaveChangesAsync(ct);
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_CREATE", "project", child.Id, new
         {
@@ -318,7 +319,7 @@ internal sealed class ProjectGroupService(
     {
         if (!actor.IsInternal) throw ApiException.Forbidden();
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        await AccessService.LockManagementAsync(conn, tx, ct);
+        await AccessService.LockBusinessAsync(conn, tx, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await ProjectGroupAccessService.RequireViewAsync(conn, tx, current, groupId, true, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:delete", ct);
@@ -361,10 +362,11 @@ internal sealed class ProjectGroupService(
         IReadOnlyCollection<Project> children,
         IReadOnlyList<string> workOrderNos,
         ulong actorId,
-        string action)
+        string action,
+        DateTime now)
     {
         db.ProjectWorkOrders.AddRange(children.SelectMany(child => workOrderNos.Select((value, index) =>
-            new ProjectWorkOrder { ProjectId = child.Id, WorkOrderNo = value, SortNo = index })));
+            new ProjectWorkOrder { ProjectId = child.Id, WorkOrderNo = value, SortNo = index, CreatedAt = now })));
         db.ProjectStatusLogs.AddRange(children.Select(child => new ProjectStatusLog
         {
             ProjectId = child.Id,
@@ -374,7 +376,7 @@ internal sealed class ProjectGroupService(
             OperatorId = actorId,
             ConfirmSide = null,
             Reason = null,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = now,
         }));
     }
 

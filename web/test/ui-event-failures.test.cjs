@@ -42,16 +42,6 @@ function findElement(node, predicate) {
 }
 
 function loadPage(relativePath, http, permissions) {
-  const filename = path.resolve(__dirname, '..', relativePath)
-  const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      jsx: ts.JsxEmit.ReactJSX,
-      target: ts.ScriptTarget.ES2022,
-      esModuleInterop: true,
-    },
-  }).outputText
-  const exports = {}
   const authState = {
     user: { id: 999, userType: 'INTERNAL' },
     hasPerm: code => permissions.includes(code),
@@ -86,21 +76,45 @@ function loadPage(relativePath, http, permissions) {
       useParams: () => ({ id: '3' }),
     },
   }
-  vm.runInNewContext(source, {
-    exports,
-    module: { exports },
-    console,
-    setTimeout,
-    clearTimeout,
-    URL,
-    URLSearchParams,
-    AbortController,
-    window: {
-      matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-    },
-    require: name => mocks[name] ?? require(name),
-  }, { filename })
-  return exports.default
+
+  function loadModule(filename) {
+    const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        jsx: ts.JsxEmit.ReactJSX,
+        target: ts.ScriptTarget.ES2022,
+        esModuleInterop: true,
+      },
+    }).outputText
+    const exports = {}
+    vm.runInNewContext(source, {
+      exports,
+      module: { exports },
+      console,
+      setTimeout,
+      clearTimeout,
+      URL,
+      URLSearchParams,
+      AbortController,
+      window: {
+        matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+      },
+      require: name => {
+        if (name in mocks) return mocks[name]
+        const normalizedName = name.replace(/\\/g, '/')
+        const mock = Object.entries(mocks).find(([key]) => normalizedName.endsWith(key.replace(/\\/g, '/')))
+        if (mock) return mock[1]
+        if (name.startsWith('.')) {
+          const local = ['.tsx', '.ts'].map((ext) => path.resolve(path.dirname(filename), name + ext)).find(fs.existsSync)
+          if (local) return loadModule(local)
+        }
+        return require(name)
+      },
+    }, { filename })
+    return exports
+  }
+
+  return loadModule(path.resolve(__dirname, '..', relativePath)).default
 }
 
 const flush = () => new Promise(resolve => setImmediate(resolve))

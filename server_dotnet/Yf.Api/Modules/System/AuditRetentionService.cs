@@ -19,7 +19,7 @@ public sealed class AuditRetentionService(AppDb db, AppOptions options, AuditSer
         await using var conn = await db.OpenAsync(ct);
         DateTime cutoff;
         await using (var clock = EfDb.Use(conn))
-            cutoff = (await clock.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct))
+            cutoff = (await DbClock.UtcNowAsync(clock, ct))
                 .AddDays(-options.AuditRetentionDays);
         long deleted = 0;
         while (true)

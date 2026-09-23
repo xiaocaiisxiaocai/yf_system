@@ -419,9 +419,7 @@ internal static class ProjectNotificationService
         if (pending.Count > 0)
         {
             await using var db = EfDb.Use(conn, tx);
-            var databaseNow = await db.Database
-                .SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(3) AS Value")
-                .SingleAsync(ct);
+            var databaseNow = await DbClock.UtcNowAsync(db, ct, 3);
             foreach (var mail in pending) mail.CreatedAt = databaseNow;
             db.EmailOutbox.AddRange(pending);
             await db.SaveChangesAsync(ct);

@@ -455,6 +455,7 @@ export function detailSummary(row: AuditLogRow): string {
   if (row.action === 'AUDIT_LOG_RETENTION' && typeof detail?.deleted === 'number') {
     return `已自动清理 ${detail.deleted} 条超过 ${formatAuditValue(detail.retentionDays)} 天的操作日志`
   }
+  if (row.action === 'MESSAGE_READ' && Array.isArray(detail?.messageIds)) return `标记 ${detail.messageIds.length} 条留言为已读`
   if (detail?.passwordChanged === true) return '已更新邮箱密码或授权码（不记录具体内容）'
   if (Array.isArray(detail?.changes) && detail.changes.length === 0
       && (row.action.endsWith('_UPDATE') || row.action.endsWith('_STATUS') || row.action === 'ROLE_ASSIGN_PERMS')) return '已保存，未发生字段变化'

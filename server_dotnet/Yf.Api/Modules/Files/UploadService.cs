@@ -366,7 +366,7 @@ public sealed partial class UploadService(
     internal const string InvalidPendingFinalMarkerPrefix = ".invalid-pending-final-";
 
     internal static Task<DateTime> DbNowAsync(YfDbContext context, CancellationToken ct) =>
-        context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        DbClock.UtcNowAsync(context, ct);
 
     internal static UploadSessionRow ToRow(UploadSession session, DateTime dbNow) => new()
     {

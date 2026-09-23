@@ -1361,6 +1361,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ExpiresAt")
+                        .HasDatabaseName("idx_refresh_tokens_expires");
+
                     b.HasIndex("TokenHash")
                         .IsUnique()
                         .HasDatabaseName("token_hash");

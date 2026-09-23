@@ -104,14 +104,20 @@ public sealed class MessageReceiptTests
         Assert.False(initialReceipt.GetProperty("readByMe").GetBoolean());
 
         await service.MarkReadAsync(conn, supplier, new MarkMessagesReadRequest { Ids = [10001, 10002] }, ct);
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM audit_logs WHERE action='MESSAGE_READ' AND target_id='10001'", cancellationToken: ct)));
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM project_activities WHERE action='READ' AND target_id=10001", cancellationToken: ct)));
+        // One aggregated audit entry per project and request; read receipts never become project activity.
+        var readAudit = await conn.QuerySingleAsync<(string TargetType, string TargetId, string Detail)>(new CommandDefinition(
+            "SELECT target_type AS TargetType,target_id AS TargetId,detail AS Detail FROM audit_logs WHERE action='MESSAGE_READ'",
+            cancellationToken: ct));
+        Assert.Equal(("project", "1001"), (readAudit.TargetType, readAudit.TargetId));
+        Assert.Contains("10001", JsonDocument.Parse(readAudit.Detail).RootElement.GetProperty("messageIds").EnumerateArray()
+            .Select(id => id.GetRawText()));
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM project_activities WHERE action='READ'", cancellationToken: ct)));
 
         await service.MarkReadAsync(conn, supplier, new MarkMessagesReadRequest { Ids = [10001, 10003] }, ct);
+        // 10001 was already read and 10003 is not visible, so nothing new is recorded.
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM audit_logs WHERE action='MESSAGE_READ' AND target_id='10001'", cancellationToken: ct)));
+            "SELECT COUNT(*) FROM audit_logs WHERE action='MESSAGE_READ'", cancellationToken: ct)));
         Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
             "SELECT COUNT(*) FROM message_reads WHERE message_id=10003", cancellationToken: ct)));
 

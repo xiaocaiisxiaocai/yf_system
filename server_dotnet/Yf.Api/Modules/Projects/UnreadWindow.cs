@@ -15,5 +15,5 @@ internal static class UnreadWindow
 
     /// <summary>The oldest timestamp still counted as unread, from the database's UTC clock.</summary>
     internal static async Task<DateTime> CutoffAsync(YfDbContext db, CancellationToken ct) =>
-        (await db.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct)).AddDays(-Days);
+        (await DbClock.UtcNowAsync(db, ct)).AddDays(-Days);
 }

@@ -23,7 +23,7 @@ internal sealed partial class ProjectService
             throw ApiException.Forbidden();
         }
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        await AccessService.LockManagementAsync(conn, tx, ct);
+        await AccessService.LockBusinessAsync(conn, tx, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:status", ct);

@@ -8,7 +8,8 @@ namespace Yf.Api.Infrastructure;
 
 public interface IProjectAuditCapture
 {
-    Task CaptureAsync(MySqlConnection db, MySqlTransaction? tx, ulong auditId, CancellationToken ct);
+    /// <summary>Called inside the audit write transaction with the just-inserted row, so implementations need not re-read it.</summary>
+    Task CaptureAsync(MySqlConnection db, MySqlTransaction? tx, Entities.AuditLog audit, string? actorName, CancellationToken ct);
 }
 
 public sealed class AuditService(IEnumerable<IProjectAuditCapture> captures, IHttpContextAccessor? accessor = null, AppOptions? options = null)
@@ -37,7 +38,7 @@ public sealed class AuditService(IEnumerable<IProjectAuditCapture> captures, IHt
             requestId = context?.TraceIdentifier,
             source = context is null ? "SYSTEM" : "HTTP",
         }, JsonDefaults.Web);
-        var createdAt = await ef.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        var createdAt = await DbClock.UtcNowAsync(ef, ct);
         var auditLog = new AuditLog
         {
             UserId = actorId,
@@ -51,7 +52,7 @@ public sealed class AuditService(IEnumerable<IProjectAuditCapture> captures, IHt
         };
         ef.AuditLogs.Add(auditLog);
         await ef.SaveChangesAsync(ct);
-        foreach (var capture in captures) await capture.CaptureAsync(db, tx, auditLog.Id, ct);
+        foreach (var capture in captures) await capture.CaptureAsync(db, tx, auditLog, actor?.RealName, ct);
         return auditLog.Id;
     }
 

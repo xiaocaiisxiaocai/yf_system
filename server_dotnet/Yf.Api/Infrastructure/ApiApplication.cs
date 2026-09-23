@@ -89,7 +89,7 @@ public static class ApiApplication
         builder.Services.AddSingleton(options).AddSingleton<AppDb>().AddSingleton<AccessService>().AddSingleton<AuditService>();
         var efConnectionString = AppDb.BuildConnectionString(options);
         builder.Services.AddPooledDbContextFactory<YfDbContext>(db => db.UseMySql(
-            efConnectionString, ServerVersion.AutoDetect(efConnectionString)));
+            efConnectionString, EfDb.ServerVersion));
         builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule();
         builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
             .WithOrigins(new Uri(options.WebBaseUrl).GetLeftPart(UriPartial.Authority))

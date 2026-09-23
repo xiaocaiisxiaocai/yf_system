@@ -173,8 +173,7 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
         await using var tx = await AppDb.BeginTransactionAsync(db, ct);
         await AccessService.LockBusinessAsync(db, tx, ct);
         await using var context = EfDb.Use(db, tx);
-        var now = await context.Database.SqlQuery<DateTime>(
-            $"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        var now = await DbClock.UtcNowAsync(context, ct);
         var activeSessions = (await context.RefreshTokens
                 .Where(token => Enumerable.Contains(userIds, token.UserId) && !token.Revoked && token.ExpiresAt > now)
                 .Select(token => new { token.UserId, token.SessionId })
@@ -240,8 +239,7 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
         CancellationToken ct)
     {
         await using var context = EfDb.Use(db, tx);
-        var now = await context.Database.SqlQuery<DateTime>(
-            $"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        var now = await DbClock.UtcNowAsync(context, ct);
         return await context.RefreshTokens.AnyAsync(token =>
             token.UserId == connection.UserId
             && token.SessionId == connection.SessionId

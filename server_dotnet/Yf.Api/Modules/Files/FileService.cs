@@ -178,7 +178,7 @@ public sealed class FileService(
         var row = ToRow(locked);
         if (row.ProjectId != initial.ProjectId) throw ApiException.Conflict("文件所属项目已变化，请刷新后重试");
         if (row.Status != "AVAILABLE") throw ApiException.NotFound();
-        var deletedAt = await ef.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        var deletedAt = await DbClock.UtcNowAsync(ef, ct);
         var changed = await ef.Files.Where(file => file.Id == id && file.Status == "AVAILABLE")
             .ExecuteUpdateAsync(setters => setters.SetProperty(file => file.Status, "DELETED")
                 .SetProperty(file => file.DeletedAt, deletedAt), ct);

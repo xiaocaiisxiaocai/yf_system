@@ -21,6 +21,8 @@
 
 采用 ASP.NET Core Minimal API；按业务模块拆分，普通业务查询和写入使用 EF Core，必须使用的 MySQL 行锁和命名锁采用参数化原生 SQL。后续接口、数据库升级与测试均由 .NET 独立维护。
 
+项目写事务持有 `security.management_lock` 的共享门控锁，再锁定具体主项目/子项目行；账号、角色、权限、组织、供应商、系统设置和字典管理事务使用排他门控锁。共享门控锁期间只在当前事务内缓存权限代码，管理事务及事务外不复用缓存。项目详情/摘要的只读鉴权不加排他项目行锁。锁顺序、审计格式和错误码见[并发与错误响应契约](docs/并发与错误响应契约-2026-09-23.md)。
+
 ## 删除操作
 
 物理删除由独立权限点控制：`project:delete`、`file:delete`、`supplier:delete`、`supplier:account_delete`、`user:delete`、`dept:delete`、`role:delete`、`log:delete` 和既有的 `message:delete_any`。新增权限只授予系统管理员角色，之后可在角色页按职责分配；管理页访问和其他编辑操作仍使用各自的菜单与管理权限。后端会在删除事务内重新校验权限，防止并发撤权后继续执行。
@@ -31,7 +33,7 @@
 | 用户、供应商账号 | 无业务历史或引用；有关联记录时使用禁用，保留创建人、确认人和已读凭证 |
 | 供应商 | 无项目且无账号；不级联删除账号 |
 | 组织、角色 | 有下级组织或绑定用户时拒绝删除；内置角色可分配权限、禁用或删除，名称保持固定 |
-| 操作日志 | 手动清理与 `AUDIT_LOG_DELETE` 留痕同事务，记录实际删除 ID 和数量；清理记录本身不可手动删除。后台每小时自动删除超过 `App:AuditRetentionDays`（默认 30 天）的日志（含清理记录），并写入一条 `AUDIT_LOG_RETENTION` 汇总；项目动态另存于 `project_activities`，不受影响 |
+| 操作日志 | 手动清理与 `AUDIT_LOG_DELETE` 留痕同事务，记录实际删除 ID 和数量；清理记录本身不可手动删除。后台每小时自动删除超过 `App:AuditRetentionDays`（默认 30 天）的日志（含清理记录），并写入一条 `AUDIT_LOG_RETENTION` 汇总；项目动态另存于 `project_activities`，不受影响。邮件发件箱中已发送/失败/已取消的记录由邮件后台每小时清理超过 `App:MailRetentionDays`（默认 90 天）的部分，待发送记录不受影响 |
 
 系统管理员角色绑定启用用户时必须保留用户管理和角色管理入口，避免管理员在权限分配时锁死系统；角色禁用和删除仍受绑定用户校验约束。删除相关的越权与保留规则回归包含在 `python scripts/test-isolated.py` 完整套件内，脚本只允许本机 MySQL，创建并清理临时测试库，不使用业务库运行删除测试。
 
@@ -112,7 +114,7 @@ dotnet run --project .\Yf.Api -- --migrate-database
 
 在线文件预览支持 PDF、XLS、XLSX、PPTX，以及 PNG、JPG、JPEG、GIF、WebP、BMP 图片，统一使用 `GET /api/v1/files/{id}/content`，并受 50 MiB 单文件上限、`file:preview` 权限和项目可见范围约束。图片响应按扩展名返回规范 MIME 类型，不信任历史文件记录中的 MIME。视频预览支持 MP4、WebM 和 OGV，不整文件缓冲，也不使用文档/图片预览上限；浏览器先用正常 Bearer 会话调用 `POST /api/v1/files/{id}/media-session`，接口返回同源 `url` 和 300 秒有效期并设置仅限该文件媒体路径的 HttpOnly Cookie。随后原生 `<video>` 对 `GET /api/v1/files/{id}/media` 发起 Range 请求，每次请求都重新验证登录会话、账号状态、预览权限和项目范围。前端可在有效期过半时续签，媒体 URL 保持不变。
 
-留言截图由 `message_images` 表管理，文件存放在私有存储根目录的 `message-images` 子目录，不发布到 `wwwroot`。`POST /api/v1/projects/{id}/messages` 同时支持原 JSON 正文和 multipart 的 `content` + 重复 `images`；每条最多 9 张、图片合计最多 50 MiB，单张还受系统参数 `upload.max_file_size` 的较小值约束。只接受 PNG、JPEG、GIF、WebP、BMP，并同时校验扩展名和文件签名。读取使用认证接口 `GET /api/v1/messages/{messageId}/images/{imageId}`，每次重新校验正常留言和项目可见范围，不使用 `file:preview` 权限。
+留言截图由 `message_images` 表管理，文件存放在私有存储根目录的 `message-images` 子目录，不发布到 `wwwroot`。`POST /api/v1/projects/{id}/messages` 同时支持原 JSON 正文和 multipart 的 `content` + 重复 `images`；每条最多 9 张、图片合计最多 50 MiB，单张还受系统参数 `upload.max_file_size` 的较小值约束。只接受 PNG、JPEG、GIF、WebP、BMP，并同时校验扩展名和文件签名。读取使用认证接口 `GET /api/v1/messages/{messageId}/images/{imageId}`，每次重新校验正常留言和项目可见范围，不使用 `file:preview` 权限。 留言软删后图片立即不可访问；后台每 10 分钟检查一次，删除时间早于数据库当前时间 30 天的图片文件及 `message_images` 记录才可清理，留言正文、回执、审计与项目动态不会由该任务删除。清理先删除文件再提交记录删除，缺失文件可幂等处理，I/O 失败、越界/链接路径或共享引用保留记录待重试。
 
 项目模型包含工令号、机台机型、机器人厂商/型号、负责人及其直属课别、优先级和预计完成日期，并提供可维护的项目字典接口。字段、权限和停用/删除规则见 [项目元数据与字典契约](docs/项目元数据与字典契约-2026-09-15.md)。
 
@@ -128,7 +130,7 @@ dotnet run --project .\Yf.Api -- --migrate-database
 
 `Yf.Api/Infrastructure/Migrations` 及 `YfDbContextModelSnapshot` 是唯一 schema 权威。不要使用 `EnsureCreated`、手写建表脚本或直接修改 `__EFMigrationsHistory`；模型变化通过 `dotnet ef migrations add` 生成迁移并审查差异。
 
-IIS 发布包默认启用 `App.AutoInitializeDatabase=true`：首次启动自动创建不存在的数据库、对空库执行 EF 迁移并创建管理员。初始密码在发布包 `appsettings.Production.json` 的 `App.BootstrapPassword`，首次登录强制修改；后续重启不会重置账号。非空数据库仍只校验，不自动执行升级迁移（包括删除 OEM 数据的迁移）。MySQL 账号必须具备目标库创建和建表权限。
+IIS 发布包默认启用 `App.AutoInitializeDatabase=true`：首次启动自动创建不存在的数据库、对空库执行 EF 迁移并创建管理员。初始密码在发布包 `appsettings.Production.json` 的 `App.BootstrapPassword`，首次登录强制修改；后续重启不会重置账号。 已初始化数据库启动时若仍配置 `App.BootstrapPassword` 或 `YF_BOOTSTRAP_PASSWORD`，仅输出不含密码值的移除提醒，不重设密码、不修改配置文件。非空数据库仍只校验，不自动执行升级迁移（包括删除 OEM 数据的迁移）。MySQL 账号必须具备目标库创建和建表权限。
 
 不开启自动初始化时，也可由 DBA 先创建空库和专用账号，然后执行独立初始化：
 
@@ -152,6 +154,17 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
 远程 MySQL 连接必须设置 `SslMode=VerifyFull`，校验证书链与主机名；私有 CA 可通过连接串 `SslCa` 指定可信 PEM 文件。仅 `localhost` 或明确回环 IP 的本机连接保留原有 TLS 模式，混合本机/远程主机列表按远程处理；API 连接与维护脚本均拒绝弱化远程校验。现有远程连接串升级前应先配置匹配域名的服务器证书和可信 CA，不能把代码更新视为服务器证书已部署。
 
 ## 测试
+
+一键执行本地构建和验证（可从任意目录调用）：
+
+```powershell
+# 先在当前进程安全设置 YF_TEST_DATABASE_URL 为本机隔离测试管理连接。
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\Temp\yf_system\server_dotnet\scripts\verify-all.ps1
+```
+
+脚本使用锁定依赖，依次验证 .NET 8 的 API/TestHost/测试构建、完整 .NET 套件、EF 模型与迁移快照一致性、真实 HTTP 契约，以及 `npm ci`、lint、前端测试和构建。每次生成独立的 `.artifacts/tests/verify-all/<时间-随机ID>/summary.json` 和各步骤日志；任何执行失败返回非零。`-IncludeMaintenance` 额外验证真实 MySQL 备份恢复；`-SkipHttp` 明确跳过 HTTP。数据库连接只能显式提供本机 `YF_TEST_DATABASE_URL`，脚本不读取开发配置中的凭据；未提供时报告数据库覆盖缺失，不可当作完整通过。
+
+脚本禁止 `YF_UPDATE_OPENAPI=1`，避免验证时重写契约快照；不会执行业务库迁移、修改 IIS 或启动浏览器。可选 `PerformanceBenchmarks.HotReadEndpointsOverLargeHistory` 基准默认跳过，报告会单列，不冒充已完成性能基准；设置 `YF_PERF_BENCHMARK=1` 才启用。
 
 在 `server_dotnet` 目录运行。完整回归前，先为当前进程设置指向独立本机测试实例的 `YF_TEST_DATABASE_URL`；数据库测试未配置连接时会跳过，单凭命令退出码为 0 不能证明完整回归通过，必须同时核对失败、跳过和未运行数量均为 0。
 

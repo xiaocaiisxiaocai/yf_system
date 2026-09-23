@@ -889,7 +889,7 @@ export interface ApiResponses {
   "GET /project-copies/{copyId}/files": PageResponseOfFileCopyHistoryItem
   "GET /project-dictionaries": Array<ProjectDictionaryResponse>
   "POST /project-dictionaries": ProjectDictionaryResponse
-  "DELETE /project-dictionaries/{id}": void
+  "DELETE /project-dictionaries/{id}": EmptyResponse
   "PUT /project-dictionaries/{id}": ProjectDictionaryResponse
   "GET /project-groups": PageResponseOfProjectGroupResponse
   "POST /project-groups": ProjectGroupResponse

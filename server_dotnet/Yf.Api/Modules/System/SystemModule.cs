@@ -116,7 +116,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
         AccessService.RequireInternal(actor);
         await AccessService.RequirePermissionAsync(conn, tx, actor, "config:manage", ct);
         await using var context = EfDb.Use(conn, tx);
-        var updatedAt = await context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP(6) AS Value").SingleAsync(ct);
+        var updatedAt = await DbClock.UtcNowAsync(context, ct);
         var changes = new List<AuditChange>();
         foreach (var item in normalized)
         {

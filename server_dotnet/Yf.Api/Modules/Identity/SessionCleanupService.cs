@@ -13,7 +13,7 @@ public sealed class SessionCleanupService(AppDb db, AppOptions options, ILogger<
     {
         await using var conn = await db.OpenAsync(ct);
         await using var context = EfDb.Use(conn);
-        var now = await context.Database.SqlQuery<DateTime>($"SELECT UTC_TIMESTAMP() AS Value").SingleAsync(ct);
+        var now = await DbClock.UtcNowAsync(context, ct, 0);
         var cutoff = now - ReplayGrace;
         return await context.RefreshTokens.Where(token => token.ExpiresAt < cutoff).ExecuteDeleteAsync(ct);
     }

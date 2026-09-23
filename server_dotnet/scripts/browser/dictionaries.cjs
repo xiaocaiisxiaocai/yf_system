@@ -154,7 +154,7 @@ async function createDictionary(context, token, type, name, parentId = null, sor
         && response.request().method() === 'DELETE');
       await page.locator('.arco-popconfirm:visible').last()
         .getByRole('button', { name: '确定', exact: true }).click();
-      assert.equal((await responseReady).status(), 204, 'successful dictionary deletion contract');
+      assert.equal((await responseReady).status(), 200, 'successful dictionary deletion contract');
       await row(name).waitFor({ state: 'detached' });
     };
     await record('三类未引用字典均可从界面删除', async () => {

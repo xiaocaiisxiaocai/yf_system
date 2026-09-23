@@ -97,21 +97,14 @@ public static class ProjectAccessService
             && await HasPermissionAsync(db, current.Id, "file:delete", ct);
     }
 
+    // Both overloads share AccessService's per-transaction permission cache.
     internal static Task<bool> HasPermissionAsync(
         YfDbContext db, ulong userId, string permission, CancellationToken ct) =>
-        (from userRole in db.UserRoles
-         join role in db.Roles on userRole.RoleId equals role.Id
-         join rolePermission in db.RolePermissions on role.Id equals rolePermission.RoleId
-         join permissionRow in db.Permissions on rolePermission.PermissionId equals permissionRow.Id
-         where userRole.UserId == userId && role.Status == "ACTIVE" && permissionRow.Code == permission
-         select permissionRow.Id).AnyAsync(ct);
+        AccessService.HasPermissionAsync(db.Database.Connection(), db.Database.Transaction(), userId, permission, ct);
 
-    internal static async Task<bool> HasPermissionAsync(
-        MySqlConnection conn, MySqlTransaction? tx, ulong userId, string permission, CancellationToken ct)
-    {
-        await using var db = EfDb.Use(conn, tx);
-        return await HasPermissionAsync(db, userId, permission, ct);
-    }
+    internal static Task<bool> HasPermissionAsync(
+        MySqlConnection conn, MySqlTransaction? tx, ulong userId, string permission, CancellationToken ct) =>
+        AccessService.HasPermissionAsync(conn, tx, userId, permission, ct);
 
     internal static async Task<ProjectAccess> RequireViewCoreAsync(
         MySqlConnection conn, MySqlTransaction? tx, CurrentUser actor, ulong projectId, bool forUpdate,
