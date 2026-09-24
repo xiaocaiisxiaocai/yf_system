@@ -201,13 +201,37 @@ public sealed class FilesRecoveryTests
         var originalSidecar = await File.ReadAllTextAsync(chunkPath + ".sha256", ct);
         await File.WriteAllBytesAsync(chunkPath, tampered, ct);
 
-        Assert.Equal(Sha256Hex(original), originalSidecar.Trim());
+        Assert.Equal(Sha256Hex(original), SidecarDigest(originalSidecar));
         Assert.Empty((await scope.Upload.GetAsync(
             scope.Context(), initialized.SessionId, ct)).UploadedChunks);
         var resumed = await scope.Upload.InitAsync(scope.Context(), request, ct);
         Assert.Equal(initialized.SessionId, resumed.SessionId);
         Assert.True(resumed.Resumed);
         Assert.Empty(resumed.UploadedChunks);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ChunkSidecarBindsDigestToFileStateAndLegacyDigestsAreRehashed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var content = new byte[] { 5, 6, 7, 8 };
+        var request = UploadRequest("sidecar.bin", content);
+        var initialized = await scope.Upload.InitAsync(scope.Context(), request, ct);
+        using (var body = new MemoryStream(content))
+            await scope.Upload.PutChunkAsync(scope.ChunkContext(content), initialized.SessionId, 0, body, ct);
+
+        var chunkPath = FileStorage.ChunkPath(scope.StorageRoot, initialized.SessionId, 0);
+        var fields = (await File.ReadAllTextAsync(chunkPath + ".sha256", ct)).Trim().Split(' ');
+        var chunk = new FileInfo(chunkPath);
+        Assert.Equal([Sha256Hex(content), chunk.Length.ToString(), chunk.LastWriteTimeUtc.Ticks.ToString()], fields);
+
+        // A digest-only sidecar from the previous format is still accepted after verifying the content.
+        await File.WriteAllTextAsync(chunkPath + ".sha256", Sha256Hex(content), ct);
+        var legacy = Assert.Single((await scope.Upload.GetAsync(scope.Context(), initialized.SessionId, ct)).UploadedChunks);
+        Assert.Equal(Sha256Hex(content), legacy.Sha256);
+        await File.WriteAllTextAsync(chunkPath + ".sha256", Sha256Hex([9, 9, 9, 9]), ct);
+        Assert.Empty((await scope.Upload.GetAsync(scope.Context(), initialized.SessionId, ct)).UploadedChunks);
     }
 
     [Fact(Timeout = 30_000)]
@@ -246,7 +270,7 @@ public sealed class FilesRecoveryTests
         var actual = await File.ReadAllBytesAsync(chunkPath, ct);
         Assert.True(actual.SequenceEqual(firstContent) || actual.SequenceEqual(secondContent));
         var actualSha256 = Sha256Hex(actual);
-        Assert.Equal(actualSha256, (await File.ReadAllTextAsync(chunkPath + ".sha256", ct)).Trim());
+        Assert.Equal(actualSha256, SidecarDigest(await File.ReadAllTextAsync(chunkPath + ".sha256", ct)));
         var uploaded = Assert.Single((await scope.Upload.GetAsync(
             scope.Context(), initialized.SessionId, ct)).UploadedChunks);
         Assert.Equal(0U, uploaded.Index);
@@ -426,6 +450,8 @@ public sealed class FilesRecoveryTests
 
     private static InitUploadRequest UploadRequest(string fileName, byte[] content) =>
         new(1, fileName, (ulong)content.LongLength, 1_700_000_000_000, Sha256Hex(content));
+
+    private static string SidecarDigest(string sidecar) => sidecar.Trim().Split(' ')[0];
 
     private static string Sha256Hex(byte[] content) =>
         Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();

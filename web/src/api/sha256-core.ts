@@ -131,3 +131,30 @@ export class Sha256 {
 export function sha256Fallback(input: Uint8Array): Uint8Array {
   return new Sha256().update(input).digest()
 }
+
+const BLOB_BLOCK_SIZE = 1024 * 1024
+
+function toHex(bytes: ArrayBuffer | Uint8Array): string {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+  return Array.from(view, (value) => value.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * SHA-256 of a Blob as lowercase hex. Uses SubtleCrypto when the context exposes it and otherwise
+ * the incremental fallback, reading 1 MiB at a time. Runs on the main thread or inside a Worker;
+ * <paramref name="pause"/> lets a main-thread caller yield between blocks.
+ */
+export async function hashBlobSha256(blob: Blob, pause?: () => Promise<void>): Promise<string> {
+  let subtle: SubtleCrypto | undefined
+  try { subtle = globalThis.crypto?.subtle } catch { subtle = undefined }
+  if (subtle) {
+    try { return toHex(await subtle.digest('SHA-256', await blob.arrayBuffer())) }
+    catch { /* HTTP origins may expose crypto without a usable subtle; continue incrementally. */ }
+  }
+  const hash = new Sha256()
+  for (let offset = 0; offset < blob.size; offset += BLOB_BLOCK_SIZE) {
+    hash.update(new Uint8Array(await blob.slice(offset, offset + BLOB_BLOCK_SIZE).arrayBuffer()))
+    if (pause && offset + BLOB_BLOCK_SIZE < blob.size) await pause()
+  }
+  return toHex(hash.digest())
+}

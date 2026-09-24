@@ -21,7 +21,11 @@ public static class ApiApplication
         var inspectDevelopment = args.Contains("--inspect-development-data", StringComparer.Ordinal);
         var resetDevelopment = args.Contains("--reset-development-data", StringComparer.Ordinal);
         var checkDevelopmentReadiness = args.Contains("--check-development-readiness", StringComparer.Ordinal);
-        if (new[] { initializeDatabase, migrateDatabase, inspectDevelopment, resetDevelopment, checkDevelopmentReadiness }.Count(value => value) > 1)
+        var convertFileBlobs = args.Contains("--convert-file-blobs", StringComparer.Ordinal);
+        var removeLegacyContent = args.Contains("--remove-legacy-content", StringComparer.Ordinal);
+        if (removeLegacyContent && !convertFileBlobs)
+            throw new ArgumentException("--remove-legacy-content is only valid together with --convert-file-blobs.");
+        if (new[] { initializeDatabase, migrateDatabase, inspectDevelopment, resetDevelopment, checkDevelopmentReadiness, convertFileBlobs }.Count(value => value) > 1)
         {
             if (checkDevelopmentReadiness)
             {
@@ -30,7 +34,7 @@ public static class ApiApplication
             }
             throw new ArgumentException("Choose one database operation.");
         }
-        args = args.Where(x => x is not ("--initialize-database" or "--migrate-database" or "--inspect-development-data" or "--reset-development-data" or "--check-development-readiness")).ToArray();
+        args = args.Where(x => x is not ("--initialize-database" or "--migrate-database" or "--inspect-development-data" or "--reset-development-data" or "--check-development-readiness" or "--convert-file-blobs" or "--remove-legacy-content")).ToArray();
         if (checkDevelopmentReadiness)
         {
             DevelopmentReadinessReport result;
@@ -82,7 +86,23 @@ public static class ApiApplication
             return null;
         }
         await EfDatabaseLifecycle.PrepareStartupAsync(options);
-        await FileBlobBackfill.RunAsync(new AppDb(options), options.StorageRoot);
+        if (convertFileBlobs)
+        {
+            // One-shot maintenance step, run while the site is stopped: copying and hashing every legacy
+            // file can take far longer than the IIS startup limit, so normal startup only validates.
+            var converted = await FileBlobBackfill.RunAsync(new AppDb(options), options.StorageRoot);
+            var removed = removeLegacyContent
+                ? await FileBlobBackfill.RemoveLegacyContentAsync(new AppDb(options), options.StorageRoot)
+                : ((int Files, ulong Bytes)?)null;
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                convertedFiles = converted,
+                removedLegacyFiles = removed?.Files,
+                removedLegacyBytes = removed?.Bytes,
+            }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            return null;
+        }
+        await FileBlobBackfill.EnsureConvertedAsync(new AppDb(options), options.StorageRoot);
         builder.WebHost.ConfigureKestrel(k => { k.AddServerHeader = false; k.Limits.MaxRequestBodySize = 64L * 1024 * 1024; });
         builder.Services.Configure<IISServerOptions>(o => o.MaxRequestBodySize = 64L * 1024 * 1024);
         builder.Services.Configure<RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);

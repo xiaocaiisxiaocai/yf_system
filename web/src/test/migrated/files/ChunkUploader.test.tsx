@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   fileMd5: vi.fn(),
   uploadFingerprint: vi.fn(),
   blobSha256: vi.fn(),
+  disposeHasher: vi.fn(),
 }))
 
 vi.mock('../../../api/client', () => ({
@@ -17,7 +18,8 @@ vi.mock('../../../api/client', () => ({
 vi.mock('../../../api/file-hash', () => ({
   fileMd5: mocks.fileMd5,
   uploadFingerprint: mocks.uploadFingerprint,
-  blobSha256: mocks.blobSha256,
+  // Chunk digests come from a per-upload Worker-backed hasher; the mock keeps one shared digest source.
+  createChunkHasher: () => ({ sha256: mocks.blobSha256, dispose: mocks.disposeHasher }),
 }))
 
 import ChunkUploader from '../../../components/ChunkUploader'
@@ -100,6 +102,7 @@ describe('ChunkUploader DOM contracts', () => {
     mocks.fileMd5.mockReset()
     mocks.uploadFingerprint.mockReset()
     mocks.blobSha256.mockReset()
+    mocks.disposeHasher.mockReset()
     installDefaultHttp()
   })
 
@@ -355,6 +358,7 @@ describe('ChunkUploader DOM contracts', () => {
     fireEvent.click(startButton())
 
     await waitFor(() => expect(callbacks.onDone).toHaveBeenCalledOnce())
+    expect(mocks.disposeHasher).toHaveBeenCalledOnce()
     expect(mocks.put).toHaveBeenCalledOnce()
     expect(mocks.put.mock.calls[0][2]).toMatchObject({
       headers: { 'X-Chunk-SHA256': 'b'.repeat(64) },

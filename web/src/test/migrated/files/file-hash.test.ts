@@ -9,6 +9,12 @@ const workerHarness = vi.hoisted(() => ({
     terminate: ReturnType<typeof vi.fn>
   }>,
   throwOnConstruction: false,
+  chunkInstances: [] as Array<{
+    onmessage: ((event: MessageEvent) => void) | null
+    onerror: ((event: ErrorEvent) => void) | null
+    postMessage: ReturnType<typeof vi.fn>
+    terminate: ReturnType<typeof vi.fn>
+  }>,
 }))
 
 vi.mock('../../../api/file-hash.worker?worker', () => ({
@@ -25,7 +31,21 @@ vi.mock('../../../api/file-hash.worker?worker', () => ({
   },
 }))
 
-import { blobSha256, fileMd5, uploadFingerprint } from '../../../api/file-hash'
+vi.mock('../../../api/chunk-hash.worker?worker', () => ({
+  default: class MockChunkHashWorker {
+    onmessage: ((event: MessageEvent) => void) | null = null
+    onerror: ((event: ErrorEvent) => void) | null = null
+    postMessage = vi.fn()
+    terminate = vi.fn()
+
+    constructor() {
+      if (workerHarness.throwOnConstruction) throw new Error('worker blocked')
+      workerHarness.chunkInstances.push(this)
+    }
+  },
+}))
+
+import { blobSha256, createChunkHasher, fileMd5, uploadFingerprint } from '../../../api/file-hash'
 import { fileMd5 as fileMd5InThread } from '../../../api/file-hash-core'
 import { Sha256 } from '../../../api/sha256-core'
 
@@ -34,6 +54,7 @@ describe('file hashing contracts', () => {
 
   beforeEach(() => {
     workerHarness.instances.length = 0
+    workerHarness.chunkInstances.length = 0
     workerHarness.throwOnConstruction = false
     globalThis.Worker = class {} as unknown as typeof Worker
   })
@@ -100,6 +121,42 @@ describe('file hashing contracts', () => {
     )
 
     expect(progress.map((value) => Math.round(value * 1000) / 1000)).toEqual([0.444, 0.889, 1])
+  })
+
+  it('chunk digests are computed in a worker and matched to their requests by id', async () => {
+    const hasher = createChunkHasher()
+    const worker = workerHarness.chunkInstances[0]
+    const first = hasher.sha256(new Blob(['one']))
+    const second = hasher.sha256(new Blob(['two']))
+
+    expect(worker.postMessage).toHaveBeenNthCalledWith(1, { id: 1, blob: expect.any(Blob) })
+    expect(worker.postMessage).toHaveBeenNthCalledWith(2, { id: 2, blob: expect.any(Blob) })
+    worker.onmessage?.({ data: { id: 2, type: 'done', digest: 'b'.repeat(64) } } as MessageEvent)
+    worker.onmessage?.({ data: { id: 1, type: 'error', message: 'read failed' } } as MessageEvent)
+    await expect(second).resolves.toBe('b'.repeat(64))
+    await expect(first).rejects.toThrow('read failed')
+
+    const abandoned = hasher.sha256(new Blob(['three']))
+    hasher.dispose()
+    await expect(abandoned).rejects.toThrow('上传已取消')
+    expect(worker.terminate).toHaveBeenCalledOnce()
+  })
+
+  it('a chunk hash worker that fails to load or cannot be created falls back to the main thread', async () => {
+    const abc = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+    const hasher = createChunkHasher()
+    const worker = workerHarness.chunkInstances[0]
+    const pending = hasher.sha256(new Blob(['abc']))
+    const preventDefault = vi.fn()
+    worker.onerror?.({ preventDefault } as unknown as ErrorEvent)
+    await expect(pending).resolves.toBe(abc)
+    expect(preventDefault).toHaveBeenCalledOnce()
+    expect(worker.terminate).toHaveBeenCalledOnce()
+    await expect(hasher.sha256(new Blob(['abc']))).resolves.toBe(abc)
+    expect(worker.postMessage).toHaveBeenCalledOnce()
+
+    workerHarness.throwOnConstruction = true
+    await expect(createChunkHasher().sha256(new Blob(['abc']))).resolves.toBe(abc)
   })
 
   it('computes lower-case SHA-256 for a bounded chunk', async () => {

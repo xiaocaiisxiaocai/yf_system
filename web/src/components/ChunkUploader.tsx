@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button, Checkbox, Modal, Progress, Typography, Message, Space } from '@arco-design/web-react'
 import { IconUpload, IconClose } from '@arco-design/web-react/icon'
 import { fmtSize } from '../api/types'
-import { blobSha256, fileMd5, uploadFingerprint } from '../api/file-hash'
+import { createChunkHasher, fileMd5, uploadFingerprint } from '../api/file-hash'
 import {
   abortUpload,
   initUpload,
@@ -241,6 +241,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     attemptsRef.current.set(key, attempt)
     const isCurrent = () => attemptsRef.current.get(key) === attempt && !attempt.cancelled
     let release: Release | undefined
+    const chunkHasher = createChunkHasher()
     try {
       release = await uploadSlots.acquire(attempt.controller.signal, () => patchEntry(key, { waiting: true }))
       if (!release || !isCurrent()) return
@@ -278,7 +279,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
           const i = chunks[cursor++]
           const blob = file.slice(i * chunkSize, Math.min((i + 1) * chunkSize, file.size))
           try {
-            const chunkDigest = await blobSha256(blob)
+            const chunkDigest = await chunkHasher.sha256(blob)
             if (remoteDigests.get(i) !== chunkDigest) {
               for (let attemptNo = 1; ; attemptNo++) {
                 try {
@@ -327,6 +328,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
         patchEntry(key, { phase: 'interrupted' })
       }
     } finally {
+      chunkHasher.dispose()
       release?.()
       patchEntry(key, { waiting: false })
       attempt.running = false

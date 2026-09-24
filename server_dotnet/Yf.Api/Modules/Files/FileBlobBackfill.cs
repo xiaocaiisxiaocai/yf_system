@@ -8,13 +8,35 @@ namespace Yf.Api.Modules.Files;
 /// <summary>
 /// One-time, fail-closed conversion of readable legacy file rows to immutable blobs.
 /// Legacy physical files are deliberately retained; only database references move.
-/// Run after EF migrations and before the host starts accepting requests.
+/// Run explicitly with <c>--convert-file-blobs</c> after EF migrations while the site is stopped;
+/// normal startup only calls <see cref="EnsureConvertedAsync"/>.
 /// </summary>
 internal static class FileBlobBackfill
 {
-    internal static async Task RunAsync(
+    internal const string ConversionRequiredMessage =
+        "File blob conversion is required before startup: stop the site and run 'dotnet Yf.Api.dll --convert-file-blobs'.";
+
+    /// <summary>Startup gate: refuses to serve while legacy rows remain, without copying or hashing content.</summary>
+    internal static async Task EnsureConvertedAsync(AppDb database, string configuredRoot, CancellationToken ct = default)
+    {
+        var root = FileStorage.Root(configuredRoot);
+        await using var conn = await database.OpenAsync(ct);
+        await using (var db = EfDb.Use(conn))
+        {
+            var pending = await db.Files.AsNoTracking()
+                .Where(file => file.BlobId == null && file.Status != "PURGED")
+                .Select(file => file.Id).FirstOrDefaultAsync(ct);
+            if (pending != 0)
+                throw new InvalidOperationException($"{ConversionRequiredMessage} First unconverted file: {pending}.");
+        }
+        await ValidateInvariantAsync(conn, root, ct);
+    }
+
+    /// <returns>The number of legacy file rows converted by this run.</returns>
+    internal static async Task<int> RunAsync(
         AppDb database, string configuredRoot, CancellationToken ct = default)
     {
+        var converted = 0;
         var root = FileStorage.Root(configuredRoot);
         await using var conn = await database.OpenAsync(ct);
         await using var migrationLease = await MySqlNamedLock.TryAcquireAsync(conn,
@@ -33,9 +55,11 @@ internal static class FileBlobBackfill
                     .FirstOrDefaultAsync(ct);
             if (candidate is null) break;
             await ConvertOneAsync(conn, root, candidate, ct);
+            converted++;
         }
 
         await ValidateInvariantAsync(conn, root, ct);
+        return converted;
     }
 
     internal static async Task ValidateInvariantAsync(MySqlConnection conn, string root, CancellationToken ct)
@@ -144,6 +168,70 @@ internal static class FileBlobBackfill
             await tx.CommitAsync(ct);
         }
         finally { TryDelete(stagingPath); }
+    }
+
+    /// <summary>Top-level storage folders that held per-file content before content-addressed blobs.</summary>
+    internal static readonly string[] LegacyContentFolders = ["files", "copy-jobs"];
+
+    /// <summary>
+    /// Opt-in cleanup after a completed conversion: deletes legacy physical files that no file row
+    /// references any more. Refuses to run while any row is unconverted, never follows links, and
+    /// leaves blobs, message images and temporary upload folders untouched.
+    /// </summary>
+    internal static async Task<(int Files, ulong Bytes)> RemoveLegacyContentAsync(
+        AppDb database, string configuredRoot, CancellationToken ct = default)
+    {
+        var root = FileStorage.Root(configuredRoot);
+        await EnsureConvertedAsync(database, configuredRoot, ct);
+        HashSet<string> referenced;
+        await using (var conn = await database.OpenAsync(ct))
+        await using (var db = EfDb.Use(conn))
+            referenced = (await db.Files.AsNoTracking().Select(file => file.StoragePath).ToArrayAsync(ct))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var removedFiles = 0;
+        ulong removedBytes = 0;
+        foreach (var folder in LegacyContentFolders)
+        {
+            var top = Path.Combine(root, folder);
+            if (!Directory.Exists(top)) continue;
+            if ((File.GetAttributes(top) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"Legacy content folder '{folder}' is a link; refusing cleanup.");
+            foreach (var path in EnumerateRegularFiles(top, ct))
+            {
+                var relative = Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
+                if (referenced.Contains(relative)) continue;
+                var length = (ulong)new FileInfo(path).Length;
+                File.Delete(path);
+                removedFiles++;
+                removedBytes += length;
+            }
+            RemoveEmptyDirectories(top, ct);
+        }
+        return (removedFiles, removedBytes);
+    }
+
+    private static IEnumerable<string> EnumerateRegularFiles(string directory, CancellationToken ct)
+    {
+        foreach (var entry in new DirectoryInfo(directory).EnumerateFileSystemInfos())
+        {
+            ct.ThrowIfCancellationRequested();
+            if ((entry.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+            if (entry is DirectoryInfo child)
+                foreach (var nested in EnumerateRegularFiles(child.FullName, ct)) yield return nested;
+            else yield return entry.FullName;
+        }
+    }
+
+    private static void RemoveEmptyDirectories(string directory, CancellationToken ct)
+    {
+        foreach (var child in new DirectoryInfo(directory).EnumerateDirectories())
+        {
+            ct.ThrowIfCancellationRequested();
+            if ((child.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+            RemoveEmptyDirectories(child.FullName, ct);
+            if (!child.EnumerateFileSystemInfos().Any()) child.Delete();
+        }
     }
 
     private static InvalidOperationException ConversionError(

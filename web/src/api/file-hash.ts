@@ -1,9 +1,9 @@
 import HashWorker from './file-hash.worker?worker'
+import ChunkHashWorker from './chunk-hash.worker?worker'
 import { fileMd5 as fileMd5InThread } from './file-hash-core'
-import { Sha256, sha256Fallback } from './sha256-core'
+import { hashBlobSha256, sha256Fallback } from './sha256-core'
 
 const FINGERPRINT_SAMPLE_SIZE = 1024 * 1024
-const SHA256_BLOCK_SIZE = 1024 * 1024
 
 function bytesToHex(bytes: ArrayBuffer | Uint8Array): string {
   const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
@@ -28,19 +28,72 @@ async function sha256Bytes(input: Uint8Array): Promise<string> {
 
 const yieldToMainThread = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 
-/** SHA-256 for one upload chunk, including ordinary HTTP origins where SubtleCrypto is unavailable. */
-export async function blobSha256(blob: Blob): Promise<string> {
-  const subtle = subtleCrypto()
-  if (subtle) {
-    try { return bytesToHex(await subtle.digest('SHA-256', await blob.arrayBuffer())) }
-    catch { /* Continue with the portable incremental path. */ }
+/** SHA-256 on the calling thread, yielding between blocks; used for small samples and as the Worker fallback. */
+export function blobSha256(blob: Blob): Promise<string> {
+  return hashBlobSha256(blob, yieldToMainThread)
+}
+
+type ChunkHashMessage =
+  | { id: number; type: 'done'; digest: string }
+  | { id: number; type: 'error'; message: string }
+
+export interface ChunkHasher {
+  sha256(blob: Blob): Promise<string>
+  dispose(): void
+}
+
+/**
+ * Per-upload SHA-256 hasher for chunks. Digests are computed in a Worker so the pure-JS fallback on
+ * HTTP origins does not occupy the page's main thread; if the Worker cannot be created or fails to
+ * load, pending and later chunks are hashed on the main thread with identical results.
+ */
+export function createChunkHasher(): ChunkHasher {
+  let worker: Worker | null = null
+  if (typeof Worker !== 'undefined') {
+    try { worker = new ChunkHashWorker() } catch { worker = null }
   }
-  const hash = new Sha256()
-  for (let offset = 0; offset < blob.size; offset += SHA256_BLOCK_SIZE) {
-    hash.update(new Uint8Array(await blob.slice(offset, offset + SHA256_BLOCK_SIZE).arrayBuffer()))
-    if (offset + SHA256_BLOCK_SIZE < blob.size) await yieldToMainThread()
+  let nextId = 0
+  const pending = new Map<number, { blob: Blob; resolve: (digest: string) => void; reject: (error: Error) => void }>()
+  const fallBackToMainThread = () => {
+    worker?.terminate()
+    worker = null
+    for (const [id, request] of pending) {
+      pending.delete(id)
+      blobSha256(request.blob).then(request.resolve, request.reject)
+    }
   }
-  return bytesToHex(hash.digest())
+  if (worker) {
+    worker.onmessage = (event: MessageEvent<ChunkHashMessage>) => {
+      const message = event.data
+      const request = pending.get(message.id)
+      if (!request) return
+      pending.delete(message.id)
+      if (message.type === 'done') request.resolve(message.digest)
+      else request.reject(new Error(message.message))
+    }
+    worker.onerror = (event) => {
+      // 脚本加载失败（例如被策略拦截）时退回主线程，而不是让上传失败。
+      event.preventDefault()
+      fallBackToMainThread()
+    }
+  }
+  return {
+    sha256(blob) {
+      const active = worker
+      if (!active) return blobSha256(blob)
+      return new Promise<string>((resolve, reject) => {
+        const id = ++nextId
+        pending.set(id, { blob, resolve, reject })
+        active.postMessage({ id, blob })
+      })
+    },
+    dispose() {
+      worker?.terminate()
+      worker = null
+      for (const request of pending.values()) request.reject(new Error('上传已取消'))
+      pending.clear()
+    },
+  }
 }
 
 /**

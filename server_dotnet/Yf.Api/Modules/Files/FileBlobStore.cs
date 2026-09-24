@@ -173,24 +173,34 @@ internal static class FileBlobStore
         return normalized;
     }
 
+    /// <param name="verifyExistingHash">
+    /// Hash a canonical file that was already on disk without a database record (an orphan left by an
+    /// unknown commit outcome). A staging file this call moves into place was just hashed by the caller
+    /// (<see cref="PreparedBlob.Sha256"/>), so it is not reread while the caller's transaction holds locks.
+    /// </param>
     private static void EnsureCanonicalAvailable(string root, string canonicalPath, PreparedBlob prepared,
         bool verifyExistingHash, CancellationToken ct)
     {
         var directory = Path.GetDirectoryName(canonicalPath)
             ?? throw new InvalidOperationException("blob 存储目录无效");
         FileStorage.CreateDirectoryWithin(root, directory, ct);
+        var publishedByThisCall = false;
         if (!File.Exists(canonicalPath))
         {
             if (string.IsNullOrWhiteSpace(prepared.StagingPath) || !File.Exists(prepared.StagingPath))
                 throw ApiException.Conflict("文件内容缺失，无法建立引用");
-            try { File.Move(prepared.StagingPath, canonicalPath, overwrite: false); }
+            try
+            {
+                File.Move(prepared.StagingPath, canonicalPath, overwrite: false);
+                publishedByThisCall = true;
+            }
             catch (IOException) when (File.Exists(canonicalPath)) { }
         }
 
         var resolved = FileStorage.ResolveExistingFile(root, canonicalPath, ct);
         if ((ulong)new FileInfo(resolved).Length != prepared.SizeBytes)
             throw new InvalidOperationException("全局 blob 路径存在不同大小的内容");
-        if (verifyExistingHash)
+        if (verifyExistingHash && !publishedByThisCall)
         {
             using var stream = new FileStream(resolved, FileMode.Open, FileAccess.Read, FileShare.Read,
                 BufferSize, FileOptions.SequentialScan);

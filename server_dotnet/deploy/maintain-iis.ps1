@@ -61,7 +61,11 @@ function Invoke-YfMigration([string]$Root,[string]$ExternalConfig) {
     try {
         $env:YF_CONFIG_PATH=$ExternalConfig
         Push-Location $Root
-        try { & dotnet (Join-Path $Root 'Yf.Api.dll') --migrate-database; if ($LASTEXITCODE -ne 0) { throw 'Explicit database migration failed; pool remains stopped.' } }
+        try {
+            & dotnet (Join-Path $Root 'Yf.Api.dll') --migrate-database; if ($LASTEXITCODE -ne 0) { throw 'Explicit database migration failed; pool remains stopped.' }
+            # Legacy file rows are converted to shared content here, not during IIS startup (startupTimeLimit).
+            & dotnet (Join-Path $Root 'Yf.Api.dll') --convert-file-blobs; if ($LASTEXITCODE -ne 0) { throw 'File content conversion failed; pool remains stopped.' }
+        }
         finally { Pop-Location }
     } finally {
         Remove-Item Env:\YF_CONFIG_PATH -ErrorAction SilentlyContinue

@@ -39,6 +39,8 @@ dotnet run --project .\Yf.Api -- --migrate-database
 
 # Other one-shot modes (mutually exclusive): --check-development-readiness, --inspect-development-data,
 # --reset-development-data --confirm-database <db> --confirm-storage-root <path>  (loopback only; see docs/开发数据初始化说明.md)
+# --convert-file-blobs [--remove-legacy-content]: one-shot legacy file -> shared blob conversion (site stopped;
+# normal startup only validates and refuses to start while unconverted rows remain)
 
 # New EF migration: dotnet-ef is pinned to 9.0.20 (= EF packages) in .config/dotnet-tools.json.
 # Needs YF_EF_DESIGN_CONNECTION pointing at a DISPOSABLE design-time DB (never a business DB).

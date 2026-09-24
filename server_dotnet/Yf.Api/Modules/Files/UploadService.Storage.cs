@@ -43,6 +43,13 @@ public sealed partial class UploadService
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// Returns the verified digest of a stored chunk. The sidecar records the digest together with the
+    /// chunk's length and last-write time captured when the server hashed the upload itself; while both
+    /// still match, the digest is reused without rereading the chunk. Any other state (older sidecar
+    /// format, rewritten chunk, clock-preserving copy) falls back to hashing the chunk content, so
+    /// same-length tampering is still excluded. The merge additionally verifies the whole file.
+    /// </summary>
     private static async Task<string?> ValidChunkDigestAsync(
         string root, string chunkPath, ulong expectedBytes, CancellationToken ct)
     {
@@ -50,10 +57,21 @@ public sealed partial class UploadService
         try
         {
             var resolvedChunk = FileStorage.ResolveExistingFile(root, chunkPath, ct);
-            if ((ulong)new FileInfo(resolvedChunk).Length != expectedBytes) return null;
+            var chunk = new FileInfo(resolvedChunk);
+            if ((ulong)chunk.Length != expectedBytes) return null;
             var resolvedDigest = FileStorage.ResolveExistingFile(root, ChunkDigestPath(chunkPath), ct);
-            var declared = (await File.ReadAllTextAsync(resolvedDigest, ct)).Trim().ToLowerInvariant();
-            if (!Sha256Pattern().IsMatch(declared)) return null;
+            var record = (await File.ReadAllTextAsync(resolvedDigest, ct)).Trim().ToLowerInvariant()
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (record.Length is not (1 or 3) || !Sha256Pattern().IsMatch(record[0])) return null;
+            var declared = record[0];
+            if (record.Length == 3
+                && ulong.TryParse(record[1], System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var recordedLength)
+                && long.TryParse(record[2], System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var recordedTicks)
+                && recordedLength == (ulong)chunk.Length
+                && recordedTicks == chunk.LastWriteTimeUtc.Ticks)
+                return declared;
             var actual = await HashFileSha256Async(resolvedChunk, ct);
             return actual.Equals(declared, StringComparison.Ordinal) ? actual : null;
         }
@@ -67,7 +85,10 @@ public sealed partial class UploadService
         var destination = FileStorage.EnsureLexicallyWithin(root, ChunkDigestPath(chunkPath), false);
         var staging = FileStorage.EnsureLexicallyWithin(root,
             destination + $".{Guid.NewGuid():D}.writing", false);
-        var bytes = Encoding.ASCII.GetBytes(digest);
+        // Bind the digest to the exact chunk file state this server hashed (see ValidChunkDigestAsync).
+        var chunk = new FileInfo(FileStorage.ResolveExistingFile(root, chunkPath, ct));
+        var bytes = Encoding.ASCII.GetBytes(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"{digest} {chunk.Length} {chunk.LastWriteTimeUtc.Ticks}"));
         try
         {
             await using (var output = new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.None,

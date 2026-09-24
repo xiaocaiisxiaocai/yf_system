@@ -371,6 +371,20 @@ try:
                 "EF migration failed after restoring the owned test history: "
                 + current_migration.stderr.decode(errors="replace")[:1500]
             )
+        conversion = subprocess.run(
+            ["dotnet", str(DLL), "--convert-file-blobs"],
+            cwd=API, env=env, capture_output=True, timeout=60,
+        )
+        conversion_lines = [line for line in conversion.stdout.decode(errors="replace").splitlines() if line.strip()]
+        conversion_result = json.loads(conversion_lines[-1]) if conversion.returncode == 0 and conversion_lines else {}
+        check("explicit file content conversion is a repeatable one-shot command",
+              conversion_result.get("convertedFiles") == 0 and conversion_result.get("removedLegacyFiles") is None)
+        misplaced_cleanup = subprocess.run(
+            ["dotnet", str(DLL), "--remove-legacy-content"],
+            cwd=API, env=env, capture_output=True, timeout=20,
+        )
+        check("legacy content cleanup is refused outside the conversion command",
+              misplaced_cleanup.returncode != 0)
         if not TEST_HOST.is_file():
             raise RuntimeError("Build server_dotnet/TestHost/Yf.Api.TestHost.csproj before HTTP testing")
         test_dll = TEST_HOST

@@ -107,8 +107,13 @@ describe('ProjectList migrated behavior', () => {
 
     pending.get(8)!.resolve({ data: [{ id: 101, supplierId: 8, supplierName: '厂商甲', partNumber: 'A-101', model: '旧响应型号', enabled: true, inUse: false, sortNo: 1 }] })
     fireEvent.click(document.getElementById('robotPartId_input')!)
-    await waitFor(() => expect(screen.queryByRole('option', { name: 'A-101' })).not.toBeInTheDocument())
+    // Wait until the dropdown is really open: before that, "A-101 absent" is trivially true, and an
+    // Escape that reaches the modal instead of the dropdown closes the whole create dialog under load.
+    expect(await screen.findByRole('option', { name: 'B-202' })).toBeVisible()
+    expect(screen.queryByRole('option', { name: 'A-101' })).not.toBeInTheDocument()
     fireEvent.keyDown(document.getElementById('robotPartId_input')!, { key: 'Escape', code: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('option', { name: 'B-202' })).not.toBeInTheDocument())
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
 
     await selectById('priorityId_input', '普通')
     await user.click(within(dialog).getByPlaceholderText('选择需求完成时间'))
