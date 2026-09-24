@@ -61,6 +61,8 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
         ? (project.status === 'TERMINATED' ? '项目已重新开始' : '项目已开始')
         : '项目已终止')
       onChanged()
+    } catch {
+      // 响应拦截器已提示错误；这里只需恢复按钮，允许原地重试。
     } finally {
       finishAction()
     }

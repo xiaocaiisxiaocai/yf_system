@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../api/client', () => ({ default: mocks }))
+vi.mock('dockview-react', () => import('../../dockviewMock'))
+vi.mock('../../../components/FileTable', () => ({ default: () => <div>文件列表</div> }))
+vi.mock('../../../components/MessagePanel', () => ({ default: () => <div>留言列表</div> }))
+vi.mock('../../../components/ProjectActivityPanel', () => ({ default: () => <div>动态列表</div> }))
 vi.mock('../../../store/auth', () => ({
   useAuth: () => ({
     user: { id: 1, userType: 'INTERNAL' },
@@ -45,7 +49,12 @@ const group = {
 
 describe('ProjectGroupDetail migrated behavior', () => {
   beforeEach(() => {
-    mocks.get.mockResolvedValue({ data: { group, projects: [project] } })
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/project-groups/3') return Promise.resolve({ data: { group, projects: [project] } })
+      if (url === '/projects/9') return Promise.resolve({ data: project })
+      if (url === '/projects/9/summary') return Promise.resolve({ data: { unreadMessages: 0 } })
+      return Promise.reject(new Error(`unexpected GET ${url}`))
+    })
     mocks.post.mockResolvedValue({ data: {} })
     mocks.put.mockResolvedValue({ data: {} })
   })
@@ -65,6 +74,9 @@ describe('ProjectGroupDetail migrated behavior', () => {
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
     expect(mocks.put).toHaveBeenCalledWith('/projects/9/status', { status: 'IN_PROGRESS' })
     pending.resolve({ data: {} })
-    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2))
+    // 面板内的流程操作完成后同时刷新子项目与主项目进度。
+    const groupReads = () => mocks.get.mock.calls.filter(([url]) => url === '/project-groups/3').length
+    await waitFor(() => expect(groupReads()).toBe(2))
+    expect(mocks.get.mock.calls.filter(([url]) => url === '/projects/9').length).toBeGreaterThanOrEqual(2)
   })
 })

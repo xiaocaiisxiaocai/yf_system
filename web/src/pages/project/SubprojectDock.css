@@ -1,0 +1,143 @@
+.subproject-dock {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+}
+.subproject-dock-view { position: absolute; inset: 0; }
+
+/* Arco 风格的面板组：白底、细边框、圆角，组之间留 8px 间距（theme.gap）。 */
+.yf-dockview-theme {
+  --dv-background-color: transparent;
+  --dv-group-view-background-color: #fff;
+  --dv-tabs-and-actions-container-background-color: var(--color-fill-1);
+  --dv-tabs-and-actions-container-height: 38px;
+  --dv-tabs-and-actions-container-font-size: 13px;
+  --dv-activegroup-visiblepanel-tab-background-color: #fff;
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #fff;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-activegroup-visiblepanel-tab-color: var(--color-text-1);
+  --dv-activegroup-hiddenpanel-tab-color: var(--color-text-2);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--color-text-1);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--color-text-3);
+  --dv-tab-divider-color: var(--app-border);
+  --dv-separator-border: transparent;
+  --dv-sash-color: transparent;
+  --dv-active-sash-color: rgb(var(--primary-6));
+  --dv-drag-over-background-color: rgba(var(--primary-6), 0.12);
+  --dv-drag-over-border: 2px dashed rgb(var(--primary-6));
+  --dv-edge-dock-indicator-color: rgb(var(--primary-6));
+  --dv-paneview-active-outline-color: rgb(var(--primary-6));
+  --dv-border-radius: 8px;
+  --dv-floating-box-shadow: 0 10px 32px rgb(25 42 70 / 18%);
+  --dv-floating-border: 1px solid var(--app-border);
+}
+.yf-dockview-theme .dv-groupview {
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius, 8px);
+  box-shadow: 0 2px 8px rgb(25 42 70 / 3%);
+}
+/* dockview 的 .dv-view 默认 overflow: auto；面板组带边框后不能再让外层出现滚动条。 */
+.yf-dockview-theme .dv-view { overflow: hidden; }
+.yf-dockview-theme .dv-groupview.dv-active-group { border-color: rgb(var(--primary-3)); }
+.yf-dockview-theme .dv-tabs-and-actions-container { border-bottom: 1px solid var(--app-border); }
+.yf-dockview-theme .dv-tab { padding: 0 12px; }
+.yf-dockview-theme .dv-tab.dv-active-tab { box-shadow: inset 0 -2px 0 rgb(var(--primary-6)); }
+.yf-dockview-theme .dv-groupview.dv-inactive-group .dv-tab.dv-active-tab { box-shadow: inset 0 -2px 0 var(--color-neutral-4); }
+.yf-dockview-theme .dv-resize-container { border-radius: var(--app-radius, 8px); }
+
+.subproject-dock-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 280px;
+  height: 100%;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.subproject-dock-tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.subproject-dock-tab .arco-tag { flex: 0 0 auto; margin: 0; }
+.subproject-dock-header-actions { display: flex; align-items: center; height: 100%; padding: 0 4px; }
+.subproject-dock-header-actions .arco-btn { color: var(--color-text-2); }
+
+/* 面板内容：流程操作固定在上方，文件/留言/动态标签页填满剩余高度。 */
+.subproject-pane {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 8px 12px 10px;
+  overflow: hidden;
+  background: #fff;
+}
+.subproject-pane-state { align-items: center; justify-content: center; }
+.subproject-pane-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--app-border);
+}
+.subproject-pane-description { flex: 1 1 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.subproject-pane-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0 2px; }
+.subproject-pane-error { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
+/* 流程按钮嵌入工具栏：去掉独立卡片外观，按钮与小号控件同高。 */
+.subproject-pane .project-workflow--compact {
+  flex: 0 1 auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.subproject-pane .project-workflow-summary { flex: 0 1 auto; gap: 8px; }
+.subproject-pane .project-workflow-summary:not(:has(.arco-typography)) { display: none; }
+.subproject-pane .project-workflow-status { margin-top: 0; }
+.subproject-pane .project-workflow-status > .arco-typography { max-width: 220px; }
+.subproject-pane .project-workflow-actions .arco-btn { height: 28px; padding: 0 12px; font-size: 13px; }
+.subproject-pane-tabs,
+.subproject-pane-tabs .arco-tabs-content-inner,
+.subproject-pane-tabs .arco-tabs-content-item-active,
+.subproject-pane-tabs .arco-tabs-pane { min-height: 0; }
+.subproject-pane-tabs { display: flex; flex: 1 1 0; flex-direction: column; margin-top: 2px; }
+.subproject-pane-tabs .arco-tabs-header-nav { flex: 0 0 auto; }
+.subproject-pane-tabs .arco-tabs-content { flex: 1 1 0; min-height: 0; overflow: hidden; padding-top: 8px; }
+.subproject-pane-tabs .arco-tabs-content-inner,
+.subproject-pane-tabs .arco-tabs-content-item-active,
+.subproject-pane-tabs .arco-tabs-pane { height: 100%; }
+.subproject-pane-tabs .arco-tabs-content-item-active { overflow: auto; }
+.subproject-pane .project-activity { height: 100%; min-height: 0; }
+.subproject-pane .project-activity-feed { flex: 1 1 0; min-height: 0; overflow: auto; }
+
+@container (max-width: 520px) {
+  .subproject-pane { padding: 6px 8px 8px; }
+  .subproject-pane-description { flex-basis: 100%; }
+  .subproject-pane-actions { margin-left: auto; }
+  .subproject-pane .message-panel .arco-textarea { max-height: 100px; }
+}
+
+.project-group-dock-empty {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 240px;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--app-border);
+  border-radius: var(--app-radius, 8px);
+  background: #fff;
+}
+
+@media (max-width: 720px) {
+  .subproject-dock { flex: 0 0 auto; height: max(560px, calc(100dvh - 140px)); }
+}

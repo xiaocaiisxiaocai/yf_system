@@ -219,7 +219,9 @@ async function createGroup(context, token, supplierId, name, defaults) {
       flow.groupName = updatedName;
       await page.goto(s.base + '/project-groups/' + flow.groupId);
       await page.getByText(updatedName, { exact: true }).waitFor();
-      await page.getByRole('button', { name: flow.name, exact: true }).click();
+      await page.locator('[data-subproject-id="' + flow.id + '"]')
+        .getByRole('button', { name: '在独立页面打开' + flow.name, exact: true }).click();
+      await page.waitForURL(s.base + '/projects/' + flow.id);
       for (const [label, tab] of [['留言', 'messages'], ['项目动态', 'activity'], ['文件', 'files']]) {
         await page.getByRole('tab', { name: label, exact: true }).click();
         await page.waitForURL(url => url.searchParams.get('tab') === tab);

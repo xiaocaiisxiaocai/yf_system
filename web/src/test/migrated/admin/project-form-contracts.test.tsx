@@ -25,6 +25,9 @@ vi.mock('../../../store/auth', () => ({
   },
 }))
 
+vi.mock('dockview-react', () => import('../../dockviewMock'))
+vi.mock('../../../components/MessagePanel', () => ({ default: () => <div>messages</div> }))
+vi.mock('../../../components/ProjectActivityPanel', () => ({ default: () => <div>activity</div> }))
 vi.mock('../../../store/collaboration', () => ({
   useCollaboration: (selector: (state: { revision: string; status: string }) => unknown) => selector(mocks.collaboration),
 }))
@@ -119,6 +122,9 @@ describe('主项目表单与刷新契约', () => {
       let requests = 0
       mocks.get.mockImplementation(async (url: string) => {
         if (url.endsWith('/copy-jobs')) return { data: { jobs: [] } }
+        if (url === '/projects/31') return { data: { ...project, workOrderNos: [] } }
+        if (url === '/projects/31/summary') return { data: { unreadMessages: 0 } }
+        if (url.startsWith('/projects/31/')) return { data: { list: [], total: 0, page: 1, pageSize: 20 } }
         requests += 1
         if (requests === 1) return { data: detail(3, '旧主项目', [project]) }
         throw Object.assign(new Error('access revoked'), { isAxiosError: true, response: { status } })

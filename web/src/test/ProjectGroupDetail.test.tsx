@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../api/client', () => ({ default: mocks }))
+vi.mock('dockview-react', () => import('./dockviewMock'))
+vi.mock('../components/FileTable', () => ({ default: () => <div>文件列表</div> }))
+vi.mock('../components/MessagePanel', () => ({ default: () => <div>留言列表</div> }))
+vi.mock('../components/ProjectActivityPanel', () => ({ default: () => <div>动态列表</div> }))
 
 vi.mock('../store/auth', () => ({
   useAuth: () => ({
@@ -61,6 +65,14 @@ const detail = {
   }],
 }
 
+const subproject = { ...detail.projects[0], supplierName: 'Robot 厂商 A', workOrderNos: [] }
+
+function subprojectGet(url: string) {
+  if (url === '/projects/9') return Promise.resolve({ data: subproject })
+  if (url === '/projects/9/summary') return Promise.resolve({ data: { unreadMessages: 0 } })
+  return null
+}
+
 function copyJob(overrides: Record<string, unknown> = {}) {
   return {
     jobId: 71,
@@ -100,6 +112,8 @@ describe('子项目后台复制任务', () => {
     mocks.get.mockImplementation((url: string) => {
       if (url === '/project-groups/3') return Promise.resolve({ data: detail })
       if (url === '/project-groups/3/copy-jobs') return Promise.resolve({ data: { jobs: [] } })
+      const pane = subprojectGet(url)
+      if (pane) return pane
       throw new Error(`unexpected GET ${url}`)
     })
   })
@@ -121,6 +135,8 @@ describe('子项目后台复制任务', () => {
         jobReads += 1
         return Promise.resolve({ data: { jobs: [jobReads > 1 ? complete : pending] } })
       }
+      const pane = subprojectGet(url)
+      if (pane) return pane
       throw new Error(`unexpected GET ${url}`)
     })
     const user = userEvent.setup()
@@ -161,6 +177,8 @@ describe('子项目后台复制任务', () => {
           ? Promise.resolve({ data: { jobs: [] } })
           : Promise.reject(new Error('copy job list temporarily unavailable'))
       }
+      const pane = subprojectGet(url)
+      if (pane) return pane
       throw new Error(`unexpected GET ${url}`)
     })
     const user = userEvent.setup()
@@ -201,6 +219,8 @@ describe('子项目后台复制任务', () => {
     mocks.get.mockImplementation((url: string) => {
       if (url === '/project-groups/3') return Promise.resolve({ data: detail })
       if (url === '/project-groups/3/copy-jobs') return new Promise((_resolve, reject) => { rejectJobs = reject })
+      const pane = subprojectGet(url)
+      if (pane) return pane
       throw new Error(`unexpected GET ${url}`)
     })
     const user = userEvent.setup()

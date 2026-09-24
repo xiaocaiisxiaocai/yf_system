@@ -331,9 +331,16 @@ async function choose(page, placeholder, optionName) {
       const childName = prefix + '-页面新增';
       const editedName = childName + '-已编辑';
       const copyName = prefix + '-页面复制件';
-      const row = name => page.getByRole('row').filter({
-        has: page.getByRole('button', { name, exact: true }),
+      // 主项目页以 Dock 面板承载子项目：先激活对应标签，再在面板内操作。
+      const tab = name => page.locator('.dv-tab').filter({
+        has: page.locator('.subproject-dock-tab-name').getByText(name, { exact: true }),
       });
+      const pane = async (id, name) => {
+        await tab(name).click();
+        const located = page.locator('[data-subproject-id="' + id + '"]');
+        await located.waitFor();
+        return located;
+      };
 
       await page.goto(s.base + '/project-groups/' + childControlSource.groupId);
       await page.getByText(childControlSource.groupName, { exact: true }).waitFor();
@@ -344,18 +351,19 @@ async function choose(page, placeholder, optionName) {
       const created = await action(page, '/project-groups/' + childControlSource.groupId + '/projects', 'POST',
         () => dialog.getByRole('button', { name: '创建子项目', exact: true }).click());
       assert.equal(created.name, childName);
-      await row(childName).waitFor();
+      await tab(childName).waitFor();
 
-      await row(childName).getByRole('button', { name: '编辑', exact: true }).click();
+      await (await pane(created.id, childName)).getByRole('button', { name: '编辑', exact: true }).click();
       dialog = page.getByRole('dialog', { name: '编辑子项目' });
       await dialog.getByPlaceholder('子项目名称', { exact: true }).fill(editedName);
       await dialog.getByPlaceholder('选填', { exact: true }).fill('页面编辑后的子项目说明');
       const edited = await action(page, '/projects/' + created.id, 'PUT',
         () => dialog.getByRole('button', { name: '保存子项目', exact: true }).click());
       assert.equal(edited.name, editedName);
-      await row(editedName).waitFor();
+      await tab(editedName).waitFor();
 
-      await row(childControlSource.name).getByRole('button', { name: '复制', exact: true }).click();
+      await (await pane(childControlSource.id, childControlSource.name))
+        .getByRole('button', { name: '复制', exact: true }).click();
       dialog = page.getByRole('dialog', { name: '复制子项目' });
       await dialog.getByPlaceholder('新子项目名称', { exact: true }).fill(copyName);
       const acceptedJob = await action(page, '/projects/' + childControlSource.id + '/copy', 'POST',
@@ -377,9 +385,13 @@ async function choose(page, placeholder, optionName) {
       assert(Number.isSafeInteger(copied.result.projectId) && copied.result.projectId > 0);
       await jobCard.getByText('已完成', { exact: true }).waitFor();
       await jobCard.getByText('已复制 1 个文件', { exact: true }).waitFor();
-      await row(copyName).waitFor();
+      const jobsDrawer = page.locator('.project-copy-jobs-drawer');
+      await jobsDrawer.locator('.arco-drawer-close-icon').click();
+      await jobsDrawer.waitFor({ state: 'hidden' });
+      await tab(copyName).waitFor();
 
-      await row(copyName).getByRole('button', { name: copyName, exact: true }).click();
+      await (await pane(copied.result.projectId, copyName))
+        .getByRole('button', { name: '在独立页面打开' + copyName, exact: true }).click();
       await page.waitForURL(s.base + '/projects/' + copied.result.projectId);
       await page.getByRole('row').filter({ hasText: copiedFileName }).waitFor();
       await page.getByRole('button', { name: '查看复制履历', exact: true }).click();
@@ -399,12 +411,11 @@ async function choose(page, placeholder, optionName) {
       assert.equal(copiedMessages.total, 0);
 
       await page.getByRole('button', { name: '返回主项目', exact: true }).click();
-      await row(editedName).waitFor();
-      await row(editedName).getByRole('button', { name: '删除', exact: true }).click();
+      await (await pane(created.id, editedName)).getByRole('button', { name: '删除', exact: true }).click();
       await action(page, '/projects/' + created.id, 'DELETE', () =>
         page.locator('.arco-popconfirm:visible').last()
           .getByRole('button', { name: '确定', exact: true }).click());
-      await row(editedName).waitFor({ state: 'detached' });
+      await tab(editedName).waitFor({ state: 'detached' });
       await api(adminContext, 'GET', '/projects/' + created.id, undefined, adminToken, 404);
     });
 

@@ -25,6 +25,7 @@
     "@tanstack/react-query": "5.103.2",
     "axios": "^1.20.0",
     "dayjs": "1.11.23",
+    "dockview-react": "8.3.1",
     "exceljs": "4.4.0",
     "lodash": "4.18.1",
     "pdfjs-dist": "6.3.289",

@@ -1,21 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Badge, Button, Card, Descriptions, Empty, Form, Input, Message, Modal, Popconfirm, Progress, Select, Space, Spin, Table, Tag, Typography,
+  Badge, Button, Card, Descriptions, Drawer, Empty, Form, Input, Message, Modal, Popconfirm, Progress, Select, Space, Spin, Tag, Typography,
 } from '@arco-design/web-react'
-import { IconDown, IconPlus } from '@arco-design/web-react/icon'
+import { IconDown, IconPlus, IconRefresh } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
 import { isAxiosError } from 'axios'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { createProjectCopyJob, unwrapCopyJob } from '../../api/copyJobs'
-import { actionSlots } from '../../components/ActionSlots'
 import ProjectCopyJobsPanel from '../../components/project-copy-jobs/ProjectCopyJobsPanel'
-import { useProjectCopyJobs } from '../../hooks/useProjectCopyJobs'
+import { isCopyJobActive, useProjectCopyJobs } from '../../hooks/useProjectCopyJobs'
 import { useAuth } from '../../store/auth'
 import { useCollaboration } from '../../store/collaboration'
 import {
   type ProjectSummary, type ProjectGroupDetail as ProjectGroupDetailData, PROJECT_STATUS, fmtTime,
 } from '../../api/types'
 import { textLengthRule } from '../../utils/textRules'
+import SubprojectDock, { type SubprojectDockHandle } from './SubprojectDock'
+import type { SubprojectDockContextValue } from './subprojectDockContext'
 import './ProjectDetail.css'
 import type { ApiResponses } from '../../api/types'
 
@@ -45,6 +46,9 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const [loadError, setLoadError] = useState(false)
   const [summaryExpanded, setSummaryExpanded] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
+  const [groupRefreshKey, setGroupRefreshKey] = useState(0)
+  const [copyJobsOpen, setCopyJobsOpen] = useState(false)
+  const dockRef = useRef<SubprojectDockHandle>(null)
   const [editing, setEditing] = useState<ProjectSummary | null>(null)
   const [childModalOpen, setChildModalOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -57,8 +61,6 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const pendingUnknownCopies = useRef(new Map<number, { idempotencyKey: string; name: string }>())
   const knownSucceededCopyJobs = useRef<Set<number>>(new Set())
   const copyJobsInitialized = useRef(false)
-  const statusInFlight = useRef(new Set<number>())
-  const [statusUpdating, setStatusUpdating] = useState<Set<number>>(() => new Set())
   const [transferOpen, setTransferOpen] = useState(false)
   const [ownerOptions, setOwnerOptions] = useState<OwnerOption[]>([])
   const [ownerOptionsLoading, setOwnerOptionsLoading] = useState(false)
@@ -76,6 +78,8 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const load = useCallback(() => {
     setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
   }, [])
+  // 面板内的流程、文件和留言操作只需刷新主项目进度与子项目状态，不必重置复制任务。
+  const refreshGroup = useCallback(() => setGroupRefreshKey((value) => value + 1), [])
 
   useEffect(() => {
     if (!validId) return
@@ -95,7 +99,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false; controller.abort() }
-  }, [groupId, reloadKey, revision, syncStatus, validId])
+  }, [groupId, groupRefreshKey, reloadKey, revision, syncStatus, validId])
 
   useEffect(() => {
     if (!canReadCopyJobs || copyJobs.unavailable) {
@@ -127,15 +131,51 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     if (newSuccess) load()
   }, [canReadCopyJobs, copyJobs.jobs, copyJobs.loading, copyJobs.ready, copyJobs.unavailable, load])
 
+  const projects = data?.projects
+  const projectMap = useMemo(() => new Map((projects ?? []).map((project) => [project.id, project])), [projects])
+  const canCreateChild = Boolean(canWrite && hasPerm('project:create'))
+  const canUpdateChild = Boolean(canWrite && hasPerm('project:update'))
+  const canDeleteChild = Boolean(isInternal && hasPerm('project:delete'))
+  const copyReady = copyJobs.ready && !copyJobs.loading
+  const copyLoading = copyJobs.loading
+  // 面板中的管理按钮复用本页的弹窗、复制幂等键和防重状态；这些处理函数不依赖主项目数据，可在加载前定义。
+  const openEdit = useCallback((project: ProjectSummary) => {
+    setEditing(project); form.setFieldsValue({ name: project.name, description: project.description }); setChildModalOpen(true)
+  }, [form])
+  const openCopy = useCallback((project: ProjectSummary) => {
+    if (!copyReady) return
+    const pending = pendingUnknownCopies.current.get(project.id)
+    setCopyOutcomeUnknown(Boolean(pending))
+    copyIdempotencyKey.current = pending?.idempotencyKey || null
+    setCopySource(project); copyForm.setFieldsValue({ name: suggestedCopyName(project.name) })
+    if (pending) copyForm.setFieldsValue({ name: pending.name })
+  }, [copyForm, copyReady])
+  const remove = useCallback(async (project: ProjectSummary) => {
+    try { await http.delete<ApiResponses['DELETE /projects/{id}']>(`/projects/${project.id}`); Message.success('子项目已删除'); load() }
+    catch { /* 请求错误由统一拦截器提示。 */ }
+  }, [load])
+  const dockContext = useMemo<SubprojectDockContextValue>(() => ({
+    projects: projectMap,
+    onGroupChanged: refreshGroup,
+    renderManageActions: (project) => (
+      <>
+        {canCreateChild && <Button size="mini" type="text" disabled={!copyReady} loading={copyLoading} onClick={() => openCopy(project)}>复制</Button>}
+        {canUpdateChild && ['DRAFT', 'IN_PROGRESS'].includes(project.status) && <Button size="mini" type="text" onClick={() => openEdit(project)}>编辑</Button>}
+        {canDeleteChild && ['DRAFT', 'TERMINATED'].includes(project.status) && (
+          <Popconfirm title={`确认删除子项目“${project.name}”？仅草稿或已终止且无文件、留言、上传和复制履历时可删除。`} onOk={() => remove(project)}>
+            <Button size="mini" type="text" status="danger">删除</Button>
+          </Popconfirm>
+        )}
+      </>
+    ),
+  }), [canCreateChild, canDeleteChild, canUpdateChild, copyLoading, copyReady, openCopy, openEdit, projectMap, refreshGroup, remove])
+
   if (!validId) return <div className="project-group-load-state"><Empty description="主项目地址无效" /><Button type="primary" onClick={() => navigate('/projects')}>返回项目列表</Button></div>
   if (loading && !data) return <div className="project-group-load-state"><Spin size={36} /></div>
   if (!data) return <div className="project-group-load-state"><Empty description="主项目加载失败或没有访问权限" /><Button type="primary" onClick={load}>重试</Button></div>
 
   const group = data.group
   const openCreate = () => { setEditing(null); form.resetFields(); setChildModalOpen(true) }
-  const openEdit = (project: ProjectSummary) => {
-    setEditing(project); form.setFieldsValue({ name: project.name, description: project.description }); setChildModalOpen(true)
-  }
   const closeChildModal = () => { if (!saving) setChildModalOpen(false) }
   const submitChild = async () => {
     if (saveInFlight.current) return
@@ -152,14 +192,6 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     } catch {
       /* 请求错误由统一拦截器提示，保留弹窗内容供重试。 */
     } finally { saveInFlight.current = false; setSaving(false) }
-  }
-  const openCopy = (project: ProjectSummary) => {
-    if (!copyJobs.ready || copyJobs.loading) return
-    const pending = pendingUnknownCopies.current.get(project.id)
-    setCopyOutcomeUnknown(Boolean(pending))
-    copyIdempotencyKey.current = pending?.idempotencyKey || null
-    setCopySource(project); copyForm.setFieldsValue({ name: suggestedCopyName(project.name) })
-    if (pending) copyForm.setFieldsValue({ name: pending.name })
   }
   const submitCopy = async () => {
     if (!copySource || copyInFlight.current) return
@@ -181,6 +213,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       const job = unwrapCopyJob(response.data)
       copyJobs.upsert(job)
       Message.success('复制任务已创建，可在复制任务中查看进度')
+      setCopyJobsOpen(true)
       pendingUnknownCopies.current.delete(copySource.id)
       setCopyOutcomeUnknown(false)
       setCopySource(null); copyForm.resetFields(); copyIdempotencyKey.current = null
@@ -202,13 +235,6 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       if (!preserveIdempotencyKey) copyIdempotencyKey.current = null
       copyInFlight.current = false; setCopying(false)
     }
-  }
-  const changeStatus = async (project: ProjectSummary, next: string) => {
-    if (statusInFlight.current.has(project.id)) return
-    statusInFlight.current.add(project.id); setStatusUpdating(new Set(statusInFlight.current))
-    try { await http.put<ApiResponses['PUT /projects/{id}/status']>(`/projects/${project.id}/status`, { status: next }); Message.success('子项目状态已更新'); load() }
-    catch { /* 请求错误由统一拦截器提示，解除当前行锁后可重试。 */ }
-    finally { statusInFlight.current.delete(project.id); setStatusUpdating(new Set(statusInFlight.current)) }
   }
   const canTransfer = isInternal && hasPerm('project:transfer')
   const openTransfer = () => {
@@ -232,32 +258,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       /* 请求错误由统一拦截器提示，保留弹窗供重试。 */
     } finally { transferInFlight.current = false; setTransferring(false) }
   }
-  const remove = async (project: ProjectSummary) => {
-    try { await http.delete<ApiResponses['DELETE /projects/{id}']>(`/projects/${project.id}`); Message.success('子项目已删除'); load() }
-    catch { /* 请求错误由统一拦截器提示。 */ }
-  }
-  const statusActions = (project: ProjectSummary) => {
-    if (project.status === 'DRAFT') return [{ key: 'IN_PROGRESS', text: '开始' }]
-    if (project.status === 'IN_PROGRESS') return [{ key: 'TERMINATED', text: '终止' }]
-    if (project.status === 'TERMINATED') return [{ key: 'IN_PROGRESS', text: '重新开始' }]
-    return []
-  }
-  const columns = [
-    { title: '子项目', dataIndex: 'name', width: 180, ellipsis: true, render: (value: string, project: ProjectSummary) => <Button type="text" size="small" onClick={() => navigate(`/projects/${project.id}`)}>{value}</Button> },
-    { title: '状态', dataIndex: 'status', width: 110, align: 'center' as const, render: (value: string) => <Tag color={PROJECT_STATUS[value]?.color}>{PROJECT_STATUS[value]?.text || value}</Tag> },
-    { title: '未读留言', dataIndex: 'unreadMessages', width: 100, align: 'center' as const, render: (value?: number) => value ? <Badge count={value} /> : '-' },
-    { title: '项目说明', dataIndex: 'description', ellipsis: true, render: display },
-    { title: '操作', width: 290, align: 'center' as const, fixed: 'right' as const, render: (_: unknown, project: ProjectSummary) => {
-      const nextStatuses = statusActions(project)
-      return actionSlots([
-        <Button key="enter" size="mini" type="text" onClick={() => navigate(`/projects/${project.id}`)}>进入协作</Button>,
-        canWrite && hasPerm('project:create') && <Button key="copy" size="mini" type="text" disabled={!copyJobs.ready || copyJobs.loading} loading={copyJobs.loading} onClick={() => openCopy(project)}>复制</Button>,
-        canWrite && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(project.status) && <Button key="edit" size="mini" type="text" onClick={() => openEdit(project)}>编辑</Button>,
-        isInternal && hasPerm('project:status') && nextStatuses[0] && <Button key={nextStatuses[0].key} size="mini" type="text" status={nextStatuses[0].key === 'TERMINATED' ? 'danger' : undefined} loading={statusUpdating.has(project.id)} disabled={statusUpdating.has(project.id)} onClick={() => changeStatus(project, nextStatuses[0].key)}>{nextStatuses[0].text}</Button>,
-        isInternal && hasPerm('project:delete') && ['DRAFT', 'TERMINATED'].includes(project.status) && <Popconfirm key="delete" title={`确认删除子项目“${project.name}”？仅草稿或已终止且无文件、留言、上传和复制履历时可删除。`} onOk={() => remove(project)}><Button size="mini" type="text" status="danger">删除</Button></Popconfirm>,
-      ], 'subproject')
-    } },
-  ]
+
   const progress = group.subprojectCount ? Math.round(group.completedCount / group.subprojectCount * 100) : 0
   const responsible = group.responsibleUserName
     ? `${group.responsibleUserName}${group.responsibleUserEmployeeNo ? `（${group.responsibleUserEmployeeNo}）` : ''}`
@@ -274,23 +275,37 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     }
   }
 
+  const activeCopyJobs = copyJobs.jobs.filter(isCopyJobActive).length
+  const showCopyJobs = canReadCopyJobs && !copyJobs.unavailable
+
   return (
     <div className="project-group-detail-page">
       {loadError && <div className="page-load-error"><Typography.Text type="warning">刷新失败，当前显示上次数据。</Typography.Text><Button size="small" onClick={load}>重试</Button></div>}
       <Card className="page-card project-group-summary-card">
         <div className="project-group-summary-heading">
           <div className="project-group-summary-title">
-            <Typography.Text type="secondary">主项目</Typography.Text>
-            <h1>{group.name}</h1>
+            <div className="project-group-summary-name">
+              <Typography.Text type="secondary">主项目</Typography.Text>
+              <h1>{group.name}</h1>
+              <Tag color={PROJECT_STATUS[group.status]?.color}>{PROJECT_STATUS[group.status]?.text}</Tag>
+            </div>
             <div className="project-group-summary-facts">
               <span><b>Robot 厂商</b>{supplier}</span>
               <span><b>负责人</b>{responsible}</span>
               <span><b>需求完成时间</b>{expectedCompletionDate}</span>
+              <span className="project-group-inline-progress"><b>验收进度</b><Progress percent={progress} size="small" showText={false} /><em>{group.completedCount}/{group.subprojectCount}</em></span>
+              <span className="project-group-inline-metrics">待验收 {group.pendingCount} · 已终止 {group.terminatedCount}</span>
             </div>
           </div>
-          <Space className="project-group-summary-actions">
-            <Tag color={PROJECT_STATUS[group.status]?.color}>{PROJECT_STATUS[group.status]?.text}</Tag>
+          <Space className="project-group-summary-actions" wrap size={8}>
+            {canCreateChild && <Button type="primary" size="small" icon={<IconPlus />} onClick={openCreate}>新增子项目</Button>}
+            {showCopyJobs && (
+              <Badge count={activeCopyJobs} dot={false}>
+                <Button size="small" onClick={() => setCopyJobsOpen(true)}>复制任务</Button>
+              </Badge>
+            )}
             {canTransfer && <Button size="small" disabled={group.pendingCount > 0} title={group.pendingCount > 0 ? '存在待验收子项目，暂不能变更负责人' : undefined} onClick={openTransfer}>变更负责人</Button>}
+            {data.projects.length > 1 && <Button size="small" icon={<IconRefresh />} title="恢复默认的子项目面板布局" onClick={() => dockRef.current?.resetLayout()}>重置布局</Button>}
             <Button
               type="text"
               size="small"
@@ -300,7 +315,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
             >
               {summaryExpanded ? '收起资料' : '查看资料'}<IconDown className={summaryExpanded ? 'is-expanded' : undefined} />
             </Button>
-            <Button onClick={() => navigate('/projects')}>返回项目列表</Button>
+            <Button size="small" onClick={() => navigate('/projects')}>返回项目列表</Button>
           </Space>
         </div>
         {summaryExpanded && <div id="project-group-extra-info" className="project-group-extra-info">
@@ -316,26 +331,39 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
             <Typography.Text>该 Robot 厂商的全部启用账号均可访问此主项目及其子项目；公司内部由负责人、主项目创建人及具备查看全部项目权限的账号访问。</Typography.Text>
           </div>
           {group.description && <div className="project-summary-description"><span className="project-summary-description-label">主项目说明</span><Typography.Text>{group.description}</Typography.Text></div>}
+          <div className="project-summary-description"><span className="project-summary-description-label">面板布局</span><Typography.Text type="secondary">拖动子项目标签可停靠到任意位置或合并为标签组，拖动分隔条调整大小，双击标签最大化；布局按账号保存在本浏览器。</Typography.Text></div>
         </div>}
-        <div className="project-group-overview">
-          <div className="project-group-progress-main"><span>总体验收进度</span><Progress percent={progress} showText /></div>
-          <div className="project-group-metrics"><span>子项目 {group.subprojectCount}</span><span>已验收 {group.completedCount}</span><span>待验收 {group.pendingCount}</span><span>已终止 {group.terminatedCount}</span></div>
+      </Card>
+
+      {data.projects.length ? (
+        <SubprojectDock ref={dockRef} groupId={groupId} userId={user?.id} projects={data.projects} context={dockContext} />
+      ) : (
+        <div className="project-group-dock-empty">
+          <Empty description={canCreateChild ? '暂无子项目，新增后会在此并列显示子项目工作区' : '暂无子项目'} />
         </div>
-      </Card>
+      )}
 
-      <Card className="page-card project-group-children-card">
-        <div className="project-group-section-heading"><div><h2>子项目</h2><Typography.Text type="secondary">文件、留言、动态与验收相互独立</Typography.Text></div>{canWrite && hasPerm('project:create') && <Button type="primary" icon={<IconPlus />} onClick={openCreate}>新增子项目</Button>}</div>
-        <Table className="page-table" rowKey="id" columns={columns} data={data.projects} pagination={false} scroll={{ x: 900, y: 'var(--page-table-scroll-y)' }} noDataElement={<Empty description="暂无子项目" />} />
-      </Card>
-
-      {canReadCopyJobs && !copyJobs.unavailable && (
-        <ProjectCopyJobsPanel
-          jobs={copyJobs.jobs}
-          loading={copyJobs.loading}
-          error={copyJobs.error}
-          onRetry={copyJobs.refresh}
-          onOpenResult={(projectId) => navigate(`/projects/${projectId}`)}
-        />
+      {showCopyJobs && (
+        <Drawer
+          className="project-copy-jobs-drawer"
+          width="min(560px, 100vw)"
+          title="复制任务"
+          visible={copyJobsOpen}
+          onCancel={() => setCopyJobsOpen(false)}
+          footer={null}
+        >
+          <ProjectCopyJobsPanel
+            jobs={copyJobs.jobs}
+            loading={copyJobs.loading}
+            error={copyJobs.error}
+            onRetry={copyJobs.refresh}
+            onOpenResult={(projectId) => {
+              // 副本属于当前主项目时直接切到它的面板，否则进入独立页面。
+              if (dockRef.current?.focusProject(projectId)) setCopyJobsOpen(false)
+              else navigate(`/projects/${projectId}`)
+            }}
+          />
+        </Drawer>
       )}
 
       <Modal className="form-dialog" title={editing ? '编辑子项目' : '新增子项目'} visible={childModalOpen} onOk={submitChild} onCancel={closeChildModal} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} okText={editing ? '保存子项目' : '创建子项目'} unmountOnExit>

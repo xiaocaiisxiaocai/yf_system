@@ -23,6 +23,10 @@ vi.mock('../../../store/auth', () => ({
     { getState: () => ({ generation: 1 }) },
   ),
 }))
+vi.mock('dockview-react', () => import('../../dockviewMock'))
+vi.mock('../../../components/FileTable', () => ({ default: () => <div>file table</div> }))
+vi.mock('../../../components/MessagePanel', () => ({ default: () => <div>messages</div> }))
+vi.mock('../../../components/ProjectActivityPanel', () => ({ default: () => <div>activity</div> }))
 vi.mock('../../../store/collaboration', () => ({
   useCollaboration: (selector: (state: { revision: string; status: string }) => unknown) => selector({ revision: '', status: 'connected' }),
 }))
@@ -140,6 +144,8 @@ describe('UI 事件失败保护', () => {
     mocks.permissions = ['project:list', 'project:status']
     mocks.get.mockImplementation(async (url: string) => {
       if (url === '/project-groups/3') { projectGets += 1; return { data: { group, projects: [project] } } }
+      if (url === '/projects/101') return { data: { ...project, workOrderNos: [] } }
+      if (url === '/projects/101/summary') return { data: { unreadMessages: 0 } }
       throw new Error(`unexpected GET ${url}`)
     })
     mocks.put.mockImplementation(async (url: string) => {
@@ -152,11 +158,13 @@ describe('UI 事件失败保护', () => {
 
     const start = await screen.findByRole('button', { name: '开始' })
     await user.click(start)
-    expect(start).toBeDisabled()
+    await waitFor(() => expect(start).toHaveClass('arco-btn-loading'))
+    await user.click(start)
+    expect(attempts).toBe(1)
     await act(async () => firstWrite.reject(new Error('status failed')))
-    await waitFor(() => expect(start).toBeEnabled())
+    await waitFor(() => expect(start).not.toHaveClass('arco-btn-loading'))
     expect(projectGets).toBe(1)
-    expect(screen.getByText('失败重试子项目')).toBeVisible()
+    expect(screen.getByRole('region', { name: '失败重试子项目' })).toBeVisible()
 
     await user.click(start)
     await waitFor(() => expect(attempts).toBe(2))

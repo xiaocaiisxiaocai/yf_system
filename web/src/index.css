@@ -718,6 +718,12 @@ html, body, #root {
   max-width: 100%;
 }
 
+/* 子项目面板内的紧凑文件表：单元格左右留白减半，说明收进问号提示。 */
+.file-table--compact .arco-table-th-item,
+.file-table--compact .arco-table-cell { padding-left: 8px; padding-right: 8px; }
+.file-table--compact .arco-table-pagination { margin-top: 8px; }
+.file-table-hint-icon { color: var(--color-text-3); font-size: 16px; cursor: help; vertical-align: middle; }
+
 /* 操作日志：高密度筛选 + 可扫描的结构化记录。 */
 .audit-heading {
   display: flex;

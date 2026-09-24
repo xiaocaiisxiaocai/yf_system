@@ -239,12 +239,27 @@
   flex: 0 0 auto;
 }
 
+.project-group-summary-card > .arco-card-body {
+  padding: 12px 16px;
+}
+
 .project-group-summary-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 12px;
+}
+
+.project-group-summary-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.project-group-summary-name .arco-tag {
+  align-self: center;
 }
 
 .project-group-summary-title {
@@ -280,6 +295,25 @@
   font-weight: 400;
 }
 
+.project-group-inline-progress {
+  display: inline-flex;
+  align-items: center;
+}
+
+.project-group-inline-progress .arco-progress {
+  width: 120px;
+  margin-right: 8px;
+}
+
+.project-group-inline-progress em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.project-group-inline-metrics {
+  color: var(--color-text-3);
+}
+
 .project-group-summary-actions {
   flex: 0 0 auto;
   align-items: center;
@@ -295,32 +329,28 @@
 }
 
 .project-group-extra-info {
+  margin-top: 10px;
   padding-top: 2px;
   border-top: 1px solid var(--color-neutral-3);
 }
 
-.project-group-children-card {
-  min-height: 0;
-  flex: 1;
-  overflow: hidden;
-}
-
-.project-group-children-card > .arco-card-body {
-  display: flex;
-  height: 100%;
-  min-height: 0;
-  flex-direction: column;
-}
-
-.project-group-children-card .arco-table-container {
-  min-height: 0;
-  flex: 1;
-}
-
 .project-group-section-heading,
-.project-group-overview,
-.project-group-metrics,
-.project-group-progress-main,
+.project-group-progress {
+  display: flex;
+  align-items: center;
+}
+
+.project-group-section-heading {
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.project-group-section-heading h2 {
+  margin: 0 0 2px;
+  font-size: 16px;
+}
+
 .project-group-progress {
   display: flex;
   align-items: center;
@@ -384,12 +414,6 @@
     overflow: auto;
   }
 
-  .project-group-overview {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 12px;
-  }
-
   .project-group-summary-heading {
     flex-direction: column;
     align-items: stretch;
@@ -400,9 +424,5 @@
     width: 100%;
     justify-content: flex-end;
     flex-wrap: wrap;
-  }
-
-  .project-group-progress-main {
-    min-width: 0;
   }
 }

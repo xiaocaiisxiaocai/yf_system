@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import {
   Button, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
-import { IconDownload, IconEye, IconUpload, IconDelete, IconClose } from '@arco-design/web-react/icon'
+import { IconDownload, IconEye, IconUpload, IconDelete, IconClose, IconQuestionCircle } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from '../store/auth'
 import { type FileItem, type PageResp, fmtSize, fmtTime } from '../api/types'
@@ -27,7 +27,15 @@ interface Props {
   onOpenCopyHistory?: () => void
   /** 供应商选择上传后提交验收时，用于刷新父组件的项目/流程状态。 */
   onProjectChanged?: () => void
+  /** 主项目页的子项目面板较窄：收紧列宽、改用小号表格，说明文字收进提示。 */
+  compact?: boolean
 }
+
+const FILE_DIRECTION_HINT = '文件方向按上传账号自动记录；文件当前不统计已读状态。'
+// 每列宽度：[常规, 紧凑]；紧凑模式的横向滚动宽度由列宽求和，避免列之间出现大段空白。
+const COLUMN_WIDTHS = {
+  name: [200, 170], direction: [130, 116], size: [90, 72], uploader: [90, 76], createdAt: [180, 150], actions: [140, 108],
+} as const
 
 const PDF_PREVIEW_MAX_BYTES = 50 * 1024 * 1024
 
@@ -51,7 +59,8 @@ function WatermarkedPreview({ employeeNo, realName, children }: { employeeNo?: s
   </div>
 }
 
-export default function FileTable({ projectId, projectStatus, targetId, onOpenCopyHistory, onProjectChanged }: Props) {
+export default function FileTable({ projectId, projectStatus, targetId, onOpenCopyHistory, onProjectChanged, compact = false }: Props) {
+  const w = compact ? 1 : 0
   const [previewToolbar, setPreviewToolbar] = useState<HTMLDivElement | null>(null)
   const revision = useCollaboration((state) => state.revision)
   const syncStatus = useCollaboration((state) => state.status)
@@ -168,7 +177,7 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
     {
       title: '文件名',
       dataIndex: 'originalName',
-      width: 200,
+      width: COLUMN_WIDTHS.name[w],
       ellipsis: true,
       render: (v: string, r: FileItem) => (
         <Space size={4} className="file-name-cell">
@@ -190,16 +199,16 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
       ),
     },
     {
-      title: '方向', dataIndex: 'direction', width: 130, align: 'center' as const,
+      title: '方向', dataIndex: 'direction', width: COLUMN_WIDTHS.direction[w], align: 'center' as const,
       render: (v: string) => v === 'C2S'
         ? <Tag color="arcoblue">公司 → 供应商</Tag>
         : <Tag color="purple">供应商 → 公司</Tag>,
     },
-    { title: '大小', dataIndex: 'sizeBytes', width: 90, align: 'center' as const, render: fmtSize },
-    { title: '上传人', dataIndex: 'uploaderName', width: 90, align: 'center' as const, ellipsis: true },
-    { title: '上传时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
+    { title: '大小', dataIndex: 'sizeBytes', width: COLUMN_WIDTHS.size[w], align: 'center' as const, render: fmtSize },
+    { title: '上传人', dataIndex: 'uploaderName', width: COLUMN_WIDTHS.uploader[w], align: 'center' as const, ellipsis: true },
+    { title: '上传时间', dataIndex: 'createdAt', width: COLUMN_WIDTHS.createdAt[w], align: 'center' as const, render: fmtTime },
     {
-      title: '操作', width: 140, fixed: 'right' as const, align: 'center' as const,
+      title: '操作', width: COLUMN_WIDTHS.actions[w], fixed: 'right' as const, align: 'center' as const,
       render: (_: unknown, r: FileItem) => actionSlots([
         hasPerm('file:download') && (
           <Button key="download" size="mini" type="text" icon={<IconDownload />} aria-label="下载文件"
@@ -212,16 +221,20 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
         ),
       ], 'file'),
     },
-  ], [hasPerm, onOpenCopyHistory, projectStatus, remove])
+  ], [hasPerm, onOpenCopyHistory, projectStatus, remove, w])
+  const scrollX = compact
+    ? Object.values(COLUMN_WIDTHS).reduce((sum, widths) => sum + widths[1], 0) + (hasPerm('file:download') ? 40 : 0)
+    : 960
 
   return (
-    <div>
-      <Space className="responsive-toolbar" style={{ marginBottom: 12, width: '100%', justifyContent: 'space-between' }}>
+    <div className={compact ? 'file-table file-table--compact' : 'file-table'}>
+      <Space className="responsive-toolbar" size={compact ? 8 : undefined} style={{ marginBottom: compact ? 8 : 12, width: '100%', justifyContent: 'space-between' }}>
         <Space>
           <Select
             allowClear
             placeholder="方向"
-            style={{ width: 150 }}
+            size={compact ? 'small' : undefined}
+            style={{ width: compact ? 124 : 150 }}
             onChange={(v) => {
               setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
               setPage(1)
@@ -234,7 +247,8 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
           <Input.Search
             allowClear
             placeholder="文件名"
-            style={{ width: 200 }}
+            size={compact ? 'small' : undefined}
+            style={{ width: compact ? 160 : 200 }}
             onSearch={(v) => {
               setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
               setPage(1)
@@ -246,23 +260,30 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
               setKeyword('')
             }}
           />
+          {compact && (
+            <Tooltip content={FILE_DIRECTION_HINT}>
+              <IconQuestionCircle className="file-table-hint-icon" aria-label={FILE_DIRECTION_HINT} />
+            </Tooltip>
+          )}
         </Space>
         <Space>
           {selected.length > 0 && hasPerm('file:download') && (
-            <Button icon={<IconDownload />} onClick={batchDownload} disabled={loading || batchDownloading} loading={batchDownloading}>
+            <Button size={compact ? 'small' : undefined} icon={<IconDownload />} onClick={batchDownload} disabled={loading || batchDownloading} loading={batchDownloading}>
               打包下载（{selected.length}）
             </Button>
           )}
           {!targetId && hasPerm('file:upload') && projectStatus === 'IN_PROGRESS' && (
-            <Button type="primary" icon={<IconUpload />} onClick={startUpload}>
+            <Button type="primary" size={compact ? 'small' : undefined} icon={<IconUpload />} onClick={startUpload}>
               上传文件
             </Button>
           )}
         </Space>
       </Space>
-      <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-        文件方向按上传账号自动记录；文件当前不统计已读状态。
-      </Typography.Text>
+      {!compact && (
+        <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+          {FILE_DIRECTION_HINT}
+        </Typography.Text>
+      )}
 
       {loadError ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
@@ -278,12 +299,14 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
             selectedRowKeys: selected,
             onChange: (keys) => setSelected(keys as number[]),
           } : undefined}
-          scroll={{ x: 960 }}
+          size={compact ? 'small' : undefined}
+          scroll={{ x: scrollX }}
           columns={columns}
           pagination={{
             total: data.total,
             current: page,
             pageSize,
+            size: compact ? 'small' : 'default',
             showTotal: true,
             onChange: (p, ps) => {
               setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
