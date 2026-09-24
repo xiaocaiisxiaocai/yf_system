@@ -8,7 +8,7 @@ vi.mock('../../../api/client', async () => {
 })
 vi.mock('../../../store/auth', async () => {
   const state = await import('./mockState')
-  return { useAuth: () => state.messageAuthState() }
+  return { useAuth: state.selectMessageAuthState }
 })
 
 import MessagePanel from '../../../components/MessagePanel'
@@ -58,6 +58,20 @@ describe('留言修订同步与竞争', () => {
     vi.stubGlobal('IntersectionObserver', undefined)
   })
   afterEach(() => vi.useRealTimers())
+
+  it('bounds notification target lookup to ten pages and reports an unloaded target', async () => {
+    const rows = Array.from({ length: 260 }, (_, index) => messageRow(260 - index))
+    const requests: number[] = []
+    messageMocks.get.mockImplementation(async (_url: string, { params }: { params: { beforeId?: number } }) => {
+      requests.push(params.beforeId ?? 0)
+      return messagePage(rows.filter(row => params.beforeId === undefined || row.id < params.beforeId).slice(0, 20), rows.length)
+    })
+
+    const view = renderMessagePanel({ targetId: 1, revision: 'bounded' })
+    await waitFor(() => expect(requests).toHaveLength(10))
+    expect(renderedMessageIds(view.container)).toHaveLength(200)
+    expect(screen.getByRole('status')).toHaveTextContent('未在最近加载的留言中找到目标')
+  })
 
   it('message revision automatically shows the new message while preserving the draft', async () => {
     setMessagePermissions('message:create')

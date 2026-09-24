@@ -13,6 +13,24 @@ namespace Yf.Api.Tests;
 [Collection(ConnectionLifecycleCollection.Name)]
 public sealed class SchemaShapeTests
 {
+    private static readonly string[] ExpectedMigrations =
+    [
+        EfDatabaseLifecycle.InitialMigrationId,
+        "20260918153503_AddOemPlatform",
+        "20260923005853_DropOemPlatform",
+        "20260923032837_FileListIndex",
+        "20260923064746_UnreadWindowIndexes",
+        "20260923071427_RefreshTokenExpiryIndex",
+        "20260923094642_AddRobotPartCatalog",
+        "20260923131700_HardenSessionsAndQueryIndexes",
+        "20260923141854_AddProjectCopyJobs",
+        "20260923151307_RemoveManualAuditDeletion",
+        "20260924003253_AddUploadFingerprintsSharedBlobsAndIdentityRevision",
+        "20260924025646_AddDictionaryAndOwnerTransferPermissions",
+        "20260924062314_HardenDataIntegrityAndRetention",
+        "20260924065611_NarrowIdentityRevisionTriggers",
+    ];
+
     [Fact]
     public async Task RobotPartCatalogEmbeddedSnapshotIsCompleteAndPinned()
     {
@@ -94,7 +112,8 @@ public sealed class SchemaShapeTests
         Assert.Equal(hash, await conn.ExecuteScalarAsync<string>("SELECT password_hash FROM users WHERE employee_no='admin'"));
         Assert.Equal("RestartSentinel", await conn.ExecuteScalarAsync<string>("SELECT real_name FROM users WHERE employee_no='admin'"));
         Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT must_change_password FROM users WHERE employee_no='admin'"));
-        Assert.Equal(12, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+        Assert.Equal(ExpectedMigrations.Length,
+            await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
     }
 
     [Fact(Timeout = 120_000)]
@@ -181,20 +200,7 @@ public sealed class SchemaShapeTests
         await database.InitializeAsync(ct);
         await using (var conn = await database.Database.OpenAsync(ct))
         {
-            Assert.Equal(new[] {
-                    EfDatabaseLifecycle.InitialMigrationId,
-                    "20260918153503_AddOemPlatform",
-                    "20260923005853_DropOemPlatform",
-                    "20260923032837_FileListIndex",
-                    "20260923064746_UnreadWindowIndexes",
-                    "20260923071427_RefreshTokenExpiryIndex",
-                    "20260923094642_AddRobotPartCatalog",
-                    "20260923131700_HardenSessionsAndQueryIndexes",
-                    "20260923141854_AddProjectCopyJobs",
-                    "20260923151307_RemoveManualAuditDeletion",
-                    "20260924003253_AddUploadFingerprintsSharedBlobsAndIdentityRevision",
-                    "20260924025646_AddDictionaryAndOwnerTransferPermissions",
-                },
+            Assert.Equal(ExpectedMigrations,
                 (await conn.QueryAsync<string>("SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId")).ToArray());
             Assert.False(await TableExistsAsync(conn, "yf_schema_migrations", ct));
             Assert.False(await TableExistsAsync(conn, "seaql_migrations", ct));
@@ -323,7 +329,8 @@ public sealed class SchemaShapeTests
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await using var conn = await database.Database.OpenAsync(ct);
-        Assert.Equal(12, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+        Assert.Equal(ExpectedMigrations.Length,
+            await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM users WHERE employee_no='admin'"));
         Assert.Equal(27, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
         Assert.Equal(7, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
@@ -392,7 +399,6 @@ public sealed class SchemaShapeTests
         AppDb database,
         AppOptions options) : IAsyncDisposable
     {
-        private static readonly SemaphoreSlim BootstrapEnvironmentLock = new(1, 1);
         private readonly string initialApplicationConnectionString = AppDb.BuildConnectionString(options);
         public AppOptions Options { get; } = options;
         public AppDb Database { get; } = database;
@@ -490,18 +496,7 @@ public sealed class SchemaShapeTests
 
         public async Task InitializeAsync(CancellationToken ct)
         {
-            await BootstrapEnvironmentLock.WaitAsync(ct);
-            var previous = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD");
-            try
-            {
-                Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", "SchemaTest#2026");
-                await SchemaBootstrap.InitializeEmptyAsync(Database, ct);
-            }
-            finally
-            {
-                Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", previous);
-                BootstrapEnvironmentLock.Release();
-            }
+            await SchemaBootstrap.InitializeEmptyAsync(Database, "SchemaTest#2026", ct);
         }
 
         public async Task ExecuteAsync(string sql, CancellationToken ct)

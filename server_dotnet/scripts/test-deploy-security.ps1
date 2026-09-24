@@ -25,6 +25,21 @@ Protect-YfDirectory $root
 try {
     $storage=Join-Path $root 'storage'
     New-Item -ItemType Directory -Path $storage | Out-Null
+    $warningClient=Join-Path $root 'native-warning.cmd'
+    [IO.File]::WriteAllText($warningClient,"@echo off`r`necho 0`r`necho fixture warning 1>&2`r`nexit /b 0`r`n",(New-Object Text.UTF8Encoding($false)))
+    $warningLog=Join-Path $root 'native-warning.stderr.log'
+    $captured=Invoke-YfNativeCapture $warningClient @() $warningLog
+    if ($captured.ExitCode -ne 0 -or @($captured.Output).Count -ne 1 -or $captured.Output[0].Trim() -ne '0' -or
+        !(Test-Path -LiteralPath $warningLog -PathType Leaf) -or
+        (Get-Content -LiteralPath $warningLog -Raw) -notmatch 'fixture warning') {
+        throw 'Native stderr warning was not captured without interrupting Windows PowerShell 5.1.'
+    }
+    Write-Output 'PASS native stderr warning with exit zero remains nonfatal'
+    $failureClient=Join-Path $root 'native-failure.cmd'
+    [IO.File]::WriteAllText($failureClient,"@echo off`r`necho fixture failure 1>&2`r`nexit /b 7`r`n",(New-Object Text.UTF8Encoding($false)))
+    $failed=Invoke-YfNativeCapture $failureClient @() (Join-Path $root 'native-failure.stderr.log')
+    if ($failed.ExitCode -ne 7) { throw 'Native nonzero exit code was not preserved.' }
+    Write-Output 'PASS native nonzero exit code remains authoritative'
     Reject { Assert-YfSeparate @($storage,(Join-Path $storage 'appsettings.json')) } 'configuration inside writable storage refused'
     Reject { Assert-YfSeparate @((Join-Path $root 'site'),(Join-Path $root 'site\appsettings.json')) } 'configuration inside application refused'
     Reject { Assert-YfSeparate @((Join-Path $root 'package'),(Join-Path $root 'package\site')) } 'application inside package refused'
@@ -62,6 +77,18 @@ try {
         $singleWorkerSet -ge $siteCreated -or $singleWorkerValidated -ge $siteCreated) {
         throw 'Installer does not fix and verify the dedicated single-worker pool before creating the site.'
     }
+    foreach ($rollbackNeedle in @('$createdPool = $true','$createdSite = $true','Remove-Website -Name $SiteName',
+            'Remove-WebAppPool -Name $AppPoolName','Set-Acl -LiteralPath $storage -AclObject $storageAcl',
+            'Set-Acl -LiteralPath $ConfigPath -AclObject $configAcl','$copiedTargets += $destination')) {
+        if ($installScript.IndexOf($rollbackNeedle,[StringComparison]::Ordinal) -lt 0) {
+            throw "Installer rollback guard is missing: $rollbackNeedle"
+        }
+    }
+    if ($installScript.IndexOf('try {',[StringComparison]::Ordinal) -gt $firstDeploymentWrite -or
+        $installScript.IndexOf('Unsupported package manifest schema version.',[StringComparison]::Ordinal) -lt 0 -or
+        $installScript.IndexOf('Package length mismatch:',[StringComparison]::Ordinal) -lt 0) {
+        throw 'Installer does not wrap writes in rollback or fully validate manifest schema and lengths.'
+    }
     Write-Output 'PASS installer applies path, configuration, ACL and pre-write environment guards'
 
     $maintainScript=Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\deploy\maintain-iis.ps1') -Raw -Encoding UTF8
@@ -69,6 +96,18 @@ try {
         $maintainScript -notmatch [regex]::Escape('Set-YfExternalConfigurationFallback $Root')) {
         throw 'Formal IIS installation or maintenance does not clear bundled configuration fallback.'
     }
+    foreach ($maintenanceNeedle in @('$originalPhysicalPath=[string]$site.physicalPath','$migrationAttempted=$true',
+            'Invoke-YfReadiness $NewSiteRoot $targetConfig.Path','$pathSwitched=$true',
+            '-Name physicalPath -Value $originalPhysicalPath','[int]$HealthCheckWaitSeconds = 120')) {
+        if ($maintainScript.IndexOf($maintenanceNeedle,[StringComparison]::Ordinal) -lt 0) {
+            throw "Maintenance rollback/readiness guard is missing: $maintenanceNeedle"
+        }
+    }
+    if ($maintainScript.IndexOf('$migrationAttempted=$true',[StringComparison]::Ordinal) -gt
+        $maintainScript.IndexOf('Invoke-YfMigration $NewSiteRoot $targetConfig.Path',[StringComparison]::Ordinal)) {
+        throw 'Maintenance marks migration risk only after starting the migration.'
+    }
+    Write-Output 'PASS maintenance distinguishes reversible path switches from migration recovery'
     $externalSite=Join-Path $root 'external-site'
     New-Item -ItemType Directory -Path $externalSite | Out-Null
     $bundled='{"App":{"ConnectionString":"fixture-db","JwtSecret":"fixture-jwt","StorageRoot":"D:\\fixture","AutoInitializeDatabase":true,"BootstrapPassword":"fixture-bootstrap"}}'

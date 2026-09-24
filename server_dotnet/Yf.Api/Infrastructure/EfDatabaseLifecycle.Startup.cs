@@ -33,6 +33,8 @@ internal static partial class EfDatabaseLifecycle
             await connection.OpenAsync(ct);
         }
 
+        await UtcDatabaseSession.InitializeAsync(connection, ct);
+
         // Same lease as explicit initialization/migration, acquired before CREATE DATABASE.
         // A second IIS worker rechecks the completed schema instead of seeding twice.
         await using var lease = await MySqlNamedLock.TryAcquireAsync(

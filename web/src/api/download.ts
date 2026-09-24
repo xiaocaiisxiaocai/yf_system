@@ -1,10 +1,6 @@
 import { Message } from '@arco-design/web-react'
 import http from './client'
-
-type DownloadGrantResponse = {
-  url: string
-  expiresInSeconds: number
-}
+import type { ApiResponses } from './types'
 
 /**
  * 下载交给隐藏 iframe 导航：成功时响应是附件，由浏览器下载管理器接管（不会触发 load）；
@@ -62,11 +58,11 @@ function startNativeDownload(path: string) {
 }
 
 export async function downloadFile(id: number): Promise<void> {
-  const response = await http.post<DownloadGrantResponse>(`/files/${id}/download-grant`)
+  const response = await http.post<ApiResponses['POST /files/{id}/download-grant']>(`/files/${id}/download-grant`)
   startNativeDownload(response.data.url)
 }
 
 export async function downloadFiles(ids: number[]): Promise<void> {
-  const response = await http.post<DownloadGrantResponse>('/files/batch-download-grant', { ids })
+  const response = await http.post<ApiResponses['POST /files/batch-download-grant']>('/files/batch-download-grant', { ids })
   startNativeDownload(response.data.url)
 }

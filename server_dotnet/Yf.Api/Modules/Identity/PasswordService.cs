@@ -56,7 +56,8 @@ public static class PasswordService
     {
         Validate(password);
         var salt = RandomNumberGenerator.GetBytes(16);
-        var hash = await DeriveAsync("argon2id", password, salt, MemoryKb, Iterations, Parallelism, HashBytes, cancellationToken);
+        var hash = await DeriveAsync("argon2id", password, salt, MemoryKb, Iterations, Parallelism, HashBytes,
+            PasswordWorkload.Management, cancellationToken);
         return $"$argon2id$v=19$m={MemoryKb},t={Iterations},p={Parallelism}${B64(salt)}${B64(hash)}";
     }
 
@@ -79,15 +80,26 @@ public static class PasswordService
     {
         if (Encoding.UTF8.GetByteCount(password) > MaxPasswordBytes || !TryParse(encodedHash, out var phc)) return false;
         var actual = await DeriveAsync(phc.Algorithm, password, phc.Salt, phc.MemoryKb, phc.Iterations,
-            phc.Parallelism, phc.Hash.Length, cancellationToken);
+            phc.Parallelism, phc.Hash.Length, PasswordWorkload.Login, cancellationToken);
+        return CryptographicOperations.FixedTimeEquals(actual, phc.Hash);
+    }
+
+    internal static async Task<bool> VerifyForPasswordChangeAsync(
+        string password, string encodedHash, CancellationToken cancellationToken = default)
+    {
+        if (Encoding.UTF8.GetByteCount(password) > MaxPasswordBytes || !TryParse(encodedHash, out var phc)) return false;
+        var actual = await DeriveAsync(phc.Algorithm, password, phc.Salt, phc.MemoryKb, phc.Iterations,
+            phc.Parallelism, phc.Hash.Length, PasswordWorkload.Management, cancellationToken);
         return CryptographicOperations.FixedTimeEquals(actual, phc.Hash);
     }
 
     private static async Task<byte[]> DeriveAsync(string algorithm, string password, byte[] salt, int memoryKb,
-        int iterations, int parallelism, int hashBytes, CancellationToken cancellationToken)
+        int iterations, int parallelism, int hashBytes, PasswordWorkload workload, CancellationToken cancellationToken)
     {
         if (!await HashSlots.WaitAsync(HashQueueTimeout, cancellationToken))
-            throw new ApiException(429, 42901, "登录请求繁忙，请稍后再试");
+            throw workload == PasswordWorkload.Login
+                ? LoginBusyException()
+                : ApiException.PasswordRateLimited("密码处理繁忙，请稍后再试");
         try
         {
             Argon2 argon = algorithm switch
@@ -105,6 +117,11 @@ public static class PasswordService
         }
         finally { HashSlots.Release(); }
     }
+
+    internal static ApiException LoginBusyException() =>
+        ApiException.TooManyRequests("登录请求繁忙，请稍后再试");
+
+    private enum PasswordWorkload { Login, Management }
 
     private static bool TryParse(string value, out Phc phc)
     {

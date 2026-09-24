@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   uploadFingerprint: vi.fn(),
   blobSha256: vi.fn(),
   disposeHasher: vi.fn(),
+  createChunkHasher: vi.fn(),
 }))
 
 vi.mock('../../../api/client', () => ({
@@ -19,7 +20,7 @@ vi.mock('../../../api/file-hash', () => ({
   fileMd5: mocks.fileMd5,
   uploadFingerprint: mocks.uploadFingerprint,
   // Chunk digests come from a per-upload Worker-backed hasher; the mock keeps one shared digest source.
-  createChunkHasher: () => ({ sha256: mocks.blobSha256, dispose: mocks.disposeHasher }),
+  createChunkHasher: mocks.createChunkHasher,
 }))
 
 import ChunkUploader from '../../../components/ChunkUploader'
@@ -103,7 +104,67 @@ describe('ChunkUploader DOM contracts', () => {
     mocks.uploadFingerprint.mockReset()
     mocks.blobSha256.mockReset()
     mocks.disposeHasher.mockReset()
+    mocks.createChunkHasher.mockReset()
+    mocks.createChunkHasher.mockImplementation(() => ({ sha256: mocks.blobSha256, dispose: mocks.disposeHasher }))
     installDefaultHttp()
+  })
+
+  it('creates hash workers only after a file receives one of the two upload slots', async () => {
+    mocks.put.mockImplementation(abortedUpload)
+    const view = renderUploader()
+    choose(uploadFile('a'), uploadFile('b'), uploadFile('c'))
+    fireEvent.click(startButton())
+
+    await waitFor(() => expect(mocks.createChunkHasher).toHaveBeenCalledTimes(2))
+    expect(sessionCalls('init')).toHaveLength(2)
+    view.unmount()
+  })
+
+  it('reports whole-file hash progress while upload fingerprinting is pending', async () => {
+    let releaseFingerprint!: (value: string) => void
+    mocks.uploadFingerprint.mockReturnValue(new Promise<string>((resolve) => { releaseFingerprint = resolve }))
+    mocks.fileMd5.mockImplementation(async (_file, _cancelled, onProgress: (fraction: number) => void) => {
+      onProgress(0.42)
+      return 'digest'
+    })
+    renderUploader()
+    choose(uploadFile('progress.bin'))
+    fireEvent.click(startButton())
+
+    expect(await screen.findByText('正在校验文件内容 42%')).toBeVisible()
+    releaseFingerprint('f'.repeat(64))
+    await screen.findByText('已完成')
+  })
+
+  it('limits chunk requests across files to four active requests', async () => {
+    let active = 0
+    let maximum = 0
+    let hold = true
+    const releases: Array<() => void> = []
+    mocks.post.mockImplementation((url: string, body?: { fileName?: string }) => {
+      if (url === '/uploads/init') return Promise.resolve(initResponse(body?.fileName ?? 'session', { totalChunks: 3 }))
+      return Promise.resolve({ data: { id: 99 } })
+    })
+    mocks.put.mockImplementation(() => {
+      active += 1
+      maximum = Math.max(maximum, active)
+      if (!hold) {
+        active -= 1
+        return Promise.resolve({ data: {} })
+      }
+      return new Promise((resolve) => releases.push(() => { active -= 1; resolve({ data: {} }) }))
+    })
+    const { callbacks } = renderUploader()
+    choose(uploadFile('a', 3), uploadFile('b', 3))
+    fireEvent.click(startButton())
+
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(4))
+    expect(maximum).toBe(4)
+    hold = false
+    releases.splice(0).forEach(release => release())
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(6))
+    await waitFor(() => expect(callbacks.onDone).toHaveBeenCalledTimes(2))
+    expect(maximum).toBe(4)
   })
 
   it('failed cancellation keeps the dialog and server session until a successful retry', async () => {

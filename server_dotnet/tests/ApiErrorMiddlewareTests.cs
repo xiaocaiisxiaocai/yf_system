@@ -7,6 +7,19 @@ namespace Yf.Api.Tests;
 
 public sealed class ApiErrorMiddlewareTests
 {
+    [Theory]
+    [InlineData(unchecked((int)0x80070070))]
+    [InlineData(unchecked((int)0x80070027))]
+    public async Task DiskFullErrorsReturnAnActionableStorageResponse(int hresult)
+    {
+        var middleware = new ApiErrorMiddleware(_ => throw new IOException("private path", hresult), new RecordingLogger());
+        var (status, body, _) = await InvokeAsync(middleware, "/api/v1/uploads/session/chunks/0");
+        Assert.Equal(507, status);
+        Assert.Equal(50701, body.GetProperty("code").GetInt32());
+        Assert.Equal("存储空间不足，请联系管理员", body.GetProperty("message").GetString());
+        Assert.DoesNotContain("private path", body.ToString());
+    }
+
     [Fact]
     public async Task UnexpectedErrorsReturnARequestIdAndLogTheFullException()
     {

@@ -43,7 +43,8 @@ public sealed class TokenService(AppOptions options)
             IssuerSigningKey = signingKey, ValidateLifetime = true, ClockSkew = TimeSpan.Zero,
             ValidAlgorithms = [SecurityAlgorithms.HmacSha256]
         }, out var validated);
-        if (validated is not JwtSecurityToken jwt || !TryReadClaims(jwt.RawPayload, out var claims))
+        if (validated is not JwtSecurityToken jwt || !string.Equals(jwt.Header.Typ, "JWT", StringComparison.Ordinal)
+            || !TryReadClaims(jwt.RawPayload, out var claims))
             throw ApiException.Unauthorized("登录状态无效");
         return claims;
     }

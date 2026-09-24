@@ -107,6 +107,7 @@ describe('project realtime migration', () => {
     connection.emit({ projectId: 3, kind: 'messages' })
     connection.emit({ projectId: 4, kind: 'receipts' })
     connection.emit({ projectId: 5, kind: 'activity' })
+    connection.emit({ projectId: 6, kind: 'project' })
     for (const invalid of [
       { projectId: 0, kind: 'messages' },
       { projectId: 1.5, kind: 'messages' },
@@ -118,6 +119,7 @@ describe('project realtime migration', () => {
       { projectId: 3, kind: 'messages' },
       { projectId: 4, kind: 'receipts' },
       { projectId: 5, kind: 'activity' },
+      { projectId: 6, kind: 'project' },
     ])
     controller.stop()
   })
@@ -175,6 +177,34 @@ describe('project realtime migration', () => {
     secondStart.resolve()
     await settle()
     expect(ready).toBe(1)
+    controller.stop()
+  })
+
+  it('an explicit connection 401 forces token refresh on the next attempt', async () => {
+    const clock = createTimers()
+    const forced: boolean[] = []
+    let connection!: FakeConnection
+    const controller = createProjectRealtime({
+      getSession: () => ({ key: '7:1', enabled: true }),
+      getAccessToken: async (forceRefresh = false) => { forced.push(forceRefresh); return forceRefresh ? 'refreshed' : 'cached' },
+      subscribeSession: () => () => undefined,
+      createConnection: (factory) => (connection = new FakeConnection(factory, [
+        async () => { await factory(); throw { statusCode: 401 } },
+        async () => { await factory() },
+      ])),
+      onEvent: () => undefined,
+      onStatus: () => undefined,
+      onReady: () => undefined,
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+    })
+    controller.start()
+    await settle()
+    expect(forced).toEqual([false])
+    clock.timers[0].callback()
+    await settle()
+    expect(forced).toEqual([false, true])
+    expect(connection.startCalls).toBe(2)
     controller.stop()
   })
 
@@ -259,6 +289,8 @@ describe('project realtime migration', () => {
     signalR.built = built
     const add = vi.spyOn(window, 'addEventListener')
     const remove = vi.spyOn(window, 'removeEventListener')
+    const addDocument = vi.spyOn(document, 'addEventListener')
+    const removeDocument = vi.spyOn(document, 'removeEventListener')
     const stop = startProjectRealtime({
       getSession: () => ({ key: '7:1', enabled: true }),
       getAccessToken: async () => 'fresh-token',
@@ -276,7 +308,9 @@ describe('project realtime migration', () => {
     const options = signalR.observed.urlOptions as { accessTokenFactory: () => Promise<string> }
     expect(await options.accessTokenFactory()).toBe('fresh-token')
     expect(add).toHaveBeenCalledWith('online', expect.any(Function))
+    expect(addDocument).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
     stop()
     expect(remove).toHaveBeenCalledWith('online', expect.any(Function))
+    expect(removeDocument).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
   })
 })

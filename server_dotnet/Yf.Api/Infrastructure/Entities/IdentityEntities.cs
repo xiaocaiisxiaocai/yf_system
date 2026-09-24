@@ -65,7 +65,10 @@ public sealed class UserConfig : IEntityTypeConfiguration<User>
         b.HasIndex(x => x.EmployeeNo).IsUnique().HasDatabaseName("uk_users_employee_no");
         b.HasIndex(x => x.SupplierId).HasDatabaseName("idx_users_supplier");
         b.HasIndex(x => x.DepartmentId).HasDatabaseName("idx_users_department");
+        b.HasIndex(x => x.CreatedBy).HasDatabaseName("idx_users_created_by");
         b.HasOne<Supplier>().WithMany().HasForeignKey(x => x.SupplierId).HasConstraintName("fk_users_supplier").OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Department>().WithMany().HasForeignKey(x => x.DepartmentId).HasConstraintName("fk_users_department").OnDelete(DeleteBehavior.SetNull);
+        b.HasOne<User>().WithMany().HasForeignKey(x => x.CreatedBy).HasConstraintName("fk_users_created_by").OnDelete(DeleteBehavior.SetNull);
     }
 }
 

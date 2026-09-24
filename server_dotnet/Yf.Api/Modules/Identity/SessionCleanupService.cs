@@ -9,6 +9,7 @@ public sealed class SessionCleanupService(AppDb db, AppOptions options, ILogger<
     // Every rotated hash must survive for the whole absolute session lifetime so replay can revoke the family.
     // Keep the rows for one more week after that family deadline for conservative cleanup.
     internal static readonly TimeSpan ReplayGrace = TimeSpan.FromDays(7);
+    internal const int BatchSize = 1000;
 
     internal async Task<int> PurgeExpiredSessionsAsync(CancellationToken ct)
     {
@@ -16,7 +17,17 @@ public sealed class SessionCleanupService(AppDb db, AppOptions options, ILogger<
         await using var context = EfDb.Use(conn);
         var now = await DbClock.UtcNowAsync(context, ct, 0);
         var cutoff = now - ReplayGrace;
-        return await context.RefreshTokens.Where(token => token.SessionExpiresAt < cutoff).ExecuteDeleteAsync(ct);
+        var deleted = 0;
+        while (true)
+        {
+            var ids = await context.RefreshTokens.Where(token => token.SessionExpiresAt < cutoff)
+                .OrderBy(token => token.Id).Select(token => token.Id).Take(BatchSize).ToArrayAsync(ct);
+            if (ids.Length == 0) return deleted;
+            deleted += await context.RefreshTokens
+                .Where(token => Enumerable.Contains(ids, token.Id) && token.SessionExpiresAt < cutoff)
+                .ExecuteDeleteAsync(ct);
+            if (ids.Length < BatchSize) return deleted;
+        }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

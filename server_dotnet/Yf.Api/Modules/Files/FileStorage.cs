@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 
 namespace Yf.Api.Modules.Files;
@@ -7,12 +9,18 @@ internal static class FileStorage
     private static readonly StringComparison PathComparison = OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
+    private static readonly ConcurrentDictionary<string, string> ResolvedRoots =
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
     public static string Root(string configuredRoot)
     {
         var full = Path.GetFullPath(configuredRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        Directory.CreateDirectory(full);
-        return ResolveFinalTarget(new DirectoryInfo(full)).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return ResolvedRoots.GetOrAdd(full, static path =>
+        {
+            Directory.CreateDirectory(path);
+            return ResolveFinalTarget(new DirectoryInfo(path))
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        });
     }
 
     public static string SessionDirectory(string root, string sessionId)
@@ -129,30 +137,35 @@ internal static class FileStorage
     public static async Task<(string Sha256, string Md5, ulong Bytes)> HashAndCopyAsync(
         IEnumerable<string> chunks, string outputPath, ulong maximumBytes, CancellationToken ct)
     {
-        await using var output = new FileStream(outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 1024,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
-        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        using var md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
-        var buffer = new byte[1024 * 1024];
-        ulong total = 0;
-        foreach (var chunk in chunks)
+        const int bufferSize = 1024 * 1024;
+        var buffer = ArrayPool<byte>.Shared.Rent(bufferSize);
+        try
         {
-            await using var input = new FileStream(chunk, FileMode.Open, FileAccess.Read, FileShare.Read, buffer.Length,
+            await using var output = new FileStream(outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
-            int read;
-            while ((read = await input.ReadAsync(buffer, ct)) != 0)
+            using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            using var md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
+            ulong total = 0;
+            foreach (var chunk in chunks)
             {
-                total = checked(total + (uint)read);
-                if (total > maximumBytes) throw Infrastructure.ApiException.BadRequest($"合并文件大小不符：期望 {maximumBytes}，实际超过上限");
-                sha.AppendData(buffer, 0, read);
-                md5.AppendData(buffer, 0, read);
-                await output.WriteAsync(buffer.AsMemory(0, read), ct);
+                await using var input = new FileStream(chunk, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+                int read;
+                while ((read = await input.ReadAsync(buffer.AsMemory(0, bufferSize), ct)) != 0)
+                {
+                    total = checked(total + (uint)read);
+                    if (total > maximumBytes) throw Infrastructure.ApiException.BadRequest($"合并文件大小不符：期望 {maximumBytes}，实际超过上限");
+                    sha.AppendData(buffer, 0, read);
+                    md5.AppendData(buffer, 0, read);
+                    await output.WriteAsync(buffer.AsMemory(0, read), ct);
+                }
             }
+            await output.FlushAsync(ct);
+            output.Flush(flushToDisk: true);
+            return (Convert.ToHexString(sha.GetHashAndReset()).ToLowerInvariant(),
+                Convert.ToHexString(md5.GetHashAndReset()).ToLowerInvariant(), total);
         }
-        await output.FlushAsync(ct);
-        output.Flush(flushToDisk: true);
-        return (Convert.ToHexString(sha.GetHashAndReset()).ToLowerInvariant(),
-            Convert.ToHexString(md5.GetHashAndReset()).ToLowerInvariant(), total);
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
 
     public static string MimeType(string fileName) => Path.GetExtension(fileName).ToLowerInvariant() switch

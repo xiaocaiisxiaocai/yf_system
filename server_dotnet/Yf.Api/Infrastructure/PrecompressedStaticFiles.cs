@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.StaticFiles;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Primitives;
 using Microsoft.Net.Http.Headers;
 
@@ -20,28 +21,15 @@ internal sealed class PrecompressedStaticFileMiddleware
         ".css", ".eot", ".html", ".js", ".json", ".map", ".mjs", ".otf", ".pfb", ".svg",
         ".ttf", ".txt", ".wasm", ".webmanifest", ".woff", ".woff2", ".xml",
     };
-    private static readonly HashSet<string> BlockedFileNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".env", "secrets.json", "web.config",
-    };
-    private static readonly HashSet<string> BlockedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".config", ".cs", ".deps.json", ".dll", ".key", ".p12", ".pdb", ".pfx", ".runtimeconfig.json",
-    };
     private static readonly FileExtensionContentTypeProvider ContentTypes = CreateContentTypes();
 
     private readonly RequestDelegate next;
-    private readonly string webRoot;
-    private readonly string webRootPrefix;
+    private readonly IFileProvider files;
 
     public PrecompressedStaticFileMiddleware(RequestDelegate next, IWebHostEnvironment environment)
     {
         this.next = next;
-        webRoot = Path.GetFullPath(environment.WebRootPath ?? Path.Combine(environment.ContentRootPath, "wwwroot"))
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        webRootPrefix = webRoot + Path.DirectorySeparatorChar;
-        if (Directory.Exists(webRoot) && IsReparsePoint(webRoot))
-            throw new InvalidOperationException("The public web root cannot be a linked directory.");
+        files = PublicStaticFileProvider.Create(environment);
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -59,27 +47,27 @@ internal sealed class PrecompressedStaticFileMiddleware
             return;
         }
 
-        var resolution = ResolvePublicPath(context.Request.Path.Value);
-        if (resolution.Denied)
+        var requestPath = context.Request.Path.Value;
+        if (!PublicStaticFileProvider.IsSafePath(requestPath))
         {
             context.Response.StatusCode = StatusCodes.Status404NotFound;
             return;
         }
-        if (resolution.PhysicalPath is null || !CompressibleExtensions.Contains(Path.GetExtension(resolution.PhysicalPath)))
+        if (string.IsNullOrEmpty(requestPath) || !CompressibleExtensions.Contains(Path.GetExtension(requestPath)))
         {
             await next(context);
             return;
         }
 
-        var source = new FileInfo(resolution.PhysicalPath);
-        if (!source.Exists || IsReparsePoint(source.FullName))
+        var source = files.GetFileInfo(requestPath);
+        if (!source.Exists)
         {
             await next(context);
             return;
         }
 
-        var br = Companion(source, ".br");
-        var gzip = Companion(source, ".gz");
+        var br = Companion(requestPath, source, ".br");
+        var gzip = Companion(requestPath, source, ".gz");
         var accepted = AcceptedEncodings.Parse(context.Request.Headers.AcceptEncoding);
         var hasRange = !StringValues.IsNullOrEmpty(context.Request.Headers.Range);
         if (hasRange)
@@ -112,9 +100,9 @@ internal sealed class PrecompressedStaticFileMiddleware
         await SendAsync(context, source, representation, selected);
     }
 
-    private async Task SendAsync(HttpContext context, FileInfo source, FileInfo representation, string encoding)
+    private async Task SendAsync(HttpContext context, IFileInfo source, IFileInfo representation, string encoding)
     {
-        var lastModified = new DateTimeOffset(source.LastWriteTimeUtc).ToUniversalTime();
+        var lastModified = source.LastModified.ToUniversalTime();
         lastModified = lastModified.AddTicks(-(lastModified.Ticks % TimeSpan.TicksPerSecond));
         var etag = CreateEtag(source, representation, encoding);
         var response = context.Response;
@@ -138,66 +126,17 @@ internal sealed class PrecompressedStaticFileMiddleware
         response.ContentLength = representation.Length;
         if (HttpMethods.IsHead(context.Request.Method)) return;
 
-        await using var stream = new FileStream(representation.FullName, new FileStreamOptions
-        {
-            Access = FileAccess.Read,
-            Mode = FileMode.Open,
-            Options = FileOptions.Asynchronous | FileOptions.SequentialScan,
-            Share = FileShare.Read | FileShare.Delete,
-        });
+        await using var stream = representation.CreateReadStream();
         await stream.CopyToAsync(response.Body, context.RequestAborted);
     }
 
-    private PathResolution ResolvePublicPath(string? requestPath)
+    private IFileInfo? Companion(string requestPath, IFileInfo source, string suffix)
     {
-        if (string.IsNullOrEmpty(requestPath) || requestPath == "/") return default;
-        string decoded;
-        try { decoded = Uri.UnescapeDataString(requestPath); }
-        catch (UriFormatException) { return new(true, null); }
-        if (decoded.IndexOfAny(['\\', '\0', ':']) >= 0 || decoded.StartsWith("//", StringComparison.Ordinal))
-            return new(true, null);
-        var segments = decoded.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Any(segment => segment is "." or ".." || segment.StartsWith(".", StringComparison.Ordinal)))
-            return new(true, null);
-        if (segments.Length > 0 && (segments[0].Equals("api", StringComparison.OrdinalIgnoreCase)
-            || segments[0].Equals("health", StringComparison.OrdinalIgnoreCase)
-            || segments[0].Equals("privateuploads", StringComparison.OrdinalIgnoreCase)))
-            return new(true, null);
-        var fileName = segments.LastOrDefault();
-        if (fileName is null) return default;
-        if (BlockedFileNames.Contains(fileName) || fileName.StartsWith("appsettings", StringComparison.OrdinalIgnoreCase)
-            || BlockedExtensions.Any(extension => fileName.EndsWith(extension, StringComparison.OrdinalIgnoreCase)))
-            return new(true, null);
-
-        var fullPath = Path.GetFullPath(Path.Combine(webRoot, Path.Combine(segments)));
-        if (!fullPath.StartsWith(webRootPrefix, StringComparison.OrdinalIgnoreCase)) return new(true, null);
-        if (ContainsReparsePoint(fullPath)) return new(true, null);
-        return new(false, fullPath);
-    }
-
-    private bool ContainsReparsePoint(string path)
-    {
-        var relative = Path.GetRelativePath(webRoot, path);
-        var cursor = webRoot;
-        foreach (var segment in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
-        {
-            if (string.IsNullOrEmpty(segment) || segment == ".") continue;
-            cursor = Path.Combine(cursor, segment);
-            if ((File.Exists(cursor) || Directory.Exists(cursor)) && IsReparsePoint(cursor)) return true;
-        }
-        return false;
-    }
-
-    private static FileInfo? Companion(FileInfo source, string suffix)
-    {
-        var companion = new FileInfo(source.FullName + suffix);
-        return companion.Exists && !IsReparsePoint(companion.FullName) && companion.LastWriteTimeUtc >= source.LastWriteTimeUtc
+        var companion = files.GetFileInfo(requestPath + suffix);
+        return companion.Exists && companion.LastModified >= source.LastModified
             ? companion
             : null;
     }
-
-    private static bool IsReparsePoint(string path) =>
-        (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
 
     private static string CacheControl(PathString path) =>
         path.Value?.EndsWith("/index.html", StringComparison.OrdinalIgnoreCase) == true
@@ -207,9 +146,9 @@ internal sealed class PrecompressedStaticFileMiddleware
                 ? "public,max-age=31536000,immutable"
                 : "public,max-age=3600";
 
-    private static string CreateEtag(FileInfo source, FileInfo representation, string encoding)
+    private static string CreateEtag(IFileInfo source, IFileInfo representation, string encoding)
     {
-        var metadata = $"{source.Length}:{source.LastWriteTimeUtc.Ticks}:{representation.Length}:{representation.LastWriteTimeUtc.Ticks}:{encoding}";
+        var metadata = $"{source.Length}:{source.LastModified.UtcDateTime.Ticks}:{representation.Length}:{representation.LastModified.UtcDateTime.Ticks}:{encoding}";
         return $"\"{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(metadata))).ToLowerInvariant()}\"";
     }
 
@@ -268,8 +207,6 @@ internal sealed class PrecompressedStaticFileMiddleware
         provider.Mappings[".webmanifest"] = "application/manifest+json";
         return provider;
     }
-
-    private readonly record struct PathResolution(bool Denied, string? PhysicalPath);
 
     private sealed record AcceptedEncodings(bool HeaderPresent, IReadOnlyDictionary<string, double> Qualities)
     {

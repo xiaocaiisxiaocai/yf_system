@@ -184,12 +184,16 @@ def run_native_download_checks(admin, conn, check, file_id, expected_bytes):
         and f"path={grant['url']}" in session_cookies,
     )
 
+    native_csp = first_headers.get("Content-Security-Policy", "")
+    grant_csp = grant_headers.get("Content-Security-Policy", "")
     check(
         "only native download responses may be framed, and only by the same origin",
         first_headers.get("X-Frame-Options") == "SAMEORIGIN"
-        and first_headers.get("Content-Security-Policy") == "frame-ancestors 'self'"
+        and native_csp.startswith("frame-ancestors 'self';")
+        and "default-src 'none'" in native_csp
+        and "sandbox allow-same-origin" in native_csp
         and grant_headers.get("X-Frame-Options") == "DENY"
-        and grant_headers.get("Content-Security-Policy") == "frame-ancestors 'none'",
+        and grant_csp == "frame-ancestors 'none'",
     )
 
     cookie_header = {"Cookie": f"yf_dls_{handle}={session_secret}"}

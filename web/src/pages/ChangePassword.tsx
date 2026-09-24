@@ -13,7 +13,8 @@ export default function ChangePassword() {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const submitting = useRef(false)
-  const { mustChangePassword, logout } = useAuth()
+  const mustChangePassword = useAuth((state) => state.mustChangePassword)
+  const logout = useAuth((state) => state.logout)
   const nav = useNavigate()
 
   const exitLogin = async () => {

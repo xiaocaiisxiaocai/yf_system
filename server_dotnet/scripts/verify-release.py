@@ -154,24 +154,40 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
     if base_settings.get("App"):
         raise RuntimeError("Application configuration must exist only in Production settings")
     settings = json.loads((package / "appsettings.Production.json").read_text(encoding="utf-8-sig"))["App"]
-    for key in ("ConnectionString", "JwtSecret", "StorageRoot", "WebBaseUrl", "BootstrapPassword"):
-        if not settings.get(key):
-            raise RuntimeError(f"Packaged Production {key} is missing")
-    if settings.get("AutoInitializeDatabase") is not True or not 6 <= len(settings["BootstrapPassword"]) <= 20:
-        raise RuntimeError("Release must enable first-start initialization with a valid-length bootstrap password")
-    origin = urlparse(settings["WebBaseUrl"])
-    if (origin.scheme not in ("http", "https") or not origin.hostname or origin.path not in ("", "/")
-            or origin.params or origin.query or origin.fragment or origin.username
-            or origin.hostname == "yf.example.com"):
-        raise RuntimeError("Packaged WebBaseUrl is not the real site origin")
+    configuration = manifest.get("configuration")
+    legacy_private_configuration = not isinstance(configuration, dict)
+    if legacy_private_configuration:
+        configuration = {"mode": "bundled-private", "containsSecrets": True, "inferredLegacy": True}
+    configuration_mode = configuration.get("mode")
+    if configuration_mode not in {"bundled-private", "external-template"}:
+        raise RuntimeError("Release manifest has an unknown configuration mode")
+    if settings.get("AutoInitializeDatabase") is not True:
+        raise RuntimeError("Release must preserve the first-start contract")
+    if configuration_mode == "bundled-private":
+        if configuration.get("containsSecrets") is not True:
+            raise RuntimeError("Private configuration mode is not marked secret-bearing")
+        for key in ("ConnectionString", "JwtSecret", "StorageRoot", "WebBaseUrl", "BootstrapPassword"):
+            if not settings.get(key):
+                raise RuntimeError(f"Packaged private Production {key} is missing")
+        if not 6 <= len(settings["BootstrapPassword"]) <= 20:
+            raise RuntimeError("Private release bootstrap password has an invalid length")
+        origin = urlparse(settings["WebBaseUrl"])
+        if (origin.scheme not in ("http", "https") or not origin.hostname or origin.path not in ("", "/")
+                or origin.params or origin.query or origin.fragment or origin.username
+                or origin.hostname == "yf.example.com"):
+            raise RuntimeError("Packaged WebBaseUrl is not the real site origin")
+        if (origin.scheme == "http") == bool(settings.get("CookieSecure")):
+            raise RuntimeError("Packaged CookieSecure does not match the site scheme")
+        if len(settings["JwtSecret"].encode("utf-8")) < 32:
+            raise RuntimeError("Packaged JWT secret is too short")
+    else:
+        if configuration.get("containsSecrets") is not False or any(
+                settings.get(key) for key in ("ConnectionString", "JwtSecret", "BootstrapPassword")):
+            raise RuntimeError("External configuration template contains bundled secrets")
     if not ntpath.isabs(settings["StorageRoot"]):
         raise RuntimeError("Packaged storage root must be an absolute Windows path")
     if any(key in settings for key in ("OemStorageRoot", "OemScanner")):
         raise RuntimeError("Packaged application still contains OEM settings")
-    if (origin.scheme == "http") == bool(settings.get("CookieSecure")):
-        raise RuntimeError("Packaged CookieSecure does not match the site scheme")
-    if len(settings["JwtSecret"].encode("utf-8")) < 32:
-        raise RuntimeError("Packaged JWT secret is too short")
     web_config = ElementTree.parse(package / "web.config")
     asp = web_config.find(".//aspNetCore")
     if asp is None or asp.get("processPath") != "dotnet" or asp.get("arguments") != r".\Yf.Api.dll" or asp.get("hostingModel") != "inprocess":
@@ -204,7 +220,11 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
               "releaseSidecars": "not-applicable" if directory_input else "passed",
               "runtimeConfig": {"tfm": "net8.0", "frameworks": runtime_frameworks},
               "precompressedAssets": precompressed_assets,
-              "releaseManifest": release_manifest, "bundledConfigurationValidated": True, "testHostExcludedFromPayload": True,
+              "releaseManifest": release_manifest, "configurationMode": configuration_mode,
+              "legacyConfigurationModeInferred": legacy_private_configuration,
+              "bundledConfigurationValidated": configuration_mode == "bundled-private",
+              "externalConfigurationTemplateValidated": configuration_mode == "external-template",
+              "testHostExcludedFromPayload": True,
               "publishedFirstStart": first_start,
               "publishedUnitHttp": http_report, "targetIisTested": False, "realSmtpTested": False}
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

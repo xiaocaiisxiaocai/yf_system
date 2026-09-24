@@ -80,7 +80,7 @@ public sealed class YfDbContextFactory : IDesignTimeDbContextFactory<YfDbContext
         var connectionString = Environment.GetEnvironmentVariable("YF_EF_DESIGN_CONNECTION")
             ?? throw new InvalidOperationException("Set YF_EF_DESIGN_CONNECTION to a disposable local MySQL connection string for design-time tooling.");
         var builder = new DbContextOptionsBuilder<YfDbContext>();
-        builder.UseMySql(connectionString, EfDb.ServerVersion);
+        builder.UseMySql(connectionString, EfDb.ServerVersion).AddInterceptors(UtcDatabaseSession.Instance);
         return new YfDbContext(builder.Options);
     }
 }

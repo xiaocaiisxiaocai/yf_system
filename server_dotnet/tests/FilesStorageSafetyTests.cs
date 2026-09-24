@@ -15,6 +15,26 @@ public sealed class FilesStorageSafetyTests
         Assert.Equal(expected, UploadService.ExtensionOf(name));
     }
 
+    [Theory]
+    [InlineData("normal-report.pdf", false)]
+    [InlineData("invoice\u202efdp.exe", true)]
+    [InlineData("folder/file.pdf", true)]
+    [InlineData("line\nfeed.pdf", true)]
+    public void UnsafeFileNameCharactersIncludeUnicodeFormattingControls(string name, bool expected)
+    {
+        Assert.Equal(expected, UploadService.HasUnsafeFileNameCharacter(name));
+    }
+
+    [Fact]
+    public void CleanupFailureDiagnosticsDoNotExposeExceptionMessagesOrPaths()
+    {
+        var code = UploadService.SafeFailureCode(new IOException(@"failed D:\private\token\chunk.bin"));
+
+        Assert.Contains(nameof(IOException), code, StringComparison.Ordinal);
+        Assert.DoesNotContain("private", code, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("token", code, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task RecursiveDeleteIsIdempotentAndRejectsTempLinkEscapingStorageRoot()
     {

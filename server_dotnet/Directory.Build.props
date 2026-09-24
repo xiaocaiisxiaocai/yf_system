@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <WarningsAsErrors>nullable</WarningsAsErrors>
+    <AnalysisLevel>8.0-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+</Project>

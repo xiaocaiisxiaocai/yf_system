@@ -123,18 +123,20 @@ describe('file hashing contracts', () => {
     expect(progress.map((value) => Math.round(value * 1000) / 1000)).toEqual([0.444, 0.889, 1])
   })
 
-  it('chunk digests are computed in a worker and matched to their requests by id', async () => {
+  it('chunk digests are queued through one worker and settled in request order', async () => {
     const hasher = createChunkHasher()
     const worker = workerHarness.chunkInstances[0]
     const first = hasher.sha256(new Blob(['one']))
     const second = hasher.sha256(new Blob(['two']))
+    const firstRejected = expect(first).rejects.toThrow('read failed')
 
     expect(worker.postMessage).toHaveBeenNthCalledWith(1, { id: 1, blob: expect.any(Blob) })
+    expect(worker.postMessage).toHaveBeenCalledTimes(1)
+    worker.onmessage?.({ data: { id: 1, type: 'error', message: 'read failed' } } as MessageEvent)
     expect(worker.postMessage).toHaveBeenNthCalledWith(2, { id: 2, blob: expect.any(Blob) })
     worker.onmessage?.({ data: { id: 2, type: 'done', digest: 'b'.repeat(64) } } as MessageEvent)
-    worker.onmessage?.({ data: { id: 1, type: 'error', message: 'read failed' } } as MessageEvent)
     await expect(second).resolves.toBe('b'.repeat(64))
-    await expect(first).rejects.toThrow('read failed')
+    await firstRejected
 
     const abandoned = hasher.sha256(new Blob(['three']))
     hasher.dispose()

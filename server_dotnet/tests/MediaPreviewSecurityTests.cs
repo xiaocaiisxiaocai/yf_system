@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using System.Text;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Identity;
@@ -37,6 +38,45 @@ public sealed class MediaPreviewSecurityTests
     {
         var access = new TokenService(Options).IssueAccess(42, "E00042", "session-family").Token;
         Assert.Throws<ApiException>(() => new MediaGrantService(Options).Parse(access));
+    }
+
+    [Fact]
+    public void MediaSigningKeyIsDomainSeparatedFromJwtSigningKey()
+    {
+        var derived = MediaGrantService.DeriveKey(Options.JwtSecret);
+        Assert.False(derived.SequenceEqual(Encoding.UTF8.GetBytes(Options.JwtSecret)));
+    }
+
+    [Theory]
+    [InlineData("https://app.example", "same-origin", "https://app.example", true)]
+    [InlineData("", "same-origin", "https://app.example", true)]
+    [InlineData("", "", "https://app.example", true)]
+    [InlineData("https://evil.example", "cross-site", "https://app.example", false)]
+    [InlineData("https://evil.example", "", "https://app.example", false)]
+    public void DownloadOriginCheckRejectsExplicitCrossOriginRequestsButKeepsNonBrowserClients(
+        string origin, string fetchSite, string configuredOrigin, bool expected)
+    {
+        Assert.Equal(expected, FileService.IsSameOriginRequest(origin, fetchSite, configuredOrigin));
+    }
+
+    [Fact]
+    public void FileCookiesShareStrictScopedSecurityOptions()
+    {
+        var persistent = FileService.CreateScopedCookieOptions(
+            secure: true, "/api/v1/files/7/media", lifetimeSeconds: 300);
+        var deletion = FileService.CreateScopedCookieOptions(
+            secure: false, "/api/v1/files/7/native-download/handle", lifetimeSeconds: null);
+
+        Assert.True(persistent.HttpOnly);
+        Assert.True(persistent.Secure);
+        Assert.Equal(SameSiteMode.Strict, persistent.SameSite);
+        Assert.Equal("/api/v1/files/7/media", persistent.Path);
+        Assert.Equal(TimeSpan.FromSeconds(300), persistent.MaxAge);
+        Assert.True(deletion.HttpOnly);
+        Assert.False(deletion.Secure);
+        Assert.Equal(SameSiteMode.Strict, deletion.SameSite);
+        Assert.Equal("/api/v1/files/7/native-download/handle", deletion.Path);
+        Assert.Null(deletion.MaxAge);
     }
 
     [Theory]

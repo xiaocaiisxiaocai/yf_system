@@ -6,7 +6,7 @@ namespace Yf.Api.Tests;
 /// <summary>
 /// Builds an IDbContextFactory&lt;YfDbContext&gt; for tests that construct
 /// IdentityService directly, mirroring how ApiApplication.cs wires it in
-/// production (same connection string, same server-version auto-detection).
+/// production (same connection string, SQL dialect and UTC session initialization).
 /// </summary>
 internal static class EfTestSupport
 {
@@ -14,7 +14,8 @@ internal static class EfTestSupport
     {
         var connectionString = AppDb.BuildConnectionString(options);
         var builder = new DbContextOptionsBuilder<YfDbContext>()
-            .UseMySql(connectionString, ServerVersion.AutoDetect(connectionString));
+            .UseMySql(connectionString, EfDb.ServerVersion)
+            .AddInterceptors(UtcDatabaseSession.Instance);
         return new SimpleDbContextFactory(builder.Options);
     }
 

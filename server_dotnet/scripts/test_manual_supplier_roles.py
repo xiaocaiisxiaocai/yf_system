@@ -17,7 +17,7 @@ def run_manual_supplier_role_checks(admin, conn, check):
     })
 
     # Deliberately without file:preview so the delegation ceiling can still be observed below.
-    account_operator_role = _role(admin, ['supplier:list', 'supplier:account', 'dashboard', 'project:list',
+    account_operator_role = _role(admin, ['supplier:list', 'supplier:account', 'supplier:account_delete', 'role:manage', 'dashboard', 'project:list',
                                           'file:upload', 'file:download', 'message:create'])
     account_operator_password = _password()
     account_operator_employee = 'supplier_accounts_' + secrets.token_hex(4)
@@ -58,10 +58,42 @@ def run_manual_supplier_role_checks(admin, conn, check):
 
     delegated = operator_create(workflow_role)
     operator_create(beyond_operator, expected=403)
+    permission_ids = {item['code']: item['id'] for item in account_operator.call('GET', '/api/v1/permissions')}
+    account_operator.call('PUT', f'/api/v1/admin/roles/{workflow_role}/permissions', {
+        'permissionIds': [permission_ids[code] for code in (
+            'dashboard', 'project:list', 'file:upload', 'file:download', 'message:create',
+            'project:submit', 'project:withdraw')],
+    })
     account_operator.call('PUT', f"/api/v1/admin/supplier-accounts/{delegated['id']}/status", {'status': 'DISABLED'})
     reenabled = account_operator.call('PUT', f"/api/v1/admin/supplier-accounts/{delegated['id']}/status", {'status': 'ACTIVE'})
     check('supplier account operator can create and re-enable accounts holding submit/withdraw',
           delegated['roleId'] == workflow_role and reenabled['status'] == 'ACTIVE')
+
+    protected_password = _password()
+    protected_employee = 'protected_' + secrets.token_hex(5)
+    protected = admin.call('POST', f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
+        'employeeNo': protected_employee, 'realName': '高权限供应商账号',
+        'email': 'protected@example.invalid', 'password': protected_password, 'roleId': beyond_operator,
+    })
+    with conn.cursor() as cursor:
+        cursor.execute('SELECT password_hash,status FROM users WHERE id=%s', (protected['id'],))
+        protected_hash, protected_status = cursor.fetchone()
+    account_operator.call('PUT', f"/api/v1/admin/supplier-accounts/{protected['id']}", {
+        'realName': '越权修改', 'email': 'changed@example.invalid',
+    }, expected=403)
+    account_operator.call('PUT', f"/api/v1/admin/supplier-accounts/{protected['id']}/status",
+                          {'status': 'DISABLED'}, expected=403)
+    account_operator.call('PUT', f"/api/v1/admin/supplier-accounts/{protected['id']}/password",
+                          {'newPassword': _password()}, expected=403)
+    account_operator.call('DELETE', f"/api/v1/admin/supplier-accounts/{protected['id']}", expected=403)
+    with conn.cursor() as cursor:
+        cursor.execute('SELECT real_name,email,password_hash,status FROM users WHERE id=%s', (protected['id'],))
+        protected_after = cursor.fetchone()
+        cursor.execute('SELECT role_id FROM user_roles WHERE user_id=%s', (protected['id'],))
+        protected_role_after = cursor.fetchone()[0]
+    check('supplier account mutations enforce the target role delegation ceiling atomically',
+          protected_after == ('高权限供应商账号', 'protected@example.invalid', protected_hash, protected_status)
+          and protected_role_after == beyond_operator)
 
     def create(role_id=None, expected=200):
         body = {'employeeNo': 'manual_' + secrets.token_hex(5), 'realName': '手工角色测试',

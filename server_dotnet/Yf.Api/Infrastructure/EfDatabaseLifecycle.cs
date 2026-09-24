@@ -15,7 +15,17 @@ internal static partial class EfDatabaseLifecycle
         var password = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD")
             ?? throw new InvalidOperationException(
                 "Initialization requires process environment YF_BOOTSTRAP_PASSWORD; passwords are never generated or printed.");
-        var passwordHash = await PasswordService.HashAsync(password, ct);
+        await InitializeEmptyAsync(database, password, ct);
+    }
+
+    internal static async Task InitializeEmptyAsync(
+        AppDb database,
+        string bootstrapPassword,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(bootstrapPassword))
+            throw new InvalidOperationException("Initialization requires a nonempty bootstrap password.");
+        var passwordHash = await PasswordService.HashAsync(bootstrapPassword, ct);
         await using var connection = await database.OpenAsync(ct);
         await using var schemaLock = await SchemaNamedLock.AcquireAsync(connection, ct);
         if (await CountTablesAsync(connection, ct) != 0)

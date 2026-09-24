@@ -110,4 +110,14 @@ describe('image preview', () => {
     view.unmount()
     expect(mocks.revokeObjectURL).toHaveBeenCalledWith('blob:fixture-1')
   })
+
+  it('reuses an existing thumbnail blob URL without downloading or owning it', async () => {
+    const view = render(<ImagePreview sourceUrl="blob:thumbnail" name="message.png" />)
+
+    expect(await screen.findByAltText('message.png')).toHaveAttribute('src', 'blob:thumbnail')
+    expect(mocks.get).not.toHaveBeenCalled()
+    expect(mocks.createObjectURL).not.toHaveBeenCalled()
+    view.unmount()
+    expect(mocks.revokeObjectURL).not.toHaveBeenCalledWith('blob:thumbnail')
+  })
 })

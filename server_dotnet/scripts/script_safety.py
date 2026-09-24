@@ -78,7 +78,9 @@ def validate_release_sidecars(
         or archive_record.get("bytes") != archive.stat().st_size
     ):
         raise RuntimeError("Release archive metadata mismatch")
-    if release.get("source") != package_manifest.get("source") or release.get("build") != package_manifest.get("build"):
+    if (release.get("source") != package_manifest.get("source")
+            or release.get("build") != package_manifest.get("build")
+            or release.get("configuration") != package_manifest.get("configuration")):
         raise RuntimeError("Inner and outer release provenance mismatch")
 
     normalized: dict[str, dict[str, object]] = {}

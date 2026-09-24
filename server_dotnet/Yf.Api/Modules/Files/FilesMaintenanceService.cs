@@ -11,6 +11,8 @@ public sealed class FilesMaintenanceService(
 {
     private readonly CancellationTokenSource stopping = new();
     private Task? loop;
+    private ulong verifyAfterBlobId;
+    private string? orphanScanAfterPath;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -49,6 +51,8 @@ public sealed class FilesMaintenanceService(
         await ExpireUploadsAsync(ct);
         await ResumePendingBlobGarbageCollectionAsync(ct);
         await PurgeDeletedFilesAsync(ct);
+        await VerifyReferencedBlobFilesAsync(ct);
+        await PurgeOrphanBlobFilesAsync(ct);
         await PurgeDeletedMessageImagesAsync(ct);
         PurgeTemporaryArchives(ct);
         await PurgeOrphanUploadDirectoriesAsync(ct);
@@ -149,27 +153,110 @@ public sealed class FilesMaintenanceService(
     {
         await using var conn = await db.OpenAsync(ct);
         DateTime cutoff;
-        DeletedFile[] rows;
         await using (var context = EfDb.Use(conn))
-        {
             cutoff = (await UploadService.DbNowAsync(context, ct)).AddDays(-30);
-            rows = await context.Files.Where(file => file.Status == FileStatuses.Deleted && file.DeletedAt != null && file.DeletedAt < cutoff)
-                .Select(file => new DeletedFile
-                {
-                    Id = file.Id, BlobId = file.BlobId, Sha256 = file.Sha256, StoragePath = file.StoragePath
-                }).ToArrayAsync(ct);
-        }
-        foreach (var row in rows)
+        ulong afterId = 0;
+        while (true)
         {
-            try
+            DeletedFile[] rows;
+            await using (var context = EfDb.Use(conn))
+                rows = await context.Files.Where(file => file.Id > afterId
+                        && file.Status == FileStatuses.Deleted && file.DeletedAt != null && file.DeletedAt < cutoff)
+                    .OrderBy(file => file.Id).Take(500)
+                    .Select(file => new DeletedFile
+                    {
+                        Id = file.Id, BlobId = file.BlobId, Sha256 = file.Sha256, StoragePath = file.StoragePath
+                    }).ToArrayAsync(ct);
+            if (rows.Length == 0) return;
+            foreach (var row in rows)
             {
-                if (row.BlobId is not ulong blobId)
-                    throw new InvalidOperationException("活动文件缺少 blob 引用，拒绝进入兼容清理路径");
-                await PurgeBlobFileAsync(conn, row, blobId, cutoff, ct);
+                afterId = row.Id;
+                try
+                {
+                    if (row.BlobId is not ulong blobId)
+                        throw new InvalidOperationException("活动文件缺少 blob 引用，拒绝进入兼容清理路径");
+                    await PurgeBlobFileAsync(conn, row, blobId, cutoff, ct);
+                }
+                catch (Exception error)
+                {
+                    logger.LogWarning(error, "拒绝或无法清理软删文件 {FileId}", row.Id);
+                }
             }
+        }
+    }
+
+    private async Task VerifyReferencedBlobFilesAsync(CancellationToken ct)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        ReferencedBlob[] rows;
+        await using (var context = EfDb.Use(conn))
+            rows = await context.FileBlobs.AsNoTracking()
+                .Where(blob => blob.Id > verifyAfterBlobId && blob.State == FileBlobStates.Ready
+                    && context.Files.Any(file => file.BlobId == blob.Id && file.Status != "PURGED"))
+                .OrderBy(blob => blob.Id).Take(100)
+                .Select(blob => new ReferencedBlob(blob.Id, blob.Sha256, blob.SizeBytes, blob.StoragePath))
+                .ToArrayAsync(ct);
+        if (rows.Length == 0)
+        {
+            verifyAfterBlobId = 0;
+            return;
+        }
+        var root = FileStorage.Root(options.StorageRoot);
+        foreach (var blob in rows)
+        {
+            verifyAfterBlobId = blob.Id;
+            try { FileBlobStore.VerifyBoundPhysicalFile(root, blob.StoragePath, blob.Sha256, blob.SizeBytes, ct); }
             catch (Exception error)
             {
-                logger.LogWarning(error, "拒绝或无法清理软删文件 {FileId}", row.Id);
+                logger.LogError(error, "引用中的 blob 文件缺失或异常 {BlobId} {Sha256}", blob.Id, blob.Sha256);
+            }
+        }
+    }
+
+    internal async Task PurgeOrphanBlobFilesAsync(CancellationToken ct)
+    {
+        var root = FileStorage.Root(options.StorageRoot);
+        var blobRoot = Path.Combine(root, "blobs", "sha256");
+        if (!Directory.Exists(blobRoot)) return;
+        if ((File.GetAttributes(blobRoot) & FileAttributes.ReparsePoint) != 0)
+        {
+            logger.LogWarning("跳过 blob 根目录符号链接");
+            return;
+        }
+        var cutoff = DateTime.UtcNow.AddHours(-24);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var scan = EnumerateRegularFiles(blobRoot, ct);
+        if (orphanScanAfterPath is not null)
+            scan = scan.SkipWhile(path => !string.Equals(path, orphanScanAfterPath, comparison)).Skip(1);
+        var candidates = scan.Take(100).ToArray();
+        if (candidates.Length == 0)
+        {
+            orphanScanAfterPath = null;
+            return;
+        }
+        orphanScanAfterPath = candidates[^1];
+
+        await using var conn = await db.OpenAsync(ct);
+        foreach (var path in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (File.GetLastWriteTimeUtc(path) >= cutoff) continue;
+            var sha256 = Path.GetFileName(path).ToLowerInvariant();
+            try
+            {
+                sha256 = FileBlobStore.NormalizeSha256(sha256);
+                var expected = FileBlobStore.AbsolutePath(root, sha256);
+                if (!string.Equals(Path.GetFullPath(path), expected, comparison)) continue;
+                await using var blobLease = await FileBlobStore.AcquireAsync(conn, [sha256], ct);
+                await using var context = EfDb.Use(conn);
+                if (await context.FileBlobs.AnyAsync(blob => blob.Sha256 == sha256, ct)) continue;
+                var resolved = FileStorage.ResolveExistingFile(root, expected, ct);
+                if (File.GetLastWriteTimeUtc(resolved) >= cutoff) continue;
+                File.Delete(resolved);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                logger.LogWarning(error, "清理孤儿 blob 失败 {Path}", path);
             }
         }
     }
@@ -379,32 +466,46 @@ public sealed class FilesMaintenanceService(
                 logger.LogWarning("跳过临时目录中的符号链接 {Directory}", info.Name);
                 continue;
             }
+            if (!Guid.TryParseExact(info.Name, "D", out _))
+            {
+                logger.LogWarning("跳过非上传会话命名的临时目录 {Directory}", info.Name);
+                continue;
+            }
             try
             {
-                if (Guid.TryParseExact(info.Name, "D", out _))
-                {
-                    // The active set above is only a scan optimization. The lease and
-                    // second database read are the authority, so another IIS worker
-                    // cannot have its live merge directory removed from a stale snapshot.
-                    await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(
-                        conn, UploadService.MergeLockName(conn, info.Name), 0, ct);
-                    if (mergeLease is null) continue;
-                    var isNowActive = await context.UploadSessions.AnyAsync(
-                        session => session.Id == info.Name && Enumerable.Contains(activeStatuses, session.Status), ct);
-                    if (isNowActive) continue;
-                    FileStorage.DeleteDirectoryTree(root, directory, ct);
-                }
-                else
-                {
-                    FileStorage.DeleteDirectoryTree(root, directory, ct);
-                }
+                // The active set above is only a scan optimization. The lease and
+                // second database read are the authority, so another IIS worker
+                // cannot have its live merge directory removed from a stale snapshot.
+                await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(
+                    conn, UploadService.MergeLockName(conn, info.Name), 0, ct);
+                if (mergeLease is null) continue;
+                var isNowActive = await context.UploadSessions.AnyAsync(
+                    session => session.Id == info.Name && Enumerable.Contains(activeStatuses, session.Status), ct);
+                if (isNowActive) continue;
+                FileStorage.DeleteDirectoryTree(root, directory, ct);
             }
             catch (Exception error) { logger.LogWarning(error, "清理孤儿上传目录失败 {Directory}", info.Name); }
         }
     }
 
+    private static IEnumerable<string> EnumerateRegularFiles(string directory, CancellationToken ct)
+    {
+        foreach (var entry in new DirectoryInfo(directory).EnumerateFileSystemInfos()
+                     .OrderBy(entry => entry.FullName, StringComparer.Ordinal))
+        {
+            ct.ThrowIfCancellationRequested();
+            if ((entry.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+            if (entry is DirectoryInfo child)
+            {
+                foreach (var nested in EnumerateRegularFiles(child.FullName, ct)) yield return nested;
+            }
+            else yield return entry.FullName;
+        }
+    }
+
     private sealed class ExpiredUpload { public string Id { get; set; } = ""; }
     private sealed record PendingBlob(ulong Id, string Sha256);
+    private sealed record ReferencedBlob(ulong Id, string Sha256, ulong SizeBytes, string StoragePath);
     private sealed class DeletedFile
     {
         public ulong Id { get; set; }

@@ -252,6 +252,19 @@ function Write-YfMySqlDefaults($Config,[string]$Directory) {
         throw
     }
 }
+function Invoke-YfNativeCapture([string]$FilePath,[string[]]$Arguments,[string]$StderrPath) {
+    $previousPreference=$ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 turns native stderr into NativeCommandError when
+        # ErrorActionPreference is Stop. Capture it and decide from the exit code.
+        $ErrorActionPreference='Continue'
+        $output=@(& $FilePath @Arguments 2> $StderrPath)
+        $exitCode=$LASTEXITCODE
+    } finally {
+        $ErrorActionPreference=$previousPreference
+    }
+    return [pscustomobject]@{ExitCode=$exitCode;Output=$output}
+}
 function Assert-YfTreeBytes([string]$Source,[string]$Destination) {
     Assert-YfNoLinks $Source
     Assert-YfNoLinks $Destination
@@ -327,15 +340,15 @@ function New-YfBackup([string]$ApplicationRoot,$Config,[string]$Destination,[str
     try {
         $defaults = Write-YfMySqlDefaults $Config $Destination
         $sql = Join-Path $Destination 'database.sql'
-        & $MySqlDump "--defaults-file=$defaults" --single-transaction --routines --triggers --events --hex-blob --no-tablespaces "--result-file=$sql" $Config.Database 2> (Join-Path $Destination 'dump.stderr.log')
-        if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $sql) -or (Get-Item -LiteralPath $sql).Length -eq 0) { throw 'Database backup failed. Inspect the protected backup log.' }
+        $dump=Invoke-YfNativeCapture $MySqlDump @("--defaults-file=$defaults",'--single-transaction','--routines','--triggers','--events','--hex-blob','--no-tablespaces',"--result-file=$sql",$Config.Database) (Join-Path $Destination 'dump.stderr.log')
+        if ($dump.ExitCode -ne 0 -or !(Test-Path -LiteralPath $sql) -or (Get-Item -LiteralPath $sql).Length -eq 0) { throw 'Database backup failed. Inspect the protected backup log.' }
     } finally {
         if ($defaults -and (Test-Path -LiteralPath $defaults -PathType Leaf)) { Remove-Item -LiteralPath $defaults -Force }
     }
     Copy-YfTree $ApplicationRoot (Join-Path $Destination 'application')
     Copy-YfTree $Config.Storage (Join-Path $Destination 'storage')
     Copy-Item -LiteralPath $Config.Path -Destination (Join-Path $Destination 'configuration.json')
-    $manifest = [ordered]@{kind='yf-offline-backup';schemaVersion=1;createdUtc=[DateTime]::UtcNow.ToString('o');siteName=$SiteName;database=$Config.Database;files=@(Get-YfManifestFiles $Destination)}
+    $manifest = [ordered]@{kind='yf-offline-backup';schemaVersion=1;createdUtc=[DateTime]::UtcNow.ToString('o');siteName=$SiteName;database=$Config.Database;containsSecrets=$true;protection='restricted-acl';files=@(Get-YfManifestFiles $Destination)}
     Write-YfJson (Join-Path $Destination 'manifest.json') $manifest
     Assert-YfManifest $Destination 'yf-offline-backup' | Out-Null
 }
@@ -357,8 +370,9 @@ function Restore-YfBackup([string]$BackupRoot,$Config,[string]$NewApplicationRoo
     $defaults = $null
     try {
         $defaults = Write-YfMySqlDefaults $Config $scratch
-        $count = @(& $MySql "--defaults-file=$defaults" --batch --skip-column-names "--database=$($Config.Database)" '--execute=SELECT (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE())+(SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema=DATABASE())+(SELECT COUNT(*) FROM information_schema.events WHERE event_schema=DATABASE())' 2> (Join-Path $scratch 'probe.stderr.log'))
-        if ($LASTEXITCODE -ne 0 -or $count.Count -ne 1 -or $count[0].Trim() -ne '0') { throw 'Restore requires an existing empty database; no data was overwritten.' }
+        $probe=Invoke-YfNativeCapture $MySql @("--defaults-file=$defaults",'--batch','--skip-column-names',"--database=$($Config.Database)",'--execute=SELECT (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE())+(SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema=DATABASE())+(SELECT COUNT(*) FROM information_schema.events WHERE event_schema=DATABASE())') (Join-Path $scratch 'probe.stderr.log')
+        $count=@($probe.Output)
+        if ($probe.ExitCode -ne 0 -or $count.Count -ne 1 -or $count[0].Trim() -ne '0') { throw 'Restore requires an existing empty database; no data was overwritten.' }
         # Stream SQL bytes without shell parsing or embedding credentials in arguments.
         $start = New-Object Diagnostics.ProcessStartInfo
         $start.FileName = (Get-Command $MySql -ErrorAction Stop).Source

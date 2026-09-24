@@ -15,8 +15,9 @@ internal static class RealtimeChangeKinds
     internal const string Messages = "messages";
     internal const string Receipts = "receipts";
     internal const string Activity = "activity";
+    internal const string Project = "project";
 
-    internal static bool IsValid(string kind) => kind is Messages or Receipts or Activity;
+    internal static bool IsValid(string kind) => kind is Messages or Receipts or Activity or Project;
 }
 
 internal sealed record RealtimeConnection(
@@ -160,7 +161,7 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
         ulong projectId,
         CancellationToken ct)
     {
-        var audience = await ResolveAudienceAsync(projectId, ct);
+        var audience = await ResolveAudienceAsync(projectId, candidates, ct);
         if (audience is null) return InitialDecisions(candidates);
         return await AuthorizeProjectAsync(candidates, audience, ct);
     }
@@ -170,7 +171,13 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
     /// cached when a connection was opened: the owner, the main project's creator, internal view-all grantees and the accounts that
     /// belong to the project's supplier right now. It only narrows candidates; delivery is re-authorized.
     /// </summary>
-    internal async Task<ProjectRealtimeAudience?> ResolveAudienceAsync(ulong projectId, CancellationToken ct)
+    internal Task<ProjectRealtimeAudience?> ResolveAudienceAsync(ulong projectId, CancellationToken ct) =>
+        ResolveAudienceAsync(projectId, null, ct);
+
+    internal async Task<ProjectRealtimeAudience?> ResolveAudienceAsync(
+        ulong projectId,
+        IReadOnlyCollection<RealtimeConnection>? candidates,
+        CancellationToken ct)
     {
         await using var db = await database.OpenAsync(ct);
         await using var context = EfDb.Use(db);
@@ -184,8 +191,25 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
             })
             .SingleOrDefaultAsync(ct);
         if (project is null) return null;
-        var viewAll = await AccessService.UsersWithPermission(context, "project:view_all").ToArrayAsync(ct);
-        var supplierUsers = await context.Users.Where(user => user.SupplierId == project.SupplierId)
+        var candidateUserIds = candidates?.Select(connection => connection.UserId).Distinct().ToArray();
+        var usersWithViewAll = AccessService.UsersWithPermission(context, "project:view_all");
+        var viewAllQuery = context.Users.Where(user => user.Status == AccountStatuses.Active
+                && usersWithViewAll.Contains(user.Id))
+            .Select(user => user.Id);
+        var supplierQuery = context.Users.Where(user => user.SupplierId == project.SupplierId
+            && user.Status == AccountStatuses.Active);
+        if (candidateUserIds is { Length: > 0 })
+        {
+            viewAllQuery = viewAllQuery.Where(id => Enumerable.Contains(candidateUserIds, id));
+            supplierQuery = supplierQuery.Where(user => Enumerable.Contains(candidateUserIds, user.Id));
+        }
+        else if (candidates is not null)
+        {
+            return new(projectId, project.SupplierId, project.ResponsibleUserId, new HashSet<ulong>(),
+                new HashSet<ulong>(), project.GroupCreatorId);
+        }
+        var viewAll = await viewAllQuery.ToArrayAsync(ct);
+        var supplierUsers = await supplierQuery
             .Select(user => user.Id).ToArrayAsync(ct);
         return new(projectId, project.SupplierId, project.ResponsibleUserId, viewAll.ToHashSet(), supplierUsers.ToHashSet(),
             project.GroupCreatorId);
@@ -244,14 +268,9 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
                         supplier.Id == user.SupplierId && supplier.Status == AccountStatuses.Active),
                 HasProjectList = AccessService.UsersWithPermission(context, "project:list").Contains(user.Id),
                 HasViewAll = AccessService.UsersWithPermission(context, "project:view_all").Contains(user.Id),
-                ProjectSupplierId = context.Projects.Where(project => project.Id == audience.ProjectId)
-                    .Select(project => (ulong?)project.SupplierId).SingleOrDefault(),
-                ProjectResponsibleUserId = context.Projects.Where(project => project.Id == audience.ProjectId)
-                    .Select(project => project.ResponsibleUserId).SingleOrDefault(),
-                ProjectGroupCreatorId = context.ProjectGroups
-                    .Where(mainProject => context.Projects.Any(project => project.Id == audience.ProjectId
-                        && project.ProjectGroupId == mainProject.Id))
-                    .Select(mainProject => (ulong?)mainProject.CreatedBy).SingleOrDefault(),
+                ProjectSupplierId = (ulong?)audience.SupplierId,
+                ProjectResponsibleUserId = audience.ResponsibleUserId,
+                ProjectGroupCreatorId = audience.GroupCreatorId,
             }).ToArrayAsync(ct);
         var factsBySession = facts.GroupBy(fact => (fact.UserId, fact.SessionId))
             .ToDictionary(group => group.Key, group => group.ToArray());
@@ -322,6 +341,9 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
 internal interface IProjectRealtimePublisher
 {
     Task PublishAsync(ulong projectId, string kind, CancellationToken ct = default);
+
+    Task PublishAsync(ProjectRealtimeAudience audience, string kind, CancellationToken ct = default) =>
+        PublishAsync(audience.ProjectId, kind, ct);
 }
 
 internal sealed record PendingProjectChange(ulong ProjectId, string Kind);
@@ -332,7 +354,7 @@ internal sealed class ProjectRealtimePublisher(
     ProjectRealtimeAuthorizer authorizer,
     ILogger<ProjectRealtimePublisher> logger) : BackgroundService, IProjectRealtimePublisher
 {
-    private readonly Channel<PendingProjectChange> queue = Channel.CreateUnbounded<PendingProjectChange>(
+    private readonly Channel<QueuedDispatch> queue = Channel.CreateUnbounded<QueuedDispatch>(
         new UnboundedChannelOptions
         {
             SingleReader = true,
@@ -342,24 +364,34 @@ internal sealed class ProjectRealtimePublisher(
     private readonly ConcurrentDictionary<PendingProjectChange, QueuedChange> queued = new();
 
     public Task PublishAsync(ulong projectId, string kind, CancellationToken ct = default)
+        => Enqueue(new(projectId, kind), null);
+
+    public Task PublishAsync(ProjectRealtimeAudience audience, string kind, CancellationToken ct = default)
+        => Enqueue(new(audience.ProjectId, kind), audience);
+
+    private Task Enqueue(PendingProjectChange change, ProjectRealtimeAudience? audience)
     {
-        if (!RealtimeChangeKinds.IsValid(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
-        var change = new PendingProjectChange(projectId, kind);
-        var state = queued.GetOrAdd(change, static _ => new QueuedChange());
-        var shouldQueue = false;
-        lock (state)
+        if (!RealtimeChangeKinds.IsValid(change.Kind))
+            throw new ArgumentOutOfRangeException(nameof(change), change.Kind, "Unsupported realtime change kind.");
+        while (true)
         {
-            if (!state.Enqueued) { state.Enqueued = true; shouldQueue = true; }
-            else state.Dirty = true;
-        }
-        if (shouldQueue && !queue.Writer.TryWrite(change))
-        {
+            var state = queued.GetOrAdd(change, static _ => new QueuedChange());
+            var shouldQueue = false;
+            lock (state)
+            {
+                if (!queued.TryGetValue(change, out var current) || !ReferenceEquals(current, state)) continue;
+                if (audience is not null) state.Audience = audience;
+                if (!state.Enqueued) { state.Enqueued = true; shouldQueue = true; }
+                else state.Dirty = true;
+            }
+            if (!shouldQueue || queue.Writer.TryWrite(new(change, state))) break;
             lock (state)
             {
                 state.Enqueued = false;
                 state.Dirty = false;
+                RemoveState(change, state);
             }
-            queued.TryRemove(change, out _);
+            break;
         }
         return Task.CompletedTask;
     }
@@ -377,12 +409,12 @@ internal sealed class ProjectRealtimePublisher(
         var running = new ConcurrentDictionary<Task, byte>();
         try
         {
-            await foreach (var change in queue.Reader.ReadAllAsync(stoppingToken))
+            await foreach (var dispatch in queue.Reader.ReadAllAsync(stoppingToken))
             {
                 await slots.WaitAsync(stoppingToken);
-                var dispatch = DispatchAndReleaseAsync(change, slots, stoppingToken);
-                running.TryAdd(dispatch, 0);
-                _ = dispatch.ContinueWith(completed => running.TryRemove(completed, out _),
+                var runningDispatch = DispatchAndReleaseAsync(dispatch, slots, stoppingToken);
+                running.TryAdd(runningDispatch, 0);
+                _ = runningDispatch.ContinueWith(completed => running.TryRemove(completed, out _),
                     CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             }
         }
@@ -396,30 +428,32 @@ internal sealed class ProjectRealtimePublisher(
         }
     }
 
-    private async Task DispatchAndReleaseAsync(PendingProjectChange change, SemaphoreSlim slots, CancellationToken stoppingToken)
+    private async Task DispatchAndReleaseAsync(QueuedDispatch dispatch, SemaphoreSlim slots, CancellationToken stoppingToken)
     {
         await Task.Yield();
-        try { await DispatchAsync(change, stoppingToken); }
+        try { await DispatchAsync(dispatch, stoppingToken); }
         catch (Exception error) when (error is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
         {
-            logger.LogWarning(error, "Realtime dispatch failed for project {ProjectId}", change.ProjectId);
+            logger.LogWarning(error, "Realtime dispatch failed for project {ProjectId}", dispatch.Change.ProjectId);
         }
         catch (OperationCanceledException)
         {
         }
         finally
         {
-            RequeueOrRelease(change, stoppingToken.IsCancellationRequested);
+            RequeueOrRelease(dispatch, stoppingToken.IsCancellationRequested);
             slots.Release();
         }
     }
 
-    private void RequeueOrRelease(PendingProjectChange change, bool stopping)
+    private void RequeueOrRelease(QueuedDispatch dispatch, bool stopping)
     {
-        if (!queued.TryGetValue(change, out var state)) return;
+        var change = dispatch.Change;
+        var state = dispatch.State;
         var requeue = false;
         lock (state)
         {
+            if (!queued.TryGetValue(change, out var current) || !ReferenceEquals(current, state)) return;
             if (!stopping && state.Dirty)
             {
                 state.Dirty = false;
@@ -429,28 +463,38 @@ internal sealed class ProjectRealtimePublisher(
             {
                 state.Enqueued = false;
                 state.Dirty = false;
-                queued.TryRemove(change, out _);
+                RemoveState(change, state);
             }
         }
-        if (requeue && !queue.Writer.TryWrite(change))
+        if (requeue && !queue.Writer.TryWrite(dispatch))
         {
             lock (state)
             {
                 state.Enqueued = false;
                 state.Dirty = false;
+                RemoveState(change, state);
             }
-            queued.TryRemove(change, out _);
         }
     }
+
+    private void RemoveState(PendingProjectChange change, QueuedChange state) =>
+        ((ICollection<KeyValuePair<PendingProjectChange, QueuedChange>>)queued)
+        .Remove(new(change, state));
+
+    private sealed record QueuedDispatch(PendingProjectChange Change, QueuedChange State);
 
     private sealed class QueuedChange
     {
         internal bool Enqueued;
         internal bool Dirty;
+        internal ProjectRealtimeAudience? Audience;
     }
 
-    private async Task DispatchAsync(PendingProjectChange change, CancellationToken stoppingToken)
+    private async Task DispatchAsync(QueuedDispatch dispatch, CancellationToken stoppingToken)
     {
+        var change = dispatch.Change;
+        ProjectRealtimeAudience? suppliedAudience;
+        lock (dispatch.State) suppliedAudience = dispatch.State.Audience;
         var payload = new ProjectChangedPayload(change.ProjectId, change.Kind);
         var nowSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var active = connections.Snapshot().Where(connection => connection.AccessExpiresAt > nowSeconds).ToArray();
@@ -462,7 +506,8 @@ internal sealed class ProjectRealtimePublisher(
                 authorizationDeadline.CancelAfter(TimeSpan.FromSeconds(5));
                 try
                 {
-                    var audience = await authorizer.ResolveAudienceAsync(change.ProjectId, authorizationDeadline.Token);
+                    var audience = suppliedAudience ?? await authorizer.ResolveAudienceAsync(
+                        change.ProjectId, active, authorizationDeadline.Token);
                     active = audience is null ? [] : ProjectRealtimeAuthorizer.SelectCandidates(active, audience);
                     decisions = active.Length == 0 || audience is null
                         ? new Dictionary<(ulong UserId, string SessionId), ProjectRealtimeAuthorization>()
@@ -491,9 +536,6 @@ internal sealed class ProjectRealtimePublisher(
             await Task.WhenAll(sends);
         }
 
-        foreach (var expired in connections.Snapshot()
-                     .Where(connection => connection.AccessExpiresAt <= DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
-            connections.Disconnect(expired.ConnectionId);
     }
 
     private async Task SendAsync(string connectionId, ProjectChangedPayload payload, ulong projectId,

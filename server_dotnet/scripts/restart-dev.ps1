@@ -4,7 +4,7 @@
 Rebuilds and restarts the local development backend (Release build) and the Vite dev server.
 
 .DESCRIPTION
-Order: back up the database -> stop the old backend -> Release build -> --migrate-database ->
+Order: back up the database -> isolated Release build -> stop the old backend -> --migrate-database ->
 start the backend and wait for /health -> restart `npm run dev` and wait for the home page.
 Only a local database (127.0.0.1/localhost) is accepted. Only listeners that are clearly this
 project's backend (Yf.Api.dll) or Vite (web\node_modules\...vite) are stopped; any other owner aborts.
@@ -34,7 +34,6 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $apiRoot = Join-Path $projectRoot 'server_dotnet\Yf.Api'
 $webRoot = Join-Path $projectRoot 'web'
-$apiDll = Join-Path $apiRoot 'bin\Release\net8.0\Yf.Api.dll'
 $healthUrl = "http://127.0.0.1:$BackendPort/health"
 $frontendUrl = "http://127.0.0.1:$FrontendPort/"
 
@@ -60,6 +59,29 @@ function Wait-Until([scriptblock]$Probe, $Process, [int]$Seconds) {
     return $false
 }
 
+function Get-ConnectionOption($Builder, [string[]]$Names, [switch]$Required) {
+    foreach ($name in $Names) {
+        if ($Builder.ContainsKey($name)) { return [string]$Builder[$name] }
+    }
+    if ($Required) { throw ('Connection string is missing ' + ($Names -join '/')) }
+    return ''
+}
+
+function ConvertTo-MySqlOption([string]$Value) {
+    return '"' + $Value.Replace('\', '\\').Replace('"', '\"').Replace("`r", '\r').Replace("`n", '\n') + '"'
+}
+
+function Invoke-NativeLogged([string]$FilePath, [string[]]$Arguments, [string]$LogPath) {
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $FilePath @Arguments *> $LogPath
+        return [int]$LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
 # --- Resolve configuration (never print the connection string) ---
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath = Join-Path $apiRoot 'appsettings.Local.json' }
 $ConfigPath = [IO.Path]::GetFullPath($ConfigPath)
@@ -67,9 +89,10 @@ if (!(Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { throw "Config file n
 $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 $builder = [System.Data.Common.DbConnectionStringBuilder]::new()
 $builder.set_ConnectionString($config.App.ConnectionString)
-if ($builder['server'] -notin @('127.0.0.1', 'localhost', '::1')) { throw 'Only a local database is allowed.' }
+$databaseServer = Get-ConnectionOption $builder @('server', 'host', 'data source') -Required
+if ($databaseServer -notin @('127.0.0.1', 'localhost', '::1')) { throw 'Only a local database is allowed.' }
 if ($DatabaseName) { $builder['database'] = $DatabaseName }
-$DatabaseName = $builder['database']
+$DatabaseName = Get-ConnectionOption $builder @('database', 'initial catalog') -Required
 if (!$StorageRoot) { $StorageRoot = $config.App.StorageRoot }
 if (!$StorageRoot) { throw 'StorageRoot is not configured; pass -StorageRoot.' }
 $StorageRoot = [IO.Path]::GetFullPath($StorageRoot)
@@ -93,6 +116,8 @@ if (!$SkipFrontend) {
 $runRoot = Join-Path $projectRoot ('.artifacts\runtime\restart-dev\' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff'))
 New-Item -ItemType Directory -Path $runRoot | Out-Null
 Write-Host "Run directory: $runRoot"
+$stagedApiDirectory = Join-Path $runRoot 'api'
+$apiDll = Join-Path $stagedApiDirectory 'Yf.Api.dll'
 
 # --- Back up the database while the old backend is still serving ---
 $backupPath = $null
@@ -100,28 +125,46 @@ if (!$SkipBackup) {
     if (!$MysqlDumpPath) {
         $cmd = Get-Command mysqldump.exe -ErrorAction SilentlyContinue
         if ($cmd) { $MysqlDumpPath = $cmd.Source }
-        else {
-            $MysqlDumpPath = @('C:\Program Files\MySQL', 'D:\Program Files\MySQL') |
-                Where-Object { Test-Path $_ } |
-                ForEach-Object { Get-ChildItem $_ -Recurse -Filter mysqldump.exe -ErrorAction SilentlyContinue } |
-                Select-Object -First 1 -ExpandProperty FullName
-        }
     }
     if (!$MysqlDumpPath) { throw 'mysqldump.exe not found; pass -MysqlDumpPath or -SkipBackup.' }
     $backupPath = Join-Path $runRoot 'before-restart.sql'
-    $port = if ($builder.ContainsKey('port')) { $builder['port'] } else { '3306' }
-    $priorMysqlPassword = $env:MYSQL_PWD
+    $port = Get-ConnectionOption $builder @('port')
+    if ([string]::IsNullOrWhiteSpace($port)) { $port = '3306' }
+    $databaseUser = Get-ConnectionOption $builder @('user id', 'user', 'uid') -Required
+    $databasePassword = Get-ConnectionOption $builder @('password', 'pwd')
+    $defaultsPath = Join-Path $runRoot ('.mysql-' + [Guid]::NewGuid().ToString('N') + '.cnf')
     try {
-        $env:MYSQL_PWD = $builder['password']
-        & $MysqlDumpPath --host=127.0.0.1 "--port=$port" "--user=$($builder['user id'])" --single-transaction `
-            --default-character-set=utf8mb4 "--result-file=$backupPath" $DatabaseName
-        if ($LASTEXITCODE -ne 0 -or (Get-Item $backupPath).Length -eq 0) { throw 'Database backup failed; nothing was stopped.' }
-    } finally { $env:MYSQL_PWD = $priorMysqlPassword }
+        $defaultsLines = @(
+            '[client]',
+            ('host=' + (ConvertTo-MySqlOption $databaseServer)),
+            ('port=' + $port),
+            ('user=' + (ConvertTo-MySqlOption $databaseUser)),
+            ('password=' + (ConvertTo-MySqlOption $databasePassword)),
+            'protocol=TCP',
+            'default-character-set=utf8mb4'
+        )
+        [IO.File]::WriteAllLines($defaultsPath, $defaultsLines, (New-Object Text.UTF8Encoding($false)))
+        $dumpExit = Invoke-NativeLogged $MysqlDumpPath @(
+            "--defaults-file=$defaultsPath", '--single-transaction',
+            '--default-character-set=utf8mb4', "--result-file=$backupPath", $DatabaseName
+        ) (Join-Path $runRoot 'database-backup.log')
+        if ($dumpExit -ne 0 -or !(Test-Path -LiteralPath $backupPath -PathType Leaf) -or
+            (Get-Item -LiteralPath $backupPath).Length -eq 0) {
+            throw 'Database backup failed; nothing was stopped.'
+        }
+    } finally {
+        if (Test-Path -LiteralPath $defaultsPath -PathType Leaf) { Remove-Item -LiteralPath $defaultsPath -Force }
+    }
     Write-Host "Backup: $backupPath"
 }
 
-# --- Backend: stop, build, migrate, start ---
-# Stop first: the running process locks bin\Release, so building beforehand would fail.
+# --- Backend: build in isolation, stop, migrate, start ---
+$buildExit = Invoke-NativeLogged (Get-Command dotnet).Source @(
+    'build', (Join-Path $apiRoot 'Yf.Api.csproj'), '--configuration', 'Release', '--output', $stagedApiDirectory
+) (Join-Path $runRoot 'build.log')
+if ($buildExit -ne 0 -or !(Test-Path -LiteralPath $apiDll -PathType Leaf)) {
+    throw "Build failed; the running backend was not stopped. See $runRoot\build.log"
+}
 if ($backendOwner) { Write-Host "Stopping backend pid $($backendOwner.ProcessId)"; Stop-Owner $backendOwner }
 
 $env:App__ConnectionString = $builder.ConnectionString
@@ -138,10 +181,8 @@ Remove-Item Env:YF_BOOTSTRAP_PASSWORD -ErrorAction SilentlyContinue
 
 Push-Location $apiRoot
 try {
-    & dotnet build .\Yf.Api.csproj -c Release *> (Join-Path $runRoot 'build.log')
-    if ($LASTEXITCODE -ne 0) { throw "Build failed; see $runRoot\build.log" }
-    & dotnet $apiDll --migrate-database *> (Join-Path $runRoot 'migration.log')
-    if ($LASTEXITCODE -ne 0) { throw "Migration failed; see $runRoot\migration.log" }
+    $migrationExit = Invoke-NativeLogged (Get-Command dotnet).Source @($apiDll, '--migrate-database') (Join-Path $runRoot 'migration.log')
+    if ($migrationExit -ne 0) { throw "Migration failed; see $runRoot\migration.log" }
     $backend = Start-Process (Get-Command dotnet).Source -ArgumentList ('"' + $apiDll + '"') -WorkingDirectory $apiRoot `
         -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $runRoot 'backend.stdout.log') `

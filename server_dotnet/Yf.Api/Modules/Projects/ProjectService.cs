@@ -10,8 +10,14 @@ namespace Yf.Api.Modules.Projects;
 internal sealed partial class ProjectService(
     AuditService audit,
     AppOptions options,
-    ProjectGroupStatusService groupStatus)
+    ProjectGroupStatusService groupStatus,
+    IProjectRealtimePublisher? realtime = null,
+    ILogger<ProjectService>? logger = null)
 {
+    private static readonly Action<ILogger, ulong, Exception?> LogDeletionRealtimePublishFailure =
+        LoggerMessage.Define<ulong>(LogLevel.Warning, new EventId(1, "ProjectDeletionRealtimePublishFailed"),
+            "Realtime publish failed after project deletion commit for project {ProjectId}");
+
     internal async Task<ProjectDetailResponse> DetailAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
@@ -19,16 +25,14 @@ internal sealed partial class ProjectService(
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
         await using var db = EfDb.Use(conn, tx);
-        var rejectReason = await db.ProjectStatusLogs
-            .Where(log => log.ProjectId == projectId && log.Action == "REJECT")
-            .OrderByDescending(log => log.Id)
-            .Select(log => log.Reason)
-            .FirstOrDefaultAsync(ct);
-        var latestSubmitterId = await db.ProjectStatusLogs
-            .Where(log => log.ProjectId == projectId && log.Action == "SUBMIT")
-            .OrderByDescending(log => log.Id)
-            .Select(log => (ulong?)log.OperatorId)
-            .FirstOrDefaultAsync(ct);
+        var statusDetails = await db.Projects.Where(item => item.Id == projectId).Select(_ => new
+        {
+            RejectReason = db.ProjectStatusLogs
+                .Where(log => log.ProjectId == projectId && log.Action == "REJECT")
+                .OrderByDescending(log => log.Id).Select(log => log.Reason).FirstOrDefault(),
+            LatestSubmitterId = db.ProjectStatusLogs.Where(log => log.Id == project.LatestSubmissionId)
+                .Select(log => (ulong?)log.OperatorId).FirstOrDefault(),
+        }).SingleAsync(ct);
         var sourceCopy = await (
             from copy in db.ProjectCopies
             join source in db.Projects on copy.SourceProjectId equals source.Id
@@ -56,8 +60,8 @@ internal sealed partial class ProjectService(
             CopySource = copySource,
         })
         {
-            RejectReason = rejectReason,
-            LatestSubmitterId = latestSubmitterId,
+            RejectReason = statusDetails.RejectReason,
+            LatestSubmitterId = statusDetails.LatestSubmitterId,
         };
         await tx.CommitAsync(ct);
         return result;
@@ -207,7 +211,16 @@ internal sealed partial class ProjectService(
             await db.Files.AnyAsync(file => file.ProjectId == projectId, ct)
                 || await db.Messages.AnyAsync(message => message.ProjectId == projectId, ct),
             await db.UploadSessions.AnyAsync(upload => upload.ProjectId == projectId, ct));
-        await db.EmailOutbox.Where(mail => mail.ProjectId == projectId).ExecuteDeleteAsync(ct);
+        var deletionAudience = await BuildDeletionAudienceAsync(db, project, ct);
+        await db.EmailOutbox.Where(mail => mail.ProjectId == projectId
+                && (mail.Status == "PENDING" || mail.Status == "SENDING"))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(mail => mail.Status, "CANCELLED")
+                .SetProperty(mail => mail.NextAttemptAt, (DateTime?)null)
+                .SetProperty(mail => mail.LastError, "项目已删除，邮件已取消"), ct);
+        // Preserve delivery history while releasing the restrictive project foreign key.
+        await db.EmailOutbox.Where(mail => mail.ProjectId == projectId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(mail => mail.ProjectId, (ulong?)null), ct);
         await db.ProjectStatusLogs.Where(log => log.ProjectId == projectId).ExecuteDeleteAsync(ct);
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DELETE", "project", projectId, new { name = project.Name }, ip, ct);
         await db.ProjectActivities.Where(activity => activity.ProjectId == projectId).ExecuteDeleteAsync(ct);
@@ -216,9 +229,32 @@ internal sealed partial class ProjectService(
         {
             throw ApiException.Conflict("项目已被删除，请刷新后重试");
         }
-        if (project.ProjectGroupId != 0)
-            await groupStatus.RecalculateAsync(conn, tx, project.ProjectGroupId, current.Id, null, ct);
+        await groupStatus.RecalculateAsync(
+            conn, tx, project.ProjectGroupId, current.Id, null, ct, groupAlreadyLocked: true);
         await tx.CommitAsync(ct);
+        if (realtime is not null)
+        {
+            try { await realtime.PublishAsync(deletionAudience, RealtimeChangeKinds.Project, CancellationToken.None); }
+            catch (Exception error)
+            {
+                if (logger is not null) LogDeletionRealtimePublishFailure(logger, projectId, error);
+            }
+        }
+    }
+
+    private static async Task<ProjectRealtimeAudience> BuildDeletionAudienceAsync(
+        YfDbContext db, ProjectRow project, CancellationToken ct)
+    {
+        var viewAllUsers = await db.Users.Where(user => user.Status == AccountStatuses.Active
+                && AccessService.UsersWithPermission(db, "project:view_all").Contains(user.Id))
+            .Select(user => user.Id).ToArrayAsync(ct);
+        var supplierUsers = await db.Users.Where(user => user.SupplierId == project.SupplierId
+                && user.Status == AccountStatuses.Active)
+            .Select(user => user.Id).ToArrayAsync(ct);
+        var creatorId = await db.ProjectGroups.Where(group => group.Id == project.ProjectGroupId)
+            .Select(group => (ulong?)group.CreatedBy).SingleOrDefaultAsync(ct);
+        return new(project.Id, project.SupplierId, project.ResponsibleUserId,
+            viewAllUsers.ToHashSet(), supplierUsers.ToHashSet(), creatorId);
     }
 
     private static async Task<ProjectRow> LoadProjectAsync(
@@ -264,7 +300,7 @@ internal sealed partial class ProjectService(
             project => project.Name == name && (excludeId == null || project.Id != excludeId.Value), ct);
         if (exists)
         {
-            throw ApiException.Conflict("项目名称已存在");
+            throw ApiException.Conflict("子项目名称已存在");
         }
     }
 
@@ -286,7 +322,8 @@ internal sealed partial class ProjectService(
 
     internal static ProjectMetadataInput NormalizeMetadata(ProjectUpsertRequest request, bool requireRobotPart)
     {
-        if (NormalizeWorkOrderNos(request.WorkOrderNos).Length == 0)
+        var workOrderNos = NormalizeWorkOrderNos(request.WorkOrderNos);
+        if (workOrderNos.Length == 0)
             throw ApiException.BadRequest("请至少填写一个工令号");
         if (string.IsNullOrWhiteSpace(request.MachineModel)) throw ApiException.BadRequest("请填写机型");
         if (requireRobotPart && request.RobotPartId is null or 0) throw ApiException.BadRequest("请选择 Robot 料号");
@@ -294,7 +331,7 @@ internal sealed partial class ProjectService(
         if (string.IsNullOrWhiteSpace(request.ExpectedCompletionDate)) throw ApiException.BadRequest("请选择需求完成时间");
         var machineModel = string.IsNullOrWhiteSpace(request.MachineModel) ? null : request.MachineModel.Trim();
         if (machineModel is not null && RuneCount(machineModel) > 128)
-            throw ApiException.BadRequest("机台机型不能超过 128 个字符");
+            throw ApiException.BadRequest("机型不能超过 128 个字符");
         DateTime? expectedCompletionDate = null;
         if (!string.IsNullOrWhiteSpace(request.ExpectedCompletionDate))
         {
@@ -305,8 +342,8 @@ internal sealed partial class ProjectService(
                 throw ApiException.BadRequest("需求完成时间必须为 yyyy-MM-dd 格式");
             expectedCompletionDate = parsed.ToDateTime(TimeOnly.MinValue);
         }
-        return new(NormalizeWorkOrderNos(request.WorkOrderNos), machineModel, request.RobotPartId,
-            null, null, null, request.PriorityId, expectedCompletionDate);
+        return new(workOrderNos, machineModel, request.RobotPartId,
+            null, null, request.PriorityId, expectedCompletionDate);
     }
 
     /// <summary>
@@ -443,7 +480,8 @@ internal sealed partial class ProjectService(
         await using var db = EfDb.Use(conn, tx);
         var count = await db.UploadSessions.LongCountAsync(upload =>
             upload.ProjectId == projectId
-            && (upload.Status == "UPLOADING" || upload.Status == "MERGING"), ct);
+            && (upload.Status == ProjectUploadSessionStatuses.Uploading
+                || upload.Status == ProjectUploadSessionStatuses.Merging), ct);
         return checked((ulong)count);
     }
 
@@ -459,7 +497,7 @@ internal sealed partial class ProjectService(
         }
         if (RuneCount(name) > 128)
         {
-            throw ApiException.BadRequest("项目名称过长");
+            throw ApiException.BadRequest("项目名称需为 1~128 个字符");
         }
         return name;
     }
@@ -494,7 +532,6 @@ internal sealed partial class ProjectService(
         string[] WorkOrderNos,
         string? MachineModel,
         ulong? RobotPartId,
-        string? LegacyRobotModelName,
         ulong? ResponsibleUserId,
         ulong? SectionId,
         ulong? PriorityId,
@@ -515,12 +552,6 @@ internal sealed partial class ProjectService(
         public string RealName { get; init; } = string.Empty;
         public ulong? SectionId { get; init; }
         public string? SectionName { get; init; }
-    }
-
-    private sealed class OwnerSelection
-    {
-        public ulong Id { get; init; }
-        public ulong? SectionId { get; init; }
     }
 
     private sealed class ProjectWorkOrderRow

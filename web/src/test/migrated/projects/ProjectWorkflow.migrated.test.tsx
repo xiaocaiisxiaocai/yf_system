@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../../api/client', () => ({
   default: { post: mocks.post, put: mocks.put },
+  getApiErrorCode: (error: { response?: { data?: { code?: number } } }) => error?.response?.data?.code,
 }))
 
 vi.mock('../../../store/auth', () => ({
@@ -164,5 +165,23 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
       reason: '需要修改',
       expectedSubmissionId: 62,
     })
+  })
+
+  it('a submission version conflict reloads once, closes rejection, and never retries the write', async () => {
+    mocks.auth.permissions = ['project:confirm']
+    const conflict = { response: { data: { code: 40901 } } }
+    mocks.post.mockRejectedValue(conflict)
+    const changed = vi.fn()
+    const user = userEvent.setup()
+    render(<ProjectWorkflowPanel project={pendingProject(71)} onChanged={changed} />)
+
+    await user.click(screen.getByRole('button', { name: '验收驳回' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByPlaceholderText('请填写驳回原因'), '版本已变化')
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认驳回' }))
+
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce())
+    expect(mocks.post).toHaveBeenCalledOnce()
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 })

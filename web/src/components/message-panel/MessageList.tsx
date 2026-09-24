@@ -2,8 +2,9 @@ import {
   Avatar, Button, Empty, Popconfirm, Popover, Space, Spin, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconCheck, IconDelete } from '@arco-design/web-react/icon'
-import type { ComponentType, RefObject } from 'react'
+import { memo, type ComponentType, type RefObject } from 'react'
 import type { Message as Msg } from '../../api/types'
+import './MessageList.css'
 
 interface Props {
   list: Msg[]
@@ -38,6 +39,88 @@ interface Props {
   }>
 }
 
+interface MessageRowProps {
+  message: Msg
+  targetId?: number
+  userId?: number
+  watermarkEmployeeNo?: string
+  watermarkRealName?: string
+  canDelete: boolean
+  receiptRefresh: number
+  fmtTime: Props['fmtTime']
+  onReceiveReceipt: Props['onReceiveReceipt']
+  onOpenReceipt: Props['onOpenReceipt']
+  onRemove: Props['onRemove']
+  MessageImages: Props['MessageImages']
+  ReceiptBody: Props['ReceiptBody']
+}
+
+const MessageRow = memo(function MessageRow({
+  message: m,
+  targetId,
+  userId,
+  watermarkEmployeeNo,
+  watermarkRealName,
+  canDelete,
+  receiptRefresh,
+  fmtTime,
+  onReceiveReceipt,
+  onOpenReceipt,
+  onRemove,
+  MessageImages,
+  ReceiptBody,
+}: MessageRowProps) {
+  return <div
+    className={`msg-item${m.id === targetId ? ' msg-item-target' : ''}`}
+    data-message-id={m.id}
+    aria-label={m.id === targetId ? '当前定位留言' : undefined}
+    data-unread={!m.readByMe && m.senderId !== userId ? 'true' : 'false'}
+  >
+    <Space align="start">
+      <Avatar size={32} style={{ background: m.senderType === 'SUPPLIER' ? '#7b61ff' : '#165dff' }}>
+        {m.senderName.slice(0, 1)}
+      </Avatar>
+      <div className="message-row-main">
+        <Space size={8}>
+          <Typography.Text bold>{m.senderName}</Typography.Text>
+          <Tag size="small" color={m.senderType === 'SUPPLIER' ? 'purple' : 'arcoblue'}>
+            {m.senderType === 'SUPPLIER' ? '供应商' : '公司'}
+          </Tag>
+          <Tag size="small" color="gray">项目留言</Tag>
+          <Typography.Text type="secondary" className="message-row-time">{fmtTime(m.createdAt)}</Typography.Text>
+        </Space>
+        <div className="message-row-content">{m.content}</div>
+        {!!m.images?.length && <MessageImages messageId={m.id} images={m.images} watermarkEmployeeNo={watermarkEmployeeNo} watermarkRealName={watermarkRealName} />}
+        <div className="message-read-marker" aria-hidden="true" />
+        <div className="message-row-actions">
+          <Popover
+            content={<div className="message-receipt-popover">
+              <Typography.Text bold className="message-receipt-title">已读协作账号</Typography.Text>
+              <ReceiptBody id={m.id} refreshKey={receiptRefresh} onLoaded={onReceiveReceipt} />
+            </div>}
+            trigger="click"
+            triggerProps={{ escToClose: true, unmountOnExit: true }}
+          >
+            <Button
+              size="mini"
+              type="text"
+              status={m.readCount >= m.totalCount && m.totalCount > 0 ? 'success' : undefined}
+              aria-label={`查看留言回执：${m.readCount}/${m.totalCount}`}
+              icon={<IconCheck />}
+            >
+              已读 {m.readCount}/{m.totalCount}
+            </Button>
+          </Popover>
+          {m.senderId === userId && <Button size="mini" type="text" onClick={() => onOpenReceipt(m.id)}>回执详情</Button>}
+          {canDelete && <Popconfirm title="删除这条留言？删除后双方均不可见。" onOk={() => onRemove(m.id)}>
+            <Button size="mini" type="text" status="danger" icon={<IconDelete />}>删除</Button>
+          </Popconfirm>}
+        </div>
+      </div>
+    </Space>
+  </div>
+})
+
 export function MessageList({
   list,
   total,
@@ -62,9 +145,9 @@ export function MessageList({
   ReceiptBody,
 }: Props) {
   return (
-    <div className="message-scroll-area" tabIndex={0} aria-label="留言列表">
+    <div ref={listRef as RefObject<HTMLDivElement>} className="message-scroll-area" tabIndex={0} aria-label="留言列表">
       {loadError ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
+        <div className="message-load-error">
           <Typography.Text type="error">加载失败</Typography.Text>
           <Button size="small" onClick={onRetryInitial}>重试</Button>
         </div>
@@ -73,83 +156,31 @@ export function MessageList({
           {list.length === 0 && !loading && !hasMore ? (
             <Empty description="暂无留言" />
           ) : (
-            <div ref={listRef as unknown as RefObject<HTMLDivElement>}>
-              {list.map((m) => (
-              <div
-                className="msg-item"
-                key={m.id}
-                data-message-id={m.id}
-                aria-label={m.id === targetId ? '当前定位留言' : undefined}
-                style={m.id === targetId ? { borderLeft: '3px solid rgb(var(--primary-6))', paddingLeft: 12, background: 'var(--color-fill-1)' } : undefined}
-                data-unread={!m.readByMe && m.senderId !== userId ? 'true' : 'false'}
-              >
-                <Space align="start">
-                  <Avatar
-                    size={32}
-                    style={{ background: m.senderType === 'SUPPLIER' ? '#7b61ff' : '#165dff' }}
-                  >
-                    {m.senderName.slice(0, 1)}
-                  </Avatar>
-                  <div style={{ flex: 1 }}>
-                    <Space size={8}>
-                      <Typography.Text bold>{m.senderName}</Typography.Text>
-                      <Tag size="small" color={m.senderType === 'SUPPLIER' ? 'purple' : 'arcoblue'}>
-                        {m.senderType === 'SUPPLIER' ? '供应商' : '公司'}
-                      </Tag>
-                      <Tag size="small" color="gray">项目留言</Tag>
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        {fmtTime(m.createdAt)}
-                      </Typography.Text>
-                    </Space>
-                    <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{m.content}</div>
-                    {!!m.images?.length && <MessageImages messageId={m.id} images={m.images} watermarkEmployeeNo={watermarkEmployeeNo} watermarkRealName={watermarkRealName} />}
-                    <div className="message-read-marker" aria-hidden="true" />
-                    <div style={{ marginTop: 4 }}>
-                      <Popover
-                        content={
-                          <div style={{ maxWidth: 320 }}>
-                            <Typography.Text bold style={{ fontSize: 12 }}>已读协作账号</Typography.Text>
-                            <ReceiptBody id={m.id} refreshKey={receiptRefresh} onLoaded={onReceiveReceipt} />
-                          </div>
-                        }
-                        trigger="click"
-                        triggerProps={{ escToClose: true, unmountOnExit: true }}
-                      >
-                        <Button
-                          size="mini"
-                          type="text"
-                          status={m.readCount >= m.totalCount && m.totalCount > 0 ? 'success' : undefined}
-                          aria-label={`查看留言回执：${m.readCount}/${m.totalCount}`}
-                          icon={<IconCheck />}
-                        >
-                          已读 {m.readCount}/{m.totalCount}
-                        </Button>
-                      </Popover>
-                      {m.senderId === userId && (
-                        <Button size="mini" type="text" onClick={() => onOpenReceipt(m.id)} style={{ marginLeft: 8 }}>
-                          回执详情
-                        </Button>
-                      )}
-                      {canDelete && (
-                        <Popconfirm title="删除这条留言？删除后双方均不可见。" onOk={() => onRemove(m.id)}>
-                          <Button size="mini" type="text" status="danger" icon={<IconDelete />} style={{ marginLeft: 8 }}>
-                            删除
-                          </Button>
-                        </Popconfirm>
-                      )}
-                    </div>
-                  </div>
-                </Space>
-              </div>
-              ))}
+            <div>
+              {list.map((message) => <MessageRow
+                key={message.id}
+                message={message}
+                targetId={targetId}
+                userId={userId}
+                watermarkEmployeeNo={watermarkEmployeeNo}
+                watermarkRealName={watermarkRealName}
+                canDelete={canDelete}
+                receiptRefresh={receiptRefresh}
+                fmtTime={fmtTime}
+                onReceiveReceipt={onReceiveReceipt}
+                onOpenReceipt={onOpenReceipt}
+                onRemove={onRemove}
+                MessageImages={MessageImages}
+                ReceiptBody={ReceiptBody}
+              />)}
               {appendError && (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 12 }}>
+                <div className="message-append-error">
                   <Typography.Text type="error">加载失败</Typography.Text>
                   <Button size="small" onClick={onLoadMore}>重试</Button>
                 </div>
               )}
               {hasMore && (
-                <div style={{ textAlign: 'center', padding: 12 }}>
+                <div className="message-load-more">
                   <Button onClick={onLoadMore} loading={loading}>
                     加载更多（{list.length}/{total}）
                   </Button>

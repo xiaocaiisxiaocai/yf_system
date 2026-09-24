@@ -1,8 +1,11 @@
 using System.Diagnostics;
 using System.IO.Compression;
+using System.Net;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
@@ -114,12 +117,151 @@ public sealed class PrecompressedStaticFilesTests : IDisposable
         foreach (var path in new[] { "/api/assets/app.js", "/health" })
             Assert.True(await InvokeAsync(Request(path, "br")));
 
-        foreach (var path in new[] { "/appsettings.json", "/../secret.js", "/..%2fsecret.js", "/.precompressed-assets.json",
-                     "/privateuploads/file.js", "/private%75ploads/file.js" })
+        foreach (var path in new[] { "/appsettings.json", "/../secret.js", "/.precompressed-assets.json",
+                     "/privateuploads/file.js" })
         {
             var denied = Request(path, "br");
             Assert.False(await InvokeAsync(denied));
             Assert.Equal(StatusCodes.Status404NotFound, denied.Response.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task KestrelDecodesRequestPathOnceAndServesLiteralPercentSequence()
+    {
+        var source = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("export const percent = true;\n", 200)));
+        var representations = WriteAsset("assets/literal%2Fname.js", source);
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            ContentRootPath = root,
+            EnvironmentName = "Testing",
+            WebRootPath = root,
+        });
+        builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
+        var app = builder.Build();
+        string? observedPath = null;
+        app.Use(async (context, next) =>
+        {
+            observedPath = context.Request.Path.Value;
+            await next(context);
+        });
+        ApiApplication.UsePublicStaticFilesBeforeRouting(app);
+        app.Run(context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return Task.CompletedTask;
+        });
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await app.StartAsync(cancellationToken);
+        try
+        {
+            var server = app.Services.GetRequiredService<IServer>();
+            var address = Assert.Single(server.Features.Get<IServerAddressesFeature>()!.Addresses);
+            using var client = new HttpClient { BaseAddress = new Uri(address) };
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/assets/literal%252Fname.js");
+            request.Headers.TryAddWithoutValidation("Accept-Encoding", "br, identity;q=0");
+
+            using var response = await client.SendAsync(request, cancellationToken);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("/assets/literal%2Fname.js", observedPath);
+            Assert.Equal("br", Assert.Single(response.Content.Headers.ContentEncoding));
+            Assert.Equal(representations.Brotli, await response.Content.ReadAsByteArrayAsync(cancellationToken));
+        }
+        finally
+        {
+            await app.StopAsync(cancellationToken);
+            await app.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task StandardStaticMiddlewareUsesBlacklistForNonCompressibleFiles()
+    {
+        var safe = new byte[] { 1, 2, 3, 4 };
+        File.WriteAllBytes(Path.Combine(root, "safe.png"), safe);
+        File.WriteAllBytes(Path.Combine(root, "appsettings.png"), [5, 6, 7]);
+        File.WriteAllBytes(Path.Combine(root, "client.dll"), [8, 9, 10]);
+        var environment = new TestEnvironment(root);
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddLogging();
+        serviceCollection.AddRouting();
+        var diagnostics = new DiagnosticListener("Yf.Api.Tests.PublicStaticFiles");
+        serviceCollection.AddSingleton(diagnostics);
+        serviceCollection.AddSingleton<DiagnosticSource>(diagnostics);
+        serviceCollection.AddSingleton<IWebHostEnvironment>(environment);
+        using var services = serviceCollection.BuildServiceProvider();
+        var application = new ApplicationBuilder(services);
+        ApiApplication.UsePublicStaticFilesBeforeRouting(application);
+        application.Run(context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return Task.CompletedTask;
+        });
+        var pipeline = application.Build();
+
+        Assert.IsType<PublicStaticFileProvider>(environment.WebRootFileProvider);
+
+        var allowed = Request("/safe.png", "identity");
+        allowed.RequestServices = services;
+        await pipeline(allowed);
+        Assert.Equal(StatusCodes.Status200OK, allowed.Response.StatusCode);
+        Assert.Equal(safe, ((MemoryStream)allowed.Response.Body).ToArray());
+
+        foreach (var path in new[] { "/appsettings.png", "/client.dll" })
+        {
+            var denied = Request(path, "identity");
+            denied.RequestServices = services;
+            await pipeline(denied);
+            Assert.Equal(StatusCodes.Status404NotFound, denied.Response.StatusCode);
+            Assert.Empty(((MemoryStream)denied.Response.Body).ToArray());
+        }
+    }
+
+    [Fact]
+    public async Task StandardStaticMiddlewareRejectsReparsePointFiles()
+    {
+        var outsideRoot = Directory.CreateTempSubdirectory("yf_static_outside_").FullName;
+        var outsideFile = Path.Combine(outsideRoot, "outside.png");
+        var link = Path.Combine(root, "linked.png");
+        File.WriteAllBytes(outsideFile, [1, 2, 3]);
+        try
+        {
+            try
+            {
+                File.CreateSymbolicLink(link, outsideFile);
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
+            {
+                Assert.Skip($"Symbolic links are unavailable: {exception.Message}");
+            }
+
+            var environment = new TestEnvironment(root);
+            var provider = PublicStaticFileProvider.Create(environment);
+            var serviceCollection = new ServiceCollection();
+            serviceCollection.AddLogging();
+            serviceCollection.AddSingleton<IWebHostEnvironment>(environment);
+            using var services = serviceCollection.BuildServiceProvider();
+            var application = new ApplicationBuilder(services);
+            application.UseStaticFiles(new StaticFileOptions { FileProvider = provider });
+            application.Run(context =>
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return Task.CompletedTask;
+            });
+            var context = Request("/linked.png", "identity");
+            context.RequestServices = services;
+
+            await application.Build()(context);
+
+            Assert.Equal(StatusCodes.Status404NotFound, context.Response.StatusCode);
+            Assert.Empty(((MemoryStream)context.Response.Body).ToArray());
+        }
+        finally
+        {
+            if (File.Exists(link)) File.Delete(link);
+            Directory.Delete(outsideRoot, recursive: true);
         }
     }
 

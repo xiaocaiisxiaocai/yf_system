@@ -10,7 +10,8 @@ namespace Yf.Api.Modules.Projects;
 internal sealed class MessageService(
     AuditService audit,
     AppOptions options,
-    IProjectRealtimePublisher? realtime = null)
+    IProjectRealtimePublisher? realtime = null,
+    ILogger<MessageService>? logger = null)
 {
     internal const int MaximumImageCount = 9;
     internal const ulong MaximumImageBytes = 50UL * 1024 * 1024;
@@ -639,7 +640,18 @@ internal sealed class MessageService(
     {
         if (realtime is null) return;
         try { await realtime.PublishAsync(projectId, kind, CancellationToken.None); }
-        catch { }
+        catch (OperationCanceledException error)
+        {
+            logger?.LogDebug(error,
+                "Realtime message notification was canceled after commit for project {ProjectId}, change {ChangeKind}",
+                projectId, kind);
+        }
+        catch (Exception error)
+        {
+            logger?.LogWarning(error,
+                "Realtime message notification failed after commit for project {ProjectId}, change {ChangeKind}",
+                projectId, kind);
+        }
     }
 
     private static MessageReceiptCounts ReceiptCounts(

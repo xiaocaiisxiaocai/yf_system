@@ -3,6 +3,7 @@ import { Button, Message, Modal, Result, Spin, Tooltip } from '@arco-design/web-
 import { IconClose, IconDelete, IconImage } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
 import './MessageImages.css'
+import { PreviewWatermark } from './PreviewWatermark'
 
 // 与 FileTable 的图片预览共用同一按需加载分包，避免此处的静态引用使其失效
 const ImagePreview = lazy(() => import('./ImagePreview'))
@@ -87,6 +88,17 @@ interface MessageImagesProps {
   watermarkRealName?: string
 }
 
+const draftFileKeys = new WeakMap<File, string>()
+let nextDraftFileKey = 0
+
+function draftFileKey(file: File) {
+  const existing = draftFileKeys.get(file)
+  if (existing) return existing
+  const key = `message-draft-${++nextDraftFileKey}`
+  draftFileKeys.set(file, key)
+  return key
+}
+
 function LocalImageThumbnail({ file, onRemove, disabled }: {
   file: File
   onRemove: () => void
@@ -146,7 +158,7 @@ export function MessageImageComposer({ files, onChange, disabled = false }: Mess
     </Tooltip>
     {files.length > 0 && <div className="message-image-drafts" aria-label={`已添加 ${files.length} 张图片`}>
       {files.map((file, index) => <LocalImageThumbnail
-        key={`${file.name}-${file.size}-${file.lastModified}-${index}`}
+        key={draftFileKey(file)}
         file={file}
         disabled={disabled}
         onRemove={() => onChange(files.filter((_, current) => current !== index))}
@@ -161,23 +173,10 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MiB`
 }
 
-function formatWatermarkTime(value = new Date()) {
-  const pad = (part: number) => String(part).padStart(2, '0')
-  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`
-}
-
-function PreviewWatermark({ employeeNo, realName }: { employeeNo?: string; realName?: string }) {
-  const [openedAt] = useState(() => new Date())
-  const label = `${employeeNo?.trim() || '未知'} ${realName?.trim() || '未知'} ${formatWatermarkTime(openedAt)}`
-  return <div className="preview-watermark" aria-hidden="true">
-    {Array.from({ length: 18 }, (_, index) => <span key={index}>{label}</span>)}
-  </div>
-}
-
 function RemoteImageThumbnail({ messageId, image, onOpen }: {
   messageId: number
   image: MessageImageItem
-  onOpen: () => void
+  onOpen: (source: string) => void
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState(() => typeof IntersectionObserver === 'undefined')
@@ -241,7 +240,7 @@ function RemoteImageThumbnail({ messageId, image, onOpen }: {
       className="message-image-open"
       aria-label={`预览图片：${image.name}`}
       disabled={!ready}
-      onClick={onOpen}
+      onClick={() => onOpen(source)}
     >
       {source && sourceAttempt === attempt && <img
         src={source}
@@ -260,7 +259,7 @@ function RemoteImageThumbnail({ messageId, image, onOpen }: {
 }
 
 export function MessageImages({ messageId, images, watermarkEmployeeNo, watermarkRealName }: MessageImagesProps) {
-  const [preview, setPreview] = useState<MessageImageItem | null>(null)
+  const [preview, setPreview] = useState<{ image: MessageImageItem; source: string } | null>(null)
   const [previewToolbar, setPreviewToolbar] = useState<HTMLDivElement | null>(null)
 
   if (!images.length) return null
@@ -271,15 +270,15 @@ export function MessageImages({ messageId, images, watermarkEmployeeNo, watermar
         key={image.id}
         messageId={messageId}
         image={image}
-        onOpen={() => setPreview(image)}
+        onOpen={(source) => setPreview({ image, source })}
       />)}
     </div>
-    <Modal
+    {preview && <Modal
       className="file-preview-modal message-image-preview-modal"
       alignCenter
       closable={false}
-      title={preview ? <div className="file-preview-heading">
-        <span className="file-preview-name" title={preview.name}>预览：{preview.name}</span>
+      title={<div className="file-preview-heading">
+        <span className="file-preview-name" title={preview.image.name}>预览：{preview.image.name}</span>
         <div className="file-preview-controls" ref={setPreviewToolbar} />
         <Button
           className="file-preview-close"
@@ -288,23 +287,23 @@ export function MessageImages({ messageId, images, watermarkEmployeeNo, watermar
           icon={<IconClose />}
           onClick={() => setPreview(null)}
         />
-      </div> : ''}
-      visible={!!preview}
+      </div>}
+      visible
       onCancel={() => setPreview(null)}
       footer={null}
       style={{ display: 'inline-flex', width: 'calc(100vw - 24px)', maxWidth: 'none', height: 'calc(100dvh - 24px)' }}
       unmountOnExit
     >
-      {preview && <div className="file-preview-surface">
+      <div className="file-preview-surface">
         <Suspense fallback={<div role="status">加载图片预览…</div>}>
           <ImagePreview
-            contentUrl={`/messages/${messageId}/images/${preview.id}`}
-            name={preview.name}
+            sourceUrl={preview.source}
+            name={preview.image.name}
             toolbarContainer={previewToolbar}
           />
         </Suspense>
         <PreviewWatermark employeeNo={watermarkEmployeeNo} realName={watermarkRealName} />
-      </div>}
-    </Modal>
+      </div>
+    </Modal>}
   </>
 }

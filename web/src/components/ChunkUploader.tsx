@@ -55,6 +55,8 @@ let nextEntryKey = 0
 
 /** 同一批次最多同时上传的文件数；其余文件排队，避免挤占浏览器连接与主线程。 */
 const MAX_CONCURRENT_FILES = 2
+/** 所有文件合计的分片请求上限，给普通 API 与实时连接保留浏览器连接。 */
+const MAX_CONCURRENT_CHUNKS = 4
 /** 单个分片遇到网络抖动等暂时性错误时的总尝试次数（含首次）。 */
 const CHUNK_ATTEMPTS = 3
 
@@ -144,6 +146,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
   const [closing, setClosing] = useState(false)
   const [submitForAcceptance, setSubmitForAcceptance] = useState(false)
   const uploadSlots = useRef(createUploadSlots(MAX_CONCURRENT_FILES)).current
+  const chunkUploadSlots = useRef(createUploadSlots(MAX_CONCURRENT_CHUNKS)).current
 
   const locking = closing || entries.some((e) => LOCKING_PHASES.includes(e.phase))
   const hasQueued = entries.some((e) => e.phase === 'queued' || e.phase === 'interrupted')
@@ -241,18 +244,28 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     attemptsRef.current.set(key, attempt)
     const isCurrent = () => attemptsRef.current.get(key) === attempt && !attempt.cancelled
     let release: Release | undefined
-    const chunkHasher = createChunkHasher()
+    let chunkHasher: ReturnType<typeof createChunkHasher> | undefined
     try {
       release = await uploadSlots.acquire(attempt.controller.signal, () => patchEntry(key, { waiting: true }))
       if (!release || !isCurrent()) return
+      chunkHasher = createChunkHasher()
+      const activeChunkHasher = chunkHasher
       patchEntry(key, { phase: 'hashing', percent: 0, waiting: false })
       let hashFailure: unknown
-      const fullMd5 = fileMd5(file, () => !isCurrent() || attempt.controller.signal.aborted).catch((error) => {
+      let showHashProgress = true
+      const fullMd5 = fileMd5(
+        file,
+        () => !isCurrent() || attempt.controller.signal.aborted,
+        (fraction) => {
+          if (showHashProgress && isCurrent()) patchEntry(key, { percent: Math.round(fraction * 100) })
+        },
+      ).catch((error) => {
         hashFailure = error
         return undefined
       })
       const fingerprint = await uploadFingerprint(file)
       if (!isCurrent()) return
+      showHashProgress = false
       patchEntry(key, { phase: 'uploading', percent: 0 })
       const init = await initUpload({
         projectId,
@@ -279,10 +292,13 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
           const i = chunks[cursor++]
           const blob = file.slice(i * chunkSize, Math.min((i + 1) * chunkSize, file.size))
           try {
-            const chunkDigest = await chunkHasher.sha256(blob)
+            const chunkDigest = await activeChunkHasher.sha256(blob)
             if (remoteDigests.get(i) !== chunkDigest) {
               for (let attemptNo = 1; ; attemptNo++) {
+                let releaseChunk: Release | undefined
                 try {
+                  releaseChunk = await chunkUploadSlots.acquire(attempt.controller.signal, () => undefined)
+                  if (!releaseChunk || !isCurrent()) throw new Error('上传已取消')
                   await putUploadChunk(sid, i, blob, chunkDigest, {
                     signal: attempt.controller.signal,
                     // 仍会自动重试时不弹出错误提示，最后一次失败才提示。
@@ -293,6 +309,8 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
                   if (attemptNo >= CHUNK_ATTEMPTS || failed || !isCurrent() || !isTransientUploadError(error)) throw error
                   await abortableDelay(1000 * 2 ** (attemptNo - 1), attempt.controller.signal)
                   if (failed || !isCurrent()) throw error
+                } finally {
+                  releaseChunk?.()
                 }
               }
             }
@@ -328,7 +346,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
         patchEntry(key, { phase: 'interrupted' })
       }
     } finally {
-      chunkHasher.dispose()
+      chunkHasher?.dispose()
       release?.()
       patchEntry(key, { waiting: false })
       attempt.running = false

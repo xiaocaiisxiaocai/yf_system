@@ -191,13 +191,28 @@ describe('FileTable DOM contracts', () => {
     expect(document.querySelector('.file-preview-modal .arco-modal-footer')).not.toBeInTheDocument()
   })
 
-  it('document preview branches and message image preview all mount a watermark layer', async () => {
+  it('handles a failed file deletion without removing the row and permits retry', async () => {
+    mocks.delete.mockRejectedValueOnce(new Error('delete failed')).mockResolvedValueOnce({ data: {} })
+    await renderTable([row(1, '保留.pdf', 'pdf', 1, { canDelete: true })])
+
+    await userEvent.click(tableRow('保留.pdf').getByRole('button', { name: '删除文件' }))
+    fireEvent.click(screen.getByRole('button', { name: '确定' }))
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalledTimes(1))
+    expect(screen.getByText('保留.pdf')).toBeVisible()
+
+    await userEvent.click(tableRow('保留.pdf').getByRole('button', { name: '删除文件' }))
+    fireEvent.click(screen.getByRole('button', { name: '确定' }))
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalledTimes(2))
+  })
+
+  it('all file preview branches and message image preview mount the existing watermark layer', async () => {
     mocks.permissions.add('file:preview')
     const previews = [
       row(1, 'sheet.xlsx', 'xlsx', 1),
       row(2, 'document.pdf', 'pdf', 1),
       row(3, 'picture.png', 'png', 1),
       row(4, 'slides.pptx', 'pptx', 1),
+      row(5, 'movie.mp4', 'mp4', 1024),
     ]
 
     for (const file of previews) {
@@ -215,6 +230,7 @@ describe('FileTable DOM contracts', () => {
     URL.createObjectURL = vi.fn(() => 'blob:message-image')
     URL.revokeObjectURL = vi.fn()
     mocks.get.mockResolvedValue({ data: new Blob(['image']) })
+    const callsBeforeMessageImage = mocks.get.mock.calls.length
     render(<MessageImages
       messageId={5}
       images={[{ id: 9, name: '留言.png', sizeBytes: 5, mimeType: 'image/png' }]}
@@ -226,6 +242,7 @@ describe('FileTable DOM contracts', () => {
     await userEvent.click(screen.getByRole('button', { name: '预览图片：留言.png' }))
     await waitFor(() => expect(document.querySelector('.preview-watermark')).toBeInTheDocument())
     expect(document.querySelector('.preview-watermark')).toHaveTextContent('E-008 留言用户')
+    expect(mocks.get).toHaveBeenCalledTimes(callsBeforeMessageImage + 1)
     URL.createObjectURL = originalCreateObjectURL
     URL.revokeObjectURL = originalRevokeObjectURL
   })

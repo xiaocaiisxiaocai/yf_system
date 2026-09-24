@@ -2,6 +2,7 @@ import axios from 'axios'
 import type { AxiosError, AxiosRequestConfig } from 'axios'
 import { Message } from '@arco-design/web-react'
 import { useAuth, type AuthLoginResponse } from '../store/auth'
+import type { ApiErrorResponse } from './generated/api-types'
 
 export const http = axios.create({ baseURL: '/api/v1', timeout: 60000 })
 
@@ -52,8 +53,11 @@ export function withAuthLock<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 const STORAGE_LOCK_KEY = 'yf:auth-refresh-lock'
-/** 租约上限：持有者崩溃或标签关闭后，其他标签最多等这么久即可接管。 */
-const STORAGE_LEASE_MS = 15_000
+/** 刷新必须在租约内结束；持有期间持续续租，以覆盖后台标签计时器被节流的情况。 */
+export const REFRESH_TIMEOUT_MS = 45_000
+export const STORAGE_LEASE_MS = 90_000
+const STORAGE_LEASE_RENEW_MS = 20_000
+const STORAGE_LOCK_WAIT_MS = 95_000
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 function readLease(): { owner: string; expires: number } | null {
@@ -71,12 +75,12 @@ function readLease(): { owner: string; expires: number } | null {
 
 /**
  * localStorage 没有原子比较交换：写入后稍等再读回，只有读回仍是自己时才算拿到锁，
- * 足以把并发刷新串行化。存储不可用（隐私模式等）时直接执行，行为与改动前一致。
+ * 足以把并发刷新串行化。存储不可用或等待超时时安全失败，绝不绕过锁执行旋转请求。
  */
 export async function withStorageLease<T>(operation: () => Promise<T>): Promise<T> {
   if (typeof window === 'undefined') return operation()
   const owner = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-  const giveUpAt = Date.now() + STORAGE_LEASE_MS
+  const giveUpAt = Date.now() + STORAGE_LOCK_WAIT_MS
   for (;;) {
     let acquired = false
     try {
@@ -87,12 +91,21 @@ export async function withStorageLease<T>(operation: () => Promise<T>): Promise<
         acquired = readLease()?.owner === owner
       }
     } catch {
-      return operation()
+      throw new Error('无法安全协调登录状态，请检查浏览器存储设置后重试')
     }
     if (acquired) {
+      const renew = window.setInterval(() => {
+        try {
+          if (readLease()?.owner !== owner) return
+          window.localStorage.setItem(STORAGE_LOCK_KEY, JSON.stringify({ owner, expires: Date.now() + STORAGE_LEASE_MS }))
+        } catch {
+          // 当前租约仍覆盖刷新请求超时；后续等待方到期后会安全失败，不会无锁执行。
+        }
+      }, STORAGE_LEASE_RENEW_MS)
       try {
         return await operation()
       } finally {
+        window.clearInterval(renew)
         try {
           if (readLease()?.owner === owner) window.localStorage.removeItem(STORAGE_LOCK_KEY)
         } catch {
@@ -100,8 +113,20 @@ export async function withStorageLease<T>(operation: () => Promise<T>): Promise<
         }
       }
     }
-    if (Date.now() >= giveUpAt) return operation()
+    if (Date.now() >= giveUpAt) throw new Error('登录状态协调超时，请稍后重试')
     await sleep(60 + Math.random() * 120)
+  }
+}
+
+function tokenExpiresSoon(token: string, minimumValiditySeconds = 60): boolean {
+  try {
+    const payload = token.split('.')[1]
+    if (!payload) return false
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const decoded = JSON.parse(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '='))) as { exp?: unknown }
+    return typeof decoded.exp === 'number' && decoded.exp <= Math.floor(Date.now() / 1000) + minimumValiditySeconds
+  } catch {
+    return false
   }
 }
 
@@ -140,7 +165,7 @@ async function tryRefresh(generation = useAuth.getState().generation): Promise<b
     const pending = withAuthLock(async () => {
       if (useAuth.getState().generation !== generation) return false
       return axios
-      .post<unknown>('/api/v1/auth/refresh', null, { withCredentials: true, timeout: 60000 })
+      .post<unknown>('/api/v1/auth/refresh', null, { withCredentials: true, timeout: REFRESH_TIMEOUT_MS })
       .then((r) => {
         if (useAuth.getState().generation !== generation) return false
         if (!isAuthLoginResponse(r.data)) throw new Error('刷新响应格式无效')
@@ -155,6 +180,36 @@ async function tryRefresh(generation = useAuth.getState().generation): Promise<b
     refreshing = pending
   }
   return refreshing
+}
+
+/** SignalR 可频繁索取 token；常态直接读内存，仅在 JWT 临近过期时进入单飞刷新。 */
+export async function getRealtimeAccessToken(forceRefresh = false): Promise<string> {
+  const before = useAuth.getState()
+  if (!before.token) return ''
+  if (forceRefresh || tokenExpiresSoon(before.token)) {
+    const refreshed = await tryRefresh(before.generation)
+    if (!refreshed) throw new Error('实时协作登录状态刷新失败')
+  }
+  const after = useAuth.getState()
+  if (after.generation !== before.generation || !after.token) throw new Error('实时协作会话已变化')
+  return after.token
+}
+
+export function getApiErrorCode(error: unknown): number | undefined {
+  if (!axios.isAxiosError<ApiErrorResponse>(error)) return undefined
+  const code = error.response?.data?.code
+  return typeof code === 'number' ? code : undefined
+}
+
+export function isSafeLoginReturnPath(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//')
+    && !value.includes('\\') && ![...value].some((character) => character.charCodeAt(0) <= 32)
+}
+
+export function buildLoginRedirectHref(pathname: string, search = '', hash = ''): string {
+  const candidate = `${pathname}${search}${hash}`
+  const from = isSafeLoginReturnPath(candidate) ? candidate : '/'
+  return `/login?from=${encodeURIComponent(from)}`
 }
 
 /** 启动引导：有持久化用户但内存无 token 时，用 refresh cookie 静默换新 */
@@ -200,7 +255,10 @@ http.interceptors.response.use(
     }
     if (status === 401) {
       useAuth.getState().logout()
-      if (location.pathname !== '/login') location.href = '/login'
+      if (location.pathname !== '/login') {
+        location.href = buildLoginRedirectHref(location.pathname, location.search, location.hash)
+        return Promise.reject(error)
+      }
     }
     // 40303 需先改密：跳强制改密页
     if (biz === 40303 && location.pathname !== '/change-password') {

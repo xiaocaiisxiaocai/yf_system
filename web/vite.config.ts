@@ -1,10 +1,36 @@
 import { defineConfig } from 'vite'
+import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { pdfAssets } from './pdf-assets.ts'
 import { contentSecurityPolicyPlugin } from './csp.ts'
 
+const LARGE_CHUNK_BYTES = 600 * 1024
+const knownLargeChunks = [
+  { name: /(?:^|\/)ExcelPreview-/, maximumBytes: 1900 * 1024 },
+]
+
+function largeChunkPolicy(): Plugin {
+  return {
+    name: 'large-chunk-policy',
+    generateBundle(_options, bundle) {
+      for (const item of Object.values(bundle)) {
+        if (item.type !== 'chunk') continue
+        const bytes = Buffer.byteLength(item.code)
+        if (bytes <= LARGE_CHUNK_BYTES) continue
+        const known = knownLargeChunks.find(entry => entry.name.test(item.fileName))
+        if (!known) {
+          this.error(`Unexpected JavaScript chunk exceeds 600 KiB: ${item.fileName} (${bytes} bytes)`)
+        }
+        if (bytes > known.maximumBytes) {
+          this.error(`Known large chunk exceeded its reviewed ceiling: ${item.fileName} (${bytes} bytes)`)
+        }
+      }
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), pdfAssets(), contentSecurityPolicyPlugin()],
+  plugins: [react(), pdfAssets(), contentSecurityPolicyPlugin(), largeChunkPolicy()],
   server: {
     host: '127.0.0.1',
     port: 5173,
@@ -19,7 +45,7 @@ export default defineConfig({
     },
   },
   build: {
-    chunkSizeWarningLimit: 2000,
+    chunkSizeWarningLimit: 600,
     rolldownOptions: {
       output: {
         codeSplitting: {

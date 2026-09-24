@@ -55,6 +55,9 @@ New-YfBackup $application $source $backup $dumpClient 'isolated-test'
 Write-Output 'PASS actual MySQL and storage backup'
 $ownedManifest=Assert-YfBackupSite $backup 'ISOLATED-TEST'
 if ($ownedManifest.siteName -ne 'isolated-test') { throw 'Site ownership guard did not return the validated manifest.' }
+if ($ownedManifest.containsSecrets -ne $true -or $ownedManifest.protection -ne 'restricted-acl') {
+    throw 'Backup manifest does not identify its secret-bearing ACL-only protection boundary.'
+}
 Reject { Assert-YfBackupSite $backup 'different-site' } 'backup from a different site refused'
 $manifestPath=Join-Path $backup 'manifest.json'
 $originalManifest=[IO.File]::ReadAllBytes($manifestPath)

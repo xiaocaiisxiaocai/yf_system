@@ -16,7 +16,6 @@ public sealed class ProjectActivityAuditContractTests
         {
             [("project", "PROJECT_CREATE")] = ("PROJECT", "CREATE", "创建项目"),
             [("project", "PROJECT_UPDATE")] = ("PROJECT", "UPDATE", "编辑项目"),
-            [("project", "PROJECT_MEMBERS")] = ("PROJECT", "MEMBERS_CHANGE", "调整项目成员"),
             [("project", "PROJECT_START")] = ("PROJECT", "START", "开始项目"),
             [("project", "PROJECT_RESTART")] = ("PROJECT", "RESTART", "重新开始项目"),
             [("project", "PROJECT_SUBMIT")] = ("PROJECT", "SUBMIT", "提交项目验收"),

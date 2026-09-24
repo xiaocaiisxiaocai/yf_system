@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
@@ -13,8 +14,16 @@ internal sealed class ProjectCopyService(
     AuditService audit,
     IProjectRealtimePublisher realtime,
     ProjectGroupStatusService groupStatus,
-    ProjectCopyWakeSignal? wake = null)
+    ProjectCopyWakeSignal? wake = null,
+    ILogger<ProjectCopyService>? logger = null)
 {
+    private static readonly Action<ILogger, ulong, Exception?> LogRealtimePublishFailure =
+        LoggerMessage.Define<ulong>(LogLevel.Warning, new EventId(1, "ProjectCopyRealtimePublishFailed"),
+            "Realtime publish failed after project copy commit for project {ProjectId}");
+    private static readonly Action<ILogger, ulong, Exception?> LogExecutionFailure =
+        LoggerMessage.Define<ulong>(LogLevel.Warning, new EventId(2, "ProjectCopyExecutionFailed"),
+            "Project copy job {JobId} failed");
+
     internal async Task<ProjectCopyJobResponse> EnqueueAsync(MySqlConnection conn, CurrentUser actor,
         ulong sourceProjectId, ProjectCopyRequest request, string? ip, CancellationToken ct)
     {
@@ -59,7 +68,9 @@ internal sealed class ProjectCopyService(
             throw ApiException.Conflict("主项目已结束，不能复制子项目");
         if (await ActiveUploadCountAsync(db, sourceProjectId, ct) != 0)
             throw ApiException.Conflict("源项目仍有进行中的文件上传，请上传完成后再复制");
-        var files = await LoadFilesForUpdateAsync(db, sourceProjectId, ct);
+        // Enqueue only records an advisory total. Capture/commit perform the authoritative locked
+        // snapshot, so locking every source file here only blocks uploads and deletes unnecessarily.
+        var files = await LoadFilesAsync(db, sourceProjectId, ct);
         var available = files.Where(file => file.Status == FileStatuses.Available).ToArray();
         var totalBytes = TotalBytes(available);
         var now = await DatabaseUtcNowAsync(db, ct);
@@ -162,6 +173,7 @@ internal sealed class ProjectCopyService(
         }
         catch (Exception error)
         {
+            if (logger is not null) LogExecutionFailure(logger, jobId, error);
             if (await FailJobAsync(jobId, executionToken, expectedWorkerEpoch, SafeError(error), CancellationToken.None))
             {
                 CleanupExecutionDirectory(jobId, executionToken, CancellationToken.None);
@@ -190,9 +202,6 @@ internal sealed class ProjectCopyService(
         await conn.CloseAsync();
         var availableFiles = snapshot.Files.Where(file => file.Status == FileStatuses.Available).ToArray();
         var totalBytes = TotalBytes(availableFiles);
-        if (jobId is ulong progressJobId)
-            await UpdateTotalsAsync(progressJobId, executionToken!, workerEpoch!.Value,
-                (ulong)availableFiles.Length, totalBytes, ct);
 
         var root = FileStorage.Root(options.StorageRoot);
         var prepared = new List<PreparedCopy>(availableFiles.Length);
@@ -203,15 +212,16 @@ internal sealed class ProjectCopyService(
         ProjectCopyResponse? response = null;
         try
         {
-            ulong completedBytes = 0;
-            foreach (var sourceFile in availableFiles)
+            if (jobId is ulong progressJobId)
             {
-                prepared.Add(PrepareBlobReference(root, sourceFile, ct));
-                completedBytes = checked(completedBytes + sourceFile.SizeBytes);
-                if (jobId is ulong activeJobId)
-                    await UpdateProgressAsync(activeJobId, executionToken!, workerEpoch!.Value,
-                        (ulong)prepared.Count, completedBytes, ct);
+                // Reuse one connection for progress, then release it before reopening the commit
+                // connection. This keeps the worker compatible with deliberately small pools.
+                await using var progressConnection = await database.OpenAsync(ct);
+                await UpdateTotalsAsync(progressConnection, progressJobId, executionToken!, workerEpoch!.Value,
+                    (ulong)availableFiles.Length, totalBytes, ct);
+                await PrepareFilesAsync(progressConnection, progressJobId);
             }
+            else await PrepareFilesAsync(null, null);
 
             // The short commit transaction fences permission changes, proves the source snapshot is
             // unchanged and serializes blob reference creation with last-reference garbage collection.
@@ -293,7 +303,7 @@ internal sealed class ProjectCopyService(
             db.Projects.Add(targetProject);
             try { await db.SaveChangesAsync(ct); }
             catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
-            { throw ApiException.Conflict("项目名称已存在"); }
+            { throw ApiException.Conflict("子项目名称已存在"); }
             targetProjectId = targetProject.Id;
             // Project.UpdatedAt is database-generated in the shared EF model, so its explicit
             // initializer is omitted from INSERT. Override only this copied row with the same
@@ -379,7 +389,8 @@ internal sealed class ProjectCopyService(
                     currentGroup.SectionId, currentGroup.PriorityId, currentGroup.ExpectedCompletionDate },
                 fileCount = prepared.Count, totalBytes,
             }, ip, ct);
-            await groupStatus.RecalculateAsync(conn, tx, currentGroup.Id, current.Id, targetProjectId, ct);
+            await groupStatus.RecalculateAsync(
+                conn, tx, currentGroup.Id, current.Id, targetProjectId, ct, groupAlreadyLocked: true);
 
             var target = await LoadProjectAsync(db, targetProjectId, ct);
             target.HasCopyHistory = true;
@@ -437,6 +448,24 @@ internal sealed class ProjectCopyService(
         await PublishCommittedAsync(sourceProjectId);
         await PublishCommittedAsync(targetProjectId);
         return response!;
+
+        async Task PrepareFilesAsync(MySqlConnection? progressConnection, ulong? activeJobId)
+        {
+            ulong completedBytes = 0;
+            var progressInterval = Stopwatch.StartNew();
+            foreach (var sourceFile in availableFiles)
+            {
+                prepared.Add(PrepareBlobReference(root, sourceFile, ct));
+                completedBytes = checked(completedBytes + sourceFile.SizeBytes);
+                if (activeJobId is not ulong currentJobId
+                    || prepared.Count != availableFiles.Length && prepared.Count % 10 != 0
+                        && progressInterval.Elapsed < TimeSpan.FromSeconds(1))
+                    continue;
+                await UpdateProgressAsync(progressConnection!, currentJobId, executionToken!, workerEpoch!.Value,
+                    (ulong)prepared.Count, completedBytes, ct);
+                progressInterval.Restart();
+            }
+        }
     }
 
     internal async Task<ProjectCopyHistoryResponse> HistoryAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
@@ -608,24 +637,30 @@ internal sealed class ProjectCopyService(
 
     private static async Task ValidateSourceAsync(YfDbContext db, ProjectRow source, CancellationToken ct)
     {
-        if (source.WorkOrderNos.Length == 0 || string.IsNullOrWhiteSpace(source.MachineModel)
-            || source.RobotPartId is null or 0 || source.ResponsibleUserId is null or 0
-            || source.PriorityId is null or 0 || source.ExpectedCompletionDate is null)
-            throw ApiException.Conflict("源项目资料不完整，请先补齐必填信息后再复制");
-        if (!await ValidMetadataAsync(db, source.SupplierId, source.ResponsibleUserId.Value, source.SectionId,
-                source.RobotPartId.Value, source.PriorityId.Value, ct))
-            throw ApiException.Conflict("源项目关联资料已失效，请先更新负责人、课别、供应商或数据字典后再复制");
+        await ValidateCopyMetadataAsync(db, source.WorkOrderNos, source.MachineModel, source.SupplierId,
+            source.RobotPartId, source.ResponsibleUserId, source.SectionId, source.PriorityId,
+            source.ExpectedCompletionDate, "源项目", ct);
     }
 
     private static async Task ValidateGroupAsync(YfDbContext db, CopyGroupRow group, CancellationToken ct)
     {
-        if (group.WorkOrderNos.Length == 0 || string.IsNullOrWhiteSpace(group.MachineModel)
-            || group.RobotPartId is null or 0 || group.ResponsibleUserId is null or 0
-            || group.PriorityId is null or 0 || group.ExpectedCompletionDate is null)
-            throw ApiException.Conflict("主项目资料不完整，请先补齐必填信息后再复制");
-        if (!await ValidMetadataAsync(db, group.SupplierId, group.ResponsibleUserId.Value, group.SectionId,
-                group.RobotPartId.Value, group.PriorityId.Value, ct))
-            throw ApiException.Conflict("主项目关联资料已失效，请先更新负责人、课别、供应商或数据字典后再复制");
+        await ValidateCopyMetadataAsync(db, group.WorkOrderNos, group.MachineModel, group.SupplierId,
+            group.RobotPartId, group.ResponsibleUserId, group.SectionId, group.PriorityId,
+            group.ExpectedCompletionDate, "主项目", ct);
+    }
+
+    private static async Task ValidateCopyMetadataAsync(
+        YfDbContext db, IReadOnlyCollection<string> workOrderNos, string? machineModel, ulong supplierId,
+        ulong? robotPartId, ulong? ownerId, ulong? sectionId, ulong? priorityId,
+        DateTime? expectedCompletionDate, string label, CancellationToken ct)
+    {
+        if (workOrderNos.Count == 0 || string.IsNullOrWhiteSpace(machineModel)
+            || robotPartId is null or 0 || ownerId is null or 0
+            || priorityId is null or 0 || expectedCompletionDate is null)
+            throw ApiException.Conflict($"{label}资料不完整，请先补齐必填信息后再复制");
+        if (!await ValidMetadataAsync(db, supplierId, ownerId.Value, sectionId,
+                robotPartId.Value, priorityId.Value, ct))
+            throw ApiException.Conflict($"{label}关联资料已失效，请先更新负责人、课别、供应商或数据字典后再复制");
     }
 
     private static async Task<bool> ValidMetadataAsync(YfDbContext db, ulong supplierId, ulong ownerId, ulong? sectionId,
@@ -633,22 +668,8 @@ internal sealed class ProjectCopyService(
     {
         if (!await db.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == AccountStatuses.Active, ct))
             return false;
-        if (!await db.Users.AnyAsync(owner => owner.Id == ownerId && owner.UserType == UserTypes.Internal
-                && owner.Status == AccountStatuses.Active && (sectionId == null || owner.DepartmentId == sectionId), ct))
-            return false;
-        if (sectionId is not null && !await db.Departments.AnyAsync(section => section.Id == sectionId && section.Kind == "SECTION"
-                && section.Status == AccountStatuses.Active
-                && (section.ParentId == null || db.Departments.Any(parent => parent.Id == section.ParentId
-                    && parent.Kind == "DEPARTMENT" && parent.Status == AccountStatuses.Active
-                    && (parent.ParentId == null || db.Departments.Any(root => root.Id == parent.ParentId
-                        && root.Kind == "DIVISION" && root.Status == AccountStatuses.Active && root.ParentId == null)))), ct))
-            return false;
-        if (!await (from userRole in db.UserRoles
-                    join role in db.Roles on userRole.RoleId equals role.Id
-                    join rolePermission in db.RolePermissions on role.Id equals rolePermission.RoleId
-                    join permission in db.Permissions on rolePermission.PermissionId equals permission.Id
-                    where userRole.UserId == ownerId && role.Status == AccountStatuses.Active && permission.Code == "project:list"
-                    select permission.Id).AnyAsync(ct))
+        if (!await ProjectService.EligibleOwners(db)
+                .AnyAsync(owner => owner.Id == ownerId && owner.SectionId == sectionId, ct))
             return false;
         if (!await db.RobotParts.AnyAsync(part => part.Id == robotPartId
                 && part.SupplierId == supplierId && part.Status == AccountStatuses.Active, ct))
@@ -700,9 +721,19 @@ internal sealed class ProjectCopyService(
             file.Ext, file.SizeBytes, file.MimeType, file.Sha256, file.StoragePath, file.Status, file.BlobId)).ToArray();
     }
 
+    private static async Task<CopyFileRow[]> LoadFilesAsync(
+        YfDbContext db, ulong projectId, CancellationToken ct)
+    {
+        var files = await db.Files.AsNoTracking().Where(file => file.ProjectId == projectId)
+            .OrderBy(file => file.Id).ToArrayAsync(ct);
+        return files.Select(file => new CopyFileRow(file.Id, file.UploaderId, file.Direction, file.OriginalName,
+            file.Ext, file.SizeBytes, file.MimeType, file.Sha256, file.StoragePath, file.Status, file.BlobId)).ToArray();
+    }
+
     private static async Task<ulong> ActiveUploadCountAsync(YfDbContext db, ulong projectId, CancellationToken ct) =>
         (ulong)await db.UploadSessions.LongCountAsync(upload => upload.ProjectId == projectId
-            && (upload.Status == "UPLOADING" || upload.Status == "MERGING"), ct);
+            && (upload.Status == ProjectUploadSessionStatuses.Uploading
+                || upload.Status == ProjectUploadSessionStatuses.Merging), ct);
 
     private static bool SameProjectSnapshot(ProjectRow a, ProjectRow b) => a.Id == b.Id
         && a.ProjectGroupId == b.ProjectGroupId && a.Name == b.Name
@@ -726,7 +757,7 @@ internal sealed class ProjectCopyService(
     private static async Task EnsureNameUniqueAsync(YfDbContext db, string name, CancellationToken ct)
     {
         if (await db.Projects.AnyAsync(project => project.Name == name, ct))
-            throw ApiException.Conflict("项目名称已存在");
+            throw ApiException.Conflict("子项目名称已存在");
     }
 
     private static ulong TotalBytes(IEnumerable<CopyFileRow> files)
@@ -765,10 +796,9 @@ internal sealed class ProjectCopyService(
         job.CompletedAt is DateTime completedAt ? ProjectJson.Utc(completedAt) : null);
 
     private async Task UpdateTotalsAsync(
-        ulong jobId, string executionToken, ulong workerEpoch,
+        MySqlConnection conn, ulong jobId, string executionToken, ulong workerEpoch,
         ulong filesTotal, ulong bytesTotal, CancellationToken ct)
     {
-        await using var conn = await database.OpenAsync(ct);
         await using var db = EfDb.Use(conn);
         var now = await DatabaseUtcNowAsync(db, ct);
         var changed = await db.ProjectCopyJobs
@@ -784,10 +814,9 @@ internal sealed class ProjectCopyService(
     }
 
     private async Task UpdateProgressAsync(
-        ulong jobId, string executionToken, ulong workerEpoch,
+        MySqlConnection conn, ulong jobId, string executionToken, ulong workerEpoch,
         ulong filesCopied, ulong bytesCopied, CancellationToken ct)
     {
-        await using var conn = await database.OpenAsync(ct);
         await using var db = EfDb.Use(conn);
         var now = await DatabaseUtcNowAsync(db, ct);
         var changed = await db.ProjectCopyJobs
@@ -947,7 +976,7 @@ internal sealed class ProjectCopyService(
     }
 
     private static async Task<DateTime> DatabaseUtcNowAsync(YfDbContext db, CancellationToken ct) =>
-        await DbClock.UtcNowAsync(db, ct);
+        await DbClock.UtcNowAsync(db, ct, 3);
 
     private static DateOnly? ToDateOnly(DateTime? value) => value is null ? null : DateOnly.FromDateTime(value.Value);
 
@@ -968,7 +997,10 @@ internal sealed class ProjectCopyService(
     private async Task PublishCommittedAsync(ulong projectId)
     {
         try { await realtime.PublishAsync(projectId, RealtimeChangeKinds.Activity, CancellationToken.None); }
-        catch { }
+        catch (Exception error)
+        {
+            if (logger is not null) LogRealtimePublishFailure(logger, projectId, error);
+        }
     }
 
     private sealed record ProjectCopySnapshot(ProjectRow Project, CopyGroupRow Group, CopyFileRow[] Files);

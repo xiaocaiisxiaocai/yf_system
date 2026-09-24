@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Repository layout — read this first
 
 - `server_dotnet/` — **the only backend.** ASP.NET Core 8 (Minimal API) + EF Core 9/Pomelo + MySQL. All new features, bug fixes, and DB migrations go here. An earlier Rust + Axum + SeaORM prototype (`yf_server/`) existed during the initial build-out but has been removed from the repo; its history is still visible via `git log` if needed for archaeology, but nothing in `server_dotnet/` depends on it. Development uses the current EF-managed schema and does not support legacy schema/data compatibility.
-- `web/` — React 18 + TypeScript 6 + Vite 8 (rolldown) + Arco Design frontend, talks to `/api/v1`. In production the ASP.NET app serves the built SPA from `wwwroot` on the same site.
+- `web/` — (frontend guidance: `web/CLAUDE.md`) React 18 + TypeScript 6 + Vite 8 (rolldown) + Arco Design frontend, talks to `/api/v1`. In production the ASP.NET app serves the built SPA from `wwwroot` on the same site.
 - `web/vendor/vue-office-{excel,pptx,pdf}/` — the preview source that is **actually built** (see Frontend architecture). `third_party/vue-office-source-2024-12-30/` is a git-ignored, locally unpacked upstream reference copy. The PPTX template the browser tests need (`scripts/browser/preview-extras.cjs`) is a trimmed, committed copy at `server_dotnet/scripts/browser/fixtures/pptx-template.zip`.
 - `server_dotnet/docs/*.md` — dated contract documents (e.g. `主项目与子项目协作契约-2026-09-16.md`) are the source of truth for business rules like project/subproject workflow, metadata dictionaries, copy semantics, and email notification policy. Check the newest-dated doc for a topic before assuming behavior from code alone.
 - OEM platform: **paused and removed** from backend, frontend and release packages. Migrations `AddOemPlatform` / `DropOemPlatform` stay in history on purpose (covered by `SchemaShapeTests`) — don't delete or squash them, and don't reintroduce OEM code without re-reading the root `README.md` note.
@@ -64,7 +64,12 @@ python .\scripts\test-isolated.py
 python .\scripts\test-isolated.py --files-only   # files-only subset
 
 # Script self-tests (no DB needed); run from scripts/
-python -m unittest test_script_safety test_publish_defaults test_browser_step_evidence test_test_host_artifacts test_maintenance_optimization_guard
+python -m unittest test_script_safety test_publish_defaults test_browser_step_evidence test_test_host_artifacts test_maintenance_optimization_guard test_verify_all_guards
+
+# All local non-browser gates, including script self-tests and precompression. By default this
+# requires YF_TEST_DATABASE_URL plus full DB/HTTP coverage; intentional partial runs use -AllowSkips.
+# Summary -> .artifacts/tests/verify-all/<run>/summary.json
+powershell -NoProfile -File .\scripts\verify-all.ps1   # -AllowSkips / -SkipHttp / -IncludeMaintenance
 
 # Maintenance (backup/restore/upgrade) tests
 python .\scripts\test-maintenance.py
@@ -84,24 +89,7 @@ Python test layout: the `scripts/test_*.py` files are mostly contract *modules* 
 
 Key env vars: `YF_CONFIG_PATH` (absolute path to external appsettings for local/prod), `YF_BOOTSTRAP_PASSWORD` (init only, unset after use), `YF_EF_DESIGN_CONNECTION` (design-time `dotnet ef` only), `YF_TEST_DATABASE_URL` (test suites only — `mysql://user:urlencoded_pass@127.0.0.1:port/ignored`, must be localhost/127.0.0.1/::1 for maintenance tests). Config precedence: `appsettings.json` → environment config → `appsettings.Local.json` → `YF_CONFIG_PATH` file → env vars → CLI args. Production IIS only honors `YF_CONFIG_PATH` and rejects `App__*`/`App:*` overrides.
 
-IIS packaging/maintenance: `scripts/publish-iis.ps1` (build+package into a unique folder under repo-root `deloy/`; ZIP only with `-CreateArchive`; writes `appsettings.Production.json` — including DB/JWT credentials and `App.BootstrapPassword` for first-start auto-init — from the git-ignored `deploy/publish-defaults.local.json`, which must have a real `WebBaseUrl`; treat the output as a private artifact), `deploy/install-iis.ps1` (first install on a new machine), `deploy/maintain-iis.ps1` (Backup/Upgrade/Restore of an existing site; copied into the package). See `deploy/README.md`.
-
-## Frontend (web) — commands
-
-Run from `web/`. Requires Node 22.13+/24+.
-
-```powershell
-npm ci
-npm run dev      # vite dev server on 127.0.0.1:5173, proxies /api (incl. WebSocket) -> 127.0.0.1:8080
-npm run build    # tsc -b && vite build (predev/prebuild also (re)build the Excel/PPTX preview bundles)
-npm run lint     # oxlint
-npm test         # node --test test/*.test.cjs
-node --test test/pdf-preview.test.cjs   # single test file
-```
-
-`npm run dev`/`build` trigger `predev`/`prebuild` hooks that regenerate `.excel-preview-build/`, `.pptx-preview-build/` and `generated/*-viewer.html` — don't hand-edit those. `generated/` is imported by source (`?raw`), so a bare `tsc -b` fails until the preview build has run once. `test/browser-*.acceptance.txt` are stale historical snippets, not tests — port any scenario you need into `server_dotnet/scripts/browser/*.cjs`.
-
-The dev proxy points at port 8080 (`server_dotnet`). The backend README runs the dev server as `npm run dev -- --host 127.0.0.1 --port 5180 --strictPort` to match `WebBaseUrl=http://127.0.0.1:5180` in the local config (CORS and the WebSocket origin allow-list both derive from `WebBaseUrl`). Never run two backends against the same business DB and storage.
+IIS packaging/maintenance: `scripts/publish-iis.ps1` builds into a unique folder under repo-root `deloy/` (ZIP only with `-CreateArchive`). Default private packages contain DB/JWT credentials from git-ignored `deploy/publish-defaults.local.json` and a fresh `App.BootstrapPassword` per package; bootstrap passwords are not reused from local defaults. Use `-ExternalConfigurationTemplate` for a package without DB/JWT/bootstrap secrets. HTTPS, non-root database access, secure cookies and a clean worktree are required by default; explicit private-development overrides are recorded in the manifest. `deploy/install-iis.ps1` installs a fresh site and `deploy/maintain-iis.ps1` handles Backup/Upgrade/Restore. See `deploy/README.md` for external `YF_CONFIG_PATH`, rollback boundaries and secret removal after initialization.
 
 ## Backend architecture (server_dotnet)
 
@@ -117,7 +105,7 @@ Modules under `Yf.Api/Modules/` are the unit of organization; each owns its own 
 
 Request/write pattern (copy it for new endpoints):
 1. Route lambda: `await using var conn = await db.OpenAsync(ct);` then call the service with `AccessService.GetCurrent(context)` and `Ip(context)`.
-2. Service: `AppDb.BeginTransactionAsync(conn)` → `AccessService.LockActorAsync` (shared lock on the `security.management_lock` gate row + re-read the actor's status/supplier) or `LockManagementAsync` (exclusive, for admin/permission-changing writes) → `AccessService.RequirePermissionAsync(conn, tx, current, "x:y")` → `EfDb.Use(conn, tx)` for EF work → `audit.WriteAsync(conn, tx, ...)` → commit → realtime publish.
+2. Service: `AppDb.BeginTransactionAsync(conn)` → `AccessService.LockActorAsync` (calls `LockBusinessAsync` — shared lock on the `security.management_lock` gate row — then re-reads the actor's status/supplier/session) or `LockManagementAsync` (exclusive, for admin/permission-changing writes) → `AccessService.RequirePermissionAsync(conn, tx, current, "x:y")` → `EfDb.Use(conn, tx)` for EF work → `audit.WriteAsync(conn, tx, ...)` → commit → realtime publish.
 3. Errors: throw `ApiException.BadRequest/Forbidden/...` (user-facing Chinese message); `ApiErrorMiddleware` renders `{ code, message }`. Unknown `/api/*` returns JSON 404 (code 40401), everything else falls back to the SPA.
 4. `/api` request bodies are capped at 2 MiB except chunk `PUT .../chunks/...` and message-image uploads — a new large-body endpoint must be exempted in `ApiApplication.cs`.
 
@@ -125,22 +113,13 @@ Cross-cutting rules worth knowing before editing:
 - Authorization is enforced both at the route/middleware layer and **re-checked inside write transactions** (the pattern above; defends against concurrent permission revocation mid-request).
 - Deletion is gated by dedicated permission points per entity (`project:delete`, `file:delete`, `supplier:delete`, etc.) plus entity-specific retention rules (e.g. a project can only be deleted while draft/terminated and with no files/messages/uploads) — see the "删除操作" table in `server_dotnet/README.md`.
 - Supplier accounts share their project scope at the supplier-company level (all enabled accounts under one supplier see the same projects); there is no per-user project-membership model anymore (no `project_members` table).
+- **Single instance only**: SignalR connection registry, native-download grants/sessions and post-response realtime publishes live in process memory, so exactly one Yf.Api process per business DB/storage (IIS app pool `maxProcesses=1`, enforced by install/maintain scripts). Sticky sessions don't make multi-instance work — see `server_dotnet/docs/部署单实例与内存状态约束-2026-09-23.md`.
+- Error codes: 409/40901 business/version conflict, 409/40902 MySQL lock-wait timeout or deadlock (don't auto-replay non-idempotent writes), 429/42901 change-password throttle, 429/42902 login/download rate limit. Refresh-token replay revokes the whole session family with no grace period; multi-tab refresh races are coordinated only in the frontend (Web Locks / localStorage lease). See `server_dotnet/docs/并发与错误响应契约-2026-09-23.md`.
+- Identity projection is cached per DB revision (`security.identity_revision`, bumped by triggers on user/supplier/refresh-token tables; startup refuses to run if the revision row or triggers are missing), so revocation is never TTL-delayed.
+- File contents are content-addressed shared blobs (`blobs/sha256/`, `files.blob_id` → `file_blobs`); copied projects get new file rows pointing at the same immutable blob. Last-reference release goes through a `GC_PENDING` state before disk deletion.
 - Only supplier accounts can submit (`project:submit`); only internal accounts can confirm/reject (`project:confirm`); acceptance is always handled internally.
 - Passwords: Argon2 PHC, 6–20 Unicode chars (≤256 UTF-8 bytes), common-weak-password rejection; legacy passwords >20 chars still verify without forced reset. The frontend rule mirror is `web/src/utils/password-policy.json` — keep it in sync with `PasswordService`.
 - Schema authority is `Yf.Api/Infrastructure/Migrations` + `YfDbContextModelSnapshot` only. Change the model, then `dotnet ef migrations add <Name>` and review the diff; never use `EnsureCreated`, hand-written DDL, or edit `__EFMigrationsHistory`. On startup a non-empty DB must have an `__EFMigrationsHistory` that exactly matches the assembly's migrations (no auto-upgrade); a DB with missing/unknown history is rejected — recreate the empty dev DB rather than patching it.
-
-## Frontend architecture (web)
-
-- `src/api/client.ts` — the HTTP client (axios) talking to `/api/v1`; `src/api/types.ts` builds on `src/api/generated/api-types.ts`, generated from the backend OpenAPI contract (see Testing philosophy).
-- `src/store/` — Zustand stores: `auth.ts` (session/user), `collaboration.ts` (live project/message state).
-- `src/services/projectRealtime.ts` — SignalR client; on a pushed change-kind it refetches the affected data.
-- `src/pages/project/` — main project/subproject list & detail screens; the largest and most actively changed area.
-- `src/pages/{org,rbac,supplier,system}/` — admin-side screens (organizations, roles/permissions, suppliers, system params/mail settings).
-- `src/components/` — shared collaboration UI: `FileTable.tsx` (file list + preview dialog), `ChunkUploader.tsx`, `MessagePanel.tsx`, and the `*Preview.tsx` viewers.
-- Previews: PDF uses local PDF.js 6.3.289 (`PdfPreview.tsx`/`pdfEngine.ts`), page-by-page, assets emitted by the `pdfAssets()` Vite plugin (`pdf-assets.ts`) into `dist/pdfjs/<version>/`. Excel/PPTX run in a sandboxed iframe: `scripts/build-{excel,pptx}-preview.mjs` bundle `web/vendor/vue-office-{excel,pptx}/viewer.js` (with npm `pptx-preview`/`exceljs`/`xlsx`) as an IIFE and inline it into `generated/{excel,pptx}-viewer.html`, which `ExcelPreview.tsx`/`PptxPreview.tsx` import `?raw`. `xlsx` comes from the SheetJS CDN tarball, not the npm registry.
-- CSP: `web/csp.ts` (Vite plugin, build only) injects a `<meta>` Content-Security-Policy into `dist/index.html` — no `unsafe-eval`/general `unsafe-inline` script. The Excel/PPTX srcdoc iframes inherit it, so each generated viewer must keep **exactly one** inline script, allowed by SHA-256 hash (the build fails otherwise). Browser tests' `waitForFunction` is patched in `scripts/browser/ui-lib.cjs` to poll via `page.evaluate`, because Playwright's native one needs eval.
-- Arco styles: `main.tsx` imports `src/styles/arco-components.ts` (generated by `node scripts/generate-arco-styles.mjs`), not the full `dist/css/arco.css`. It lists only the stylesheets the imported components need, in full-bundle order (loading `css.js` per component would reorder the cascade and shift layouts). After importing a new Arco component, rerun the generator — `test/arco-styles.test.cjs` fails while it is stale.
-- Preview watermark (employee no. + name + open time) is `WatermarkedPreview` in `src/components/FileTable.tsx`, styled by `.preview-watermark` in `src/index.css`.
 
 ## Testing philosophy in this repo
 
@@ -148,4 +127,4 @@ Tests here are deliberately end-to-end and isolation-heavy, not just unit tests:
 - Every DB-touching test suite requires an explicit, separate test MySQL connection (`YF_TEST_DATABASE_URL`); nothing runs against the dev/business database. DB tests **skip** when it is unset, so a bare "exit code 0" does not prove a full pass — check failed/skipped/not-run counts are all zero.
 - Browser tests build real artifacts (web `dist` + `TestHost`) and verify SHA-256 of what's actually under test, rejecting stale builds.
 - `tests/Contracts/api-v1.json` is the authoritative frontend↔backend HTTP contract; update it alongside any route/method change.
-- Typed contract: every JSON endpoint returns a named response record (`*Response`, `PageResponse<T>`, `EmptyResponse` — never `Task<object>` or anonymous objects), so `OpenApiContractTests` can generate `tests/Contracts/openapi-v1.json` (no DB; Swashbuckle lives only in the test project) and fail on any untyped endpoint. After changing a route, request or response type: `YF_UPDATE_OPENAPI=1 dotnet test .\tests\Yf.Api.Tests.csproj --filter OpenApiContractTests`, then in `web/` `npm run generate:api-types` (writes `src/api/generated/api-types.ts`; `test/api-types.test.cjs` fails while stale). Frontend calls are typed as `http.get<ApiResponses['GET /route/{id}']>(...)`; `src/api/types.ts` derives its types from the generated ones and only narrows enum-like string fields. Keep JSON shapes identical when converting: optional-when-null members need `[JsonIgnore(Condition = WhenWritingNull)]`.
+- Typed contract: every JSON endpoint returns a named response record (`*Response`, `PageResponse<T>`, `EmptyResponse` — never `Task<object>` or anonymous objects), so `OpenApiContractTests` can generate `tests/Contracts/openapi-v1.json` (no DB; Swashbuckle lives only in the test project) and fail on any untyped endpoint. After changing a route, request or response type: `YF_UPDATE_OPENAPI=1 dotnet test .\tests\Yf.Api.Tests.csproj --filter OpenApiContractTests`, then in `web/` `npm run generate:api-types` (writes `src/api/generated/api-types.ts`; `src/test/migrated/core/api-contracts.test.ts` fails while stale). Frontend calls are typed as `http.get<ApiResponses['GET /route/{id}']>(...)`; `src/api/types.ts` derives its types from the generated ones and only narrows enum-like string fields. Keep JSON shapes identical when converting: optional-when-null members need `[JsonIgnore(Condition = WhenWritingNull)]`.

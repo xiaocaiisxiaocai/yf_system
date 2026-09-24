@@ -1,6 +1,6 @@
 import { HubConnectionBuilder, LogLevel } from '@microsoft/signalr'
 
-export type ProjectRealtimeKind = 'messages' | 'receipts' | 'activity'
+export type ProjectRealtimeKind = 'messages' | 'receipts' | 'activity' | 'project'
 export type ProjectRealtimeStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 
 export interface ProjectRealtimeEvent {
@@ -16,7 +16,7 @@ export interface ProjectRealtimeSession {
 
 export interface ProjectRealtimeOptions {
   getSession: () => ProjectRealtimeSession
-  getAccessToken: () => Promise<string>
+  getAccessToken: (forceRefresh?: boolean) => Promise<string>
   subscribeSession: (wake: () => void) => () => void
   onEvent: (event: ProjectRealtimeEvent) => void
   onReady: () => void | Promise<void>
@@ -57,7 +57,7 @@ export function parseProjectRealtimeEvent(payload: unknown): ProjectRealtimeEven
   if (typeof value.projectId !== 'number'
     || !Number.isSafeInteger(value.projectId)
     || value.projectId <= 0
-    || (value.kind !== 'messages' && value.kind !== 'receipts' && value.kind !== 'activity')) return null
+    || (value.kind !== 'messages' && value.kind !== 'receipts' && value.kind !== 'activity' && value.kind !== 'project')) return null
   return { projectId: value.projectId, kind: value.kind }
 }
 
@@ -85,6 +85,7 @@ export function createProjectRealtime(options: CreateProjectRealtimeOptions): Pr
   let startAttempt: { generation: number; promise: Promise<void> } | null = null
   let unsubscribeSession: (() => void) | null = null
   let unsubscribeResume: (() => void) | null = null
+  let forceTokenRefresh = false
 
   const sessionMatches = (expectedGeneration: number, expectedKey: string) => {
     if (!active || generation !== expectedGeneration || sessionKey !== expectedKey) return false
@@ -138,8 +139,9 @@ export function createProjectRealtime(options: CreateProjectRealtimeOptions): Pr
 
   const buildConnection = (expectedGeneration: number, expectedKey: string) => {
     const accessTokenFactory = async () => {
-      const token = await options.getAccessToken()
+      const token = await options.getAccessToken(forceTokenRefresh)
       if (!sessionMatches(expectedGeneration, expectedKey)) throw new Error('实时协作会话已变化')
+      forceTokenRefresh = false
       return token
     }
     const created = options.createConnection(accessTokenFactory)
@@ -205,7 +207,12 @@ export function createProjectRealtime(options: CreateProjectRealtimeOptions): Pr
         reportStatus('connected')
         reportReady(expectedGeneration, expectedKey)
       })
-      .catch(() => {
+      .catch((error: unknown) => {
+        if (typeof error === 'object' && error !== null) {
+          const status = (error as { statusCode?: unknown; status?: unknown }).statusCode
+            ?? (error as { status?: unknown }).status
+          if (status === 401) forceTokenRefresh = true
+        }
         if (connection === target) scheduleRetry(expectedGeneration, expectedKey)
       })
       .finally(() => {
@@ -226,6 +233,7 @@ export function createProjectRealtime(options: CreateProjectRealtimeOptions): Pr
     generation += 1
     clearRetry()
     retryFailures = 0
+    forceTokenRefresh = false
     const previous = connection
     connection = null
     startAttempt = null
@@ -257,6 +265,7 @@ export function createProjectRealtime(options: CreateProjectRealtimeOptions): Pr
       generation += 1
       clearRetry()
       retryFailures = 0
+      forceTokenRefresh = false
       sessionKey = null
       startAttempt = null
       const previous = connection
@@ -289,8 +298,13 @@ function createSignalRConnection(accessTokenFactory: () => Promise<string>): Pro
 }
 
 function subscribeBrowserResume(wake: () => void): () => void {
+  const onVisibility = () => { if (document.visibilityState === 'visible') wake() }
   window.addEventListener('online', wake)
-  return () => window.removeEventListener('online', wake)
+  document.addEventListener('visibilitychange', onVisibility)
+  return () => {
+    window.removeEventListener('online', wake)
+    document.removeEventListener('visibilitychange', onVisibility)
+  }
 }
 
 /** Starts the production SignalR channel and returns its complete cleanup function. */

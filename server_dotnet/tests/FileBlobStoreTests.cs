@@ -11,7 +11,7 @@ namespace Yf.Api.Tests;
 public sealed class FileBlobStoreTests
 {
     [Fact(Timeout = 60_000)]
-    public async Task FreshlyStagedContentIsPublishedAndOrphanedCanonicalContentIsStillVerified()
+    public async Task FreshlyStagedContentReplacesUnregisteredCanonicalContentWithoutHashingInsideTransaction()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
@@ -35,7 +35,27 @@ public sealed class FileBlobStoreTests
                 await tx.CommitAsync(ct);
             }
             Assert.False(File.Exists(staging));
-            Assert.Equal(content, await File.ReadAllBytesAsync(FileBlobStore.AbsolutePath(root, sha), ct));
+            var canonical = FileBlobStore.AbsolutePath(root, sha);
+            Assert.Equal(content, await File.ReadAllBytesAsync(canonical, ct));
+
+            // Same-length canonical corruption is rejected by copy verification and repaired by a
+            // duplicate upload's already verified staging file without hashing under database locks.
+            await File.WriteAllBytesAsync(canonical, [4, 3, 2, 1], ct);
+            var corrupt = Assert.Throws<ApiException>(() =>
+                FileBlobStore.VerifyBoundPhysicalFile(root, FileBlobStore.RelativePath(sha), sha,
+                    (ulong)content.Length, ct));
+            Assert.Equal(409, corrupt.Status);
+            var repairStaging = Path.Combine(root, "staging-repair.tmp");
+            await File.WriteAllBytesAsync(repairStaging, content, ct);
+            await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+            await using (var db = EfDb.Use(conn, tx))
+            {
+                await FileBlobStore.ResolveForReferenceAsync(db, root,
+                    new FileBlobStore.PreparedBlob(sha, (ulong)content.Length, repairStaging),
+                    expectedBlobId: null, DateTime.UtcNow, ct);
+                await tx.CommitAsync(ct);
+            }
+            Assert.Equal(content, await File.ReadAllBytesAsync(canonical, ct));
 
             // A canonical file left without a database row (unknown commit outcome) is not trusted blindly.
             var claimed = new byte[] { 9, 8, 7, 6 };
@@ -48,12 +68,14 @@ public sealed class FileBlobStoreTests
             await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
             await using (var db = EfDb.Use(conn, tx))
             {
-                await Assert.ThrowsAsync<InvalidOperationException>(() => FileBlobStore.ResolveForReferenceAsync(db, root,
-                    new FileBlobStore.PreparedBlob(claimedSha, (ulong)claimed.Length, secondStaging), null, DateTime.UtcNow, ct));
-                await tx.RollbackAsync(ct);
+                var blob = await FileBlobStore.ResolveForReferenceAsync(db, root,
+                    new FileBlobStore.PreparedBlob(claimedSha, (ulong)claimed.Length, secondStaging), null, DateTime.UtcNow, ct);
+                Assert.Equal(claimedSha, blob.Sha256);
+                await tx.CommitAsync(ct);
             }
             await using (var db = EfDb.Use(conn))
-                Assert.False(await db.Set<FileBlob>().AnyAsync(blob => blob.Sha256 == claimedSha, ct));
+                Assert.True(await db.Set<FileBlob>().AnyAsync(blob => blob.Sha256 == claimedSha, ct));
+            Assert.Equal(claimed, await File.ReadAllBytesAsync(orphan, ct));
         }
         finally
         {
@@ -95,6 +117,15 @@ public sealed class FileBlobStoreTests
             Assert.Equal(0, await FileBlobBackfill.RunAsync(database.Database, root, ct));
             await FileBlobBackfill.EnsureConvertedAsync(database.Database, root, ct);
             Assert.True(File.Exists(Path.Combine(root, legacyRelative)));
+
+            // Startup checks relational integrity only; the maintenance verifier owns physical scans.
+            var canonical = FileBlobStore.AbsolutePath(root, sha);
+            File.Delete(canonical);
+            await FileBlobBackfill.EnsureConvertedAsync(database.Database, root, ct);
+            await using (var conn = await database.Database.OpenAsync(ct))
+                await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    FileBlobBackfill.ValidateInvariantAsync(conn, FileStorage.Root(root), ct));
+            await WriteAsync(root, FileBlobStore.RelativePath(sha), content, ct);
 
             var removed = await FileBlobBackfill.RemoveLegacyContentAsync(database.Database, root, ct);
             Assert.Equal(2, removed.Files);

@@ -49,6 +49,13 @@ describe('操作日志真实界面', () => {
     mocks.get.mockResolvedValue({ data: page([]) })
   })
 
+  it('a capped audit count is shown as a lower bound with a filter hint', async () => {
+    mocks.get.mockResolvedValue({ data: page([loginRow()], 1, 10_001) })
+    render(<AuditLog />)
+    expect(await screen.findByText('10000+ 条记录，请缩小筛选范围查看完整结果')).toBeVisible()
+    expect(screen.queryByText('共 10001 条记录')).not.toBeInTheDocument()
+  })
+
   it('audit time filtering preserves an explicitly selected midnight endpoint', async () => {
     let query: Record<string, unknown> = {}
     mocks.get.mockImplementation(async (_url, config) => {

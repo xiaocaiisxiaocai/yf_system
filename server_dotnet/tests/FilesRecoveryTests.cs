@@ -13,22 +13,14 @@ namespace Yf.Api.Tests;
 public sealed class FilesRecoveryTests
 {
     [Fact]
-    public async Task SessionCommitConfirmationControlsSuccessAndDirectoryCleanup()
+    public void SessionCommitConfirmationControlsSuccessAndDirectoryCleanup()
     {
-        var unknown = await UploadService.ProbeSessionExistenceAsync(
-            _ => Task.FromException<bool>(new IOException("confirmation unavailable")),
-            TestContext.Current.CancellationToken);
-        var exists = await UploadService.ProbeSessionExistenceAsync(
-            _ => Task.FromResult(true), TestContext.Current.CancellationToken);
-        var missing = await UploadService.ProbeSessionExistenceAsync(
-            _ => Task.FromResult(false), TestContext.Current.CancellationToken);
-
         Assert.Equal(new SessionCommitRecoveryDecision(true, false),
-            UploadService.SessionCommitRecovery(exists));
-        Assert.Equal(new SessionCommitRecoveryDecision(false, true),
-            UploadService.SessionCommitRecovery(missing));
+            UploadService.SessionCommitRecovery(true));
         Assert.Equal(new SessionCommitRecoveryDecision(false, false),
-            UploadService.SessionCommitRecovery(unknown));
+            UploadService.SessionCommitRecovery(false));
+        Assert.Equal(new SessionCommitRecoveryDecision(false, false),
+            UploadService.SessionCommitRecovery(null));
     }
 
     [Fact(Timeout = 30_000)]
@@ -211,7 +203,7 @@ public sealed class FilesRecoveryTests
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task ChunkSidecarBindsDigestToFileStateAndLegacyDigestsAreRehashed()
+    public async Task ChunkSidecarBindsDigestToFileStateAndLegacyDigestsAreDeferredUntilMerge()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
@@ -226,12 +218,13 @@ public sealed class FilesRecoveryTests
         var chunk = new FileInfo(chunkPath);
         Assert.Equal([Sha256Hex(content), chunk.Length.ToString(), chunk.LastWriteTimeUtc.Ticks.ToString()], fields);
 
-        // A digest-only sidecar from the previous format is still accepted after verifying the content.
+        // Status polling never rereads a legacy chunk. Merge still hashes it and accepts valid content.
         await File.WriteAllTextAsync(chunkPath + ".sha256", Sha256Hex(content), ct);
-        var legacy = Assert.Single((await scope.Upload.GetAsync(scope.Context(), initialized.SessionId, ct)).UploadedChunks);
-        Assert.Equal(Sha256Hex(content), legacy.Sha256);
-        await File.WriteAllTextAsync(chunkPath + ".sha256", Sha256Hex([9, 9, 9, 9]), ct);
         Assert.Empty((await scope.Upload.GetAsync(scope.Context(), initialized.SessionId, ct)).UploadedChunks);
+        await scope.Upload.SubmitMd5Async(scope.Context(), initialized.SessionId,
+            new SubmitUploadMd5Request(Md5Hex(content)), ct);
+        var merged = await scope.Upload.MergeAsync(scope.Context(), initialized.SessionId, ct);
+        Assert.Equal(Sha256Hex(content), merged.Sha256);
     }
 
     [Fact(Timeout = 30_000)]
@@ -421,6 +414,62 @@ public sealed class FilesRecoveryTests
     }
 
     [Fact(Timeout = 30_000)]
+    public async Task OrphanUploadCleanupDeletesOnlyOldGuidSessionDirectories()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var temp = Path.Combine(scope.StorageRoot, "tmp");
+        var orphanSession = Path.Combine(temp, Guid.NewGuid().ToString("D"));
+        var unknownDirectory = Path.Combine(temp, "private-maintenance-data");
+        Directory.CreateDirectory(orphanSession);
+        Directory.CreateDirectory(unknownDirectory);
+        await File.WriteAllTextAsync(Path.Combine(orphanSession, "partial.bin"), "orphan", ct);
+        await File.WriteAllTextAsync(Path.Combine(unknownDirectory, "keep.bin"), "private", ct);
+        var old = DateTime.UtcNow.AddHours(-25);
+        Directory.SetLastWriteTimeUtc(orphanSession, old);
+        Directory.SetLastWriteTimeUtc(unknownDirectory, old);
+
+        await scope.Maintenance.RunGarbageCollectionAsync(ct);
+
+        Assert.False(Directory.Exists(orphanSession));
+        Assert.True(File.Exists(Path.Combine(unknownDirectory, "keep.bin")));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task OrphanBlobCollectionUsesGracePeriodAndKeepsRegisteredContent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var orphanContent = new byte[] { 10, 20, 30 };
+        var registeredContent = new byte[] { 40, 50, 60 };
+        var orphanSha = Sha256Hex(orphanContent);
+        var registeredSha = Sha256Hex(registeredContent);
+        var orphanPath = FileBlobStore.AbsolutePath(scope.StorageRoot, orphanSha);
+        var registeredPath = FileBlobStore.AbsolutePath(scope.StorageRoot, registeredSha);
+        Directory.CreateDirectory(Path.GetDirectoryName(orphanPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(registeredPath)!);
+        await File.WriteAllBytesAsync(orphanPath, orphanContent, ct);
+        await File.WriteAllBytesAsync(registeredPath, registeredContent, ct);
+        File.SetLastWriteTimeUtc(orphanPath, DateTime.UtcNow.AddHours(-25));
+        File.SetLastWriteTimeUtc(registeredPath, DateTime.UtcNow.AddHours(-25));
+        await using (var connection = await scope.Database.OpenAsync(ct))
+            await connection.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO file_blobs(sha256,size_bytes,storage_path,state,created_at)
+                VALUES(@Sha,@Size,@Path,'READY',UTC_TIMESTAMP(6))
+                """, new
+                {
+                    Sha = registeredSha,
+                    Size = (ulong)registeredContent.Length,
+                    Path = FileBlobStore.RelativePath(registeredSha)
+                }, cancellationToken: ct));
+
+        await scope.Maintenance.PurgeOrphanBlobFilesAsync(ct);
+
+        Assert.False(File.Exists(orphanPath));
+        Assert.True(File.Exists(registeredPath));
+    }
+
+    [Fact(Timeout = 30_000)]
     public async Task BatchDownloadChecksProjectScopeBeforeRevealingUnavailableFileName()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -443,8 +492,8 @@ public sealed class FilesRecoveryTests
         var error = await Assert.ThrowsAsync<ApiException>(() => scope.Files.BatchDownloadAsync(
             context, new BatchDownloadRequest([1]), ct));
 
-        Assert.Equal(403, error.Status);
-        Assert.Equal(40302, error.Code);
+        Assert.Equal(404, error.Status);
+        Assert.Equal(40401, error.Code);
         Assert.DoesNotContain("private-file-name.pdf", error.Message, StringComparison.Ordinal);
     }
 
@@ -645,7 +694,7 @@ public sealed class FilesRecoveryTests
                 var maintenance = new FilesMaintenanceService(
                     database, options, NullLogger<FilesMaintenanceService>.Instance);
                 var upload = new UploadService(database, options,
-                    new AuditService(Array.Empty<IProjectAuditCapture>()));
+                    new AuditService(Array.Empty<IProjectAuditCapture>()), NullLogger<UploadService>.Instance);
                 var audit = new AuditService(Array.Empty<IProjectAuditCapture>());
                 var identity = new IdentityService(EfTestSupport.DbContextFactory(options), options, new LoginRateLimiter(),
                     new TokenService(options), new PermissionService(), audit);

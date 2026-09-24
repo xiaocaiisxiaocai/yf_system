@@ -47,8 +47,8 @@ public sealed class MessageConfig : IEntityTypeConfiguration<Message>
         b.Property(x => x.Content).HasColumnName("content").HasColumnType("text").IsRequired();
         b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue("NORMAL");
         b.Property(x => x.DeletedBy).HasColumnName("deleted_by");
-        b.Property(x => x.DeletedAt).HasColumnName("deleted_at").HasColumnType("datetime");
-        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
+        b.Property(x => x.DeletedAt).HasColumnName("deleted_at").HasColumnType("datetime(3)");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.HasIndex(x => x.SenderId).HasDatabaseName("fk_msg_sender");
         b.HasIndex(x => new { x.ProjectId, x.CreatedAt }).HasDatabaseName("idx_msg_project_time");
         b.HasIndex(x => new { x.ProjectId, x.Status, x.Id }).HasDatabaseName("idx_msg_project_status_id");
@@ -68,9 +68,9 @@ public sealed class MessageReadConfig : IEntityTypeConfiguration<MessageRead>
         b.HasKey(x => new { x.MessageId, x.UserId });
         b.Property(x => x.MessageId).HasColumnName("message_id");
         b.Property(x => x.UserId).HasColumnName("user_id");
-        b.Property(x => x.ReadAt).HasColumnName("read_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
+        b.Property(x => x.ReadAt).HasColumnName("read_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.HasIndex(x => x.UserId).HasDatabaseName("idx_mr_user");
-        b.HasOne<Message>().WithMany().HasForeignKey(x => x.MessageId).HasConstraintName("fk_mr_msg").OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Message>().WithMany().HasForeignKey(x => x.MessageId).HasConstraintName("fk_mr_msg").OnDelete(DeleteBehavior.Cascade);
         b.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).HasConstraintName("fk_mr_user").OnDelete(DeleteBehavior.Restrict);
     }
 }

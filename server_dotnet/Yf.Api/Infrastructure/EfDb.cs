@@ -28,6 +28,7 @@ internal static class EfDb
         var options = OptionsByConnection.GetValue(connection, static item =>
             new DbContextOptionsBuilder<YfDbContext>()
                 .UseMySql(item, ServerVersion)
+                .AddInterceptors(UtcDatabaseSession.Instance)
                 .Options);
         var context = new YfDbContext(options);
         if (transaction is not null) context.Database.UseTransaction(transaction);

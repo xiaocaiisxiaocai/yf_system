@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Message } from '@arco-design/web-react'
 import { useState } from 'react'
-import { afterEach, describe, expect, it } from 'vitest'
-import { pasteMessageImages } from '../../../components/MessageImages'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MessageImageComposer, pasteMessageImages } from '../../../components/MessageImages'
 
 function sizedFile(name: string, type: string, size: number) {
   const file = new File(['fixture'], name, { type })
@@ -19,6 +19,11 @@ function PasteHarness({ initial = [] }: { initial?: File[] }) {
     />
     <output aria-label="已选图片">{files.map(file => file.name).join(',')}</output>
   </div>
+}
+
+function ComposerHarness({ initial }: { initial: File[] }) {
+  const [files, setFiles] = useState(initial)
+  return <MessageImageComposer files={files} onChange={setFiles} />
 }
 
 function paste(target: HTMLElement, files: File[]) {
@@ -75,5 +80,23 @@ describe('留言图片粘贴', () => {
     expect(result.prevented).toBe(true)
     expect(screen.getByRole('status', { name: '已选图片' })).not.toHaveTextContent('tenth.png')
     await waitFor(() => expect(screen.getByText('每条留言最多添加 9 张图片')).toBeVisible())
+  })
+
+  it('keeps the correct thumbnail blob when removing the first of identical file metadata', () => {
+    const first = sizedFile('same.png', 'image/png', 1)
+    const second = sizedFile('same.png', 'image/png', 1)
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockImplementation(file =>
+      file === first ? 'blob:first' : 'blob:second')
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+    render(<ComposerHarness initial={[first, second]} />)
+
+    expect(screen.getAllByAltText('same.png').map(image => image.getAttribute('src')))
+      .toEqual(['blob:first', 'blob:second'])
+    fireEvent.click(screen.getAllByRole('button', { name: '移除图片：same.png' })[0])
+
+    expect(screen.getByAltText('same.png')).toHaveAttribute('src', 'blob:second')
+    expect(createObjectURL).toHaveBeenCalledTimes(2)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:first')
+    expect(revokeObjectURL).not.toHaveBeenCalledWith('blob:second')
   })
 })

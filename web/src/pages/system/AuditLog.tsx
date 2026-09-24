@@ -119,8 +119,8 @@ function AuditDetail({ row }: { row: AuditLogRow }) {
         {changes.length > 0 && (
           <div className="audit-change-table">
             <div className="audit-change-head"><span>字段</span><span>修改前</span><span>修改后</span></div>
-            {changes.map((change, index) => (
-              <div className="audit-change-row" key={`${change.field}-${index}`}>
+            {changes.map((change) => (
+              <div className="audit-change-row" key={`${change.field}:${formatChangeValue(change, 'before')}:${formatChangeValue(change, 'after')}`}>
                 <strong title={change.label}>{change.label}</strong>
                 <span className="audit-before" title={formatChangeValue(change, 'before')}>{formatChangeValue(change, 'before')}</span>
                 <span className="audit-after" title={formatChangeValue(change, 'after')}>{formatChangeValue(change, 'after')}</span>
@@ -138,8 +138,8 @@ function AuditDetail({ row }: { row: AuditLogRow }) {
         )}
         {notes.length > 0 && (
           <div className="audit-detail-notes">
-            {notes.map((item, index) => (
-              <div className={`audit-detail-note audit-detail-note--${item.tone}`} key={`${item.label}-${index}`}>
+            {notes.map((item) => (
+              <div className={`audit-detail-note audit-detail-note--${item.tone}`} key={item.label}>
                 <span>{item.label}</span><strong>{item.value}</strong>
               </div>
             ))}
@@ -252,7 +252,10 @@ export default function AuditLog() {
       </div>
 
       <div className="audit-result-bar">
-        <Typography.Text type="secondary">共 {data.total} 条记录</Typography.Text>
+        <Typography.Text type="secondary">
+          {data.total >= 10_001 ? '10000+ 条记录，请缩小筛选范围查看完整结果' : `共 ${data.total} 条记录`}
+          {filters.keyword && !filters.range.length ? '；关键词默认搜索最近 30 天' : ''}
+        </Typography.Text>
       </div>
 
       {loadError ? (
@@ -297,7 +300,7 @@ export default function AuditLog() {
               <Button key="view" size="mini" type="text" icon={<IconEye />} onClick={() => setSelected(row)}>查看</Button>,
             ], 'single') : null },
           ]}
-          pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { beginReload(); setPage(nextPage); setPageSize(nextSize) } }}
+          pagination={{ total: data.total, current: page, pageSize, showTotal: data.total < 10_001, sizeCanChange: true, onChange: (nextPage, nextSize) => { beginReload(); setPage(nextPage); setPageSize(nextSize) } }}
         />
       )}
 

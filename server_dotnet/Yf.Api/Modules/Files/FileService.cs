@@ -1,3 +1,4 @@
+using System.Buffers;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using System.IO.Compression;
@@ -63,7 +64,7 @@ public sealed class FileService(
         await using var conn = await db.OpenAsync(ct);
         await AccessService.RequirePermissionAsync(conn, null, actor, inline ? "file:preview" : "file:download", ct);
         var row = await LoadAvailableAsync(conn, id, ct);
-        await ProjectAccessService.RequireViewAsync(conn, null, actor, row.ProjectId, ct);
+        await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
         if (inline && !IsPreviewable(row.Ext))
             throw ApiException.BadRequest("该文件类型不支持在线预览，请下载原文件查看");
         string path;
@@ -81,7 +82,7 @@ public sealed class FileService(
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         try
         {
-            context.Response.Headers.CacheControl = "private, no-store";
+            SetNoStore(context.Response);
             if (inline)
             {
                 await WriteWindowedAuditAsync(context, conn, actor.Id, "FILE_PREVIEW", id,
@@ -89,8 +90,8 @@ public sealed class FileService(
                 context.Response.Headers.ContentDisposition = $"inline; filename*=UTF-8''{Uri.EscapeDataString(row.OriginalName)}";
                 return Results.File(stream, FileStorage.MimeType("preview." + row.Ext), enableRangeProcessing: true);
             }
-            await audit.WriteAsync(conn, null, actor.Id, "FILE_DOWNLOAD", "file", id,
-                new { name = row.OriginalName }, ClientIp.Resolve(context, options), ct);
+            await WriteWindowedAuditAsync(context, conn, actor.Id, "FILE_DOWNLOAD", id,
+                new { name = row.OriginalName }, ct);
             return Results.File(stream, row.MimeType ?? "application/octet-stream", row.OriginalName,
                 enableRangeProcessing: true);
         }
@@ -109,7 +110,7 @@ public sealed class FileService(
         await using var conn = await db.OpenAsync(ct);
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:download", ct);
         var row = await LoadAvailableAsync(conn, id, ct);
-        await ProjectAccessService.RequireViewAsync(conn, null, actor, row.ProjectId, ct);
+        await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
         _ = ResolveExisting(row, ct);
 
         var issue = downloadGrants.Issue(actor.Id, claims.SessionId, [id], batch: false);
@@ -131,7 +132,7 @@ public sealed class FileService(
         var actor = await RequireActiveDownloadActorAsync(conn, session, ct);
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:download", ct);
         var row = await LoadAvailableAsync(conn, id, ct);
-        await ProjectAccessService.RequireViewAsync(conn, null, actor, row.ProjectId, ct);
+        await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
         var filePath = ResolveExisting(row, ct);
         var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
             FileOptions.Asynchronous | FileOptions.RandomAccess);
@@ -201,18 +202,11 @@ public sealed class FileService(
         await using var conn = await db.OpenAsync(ct);
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:preview", ct);
         var row = await LoadAvailableAsync(conn, id, ct);
-        await ProjectAccessService.RequireViewAsync(conn, null, actor, row.ProjectId, ct);
+        await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
         if (!IsVideo(row.Ext)) throw ApiException.BadRequest("该文件类型不支持视频预览");
 
         context.Response.Cookies.Append(MediaGrantService.CookieName(id), mediaGrants.Issue(actor.Id, claims.SessionId, id),
-            new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = options.CookieSecure,
-                SameSite = SameSiteMode.Strict,
-                Path = MediaPath(id),
-                MaxAge = TimeSpan.FromSeconds(MediaGrantService.LifetimeSeconds)
-            });
+            CreateScopedCookieOptions(options.CookieSecure, MediaPath(id), MediaGrantService.LifetimeSeconds));
         return new(MediaPath(id), MediaGrantService.LifetimeSeconds);
     }
 
@@ -229,7 +223,7 @@ public sealed class FileService(
         var actor = await LoadMediaActorAsync(conn, grant.UserId, ct);
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:preview", ct);
         var row = await LoadAvailableAsync(conn, id, ct);
-        await ProjectAccessService.RequireViewAsync(conn, null, actor, row.ProjectId, ct);
+        await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
         var contentType = MediaMimeType(row.Ext)
             ?? throw ApiException.BadRequest("该文件类型不支持视频预览");
 
@@ -247,7 +241,7 @@ public sealed class FileService(
         {
             await WriteWindowedAuditAsync(context, conn, actor.Id, "FILE_PREVIEW", id,
                 new { name = row.OriginalName }, ct, $"media:{actor.Id}:{grant.SessionId}:{id}");
-            context.Response.Headers.CacheControl = "private, no-store";
+            SetNoStore(context.Response);
             context.Response.Headers.ContentDisposition = $"inline; filename*=UTF-8''{Uri.EscapeDataString(row.OriginalName)}";
             return Results.File(stream, contentType, enableRangeProcessing: true);
         }
@@ -266,7 +260,8 @@ public sealed class FileService(
         var initial = await FileRows(initialContext).SingleOrDefaultAsync(file => file.Id == id, ct) ?? throw ApiException.NotFound();
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-        await ProjectAccessService.RequireFileDeleteAsync(conn, tx, current, initial.ProjectId, ct);
+        try { await ProjectAccessService.RequireFileDeleteAsync(conn, tx, current, initial.ProjectId, ct); }
+        catch (ApiException error) when (error.Status == StatusCodes.Status403Forbidden) { throw ApiException.NotFound(); }
         await using var ef = EfDb.Use(conn, tx);
         var locked = await ef.Files.FromSqlInterpolated($"SELECT * FROM files WHERE id={id} FOR UPDATE")
             .AsNoTracking().SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
@@ -299,7 +294,7 @@ public sealed class FileService(
             lease.Dispose();
             throw;
         }
-        context.Response.Headers.CacheControl = "private, no-store";
+        SetNoStore(context.Response);
         // Stream the archive as it is compressed instead of staging up to 256 MiB on disk first, so the
         // download starts immediately. The limiter lease is held until the stream completes.
         return new ZipStreamResult(batch.Entries, $"yf_files_{Guid.NewGuid():D}.zip", lease);
@@ -357,23 +352,27 @@ public sealed class FileService(
         var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         ulong copiedTotal = 0;
         using var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true);
-        foreach (var source in sources)
+        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        try
         {
-            var entryName = UniqueEntryName(Path.GetFileName(source.OriginalName), usedNames);
-            var entry = archive.CreateEntry(entryName, CompressionLevelFor(entryName));
-            await using var entryStream = entry.Open();
-            await using var input = new FileStream(source.Path, FileMode.Open, FileAccess.Read, FileShare.Read,
-                64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            var buffer = new byte[64 * 1024];
-            int read;
-            while ((read = await input.ReadAsync(buffer, ct)) != 0)
+            foreach (var source in sources)
             {
-                copiedTotal = checked(copiedTotal + (uint)read);
-                if (copiedTotal > BatchInputMaximumBytes)
-                    throw new InvalidOperationException("Batch download input grew beyond its validated size.");
-                await entryStream.WriteAsync(buffer.AsMemory(0, read), ct);
+                var entryName = UniqueEntryName(Path.GetFileName(source.OriginalName), usedNames);
+                var entry = archive.CreateEntry(entryName, CompressionLevelFor(entryName));
+                await using var entryStream = entry.Open();
+                await using var input = new FileStream(source.Path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                int read;
+                while ((read = await input.ReadAsync(buffer.AsMemory(0, 64 * 1024), ct)) != 0)
+                {
+                    copiedTotal = checked(copiedTotal + (uint)read);
+                    if (copiedTotal > BatchInputMaximumBytes)
+                        throw new InvalidOperationException("Batch download input grew beyond its validated size.");
+                    await entryStream.WriteAsync(buffer.AsMemory(0, read), ct);
+                }
             }
         }
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
 
     private static CompressionLevel CompressionLevelFor(string fileName)
@@ -417,7 +416,7 @@ public sealed class FileService(
         {
             if (!available.TryGetValue(id, out var row)) throw ApiException.NotFound();
             if (viewableProjects.Add(row.ProjectId))
-                await ProjectAccessService.RequireViewAsync(conn, tx, actor, row.ProjectId, ct);
+                await RequireViewOrNotFoundAsync(conn, tx, actor, row.ProjectId, ct);
             if (row.Status != FileStatuses.Available) throw ApiException.BadRequest($"文件 {row.OriginalName} 不可用");
             var path = ResolveExisting(row, ct);
             inputBytes = checked(inputBytes + (ulong)new FileInfo(path).Length);
@@ -447,33 +446,25 @@ public sealed class FileService(
             throw ApiException.Unauthorized("缺少下载凭证，请重新发起下载");
 
         var session = downloadGrants.Redeem(handle, grantSecret);
-        context.Response.Cookies.Delete(DownloadGrantService.GrantCookieName(handle), new CookieOptions
-        {
-            HttpOnly = true,
-            Secure = options.CookieSecure,
-            SameSite = SameSiteMode.Strict,
-            Path = path,
-        });
-        context.Response.Cookies.Append(DownloadGrantService.SessionCookieName(handle), session.Secret, new CookieOptions
-        {
-            HttpOnly = true,
-            Secure = options.CookieSecure,
-            SameSite = SameSiteMode.Strict,
-            Path = path,
-            MaxAge = TimeSpan.FromSeconds(DownloadGrantService.SessionLifetimeSeconds),
-        });
+        context.Response.Cookies.Delete(DownloadGrantService.GrantCookieName(handle),
+            CreateScopedCookieOptions(options.CookieSecure, path, lifetimeSeconds: null));
+        context.Response.Cookies.Append(DownloadGrantService.SessionCookieName(handle), session.Secret,
+            CreateScopedCookieOptions(options.CookieSecure, path, DownloadGrantService.SessionLifetimeSeconds));
         return session;
     }
 
     private void AppendGrantCookie(HttpContext context, DownloadGrantIssue issue, string path) =>
-        context.Response.Cookies.Append(DownloadGrantService.GrantCookieName(issue.Handle), issue.Secret, new CookieOptions
-        {
-            HttpOnly = true,
-            Secure = options.CookieSecure,
-            SameSite = SameSiteMode.Strict,
-            Path = path,
-            MaxAge = TimeSpan.FromSeconds(issue.ExpiresInSeconds),
-        });
+        context.Response.Cookies.Append(DownloadGrantService.GrantCookieName(issue.Handle), issue.Secret,
+            CreateScopedCookieOptions(options.CookieSecure, path, issue.ExpiresInSeconds));
+
+    internal static CookieOptions CreateScopedCookieOptions(bool secure, string path, int? lifetimeSeconds) => new()
+    {
+        HttpOnly = true,
+        Secure = secure,
+        SameSite = SameSiteMode.Strict,
+        Path = path,
+        MaxAge = lifetimeSeconds is int seconds ? TimeSpan.FromSeconds(seconds) : null,
+    };
 
     private async Task WriteSessionAuditAsync(
         HttpContext context, MySqlConnection conn, DownloadSession session, string action, ulong? targetId,
@@ -510,12 +501,17 @@ public sealed class FileService(
     private void RequireSameOrigin(HttpRequest request)
     {
         var fetchSite = request.Headers["Sec-Fetch-Site"].ToString();
-        if (fetchSite.Equals("cross-site", StringComparison.OrdinalIgnoreCase)
-            || fetchSite.Equals("same-site", StringComparison.OrdinalIgnoreCase))
-            throw ApiException.Forbidden("下载请求必须来自当前站点");
         var originText = request.Headers.Origin.ToString();
-        if (!IdentityModule.OriginAllowed(originText, options.WebBaseUrl))
+        if (!IsSameOriginRequest(originText, fetchSite, options.WebBaseUrl))
             throw ApiException.Forbidden("下载请求必须来自当前站点");
+    }
+
+    internal static bool IsSameOriginRequest(string origin, string fetchSite, string configuredOrigin)
+    {
+        if (fetchSite.Equals("cross-site", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.IsNullOrWhiteSpace(origin))
+            return IdentityModule.OriginAllowed(origin, configuredOrigin);
+        return true;
     }
 
     private static void SetNoStore(HttpResponse response)
@@ -523,6 +519,13 @@ public sealed class FileService(
         response.Headers.CacheControl = "private, no-store";
         response.Headers.Pragma = "no-cache";
         response.Headers["Referrer-Policy"] = "no-referrer";
+    }
+
+    private static async Task RequireViewOrNotFoundAsync(
+        MySqlConnection conn, MySqlTransaction? tx, CurrentUser actor, ulong projectId, CancellationToken ct)
+    {
+        try { await ProjectAccessService.RequireViewAsync(conn, tx, actor, projectId, ct); }
+        catch (ApiException error) when (error.Status == StatusCodes.Status403Forbidden) { throw ApiException.NotFound(); }
     }
 
     private string ResolveExisting(FileRow row, CancellationToken ct)

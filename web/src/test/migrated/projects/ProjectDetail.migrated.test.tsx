@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     status: 'ready',
     messageRevisions: {} as Record<number, number>,
     receiptRevisions: {} as Record<number, number>,
+    activityRevisions: {} as Record<number, number>,
     reconnectRevision: 0,
     realtimeStatus: 'connected',
   },
@@ -112,7 +113,7 @@ describe('ProjectDetail migrated behavior', () => {
   beforeEach(() => {
     mocks.get.mockImplementation(defaultGet)
     mocks.collaboration = {
-      revision: 'global-1', status: 'ready', messageRevisions: {}, receiptRevisions: {}, reconnectRevision: 0, realtimeStatus: 'connected',
+      revision: 'global-1', status: 'ready', messageRevisions: {}, receiptRevisions: {}, activityRevisions: {}, reconnectRevision: 0, realtimeStatus: 'connected',
     }
   })
 
@@ -163,6 +164,12 @@ describe('ProjectDetail migrated behavior', () => {
     view.rerender(
       <MemoryRouter initialEntries={['/projects/1']}><RouteControls /><Routes><Route path="/projects/:id" element={<ProjectDetail />} /></Routes></MemoryRouter>,
     )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(projectCalls).toBe(1)
+    mocks.collaboration.activityRevisions = { 1: 1 }
+    view.rerender(
+      <MemoryRouter initialEntries={['/projects/1']}><RouteControls /><Routes><Route path="/projects/:id" element={<ProjectDetail />} /></Routes></MemoryRouter>,
+    )
     await waitFor(() => expect(projectCalls).toBe(2))
     await user.click(screen.getByRole('button', { name: '完成操作后刷新' }))
     expect(await screen.findByRole('heading', { name: '操作后项目' })).toBeInTheDocument()
@@ -188,6 +195,47 @@ describe('ProjectDetail migrated behavior', () => {
     await user.click(screen.getByRole('button', { name: '完成操作后刷新' }))
     expect(await screen.findByText('项目加载失败或没有访问权限')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: '敏感项目' })).not.toBeInTheDocument()
+  })
+
+  it('project deletion refreshes only the affected detail while message events refresh only its summary', async () => {
+    let projectCalls = 0
+    let summaryCalls = 0
+    let deleted = false
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/projects/1') {
+        projectCalls += 1
+        return deleted
+          ? Promise.reject({ isAxiosError: true, response: { status: 404 } })
+          : Promise.resolve({ data: project(1, { name: '待删除项目' }) })
+      }
+      if (url === '/projects/1/summary') {
+        summaryCalls += 1
+        return Promise.resolve({ data: { unreadMessages: summaryCalls, activityRevision: `a${summaryCalls}` } })
+      }
+      if (url === '/project-groups/3') return Promise.resolve({ data: { projects: [project()] } })
+      throw new Error(`unexpected GET ${url}`)
+    })
+    const view = renderDetail('/projects/1?tab=messages')
+    expect(await screen.findByRole('heading', { name: '待删除项目' })).toBeInTheDocument()
+    await waitFor(() => expect(summaryCalls).toBe(1))
+
+    mocks.collaboration.activityRevisions = { 2: 1 }
+    view.rerender(<MemoryRouter initialEntries={['/projects/1?tab=messages']}><RouteControls /><Routes><Route path="/projects/:id" element={<ProjectDetail />} /></Routes></MemoryRouter>)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(projectCalls).toBe(1)
+
+    mocks.collaboration.messageRevisions = { 1: 1 }
+    view.rerender(<MemoryRouter initialEntries={['/projects/1?tab=messages']}><RouteControls /><Routes><Route path="/projects/:id" element={<ProjectDetail />} /></Routes></MemoryRouter>)
+    await waitFor(() => expect(summaryCalls).toBe(2))
+    expect(projectCalls).toBe(1)
+
+    deleted = true
+    mocks.collaboration.activityRevisions = { 1: 1, 2: 1 }
+    view.rerender(<MemoryRouter initialEntries={['/projects/1?tab=messages']}><RouteControls /><Routes><Route path="/projects/:id" element={<ProjectDetail />} /></Routes></MemoryRouter>)
+    expect(await screen.findByText('项目不存在或已删除')).toBeInTheDocument()
+    expect(projectCalls).toBe(2)
+    expect(screen.getByRole('button', { name: '返回项目列表' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: '待删除项目' })).not.toBeInTheDocument()
   })
 
   it('unknown project tab query falls back to files and keeps description expansion keyboard accessible', async () => {

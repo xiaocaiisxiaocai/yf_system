@@ -9,7 +9,7 @@ vi.mock('../../../api/client', async () => {
 })
 vi.mock('../../../store/auth', async () => {
   const state = await import('./mockState')
-  return { useAuth: () => state.messageAuthState() }
+  return { useAuth: state.selectMessageAuthState }
 })
 
 import MessagePanel from '../../../components/MessagePanel'
@@ -172,6 +172,21 @@ describe('留言回执刷新与详情', () => {
     fireEvent(document, new Event('visibilitychange'))
     await advance(10000)
     expect(receiptCalls).toBe(inactiveCalls)
+  })
+
+  it('keeps one container scroll listener when receipt revisions change', async () => {
+    const add = vi.spyOn(HTMLElement.prototype, 'addEventListener')
+    messageMocks.get.mockImplementation(async (url: string) => url.endsWith('/messages')
+      ? messagePage([messageRow(1)])
+      : { data: [{ id: 1, readCount: 0, totalCount: 1 }] })
+    const view = renderMessagePanel({ receiptRevision: 'r1' })
+    await screen.findByText('留言 1')
+    view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" receiptRevision="r2" />)
+    await waitFor(() => expect(screen.getByText('留言 1')).toBeVisible())
+
+    const scrollRegistrations = add.mock.calls.filter(([type], index) => type === 'scroll'
+      && (add.mock.instances[index] as HTMLElement | undefined)?.classList?.contains('message-scroll-area'))
+    expect(scrollRegistrations).toHaveLength(1)
   })
 
   it('receipt sync ignores delayed responses after project switch and aborts on unmount', async () => {

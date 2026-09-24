@@ -41,7 +41,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var isAdmin = await AccessService.IsSystemAdminAsync(connection, null, actor.Id, ct);
         var term = string.IsNullOrWhiteSpace(keyword) ? null : keyword.Trim();
         var query = context.Roles.AsNoTracking().Where(role => role.Status == AccountStatuses.Active
-            && !(role.IsBuiltIn && role.Name == "供应商人员")
+            && !(role.IsBuiltIn && role.Name == AdminBuiltIns.SupplierRoleName)
             && (isAdmin || (!(role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator)
                 && !context.RolePermissions.Where(rp => rp.RoleId == role.Id)
                     .Join(context.Permissions, rp => rp.PermissionId, p => p.Id, (_, p) => p.Code)
@@ -60,6 +60,8 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var roleId = AdminValidation.OneRole(request.RoleId, request.RoleIds, true);
         if (request.DepartmentId is not ulong departmentId) throw ApiException.BadRequest("请选择所属组织");
         await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await ManagementAuthorization.PrecheckAsync(context, actor, "user:manage", ct);
+        var passwordHash = await PasswordService.HashAsync(request.Password, ct);
         await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         await ManagementAsync(context, actor, "user:manage", ct);
         var connection = context.Database.Connection(); var dbTransaction = context.Database.RequireTransaction();
@@ -70,7 +72,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         if (await context.Users.AnyAsync(x => x.EmployeeNo == employeeNo, ct)) throw ApiException.Conflict("工号已存在");
         var user = new User
         {
-            EmployeeNo = employeeNo, PasswordHash = await PasswordService.HashAsync(request.Password, ct), RealName = request.RealName.Trim(),
+            EmployeeNo = employeeNo, PasswordHash = passwordHash, RealName = request.RealName.Trim(),
             Email = request.Email.Trim(), UserType = UserTypes.Internal, DepartmentId = departmentId, Status = AccountStatuses.Active,
             MustChangePassword = true, FailedLoginAttempts = 0, CreatedBy = actor.Id
         };
@@ -168,6 +170,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         if (user.UserType != UserTypes.Internal) throw ApiException.BadRequest("供应商人员请在供应商模块维护");
         var connection = context.Database.Connection(); var dbTransaction = context.Database.RequireTransaction();
         await permissionCeiling.EnsureManageUserAsync(connection, dbTransaction, actor, id, ct);
+        if (user.Status == status) return await JsonAsync(context, user, ct);
         if (status == AccountStatuses.Disabled) { await EnsureNoActiveProjectResponsibilityAsync(context, id, ct); await EnsureAdminRemovalSafeAsync(context, actor.Id, id, null, ct); }
         else
         {
@@ -192,13 +195,14 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
     {
         PasswordService.Validate(password);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await ManagementAuthorization.PrecheckAsync(context, actor, "user:manage", ct);
+        var hash = await PasswordService.HashAsync(password, ct);
         await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         await ManagementAsync(context, actor, "user:manage", ct);
         var user = await LockUserAsync(context, id, ct) ?? throw ApiException.NotFound();
         if (user.UserType != UserTypes.Internal) throw ApiException.BadRequest("供应商人员请在供应商模块维护");
         var connection = context.Database.Connection(); var dbTransaction = context.Database.RequireTransaction();
         await permissionCeiling.EnsureManageUserAsync(connection, dbTransaction, actor, id, ct);
-        var hash = await PasswordService.HashAsync(password, ct);
         await context.Users.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.PasswordHash, hash)
             .SetProperty(x => x.MustChangePassword, true).SetProperty(x => x.FailedLoginAttempts, 0).SetProperty(x => x.LockedUntil, (DateTime?)null), ct);
         await IdentityService.RevokeAllAsync(connection, dbTransaction, id, ct);
@@ -241,13 +245,12 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         var connection = context.Database.Connection(); var dbTransaction = context.Database.RequireTransaction();
-        await AccessService.LockManagementAsync(connection, dbTransaction, ct); actor = await AccessService.RecheckActorAsync(connection, dbTransaction, actor, ct);
-        AccessService.RequireInternal(actor); await AccessService.RequirePermissionAsync(connection, dbTransaction, actor, "user:manage", ct);
+        await ManagementAuthorization.RequireAsync(context, actor, "user:manage", ct);
         await AccessService.RequirePermissionAsync(connection, dbTransaction, actor, "user:delete", ct);
         var user = await LockUserAsync(context, id, ct) ?? throw ApiException.NotFound();
         if (id == actor.Id) throw ApiException.BadRequest("不能删除自己的账号");
         if (user.UserType != UserTypes.Internal) throw ApiException.BadRequest("供应商人员请在供应商模块删除");
-        if (user.EmployeeNo == "admin") throw ApiException.BadRequest("系统管理员账号不可删除");
+        if (user.EmployeeNo == AdminBuiltIns.BootstrapAdministratorEmployeeNo) throw ApiException.BadRequest("系统管理员账号不可删除");
         await permissionCeiling.EnsureManageUserAsync(connection, dbTransaction, actor, id, ct);
         await EnsureAdminRemovalSafeAsync(context, actor.Id, id, null, ct); await EnsureNoHistoryAsync(context, id, ct);
         await audit.WriteAsync(connection, dbTransaction, actor.Id, "USER_DELETE", "user", id,
@@ -308,8 +311,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
     private static async Task ManagementAsync(YfDbContext context, CurrentUser actor, string permission, CancellationToken ct)
     {
         var connection = context.Database.Connection(); var transaction = context.Database.RequireTransaction();
-        await AccessService.LockManagementAsync(connection, transaction, ct); actor = await AccessService.RecheckActorAsync(connection, transaction, actor, ct);
-        AccessService.RequireInternal(actor); await AccessService.RequirePermissionAsync(connection, transaction, actor, permission, ct);
+        await ManagementAuthorization.RequireAsync(context, actor, permission, ct);
     }
 
     private static Task<User?> FindAsync(YfDbContext context, ulong id, CancellationToken ct) => context.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, ct);
@@ -325,7 +327,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
     {
         var role = await FindRoleAsync(context, roleId, ct) ?? throw ApiException.BadRequest($"角色不存在: {roleId}");
         if (role.Status != AccountStatuses.Active) throw ApiException.BadRequest("不能绑定已禁用的角色");
-        if (role.IsBuiltIn && role.Name == "供应商人员") throw ApiException.BadRequest("供应商角色只能由供应商账号使用");
+        if (role.IsBuiltIn && role.Name == AdminBuiltIns.SupplierRoleName) throw ApiException.BadRequest("供应商角色只能由供应商账号使用");
     }
 
     private static async Task EnsureAdminRemovalSafeAsync(YfDbContext context, ulong actorId, ulong targetId, ulong? newRoleId, CancellationToken ct)

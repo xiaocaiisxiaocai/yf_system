@@ -9,7 +9,7 @@ vi.mock('../../../api/client', async () => {
 
 vi.mock('../../../store/auth', async () => {
   const state = await import('./mockState')
-  return { useAuth: () => state.messageAuthState() }
+  return { useAuth: state.selectMessageAuthState }
 })
 
 import MessagePanel from '../../../components/MessagePanel'
@@ -149,6 +149,24 @@ describe('留言撰写、发送与分页', () => {
     expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument()
     view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" />)
     expect(await screen.findByRole('button', { name: /删除/ })).toBeVisible()
+  })
+
+  it('handles a failed message deletion and permits a later retry', async () => {
+    setMessagePermissions('message:delete_any')
+    messageMocks.get.mockResolvedValue(messagePage([messageRow(1, { content: '保留的留言' })]))
+    messageMocks.delete.mockRejectedValueOnce(new Error('delete failed')).mockResolvedValueOnce({ data: {} })
+    const user = userEvent.setup()
+    renderMessagePanel()
+    await screen.findByText('保留的留言')
+
+    await user.click(screen.getByRole('button', { name: /删除/ }))
+    fireEvent.click(screen.getByRole('button', { name: '确定' }))
+    await waitFor(() => expect(messageMocks.delete).toHaveBeenCalledTimes(1))
+    expect(screen.getByText('保留的留言')).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: /删除/ }))
+    fireEvent.click(screen.getByRole('button', { name: '确定' }))
+    await waitFor(() => expect(screen.queryByText('保留的留言')).not.toBeInTheDocument())
   })
 
   it('deleting 1 loaded messages keeps older messages reachable', async () => {

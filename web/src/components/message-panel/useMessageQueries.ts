@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import {
   useInfiniteQuery,
   useMutation,
@@ -12,6 +12,7 @@ import type { ApiResponses, Message } from '../../api/types'
 import { loadReadCounts, type ReadCounts } from '../MessageReceipts'
 
 const PAGE_SIZE = 20
+const MAX_TARGET_LOCATE_PAGES = 10
 
 export function isMessageAccessError(error: unknown) {
   const candidate = error as { response?: { status?: unknown }; status?: unknown } | null
@@ -36,6 +37,7 @@ interface MessageWindow {
   baselineTotal: number
   page: number
   seenRevision: string
+  targetLocateExhausted: boolean
 }
 
 interface MessageSyncWindow {
@@ -135,7 +137,10 @@ export function useMessageFeed({
       const messages: Message[] = []
       let total = 0
       let lastBatchSize = 0
+      let locatePages = 0
+      let targetLocated = false
       for (;;) {
+        signal.throwIfAborted()
         const response = await http.get<ApiResponses['GET /projects/{id}/messages']>(`/projects/${projectId}/messages`, {
           params: { page: pageParam.page, pageSize: PAGE_SIZE, beforeId },
           signal,
@@ -145,14 +150,16 @@ export function useMessageFeed({
         if (!Number.isSafeInteger(response.data.total) || response.data.total < 0) throw new Error('Invalid message total')
         total = response.data.total
         messages.push(...batch)
+        targetLocated ||= targetId !== undefined && batch.some(message => message.id === targetId)
         lastBatchSize = batch.length
+        locatePages += 1
         const lastId = batch.at(-1)?.id
         if (pageParam.locateTarget && targetId !== undefined && lastId !== undefined
           && (!Number.isSafeInteger(lastId) || lastId <= 0 || beforeId !== undefined && lastId >= beforeId)) {
           throw new Error('Invalid message cursor')
         }
-        if (!pageParam.locateTarget || targetId === undefined || lastId === undefined
-          || lastId <= targetId || batch.length < PAGE_SIZE) break
+        if (!pageParam.locateTarget || targetId === undefined || targetLocated || lastId === undefined
+          || lastId <= targetId || batch.length < PAGE_SIZE || locatePages >= MAX_TARGET_LOCATE_PAGES) break
         beforeId = lastId
       }
       return {
@@ -163,6 +170,7 @@ export function useMessageFeed({
         baselineTotal: total,
         page: pageParam.page,
         seenRevision: pageParam.requestRevision,
+        targetLocateExhausted: pageParam.locateTarget && targetId !== undefined && !targetLocated,
       }
     },
     getNextPageParam: (lastPage, pages) => {
@@ -187,6 +195,7 @@ export function useMessageFeed({
   const lastPage = query.data?.pages.at(-1)
   const total = lastPage?.total ?? query.data?.pages[0]?.total ?? 0
   const seenRevision = query.data?.pages[0]?.seenRevision ?? revision
+  const targetLocateExhausted = query.data?.pages[0]?.targetLocateExhausted ?? false
 
   const applyReadCounts = useCallback((counts: ReadCounts[]) => {
     const byId = new Map(counts.map(item => [item.id, item]))
@@ -258,6 +267,7 @@ export function useMessageFeed({
           baselineTotal: window.total,
           page: 1,
           seenRevision: window.revision,
+          targetLocateExhausted: false,
         }],
         pageParams: [{ ...firstParam, requestRevision: window.revision }],
       }
@@ -270,6 +280,7 @@ export function useMessageFeed({
     list,
     total,
     seenRevision,
+    targetLocateExhausted,
     applyReadCounts,
     markReadLocally,
     addConfirmedMessage,
@@ -390,6 +401,7 @@ export function useMessageReceiptPolling({
   onCounts: (counts: ReadCounts[]) => void
 }) {
   const [ids, setIds] = useState<number[]>([])
+  const idsRef = useRef<number[]>([])
   const [scopeUserId, scopeGeneration, scopeGrantSignature] = scope
   const stableScope = useMemo<SessionQueryScope>(
     () => [scopeUserId, scopeGeneration, scopeGrantSignature],
@@ -432,6 +444,26 @@ export function useMessageReceiptPolling({
     },
   }, queryClient)
   const refetchReceipts = query.refetch
+  const receiptQueryKeyRef = useRef<QueryKey>(receiptQueryKey)
+  const refetchReceiptsRef = useRef(refetchReceipts)
+  useEffect(() => {
+    receiptQueryKeyRef.current = receiptQueryKey
+    refetchReceiptsRef.current = refetchReceipts
+  }, [receiptQueryKey, refetchReceipts])
+
+  const updateIds = useCallback((next: number[], wake: boolean) => {
+    if (!sameIds(idsRef.current, next)) {
+      idsRef.current = next
+      setIds(next)
+    } else if (wake && next.length) {
+      void refetchReceiptsRef.current({ cancelRefetch: true })
+    }
+  }, [])
+
+  const scanVisible = useCallback((wake: boolean) => {
+    if (document.visibilityState !== 'visible' || typeof navigator !== 'undefined' && navigator.onLine === false) return
+    updateIds(visibleMessageIds(listRef), wake)
+  }, [listRef, updateIds])
 
   useEffect(() => {
     if (query.data) {
@@ -440,43 +472,62 @@ export function useMessageReceiptPolling({
   }, [query.data, query.dataUpdatedAt, onCounts])
 
   useEffect(() => {
+    if (!active || typeof IntersectionObserver === 'undefined') return
+    const root = listRef.current
+    if (!root) return
+    const visible = new Set<number>()
+    const orderedIds = () => [...root.querySelectorAll<HTMLElement>('[data-message-id]')]
+      .map(element => Number(element.dataset.messageId))
+      .filter(id => visible.has(id))
+      .slice(0, 500)
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const id = Number((entry.target as HTMLElement).dataset.messageId)
+        if (!Number.isSafeInteger(id)) continue
+        if (entry.isIntersecting) visible.add(id)
+        else visible.delete(id)
+      }
+      updateIds(orderedIds(), true)
+    }, { root, threshold: 0.01 })
+    root.querySelectorAll<HTMLElement>('[data-message-id]').forEach(element => observer.observe(element))
+    return () => observer.disconnect()
+  }, [active, list, listRef, updateIds])
+
+  useEffect(() => {
+    if (active && typeof IntersectionObserver === 'undefined') scanVisible(false)
+  }, [active, list, scanVisible])
+
+  useEffect(() => {
     if (!active || typeof document === 'undefined' || typeof window === 'undefined') return
     let timer: ReturnType<typeof setTimeout> | undefined
     let scrollTimer: ReturnType<typeof setTimeout> | undefined
-    const scan = (wake: boolean) => {
-      if (document.visibilityState !== 'visible' || typeof navigator !== 'undefined' && navigator.onLine === false) return
-      const next = visibleMessageIds(listRef)
-      if (!sameIds(ids, next)) {
-        setIds(next)
-      } else if (wake && next.length) {
-        void refetchReceipts({ cancelRefetch: true })
-      }
-    }
     const scheduleScan = () => {
+      if (typeof IntersectionObserver !== 'undefined') return
       clearTimeout(timer)
       timer = setTimeout(() => {
-        scan(false)
+        scanVisible(false)
         scheduleScan()
       }, 5000)
     }
     const wake = () => {
       if (document.visibilityState !== 'visible' || typeof navigator !== 'undefined' && navigator.onLine === false) {
-        void queryClient.cancelQueries({ queryKey: receiptQueryKey }, { silent: true })
+        void queryClient.cancelQueries({ queryKey: receiptQueryKeyRef.current }, { silent: true })
         return
       }
-      scan(true)
+      scanVisible(true)
     }
     const onScroll = () => {
       clearTimeout(scrollTimer)
-      scrollTimer = setTimeout(() => scan(true), 150)
+      scrollTimer = setTimeout(() => scanVisible(true), 150)
     }
-    scan(false)
+    const scrollArea = listRef.current
+    scanVisible(false)
     scheduleScan()
     document.addEventListener('visibilitychange', wake)
     window.addEventListener('focus', wake)
     window.addEventListener('online', wake)
     window.addEventListener('offline', wake)
-    window.addEventListener('scroll', onScroll, true)
+    if (typeof IntersectionObserver === 'undefined') scrollArea?.addEventListener('scroll', onScroll)
     return () => {
       clearTimeout(timer)
       clearTimeout(scrollTimer)
@@ -484,9 +535,9 @@ export function useMessageReceiptPolling({
       window.removeEventListener('focus', wake)
       window.removeEventListener('online', wake)
       window.removeEventListener('offline', wake)
-      window.removeEventListener('scroll', onScroll, true)
+      scrollArea?.removeEventListener('scroll', onScroll)
     }
-  }, [active, ids, list, listRef, receiptQueryKey, refetchReceipts])
+  }, [active, listRef, scanVisible])
 
   return query
 }

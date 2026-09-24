@@ -132,6 +132,12 @@ def run_identity_checks(client, Client, conn, check):
     email_keyword = urllib.parse.quote(updated["email"])
     email_results = client.call("GET", f"/api/v1/admin/users?keyword={email_keyword}")
     check("identity internal account search includes email", email_results["total"] == 1 and email_results["list"][0]["id"] == user_id)
+    unchanged_user = client.call("PUT", f"/api/v1/admin/users/{user_id}/status", {"status": "ACTIVE"})
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM audit_logs WHERE action='USER_STATUS' AND target_id=%s", (str(user_id),))
+        unchanged_user_audits = cursor.fetchone()[0]
+    check("identity unchanged user status is a no-op without audit noise",
+          unchanged_user["status"] == "ACTIVE" and unchanged_user_audits == 0)
     disabled = client.call("PUT", f"/api/v1/admin/users/{user_id}/status", {"status": "DISABLED"})
     client.call("PUT", f"/api/v1/admin/users/{user_id}/status", {"status": "ACTIVE"})
     client.call("PUT", f"/api/v1/admin/users/{user_id}/password", {"newPassword": _password()})
@@ -389,6 +395,13 @@ def run_identity_checks(client, Client, conn, check):
         cursor.execute("SELECT COUNT(*) FROM refresh_tokens WHERE user_id IN (%s,%s) AND revoked=0",
                        (supplier_user["id"], supplier_peer_user["id"]))
         active_target_sessions_before_disable = cursor.fetchone()[0]
+    unchanged_supplier = client.call("PUT", f"/api/v1/admin/suppliers/{supplier['id']}/status", {"status": "ACTIVE"})
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM audit_logs WHERE action='SUPPLIER_STATUS' AND target_id=%s",
+                       (str(supplier["id"]),))
+        unchanged_supplier_audits = cursor.fetchone()[0]
+    check("identity unchanged supplier status is a no-op without audit noise",
+          unchanged_supplier["status"] == "ACTIVE" and unchanged_supplier_audits == 0)
     client.call("PUT", f"/api/v1/admin/suppliers/{supplier['id']}/status", {"status": "DISABLED"})
     for old_client, _, old_refresh in target_supplier_sessions:
         old_client.call("GET", "/api/v1/auth/profile", expected=401)

@@ -19,7 +19,9 @@ param(
     [string]$RestoreConfigPath,
     [string]$MySqlDump = 'mysqldump.exe',
     [string]$MySql = 'mysql.exe',
-    [switch]$MigrateDatabase
+    [switch]$MigrateDatabase,
+    [ValidateRange(30,600)][int]$HealthCheckWaitSeconds = 120,
+    [ValidateRange(2,30)][int]$HealthRequestTimeoutSeconds = 10
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'maintenance-common.ps1')
@@ -72,6 +74,23 @@ function Invoke-YfMigration([string]$Root,[string]$ExternalConfig) {
         foreach ($name in $saved.Keys) { Set-Item -LiteralPath ('Env:\'+$name) -Value $saved[$name] }
     }
 }
+function Invoke-YfReadiness([string]$Root,[string]$ExternalConfig) {
+    $saved=@{}
+    foreach ($item in Get-ChildItem Env:) {
+        if ($item.Name -match '^App(__|:)' -or $item.Name -eq 'YF_CONFIG_PATH') { $saved[$item.Name]=$item.Value; Remove-Item -LiteralPath ('Env:\'+$item.Name) }
+    }
+    try {
+        $env:YF_CONFIG_PATH=$ExternalConfig
+        Push-Location $Root
+        try {
+            & dotnet (Join-Path $Root 'Yf.Api.dll') --check-development-readiness
+            if ($LASTEXITCODE -ne 0) { throw 'New deployment readiness check failed; pool remains stopped.' }
+        } finally { Pop-Location }
+    } finally {
+        Remove-Item Env:\YF_CONFIG_PATH -ErrorAction SilentlyContinue
+        foreach ($name in $saved.Keys) { Set-Item -LiteralPath ('Env:\'+$name) -Value $saved[$name] }
+    }
+}
 
 Import-Module WebAdministration -ErrorAction Stop
 $site=Get-Website -Name $SiteName -ErrorAction Stop
@@ -79,7 +98,8 @@ if (!$site -or $site.Name -ne $SiteName) { throw 'Named IIS site was not found.'
 $pool=[string]$site.applicationPool
 if ($pool -notmatch '^[A-Za-z0-9_-]+$') { throw 'Unexpected application pool name.' }
 if (@(Get-Website | Where-Object { $_.applicationPool -eq $pool -and $_.Name -ne $SiteName }).Count -or @(Get-WebApplication | Where-Object { $_.applicationPool -eq $pool }).Count) { throw 'Maintenance requires a dedicated application pool with no child applications.' }
-$currentRoot=Get-YfFullPath ([Environment]::ExpandEnvironmentVariables($site.physicalPath))
+$originalPhysicalPath=[string]$site.physicalPath
+$currentRoot=Get-YfFullPath ([Environment]::ExpandEnvironmentVariables($originalPhysicalPath))
 Assert-YfNoLinks $currentRoot
 if (!(Test-Path -LiteralPath (Join-Path $currentRoot 'Yf.Api.dll'))) { throw 'The named site is not a Yf ASP.NET Core deployment.' }
 [xml]$currentXml=Get-Content -LiteralPath (Join-Path $currentRoot 'web.config') -Raw -Encoding UTF8
@@ -116,6 +136,7 @@ if ($Action -ne 'Backup') {
         Assert-YfEmptyDirectory $targetConfig.Storage
     }
     Assert-YfSeparate $paths
+    Get-Command dotnet -ErrorAction Stop | Out-Null
 }
 if ($Action -eq 'Upgrade') {
     $PackageRoot=Get-YfFullPath $PackageRoot
@@ -126,10 +147,11 @@ if ($Action -eq 'Upgrade') {
     foreach ($required in @('Yf.Api.dll','Yf.Api.runtimeconfig.json','web.config','wwwroot\index.html')) {
         if (!(Test-Path -LiteralPath (Join-Path $PackageRoot $required) -PathType Leaf)) { throw 'Incomplete upgrade package.' }
     }
-    if ($MigrateDatabase) { Get-Command dotnet -ErrorAction Stop | Out-Null }
 }
 if ($MigrateDatabase -and $Action -ne 'Upgrade') { throw 'MigrateDatabase is only supported for Upgrade.' }
 $wasRunning=(Get-WebAppPoolState -Name $pool).Value -eq 'Started'
+$migrationAttempted=$false
+$pathSwitched=$false
 try {
     if ($wasRunning) { Stop-WebAppPool -Name $pool }
     $deadline=[DateTime]::UtcNow.AddSeconds(120)
@@ -146,22 +168,41 @@ try {
     if ($Action -ne 'Backup') {
         Set-YfSiteConfig $NewSiteRoot $targetConfig.Path
         Grant-YfApplicationAccess $NewSiteRoot $targetConfig $pool
-        if ($MigrateDatabase) { Invoke-YfMigration $NewSiteRoot $targetConfig.Path }
+        if ($MigrateDatabase) {
+            $migrationAttempted=$true
+            Invoke-YfMigration $NewSiteRoot $targetConfig.Path
+        }
+        Invoke-YfReadiness $NewSiteRoot $targetConfig.Path
         Set-ItemProperty ('IIS:\Sites\'+$SiteName) -Name physicalPath -Value $NewSiteRoot
+        $pathSwitched=$true
     }
     if ($wasRunning) {
         Start-WebAppPool -Name $pool
         $healthy=$false
-        for ($attempt=0; $attempt -lt 12; $attempt++) {
-            try { $health=Invoke-RestMethod ($targetConfig.Origin.TrimEnd('/')+'/health') -TimeoutSec 5; if ($health.status -eq 'ok' -and $health.db -eq 'up') { $healthy=$true; break } } catch { }
-            Start-Sleep -Seconds 1
+        $healthDeadline=[DateTime]::UtcNow.AddSeconds($HealthCheckWaitSeconds)
+        while ([DateTime]::UtcNow -lt $healthDeadline) {
+            try { $health=Invoke-RestMethod ($targetConfig.Origin.TrimEnd('/')+'/health') -TimeoutSec $HealthRequestTimeoutSeconds; if ($health.status -eq 'ok' -and $health.db -eq 'up') { $healthy=$true; break } } catch { }
+            Start-Sleep -Seconds 2
         }
         if (!$healthy) { throw 'HTTPS health check failed; pool will remain stopped for investigation.' }
     }
     Write-Host "$Action completed for $SiteName. Backup: $backupRoot"
     if (!$wasRunning) { Write-Host 'The application pool was already stopped and remains stopped.' }
 } catch {
+    $originalError=$_
     if ((Get-WebAppPoolState -Name $pool).Value -ne 'Stopped') { Stop-WebAppPool -Name $pool }
-    Write-Warning 'Maintenance failed. Only the named pool was stopped. Old application and original database/storage were not deleted; inspect the failure before resuming.'
-    throw
+    if ($pathSwitched -and !$migrationAttempted) {
+        try {
+            Set-ItemProperty ('IIS:\Sites\'+$SiteName) -Name physicalPath -Value $originalPhysicalPath
+            $pathSwitched=$false
+            Write-Warning 'Maintenance failed before any database migration; the original site path was restored and the pool remains stopped.'
+        } catch {
+            Write-Warning 'Maintenance failed and the original site path could not be restored automatically. The pool remains stopped; repair the physicalPath before starting it.'
+        }
+    } elseif ($migrationAttempted) {
+        Write-Warning 'Maintenance failed after database migration may have started. The pool remains stopped and the script did not start the old application; recover the matching application/database/storage set from the protected backup.'
+    } else {
+        Write-Warning 'Maintenance failed before the site path changed. The pool remains stopped; old application and original database/storage were not deleted.'
+    }
+    throw $originalError
 }

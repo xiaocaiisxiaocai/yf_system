@@ -5,9 +5,7 @@ using Yf.Api.Infrastructure;
 namespace Yf.Api.Tests;
 
 /// <summary>
-/// A throwaway local MySQL database initialized with the current EF migrations. Initialization sets
-/// YF_BOOTSTRAP_PASSWORD process-wide, so test classes using it must join ConnectionLifecycleCollection.
-/// Skips the test when
+/// A throwaway local MySQL database initialized with the current EF migrations. Skips the test when
 /// YF_TEST_DATABASE_URL is not set, and drops the database on dispose.
 /// </summary>
 internal sealed class MigratedTestDatabase : IAsyncDisposable
@@ -70,10 +68,8 @@ internal sealed class MigratedTestDatabase : IAsyncDisposable
             };
             applicationConnectionString = AppDb.BuildConnectionString(options);
             var scope = new MigratedTestDatabase(administration, databaseName, options);
-            var previousPassword = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD");
-            Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", "Migrated#" + Guid.NewGuid().ToString("N")[..8] + "!");
-            try { await SchemaBootstrap.InitializeEmptyAsync(scope.Database, ct); }
-            finally { Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", previousPassword); }
+            var bootstrapPassword = "Migrated#" + Guid.NewGuid().ToString("N")[..8] + "!";
+            await SchemaBootstrap.InitializeEmptyAsync(scope.Database, bootstrapPassword, ct);
             return scope;
         }
         catch

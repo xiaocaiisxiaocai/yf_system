@@ -58,7 +58,7 @@ public sealed class AuditLogConfig : IEntityTypeConfiguration<AuditLog>
         b.Property(x => x.TargetId).HasColumnName("target_id").HasMaxLength(64);
         b.Property(x => x.Detail).HasColumnName("detail").HasColumnType("json");
         b.Property(x => x.Ip).HasColumnName("ip").HasMaxLength(64);
-        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.HasIndex(x => x.CreatedAt).HasDatabaseName("idx_audit_time");
         b.HasIndex(x => x.UserId).HasDatabaseName("idx_audit_user");
         b.HasIndex(x => new { x.Action, x.CreatedAt, x.Id }).HasDatabaseName("idx_audit_action_time");
@@ -86,10 +86,11 @@ public sealed class EmailOutboxConfig : IEntityTypeConfiguration<EmailOutbox>
         b.Property(x => x.NextAttemptAt).HasColumnName("next_attempt_at").HasColumnType("datetime(3)");
         b.Property(x => x.LastError).HasColumnName("last_error").HasMaxLength(1024);
         b.Property(x => x.SentAt).HasColumnName("sent_at").HasColumnType("datetime");
-        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.HasIndex(x => x.DedupeKey).IsUnique().HasDatabaseName("uk_outbox_dedupe_key");
         b.HasIndex(x => new { x.Status, x.RetryCount }).HasDatabaseName("idx_outbox_status");
         b.HasIndex(x => new { x.Status, x.NextAttemptAt }).HasDatabaseName("idx_outbox_status_next");
+        b.HasIndex(x => new { x.Status, x.CreatedAt, x.Id }).HasDatabaseName("idx_outbox_status_created");
         b.HasIndex(x => x.ProjectId).HasDatabaseName("fk_outbox_project_v2");
         b.HasOne<Project>().WithMany().HasForeignKey(x => x.ProjectId).HasConstraintName("fk_outbox_project_v2").OnDelete(DeleteBehavior.Restrict);
         // Deliberately no FK on recipient_user_id: recipient_email is the durable snapshot used at send time.

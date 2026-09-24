@@ -74,8 +74,13 @@ internal sealed class CollaborationService
             await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
         await using var db = EfDb.Use(conn, tx);
         var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
-        var activities = MeaningfulActivities(db.ProjectActivities, current.Id, canReceivePendingAcceptance);
         var cutoff = await UnreadWindow.CutoffAsync(db, ct);
+        // Notifications, totals and unread state share the same bounded window. Older activity stays in
+        // the audit/history tables but is not part of this hot collaboration feed.
+        var activities = MeaningfulActivities(
+            db.ProjectActivities.Where(activity => activity.OccurredAt >= cutoff),
+            current.Id,
+            canReceivePendingAcceptance);
         // Join the visible projects once: the same join supplies both the scope check and the project name.
         var query =
             from activity in activities
@@ -94,15 +99,12 @@ internal sealed class CollaborationService
                 Activity = activity,
                 ProjectName = project.Name,
                 ProjectGroupName = projectGroup.Name,
-                // Outside the unread window an activity counts as read.
-                IsRead = isRead || activity.OccurredAt < cutoff,
+                IsRead = isRead,
                 FileAvailable = fileAvailable,
                 MessageAvailable = messageAvailable,
             };
 
-        // The explicit window bound gives MySQL a range predicate on occurred_at, so the unread
-        // count and filter scan only the last UnreadWindow.Days instead of the whole history.
-        var unread = query.Where(row => row.Activity.OccurredAt >= cutoff && !row.IsRead);
+        var unread = query.Where(row => !row.IsRead);
         var unreadCount = (ulong)await unread.LongCountAsync(ct);
         var filtered = unreadOnly ? unread : query;
         var total = unreadOnly ? unreadCount : (ulong)await filtered.LongCountAsync(ct);

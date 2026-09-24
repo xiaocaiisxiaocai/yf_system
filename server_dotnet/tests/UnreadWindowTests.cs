@@ -55,8 +55,9 @@ public sealed class UnreadWindowTests
         Assert.Equal(1UL, (await collaboration.SummaryAsync(conn, admin, ct)).UnreadCount);
         var notifications = await collaboration.NotificationsAsync(conn, admin, 1, 20, false, ct);
         Assert.Equal(1UL, notifications.UnreadCount);
-        Assert.Equal([2UL, 1UL], notifications.List.Select(item => item.Id));
-        Assert.Equal([false, true], notifications.List.Select(item => item.Read));
+        Assert.Equal(1UL, notifications.Total);
+        Assert.Equal(2UL, Assert.Single(notifications.List).Id);
+        Assert.False(notifications.List[0].Read);
         var unreadNotifications = await collaboration.NotificationsAsync(conn, admin, 1, 20, true, ct);
         Assert.Equal(2UL, Assert.Single(unreadNotifications.List).Id);
     }

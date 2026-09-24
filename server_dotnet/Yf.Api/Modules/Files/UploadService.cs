@@ -13,7 +13,8 @@ namespace Yf.Api.Modules.Files;
 public sealed partial class UploadService(
     AppDb db,
     AppOptions options,
-    AuditService audit)
+    AuditService audit,
+    ILogger<UploadService> logger)
 {
     private const uint MinimumChunkSize = 256 * 1024;
     private const uint MaximumChunkSize = 64 * 1024 * 1024;
@@ -76,6 +77,7 @@ public sealed partial class UploadService(
             var tempDir = FileStorage.SessionDirectory(root, sessionId);
             tempDir = FileStorage.CreateDirectoryWithin(root, tempDir, ct);
             SessionCommitRecoveryDecision? commitRecovery = null;
+            var commitAttempted = false;
             try
             {
                 await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
@@ -102,6 +104,7 @@ public sealed partial class UploadService(
                     UpdatedAt = dbNow
                 });
                 await ef.SaveChangesAsync(ct);
+                commitAttempted = true;
                 try { await tx.CommitAsync(ct); }
                 catch
                 {
@@ -117,10 +120,14 @@ public sealed partial class UploadService(
             }
             catch
             {
+                // Before COMMIT starts, transaction disposal makes cleanup safe. Once COMMIT starts,
+                // only a positive probe proves success; a negative read can race a server-side commit.
                 var recovery = commitRecovery
-                    ?? SessionCommitRecovery(await SessionExistsSafelyAsync(sessionId, ct));
+                    ?? (commitAttempted
+                        ? new SessionCommitRecoveryDecision(Acknowledge: false, DeleteDirectory: false)
+                        : new SessionCommitRecoveryDecision(Acknowledge: false, DeleteDirectory: true));
                 if (recovery.DeleteDirectory)
-                    TryDeleteDirectory(options.StorageRoot, tempDir, CancellationToken.None);
+                    TryDeleteDirectory(options.StorageRoot, tempDir, sessionId, CancellationToken.None);
                 throw;
             }
             return new UploadInitResponse(sessionId, chunkSize, totalChunks,
@@ -138,7 +145,7 @@ public sealed partial class UploadService(
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:upload", ct);
         if (session.Status == "UPLOADING" && session.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
-        var chunks = await UploadedChunksAsync(session, ct);
+        var chunks = await UploadedChunksAsync(session, repairMetadata: false, ct);
         return new UploadSessionResponse(session.Id, session.Status, session.ChunkSize, session.TotalChunks, chunks,
             session.FileName, session.FileSize, session.ResultFileId);
     }
@@ -195,18 +202,18 @@ public sealed partial class UploadService(
                 ? session.FileSize - (ulong)session.ChunkSize * (session.TotalChunks - 1)
                 : session.ChunkSize;
             if (lockedExpected != expected) throw ApiException.Conflict("上传会话参数已变化，请重新查询");
-            if (await ValidChunkDigestAsync(root, path, expected, ct) is { } existingDigest
+            if (await ValidChunkDigestAsync(root, path, expected, repairMetadata: false, ct) is { } existingDigest
                 && existingDigest.Equals(declaredDigest, StringComparison.Ordinal))
             {
                 await tx.CommitAsync(ct);
                 return;
             }
-            TryDeleteFile(ChunkDigestPath(path));
+            TryDeleteFile(ChunkDigestPath(path), "stale-chunk-digest");
             File.Move(temporary, path, overwrite: true);
             await WriteChunkDigestAsync(root, path, actualDigest, ct);
             await tx.CommitAsync(ct);
         }
-        finally { TryDeleteFile(temporary); }
+        finally { TryDeleteFile(temporary, "chunk-upload-staging"); }
     }
 
     public async Task SubmitMd5Async(
@@ -275,10 +282,10 @@ public sealed partial class UploadService(
     private async Task<UploadInitResponse> InitResponseAsync(
         UploadSessionRow session, bool resumed, CancellationToken ct) =>
         new(session.Id, session.ChunkSize, session.TotalChunks,
-            await UploadedChunksAsync(session, ct), resumed);
+            await UploadedChunksAsync(session, repairMetadata: false, ct), resumed);
 
     private async Task<List<UploadedChunkDigestResponse>> UploadedChunksAsync(
-        UploadSessionRow session, CancellationToken ct)
+        UploadSessionRow session, bool repairMetadata, CancellationToken ct)
     {
         var root = FileStorage.Root(options.StorageRoot);
         var result = new List<UploadedChunkDigestResponse>();
@@ -289,7 +296,7 @@ public sealed partial class UploadService(
             var expected = index == session.TotalChunks - 1
                 ? session.FileSize - (ulong)session.ChunkSize * (session.TotalChunks - 1)
                 : session.ChunkSize;
-            var digest = await ValidChunkDigestAsync(root, path, expected, ct);
+            var digest = await ValidChunkDigestAsync(root, path, expected, repairMetadata, ct);
             if (digest is not null) result.Add(new UploadedChunkDigestResponse(index, digest));
         }
         return result;
@@ -298,8 +305,8 @@ public sealed partial class UploadService(
     private async Task<string> ValidateFileAsync(MySqlConnection conn, InitUploadRequest request, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.FileName) || request.FileName.EnumerateRunes().Count() > 255
-            || request.FileName.Any(character => char.IsControl(character) || character is '/' or '\\'))
-            throw ApiException.BadRequest("文件名需为 1~255 个字符且不能包含路径或控制字符");
+            || HasUnsafeFileNameCharacter(request.FileName))
+            throw ApiException.BadRequest("文件名需为 1~255 个字符且不能包含路径、控制字符或格式字符");
         if (request.FileSize == 0) throw ApiException.BadRequest("空文件不可上传");
         var maximum = await ConfigUInt64Async(conn, "upload.max_file_size", (ulong)options.UploadMaxFileSize, ct);
         if (request.FileSize > maximum)
@@ -318,6 +325,10 @@ public sealed partial class UploadService(
     // A name without a dot has no extension; it must not be mistaken for one (a file named "pdf").
     internal static string ExtensionOf(string name) =>
         name.Contains('.') ? name[(name.LastIndexOf('.') + 1)..].ToLowerInvariant() : string.Empty;
+
+    internal static bool HasUnsafeFileNameCharacter(string name) =>
+        name.Any(character => char.IsControl(character) || character is '/' or '\\')
+        || name.EnumerateRunes().Any(rune => Rune.GetUnicodeCategory(rune) == UnicodeCategory.Format);
 
     private static async Task<ulong> ConfigUInt64Async(MySqlConnection conn, string key, ulong fallback, CancellationToken ct)
     {
@@ -350,28 +361,32 @@ public sealed partial class UploadService(
         return ToRow(file);
     }
 
-    private async Task<bool?> SessionExistsSafelyAsync(string id, CancellationToken ct) =>
-        await ProbeSessionExistenceAsync(async cancellationToken =>
-        {
-            await using var conn = await db.OpenAsync(cancellationToken);
-            await using var context = EfDb.Use(conn);
-            return await context.UploadSessions.AnyAsync(session => session.Id == id, cancellationToken);
-        }, ct);
-
-    internal static async Task<bool?> ProbeSessionExistenceAsync(
-        Func<CancellationToken, Task<bool>> probe, CancellationToken ct)
+    private async Task<bool?> SessionExistsSafelyAsync(string id, CancellationToken ct)
     {
-        try { return await probe(ct); }
-        catch { return null; }
+        try
+        {
+            await using var conn = await db.OpenAsync(ct);
+            await using var context = EfDb.Use(conn);
+            return await context.UploadSessions.AnyAsync(session => session.Id == id, ct);
+        }
+        catch (Exception error)
+        {
+            logger.LogWarning("确认上传会话提交结果失败 {SessionId} {Failure}", id, SafeFailureCode(error));
+            return null;
+        }
     }
 
     internal static SessionCommitRecoveryDecision SessionCommitRecovery(bool? sessionExists) =>
         sessionExists switch
         {
             true => new(Acknowledge: true, DeleteDirectory: false),
-            false => new(Acknowledge: false, DeleteDirectory: true),
+            false => new(Acknowledge: false, DeleteDirectory: false),
             null => new(Acknowledge: false, DeleteDirectory: false)
         };
+
+    internal static string SafeFailureCode(Exception error) => error is MySqlException mysql
+        ? $"{error.GetType().Name}:mysql-{mysql.Number}:0x{error.HResult:x8}"
+        : $"{error.GetType().Name}:0x{error.HResult:x8}";
 
     private static async Task WriteUploadAbortAuditAsync(MySqlConnection conn, MySqlTransaction tx,
         CurrentUser actor, string sessionId, string ip, CancellationToken ct)

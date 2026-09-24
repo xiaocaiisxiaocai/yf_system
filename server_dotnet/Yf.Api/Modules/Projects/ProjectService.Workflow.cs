@@ -253,8 +253,8 @@ internal sealed partial class ProjectService
             reason,
             statusLogId,
         }, ip, ct);
-        if (project.ProjectGroupId != 0)
-            await groupStatus.RecalculateAsync(conn, tx, project.ProjectGroupId, actor.Id, project.Id, ct);
+        await groupStatus.RecalculateAsync(
+            conn, tx, project.ProjectGroupId, actor.Id, project.Id, ct, groupAlreadyLocked: true);
         return statusLogId;
     }
 

@@ -56,7 +56,7 @@ public sealed class AuditService(IEnumerable<IProjectAuditCapture> captures, IHt
         var context = accessor?.HttpContext;
         if (string.IsNullOrWhiteSpace(ip) && context is not null)
             ip = options is null ? context.Connection.RemoteIpAddress?.ToString() : ClientIp.Resolve(context, options);
-        var createdAt = await DbClock.UtcNowAsync(ef, ct);
+        var createdAt = await DbClock.UtcNowAsync(ef, ct, 3);
         var entries = writes.ToArray();
         var targetNames = await TargetNamesAsync(ef, entries, ct);
         var auditLogs = new List<AuditLog>(entries.Length);

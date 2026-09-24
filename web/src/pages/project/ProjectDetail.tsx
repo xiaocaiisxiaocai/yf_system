@@ -172,14 +172,14 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const navigate = useNavigate()
   const [project, setProject] = useState<Project | null>(null)
   const [summary, setSummary] = useState<Summary>({ unreadMessages: 0 })
-  const revision = useCollaboration((state) => state.revision)
-  const syncStatus = useCollaboration((state) => state.status)
   const liveMessages = useCollaboration((state) => state.messageRevisions?.[pid] ?? 0)
   const liveReceipts = useCollaboration((state) => state.receiptRevisions?.[pid] ?? 0)
+  const liveActivity = useCollaboration((state) => state.activityRevisions?.[pid] ?? 0)
   const reconnected = useCollaboration((state) => state.reconnectRevision ?? 0)
   const realtimeConnected = useCollaboration((state) => state.realtimeStatus === 'connected')
   const projectSeq = useRef(0)
   const summarySeq = useRef(0)
+  const summaryAbort = useRef<AbortController | null>(null)
   const historySeq = useRef(0)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [copyHistory, setCopyHistory] = useState<ProjectCopyHistory | null>(null)
@@ -187,6 +187,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const [historyError, setHistoryError] = useState(false)
   const [historyReloadKey, setHistoryReloadKey] = useState(0)
   const [loadErrorFor, setLoadErrorFor] = useState<number | null>(null)
+  const [missingProjectFor, setMissingProjectFor] = useState<number | null>(null)
   const [siblings, setSiblings] = useState<ProjectSummary[]>([])
   const currentGroupId = project?.id === pid ? project.projectGroupId : undefined
   const [searchParams, setSearchParams] = useSearchParams()
@@ -212,26 +213,37 @@ function ProjectDetailContent({ id }: { id?: string }) {
       if (seq !== projectSeq.current) return
       setProject(next)
       setLoadErrorFor(null)
+      setMissingProjectFor(null)
     } catch (error: unknown) {
       if (seq !== projectSeq.current) return
       // 权限丢失或资源不存在时清除旧内容；瞬时错误保留快照并提供重试。
       setLoadErrorFor(pid)
-      if (isAxiosError(error) && (error.response?.status === 403 || error.response?.status === 404)) setProject(null)
+      const status = isAxiosError(error) ? error.response?.status : undefined
+      setMissingProjectFor(status === 404 ? pid : null)
+      if (status === 403 || status === 404) setProject(null)
     }
   }, [fetchProject, pid])
 
-  const fetchSummary = useCallback(async () => {
-    const r = await http.get<ApiResponses['GET /projects/{id}/summary']>(`/projects/${pid}/summary`)
+  const fetchSummary = useCallback(async (signal?: AbortSignal) => {
+    const r = await http.get<ApiResponses['GET /projects/{id}/summary']>(`/projects/${pid}/summary`, {
+      signal,
+      quietNetworkError: true,
+    } as QuietRequestConfig)
     return r.data as Summary
   }, [pid])
 
   const loadSummary = useCallback(async () => {
+    summaryAbort.current?.abort()
+    const controller = new AbortController()
+    summaryAbort.current = controller
     const seq = ++summarySeq.current
     try {
-      const next = await fetchSummary()
-      if (seq === summarySeq.current) setSummary(next)
+      const next = await fetchSummary(controller.signal)
+      if (!controller.signal.aborted && seq === summarySeq.current) setSummary(next)
     } catch {
-      /* 拦截器已提示 */
+      // 概览是辅助状态；断网或被后续请求取消时保留现有快照。
+    } finally {
+      if (summaryAbort.current === controller) summaryAbort.current = null
     }
   }, [fetchSummary])
 
@@ -269,11 +281,14 @@ function ProjectDetailContent({ id }: { id?: string }) {
         if (!active || seq !== projectSeq.current) return
         setProject(next)
         setLoadErrorFor(null)
+        setMissingProjectFor(null)
       })
       .catch((error: unknown) => {
         if (active && seq === projectSeq.current) {
           setLoadErrorFor(pid)
-          if (isAxiosError(error) && (error.response?.status === 403 || error.response?.status === 404)) setProject(null)
+          const status = isAxiosError(error) ? error.response?.status : undefined
+          setMissingProjectFor(status === 404 ? pid : null)
+          if (status === 403 || status === 404) setProject(null)
         }
       })
     return () => {
@@ -281,7 +296,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
       if (projectSeq.current === seq) projectSeq.current += 1
       controller.abort()
     }
-  }, [fetchProject, pid, validProjectId, revision, syncStatus])
+  }, [fetchProject, liveActivity, pid, reconnected, validProjectId])
 
   useEffect(() => {
     if (!currentGroupId) return
@@ -295,7 +310,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
       })
       .catch(() => { if (active) setSiblings([]) })
     return () => { active = false; controller.abort() }
-  }, [currentGroupId, revision, syncStatus])
+  }, [currentGroupId, liveActivity, reconnected])
 
   const switchProject = useCallback((nextId: number) => {
     if (nextId === pid) return
@@ -309,8 +324,9 @@ function ProjectDetailContent({ id }: { id?: string }) {
     void loadSummary()
     return () => {
       summarySeq.current += 1
+      summaryAbort.current?.abort()
     }
-  }, [project?.id, pid, loadSummary, revision, syncStatus])
+  }, [liveActivity, liveMessages, loadSummary, pid, project?.id, reconnected])
 
   useEffect(() => {
     if (!historyOpen || project?.id !== pid || !project.hasCopyHistory) return
@@ -352,16 +368,20 @@ function ProjectDetailContent({ id }: { id?: string }) {
       <div style={{ textAlign: 'center', padding: 80 }}>
         {loadErrorFor === pid ? (
           <>
-            <Empty description="项目加载失败或没有访问权限" />
-            <Button
-              type="primary"
-              onClick={() => {
-                setLoadErrorFor(null)
-                loadProject()
-              }}
-            >
-              重试
-            </Button>
+            <Empty description={missingProjectFor === pid ? '项目不存在或已删除' : '项目加载失败或没有访问权限'} />
+            {missingProjectFor === pid ? (
+              <Button type="primary" onClick={() => navigate('/projects')}>返回项目列表</Button>
+            ) : (
+              <Button
+                type="primary"
+                onClick={() => {
+                  setLoadErrorFor(null)
+                  loadProject()
+                }}
+              >
+                重试
+              </Button>
+            )}
           </>
         ) : (
           <Spin size={36} />

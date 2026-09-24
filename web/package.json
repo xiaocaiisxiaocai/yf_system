@@ -11,7 +11,7 @@
     "build": "tsc -b && vite build",
     "postbuild": "node scripts/precompress-assets.mjs",
     "test:precompression": "node --test scripts/precompress-assets.test.mjs",
-    "lint": "oxlint",
+    "lint": "oxlint --deny-warnings",
     "preview": "vite preview",
     "build:excel-preview": "node scripts/build-excel-preview.mjs",
     "predev": "npm run build:excel-preview && npm run build:pptx-preview",
@@ -52,6 +52,10 @@
     "typescript": "~6.0.2",
     "vite": "^8.2.2",
     "vitest": "5.0.1"
+  },
+  "yfDependencyPolicy": {
+    "bundledPreviewRuntimeDependencies": ["dayjs", "exceljs", "lodash", "pptx-preview", "tinycolor2", "xlsx"],
+    "reason": "These packages are imported by the vendored Excel/PPTX viewer sources and bundled into production preview assets."
   },
   "overrides": {
     "exceljs": {

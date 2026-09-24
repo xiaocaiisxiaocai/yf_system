@@ -80,6 +80,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await GateAsync(context, actor, "supplier:manage", ct);
         var row = await context.Suppliers.FromSqlInterpolated($"SELECT * FROM suppliers WHERE id={id} FOR UPDATE")
             .AsNoTracking().SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+        if (row.Status == status) return Json(row);
         await context.Suppliers.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, status), ct);
         var revokedSessionCount = 0;
         if (status == AccountStatuses.Disabled)
@@ -166,6 +167,8 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
     {
         AccessService.RequireInternal(actor); AdminValidation.EmployeeNo(request.EmployeeNo); ValidateName(request.RealName); AdminValidation.Email(request.Email); PasswordService.Validate(request.Password);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await ManagementAuthorization.PrecheckAsync(context, actor, "supplier:account", ct);
+        var passwordHash = await PasswordService.HashAsync(request.Password, ct);
         await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         await GateAsync(context, actor, "supplier:account", ct);
         var supplier = await FindAsync(context, supplierId, ct) ?? throw ApiException.NotFound();
@@ -176,7 +179,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var role = await EnsureSupplierRoleAssignableAsync(context, actor, roleId, ct);
         var user = new User
         {
-            EmployeeNo = employeeNo, PasswordHash = await PasswordService.HashAsync(request.Password, ct), RealName = request.RealName.Trim(),
+            EmployeeNo = employeeNo, PasswordHash = passwordHash, RealName = request.RealName.Trim(),
             Email = request.Email.Trim(), UserType = UserTypes.Supplier, SupplierId = supplierId, Status = AccountStatuses.Active,
             MustChangePassword = true, FailedLoginAttempts = 0, CreatedBy = actor.Id
         };
@@ -203,6 +206,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         await GateAsync(context, actor, "supplier:account", ct);
         var user = await FindAccountAsync(context, id, ct) ?? throw ApiException.NotFound();
+        await EnsureSupplierAccountWithinCeilingAsync(context, actor, user, ct);
         var realName = request.RealName?.Trim() ?? user.RealName;
         var email = request.Email?.Trim() ?? user.Email;
         await context.Users.Where(x => x.Id == id).ExecuteUpdateAsync(s => s
@@ -228,6 +232,8 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
             if (!user.RoleId.HasValue) throw ApiException.BadRequest("供应商账号必须绑定一个角色");
             await EnsureSupplierRoleAssignableAsync(context, actor, user.RoleId.Value, ct);
         }
+        else await EnsureSupplierAccountWithinCeilingAsync(context, actor, user, ct);
+        if (user.Status == status) return AccountJson(user);
         await context.Users.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, status), ct);
         if (status == AccountStatuses.Disabled) await IdentityService.RevokeAllAsync(context.Database.Connection(), context.Database.RequireTransaction(), id, ct);
         await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, "SUPPLIER_ACCOUNT_STATUS", "user", id, new
@@ -242,9 +248,15 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
     {
         AccessService.RequireInternal(actor); PasswordService.Validate(password);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await ManagementAuthorization.PrecheckAsync(context, actor, "supplier:account", ct);
+        var hash = await PasswordService.HashAsync(password, ct);
         await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         await GateAsync(context, actor, "supplier:account", ct);
-        var user = await FindAccountAsync(context, id, ct) ?? throw ApiException.NotFound(); var hash = await PasswordService.HashAsync(password, ct);
+        var locked = await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id={id} FOR UPDATE")
+            .AsNoTracking().SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+        var user = await AccountRowAsync(context, locked, ct);
+        if (user.UserType != UserTypes.Supplier) throw ApiException.BadRequest("该账号不是供应商人员");
+        await EnsureSupplierAccountWithinCeilingAsync(context, actor, user, ct);
         await context.Users.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.PasswordHash, hash)
             .SetProperty(x => x.MustChangePassword, true).SetProperty(x => x.FailedLoginAttempts, 0).SetProperty(x => x.LockedUntil, (DateTime?)null), ct);
         await IdentityService.RevokeAllAsync(context.Database.Connection(), context.Database.RequireTransaction(), id, ct);
@@ -266,6 +278,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var locked = await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id={id} FOR UPDATE").AsNoTracking().SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         var user = await AccountRowAsync(context, locked, ct);
         if (user.UserType != UserTypes.Supplier) throw ApiException.BadRequest("该账号不是供应商人员");
+        await EnsureSupplierAccountWithinCeilingAsync(context, actor, user, ct);
         await UserService.EnsureNoHistoryAsync(context, id, ct);
         await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, "SUPPLIER_ACCOUNT_DELETE", "user", id,
             new { user.EmployeeNo, user.RealName, targetName = AccountAuditName(user), changes = Array.Empty<AuditChange>() }, null, ct);
@@ -274,9 +287,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
 
     private static async Task GateAsync(YfDbContext context, CurrentUser actor, string permission, CancellationToken ct)
     {
-        var connection = context.Database.Connection(); var transaction = context.Database.RequireTransaction();
-        await AccessService.LockManagementAsync(connection, transaction, ct); actor = await AccessService.RecheckActorAsync(connection, transaction, actor, ct);
-        AccessService.RequireInternal(actor); await AccessService.RequirePermissionAsync(connection, transaction, actor, permission, ct);
+        await ManagementAuthorization.RequireAsync(context, actor, permission, ct);
     }
 
     private async Task RequireSupplierReadAsync(YfDbContext context, CurrentUser actor, CancellationToken ct)
@@ -286,7 +297,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
     }
 
     private static async Task<ulong> FallbackSupplierRoleIdAsync(YfDbContext context, CancellationToken ct) =>
-        await context.Roles.AsNoTracking().Where(x => x.IsBuiltIn && x.Name == "供应商人员").Select(x => (ulong?)x.Id).SingleOrDefaultAsync(ct)
+        await context.Roles.AsNoTracking().Where(x => x.IsBuiltIn && x.Name == AdminBuiltIns.SupplierRoleName).Select(x => (ulong?)x.Id).SingleOrDefaultAsync(ct)
         ?? throw ApiException.BadRequest("请选择供应商角色；当前没有可用的内置供应商人员角色");
 
     private async Task<Role> EnsureSupplierRoleAssignableAsync(YfDbContext context, CurrentUser actor, ulong roleId, CancellationToken ct)
@@ -306,9 +317,17 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
     private async Task EnsureSupplierRoleWithinCeilingAsync(YfDbContext context, CurrentUser actor, IEnumerable<string> codes, CancellationToken ct)
     {
         var connection = context.Database.Connection(); var transaction = context.Database.RequireTransaction();
-        if (await AccessService.IsSystemAdminAsync(connection, transaction, actor.Id, ct)) return;
-        var owned = (await permissions.GetCodesAsync(connection, transaction, actor.Id, ct)).ToHashSet(StringComparer.Ordinal);
-        if (codes.Any(code => !RoleService.SupplierExclusivePermissionCodes.Contains(code) && !owned.Contains(code))) throw ApiException.Forbidden();
+        await permissions.EnsureCodesGrantableAsync(connection, transaction, actor, codes.ToArray(), ct,
+            RoleService.SupplierExclusivePermissionCodes);
+    }
+
+    private async Task EnsureSupplierAccountWithinCeilingAsync(
+        YfDbContext context, CurrentUser actor, AdminUserRow user, CancellationToken ct)
+    {
+        if (!user.RoleId.HasValue) return;
+        var codes = await context.RolePermissions.Where(x => x.RoleId == user.RoleId.Value)
+            .Join(context.Permissions, x => x.PermissionId, x => x.Id, (_, permission) => permission.Code).ToArrayAsync(ct);
+        await EnsureSupplierRoleWithinCeilingAsync(context, actor, codes, ct);
     }
 
     private static Task<Supplier?> FindAsync(YfDbContext context, ulong id, CancellationToken ct) => context.Suppliers.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, ct);

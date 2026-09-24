@@ -24,3 +24,8 @@ export function messageAuthState() {
     generation: messageMocks.generation,
   }
 }
+
+export function selectMessageAuthState<T>(selector?: (state: ReturnType<typeof messageAuthState>) => T) {
+  const state = messageAuthState()
+  return selector ? selector(state) : state
+}

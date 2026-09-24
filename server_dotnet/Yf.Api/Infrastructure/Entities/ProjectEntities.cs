@@ -242,8 +242,8 @@ public sealed class ProjectConfig : IEntityTypeConfiguration<Project>
         b.Property(x => x.Status).HasColumnName("status").HasMaxLength(24).IsRequired().HasDefaultValue("DRAFT");
         b.Property(x => x.ConfirmSide).HasColumnName("confirm_side").HasMaxLength(16);
         b.Property(x => x.CreatedBy).HasColumnName("created_by");
-        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
-        b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP").ValueGeneratedOnAddOrUpdate();
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+        b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)").ValueGeneratedOnAddOrUpdate();
         b.Property(x => x.MachineModel).HasColumnName("machine_model").HasMaxLength(128);
         b.Property(x => x.RobotPartId).HasColumnName("robot_part_id");
         b.Property(x => x.LegacyRobotModelName).HasColumnName("legacy_robot_model_name").HasMaxLength(512);
@@ -291,6 +291,7 @@ public sealed class ProjectStatusLogConfig : IEntityTypeConfiguration<ProjectSta
     public void Configure(EntityTypeBuilder<ProjectStatusLog> b)
     {
         b.ToTable("project_status_logs");
+        b.UseCollation("utf8mb4_unicode_ci");
         b.HasKey(x => x.Id);
         b.Property(x => x.ProjectId).HasColumnName("project_id");
         b.Property(x => x.FromStatus).HasColumnName("from_status").HasMaxLength(24);
@@ -380,6 +381,7 @@ public sealed class ProjectActivityConfig : IEntityTypeConfiguration<ProjectActi
     public void Configure(EntityTypeBuilder<ProjectActivity> b)
     {
         b.ToTable("project_activities");
+        b.UseCollation("utf8mb4_unicode_ci");
         b.HasKey(x => x.Id);
         b.Property(x => x.ProjectId).HasColumnName("project_id");
         b.Property(x => x.ActivityType).HasColumnName("activity_type").HasMaxLength(16).IsRequired();

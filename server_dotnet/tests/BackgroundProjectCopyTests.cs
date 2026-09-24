@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Globalization;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -38,7 +39,8 @@ public sealed class BackgroundProjectCopyTests
             Assert.True(await worker.RunNextAsync(ct));
             Assert.False(await worker.RunNextAsync(ct));
             var finished = await service.GetJobAsync(conn, actor, accepted.JobId, ct);
-            Assert.Equal("succeeded", finished.Status);
+            Assert.True(finished.Status == "succeeded",
+                $"复制任务终态为 {finished.Status}: {finished.Error ?? "未记录错误"}");
             Assert.Equal(finished.FilesTotal, finished.FilesCopied);
             Assert.Equal(finished.BytesTotal, finished.BytesCopied);
             Assert.NotNull(finished.Result);
@@ -144,7 +146,8 @@ public sealed class BackgroundProjectCopyTests
             await conn.ExecuteAsync(new CommandDefinition(
                 "UPDATE project_copy_jobs SET status='running',execution_token=@Token,started_at=UTC_TIMESTAMP(6) WHERE id=@Id",
                 new { Id = accepted.JobId, Token = interruptedToken }, cancellationToken: ct));
-            var owned = Path.Combine(storage, "copy-jobs", accepted.JobId.ToString(), interruptedToken);
+            var owned = Path.Combine(storage, "copy-jobs",
+                accepted.JobId.ToString(CultureInfo.InvariantCulture), interruptedToken);
             Directory.CreateDirectory(owned);
             await File.WriteAllTextAsync(Path.Combine(owned, "partial.tmp"), "partial", ct);
 
@@ -159,7 +162,8 @@ public sealed class BackgroundProjectCopyTests
                 "SELECT COUNT(*) FROM projects WHERE name='恢复复制件'", cancellationToken: ct)));
             Assert.True(await worker.RunNextAsync(ct));
             var succeeded = await service.GetJobAsync(conn, actor, accepted.JobId, ct);
-            Assert.Equal("succeeded", succeeded.Status);
+            Assert.True(succeeded.Status == "succeeded",
+                $"恢复任务终态为 {succeeded.Status}: {succeeded.Error ?? "未记录错误"}");
             Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
                 "SELECT COUNT(*) FROM projects WHERE name='恢复复制件'", cancellationToken: ct)));
             var storedPath = Assert.IsType<string>(await conn.ExecuteScalarAsync<string>(new CommandDefinition(
@@ -182,7 +186,8 @@ public sealed class BackgroundProjectCopyTests
             Assert.True(File.Exists(unknownPath));
 
             // A stale execution of the same finished job is removed; the canonical result stays.
-            var stale = Path.Combine(storage, "copy-jobs", accepted.JobId.ToString(), Guid.NewGuid().ToString("N"));
+            var stale = Path.Combine(storage, "copy-jobs",
+                accepted.JobId.ToString(CultureInfo.InvariantCulture), Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(stale);
             await File.WriteAllTextAsync(Path.Combine(stale, "partial.tmp"), "partial", ct);
             Assert.Equal(1, await worker.ScavengeOwnedDirectoriesAsync(ct));

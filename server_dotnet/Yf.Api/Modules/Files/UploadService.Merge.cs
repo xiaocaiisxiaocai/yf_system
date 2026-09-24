@@ -37,7 +37,7 @@ public sealed partial class UploadService
         if (session.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
         await ProjectAccessService.RequireFileUploadAsync(conn, null, actor, session.ProjectId, ct);
-        var uploaded = await UploadedChunksAsync(session, ct);
+        var uploaded = await UploadedChunksAsync(session, repairMetadata: true, ct);
         if ((uint)uploaded.Count != session.TotalChunks)
             throw ApiException.BadRequest($"分片不完整：已传 {uploaded.Count}/{session.TotalChunks}");
         FileStorage.EnsureFreeSpace(options.StorageRoot, session.FileSize);
@@ -61,12 +61,10 @@ public sealed partial class UploadService
     {
         var extension = ExtensionOf(session.FileName);
         var storedName = $"{Guid.NewGuid():D}.{extension}";
-        await using var clockContext = EfDb.Use(conn);
-        var now = await DbNowAsync(clockContext, ct);
         var root = FileStorage.Root(options.StorageRoot);
         var mergeTemp = FileStorage.EnsureLexicallyWithin(root,
             Path.Combine(FileStorage.SessionDirectory(root, session.Id), $"{storedName}.tmp"), false);
-        TryDeleteFile(mergeTemp);
+        TryDeleteFile(mergeTemp, "merge-staging-before-start");
         var chunks = new List<string>(checked((int)session.TotalChunks));
         for (uint index = 0; index < session.TotalChunks; index++)
         {
@@ -75,16 +73,16 @@ public sealed partial class UploadService
         }
         (string Sha256, string Md5, ulong Bytes) hash;
         try { hash = await FileStorage.HashAndCopyAsync(chunks, mergeTemp, session.FileSize, ct); }
-        catch { TryDeleteFile(mergeTemp); throw; }
+        catch { TryDeleteFile(mergeTemp, "merge-staging-after-copy-failure"); throw; }
         if (hash.Bytes != session.FileSize)
         {
-            TryDeleteFile(mergeTemp);
+            TryDeleteFile(mergeTemp, "merge-staging-size-mismatch");
             throw ApiException.BadRequest($"合并文件大小不符：期望 {session.FileSize}，实际 {hash.Bytes}");
         }
         if (!string.IsNullOrWhiteSpace(session.FileMd5)
             && !hash.Md5.Equals(session.FileMd5.Trim(), StringComparison.OrdinalIgnoreCase))
         {
-            TryDeleteFile(mergeTemp);
+            TryDeleteFile(mergeTemp, "merge-staging-md5-mismatch");
             throw ApiException.BadRequest("文件 MD5 校验失败，请重新上传");
         }
         await using var blobLease = await FileBlobStore.AcquireAsync(conn, [hash.Sha256], ct);
@@ -99,6 +97,7 @@ public sealed partial class UploadService
 
             var direction = current.IsInternal ? "C2S" : "S2C";
             await using var ef = EfDb.Use(conn, tx);
+            var now = await DbNowAsync(ef, ct);
             // The per-SHA lease stays owned through COMMIT. Publication is immutable and
             // may safely outlive an unknown COMMIT outcome; it is never rollback-cleaned.
             var blob = await FileBlobStore.ResolveForReferenceAsync(ef, root,
@@ -146,7 +145,7 @@ public sealed partial class UploadService
         }
         finally
         {
-            TryDeleteFile(mergeTemp);
+            TryDeleteFile(mergeTemp, "merge-staging-finalize");
         }
     }
 
@@ -200,21 +199,12 @@ public sealed partial class UploadService
 
     private async Task<FileResponse> CompletedFileAsync(MySqlConnection conn, UploadSessionRow session, ulong uploaderId, CancellationToken ct)
     {
-        FileRow? file = null;
         await using var context = EfDb.Use(conn);
-        if (session.ResultFileId is ulong resultId)
-        {
-            var byResult = await context.Files.SingleOrDefaultAsync(item => item.Id == resultId, ct);
-            if (byResult is not null) file = ToRow(byResult);
-        }
-        if (file is null)
-        {
-            var fallback = await context.Files.Where(item => item.ProjectId == session.ProjectId
-                    && item.OriginalName == session.FileName && item.UploaderId == uploaderId)
-                .OrderByDescending(item => item.Id).FirstOrDefaultAsync(ct);
-            if (fallback is not null) file = ToRow(fallback);
-        }
-        return file is null ? throw ApiException.Conflict("会话已完成") : FileJson(file);
+        if (session.ResultFileId is not ulong resultId)
+            throw ApiException.Conflict("上传会话缺少结果文件，请联系管理员检查历史数据");
+        var file = await context.Files.SingleOrDefaultAsync(item => item.Id == resultId
+            && item.Status == FileStatuses.Available && item.UploaderId == uploaderId, ct);
+        return file is null ? throw ApiException.Conflict("上传结果文件已不存在") : FileJson(ToRow(file));
     }
 
     private async Task ResetMergeLeaseSafelyAsync(string id, DateTime lease, CancellationToken ct)
@@ -230,7 +220,11 @@ public sealed partial class UploadService
                     .SetProperty(session => session.UpdatedAt, dbNow), ct);
             await tx.CommitAsync(ct);
         }
-        catch { }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception error)
+        {
+            logger.LogWarning("恢复上传合并状态失败 {SessionId} {Failure}", id, SafeFailureCode(error));
+        }
     }
 
     private async Task<FileRow?> ConfirmCompletedFileSafelyAsync(string sessionId, CancellationToken ct)
@@ -244,7 +238,12 @@ public sealed partial class UploadService
                 .SingleOrDefaultAsync(ct);
             return file is null ? null : ToRow(file);
         }
-        catch { return null; }
+        catch (Exception error)
+        {
+            logger.LogWarning("确认上传合并提交结果失败 {SessionId} {Failure}",
+                sessionId, SafeFailureCode(error));
+            return null;
+        }
     }
 
     private const int FileSummaryDelayMinutes = 2;

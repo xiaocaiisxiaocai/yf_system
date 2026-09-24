@@ -39,9 +39,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime")
+                        .HasColumnType("datetime(3)")
                         .HasColumnName("created_at")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
 
                     b.Property<string>("Detail")
                         .HasColumnType("json")
@@ -207,9 +207,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime")
+                        .HasColumnType("datetime(3)")
                         .HasColumnName("created_at")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
 
                     b.Property<string>("DedupeKey")
                         .HasMaxLength(128)
@@ -283,6 +283,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.HasIndex("Status", "RetryCount")
                         .HasDatabaseName("idx_outbox_status");
+
+                    b.HasIndex("Status", "CreatedAt", "Id")
+                        .HasDatabaseName("idx_outbox_status_created");
 
                     b.ToTable("email_outbox", (string)null);
 
@@ -418,9 +421,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime")
+                        .HasColumnType("datetime(3)")
                         .HasColumnName("created_at")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
 
                     b.Property<DateTime?>("DeletedAt")
                         .HasColumnType("datetime(3)")
@@ -525,12 +528,12 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime")
+                        .HasColumnType("datetime(3)")
                         .HasColumnName("created_at")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
 
                     b.Property<DateTime?>("DeletedAt")
-                        .HasColumnType("datetime")
+                        .HasColumnType("datetime(3)")
                         .HasColumnName("deleted_at");
 
                     b.Property<ulong?>("DeletedBy")
@@ -651,9 +654,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.Property<DateTime>("ReadAt")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime")
+                        .HasColumnType("datetime(3)")
                         .HasColumnName("read_at")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
 
                     b.HasKey("MessageId", "UserId");
 
@@ -732,9 +735,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime")
+                        .HasColumnType("datetime(3)")
                         .HasColumnName("created_at")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
 
                     b.Property<ulong>("CreatedBy")
                         .HasColumnType("bigint unsigned")
@@ -799,9 +802,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.Property<DateTime>("UpdatedAt")
                         .ValueGeneratedOnAddOrUpdate()
-                        .HasColumnType("datetime")
+                        .HasColumnType("datetime(3)")
                         .HasColumnName("updated_at")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
 
                     MySqlPropertyBuilderExtensions.UseMySqlComputedColumn(b.Property<DateTime>("UpdatedAt"));
 
@@ -916,6 +919,8 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasDatabaseName("idx_project_activities_project_type_time");
 
                     b.ToTable("project_activities", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectCopy", b =>
@@ -1125,6 +1130,8 @@ namespace Yf.Api.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("project_copy_worker_state", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
 
                     b.HasData(
                         new
@@ -1483,6 +1490,8 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasDatabaseName("idx_project_status_logs_project_time");
 
                     b.ToTable("project_status_logs", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectWorkOrder", b =>
@@ -1928,9 +1937,6 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProjectId")
-                        .HasDatabaseName("fk_us_project");
-
                     b.HasIndex("ResultFileId")
                         .HasDatabaseName("idx_upload_result_file");
 
@@ -2047,6 +2053,9 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnName("user_type");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CreatedBy")
+                        .HasDatabaseName("idx_users_created_by");
 
                     b.HasIndex("DepartmentId")
                         .HasDatabaseName("idx_users_department");
@@ -2192,7 +2201,7 @@ namespace Yf.Api.Infrastructure.Migrations
                     b.HasOne("Yf.Api.Infrastructure.Entities.Message", null)
                         .WithMany()
                         .HasForeignKey("MessageId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_mr_msg");
 
@@ -2481,6 +2490,18 @@ namespace Yf.Api.Infrastructure.Migrations
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.User", b =>
                 {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("CreatedBy")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_users_created_by");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.Department", null)
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_users_department");
+
                     b.HasOne("Yf.Api.Infrastructure.Entities.Supplier", null)
                         .WithMany()
                         .HasForeignKey("SupplierId")

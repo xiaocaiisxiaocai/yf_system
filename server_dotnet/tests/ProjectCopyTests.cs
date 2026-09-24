@@ -13,6 +13,36 @@ namespace Yf.Api.Tests;
 public sealed class ProjectCopyTests
 {
     [Fact(Timeout = 120_000)]
+    public async Task DeletingProjectCancelsPendingMailPreservesHistoryAndPublishesDeletion()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_delete_signal", ct);
+        await database.InitializeBusinessFixtureAsync(ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await database.ExecuteAsync(SeedSql + """
+            INSERT INTO email_outbox(event_type,project_id,recipient_email,subject,body,status,created_at) VALUES
+              ('MESSAGE_CREATED',7102,'pending@example.test','pending','pending','PENDING',UTC_TIMESTAMP()),
+              ('MESSAGE_CREATED',7102,'sent@example.test','sent','sent','SENT',UTC_TIMESTAMP());
+            """, ct);
+
+        var publisher = new RecordingPublisher();
+        var audit = new AuditService([]);
+        var projects = new ProjectService(audit, database.Options, new ProjectGroupStatusService(audit), publisher);
+        await using var conn = await database.Database.OpenAsync(ct);
+        await projects.DeleteAsync(conn, new CurrentUser(1, "admin", "INTERNAL", null), 7102, null, ct);
+
+        Assert.False(await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=7102)", cancellationToken: ct)));
+        var mail = (await conn.QueryAsync<(string Status, ulong? ProjectId)>(new CommandDefinition(
+            "SELECT status AS Status,project_id AS ProjectId FROM email_outbox ORDER BY id",
+            cancellationToken: ct))).ToArray();
+        Assert.Equal(["CANCELLED", "SENT"], mail.Select(row => row.Status));
+        Assert.All(mail, row => Assert.Null(row.ProjectId));
+        var signal = Assert.Single(publisher.Calls);
+        Assert.Equal((7102UL, RealtimeChangeKinds.Project), signal);
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task CompletedSourceCopyUsesCurrentMainDataAndIgnoresRealtimeFailureAfterCommit()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -101,7 +131,7 @@ public sealed class ProjectCopyTests
             // DbClock's UTC value rather than passing only because this server currently runs UTC.
             await conn.ExecuteAsync(new CommandDefinition("""
                 ALTER TABLE projects
-                MODIFY COLUMN updated_at DATETIME NOT NULL DEFAULT '2000-01-01 00:00:00'
+                MODIFY COLUMN updated_at DATETIME(3) NOT NULL DEFAULT '2000-01-01 00:00:00.000'
                 """, cancellationToken: ct));
             var result = Json(await service.CopyAsync(conn, actor, 7101, new() { Name = "复制项目" }, null, ct));
             var targetId = result.RootElement.GetProperty("copy").GetProperty("targetProjectId").GetUInt64();
@@ -286,9 +316,10 @@ public sealed class ProjectCopyTests
     }
     private sealed class RecordingPublisher : IProjectRealtimePublisher
     {
-        internal List<ulong> ProjectIds { get; } = [];
+        internal List<(ulong ProjectId, string Kind)> Calls { get; } = [];
+        internal IReadOnlyList<ulong> ProjectIds => Calls.Select(call => call.ProjectId).ToArray();
         public Task PublishAsync(ulong projectId, string kind, CancellationToken ct = default)
-        { ProjectIds.Add(projectId); return Task.CompletedTask; }
+        { Calls.Add((projectId, kind)); return Task.CompletedTask; }
     }
     private sealed class ThrowingPublisher : IProjectRealtimePublisher
     {

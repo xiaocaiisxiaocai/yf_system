@@ -11,7 +11,7 @@ public static class SystemModule
 {
     public static IServiceCollection AddSystemModule(this IServiceCollection services)
         => services.AddSingleton<SystemService>().AddSingleton<SmtpSettingsService>().AddSingleton<MailService>().AddHostedService<MailWorker>()
-            .AddHostedService<AuditRetentionService>();
+            .AddHostedService<AuditRetentionService>().AddHostedService<OperationalRetentionService>();
 
     public static IEndpointRouteBuilder MapSystemModule(this IEndpointRouteBuilder endpoints)
     {
@@ -50,6 +50,10 @@ public sealed record ConfigBatch(ConfigItem[] Items);
 
 public sealed class SystemService(AppDb db, AuditService audit)
 {
+    // 10,001 is a sentinel: clients display it as "10000+", never as an exact total.
+    internal const int MaximumReportedAuditTotal = 10_001;
+    internal const int MaximumKeywordRangeDays = 31;
+
     public async Task<SystemConfigResponse[]> ListConfigsAsync(CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
@@ -150,16 +154,37 @@ public sealed class SystemService(AppDb db, AuditService audit)
         if (action.Length > 0) query = query.Where(log => log.Action == action);
         if (targetType.Length > 0) query = query.Where(log => log.TargetType == targetType);
         if (targetId.Length > 0) query = query.Where(log => log.TargetId == targetId);
+        DateTime? start = null;
+        DateTime? end = null;
+        foreach (var name in new[] { "start", "end" })
+        {
+            if (string.IsNullOrWhiteSpace(request.Query[name])) continue;
+            if (!DateTimeOffset.TryParse(request.Query[name], CultureInfo.InvariantCulture, DateTimeStyles.None, out var at))
+                throw ApiException.BadRequest("日期参数无效");
+            if (name == "start") start = at.UtcDateTime;
+            else end = at.UtcDateTime;
+        }
         var keyword = request.Query["keyword"].ToString().Trim();
         if (keyword.Length > 0)
         {
+            var now = await DbClock.UtcNowAsync(context, ct, 3);
+            var effectiveEnd = end ?? now;
+            var effectiveStart = start ?? effectiveEnd.AddDays(-30);
+            if (effectiveEnd < effectiveStart)
+                throw ApiException.BadRequest("关键字搜索的结束时间不能早于开始时间");
+            if (effectiveEnd - effectiveStart > TimeSpan.FromDays(MaximumKeywordRangeDays))
+                throw ApiException.BadRequest("关键字搜索时间范围不能超过 31 天，请缩小时间范围");
+            query = query.Where(log => log.CreatedAt >= effectiveStart && log.CreatedAt <= effectiveEnd);
             var pattern = QueryValues.ContainsPattern(keyword);
             query = query.Where(log =>
                 log.EmployeeNo != null && EF.Functions.Like(log.EmployeeNo, pattern, QueryValues.LikeEscape)
                 || EF.Functions.Like(log.Action, pattern, QueryValues.LikeEscape)
                 || log.TargetType != null && EF.Functions.Like(log.TargetType, pattern, QueryValues.LikeEscape)
                 || log.TargetId != null && EF.Functions.Like(log.TargetId, pattern, QueryValues.LikeEscape)
-                || log.Detail != null && EF.Functions.Like(EF.Functions.JsonUnquote(log.Detail), pattern, QueryValues.LikeEscape)
+                || log.Detail != null && EF.Functions.Like(
+                    EF.Functions.Collate(EF.Functions.JsonUnquote(log.Detail), "utf8mb4_unicode_ci"),
+                    pattern,
+                    QueryValues.LikeEscape)
                 || context.Users.Any(user => user.Id == log.UserId && EF.Functions.Like(user.RealName, pattern, QueryValues.LikeEscape)));
         }
         var employeeNo = request.Query["employeeNo"].ToString().Trim();
@@ -168,17 +193,15 @@ public sealed class SystemService(AppDb db, AuditService audit)
             var pattern = QueryValues.ContainsPattern(employeeNo);
             query = query.Where(log => log.EmployeeNo != null && EF.Functions.Like(log.EmployeeNo, pattern, QueryValues.LikeEscape));
         }
-        foreach (var name in new[] { "start", "end" })
-            if (!string.IsNullOrWhiteSpace(request.Query[name]))
-            {
-                if (!DateTimeOffset.TryParse(request.Query[name], CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)) throw ApiException.BadRequest("日期参数无效");
-                var utc = at.UtcDateTime;
-                query = name == "start" ? query.Where(log => log.CreatedAt >= utc) : query.Where(log => log.CreatedAt <= utc);
-            }
+        if (keyword.Length == 0)
+        {
+            if (start is { } startAt) query = query.Where(log => log.CreatedAt >= startAt);
+            if (end is { } endAt) query = query.Where(log => log.CreatedAt <= endAt);
+        }
         if (categoryActions is not null)
             query = query.Where(log => Enumerable.Contains(categoryActions, log.Action));
-        var total = (ulong)await query.LongCountAsync(ct);
-        var rows = await query.OrderByDescending(log => log.Id).Select(log => new AuditRow
+        var total = (ulong)await query.Take(MaximumReportedAuditTotal).LongCountAsync(ct);
+        var rows = await query.OrderByDescending(log => log.CreatedAt).ThenByDescending(log => log.Id).Select(log => new AuditRow
         {
             Id = log.Id, UserId = log.UserId, EmployeeNo = log.EmployeeNo,
             CurrentActorName = context.Users.Where(user => user.Id == log.UserId).Select(user => user.RealName).FirstOrDefault(),

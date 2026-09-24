@@ -60,20 +60,25 @@ if ([string]::IsNullOrWhiteSpace($config.App.ConnectionString) -or [Text.Encodin
 $manifestPath = Join-Path $PackageRoot 'manifest.json'
 if (!(Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Package manifest missing.' }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($manifest.schemaVersion -ne 1) { throw 'Unsupported package manifest schema version.' }
+$knownPaths = @{}
 foreach ($entry in $manifest.files) {
     $file = [IO.Path]::GetFullPath((Join-Path $PackageRoot $entry.path))
-    if (!(Within $file $PackageRoot) -or !(Test-Path -LiteralPath $file -PathType Leaf)) { throw 'Invalid manifest path or missing file.' }
+    $relative = $file.Substring($PackageRoot.Length).TrimStart('\').ToLowerInvariant()
+    if (!(Within $file $PackageRoot) -or $knownPaths.ContainsKey($relative) -or !(Test-Path -LiteralPath $file -PathType Leaf)) { throw 'Invalid, duplicate or missing manifest file.' }
+    if ((Get-Item -LiteralPath $file -Force).Length -ne $entry.bytes) { throw "Package length mismatch: $($entry.path)" }
     if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $entry.sha256) { throw "Package hash mismatch: $($entry.path)" }
+    $knownPaths[$relative] = $true
 }
-$knownPaths = @($manifest.files | ForEach-Object { $_.path.Replace('/','\').ToLowerInvariant() })
 foreach ($actual in Get-ChildItem -LiteralPath $PackageRoot -Recurse -File -Force) {
     $relative = $actual.FullName.Substring($PackageRoot.Length).TrimStart('\').ToLowerInvariant()
-    if ($relative -ne 'manifest.json' -and $knownPaths -notcontains $relative) { throw "Unlisted file in package: $relative" }
+    if ($relative -ne 'manifest.json' -and !$knownPaths.ContainsKey($relative)) { throw "Unlisted file in package: $relative" }
 }
 foreach ($required in @('Yf.Api.dll','Yf.Api.runtimeconfig.json','web.config','wwwroot\index.html','maintenance-common.ps1')) {
     if (!(Test-Path -LiteralPath (Join-Path $PackageRoot $required) -PathType Leaf)) { throw "Missing required payload: $required" }
 }
 . (Join-Path $PackageRoot 'maintenance-common.ps1')
+Assert-YfManifest $PackageRoot | Out-Null
 Assert-YfSeparate @($PackageRoot,$SiteRoot,$ConfigPath,$storage)
 $maintenanceConfig = Read-YfMaintenanceConfig $ConfigPath
 if ($maintenanceConfig.Storage -ne $storage) { throw 'Configuration storage path changed during validation.' }
@@ -95,52 +100,89 @@ if (!$certificate.HasPrivateKey -or $certificate.NotAfter -lt (Get-Date) -or $ce
 $bindingInfo = '*:' + $HttpsPort + ':' + $HostName
 if (Get-WebBinding | Where-Object { $_.bindingInformation -eq $bindingInfo }) { throw 'The requested HTTPS binding is already in use.' }
 
-New-Item -ItemType Directory -Path $SiteRoot -Force | Out-Null
-foreach ($item in Get-ChildItem -LiteralPath $PackageRoot -Force) {
-    if ($item.Name -in @('install-iis.ps1','README.md','appsettings.example.json','manifest.json')) { continue }
-    Copy-Item -LiteralPath $item.FullName -Destination $SiteRoot -Recurse
+$siteRootExisted = Test-Path -LiteralPath $SiteRoot -PathType Container
+$siteRootAcl = if ($siteRootExisted) { Get-Acl -LiteralPath $SiteRoot } else { $null }
+$storageAcl = Get-Acl -LiteralPath $storage
+$configAcl = Get-Acl -LiteralPath $ConfigPath
+$copiedTargets = @()
+$createdPool = $false
+$createdSite = $false
+try {
+    New-Item -ItemType Directory -Path $SiteRoot -Force | Out-Null
+    foreach ($item in Get-ChildItem -LiteralPath $PackageRoot -Force) {
+        if ($item.Name -in @('install-iis.ps1','README.md','appsettings.example.json','manifest.json')) { continue }
+        $destination = Join-Path $SiteRoot $item.Name
+        $copiedTargets += $destination
+        Copy-Item -LiteralPath $item.FullName -Destination $destination -Recurse
+    }
+    Set-YfExternalConfigurationFallback $SiteRoot
+    $webConfigPath = Join-Path $SiteRoot 'web.config'
+    [xml]$webConfig = Get-Content -LiteralPath $webConfigPath -Raw -Encoding UTF8
+    $asp = $webConfig.SelectSingleNode('//aspNetCore')
+    if (!$asp) { throw 'Published ASP.NET Core IIS configuration missing.' }
+    $environment = $asp.SelectSingleNode('environmentVariables')
+    if (!$environment) { $environment = $webConfig.CreateElement('environmentVariables'); $asp.AppendChild($environment) | Out-Null }
+    foreach ($pair in @(@('YF_CONFIG_PATH',$ConfigPath),@('ASPNETCORE_ENVIRONMENT','Production'))) {
+        $node = $webConfig.CreateElement('environmentVariable'); $node.SetAttribute('name',$pair[0]); $node.SetAttribute('value',$pair[1]); $environment.AppendChild($node) | Out-Null
+    }
+    $webConfig.Save($webConfigPath)
+    # Realtime collaboration prefers WebSockets. Without the IIS WebSocket Protocol role service
+    # (Windows Server feature Web-WebSockets) SignalR falls back to slower transports or polling.
+    if (!(Get-WebGlobalModule -Name 'WebSocketModule' -ErrorAction SilentlyContinue)) {
+        Write-Warning 'IIS WebSocket Protocol is not installed (Install-WindowsFeature Web-WebSockets). Realtime updates will fall back to slower transports.'
+    }
+    New-WebAppPool -Name $AppPoolName | Out-Null
+    $createdPool = $true
+    Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name managedRuntimeVersion -Value ''
+    Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.identityType -Value 'ApplicationPoolIdentity'
+    Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.loadUserProfile -Value $false
+    Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.maxProcesses -Value 1
+    Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name startMode -Value AlwaysRunning
+    Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.idleTimeout -Value ([TimeSpan]::Zero)
+    Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name enable32BitAppOnWin64 -Value $false
+    $installedPool = Get-Item "IIS:\AppPools\$AppPoolName"
+    Assert-YfApplicationPoolProcessModel ($installedPool.processModel.identityType.ToString()) ([bool]$installedPool.processModel.loadUserProfile) ([int]$installedPool.processModel.maxProcesses)
+    $identity = 'IIS AppPool\' + $AppPoolName
+    & icacls.exe $SiteRoot /grant "${identity}:(OI)(CI)RX" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application read permissions.' }
+    & icacls.exe $storage /grant "${identity}:(OI)(CI)M" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to grant storage permissions.' }
+    Protect-YfConfigurationFile $ConfigPath $identity
+    New-Website -Name $SiteName -PhysicalPath $SiteRoot -ApplicationPool $AppPoolName -Port $HttpsPort -HostHeader $HostName -Ssl -SslFlags 1 | Out-Null
+    $createdSite = $true
+    # Browser SignalR handshakes carry a short-lived access_token in the query string.
+    # Keep request metadata while excluding URI Query from this application's IIS log.
+    Set-ItemProperty "IIS:\Sites\$SiteName" -Name logFile.logExtFileFlags -Value 'Date,Time,ClientIP,UserName,SiteName,ServerIP,Method,UriStem,ServerPort,UserAgent,HttpStatus,HttpSubStatus,Win32Status,TimeTaken'
+    $binding = Get-WebBinding -Name $SiteName -Protocol https
+    $binding.AddSslCertificate($thumb,'My')
+    Set-ItemProperty "IIS:\Sites\$SiteName" -Name applicationDefaults.preloadEnabled -Value $true
+    Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $SiteName -Filter 'system.webServer/security/requestFiltering/requestLimits' -Name maxAllowedContentLength -Value 67108864
+    Start-WebAppPool -Name $AppPoolName
+    Start-Website -Name $SiteName
+    Write-Host "Installed new site: $origin"
+    Write-Host "Check $origin/health and browser login from the target network. Database was not initialized or migrated by this installer."
+} catch {
+    $originalError = $_
+    $cleanupErrors = @()
+    if ($createdSite -or (Test-Path "IIS:\Sites\$SiteName")) {
+        try { Remove-Website -Name $SiteName } catch { $cleanupErrors += 'IIS site' }
+    }
+    if ($createdPool -or (Test-Path "IIS:\AppPools\$AppPoolName")) {
+        try {
+            if ((Get-WebAppPoolState -Name $AppPoolName -ErrorAction SilentlyContinue).Value -eq 'Started') { Stop-WebAppPool -Name $AppPoolName }
+            Remove-WebAppPool -Name $AppPoolName
+        } catch { $cleanupErrors += 'application pool' }
+    }
+    try { Set-Acl -LiteralPath $storage -AclObject $storageAcl } catch { $cleanupErrors += 'storage ACL' }
+    try { Set-Acl -LiteralPath $ConfigPath -AclObject $configAcl } catch { $cleanupErrors += 'configuration ACL' }
+    foreach ($target in $copiedTargets) {
+        try { if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force } } catch { $cleanupErrors += $target }
+    }
+    if ($siteRootExisted) {
+        try { Set-Acl -LiteralPath $SiteRoot -AclObject $siteRootAcl } catch { $cleanupErrors += 'site root ACL' }
+    } else {
+        try { if (Test-Path -LiteralPath $SiteRoot) { Remove-Item -LiteralPath $SiteRoot -Force } } catch { $cleanupErrors += 'site root' }
+    }
+    if ($cleanupErrors.Count) { Write-Warning ('Installation failed and rollback was incomplete: ' + ($cleanupErrors -join ', ')) }
+    throw $originalError
 }
-Set-YfExternalConfigurationFallback $SiteRoot
-$webConfigPath = Join-Path $SiteRoot 'web.config'
-[xml]$webConfig = Get-Content -LiteralPath $webConfigPath -Raw -Encoding UTF8
-$asp = $webConfig.SelectSingleNode('//aspNetCore')
-if (!$asp) { throw 'Published ASP.NET Core IIS configuration missing.' }
-$environment = $asp.SelectSingleNode('environmentVariables')
-if (!$environment) { $environment = $webConfig.CreateElement('environmentVariables'); $asp.AppendChild($environment) | Out-Null }
-foreach ($pair in @(@('YF_CONFIG_PATH',$ConfigPath),@('ASPNETCORE_ENVIRONMENT','Production'))) {
-    $node = $webConfig.CreateElement('environmentVariable'); $node.SetAttribute('name',$pair[0]); $node.SetAttribute('value',$pair[1]); $environment.AppendChild($node) | Out-Null
-}
-$webConfig.Save($webConfigPath)
-# Realtime collaboration prefers WebSockets. Without the IIS WebSocket Protocol role service
-# (Windows Server feature Web-WebSockets) SignalR falls back to slower transports or polling.
-if (!(Get-WebGlobalModule -Name 'WebSocketModule' -ErrorAction SilentlyContinue)) {
-    Write-Warning 'IIS WebSocket Protocol is not installed (Install-WindowsFeature Web-WebSockets). Realtime updates will fall back to slower transports.'
-}
-New-WebAppPool -Name $AppPoolName | Out-Null
-Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name managedRuntimeVersion -Value ''
-Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.identityType -Value 'ApplicationPoolIdentity'
-Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.loadUserProfile -Value $false
-Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.maxProcesses -Value 1
-Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name startMode -Value AlwaysRunning
-Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.idleTimeout -Value ([TimeSpan]::Zero)
-Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name enable32BitAppOnWin64 -Value $false
-$installedPool = Get-Item "IIS:\AppPools\$AppPoolName"
-Assert-YfApplicationPoolProcessModel ($installedPool.processModel.identityType.ToString()) ([bool]$installedPool.processModel.loadUserProfile) ([int]$installedPool.processModel.maxProcesses)
-$identity = 'IIS AppPool\' + $AppPoolName
-& icacls.exe $SiteRoot /grant "${identity}:(OI)(CI)RX" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application read permissions.' }
-& icacls.exe $storage /grant "${identity}:(OI)(CI)M" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Unable to grant storage permissions.' }
-Protect-YfConfigurationFile $ConfigPath $identity
-New-Website -Name $SiteName -PhysicalPath $SiteRoot -ApplicationPool $AppPoolName -Port $HttpsPort -HostHeader $HostName -Ssl -SslFlags 1 | Out-Null
-# Browser SignalR handshakes carry a short-lived access_token in the query string.
-# Keep request metadata while excluding URI Query from this application's IIS log.
-Set-ItemProperty "IIS:\Sites\$SiteName" -Name logFile.logExtFileFlags -Value 'Date,Time,ClientIP,UserName,SiteName,ServerIP,Method,UriStem,ServerPort,UserAgent,HttpStatus,HttpSubStatus,Win32Status,TimeTaken'
-$binding = Get-WebBinding -Name $SiteName -Protocol https
-$binding.AddSslCertificate($thumb,'My')
-Set-ItemProperty "IIS:\Sites\$SiteName" -Name applicationDefaults.preloadEnabled -Value $true
-Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $SiteName -Filter 'system.webServer/security/requestFiltering/requestLimits' -Name maxAllowedContentLength -Value 67108864
-Start-WebAppPool -Name $AppPoolName
-Start-Website -Name $SiteName
-Write-Host "Installed new site: $origin"
-Write-Host "Check $origin/health and browser login from the target network. Database was not initialized or migrated by this installer."

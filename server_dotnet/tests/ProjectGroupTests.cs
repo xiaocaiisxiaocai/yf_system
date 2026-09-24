@@ -244,6 +244,26 @@ public sealed class ProjectGroupTests
         Assert.Equal("WO-NEW", rows[1].WorkOrders);
         Assert.Equal(8503UL, rows[1].ResponsibleUserId);
         Assert.Equal(8502UL, rows[1].SectionId);
+
+        var auditCount = await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM audit_logs WHERE action IN ('PROJECT_GROUP_UPDATE','PROJECT_UPDATE')",
+            cancellationToken: ct));
+        var activeUpdatedAt = rows[1].UpdatedAt;
+        await groups.UpdateAsync(conn, actor, groupId, new ProjectUpsertRequest
+        {
+            Name = "冻结测试主项目-更新",
+            SupplierId = 8501,
+            WorkOrderNos = ["WO-NEW"],
+            MachineModel = "新机型",
+            RobotPartId = 8505,
+            PriorityId = 8506,
+            ExpectedCompletionDate = "2027-01-01",
+        }, null, ct);
+        Assert.Equal(auditCount, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM audit_logs WHERE action IN ('PROJECT_GROUP_UPDATE','PROJECT_UPDATE')",
+            cancellationToken: ct)));
+        Assert.Equal(activeUpdatedAt, await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
+            "SELECT updated_at FROM projects WHERE id=@Id", new { Id = childIds[1] }, cancellationToken: ct)));
     }
 
     private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web)));

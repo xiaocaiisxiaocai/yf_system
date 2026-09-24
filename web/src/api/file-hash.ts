@@ -54,9 +54,26 @@ export function createChunkHasher(): ChunkHasher {
   }
   let nextId = 0
   const pending = new Map<number, { blob: Blob; resolve: (digest: string) => void; reject: (error: Error) => void }>()
+  const queued: number[] = []
+  let inFlight: number | undefined
+  let disposed = false
+  const pump = () => {
+    if (!worker || inFlight !== undefined || disposed) return
+    const id = queued.shift()
+    if (id === undefined) return
+    const request = pending.get(id)
+    if (!request) {
+      pump()
+      return
+    }
+    inFlight = id
+    worker.postMessage({ id, blob: request.blob })
+  }
   const fallBackToMainThread = () => {
     worker?.terminate()
     worker = null
+    inFlight = undefined
+    queued.length = 0
     for (const [id, request] of pending) {
       pending.delete(id)
       blobSha256(request.blob).then(request.resolve, request.reject)
@@ -68,8 +85,10 @@ export function createChunkHasher(): ChunkHasher {
       const request = pending.get(message.id)
       if (!request) return
       pending.delete(message.id)
+      if (inFlight === message.id) inFlight = undefined
       if (message.type === 'done') request.resolve(message.digest)
       else request.reject(new Error(message.message))
+      pump()
     }
     worker.onerror = (event) => {
       // 脚本加载失败（例如被策略拦截）时退回主线程，而不是让上传失败。
@@ -79,17 +98,22 @@ export function createChunkHasher(): ChunkHasher {
   }
   return {
     sha256(blob) {
+      if (disposed) return Promise.reject(new Error('上传已取消'))
       const active = worker
       if (!active) return blobSha256(blob)
       return new Promise<string>((resolve, reject) => {
         const id = ++nextId
         pending.set(id, { blob, resolve, reject })
-        active.postMessage({ id, blob })
+        queued.push(id)
+        pump()
       })
     },
     dispose() {
+      disposed = true
       worker?.terminate()
       worker = null
+      inFlight = undefined
+      queued.length = 0
       for (const request of pending.values()) request.reject(new Error('上传已取消'))
       pending.clear()
     },

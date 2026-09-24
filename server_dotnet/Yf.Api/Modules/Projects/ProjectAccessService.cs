@@ -31,8 +31,9 @@ public static class ProjectAccessService
         }
         if (await HasPermissionAsync(db, current.Id, "project:view_all", ct)) return db.Projects;
         var userId = current.Id;
+        var createdGroupIds = db.ProjectGroups.Where(group => group.CreatedBy == userId).Select(group => group.Id);
         return db.Projects.Where(project => project.ResponsibleUserId == userId
-            || db.ProjectGroups.Any(group => group.Id == project.ProjectGroupId && group.CreatedBy == userId));
+            || createdGroupIds.Contains(project.ProjectGroupId));
     }
 
     public static async Task<ProjectAccess> RequireViewAsync(
@@ -162,9 +163,6 @@ public static class ProjectAccessService
         {
             if (current.SupplierId is null || current.SupplierId.Value != access.SupplierId)
                 throw ApiException.OutOfScope();
-            if (!await db.Suppliers.AnyAsync(
-                    supplier => supplier.Id == current.SupplierId.Value && supplier.Status == AccountStatuses.Active, ct))
-                throw ApiException.OutOfScope();
             return access;
         }
         if (access.ResponsibleUserId == current.Id
@@ -194,4 +192,10 @@ internal static class ProjectStatuses
     internal const string PendingConfirmation = "PENDING_CONFIRMATION";
     internal const string Completed = "COMPLETED";
     internal const string Terminated = "TERMINATED";
+}
+
+internal static class ProjectUploadSessionStatuses
+{
+    internal const string Uploading = "UPLOADING";
+    internal const string Merging = "MERGING";
 }

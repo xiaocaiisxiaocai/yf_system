@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
@@ -11,12 +12,13 @@ public sealed class IdentityService(
     LoginRateLimiter loginRateLimiter,
     TokenService tokens,
     PermissionService permissions,
-    AuditService audit)
+    AuditService audit,
+    ILogger<IdentityService>? logger = null)
 {
     internal const int MaximumFailedLogins = 10;
     internal const int LoginLockMinutes = 15;
 
-    public async Task<(LoginResponse Response, string Refresh)> LoginAsync(LoginRequest request, string clientIp, CancellationToken ct)
+    public async Task<(LoginResponse Response, string Refresh, DateTime RefreshExpiresAt)> LoginAsync(LoginRequest request, string clientIp, CancellationToken ct)
     {
         var employeeNo = request.EmployeeNo?.Trim() ?? "";
         if (employeeNo.Length == 0 || string.IsNullOrEmpty(request.Password)) throw ApiException.BadRequest("工号和密码不能为空");
@@ -100,10 +102,10 @@ public sealed class IdentityService(
             grants.Permissions, grants.Menus, await BriefAsync(context, user, ct));
         await tx.CommitAsync(ct);
         await AuditBestEffortAsync(context.Database.Connection(), user.Id, user.EmployeeNo, "LOGIN", null, null, null, clientIp, ct);
-        return (response, refresh);
+        return (response, refresh.Token, refresh.ExpiresAt);
     }
 
-    public async Task<(LoginResponse Response, string Refresh)> RefreshAsync(string refreshToken, string clientIp, CancellationToken ct)
+    public async Task<(LoginResponse Response, string Refresh, DateTime RefreshExpiresAt)> RefreshAsync(string refreshToken, string clientIp, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(refreshToken)) throw ApiException.Unauthorized("缺少登录凭证");
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -111,7 +113,7 @@ public sealed class IdentityService(
         var found = await context.RefreshTokens.AsNoTracking().SingleOrDefaultAsync(t => t.TokenHash == hash, ct)
                     ?? throw ApiException.Unauthorized("登录状态无效");
         await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
-        await AccessService.LockManagementAsync(context.Database.Connection(), context.Database.RequireTransaction(), ct);
+        await AccessService.LockBusinessAsync(context.Database.Connection(), context.Database.RequireTransaction(), ct);
         var user = await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id = {found.UserId} FOR UPDATE").SingleOrDefaultAsync(ct)
                    ?? throw ApiException.Unauthorized("账号不存在");
         var row = await context.RefreshTokens.FromSqlInterpolated($"SELECT * FROM refresh_tokens WHERE id = {found.Id} FOR UPDATE").SingleOrDefaultAsync(ct)
@@ -142,7 +144,7 @@ public sealed class IdentityService(
         var response = new LoginResponse(accessToken.Token, accessToken.ExpiresAt, user.MustChangePassword,
             grants.Permissions, grants.Menus, await BriefAsync(context, user, ct));
         await tx.CommitAsync(ct);
-        return (response, next);
+        return (response, next.Token, next.ExpiresAt);
     }
 
     public async Task LogoutAsync(string? refreshToken, string? authorization, string clientIp, CancellationToken ct)
@@ -166,11 +168,14 @@ public sealed class IdentityService(
                 if (await HasActiveSessionAsync(context.Database.Connection(), null, claim.UserId, claim.SessionId, ct))
                     targets.Add((claim.UserId, claim.SessionId));
             }
-            catch { }
+            catch (Exception ex) when (ex is ApiException or SecurityTokenException or ArgumentException or FormatException)
+            {
+                logger?.LogDebug(ex, "Ignoring an invalid access token supplied during logout");
+            }
         }
         if (targets.Count == 0) return;
         await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
-        await AccessService.LockManagementAsync(context.Database.Connection(), context.Database.RequireTransaction(), ct);
+        await AccessService.LockBusinessAsync(context.Database.Connection(), context.Database.RequireTransaction(), ct);
         foreach (var uid in targets.Select(x => x.UserId).Distinct().Order())
             await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id = {uid} FOR UPDATE").AsNoTracking().SingleOrDefaultAsync(ct);
         foreach (var target in targets)
@@ -186,6 +191,17 @@ public sealed class IdentityService(
         if (string.IsNullOrEmpty(request.OldPassword)) throw ApiException.BadRequest("原密码错误");
         if (!loginRateLimiter.AllowPasswordChange(current.Id))
             throw ApiException.PasswordRateLimited("密码校验尝试过于频繁，请稍后再试");
+        if (string.Equals(request.OldPassword, request.NewPassword, StringComparison.Ordinal))
+            throw ApiException.BadRequest("新密码不能与当前密码相同");
+        PasswordService.Validate(request.NewPassword);
+
+        User snapshot;
+        await using (var lookup = await dbFactory.CreateDbContextAsync(ct))
+            snapshot = await lookup.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Id == current.Id, ct) ?? throw ApiException.NotFound();
+        if (!await PasswordService.VerifyForPasswordChangeAsync(request.OldPassword, snapshot.PasswordHash, ct))
+            throw ApiException.BadRequest("原密码错误");
+        var replacementHash = await PasswordService.HashAsync(request.NewPassword, ct);
+
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         await AccessService.LockManagementAsync(context.Database.Connection(), context.Database.RequireTransaction(), ct);
@@ -194,11 +210,9 @@ public sealed class IdentityService(
             || current.SessionId is string sessionId && !await HasActiveSessionAsync(
                 context.Database.Connection(), context.Database.RequireTransaction(), current.Id, sessionId, ct))
             throw ApiException.Forbidden();
-        if (!await PasswordService.VerifyAsync(request.OldPassword, user.PasswordHash, ct)) throw ApiException.BadRequest("原密码错误");
-        if (string.Equals(request.OldPassword, request.NewPassword, StringComparison.Ordinal))
-            throw ApiException.BadRequest("新密码不能与当前密码相同");
-        PasswordService.Validate(request.NewPassword);
-        user.PasswordHash = await PasswordService.HashAsync(request.NewPassword, ct);
+        if (!string.Equals(user.PasswordHash, snapshot.PasswordHash, StringComparison.Ordinal))
+            throw ApiException.Conflict("密码已被其他操作修改，请重新登录");
+        user.PasswordHash = replacementHash;
         user.MustChangePassword = false;
         user.FailedLoginAttempts = 0;
         user.LockedUntil = null;
@@ -263,10 +277,11 @@ public sealed class IdentityService(
             .ExecuteUpdateAsync(setters => setters.SetProperty(token => token.Revoked, true), ct);
     }
 
-    private async Task<string> IssueRefreshAsync(YfDbContext context, ulong userId, string sessionId, string clientIp,
+    private async Task<IssuedRefresh> IssueRefreshAsync(YfDbContext context, ulong userId, string sessionId, string clientIp,
         DateTime dbNow, DateTime sessionCreatedAt, DateTime sessionExpiresAt, CancellationToken ct)
     {
         var raw = TokenService.NewRefreshToken();
+        var expiresAt = Min(dbNow.AddDays(options.RefreshTtlDays), sessionExpiresAt);
         context.RefreshTokens.Add(new RefreshToken
         {
             UserId = userId,
@@ -274,13 +289,13 @@ public sealed class IdentityService(
             TokenHash = TokenService.HashRefreshToken(raw),
             SessionCreatedAt = sessionCreatedAt,
             SessionExpiresAt = sessionExpiresAt,
-            ExpiresAt = Min(dbNow.AddDays(options.RefreshTtlDays), sessionExpiresAt),
+            ExpiresAt = expiresAt,
             Revoked = false,
             Ip = clientIp,
             CreatedAt = dbNow
         });
         await context.SaveChangesAsync(ct);
-        return raw;
+        return new(raw, expiresAt);
     }
 
     private static DateTime Min(DateTime left, DateTime right) => left <= right ? left : right;
@@ -310,6 +325,19 @@ public sealed class IdentityService(
     private async Task AuditBestEffortAsync(MySqlConnection conn, ulong? userId, string? employeeNo, string action,
         string? targetType, ulong? targetId, object? detail, string? ip, CancellationToken ct)
     {
-        try { await audit.WriteAsync(conn, null, userId, action, targetType, targetId, detail, ip, ct, employeeNo); } catch { }
+        try
+        {
+            await audit.WriteAsync(conn, null, userId, action, targetType, targetId, detail, ip, ct, employeeNo);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Best-effort identity audit failed for {Action}", action);
+        }
     }
+
+    private sealed record IssuedRefresh(string Token, DateTime ExpiresAt);
 }

@@ -479,11 +479,11 @@ def run_business_acceptance(client, Client, conn, check):
     supplier_b_client.call("GET", f"/api/v1/projects/{project_a}/messages", expected=403)
     supplier_b_client.call("GET", f"/api/v1/projects/{project_a}/files", expected=403)
     supplier_b_client.call("GET", f"/api/v1/messages/{message_a[0]}/reads", expected=403)
-    supplier_b_client.call("GET", f"/api/v1/files/{file_a_company}/content", expected=403, raw=True)
-    supplier_b_client.call("GET", f"/api/v1/files/{file_a_company}/download", expected=403, raw=True)
+    supplier_b_client.call("GET", f"/api/v1/files/{file_a_company}/content", expected=404, raw=True)
+    supplier_b_client.call("GET", f"/api/v1/files/{file_a_company}/download", expected=404, raw=True)
     supplier_b_client.call("POST", "/api/v1/files/batch-download", {
         "ids": [file_a_company, file_a_supplier],
-    }, expected=403)
+    }, expected=404)
     foreign_b_bytes = b"supplier-b-must-not-upload-to-company-a"
     supplier_b_client.call(
         "POST", "/api/v1/uploads/init",
@@ -498,11 +498,11 @@ def run_business_acceptance(client, Client, conn, check):
     supplier_a_client.call("GET", f"/api/v1/projects/{project_b}/messages", expected=403)
     supplier_a_client.call("GET", f"/api/v1/projects/{project_b}/files", expected=403)
     supplier_a_client.call("GET", f"/api/v1/messages/{message_b[0]}/reads", expected=403)
-    supplier_a_client.call("GET", f"/api/v1/files/{file_b_supplier}/content", expected=403, raw=True)
-    supplier_a_client.call("GET", f"/api/v1/files/{file_b_supplier}/download", expected=403, raw=True)
+    supplier_a_client.call("GET", f"/api/v1/files/{file_b_supplier}/content", expected=404, raw=True)
+    supplier_a_client.call("GET", f"/api/v1/files/{file_b_supplier}/download", expected=404, raw=True)
     supplier_a_client.call("POST", "/api/v1/files/batch-download", {
         "ids": [file_b_company, file_b_supplier],
-    }, expected=403)
+    }, expected=404)
     foreign_a_bytes = b"supplier-a-must-not-upload-to-company-b"
     supplier_a_client.call(
         "POST", "/api/v1/uploads/init",

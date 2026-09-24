@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Button, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
@@ -12,6 +12,7 @@ import PdfPreview from './PdfPreview'
 import { useCollaboration } from '../store/collaboration'
 import type { ApiResponses } from '../api/types'
 import { downloadFile, downloadFiles } from '../api/download'
+import { PreviewWatermark } from './PreviewWatermark'
 
 // Excel 解析器仅在用户真正打开工作簿预览时按需加载
 const ExcelPreview = lazy(() => import('./ExcelPreview'))
@@ -41,19 +42,6 @@ function previewKind(ext: string, sizeBytes = 0): 'excel' | 'pdf' | 'pptx' | 'vi
   // PDF.js 同样会在浏览器内完整缓冲文件；较大文件仅允许下载。
   if (ext === 'pdf' && sizeBytes <= PDF_PREVIEW_MAX_BYTES) return 'pdf'
   return 'none'
-}
-
-function formatWatermarkTime(value = new Date()) {
-  const pad = (part: number) => String(part).padStart(2, '0')
-  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`
-}
-
-function PreviewWatermark({ employeeNo, realName }: { employeeNo?: string; realName?: string }) {
-  const [openedAt] = useState(() => new Date())
-  const label = `${employeeNo?.trim() || '未知'} ${realName?.trim() || '未知'} ${formatWatermarkTime(openedAt)}`
-  return <div className="preview-watermark" aria-hidden="true">
-    {Array.from({ length: 18 }, (_, index) => <span key={index}>{label}</span>)}
-  </div>
 }
 
 function WatermarkedPreview({ employeeNo, realName, children }: { employeeNo?: string; realName?: string; children: ReactNode }) {
@@ -166,11 +154,65 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
     }
   }
 
-  const remove = async (f: FileItem) => {
-    await http.delete<ApiResponses['DELETE /files/{id}']>(`/files/${f.id}`)
-    Message.success('已删除')
-    load()
-  }
+  const remove = useCallback(async (f: FileItem) => {
+    try {
+      await http.delete<ApiResponses['DELETE /files/{id}']>(`/files/${f.id}`)
+      Message.success('已删除')
+      load()
+    } catch {
+      // 请求层已显示错误；确认框收到已处理的 Promise，避免全局 unhandledrejection。
+    }
+  }, [load])
+
+  const columns = useMemo(() => [
+    {
+      title: '文件名',
+      dataIndex: 'originalName',
+      width: 200,
+      ellipsis: true,
+      render: (v: string, r: FileItem) => (
+        <Space size={4} className="file-name-cell">
+          <span className="table-cell-text" title={v}>{v}</span>
+          {r.isCopiedReference && (
+            <Tooltip content={onOpenCopyHistory ? '由项目复制产生，点击查看复制履历' : '由项目复制产生的独立文件'}>
+              {onOpenCopyHistory ? (
+                <Button className="file-reference-button" size="mini" type="text"
+                  aria-label={`查看文件「${v}」的复制履历`} onClick={onOpenCopyHistory}>复制件</Button>
+              ) : <Tag className="file-reference-tag" color="arcoblue">复制件</Tag>}
+            </Tooltip>
+          )}
+          {previewKind(r.ext, r.sizeBytes) !== 'none' && hasPerm('file:preview') && (
+            <Tooltip content="在线预览">
+              <Button size="mini" type="text" icon={<IconEye />} aria-label="预览文件" onClick={() => setPreview(r)} />
+            </Tooltip>
+          )}
+        </Space>
+      ),
+    },
+    {
+      title: '方向', dataIndex: 'direction', width: 130, align: 'center' as const,
+      render: (v: string) => v === 'C2S'
+        ? <Tag color="arcoblue">公司 → 供应商</Tag>
+        : <Tag color="purple">供应商 → 公司</Tag>,
+    },
+    { title: '大小', dataIndex: 'sizeBytes', width: 90, align: 'center' as const, render: fmtSize },
+    { title: '上传人', dataIndex: 'uploaderName', width: 90, align: 'center' as const, ellipsis: true },
+    { title: '上传时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
+    {
+      title: '操作', width: 140, fixed: 'right' as const, align: 'center' as const,
+      render: (_: unknown, r: FileItem) => actionSlots([
+        hasPerm('file:download') && (
+          <Button key="download" size="mini" type="text" icon={<IconDownload />} aria-label="下载文件"
+            onClick={() => { void downloadFile(r.id).catch(() => undefined) }}>下载</Button>
+        ),
+        r.canDelete && projectStatus === 'IN_PROGRESS' && (
+          <Popconfirm key="delete" title={`删除文件「${r.originalName}」？`} onOk={() => remove(r)}>
+            <Button size="mini" type="text" status="danger" icon={<IconDelete />} aria-label="删除文件">删除</Button>
+          </Popconfirm>
+        ),
+      ], 'file'),
+    },
+  ], [hasPerm, onOpenCopyHistory, projectStatus, remove])
 
   return (
     <div>
@@ -237,69 +279,7 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
             onChange: (keys) => setSelected(keys as number[]),
           } : undefined}
           scroll={{ x: 960 }}
-          columns={[
-          {
-            title: '文件名',
-            dataIndex: 'originalName',
-            width: 200,
-            ellipsis: true,
-            render: (v: string, r: FileItem) => (
-              <Space size={4} className="file-name-cell">
-                <span className="table-cell-text" title={v}>{v}</span>
-                {r.isCopiedReference && (
-                  <Tooltip content={onOpenCopyHistory ? '由项目复制产生，点击查看复制履历' : '由项目复制产生的独立文件'}>
-                    {onOpenCopyHistory ? (
-                      <Button
-                        className="file-reference-button"
-                        size="mini"
-                        type="text"
-                        aria-label={`查看文件「${v}」的复制履历`}
-                        onClick={onOpenCopyHistory}
-                      >
-                        复制件
-                      </Button>
-                    ) : <Tag className="file-reference-tag" color="arcoblue">复制件</Tag>}
-                  </Tooltip>
-                )}
-                {previewKind(r.ext, r.sizeBytes) !== 'none' && hasPerm('file:preview') && (
-                  <Tooltip content="在线预览">
-                    <Button size="mini" type="text" icon={<IconEye />} aria-label="预览文件" onClick={() => setPreview(r)} />
-                  </Tooltip>
-                )}
-              </Space>
-            ),
-          },
-          {
-            title: '方向',
-            dataIndex: 'direction',
-            width: 130,
-            align: 'center' as const,
-            render: (v: string) =>
-              v === 'C2S' ? <Tag color="arcoblue">公司 → 供应商</Tag> : <Tag color="purple">供应商 → 公司</Tag>,
-          },
-          { title: '大小', dataIndex: 'sizeBytes', width: 90, align: 'center' as const, render: fmtSize },
-          { title: '上传人', dataIndex: 'uploaderName', width: 90, align: 'center' as const, ellipsis: true },
-          { title: '上传时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
-          {
-            title: '操作',
-            width: 140,
-            fixed: 'right' as const,
-            align: 'center' as const,
-            render: (_: unknown, r: FileItem) => actionSlots([
-              hasPerm('file:download') && (
-                <Button key="download" size="mini" type="text" icon={<IconDownload />} aria-label="下载文件"
-                  onClick={() => { void downloadFile(r.id).catch(() => undefined) }}>
-                  下载
-                </Button>
-              ),
-              r.canDelete && projectStatus === 'IN_PROGRESS' && (
-                <Popconfirm key="delete" title={`删除文件「${r.originalName}」？`} onOk={() => remove(r)}>
-                  <Button size="mini" type="text" status="danger" icon={<IconDelete />} aria-label="删除文件">删除</Button>
-                </Popconfirm>
-              ),
-            ], 'file'),
-          },
-          ]}
+          columns={columns}
           pagination={{
             total: data.total,
             current: page,
@@ -357,7 +337,7 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'video' && (
           <Suspense fallback={<div role="status">加载视频播放器…</div>}>
-            <VideoPreview fileId={preview.id} />
+            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><VideoPreview fileId={preview.id} /></WatermarkedPreview>
           </Suspense>
         )}
       </Modal>

@@ -39,6 +39,8 @@ public sealed class ApiErrorMiddleware(RequestDelegate next, ILogger<ApiErrorMid
                 ApiException api => api,
                 JsonException => ApiException.BadRequest("请求格式不正确"),
                 BadHttpRequestException bad => new ApiException(bad.StatusCode, 40001, "请求格式不正确"),
+                IOException io when (io.HResult & 0xffff) is 0x70 or 0x27 =>
+                    new ApiException(StatusCodes.Status507InsufficientStorage, 50701, "存储空间不足，请联系管理员"),
                 MySqlException sql when sql.Number == 1062 => ApiException.Conflict("数据已存在，请刷新后重试"),
                 DbUpdateException { InnerException: MySqlException { Number: 1062 } } => ApiException.Conflict("数据已存在，请刷新后重试"),
                 // InnoDB rolled the statement or transaction back; nothing was committed and a retry is safe.

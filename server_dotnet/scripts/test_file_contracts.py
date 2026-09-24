@@ -234,12 +234,14 @@ def run_file_checks(client, conn, check, pid, fid):
     supplier_client = type(client)(client.base)
     supplier_client.login(employee, password)
     listing = supplier_client.call("GET", f"/api/v1/projects/{pid}/files?targetId={disposable_fid}")
-    supplier_client.call("DELETE", f"/api/v1/files/{disposable_fid}", expected=403)
+    # Destructive file endpoints deliberately collapse authorization failures to
+    # 404 so callers cannot use them as a separate file-existence oracle.
+    supplier_client.call("DELETE", f"/api/v1/files/{disposable_fid}", expected=404)
     with conn.cursor() as cursor:
         cursor.execute("SELECT status FROM files WHERE id=%s", (disposable_fid,))
         status_after_denial = cursor.fetchone()[0]
     check(
-        "file delete permission is reflected and enforced",
+        "file delete permission is reflected and hidden-denial is side-effect free",
         len(listing["list"]) == 1
         and listing["list"][0]["canDelete"] is False
         and status_after_denial == "AVAILABLE",
@@ -298,8 +300,8 @@ def run_file_checks(client, conn, check, pid, fid):
     out_of_scope_client = _new_internal_with_permissions(
         client, conn, ["project:list", "file:preview"])
     out_of_scope_client.call(
-        "GET", f"/api/v1/files/{image_file_ids['png']}/content", expected=403)
-    check("image preview denies a permitted user outside the project scope", True)
+        "GET", f"/api/v1/files/{image_file_ids['png']}/content", expected=404)
+    check("image preview hides file existence from a permitted user outside the project scope", True)
 
     zip_bytes = b"PK\x03\x04file preview boundary"
     zip_fid = _insert_available_file(

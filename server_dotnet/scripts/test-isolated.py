@@ -33,6 +33,7 @@ from test_background_copy_contracts import run_background_copy_checks
 from test_role_fixtures import assert_admin_only_initialization, install_legacy_test_roles
 from test_system_contracts import run_system_checks
 from test_project_remediation import run_project_remediation_checks
+from test_route_contracts import run_anonymous_route_contracts, run_recent_route_contracts
 from test_collaboration_contracts import run_collaboration_checks
 from test_business_acceptance import _create_project_group, run_business_acceptance
 from test_workflow_acceptance import run_workflow_acceptance
@@ -203,7 +204,12 @@ class Client:
     def __init__(self, base):
         self.base = base
         self.cookies = http.cookiejar.CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookies))
+        # Test targets are always loopback. Never let host proxy settings route
+        # readiness or contract traffic away from the owned child process.
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPCookieProcessor(self.cookies),
+        )
         self.token = None
 
     def call(self, method, path, body=None, expected=200, headers=None, raw=False):
@@ -268,6 +274,32 @@ def stop_process(owned):
             owned.wait()
 
 
+def wait_for_http_ready(process, probe, target, timeout_seconds=60.0, interval_seconds=0.1):
+    deadline = time.monotonic() + timeout_seconds
+    attempts = 0
+    last_failure = "probe returned no ready result"
+    while time.monotonic() < deadline:
+        return_code = process.poll()
+        if return_code is not None:
+            raise RuntimeError(
+                f"API process {process.pid} exited before readiness with code {return_code}; "
+                f"target={target}; attempts={attempts}; lastProbe={last_failure}"
+            )
+        attempts += 1
+        try:
+            if probe():
+                return
+            last_failure = "probe returned no ready result"
+        except (OSError, urllib.error.URLError, AssertionError, ValueError) as error:
+            detail = " ".join(str(error).split())
+            last_failure = f"{type(error).__name__}: {detail[:600]}"
+        time.sleep(interval_seconds)
+    raise TimeoutError(
+        f"API process {process.pid} did not become ready within {timeout_seconds:g} seconds; "
+        f"target={target}; attempts={attempts}; lastProbe={last_failure}"
+    )
+
+
 try:
     with conn.cursor() as cursor:
         cursor.execute(f"CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
@@ -291,8 +323,9 @@ try:
                     "App__JwtSecret": secrets.token_urlsafe(48), "App__StorageRoot": str(storage),
                     "App__WebBaseUrl": base, "App__CookieSecure": "false", "App__WorkerEnabled": "false",
                     "App__CopyWorkerEnabled": "true",
-                    "App__Smtp__Host": "", "ASPNETCORE_URLS": base, "URLS": base, "YF_BOOTSTRAP_PASSWORD": initial,
-                    "Logging__LogLevel__Default": "Warning"})
+                    "App__Smtp__Host": "", "ASPNETCORE_URLS": base, "YF_BOOTSTRAP_PASSWORD": initial,
+                    "Logging__LogLevel__Default": "Warning",
+                    "Logging__LogLevel__Microsoft.Hosting.Lifetime": "Information"})
         initialized = subprocess.run(["dotnet", str(DLL), "--initialize-database"], cwd=API, env=env, capture_output=True)
         if initialized.returncode:
             raise RuntimeError(".NET empty database initialization failed: " + initialized.stderr.decode(errors="replace")[:1500])
@@ -396,6 +429,7 @@ try:
             shutil.copy2(TEST_HOST, test_payload / TEST_HOST.name)
             test_dll = test_payload / TEST_HOST.name
         verify_test_host_artifacts(API if PUBLISHED else DLL.parent, test_dll, use_api_runtime=bool(PUBLISHED))
+        production_command = ["dotnet", str(DLL), "--urls", base]
         host_command = ["dotnet", str(test_dll)]
         if PUBLISHED:
             host_command = ["dotnet", "exec", "--depsfile", str(test_dll.parent / "Yf.Api.deps.json"),
@@ -403,19 +437,20 @@ try:
         check("test host uses exact API assembly and managed runtime dependencies", True)
         api_log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(api_log_path, "wb") as log:
-            process = subprocess.Popen(["dotnet", str(DLL)], cwd=API, env=env, stdout=log, stderr=log)
+            process = subprocess.Popen(production_command, cwd=API, env=env, stdout=log, stderr=log)
             stack.callback(stop_process, process)
             client = Client(base)
-            for _ in range(100):
-                if process.poll() is not None:
-                    raise RuntimeError("Test API exited: " + api_log_path.read_text(errors="replace")[-1800:])
-                try:
-                    client.call("GET", "/health")
-                    break
-                except (OSError, AssertionError):
-                    time.sleep(0.1)
-            else:
-                raise RuntimeError("Test API health timeout")
+            try:
+                wait_for_http_ready(
+                    process,
+                    lambda: client.call("GET", "/health") is not None,
+                    base + "/health",
+                )
+            except (RuntimeError, TimeoutError) as error:
+                raise RuntimeError(
+                    f"Test API readiness failed: {error}; "
+                    + api_log_path.read_text(errors="replace")[-1800:]
+                ) from error
             check("production entry HTTP health and database connectivity", True)
             unavailable_captcha = client.call("GET", "/api/v1/auth/captcha", expected=401)
             check("production authentication API does not expose CAPTCHA anonymously",
@@ -432,18 +467,20 @@ try:
             process = subprocess.Popen(host_command, cwd=API, env=env, stdout=log, stderr=log)
             stack.callback(stop_process, process)
             client = Client(base)
-            for _ in range(100):
-                if process.poll() is not None:
-                    raise RuntimeError("Loopback test host exited: " + api_log_path.read_text(errors="replace")[-1800:])
-                try:
-                    client.call("GET", "/health")
-                    break
-                except (OSError, AssertionError):
-                    time.sleep(0.1)
-            else:
-                raise RuntimeError("Loopback test host health timeout")
+            try:
+                wait_for_http_ready(
+                    process,
+                    lambda: client.call("GET", "/health") is not None,
+                    base + "/health",
+                )
+            except (RuntimeError, TimeoutError) as error:
+                raise RuntimeError(
+                    f"Loopback test host readiness failed: {error}; "
+                    + api_log_path.read_text(errors="replace")[-1800:]
+                ) from error
             client.call("GET", "/api/v1/project-groups", expected=401)
             check("anonymous API denied", True)
+            run_anonymous_route_contracts(client, check)
             result = client.login("admin", initial)
             check("bootstrap direct login enforces password change without CAPTCHA", result["mustChangePassword"])
             client.call("GET", "/api/v1/project-groups", expected=403)
@@ -515,6 +552,7 @@ try:
             if FILES_ONLY:
                 raise FileContractsComplete()
             run_background_copy_checks(client, conn, check, sid)
+            run_recent_route_contracts(client, Client, conn, check)
             recovery_bytes = b"%PDF-1.4\nowned interrupted merge regression\n%%EOF\n"
             recovery = init_upload(client, pid, "recovery.pdf", recovery_bytes)
             recovery_id = recovery["sessionId"]

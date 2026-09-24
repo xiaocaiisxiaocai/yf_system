@@ -11,7 +11,10 @@ Only the deployment directory is produced unless CreateArchive is specified.
 [CmdletBinding()]
 param(
     [string]$FreshOutputDirectory,
-    [switch]$CreateArchive
+    [switch]$CreateArchive,
+    [switch]$ExternalConfigurationTemplate,
+    [switch]$AllowInsecurePrivateConfiguration,
+    [switch]$AllowDirty
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,6 +60,29 @@ function Write-Utf8NoBom([string]$Path, [string]$Content) {
     [IO.File]::WriteAllText($Path, $Content, $encoding)
 }
 
+function Protect-ReleasePath([string]$Path, [switch]$File) {
+    $acl = if ($File) { New-Object Security.AccessControl.FileSecurity } else { New-Object Security.AccessControl.DirectorySecurity }
+    $acl.SetAccessRuleProtection($true, $false)
+    $sids = @(
+        [Security.Principal.WindowsIdentity]::GetCurrent().User,
+        (New-Object Security.Principal.SecurityIdentifier 'S-1-5-18'),
+        (New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544')
+    )
+    foreach ($sid in $sids) {
+        $inheritance = if ($File) { 'None' } else { 'ContainerInherit,ObjectInherit' }
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', $inheritance, 'None', 'Allow')
+        $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
+function New-RandomBase64([int]$ByteCount) {
+    $bytes = New-Object byte[] $ByteCount
+    $random = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $random.GetBytes($bytes) } finally { $random.Dispose() }
+    return [Convert]::ToBase64String($bytes)
+}
+
 function Initialize-PublishDefaults([string]$Path) {
     if (!(Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw 'Local publish defaults file is missing: server_dotnet/deploy/publish-defaults.local.json'
@@ -66,24 +92,50 @@ function Initialize-PublishDefaults([string]$Path) {
         throw 'Local publish defaults must contain App.ConnectionString.'
     }
     if ([string]::IsNullOrWhiteSpace([string]$defaults.App.JwtSecret)) {
-        $bytes = New-Object byte[] 32
-        $random = [Security.Cryptography.RandomNumberGenerator]::Create()
-        try { $random.GetBytes($bytes) } finally { $random.Dispose() }
-        $defaults.App.JwtSecret = [Convert]::ToBase64String($bytes)
+        $defaults.App.JwtSecret = New-RandomBase64 32
         Write-Utf8NoBom $Path (($defaults | ConvertTo-Json -Depth 8) + "`n")
     }
     if ([Text.Encoding]::UTF8.GetByteCount([string]$defaults.App.JwtSecret) -lt 32) {
         throw 'Local publishing JWT secret must be at least 32 bytes.'
     }
-    $bootstrap = $defaults.App.PSObject.Properties['BootstrapPassword']
-    if (!$bootstrap -or [string]::IsNullOrWhiteSpace([string]$bootstrap.Value)) {
-        $bytes = New-Object byte[] 12
-        $random = [Security.Cryptography.RandomNumberGenerator]::Create()
-        try { $random.GetBytes($bytes) } finally { $random.Dispose() }
-        $defaults.App | Add-Member -NotePropertyName BootstrapPassword -NotePropertyValue ([Convert]::ToBase64String($bytes)) -Force
-        Write-Utf8NoBom $Path (($defaults | ConvertTo-Json -Depth 8) + "`n")
-    }
     return $defaults
+}
+
+function Assert-PrivatePublishDefaults($Defaults, [switch]$AllowInsecure) {
+    $origin = $null
+    if (![Uri]::TryCreate([string]$Defaults.App.WebBaseUrl, [UriKind]::Absolute, [ref]$origin) -or
+        $origin.AbsolutePath -ne '/' -or $origin.Query -or $origin.Fragment -or $origin.UserInfo -or
+        $origin.Host -eq 'yf.example.com') {
+        throw 'Private publication requires a real origin in App.WebBaseUrl.'
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$Defaults.App.StorageRoot)) {
+        throw 'Private publication requires App.StorageRoot.'
+    }
+
+    $builder = New-Object Data.Common.DbConnectionStringBuilder
+    try { $builder.set_ConnectionString([string]$Defaults.App.ConnectionString) }
+    catch { throw 'Private publication requires a valid App.ConnectionString.' }
+    $databaseUser = $null
+    foreach ($key in @('User ID', 'UserID', 'User', 'UID')) {
+        if ($builder.ContainsKey($key)) { $databaseUser = [string]$builder[$key]; break }
+    }
+    if ([string]::IsNullOrWhiteSpace($databaseUser)) {
+        throw 'Private publication requires an explicit database user.'
+    }
+
+    $secureOrigin = $origin.Scheme -eq 'https' -and $Defaults.App.CookieSecure -eq $true
+    if (!$AllowInsecure -and (!$secureOrigin -or $databaseUser.Equals('root', [StringComparison]::OrdinalIgnoreCase))) {
+        throw 'Private publication requires HTTPS, CookieSecure=true and a non-root database user. Use -AllowInsecurePrivateConfiguration only for an explicitly accepted isolated environment.'
+    }
+    if ($origin.Scheme -notin @('http', 'https')) {
+        throw 'Private publication WebBaseUrl must use HTTP or HTTPS.'
+    }
+    if ($origin.Scheme -eq 'https' -and !$Defaults.App.CookieSecure) {
+        throw 'HTTPS publication requires CookieSecure=true.'
+    }
+    if ($origin.Scheme -eq 'http' -and $Defaults.App.CookieSecure) {
+        throw 'HTTP publication requires CookieSecure=false for login cookies.'
+    }
 }
 
 function Get-PayloadFiles([string]$Root, [string[]]$ExcludedNames) {
@@ -147,6 +199,12 @@ if ($LASTEXITCODE -ne 0 -or !$gitHead) { throw 'Unable to resolve the Git HEAD.'
 $gitStatus = @(& git -C $repoRoot status --porcelain=v1 --untracked-files=all)
 if ($LASTEXITCODE -ne 0) { throw 'Unable to read the Git working-tree status.' }
 $isDirty = $gitStatus.Count -gt 0
+if ($isDirty -and !$AllowDirty) {
+    throw 'The working tree is dirty. Commit or stash the intended release inputs, or use -AllowDirty to record an explicitly accepted dirty build.'
+}
+if ($AllowInsecurePrivateConfiguration -and $ExternalConfigurationTemplate) {
+    throw '-AllowInsecurePrivateConfiguration cannot be combined with -ExternalConfigurationTemplate.'
+}
 
 if ([string]::IsNullOrWhiteSpace($FreshOutputDirectory)) {
     $releaseId = 'Yf.System-{0}-{1}-{2}' -f [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'), $gitHead.Substring(0, 8), ([Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -212,9 +270,13 @@ if ($dotnetVersionExitCode -ne 0 -or $selectedDotnetSdk -notmatch '^8\.') {
     throw "The publishing process must select a .NET 8 SDK from server_dotnet/global.json; selected: $selectedDotnetSdk"
 }
 
-# Generate the project-specific JWT once and reuse it across future releases.
-# Never print these values or include the local defaults file itself in a package.
-$publishDefaults = Initialize-PublishDefaults $publishDefaultsPath
+$publishDefaults = $null
+if (!$ExternalConfigurationTemplate) {
+    # Generate the project-specific JWT once and reuse it across releases. The
+    # bootstrap password is generated separately for every private package.
+    $publishDefaults = Initialize-PublishDefaults $publishDefaultsPath
+    Assert-PrivatePublishDefaults $publishDefaults -AllowInsecure:$AllowInsecurePrivateConfiguration
+}
 
 if (!(Test-Path -LiteralPath $outputParent -PathType Container)) {
     New-Item -ItemType Directory -Path $outputParent | Out-Null
@@ -222,15 +284,13 @@ if (!(Test-Path -LiteralPath $outputParent -PathType Container)) {
 if (!(Test-Path -LiteralPath $outputRoot -PathType Container)) {
     New-Item -ItemType Directory -Path $outputRoot | Out-Null
 }
+Protect-ReleasePath $outputRoot
 
 $buildCommands = @()
-$frontendDependencyInstall = 'skipped-existing-node_modules'
-if (!(Test-Path -LiteralPath $webModules -PathType Container)) {
-    $frontendDependencyInstall = 'npm-ci'
-    $buildCommands += [ordered]@{ workingDirectory = 'web'; executable = 'npm'; arguments = @('ci') }
-    Push-Location $webRoot
-    try { Invoke-Native 'npm' @('ci') } finally { Pop-Location }
-}
+$frontendDependencyInstall = 'npm-ci'
+$buildCommands += [ordered]@{ workingDirectory = 'web'; executable = 'npm'; arguments = @('ci') }
+Push-Location $webRoot
+try { Invoke-Native 'npm' @('ci') } finally { Pop-Location }
 $buildCommands += [ordered]@{ workingDirectory = 'web'; executable = 'npm'; arguments = @('run', 'build') }
 Push-Location $webRoot
 try { Invoke-Native 'npm' @('run', 'build') } finally { Pop-Location }
@@ -280,31 +340,25 @@ foreach ($name in @('install-iis.ps1', 'maintain-iis.ps1', 'maintenance-common.p
 }
 $productionPath = Join-Path $outputRoot 'appsettings.Production.json'
 $productionSettings = Get-Content -LiteralPath (Join-Path $deployRoot 'appsettings.example.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-$productionSettings.App.ConnectionString = $publishDefaults.App.ConnectionString
-$productionSettings.App.JwtSecret = $publishDefaults.App.JwtSecret
-$productionSettings.App.BootstrapPassword = $publishDefaults.App.BootstrapPassword
-foreach ($name in @('StorageRoot', 'WebBaseUrl')) {
-    $override = $publishDefaults.App.PSObject.Properties[$name]
-    if ($override -and ![string]::IsNullOrWhiteSpace([string]$override.Value)) {
-        $productionSettings.App.$name = [string]$override.Value
+$configurationMode = 'bundled-private'
+if (!$ExternalConfigurationTemplate) {
+    $productionSettings.App.ConnectionString = $publishDefaults.App.ConnectionString
+    $productionSettings.App.JwtSecret = $publishDefaults.App.JwtSecret
+    $productionSettings.App.BootstrapPassword = New-RandomBase64 12
+    foreach ($name in @('StorageRoot', 'WebBaseUrl')) {
+        $override = $publishDefaults.App.PSObject.Properties[$name]
+        if ($override -and ![string]::IsNullOrWhiteSpace([string]$override.Value)) {
+            $productionSettings.App.$name = [string]$override.Value
+        }
     }
-}
-if ($publishDefaults.App.PSObject.Properties['CookieSecure']) {
-    $productionSettings.App.CookieSecure = [bool]$publishDefaults.App.CookieSecure
-}
-$origin = $null
-if (![Uri]::TryCreate([string]$productionSettings.App.WebBaseUrl, [UriKind]::Absolute, [ref]$origin) -or
-    $origin.Scheme -notin @('http', 'https') -or $origin.AbsolutePath -ne '/' -or
-    $origin.Query -or $origin.Fragment -or $origin.UserInfo -or
-    $origin.Host -eq 'yf.example.com' -or
-    [string]::IsNullOrWhiteSpace([string]$productionSettings.App.StorageRoot)) {
-    throw 'Set the real WebBaseUrl and StorageRoot in publish-defaults.local.json before publishing a directly usable IIS package.'
-}
-if ($origin.Scheme -eq 'https' -and !$productionSettings.App.CookieSecure) {
-    throw 'HTTPS publication requires CookieSecure=true.'
-}
-if ($origin.Scheme -eq 'http' -and $productionSettings.App.CookieSecure) {
-    throw 'HTTP publication requires CookieSecure=false for login cookies.'
+    if ($publishDefaults.App.PSObject.Properties['CookieSecure']) {
+        $productionSettings.App.CookieSecure = [bool]$publishDefaults.App.CookieSecure
+    }
+} else {
+    $configurationMode = 'external-template'
+    $productionSettings.App.ConnectionString = ''
+    $productionSettings.App.JwtSecret = ''
+    $productionSettings.App.BootstrapPassword = ''
 }
 $storageRoot = Get-FullLocalPath ([string]$productionSettings.App.StorageRoot) 'App.StorageRoot'
 Write-Utf8NoBom $productionPath (($productionSettings | ConvertTo-Json -Depth 8) + "`n")
@@ -483,9 +537,10 @@ foreach ($file in @(Get-ChildItem -LiteralPath $outputRoot -Recurse -Force -File
 $packagedSettings = Get-Content -LiteralPath $productionPath -Raw | ConvertFrom-Json
 if ($packagedSettings.App.ConnectionString -ne $productionSettings.App.ConnectionString -or
     $packagedSettings.App.JwtSecret -ne $productionSettings.App.JwtSecret -or
+    $packagedSettings.App.BootstrapPassword -ne $productionSettings.App.BootstrapPassword -or
     $packagedSettings.App.StorageRoot -ne $productionSettings.App.StorageRoot -or
     $packagedSettings.App.WebBaseUrl -ne $productionSettings.App.WebBaseUrl) {
-    throw 'Packaged appsettings.Production.json does not match the configured publish defaults.'
+    throw 'Packaged appsettings.Production.json does not match the selected configuration mode.'
 }
 foreach ($requiredPayload in @(
     'Yf.Api.dll', 'Yf.Api.runtimeconfig.json', 'web.config', 'wwwroot\index.html', 'precompressed-assets.json',
@@ -517,6 +572,11 @@ $packageManifest = [ordered]@{
         frontendDependencyInstall = $frontendDependencyInstall
         commands = $buildCommands
     }
+    configuration = [ordered]@{
+        mode = $configurationMode
+        containsSecrets = !$ExternalConfigurationTemplate
+        insecureOverride = [bool]$AllowInsecurePrivateConfiguration
+    }
     files = $payloadFiles
 }
 $packageManifestPath = Join-Path $outputRoot 'manifest.json'
@@ -529,6 +589,7 @@ if (!$CreateArchive) {
 }
 
 New-NormalizedZip $outputRoot $zipPath
+Protect-ReleasePath $zipPath -File
 $zipInfo = Get-Item -LiteralPath $zipPath
 $zipSha256 = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $allPackagedFiles = @(Get-PayloadFiles $outputRoot @())
@@ -538,6 +599,7 @@ $releaseManifest = [ordered]@{
     createdUtc = $createdUtc
     source = $packageManifest.source
     build = $packageManifest.build
+    configuration = $packageManifest.configuration
     files = $allPackagedFiles
     archive = [ordered]@{
         path = $zipInfo.Name
@@ -547,6 +609,8 @@ $releaseManifest = [ordered]@{
 }
 Write-Utf8NoBom $releaseManifestPath (($releaseManifest | ConvertTo-Json -Depth 8) + "`n")
 Write-Utf8NoBom $zipHashPath ($zipSha256 + '  ' + $zipInfo.Name + "`n")
+Protect-ReleasePath $releaseManifestPath -File
+Protect-ReleasePath $zipHashPath -File
 
 Write-Host "Archive: $zipPath"
 Write-Host "Release manifest: $releaseManifestPath"

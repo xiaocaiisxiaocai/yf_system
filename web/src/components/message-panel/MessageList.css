@@ -1,0 +1,15 @@
+.msg-item-target {
+  border-left: 3px solid rgb(var(--primary-6));
+  padding-left: 12px;
+  background: var(--color-fill-1);
+}
+
+.message-row-main { flex: 1; min-width: 0; }
+.message-row-time, .message-receipt-title { font-size: 12px; }
+.message-row-content { margin-top: 4px; white-space: pre-wrap; }
+.message-row-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.message-receipt-popover { max-width: 320px; }
+.message-load-error { display: flex; align-items: center; gap: 8px; padding: 24px 0; }
+.message-append-error { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px; }
+.message-load-more { padding: 12px; text-align: center; }
+.message-locate-notice { display: block; margin-bottom: 12px; }

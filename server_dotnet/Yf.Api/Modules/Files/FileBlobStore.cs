@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
@@ -64,31 +65,35 @@ internal static class FileBlobStore
         await using var output = new FileStream(stagingPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
             BufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[BufferSize];
-        var interval = Stopwatch.StartNew();
-        ulong total = 0;
-        ulong lastReported = 0;
-        int read;
-        while ((read = await input.ReadAsync(buffer, ct)) != 0)
+        var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+        try
         {
-            total = checked(total + (uint)read);
-            if (total > expectedBytes) throw ApiException.Conflict("源文件大小在复制期间发生变化");
-            sha.AppendData(buffer, 0, read);
-            await output.WriteAsync(buffer.AsMemory(0, read), ct);
-            if (reportProgress is not null && interval.Elapsed >= TimeSpan.FromSeconds(1)
-                && total - lastReported >= 8UL * 1024 * 1024)
+            var interval = Stopwatch.StartNew();
+            ulong total = 0;
+            ulong lastReported = 0;
+            int read;
+            while ((read = await input.ReadAsync(buffer.AsMemory(0, BufferSize), ct)) != 0)
             {
-                await reportProgress(total);
-                lastReported = total;
-                interval.Restart();
+                total = checked(total + (uint)read);
+                if (total > expectedBytes) throw ApiException.Conflict("源文件大小在复制期间发生变化");
+                sha.AppendData(buffer, 0, read);
+                await output.WriteAsync(buffer.AsMemory(0, read), ct);
+                if (reportProgress is not null && interval.Elapsed >= TimeSpan.FromSeconds(1)
+                    && total - lastReported >= 8UL * 1024 * 1024)
+                {
+                    await reportProgress(total);
+                    lastReported = total;
+                    interval.Restart();
+                }
             }
+            await output.FlushAsync(ct);
+            output.Flush(flushToDisk: true);
+            var actualHash = Convert.ToHexString(sha.GetHashAndReset()).ToLowerInvariant();
+            if (total != expectedBytes || !actualHash.Equals(normalizedHash, StringComparison.Ordinal))
+                throw ApiException.Conflict("源文件完整性校验失败，项目未复制");
+            return new(normalizedHash, total, stagingPath);
         }
-        await output.FlushAsync(ct);
-        output.Flush(flushToDisk: true);
-        var actualHash = Convert.ToHexString(sha.GetHashAndReset()).ToLowerInvariant();
-        if (total != expectedBytes || !actualHash.Equals(normalizedHash, StringComparison.Ordinal))
-            throw ApiException.Conflict("源文件完整性校验失败，项目未复制");
-        return new(normalizedHash, total, stagingPath);
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
 
     internal static void VerifyBoundPhysicalFile(string root, string storagePath, string sha256, ulong sizeBytes,
@@ -103,6 +108,11 @@ internal static class FileBlobStore
         { throw ApiException.Conflict("文件内容缺失或存储路径异常，无法复制"); }
         if ((ulong)new FileInfo(path).Length != sizeBytes)
             throw ApiException.Conflict("文件内容大小校验失败，无法复制");
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            BufferSize, FileOptions.SequentialScan);
+        var actual = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        if (!actual.Equals(NormalizeSha256(sha256), StringComparison.Ordinal))
+            throw ApiException.Conflict("文件内容 SHA-256 校验失败，无法复制");
     }
 
     /// <summary>
@@ -126,7 +136,8 @@ internal static class FileBlobStore
             if (blob.SizeBytes != prepared.SizeBytes
                 || !blob.StoragePath.Equals(relativePath, StringComparison.Ordinal))
                 throw new InvalidOperationException("SHA-256 内容记录与存储元数据冲突");
-            EnsureCanonicalAvailable(root, canonicalPath, prepared, verifyExistingHash: false, ct);
+            EnsureCanonicalAvailable(root, canonicalPath, prepared,
+                replaceExisting: !string.IsNullOrWhiteSpace(prepared.StagingPath), ct);
             blob.State = FileBlobStates.Ready;
             blob.GarbageCollectionStartedAt = null;
             await db.SaveChangesAsync(ct);
@@ -134,7 +145,7 @@ internal static class FileBlobStore
             return blob;
         }
 
-        EnsureCanonicalAvailable(root, canonicalPath, prepared, verifyExistingHash: true, ct);
+        EnsureCanonicalAvailable(root, canonicalPath, prepared, replaceExisting: true, ct);
         blob = new FileBlob
         {
             Sha256 = sha256,
@@ -173,18 +184,16 @@ internal static class FileBlobStore
         return normalized;
     }
 
-    /// <param name="verifyExistingHash">
-    /// Hash a canonical file that was already on disk without a database record (an orphan left by an
-    /// unknown commit outcome). A staging file this call moves into place was just hashed by the caller
-    /// (<see cref="PreparedBlob.Sha256"/>), so it is not reread while the caller's transaction holds locks.
+    /// <param name="replaceExisting">
+    /// Replace canonical content with the caller's already verified staging file. This repairs unknown
+    /// commit or external-corruption remnants without hashing disk content while database locks are held.
     /// </param>
     private static void EnsureCanonicalAvailable(string root, string canonicalPath, PreparedBlob prepared,
-        bool verifyExistingHash, CancellationToken ct)
+        bool replaceExisting, CancellationToken ct)
     {
         var directory = Path.GetDirectoryName(canonicalPath)
             ?? throw new InvalidOperationException("blob 存储目录无效");
         FileStorage.CreateDirectoryWithin(root, directory, ct);
-        var publishedByThisCall = false;
         if (!File.Exists(canonicalPath))
         {
             if (string.IsNullOrWhiteSpace(prepared.StagingPath) || !File.Exists(prepared.StagingPath))
@@ -192,22 +201,23 @@ internal static class FileBlobStore
             try
             {
                 File.Move(prepared.StagingPath, canonicalPath, overwrite: false);
-                publishedByThisCall = true;
             }
-            catch (IOException) when (File.Exists(canonicalPath)) { }
+            catch (IOException) when (File.Exists(canonicalPath))
+            {
+                if (replaceExisting)
+                    File.Move(prepared.StagingPath, canonicalPath, overwrite: true);
+            }
+        }
+        else if (replaceExisting)
+        {
+            if (string.IsNullOrWhiteSpace(prepared.StagingPath) || !File.Exists(prepared.StagingPath))
+                throw ApiException.Conflict("发现已有文件内容，但缺少已校验暂存文件，无法建立引用");
+            File.Move(prepared.StagingPath, canonicalPath, overwrite: true);
         }
 
         var resolved = FileStorage.ResolveExistingFile(root, canonicalPath, ct);
         if ((ulong)new FileInfo(resolved).Length != prepared.SizeBytes)
             throw new InvalidOperationException("全局 blob 路径存在不同大小的内容");
-        if (verifyExistingHash && !publishedByThisCall)
-        {
-            using var stream = new FileStream(resolved, FileMode.Open, FileAccess.Read, FileShare.Read,
-                BufferSize, FileOptions.SequentialScan);
-            var actual = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-            if (!actual.Equals(prepared.Sha256, StringComparison.Ordinal))
-                throw new InvalidOperationException("全局 blob 路径存在哈希不匹配的内容");
-        }
     }
 
     private static void TryDelete(string? path)

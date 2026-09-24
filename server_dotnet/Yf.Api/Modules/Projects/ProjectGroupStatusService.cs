@@ -13,13 +13,16 @@ internal sealed class ProjectGroupStatusService(AuditService audit)
         ulong groupId,
         ulong actorId,
         ulong? triggerProjectId,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool groupAlreadyLocked = false)
     {
         await using var db = EfDb.Use(conn, tx);
-        var group = await db.ProjectGroups
-            .FromSqlInterpolated($"SELECT * FROM project_groups WHERE id={groupId} FOR UPDATE")
-            .AsNoTracking()
-            .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound("主项目不存在");
+        var group = groupAlreadyLocked
+            ? await db.ProjectGroups.AsNoTracking().SingleOrDefaultAsync(item => item.Id == groupId, ct)
+            : await db.ProjectGroups
+                .FromSqlInterpolated($"SELECT * FROM project_groups WHERE id={groupId} FOR UPDATE")
+                .AsNoTracking().SingleOrDefaultAsync(ct);
+        if (group is null) throw ApiException.NotFound("主项目不存在");
 
         var counts = await db.Projects
             .Where(project => project.ProjectGroupId == groupId)

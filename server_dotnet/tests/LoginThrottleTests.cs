@@ -178,7 +178,32 @@ public sealed class LoginThrottleTests
     }
 
     [Fact(Timeout = 120_000)]
-    public async Task LogoutWaitsForStartedBusinessTransactionAndLaterWritesRejectRevokedSession()
+    public async Task ConcurrentPasswordResetMakesAnInFlightSelfChangeFailWithoutOverwritingIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await LoginDatabase.CreateAsync(ct);
+        await using var management = await scope.OpenAsync(ct);
+        await using var managementTx = await AppDb.BeginTransactionAsync(management, ct);
+        await AccessService.LockManagementAsync(management, managementTx, ct);
+
+        var change = scope.Service().ChangePasswordAsync(
+            new CurrentUser(1, "target", UserTypes.Internal, null),
+            new(scope.Password, "SelfChange#2026"), ct);
+        await scope.WaitForBlockedManagementAsync(ct);
+        const string concurrentPassword = "AdminReset#2026";
+        var concurrentHash = await PasswordService.HashAsync(concurrentPassword, ct);
+        await management.ExecuteAsync(new CommandDefinition(
+            "UPDATE users SET password_hash=@hash WHERE id=1", new { hash = concurrentHash }, managementTx,
+            cancellationToken: ct));
+        await managementTx.CommitAsync(ct);
+
+        var conflict = await Assert.ThrowsAsync<ApiException>(() => change);
+        Assert.Equal(40901, conflict.Code);
+        Assert.Equal(1UL, (await scope.LoginAsync("target", concurrentPassword, "192.0.2.219", ct)).User.Id);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task LogoutSharesTheBusinessGateAndLaterWritesRejectTheRevokedSession()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await LoginDatabase.CreateAsync(ct);
@@ -192,11 +217,9 @@ public sealed class LoginThrottleTests
         Assert.Equal(state.SessionId, checkedActor.SessionId);
 
         var logout = scope.Service().LogoutAsync(login.Refresh, null, "192.0.2.221", ct);
-        await scope.WaitForBlockedManagementAsync(ct);
-        Assert.False(logout.IsCompleted);
+        await logout.WaitAsync(TimeSpan.FromSeconds(15), ct);
 
         await businessTx.CommitAsync(ct);
-        await logout;
 
         await using var after = await scope.OpenAsync(ct);
         await using var afterTx = await AppDb.BeginTransactionAsync(after, ct);
@@ -317,9 +340,13 @@ public sealed class LoginThrottleTests
             return (await Service().LoginAsync(new(employeeNo, supplied), ip, ct)).Response;
         }
 
-        public Task<(LoginResponse Response, string Refresh)> LoginWithRefreshAsync(
+        public async Task<(LoginResponse Response, string Refresh)> LoginWithRefreshAsync(
             string employeeNo, string supplied, string ip, CancellationToken ct) =>
-            Service().LoginAsync(new(employeeNo, supplied), ip, ct);
+            WithoutRefreshExpiry(await Service().LoginAsync(new(employeeNo, supplied), ip, ct));
+
+        private static (LoginResponse Response, string Refresh) WithoutRefreshExpiry(
+            (LoginResponse Response, string Refresh, DateTime RefreshExpiresAt) result) =>
+            (result.Response, result.Refresh);
 
         public async Task RejectAsync(string employeeNo, string supplied, string ip, CancellationToken ct)
         {

@@ -9,7 +9,8 @@ namespace Yf.Api.Modules.Projects;
 
 internal sealed class ProjectActivityService(
     IHttpContextAccessor? accessor = null,
-    IProjectRealtimePublisher? realtime = null) : IProjectAuditCapture
+    IProjectRealtimePublisher? realtime = null,
+    ILogger<ProjectActivityService>? logger = null) : IProjectAuditCapture
 {
     private static readonly object ScheduledRealtimeKey = new();
     internal static IReadOnlyDictionary<(string TargetType, string AuditAction), AuditActivityMapping> AuditActionMappings { get; } =
@@ -17,7 +18,6 @@ internal sealed class ProjectActivityService(
         {
             [("project", "PROJECT_CREATE")] = new("PROJECT", "CREATE", "创建项目"),
             [("project", "PROJECT_UPDATE")] = new("PROJECT", "UPDATE", "编辑项目"),
-            [("project", "PROJECT_MEMBERS")] = new("PROJECT", "MEMBERS_CHANGE", "调整项目成员"),
             [("project", "PROJECT_START")] = new("PROJECT", "START", "开始项目"),
             [("project", "PROJECT_RESTART")] = new("PROJECT", "RESTART", "重新开始项目"),
             [("project", "PROJECT_SUBMIT")] = new("PROJECT", "SUBMIT", "提交项目验收"),
@@ -48,11 +48,10 @@ internal sealed class ProjectActivityService(
         CancellationToken ct)
     {
         await using var db = EfDb.Use(conn, tx);
-        var row = await db.ProjectActivities.Where(activity => activity.ProjectId == projectId)
-            .GroupBy(_ => 1)
-            .Select(group => new { ActivityCount = group.LongCount(), LatestId = group.Max(x => x.Id) })
-            .SingleOrDefaultAsync(ct);
-        return row is null ? "0:0" : $"{row.ActivityCount}:{row.LatestId}";
+        var latestId = await db.ProjectActivities.Where(activity => activity.ProjectId == projectId)
+            .Select(activity => (ulong?)activity.Id)
+            .MaxAsync(ct) ?? 0;
+        return latestId.ToString(CultureInfo.InvariantCulture);
     }
 
     public Task CaptureAsync(MySqlConnection connection, MySqlTransaction? tx, AuditLog auditLog,
@@ -186,7 +185,18 @@ internal sealed class ProjectActivityService(
         {
             if (context.Response.StatusCode >= StatusCodes.Status400BadRequest) return;
             try { await realtime.PublishAsync(projectId, RealtimeChangeKinds.Activity, CancellationToken.None); }
-            catch { }
+            catch (OperationCanceledException error)
+            {
+                logger?.LogDebug(error,
+                    "Realtime activity notification was canceled after response completion for project {ProjectId}",
+                    projectId);
+            }
+            catch (Exception error)
+            {
+                logger?.LogWarning(error,
+                    "Realtime activity notification failed after response completion for project {ProjectId}",
+                    projectId);
+            }
         });
     }
 
@@ -250,12 +260,13 @@ internal sealed class ProjectActivityService(
                 row.Id, row.ActivityType, row.Action, row.ActorName, ProjectJson.Utc(row.OccurredAt), row.Title,
                 row.ActivityType == "MESSAGE" && !available ? null : row.Summary, row.TargetId, available);
         }).ToArray();
-        var lastActivityAt = await db.ProjectActivities
-            .Where(activity => activity.ProjectId == projectId)
-            .OrderByDescending(activity => activity.OccurredAt)
-            .ThenByDescending(activity => activity.Id)
-            .Select(activity => (DateTime?)activity.OccurredAt)
-            .FirstOrDefaultAsync(ct);
+        var lastActivityAt = type is null && cursorValue is null
+            ? rows.FirstOrDefault()?.OccurredAt
+            : await db.ProjectActivities.Where(activity => activity.ProjectId == projectId)
+                .OrderByDescending(activity => activity.OccurredAt)
+                .ThenByDescending(activity => activity.Id)
+                .Select(activity => (DateTime?)activity.OccurredAt)
+                .FirstOrDefaultAsync(ct);
         return new ProjectActivityPage(
             list,
             hasMore && rows.Length > 0 ? EncodeCursor(rows[^1].OccurredAt, rows[^1].Id) : null,

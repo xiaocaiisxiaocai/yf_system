@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Result, Spin } from '@arco-design/web-react'
 import { useAuth } from './store/auth'
-import { bootAuth } from './api/client'
+import { bootAuth, isSafeLoginReturnPath } from './api/client'
 
 const AdminLayout = lazy(() => import('./layouts/AdminLayout'))
 const Login = lazy(() => import('./pages/Login'))
@@ -35,8 +35,20 @@ function Authenticated({ children }: { children: JSX.Element }) {
   return token ? children : <Navigate to="/login" state={{ from: `${loc.pathname}${loc.search}` }} replace />
 }
 
+function LoginRoute() {
+  const loc = useLocation() as ReturnType<typeof useLocation> & { state?: { from?: string } }
+  const from = new URLSearchParams(loc.search).get('from')
+  if (!loc.state?.from && isSafeLoginReturnPath(from)) {
+    return <Navigate to="/login" state={{ from }} replace />
+  }
+  return <Login />
+}
+
 export function Guard({ children, menu, permission, anyPermission }: { children: JSX.Element; menu?: string; permission?: string; anyPermission?: string[] }) {
-  const { token, mustChangePassword, menus, permissions } = useAuth()
+  const token = useAuth((state) => state.token)
+  const mustChangePassword = useAuth((state) => state.mustChangePassword)
+  const menus = useAuth((state) => state.menus)
+  const permissions = useAuth((state) => state.permissions)
   const loc = useLocation()
   if (!token) return <Navigate to="/login" state={{ from: `${loc.pathname}${loc.search}` }} replace />
   if (mustChangePassword) return <Navigate to="/change-password" replace />
@@ -99,7 +111,7 @@ export default function App() {
   return (
     <Suspense fallback={<PageLoader />}>
       <Routes>
-        <Route path="/login" element={<Login />} />
+        <Route path="/login" element={<LoginRoute />} />
         <Route path="/change-password" element={<Authenticated><ChangePassword /></Authenticated>} />
         <Route
           path="/"

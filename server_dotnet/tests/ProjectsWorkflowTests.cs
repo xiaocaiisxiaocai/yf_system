@@ -6,6 +6,27 @@ namespace Yf.Api.Tests;
 public sealed class ProjectsWorkflowTests
 {
     [Theory]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    [InlineData(" DRAFT ", "DRAFT")]
+    [InlineData("IN_PROGRESS", "IN_PROGRESS")]
+    [InlineData("COMPLETED", "COMPLETED")]
+    [InlineData("TERMINATED", "TERMINATED")]
+    public void MainProjectStatusFilterAcceptsOnlyDerivedStatuses(string? value, string? expected)
+    {
+        Assert.Equal(expected, ProjectGroupService.NormalizeGroupStatus(value));
+    }
+
+    [Theory]
+    [InlineData("PENDING_CONFIRMATION")]
+    [InlineData("UNKNOWN")]
+    public void MainProjectStatusFilterRejectsUnknownValues(string value)
+    {
+        var error = Assert.Throws<ApiException>(() => ProjectGroupService.NormalizeGroupStatus(value));
+        Assert.Equal(400, error.Status);
+    }
+
+    [Theory]
     [InlineData(0UL, 0UL, 0UL, 0UL, "DRAFT")]
     [InlineData(2UL, 2UL, 0UL, 0UL, "DRAFT")]
     [InlineData(3UL, 0UL, 3UL, 0UL, "COMPLETED")]

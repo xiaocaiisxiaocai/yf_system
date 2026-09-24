@@ -79,7 +79,7 @@ public sealed class FileRecordConfig : IEntityTypeConfiguration<FileRecord>
         b.Property(x => x.StoragePath).HasColumnName("storage_path").HasMaxLength(512).IsRequired();
         b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue(FileStatuses.Available);
         b.Property(x => x.DeletedAt).HasColumnName("deleted_at").HasColumnType("datetime(3)");
-        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.HasIndex(x => x.StoredName).IsUnique().HasDatabaseName("stored_name");
         b.HasIndex(x => x.UploaderId).HasDatabaseName("fk_files_uploader");
         // Serves the file list: WHERE project_id=? AND status=? ORDER BY id DESC; also backs fk_files_project.
@@ -117,7 +117,6 @@ public sealed class UploadSessionConfig : IEntityTypeConfiguration<UploadSession
         // Upload initialization uses one database timestamp for created/expires/updated.
         // Keep the database's ON UPDATE behavior while still sending that explicit value on insert.
         updatedAt.Metadata.SetBeforeSaveBehavior(PropertySaveBehavior.Save);
-        b.HasIndex(x => x.ProjectId).HasDatabaseName("fk_us_project");
         b.HasIndex(x => x.UploaderId).HasDatabaseName("idx_us_uploader");
         b.HasIndex(x => new { x.ProjectId, x.UploaderId, x.FileFingerprint, x.Status, x.ExpiresAt })
             .HasDatabaseName("idx_us_resume");

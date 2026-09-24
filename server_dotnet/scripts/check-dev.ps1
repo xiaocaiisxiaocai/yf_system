@@ -17,8 +17,17 @@ try {
     Push-Location $apiDirectory
     try {
         # Always rebuild: an existing DLL is not evidence that current source compiles.
-        $buildOutput = & dotnet build .\Yf.Api.csproj --configuration Debug --no-restore --verbosity quiet 2>&1
-        if ($LASTEXITCODE -ne 0) {
+        $previousPreference = $ErrorActionPreference
+        try {
+            # PowerShell 5.1 promotes native stderr to terminating errors under
+            # Stop. Preserve output and decide from the native exit code.
+            $ErrorActionPreference = 'Continue'
+            $buildOutput = @(& dotnet build .\Yf.Api.csproj --configuration Debug --no-restore --verbosity quiet 2>&1)
+            $buildExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousPreference
+        }
+        if ($buildExitCode -ne 0) {
             throw 'Build failed. Run dotnet build server_dotnet/Yf.Api/Yf.Api.csproj for compiler diagnostics.'
         }
         $env:YF_CONFIG_PATH = $ConfigPath

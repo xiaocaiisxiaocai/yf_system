@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Result, Spin } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../api/client'
 import viewerHtml from '../../generated/excel-viewer.html?raw'
@@ -10,7 +10,7 @@ function ExcelDocument({ fileId }: { fileId: number }) {
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const send = useRef<() => void>(() => {})
   const frameLoaded = useRef(false)
-  const html = viewerHtml.replaceAll('YF_VIEWER_NONCE', channel)
+  const html = useMemo(() => viewerHtml.replaceAll('YF_VIEWER_NONCE', channel), [channel])
 
   useEffect(() => {
     let active = true

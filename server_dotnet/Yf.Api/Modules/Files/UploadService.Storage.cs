@@ -1,4 +1,5 @@
 using MySqlConnector;
+using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 using Yf.Api.Infrastructure;
@@ -14,20 +15,24 @@ public sealed partial class UploadService
         await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[1024 * 1024];
-        ulong total = 0;
-        int read;
-        while ((read = await source.ReadAsync(buffer, ct)) != 0)
+        var buffer = ArrayPool<byte>.Shared.Rent(1024 * 1024);
+        try
         {
-            total = checked(total + (uint)read);
-            if (total > expected) throw ApiException.BadRequest($"分片大小不符：期望 {expected}，实际超过上限");
-            hash.AppendData(buffer, 0, read);
-            await output.WriteAsync(buffer.AsMemory(0, read), ct);
+            ulong total = 0;
+            int read;
+            while ((read = await source.ReadAsync(buffer.AsMemory(0, 1024 * 1024), ct)) != 0)
+            {
+                total = checked(total + (uint)read);
+                if (total > expected) throw ApiException.BadRequest($"分片大小不符：期望 {expected}，实际超过上限");
+                hash.AppendData(buffer, 0, read);
+                await output.WriteAsync(buffer.AsMemory(0, read), ct);
+            }
+            if (total != expected) throw ApiException.BadRequest($"分片大小不符：期望 {expected}，实际 {total}");
+            await output.FlushAsync(ct);
+            output.Flush(flushToDisk: true);
+            return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
         }
-        if (total != expected) throw ApiException.BadRequest($"分片大小不符：期望 {expected}，实际 {total}");
-        await output.FlushAsync(ct);
-        output.Flush(flushToDisk: true);
-        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
 
     private static string ChunkDigestPath(string chunkPath) => chunkPath + ".sha256";
@@ -37,21 +42,26 @@ public sealed partial class UploadService
         await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[1024 * 1024];
-        int read;
-        while ((read = await input.ReadAsync(buffer, ct)) != 0) hash.AppendData(buffer, 0, read);
-        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        var buffer = ArrayPool<byte>.Shared.Rent(1024 * 1024);
+        try
+        {
+            int read;
+            while ((read = await input.ReadAsync(buffer.AsMemory(0, 1024 * 1024), ct)) != 0)
+                hash.AppendData(buffer, 0, read);
+            return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        }
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
 
     /// <summary>
     /// Returns the verified digest of a stored chunk. The sidecar records the digest together with the
     /// chunk's length and last-write time captured when the server hashed the upload itself; while both
     /// still match, the digest is reused without rereading the chunk. Any other state (older sidecar
-    /// format, rewritten chunk, clock-preserving copy) falls back to hashing the chunk content, so
-    /// same-length tampering is still excluded. The merge additionally verifies the whole file.
+    /// format or rewritten chunk is treated as missing by status/resume checks. Merge is the only path
+    /// that rereads such chunks, and repairs the sidecar only after the content digest is verified.
     /// </summary>
-    private static async Task<string?> ValidChunkDigestAsync(
-        string root, string chunkPath, ulong expectedBytes, CancellationToken ct)
+    private async Task<string?> ValidChunkDigestAsync(
+        string root, string chunkPath, ulong expectedBytes, bool repairMetadata, CancellationToken ct)
     {
         if (!File.Exists(chunkPath) || !File.Exists(ChunkDigestPath(chunkPath))) return null;
         try
@@ -72,14 +82,17 @@ public sealed partial class UploadService
                 && recordedLength == (ulong)chunk.Length
                 && recordedTicks == chunk.LastWriteTimeUtc.Ticks)
                 return declared;
+            if (!repairMetadata) return null;
             var actual = await HashFileSha256Async(resolvedChunk, ct);
-            return actual.Equals(declared, StringComparison.Ordinal) ? actual : null;
+            if (!actual.Equals(declared, StringComparison.Ordinal)) return null;
+            await WriteChunkDigestAsync(root, chunkPath, actual, ct);
+            return actual;
         }
         catch (FileNotFoundException) { return null; }
         catch (DirectoryNotFoundException) { return null; }
     }
 
-    private static async Task WriteChunkDigestAsync(
+    private async Task WriteChunkDigestAsync(
         string root, string chunkPath, string digest, CancellationToken ct)
     {
         var destination = FileStorage.EnsureLexicallyWithin(root, ChunkDigestPath(chunkPath), false);
@@ -100,7 +113,7 @@ public sealed partial class UploadService
             }
             File.Move(staging, destination, overwrite: true);
         }
-        finally { TryDeleteFile(staging); }
+        finally { TryDeleteFile(staging, "chunk-sidecar-staging"); }
     }
 
     internal static string MergeLockName(MySqlConnection conn, string sessionId) =>
@@ -113,18 +126,34 @@ public sealed partial class UploadService
             FileStorage.DeleteDirectoryTree(options.StorageRoot,
                 FileStorage.SessionDirectory(FileStorage.Root(options.StorageRoot), sessionId), ct);
         }
-        catch
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception error)
         {
             // The maintenance worker retries the owned session directory.
+            logger.LogWarning("清理上传会话临时目录失败 {SessionId} {Failure}",
+                sessionId, SafeFailureCode(error));
         }
         return Task.CompletedTask;
     }
 
-    private static void TryDeleteFile(string path) { try { File.Delete(path); } catch { } }
+    private void TryDeleteFile(string path, string operation)
+    {
+        try { File.Delete(path); }
+        catch (Exception error)
+        {
+            logger.LogWarning("清理文件模块临时文件失败 {Operation} {Failure}",
+                operation, SafeFailureCode(error));
+        }
+    }
 
-    private static void TryDeleteDirectory(string root, string path, CancellationToken ct)
+    private void TryDeleteDirectory(string root, string path, string sessionId, CancellationToken ct)
     {
         try { FileStorage.DeleteDirectoryTree(root, path, ct); }
-        catch { }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception error)
+        {
+            logger.LogWarning("回滚上传初始化目录失败 {SessionId} {Failure}",
+                sessionId, SafeFailureCode(error));
+        }
     }
 }

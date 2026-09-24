@@ -10,7 +10,7 @@ public sealed class MediaGrantService(AppOptions options)
 {
     internal const int LifetimeSeconds = 300;
     private const string TokenType = "YF-MEDIA";
-    private readonly byte[] key = Encoding.UTF8.GetBytes(options.JwtSecret);
+    private readonly byte[] key = DeriveKey(options.JwtSecret);
 
     public string Issue(ulong userId, string sessionId, ulong fileId) =>
         Issue(userId, sessionId, fileId, DateTimeOffset.UtcNow, LifetimeSeconds);
@@ -72,6 +72,11 @@ public sealed class MediaGrantService(AppOptions options)
     }
 
     internal static string CookieName(ulong fileId) => "yf_media_" + fileId;
+    internal static byte[] DeriveKey(string jwtSecret)
+    {
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(jwtSecret));
+        return hmac.ComputeHash("yf-media-v1"u8.ToArray());
+    }
     private static ApiException InvalidGrant() => ApiException.Unauthorized("媒体预览凭证无效或已过期");
 }
 

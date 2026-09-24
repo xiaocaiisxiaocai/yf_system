@@ -59,7 +59,7 @@ internal static class ProjectQueries
             PriorityName = priority.Name,
             ExpectedCompletionDate = project.ExpectedCompletionDate.HasValue
                 ? project.ExpectedCompletionDate.GetValueOrDefault().ToDateTime(TimeOnly.MinValue) : null,
-            HasCopyHistory = db.ProjectCopies.Any(copy =>
-                copy.SourceProjectId == project.Id || copy.TargetProjectId == project.Id),
+            HasCopyHistory = db.ProjectCopies.Any(copy => copy.SourceProjectId == project.Id)
+                || db.ProjectCopies.Any(copy => copy.TargetProjectId == project.Id),
         };
 }

@@ -1,5 +1,6 @@
 using Dapper;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Identity;
 
@@ -8,6 +9,79 @@ namespace Yf.Api.Tests;
 [Collection(ConnectionLifecycleCollection.Name)]
 public sealed class IdentityRevisionDatabaseTests
 {
+    [Fact(Timeout = 120_000)]
+    public async Task LoginTelemetryAndSupplierDetailsDoNotInvalidateSecurityProjection()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
+        await SeedSupplierSessionAsync(database, ct);
+        var cache = new IdentityProjectionCache();
+        var claims = Claims();
+        var cached = await cache.ResolveAsync(database.Database, claims, ct);
+        var before = await RevisionAsync(database, ct);
+
+        await database.ExecuteAsync("""
+            UPDATE users
+            SET failed_login_attempts=7,
+                locked_until=DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 5 MINUTE),
+                last_login_at=UTC_TIMESTAMP(6),
+                last_login_ip='198.51.100.44'
+            WHERE id=99200;
+            UPDATE suppliers SET name='Revision Supplier Renamed',remark='non-security detail' WHERE id=99300;
+            """, null, ct);
+
+        Assert.Equal(before, await RevisionAsync(database, ct));
+        Assert.Same(cached, await cache.ResolveAsync(database.Database, claims, ct));
+
+        await database.ExecuteAsync("UPDATE users SET employee_no='REVISION-USER' WHERE id=99200", null, ct);
+        var userRevision = await RevisionAsync(database, ct);
+        Assert.True(userRevision > before);
+        var renamedUser = await cache.ResolveAsync(database.Database, claims, ct);
+        Assert.NotSame(cached, renamedUser);
+        Assert.Equal("REVISION-USER", renamedUser!.EmployeeNo);
+
+        await database.ExecuteAsync("UPDATE suppliers SET status='active' WHERE id=99300", null, ct);
+        var supplierCaseRevision = await RevisionAsync(database, ct);
+        Assert.True(supplierCaseRevision > userRevision);
+
+        await database.ExecuteAsync("UPDATE suppliers SET status='DISABLED' WHERE id=99300", null, ct);
+        Assert.True(await RevisionAsync(database, ct) > supplierCaseRevision);
+        var disabled = await cache.ResolveAsync(database.Database, claims, ct);
+        Assert.NotSame(renamedUser, disabled);
+        Assert.False(disabled!.SupplierActive);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task ExpiredSessionCleanupDoesNotBumpRevisionButActiveSessionDeletionDoes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
+        await SeedSupplierSessionAsync(database, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO refresh_tokens(
+              user_id,session_id,token_hash,session_created_at,session_expires_at,expires_at,revoked,ip)
+            VALUES(99200,'cleanup-expired',REPEAT('c',64),DATE_SUB(UTC_TIMESTAMP(),INTERVAL 38 DAY),
+                   DATE_SUB(UTC_TIMESTAMP(),INTERVAL 8 DAY),DATE_SUB(UTC_TIMESTAMP(),INTERVAL 31 DAY),1,'192.0.2.3')
+            """, null, ct);
+        var cache = new IdentityProjectionCache();
+        var claims = Claims();
+        var cached = await cache.ResolveAsync(database.Database, claims, ct);
+        Assert.True(cached!.SessionActive);
+        var beforeCleanup = await RevisionAsync(database, ct);
+
+        var cleanup = new SessionCleanupService(database.Database, database.Options,
+            NullLogger<SessionCleanupService>.Instance);
+        Assert.Equal(1, await cleanup.PurgeExpiredSessionsAsync(ct));
+        Assert.Equal(beforeCleanup, await RevisionAsync(database, ct));
+        Assert.Same(cached, await cache.ResolveAsync(database.Database, claims, ct));
+
+        await database.ExecuteAsync("DELETE FROM refresh_tokens WHERE user_id=99200 AND session_id='revision-session'", null, ct);
+        Assert.True(await RevisionAsync(database, ct) > beforeCleanup);
+        var revoked = await cache.ResolveAsync(database.Database, claims, ct);
+        Assert.NotSame(cached, revoked);
+        Assert.False(revoked!.SessionActive);
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task SecurityTableUpdatesInvalidateCachedProjection()
     {

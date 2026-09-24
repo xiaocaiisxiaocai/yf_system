@@ -22,6 +22,7 @@ internal sealed class ProjectGroupService(
         CancellationToken ct)
     {
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
+        status = NormalizeGroupStatus(status);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await using var db = EfDb.Use(conn, tx);
@@ -32,11 +33,7 @@ internal sealed class ProjectGroupService(
             query = query.Where(group => EF.Functions.Like(
                 group.Name, QueryValues.ContainsPattern(value), QueryValues.LikeEscape));
         }
-        if (!string.IsNullOrWhiteSpace(status))
-        {
-            var value = status.Trim();
-            query = query.Where(group => group.Status == value);
-        }
+        if (status is not null) query = query.Where(group => group.Status == status);
         if (supplierId is not null) query = query.Where(group => group.SupplierId == supplierId.Value);
         var total = (ulong)await query.LongCountAsync(ct);
         var offset = (actualPage - 1) * size;
@@ -87,7 +84,7 @@ internal sealed class ProjectGroupService(
         await EnsureSupplierAsync(db, request.SupplierId, ct);
         await EnsureGroupNameUniqueAsync(db, name, null, ct);
         if (await db.Projects.AnyAsync(project => Enumerable.Contains(childNames, project.Name), ct))
-            throw ApiException.Conflict("项目名称已存在");
+            throw ApiException.Conflict("子项目名称已存在");
         metadata = metadata with
         {
             ResponsibleUserId = current.Id,
@@ -121,7 +118,7 @@ internal sealed class ProjectGroupService(
         db.Projects.AddRange(children);
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
-        { throw ApiException.Conflict("项目名称已存在"); }
+        { throw ApiException.Conflict("子项目名称已存在"); }
         var createdAt = await DbClock.UtcNowAsync(db, ct, 3);
         AddChildRecords(db, children, metadata.WorkOrderNos, current.Id, "CREATE", createdAt);
         db.ProjectGroupStatusLogs.Add(new ProjectGroupStatusLog
@@ -158,7 +155,7 @@ internal sealed class ProjectGroupService(
             subprojectNames = childNames,
         })).ToArray();
         await audit.WriteBatchAsync(conn, tx, current.Id, createAudits, ip, ct);
-        var result = ProjectJson.ProjectGroup(await LoadGroupAsync(db, group.Id, current.Id, ct));
+        var result = ProjectJson.ProjectGroup(await LoadGroupAsync(db, group.Id, current.Id, ct, loadUnread: false));
         await tx.CommitAsync(ct);
         return result;
     }
@@ -188,7 +185,7 @@ internal sealed class ProjectGroupService(
         if (await db.Projects.AnyAsync(project => project.ProjectGroupId == groupId
                 && project.Status == ProjectStatuses.PendingConfirmation, ct))
             throw ApiException.Conflict("存在待验收子项目，暂不能修改主项目资料");
-        var before = await LoadGroupAsync(db, groupId, current.Id, ct);
+        var before = await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false);
         await EnsureGroupNameUniqueAsync(db, name, groupId, ct);
         metadata = await ProjectService.ValidateMetadataAsync(conn, tx, metadata, new ProjectRow
         {
@@ -200,6 +197,22 @@ internal sealed class ProjectGroupService(
             ResponsibleUserId = before.ResponsibleUserId,
             SectionId = before.SectionId,
         };
+
+        var workOrdersChanged = !before.WorkOrderNos.SequenceEqual(metadata.WorkOrderNos, StringComparer.Ordinal);
+        var inheritedMetadataChanged = before.MachineModel != metadata.MachineModel
+            || before.RobotPartId != metadata.RobotPartId
+            || before.PriorityId != metadata.PriorityId
+            || before.ExpectedCompletionDate != metadata.ExpectedCompletionDate;
+        var groupChanged = before.Name != name
+            || before.Description != request.Description
+            || workOrdersChanged
+            || inheritedMetadataChanged;
+        if (!groupChanged)
+        {
+            var unchanged = ProjectJson.ProjectGroup(before);
+            await tx.CommitAsync(ct);
+            return unchanged;
+        }
 
         try
         {
@@ -216,45 +229,39 @@ internal sealed class ProjectGroupService(
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
         { throw ApiException.Conflict("主项目名称已存在"); }
 
-        var childIds = await db.Projects
-            .Where(project => project.ProjectGroupId == groupId
-                && (project.Status != ProjectStatuses.Completed
-                    || project.ResponsibleUserId != metadata.ResponsibleUserId
-                    || project.SectionId != metadata.SectionId))
-            .OrderBy(project => project.Id).Select(project => project.Id).ToArrayAsync(ct);
-        await db.Projects.Where(project => project.ProjectGroupId == groupId
-                && (project.ResponsibleUserId != metadata.ResponsibleUserId
-                    || project.SectionId != metadata.SectionId))
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(project => project.ResponsibleUserId, metadata.ResponsibleUserId)
-                .SetProperty(project => project.SectionId, metadata.SectionId), ct);
-        await db.Projects.Where(project => project.ProjectGroupId == groupId
-                && project.Status != ProjectStatuses.Completed)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(project => project.MachineModel, metadata.MachineModel)
-                .SetProperty(project => project.RobotPartId, metadata.RobotPartId)
-                .SetProperty(project => project.ResponsibleUserId, metadata.ResponsibleUserId)
-                .SetProperty(project => project.SectionId, metadata.SectionId)
-                .SetProperty(project => project.PriorityId, metadata.PriorityId)
-                .SetProperty(project => project.ExpectedCompletionDate, ToDateOnly(metadata.ExpectedCompletionDate)), ct);
-        if (metadata.RobotPartId is not null)
+        var childIds = inheritedMetadataChanged || workOrdersChanged
+            ? await db.Projects.Where(project => project.ProjectGroupId == groupId
+                    && project.Status != ProjectStatuses.Completed)
+                .OrderBy(project => project.Id).Select(project => project.Id).ToArrayAsync(ct)
+            : [];
+        if (inheritedMetadataChanged)
         {
-            await db.ProjectGroups.Where(group => group.Id == groupId)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(group => group.LegacyRobotModelName, (string?)null), ct);
             await db.Projects.Where(project => project.ProjectGroupId == groupId
                     && project.Status != ProjectStatuses.Completed)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(project => project.LegacyRobotModelName, (string?)null), ct);
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(project => project.MachineModel, metadata.MachineModel)
+                    .SetProperty(project => project.RobotPartId, metadata.RobotPartId)
+                    .SetProperty(project => project.PriorityId, metadata.PriorityId)
+                    .SetProperty(project => project.ExpectedCompletionDate, ToDateOnly(metadata.ExpectedCompletionDate)), ct);
+            if (metadata.RobotPartId is not null)
+            {
+                await db.ProjectGroups.Where(group => group.Id == groupId)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(group => group.LegacyRobotModelName, (string?)null), ct);
+                await db.Projects.Where(project => project.ProjectGroupId == groupId
+                        && project.Status != ProjectStatuses.Completed)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(project => project.LegacyRobotModelName, (string?)null), ct);
+            }
         }
-        await ReplaceGroupWorkOrdersAsync(db, groupId, metadata.WorkOrderNos, ct);
-        await db.ProjectWorkOrders.Where(order => db.Projects.Any(project => project.Id == order.ProjectId
-                && project.ProjectGroupId == groupId && project.Status != ProjectStatuses.Completed))
-            .ExecuteDeleteAsync(ct);
-        var mutableProjectIds = await db.Projects.Where(project => project.ProjectGroupId == groupId
-                && project.Status != ProjectStatuses.Completed)
-            .Select(project => project.Id).ToArrayAsync(ct);
-        db.ProjectWorkOrders.AddRange(mutableProjectIds.SelectMany(projectId => metadata.WorkOrderNos.Select((value, index) =>
-            new ProjectWorkOrder { ProjectId = projectId, WorkOrderNo = value, SortNo = index })));
-        await db.SaveChangesAsync(ct);
+        if (workOrdersChanged)
+        {
+            await ReplaceGroupWorkOrdersAsync(db, groupId, metadata.WorkOrderNos, ct);
+            await db.ProjectWorkOrders.Where(order => db.Projects.Any(project => project.Id == order.ProjectId
+                    && project.ProjectGroupId == groupId && project.Status != ProjectStatuses.Completed))
+                .ExecuteDeleteAsync(ct);
+            db.ProjectWorkOrders.AddRange(childIds.SelectMany(projectId => metadata.WorkOrderNos.Select((value, index) =>
+                new ProjectWorkOrder { ProjectId = projectId, WorkOrderNo = value, SortNo = index })));
+            await db.SaveChangesAsync(ct);
+        }
 
         var updateAudits = childIds.Select(childId => new AuditWrite(
             "PROJECT_UPDATE", "project", childId, new
@@ -276,7 +283,7 @@ internal sealed class ProjectGroupService(
                     DateValue(before.ExpectedCompletionDate), DateValue(metadata.ExpectedCompletionDate))),
         })).ToArray();
         await audit.WriteBatchAsync(conn, tx, current.Id, updateAudits, ip, ct);
-        var result = ProjectJson.ProjectGroup(await LoadGroupAsync(db, groupId, current.Id, ct));
+        var result = ProjectJson.ProjectGroup(await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false));
         await tx.CommitAsync(ct);
         return result;
     }
@@ -305,7 +312,7 @@ internal sealed class ProjectGroupService(
             throw ApiException.Conflict("存在待验收子项目，暂不能变更负责人");
         var owner = await ProjectService.EligibleOwners(db).Where(row => row.Id == targetId).SingleOrDefaultAsync(ct)
             ?? throw ApiException.BadRequest("新负责人必须是启用且拥有项目列表权限的公司内部账号");
-        var before = await LoadGroupAsync(db, groupId, current.Id, ct);
+        var before = await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false);
 
         await db.ProjectGroups.Where(group => group.Id == groupId).ExecuteUpdateAsync(setters => setters
             .SetProperty(group => group.ResponsibleUserId, owner.Id)
@@ -340,7 +347,7 @@ internal sealed class ProjectGroupService(
             changes = AuditChange.OnlyChanged(responsibleChange, sectionChange),
         })).ToArray();
         await audit.WriteBatchAsync(conn, tx, current.Id, audits, ip, ct);
-        var result = ProjectJson.ProjectGroup(await LoadGroupAsync(db, groupId, current.Id, ct));
+        var result = ProjectJson.ProjectGroup(await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false));
         await tx.CommitAsync(ct);
         return result;
     }
@@ -365,13 +372,13 @@ internal sealed class ProjectGroupService(
             throw ApiException.Conflict("主项目已结束，不能新增子项目");
         await using var db = EfDb.Use(conn, tx);
         await EnsureProjectNameUniqueAsync(db, name, null, ct);
-        var group = await LoadGroupAsync(db, groupId, current.Id, ct);
+        var group = await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false);
         var metadata = Metadata(group);
         var child = NewChild(groupId, name, request.Description, group.SupplierId, current.Id, metadata);
         db.Projects.Add(child);
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
-        { throw ApiException.Conflict("项目名称已存在"); }
+        { throw ApiException.Conflict("子项目名称已存在"); }
         AddChildRecords(db, [child], metadata.WorkOrderNos, current.Id, "CREATE", await DbClock.UtcNowAsync(db, ct, 3));
         await db.SaveChangesAsync(ct);
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_CREATE", "project", child.Id, new
@@ -381,8 +388,8 @@ internal sealed class ProjectGroupService(
             projectGroupName = group.Name,
             inheritedFromMainProject = true,
         }, ip, ct);
-        await groupStatus.RecalculateAsync(conn, tx, groupId, current.Id, child.Id, ct);
-        var result = ProjectJson.Project(await LoadChildAsync(db, child.Id, current.Id, ct));
+        await groupStatus.RecalculateAsync(conn, tx, groupId, current.Id, child.Id, ct, groupAlreadyLocked: true);
+        var result = ProjectJson.Project(await LoadChildAsync(db, child.Id, current.Id, ct, loadUnread: false));
         await tx.CommitAsync(ct);
         return result;
     }
@@ -401,7 +408,7 @@ internal sealed class ProjectGroupService(
         await ProjectGroupAccessService.RequireViewAsync(conn, tx, current, groupId, true, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:delete", ct);
         await using var db = EfDb.Use(conn, tx);
-        var group = await LoadGroupAsync(db, groupId, current.Id, ct);
+        var group = await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false);
         if (group.SubprojectCount > 0) throw ApiException.Conflict("主项目仍有子项目，请先逐个处理子项目");
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_GROUP_DELETE", "project_group", groupId,
             new { name = group.Name }, ip, ct);
@@ -427,7 +434,7 @@ internal sealed class ProjectGroupService(
         CreatedBy = actorId,
         MachineModel = metadata.MachineModel,
         RobotPartId = metadata.RobotPartId,
-        LegacyRobotModelName = metadata.LegacyRobotModelName,
+        LegacyRobotModelName = null,
         ResponsibleUserId = metadata.ResponsibleUserId,
         SectionId = metadata.SectionId,
         PriorityId = metadata.PriorityId,
@@ -457,53 +464,72 @@ internal sealed class ProjectGroupService(
         }));
     }
 
-    // Unread counts are loaded per page by LoadGroupUnreadAsync: a correlated per-group count here would
-    // scan every message once per group.
+    // Related labels and status counts are joined once. Unread counts are loaded per page by
+    // LoadGroupUnreadAsync because they depend on the current user and the bounded unread window.
     private static IQueryable<ProjectGroupRow> GroupRows(
         YfDbContext db,
-        IQueryable<ProjectGroup> query) => query.Select(group => new ProjectGroupRow
+        IQueryable<ProjectGroup> query)
     {
-        Id = group.Id,
-        Name = group.Name,
-        Description = group.Description,
-        SupplierId = group.SupplierId,
-        SupplierName = db.Suppliers.Where(supplier => supplier.Id == group.SupplierId)
-            .Select(supplier => supplier.Name).FirstOrDefault(),
-        Status = group.Status,
-        CreatedBy = group.CreatedBy,
-        CreatedByName = db.Users.Where(user => user.Id == group.CreatedBy)
-            .Select(user => user.RealName).FirstOrDefault(),
-        MachineModel = group.MachineModel,
-        RobotPartId = group.RobotPartId,
-        RobotPartNumber = db.RobotParts.Where(item => item.Id == group.RobotPartId)
-            .Select(item => item.PartNumber).FirstOrDefault(),
-        RobotModelName = db.RobotParts.Where(item => item.Id == group.RobotPartId)
-            .Select(item => item.Model).FirstOrDefault() ?? group.LegacyRobotModelName,
-        LegacyRobotModelName = group.LegacyRobotModelName,
-        ResponsibleUserId = group.ResponsibleUserId,
-        ResponsibleUserEmployeeNo = db.Users.Where(user => user.Id == group.ResponsibleUserId)
-            .Select(user => user.EmployeeNo).FirstOrDefault(),
-        ResponsibleUserName = db.Users.Where(user => user.Id == group.ResponsibleUserId)
-            .Select(user => user.RealName).FirstOrDefault(),
-        SectionId = group.SectionId,
-        SectionName = db.Departments.Where(section => section.Id == group.SectionId && section.Kind == "SECTION")
-            .Select(section => section.Name).FirstOrDefault(),
-        PriorityId = group.PriorityId,
-        PriorityName = db.ProjectDictionaries.Where(item => item.Id == group.PriorityId)
-            .Select(item => item.Name).FirstOrDefault(),
-        ExpectedCompletionDate = group.ExpectedCompletionDate.HasValue
-            ? group.ExpectedCompletionDate.Value.ToDateTime(TimeOnly.MinValue) : null,
-        CompletedAt = group.CompletedAt,
-        CreatedAt = group.CreatedAt,
-        UpdatedAt = group.UpdatedAt,
-        SubprojectCount = (ulong)db.Projects.LongCount(project => project.ProjectGroupId == group.Id),
-        CompletedCount = (ulong)db.Projects.LongCount(project => project.ProjectGroupId == group.Id
-            && project.Status == ProjectStatuses.Completed),
-        PendingCount = (ulong)db.Projects.LongCount(project => project.ProjectGroupId == group.Id
-            && project.Status == ProjectStatuses.PendingConfirmation),
-        TerminatedCount = (ulong)db.Projects.LongCount(project => project.ProjectGroupId == group.Id
-            && project.Status == ProjectStatuses.Terminated),
-    });
+        var counts = from project in db.Projects
+                     group project by project.ProjectGroupId into perGroup
+                     select new
+                     {
+                         ProjectGroupId = perGroup.Key,
+                         Total = perGroup.LongCount(),
+                         Completed = perGroup.LongCount(project => project.Status == ProjectStatuses.Completed),
+                         Pending = perGroup.LongCount(project => project.Status == ProjectStatuses.PendingConfirmation),
+                         Terminated = perGroup.LongCount(project => project.Status == ProjectStatuses.Terminated),
+                     };
+        return
+            from mainProject in query
+            join supplierValue in db.Suppliers on mainProject.SupplierId equals supplierValue.Id into suppliers
+            from supplier in suppliers.DefaultIfEmpty()
+            join creatorValue in db.Users on mainProject.CreatedBy equals creatorValue.Id into creators
+            from creator in creators.DefaultIfEmpty()
+            join partValue in db.RobotParts on mainProject.RobotPartId equals (ulong?)partValue.Id into parts
+            from part in parts.DefaultIfEmpty()
+            join ownerValue in db.Users on mainProject.ResponsibleUserId equals (ulong?)ownerValue.Id into owners
+            from owner in owners.DefaultIfEmpty()
+            join sectionValue in db.Departments.Where(item => item.Kind == "SECTION")
+                on mainProject.SectionId equals (ulong?)sectionValue.Id into sections
+            from section in sections.DefaultIfEmpty()
+            join priorityValue in db.ProjectDictionaries on mainProject.PriorityId equals (ulong?)priorityValue.Id into priorities
+            from priority in priorities.DefaultIfEmpty()
+            join countValue in counts on mainProject.Id equals countValue.ProjectGroupId into countRows
+            from count in countRows.DefaultIfEmpty()
+            select new ProjectGroupRow
+            {
+                Id = mainProject.Id,
+                Name = mainProject.Name,
+                Description = mainProject.Description,
+                SupplierId = mainProject.SupplierId,
+                SupplierName = supplier.Name,
+                Status = mainProject.Status,
+                CreatedBy = mainProject.CreatedBy,
+                CreatedByName = creator.RealName,
+                MachineModel = mainProject.MachineModel,
+                RobotPartId = mainProject.RobotPartId,
+                RobotPartNumber = part.PartNumber,
+                RobotModelName = part.Model ?? mainProject.LegacyRobotModelName,
+                LegacyRobotModelName = mainProject.LegacyRobotModelName,
+                ResponsibleUserId = mainProject.ResponsibleUserId,
+                ResponsibleUserEmployeeNo = owner.EmployeeNo,
+                ResponsibleUserName = owner.RealName,
+                SectionId = mainProject.SectionId,
+                SectionName = section.Name,
+                PriorityId = mainProject.PriorityId,
+                PriorityName = priority.Name,
+                ExpectedCompletionDate = mainProject.ExpectedCompletionDate.HasValue
+                    ? mainProject.ExpectedCompletionDate.GetValueOrDefault().ToDateTime(TimeOnly.MinValue) : null,
+                CompletedAt = mainProject.CompletedAt,
+                CreatedAt = mainProject.CreatedAt,
+                UpdatedAt = mainProject.UpdatedAt,
+                SubprojectCount = count == null ? 0 : (ulong)count.Total,
+                CompletedCount = count == null ? 0 : (ulong)count.Completed,
+                PendingCount = count == null ? 0 : (ulong)count.Pending,
+                TerminatedCount = count == null ? 0 : (ulong)count.Terminated,
+            };
+    }
 
     /// <summary>Unread messages (within the unread window) per group, for all groups in one query.</summary>
     private static async Task LoadGroupUnreadAsync(
@@ -525,21 +551,21 @@ internal sealed class ProjectGroupService(
     }
 
     private static async Task<ProjectGroupRow> LoadGroupAsync(
-        YfDbContext db, ulong groupId, ulong userId, CancellationToken ct)
+        YfDbContext db, ulong groupId, ulong userId, CancellationToken ct, bool loadUnread = true)
     {
         var row = await GroupRows(db, db.ProjectGroups.Where(group => group.Id == groupId))
             .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         await LoadWorkOrdersAsync(db, [row], ct);
-        await LoadGroupUnreadAsync(db, [row], userId, ct);
+        if (loadUnread) await LoadGroupUnreadAsync(db, [row], userId, ct);
         return row;
     }
 
     private static async Task<ProjectRow> LoadChildAsync(
-        YfDbContext db, ulong projectId, ulong userId, CancellationToken ct)
+        YfDbContext db, ulong projectId, ulong userId, CancellationToken ct, bool loadUnread = true)
     {
         var row = await ProjectQueries.Rows(db).SingleOrDefaultAsync(project => project.Id == projectId, ct)
             ?? throw ApiException.NotFound();
-        await LoadProjectExtrasAsync(db, [row], userId, ct);
+        await LoadProjectExtrasAsync(db, [row], userId, ct, loadUnread);
         return row;
     }
 
@@ -559,7 +585,8 @@ internal sealed class ProjectGroupService(
     }
 
     private static async Task LoadProjectExtrasAsync(
-        YfDbContext db, IReadOnlyCollection<ProjectRow> projects, ulong userId, CancellationToken ct)
+        YfDbContext db, IReadOnlyCollection<ProjectRow> projects, ulong userId, CancellationToken ct,
+        bool loadUnread = true)
     {
         if (projects.Count == 0) return;
         var ids = projects.Select(project => project.Id).ToArray();
@@ -568,13 +595,17 @@ internal sealed class ProjectGroupService(
             .Select(order => new ProjectWorkOrderValue(order.ProjectId, order.WorkOrderNo)).ToArrayAsync(ct);
         var workOrderLookup = workOrders.GroupBy(row => row.ProjectId)
             .ToDictionary(group => group.Key, group => group.Select(row => row.WorkOrderNo).ToArray());
-        var cutoff = await UnreadWindow.CutoffAsync(db, ct);
-        var unreadRows = await db.Messages.Where(message => Enumerable.Contains(ids, message.ProjectId)
-                && message.Status == "NORMAL" && message.SenderId != userId && message.CreatedAt >= cutoff
-                && !db.MessageReads.Any(receipt => receipt.MessageId == message.Id && receipt.UserId == userId))
-            .GroupBy(message => message.ProjectId)
-            .Select(group => new UnreadValue(group.Key, group.LongCount())).ToArrayAsync(ct);
-        var unreadLookup = unreadRows.ToDictionary(row => row.ProjectId, row => (ulong)row.Count);
+        var unreadLookup = new Dictionary<ulong, ulong>();
+        if (loadUnread)
+        {
+            var cutoff = await UnreadWindow.CutoffAsync(db, ct);
+            var unreadRows = await db.Messages.Where(message => Enumerable.Contains(ids, message.ProjectId)
+                    && message.Status == "NORMAL" && message.SenderId != userId && message.CreatedAt >= cutoff
+                    && !db.MessageReads.Any(receipt => receipt.MessageId == message.Id && receipt.UserId == userId))
+                .GroupBy(message => message.ProjectId)
+                .Select(group => new UnreadValue(group.Key, group.LongCount())).ToArrayAsync(ct);
+            unreadLookup = unreadRows.ToDictionary(row => row.ProjectId, row => (ulong)row.Count);
+        }
         foreach (var project in projects)
         {
             project.WorkOrderNos = workOrderLookup.GetValueOrDefault(project.Id) ?? [];
@@ -616,7 +647,7 @@ internal sealed class ProjectGroupService(
     {
         if (await db.Projects.AnyAsync(project => project.Name == name
                 && (excludeId == null || project.Id != excludeId), ct))
-            throw ApiException.Conflict("项目名称已存在");
+            throw ApiException.Conflict("子项目名称已存在");
     }
 
     private static string[] NormalizeSubprojectNames(string?[]? values)
@@ -639,11 +670,20 @@ internal sealed class ProjectGroupService(
         group.WorkOrderNos,
         group.MachineModel,
         group.RobotPartId,
-        group.LegacyRobotModelName,
         group.ResponsibleUserId,
         group.SectionId,
         group.PriorityId,
         group.ExpectedCompletionDate);
+
+    internal static string? NormalizeGroupStatus(string? status)
+    {
+        if (string.IsNullOrWhiteSpace(status)) return null;
+        var value = status.Trim();
+        if (value is not (ProjectStatuses.Draft or ProjectStatuses.InProgress
+            or ProjectStatuses.Completed or ProjectStatuses.Terminated))
+            throw ApiException.BadRequest("主项目状态不正确");
+        return value;
+    }
 
     private static DateOnly? ToDateOnly(DateTime? value) => value is null ? null : DateOnly.FromDateTime(value.Value);
 

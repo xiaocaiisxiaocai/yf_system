@@ -2,12 +2,7 @@ import type * as Api from './generated/api-types'
 
 export type { ApiResponses, ApiRoute } from './generated/api-types'
 
-export interface PageResp<T> {
-  list: T[]
-  total: number
-  page: number
-  pageSize: number
-}
+export type PageResp<T> = Omit<Api.PageResponseOfAuditLogResponse, 'list'> & { list: T[] }
 
 /**
  * 以下业务类型由后端 OpenAPI 生成的 ./generated/api-types 推导（npm run generate:api-types），
@@ -82,7 +77,8 @@ export type FileItem = Omit<Api.FileListItem, 'direction'> & { direction: 'C2S' 
 
 export type Message = Omit<Api.MessageResponse, 'senderType'> & { senderType: 'INTERNAL' | 'SUPPLIER' }
 
-export const PROJECT_STATUS: Record<string, { text: string; color: string }> = {
+type ProjectStatusView = { text: string; color: string }
+export const PROJECT_STATUS: Record<ProjectStatus, ProjectStatusView> & Partial<Record<string, ProjectStatusView>> = {
   DRAFT: { text: '草稿', color: 'gray' },
   IN_PROGRESS: { text: '进行中', color: 'arcoblue' },
   PENDING_CONFIRMATION: { text: '待内部验收', color: 'orange' },

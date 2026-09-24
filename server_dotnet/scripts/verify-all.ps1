@@ -9,15 +9,18 @@
     secrets.  Database-backed .NET tests and the HTTP contract suite run only
     when the caller explicitly supplies a local YF_TEST_DATABASE_URL.
 
-    HTTP validation is enabled by default when YF_TEST_DATABASE_URL is present.
-    Use -SkipHttp when only the build and unit-test gates are required.  The
-    real MySQL maintenance suite is opt-in with -IncludeMaintenance.  Browser
-    automation is intentionally not part of this script.
+    Full database and HTTP coverage is required by default. Use -AllowSkips to
+    run the available non-database gates when YF_TEST_DATABASE_URL is absent,
+    or together with -SkipHttp for an explicitly partial run. The real MySQL
+    maintenance suite is opt-in with -IncludeMaintenance. Browser automation
+    is intentionally not part of this script.
 #>
 [CmdletBinding()]
 param(
     [switch]$SkipHttp,
-    [switch]$IncludeMaintenance
+    [switch]$IncludeMaintenance,
+    [switch]$AllowSkips,
+    [switch]$SelfTestNpmCiPreflight
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,6 +43,7 @@ $script:PlanNames = @(
     'openapi-update-guard',
     'database-configuration',
     'dotnet-sdk',
+    'dotnet-tool-restore',
     'restore-api',
     'restore-testhost',
     'restore-tests',
@@ -50,9 +54,12 @@ $script:PlanNames = @(
     'ef-model-check',
     'http-isolated',
     'maintenance',
+    'python-script-self-tests',
+    'npm-ci-native-binding-preflight',
     'npm-ci',
     'npm-lint',
     'npm-test',
+    'npm-test-precompression',
     'npm-build'
 )
 $script:RedactionValues = New-Object 'System.Collections.Generic.List[string]'
@@ -214,6 +221,114 @@ function Assert-Passed {
     }
 }
 
+function Assert-NpmCiNativeBindingsAvailable {
+    param([Parameter(Mandatory = $true)][string]$NodeModulesRoot)
+
+    if (-not (Test-Path -LiteralPath $NodeModulesRoot -PathType Container)) {
+        return @{ nodeModulesPresent = $false; nativeFilesChecked = 0 }
+    }
+
+    $root = [IO.Path]::GetFullPath($NodeModulesRoot).TrimEnd('\', '/')
+    $nativeFiles = @(Get-ChildItem -LiteralPath $root -Recurse -Force -File -ErrorAction Stop |
+        Where-Object { $_.Extension -in @('.node', '.dll', '.exe') } |
+        Sort-Object FullName)
+    $blocked = @()
+    foreach ($file in $nativeFiles) {
+        $stream = $null
+        try {
+            # Read-only access with FileShare.None does not mutate dependencies,
+            # but proves another process is not currently sharing this binding.
+            $stream = [IO.File]::Open($file.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+        } catch {
+            $blocked += $file.FullName.Substring($root.Length).TrimStart('\', '/').Replace('\', '/')
+        } finally {
+            if ($null -ne $stream) { $stream.Dispose() }
+        }
+    }
+
+    if ($blocked.Count -gt 0) {
+        $examples = @($blocked | Select-Object -First 10)
+        $suffix = if ($blocked.Count -gt $examples.Count) { ' (additional blocked files omitted)' } else { '' }
+        throw ('npm ci was not started because {0} native binding file(s) under web/node_modules cannot be opened read-only with exclusive sharing: {1}{2}. A running Node/Vite process may own them. Run verification in an isolated worktree or workspace with its own node_modules. This script will not stop processes, rename dependencies or delete files to bypass the lock.' -f
+            $blocked.Count, ($examples -join ', '), $suffix)
+    }
+
+    return @{ nodeModulesPresent = $true; nativeFilesChecked = $nativeFiles.Count }
+}
+
+function Invoke-NpmCiNativeBindingPreflight {
+    param([Parameter(Mandatory = $true)][string]$NodeModulesRoot)
+
+    $name = 'npm-ci-native-binding-preflight'
+    $logPath = Join-Path $runRoot ($name + '.log')
+    try {
+        $details = Assert-NpmCiNativeBindingsAvailable -NodeModulesRoot $NodeModulesRoot
+        Write-Log -Path $logPath -Text ('PASS: checked {0} existing native binding file(s); npm ci has not started.' -f $details.nativeFilesChecked)
+        return Add-Result -Name $name -Status 'passed' -ExitCode 0 -LogPath $logPath -Reason $null -Details $details
+    } catch {
+        $reason = $_.Exception.Message
+        Write-Log -Path $logPath -Text $reason
+        return Add-Result -Name $name -Status 'failed' -ExitCode 1 -LogPath $logPath -Reason $reason -Details @{ nodeModulesPresent = (Test-Path -LiteralPath $NodeModulesRoot -PathType Container) }
+    }
+}
+
+function Invoke-NpmCiNativeBindingPreflightSelfTest {
+    $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
+    $fixtureRoot = [IO.Path]::GetFullPath((Join-Path $tempBase ('yf-verify-npm-lock-' + [Guid]::NewGuid().ToString('N'))))
+    $tempPrefix = $tempBase + [IO.Path]::DirectorySeparatorChar
+    if (-not $fixtureRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetFileName($fixtureRoot) -notmatch '^yf-verify-npm-lock-[a-f0-9]{32}$') {
+        throw 'Unsafe npm preflight self-test directory.'
+    }
+
+    $holder = $null
+    try {
+        $nodeModules = Join-Path $fixtureRoot 'node_modules'
+        $bindingDirectory = Join-Path $nodeModules 'fixture-native'
+        New-Item -ItemType Directory -Path $bindingDirectory -Force | Out-Null
+        $binding = Join-Path $bindingDirectory 'fixture.node'
+        $content = [Text.Encoding]::UTF8.GetBytes('native-binding-fixture')
+        [IO.File]::WriteAllBytes($binding, $content)
+        $fixedWriteTime = [DateTime]::SpecifyKind([DateTime]'2026-01-02T03:04:05', [DateTimeKind]::Utc)
+        [IO.File]::SetLastWriteTimeUtc($binding, $fixedWriteTime)
+        $beforeHash = (Get-FileHash -LiteralPath $binding -Algorithm SHA256).Hash
+        $beforeLength = (Get-Item -LiteralPath $binding).Length
+        $beforeWriteTime = (Get-Item -LiteralPath $binding).LastWriteTimeUtc
+
+        $holder = [IO.File]::Open($binding, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+        $blocked = $false
+        $message = ''
+        try {
+            Assert-NpmCiNativeBindingsAvailable -NodeModulesRoot $nodeModules | Out-Null
+        } catch {
+            $blocked = $true
+            $message = $_.Exception.Message
+        } finally {
+            $holder.Dispose()
+            $holder = $null
+        }
+
+        if (-not $blocked -or $message -notmatch 'isolated worktree or workspace' -or
+            -not (Test-Path -LiteralPath $binding -PathType Leaf) -or
+            (Get-FileHash -LiteralPath $binding -Algorithm SHA256).Hash -ne $beforeHash -or
+            (Get-Item -LiteralPath $binding).Length -ne $beforeLength -or
+            (Get-Item -LiteralPath $binding).LastWriteTimeUtc -ne $beforeWriteTime) {
+            throw 'npm ci native-binding preflight did not fail before changing the locked fixture.'
+        }
+
+        Remove-Item -LiteralPath $binding -Force
+        $empty = Assert-NpmCiNativeBindingsAvailable -NodeModulesRoot $nodeModules
+        $missing = Assert-NpmCiNativeBindingsAvailable -NodeModulesRoot (Join-Path $fixtureRoot 'missing-node_modules')
+        if ($empty.nativeFilesChecked -ne 0 -or $missing.nativeFilesChecked -ne 0 -or $missing.nodeModulesPresent) {
+            throw 'Empty or absent node_modules did not pass the npm ci preflight.'
+        }
+        Write-Host 'PASS npm ci native-binding preflight blocks a real locked file without changing it; empty node_modules passes.'
+    } finally {
+        if ($null -ne $holder) { $holder.Dispose() }
+        if (Test-Path -LiteralPath $fixtureRoot) { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force }
+    }
+}
+
 function Mark-PendingStepsSkipped {
     param([Parameter(Mandatory = $true)][string]$Reason)
 
@@ -342,6 +457,16 @@ function Restore-ConfigurationEnvironment {
     }
 }
 
+if ($SelfTestNpmCiPreflight) {
+    try {
+        Invoke-NpmCiNativeBindingPreflightSelfTest
+        exit 0
+    } catch {
+        Write-Error $_.Exception.Message
+        exit 1
+    }
+}
+
 $testDatabaseUrl = [Environment]::GetEnvironmentVariable('YF_TEST_DATABASE_URL', 'Process')
 Add-RedactionValue $testDatabaseUrl
 $originalDesignConnection = [Environment]::GetEnvironmentVariable('YF_EF_DESIGN_CONNECTION', 'Process')
@@ -373,6 +498,9 @@ try {
     if ([string]::IsNullOrWhiteSpace($testDatabaseUrl)) {
         $script:DatabaseMode = 'skipped-no-explicit-local-url'
         [void](Add-SkippedResult -Name 'database-configuration' -Reason 'YF_TEST_DATABASE_URL is not set; database-backed .NET and HTTP checks are skipped.')
+        if (-not $AllowSkips) {
+            throw 'Full coverage requires an explicit local YF_TEST_DATABASE_URL. Use -AllowSkips only for an intentional partial run.'
+        }
     } else {
         $testDatabaseUri = $null
         $validUri = [Uri]::TryCreate($testDatabaseUrl, [UriKind]::Absolute, [ref]$testDatabaseUri)
@@ -410,6 +538,9 @@ try {
     $testsProject = '.\tests\Yf.Api.Tests.csproj'
     $restoreArguments = @('--locked-mode', '--verbosity', 'minimal')
     $buildArguments = @('--configuration', 'Debug', '--no-restore', '--verbosity', 'minimal')
+
+    $step = Invoke-VerificationStep -Name 'dotnet-tool-restore' -FilePath 'dotnet' -Arguments @('tool', 'restore') -WorkingDirectory $serverRoot
+    Assert-Passed $step
 
     $step = Invoke-VerificationStep -Name 'restore-api' -FilePath 'dotnet' -Arguments (@('restore', $apiProject) + $restoreArguments) -WorkingDirectory $serverRoot
     Assert-Passed $step
@@ -464,12 +595,27 @@ try {
         }
     }
 
-    $npmCommand = 'npm.cmd'
+    $scriptSelfTests = @(
+        'test_script_safety',
+        'test_publish_defaults',
+        'test_browser_step_evidence',
+        'test_test_host_artifacts',
+        'test_maintenance_optimization_guard',
+        'test_verify_all_guards'
+    )
+    $step = Invoke-VerificationStep -Name 'python-script-self-tests' -FilePath 'python' -Arguments (@('-m', 'unittest') + $scriptSelfTests) -WorkingDirectory $scriptDirectory
+    Assert-Passed $step
+
+    $npmCommand = if ($IsWindows -or $PSVersionTable.PSEdition -eq 'Desktop') { 'npm.cmd' } else { 'npm' }
+    $step = Invoke-NpmCiNativeBindingPreflight -NodeModulesRoot (Join-Path $webRoot 'node_modules')
+    Assert-Passed $step
     $step = Invoke-VerificationStep -Name 'npm-ci' -FilePath $npmCommand -Arguments @('ci') -WorkingDirectory $webRoot
     Assert-Passed $step
     $step = Invoke-VerificationStep -Name 'npm-lint' -FilePath $npmCommand -Arguments @('run', 'lint') -WorkingDirectory $webRoot
     Assert-Passed $step
     $step = Invoke-VerificationStep -Name 'npm-test' -FilePath $npmCommand -Arguments @('test') -WorkingDirectory $webRoot
+    Assert-Passed $step
+    $step = Invoke-VerificationStep -Name 'npm-test-precompression' -FilePath $npmCommand -Arguments @('run', 'test:precompression') -WorkingDirectory $webRoot
     Assert-Passed $step
     $step = Invoke-VerificationStep -Name 'npm-build' -FilePath $npmCommand -Arguments @('run', 'build') -WorkingDirectory $webRoot
     Assert-Passed $step
@@ -496,8 +642,24 @@ try {
     if ($null -ne $script:TestSummary -and $script:TestSummary.Contains('skipped')) {
         $testSkipped = [int]$script:TestSummary.skipped
     }
-    $fullCoverage = ($failed.Count -eq 0 -and $skipped.Count -eq 0 -and $testSkipped -eq 0)
-    $overall = if ($script:ExitCode -ne 0 -or $failed.Count -gt 0) { 'failed' } elseif ($skipped.Count -gt 0 -or $testSkipped -gt 0) { 'passed-with-skips' } else { 'passed' }
+    $databaseTestSkipped = 0
+    $unexpectedTestSkipped = 0
+    if ($null -ne $script:TestSummary) {
+        if ($script:TestSummary.Contains('databaseSkippedWithoutExplicitUrl')) {
+            $databaseTestSkipped = [int]$script:TestSummary.databaseSkippedWithoutExplicitUrl
+        }
+        if ($script:TestSummary.Contains('unexpectedSkipped')) {
+            $unexpectedTestSkipped = [int]$script:TestSummary.unexpectedSkipped
+        }
+    }
+    $coverageRequiredSteps = @('database-configuration', 'http-isolated')
+    $coverageSkips = @($skipped | Where-Object { $_.name -in $coverageRequiredSteps })
+    $fullCoverage = ($failed.Count -eq 0 -and $coverageSkips.Count -eq 0 -and
+        $databaseTestSkipped -eq 0 -and $unexpectedTestSkipped -eq 0)
+    if (-not $AllowSkips -and -not $fullCoverage) {
+        $script:ExitCode = 1
+    }
+    $overall = if ($script:ExitCode -ne 0 -or $failed.Count -gt 0) { 'failed' } elseif (-not $fullCoverage) { 'passed-with-skips' } else { 'passed' }
     $report = [ordered]@{
         schemaVersion = 1
         generatedAtUtc = [DateTime]::UtcNow.ToString('o')
@@ -505,6 +667,7 @@ try {
         runDirectory = $runRoot
         status = $overall
         fullCoverage = $fullCoverage
+        allowSkips = [bool]$AllowSkips
         databaseChecks = $script:DatabaseMode
         browserAutomation = 'not-run'
         dotnetSdk = $script:DotnetSdkVersion

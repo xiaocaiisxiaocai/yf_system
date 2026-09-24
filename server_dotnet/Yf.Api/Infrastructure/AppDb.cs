@@ -28,7 +28,12 @@ public sealed class AppDb
     public async Task<MySqlConnection> OpenAsync(CancellationToken cancellationToken = default)
     {
         var connection = new MySqlConnection(connectionString);
-        try { await connection.OpenAsync(cancellationToken); return connection; }
+        try
+        {
+            await connection.OpenAsync(cancellationToken);
+            await UtcDatabaseSession.InitializeAsync(connection, cancellationToken);
+            return connection;
+        }
         catch { await connection.DisposeAsync(); throw; }
     }
 

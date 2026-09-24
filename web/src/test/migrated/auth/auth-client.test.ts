@@ -68,6 +68,11 @@ function profileResponse(id: number) {
   return { data: profile }
 }
 
+function jwt(exp: number) {
+  const payload = btoa(JSON.stringify({ exp })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  return `header.${payload}.signature`
+}
+
 async function loadClient(harness = createAxiosHarness()) {
   vi.resetModules()
   vi.doMock('axios', () => ({ default: harness.axios }))
@@ -125,6 +130,7 @@ async function forbidden(loaded: Awaited<ReturnType<typeof loadClient>>, url = '
 describe('auth client migration', () => {
   afterEach(() => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
     vi.clearAllMocks()
     localStorage.clear()
   })
@@ -264,6 +270,51 @@ describe('auth client migration', () => {
     expect(overlapped).toBe(false)
     expect(order).toHaveLength(2)
     expect(localStorage.getItem('yf:auth-refresh-lock')).toBeNull()
+    if (descriptor) Object.defineProperty(navigator, 'locks', descriptor)
+    else Reflect.deleteProperty(navigator, 'locks')
+  })
+
+  it('the storage lease renews during a long operation and releases only after completion', async () => {
+    const loaded = await loadClient()
+    vi.useFakeTimers()
+    const operation = deferred<string>()
+    const pending = loaded.client.withStorageLease(() => operation.promise)
+    await vi.advanceTimersByTimeAsync(50)
+    const first = JSON.parse(localStorage.getItem('yf:auth-refresh-lock')!) as { owner: string; expires: number }
+    await vi.advanceTimersByTimeAsync(20_000)
+    const renewed = JSON.parse(localStorage.getItem('yf:auth-refresh-lock')!) as { owner: string; expires: number }
+    expect(renewed.owner).toBe(first.owner)
+    expect(renewed.expires).toBeGreaterThan(first.expires)
+    operation.resolve('done')
+    await expect(pending).resolves.toBe('done')
+    expect(localStorage.getItem('yf:auth-refresh-lock')).toBeNull()
+  })
+
+  it('storage coordination failure rejects without running the protected operation', async () => {
+    const loaded = await loadClient()
+    const operation = vi.fn(async () => 'unsafe')
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked') })
+    await expect(loaded.client.withStorageLease(operation)).rejects.toThrow('无法安全协调登录状态')
+    expect(operation).not.toHaveBeenCalled()
+  })
+
+  it('realtime token reads stay in memory until the JWT is close to expiry', async () => {
+    const loaded = await loadClient()
+    const descriptor = Object.getOwnPropertyDescriptor(navigator, 'locks')
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      value: { request: (_name: string, operation: () => Promise<unknown>) => operation() },
+    })
+    const valid = jwt(Math.floor(Date.now() / 1000) + 600)
+    seedSession(loaded.auth, valid, 7, 3)
+    await expect(loaded.client.getRealtimeAccessToken()).resolves.toBe(valid)
+    expect(loaded.harness.axios.post).not.toHaveBeenCalled()
+
+    seedSession(loaded.auth, jwt(Math.floor(Date.now() / 1000) + 30), 7, 4)
+    loaded.harness.axios.post.mockResolvedValue({ data: completeRefreshPayload('renewed-token', 7) })
+    await expect(loaded.client.getRealtimeAccessToken()).resolves.toBe('renewed-token')
+    expect(loaded.harness.axios.post).toHaveBeenCalledOnce()
+    expect(loaded.harness.axios.post.mock.calls[0][2]).toMatchObject({ timeout: loaded.client.REFRESH_TIMEOUT_MS })
     if (descriptor) Object.defineProperty(navigator, 'locks', descriptor)
     else Reflect.deleteProperty(navigator, 'locks')
   })
@@ -415,5 +466,15 @@ describe('auth client migration', () => {
     }
     await expect(loaded.harness.responseFailures[0](error)).rejects.toBe(error)
     expect(loaded.harness.errors).toEqual(['登录请求失败'])
+  })
+
+  it('preserves numeric API error codes and accepts only safe relative login return paths', async () => {
+    const loaded = await loadClient()
+    expect(loaded.client.getApiErrorCode({ isAxiosError: true, response: { data: { code: 40901 } } })).toBe(40901)
+    expect(loaded.client.isSafeLoginReturnPath('/projects/7?tab=messages')).toBe(true)
+    expect(loaded.client.isSafeLoginReturnPath('//external.invalid')).toBe(false)
+    expect(loaded.client.isSafeLoginReturnPath('/projects\\7')).toBe(false)
+    expect(loaded.client.buildLoginRedirectHref('/projects/7', '?tab=messages', '#latest'))
+      .toBe('/login?from=%2Fprojects%2F7%3Ftab%3Dmessages%23latest')
   })
 })

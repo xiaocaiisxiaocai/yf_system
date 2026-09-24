@@ -110,7 +110,7 @@ public static class ApiApplication
         builder.Services.AddSingleton(options).AddSingleton<AppDb>().AddSingleton<AccessService>().AddSingleton<AuditService>();
         var efConnectionString = AppDb.BuildConnectionString(options);
         builder.Services.AddPooledDbContextFactory<YfDbContext>(db => db.UseMySql(
-            efConnectionString, EfDb.ServerVersion));
+            efConnectionString, EfDb.ServerVersion).AddInterceptors(UtcDatabaseSession.Instance));
         builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule();
         builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
             .WithOrigins(new Uri(options.WebBaseUrl).GetLeftPart(UriPartial.Authority))
@@ -130,16 +130,24 @@ public static class ApiApplication
             // error page and show its reason; every other response stays unframeable.
             var sameOriginFrame = IdentityMiddleware.IsNativeDownloadRequest(context.Request);
             context.Response.Headers.XFrameOptions = sameOriginFrame ? "SAMEORIGIN" : "DENY";
+            // frame-ancestors is ignored in a meta CSP. Keep the SPA's generated script hashes
+            // and preview policy intact, and add the framing rule at the HTTP boundary.
+            context.Response.Headers.ContentSecurityPolicy = sameOriginFrame
+                ? "frame-ancestors 'self'" : "frame-ancestors 'none'";
+            if (sameOriginFrame || ApiRequestPolicy.IsFileContent(context.Request))
+            {
+                context.Response.Headers.ContentSecurityPolicy += "; default-src 'none'; img-src 'self' data:; media-src 'self'; sandbox allow-same-origin";
+                context.Response.Headers["Cross-Origin-Resource-Policy"] = "same-origin";
+            }
             // HTTPS-only deployments: keep browsers from ever downgrading to HTTP. Subdomains are
             // left out because other intranet services may still share the parent domain over HTTP.
             if (context.Request.IsHttps) context.Response.Headers.StrictTransportSecurity = "max-age=31536000";
             if (context.Request.Path.StartsWithSegments("/api"))
             {
                 context.Response.Headers.CacheControl = "private, no-store";
-                context.Response.Headers.ContentSecurityPolicy = sameOriginFrame ? "frame-ancestors 'self'" : "frame-ancestors 'none'";
                 var limit = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
                 if (limit is { IsReadOnly: false }
-                    && !(HttpMethods.IsPut(context.Request.Method) && context.Request.Path.Value!.Contains("/chunks/", StringComparison.Ordinal)))
+                    && !ApiRequestPolicy.IsChunkUpload(context.Request))
                     limit.MaxRequestBodySize = ProjectsModule.IsMessageImageUpload(context.Request)
                         ? MessageService.MultipartRequestLimitBytes
                         : 2L * 1024 * 1024;
@@ -165,6 +173,8 @@ public static class ApiApplication
 
     internal static void UsePublicStaticFilesBeforeRouting(IApplicationBuilder app)
     {
+        var environment = app.ApplicationServices.GetRequiredService<IWebHostEnvironment>();
+        environment.WebRootFileProvider = PublicStaticFileProvider.Create(environment);
         app.UseDefaultFiles();
         app.UsePrecompressedStaticFiles();
         app.UseStaticFiles(new StaticFileOptions

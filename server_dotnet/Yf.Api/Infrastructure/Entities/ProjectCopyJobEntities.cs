@@ -95,6 +95,7 @@ public sealed class ProjectCopyWorkerStateConfig : IEntityTypeConfiguration<Proj
     public void Configure(EntityTypeBuilder<ProjectCopyWorkerState> b)
     {
         b.ToTable("project_copy_worker_state");
+        b.UseCollation("utf8mb4_unicode_ci");
         b.HasKey(x => x.Id);
         b.Property(x => x.Id).HasColumnName("id").ValueGeneratedNever();
         b.Property(x => x.Epoch).HasColumnName("epoch");

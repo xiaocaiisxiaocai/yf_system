@@ -13,7 +13,7 @@ vi.mock('../../../api/client', async () => {
 vi.mock('../../../store/auth', async () => {
   const state = await import('./mockState')
   return {
-    useAuth: () => state.messageAuthState(),
+    useAuth: state.selectMessageAuthState,
   }
 })
 

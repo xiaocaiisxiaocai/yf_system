@@ -42,9 +42,16 @@ export default function MessagePanel({
   receiptRevision = '',
   realtimeConnected = false,
 }: Props) {
-  const auth = useAuth()
-  const { hasPerm, user } = auth
-  const scope = createSessionQueryScope(auth)
+  const hasPerm = useAuth(state => state.hasPerm)
+  const user = useAuth(state => state.user)
+  const generation = useAuth(state => state.generation)
+  const permissions = useAuth(state => state.permissions)
+  const menus = useAuth(state => state.menus)
+  const mustChangePassword = useAuth(state => state.mustChangePassword)
+  const scope = useMemo(
+    () => createSessionQueryScope({ user, generation, permissions, menus, mustChangePassword }),
+    [user, generation, permissions, menus, mustChangePassword],
+  )
   const [content, setContent] = useState('')
   const [images, setImages] = useState<File[]>([])
   const [sending, setSending] = useState(false)
@@ -269,17 +276,21 @@ export default function MessagePanel({
     }
   }
 
-  const remove = async (id: number) => {
+  const remove = useCallback(async (id: number) => {
     const requestFeedKey = feedKey
     const removeMessage = removeConfirmedMessage
     const requestSyncRoot = sync.rootKey
-    await commands.remove.mutateAsync(id)
-    const syncWasFetching = queryClient.isFetching({ queryKey: requestSyncRoot }) > 0
-    await cancelMessageQueries([requestFeedKey, requestSyncRoot])
-    removeMessage(id)
-    if (selectedReceiptId === id) setSelectedReceiptId(null)
-    if (syncWasFetching) void queryClient.invalidateQueries({ queryKey: requestSyncRoot })
-  }
+    try {
+      await commands.remove.mutateAsync(id)
+      const syncWasFetching = queryClient.isFetching({ queryKey: requestSyncRoot }) > 0
+      await cancelMessageQueries([requestFeedKey, requestSyncRoot])
+      removeMessage(id)
+      setSelectedReceiptId(current => current === id ? null : current)
+      if (syncWasFetching) void queryClient.invalidateQueries({ queryKey: requestSyncRoot })
+    } catch {
+      // 请求层已显示错误；确认框收到已处理的 Promise，避免全局 unhandledrejection。
+    }
+  }, [commands.remove, feedKey, removeConfirmedMessage, sync.rootKey])
 
   const receipt = !isMessageAccessError(receiptDetail.error) && selectedReceiptId !== null && receiptDetail.data
     ? { id: selectedReceiptId, readers: receiptDetail.data.readers, unread: receiptDetail.data.unread }
@@ -302,6 +313,12 @@ export default function MessagePanel({
           <Typography.Text type="error">留言同步失败，正在重试</Typography.Text>
           <Button type="text" size="small" onClick={() => void sync.refetch({ cancelRefetch: true })}>重试同步</Button>
         </div>
+      )}
+
+      {targetId !== undefined && feed.targetLocateExhausted && !feedList.some(message => message.id === targetId) && (
+        <Typography.Text type="secondary" role="status" className="message-locate-notice">
+          未在最近加载的留言中找到目标，可能已删除；可继续加载更早留言。
+        </Typography.Text>
       )}
 
       {canWrite && !accessRevoked && (
@@ -338,7 +355,7 @@ export default function MessagePanel({
         onLoadMore={() => feedQuery.fetchNextPage()}
         onReceiveReceipt={receiveReceipt}
         onOpenReceipt={setSelectedReceiptId}
-        onRemove={id => void remove(id)}
+        onRemove={remove}
         MessageImages={MessageImages}
         ReceiptBody={ReceiptBody}
       />

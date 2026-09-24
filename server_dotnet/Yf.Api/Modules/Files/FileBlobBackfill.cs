@@ -19,7 +19,7 @@ internal static class FileBlobBackfill
     /// <summary>Startup gate: refuses to serve while legacy rows remain, without copying or hashing content.</summary>
     internal static async Task EnsureConvertedAsync(AppDb database, string configuredRoot, CancellationToken ct = default)
     {
-        var root = FileStorage.Root(configuredRoot);
+        _ = FileStorage.Root(configuredRoot);
         await using var conn = await database.OpenAsync(ct);
         await using (var db = EfDb.Use(conn))
         {
@@ -29,7 +29,7 @@ internal static class FileBlobBackfill
             if (pending != 0)
                 throw new InvalidOperationException($"{ConversionRequiredMessage} First unconverted file: {pending}.");
         }
-        await ValidateInvariantAsync(conn, root, ct);
+        await ValidateDatabaseInvariantAsync(conn, ct);
     }
 
     /// <returns>The number of legacy file rows converted by this run.</returns>
@@ -64,22 +64,8 @@ internal static class FileBlobBackfill
 
     internal static async Task ValidateInvariantAsync(MySqlConnection conn, string root, CancellationToken ct)
     {
+        await ValidateDatabaseInvariantAsync(conn, ct);
         await using var db = EfDb.Use(conn);
-        var unbound = await db.Files.AsNoTracking()
-            .Where(file => file.BlobId == null && file.Status != "PURGED")
-            .Select(file => new { file.Id, file.Status }).FirstOrDefaultAsync(ct);
-        if (unbound is not null)
-            throw new InvalidOperationException(
-                $"File blob conversion is incomplete: file {unbound.Id} ({unbound.Status}) has no blob reference.");
-        var invalid = await (from file in db.Files.AsNoTracking()
-            join blob in db.FileBlobs.AsNoTracking() on file.BlobId equals (ulong?)blob.Id
-            where file.Status != "PURGED" && (blob.State != FileBlobStates.Ready
-                || file.Sha256 != blob.Sha256 || file.SizeBytes != blob.SizeBytes
-                || file.StoragePath != blob.StoragePath)
-            select new { file.Id, BlobId = blob.Id }).FirstOrDefaultAsync(ct);
-        if (invalid is not null)
-            throw new InvalidOperationException(
-                $"File blob invariant failed: file {invalid.Id} does not match ready blob {invalid.BlobId}.");
         var referenced = await (from blob in db.FileBlobs.AsNoTracking()
             where db.Files.Any(file => file.BlobId == blob.Id && file.Status != "PURGED")
             orderby blob.Id
@@ -97,6 +83,26 @@ internal static class FileBlobBackfill
                     $"File blob invariant failed: referenced blob {blob.Id} is missing or invalid.", error);
             }
         }
+    }
+
+    internal static async Task ValidateDatabaseInvariantAsync(MySqlConnection conn, CancellationToken ct)
+    {
+        await using var db = EfDb.Use(conn);
+        var unbound = await db.Files.AsNoTracking()
+            .Where(file => file.BlobId == null && file.Status != "PURGED")
+            .Select(file => new { file.Id, file.Status }).FirstOrDefaultAsync(ct);
+        if (unbound is not null)
+            throw new InvalidOperationException(
+                $"File blob conversion is incomplete: file {unbound.Id} ({unbound.Status}) has no blob reference.");
+        var invalid = await (from file in db.Files.AsNoTracking()
+            join blob in db.FileBlobs.AsNoTracking() on file.BlobId equals (ulong?)blob.Id
+            where file.Status != "PURGED" && (blob.State != FileBlobStates.Ready
+                || file.Sha256 != blob.Sha256 || file.SizeBytes != blob.SizeBytes
+                || file.StoragePath != blob.StoragePath)
+            select new { file.Id, BlobId = blob.Id }).FirstOrDefaultAsync(ct);
+        if (invalid is not null)
+            throw new InvalidOperationException(
+                $"File blob invariant failed: file {invalid.Id} does not match ready blob {invalid.BlobId}.");
     }
 
     private static async Task ConvertOneAsync(
@@ -185,9 +191,12 @@ internal static class FileBlobBackfill
         await EnsureConvertedAsync(database, configuredRoot, ct);
         HashSet<string> referenced;
         await using (var conn = await database.OpenAsync(ct))
-        await using (var db = EfDb.Use(conn))
+        {
+            await ValidateInvariantAsync(conn, root, ct);
+            await using var db = EfDb.Use(conn);
             referenced = (await db.Files.AsNoTracking().Select(file => file.StoragePath).ToArrayAsync(ct))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
 
         var removedFiles = 0;
         ulong removedBytes = 0;

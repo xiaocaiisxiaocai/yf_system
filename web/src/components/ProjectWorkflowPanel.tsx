@@ -3,7 +3,7 @@ import {
   Button, Form, Input, Message, Modal, Popconfirm, Space, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconCheckCircle, IconCloseCircle, IconPlayArrow, IconStop, IconUndo } from '@arco-design/web-react/icon'
-import http from '../api/client'
+import http, { getApiErrorCode } from '../api/client'
 import { type Project, PROJECT_STATUS } from '../api/types'
 import { useAuth } from '../store/auth'
 import type { ApiResponses } from '../api/types'
@@ -34,6 +34,16 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
   const finishAction = () => {
     busyRef.current = false
     setBusy(false)
+  }
+  const refreshAfterVersionConflict = (error: unknown, closeReject = false) => {
+    if (getApiErrorCode(error) !== 40901) return false
+    if (closeReject) {
+      rejectForm.resetFields()
+      setRejectSubmissionId(null)
+      setRejectOpen(false)
+    }
+    onChanged()
+    return true
   }
 
   const isInternal = user?.userType === 'INTERNAL'
@@ -78,6 +88,8 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
       await http.post<ApiResponses['POST /projects/{id}/confirm']>(`/projects/${project.id}/confirm`, { expectedSubmissionId })
       Message.success('公司验收已通过')
       onChanged()
+    } catch (error) {
+      if (!refreshAfterVersionConflict(error)) throw error
     } finally {
       finishAction()
     }
@@ -101,6 +113,8 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
       setRejectSubmissionId(null)
       setRejectOpen(false)
       onChanged()
+    } catch (error) {
+      if (!refreshAfterVersionConflict(error, true)) throw error
     } finally {
       finishAction()
     }
@@ -117,6 +131,8 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
       await http.post<ApiResponses['POST /projects/{id}/withdraw']>(`/projects/${project.id}/withdraw`, { expectedSubmissionId })
       Message.success('已撤回验收申请')
       onChanged()
+    } catch (error) {
+      if (!refreshAfterVersionConflict(error)) throw error
     } finally {
       finishAction()
     }

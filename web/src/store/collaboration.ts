@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import http, { type QuietRequestConfig } from '../api/client'
+import http, { getRealtimeAccessToken, type QuietRequestConfig } from '../api/client'
 import { useAuth } from './auth'
 import { startProjectRealtime } from '../services/projectRealtime'
 import type { ApiResponses } from '../api/types'
@@ -24,6 +24,7 @@ interface CollaborationState extends CollaborationSummary {
   realtimeStatus: 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
   messageRevisions: Record<number, number>
   receiptRevisions: Record<number, number>
+  activityRevisions: Record<number, number>
   reconnectRevision: number
   refresh: () => Promise<void>
   reset: () => void
@@ -120,12 +121,13 @@ export const useCollaboration = create<CollaborationState>((set) => ({
   realtimeStatus: 'disconnected',
   messageRevisions: {},
   receiptRevisions: {},
+  activityRevisions: {},
   reconnectRevision: 0,
   refresh: async () => {
     if (activePoller) await activePoller.refresh()
     else await refreshCollaborationSummary()
   },
-  reset: () => set({ ...EMPTY_SUMMARY, status: 'idle', realtimeStatus: 'disconnected', messageRevisions: {}, receiptRevisions: {}, reconnectRevision: 0 }),
+  reset: () => set({ ...EMPTY_SUMMARY, status: 'idle', realtimeStatus: 'disconnected', messageRevisions: {}, receiptRevisions: {}, activityRevisions: {}, reconnectRevision: 0 }),
 }))
 
 interface PollSession {
@@ -142,6 +144,22 @@ function currentPollSession(): PollSession {
     && permissions.includes('project:list'),
   )
   return { key: enabled && user ? `${generation}:${user.id}` : null, enabled }
+}
+
+function authWakeSignature(): string {
+  const { generation, menus, permissions, token, user } = useAuth.getState()
+  return JSON.stringify([generation, user?.id ?? null, Boolean(token), [...menus].sort(), [...permissions].sort()])
+}
+
+/** Token rotations and unrelated auth fields must not collapse the poll backoff or create extra requests. */
+function subscribeAuthSession(wake: () => void): () => void {
+  let previous = authWakeSignature()
+  return useAuth.subscribe(() => {
+    const next = authWakeSignature()
+    if (next === previous) return
+    previous = next
+    wake()
+  })
 }
 
 export async function refreshCollaborationSummary(signal?: AbortSignal, expectedKey = currentPollSession().key): Promise<boolean> {
@@ -191,7 +209,7 @@ export interface CollaborationPoller {
 /** 可注入时钟和会话的轮询器，保证单飞、会话隔离、取消与失败退避。 */
 export function createCollaborationPoller(options: CollaborationPollerOptions): CollaborationPoller {
   const intervalMs = options.intervalMs ?? 5_000
-  const maximumBackoffMs = options.maximumBackoffMs ?? 60_000
+  const maximumBackoffMs = options.maximumBackoffMs ?? 30_000
   const setTimer = options.setTimer ?? setTimeout
   const clearTimer = options.clearTimer ?? clearTimeout
   let active = false
@@ -333,7 +351,7 @@ export function startCollaborationPolling(): () => void {
     getSession: currentPollSession,
     poll: (key, signal) => refreshCollaborationSummary(signal, key),
     reset: () => useCollaboration.getState().reset(),
-    subscribeSession: (wake) => useAuth.subscribe(wake),
+    subscribeSession: subscribeAuthSession,
     subscribeResume: subscribeBrowserResume,
     isPaused: () => document.visibilityState !== 'visible' || navigator.onLine === false,
     intervalMs: () => useCollaboration.getState().realtimeStatus === 'connected' ? 60_000 : 5_000,
@@ -350,13 +368,8 @@ export function startCollaborationPolling(): () => void {
   }
   const stop = startProjectRealtime({
     getSession: () => { const session = currentPollSession(); return { ...session, key: session.key ?? '' } },
-    getAccessToken: async () => {
-      const expectedKey = currentPollSession().key
-      // Reuse the existing single-flight refresh/rotation instead of keeping a second token.
-      await http.get<ApiResponses['GET /collaboration/summary']>('/collaboration/summary', { quietNetworkError: true, timeout: 10000 } as QuietRequestConfig)
-      return expectedKey === currentPollSession().key ? useAuth.getState().token ?? '' : ''
-    },
-    subscribeSession: (wake) => useAuth.subscribe(wake),
+    getAccessToken: getRealtimeAccessToken,
+    subscribeSession: subscribeAuthSession,
     onStatus: (realtimeStatus) => {
       useCollaboration.setState({ realtimeStatus })
       if (realtimeStatus !== 'connected') void poller.refresh()
@@ -371,6 +384,9 @@ export function startCollaborationPolling(): () => void {
       } }))
       if (kind === 'receipts') useCollaboration.setState((state) => ({ receiptRevisions: {
         ...state.receiptRevisions, [projectId]: (state.receiptRevisions[projectId] ?? 0) + 1,
+      } }))
+      if (kind === 'activity' || kind === 'project') useCollaboration.setState((state) => ({ activityRevisions: {
+        ...state.activityRevisions, [projectId]: (state.activityRevisions[projectId] ?? 0) + 1,
       } }))
       if (kind !== 'receipts') refreshAfterEvent()
     },

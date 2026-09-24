@@ -5,15 +5,15 @@ import http, { type QuietRequestConfig } from '../api/client'
 import './ImagePreview.css'
 import { wheelZoomFactor } from '../../vendor/preview-wheel.js'
 
-function ImageDocument({ fileId, contentUrl, name, toolbarContainer }: {
-  fileId?: number; contentUrl?: string; name: string; toolbarContainer?: HTMLElement | null
+function ImageDocument({ fileId, contentUrl, sourceUrl, name, toolbarContainer }: {
+  fileId?: number; contentUrl?: string; sourceUrl?: string; name: string; toolbarContainer?: HTMLElement | null
 }) {
   const viewport = useRef<HTMLDivElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
   const zoomAnchor = useRef<{ x: number; y: number; fractionX: number; fractionY: number } | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
-  const [source, setSource] = useState('')
+  const [source, setSource] = useState(() => sourceUrl ?? '')
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [attempt, setAttempt] = useState(0)
   const [natural, setNatural] = useState({ width: 0, height: 0 })
@@ -63,23 +63,25 @@ function ImageDocument({ fileId, contentUrl, name, toolbarContainer }: {
   useEffect(() => {
     let active = true
     let objectUrl = ''
-    const controller = new AbortController()
+    const controller = sourceUrl ? undefined : new AbortController()
     timer.current = setTimeout(() => {
-      active = false; controller.abort(); setSource(''); setStatus('error')
+      active = false; controller?.abort(); setSource(''); setStatus('error')
     }, 60000)
-    const requestUrl = contentUrl ?? `/files/${fileId}/content`
-    void http.get<Blob>(requestUrl, {
-      responseType: 'blob', signal: controller.signal, quietNetworkError: true,
-    } as QuietRequestConfig).then(response => {
-      if (!active) return
-      objectUrl = URL.createObjectURL(response.data)
-      setSource(objectUrl)
-    }).catch(() => { if (active) { clearTimeout(timer.current); setStatus('error') } })
+    if (!sourceUrl) {
+      const requestUrl = contentUrl ?? `/files/${fileId}/content`
+      void http.get<Blob>(requestUrl, {
+        responseType: 'blob', signal: controller?.signal, quietNetworkError: true,
+      } as QuietRequestConfig).then(response => {
+        if (!active) return
+        objectUrl = URL.createObjectURL(response.data)
+        setSource(objectUrl)
+      }).catch(() => { if (active) { clearTimeout(timer.current); setStatus('error') } })
+    }
     return () => {
-      active = false; controller.abort(); clearTimeout(timer.current)
+      active = false; controller?.abort(); clearTimeout(timer.current)
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [fileId, contentUrl, attempt])
+  }, [fileId, contentUrl, sourceUrl, attempt])
 
   const changeZoom = (value: number | 'fit') => {
     zoomAnchor.current = null
@@ -132,7 +134,7 @@ function ImageDocument({ fileId, contentUrl, name, toolbarContainer }: {
     {status === 'loading' && <div className="image-preview-status" role="status"><Spin />正在加载图片…</div>}
     {status === 'error' && <div className="image-preview-status" role="alert"><Result status="error" title="图片预览失败"
       subTitle="图片可能损坏或读取失败，请重试。" extra={<Button onClick={() => {
-        setSource(''); setNatural({ width: 0, height: 0 }); setZoom('fit'); setStatus('loading'); setAttempt(value => value + 1)
+        setSource(sourceUrl ?? ''); setNatural({ width: 0, height: 0 }); setZoom('fit'); setStatus('loading'); setAttempt(value => value + 1)
       }}>重试图片预览</Button>} /></div>}
   </section>
 }
@@ -143,8 +145,10 @@ type ImagePreviewProps = {
 } & (
   | { fileId: number; contentUrl?: never }
   | { fileId?: never; contentUrl: string }
+  | { fileId?: never; contentUrl?: never; sourceUrl: string }
 )
 
 export default function ImagePreview(props: ImagePreviewProps) {
-  return <ImageDocument key={props.contentUrl ?? props.fileId} {...props} />
+  const sourceUrl = 'sourceUrl' in props ? props.sourceUrl : undefined
+  return <ImageDocument key={sourceUrl ?? props.contentUrl ?? props.fileId} {...props} />
 }

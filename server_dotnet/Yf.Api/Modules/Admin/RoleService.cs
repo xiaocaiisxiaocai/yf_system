@@ -16,10 +16,8 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
 
     // Supplier-only workflow actions: internal accounts can never exercise them, so they are left out of
     // the delegation ceiling when an internal manager assigns a supplier role.
-    internal static FrozenSet<string> SupplierExclusivePermissionCodes { get; } = new[]
-    {
-        "project:submit", "project:withdraw"
-    }.ToFrozenSet(StringComparer.Ordinal);
+    internal static FrozenSet<string> SupplierExclusivePermissionCodes { get; } =
+        PermissionDelegationPolicy.SupplierExclusivePermissionCodes;
 
     public async Task<PermissionResponse[]> PermissionsAsync(CurrentUser actor, CancellationToken ct)
     {
@@ -145,11 +143,13 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         await GateAsync(context, actor, "role:manage", ct);
         await ceiling.EnsureManageRoleAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, id, ct);
         var role = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
-        await ceiling.EnsureGrantableAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, ids, ct);
-        var valid = ids.Length == 0 ? [] : await context.Permissions.AsNoTracking().Where(p => Enumerable.Contains(ids, p.Id)).ToArrayAsync(ct);
-        if (valid.Length != ids.Length) throw ApiException.BadRequest("权限点不存在");
         var assignedToSupplier = await context.UserRoles.Join(context.Users, ur => ur.UserId, u => u.Id, (ur, u) => new { ur, u })
             .AnyAsync(x => x.ur.RoleId == id && x.u.UserType == UserTypes.Supplier, ct);
+        var supplierRestricted = assignedToSupplier || role.IsBuiltIn && role.Name == AdminBuiltIns.SupplierRoleName;
+        await ceiling.EnsureGrantableAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, ids, ct,
+            supplierRestricted ? SupplierExclusivePermissionCodes : null);
+        var valid = ids.Length == 0 ? [] : await context.Permissions.AsNoTracking().Where(p => Enumerable.Contains(ids, p.Id)).ToArrayAsync(ct);
+        if (valid.Length != ids.Length) throw ApiException.BadRequest("权限点不存在");
         if (!IsSupplierPermissionSetAllowed(role.IsBuiltIn, role.Name, valid.Select(x => x.Code)) ||
             assignedToSupplier && !IsSupplierAccountPermissionSetAllowed(valid.Select(x => x.Code)))
             throw ApiException.BadRequest("供应商账号角色只能授予供应商自有项目所需权限");
@@ -215,7 +215,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
     }
 
     internal static bool IsSupplierPermissionSetAllowed(bool isBuiltIn, string roleName, IEnumerable<string> codes) =>
-        !isBuiltIn || roleName != "供应商人员" || codes.All(SupplierPermissionCodes.Contains);
+        !isBuiltIn || roleName != AdminBuiltIns.SupplierRoleName || codes.All(SupplierPermissionCodes.Contains);
     internal static bool IsSupplierAccountPermissionSetAllowed(IEnumerable<string> codes) => codes.All(SupplierPermissionCodes.Contains);
 
     internal static async Task EnsureProjectListRemovalSafeAsync(YfDbContext context, ulong roleId, CancellationToken ct)
@@ -229,10 +229,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
 
     private static async Task GateAsync(YfDbContext context, CurrentUser actor, string permission, CancellationToken ct)
     {
-        await AccessService.LockManagementAsync(context.Database.Connection(), context.Database.RequireTransaction(), ct);
-        actor = await AccessService.RecheckActorAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, ct);
-        AccessService.RequireInternal(actor);
-        await AccessService.RequirePermissionAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, permission, ct);
+        await ManagementAuthorization.RequireAsync(context, actor, permission, ct);
     }
 
     private static void Validate(RoleUpsert r) { if (string.IsNullOrWhiteSpace(r.Name) || r.Name.Trim().EnumerateRunes().Count() > 64) throw ApiException.BadRequest("角色名称需为 1~64 个字符"); if (r.Description?.EnumerateRunes().Count() > 255) throw ApiException.BadRequest("角色说明不能超过 255 个字符"); }
@@ -268,7 +265,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
             permissionIds[r.Id].ToArray(),
             (ulong)assignedCounts.GetValueOrDefault(r.Id),
             canManage(r.Id),
-            assignedToSupplier.Contains(r.Id) || r.IsBuiltIn && r.Name == "供应商人员",
+            assignedToSupplier.Contains(r.Id) || r.IsBuiltIn && r.Name == AdminBuiltIns.SupplierRoleName,
             r.CreatedAt)).ToList();
     }
 }

@@ -3,14 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   realtimeOptions: null as null | {
+    getAccessToken: () => Promise<string>
     onStatus: (status: 'connecting' | 'connected' | 'reconnecting' | 'disconnected') => void
     onReady: () => void
-    onEvent: (event: { projectId: number; kind: 'messages' | 'receipts' | 'activity' }) => void
+    onEvent: (event: { projectId: number; kind: 'messages' | 'receipts' | 'activity' | 'project' }) => void
   },
   realtimeStop: vi.fn(),
+  realtimeToken: vi.fn(),
 }))
 
-vi.mock('../../../api/client', () => ({ default: { get: mocks.get } }))
+vi.mock('../../../api/client', () => ({
+  default: { get: mocks.get },
+  getRealtimeAccessToken: mocks.realtimeToken,
+}))
 vi.mock('../../../services/projectRealtime', () => ({
   startProjectRealtime: vi.fn((options) => {
     mocks.realtimeOptions = options
@@ -64,6 +69,7 @@ describe('collaboration migration', () => {
     mocks.get.mockReset().mockResolvedValue({ data: { unreadCount: 0, latestId: 1, revision: 'server-1' } })
     mocks.realtimeOptions = null
     mocks.realtimeStop.mockReset()
+    mocks.realtimeToken.mockReset().mockResolvedValue('memory-token')
   })
 
   afterEach(() => {
@@ -89,6 +95,9 @@ describe('collaboration migration', () => {
     await settle()
     expect(useCollaboration.getState().messageRevisions).toEqual({ 11: 1 })
     expect(useCollaboration.getState().receiptRevisions).toEqual({ 12: 1 })
+    live.onEvent({ projectId: 11, kind: 'activity' })
+    live.onEvent({ projectId: 13, kind: 'project' })
+    expect(useCollaboration.getState().activityRevisions).toEqual({ 11: 1, 13: 1 })
     expect(mocks.get).toHaveBeenCalledTimes(requestsAfterMessage)
 
     live.onStatus('reconnecting')
@@ -185,6 +194,29 @@ describe('collaboration migration', () => {
     expect(timers[1].delay).toBe(10_000)
     poller.stop()
     expect(timers[1].cleared).toBe(true)
+  })
+
+  it('token rotation stays quiet while token availability and permission changes wake polling', async () => {
+    vi.useFakeTimers()
+    const stop = startCollaborationPolling()
+    await settle()
+    const baseline = mocks.get.mock.calls.length
+    useAuth.setState({ token: 'rotated-token' })
+    await settle()
+    expect(mocks.get).toHaveBeenCalledTimes(baseline)
+    useAuth.setState({ permissions: ['project:list', 'project:confirm'] })
+    await settle()
+    expect(mocks.get.mock.calls.length).toBeGreaterThan(baseline)
+    const afterPermissionChange = mocks.get.mock.calls.length
+    useAuth.setState({ token: null })
+    await settle()
+    expect(mocks.get).toHaveBeenCalledTimes(afterPermissionChange)
+    useAuth.setState({ token: 'restored-token' })
+    await settle()
+    expect(mocks.get.mock.calls.length).toBeGreaterThan(afterPermissionChange)
+    await expect(mocks.realtimeOptions!.getAccessToken()).resolves.toBe('memory-token')
+    expect(mocks.realtimeToken).toHaveBeenCalledOnce()
+    stop()
   })
 
   it('bursts of realtime pushes collapse into one jittered summary refresh', async () => {
