@@ -54,6 +54,8 @@ public sealed class IdentityConnectionTests
                         revoked BOOLEAN NOT NULL, expires_at DATETIME NOT NULL,
                         session_created_at DATETIME NOT NULL, session_expires_at DATETIME NOT NULL
                     );
+                    CREATE TABLE system_configs(cfg_key VARCHAR(100) PRIMARY KEY, cfg_value TEXT NOT NULL);
+                    INSERT INTO system_configs VALUES('security.identity_revision','0');
                     INSERT INTO users VALUES(1,'pool_test','INTERNAL',NULL,'ACTIVE',0);
                     INSERT INTO refresh_tokens
                         (user_id,session_id,revoked,expires_at,session_created_at,session_expires_at)
@@ -79,7 +81,7 @@ public sealed class IdentityConnectionTests
                     new CommandDefinition("SELECT 1", cancellationToken: deadline.Token)));
                 downstreamCompleted = true;
             });
-            await middleware.InvokeAsync(context, db, tokens);
+            await middleware.InvokeAsync(context, db, tokens, new IdentityProjectionCache());
             Assert.True(downstreamCompleted);
         }
         finally

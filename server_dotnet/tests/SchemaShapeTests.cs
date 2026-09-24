@@ -94,7 +94,7 @@ public sealed class SchemaShapeTests
         Assert.Equal(hash, await conn.ExecuteScalarAsync<string>("SELECT password_hash FROM users WHERE employee_no='admin'"));
         Assert.Equal("RestartSentinel", await conn.ExecuteScalarAsync<string>("SELECT real_name FROM users WHERE employee_no='admin'"));
         Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT must_change_password FROM users WHERE employee_no='admin'"));
-        Assert.Equal(10, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+        Assert.Equal(11, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
     }
 
     [Fact(Timeout = 120_000)]
@@ -192,6 +192,7 @@ public sealed class SchemaShapeTests
                     "20260923131700_HardenSessionsAndQueryIndexes",
                     "20260923141854_AddProjectCopyJobs",
                     "20260923151307_RemoveManualAuditDeletion",
+                    "20260924003253_AddUploadFingerprintsSharedBlobsAndIdentityRevision",
                 },
                 (await conn.QueryAsync<string>("SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId")).ToArray());
             Assert.False(await TableExistsAsync(conn, "yf_schema_migrations", ct));
@@ -201,7 +202,7 @@ public sealed class SchemaShapeTests
             Assert.Equal(34, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
             Assert.Equal(34, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='log:delete'"));
-            Assert.Equal(13, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
+            Assert.Equal(14, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'oem\\_%'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
@@ -321,7 +322,7 @@ public sealed class SchemaShapeTests
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await using var conn = await database.Database.OpenAsync(ct);
-        Assert.Equal(10, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+        Assert.Equal(11, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM users WHERE employee_no='admin'"));
         Assert.Equal(27, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
         Assert.Equal(7, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
@@ -391,6 +392,7 @@ public sealed class SchemaShapeTests
         AppOptions options) : IAsyncDisposable
     {
         private static readonly SemaphoreSlim BootstrapEnvironmentLock = new(1, 1);
+        private readonly string initialApplicationConnectionString = AppDb.BuildConnectionString(options);
         public AppOptions Options { get; } = options;
         public AppDb Database { get; } = database;
 
@@ -418,6 +420,7 @@ public sealed class SchemaShapeTests
                 DateTimeKind = MySqlDateTimeKind.Utc,
                 SslMode = MySqlSslMode.None,
                 AllowUserVariables = true,
+                Pooling = false,
             };
             var administration = new MySqlConnection(adminOptions.ConnectionString);
             await administration.OpenAsync(ct);
@@ -436,6 +439,7 @@ public sealed class SchemaShapeTests
                         Database = databaseName,
                         MaximumPoolSize = 1,
                         MinimumPoolSize = 0,
+                        Pooling = true,
                     }.ConnectionString,
                     StorageRoot = Path.Combine(Path.GetTempPath(), "yf_schema_shape_storage"),
                     WorkerEnabled = false,
@@ -507,7 +511,11 @@ public sealed class SchemaShapeTests
 
         public async ValueTask DisposeAsync()
         {
-            try { await administration.ExecuteAsync($"DROP DATABASE IF EXISTS `{databaseName}`"); }
+            try
+            {
+                TestDatabasePoolCleanup.Clear(initialApplicationConnectionString, AppDb.BuildConnectionString(Options));
+                await administration.ExecuteAsync($"DROP DATABASE IF EXISTS `{databaseName}`");
+            }
             finally { await administration.DisposeAsync(); }
         }
     }

@@ -25,6 +25,8 @@ public sealed partial class UploadService
         if (session.Status is not ("UPLOADING" or "MERGING")) throw ApiException.Conflict("会话已失效");
         if (session.Status == "UPLOADING" && session.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
+        if (string.IsNullOrWhiteSpace(session.FileMd5))
+            throw ApiException.Conflict("文件完整性摘要尚未提交");
 
         await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(
             conn, MergeLockName(conn, sessionId), 0, ct)
@@ -35,7 +37,7 @@ public sealed partial class UploadService
         if (session.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
         await ProjectAccessService.RequireFileUploadAsync(conn, null, actor, session.ProjectId, ct);
-        var uploaded = UploadedChunks(session, ct);
+        var uploaded = await UploadedChunksAsync(session, ct);
         if ((uint)uploaded.Count != session.TotalChunks)
             throw ApiException.BadRequest($"分片不完整：已传 {uploaded.Count}/{session.TotalChunks}");
         FileStorage.EnsureFreeSpace(options.StorageRoot, session.FileSize);
@@ -44,7 +46,7 @@ public sealed partial class UploadService
         try
         {
             var result = await DoMergeAsync(conn, context, actor, session, ct);
-            await TryCleanupSessionArtifactsAsync(conn, session.Id, CancellationToken.None);
+            await TryCleanupSessionArtifactsAsync(session.Id, CancellationToken.None);
             return result;
         }
         catch
@@ -62,9 +64,6 @@ public sealed partial class UploadService
         await using var clockContext = EfDb.Use(conn);
         var now = await DbNowAsync(clockContext, ct);
         var root = FileStorage.Root(options.StorageRoot);
-        var finalPath = FileStorage.FinalPath(root, now, storedName);
-        var finalDirectory = Path.GetDirectoryName(finalPath) ?? throw new InvalidOperationException("存储目录无效");
-        FileStorage.CreateDirectoryWithin(root, finalDirectory, ct);
         var mergeTemp = FileStorage.EnsureLexicallyWithin(root,
             Path.Combine(FileStorage.SessionDirectory(root, session.Id), $"{storedName}.tmp"), false);
         TryDeleteFile(mergeTemp);
@@ -88,8 +87,7 @@ public sealed partial class UploadService
             TryDeleteFile(mergeTemp);
             throw ApiException.BadRequest("文件 MD5 校验失败，请重新上传");
         }
-        var relativePath = Path.GetRelativePath(root, finalPath).Replace(Path.DirectorySeparatorChar, '/');
-        var keepFinal = false;
+        await using var blobLease = await FileBlobStore.AcquireAsync(conn, [hash.Sha256], ct);
         try
         {
             await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
@@ -99,16 +97,17 @@ public sealed partial class UploadService
             if (locked.Status != "MERGING" || locked.UpdatedAt != session.UpdatedAt)
                 throw ApiException.Conflict("上传会话状态已变化，请重新查询");
 
-            // Final publication happens only after the database connection that owns
-            // the named lease has passed the persisted fencing check. A disconnected
-            // former owner therefore cannot publish after another worker takes over.
-            await WritePendingFinalMarkerAsync(root, session.Id, relativePath, ct);
-            File.Move(mergeTemp, finalPath, overwrite: false);
             var direction = current.IsInternal ? "C2S" : "S2C";
             await using var ef = EfDb.Use(conn, tx);
+            // The per-SHA lease stays owned through COMMIT. Publication is immutable and
+            // may safely outlive an unknown COMMIT outcome; it is never rollback-cleaned.
+            var blob = await FileBlobStore.ResolveForReferenceAsync(ef, root,
+                new FileBlobStore.PreparedBlob(hash.Sha256, hash.Bytes, mergeTemp),
+                expectedBlobId: null, now, ct);
             var file = new FileRecord
             {
                 ProjectId = session.ProjectId,
+                BlobId = blob.Id,
                 UploaderId = current.Id,
                 Direction = direction,
                 OriginalName = session.FileName,
@@ -117,7 +116,7 @@ public sealed partial class UploadService
                 SizeBytes = session.FileSize,
                 MimeType = FileStorage.MimeType(session.FileName),
                 Sha256 = hash.Sha256,
-                StoragePath = relativePath,
+                StoragePath = blob.StoragePath,
                 Status = FileStatuses.Available,
                 CreatedAt = now
             };
@@ -140,17 +139,14 @@ public sealed partial class UploadService
             {
                 using var reconcile = new CancellationTokenSource(TimeSpan.FromSeconds(15));
                 var confirmed = await ConfirmCompletedFileSafelyAsync(session.Id, reconcile.Token);
-                if (confirmed is not null) { keepFinal = true; return FileJson(confirmed); }
-                keepFinal = true;
+                if (confirmed is not null) return FileJson(confirmed);
                 throw;
             }
-            keepFinal = true;
             return FileJson(await LoadFileAsync(conn, fileId, ct));
         }
         finally
         {
             TryDeleteFile(mergeTemp);
-            if (!keepFinal) TryDeleteFile(finalPath);
         }
     }
 

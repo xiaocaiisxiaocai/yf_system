@@ -1,22 +1,19 @@
-using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
-using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
-using System.Text.RegularExpressions;
 using Yf.Api.Infrastructure;
-using Yf.Api.Infrastructure.Entities;
-using Yf.Api.Modules.Projects;
-using Yf.Api.Modules.SystemManagement;
 
 namespace Yf.Api.Modules.Files;
 
-// Chunk and pending-file storage on disk: exact writes, crash markers and cleanup of session artifacts.
+// Chunk storage on disk: exact writes, persisted digests and owned session cleanup.
 public sealed partial class UploadService
 {
-    private static async Task WriteExactAsync(Stream source, string destination, ulong expected, CancellationToken ct)
+    private static async Task<string> WriteExactAndHashAsync(
+        Stream source, string destination, ulong expected, CancellationToken ct)
     {
         await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var buffer = new byte[1024 * 1024];
         ulong total = 0;
         int read;
@@ -24,170 +21,82 @@ public sealed partial class UploadService
         {
             total = checked(total + (uint)read);
             if (total > expected) throw ApiException.BadRequest($"分片大小不符：期望 {expected}，实际超过上限");
+            hash.AppendData(buffer, 0, read);
             await output.WriteAsync(buffer.AsMemory(0, read), ct);
         }
         if (total != expected) throw ApiException.BadRequest($"分片大小不符：期望 {expected}，实际 {total}");
         await output.FlushAsync(ct);
         output.Flush(flushToDisk: true);
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
-    internal static string MergeLockName(MySqlConnection conn, string sessionId) =>
-        MySqlNamedLock.Name("upload-merge", conn.Database, sessionId);
+    private static string ChunkDigestPath(string chunkPath) => chunkPath + ".sha256";
 
-    internal static async Task WritePendingFinalMarkerAsync(
-        string root, string sessionId, string relativePath, CancellationToken ct)
+    private static async Task<string> HashFileSha256Async(string path, CancellationToken ct)
     {
-        var directory = FileStorage.SessionDirectory(root, sessionId);
-        directory = FileStorage.CreateDirectoryWithin(root, directory, ct);
-        var markerId = Guid.NewGuid().ToString("D");
-        var marker = FileStorage.EnsureLexicallyWithin(root,
-            Path.Combine(directory, PendingFinalMarkerPrefix + markerId), false);
+        await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[1024 * 1024];
+        int read;
+        while ((read = await input.ReadAsync(buffer, ct)) != 0) hash.AppendData(buffer, 0, read);
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
+
+    private static async Task<string?> ValidChunkDigestAsync(
+        string root, string chunkPath, ulong expectedBytes, CancellationToken ct)
+    {
+        if (!File.Exists(chunkPath) || !File.Exists(ChunkDigestPath(chunkPath))) return null;
+        try
+        {
+            var resolvedChunk = FileStorage.ResolveExistingFile(root, chunkPath, ct);
+            if ((ulong)new FileInfo(resolvedChunk).Length != expectedBytes) return null;
+            var resolvedDigest = FileStorage.ResolveExistingFile(root, ChunkDigestPath(chunkPath), ct);
+            var declared = (await File.ReadAllTextAsync(resolvedDigest, ct)).Trim().ToLowerInvariant();
+            if (!Sha256Pattern().IsMatch(declared)) return null;
+            var actual = await HashFileSha256Async(resolvedChunk, ct);
+            return actual.Equals(declared, StringComparison.Ordinal) ? actual : null;
+        }
+        catch (FileNotFoundException) { return null; }
+        catch (DirectoryNotFoundException) { return null; }
+    }
+
+    private static async Task WriteChunkDigestAsync(
+        string root, string chunkPath, string digest, CancellationToken ct)
+    {
+        var destination = FileStorage.EnsureLexicallyWithin(root, ChunkDigestPath(chunkPath), false);
         var staging = FileStorage.EnsureLexicallyWithin(root,
-            Path.Combine(directory, PendingFinalStagingPrefix + markerId), false);
-        var payload = Encoding.UTF8.GetBytes(relativePath);
+            destination + $".{Guid.NewGuid():D}.writing", false);
+        var bytes = Encoding.ASCII.GetBytes(digest);
         try
         {
             await using (var output = new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                              4096, FileOptions.Asynchronous | FileOptions.WriteThrough))
             {
-                await output.WriteAsync(payload, ct);
+                await output.WriteAsync(bytes, ct);
                 await output.FlushAsync(ct);
                 output.Flush(flushToDisk: true);
             }
-            File.Move(staging, marker, overwrite: false);
+            File.Move(staging, destination, overwrite: true);
         }
         finally { TryDeleteFile(staging); }
     }
 
-    internal static async Task CleanupPendingFinalsAsync(
-        MySqlConnection conn,
-        string configuredRoot,
-        string sessionId,
-        ILogger logger,
-        CancellationToken ct)
-    {
-        var root = FileStorage.Root(configuredRoot);
-        var directory = FileStorage.SessionDirectory(root, sessionId);
-        if (!Directory.Exists(directory)) return;
-        directory = FileStorage.ResolveExisting(root, directory, requireFile: false, ct);
-        foreach (var candidate in Directory.EnumerateFiles(
-                     directory, PendingFinalMarkerPrefix + "*", SearchOption.TopDirectoryOnly))
-        {
-            ct.ThrowIfCancellationRequested();
-            var marker = FileStorage.ResolveExistingFile(root, candidate, ct);
-            if (new FileInfo(marker).Length is <= 0 or > 2048)
-            {
-                QuarantinePendingFinalMarker(root, directory, marker, sessionId, logger, "标记长度无效");
-                continue;
-            }
+    internal static string MergeLockName(MySqlConnection conn, string sessionId) =>
+        MySqlNamedLock.Name("upload-merge", conn.Database, sessionId);
 
-            string relativePath;
-            try
-            {
-                relativePath = await File.ReadAllTextAsync(marker, new UTF8Encoding(false, true), ct);
-            }
-            catch (DecoderFallbackException)
-            {
-                QuarantinePendingFinalMarker(root, directory, marker, sessionId, logger, "标记不是有效 UTF-8");
-                continue;
-            }
-
-            // Check the durable database reference before classifying legacy marker text. A committed
-            // file must always win, even if a historical marker does not match today's filename rules.
-            await using var context = EfDb.Use(conn);
-            var referenced = await context.Files.AnyAsync(file => file.StoragePath == relativePath, ct);
-            if (referenced)
-            {
-                File.Delete(marker);
-                continue;
-            }
-
-            if (!IsPendingFinalPath(relativePath))
-            {
-                // A truncated marker cannot prove which file was published. Keep every possible
-                // target untouched, move the marker out of the active pattern, and let the owned
-                // session directory cleanup remove the quarantined evidence.
-                QuarantinePendingFinalMarker(root, directory, marker, sessionId, logger, "标记路径格式无效");
-                continue;
-            }
-
-            string finalPath;
-            try { finalPath = FileStorage.ResolveForCleanup(root, relativePath, ct); }
-            catch (InvalidOperationException)
-            {
-                QuarantinePendingFinalMarker(root, directory, marker, sessionId, logger, "标记路径越出存储根目录");
-                continue;
-            }
-
-            if (Directory.Exists(finalPath))
-            {
-                QuarantinePendingFinalMarker(root, directory, marker, sessionId, logger, "标记目标不是文件");
-                continue;
-            }
-            if (File.Exists(finalPath))
-            {
-                finalPath = FileStorage.ResolveExistingFile(root, finalPath, ct);
-                File.Delete(finalPath);
-            }
-            File.Delete(marker);
-        }
-    }
-
-    private static bool IsPendingFinalPath(string relativePath)
-    {
-        if (string.IsNullOrWhiteSpace(relativePath)
-            || relativePath != relativePath.Trim()
-            || relativePath.Contains('\\')
-            || Path.IsPathFullyQualified(relativePath)) return false;
-        var parts = relativePath.Split('/');
-        if (parts.Length != 4 || parts[0] != "files"
-            || parts[1].Length != 4 || !parts[1].All(char.IsAsciiDigit)
-            || parts[2].Length != 2 || !int.TryParse(parts[2], out var month) || month is < 1 or > 12)
-            return false;
-        var extension = Path.GetExtension(parts[3]);
-        return extension.Length is >= 2 and <= 17
-               && extension.AsSpan(1).ToArray().All(char.IsAsciiLetterOrDigit)
-               && Guid.TryParseExact(Path.GetFileNameWithoutExtension(parts[3]), "D", out _);
-    }
-
-    private static void QuarantinePendingFinalMarker(
-        string root,
-        string directory,
-        string marker,
-        string sessionId,
-        ILogger logger,
-        string reason)
-    {
-        var quarantined = FileStorage.EnsureLexicallyWithin(root,
-            Path.Combine(directory, InvalidPendingFinalMarkerPrefix + Guid.NewGuid().ToString("D")), false);
-        try
-        {
-            File.Move(marker, quarantined, overwrite: false);
-            logger.LogWarning("已隔离无效待提交文件标记 {SessionId} {MarkerName}: {Reason}",
-                sessionId, Path.GetFileName(marker), reason);
-        }
-        catch (Exception error)
-        {
-            // Do not interpret or delete a target from invalid marker text. The caller can still
-            // safely delete the owned session directory, including the marker itself.
-            logger.LogWarning(error, "无法隔离无效待提交文件标记 {SessionId} {MarkerName}: {Reason}",
-                sessionId, Path.GetFileName(marker), reason);
-        }
-    }
-
-    private async Task TryCleanupSessionArtifactsAsync(
-        MySqlConnection conn, string sessionId, CancellationToken ct)
+    private Task TryCleanupSessionArtifactsAsync(string sessionId, CancellationToken ct)
     {
         try
         {
-            await CleanupPendingFinalsAsync(conn, options.StorageRoot, sessionId, logger, ct);
             FileStorage.DeleteDirectoryTree(options.StorageRoot,
                 FileStorage.SessionDirectory(FileStorage.Root(options.StorageRoot), sessionId), ct);
         }
         catch
         {
-            // The maintenance worker retries durable markers and session directories.
+            // The maintenance worker retries the owned session directory.
         }
+        return Task.CompletedTask;
     }
 
     private static void TryDeleteFile(string path) { try { File.Delete(path); } catch { } }

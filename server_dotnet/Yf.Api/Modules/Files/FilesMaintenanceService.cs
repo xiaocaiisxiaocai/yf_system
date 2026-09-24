@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 
 namespace Yf.Api.Modules.Files;
 
@@ -46,6 +47,7 @@ public sealed class FilesMaintenanceService(
     {
         await RecoverAbandonedMergesAsync(ct);
         await ExpireUploadsAsync(ct);
+        await ResumePendingBlobGarbageCollectionAsync(ct);
         await PurgeDeletedFilesAsync(ct);
         await PurgeDeletedMessageImagesAsync(ct);
         PurgeTemporaryArchives(ct);
@@ -98,8 +100,6 @@ public sealed class FilesMaintenanceService(
                 }
                 if (expired)
                 {
-                    await UploadService.CleanupPendingFinalsAsync(
-                        conn, options.StorageRoot, candidate.Id, logger, ct);
                     FileStorage.DeleteDirectoryTree(options.StorageRoot,
                         FileStorage.SessionDirectory(FileStorage.Root(options.StorageRoot), candidate.Id), ct);
                 }
@@ -139,7 +139,6 @@ public sealed class FilesMaintenanceService(
             var directory = FileStorage.SessionDirectory(root, session.Id);
             try
             {
-                await UploadService.CleanupPendingFinalsAsync(conn, root, session.Id, logger, ct);
                 FileStorage.DeleteDirectoryTree(root, directory, ct);
             }
             catch (Exception error) { logger.LogWarning(error, "清理过期上传目录失败 {SessionId}", session.Id); }
@@ -149,40 +148,119 @@ public sealed class FilesMaintenanceService(
     private async Task PurgeDeletedFilesAsync(CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
+        DateTime cutoff;
         DeletedFile[] rows;
         await using (var context = EfDb.Use(conn))
         {
-            var cutoff = (await UploadService.DbNowAsync(context, ct)).AddDays(-30);
+            cutoff = (await UploadService.DbNowAsync(context, ct)).AddDays(-30);
             rows = await context.Files.Where(file => file.Status == FileStatuses.Deleted && file.DeletedAt != null && file.DeletedAt < cutoff)
-                .Select(file => new DeletedFile { Id = file.Id, StoragePath = file.StoragePath }).ToArrayAsync(ct);
+                .Select(file => new DeletedFile
+                {
+                    Id = file.Id, BlobId = file.BlobId, Sha256 = file.Sha256, StoragePath = file.StoragePath
+                }).ToArrayAsync(ct);
         }
         foreach (var row in rows)
         {
             try
             {
-                try
-                {
-                    var path = FileStorage.ResolveExistingFile(options.StorageRoot,
-                        Path.Combine(options.StorageRoot, row.StoragePath), ct);
-                    File.Delete(path);
-                }
-                catch (FileNotFoundException) { }
-                await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-                await using var context = EfDb.Use(conn, tx);
-                var referenced = await context.FileCopyRefs.AnyAsync(reference =>
-                    reference.SourceFileId == row.Id || reference.TargetFileId == row.Id, ct);
-                if (referenced)
-                    await context.Files.Where(file => file.Id == row.Id && file.Status == FileStatuses.Deleted)
-                        .ExecuteUpdateAsync(setters => setters.SetProperty(file => file.Status, "PURGED"), ct);
-                else
-                    await context.Files.Where(file => file.Id == row.Id && file.Status == FileStatuses.Deleted).ExecuteDeleteAsync(ct);
-                await tx.CommitAsync(ct);
+                if (row.BlobId is not ulong blobId)
+                    throw new InvalidOperationException("活动文件缺少 blob 引用，拒绝进入兼容清理路径");
+                await PurgeBlobFileAsync(conn, row, blobId, cutoff, ct);
             }
             catch (Exception error)
             {
                 logger.LogWarning(error, "拒绝或无法清理软删文件 {FileId}", row.Id);
             }
         }
+    }
+
+    private async Task PurgeBlobFileAsync(
+        MySqlConnector.MySqlConnection conn, DeletedFile candidate, ulong blobId, DateTime cutoff, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(candidate.Sha256))
+            throw new InvalidOperationException("blob 文件缺少 SHA-256，拒绝清理");
+        await using var blobLease = await FileBlobStore.AcquireAsync(conn, [candidate.Sha256], ct);
+        FileBlob? claimedBlob = null;
+        await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+        await using (var context = EfDb.Use(conn, tx))
+        {
+            var file = await context.Files
+                .FromSqlInterpolated($"SELECT * FROM files WHERE id={candidate.Id} FOR UPDATE")
+                .SingleOrDefaultAsync(ct);
+            if (file is null || file.Status != FileStatuses.Deleted
+                || file.DeletedAt is null || file.DeletedAt >= cutoff || file.BlobId != blobId)
+            {
+                await tx.CommitAsync(ct);
+                return;
+            }
+            var blob = await context.FileBlobs
+                .FromSqlInterpolated($"SELECT * FROM file_blobs WHERE id={blobId} FOR UPDATE")
+                .SingleAsync(ct);
+            if (!blob.Sha256.Equals(FileBlobStore.NormalizeSha256(candidate.Sha256), StringComparison.Ordinal))
+                throw new InvalidOperationException("文件与 blob 哈希记录不一致，拒绝清理");
+
+            file.BlobId = null;
+            var retainedForHistory = await context.FileCopyRefs.AnyAsync(reference =>
+                reference.SourceFileId == file.Id || reference.TargetFileId == file.Id, ct);
+            if (retainedForHistory) file.Status = "PURGED";
+            else context.Files.Remove(file);
+            await context.SaveChangesAsync(ct);
+
+            if (!await context.Files.AnyAsync(other => other.BlobId == blob.Id, ct))
+            {
+                blob.State = FileBlobStates.GarbageCollectionPending;
+                blob.GarbageCollectionStartedAt = await UploadService.DbNowAsync(context, ct);
+                await context.SaveChangesAsync(ct);
+                claimedBlob = blob;
+            }
+            await tx.CommitAsync(ct);
+        }
+        if (claimedBlob is not null)
+            await FinalizePendingBlobAsync(conn, claimedBlob.Id, ct);
+    }
+
+    private async Task ResumePendingBlobGarbageCollectionAsync(CancellationToken ct)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        PendingBlob[] pending;
+        await using (var context = EfDb.Use(conn))
+            pending = await context.FileBlobs
+                .Where(blob => blob.State == FileBlobStates.GarbageCollectionPending)
+                .OrderBy(blob => blob.Id).Take(100)
+                .Select(blob => new PendingBlob(blob.Id, blob.Sha256)).ToArrayAsync(ct);
+        foreach (var candidate in pending)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                await using var blobLease = await FileBlobStore.AcquireAsync(conn, [candidate.Sha256], ct);
+                await FinalizePendingBlobAsync(conn, candidate.Id, ct);
+            }
+            catch (Exception error)
+            {
+                logger.LogWarning(error, "恢复 blob 清理失败 {BlobId}", candidate.Id);
+            }
+        }
+    }
+
+    private async Task FinalizePendingBlobAsync(
+        MySqlConnector.MySqlConnection conn, ulong blobId, CancellationToken ct)
+    {
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        await using var context = EfDb.Use(conn, tx);
+        var blob = await context.FileBlobs
+            .FromSqlInterpolated($"SELECT * FROM file_blobs WHERE id={blobId} FOR UPDATE")
+            .SingleOrDefaultAsync(ct);
+        if (blob is null || blob.State != FileBlobStates.GarbageCollectionPending
+            || await context.Files.AnyAsync(file => file.BlobId == blobId, ct))
+        {
+            await tx.CommitAsync(ct);
+            return;
+        }
+        FileBlobStore.DeleteCanonicalFile(FileStorage.Root(options.StorageRoot), blob, ct);
+        context.FileBlobs.Remove(blob);
+        await context.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
     }
 
     internal async Task PurgeDeletedMessageImagesAsync(CancellationToken ct)
@@ -314,7 +392,6 @@ public sealed class FilesMaintenanceService(
                     var isNowActive = await context.UploadSessions.AnyAsync(
                         session => session.Id == info.Name && Enumerable.Contains(activeStatuses, session.Status), ct);
                     if (isNowActive) continue;
-                    await UploadService.CleanupPendingFinalsAsync(conn, root, info.Name, logger, ct);
                     FileStorage.DeleteDirectoryTree(root, directory, ct);
                 }
                 else
@@ -327,5 +404,12 @@ public sealed class FilesMaintenanceService(
     }
 
     private sealed class ExpiredUpload { public string Id { get; set; } = ""; }
-    private sealed class DeletedFile { public ulong Id { get; set; } public string StoragePath { get; set; } = ""; }
+    private sealed record PendingBlob(ulong Id, string Sha256);
+    private sealed class DeletedFile
+    {
+        public ulong Id { get; set; }
+        public ulong? BlobId { get; set; }
+        public string? Sha256 { get; set; }
+        public string StoragePath { get; set; } = "";
+    }
 }

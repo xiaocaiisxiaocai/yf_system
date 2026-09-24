@@ -54,7 +54,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
     {
         await using var conn = await db.OpenAsync(ct);
         await using var context = EfDb.Use(conn);
-        var hidden = new[] { "security.management_lock", "mail.smtp", "storage.warn_percent" };
+        var hidden = new[] { "security.management_lock", "security.identity_revision", "mail.smtp", "storage.warn_percent" };
         return await context.SystemConfigs.Where(config => !Enumerable.Contains(hidden, config.CfgKey))
             .OrderBy(config => config.CfgKey)
             .Select(config => new SystemConfigResponse(config.CfgKey, config.CfgValue, config.Description, config.UpdatedAt))
@@ -67,7 +67,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
         if (key.Length == 0 || key.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or '-')))
             throw ApiException.BadRequest("系统参数名称无效");
         var value = input?.Trim();
-        if (key is "security.management_lock" or "mail.smtp") throw ApiException.BadRequest("请使用对应的专用配置入口");
+        if (key is "security.management_lock" or "security.identity_revision" or "mail.smtp") throw ApiException.BadRequest("请使用对应的专用配置入口");
         if (key == "storage.warn_percent") throw ApiException.BadRequest("存储告警阈值已停用");
         (long min, long max)? range = key switch
         {

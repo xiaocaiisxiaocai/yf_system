@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -41,6 +41,7 @@ import ProjectList from '../../../pages/project/ProjectList'
 import ProjectGroupDetail from '../../../pages/project/ProjectGroupDetail'
 import FileTable from '../../../components/FileTable'
 import AuditLog from '../../../pages/system/AuditLog'
+import { queryClient } from '../../../api/queryClient'
 
 function page(list: unknown[] = [], pageSize = 10, current = 1, total = list.length) {
   return { list, total, page: current, pageSize }
@@ -51,6 +52,10 @@ function deferred<T>() {
   let reject!: (reason?: unknown) => void
   const promise = new Promise<T>((ok, fail) => { resolve = ok; reject = fail })
   return { promise, resolve, reject }
+}
+
+function httpError(status: number) {
+  return Object.assign(new Error(`HTTP ${status}`), { response: { status } })
 }
 
 function installGet(handler: typeof mocks.getImpl) {
@@ -345,8 +350,13 @@ describe('重复搜索运行时注册用例', () => {
   for (const item of cases) {
     it(item.title, async () => {
       let requests = 0
-      installGet(async (url: string) => {
-        if (url === item.api) { requests += 1; return { data: page() } }
+      const requestConfigs: unknown[] = []
+      installGet(async (url: string, config?: unknown) => {
+        if (url === item.api) {
+          requests += 1
+          requestConfigs.push(config)
+          return { data: page() }
+        }
         return { data: [] }
       })
       const user = userEvent.setup()
@@ -360,6 +370,92 @@ describe('重复搜索运行时注册用例', () => {
       fireEvent.click(searchAction)
       await waitFor(() => expect(requests).toBe(3))
       expect(document.querySelector('.arco-spin-loading')).not.toBeInTheDocument()
+      if (item.api === '/admin/users') {
+        expect(requestConfigs).toHaveLength(3)
+        for (const config of requestConfigs) expect(config).toMatchObject({ signal: expect.any(AbortSignal) })
+      }
     })
   }
+
+  it('UserList cancels an obsolete page request and keeps the newer filtered result', async () => {
+    const oldPage = deferred<{ data: ReturnType<typeof page> }>()
+    const filtered = deferred<{ data: ReturnType<typeof page> }>()
+    let oldSignal: AbortSignal | undefined
+    installGet((url: string, config?: unknown) => {
+      if (url === '/departments' || url === '/admin/user-role-options') return Promise.resolve({ data: [] })
+      if (url !== '/admin/users') return Promise.resolve({ data: [] })
+      const request = config as { params: { page: number; keyword?: string }; signal: AbortSignal }
+      if (request.params.keyword === 'steel') return filtered.promise
+      if (request.params.page === 2) {
+        oldSignal = request.signal
+        return oldPage.promise
+      }
+      return Promise.resolve({ data: page([{ id: 1, employeeNo: 'first-page', realName: '首页', email: 'first@example.invalid', status: 'ACTIVE', createdAt: '' }], 10, 1, 20) })
+    })
+
+    const user = userEvent.setup()
+    render(<UserList />)
+    await screen.findByText('first-page')
+    fireEvent.click(screen.getByLabelText('第 2 页'))
+    await waitFor(() => expect(oldSignal).toBeInstanceOf(AbortSignal))
+
+    const search = screen.getByPlaceholderText('工号 / 姓名 / 邮箱')
+    await user.type(search, 'steel')
+    fireEvent.click(search.closest('.arco-input-search')!.querySelector<HTMLElement>('.arco-icon-search')!)
+    await waitFor(() => expect(oldSignal?.aborted).toBe(true))
+    await act(async () => filtered.resolve({ data: page([{ id: 2, employeeNo: 'filtered-user', realName: '筛选结果', email: 'filtered@example.invalid', status: 'ACTIVE', createdAt: '' }]) }))
+    expect(await screen.findByText('filtered-user')).toBeVisible()
+
+    await act(async () => oldPage.resolve({ data: page([{ id: 3, employeeNo: 'stale-page', realName: '过期结果', email: 'stale@example.invalid', status: 'ACTIVE', createdAt: '' }], 10, 2, 20) }))
+    expect(screen.getByText('filtered-user')).toBeVisible()
+    expect(screen.queryByText('stale-page')).not.toBeInTheDocument()
+  })
+
+  it.each([401, 403])('UserList hides protected data and clears list and option caches after HTTP %s', async (status) => {
+    let denied = false
+    installGet(async (url: string) => {
+      if (url === '/admin/users') {
+        if (denied) throw httpError(status)
+        return { data: page([{ id: 19, employeeNo: 'protected-user', realName: '受保护用户', email: 'protected@example.invalid', status: 'ACTIVE', createdAt: '' }]) }
+      }
+      if (url === '/departments') return { data: [{ id: 4, name: '研发部', kind: 'DEPARTMENT', status: 'ACTIVE', sortNo: 1, children: [] }] }
+      if (url === '/admin/user-role-options') return { data: [{ id: 7, name: '内部成员' }] }
+      return { data: [] }
+    })
+
+    render(<UserList />)
+    expect(await screen.findByText('protected-user')).toBeVisible()
+    expect(queryClient.getQueriesData({ queryKey: ['admin-users'] }).some(([, data]) => data !== undefined)).toBe(true)
+    expect(queryClient.getQueriesData({ queryKey: ['admin-user-options'] }).some(([, data]) => data !== undefined)).toBe(true)
+
+    denied = true
+    const search = screen.getByPlaceholderText('工号 / 姓名 / 邮箱')
+    fireEvent.click(search.closest('.arco-input-search')!.querySelector<HTMLElement>('.arco-icon-search')!)
+
+    expect(await screen.findByText('当前会话无权读取用户管理数据，请重新登录或联系管理员确认权限。')).toBeVisible()
+    expect(screen.queryByText('protected-user')).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(queryClient.getQueriesData({ queryKey: ['admin-users'] })).toHaveLength(0)
+      expect(queryClient.getQueriesData({ queryKey: ['admin-user-options'] })).toHaveLength(0)
+    })
+  })
+
+  it('UserList retains its cached snapshot after a retryable server failure', async () => {
+    let fail = false
+    installGet(async (url: string) => {
+      if (url === '/admin/users') {
+        if (fail) throw httpError(500)
+        return { data: page([{ id: 20, employeeNo: 'cached-user', realName: '缓存用户', email: 'cached@example.invalid', status: 'ACTIVE', createdAt: '' }]) }
+      }
+      return { data: [] }
+    })
+
+    render(<UserList />)
+    expect(await screen.findByText('cached-user')).toBeVisible()
+    fail = true
+    const search = screen.getByPlaceholderText('工号 / 姓名 / 邮箱')
+    fireEvent.click(search.closest('.arco-input-search')!.querySelector<HTMLElement>('.arco-icon-search')!)
+    expect(await screen.findByText('加载失败')).toBeVisible()
+    expect(queryClient.getQueriesData({ queryKey: ['admin-users'] }).some(([, data]) => data !== undefined)).toBe(true)
+  })
 })

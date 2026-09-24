@@ -9,6 +9,8 @@
     "test:watch": "vitest",
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "postbuild": "node scripts/precompress-assets.mjs",
+    "test:precompression": "node --test scripts/precompress-assets.test.mjs",
     "lint": "oxlint",
     "preview": "vite preview",
     "build:excel-preview": "node scripts/build-excel-preview.mjs",
@@ -20,6 +22,7 @@
   "dependencies": {
     "@arco-design/web-react": "^2.66.16",
     "@microsoft/signalr": "10.0.11",
+    "@tanstack/react-query": "5.103.2",
     "axios": "^1.20.0",
     "dayjs": "1.11.23",
     "exceljs": "4.4.0",

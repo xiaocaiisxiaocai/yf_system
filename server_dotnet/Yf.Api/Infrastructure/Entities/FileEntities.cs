@@ -9,6 +9,7 @@ namespace Yf.Api.Infrastructure.Entities;
 public sealed class FileRecord
 {
     public ulong Id { get; set; }
+    public ulong? BlobId { get; set; }
     public ulong ProjectId { get; set; }
     public ulong UploaderId { get; set; }
     public string Direction { get; set; } = null!;
@@ -31,6 +32,8 @@ public sealed class UploadSession
     public ulong UploaderId { get; set; }
     public string FileName { get; set; } = null!;
     public ulong FileSize { get; set; }
+    public long FileLastModified { get; set; }
+    public string FileFingerprint { get; set; } = null!;
     public string? FileMd5 { get; set; }
     public uint ChunkSize { get; set; }
     public uint TotalChunks { get; set; }
@@ -60,6 +63,10 @@ public sealed class FileRecordConfig : IEntityTypeConfiguration<FileRecord>
         b.ToTable("files");
         b.UseCollation("utf8mb4_unicode_ci");
         b.HasKey(x => x.Id);
+        b.Property(x => x.BlobId).HasColumnName("blob_id");
+        b.HasIndex(x => x.BlobId).HasDatabaseName("idx_files_blob");
+        b.HasOne<FileBlob>().WithMany().HasForeignKey(x => x.BlobId)
+            .HasConstraintName("fk_files_blob").OnDelete(DeleteBehavior.Restrict);
         b.Property(x => x.ProjectId).HasColumnName("project_id");
         b.Property(x => x.UploaderId).HasColumnName("uploader_id");
         b.Property(x => x.Direction).HasColumnName("direction").HasMaxLength(8).IsRequired();
@@ -95,6 +102,8 @@ public sealed class UploadSessionConfig : IEntityTypeConfiguration<UploadSession
         b.Property(x => x.UploaderId).HasColumnName("uploader_id");
         b.Property(x => x.FileName).HasColumnName("file_name").HasMaxLength(255).IsRequired();
         b.Property(x => x.FileSize).HasColumnName("file_size");
+        b.Property(x => x.FileLastModified).HasColumnName("file_last_modified");
+        b.Property(x => x.FileFingerprint).HasColumnName("file_fingerprint").HasMaxLength(64).IsRequired();
         b.Property(x => x.FileMd5).HasColumnName("file_md5").HasMaxLength(32);
         b.Property(x => x.ChunkSize).HasColumnName("chunk_size");
         b.Property(x => x.TotalChunks).HasColumnName("total_chunks");
@@ -110,6 +119,8 @@ public sealed class UploadSessionConfig : IEntityTypeConfiguration<UploadSession
         updatedAt.Metadata.SetBeforeSaveBehavior(PropertySaveBehavior.Save);
         b.HasIndex(x => x.ProjectId).HasDatabaseName("fk_us_project");
         b.HasIndex(x => x.UploaderId).HasDatabaseName("idx_us_uploader");
+        b.HasIndex(x => new { x.ProjectId, x.UploaderId, x.FileFingerprint, x.Status, x.ExpiresAt })
+            .HasDatabaseName("idx_us_resume");
         b.HasIndex(x => new { x.Status, x.ExpiresAt }).HasDatabaseName("idx_us_status_exp");
         b.HasIndex(x => x.ResultFileId).HasDatabaseName("idx_upload_result_file");
         b.HasOne<Project>().WithMany().HasForeignKey(x => x.ProjectId).HasConstraintName("fk_us_project").OnDelete(DeleteBehavior.Restrict);

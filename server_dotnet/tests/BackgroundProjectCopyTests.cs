@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
@@ -57,15 +58,69 @@ public sealed class BackgroundProjectCopyTests
             Assert.Empty((await service.ListJobsAsync(conn, otherAdmin, source.GroupId, ct)).Jobs);
 
             var copied = await conn.QuerySingleAsync<CopiedFile>(new CommandDefinition(
-                "SELECT storage_path AS StoragePath,sha256 AS Sha256 FROM files WHERE project_id=@ProjectId",
+                "SELECT id AS Id,blob_id AS BlobId,storage_path AS StoragePath,sha256 AS Sha256 FROM files WHERE project_id=@ProjectId",
                 new { ProjectId = finished.Result!.ProjectId }, cancellationToken: ct));
             Assert.NotEqual(source.StoragePath, copied.StoragePath);
             Assert.Equal(source.Sha256, copied.Sha256);
+            var sourceFile = await conn.QuerySingleAsync<CopiedFile>(new CommandDefinition(
+                "SELECT id AS Id,blob_id AS BlobId,storage_path AS StoragePath,sha256 AS Sha256 FROM files WHERE id=99121",
+                cancellationToken: ct));
+            Assert.NotEqual(sourceFile.Id, copied.Id);
+            Assert.NotNull(sourceFile.BlobId);
+            Assert.Equal(sourceFile.BlobId, copied.BlobId);
+            Assert.Equal(sourceFile.StoragePath, copied.StoragePath);
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM file_blobs WHERE id=@Id", new { Id = copied.BlobId }, cancellationToken: ct)));
             Assert.Equal(source.Bytes, await File.ReadAllBytesAsync(Path.Combine(storage,
                 copied.StoragePath.Replace('/', Path.DirectorySeparatorChar)), ct));
             Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
                 "SELECT COUNT(*) FROM project_copies WHERE source_project_id=@ProjectId",
                 new { ProjectId = source.ProjectId }, cancellationToken: ct)));
+
+            var canonicalPath = Path.Combine(storage,
+                copied.StoragePath.Replace('/', Path.DirectorySeparatorChar));
+            await conn.ExecuteAsync(new CommandDefinition("""
+                UPDATE files SET status='DELETED',deleted_at=UTC_TIMESTAMP(3)-INTERVAL 31 DAY WHERE id=99121;
+                """, cancellationToken: ct));
+            var maintenance = new FilesMaintenanceService(
+                database.Database, database.Options, NullLogger<FilesMaintenanceService>.Instance);
+            await maintenance.RunGarbageCollectionAsync(ct);
+            Assert.Equal("PURGED", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+                "SELECT status FROM files WHERE id=99121", cancellationToken: ct)));
+            Assert.Null(await conn.ExecuteScalarAsync<ulong?>(new CommandDefinition(
+                "SELECT blob_id FROM files WHERE id=99121", cancellationToken: ct)));
+            Assert.True(File.Exists(canonicalPath));
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM file_blobs WHERE id=@Id", new { Id = copied.BlobId }, cancellationToken: ct)));
+
+            await conn.ExecuteAsync(new CommandDefinition(
+                "UPDATE files SET status='DELETED',deleted_at=UTC_TIMESTAMP(3)-INTERVAL 31 DAY WHERE id=@Id",
+                new { copied.Id }, cancellationToken: ct));
+            await maintenance.RunGarbageCollectionAsync(ct);
+            Assert.Equal("PURGED", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+                "SELECT status FROM files WHERE id=@Id", new { copied.Id }, cancellationToken: ct)));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM file_blobs WHERE id=@Id", new { Id = copied.BlobId }, cancellationToken: ct)));
+            Assert.False(File.Exists(canonicalPath));
+
+            // Simulate a process stop after the durable GC_PENDING claim but before disk deletion.
+            var pendingBytes = "pending-blob-restart"u8.ToArray();
+            var pendingSha = Convert.ToHexString(SHA256.HashData(pendingBytes)).ToLowerInvariant();
+            var pendingRelative = FileBlobStore.RelativePath(pendingSha);
+            var pendingPath = Path.Combine(storage, pendingRelative.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(pendingPath)!);
+            await File.WriteAllBytesAsync(pendingPath, pendingBytes, ct);
+            var pendingId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("""
+                INSERT INTO file_blobs(sha256,size_bytes,storage_path,state,gc_started_at,created_at)
+                VALUES(@Sha,@Size,@Path,'GC_PENDING',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6));
+                SELECT LAST_INSERT_ID();
+                """, new { Sha = pendingSha, Size = pendingBytes.Length, Path = pendingRelative }, cancellationToken: ct));
+            var restartedMaintenance = new FilesMaintenanceService(
+                database.Database, database.Options, NullLogger<FilesMaintenanceService>.Instance);
+            await restartedMaintenance.RunGarbageCollectionAsync(ct);
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM file_blobs WHERE id=@Id", new { Id = pendingId }, cancellationToken: ct)));
+            Assert.False(File.Exists(pendingPath));
         }
         finally { TryDeleteStorage(storage); }
     }
@@ -115,7 +170,18 @@ public sealed class BackgroundProjectCopyTests
             Assert.Equal(0, await worker.ScavengeOwnedDirectoriesAsync(ct));
             Assert.True(Directory.Exists(resultDirectory));
 
-            // A stale execution of the same finished job is unreferenced and removed; the result stays.
+            // A canonical blob left by an unknown COMMIT is outside copy-job staging and must
+            // never be scavenged solely because its database outcome cannot yet be proven.
+            var unknownBytes = "unknown-commit-canonical"u8.ToArray();
+            var unknownSha = Convert.ToHexString(SHA256.HashData(unknownBytes)).ToLowerInvariant();
+            var unknownPath = Path.Combine(storage,
+                FileBlobStore.RelativePath(unknownSha).Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(unknownPath)!);
+            await File.WriteAllBytesAsync(unknownPath, unknownBytes, ct);
+            Assert.Equal(0, await worker.ScavengeOwnedDirectoriesAsync(ct));
+            Assert.True(File.Exists(unknownPath));
+
+            // A stale execution of the same finished job is removed; the canonical result stays.
             var stale = Path.Combine(storage, "copy-jobs", accepted.JobId.ToString(), Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(stale);
             await File.WriteAllTextAsync(Path.Combine(stale, "partial.tmp"), "partial", ct);
@@ -379,6 +445,7 @@ public sealed class BackgroundProjectCopyTests
                 INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,mime_type,sha256,storage_path,status,created_at)
                 VALUES(99121,{projectId},@ActorId,'C2S','后台源文件.txt','background-source.txt','txt',@Size,'text/plain',@Sha,@Path,'AVAILABLE',UTC_TIMESTAMP(3))
                 """, new { ActorId = actorId, Size = bytes.Length, Sha = sha, Path = relative }, cancellationToken: ct));
+            await FileBlobBackfill.RunAsync(database.Database, storage, ct);
         }
         return new(actorId, groupId, projectId, priorityId, bytes, sha, relative);
     }
@@ -387,7 +454,13 @@ public sealed class BackgroundProjectCopyTests
 
     private sealed record Seed(ulong ActorId, ulong GroupId, ulong ProjectId, ulong PriorityId,
         byte[] Bytes, string Sha256, string StoragePath);
-    private sealed class CopiedFile { public string StoragePath { get; init; } = ""; public string Sha256 { get; init; } = ""; }
+    private sealed class CopiedFile
+    {
+        public ulong Id { get; init; }
+        public ulong? BlobId { get; init; }
+        public string StoragePath { get; init; } = "";
+        public string Sha256 { get; init; } = "";
+    }
     private sealed class JobState { public string Status { get; init; } = ""; public string? Error { get; init; } }
     private sealed class NoOpPublisher : IProjectRealtimePublisher
     {

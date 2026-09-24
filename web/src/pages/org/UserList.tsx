@@ -1,10 +1,12 @@
 import { textLengthRule } from '../../utils/textRules'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
-  Button, Card, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, TreeSelect, Typography,
+  Button, Card, Form, Input, Message, Modal, Popconfirm, Result, Select, Space, Table, Tag, TreeSelect, Typography,
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../../api/client'
+import { createSessionQueryScope, queryClient } from '../../api/queryClient'
 import { actionSlots } from '../../components/ActionSlots'
 import PasswordInput from '../../components/PasswordInput'
 import { useAuth } from '../../store/auth'
@@ -53,113 +55,112 @@ function toTreeData(nodes: DeptNode[]): DeptTreeData[] {
   }))
 }
 
+function isAuthorizationError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const candidate = error as { status?: unknown; response?: { status?: unknown } }
+  const status = candidate.response?.status ?? candidate.status
+  return status === 401 || status === 403
+}
+
 export default function UserList() {
-  const me = useAuth((s) => s.user)
-  const canDelete = useAuth((s) => s.hasPerm('user:delete'))
-  const [data, setData] = useState<PageResp<UserRow>>({ list: [], total: 0, page: 1, pageSize: 10 })
-  const [loading, setLoading] = useState(true)
-  const [reloadKey, setReloadKey] = useState(0)
+  const auth = useAuth()
+  const [sessionUserId, sessionGeneration, sessionGrants] = createSessionQueryScope(auth)
+  const sessionScope = useMemo(
+    () => [sessionUserId, sessionGeneration, sessionGrants] as const,
+    [sessionGeneration, sessionGrants, sessionUserId],
+  )
+  const me = auth.user
+  const canDelete = auth.hasPerm('user:delete')
   const [keyword, setKeyword] = useState('')
   const [departmentId, setDepartmentId] = useState<number>()
   const [status, setStatus] = useState<string>()
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
-  const [loadError, setLoadError] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [resettingPassword, setResettingPassword] = useState(false)
   const [editing, setEditing] = useState<UserRow | null>(null)
   const [resetTarget, setResetTarget] = useState<UserRow | null>(null)
-  const [depts, setDepts] = useState<DeptNode[]>([])
-  const [roles, setRoles] = useState<RoleOpt[]>([])
-  const [optionsLoading, setOptionsLoading] = useState(true)
-  const [optionsError, setOptionsError] = useState(false)
-  const optionsSeq = useRef(0)
   const saveInFlight = useRef(false)
   const passwordResetInFlight = useRef(false)
   const [form] = Form.useForm()
   const [pwdForm] = Form.useForm()
+  const usersQueryKey = useMemo(() => ['admin-users', sessionScope] as const, [sessionScope])
+  const optionsQueryKey = useMemo(() => ['admin-user-options', sessionScope] as const, [sessionScope])
+
+  const usersQuery = useQuery({
+    queryKey: [...usersQueryKey, { page, pageSize, keyword, departmentId, status }],
+    queryFn: async ({ signal }) => {
+      const response = await http.get<ApiResponses['GET /admin/users']>('/admin/users', {
+        params: { page, pageSize, keyword: keyword || undefined, departmentId, status }, signal,
+      })
+      return response.data as PageResp<UserRow>
+    },
+  }, queryClient)
+  const optionsQuery = useQuery({
+    queryKey: optionsQueryKey,
+    queryFn: async ({ signal }) => {
+      const config: QuietRequestConfig = { signal, quietNetworkError: true }
+      const [departmentsResponse, rolesResponse] = await Promise.all([
+        http.get<ApiResponses['GET /departments']>('/departments', config),
+        http.get<ApiResponses['GET /admin/user-role-options']>('/admin/user-role-options', config),
+      ])
+      return { depts: departmentsResponse.data as DeptNode[], roles: rolesResponse.data as RoleOpt[] }
+    },
+  }, queryClient)
+
+  const authorizationError = isAuthorizationError(usersQuery.error) || isAuthorizationError(optionsQuery.error)
+  const data = !authorizationError && usersQuery.data ? usersQuery.data : { list: [], total: 0, page, pageSize }
+  const loading = usersQuery.isFetching
+  const loadError = usersQuery.isError && !usersQuery.isFetching
+  const depts = authorizationError ? [] : optionsQuery.data?.depts ?? []
+  const roles = authorizationError ? [] : optionsQuery.data?.roles ?? []
+  const optionsLoading = optionsQuery.isFetching
+  const optionsError = optionsQuery.isError && !optionsQuery.isFetching
   const editingRoleId = editing?.roleId ?? editing?.roleIds?.[0]
   const editingRoleUnavailable = editingRoleId != null
     && !optionsLoading
     && !optionsError
     && !roles.some((role) => role.id === editingRoleId)
 
-  const fetchUsers = useCallback(async () => {
-    const r = await http.get<ApiResponses['GET /admin/users']>('/admin/users', { params: { page, pageSize, keyword: keyword || undefined, departmentId, status } })
-    return r.data as PageResp<UserRow>
-  }, [page, pageSize, keyword, departmentId, status])
-
-  const load = useCallback(() => {
-    setLoading(true)
-    setLoadError(false)
-    setReloadKey((value) => value + 1)
-  }, [])
+  useEffect(() => {
+    if (!authorizationError) return
+    void queryClient.cancelQueries({ queryKey: usersQueryKey })
+    void queryClient.cancelQueries({ queryKey: optionsQueryKey })
+    queryClient.removeQueries({ queryKey: usersQueryKey })
+    queryClient.removeQueries({ queryKey: optionsQueryKey })
+  }, [authorizationError, optionsQueryKey, usersQueryKey])
 
   useEffect(() => {
-    let active = true
-    fetchUsers()
-      .then((next) => {
-        if (active) {
-          setData(next)
-          setLoadError(false)
-          const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || pageSize)))
-          if (page > lastPage) setPage(lastPage)
-        }
-      })
-      .catch(() => {
-        if (active) setLoadError(true)
-      })
-      .finally(() => {
-        if (active) setLoading(false)
-      })
-    return () => {
-      active = false
-    }
-  }, [fetchUsers, page, pageSize, reloadKey])
+    const next = usersQuery.data
+    if (!next) return
+    const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || pageSize)))
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the server can shrink the last page between requests
+    if (page > lastPage) setPage(lastPage)
+  }, [page, pageSize, usersQuery.data])
 
-  const retryOptions = () => {
-    setOptionsLoading(true)
-    setOptionsError(false)
-    const seq = ++optionsSeq.current
-    Promise.all([
-      http.get<ApiResponses['GET /departments']>('/departments', { quietNetworkError: true } as QuietRequestConfig),
-      http.get<ApiResponses['GET /admin/user-role-options']>('/admin/user-role-options', { quietNetworkError: true } as QuietRequestConfig),
-    ])
-      .then(([departmentsResponse, rolesResponse]) => {
-        if (seq !== optionsSeq.current) return
-        setDepts(departmentsResponse.data as DeptNode[])
-        setRoles(rolesResponse.data)
-      })
-      .catch(() => {
-        if (seq === optionsSeq.current) setOptionsError(true)
-      })
-      .finally(() => {
-        if (seq === optionsSeq.current) setOptionsLoading(false)
-      })
-  }
-
-  useEffect(() => {
-    const seq = ++optionsSeq.current
-    Promise.all([
-        http.get<ApiResponses['GET /departments']>('/departments', { quietNetworkError: true } as QuietRequestConfig),
-        http.get<ApiResponses['GET /admin/user-role-options']>('/admin/user-role-options', { quietNetworkError: true } as QuietRequestConfig),
-      ])
-      .then(([departmentsResponse, rolesResponse]) => {
-        if (seq !== optionsSeq.current) return
-        setDepts(departmentsResponse.data as DeptNode[])
-        setRoles(rolesResponse.data)
-      })
-      .catch(() => {
-        if (seq === optionsSeq.current) setOptionsError(true)
-      })
-      .finally(() => {
-        if (seq === optionsSeq.current) setOptionsLoading(false)
-      })
-    return () => {
-      optionsSeq.current += 1
-    }
-  }, [])
+  const invalidateUsers = () => queryClient.invalidateQueries({ queryKey: usersQueryKey })
+  const saveMutation = useMutation({
+    mutationFn: async ({ id, payload }: { id?: number; payload: Record<string, unknown> }) => id
+      ? http.put<ApiResponses['PUT /admin/users/{id}']>(`/admin/users/${id}`, payload)
+      : http.post<ApiResponses['POST /admin/users']>('/admin/users', payload),
+    onSuccess: invalidateUsers,
+  }, queryClient)
+  const statusMutation = useMutation({
+    mutationFn: (u: UserRow) => http.put<ApiResponses['PUT /admin/users/{id}/status']>(
+      `/admin/users/${u.id}/status`, { status: u.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' },
+    ),
+    onSuccess: invalidateUsers,
+  }, queryClient)
+  const deleteMutation = useMutation({
+    mutationFn: (u: UserRow) => http.delete<ApiResponses['DELETE /admin/users/{id}']>(`/admin/users/${u.id}`),
+    onSuccess: invalidateUsers,
+  }, queryClient)
+  const passwordMutation = useMutation({
+    mutationFn: ({ id, newPassword }: { id: number; newPassword: string }) =>
+      http.put<ApiResponses['PUT /admin/users/{id}/password']>(`/admin/users/${id}/password`, { newPassword }),
+    onSuccess: invalidateUsers,
+  }, queryClient)
+  const saving = saveMutation.isPending
+  const resettingPassword = passwordMutation.isPending
 
   const submit = async () => {
     if (saveInFlight.current) return
@@ -186,37 +187,35 @@ export default function UserList() {
         departmentId: selectedDepartmentId,
         roleId: Number(roleId),
       }
-      setSaving(true)
       if (editing) {
         // 资料与角色同一接口事务提交，避免两次 PUT 的半失败
-        await http.put<ApiResponses['PUT /admin/users/{id}']>(`/admin/users/${editing.id}`, {
-          realName: payload.realName,
-          email: payload.email,
-          departmentId: payload.departmentId,
-          roleId: payload.roleId,
+        await saveMutation.mutateAsync({
+          id: editing.id,
+          payload: {
+            realName: payload.realName,
+            email: payload.email,
+            departmentId: payload.departmentId,
+            roleId: payload.roleId,
+          },
         })
         Message.success('用户已更新')
       } else {
-        await http.post<ApiResponses['POST /admin/users']>('/admin/users', payload)
+        await saveMutation.mutateAsync({ payload })
         Message.success('用户已创建（首次登录需改密）')
       }
       setEditOpen(false)
-      load()
     } finally {
       saveInFlight.current = false
-      setSaving(false)
     }
   }
 
   const toggle = async (u: UserRow) => {
-    await http.put<ApiResponses['PUT /admin/users/{id}/status']>(`/admin/users/${u.id}/status`, { status: u.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
-    load()
+    await statusMutation.mutateAsync(u)
   }
 
   const remove = async (u: UserRow) => {
-    await http.delete<ApiResponses['DELETE /admin/users/{id}']>(`/admin/users/${u.id}`)
+    await deleteMutation.mutateAsync(u)
     Message.success('用户已删除')
-    load()
   }
 
   const resetPwd = async () => {
@@ -225,14 +224,12 @@ export default function UserList() {
     try {
       const v = await pwdForm.validate().catch(() => null)
       if (!v) return
-      setResettingPassword(true)
-      await http.put<ApiResponses['PUT /admin/users/{id}/password']>(`/admin/users/${resetTarget!.id}/password`, { newPassword: v.newPassword })
+      await passwordMutation.mutateAsync({ id: resetTarget!.id, newPassword: v.newPassword })
       Message.success('密码已重置，该用户所有登录态已失效')
       setResetTarget(null)
       pwdForm.resetFields()
     } finally {
       passwordResetInFlight.current = false
-      setResettingPassword(false)
     }
   }
 
@@ -245,6 +242,16 @@ export default function UserList() {
     if (resettingPassword) return
     pwdForm.resetFields()
     setResetTarget(null)
+  }
+
+  if (authorizationError) {
+    return (
+      <Result
+        status="403"
+        title="用户管理不可用"
+        subTitle="当前会话无权读取用户管理数据，请重新登录或联系管理员确认权限。"
+      />
+    )
   }
 
   return (
@@ -261,14 +268,16 @@ export default function UserList() {
             placeholder="工号 / 姓名 / 邮箱"
             style={{ width: 260 }}
             onSearch={(v) => {
-              setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
+              const sameQuery = page === 1 && keyword === v
               setPage(1)
               setKeyword(v)
+              if (sameQuery) void usersQuery.refetch()
             }}
             onClear={() => {
-              setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
+              const sameQuery = page === 1 && keyword === ''
               setPage(1)
               setKeyword('')
+              if (sameQuery) void usersQuery.refetch()
             }}
           />
           <TreeSelect
@@ -279,21 +288,33 @@ export default function UserList() {
             loading={optionsLoading}
             disabled={optionsError}
             value={departmentId ? String(departmentId) : undefined}
-            onChange={(v) => { setLoading(true); setLoadError(false); setReloadKey((value) => value + 1); setPage(1); setDepartmentId(v ? Number(v) : undefined) }}
+            onChange={(v) => {
+              const next = v ? Number(v) : undefined
+              const sameQuery = page === 1 && departmentId === next
+              setPage(1)
+              setDepartmentId(next)
+              if (sameQuery) void usersQuery.refetch()
+            }}
           />
           <Select
             allowClear
             placeholder="全部状态"
             style={{ width: 110 }}
             value={status}
-            onChange={(v) => { setLoading(true); setLoadError(false); setReloadKey((value) => value + 1); setPage(1); setStatus(v as string | undefined) }}
+            onChange={(v) => {
+              const next = v as string | undefined
+              const sameQuery = page === 1 && status === next
+              setPage(1)
+              setStatus(next)
+              if (sameQuery) void usersQuery.refetch()
+            }}
           >
             <Select.Option value="ACTIVE">启用</Select.Option>
             <Select.Option value="DISABLED">禁用</Select.Option>
           </Select>
         </Space>
         <Space>
-          {optionsError && <Button size="small" onClick={retryOptions}>重试加载组织和角色</Button>}
+          {optionsError && <Button size="small" onClick={() => { void optionsQuery.refetch() }}>重试加载组织和角色</Button>}
           {!optionsLoading && !optionsError && roles.length === 0 && <Typography.Text type="warning">暂无启用的角色</Typography.Text>}
           <Button
             type="primary"
@@ -312,7 +333,7 @@ export default function UserList() {
       {loadError ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
           <Typography.Text type="error">加载失败</Typography.Text>
-          <Button size="small" onClick={load}>重试</Button>
+          <Button size="small" onClick={() => { void usersQuery.refetch() }}>重试</Button>
         </div>
       ) : (
         <Table
@@ -393,9 +414,10 @@ export default function UserList() {
             showTotal: true,
             sizeCanChange: true,
             onChange: (p, ps) => {
-              setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
+              const sameQuery = page === p && pageSize === ps
               setPage(p)
               setPageSize(ps)
+              if (sameQuery) void usersQuery.refetch()
             },
           }}
         />

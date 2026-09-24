@@ -1,6 +1,4 @@
 using System.Text;
-using System.Diagnostics;
-using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
@@ -160,6 +158,7 @@ internal sealed class ProjectCopyService(
             // now waits for MySQL to settle the original COMMIT, so only this stable read may recover a
             // negative outcome. A database outage leaves RUNNING intact for the next lease owner.
             if (!await ResolveUnknownOutcomeAsync(unknown, CancellationToken.None)) throw;
+            CleanupExecutionDirectory(jobId, executionToken, CancellationToken.None);
         }
         catch (Exception error)
         {
@@ -183,11 +182,11 @@ internal sealed class ProjectCopyService(
     {
         if (!actor.IsInternal) throw ApiException.Forbidden("仅内部用户可以复制项目");
         var targetName = ValidateName(request.Name);
-        // An earlier failed physical copy may have released this caller-owned connection.
+        // A previous failed attempt may have released this caller-owned connection.
         if (conn.State == System.Data.ConnectionState.Closed) await conn.OpenAsync(ct);
         var snapshot = await CaptureSnapshotAsync(conn, actor, sourceProjectId, targetName, ct);
-        // Copying and hashing can take minutes. Do not reserve a pooled database connection
-        // while only touching files; the commit phase opens it again and rechecks all access.
+        // Release the snapshot connection before validating immutable blob files. The commit phase
+        // opens it again, locks each content hash, and rechecks access and the complete source snapshot.
         await conn.CloseAsync();
         var availableFiles = snapshot.Files.Where(file => file.Status == FileStatuses.Available).ToArray();
         var totalBytes = TotalBytes(availableFiles);
@@ -195,7 +194,6 @@ internal sealed class ProjectCopyService(
             await UpdateTotalsAsync(progressJobId, executionToken!, workerEpoch!.Value,
                 (ulong)availableFiles.Length, totalBytes, ct);
 
-        if (totalBytes > 0) FileStorage.EnsureFreeSpace(options.StorageRoot, totalBytes);
         var root = FileStorage.Root(options.StorageRoot);
         var prepared = new List<PreparedCopy>(availableFiles.Length);
         var committed = false;
@@ -208,19 +206,18 @@ internal sealed class ProjectCopyService(
             ulong completedBytes = 0;
             foreach (var sourceFile in availableFiles)
             {
-                var completedFiles = (ulong)prepared.Count;
-                prepared.Add(await PreparePhysicalCopyAsync(root, snapshot.CopiedAt, sourceFile, jobId, executionToken,
-                    jobId is null ? null : copied => UpdateProgressAsync(jobId.Value, executionToken!, workerEpoch!.Value, completedFiles,
-                        checked(completedBytes + copied), ct), ct));
+                prepared.Add(PrepareBlobReference(root, sourceFile, ct));
                 completedBytes = checked(completedBytes + sourceFile.SizeBytes);
                 if (jobId is ulong activeJobId)
                     await UpdateProgressAsync(activeJobId, executionToken!, workerEpoch!.Value,
                         (ulong)prepared.Count, completedBytes, ct);
             }
 
-            // File I/O stays outside the transaction. This short second transaction
-            // fences permission changes (shared business gate) and proves the source snapshot is unchanged.
+            // The short commit transaction fences permission changes, proves the source snapshot is
+            // unchanged and serializes blob reference creation with last-reference garbage collection.
             await conn.OpenAsync(ct);
+            await using var blobLeases = await FileBlobStore.AcquireAsync(
+                conn, prepared.Select(item => item.Blob.Sha256), ct);
             await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
             await AccessService.LockBusinessAsync(conn, tx, ct);
             var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
@@ -260,6 +257,20 @@ internal sealed class ProjectCopyService(
             await EnsureNameUniqueAsync(db, targetName, ct);
             var createdAt = await DatabaseUtcNowAsync(db, ct);
 
+            var resolvedBlobs = new Dictionary<string, FileBlob>(StringComparer.Ordinal);
+            foreach (var group in prepared.GroupBy(item => item.Blob.Sha256, StringComparer.Ordinal)
+                         .OrderBy(group => group.Key, StringComparer.Ordinal))
+            {
+                var expectedIds = group.Where(item => item.Source.BlobId is not null)
+                    .Select(item => item.Source.BlobId!.Value).Distinct().ToArray();
+                if (expectedIds.Length > 1)
+                    throw ApiException.Conflict("相同内容关联了不同 blob 记录，无法复制");
+                var reference = group.First();
+                var blob = await FileBlobStore.ResolveForReferenceAsync(db, root, reference.Blob,
+                    expectedIds.Length == 0 ? null : expectedIds[0], createdAt, ct);
+                resolvedBlobs.Add(group.Key, blob);
+            }
+
             var targetProject = new Project
             {
                 ProjectGroupId = currentGroup.Id,
@@ -284,6 +295,13 @@ internal sealed class ProjectCopyService(
             catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
             { throw ApiException.Conflict("项目名称已存在"); }
             targetProjectId = targetProject.Id;
+            // Project.UpdatedAt is database-generated in the shared EF model, so its explicit
+            // initializer is omitted from INSERT. Override only this copied row with the same
+            // database UTC timestamp used by created_at; CURRENT_TIMESTAMP may use server local time.
+            var timestamped = await db.Projects.Where(project => project.Id == targetProjectId)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(project => project.UpdatedAt, createdAt), ct);
+            if (timestamped != 1)
+                throw new InvalidOperationException("复制项目时间戳写入失败");
 
             var actorName = await db.Users.Where(user => user.Id == current.Id)
                 .Select(user => user.RealName).SingleAsync(ct);
@@ -321,6 +339,7 @@ internal sealed class ProjectCopyService(
             var copiedFiles = prepared.Select(item => new FileRecord
             {
                 ProjectId = targetProjectId,
+                BlobId = resolvedBlobs[item.Blob.Sha256].Id,
                 UploaderId = item.Source.UploaderId,
                 Direction = item.Source.Direction,
                 OriginalName = item.Source.OriginalName,
@@ -329,7 +348,7 @@ internal sealed class ProjectCopyService(
                 SizeBytes = item.Source.SizeBytes,
                 MimeType = item.Source.MimeType,
                 Sha256 = item.Source.Sha256,
-                StoragePath = item.StoragePath,
+                StoragePath = resolvedBlobs[item.Blob.Sha256].StoragePath,
                 Status = FileStatuses.Available,
                 DeletedAt = null,
                 CreatedAt = createdAt,
@@ -400,6 +419,11 @@ internal sealed class ProjectCopyService(
                     throw new InvalidOperationException("项目复制提交结果未知；已保留候选文件以避免破坏可能已提交的数据，请按复制记录核对后处理。", commitError);
                 }
             }
+            if (committed)
+            {
+                if (jobId is ulong committedJobId)
+                    CleanupExecutionDirectory(committedJobId, executionToken!, CancellationToken.None);
+            }
         }
         finally
         {
@@ -407,7 +431,6 @@ internal sealed class ProjectCopyService(
             {
                 if (jobId is ulong ownedJobId)
                     CleanupExecutionDirectory(ownedJobId, executionToken!, CancellationToken.None);
-                else foreach (var item in prepared) TryDelete(item.TargetPath);
             }
         }
 
@@ -520,72 +543,31 @@ internal sealed class ProjectCopyService(
         if (await ActiveUploadCountAsync(db, sourceProjectId, ct) != 0)
             throw ApiException.Conflict("源项目仍有进行中的文件上传，请上传完成后再复制");
         var files = await LoadFilesForUpdateAsync(db, sourceProjectId, ct);
-        var copiedAt = await DatabaseUtcNowAsync(db, ct);
         await tx.CommitAsync(ct);
-        return new(source, group, files, copiedAt);
+        return new(source, group, files);
     }
 
-    private static async Task<PreparedCopy> PreparePhysicalCopyAsync(string root, DateTime copiedAt,
-        CopyFileRow sourceFile, ulong? jobId, string? executionToken,
-        Func<ulong, Task>? reportProgress, CancellationToken ct)
+    private static PreparedCopy PrepareBlobReference(
+        string root, CopyFileRow sourceFile, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(sourceFile.Sha256) || sourceFile.Sha256.Length != 64)
             throw ApiException.Conflict($"源文件“{sourceFile.OriginalName}”缺少完整性校验值，无法复制");
-        string sourcePath;
-        try { sourcePath = FileStorage.ResolveExistingFile(root, Path.Combine(root, sourceFile.StoragePath), ct); }
-        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException or InvalidOperationException)
-        { throw ApiException.Conflict($"源文件“{sourceFile.OriginalName}”缺失或存储路径异常，无法复制"); }
         var storedName = $"{Guid.NewGuid():D}.{sourceFile.Ext}";
-        var targetPath = jobId is ulong ownedJobId
-            ? FileStorage.EnsureLexicallyWithin(root,
-                Path.Combine(root, "copy-jobs", ownedJobId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    executionToken!, storedName),
-                allowRoot: false)
-            : FileStorage.FinalPath(root, copiedAt, storedName);
-        var directory = Path.GetDirectoryName(targetPath) ?? throw new InvalidOperationException("存储目录无效");
-        directory = FileStorage.CreateDirectoryWithin(root, directory, ct);
-        targetPath = FileStorage.EnsureLexicallyWithin(root, Path.Combine(directory, storedName), allowRoot: false);
+        if (sourceFile.BlobId is null)
+            throw ApiException.Conflict($"源文件“{sourceFile.OriginalName}”尚未完成内容存储转换，无法复制");
+        string sha256;
         try
         {
-            var hash = await HashAndCopyWithProgressAsync(sourcePath, targetPath, sourceFile.SizeBytes,
-                reportProgress, ct);
-            if (hash.Bytes != sourceFile.SizeBytes || !hash.Sha256.Equals(sourceFile.Sha256, StringComparison.OrdinalIgnoreCase))
-                throw ApiException.Conflict($"源文件“{sourceFile.OriginalName}”完整性校验失败，项目未复制");
-            return new(sourceFile, storedName, Path.GetRelativePath(root, targetPath).Replace(Path.DirectorySeparatorChar, '/'), targetPath);
+            sha256 = FileBlobStore.NormalizeSha256(sourceFile.Sha256);
+            FileBlobStore.VerifyBoundPhysicalFile(root, sourceFile.StoragePath, sha256,
+                sourceFile.SizeBytes, ct);
         }
-        catch { TryDelete(targetPath); throw; }
-    }
-
-    private static async Task<(string Sha256, ulong Bytes)> HashAndCopyWithProgressAsync(
-        string sourcePath, string targetPath, ulong maximumBytes, Func<ulong, Task>? reportProgress, CancellationToken ct)
-    {
-        await using var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read,
-            1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        await using var output = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-            1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[1024 * 1024];
-        var interval = Stopwatch.StartNew();
-        ulong total = 0;
-        ulong lastReported = 0;
-        int read;
-        while ((read = await input.ReadAsync(buffer, ct)) != 0)
+        catch (InvalidOperationException)
         {
-            total = checked(total + (uint)read);
-            if (total > maximumBytes) throw ApiException.Conflict("源文件大小在复制期间发生变化");
-            sha.AppendData(buffer, 0, read);
-            await output.WriteAsync(buffer.AsMemory(0, read), ct);
-            if (reportProgress is not null && interval.Elapsed >= TimeSpan.FromSeconds(1)
-                && total - lastReported >= 8UL * 1024 * 1024)
-            {
-                await reportProgress(total);
-                lastReported = total;
-                interval.Restart();
-            }
+            throw ApiException.Conflict($"源文件“{sourceFile.OriginalName}”内容引用异常，无法复制");
         }
-        await output.FlushAsync(ct);
-        output.Flush(flushToDisk: true);
-        return (Convert.ToHexString(sha.GetHashAndReset()).ToLowerInvariant(), total);
+        return new(sourceFile, storedName,
+            new FileBlobStore.PreparedBlob(sha256, sourceFile.SizeBytes, null));
     }
 
     private async Task<bool?> CheckCommitOutcomeAsync(ulong targetProjectId, ulong copyId)
@@ -710,7 +692,7 @@ internal sealed class ProjectCopyService(
             .FromSqlInterpolated($"SELECT * FROM files WHERE project_id={projectId} ORDER BY id FOR UPDATE")
             .AsNoTracking().ToArrayAsync(ct);
         return files.Select(file => new CopyFileRow(file.Id, file.UploaderId, file.Direction, file.OriginalName,
-            file.Ext, file.SizeBytes, file.MimeType, file.Sha256, file.StoragePath, file.Status)).ToArray();
+            file.Ext, file.SizeBytes, file.MimeType, file.Sha256, file.StoragePath, file.Status, file.BlobId)).ToArray();
     }
 
     private static async Task<ulong> ActiveUploadCountAsync(YfDbContext db, ulong projectId, CancellationToken ct) =>
@@ -984,9 +966,7 @@ internal sealed class ProjectCopyService(
         catch { }
     }
 
-    private static void TryDelete(string path) { try { File.Delete(path); } catch { } }
-
-    private sealed record ProjectCopySnapshot(ProjectRow Project, CopyGroupRow Group, CopyFileRow[] Files, DateTime CopiedAt);
+    private sealed record ProjectCopySnapshot(ProjectRow Project, CopyGroupRow Group, CopyFileRow[] Files);
     private sealed class CopyGroupRow
     {
         public ulong Id { get; init; }
@@ -1003,9 +983,9 @@ internal sealed class ProjectCopyService(
         public DateTime UpdatedAt { get; init; }
     }
 
-    private sealed record PreparedCopy(CopyFileRow Source, string StoredName, string StoragePath, string TargetPath);
+    private sealed record PreparedCopy(CopyFileRow Source, string StoredName, FileBlobStore.PreparedBlob Blob);
     private sealed record CopyFileRow(ulong Id, ulong UploaderId, string Direction, string OriginalName, string Ext,
-        ulong SizeBytes, string? MimeType, string? Sha256, string StoragePath, string Status);
+        ulong SizeBytes, string? MimeType, string? Sha256, string StoragePath, string Status, ulong? BlobId);
     private sealed class CopyHistoryRow
     {
         public ulong CopyId { get; init; }

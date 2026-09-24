@@ -33,7 +33,7 @@ public sealed record UploadInitResponse(
     string SessionId,
     uint ChunkSize,
     uint TotalChunks,
-    IReadOnlyList<uint> UploadedChunks,
+    IReadOnlyList<UploadedChunkDigestResponse> UploadedChunks,
     // Present (true) only when an existing session is resumed.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Resumed = null);
 
@@ -42,9 +42,11 @@ public sealed record UploadSessionResponse(
     string Status,
     uint ChunkSize,
     uint TotalChunks,
-    IReadOnlyList<uint> UploadedChunks,
+    IReadOnlyList<UploadedChunkDigestResponse> UploadedChunks,
     string FileName,
     ulong FileSize,
     ulong? ResultFileId);
+
+public sealed record UploadedChunkDigestResponse(uint Index, string Sha256);
 
 public sealed record MediaSessionResponse(string Url, int ExpiresInSeconds);

@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button, Checkbox, Modal, Progress, Typography, Message, Space } from '@arco-design/web-react'
 import { IconUpload, IconClose } from '@arco-design/web-react/icon'
-import http, { type QuietRequestConfig } from '../api/client'
 import { fmtSize } from '../api/types'
-import { fileMd5 } from '../api/file-hash'
-import type { ApiResponses } from '../api/types'
+import { blobSha256, fileMd5, uploadFingerprint } from '../api/file-hash'
+import {
+  abortUpload,
+  initUpload,
+  mergeUpload,
+  putUploadChunk,
+  submitUploadMd5,
+} from '../api/uploads'
 
 interface Props {
   projectId: number
@@ -204,11 +209,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     attempt.mergeInvalid = false
     patchEntry(key, { phase: 'merging' })
     try {
-      await http.post<ApiResponses['POST /uploads/{sessionId}/merge']>(
-        `/uploads/${attempt.sessionId}/merge`,
-        undefined,
-        { timeout: 10 * 60 * 1000 },
-      )
+      await mergeUpload(attempt.sessionId)
       if (attemptsRef.current.get(key) !== attempt || attempt.cancelled) return
       attempt.mergePending = false
       patchEntry(key, { phase: 'done', percent: 100 })
@@ -244,50 +245,54 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
       release = await uploadSlots.acquire(attempt.controller.signal, () => patchEntry(key, { waiting: true }))
       if (!release || !isCurrent()) return
       patchEntry(key, { phase: 'hashing', percent: 0, waiting: false })
-      let hashedPercent = 0
-      const digest = await fileMd5(file, () => !isCurrent(), (fraction) => {
-        const percent = Math.floor(fraction * 100)
-        if (percent !== hashedPercent && isCurrent()) { hashedPercent = percent; patchEntry(key, { percent }) }
+      let hashFailure: unknown
+      const fullMd5 = fileMd5(file, () => !isCurrent() || attempt.controller.signal.aborted).catch((error) => {
+        hashFailure = error
+        return undefined
       })
+      const fingerprint = await uploadFingerprint(file)
       if (!isCurrent()) return
-      patchEntry(key, { percent: 0 })
-      patchEntry(key, { phase: 'uploading' })
-      const init = await http.post<ApiResponses['POST /uploads/init']>('/uploads/init', {
+      patchEntry(key, { phase: 'uploading', percent: 0 })
+      const init = await initUpload({
         projectId,
         fileName: file.name,
         fileSize: file.size,
-        fileMd5: digest,
+        fileLastModified: file.lastModified,
+        fileFingerprint: fingerprint,
       })
       const sid: string = init.data.sessionId
       attempt.sessionId = sid
       if (!isCurrent()) return
       const chunkSize: number = init.data.chunkSize
       const total: number = init.data.totalChunks
-      const uploaded: Set<number> = new Set(init.data.uploadedChunks || [])
-      patchEntry(key, { percent: Math.round((uploaded.size / total) * 100) })
-      const missing = Array.from({ length: total }, (_, i) => i).filter((i) => !uploaded.has(i))
+      const remoteDigests = new Map(
+        (init.data.uploadedChunks || []).map((chunk) => [chunk.index, chunk.sha256.toLowerCase()]),
+      )
+      const uploaded = new Set<number>()
+      const chunks = Array.from({ length: total }, (_, i) => i)
       let cursor = 0
       let failed = false
       let firstFailure: { reason: unknown } | undefined
       const worker = async () => {
-        while (cursor < missing.length && !failed && isCurrent()) {
-          const i = missing[cursor++]
+        while (cursor < chunks.length && !failed && isCurrent()) {
+          const i = chunks[cursor++]
           const blob = file.slice(i * chunkSize, Math.min((i + 1) * chunkSize, file.size))
           try {
-            for (let attemptNo = 1; ; attemptNo++) {
-              try {
-                await http.put<ApiResponses['PUT /uploads/{sessionId}/chunks/{index}']>(`/uploads/${sid}/chunks/${i}`, blob, {
-                  headers: { 'Content-Type': 'application/octet-stream' },
-                  timeout: 300000,
-                  signal: attempt.controller.signal,
-                  // 仍会自动重试时不弹出错误提示，最后一次失败才提示。
-                  quietNetworkError: attemptNo < CHUNK_ATTEMPTS,
-                } as QuietRequestConfig)
-                break
-              } catch (error) {
-                if (attemptNo >= CHUNK_ATTEMPTS || failed || !isCurrent() || !isTransientUploadError(error)) throw error
-                await abortableDelay(1000 * 2 ** (attemptNo - 1), attempt.controller.signal)
-                if (failed || !isCurrent()) throw error
+            const chunkDigest = await blobSha256(blob)
+            if (remoteDigests.get(i) !== chunkDigest) {
+              for (let attemptNo = 1; ; attemptNo++) {
+                try {
+                  await putUploadChunk(sid, i, blob, chunkDigest, {
+                    signal: attempt.controller.signal,
+                    // 仍会自动重试时不弹出错误提示，最后一次失败才提示。
+                    quietNetworkError: attemptNo < CHUNK_ATTEMPTS,
+                  })
+                  break
+                } catch (error) {
+                  if (attemptNo >= CHUNK_ATTEMPTS || failed || !isCurrent() || !isTransientUploadError(error)) throw error
+                  await abortableDelay(1000 * 2 ** (attemptNo - 1), attempt.controller.signal)
+                  if (failed || !isCurrent()) throw error
+                }
               }
             }
           } catch (error) {
@@ -304,13 +309,20 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
           patchEntry(key, { percent: Math.round((uploaded.size / total) * 100) })
         }
       }
-      const results = await Promise.allSettled(Array.from({ length: Math.min(3, missing.length) }, () => worker()))
+      const results = await Promise.allSettled(Array.from({ length: Math.min(3, chunks.length) }, () => worker()))
       if (!isCurrent()) return
       if (firstFailure) throw firstFailure.reason
       const failure = results.find((result) => result.status === 'rejected')
       if (failure?.status === 'rejected') throw failure.reason
+      const digest = await fullMd5
+      if (hashFailure) throw hashFailure
+      if (!digest) throw new Error('文件 MD5 计算失败')
+      if (!isCurrent()) return
+      await submitUploadMd5(sid, digest)
+      if (!isCurrent()) return
       await confirmMerge(key, attempt, file.name)
     } catch {
+      attempt.controller.abort()
       if (isCurrent()) {
         patchEntry(key, { phase: 'interrupted' })
       }
@@ -350,7 +362,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     await attempt.finished
     if (attemptsRef.current.get(key) !== attempt) return false
     try {
-      if (attempt.sessionId) await http.delete<ApiResponses['DELETE /uploads/{sessionId}']>(`/uploads/${attempt.sessionId}`)
+      if (attempt.sessionId) await abortUpload(attempt.sessionId)
       if (attemptsRef.current.get(key) !== attempt) return false
       attemptsRef.current.delete(key)
       patchEntry(key, { phase: 'cancelled' })
@@ -376,7 +388,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     await attempt.finished
     if (attemptsRef.current.get(key) !== attempt) return
     try {
-      await http.delete<ApiResponses['DELETE /uploads/{sessionId}']>(`/uploads/${attempt.sessionId}`)
+      await abortUpload(attempt.sessionId)
       if (attemptsRef.current.get(key) !== attempt) return
       attemptsRef.current.delete(key)
       setEntries((list) => list.filter((e) => e.key !== key))

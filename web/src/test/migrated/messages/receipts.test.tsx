@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../api/client', async () => {
@@ -7,8 +8,8 @@ vi.mock('../../../api/client', async () => {
   return { default: { get: state.get, post: state.post, delete: state.delete } }
 })
 vi.mock('../../../store/auth', async () => {
-  const state = (await import('./mockState')).messageMocks
-  return { useAuth: () => ({ hasPerm: (permission: string) => state.permissions.has(permission), user: state.user }) }
+  const state = await import('./mockState')
+  return { useAuth: () => state.messageAuthState() }
 })
 
 import MessagePanel from '../../../components/MessagePanel'
@@ -48,9 +49,10 @@ function installVisibleRects() {
 
 async function flush() {
   await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    for (let turn = 0; turn < 3; turn += 1) {
+      await vi.advanceTimersByTimeAsync(1)
+      await Promise.resolve()
+    }
   })
 }
 
@@ -99,7 +101,7 @@ describe('留言回执刷新与详情', () => {
     await user.click(buttons[1])
     await act(async () => requests.get(2)![0].resolve({ data: { readers: [{ userId: 2, realName: '读者二', userType: 'INTERNAL' }], unread: [] } }))
     await act(async () => requests.get(1)![0].resolve({ data: { readers: [{ userId: 3, realName: '读者一', userType: 'INTERNAL' }], unread: [] } }))
-    expect(screen.getByText('读者二')).toBeVisible()
+    expect(await screen.findByText('读者二')).toBeVisible()
     expect(screen.queryByText('读者一')).not.toBeInTheDocument()
 
     await user.click(buttons[0])
@@ -277,6 +279,32 @@ describe('留言回执刷新与详情', () => {
     expect(receiptCalls).toBe(reconnected)
   })
 
+  it('StrictMode focus wake refetches an unchanged visible receipt set once', async () => {
+    vi.useFakeTimers()
+    visibleIds.add(1)
+    let receiptCalls = 0
+    messageMocks.get.mockImplementation(async (url: string) => {
+      if (url === '/projects/1/messages') return messagePage([messageRow(1)])
+      receiptCalls += 1
+      return { data: [{ id: 1, readCount: receiptCalls, totalCount: receiptCalls }] }
+    })
+    const view = render(
+      <StrictMode>
+        <MessagePanel projectId={1} projectStatus="IN_PROGRESS" active realtimeConnected />
+      </StrictMode>,
+    )
+    await flush()
+    await flush()
+    expect(receiptCalls).toBeGreaterThan(0)
+    const beforeFocus = receiptCalls
+
+    fireEvent.focus(window)
+    await flush()
+
+    expect(receiptCalls).toBe(beforeFocus + 1)
+    view.unmount()
+  })
+
   it('message receipt popover distinguishes failure, retries, and ignores an older response', async () => {
     const pending: Array<ReturnType<typeof deferred<{ data: { readers: Array<{ realName: string }>; unread: never[] } }>>> = []
     messageMocks.get.mockImplementation(async () => {
@@ -287,7 +315,7 @@ describe('留言回执刷新与详情', () => {
     const view = render(<ReceiptBody id={7} />)
     await waitFor(() => expect(pending).toHaveLength(1))
     await act(async () => pending[0].reject(new Error('reads unavailable')))
-    expect(screen.getByText('回执加载失败')).toBeVisible()
+    expect(await screen.findByText('回执加载失败')).toBeVisible()
     expect(screen.queryByText('暂无')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
     await waitFor(() => expect(pending).toHaveLength(2))
@@ -296,7 +324,7 @@ describe('留言回执刷新与详情', () => {
     await act(async () => pending[1].resolve({ data: { readers: [{ realName: '旧回执' }], unread: [] } }))
     expect(screen.queryByText('旧回执')).not.toBeInTheDocument()
     await act(async () => pending[2].resolve({ data: { readers: [{ realName: '新回执' }], unread: [] } }))
-    expect(screen.getByText('新回执')).toBeVisible()
+    expect(await screen.findByText('新回执')).toBeVisible()
   })
 
   it('message detail replaces stale content with loading, failure and retry states for the requested message', async () => {
@@ -319,7 +347,7 @@ describe('留言回执刷新与详情', () => {
     expect(screen.queryByText('读者 A')).not.toBeInTheDocument()
     expect(screen.getByText('回执加载中…')).toBeVisible()
     await act(async () => b.reject(new Error('receipt unavailable')))
-    expect(screen.getByText('回执加载失败')).toBeVisible()
+    expect(await screen.findByText('回执加载失败')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '重试' }))
     expect(await screen.findByText('读者 B')).toBeVisible()
   })
@@ -340,7 +368,7 @@ describe('留言回执刷新与详情', () => {
     await user.click(buttons[1])
     await act(async () => pending[1].resolve({ data: { readers: [{ userId: 22, realName: '读者 B', userType: 'INTERNAL' }], unread: [] } }))
     await act(async () => pending[0].reject(new Error('late A failure')))
-    expect(screen.getByText('读者 B')).toBeVisible()
+    expect(await screen.findByText('读者 B')).toBeVisible()
 
     await user.click(buttons[0])
     await waitFor(() => expect(pending).toHaveLength(3))

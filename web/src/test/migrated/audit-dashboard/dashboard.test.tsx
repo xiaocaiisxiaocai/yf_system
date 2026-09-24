@@ -26,6 +26,7 @@ import Dashboard from '../../../pages/Dashboard'
 import MessagePanel from '../../../components/MessagePanel'
 import DeptManage from '../../../pages/org/DeptManage'
 import SysConfig from '../../../pages/system/SysConfig'
+import { queryClient } from '../../../api/queryClient'
 
 const summary = {
   projectCount: 3,
@@ -41,6 +42,10 @@ function deferred<T>() {
   let reject!: (reason?: unknown) => void
   const promise = new Promise<T>((ok, fail) => { resolve = ok; reject = fail })
   return { promise, resolve, reject }
+}
+
+function httpError(status: number) {
+  return Object.assign(new Error(`HTTP ${status}`), { response: { status } })
 }
 
 function CurrentLocation() {
@@ -136,7 +141,11 @@ describe('工作台协作生产界面', () => {
 
     expect(await screen.findByText('请核对全部验收记录')).toBeVisible()
     const initialMessages = mocks.get.mock.calls.find(([url]) => url === '/dashboard/messages')
-    expect(initialMessages?.[1]).toMatchObject({ params: { page: 1, pageSize: 10, unreadOnly: true }, quietNetworkError: true })
+    expect(initialMessages?.[1]).toMatchObject({
+      params: { page: 1, pageSize: 10, unreadOnly: true },
+      signal: expect.any(AbortSignal),
+      quietNetworkError: true,
+    })
 
     await user.click(screen.getByRole('link', { name: '查看设备验收的留言' }))
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/projects/8?tab=messages&target=37')
@@ -167,7 +176,8 @@ describe('工作台协作生产界面', () => {
     mocks.collaboration.revision = 'revision-2'
     view.rerender(dashboardView())
     await waitFor(() => expect(refreshes).toHaveLength(6))
-    for (const refresh of refreshes) expect(refresh.config).toMatchObject({ quietNetworkError: true })
+    for (const refresh of refreshes) expect(refresh.config).toMatchObject({ signal: expect.any(AbortSignal), quietNetworkError: true })
+    expect(refreshes.slice(0, 3).every(({ config }) => (config.signal as AbortSignal).aborted)).toBe(true)
 
     await act(async () => {
       for (const refresh of refreshes.slice(3)) {
@@ -208,6 +218,27 @@ describe('工作台协作生产界面', () => {
     await waitFor(() => expect(screen.getAllByText('更新暂时失败，显示上次数据')).toHaveLength(3))
     expect(screen.getByText('保留内容')).toBeVisible()
     expect(screen.getAllByText('更新暂时失败，显示上次数据')).toHaveLength(3)
+  })
+
+  it.each([401, 403])('an HTTP %s refresh hides protected snapshots and clears the dashboard cache', async (status) => {
+    let denied = false
+    mocks.get.mockImplementation(async (url: string) => {
+      if (denied) throw httpError(status)
+      if (url === '/dashboard/summary') return { data: summary }
+      if (url === '/dashboard/pending-projects') return { data: emptyPage }
+      return { data: { list: [{ id: 7, projectId: 3, content: '受保护留言', createdAt: '', unread: true }], total: 1, page: 1, pageSize: 10 } }
+    })
+    const view = render(dashboardView())
+    expect(await screen.findByText('受保护留言')).toBeVisible()
+    expect(queryClient.getQueriesData({ queryKey: ['dashboard'] }).some(([, data]) => data !== undefined)).toBe(true)
+
+    denied = true
+    mocks.collaboration.revision = `denied-${status}`
+    view.rerender(dashboardView())
+
+    expect(await screen.findByText('当前会话无权读取工作台数据，请重新登录或联系管理员确认权限。')).toBeVisible()
+    expect(screen.queryByText('受保护留言')).not.toBeInTheDocument()
+    await waitFor(() => expect(queryClient.getQueriesData({ queryKey: ['dashboard'] })).toHaveLength(0))
   })
 
   it('dashboard and project detail panels expose retry instead of a false empty state', async () => {
@@ -313,7 +344,7 @@ describe('工作台协作生产界面', () => {
     render(dashboardView())
     expect(await screen.findByText('跟进待公司验收与未读留言')).toBeVisible()
     expect(screen.getByRole('heading', { name: '待公司验收子项目' })).toBeVisible()
-    expect(screen.getByText('暂无待公司验收子项目')).toBeVisible()
+    expect(await screen.findByText('暂无待公司验收子项目')).toBeVisible()
     expect(screen.queryByText('优先处理公司内部验收与未读留言')).not.toBeInTheDocument()
   })
 

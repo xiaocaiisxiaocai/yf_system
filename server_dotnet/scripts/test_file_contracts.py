@@ -10,6 +10,17 @@ import os
 from pathlib import Path
 import secrets
 
+from file_blob_fixture import insert_blob_file
+from upload_contract import (
+    FINGERPRINT_SAMPLE_SIZE,
+    file_fingerprint,
+    init_request,
+    init_upload,
+    put_chunk,
+    submit_md5,
+    upload_bytes,
+)
+
 
 def _password():
     return "Yf9!" + secrets.token_urlsafe(9)
@@ -20,21 +31,8 @@ def _abort(client, session_id):
 
 
 def _upload_file(client, project_id, file_name, content):
-    initialized = client.call("POST", "/api/v1/uploads/init", {
-        "projectId": project_id,
-        "fileName": file_name,
-        "fileSize": len(content),
-        "fileMd5": hashlib.md5(content).hexdigest(),
-    })
-    chunk_size = initialized["chunkSize"]
-    for index in range(initialized["totalChunks"]):
-        client.call(
-            "PUT", f"/api/v1/uploads/{initialized['sessionId']}/chunks/{index}",
-            content[index * chunk_size:(index + 1) * chunk_size],
-            headers={"Content-Type": "application/octet-stream"},
-        )
-    merged = client.call("POST", f"/api/v1/uploads/{initialized['sessionId']}/merge")
-    return merged.get("id", merged.get("fileId"))
+    _, _, merged = upload_bytes(client, project_id, file_name, content)
+    return merged["id"]
 
 
 def _new_internal_with_permissions(client, conn, codes):
@@ -70,31 +68,17 @@ def _new_internal_with_permissions(client, conn, codes):
 
 
 def _insert_available_file(conn, project_id, uploader_id, storage_root, extension, content=None, size=None):
-    token = secrets.token_hex(8)
-    stored_name = token + "." + extension
-    path = storage_root / stored_name
-    if content is not None:
-        path.write_bytes(content)
-    else:
-        with path.open("wb") as stream:
-            stream.truncate(size)
-    physical_size = path.stat().st_size
-    digest = hashlib.sha256(content).hexdigest() if content is not None else "0" * 64
     mime = {
         "zip": "application/zip",
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "mp4": "video/mp4",
     }[extension]
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,"
-            "mime_type,sha256,storage_path,status,deleted_at,created_at) "
-            "VALUES(%s,%s,'C2S',%s,%s,%s,%s,%s,%s,%s,'AVAILABLE',NULL,UTC_TIMESTAMP(3))",
-            (project_id, uploader_id, stored_name, stored_name, extension, physical_size,
-             mime, digest, stored_name),
-        )
-        return cursor.lastrowid
+    original_name = secrets.token_hex(8) + "." + extension
+    return insert_blob_file(
+        conn, storage_root, project_id, uploader_id, original_name, extension, mime,
+        content=content, size=size,
+    )["file_id"]
 
 
 def run_file_checks(client, conn, check, pid, fid):
@@ -113,52 +97,73 @@ def run_file_checks(client, conn, check, pid, fid):
     filtered = client.call('GET', f'/api/v1/projects/{pid}/files?targetId={fid}')
     check('file target and pagination reject malformed filters but retain valid targeting',
           filtered['total'] == 1 and filtered['list'][0]['id'] == fid)
-    # An uploaded chunk is discovered by a second init with the same strong identity.
-    resumed_bytes = b"%PDF-1.4\nfile resume contract\n%%EOF\n"
-    resumed_md5 = hashlib.md5(resumed_bytes).hexdigest()
+    # The quick fingerprint intentionally samples only the first and last MiB.
+    # Per-chunk digests let a resumed client detect and replace a changed middle.
+    prefix = b"P" * FINGERPRINT_SAMPLE_SIZE
+    suffix = b"S" * FINGERPRINT_SAMPLE_SIZE
+    resumed_bytes = prefix + b"A" * 262144 + suffix
+    changed_bytes = prefix + b"B" * 262144 + suffix
     resumed_name = "resume-" + secrets.token_hex(5) + ".pdf"
-    init = client.call("POST", "/api/v1/uploads/init", {
-        "projectId": pid, "fileName": resumed_name,
-        "fileSize": len(resumed_bytes), "fileMd5": resumed_md5,
-    })
-    resume_session = init["sessionId"]
-    client.call(
-        "PUT", f"/api/v1/uploads/{resume_session}/chunks/0", resumed_bytes,
-        headers={"Content-Type": "application/octet-stream"},
-    )
-    resumed = client.call("POST", "/api/v1/uploads/init", {
-        "projectId": pid, "fileName": resumed_name,
-        "fileSize": len(resumed_bytes), "fileMd5": resumed_md5,
-    })
     check(
-        "file init resumes matching upload and reports chunks",
+        "file quick fingerprint permits same-metadata middle changes",
+        resumed_bytes != changed_bytes
+        and file_fingerprint(resumed_name, resumed_bytes)
+        == file_fingerprint(resumed_name, changed_bytes),
+    )
+    init = init_upload(client, pid, resumed_name, resumed_bytes)
+    resume_session = init["sessionId"]
+    middle_index = FINGERPRINT_SAMPLE_SIZE // init["chunkSize"]
+    middle_start = middle_index * init["chunkSize"]
+    original_middle = resumed_bytes[middle_start:middle_start + init["chunkSize"]]
+    changed_middle = changed_bytes[middle_start:middle_start + init["chunkSize"]]
+    put_chunk(client, resume_session, middle_index, original_middle)
+    resumed = init_upload(client, pid, resumed_name, changed_bytes)
+    check(
+        "file init resumes matching quick identity and reports chunk digests",
         resumed["sessionId"] == resume_session
         and resumed.get("resumed") is True
-        and resumed["uploadedChunks"] == [0],
+        and resumed["uploadedChunks"] == [{
+            "index": middle_index,
+            "sha256": hashlib.sha256(original_middle).hexdigest(),
+        }]
+        and resumed["uploadedChunks"][0]["sha256"] != hashlib.sha256(changed_middle).hexdigest(),
     )
+    mismatch = put_chunk(
+        client, resume_session, 0, changed_bytes[:init["chunkSize"]],
+        expected=400, declared_sha256="0" * 64,
+    )
+    check("file chunk upload rejects a declared SHA-256 that differs from the body",
+          "SHA-256" in mismatch["message"])
+    for index in range(init["totalChunks"]):
+        start = index * init["chunkSize"]
+        put_chunk(client, resume_session, index, changed_bytes[start:start + init["chunkSize"]])
+    submit_md5(client, resume_session, changed_bytes)
     merged = client.call("POST", f"/api/v1/uploads/{resume_session}/merge")
-    disposable_fid = merged.get("id", merged.get("fileId"))
-    check("file resumed upload merges", disposable_fid is not None)
+    disposable_fid = merged["id"]
+    resumed_download, _ = client.call(
+        "GET", f"/api/v1/files/{disposable_fid}/download", raw=True)
+    check("file resumed upload replaces a changed middle and merges exact bytes",
+          resumed_download == changed_bytes)
 
     # A valid extension is required before any session or directory is created.
-    rejected = client.call("POST", "/api/v1/uploads/init", {
-        "projectId": pid, "fileName": "blocked-" + secrets.token_hex(4) + ".exe",
-        "fileSize": 4, "fileMd5": hashlib.md5(b"nope").hexdigest(),
-    }, expected=400)
+    rejected_name = "blocked-" + secrets.token_hex(4) + ".exe"
+    rejected = client.call(
+        "POST", "/api/v1/uploads/init",
+        init_request(pid, rejected_name, b"nope"), expected=400)
     check("file init rejects non-whitelisted extension", "文件类型" in rejected["message"])
 
     # A complete byte stream with the wrong declared MD5 must not produce a file.
     bad_md5_bytes = b"%PDF-1.4\nwrong digest contract\n%%EOF\n"
-    bad = client.call("POST", "/api/v1/uploads/init", {
-        "projectId": pid, "fileName": "bad-md5-" + secrets.token_hex(5) + ".pdf",
-        "fileSize": len(bad_md5_bytes), "fileMd5": "0" * 32,
-    })
+    bad = init_upload(
+        client, pid, "bad-md5-" + secrets.token_hex(5) + ".pdf", bad_md5_bytes)
     bad_session = bad["sessionId"]
     try:
-        client.call(
-            "PUT", f"/api/v1/uploads/{bad_session}/chunks/0", bad_md5_bytes,
-            headers={"Content-Type": "application/octet-stream"},
-        )
+        put_chunk(client, bad_session, 0, bad_md5_bytes)
+        missing_md5 = client.call(
+            "POST", f"/api/v1/uploads/{bad_session}/merge", expected=409)
+        check("file merge rejects a session before full MD5 submission",
+              "摘要" in missing_md5["message"])
+        submit_md5(client, bad_session, bad_md5_bytes, digest="0" * 32)
         mismatch = client.call("POST", f"/api/v1/uploads/{bad_session}/merge", expected=400)
         state = client.call("GET", f"/api/v1/uploads/{bad_session}")
         check(
@@ -170,18 +175,14 @@ def run_file_checks(client, conn, check, pid, fid):
 
     # Force two chunks and omit the tail. Merge must reject before taking its lease.
     missing_bytes = b"M" * 262145
-    missing = client.call("POST", "/api/v1/uploads/init", {
-        "projectId": pid, "fileName": "missing-" + secrets.token_hex(5) + ".pdf",
-        "fileSize": len(missing_bytes), "fileMd5": hashlib.md5(missing_bytes).hexdigest(),
-    })
+    missing = init_upload(
+        client, pid, "missing-" + secrets.token_hex(5) + ".pdf", missing_bytes)
     missing_session = missing["sessionId"]
     try:
         check("file missing-chunk fixture uses multiple chunks", missing["totalChunks"] > 1)
         first_chunk = missing_bytes[:missing["chunkSize"]]
-        client.call(
-            "PUT", f"/api/v1/uploads/{missing_session}/chunks/0", first_chunk,
-            headers={"Content-Type": "application/octet-stream"},
-        )
+        put_chunk(client, missing_session, 0, first_chunk)
+        submit_md5(client, missing_session, missing_bytes)
         incomplete = client.call("POST", f"/api/v1/uploads/{missing_session}/merge", expected=400)
         check("file merge rejects missing chunks", "分片不完整" in incomplete["message"])
     finally:
@@ -189,18 +190,13 @@ def run_file_checks(client, conn, check, pid, fid):
 
     # Abort is idempotent, removes the session directory, and writes one audit event.
     abort_bytes = b"abort contract"
-    abort_init = client.call("POST", "/api/v1/uploads/init", {
-        "projectId": pid, "fileName": "abort-" + secrets.token_hex(5) + ".pdf",
-        "fileSize": len(abort_bytes), "fileMd5": hashlib.md5(abort_bytes).hexdigest(),
-    })
+    abort_init = init_upload(
+        client, pid, "abort-" + secrets.token_hex(5) + ".pdf", abort_bytes)
     abort_session = abort_init["sessionId"]
     with conn.cursor() as cursor:
         cursor.execute("SELECT temp_dir FROM upload_sessions WHERE id=%s", (abort_session,))
         abort_dir = Path(cursor.fetchone()[0])
-    client.call(
-        "PUT", f"/api/v1/uploads/{abort_session}/chunks/0", abort_bytes,
-        headers={"Content-Type": "application/octet-stream"},
-    )
+    put_chunk(client, abort_session, 0, abort_bytes)
     _abort(client, abort_session)
     _abort(client, abort_session)
     abort_state = client.call("GET", f"/api/v1/uploads/{abort_session}")

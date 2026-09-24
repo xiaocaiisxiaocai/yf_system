@@ -6,6 +6,12 @@ namespace Yf.Api.Infrastructure;
 internal static class BootstrapSeedCatalog
 {
     internal const ulong AdministratorRoleId = 1;
+    internal static readonly string[] IdentityRevisionTriggers =
+    [
+        "trg_identity_users_insert", "trg_identity_users_update", "trg_identity_users_delete",
+        "trg_identity_suppliers_insert", "trg_identity_suppliers_update", "trg_identity_suppliers_delete",
+        "trg_identity_refresh_tokens_insert", "trg_identity_refresh_tokens_update", "trg_identity_refresh_tokens_delete",
+    ];
 
     private static readonly (ulong Id, string Code, string Name, string Type, ulong? ParentId, int SortNo)[] Permissions =
     [
@@ -121,5 +127,18 @@ internal static class BootstrapSeedCatalog
     {
         if (await db.SystemConfigs.CountAsync(config => config.CfgKey == "security.management_lock", ct) != 1)
             throw new InvalidOperationException("Database permission gate missing.");
+        var revision = await db.SystemConfigs.Where(config => config.CfgKey == "security.identity_revision")
+            .Select(config => config.CfgValue).SingleOrDefaultAsync(ct);
+        if (revision is null || !ulong.TryParse(revision, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out _))
+            throw new InvalidOperationException("Database identity revision missing or invalid.");
+        var triggers = await db.Database.SqlQuery<string>($"""
+                SELECT TRIGGER_NAME AS Value
+                FROM information_schema.TRIGGERS
+                WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME LIKE 'trg_identity_%'
+                """)
+            .ToArrayAsync(ct);
+        if (!IdentityRevisionTriggers.ToHashSet(StringComparer.Ordinal).SetEquals(triggers))
+            throw new InvalidOperationException("Database identity revision triggers missing or unexpected.");
     }
 }

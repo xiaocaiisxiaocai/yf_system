@@ -176,7 +176,8 @@ export interface InitUploadRequest {
   projectId: number
   fileName: string
   fileSize: number
-  fileMd5?: string | null
+  fileLastModified: number
+  fileFingerprint: string
 }
 
 export interface LoginRequest {
@@ -720,6 +721,10 @@ export interface StatusRequest {
   status: string
 }
 
+export interface SubmitUploadMd5Request {
+  fileMd5: string
+}
+
 export interface SubprojectUpsertRequest {
   name?: string | null
   description?: string | null
@@ -784,7 +789,7 @@ export interface UploadInitResponse {
   sessionId: string
   chunkSize: number
   totalChunks: number
-  uploadedChunks: Array<number>
+  uploadedChunks: Array<UploadedChunkDigestResponse>
   resumed?: boolean | null
 }
 
@@ -793,10 +798,15 @@ export interface UploadSessionResponse {
   status: string
   chunkSize: number
   totalChunks: number
-  uploadedChunks: Array<number>
+  uploadedChunks: Array<UploadedChunkDigestResponse>
   fileName: string
   fileSize: number
   resultFileId: number | null
+}
+
+export interface UploadedChunkDigestResponse {
+  index: number
+  sha256: string
 }
 
 export interface UserBrief {
@@ -953,6 +963,7 @@ export interface ApiResponses {
   "DELETE /uploads/{sessionId}": EmptyResponse
   "GET /uploads/{sessionId}": UploadSessionResponse
   "PUT /uploads/{sessionId}/chunks/{index}": EmptyResponse
+  "POST /uploads/{sessionId}/md5": EmptyResponse
   "POST /uploads/{sessionId}/merge": FileResponse
 }
 

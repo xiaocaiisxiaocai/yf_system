@@ -15,6 +15,8 @@ import urllib.error
 import urllib.request
 import zipfile
 
+from file_blob_fixture import insert_blob_file
+
 
 _HANDLE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -142,19 +144,10 @@ def _insert_large_zip(conn, source_file_id):
         )
         project_id, uploader_id, temp_dir = cursor.fetchone()
     storage_root = Path(temp_dir).parents[1]
-    stored_name = "native-abort-" + secrets.token_hex(8) + ".zip"
-    path = storage_root / stored_name
-    with path.open("wb") as stream:
-        stream.truncate(64 * 1024 * 1024)
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,"
-            "mime_type,sha256,storage_path,status,deleted_at,created_at) "
-            "VALUES(%s,%s,'C2S',%s,%s,'zip',%s,'application/zip',%s,%s,'AVAILABLE',NULL,UTC_TIMESTAMP(3))",
-            (project_id, uploader_id, "native-abort-large.zip", stored_name, path.stat().st_size,
-             "0" * 64, stored_name),
-        )
-        return cursor.lastrowid
+    return insert_blob_file(
+        conn, storage_root, project_id, uploader_id,
+        "native-abort-large.zip", "zip", "application/zip", size=64 * 1024 * 1024,
+    )["file_id"]
 
 
 def run_native_download_checks(admin, conn, check, file_id, expected_bytes):

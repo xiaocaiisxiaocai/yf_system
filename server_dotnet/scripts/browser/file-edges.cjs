@@ -2,6 +2,7 @@ const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const XLSX = require(process.env.YF_PROJECT_ROOT + '/web/node_modules/xlsx');
 const { fs, assert, OUT, s, f, record, login, api, projectMetadata, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
+const { uploadFixture: uploadApi } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/upload-contract.cjs');
 
 const fileListPath = projectId => '/api/v1/projects/' + projectId + '/files';
 
@@ -18,29 +19,6 @@ async function createProjectGroup(context, token, supplierId, name) {
   const detail = await (await api(context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
   assert.equal(detail.projects.length, 1, 'file fixture must contain one subproject');
   return detail.projects[0];
-}
-
-async function uploadApi(context, token, projectId, fileName, bytes) {
-  const fileMd5 = crypto.createHash('md5').update(bytes).digest('hex');
-  const initResponse = await api(context, 'POST', '/uploads/init', {
-    projectId, fileName, fileSize: bytes.length, fileMd5,
-  }, token);
-  const init = await initResponse.json();
-  for (let index = 0; index < init.totalChunks; index++) {
-    const chunk = bytes.subarray(index * init.chunkSize, Math.min((index + 1) * init.chunkSize, bytes.length));
-    const response = await context.request.fetch(s.base + '/api/v1/uploads/' + init.sessionId + '/chunks/' + index, {
-      method: 'PUT',
-      data: chunk,
-      headers: {
-        Origin: s.base,
-        Authorization: 'Bearer ' + token,
-        'Content-Type': 'application/octet-stream',
-      },
-    });
-    assert.equal(response.status(), 200, 'upload chunk ' + index);
-  }
-  const merged = await (await api(context, 'POST', '/uploads/' + init.sessionId + '/merge', undefined, token)).json();
-  return { ...merged, sessionId: init.sessionId };
 }
 
 function workbookBytes(marker) {
@@ -341,6 +319,8 @@ async function assertExcelGrid(dialog, expectedRows) {
       assert.equal(secondInit.sessionId, firstInit.sessionId);
       assert.equal(secondInit.resumed, true);
       assert(secondInit.uploadedChunks.length > 0, 'at least one completed chunk must be resumed');
+      assert(secondInit.uploadedChunks.every(chunk => Number.isInteger(chunk.index)
+        && /^[0-9a-f]{64}$/.test(chunk.sha256)), 'resumed chunks must include their SHA-256 digests');
       assert.equal((await mergeReady).status(), 200);
       await dialog.waitFor({ state: 'hidden' });
       await row(interruptedName).waitFor();

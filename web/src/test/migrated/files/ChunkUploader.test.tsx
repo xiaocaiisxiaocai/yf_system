@@ -7,12 +7,18 @@ const mocks = vi.hoisted(() => ({
   put: vi.fn(),
   delete: vi.fn(),
   fileMd5: vi.fn(),
+  uploadFingerprint: vi.fn(),
+  blobSha256: vi.fn(),
 }))
 
 vi.mock('../../../api/client', () => ({
   default: { post: mocks.post, put: mocks.put, delete: mocks.delete },
 }))
-vi.mock('../../../api/file-hash', () => ({ fileMd5: mocks.fileMd5 }))
+vi.mock('../../../api/file-hash', () => ({
+  fileMd5: mocks.fileMd5,
+  uploadFingerprint: mocks.uploadFingerprint,
+  blobSha256: mocks.blobSha256,
+}))
 
 import ChunkUploader from '../../../components/ChunkUploader'
 
@@ -40,6 +46,8 @@ function installDefaultHttp() {
   mocks.put.mockResolvedValue({ data: {} })
   mocks.delete.mockResolvedValue({ data: {} })
   mocks.fileMd5.mockResolvedValue('digest')
+  mocks.uploadFingerprint.mockResolvedValue('f'.repeat(64))
+  mocks.blobSha256.mockResolvedValue('c'.repeat(64))
 }
 
 function renderUploader(offerSubmit = false) {
@@ -90,6 +98,8 @@ describe('ChunkUploader DOM contracts', () => {
     mocks.put.mockReset()
     mocks.delete.mockReset()
     mocks.fileMd5.mockReset()
+    mocks.uploadFingerprint.mockReset()
+    mocks.blobSha256.mockReset()
     installDefaultHttp()
   })
 
@@ -170,6 +180,7 @@ describe('ChunkUploader DOM contracts', () => {
   it('closing an uncertain merge neither aborts the session nor submits acceptance', async () => {
     mocks.post.mockImplementation((url: string, body?: { fileName?: string }) => {
       if (url === '/uploads/init') return Promise.resolve(initResponse(body?.fileName ?? 'a'))
+      if (url.endsWith('/md5')) return Promise.resolve({ data: {} })
       return Promise.reject(new Error('response lost'))
     })
     const { callbacks } = renderUploader(true)
@@ -301,10 +312,89 @@ describe('ChunkUploader DOM contracts', () => {
     expect(sessionCalls('init').some(([, body]) => body.fileName === 'd')).toBe(false)
   })
 
+  it('starts chunk upload before the full MD5 is ready, then submits it before merge', async () => {
+    let releaseMd5!: (digest: string) => void
+    mocks.fileMd5.mockReturnValue(new Promise<string>((resolve) => { releaseMd5 = resolve }))
+    const { callbacks } = renderUploader()
+    const file = uploadFile('parallel.pdf')
+    choose(file)
+    fireEvent.click(startButton())
+
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledOnce())
+    expect(mocks.post.mock.calls.some(([url]) => String(url).endsWith('/md5'))).toBe(false)
+    expect(sessionCalls('merge')).toHaveLength(0)
+    const initBody = sessionCalls('init')[0][1]
+    expect(initBody).toMatchObject({
+      fileName: 'parallel.pdf',
+      fileSize: file.size,
+      fileLastModified: file.lastModified,
+      fileFingerprint: 'f'.repeat(64),
+    })
+    expect(initBody).not.toHaveProperty('fileMd5')
+
+    await act(async () => releaseMd5('browser-full-md5'))
+    await waitFor(() => expect(callbacks.onDone).toHaveBeenCalledOnce())
+    const uploadPosts = mocks.post.mock.calls.map(([url]) => String(url))
+    expect(uploadPosts).toEqual([
+      '/uploads/init',
+      '/uploads/parallel.pdf/md5',
+      '/uploads/parallel.pdf/merge',
+    ])
+  })
+
+  it('revalidates resumed chunks against the current file digest and replaces a mismatch', async () => {
+    mocks.post.mockImplementation((url: string) => {
+      if (url === '/uploads/init') return Promise.resolve(initResponse('same-fingerprint', {
+        uploadedChunks: [{ index: 0, sha256: 'a'.repeat(64) }],
+      }))
+      return Promise.resolve({ data: { id: 99 } })
+    })
+    mocks.blobSha256.mockResolvedValue('b'.repeat(64))
+    const { callbacks } = renderUploader()
+    choose(uploadFile('same-edge-bytes.pdf'))
+    fireEvent.click(startButton())
+
+    await waitFor(() => expect(callbacks.onDone).toHaveBeenCalledOnce())
+    expect(mocks.put).toHaveBeenCalledOnce()
+    expect(mocks.put.mock.calls[0][2]).toMatchObject({
+      headers: { 'X-Chunk-SHA256': 'b'.repeat(64) },
+    })
+  })
+
+  it('skips a resumed chunk only when its server digest matches the current file', async () => {
+    mocks.post.mockImplementation((url: string) => {
+      if (url === '/uploads/init') return Promise.resolve(initResponse('resumed', {
+        uploadedChunks: [{ index: 0, sha256: 'c'.repeat(64) }],
+      }))
+      return Promise.resolve({ data: { id: 99 } })
+    })
+    const { callbacks } = renderUploader()
+    choose(uploadFile('resume.pdf'))
+    fireEvent.click(startButton())
+
+    await waitFor(() => expect(callbacks.onDone).toHaveBeenCalledOnce())
+    expect(mocks.put).not.toHaveBeenCalled()
+    expect(mocks.post.mock.calls.some(([url]) => String(url).endsWith('/md5'))).toBe(true)
+    expect(sessionCalls('merge')).toHaveLength(1)
+  })
+
+  it('does not merge when the parallel full-file hash fails', async () => {
+    mocks.fileMd5.mockRejectedValue(new Error('worker hash failed'))
+    renderUploader()
+    choose(uploadFile('hash-failed.pdf'))
+    fireEvent.click(startButton())
+
+    await screen.findByText(/上传中断/)
+    expect(mocks.put).toHaveBeenCalledOnce()
+    expect(mocks.post.mock.calls.some(([url]) => String(url).endsWith('/md5'))).toBe(false)
+    expect(sessionCalls('merge')).toHaveLength(0)
+  })
+
   it('lost upload merge response retries only merge on the same session', async () => {
     let mergeCalls = 0
     mocks.post.mockImplementation((url: string, body?: { fileName?: string }) => {
       if (url === '/uploads/init') return Promise.resolve(initResponse(body?.fileName ?? 'same-session', { sessionId: 'same-session' }))
+      if (url.endsWith('/md5')) return Promise.resolve({ data: {} })
       mergeCalls += 1
       return mergeCalls === 1 ? Promise.reject(new Error('response lost after commit')) : Promise.resolve({ data: { id: 99 } })
     })
@@ -334,6 +424,7 @@ describe('ChunkUploader DOM contracts', () => {
       if (url === '/uploads/damaged-session/merge') {
         return Promise.reject({ response: { status: 400, data: { message: '文件 MD5 校验失败，请重新上传' } } })
       }
+      if (url.endsWith('/md5')) return Promise.resolve({ data: {} })
       return Promise.resolve({ data: { id: 99 } })
     })
     mocks.delete.mockImplementation(() => deleteFailures-- > 0
@@ -369,6 +460,7 @@ describe('ChunkUploader DOM contracts', () => {
     const retry = new Promise((resolve) => { releaseRetry = resolve })
     mocks.post.mockImplementation((url: string) => {
       if (url === '/uploads/init') return Promise.resolve(initResponse('', { sessionId: 'same-session' }))
+      if (url.endsWith('/md5')) return Promise.resolve({ data: {} })
       mergeCalls += 1
       if (mergeCalls === 1) return Promise.reject(new Error('response lost after commit'))
       return retry
@@ -396,11 +488,12 @@ describe('ChunkUploader DOM contracts', () => {
     const puts: Array<{ attempt: number; chunk: number }> = []
     mocks.post.mockImplementation((url: string) => {
       if (url.endsWith('/merge')) return Promise.resolve({ data: { id: 99 } })
+      if (url.endsWith('/md5')) return Promise.resolve({ data: {} })
       initCalls += 1
       return Promise.resolve(initResponse('', {
         sessionId: 'test-session',
         totalChunks: 3,
-        uploadedChunks: initCalls === 1 ? [] : [0],
+        uploadedChunks: initCalls === 1 ? [] : [{ index: 0, sha256: 'c'.repeat(64) }],
       }))
     })
     mocks.put.mockImplementation((url: string, _blob: Blob, config: { signal: AbortSignal }) => {
@@ -444,6 +537,7 @@ describe('ChunkUploader DOM contracts', () => {
         events.push(url)
         return Promise.resolve({ data: {} })
       }
+      if (url.endsWith('/md5')) return Promise.resolve({ data: {} })
       inits += 1
       return Promise.resolve(initResponse('', { sessionId: `session-${inits}` }))
     })
@@ -471,9 +565,14 @@ describe('ChunkUploader DOM contracts', () => {
   it('merging upload cannot be reported cancelled while its file commits', async () => {
     let releaseMerge!: (value: unknown) => void
     const merge = new Promise((resolve) => { releaseMerge = resolve })
-    mocks.post.mockImplementation((url: string) => url === '/uploads/init'
-      ? Promise.resolve(initResponse('', { sessionId: 'session-1', uploadedChunks: [0] }))
-      : merge)
+    mocks.post.mockImplementation((url: string) => {
+      if (url === '/uploads/init') return Promise.resolve(initResponse('', {
+        sessionId: 'session-1',
+        uploadedChunks: [{ index: 0, sha256: 'c'.repeat(64) }],
+      }))
+      if (url.endsWith('/md5')) return Promise.resolve({ data: {} })
+      return merge
+    })
     const { callbacks } = renderUploader()
     choose(uploadFile('sample.pdf'))
     fireEvent.click(startButton())
@@ -496,11 +595,15 @@ describe('ChunkUploader DOM contracts', () => {
         events.push('merge')
         return Promise.resolve({ data: { id: 1 } })
       }
+      if (url.endsWith('/md5')) return Promise.resolve({ data: {} })
       events.push('init')
       initCount += 1
       return initCount === 1
         ? lateInit
-        : Promise.resolve(initResponse('', { sessionId: 'shared-session', uploadedChunks: [0] }))
+        : Promise.resolve(initResponse('', {
+          sessionId: 'shared-session',
+          uploadedChunks: [{ index: 0, sha256: 'c'.repeat(64) }],
+        }))
     })
     mocks.delete.mockImplementation(() => {
       events.push('delete')

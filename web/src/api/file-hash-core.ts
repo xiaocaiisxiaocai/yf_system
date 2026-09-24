@@ -1,8 +1,8 @@
 import SparkMD5 from 'spark-md5'
 
 /**
- * 分段计算内容标识（主线程或 Worker 内均可运行；调用方请用 file-hash.ts 的 fileMd5），
- * 避免同名同大小的新文件续接旧分片；不把整份大文件读入内存。
+ * 增量计算整文件 MD5（主线程或 Worker 内均可运行；调用方请用 file-hash.ts 的 fileMd5），
+ * 用于服务端组装后的最终完整性校验；不把整份大文件读入内存。
  * 每段之间让出主线程，onProgress 报告 0–1 的进度，便于大文件显示校验进度。
  */
 export async function fileMd5(

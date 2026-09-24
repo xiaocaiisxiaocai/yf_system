@@ -111,7 +111,7 @@ public sealed class IdentityService(
         var found = await context.RefreshTokens.AsNoTracking().SingleOrDefaultAsync(t => t.TokenHash == hash, ct)
                     ?? throw ApiException.Unauthorized("登录状态无效");
         await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
-        await AccessService.LockBusinessAsync(context.Database.Connection(), context.Database.RequireTransaction(), ct);
+        await AccessService.LockManagementAsync(context.Database.Connection(), context.Database.RequireTransaction(), ct);
         var user = await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id = {found.UserId} FOR UPDATE").SingleOrDefaultAsync(ct)
                    ?? throw ApiException.Unauthorized("账号不存在");
         var row = await context.RefreshTokens.FromSqlInterpolated($"SELECT * FROM refresh_tokens WHERE id = {found.Id} FOR UPDATE").SingleOrDefaultAsync(ct)
@@ -170,6 +170,7 @@ public sealed class IdentityService(
         }
         if (targets.Count == 0) return;
         await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        await AccessService.LockManagementAsync(context.Database.Connection(), context.Database.RequireTransaction(), ct);
         foreach (var uid in targets.Select(x => x.UserId).Distinct().Order())
             await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id = {uid} FOR UPDATE").AsNoTracking().SingleOrDefaultAsync(ct);
         foreach (var target in targets)
@@ -187,8 +188,12 @@ public sealed class IdentityService(
             throw ApiException.PasswordRateLimited("密码校验尝试过于频繁，请稍后再试");
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        await AccessService.LockManagementAsync(context.Database.Connection(), context.Database.RequireTransaction(), ct);
         var user = await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id = {current.Id} FOR UPDATE").SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
-        if (user.Status != AccountStatuses.Active) throw ApiException.Forbidden();
+        if (user.Status != AccountStatuses.Active || !await IsSupplierActiveAsync(context, user, ct)
+            || current.SessionId is string sessionId && !await HasActiveSessionAsync(
+                context.Database.Connection(), context.Database.RequireTransaction(), current.Id, sessionId, ct))
+            throw ApiException.Forbidden();
         if (!await PasswordService.VerifyAsync(request.OldPassword, user.PasswordHash, ct)) throw ApiException.BadRequest("原密码错误");
         if (string.Equals(request.OldPassword, request.NewPassword, StringComparison.Ordinal))
             throw ApiException.BadRequest("新密码不能与当前密码相同");
@@ -217,8 +222,12 @@ public sealed class IdentityService(
         var email = request.Email.Trim();
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        await AccessService.LockBusinessAsync(context.Database.Connection(), context.Database.RequireTransaction(), ct);
         var user = await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id = {current.Id} FOR UPDATE").SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
-        if (user.Status != AccountStatuses.Active) throw ApiException.Forbidden();
+        if (user.Status != AccountStatuses.Active || !await IsSupplierActiveAsync(context, user, ct)
+            || current.SessionId is string sessionId && !await HasActiveSessionAsync(
+                context.Database.Connection(), context.Database.RequireTransaction(), current.Id, sessionId, ct))
+            throw ApiException.Forbidden();
         if (user.Email != email)
         {
             var oldEmail = user.Email;

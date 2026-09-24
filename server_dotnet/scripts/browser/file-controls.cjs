@@ -12,6 +12,7 @@ const XLSX = require(process.env.YF_PROJECT_ROOT + '/web/node_modules/xlsx');
 const {
   assert, OUT, s, f, record, login, api, projectMetadata, track,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
+const { uploadFixture } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/upload-contract.cjs');
 
 const apiPath = path => '/api/v1' + path;
 const pathOf = value => new URL(value.url()).pathname;
@@ -49,33 +50,6 @@ function workbookBytes(marker) {
     [marker, 'DOWNLOAD-FALLBACK'],
   ]), '验收');
   return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
-}
-
-async function uploadFixture(context, token, projectId, fileName, bytes) {
-  const fileMd5 = crypto.createHash('md5').update(bytes).digest('hex');
-  const init = await (await api(context, 'POST', '/uploads/init', {
-    projectId, fileName, fileSize: bytes.length, fileMd5,
-  }, token)).json();
-  for (let index = 0; index < init.totalChunks; index += 1) {
-    const chunk = bytes.subarray(
-      index * init.chunkSize,
-      Math.min((index + 1) * init.chunkSize, bytes.length),
-    );
-    const response = await context.request.fetch(s.base + apiPath(`/uploads/${init.sessionId}/chunks/${index}`), {
-      method: 'PUT',
-      data: chunk,
-      headers: {
-        Origin: s.base,
-        Authorization: 'Bearer ' + token,
-        'Content-Type': 'application/octet-stream',
-      },
-    });
-    assert.equal(response.status(), 200, `fixture chunk ${fileName} ${index}`);
-  }
-  const merged = await (await api(
-    context, 'POST', `/uploads/${init.sessionId}/merge`, undefined, token,
-  )).json();
-  return { ...merged, sessionId: init.sessionId };
 }
 
 async function createProjectGroup(context, token, supplierId, name) {

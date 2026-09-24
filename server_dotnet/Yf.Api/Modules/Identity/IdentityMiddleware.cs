@@ -1,4 +1,3 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Files;
@@ -13,7 +12,7 @@ public sealed class IdentityMiddleware(RequestDelegate next)
         "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/refresh"
     };
 
-    public async Task InvokeAsync(HttpContext context, AppDb db, TokenService tokens)
+    public async Task InvokeAsync(HttpContext context, AppDb db, TokenService tokens, IdentityProjectionCache identityCache)
     {
         var ct = context.RequestAborted;
         var path = context.Request.Path.Value ?? "";
@@ -30,31 +29,17 @@ public sealed class IdentityMiddleware(RequestDelegate next)
         catch (ApiException) { throw; }
         catch { throw ApiException.Unauthorized("登录状态无效"); }
 
-        // Authentication owns only its lookups, not the downstream request. In
-        // particular, uploads/downloads must not pin this connection while they
-        // stream or wait for a second connection from the same pool.
-        await using (var conn = await db.OpenAsync(ct))
-        {
-            // One round trip checks the session, the account and its supplier. DateTime.UtcNow is
-            // translated to the database clock (UTC_TIMESTAMP), matching the session checks elsewhere.
-            await using var ef = EfDb.Use(conn);
-            var sessionId = claims.SessionId;
-            var row = await ef.Users.Where(user => user.Id == claims.UserId).Select(user => new
-            {
-                user.Id, user.EmployeeNo, user.UserType, user.SupplierId, user.Status, user.MustChangePassword,
-                SessionActive = ef.RefreshTokens.Any(token => token.UserId == user.Id && token.SessionId == sessionId
-                    && !token.Revoked && token.ExpiresAt > DateTime.UtcNow && token.SessionExpiresAt > DateTime.UtcNow),
-                SupplierActive = user.SupplierId != null
-                    && ef.Suppliers.Any(supplier => supplier.Id == user.SupplierId && supplier.Status == AccountStatuses.Active),
-            }).SingleOrDefaultAsync(ct);
-            if (row is null || !row.SessionActive) throw ApiException.Unauthorized("登录状态已失效，请重新登录");
-            if (row.Status != AccountStatuses.Active) throw ApiException.Unauthorized("账号已被禁用");
-            if (row.UserType == UserTypes.Supplier && !row.SupplierActive) throw ApiException.Unauthorized("所属供应商已被禁用");
-            if (row.MustChangePassword && path is not ("/api/v1/auth/profile" or "/api/v1/auth/password" or "/api/v1/auth/logout"))
-                throw new ApiException(403, 40303, "请先修改初始密码");
-            context.Items[typeof(CurrentUser)] = new CurrentUser(row.Id, row.EmployeeNo, row.UserType, row.SupplierId);
-            context.Items[typeof(AccessClaims)] = claims;
-        }
+        // Authentication owns only its lookup connection, not the downstream request. Cache hits
+        // still probe the database revision and clock, so committed revocation and expiry are never
+        // hidden by an application TTL.
+        var row = await identityCache.ResolveAsync(db, claims, ct);
+        if (row is null || !row.SessionActive) throw ApiException.Unauthorized("登录状态已失效，请重新登录");
+        if (row.Status != AccountStatuses.Active) throw ApiException.Unauthorized("账号已被禁用");
+        if (row.UserType == UserTypes.Supplier && !row.SupplierActive) throw ApiException.Unauthorized("所属供应商已被禁用");
+        if (row.MustChangePassword && path is not ("/api/v1/auth/profile" or "/api/v1/auth/password" or "/api/v1/auth/logout"))
+            throw new ApiException(403, 40303, "请先修改初始密码");
+        context.Items[typeof(CurrentUser)] = new CurrentUser(row.Id, row.EmployeeNo, row.UserType, row.SupplierId, claims.SessionId);
+        context.Items[typeof(AccessClaims)] = claims;
         await next(context);
     }
 

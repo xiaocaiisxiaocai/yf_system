@@ -289,6 +289,66 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.FileBlob", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime?>("GarbageCollectionStartedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("gc_started_at");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasColumnType("char(64)")
+                        .HasColumnName("sha256")
+                        .UseCollation("ascii_bin");
+
+                    b.Property<ulong>("SizeBytes")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("size_bytes");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("READY")
+                        .HasColumnName("state");
+
+                    b.Property<string>("StoragePath")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("storage_path")
+                        .UseCollation("ascii_bin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Sha256")
+                        .IsUnique()
+                        .HasDatabaseName("uk_file_blobs_sha256");
+
+                    b.HasIndex("StoragePath")
+                        .IsUnique()
+                        .HasDatabaseName("uk_file_blobs_storage_path");
+
+                    b.HasIndex("State", "Id")
+                        .HasDatabaseName("idx_file_blobs_state");
+
+                    b.ToTable("file_blobs", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.FileCopyRef", b =>
                 {
                     b.Property<ulong>("Id")
@@ -351,6 +411,10 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnName("id");
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<ulong?>("BlobId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("blob_id");
 
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
@@ -423,6 +487,9 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnName("uploader_id");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("BlobId")
+                        .HasDatabaseName("idx_files_blob");
 
                     b.HasIndex("StoredName")
                         .IsUnique()
@@ -1796,6 +1863,16 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("datetime")
                         .HasColumnName("expires_at");
 
+                    b.Property<string>("FileFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("file_fingerprint");
+
+                    b.Property<long>("FileLastModified")
+                        .HasColumnType("bigint")
+                        .HasColumnName("file_last_modified");
+
                     b.Property<string>("FileMd5")
                         .HasMaxLength(32)
                         .HasColumnType("varchar(32)")
@@ -1862,6 +1939,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.HasIndex("Status", "ExpiresAt")
                         .HasDatabaseName("idx_us_status_exp");
+
+                    b.HasIndex("ProjectId", "UploaderId", "FileFingerprint", "Status", "ExpiresAt")
+                        .HasDatabaseName("idx_us_resume");
 
                     b.ToTable("upload_sessions", (string)null);
 
@@ -2059,6 +2139,12 @@ namespace Yf.Api.Infrastructure.Migrations
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.FileRecord", b =>
                 {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.FileBlob", null)
+                        .WithMany()
+                        .HasForeignKey("BlobId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_files_blob");
+
                     b.HasOne("Yf.Api.Infrastructure.Entities.Project", null)
                         .WithMany()
                         .HasForeignKey("ProjectId")

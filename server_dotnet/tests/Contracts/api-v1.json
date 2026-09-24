@@ -75,6 +75,7 @@
   "POST /api/v1/projects/{}/withdraw",
   "POST /api/v1/project-dictionaries",
   "POST /api/v1/uploads/init",
+  "POST /api/v1/uploads/{}/md5",
   "POST /api/v1/uploads/{}/merge",
   "PUT /api/v1/admin/departments/{}",
   "PUT /api/v1/admin/departments/{}/status",

@@ -16,33 +16,6 @@ public sealed class FilesStorageSafetyTests
     }
 
     [Fact]
-    public async Task PendingFinalMarkerIsPublishedAtomicallyAfterPayloadIsDurable()
-    {
-        var sandbox = Path.Combine(Path.GetTempPath(), "yf_file_marker_" + Guid.NewGuid().ToString("N"));
-        var root = Path.Combine(sandbox, "storage");
-        var sessionId = Guid.NewGuid().ToString("D");
-        var directory = FileStorage.SessionDirectory(root, sessionId);
-        Directory.CreateDirectory(directory);
-        var relativePath = $"files/2026/09/{Guid.NewGuid():D}.pdf";
-
-        try
-        {
-            await UploadService.WritePendingFinalMarkerAsync(
-                FileStorage.Root(root), sessionId, relativePath, TestContext.Current.CancellationToken);
-
-            var markers = Directory.GetFiles(directory, UploadService.PendingFinalMarkerPrefix + "*");
-            Assert.Single(markers);
-            Assert.Equal(relativePath, await File.ReadAllTextAsync(
-                markers[0], TestContext.Current.CancellationToken));
-            Assert.Empty(Directory.GetFiles(directory, UploadService.PendingFinalStagingPrefix + "*"));
-        }
-        finally
-        {
-            if (Directory.Exists(sandbox)) Directory.Delete(sandbox, recursive: true);
-        }
-    }
-
-    [Fact]
     public async Task RecursiveDeleteIsIdempotentAndRejectsTempLinkEscapingStorageRoot()
     {
         var sandbox = Path.Combine(Path.GetTempPath(), "yf_file_delete_" + Guid.NewGuid().ToString("N"));

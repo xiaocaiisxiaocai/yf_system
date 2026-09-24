@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash, randomBytes } from 'node:crypto'
 
 const workerHarness = vi.hoisted(() => ({
   instances: [] as Array<{
@@ -24,8 +25,9 @@ vi.mock('../../../api/file-hash.worker?worker', () => ({
   },
 }))
 
-import { fileMd5 } from '../../../api/file-hash'
+import { blobSha256, fileMd5, uploadFingerprint } from '../../../api/file-hash'
 import { fileMd5 as fileMd5InThread } from '../../../api/file-hash-core'
+import { Sha256 } from '../../../api/sha256-core'
 
 describe('file hashing contracts', () => {
   const originalWorker = globalThis.Worker
@@ -98,5 +100,67 @@ describe('file hashing contracts', () => {
     )
 
     expect(progress.map((value) => Math.round(value * 1000) / 1000)).toEqual([0.444, 0.889, 1])
+  })
+
+  it('computes lower-case SHA-256 for a bounded chunk', async () => {
+    await expect(blobSha256(new Blob(['abc']))).resolves.toBe(
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+    )
+  })
+
+  it('matches SHA-256 standard vectors when crypto.subtle is absent', async () => {
+    vi.stubGlobal('crypto', {})
+    const vectors = [
+      ['', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'],
+      ['abc', 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'],
+      [
+        'abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq',
+        '248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1',
+      ],
+    ]
+    for (const [value, expected] of vectors) {
+      await expect(blobSha256(new Blob([value]))).resolves.toBe(expected)
+    }
+  })
+
+  it('matches Node crypto for random bytes split across irregular incremental blocks', async () => {
+    vi.stubGlobal('crypto', {})
+    const bytes = new Uint8Array(randomBytes(2 * 1024 * 1024 + 137))
+    const expected = createHash('sha256').update(bytes).digest('hex')
+    await expect(blobSha256(new Blob([bytes]))).resolves.toBe(expected)
+
+    const incremental = new Sha256()
+    const blockSizes = [1, 63, 64, 65, 4093, 1024 * 1024]
+    let offset = 0
+    let block = 0
+    while (offset < bytes.length) {
+      const end = Math.min(bytes.length, offset + blockSizes[block++ % blockSizes.length])
+      incremental.update(bytes.subarray(offset, end))
+      offset = end
+    }
+    expect(Buffer.from(incremental.digest()).toString('hex')).toBe(expected)
+  })
+
+  it('matches the Python fixture fingerprint on an insecure HTTP-style crypto surface', async () => {
+    vi.stubGlobal('crypto', {})
+    const bytes = new Uint8Array(256 * 9)
+    for (let index = 0; index < bytes.length; index++) bytes[index] = index % 256
+    const file = new File([bytes], '测试 "edge".bin', { lastModified: 1_700_000_000_123 })
+
+    await expect(uploadFingerprint(file)).resolves.toBe(
+      'c608af5839cdbfe7894a89cd405ce34aac23e6be0d254ba0c3744070062f0f48',
+    )
+  })
+
+  it('keeps quick resume identity separate from full-file integrity', async () => {
+    const edge = new Uint8Array(1024 * 1024)
+    edge.fill(7)
+    const first = new File([edge, new Uint8Array([1]), edge], 'same.bin', { lastModified: 1234 })
+    const changedMiddle = new File([edge, new Uint8Array([2]), edge], 'same.bin', { lastModified: 1234 })
+
+    expect(await uploadFingerprint(first)).toBe(await uploadFingerprint(changedMiddle))
+    expect(await fileMd5InThread(first)).not.toBe(await fileMd5InThread(changedMiddle))
+    expect(await uploadFingerprint(new File([edge, new Uint8Array([1]), edge], 'same.bin', { lastModified: 1235 })))
+      .not.toBe(await uploadFingerprint(first))
   })
 })

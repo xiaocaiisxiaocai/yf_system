@@ -12,7 +12,7 @@ internal static class DevelopmentDataReset
     private static readonly string[] ClearedTables = [
         "collaboration_reads", "message_reads", "message_images", "email_outbox", "project_activities",
         "file_copy_refs", "project_copy_jobs", "project_copies",
-        "project_group_status_logs", "project_status_logs", "upload_sessions", "files", "messages", "projects",
+        "project_group_status_logs", "project_status_logs", "upload_sessions", "files", "file_blobs", "messages", "projects",
         "project_group_work_orders", "project_groups", "robot_parts", "refresh_tokens",
         "user_roles", "role_permissions", "departments", "audit_logs"
     ];
@@ -32,6 +32,7 @@ internal static class DevelopmentDataReset
             ["project_status_logs"] = (db, ct) => db.ProjectStatusLogs.LongCountAsync(ct),
             ["upload_sessions"] = (db, ct) => db.UploadSessions.LongCountAsync(ct),
             ["files"] = (db, ct) => db.Files.LongCountAsync(ct),
+            ["file_blobs"] = (db, ct) => db.FileBlobs.LongCountAsync(ct),
             ["messages"] = (db, ct) => db.Messages.LongCountAsync(ct),
             ["projects"] = (db, ct) => db.Projects.LongCountAsync(ct),
             ["project_group_work_orders"] = (db, ct) => db.ProjectGroupWorkOrders.LongCountAsync(ct),
@@ -86,7 +87,7 @@ internal static class DevelopmentDataReset
             counts[table] = await TableCounts[table](db, ct);
         return new(database, root,
             [Path.Combine(root, "files"), Path.Combine(root, "message-images"), Path.Combine(root, "tmp"),
-                Path.Combine(root, "copy-jobs")], counts);
+                Path.Combine(root, "copy-jobs"), Path.Combine(root, "blobs")], counts);
     }
 
     internal static async Task<Plan> ResetAsync(
@@ -233,6 +234,7 @@ internal static class DevelopmentDataReset
         await db.ProjectStatusLogs.ExecuteDeleteAsync(ct);
         await db.UploadSessions.ExecuteDeleteAsync(ct);
         await db.Files.ExecuteDeleteAsync(ct);
+        await db.FileBlobs.ExecuteDeleteAsync(ct);
         await db.Messages.ExecuteDeleteAsync(ct);
         await db.Projects.ExecuteDeleteAsync(ct);
         await db.ProjectGroupWorkOrders.ExecuteDeleteAsync(ct);
@@ -247,6 +249,7 @@ internal static class DevelopmentDataReset
 
     private static async Task<string> SettingsSnapshotAsync(YfDbContext db, CancellationToken ct) =>
         JsonSerializer.Serialize(await db.SystemConfigs
+            .Where(config => config.CfgKey != "security.identity_revision")
             .OrderBy(config => config.CfgKey)
             .Select(config => new { config.CfgKey, config.CfgValue, config.Description, config.UpdatedAt })
             .ToArrayAsync(ct));

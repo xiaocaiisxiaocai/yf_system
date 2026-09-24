@@ -3578,6 +3578,55 @@
         }
       }
     },
+    "/api/v1/uploads/{sessionId}/md5": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitUploadMd5Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmptyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/uploads/{sessionId}/merge": {
       "post": {
         "tags": [
@@ -4854,7 +4903,8 @@
       },
       "InitUploadRequest": {
         "required": [
-          "fileMd5",
+          "fileFingerprint",
+          "fileLastModified",
           "fileName",
           "fileSize",
           "projectId"
@@ -4872,9 +4922,12 @@
             "type": "integer",
             "format": "int64"
           },
-          "fileMd5": {
-            "type": "string",
-            "nullable": true
+          "fileLastModified": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "fileFingerprint": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -7143,6 +7196,18 @@
         },
         "additionalProperties": false
       },
+      "SubmitUploadMd5Request": {
+        "required": [
+          "fileMd5"
+        ],
+        "type": "object",
+        "properties": {
+          "fileMd5": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "SubprojectUpsertRequest": {
         "required": [
           "description",
@@ -7393,8 +7458,7 @@
           "uploadedChunks": {
             "type": "array",
             "items": {
-              "type": "integer",
-              "format": "int32"
+              "$ref": "#/components/schemas/UploadedChunkDigestResponse"
             }
           },
           "resumed": {
@@ -7434,8 +7498,7 @@
           "uploadedChunks": {
             "type": "array",
             "items": {
-              "type": "integer",
-              "format": "int32"
+              "$ref": "#/components/schemas/UploadedChunkDigestResponse"
             }
           },
           "fileName": {
@@ -7449,6 +7512,23 @@
             "type": "integer",
             "format": "int64",
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "UploadedChunkDigestResponse": {
+        "required": [
+          "index",
+          "sha256"
+        ],
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sha256": {
+            "type": "string"
           }
         },
         "additionalProperties": false

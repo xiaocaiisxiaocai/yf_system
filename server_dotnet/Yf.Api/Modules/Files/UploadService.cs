@@ -13,8 +13,7 @@ namespace Yf.Api.Modules.Files;
 public sealed partial class UploadService(
     AppDb db,
     AppOptions options,
-    AuditService audit,
-    ILogger<UploadService> logger)
+    AuditService audit)
 {
     private const uint MinimumChunkSize = 256 * 1024;
     private const uint MaximumChunkSize = 64 * 1024 * 1024;
@@ -25,9 +24,12 @@ public sealed partial class UploadService(
         await using var conn = await db.OpenAsync(ct);
         await ProjectAccessService.RequireFileUploadAsync(conn, null, actor, request.ProjectId, ct);
         await ValidateFileAsync(conn, request, ct);
-        if (request.FileMd5 is not null && !Md5Pattern().IsMatch(request.FileMd5))
-            throw ApiException.BadRequest("文件 MD5 摘要格式无效");
-        var fileMd5 = request.FileMd5?.ToLowerInvariant();
+        if (request.FileLastModified < 0)
+            throw ApiException.BadRequest("文件修改时间无效");
+        if (string.IsNullOrWhiteSpace(request.FileFingerprint)
+            || !Sha256Pattern().IsMatch(request.FileFingerprint))
+            throw ApiException.BadRequest("文件快速指纹格式无效");
+        var fileFingerprint = request.FileFingerprint.ToLowerInvariant();
 
         var chunkSize = (uint)Math.Clamp(await ConfigUInt64Async(conn, "upload.chunk_size", (ulong)options.UploadChunkSize, ct),
             MinimumChunkSize, MaximumChunkSize);
@@ -36,26 +38,23 @@ public sealed partial class UploadService(
         var totalChunks = (uint)totalChunks64;
         FileStorage.EnsureFreeSpace(options.StorageRoot, request.FileSize);
 
-        MySqlNamedLock? identityLease = null;
-        if (fileMd5 is not null)
-        {
-            var identityLockName = MySqlNamedLock.Name("upload-init", conn.Database,
-                request.ProjectId, actor.Id, request.FileName, request.FileSize, fileMd5);
-            identityLease = await MySqlNamedLock.TryAcquireAsync(conn, identityLockName, 10, ct)
-                ?? throw ApiException.Conflict("相同文件正在初始化，请稍后重试");
-        }
+        var identityLockName = MySqlNamedLock.Name("upload-init", conn.Database,
+            request.ProjectId, actor.Id, request.FileName, request.FileSize,
+            request.FileLastModified, fileFingerprint);
+        var identityLease = await MySqlNamedLock.TryAcquireAsync(conn, identityLockName, 10, ct)
+            ?? throw ApiException.Conflict("相同文件正在初始化，请稍后重试");
         await using (identityLease)
         {
             UploadSessionRow? existing = null;
-            if (fileMd5 is not null)
+            await using (var ef = EfDb.Use(conn))
             {
-                await using var ef = EfDb.Use(conn);
                 var dbNow = await DbNowAsync(ef, ct);
                 var resumable = new[] { "UPLOADING", "MERGING" };
                 var entity = await ef.UploadSessions
                     .Where(session => session.ProjectId == request.ProjectId && session.UploaderId == actor.Id
                         && session.FileName == request.FileName && session.FileSize == request.FileSize
-                        && session.FileMd5 == fileMd5 && session.ExpiresAt > dbNow
+                        && session.FileLastModified == request.FileLastModified
+                        && session.FileFingerprint == fileFingerprint && session.ExpiresAt > dbNow
                         && Enumerable.Contains(resumable, session.Status))
                     .OrderByDescending(session => session.CreatedAt).FirstOrDefaultAsync(ct);
                 existing = entity is null ? null : ToRow(entity, dbNow);
@@ -69,7 +68,7 @@ public sealed partial class UploadService(
                         ?? throw ApiException.Conflict("该文件正在合并，请稍候");
                     existing = await ResetOrphanedMergeAsync(conn, actor, existing, ct);
                 }
-                return InitResponse(existing, resumed: true, ct);
+                return await InitResponseAsync(existing, resumed: true, ct);
             }
 
             var sessionId = Guid.NewGuid().ToString("D");
@@ -91,7 +90,9 @@ public sealed partial class UploadService(
                     UploaderId = current.Id,
                     FileName = request.FileName,
                     FileSize = request.FileSize,
-                    FileMd5 = fileMd5,
+                    FileLastModified = request.FileLastModified,
+                    FileFingerprint = fileFingerprint,
+                    FileMd5 = null,
                     ChunkSize = chunkSize,
                     TotalChunks = totalChunks,
                     TempDir = tempDir,
@@ -122,7 +123,8 @@ public sealed partial class UploadService(
                     TryDeleteDirectory(options.StorageRoot, tempDir, CancellationToken.None);
                 throw;
             }
-            return new UploadInitResponse(sessionId, chunkSize, totalChunks, Array.Empty<uint>());
+            return new UploadInitResponse(sessionId, chunkSize, totalChunks,
+                Array.Empty<UploadedChunkDigestResponse>());
         }
     }
 
@@ -136,7 +138,7 @@ public sealed partial class UploadService(
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:upload", ct);
         if (session.Status == "UPLOADING" && session.IsExpired)
             throw ApiException.Conflict("上传会话已过期，请重新发起");
-        var chunks = UploadedChunks(session, ct);
+        var chunks = await UploadedChunksAsync(session, ct);
         return new UploadSessionResponse(session.Id, session.Status, session.ChunkSize, session.TotalChunks, chunks,
             session.FileName, session.FileSize, session.ResultFileId);
     }
@@ -144,6 +146,9 @@ public sealed partial class UploadService(
     public async Task PutChunkAsync(HttpContext context, string sessionId, int index, Stream body, CancellationToken ct)
     {
         if (index < 0) throw ApiException.BadRequest("分片序号越界");
+        var declaredDigest = context.Request.Headers["X-Chunk-SHA256"].ToString().Trim().ToLowerInvariant();
+        if (!Sha256Pattern().IsMatch(declaredDigest))
+            throw ApiException.BadRequest("分片 SHA-256 摘要格式无效");
         var actor = AccessService.GetCurrent(context);
         UploadSessionRow initial;
         await using (var initialConnection = await db.OpenAsync(ct))
@@ -171,7 +176,9 @@ public sealed partial class UploadService(
             path + $".{Guid.NewGuid():D}.uploading", false);
         try
         {
-            await WriteExactAsync(body, temporary, expected, ct);
+            var actualDigest = await WriteExactAndHashAsync(body, temporary, expected, ct);
+            if (!actualDigest.Equals(declaredDigest, StringComparison.Ordinal))
+                throw ApiException.BadRequest("分片 SHA-256 校验失败");
             // Network receive is complete before any business or project row is locked.
             await using var conn = await db.OpenAsync(ct);
             await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
@@ -188,16 +195,41 @@ public sealed partial class UploadService(
                 ? session.FileSize - (ulong)session.ChunkSize * (session.TotalChunks - 1)
                 : session.ChunkSize;
             if (lockedExpected != expected) throw ApiException.Conflict("上传会话参数已变化，请重新查询");
-            if (File.Exists(path) && (ulong)new FileInfo(path).Length == expected)
+            if (await ValidChunkDigestAsync(root, path, expected, ct) is { } existingDigest
+                && existingDigest.Equals(declaredDigest, StringComparison.Ordinal))
             {
                 await tx.CommitAsync(ct);
                 return;
             }
-            if (File.Exists(path)) File.Delete(path);
-            File.Move(temporary, path, overwrite: false);
+            TryDeleteFile(ChunkDigestPath(path));
+            File.Move(temporary, path, overwrite: true);
+            await WriteChunkDigestAsync(root, path, actualDigest, ct);
             await tx.CommitAsync(ct);
         }
         finally { TryDeleteFile(temporary); }
+    }
+
+    public async Task SubmitMd5Async(
+        HttpContext context, string sessionId, SubmitUploadMd5Request request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.FileMd5) || !Md5Pattern().IsMatch(request.FileMd5))
+            throw ApiException.BadRequest("文件 MD5 摘要格式无效");
+        var actor = AccessService.GetCurrent(context);
+        await using var conn = await db.OpenAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var session = await LoadSessionAsync(conn, tx, sessionId, true, ct);
+        if (session.UploaderId != current.Id) throw ApiException.Forbidden();
+        await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, session.ProjectId, ct);
+        if (session.Status != "UPLOADING") throw ApiException.Conflict("会话不可提交完整性摘要");
+        if (session.IsExpired) throw ApiException.Conflict("上传会话已过期，请重新发起");
+        await using var ef = EfDb.Use(conn, tx);
+        var dbNow = await DbNowAsync(ef, ct);
+        await ef.UploadSessions.Where(item => item.Id == sessionId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.FileMd5, request.FileMd5.ToLowerInvariant())
+                .SetProperty(item => item.UpdatedAt, dbNow), ct);
+        await tx.CommitAsync(ct);
     }
 
     public async Task AbortAsync(HttpContext context, string sessionId, CancellationToken ct)
@@ -237,16 +269,19 @@ public sealed partial class UploadService(
             }
             await tx.CommitAsync(ct);
         }
-        await TryCleanupSessionArtifactsAsync(conn, sessionId, CancellationToken.None);
+        await TryCleanupSessionArtifactsAsync(sessionId, CancellationToken.None);
     }
 
-    private UploadInitResponse InitResponse(UploadSessionRow session, bool resumed, CancellationToken ct) =>
-        new(session.Id, session.ChunkSize, session.TotalChunks, UploadedChunks(session, ct), resumed);
+    private async Task<UploadInitResponse> InitResponseAsync(
+        UploadSessionRow session, bool resumed, CancellationToken ct) =>
+        new(session.Id, session.ChunkSize, session.TotalChunks,
+            await UploadedChunksAsync(session, ct), resumed);
 
-    private List<uint> UploadedChunks(UploadSessionRow session, CancellationToken ct)
+    private async Task<List<UploadedChunkDigestResponse>> UploadedChunksAsync(
+        UploadSessionRow session, CancellationToken ct)
     {
         var root = FileStorage.Root(options.StorageRoot);
-        var result = new List<uint>();
+        var result = new List<UploadedChunkDigestResponse>();
         for (uint index = 0; index < session.TotalChunks; index++)
         {
             var path = FileStorage.ChunkPath(root, session.Id, index);
@@ -254,12 +289,8 @@ public sealed partial class UploadService(
             var expected = index == session.TotalChunks - 1
                 ? session.FileSize - (ulong)session.ChunkSize * (session.TotalChunks - 1)
                 : session.ChunkSize;
-            try
-            {
-                var resolved = FileStorage.ResolveExistingFile(root, path, ct);
-                if ((ulong)new FileInfo(resolved).Length == expected) result.Add(index);
-            }
-            catch (FileNotFoundException) { }
+            var digest = await ValidChunkDigestAsync(root, path, expected, ct);
+            if (digest is not null) result.Add(new UploadedChunkDigestResponse(index, digest));
         }
         return result;
     }
@@ -360,10 +391,6 @@ public sealed partial class UploadService(
         await context.SaveChangesAsync(ct);
     }
 
-    internal const string PendingFinalMarkerPrefix = ".pending-final-";
-    internal const string PendingFinalStagingPrefix = ".writing-pending-final-";
-    internal const string InvalidPendingFinalMarkerPrefix = ".invalid-pending-final-";
-
     internal static Task<DateTime> DbNowAsync(YfDbContext context, CancellationToken ct) =>
         DbClock.UtcNowAsync(context, ct);
 
@@ -374,6 +401,8 @@ public sealed partial class UploadService(
         UploaderId = session.UploaderId,
         FileName = session.FileName,
         FileSize = session.FileSize,
+        FileLastModified = session.FileLastModified,
+        FileFingerprint = session.FileFingerprint,
         FileMd5 = session.FileMd5,
         ChunkSize = session.ChunkSize,
         TotalChunks = session.TotalChunks,
@@ -399,4 +428,7 @@ public sealed partial class UploadService(
 
     [GeneratedRegex("^[0-9a-fA-F]{32}$", RegexOptions.CultureInvariant)]
     private static partial Regex Md5Pattern();
+
+    [GeneratedRegex("^[0-9a-fA-F]{64}$", RegexOptions.CultureInvariant)]
+    private static partial Regex Sha256Pattern();
 }

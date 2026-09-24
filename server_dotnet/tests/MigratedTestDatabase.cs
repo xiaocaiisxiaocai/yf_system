@@ -14,12 +14,14 @@ internal sealed class MigratedTestDatabase : IAsyncDisposable
 {
     private readonly MySqlConnection administration;
     private readonly string databaseName;
+    private readonly string initialApplicationConnectionString;
 
     private MigratedTestDatabase(MySqlConnection administration, string databaseName, AppOptions options)
     {
         this.administration = administration;
         this.databaseName = databaseName;
         Options = options;
+        initialApplicationConnectionString = AppDb.BuildConnectionString(options);
         Database = new AppDb(options);
     }
 
@@ -43,10 +45,12 @@ internal sealed class MigratedTestDatabase : IAsyncDisposable
             Password = credentials.Length == 2 ? Uri.UnescapeDataString(credentials[1]) : string.Empty,
             DateTimeKind = MySqlDateTimeKind.Utc,
             SslMode = MySqlSslMode.None,
+            Pooling = false,
         };
         var administration = new MySqlConnection(adminOptions.ConnectionString);
         await administration.OpenAsync(ct);
         var databaseName = $"yf_t_{Guid.NewGuid():N}";
+        string? applicationConnectionString = null;
         try
         {
             await administration.ExecuteAsync(new CommandDefinition(
@@ -59,10 +63,12 @@ internal sealed class MigratedTestDatabase : IAsyncDisposable
                     Database = databaseName,
                     MaximumPoolSize = 2,
                     MinimumPoolSize = 0,
+                    Pooling = true,
                 }.ConnectionString,
                 StorageRoot = Path.Combine(Path.GetTempPath(), "yf_migrated_test_storage"),
                 WorkerEnabled = false,
             };
+            applicationConnectionString = AppDb.BuildConnectionString(options);
             var scope = new MigratedTestDatabase(administration, databaseName, options);
             var previousPassword = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD");
             Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", "Migrated#" + Guid.NewGuid().ToString("N")[..8] + "!");
@@ -72,7 +78,11 @@ internal sealed class MigratedTestDatabase : IAsyncDisposable
         }
         catch
         {
-            try { await administration.ExecuteAsync($"DROP DATABASE IF EXISTS `{databaseName}`"); }
+            try
+            {
+                TestDatabasePoolCleanup.Clear(applicationConnectionString);
+                await administration.ExecuteAsync($"DROP DATABASE IF EXISTS `{databaseName}`");
+            }
             finally { await administration.DisposeAsync(); }
             throw;
         }
@@ -92,7 +102,26 @@ internal sealed class MigratedTestDatabase : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        try { await administration.ExecuteAsync($"DROP DATABASE IF EXISTS `{databaseName}`"); }
+        try
+        {
+            TestDatabasePoolCleanup.Clear(initialApplicationConnectionString, AppDb.BuildConnectionString(Options));
+            await administration.ExecuteAsync($"DROP DATABASE IF EXISTS `{databaseName}`");
+        }
         finally { await administration.DisposeAsync(); }
+    }
+}
+
+internal static class TestDatabasePoolCleanup
+{
+    internal static void Clear(params string?[] connectionStrings)
+    {
+        foreach (var connectionString in connectionStrings
+                     .Where(value => !string.IsNullOrWhiteSpace(value))
+                     .Select(value => value!)
+                     .Distinct(StringComparer.Ordinal))
+        {
+            using var connection = new MySqlConnection(connectionString);
+            MySqlConnection.ClearPool(connection);
+        }
     }
 }

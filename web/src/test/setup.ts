@@ -5,8 +5,13 @@ import { afterEach, vi } from 'vitest'
 // Parallel workers share the CPU; give findBy*/waitFor more headroom than the 1 s default.
 configure({ asyncUtilTimeout: 5_000 })
 
-afterEach(() => {
+afterEach(async () => {
   cleanup()
+  if (typeof window !== 'undefined') {
+    const { queryClient } = await import('../api/queryClient')
+    await queryClient.cancelQueries()
+    queryClient.clear()
+  }
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
   vi.useRealTimers()

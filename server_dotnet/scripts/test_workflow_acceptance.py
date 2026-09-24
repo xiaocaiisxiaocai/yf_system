@@ -7,6 +7,8 @@ stop at durable PENDING outbox rows.
 
 import secrets
 
+from upload_contract import init_request
+
 from test_business_acceptance import (
     _activate_user,
     _create_project_group,
@@ -629,12 +631,8 @@ def run_workflow_acceptance(client, Client, conn, check):
 
     _expect_atomic_rejection(
         check, conn, supplier_client, project_id, "completed upload init",
-        "POST", "/api/v1/uploads/init", {
-            "projectId": project_id,
-            "fileName": "after-completed.pdf",
-            "fileSize": 1,
-            "fileMd5": "0" * 32,
-        })
+        "POST", "/api/v1/uploads/init",
+        init_request(project_id, "after-completed.pdf", b"\0"))
     _expect_atomic_rejection(
         check, conn, supplier_client, project_id, "completed message create",
         "POST", f"/api/v1/projects/{project_id}/messages", {"content": "不可新增"})

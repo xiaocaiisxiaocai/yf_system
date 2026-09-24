@@ -9,6 +9,8 @@ import hashlib
 import secrets
 import urllib.parse
 
+from upload_contract import init_request, upload_bytes
+
 
 def _password():
     return "Yf9!" + secrets.token_urlsafe(9)
@@ -44,26 +46,8 @@ def _activate_user(admin_client, Client, check, employee_no, initial_password, u
 
 
 def _upload_chunks(actor, project_id, file_name, content):
-    initialized = actor.call("POST", "/api/v1/uploads/init", {
-        "projectId": project_id,
-        "fileName": file_name,
-        "fileSize": len(content),
-        "fileMd5": hashlib.md5(content).hexdigest(),
-    })
-    chunk_size = initialized["chunkSize"]
-    for index in range(initialized["totalChunks"]):
-        actor.call(
-            "PUT",
-            f"/api/v1/uploads/{initialized['sessionId']}/chunks/{index}",
-            content[index * chunk_size:(index + 1) * chunk_size],
-            headers={"Content-Type": "application/octet-stream"},
-        )
-    state = actor.call("GET", f"/api/v1/uploads/{initialized['sessionId']}")
-    merged = actor.call("POST", f"/api/v1/uploads/{initialized['sessionId']}/merge")
-    file_id = merged.get("id", merged.get("fileId"))
-    if file_id is None:
-        raise AssertionError("business upload merge response missing file identifier")
-    return file_id, initialized["totalChunks"], state["uploadedChunks"]
+    initialized, state, merged = upload_bytes(actor, project_id, file_name, content)
+    return merged["id"], initialized["totalChunks"], state["uploadedChunks"]
 
 
 def _download_matches(actor, file_id, expected):
@@ -501,12 +485,11 @@ def run_business_acceptance(client, Client, conn, check):
         "ids": [file_a_company, file_a_supplier],
     }, expected=403)
     foreign_b_bytes = b"supplier-b-must-not-upload-to-company-a"
-    supplier_b_client.call("POST", "/api/v1/uploads/init", {
-        "projectId": project_a,
-        "fileName": "foreign-b-to-a-" + suffix + ".zip",
-        "fileSize": len(foreign_b_bytes),
-        "fileMd5": hashlib.md5(foreign_b_bytes).hexdigest(),
-    }, expected=403)
+    supplier_b_client.call(
+        "POST", "/api/v1/uploads/init",
+        init_request(project_a, "foreign-b-to-a-" + suffix + ".zip", foreign_b_bytes),
+        expected=403,
+    )
     supplier_b_client.call("POST", f"/api/v1/projects/{project_a}/messages", {
         "content": "供应商乙不得写入供应商甲项目",
     }, expected=403)
@@ -521,12 +504,11 @@ def run_business_acceptance(client, Client, conn, check):
         "ids": [file_b_company, file_b_supplier],
     }, expected=403)
     foreign_a_bytes = b"supplier-a-must-not-upload-to-company-b"
-    supplier_a_client.call("POST", "/api/v1/uploads/init", {
-        "projectId": project_b,
-        "fileName": "foreign-a-to-b-" + suffix + ".zip",
-        "fileSize": len(foreign_a_bytes),
-        "fileMd5": hashlib.md5(foreign_a_bytes).hexdigest(),
-    }, expected=403)
+    supplier_a_client.call(
+        "POST", "/api/v1/uploads/init",
+        init_request(project_b, "foreign-a-to-b-" + suffix + ".zip", foreign_a_bytes),
+        expected=403,
+    )
     supplier_a_client.call("POST", f"/api/v1/projects/{project_b}/messages", {
         "content": "供应商甲不得写入供应商乙项目",
     }, expected=403)

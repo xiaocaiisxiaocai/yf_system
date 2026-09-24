@@ -3,28 +3,7 @@ const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const JSZip = require(process.env.YF_PROJECT_ROOT + '/web/node_modules/jszip');
 const { fs, assert, OUT, s, f, record, login, api, projectMetadata, action, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
-
-async function uploadApi(context, token, projectId, fileName, bytes) {
-  const fileMd5 = crypto.createHash('md5').update(bytes).digest('hex');
-  const initialized = await (await api(context, 'POST', '/uploads/init', {
-    projectId, fileName, fileSize: bytes.length, fileMd5,
-  }, token)).json();
-  for (let index = 0; index < initialized.totalChunks; index++) {
-    const chunk = bytes.subarray(index * initialized.chunkSize,
-      Math.min((index + 1) * initialized.chunkSize, bytes.length));
-    const response = await context.request.fetch(
-      s.base + '/api/v1/uploads/' + initialized.sessionId + '/chunks/' + index, {
-        method: 'PUT', data: chunk,
-        headers: {
-          Origin: s.base,
-          Authorization: 'Bearer ' + token,
-          'Content-Type': 'application/octet-stream',
-        },
-      });
-    assert.equal(response.status(), 200, 'upload chunk ' + index + ' for ' + fileName);
-  }
-  return (await api(context, 'POST', '/uploads/' + initialized.sessionId + '/merge', undefined, token)).json();
-}
+const { uploadFixture: uploadApi } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/upload-contract.cjs');
 
 async function createProject(context, token, supplierId, name) {
   const group = await (await api(context, 'POST', '/project-groups', {

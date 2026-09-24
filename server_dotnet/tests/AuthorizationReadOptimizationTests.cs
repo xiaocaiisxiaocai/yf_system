@@ -38,7 +38,7 @@ public sealed class AuthorizationReadOptimizationTests
         var ct = TestContext.Current.CancellationToken;
         await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
         await SeedAsync(database, ct);
-        var actor = new CurrentUser(9_200, "read-actor", "INTERNAL", null);
+        var actor = new CurrentUser(9_200, "read-actor", "INTERNAL", null, "read-session");
 
         await using (var management = await database.Database.OpenAsync(ct))
         await using (var managementTx = await AppDb.BeginTransactionAsync(management, ct))
@@ -122,6 +122,9 @@ public sealed class AuthorizationReadOptimizationTests
             VALUES(9200,'read-actor','unused','Read Actor','','INTERNAL','ACTIVE',0),
                   (9201,'other-owner','unused','Other Owner','','INTERNAL','ACTIVE',0);
         INSERT INTO user_roles(user_id,role_id) VALUES(9200,9100);
+        INSERT INTO refresh_tokens(user_id,session_id,token_hash,session_created_at,session_expires_at,expires_at,revoked,ip)
+            VALUES(9200,'read-session',REPEAT('a',64),UTC_TIMESTAMP(),DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 DAY),
+                   DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 DAY),0,'192.0.2.1');
         INSERT INTO suppliers(id,name,status,created_by) VALUES(9300,'read supplier','ACTIVE',1);
         INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
             VALUES(9350,'read group',9300,'IN_PROGRESS',1,9200);

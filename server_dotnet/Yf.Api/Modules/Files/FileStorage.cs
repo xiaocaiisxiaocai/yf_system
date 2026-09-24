@@ -24,9 +24,6 @@ internal static class FileStorage
     public static string ChunkPath(string root, string sessionId, uint index) =>
         EnsureLexicallyWithin(root, Path.Combine(SessionDirectory(root, sessionId), $"{index}.part"), false);
 
-    public static string FinalPath(string root, DateTime now, string storedName) =>
-        EnsureLexicallyWithin(root, Path.Combine(root, "files", now.ToString("yyyy"), now.ToString("MM"), storedName), false);
-
     public static string CreateDirectoryWithin(string root, string candidate, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -96,40 +93,6 @@ internal static class FileStorage
         }
 
         if (requireFile && !File.Exists(current)) throw new FileNotFoundException();
-        return current;
-    }
-
-    public static string ResolveForCleanup(string root, string raw, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) throw new InvalidOperationException("迁移清理队列包含空路径");
-        var rawPath = raw.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
-        if (rawPath.Split(Path.DirectorySeparatorChar).Any(component => component == ".."))
-            throw new InvalidOperationException($"迁移清理路径包含父级遍历: {raw}");
-
-        var rootFull = Path.GetFullPath(root);
-        var candidate = Path.IsPathFullyQualified(rawPath) ? rawPath : Path.Combine(rootFull, rawPath);
-        candidate = EnsureLexicallyWithin(rootFull, candidate, allowRoot: false);
-        var resolvedRoot = Root(rootFull);
-        var relative = Path.GetRelativePath(rootFull, candidate);
-        var current = resolvedRoot;
-        var components = relative.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
-        for (var i = 0; i < components.Length; i++)
-        {
-            ct.ThrowIfCancellationRequested();
-            var next = Path.Combine(current, components[i]);
-            FileSystemInfo info = Directory.Exists(next) ? new DirectoryInfo(next) : new FileInfo(next);
-            if (!info.Exists)
-            {
-                current = next;
-                for (var j = i + 1; j < components.Length; j++) current = Path.Combine(current, components[j]);
-                break;
-            }
-            current = ResolveFinalTarget(info);
-            if (!IsWithin(resolvedRoot, current) || PathsEqual(resolvedRoot, current))
-                throw new InvalidOperationException($"迁移清理路径通过符号链接越出存储根目录: {raw}");
-        }
-        if (!IsWithin(resolvedRoot, current) || PathsEqual(resolvedRoot, current))
-            throw new InvalidOperationException($"迁移清理路径解析后位于存储根目录之外: {raw}");
         return current;
     }
 

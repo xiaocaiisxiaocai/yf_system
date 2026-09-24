@@ -133,6 +133,8 @@ $webRoot = Join-Path $repoRoot 'web'
 $webLock = Join-Path $webRoot 'package-lock.json'
 $webModules = Join-Path $webRoot 'node_modules'
 $webDist = Join-Path $webRoot 'dist'
+$webCompressionScript = Join-Path $webRoot 'scripts\precompress-assets.mjs'
+$webPrecompressionManifest = Join-Path $webDist '.precompressed-assets.json'
 $deployRoot = Join-Path $repoRoot 'server_dotnet\deploy'
 $publishDefaultsPath = Join-Path $deployRoot 'publish-defaults.local.json'
 $noticesSource = Join-Path $repoRoot 'server_dotnet\THIRD-PARTY-NOTICES.md'
@@ -176,6 +178,7 @@ foreach ($required in @(
     $apiProject,
     $globalJsonPath,
     $webLock,
+    $webCompressionScript,
     (Join-Path $deployRoot 'install-iis.ps1'),
     (Join-Path $deployRoot 'maintain-iis.ps1'),
     (Join-Path $deployRoot 'maintenance-common.ps1'),
@@ -234,6 +237,9 @@ try { Invoke-Native 'npm' @('run', 'build') } finally { Pop-Location }
 if (!(Test-Path -LiteralPath (Join-Path $webDist 'index.html') -PathType Leaf)) {
     throw 'Frontend build did not produce dist/index.html.'
 }
+if (!(Test-Path -LiteralPath $webPrecompressionManifest -PathType Leaf)) {
+    throw 'Frontend build did not produce the precompressed asset manifest.'
+}
 
 $publishArguments = @(
     'publish', $apiProject,
@@ -262,6 +268,12 @@ if (Test-Path -LiteralPath $wwwRoot) {
 foreach ($item in Get-ChildItem -LiteralPath $webDist -Force) {
     Copy-Item -LiteralPath $item.FullName -Destination $wwwRoot -Recurse
 }
+$packagedPrecompressionManifest = Join-Path $outputRoot 'precompressed-assets.json'
+Move-Item -LiteralPath (Join-Path $wwwRoot '.precompressed-assets.json') -Destination $packagedPrecompressionManifest
+$precompressionVerificationArguments = @($webCompressionScript, '--verify', $wwwRoot, $packagedPrecompressionManifest)
+$buildCommands += [ordered]@{ workingDirectory = 'web'; executable = 'node'; arguments = $precompressionVerificationArguments }
+Push-Location $webRoot
+try { Invoke-Native 'node' $precompressionVerificationArguments } finally { Pop-Location }
 
 foreach ($name in @('install-iis.ps1', 'maintain-iis.ps1', 'maintenance-common.ps1', 'README.md')) {
     Copy-Item -LiteralPath (Join-Path $deployRoot $name) -Destination (Join-Path $outputRoot $name)
@@ -476,7 +488,7 @@ if ($packagedSettings.App.ConnectionString -ne $productionSettings.App.Connectio
     throw 'Packaged appsettings.Production.json does not match the configured publish defaults.'
 }
 foreach ($requiredPayload in @(
-    'Yf.Api.dll', 'Yf.Api.runtimeconfig.json', 'web.config', 'wwwroot\index.html',
+    'Yf.Api.dll', 'Yf.Api.runtimeconfig.json', 'web.config', 'wwwroot\index.html', 'precompressed-assets.json',
     'install-iis.ps1', 'maintain-iis.ps1', 'maintenance-common.ps1'
 )) {
     if (!(Test-Path -LiteralPath (Join-Path $outputRoot $requiredPayload) -PathType Leaf)) {

@@ -65,15 +65,25 @@ def run_background_copy_checks(client, conn, check, supplier_id):
     with conn.cursor() as cursor:
         cursor.execute("SELECT COUNT(*) FROM projects WHERE name=%s", (name,))
         target_count = cursor.fetchone()[0]
-        cursor.execute("SELECT id,sha256,storage_path FROM files WHERE project_id=%s", (target_id,))
+        cursor.execute(
+            "SELECT id,project_id,sha256,storage_path,blob_id FROM files WHERE project_id=%s",
+            (target_id,),
+        )
         copied_file = cursor.fetchone()
-        cursor.execute("SELECT storage_path FROM files WHERE id=%s", (file_id,))
-        source_path = cursor.fetchone()[0]
+        cursor.execute("SELECT storage_path,blob_id FROM files WHERE id=%s", (file_id,))
+        source_path, source_blob_id = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) FROM files WHERE blob_id=%s", (source_blob_id,))
+        blob_references = cursor.fetchone()[0]
     content, _ = client.call("GET", f"/api/v1/files/{copied_file[0]}/download", raw=True)
-    check("completed copy retries never create another project and copied bytes remain independent",
+    check("completed copy retries share one immutable blob without duplicating the project",
           again["jobId"] == job["jobId"] and target_count == 1
-          and copied_file[1] == hashlib.sha256(payload).hexdigest()
-          and copied_file[2] != source_path and content == payload)
+          and copied_file[0] != file_id
+          and copied_file[1] == target_id != source["id"]
+          and copied_file[2] == hashlib.sha256(payload).hexdigest()
+          and copied_file[3] == source_path
+          and copied_file[4] == source_blob_id
+          and blob_references >= 2
+          and content == payload)
 
     # Missing keys are now invalid; there is no synchronous legacy fallback.
     client.call("POST", f"/api/v1/projects/{source['id']}/copy", {"name": name + "旧请求"}, expected=400)

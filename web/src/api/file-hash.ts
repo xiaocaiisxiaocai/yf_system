@@ -1,5 +1,69 @@
 import HashWorker from './file-hash.worker?worker'
 import { fileMd5 as fileMd5InThread } from './file-hash-core'
+import { Sha256, sha256Fallback } from './sha256-core'
+
+const FINGERPRINT_SAMPLE_SIZE = 1024 * 1024
+const SHA256_BLOCK_SIZE = 1024 * 1024
+
+function bytesToHex(bytes: ArrayBuffer | Uint8Array): string {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+  return Array.from(view, (value) => value.toString(16).padStart(2, '0')).join('')
+}
+
+function subtleCrypto(): SubtleCrypto | undefined {
+  try { return globalThis.crypto?.subtle }
+  catch { return undefined }
+}
+
+async function sha256Bytes(input: Uint8Array): Promise<string> {
+  const subtle = subtleCrypto()
+  if (subtle) {
+    const webCryptoInput = new Uint8Array(new ArrayBuffer(input.byteLength))
+    webCryptoInput.set(input)
+    try { return bytesToHex(await subtle.digest('SHA-256', webCryptoInput.buffer)) }
+    catch { /* HTTP origins and embedded browsers may expose crypto without usable subtle. */ }
+  }
+  return bytesToHex(sha256Fallback(input))
+}
+
+const yieldToMainThread = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+/** SHA-256 for one upload chunk, including ordinary HTTP origins where SubtleCrypto is unavailable. */
+export async function blobSha256(blob: Blob): Promise<string> {
+  const subtle = subtleCrypto()
+  if (subtle) {
+    try { return bytesToHex(await subtle.digest('SHA-256', await blob.arrayBuffer())) }
+    catch { /* Continue with the portable incremental path. */ }
+  }
+  const hash = new Sha256()
+  for (let offset = 0; offset < blob.size; offset += SHA256_BLOCK_SIZE) {
+    hash.update(new Uint8Array(await blob.slice(offset, offset + SHA256_BLOCK_SIZE).arrayBuffer()))
+    if (offset + SHA256_BLOCK_SIZE < blob.size) await yieldToMainThread()
+  }
+  return bytesToHex(hash.digest())
+}
+
+/**
+ * Fast resumable-upload identity. This deliberately is not the full-file integrity digest:
+ * it binds browser file metadata plus the first and last 1 MiB so upload can start quickly.
+ */
+export async function uploadFingerprint(file: File): Promise<string> {
+  const first = file.slice(0, Math.min(FINGERPRINT_SAMPLE_SIZE, file.size))
+  const lastStart = Math.max(0, file.size - FINGERPRINT_SAMPLE_SIZE)
+  const [firstSha256, lastSha256] = await Promise.all([
+    blobSha256(first),
+    blobSha256(file.slice(lastStart, file.size)),
+  ])
+  const canonical = JSON.stringify([
+    'yf-upload-fingerprint-v2',
+    file.name,
+    file.size,
+    file.lastModified,
+    firstSha256,
+    lastSha256,
+  ])
+  return sha256Bytes(new TextEncoder().encode(canonical))
+}
 
 type WorkerMessage =
   | { type: 'progress'; fraction: number }
@@ -10,7 +74,7 @@ type WorkerMessage =
 const CANCEL_POLL_MS = 100
 
 /**
- * 计算上传内容标识。优先在 Web Worker 中计算，大文件（最大 2 GiB）校验时主线程保持响应；
+ * 计算整文件 MD5。优先在 Web Worker 中增量计算，大文件（最大 2 GiB）校验时主线程保持响应；
  * 环境不支持 Worker 或 Worker 启动失败时退回主线程分段计算，结果完全一致。
  */
 export async function fileMd5(

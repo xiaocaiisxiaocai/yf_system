@@ -8,6 +8,7 @@ public static class IdentityModule
 
     public static IServiceCollection AddIdentityModule(this IServiceCollection services) => services
         .AddSingleton<LoginRateLimiter>()
+        .AddSingleton<IdentityProjectionCache>()
         .AddSingleton<TokenService>()
         .AddSingleton<PermissionService>()
         .AddSingleton<IdentityService>()

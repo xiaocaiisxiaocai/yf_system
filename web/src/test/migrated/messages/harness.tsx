@@ -11,12 +11,9 @@ vi.mock('../../../api/client', async () => {
 })
 
 vi.mock('../../../store/auth', async () => {
-  const state = (await import('./mockState')).messageMocks
+  const state = await import('./mockState')
   return {
-    useAuth: () => ({
-      hasPerm: (permission: string) => state.permissions.has(permission),
-      user: state.user,
-    }),
+    useAuth: () => state.messageAuthState(),
   }
 })
 

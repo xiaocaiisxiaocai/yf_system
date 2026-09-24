@@ -41,6 +41,7 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<MessageImage> MessageImages => Set<MessageImage>();
 
     public DbSet<FileRecord> Files => Set<FileRecord>();
+    public DbSet<FileBlob> FileBlobs => Set<FileBlob>();
     public DbSet<UploadSession> UploadSessions => Set<UploadSession>();
     public DbSet<FileCopyRef> FileCopyRefs => Set<FileCopyRef>();
 

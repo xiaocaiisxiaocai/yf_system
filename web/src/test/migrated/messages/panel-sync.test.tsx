@@ -7,8 +7,8 @@ vi.mock('../../../api/client', async () => {
   return { default: { get: state.get, post: state.post, delete: state.delete } }
 })
 vi.mock('../../../store/auth', async () => {
-  const state = (await import('./mockState')).messageMocks
-  return { useAuth: () => ({ hasPerm: (permission: string) => state.permissions.has(permission), user: state.user }) }
+  const state = await import('./mockState')
+  return { useAuth: () => state.messageAuthState() }
 })
 
 import MessagePanel from '../../../components/MessagePanel'
@@ -232,15 +232,20 @@ describe('留言修订同步与竞争', () => {
     await act(async () => Promise.resolve())
     fireEvent.change(textbox(), { target: { value: '失败时也保留' } })
     view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" revision="r2" />)
-    await act(async () => Promise.resolve())
+    await act(async () => vi.advanceTimersByTimeAsync(0))
     expect(renderedMessageIds(view.container)).toEqual([2, 1])
     expect(textbox()).toHaveValue('失败时也保留')
     expect(screen.getByText('留言同步失败，正在重试')).toBeVisible()
     await act(async () => vi.advanceTimersByTimeAsync(5000))
     expect(syncAttempts).toBe(2)
+    for (let flush = 0; flush < 10 && !screen.queryByText('重试后出现'); flush += 1) {
+      await act(async () => vi.advanceTimersByTimeAsync(1))
+    }
+    expect(screen.getByText('重试后出现')).toBeVisible()
     expect(renderedMessageIds(view.container)).toEqual([3, 2, 1])
     expect(textbox()).toHaveValue('失败时也保留')
     expect(screen.queryByText('留言同步失败，正在重试')).not.toBeInTheDocument()
+    view.unmount()
   })
 
   it('message auto-sync ignores late responses from older revisions and projects', async () => {
@@ -261,7 +266,7 @@ describe('留言修订同步与竞争', () => {
     expect(pending[0].signal.aborted).toBe(true)
     await act(async () => pending[1].request.resolve(messagePage([messageRow(12, { content: '当前 revision' })])))
     await act(async () => pending[0].request.resolve(messagePage([messageRow(11, { content: '旧 revision' })])))
-    expect(renderedMessageIds(view.container)).toEqual([12])
+    await waitFor(() => expect(renderedMessageIds(view.container)).toEqual([12]))
 
     view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" revision="r4" />)
     await waitFor(() => expect(pending).toHaveLength(3))
@@ -286,5 +291,49 @@ describe('留言修订同步与竞争', () => {
     await screen.findByText('留言 2')
     expect(messageMocks.get).toHaveBeenCalledTimes(2)
     expect(messageMocks.get.mock.calls[1][1].quietNetworkError).toBe(true)
+  })
+
+  it('opening a receipt after sync does not replay the sync snapshot over a confirmed send', async () => {
+    setMessagePermissions('message:create')
+    let rows = [messageRow(2), messageRow(1)]
+    const created = messageRow(4, { senderId: 9, senderName: '我', content: '同步后已确认发送' })
+    messageMocks.get.mockImplementation(async (url: string) => {
+      if (url === '/messages/4/reads') {
+        return { data: { readers: [{ userId: 11, realName: '回执读者', userType: 'INTERNAL' }], unread: [] } }
+      }
+      return messagePage(rows)
+    })
+    messageMocks.post.mockResolvedValue({ data: created })
+    const user = userEvent.setup()
+    const view = renderMessagePanel({ revision: 'r1' })
+    await screen.findByText('留言 2')
+    rows = [messageRow(3, { content: '同步到的新留言' }), ...rows]
+    view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" revision="r2" />)
+    await screen.findByText('同步到的新留言')
+
+    fireEvent.change(textbox(), { target: { value: '同步后已确认发送' } })
+    fireEvent.click(screen.getByRole('button', { name: /发送/ }))
+    await screen.findByText('同步后已确认发送')
+    await user.click(screen.getByRole('button', { name: '回执详情' }))
+    expect(await screen.findByText('回执读者')).toBeVisible()
+
+    expect(renderedMessageIds(view.container)).toEqual([4, 3, 2, 1])
+  })
+
+  it('an authorization failure clears cached messages before the refreshed profile arrives', async () => {
+    setMessagePermissions('message:create')
+    messageMocks.get.mockImplementation(async (_url: string, config: { quietNetworkError?: boolean }) => {
+      if (!config.quietNetworkError) return messagePage([messageRow(1, { content: '已失权留言' })])
+      throw { response: { status: 403 } }
+    })
+    const view = renderMessagePanel({ revision: 'r1' })
+    expect(await screen.findByText('已失权留言')).toBeVisible()
+
+    view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" revision="r2" />)
+
+    await waitFor(() => expect(screen.queryByText('已失权留言')).not.toBeInTheDocument())
+    expect(screen.getByRole('heading', { name: '协作留言（0）' })).toBeVisible()
+    expect(screen.queryByPlaceholderText('输入留言，Ctrl+Enter 发送')).not.toBeInTheDocument()
+    expect(screen.queryByText('留言同步失败，正在重试')).not.toBeInTheDocument()
   })
 })

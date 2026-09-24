@@ -86,6 +86,9 @@ public sealed class ProjectCopyTests
                 INSERT INTO messages(id,project_id,sender_id,content,status,created_at)
                 VALUES(8201,7101,1,'不应复制的留言','NORMAL',UTC_TIMESTAMP(3));
                 """, ct);
+            await FileBlobBackfill.RunAsync(database.Database, storage, ct);
+            await FileBlobBackfill.RunAsync(database.Database, storage, ct);
+            Assert.True(File.Exists(sourcePath));
 
             var options = new AppOptions { StorageRoot = storage };
             var publisher = new RecordingPublisher();
@@ -94,6 +97,12 @@ public sealed class ProjectCopyTests
             var service = new ProjectCopyService(database.Database, options, audit, publisher, groupStatus);
             var actor = new CurrentUser(1, "admin", "INTERNAL", null);
             await using var conn = await database.Database.OpenAsync(ct);
+            // Make the database default deliberately non-UTC. The copy path must explicitly use
+            // DbClock's UTC value rather than passing only because this server currently runs UTC.
+            await conn.ExecuteAsync(new CommandDefinition("""
+                ALTER TABLE projects
+                MODIFY COLUMN updated_at DATETIME NOT NULL DEFAULT '2000-01-01 00:00:00'
+                """, cancellationToken: ct));
             var result = Json(await service.CopyAsync(conn, actor, 7101, new() { Name = "复制项目" }, null, ct));
             var targetId = result.RootElement.GetProperty("copy").GetProperty("targetProjectId").GetUInt64();
             var copyId = result.RootElement.GetProperty("copy").GetProperty("copyId").GetUInt64();
@@ -103,12 +112,26 @@ public sealed class ProjectCopyTests
             Assert.True(result.RootElement.GetProperty("project").GetProperty("hasCopyHistory").GetBoolean());
 
             var copied = await conn.QuerySingleAsync<CopiedFile>(new CommandDefinition(
-                "SELECT id AS Id,storage_path AS StoragePath,uploader_id AS UploaderId,direction AS Direction,sha256 AS Sha256 FROM files WHERE project_id=@TargetId",
+                "SELECT id AS Id,blob_id AS BlobId,storage_path AS StoragePath,uploader_id AS UploaderId,direction AS Direction,sha256 AS Sha256 FROM files WHERE project_id=@TargetId",
                 new { TargetId = targetId }, cancellationToken: ct));
             Assert.NotEqual(sourceRelative, copied.StoragePath);
             Assert.Equal(4UL, copied.UploaderId);
             Assert.Equal("S2C", copied.Direction);
             Assert.Equal(sha, copied.Sha256);
+            var sourceBlob = await conn.QuerySingleAsync<CopiedFile>(new CommandDefinition(
+                "SELECT id AS Id,blob_id AS BlobId,storage_path AS StoragePath,sha256 AS Sha256 FROM files WHERE id=8101",
+                cancellationToken: ct));
+            Assert.NotEqual(sourceBlob.Id, copied.Id);
+            Assert.NotNull(sourceBlob.BlobId);
+            Assert.Equal(sourceBlob.BlobId, copied.BlobId);
+            Assert.Equal(sourceBlob.StoragePath, copied.StoragePath);
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM file_blobs WHERE sha256=@Sha", new { Sha = sha }, cancellationToken: ct)));
+            var timestamps = await conn.QuerySingleAsync<ProjectTimestamps>(new CommandDefinition(
+                "SELECT created_at AS CreatedAt,updated_at AS UpdatedAt FROM projects WHERE id=@TargetId",
+                new { TargetId = targetId }, cancellationToken: ct));
+            Assert.Equal(timestamps.CreatedAt, timestamps.UpdatedAt);
+            Assert.NotEqual(new DateTime(2000, 1, 1), timestamps.UpdatedAt);
             Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(storage,
                 copied.StoragePath.Replace('/', Path.DirectorySeparatorChar)), ct));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
@@ -169,6 +192,10 @@ public sealed class ProjectCopyTests
             Assert.False(await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
                 "SELECT EXISTS(SELECT 1 FROM projects WHERE name='复制失败项目')", cancellationToken: ct)));
             Assert.Equal(beforeFiles, Directory.EnumerateFiles(storage, "*", SearchOption.AllDirectories).Count());
+            var conversionError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                FileBlobBackfill.RunAsync(database.Database, storage, ct));
+            Assert.Contains("file 8999", conversionError.Message, StringComparison.Ordinal);
+            Assert.Contains("missing", conversionError.Message, StringComparison.OrdinalIgnoreCase);
 
             await conn.ExecuteAsync(new CommandDefinition(
                 "UPDATE project_dictionaries SET status='DISABLED' WHERE id=6203", cancellationToken: ct));
@@ -186,12 +213,18 @@ public sealed class ProjectCopyTests
             var maintenance = new FilesMaintenanceService(database.Database, options,
                 NullLogger<FilesMaintenanceService>.Instance);
             await maintenance.RunGarbageCollectionAsync(ct);
-            Assert.False(File.Exists(sourcePath));
+            Assert.True(File.Exists(sourcePath));
             Assert.False(File.Exists(copiedPath));
             await conn.OpenAsync(ct);
             Assert.Equal(2, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
                 "SELECT COUNT(*) FROM files WHERE id IN (8101,@CopiedId) AND status='PURGED'",
                 new { CopiedId = copied.Id }, cancellationToken: ct)));
+            Assert.Equal(2, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM files WHERE id IN (8101,@CopiedId) AND blob_id IS NULL",
+                new { CopiedId = copied.Id }, cancellationToken: ct)));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM file_blobs WHERE id=@BlobId",
+                new { BlobId = copied.BlobId }, cancellationToken: ct)));
             await conn.CloseAsync();
             var downloadContext = new DefaultHttpContext();
             downloadContext.Items[typeof(CurrentUser)] = actor;
@@ -238,8 +271,13 @@ public sealed class ProjectCopyTests
         """;
 
     private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
-    private sealed class CopiedFile { public ulong Id { get; init; } public string StoragePath { get; init; } = "";
+    private sealed class CopiedFile { public ulong Id { get; init; } public ulong? BlobId { get; init; } public string StoragePath { get; init; } = "";
         public ulong UploaderId { get; init; } public string Direction { get; init; } = ""; public string Sha256 { get; init; } = ""; }
+    private sealed class ProjectTimestamps
+    {
+        public DateTime CreatedAt { get; init; }
+        public DateTime UpdatedAt { get; init; }
+    }
     private sealed class CopiedProject
     {
         public string MachineModel { get; init; } = "";

@@ -35,6 +35,13 @@ public static class FilesModule
             await service.PutChunkAsync(context, sessionId, index, context.Request.Body, ct);
             return EmptyResponse.Instance;
         }).DisableAntiforgery();
+        api.MapPost("/uploads/{sessionId}/md5", async (
+            HttpContext context, string sessionId, SubmitUploadMd5Request request,
+            UploadService service, CancellationToken ct) =>
+        {
+            await service.SubmitMd5Async(context, sessionId, request, ct);
+            return EmptyResponse.Instance;
+        });
         api.MapPost("/uploads/{sessionId}/merge", async (
             HttpContext context, string sessionId, UploadService service, CancellationToken ct) =>
             await service.MergeAsync(context, sessionId, ct));
@@ -93,7 +100,10 @@ public sealed record InitUploadRequest(
     ulong ProjectId,
     string FileName,
     ulong FileSize,
-    string? FileMd5);
+    long FileLastModified,
+    string FileFingerprint);
+
+public sealed record SubmitUploadMd5Request(string FileMd5);
 
 public sealed record BatchDownloadRequest(IReadOnlyList<ulong> Ids);
 public sealed record DownloadGrantResponse(string Url, int ExpiresInSeconds);
@@ -123,6 +133,8 @@ internal sealed class UploadSessionRow
     public ulong UploaderId { get; set; }
     public string FileName { get; set; } = "";
     public ulong FileSize { get; set; }
+    public long FileLastModified { get; set; }
+    public string FileFingerprint { get; set; } = "";
     public string? FileMd5 { get; set; }
     public uint ChunkSize { get; set; }
     public uint TotalChunks { get; set; }

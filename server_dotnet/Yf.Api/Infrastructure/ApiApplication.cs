@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -83,17 +82,12 @@ public static class ApiApplication
             return null;
         }
         await EfDatabaseLifecycle.PrepareStartupAsync(options);
+        await FileBlobBackfill.RunAsync(new AppDb(options), options.StorageRoot);
         builder.WebHost.ConfigureKestrel(k => { k.AddServerHeader = false; k.Limits.MaxRequestBodySize = 64L * 1024 * 1024; });
         builder.Services.Configure<IISServerOptions>(o => o.MaxRequestBodySize = 64L * 1024 * 1024);
         builder.Services.Configure<RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton(options).AddSingleton<AppDb>().AddSingleton<AccessService>().AddSingleton<AuditService>();
-        builder.Services.AddResponseCompression(compression =>
-        {
-            compression.EnableForHttps = true;
-            compression.MimeTypes = ResponseCompressionDefaults.MimeTypes
-                .Concat(["application/javascript", "text/css", "application/wasm"]);
-        });
         var efConnectionString = AppDb.BuildConnectionString(options);
         builder.Services.AddPooledDbContextFactory<YfDbContext>(db => db.UseMySql(
             efConnectionString, EfDb.ServerVersion));
@@ -132,6 +126,9 @@ public static class ApiApplication
             }
             await next(context);
         });
+        // Resolve default documents and immutable public files before routing. If routing runs first,
+        // the SPA fallback captures "/" before DefaultFiles can rewrite it to "/index.html".
+        UsePublicStaticFilesBeforeRouting(app);
         app.UseCors();
         app.UseMiddleware<IdentityMiddleware>();
         app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime();
@@ -141,10 +138,15 @@ public static class ApiApplication
                 ? Results.Json(new { status = "ok", db = "up" })
                 : Results.Json(new { status = "degraded", db = "down" }, statusCode: 503));
         app.Map("/api/{**path}", () => Results.Json(new ApiErrorResponse(40401, "接口不存在"), statusCode: 404));
-        // Compress only the SPA/static branch. API responses deliberately bypass compression.
-        app.UseWhen(context => !context.Request.Path.StartsWithSegments("/api"), branch =>
-            branch.UseResponseCompression());
+        if (File.Exists(Path.Combine(app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot"), "index.html")))
+            app.MapFallbackToFile("index.html");
+        return app;
+    }
+
+    internal static void UsePublicStaticFilesBeforeRouting(IApplicationBuilder app)
+    {
         app.UseDefaultFiles();
+        app.UsePrecompressedStaticFiles();
         app.UseStaticFiles(new StaticFileOptions
         {
             // Vite emits content-hashed file names under /assets, so those never change in place.
@@ -153,9 +155,7 @@ public static class ApiApplication
                 : context.Context.Request.Path.StartsWithSegments("/assets") ? "public,max-age=31536000,immutable"
                 : "public,max-age=3600"
         });
-        if (File.Exists(Path.Combine(app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot"), "index.html")))
-            app.MapFallbackToFile("index.html");
-        return app;
+        app.UseRouting();
     }
 
     private static WebApplicationBuilder CreateConfiguredBuilder(string[] args)

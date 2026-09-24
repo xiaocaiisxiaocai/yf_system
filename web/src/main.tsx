@@ -6,6 +6,11 @@ import { IconClose } from '@arco-design/web-react/icon'
 import './styles/arco-components'
 import './index.css'
 import App from './App'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { bindQuerySessionLifecycle, queryClient } from './api/queryClient'
+
+const unbindQuerySession = bindQuerySessionLifecycle()
+if (import.meta.hot) import.meta.hot.dispose(unbindQuerySession)
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -29,7 +34,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       },
     }}>
       <BrowserRouter>
-        <App />
+        <QueryClientProvider client={queryClient}>
+          <App />
+        </QueryClientProvider>
       </BrowserRouter>
     </ConfigProvider>
   </React.StrictMode>

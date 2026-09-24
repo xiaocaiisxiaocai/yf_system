@@ -52,6 +52,48 @@ def validate_net8_runtime_config(path):
     return versions
 
 
+def validate_precompressed_assets(package, actual):
+    manifest_path = package / "precompressed-assets.json"
+    public_root = package / "wwwroot"
+    if not manifest_path.is_file() or not public_root.is_dir():
+        raise RuntimeError("Precompressed asset manifest or public web root is missing")
+    if (public_root / ".precompressed-assets.json").exists():
+        raise RuntimeError("Precompression build metadata must not be publicly served")
+    private_public_names = {"web.config", ".env", "secrets.json"}
+    for path in public_root.rglob("*"):
+        if not path.is_file():
+            continue
+        name = path.name.lower()
+        if (name in private_public_names or name.startswith("appsettings")
+                or name.endswith((".config", ".cs", ".deps.json", ".dll", ".pdb", ".pfx", ".p12", ".key",
+                                  ".runtimeconfig.json"))):
+            raise RuntimeError("Private configuration or executable file is exposed below wwwroot")
+    verifier = source / "web/scripts/precompress-assets.mjs"
+    run = subprocess.run(
+        ["node", str(verifier), "--verify", str(public_root), str(manifest_path)],
+        capture_output=True, text=True, errors="replace", timeout=180,
+    )
+    if run.returncode:
+        detail = (run.stderr or run.stdout).strip().splitlines()
+        raise RuntimeError("Precompressed asset verification failed: " + (detail[-1] if detail else "node verifier failed"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    generated = []
+    for asset in manifest.get("assets", []):
+        source_path = "wwwroot/" + asset["path"]
+        if source_path not in actual:
+            raise RuntimeError("Precompression source is outside the packaged public payload")
+        for encoding in ("br", "gzip"):
+            representation = asset.get("encodings", {}).get(encoding, {})
+            if representation.get("status") == "generated":
+                packaged_path = "wwwroot/" + representation["path"]
+                if packaged_path not in actual:
+                    raise RuntimeError("Precompressed representation is missing from packaged payload")
+                generated.append(packaged_path)
+    return {"manifest": "precompressed-assets.json", "assets": len(manifest.get("assets", [])),
+            "representations": len(generated), "decompressionByteExact": True,
+            "publicBuildMetadataExcluded": True, "privatePublicFilesExcluded": True}
+
+
 with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root) as temp:
     extraction = Path(temp).resolve()
     if directory_input:
@@ -89,7 +131,7 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
         for name in sorted(actual)
     }
     release_manifest = None if directory_input else validate_release_sidecars(archive, manifest, actual_files)
-    required = {"Yf.Api.dll", "Yf.Api.runtimeconfig.json", "web.config", "wwwroot/index.html",
+    required = {"Yf.Api.dll", "Yf.Api.runtimeconfig.json", "web.config", "wwwroot/index.html", "precompressed-assets.json",
                 "install-iis.ps1", "maintain-iis.ps1", "maintenance-common.ps1", "README.md"}
     if not required.issubset(actual):
         raise RuntimeError("Required application or maintenance payload is missing")
@@ -102,6 +144,7 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
             or build.get("selfContained") is not False or not str(build.get("sdkVersion", "")).startswith("8.")):
         raise RuntimeError("Release manifest does not describe a .NET 8 win-x64 framework-dependent build")
     runtime_frameworks = validate_net8_runtime_config(package / "Yf.Api.runtimeconfig.json")
+    precompressed_assets = validate_precompressed_assets(package, actual)
     if any("testhost" in Path(name).stem.lower() and Path(name).suffix.lower() in (".dll", ".exe") for name in actual):
         raise RuntimeError("A test host was included in the production payload")
     config_names = {name for name in actual if Path(name).name.lower().startswith("appsettings") and name.lower().endswith(".json")}
@@ -160,6 +203,7 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
               "zipPathsCrcAndHashes": "not-applicable" if directory_input else "passed",
               "releaseSidecars": "not-applicable" if directory_input else "passed",
               "runtimeConfig": {"tfm": "net8.0", "frameworks": runtime_frameworks},
+              "precompressedAssets": precompressed_assets,
               "releaseManifest": release_manifest, "bundledConfigurationValidated": True, "testHostExcludedFromPayload": True,
               "publishedFirstStart": first_start,
               "publishedUnitHttp": http_report, "targetIisTested": False, "realSmtpTested": False}

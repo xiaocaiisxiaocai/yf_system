@@ -151,11 +151,14 @@ public sealed class LoginThrottleTests
         try
         {
             // A waiting management lock proves login has already loaded and hashed
-            // its candidate. Self-service password change only needs the user row.
+            // its candidate. Apply the concurrent credential change while this test owns
+            // that same gate, preserving the production gate -> user -> token lock order.
             await scope.WaitForBlockedLoginAsync(ct);
             const string replacement = "Concurrent#2026";
-            await scope.Service().ChangePasswordAsync(
-                new CurrentUser(1, "target", "INTERNAL", null), new(scope.Password, replacement), ct);
+            await gate.ExecuteAsync(new CommandDefinition("""
+                UPDATE users SET password_hash=@hash,must_change_password=0 WHERE id=1;
+                UPDATE refresh_tokens SET revoked=1 WHERE user_id=1 AND revoked=0;
+                """, new { hash = await PasswordService.HashAsync(replacement, ct) }, transaction, cancellationToken: ct));
             await transaction.CommitAsync(ct);
             released = true;
             await oldLogin;
@@ -172,6 +175,35 @@ public sealed class LoginThrottleTests
                 try { await oldLogin; } catch { }
             }
         }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task LogoutWaitsForStartedBusinessTransactionAndLaterWritesRejectRevokedSession()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await LoginDatabase.CreateAsync(ct);
+        var login = await scope.LoginWithRefreshAsync("target", scope.Password, "192.0.2.220", ct);
+        var state = await scope.RefreshStateAsync(login.Refresh, ct);
+        var actor = new CurrentUser(1, "target", UserTypes.Internal, null, state.SessionId);
+
+        await using var business = await scope.OpenAsync(ct);
+        await using var businessTx = await AppDb.BeginTransactionAsync(business, ct);
+        var checkedActor = await AccessService.LockActorAsync(business, businessTx, actor, ct);
+        Assert.Equal(state.SessionId, checkedActor.SessionId);
+
+        var logout = scope.Service().LogoutAsync(login.Refresh, null, "192.0.2.221", ct);
+        await scope.WaitForBlockedManagementAsync(ct);
+        Assert.False(logout.IsCompleted);
+
+        await businessTx.CommitAsync(ct);
+        await logout;
+
+        await using var after = await scope.OpenAsync(ct);
+        await using var afterTx = await AppDb.BeginTransactionAsync(after, ct);
+        var denied = await Assert.ThrowsAsync<ApiException>(() =>
+            AccessService.LockActorAsync(after, afterTx, actor, ct));
+        Assert.Equal(40301, denied.Code);
+        await afterTx.RollbackAsync(ct);
     }
 
     [Fact(Timeout = 120_000)]
@@ -259,6 +291,22 @@ public sealed class LoginThrottleTests
                       AND p.INFO LIKE '%security.management_lock%LOCK IN SHARE MODE%'
                     """, new { name }, cancellationToken: deadline.Token));
                 if (blocked == 1) return;
+                await Task.Delay(20, deadline.Token);
+            }
+        }
+
+        public async Task WaitForBlockedManagementAsync(CancellationToken ct)
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(15));
+            while (true)
+            {
+                var blocked = await admin.ExecuteScalarAsync<int>(new CommandDefinition("""
+                    SELECT COUNT(*) FROM information_schema.processlist p
+                    WHERE p.DB=@name AND p.COMMAND='Query'
+                      AND p.INFO LIKE '%security.management_lock%FOR UPDATE%'
+                    """, new { name }, cancellationToken: deadline.Token));
+                if (blocked >= 1) return;
                 await Task.Delay(20, deadline.Token);
             }
         }

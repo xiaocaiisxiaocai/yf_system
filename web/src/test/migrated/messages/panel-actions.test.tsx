@@ -8,8 +8,8 @@ vi.mock('../../../api/client', async () => {
 })
 
 vi.mock('../../../store/auth', async () => {
-  const state = (await import('./mockState')).messageMocks
-  return { useAuth: () => ({ hasPerm: (permission: string) => state.permissions.has(permission), user: state.user }) }
+  const state = await import('./mockState')
+  return { useAuth: () => state.messageAuthState() }
 })
 
 import MessagePanel from '../../../components/MessagePanel'
@@ -196,13 +196,13 @@ describe('留言撰写、发送与分页', () => {
         )
       })
       const user = userEvent.setup()
-      const view = renderMessagePanel()
+      const view = renderMessagePanel({ projectId: total })
       await screen.findByText('留言 1')
       if (total === 20) {
         expect(loadMoreButton()).not.toBeInTheDocument()
       } else {
         await user.click(loadMoreButton()!)
-        expect(loadMoreButton()).not.toBeInTheDocument()
+        await waitFor(() => expect(loadMoreButton()).not.toBeInTheDocument())
       }
       view.unmount()
       messageMocks.get.mockReset()

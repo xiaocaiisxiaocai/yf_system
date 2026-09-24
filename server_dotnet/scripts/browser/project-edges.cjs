@@ -1,6 +1,7 @@
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const { assert, OUT, s, f, record, login, api, projectMetadata, action, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
+const { uploadFixture } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/upload-contract.cjs');
 
 async function loadProjectDefaults(context, token, supplierId) {
   return {
@@ -22,18 +23,6 @@ async function createGroup(context, token, supplierId, name, defaults) {
   const detail = await (await api(context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
   assert.equal(detail.projects.length, 1, 'group fixture must contain one subproject');
   return { groupId: group.id, groupName: group.name, ...detail.projects[0] };
-}
-
-async function uploadFixture(context, token, projectId, name, bytes) {
-  const fileMd5 = crypto.createHash('md5').update(bytes).digest('hex');
-  const init = await (await api(context, 'POST', '/uploads/init', {
-    projectId, fileName: name, fileSize: bytes.length, fileMd5,
-  }, token)).json();
-  for (let index = 0; index < init.totalChunks; index += 1) {
-    await api(context, 'PUT', '/uploads/' + init.sessionId + '/chunks/' + index,
-      bytes.subarray(index * init.chunkSize, Math.min((index + 1) * init.chunkSize, bytes.length)), token);
-  }
-  return (await api(context, 'POST', '/uploads/' + init.sessionId + '/merge', undefined, token)).json();
 }
 
 (async () => {

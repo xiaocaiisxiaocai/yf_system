@@ -37,6 +37,7 @@ from test_collaboration_contracts import run_collaboration_checks
 from test_business_acceptance import _create_project_group, run_business_acceptance
 from test_workflow_acceptance import run_workflow_acceptance
 from test_manual_supplier_roles import run_manual_supplier_role_checks
+from upload_contract import init_upload, put_chunk, submit_md5
 
 ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS_ROOT = (ROOT / ".artifacts").resolve()
@@ -44,8 +45,8 @@ TEST_ROOT = ARTIFACTS_ROOT / "tests"
 TEST_TEMP_ROOT = TEST_ROOT / "tmp"
 TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
 CONFIGURATION = os.environ.get("YF_TEST_CONFIGURATION", "Debug").strip()
-if CONFIGURATION not in {"Debug", "Release", "Hardening", "Migration"}:
-    raise SystemExit("YF_TEST_CONFIGURATION must be exactly Debug, Release, Hardening, or Migration")
+if CONFIGURATION not in {"Debug", "Release", "Hardening", "Migration", "Redesign"}:
+    raise SystemExit("YF_TEST_CONFIGURATION must be exactly Debug, Release, Hardening, Migration, or Redesign")
 PUBLISHED = os.environ.get("YF_TEST_API_DIR")
 API = Path(PUBLISHED).resolve() if PUBLISHED else ROOT / "server_dotnet/Yf.Api"
 DLL = API / "Yf.Api.dll" if PUBLISHED else API / f"bin/{CONFIGURATION}/net8.0/Yf.Api.dll"
@@ -440,9 +441,17 @@ try:
             check("authenticated authentication API has no CAPTCHA endpoint", missing_captcha["code"] == 40401)
             profile = client.call("GET", "/api/v1/auth/profile")
             check("profile has frontend permission/menu contract", bool(profile["permissions"]) and bool(profile["menus"]))
+            _, cors_headers = client.call("OPTIONS", "/api/v1/projects", expected=204,
+                headers={"Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "authorization"}, raw=True)
+            check("routed API preflight keeps the configured credentialed origin",
+                  cors_headers.get("Access-Control-Allow-Origin") == client.base
+                  and cors_headers.get("Access-Control-Allow-Credentials") == "true")
+            negotiation = client.call("POST", "/api/v1/collaboration/live/negotiate?negotiateVersion=1")
+            check("SignalR negotiation remains authenticated after static pipeline routing",
+                  any(item["transport"] == "WebSockets" for item in negotiation["availableTransports"]))
             if not FILES_ONLY:
                 run_identity_checks(client, Client, conn, check)
-                run_project_remediation_checks(client, Client, conn, check)
+                run_project_remediation_checks(client, Client, conn, check, storage)
                 run_collaboration_checks(client, Client, conn, check)
                 for path in ("/dashboard/summary", "/dashboard/pending-projects", "/departments", "/permissions", "/supplier-options", "/robot-parts?enabledOnly=true", "/admin/users", "/admin/roles", "/admin/suppliers", "/admin/user-role-options", "/admin/system/configs", "/admin/system/mail-status", "/admin/audit-logs"):
                     client.call("GET", "/api/v1" + path)
@@ -462,18 +471,24 @@ try:
             client.call("PUT", f"/api/v1/projects/{pid}/status", {"status": "IN_PROGRESS"})
             check("supplier/project creation and project start", True)
             pdf = b"%PDF-1.4\n" + b"test data\n" * 40000 + b"%%EOF\n"
-            upload = client.call("POST", "/api/v1/uploads/init", {"projectId": pid, "fileName": "regression.pdf", "fileSize": len(pdf), "fileMd5": hashlib.md5(pdf).hexdigest()})
+            upload = init_upload(client, pid, "regression.pdf", pdf)
             session = upload["sessionId"]
             size = upload["chunkSize"]
             check("upload uses the updated chunk-size setting", size == 262144)
             for index in range(upload["totalChunks"]):
-                client.call("PUT", f"/api/v1/uploads/{session}/chunks/{index}", pdf[index * size:(index + 1) * size], headers={"Content-Type": "application/octet-stream"})
+                put_chunk(client, session, index, pdf[index * size:(index + 1) * size])
             resumed = client.call("GET", f"/api/v1/uploads/{session}")
-            check("chunk upload and resume state", len(resumed["uploadedChunks"]) == upload["totalChunks"])
+            check(
+                "chunk upload and resume state",
+                len(resumed["uploadedChunks"]) == upload["totalChunks"]
+                and all(
+                    item["index"] == index and len(item["sha256"]) == 64
+                    for index, item in enumerate(resumed["uploadedChunks"])
+                ),
+            )
+            submit_md5(client, session, pdf)
             merged = client.call("POST", f"/api/v1/uploads/{session}/merge")
-            fid = merged.get("id", merged.get("fileId"))
-            if fid is None:
-                raise AssertionError("merge response missing file identifier")
+            fid = merged["id"]
             downloaded, headers = client.call("GET", f"/api/v1/files/{fid}/download", raw=True)
             check("download bytes and SHA256", hashlib.sha256(downloaded).digest() == hashlib.sha256(pdf).digest())
             partial, headers = client.call("GET", f"/api/v1/files/{fid}/content", expected=206, headers={"Range": "bytes=0-7"}, raw=True)
@@ -487,14 +502,15 @@ try:
                 raise FileContractsComplete()
             run_background_copy_checks(client, conn, check, sid)
             recovery_bytes = b"%PDF-1.4\nowned interrupted merge regression\n%%EOF\n"
-            recovery = client.call("POST", "/api/v1/uploads/init", {"projectId": pid, "fileName": "recovery.pdf", "fileSize": len(recovery_bytes)})
+            recovery = init_upload(client, pid, "recovery.pdf", recovery_bytes)
             recovery_id = recovery["sessionId"]
-            client.call("PUT", f"/api/v1/uploads/{recovery_id}/chunks/0", recovery_bytes, headers={"Content-Type": "application/octet-stream"})
+            put_chunk(client, recovery_id, 0, recovery_bytes)
+            submit_md5(client, recovery_id, recovery_bytes)
             with conn.cursor() as cursor:
                 cursor.execute("UPDATE upload_sessions SET status='MERGING' WHERE id=%s", (recovery_id,))
             recovered = client.call("POST", f"/api/v1/uploads/{recovery_id}/merge")
             recovered_data, _ = client.call("GET", f"/api/v1/files/{recovered['id']}/download", raw=True)
-            check("abandoned merge without MD5 completes on retry with exact bytes", recovered_data == recovery_bytes)
+            check("abandoned merge with deferred MD5 completes on retry with exact bytes", recovered_data == recovery_bytes)
             message = client.call("POST", f"/api/v1/projects/{pid}/messages", {"content": "隔离接口测试留言"})
             mid = message["id"]
             client.call("POST", "/api/v1/messages/read", {"ids": [mid]})

@@ -6,21 +6,9 @@ const crypto = require('node:crypto');
 const {
   assert, OUT, s, f, record, login, api, projectMetadata, action, track,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
+const { uploadFixture: uploadBytes } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/upload-contract.cjs');
 
 const apiPath = value => new URL(value.url()).pathname;
-
-async function uploadBytes(context, token, projectId, name, bytes) {
-  const fileMd5 = crypto.createHash('md5').update(bytes).digest('hex');
-  const initialized = await (await api(context, 'POST', '/uploads/init', {
-    projectId, fileName: name, fileSize: bytes.length, fileMd5,
-  }, token)).json();
-  for (let index = 0; index < initialized.totalChunks; index += 1) {
-    const start = index * initialized.chunkSize;
-    const chunk = bytes.subarray(start, Math.min(start + initialized.chunkSize, bytes.length));
-    await api(context, 'PUT', '/uploads/' + initialized.sessionId + '/chunks/' + index, chunk, token);
-  }
-  return (await api(context, 'POST', '/uploads/' + initialized.sessionId + '/merge', undefined, token)).json();
-}
 
 async function loadProjectDefaults(context, token, supplierId) {
   return {

@@ -2,6 +2,7 @@ using Dapper;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 using MySqlConnector;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Files;
@@ -65,7 +66,7 @@ public sealed class FilesRecoveryTests
         await scope.InsertSessionAsync(sessionId, "UPLOADING", expired: false);
         Assert.False(await scope.IsExpiredByDatabaseAsync(sessionId));
         var body = new BlockingOneByteStream();
-        var context = scope.Context(contentLength: 1);
+        var context = scope.ChunkContext([1]);
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var put = scope.Upload.PutChunkAsync(context, sessionId, 0, body, operation.Token);
         var released = false;
@@ -110,14 +111,18 @@ public sealed class FilesRecoveryTests
 
         Assert.Equal([1], await File.ReadAllBytesAsync(
             FileStorage.ChunkPath(scope.StorageRoot, sessionId, 0), ct));
+        var uploaded = Assert.Single((await scope.Upload.GetAsync(
+            scope.Context(), sessionId, ct)).UploadedChunks);
+        Assert.Equal(0U, uploaded.Index);
+        Assert.Equal(Sha256Hex([1]), uploaded.Sha256);
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task ConcurrentIdenticalMd5InitializationReturnsOneSession()
+    public async Task ConcurrentIdenticalFingerprintInitializationReturnsOneSession()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
-        var request = new InitUploadRequest(1, "same.bin", 1, new string('a', 32));
+        var request = UploadRequest("same.bin", [1]);
 
         var calls = await Task.WhenAll(
             scope.Upload.InitAsync(scope.Context(), request, ct),
@@ -126,16 +131,130 @@ public sealed class FilesRecoveryTests
 
         Assert.NotNull(ids[0]);
         Assert.Equal(ids[0], ids[1]);
+        Assert.Single(calls, response => response.Resumed is null);
+        Assert.Single(calls, response => response.Resumed is true);
+        Assert.All(calls, response => Assert.Empty(response.UploadedChunks));
         await using var connection = await scope.Database.OpenAsync(ct);
         Assert.Equal(1, await connection.ExecuteScalarAsync<int>(new CommandDefinition("""
             SELECT COUNT(*) FROM upload_sessions
             WHERE project_id=1 AND uploader_id=1 AND file_name='same.bin'
-              AND file_size=1 AND file_md5=@Md5
-            """, new { Md5 = new string('a', 32) }, cancellationToken: ct)));
+              AND file_size=1 AND file_last_modified=@FileLastModified
+              AND file_fingerprint=@FileFingerprint AND file_md5 IS NULL
+            """, new { request.FileLastModified, request.FileFingerprint }, cancellationToken: ct)));
         var timing = await scope.TimingAsync(ids[0]!);
         Assert.True(timing.CreatedEqualsUpdated);
         Assert.True(timing.HasTwentyFourHourLifetime);
         Assert.True(timing.IsActive);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ResumeReportsVerifiedChunkDigestsAndRejectsCorruptReplacement()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var original = new byte[] { 1 };
+        var replacement = new byte[] { 2 };
+        var request = UploadRequest("resume.bin", original);
+        var initialized = await scope.Upload.InitAsync(scope.Context(), request, ct);
+
+        using (var body = new MemoryStream(original))
+            await scope.Upload.PutChunkAsync(scope.ChunkContext(original), initialized.SessionId, 0, body, ct);
+
+        using (var body = new MemoryStream(replacement))
+        {
+            var mismatched = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.PutChunkAsync(
+                scope.ChunkContext(replacement, Sha256Hex(original)), initialized.SessionId, 0, body, ct));
+            Assert.Equal(400, mismatched.Status);
+        }
+        Assert.Equal(original, await File.ReadAllBytesAsync(
+            FileStorage.ChunkPath(scope.StorageRoot, initialized.SessionId, 0), ct));
+
+        var resumed = await scope.Upload.InitAsync(scope.Context(), request, ct);
+        Assert.Equal(initialized.SessionId, resumed.SessionId);
+        Assert.True(resumed.Resumed);
+        var originalDigest = Assert.Single(resumed.UploadedChunks);
+        Assert.Equal(0U, originalDigest.Index);
+        Assert.Equal(Sha256Hex(original), originalDigest.Sha256);
+
+        using (var body = new MemoryStream(replacement))
+            await scope.Upload.PutChunkAsync(scope.ChunkContext(replacement), initialized.SessionId, 0, body, ct);
+        var replacedDigest = Assert.Single((await scope.Upload.GetAsync(
+            scope.Context(), initialized.SessionId, ct)).UploadedChunks);
+        Assert.Equal(Sha256Hex(replacement), replacedDigest.Sha256);
+        Assert.Equal(replacement, await File.ReadAllBytesAsync(
+            FileStorage.ChunkPath(scope.StorageRoot, initialized.SessionId, 0), ct));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task SameLengthChunkTamperingIsExcludedFromGetAndResume()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var original = new byte[] { 1, 2, 3, 4 };
+        var tampered = new byte[] { 4, 3, 2, 1 };
+        var request = UploadRequest("tampered.bin", original);
+        var initialized = await scope.Upload.InitAsync(scope.Context(), request, ct);
+        using (var body = new MemoryStream(original))
+            await scope.Upload.PutChunkAsync(scope.ChunkContext(original), initialized.SessionId, 0, body, ct);
+
+        var chunkPath = FileStorage.ChunkPath(scope.StorageRoot, initialized.SessionId, 0);
+        var originalSidecar = await File.ReadAllTextAsync(chunkPath + ".sha256", ct);
+        await File.WriteAllBytesAsync(chunkPath, tampered, ct);
+
+        Assert.Equal(Sha256Hex(original), originalSidecar.Trim());
+        Assert.Empty((await scope.Upload.GetAsync(
+            scope.Context(), initialized.SessionId, ct)).UploadedChunks);
+        var resumed = await scope.Upload.InitAsync(scope.Context(), request, ct);
+        Assert.Equal(initialized.SessionId, resumed.SessionId);
+        Assert.True(resumed.Resumed);
+        Assert.Empty(resumed.UploadedChunks);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ConcurrentOverlappingChunkReplacementsLeaveOneConsistentPayloadAndDigest()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var firstContent = Enumerable.Repeat((byte)0x11, 4096).ToArray();
+        var secondContent = Enumerable.Repeat((byte)0x22, 4096).ToArray();
+        var request = UploadRequest("overlap.bin", firstContent);
+        var initialized = await scope.Upload.InitAsync(scope.Context(), request, ct);
+        await using var firstBody = new GatedPayloadStream(firstContent);
+        await using var secondBody = new GatedPayloadStream(secondContent);
+        var firstPut = scope.Upload.PutChunkAsync(
+            scope.ChunkContext(firstContent), initialized.SessionId, 0, firstBody, ct);
+        var secondPut = scope.Upload.PutChunkAsync(
+            scope.ChunkContext(secondContent), initialized.SessionId, 0, secondBody, ct);
+        var puts = Task.WhenAll(firstPut, secondPut);
+
+        try
+        {
+            var bothEntered = Task.WhenAll(
+                firstBody.WaitUntilReadAsync(ct), secondBody.WaitUntilReadAsync(ct));
+            var first = await Task.WhenAny(bothEntered, puts).WaitAsync(TimeSpan.FromSeconds(5), ct);
+            if (first == puts) await puts;
+            await bothEntered;
+        }
+        finally
+        {
+            firstBody.Release();
+            secondBody.Release();
+        }
+        await puts.WaitAsync(TimeSpan.FromSeconds(10), ct);
+
+        var chunkPath = FileStorage.ChunkPath(scope.StorageRoot, initialized.SessionId, 0);
+        var actual = await File.ReadAllBytesAsync(chunkPath, ct);
+        Assert.True(actual.SequenceEqual(firstContent) || actual.SequenceEqual(secondContent));
+        var actualSha256 = Sha256Hex(actual);
+        Assert.Equal(actualSha256, (await File.ReadAllTextAsync(chunkPath + ".sha256", ct)).Trim());
+        var uploaded = Assert.Single((await scope.Upload.GetAsync(
+            scope.Context(), initialized.SessionId, ct)).UploadedChunks);
+        Assert.Equal(0U, uploaded.Index);
+        Assert.Equal(actualSha256, uploaded.Sha256);
+
+        await scope.Upload.SubmitMd5Async(scope.Context(), initialized.SessionId,
+            new SubmitUploadMd5Request(Md5Hex(actual)), ct);
+        Assert.Equal(Md5Hex(actual), await scope.FileMd5Async(initialized.SessionId));
     }
 
     [Fact(Timeout = 30_000)]
@@ -169,11 +288,11 @@ public sealed class FilesRecoveryTests
         Assert.False(await scope.IsExpiredByDatabaseAsync(activeId));
         Assert.True(await scope.IsExpiredByDatabaseAsync(expiredId));
         using var activeBody = new MemoryStream([1]);
-        await scope.Upload.PutChunkAsync(scope.Context(contentLength: 1), activeId, 0,
+        await scope.Upload.PutChunkAsync(scope.ChunkContext([1]), activeId, 0,
             activeBody, ct);
         using var expiredBody = new MemoryStream([1]);
         var expired = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Upload.PutChunkAsync(scope.Context(contentLength: 1), expiredId, 0,
+            scope.Upload.PutChunkAsync(scope.ChunkContext([1]), expiredId, 0,
                 expiredBody, ct));
         Assert.Equal(409, expired.Status);
         Assert.True(File.Exists(FileStorage.ChunkPath(scope.StorageRoot, activeId, 0)));
@@ -188,9 +307,10 @@ public sealed class FilesRecoveryTests
         var activeId = Guid.NewGuid().ToString("D");
         var expiredId = Guid.NewGuid().ToString("D");
         var expiredMergingId = Guid.NewGuid().ToString("D");
-        await scope.InsertSessionAsync(activeId, "UPLOADING", expired: false);
-        await scope.InsertSessionAsync(expiredId, "UPLOADING", expired: true);
-        await scope.InsertSessionAsync(expiredMergingId, "MERGING", expired: true);
+        var fileMd5 = Md5Hex([1]);
+        await scope.InsertSessionAsync(activeId, "UPLOADING", expired: false, fileMd5);
+        await scope.InsertSessionAsync(expiredId, "UPLOADING", expired: true, fileMd5);
+        await scope.InsertSessionAsync(expiredMergingId, "MERGING", expired: true, fileMd5);
 
         Assert.False(await scope.IsExpiredByDatabaseAsync(activeId));
         Assert.True(await scope.IsExpiredByDatabaseAsync(expiredId));
@@ -210,7 +330,7 @@ public sealed class FilesRecoveryTests
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task Md5LessAbandonedMergeCanBeRetriedAndThenAborted()
+    public async Task Md5LessAbandonedMergeRequiresDigestThenCanBeAborted()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
@@ -220,7 +340,7 @@ public sealed class FilesRecoveryTests
 
         var incomplete = await Assert.ThrowsAsync<ApiException>(() =>
             scope.Upload.MergeAsync(scope.Context(), sessionId, ct));
-        Assert.Equal(400, incomplete.Status);
+        Assert.Equal(409, incomplete.Status);
         Assert.Equal("MERGING", await scope.StatusAsync(sessionId));
 
         await scope.Upload.AbortAsync(scope.Context(), sessionId, ct);
@@ -229,7 +349,29 @@ public sealed class FilesRecoveryTests
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task ExpiredAbandonedMergeRemovesOnlyUnreferencedPendingFinals()
+    public async Task MergeRejectsSubmittedMd5ThatDoesNotMatchUploadedContent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var payload = new byte[] { 1 };
+        var initialized = await scope.Upload.InitAsync(
+            scope.Context(), UploadRequest("wrong-md5.bin", payload), ct);
+        using (var body = new MemoryStream(payload))
+            await scope.Upload.PutChunkAsync(scope.ChunkContext(payload), initialized.SessionId, 0, body, ct);
+        await scope.Upload.SubmitMd5Async(scope.Context(), initialized.SessionId,
+            new SubmitUploadMd5Request(new string('0', 32)), ct);
+
+        var mismatch = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Upload.MergeAsync(scope.Context(), initialized.SessionId, ct));
+
+        Assert.Equal(400, mismatch.Status);
+        Assert.Equal("UPLOADING", await scope.StatusAsync(initialized.SessionId));
+        Assert.Equal(payload, await File.ReadAllBytesAsync(
+            FileStorage.ChunkPath(scope.StorageRoot, initialized.SessionId, 0), ct));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ExpiredAbandonedMergeRemovesOnlyItsOwnedSessionDirectory()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
@@ -239,35 +381,19 @@ public sealed class FilesRecoveryTests
 
         var sessionDirectory = FileStorage.SessionDirectory(scope.StorageRoot, sessionId);
         Directory.CreateDirectory(sessionDirectory);
-        var referenced = scope.CreateFinal($"{Guid.NewGuid():D}.bin");
-        var orphan = scope.CreateFinal($"{Guid.NewGuid():D}.bin");
-        var unrelated = scope.CreateFinal($"{Guid.NewGuid():D}.bin");
-        var outside = Path.Combine(Path.GetDirectoryName(scope.StorageRoot)!, "outside.bin");
-        await File.WriteAllBytesAsync(outside, [2], ct);
-        await scope.ReferenceFileAsync(referenced);
-        await WriteMarkerAsync(sessionDirectory, referenced);
-        await WriteMarkerAsync(sessionDirectory, orphan);
-        await File.WriteAllBytesAsync(
-            Path.Combine(sessionDirectory, UploadService.PendingFinalMarkerPrefix + Guid.NewGuid().ToString("D")),
-            [], ct);
-        await File.WriteAllTextAsync(
-            Path.Combine(sessionDirectory, UploadService.PendingFinalMarkerPrefix + Guid.NewGuid().ToString("D")),
-            "files/2026/09", ct);
-        await File.WriteAllTextAsync(
-            Path.Combine(sessionDirectory, UploadService.PendingFinalMarkerPrefix + Guid.NewGuid().ToString("D")),
-            "../outside.bin", ct);
-        await File.WriteAllTextAsync(
-            Path.Combine(sessionDirectory, UploadService.PendingFinalStagingPrefix + Guid.NewGuid().ToString("D")),
-            "interrupted-before-publication", ct);
+        await File.WriteAllTextAsync(Path.Combine(sessionDirectory, "interrupted.part"), "partial", ct);
+        var outside = Path.Combine(Path.GetDirectoryName(scope.StorageRoot)!,
+            $"outside-{Guid.NewGuid():N}.bin");
+        try
+        {
+            await File.WriteAllBytesAsync(outside, [2], ct);
+            await scope.Maintenance.RunGarbageCollectionAsync(ct);
 
-        await scope.Maintenance.RunGarbageCollectionAsync(ct);
-
-        Assert.Equal("EXPIRED", await scope.StatusAsync(sessionId));
-        Assert.True(File.Exists(referenced));
-        Assert.False(File.Exists(orphan));
-        Assert.True(File.Exists(unrelated));
-        Assert.Equal([2], await File.ReadAllBytesAsync(outside, ct));
-        Assert.False(Directory.Exists(sessionDirectory));
+            Assert.Equal("EXPIRED", await scope.StatusAsync(sessionId));
+            Assert.Equal([2], await File.ReadAllBytesAsync(outside, ct));
+            Assert.False(Directory.Exists(sessionDirectory));
+        }
+        finally { try { File.Delete(outside); } catch { } }
     }
 
     [Fact(Timeout = 30_000)]
@@ -298,13 +424,14 @@ public sealed class FilesRecoveryTests
         Assert.DoesNotContain("private-file-name.pdf", error.Message, StringComparison.Ordinal);
     }
 
-    private static Task WriteMarkerAsync(string sessionDirectory, string finalPath) =>
-        File.WriteAllTextAsync(
-            Path.Combine(sessionDirectory, UploadService.PendingFinalMarkerPrefix + Guid.NewGuid().ToString("D")),
-            Path.GetRelativePath(Path.GetDirectoryName(sessionDirectory) is { } temp
-                    ? Directory.GetParent(temp)!.FullName
-                    : throw new InvalidOperationException(), finalPath)
-                .Replace(Path.DirectorySeparatorChar, '/'));
+    private static InitUploadRequest UploadRequest(string fileName, byte[] content) =>
+        new(1, fileName, (ulong)content.LongLength, 1_700_000_000_000, Sha256Hex(content));
+
+    private static string Sha256Hex(byte[] content) =>
+        Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
+
+    private static string Md5Hex(byte[] content) =>
+        Convert.ToHexString(MD5.HashData(content)).ToLowerInvariant();
 
     private sealed class FilesDatabaseScope : IAsyncDisposable
     {
@@ -422,21 +549,37 @@ public sealed class FilesRecoveryTests
                         CREATE TABLE upload_sessions(
                             id VARCHAR(36) PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL,
                             uploader_id BIGINT UNSIGNED NOT NULL, file_name VARCHAR(255) NOT NULL,
-                            file_size BIGINT UNSIGNED NOT NULL, file_md5 VARCHAR(32) NULL,
+                            file_size BIGINT UNSIGNED NOT NULL, file_last_modified BIGINT NOT NULL,
+                            file_fingerprint VARCHAR(64) NOT NULL, file_md5 VARCHAR(32) NULL,
                             chunk_size INT UNSIGNED NOT NULL, total_chunks INT UNSIGNED NOT NULL,
                             temp_dir VARCHAR(512) NOT NULL, status VARCHAR(16) NOT NULL,
                             result_file_id BIGINT UNSIGNED NULL, expires_at DATETIME NOT NULL,
                             created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
                         );
+                        CREATE TABLE file_blobs(
+                            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                            sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                            size_bytes BIGINT UNSIGNED NOT NULL,
+                            storage_path VARCHAR(512) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                            state VARCHAR(16) NOT NULL DEFAULT 'READY',
+                            gc_started_at DATETIME(6) NULL,
+                            created_at DATETIME(6) NOT NULL,
+                            UNIQUE KEY uk_file_blobs_sha256(sha256),
+                            UNIQUE KEY uk_file_blobs_storage_path(storage_path),
+                            KEY idx_file_blobs_state(state,id)
+                        );
                         CREATE TABLE files(
                             id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                             project_id BIGINT UNSIGNED NOT NULL, uploader_id BIGINT UNSIGNED NOT NULL,
+                            blob_id BIGINT UNSIGNED NULL,
                             direction VARCHAR(10) NOT NULL, original_name VARCHAR(255) NOT NULL,
                             stored_name VARCHAR(255) NOT NULL, ext VARCHAR(32) NOT NULL,
                             size_bytes BIGINT UNSIGNED NOT NULL, mime_type VARCHAR(255) NULL,
                             sha256 VARCHAR(64) NULL, storage_path VARCHAR(1024) NOT NULL,
                             status VARCHAR(20) NOT NULL, deleted_at DATETIME(6) NULL,
-                            created_at DATETIME(6) NOT NULL
+                            created_at DATETIME(6) NOT NULL,
+                            KEY idx_files_blob(blob_id),
+                            CONSTRAINT fk_files_blob FOREIGN KEY(blob_id) REFERENCES file_blobs(id) ON DELETE RESTRICT
                         );
                         -- The maintenance entry point also sweeps soft-deleted message images.
                         -- Keep these empty in file-recovery fixtures; image retention has dedicated tests.
@@ -476,8 +619,7 @@ public sealed class FilesRecoveryTests
                 var maintenance = new FilesMaintenanceService(
                     database, options, NullLogger<FilesMaintenanceService>.Instance);
                 var upload = new UploadService(database, options,
-                    new AuditService(Array.Empty<IProjectAuditCapture>()),
-                    NullLogger<UploadService>.Instance);
+                    new AuditService(Array.Empty<IProjectAuditCapture>()));
                 var audit = new AuditService(Array.Empty<IProjectAuditCapture>());
                 var identity = new IdentityService(EfTestSupport.DbContextFactory(options), options, new LoginRateLimiter(),
                     new TokenService(options), new PermissionService(), audit);
@@ -494,15 +636,17 @@ public sealed class FilesRecoveryTests
             }
         }
 
-        public async Task InsertSessionAsync(string id, string status, bool expired)
+        public async Task InsertSessionAsync(string id, string status, bool expired, string? fileMd5 = null)
         {
             Directory.CreateDirectory(FileStorage.SessionDirectory(StorageRoot, id));
             await using var connection = await Database.OpenAsync();
             await connection.ExecuteAsync("""
                 INSERT INTO upload_sessions
-                    (id,project_id,uploader_id,file_name,file_size,file_md5,chunk_size,total_chunks,
+                    (id,project_id,uploader_id,file_name,file_size,file_last_modified,file_fingerprint,
+                     file_md5,chunk_size,total_chunks,
                      temp_dir,status,result_file_id,expires_at,created_at,updated_at)
-                VALUES(@Id,1,1,'sample.bin',1,NULL,1,1,@TempDir,@Status,NULL,
+                VALUES(@Id,1,1,'sample.bin',1,1700000000000,@FileFingerprint,
+                       @FileMd5,1,1,@TempDir,@Status,NULL,
                        CASE WHEN @Expired THEN UTC_TIMESTAMP(6)-INTERVAL 1 MINUTE
                             ELSE UTC_TIMESTAMP(6)+INTERVAL 1 HOUR END,
                        UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
@@ -511,7 +655,9 @@ public sealed class FilesRecoveryTests
                 Id = id,
                 TempDir = FileStorage.SessionDirectory(StorageRoot, id),
                 Status = status,
-                Expired = expired
+                Expired = expired,
+                FileFingerprint = Sha256Hex([1]),
+                FileMd5 = fileMd5
             });
         }
 
@@ -542,6 +688,13 @@ public sealed class FilesRecoveryTests
             return context;
         }
 
+        public DefaultHttpContext ChunkContext(byte[] content, string? declaredDigest = null)
+        {
+            var context = Context(content.LongLength);
+            context.Request.Headers["X-Chunk-SHA256"] = declaredDigest ?? Sha256Hex(content);
+            return context;
+        }
+
         public Task KillConnectionAsync(int serverThread, CancellationToken ct) =>
             administration.ExecuteAsync(new CommandDefinition(
                 $"KILL CONNECTION {serverThread}", cancellationToken: ct));
@@ -553,32 +706,11 @@ public sealed class FilesRecoveryTests
                 "SELECT status FROM upload_sessions WHERE id=@Id", new { Id = id });
         }
 
-        public string CreateFinal(string name)
-        {
-            var directory = Path.Combine(StorageRoot, "files", "2026", "09");
-            Directory.CreateDirectory(directory);
-            var path = Path.Combine(directory, name);
-            File.WriteAllBytes(path, [1]);
-            return path;
-        }
-
-        public async Task ReferenceFileAsync(string finalPath)
+        public async Task<string?> FileMd5Async(string id)
         {
             await using var connection = await Database.OpenAsync();
-            var fileName = Path.GetFileName(finalPath);
-            await connection.ExecuteAsync(
-                """
-                INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,
-                                  mime_type,sha256,storage_path,status,deleted_at,created_at)
-                VALUES(1,1,'C2S',@FileName,@FileName,@Ext,1,'application/octet-stream',NULL,
-                       @Path,'AVAILABLE',NULL,UTC_TIMESTAMP(6))
-                """,
-                new
-                {
-                    FileName = fileName,
-                    Ext = Path.GetExtension(fileName).TrimStart('.').ToLowerInvariant(),
-                    Path = Path.GetRelativePath(StorageRoot, finalPath).Replace(Path.DirectorySeparatorChar, '/')
-                });
+            return await connection.QuerySingleAsync<string?>(
+                "SELECT file_md5 FROM upload_sessions WHERE id=@Id", new { Id = id });
         }
 
         public async ValueTask DisposeAsync()
@@ -627,5 +759,43 @@ public sealed class FilesRecoveryTests
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class GatedPayloadStream(byte[] content) : Stream
+    {
+        private readonly MemoryStream inner = new(content, writable: false);
+        private readonly TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int firstRead;
+
+        public Task WaitUntilReadAsync(CancellationToken ct) => entered.Task.WaitAsync(ct);
+        public void Release() => released.TrySetResult();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            if (Interlocked.Exchange(ref firstRead, 1) == 0)
+            {
+                entered.TrySetResult();
+                await released.Task.WaitAsync(ct);
+            }
+            return await inner.ReadAsync(buffer, ct);
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => inner.Length;
+        public override long Position { get => inner.Position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) inner.Dispose();
+            base.Dispose(disposing);
+        }
     }
 }

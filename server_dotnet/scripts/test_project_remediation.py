@@ -7,6 +7,8 @@ database connection, and API Client type. The mail worker must remain disabled.
 import secrets
 import threading
 import time
+
+from file_blob_fixture import insert_blob_file
 from test_background_copy_contracts import submit_and_wait_copy
 
 from test_business_acceptance import (
@@ -113,16 +115,12 @@ def _new_project(creator_client, admin_client, conn, supplier_id, name):
         name + "-" + secrets.token_hex(5))
 
 
-def _insert_file(conn, project_id, uploader_id):
+def _insert_file(conn, storage_root, project_id, uploader_id):
     token = secrets.token_hex(8)
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,"
-            "mime_type,sha256,storage_path,status,deleted_at,created_at) "
-            "VALUES(%s,%s,'C2S',%s,%s,'pdf',1,'application/pdf',%s,%s,'AVAILABLE',NULL,UTC_TIMESTAMP(3))",
-            (project_id, uploader_id, token + ".pdf", token + ".pdf", "0" * 64, token + ".pdf"),
-        )
-        return cursor.lastrowid
+    return insert_blob_file(
+        conn, storage_root, project_id, uploader_id,
+        token + ".pdf", "pdf", "application/pdf", content=b"x",
+    )["file_id"]
 
 
 def _request_in_thread(client, method, path, body, expected):
@@ -239,7 +237,7 @@ def _assert_no_submit_side_effect(conn, project_id):
     return state == ("IN_PROGRESS", None) and submits == 0
 
 
-def run_project_remediation_checks(client, Client, conn, check):
+def run_project_remediation_checks(client, Client, conn, check, storage_root):
     section_id = _section(client, secrets.token_hex(5))
     supplier, supplier_user, supplier_client = _new_supplier(client, Client, conn)
     dashboardless_role_id = _new_role(client, ["project:list", "project:create"])
@@ -412,7 +410,7 @@ def run_project_remediation_checks(client, Client, conn, check):
     # entered PENDING_CONFIRMATION.
     deleted_project = _new_project(
         old_client, client, conn, supplier["id"], "并发删除文件")
-    deleted_file = _insert_file(conn, deleted_project, old_user["id"])
+    deleted_file = _insert_file(conn, storage_root, deleted_project, old_user["id"])
     conn.begin()
     try:
         with conn.cursor() as cursor:
@@ -439,18 +437,19 @@ def run_project_remediation_checks(client, Client, conn, check):
     # The same interleaving must observe a newly committed active upload.
     upload_project = _new_project(
         old_client, client, conn, supplier["id"], "并发活动上传")
-    _insert_file(conn, upload_project, old_user["id"])
+    _insert_file(conn, storage_root, upload_project, old_user["id"])
     upload_id = str(__import__("uuid").uuid4())
     conn.begin()
     try:
         with conn.cursor() as cursor:
             cursor.execute("SELECT id FROM projects WHERE id=%s FOR UPDATE", (upload_project,))
             cursor.execute(
-                "INSERT INTO upload_sessions(id,project_id,uploader_id,file_name,file_size,file_md5,chunk_size,"
+                "INSERT INTO upload_sessions(id,project_id,uploader_id,file_name,file_size,file_last_modified,"
+                "file_fingerprint,file_md5,chunk_size,"
                 "total_chunks,temp_dir,status,result_file_id,expires_at,created_at,updated_at) "
-                "VALUES(%s,%s,%s,'active.pdf',1,NULL,262144,1,%s,'UPLOADING',NULL,"
+                "VALUES(%s,%s,%s,'active.pdf',1,1700000000000,%s,NULL,262144,1,%s,'UPLOADING',NULL,"
                 "DATE_ADD(UTC_TIMESTAMP(3),INTERVAL 1 HOUR),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))",
-                (upload_id, upload_project, old_user["id"], "owned/" + upload_id),
+                (upload_id, upload_project, old_user["id"], "0" * 64, "owned/" + upload_id),
             )
         submit_client = Client(client.base)
         submit_client.token = supplier_client.token
@@ -471,7 +470,7 @@ def run_project_remediation_checks(client, Client, conn, check):
     # only after waiting for the project lock.
     withdraw_project = _new_project(
         old_client, client, conn, supplier["id"], "并发旧提交者撤回")
-    _insert_file(conn, withdraw_project, old_user["id"])
+    _insert_file(conn, storage_root, withdraw_project, old_user["id"])
     old_submission = supplier_client.call(
         "POST", f"/api/v1/projects/{withdraw_project}/submit", {})
     reviewer_client.call("POST", f"/api/v1/projects/{withdraw_project}/reject", {
@@ -514,7 +513,7 @@ def run_project_remediation_checks(client, Client, conn, check):
     # result notification even when the reviewer is selected by global scope.
     notice_project = _new_project(
         old_client, client, conn, supplier["id"], "供应商提交结果通知")
-    _insert_file(conn, notice_project, new_user["id"])
+    _insert_file(conn, storage_root, notice_project, new_user["id"])
     view_all_client.call("POST", f"/api/v1/projects/{notice_project}/submit", {}, expected=403)
     notice_submission = supplier_client.call(
         "POST", f"/api/v1/projects/{notice_project}/submit", {})

@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Button, Card, Collapse, Empty, Grid, List, Pagination, Result, Spin, Statistic, Tag, Typography } from '@arco-design/web-react'
 import { IconRight } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../api/client'
+import { createSessionQueryScope, queryClient } from '../api/queryClient'
 import { fmtTime } from '../api/types'
 import { useAuth } from '../store/auth'
 import { useCollaboration } from '../store/collaboration'
@@ -60,22 +62,113 @@ interface MessagePage {
 
 const PAGE_SIZE = 10
 
-export default function Dashboard() {
-  const [data, setData] = useState<Summary | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState(false)
-  const [summaryRefreshError, setSummaryRefreshError] = useState(false)
-  const summarySeq = useRef(0)
-  const hasSummarySnapshot = useRef(false)
+function isAuthorizationError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const candidate = error as { status?: unknown; response?: { status?: unknown } }
+  const status = candidate.response?.status ?? candidate.status
+  return status === 401 || status === 403
+}
 
-  const [pendingData, setPendingData] = useState<PendingProjectPage>({ list: [], total: 0, page: 1, pageSize: PAGE_SIZE })
+export default function Dashboard() {
   const [pendingPage, setPendingPage] = useState(1)
-  const [pendingLoading, setPendingLoading] = useState(true)
-  const [pendingError, setPendingError] = useState(false)
-  const [pendingRefreshError, setPendingRefreshError] = useState(false)
-  const pendingSeq = useRef(0)
-  const hasPendingSnapshot = useRef(false)
   const [collapsedPendingGroups, setCollapsedPendingGroups] = useState<Set<number>>(() => new Set())
+  const [messagePage, setMessagePage] = useState(1)
+  const [unreadOnly, setUnreadOnly] = useState(true)
+  const observedRevision = useRef<string | null>(null)
+  const auth = useAuth()
+  const [sessionUserId, sessionGeneration, sessionGrants] = createSessionQueryScope(auth)
+  const sessionScope = useMemo(
+    () => [sessionUserId, sessionGeneration, sessionGrants] as const,
+    [sessionGeneration, sessionGrants, sessionUserId],
+  )
+  const user = auth.user
+  const hasDashboardMenu = auth.menus.includes('dashboard')
+  const hasProjectAccess = auth.permissions.includes('project:list')
+  const hasDashboard = hasDashboardMenu && hasProjectAccess
+  const hasOtherMenus = auth.menus.some(menu => menu !== 'dashboard')
+  const collaborationRevision = useCollaboration((s) => s.revision)
+  const collaborationStatus = useCollaboration((s) => s.status)
+  const nav = useNavigate()
+  const dashboardQueryKey = useMemo(() => ['dashboard', sessionScope] as const, [sessionScope])
+  const isSupplier = user?.userType === 'SUPPLIER'
+  const acceptanceCopy = isSupplier ? {
+    cardTitle: '待公司验收子项目',
+    cardAction: '查看待公司验收',
+    heading: '待公司验收子项目',
+    headingEmpty: '已提交并等待公司处理的验收',
+    error: '待公司验收子项目加载失败',
+    empty: '暂无待公司验收子项目',
+    status: '待公司验收',
+  } : {
+    cardTitle: '待内部验收子项目',
+    cardAction: '查看待验收',
+    heading: '公司内部待验收子项目',
+    headingEmpty: '需要处理的内部验收',
+    error: '内部待验收子项目加载失败',
+    empty: '暂无内部待验收子项目',
+    status: '待公司内部验收',
+  }
+
+  const summaryQuery = useQuery({
+    queryKey: [...dashboardQueryKey, 'summary'],
+    enabled: hasDashboard,
+    queryFn: async ({ signal }) => {
+      const config: QuietRequestConfig = { signal, quietNetworkError: true }
+      const response = await http.get<ApiResponses['GET /dashboard/summary']>('/dashboard/summary', config)
+      return response.data as Summary
+    },
+  }, queryClient)
+  const pendingQuery = useQuery({
+    queryKey: [...dashboardQueryKey, 'pending-projects', pendingPage],
+    enabled: hasDashboard,
+    queryFn: async ({ signal }) => {
+      const config: QuietRequestConfig = {
+        params: { page: pendingPage, pageSize: PAGE_SIZE }, signal, quietNetworkError: true,
+      }
+      const response = await http.get<ApiResponses['GET /dashboard/pending-projects']>('/dashboard/pending-projects', config)
+      return response.data as PendingProjectPage
+    },
+  }, queryClient)
+  const messageQuery = useQuery({
+    queryKey: [...dashboardQueryKey, 'messages', messagePage, unreadOnly],
+    enabled: hasDashboard,
+    queryFn: async ({ signal }) => {
+      const config: QuietRequestConfig = {
+        params: { page: messagePage, pageSize: PAGE_SIZE, unreadOnly }, signal, quietNetworkError: true,
+      }
+      const response = await http.get<ApiResponses['GET /dashboard/messages']>('/dashboard/messages', config)
+      return response.data as MessagePage
+    },
+  }, queryClient)
+
+  const dashboardAuthorizationError = isAuthorizationError(summaryQuery.error)
+    || isAuthorizationError(pendingQuery.error)
+    || isAuthorizationError(messageQuery.error)
+  const data = dashboardAuthorizationError ? undefined : summaryQuery.data
+  const pendingData = !dashboardAuthorizationError && pendingQuery.data
+    ? pendingQuery.data
+    : { list: [], total: 0, page: pendingPage, pageSize: PAGE_SIZE }
+  const messageData = !dashboardAuthorizationError && messageQuery.data
+    ? messageQuery.data
+    : { list: [], total: 0, page: messagePage, pageSize: PAGE_SIZE }
+  const loading = summaryQuery.isFetching
+  const loadError = summaryQuery.isError && !summaryQuery.data
+  const summaryRefreshError = summaryQuery.isRefetchError && !!summaryQuery.data
+  const pendingLoading = pendingQuery.isFetching
+  const pendingError = pendingQuery.isError && !pendingQuery.data
+  const pendingRefreshError = pendingQuery.isRefetchError && !!pendingQuery.data
+  const messageLoading = messageQuery.isFetching
+  const messageError = messageQuery.isError && !messageQuery.data
+  const messageRefreshError = messageQuery.isRefetchError && !!messageQuery.data
+  const refetchSummary = summaryQuery.refetch
+  const refetchPending = pendingQuery.refetch
+  const refetchMessages = messageQuery.refetch
+
+  useEffect(() => {
+    if (!dashboardAuthorizationError) return
+    void queryClient.cancelQueries({ queryKey: dashboardQueryKey })
+    queryClient.removeQueries({ queryKey: dashboardQueryKey })
+  }, [dashboardAuthorizationError, dashboardQueryKey])
 
   const pendingGroups = useMemo<PendingProjectGroup[]>(() => {
     const order: number[] = []
@@ -99,173 +192,21 @@ export default function Dashboard() {
     [collapsedPendingGroups, pendingGroups],
   )
 
-  const [messageData, setMessageData] = useState<MessagePage>({ list: [], total: 0, page: 1, pageSize: PAGE_SIZE })
-  const [messagePage, setMessagePage] = useState(1)
-  const [unreadOnly, setUnreadOnly] = useState(true)
-  const [messageLoading, setMessageLoading] = useState(true)
-  const [messageError, setMessageError] = useState(false)
-  const [messageRefreshError, setMessageRefreshError] = useState(false)
-  const messageSeq = useRef(0)
-  const hasMessageSnapshot = useRef(false)
-
-  const mounted = useRef(true)
-  const observedRevision = useRef<string | null>(null)
-  const user = useAuth((s) => s.user)
-  const hasDashboardMenu = useAuth((s) => s.menus.includes('dashboard'))
-  const hasProjectAccess = useAuth((s) => s.permissions.includes('project:list'))
-  const hasDashboard = hasDashboardMenu && hasProjectAccess
-  const hasOtherMenus = useAuth((s) => s.menus.some(menu => menu !== 'dashboard'))
-  const collaborationRevision = useCollaboration((s) => s.revision)
-  const collaborationStatus = useCollaboration((s) => s.status)
-  const nav = useNavigate()
-  const isSupplier = user?.userType === 'SUPPLIER'
-  const acceptanceCopy = isSupplier ? {
-    cardTitle: '待公司验收子项目',
-    cardAction: '查看待公司验收',
-    heading: '待公司验收子项目',
-    headingEmpty: '已提交并等待公司处理的验收',
-    error: '待公司验收子项目加载失败',
-    empty: '暂无待公司验收子项目',
-    status: '待公司验收',
-  } : {
-    cardTitle: '待内部验收子项目',
-    cardAction: '查看待验收',
-    heading: '公司内部待验收子项目',
-    headingEmpty: '需要处理的内部验收',
-    error: '内部待验收子项目加载失败',
-    empty: '暂无内部待验收子项目',
-    status: '待公司内部验收',
-  }
+  useEffect(() => {
+    const next = pendingQuery.data
+    if (!next) return
+    const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || PAGE_SIZE)))
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the server can shrink the last page between requests
+    if (pendingPage > lastPage) setPendingPage(lastPage)
+  }, [pendingPage, pendingQuery.data])
 
   useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-      summarySeq.current += 1
-      pendingSeq.current += 1
-      messageSeq.current += 1
-    }
-  }, [])
-
-  const fetchSummary = useCallback(async (quiet = false) => {
-    if (!hasDashboard) return
-    const seq = ++summarySeq.current
-    if (!quiet) {
-      setLoading(true)
-      setLoadError(false)
-      setSummaryRefreshError(false)
-    }
-    try {
-      const config: QuietRequestConfig = { quietNetworkError: true }
-      const response = await http.get<ApiResponses['GET /dashboard/summary']>('/dashboard/summary', config)
-      if (!mounted.current || seq !== summarySeq.current) return
-      setData(response.data as Summary)
-      hasSummarySnapshot.current = true
-      setLoadError(false)
-      setSummaryRefreshError(false)
-    } catch {
-      if (mounted.current && seq === summarySeq.current) {
-        if (quiet && hasSummarySnapshot.current) setSummaryRefreshError(true)
-        else setLoadError(true)
-      }
-    } finally {
-      if (mounted.current && seq === summarySeq.current) setLoading(false)
-    }
-  }, [hasDashboard])
-
-  const fetchPending = useCallback(async (requestedPage: number, quiet = false) => {
-    if (!hasDashboard) return
-    const seq = ++pendingSeq.current
-    if (!quiet) {
-      setPendingLoading(true)
-      setPendingError(false)
-      setPendingRefreshError(false)
-    }
-    try {
-      let page = requestedPage
-      while (mounted.current && seq === pendingSeq.current) {
-        const config: QuietRequestConfig = {
-          params: { page, pageSize: PAGE_SIZE },
-          quietNetworkError: true,
-        }
-        const response = await http.get<ApiResponses['GET /dashboard/pending-projects']>('/dashboard/pending-projects', config)
-        if (!mounted.current || seq !== pendingSeq.current) return
-        const next = response.data as PendingProjectPage
-        const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || PAGE_SIZE)))
-        if (page > lastPage) {
-          page = lastPage
-          setPendingPage(lastPage)
-          continue
-        }
-        setPendingData(next)
-        hasPendingSnapshot.current = true
-        setPendingError(false)
-        setPendingRefreshError(false)
-        return
-      }
-    } catch {
-      if (mounted.current && seq === pendingSeq.current) {
-        if (quiet && hasPendingSnapshot.current) setPendingRefreshError(true)
-        else setPendingError(true)
-      }
-    } finally {
-      if (mounted.current && seq === pendingSeq.current) setPendingLoading(false)
-    }
-  }, [hasDashboard])
-
-  const fetchMessages = useCallback(async (requestedPage: number, nextUnreadOnly: boolean, quiet = false) => {
-    if (!hasDashboard) return
-    const seq = ++messageSeq.current
-    if (!quiet) {
-      setMessageLoading(true)
-      setMessageError(false)
-      setMessageRefreshError(false)
-    }
-    try {
-      let page = requestedPage
-      while (mounted.current && seq === messageSeq.current) {
-        const config: QuietRequestConfig = {
-          params: { page, pageSize: PAGE_SIZE, unreadOnly: nextUnreadOnly },
-          quietNetworkError: true,
-        }
-        const response = await http.get<ApiResponses['GET /dashboard/messages']>('/dashboard/messages', config)
-        if (!mounted.current || seq !== messageSeq.current) return
-        const next = response.data as MessagePage
-        const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || PAGE_SIZE)))
-        if (page > lastPage) {
-          page = lastPage
-          setMessagePage(lastPage)
-          continue
-        }
-        setMessageData(next)
-        hasMessageSnapshot.current = true
-        setMessageError(false)
-        setMessageRefreshError(false)
-        return
-      }
-    } catch {
-      if (mounted.current && seq === messageSeq.current) {
-        if (quiet && hasMessageSnapshot.current) setMessageRefreshError(true)
-        else setMessageError(true)
-      }
-    } finally {
-      if (mounted.current && seq === messageSeq.current) setMessageLoading(false)
-    }
-  }, [hasDashboard])
-
-  useEffect(() => {
-    if (!hasDashboard) {
-      summarySeq.current += 1
-      pendingSeq.current += 1
-      messageSeq.current += 1
-      return
-    }
-    // Establish the initial snapshots from the three independent server resources.
-    // eslint-disable-next-line react/set-state-in-effect
-    void fetchSummary()
-    void fetchPending(1)
-    void fetchMessages(1, true)
-  }, [fetchMessages, fetchPending, fetchSummary, hasDashboard])
+    const next = messageQuery.data
+    if (!next) return
+    const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || PAGE_SIZE)))
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the server can shrink the last page between requests
+    if (messagePage > lastPage) setMessagePage(lastPage)
+  }, [messagePage, messageQuery.data])
 
   useEffect(() => {
     if (!hasDashboard) return
@@ -279,22 +220,21 @@ export default function Dashboard() {
     }
     if (observedRevision.current === collaborationRevision) return
     observedRevision.current = collaborationRevision
-    void fetchSummary(true)
-    void fetchPending(pendingPage, true)
-    void fetchMessages(messagePage, unreadOnly, true)
-  }, [collaborationRevision, collaborationStatus, fetchMessages, fetchPending, fetchSummary, hasDashboard, messagePage, pendingPage, unreadOnly])
+    void refetchSummary()
+    void refetchPending()
+    void refetchMessages()
+  }, [collaborationRevision, collaborationStatus, hasDashboard, refetchMessages, refetchPending, refetchSummary])
 
   const refreshDashboard = () => {
-    void fetchSummary()
-    void fetchPending(pendingPage)
-    void fetchMessages(messagePage, unreadOnly)
+    void refetchSummary()
+    void refetchPending()
+    void refetchMessages()
   }
 
   const changeMessageFilter = (nextUnreadOnly: boolean) => {
     if (nextUnreadOnly === unreadOnly) return
     setUnreadOnly(nextUnreadOnly)
     setMessagePage(1)
-    void fetchMessages(1, nextUnreadOnly)
   }
 
   const cards = [
@@ -314,6 +254,16 @@ export default function Dashboard() {
           : hasOtherMenus
           ? '当前账号未分配工作台菜单权限，请从导航进入已授权功能，或在右上角维护个人资料。'
           : '请联系管理员分配功能权限，或在右上角维护个人资料。'}
+      />
+    )
+  }
+
+  if (dashboardAuthorizationError) {
+    return (
+      <Result
+        status="403"
+        title="工作台不可用"
+        subTitle="当前会话无权读取工作台数据，请重新登录或联系管理员确认权限。"
       />
     )
   }
@@ -347,7 +297,7 @@ export default function Dashboard() {
             {pendingRefreshError && !pendingLoading && (
               <div className="dashboard-stale-notice" role="status">
                 <span>更新暂时失败，显示上次数据</span>
-                <Button size="mini" onClick={() => { void fetchPending(pendingPage) }}>重试</Button>
+                <Button size="mini" onClick={() => { void refetchPending() }}>重试</Button>
               </div>
             )}
             {pendingLoading ? (
@@ -355,7 +305,7 @@ export default function Dashboard() {
             ) : pendingError ? (
               <div className="dashboard-feedback">
                 <Typography.Text type="error">{acceptanceCopy.error}</Typography.Text>
-                <Button size="small" onClick={() => { void fetchPending(pendingPage) }}>重试</Button>
+                <Button size="small" onClick={() => { void refetchPending() }}>重试</Button>
               </div>
             ) : pendingData.list.length > 0 ? (
               <>
@@ -419,7 +369,6 @@ export default function Dashboard() {
                       sizeCanChange={false}
                       onChange={(page) => {
                         setPendingPage(page)
-                        void fetchPending(page)
                       }}
                     />
                   </div>
@@ -453,7 +402,7 @@ export default function Dashboard() {
             {messageRefreshError && !messageLoading && (
               <div className="dashboard-stale-notice" role="status">
                 <span>更新暂时失败，显示上次数据</span>
-                <Button size="mini" onClick={() => { void fetchMessages(messagePage, unreadOnly) }}>重试</Button>
+                <Button size="mini" onClick={() => { void refetchMessages() }}>重试</Button>
               </div>
             )}
             {messageLoading ? (
@@ -461,7 +410,7 @@ export default function Dashboard() {
             ) : messageError ? (
               <div className="dashboard-feedback">
                 <Typography.Text type="error">留言加载失败</Typography.Text>
-                <Button size="small" onClick={() => { void fetchMessages(messagePage, unreadOnly) }}>重试</Button>
+                <Button size="small" onClick={() => { void refetchMessages() }}>重试</Button>
               </div>
             ) : messageData.list.length > 0 ? (
               <>
@@ -516,7 +465,6 @@ export default function Dashboard() {
                       sizeCanChange={false}
                       onChange={(page) => {
                         setMessagePage(page)
-                        void fetchMessages(page, unreadOnly)
                       }}
                     />
                   </div>
@@ -539,7 +487,7 @@ export default function Dashboard() {
           {summaryRefreshError && data && (
             <span className="dashboard-overview-stale" role="status">
               更新暂时失败，显示上次数据
-              <Button size="mini" onClick={() => { void fetchSummary() }}>重试</Button>
+              <Button size="mini" onClick={() => { void refetchSummary() }}>重试</Button>
             </span>
           )}
         </div>
@@ -548,7 +496,7 @@ export default function Dashboard() {
         ) : loadError && !data ? (
           <div className="dashboard-feedback dashboard-overview-error">
             <Typography.Text type="error">加载失败</Typography.Text>
-            <Button size="small" onClick={() => { void fetchSummary() }}>重试</Button>
+            <Button size="small" onClick={() => { void refetchSummary() }}>重试</Button>
           </div>
         ) : (
           <Grid.Row className="dashboard-stats" gutter={[12, 12]}>

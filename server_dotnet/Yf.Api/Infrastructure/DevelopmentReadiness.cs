@@ -40,6 +40,8 @@ internal static class DevelopmentReadiness
         {
             await using var connection = await new AppDb(options).OpenAsync(cancellationToken);
             await EfDatabaseLifecycle.ValidateReadyAsync(connection, cancellationToken);
+            await Yf.Api.Modules.Files.FileBlobBackfill.ValidateInvariantAsync(connection,
+                Path.GetFullPath(options.StorageRoot), cancellationToken);
         }, ct);
 
     internal static async Task<DevelopmentReadinessReport> CheckAsync(

@@ -6,7 +6,7 @@ const scope = self as unknown as {
   postMessage: (message: unknown) => void
 }
 
-/** 在后台线程计算上传内容标识，避免大文件校验期间页面卡顿。协议见 file-hash.ts。 */
+/** 在后台线程增量计算整文件 MD5，避免大文件校验期间页面卡顿。协议见 file-hash.ts。 */
 scope.onmessage = async (event) => {
   try {
     const digest = await fileMd5(event.data.file, () => false, (fraction) => {

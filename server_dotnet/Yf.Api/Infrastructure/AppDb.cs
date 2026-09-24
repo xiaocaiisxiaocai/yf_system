@@ -68,7 +68,7 @@ public sealed class ApiException(int status, int code, string message) : Excepti
     public static ApiException PasswordRateLimited(string message) => new(429, 42901, message);
 }
 
-public sealed record CurrentUser(ulong Id, string EmployeeNo, string UserType, ulong? SupplierId)
+public sealed record CurrentUser(ulong Id, string EmployeeNo, string UserType, ulong? SupplierId, string? SessionId = null)
 {
     public ulong UserId => Id;
     public bool IsInternal => UserType == UserTypes.Internal;
@@ -118,18 +118,27 @@ public sealed class AccessService
     /// </summary>
     private static readonly ConditionalWeakTable<MySqlTransaction, ConcurrentDictionary<ulong, PermissionSnapshot>> PermissionCache = new();
 
+    /// <summary>
+    /// Rechecks live account and supplier state and, for HTTP actors, the access token's session
+    /// family. A null session is reserved for trusted internal/background actors and test fixtures.
+    /// </summary>
     public static async Task<CurrentUser> RecheckActorAsync(MySqlConnection db, MySqlTransaction? tx, CurrentUser user, CancellationToken ct = default)
     {
         await using var context = EfDb.Use(db, tx);
+        var sessionId = user.SessionId;
         var row = await context.Users.Where(row => row.Id == user.Id).Select(row => new
         {
             row.Id, row.EmployeeNo, row.UserType, row.SupplierId, row.Status, row.MustChangePassword,
+            SessionActive = sessionId == null || context.RefreshTokens.Any(token => token.UserId == row.Id
+                && token.SessionId == sessionId && !token.Revoked
+                && token.ExpiresAt > DateTime.UtcNow && token.SessionExpiresAt > DateTime.UtcNow),
         }).SingleOrDefaultAsync(ct);
-        if (row is null || row.Status != AccountStatuses.Active || row.MustChangePassword) throw ApiException.Forbidden();
+        if (row is null || row.Status != AccountStatuses.Active || row.MustChangePassword || !row.SessionActive)
+            throw ApiException.Forbidden();
         if (row.UserType == UserTypes.Supplier && (row.SupplierId is not ulong supplierId
             || !await context.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == AccountStatuses.Active, ct)))
             throw ApiException.Forbidden();
-        return new(row.Id, row.EmployeeNo, row.UserType, row.SupplierId);
+        return new(row.Id, row.EmployeeNo, row.UserType, row.SupplierId, sessionId);
     }
 
     public static async Task<CurrentUser> LockActorAsync(MySqlConnection db, MySqlTransaction tx, CurrentUser user, CancellationToken ct = default)

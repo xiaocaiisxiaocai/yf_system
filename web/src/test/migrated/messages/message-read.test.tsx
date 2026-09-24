@@ -127,7 +127,9 @@ describe('留言可见后标记已读', () => {
     const view = renderMessagePanel()
     await screen.findByText('留言 7')
     await intersectUnread()
-    await waitFor(() => expect(messageMocks.get).toHaveBeenCalledWith('/messages/7/reads'))
+    await waitFor(() => expect(messageMocks.get).toHaveBeenCalledWith(
+      '/messages/7/reads', expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ))
 
     view.rerender(<MessagePanel projectId={2} projectStatus="IN_PROGRESS" />)
     await screen.findByText('留言 8')
@@ -155,7 +157,9 @@ describe('留言可见后标记已读', () => {
     const view = renderMessagePanel()
     await screen.findByText('留言 7')
     await intersectUnread()
-    await waitFor(() => expect(messageMocks.get).toHaveBeenCalledWith('/messages/7/reads'))
+    await waitFor(() => expect(messageMocks.get).toHaveBeenCalledWith(
+      '/messages/7/reads', expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ))
 
     view.rerender(<MessagePanel projectId={2} projectStatus="IN_PROGRESS" />)
     await screen.findByText('留言 8')
@@ -187,12 +191,14 @@ describe('留言可见后标记已读', () => {
 
     await intersectUnread()
     await waitFor(() => expect(maximum).toBe(4))
-    expect(messageMocks.get).not.toHaveBeenCalledWith('/messages/5/reads')
+    expect(messageMocks.get.mock.calls.some(([url]) => url === '/messages/5/reads')).toBe(false)
     await act(async () => {
       for (const id of [1, 2, 3, 4]) receipts.get(id)!.resolve({ data: { readers: [], unread: [] } })
       await Promise.resolve()
     })
-    await waitFor(() => expect(messageMocks.get).toHaveBeenCalledWith('/messages/5/reads'))
+    await waitFor(() => expect(messageMocks.get).toHaveBeenCalledWith(
+      '/messages/5/reads', expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ))
     await act(async () => {
       receipts.get(5)!.resolve({ data: { readers: [], unread: [] } })
       await Promise.resolve()
