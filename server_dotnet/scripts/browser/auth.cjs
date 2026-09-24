@@ -2,7 +2,6 @@ const {chromium}=require('playwright');
 const fs=require('fs');
 const path=require('path');
 const assert=require('assert/strict');
-const ROOT=process.env.YF_PROJECT_ROOT;
 const OUT=process.env.YF_BROWSER_EVIDENCE_DIR;
 const state=JSON.parse(fs.readFileSync(path.join(OUT,'state.private.json'),'utf8'));
 const checks=[];

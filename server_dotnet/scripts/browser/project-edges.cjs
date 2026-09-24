@@ -62,7 +62,6 @@ async function uploadFixture(context, token, projectId, name, bytes) {
     }
     let flow = await createGroup(context, auth.accessToken, f.suppliers.a.id, prefix + '-流程', defaults);
     const groupsPath = '/api/v1/project-groups';
-    const row = name => page.getByRole('row').filter({ has: page.getByRole('link', { name, exact: true }) });
     const pop = () => page.locator('.arco-popconfirm:visible').last()
       .getByRole('button', { name: '确定', exact: true }).click();
     const listResponse = (parameters, status = 200) => page.waitForResponse(response => {

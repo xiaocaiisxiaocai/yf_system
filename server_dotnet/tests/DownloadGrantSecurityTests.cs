@@ -60,6 +60,22 @@ public sealed class DownloadGrantSecurityTests
     }
 
     [Fact]
+    public void RejectedRedemptionReleasesTheConsumedGrantQuota()
+    {
+        var service = new DownloadGrantService();
+        var issued = Enumerable.Range(1, 32)
+            .Select(index => service.Issue(99, "same-session", [(ulong)index], batch: false, Now))
+            .ToArray();
+        // A wrong secret still consumes the single-use grant; its quota slot must not leak.
+        foreach (var issue in issued)
+            Assert.Throws<ApiException>(() => service.Redeem(issue.Handle, "wrong-secret", Now));
+
+        for (var index = 0; index < 32; index++)
+            service.Issue(99, "same-session", [(ulong)index + 100], batch: false, Now);
+        Assert.Throws<ApiException>(() => service.Issue(99, "same-session", [999], batch: false, Now));
+    }
+
+    [Fact]
     public async Task AuditDeduplicationSerializesConcurrentWritesAndIsTimeBounded()
     {
         var service = new DownloadGrantService();

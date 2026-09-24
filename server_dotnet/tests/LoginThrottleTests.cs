@@ -52,6 +52,28 @@ public sealed class LoginThrottleTests
     }
 
     [Fact(Timeout = 120_000)]
+    public async Task RepeatedOldPasswordChecksAreThrottledBeforeHashing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await LoginDatabase.CreateAsync(ct);
+        var service = scope.Service(new LoginRateLimiter());
+        var user = new CurrentUser(1, "target", "INTERNAL", null);
+        for (var attempt = 0; attempt < LoginRateLimiter.MaximumPasswordChangeAttempts; attempt++)
+        {
+            var wrong = await Assert.ThrowsAsync<ApiException>(() => service.ChangePasswordAsync(
+                user, new(scope.Password + "wrong", "Throttle#2026"), ct));
+            Assert.Equal("原密码错误", wrong.Message);
+        }
+
+        // Even the correct old password is refused while the account's window is exhausted.
+        var limited = await Assert.ThrowsAsync<ApiException>(() => service.ChangePasswordAsync(
+            user, new(scope.Password, "Throttle#2026"), ct));
+        Assert.Equal(429, limited.Status);
+        Assert.Equal(42901, limited.Code);
+        Assert.Equal(1UL, (await scope.LoginAsync("target", scope.Password, "192.0.2.230", ct)).User.Id);
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task LoginWithoutCaptchaAcceptsExistingLongPasswordWithoutForcingReset()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -218,8 +240,10 @@ public sealed class LoginThrottleTests
         public string Password { get; } = password;
         public string LegacyPassword { get; } = legacyPassword;
 
-        public IdentityService Service() =>
-            new(_dbContextFactory.Value, options, new LoginRateLimiter(), new TokenService(options), new PermissionService(), new AuditService([]));
+        public IdentityService Service() => Service(new LoginRateLimiter());
+
+        public IdentityService Service(LoginRateLimiter limiter) =>
+            new(_dbContextFactory.Value, options, limiter, new TokenService(options), new PermissionService(), new AuditService([]));
 
         public Task<MySqlConnection> OpenAsync(CancellationToken ct) => _db.OpenAsync(ct);
 

@@ -1,7 +1,7 @@
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const {
-  fs, assert, OUT, s, f, record, login, api, action, track,
+  fs, assert, OUT, s, record, login, api, action, track,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
 const MB = 1024 * 1024;

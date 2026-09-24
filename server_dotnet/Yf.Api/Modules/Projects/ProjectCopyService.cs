@@ -562,7 +562,7 @@ internal sealed class ProjectCopyService(
         await using var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read,
             1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
         await using var output = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-            1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan | FileOptions.WriteThrough);
+            1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var buffer = new byte[1024 * 1024];
         var interval = Stopwatch.StartNew();

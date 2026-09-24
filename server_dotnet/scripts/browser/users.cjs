@@ -1,5 +1,5 @@
 const {chromium}=require('playwright');
-const {fs,assert,OUT,s,f,save,record,login,api,track}=require(process.env.YF_BROWSER_SUPPORT_DIR+'/ui-lib.cjs');
+const {assert,OUT,s,f,save,record,login,api,track}=require(process.env.YF_BROWSER_SUPPORT_DIR+'/ui-lib.cjs');
 (async()=>{let b,p;try{
  b=await chromium.launch({channel:'chrome',headless:true});
  for(const [key,u] of Object.entries(f.users)){

@@ -277,15 +277,20 @@ internal static class ProjectNotificationService
     {
         await using var db = EfDb.Use(conn, tx);
         var permittedUsers = AccessService.UsersWithPermission(db, "project:list");
-        var rows = await db.Users
-            .Where(user => user.Status == AccountStatuses.Active && permittedUsers.Contains(user.Id))
-            .Where(user => db.Projects.Any(currentProject =>
-                currentProject.Id == project.Id
-                && ((user.UserType == UserTypes.Internal && user.Id == currentProject.ResponsibleUserId)
-                    || (user.UserType == UserTypes.Supplier
-                        && user.SupplierId == currentProject.SupplierId
-                        && db.Suppliers.Any(supplier =>
-                            supplier.Id == currentProject.SupplierId && supplier.Status == AccountStatuses.Active)))))
+        // Drive from the project's primary-key row so users are looked up by id (owner) or by the
+        // supplier index, instead of evaluating a correlated project check for every active user.
+        var rows = await (
+                from currentProject in db.Projects
+                where currentProject.Id == project.Id
+                from user in db.Users
+                where user.Status == AccountStatuses.Active
+                    && ((user.UserType == UserTypes.Internal && user.Id == currentProject.ResponsibleUserId)
+                        || (user.UserType == UserTypes.Supplier
+                            && user.SupplierId == currentProject.SupplierId
+                            && db.Suppliers.Any(supplier =>
+                                supplier.Id == currentProject.SupplierId && supplier.Status == AccountStatuses.Active)))
+                    && permittedUsers.Contains(user.Id)
+                select user)
             .OrderBy(user => user.Id)
             .Select(user => new UserRow
             {

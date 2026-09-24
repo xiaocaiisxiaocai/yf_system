@@ -135,16 +135,11 @@ public static class ApiApplication
         app.UseCors();
         app.UseMiddleware<IdentityMiddleware>();
         app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime();
+        var healthProbe = new DatabaseHealthProbe();
         app.MapGet("/health", async (IDbContextFactory<YfDbContext> factory, CancellationToken ct) =>
-        {
-            try
-            {
-                await using var context = await factory.CreateDbContextAsync(ct);
-                if (!await context.Database.CanConnectAsync(ct)) throw new InvalidOperationException("Database unavailable.");
-                return Results.Json(new { status = "ok", db = "up" });
-            }
-            catch { return Results.Json(new { status = "degraded", db = "down" }, statusCode: 503); }
-        });
+            await healthProbe.IsUpAsync(factory, ct)
+                ? Results.Json(new { status = "ok", db = "up" })
+                : Results.Json(new { status = "degraded", db = "down" }, statusCode: 503));
         app.Map("/api/{**path}", () => Results.Json(new ApiErrorResponse(40401, "接口不存在"), statusCode: 404));
         // Compress only the SPA/static branch. API responses deliberately bypass compression.
         app.UseWhen(context => !context.Request.Path.StartsWithSegments("/api"), branch =>
@@ -186,5 +181,42 @@ public static class ApiApplication
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         }));
         Environment.ExitCode = result.ReadyForStartup ? 0 : 1;
+    }
+}
+
+/// <summary>
+/// The anonymous health endpoint must not let callers drive one database connection per request.
+/// Concurrent probes share one in-flight check, and a healthy result is reused briefly. A failed
+/// check is not cached, so startup polling sees the database as soon as it becomes reachable.
+/// </summary>
+internal sealed class DatabaseHealthProbe(Func<DateTime>? clock = null)
+{
+    internal static readonly TimeSpan HealthyCacheDuration = TimeSpan.FromSeconds(5);
+    private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly Func<DateTime> clock = clock ?? (() => DateTime.UtcNow);
+    private long healthyUntilTicks;
+
+    internal async Task<bool> IsUpAsync(IDbContextFactory<YfDbContext> factory, CancellationToken ct) =>
+        await IsUpAsync(async token =>
+        {
+            await using var context = await factory.CreateDbContextAsync(token);
+            return await context.Database.CanConnectAsync(token);
+        }, ct);
+
+    internal async Task<bool> IsUpAsync(Func<CancellationToken, Task<bool>> probe, CancellationToken ct)
+    {
+        if (clock().Ticks < Interlocked.Read(ref healthyUntilTicks)) return true;
+        try { await gate.WaitAsync(ct); }
+        catch (OperationCanceledException) { return false; }
+        try
+        {
+            if (clock().Ticks < Interlocked.Read(ref healthyUntilTicks)) return true;
+            bool up;
+            try { up = await probe(ct); }
+            catch { up = false; }
+            Interlocked.Exchange(ref healthyUntilTicks, up ? (clock() + HealthyCacheDuration).Ticks : 0);
+            return up;
+        }
+        finally { gate.Release(); }
     }
 }

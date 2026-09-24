@@ -96,6 +96,8 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       copyJobsInitialized.current = false
       copyIdempotencyKey.current = null
       pendingUnknownCopies.current.clear()
+      // Copy-job access comes from the server; losing it must close the copy dialog this component owns.
+      // eslint-disable-next-line react/set-state-in-effect
       setCopyOutcomeUnknown(false)
       setCopySource(null)
       return

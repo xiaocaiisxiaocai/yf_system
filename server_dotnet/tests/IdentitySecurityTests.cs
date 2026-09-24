@@ -50,6 +50,17 @@ public sealed class IdentitySecurityTests
     }
 
     [Fact]
+    public void PasswordChangeAttemptsAreLimitedPerAccountRegardlessOfLoginBudget()
+    {
+        var limiter = new LoginRateLimiter();
+        Assert.All(Enumerable.Range(1, LoginRateLimiter.MaximumPasswordChangeAttempts),
+            _ => Assert.True(limiter.AllowPasswordChange(7)));
+        Assert.False(limiter.AllowPasswordChange(7));
+        Assert.True(limiter.AllowPasswordChange(8));
+        Assert.True(limiter.AllowLogin("192.0.2.1", "target"));
+    }
+
+    [Fact]
     public void LoginRateLimiterKeepsIpAndIpAccountLimits()
     {
         var accountLimiter = new LoginRateLimiter();

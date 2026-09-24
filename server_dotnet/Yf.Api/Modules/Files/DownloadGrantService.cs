@@ -57,9 +57,10 @@ public sealed class DownloadGrantService
         {
             CleanupExpired(now);
             // Removing before validation makes every grant a single redemption attempt and avoids races.
-            if (!grants.Remove(handle, out var grant) || !Matches(grant.SecretHash, secret))
-                throw InvalidGrant();
+            if (!grants.Remove(handle, out var grant)) throw InvalidGrant();
+            // The grant is consumed even when the secret is wrong, so release its quota slot first.
             DecrementUser(grant.UserId);
+            if (!Matches(grant.SecretHash, secret)) throw InvalidGrant();
             var sessionSecret = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
             var expiresAt = now.AddSeconds(SessionLifetimeSeconds);
             sessions[handle] = new(grant.UserId, grant.AuthSessionId, grant.FileIds, grant.Batch,

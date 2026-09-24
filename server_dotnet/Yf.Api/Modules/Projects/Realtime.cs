@@ -350,22 +350,53 @@ internal sealed class ProjectRealtimePublisher(
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Changes for different projects dispatch concurrently, so one project's slow authorization or send
+    /// does not delay every other project. A given (project, kind) is never dispatched twice at once: it
+    /// stays marked as enqueued until <see cref="RequeueOrRelease"/>, and publishes meanwhile only mark it dirty.
+    /// </summary>
+    internal const int MaximumConcurrentDispatches = 4;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        using var slots = new SemaphoreSlim(MaximumConcurrentDispatches);
+        var running = new ConcurrentDictionary<Task, byte>();
         try
         {
             await foreach (var change in queue.Reader.ReadAllAsync(stoppingToken))
             {
-                try { await DispatchAsync(change, stoppingToken); }
-                catch (Exception error) when (error is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
-                {
-                    logger.LogWarning(error, "Realtime dispatch failed for project {ProjectId}", change.ProjectId);
-                }
-                finally { RequeueOrRelease(change, stoppingToken.IsCancellationRequested); }
+                await slots.WaitAsync(stoppingToken);
+                var dispatch = DispatchAndReleaseAsync(change, slots, stoppingToken);
+                running.TryAdd(dispatch, 0);
+                _ = dispatch.ContinueWith(completed => running.TryRemove(completed, out _),
+                    CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
+        }
+        finally
+        {
+            // Let in-flight sends observe cancellation and finish before the semaphore is disposed.
+            await Task.WhenAll(running.Keys);
+        }
+    }
+
+    private async Task DispatchAndReleaseAsync(PendingProjectChange change, SemaphoreSlim slots, CancellationToken stoppingToken)
+    {
+        await Task.Yield();
+        try { await DispatchAsync(change, stoppingToken); }
+        catch (Exception error) when (error is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
+        {
+            logger.LogWarning(error, "Realtime dispatch failed for project {ProjectId}", change.ProjectId);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            RequeueOrRelease(change, stoppingToken.IsCancellationRequested);
+            slots.Release();
         }
     }
 

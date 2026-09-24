@@ -10,8 +10,14 @@ public sealed class LoginRateLimiter
     public bool AllowLogin(string clientIp, string employeeNo) =>
         AllowIp(clientIp) && AllowIpAndAccount(clientIp, employeeNo);
 
-    public bool AllowPasswordChange(string clientIp, ulong userId) =>
-        Allow($"password-change:{clientIp}:{userId}", 5);
+    /// <summary>
+    /// Every self-service old-password check costs one Argon2 derivation from the shared login pool, so
+    /// attempts (not only failures) are limited per account, independent of the client IP.
+    /// </summary>
+    public bool AllowPasswordChange(ulong userId) =>
+        Allow($"password-change:{userId}", MaximumPasswordChangeAttempts);
+
+    internal const int MaximumPasswordChangeAttempts = 5;
 
     private bool AllowIpAndAccount(string clientIp, string employeeNo) =>
         Allow($"login:{clientIp}:{employeeNo}", 10);

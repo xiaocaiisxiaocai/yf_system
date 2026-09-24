@@ -501,7 +501,7 @@ internal sealed class MessageService(
         {
             await using var input = file.OpenReadStream();
             await using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-                64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan | FileOptions.WriteThrough);
+                64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
             var buffer = new byte[64 * 1024];
             int read;
             while ((read = await input.ReadAsync(buffer, ct)) != 0)

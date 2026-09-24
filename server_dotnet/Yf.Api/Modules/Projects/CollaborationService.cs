@@ -73,8 +73,9 @@ internal sealed class CollaborationService
             await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
         await using var db = EfDb.Use(conn, tx);
         var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
-        var activities = VisibleMeaningfulActivities(db, visibleProjects, current.Id, canReceivePendingAcceptance);
+        var activities = MeaningfulActivities(db.ProjectActivities, current.Id, canReceivePendingAcceptance);
         var cutoff = await UnreadWindow.CutoffAsync(db, ct);
+        // Join the visible projects once: the same join supplies both the scope check and the project name.
         var query =
             from activity in activities
             join project in visibleProjects on activity.ProjectId equals project.Id
@@ -188,8 +189,19 @@ internal sealed class CollaborationService
         IQueryable<Yf.Api.Infrastructure.Entities.Project> visibleProjects,
         ulong userId,
         bool canReceivePendingAcceptance) =>
-        from activity in db.ProjectActivities
-        join project in visibleProjects on activity.ProjectId equals project.Id
+        MeaningfulActivities(
+            from activity in db.ProjectActivities
+            join project in visibleProjects on activity.ProjectId equals project.Id
+            select activity,
+            userId,
+            canReceivePendingAcceptance);
+
+    /// <summary>Activities that count as collaboration notifications for <paramref name="userId"/>; scope is applied by the caller.</summary>
+    private static IQueryable<ProjectActivity> MeaningfulActivities(
+        IQueryable<ProjectActivity> source,
+        ulong userId,
+        bool canReceivePendingAcceptance) =>
+        from activity in source
         where activity.ActorId != null && activity.ActorId != userId
             && ((activity.ActivityType == "FILE" && activity.Action == "UPLOAD")
                 || (activity.ActivityType == "MESSAGE" && activity.Action == "CREATE")
