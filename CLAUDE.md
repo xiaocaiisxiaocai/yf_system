@@ -24,6 +24,10 @@ Run from `server_dotnet/`. Requires .NET 8 SDK (`global.json` selects `8.0.412`)
 $env:YF_CONFIG_PATH = 'D:\YfConfig\appsettings.Local.json'
 dotnet run --project .\Yf.Api --launch-profile Yf.Local   # Development env, http://127.0.0.1:8080
 
+# Rebuild + restart local backend (Release, port 8080) and Vite (5180): backs up the local DB, stops only
+# this project's listeners, builds, --migrate-database, waits for /health. Logs -> .artifacts/runtime/restart-dev/
+powershell -NoProfile -File .\scripts\restart-dev.ps1 -DatabaseName <dev_db> -StorageRoot <storage_dir>   # -SkipFrontend / -SkipBackup
+
 # Pre-start dependency check (config, EF migrations, storage R/W); JSON output, non-zero on failure.
 # readyForStartup=true does not prove the API is listening — also hit /health and a real login.
 dotnet restore .\Yf.Api\Yf.Api.csproj --locked-mode
