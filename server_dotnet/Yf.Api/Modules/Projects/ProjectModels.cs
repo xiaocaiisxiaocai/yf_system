@@ -109,6 +109,12 @@ public sealed class ProjectRejectRequest
     public ulong? ExpectedSubmissionId { get; init; }
 }
 
+public sealed class ProjectGroupTransferRequest
+{
+    [JsonPropertyName("responsibleUserId")]
+    public ulong? ResponsibleUserId { get; init; }
+}
+
 public sealed class ProjectDecisionRequest
 {
     [JsonPropertyName("expectedSubmissionId")]

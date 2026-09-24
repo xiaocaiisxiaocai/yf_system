@@ -96,6 +96,7 @@
   "PUT /api/v1/auth/password",
   "PUT /api/v1/auth/profile",
   "PUT /api/v1/project-groups/{}",
+  "PUT /api/v1/project-groups/{}/responsible",
   "PUT /api/v1/projects/{}",
   "PUT /api/v1/projects/{}/status",
   "PUT /api/v1/project-dictionaries/{}",

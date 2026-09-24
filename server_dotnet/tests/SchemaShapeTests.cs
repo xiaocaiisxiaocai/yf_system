@@ -94,7 +94,7 @@ public sealed class SchemaShapeTests
         Assert.Equal(hash, await conn.ExecuteScalarAsync<string>("SELECT password_hash FROM users WHERE employee_no='admin'"));
         Assert.Equal("RestartSentinel", await conn.ExecuteScalarAsync<string>("SELECT real_name FROM users WHERE employee_no='admin'"));
         Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT must_change_password FROM users WHERE employee_no='admin'"));
-        Assert.Equal(11, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+        Assert.Equal(12, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
     }
 
     [Fact(Timeout = 120_000)]
@@ -193,14 +193,15 @@ public sealed class SchemaShapeTests
                     "20260923141854_AddProjectCopyJobs",
                     "20260923151307_RemoveManualAuditDeletion",
                     "20260924003253_AddUploadFingerprintsSharedBlobsAndIdentityRevision",
+                    "20260924025646_AddDictionaryAndOwnerTransferPermissions",
                 },
                 (await conn.QueryAsync<string>("SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId")).ToArray());
             Assert.False(await TableExistsAsync(conn, "yf_schema_migrations", ct));
             Assert.False(await TableExistsAsync(conn, "seaql_migrations", ct));
             Assert.Equal("admin", await conn.ExecuteScalarAsync<string>("SELECT employee_no FROM users"));
             Assert.Equal("系统管理员", await conn.ExecuteScalarAsync<string>("SELECT name FROM roles"));
-            Assert.Equal(34, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
-            Assert.Equal(34, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(37, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
+            Assert.Equal(37, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='log:delete'"));
             Assert.Equal(14, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
@@ -322,7 +323,7 @@ public sealed class SchemaShapeTests
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await using var conn = await database.Database.OpenAsync(ct);
-        Assert.Equal(11, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
+        Assert.Equal(12, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM users WHERE employee_no='admin'"));
         Assert.Equal(27, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
         Assert.Equal(7, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));

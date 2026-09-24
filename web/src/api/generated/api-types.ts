@@ -572,12 +572,16 @@ export interface ProjectGroupResponse {
   unreadMessages: number
 }
 
+export interface ProjectGroupTransferRequest {
+  responsibleUserId?: number | null
+}
+
 export interface ProjectOwnerOption {
   id: number
   employeeNo: string
   realName: string
-  sectionId: number
-  sectionName: string
+  sectionId: number | null
+  sectionName: string | null
 }
 
 export interface ProjectRejectRequest {
@@ -936,6 +940,7 @@ export interface ApiResponses {
   "GET /project-groups/{id}": ProjectGroupDetailResponse
   "PUT /project-groups/{id}": ProjectGroupResponse
   "POST /project-groups/{id}/projects": ProjectResponse
+  "PUT /project-groups/{id}/responsible": ProjectGroupResponse
   "GET /project-owner-options": Array<ProjectOwnerOption>
   "DELETE /projects/{id}": EmptyResponse
   "GET /projects/{id}": ProjectDetailResponse

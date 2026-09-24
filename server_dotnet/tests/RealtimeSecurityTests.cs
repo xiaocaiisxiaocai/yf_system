@@ -69,16 +69,17 @@ public sealed class RealtimeSecurityTests
             new RealtimeConnection("owner", 10, "s1", expires),
             new RealtimeConnection("view-all", 11, "s2", expires),
             new RealtimeConnection("unrelated-internal", 12, "s3", expires),
+            new RealtimeConnection("group-creator", 13, "s7", expires),
             new RealtimeConnection("supplier", 20, "s4", expires, "SUPPLIER", 100),
             new RealtimeConnection("other-supplier", 21, "s5", expires, "SUPPLIER", 200),
             // Opened while the account belonged to supplier 200; it has since been moved to supplier 100.
             new RealtimeConnection("moved-supplier", 22, "s6", expires, "SUPPLIER", 200),
         };
-        var audience = new ProjectRealtimeAudience(999, 100, 10, new HashSet<ulong> { 11 }, new HashSet<ulong> { 20, 22 });
+        var audience = new ProjectRealtimeAudience(999, 100, 10, new HashSet<ulong> { 11 }, new HashSet<ulong> { 20, 22 }, 13);
 
         var candidates = ProjectRealtimeAuthorizer.SelectCandidates(connections, audience);
 
-        Assert.Equal(["owner", "view-all", "supplier", "moved-supplier"],
+        Assert.Equal(["owner", "view-all", "group-creator", "supplier", "moved-supplier"],
             candidates.Select(connection => connection.ConnectionId).ToArray());
     }
 

@@ -119,7 +119,7 @@ internal sealed class ProjectDictionaryService(AuditService audit)
     internal static async Task RequireReadAsync(MySqlConnection conn, MySqlTransaction tx, CurrentUser current, CancellationToken ct)
     {
         AccessService.RequireInternal(current);
-        if (await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "config:manage", ct)) return;
+        if (await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "dict:manage", ct)) return;
         await RequireOptionReadAsync(conn, tx, current, ct);
     }
 
@@ -129,7 +129,7 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         await AccessService.LockManagementAsync(conn, tx, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         AccessService.RequireInternal(current);
-        await AccessService.RequirePermissionAsync(conn, tx, current, "config:manage", ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "dict:manage", ct);
         return current;
     }
 

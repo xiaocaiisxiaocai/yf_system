@@ -49,6 +49,9 @@ internal static class BootstrapSeedCatalog
         (45, "project:submit", "提交项目验收", "ACTION", 2, 40),
         (46, "project:confirm", "确认/驳回项目", "ACTION", 2, 41),
         (47, "project:withdraw", "撤回项目验收", "ACTION", 2, 42),
+        (48, "system:dict", "数据字典", "MENU", null, 8),
+        (49, "dict:manage", "数据字典管理", "ACTION", 48, 28),
+        (50, "project:transfer", "变更项目负责人", "ACTION", 2, 43),
     ];
 
     private static readonly (string Key, string Value, string Description)[] Configs =

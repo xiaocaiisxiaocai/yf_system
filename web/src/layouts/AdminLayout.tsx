@@ -33,7 +33,7 @@ const MENU_ITEMS = [
   { code: 'rbac:role', path: '/rbac/roles', label: '角色权限', icon: <IconSafe /> },
   { code: 'log:audit', path: '/logs', label: '操作日志', icon: <IconHistory /> },
   { code: 'system:config', path: '/system/config', label: '系统参数', icon: <IconSettings /> },
-  { code: 'system:config', path: '/system/dictionaries', label: '数据字典', icon: <IconBook /> },
+  { code: 'system:dict', path: '/system/dictionaries', label: '数据字典', icon: <IconBook /> },
 ]
 
 export default function AdminLayout() {

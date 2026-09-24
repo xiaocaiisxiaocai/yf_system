@@ -153,8 +153,8 @@ internal sealed partial class ProjectService(
             || await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct);
         var query = db.Suppliers.Where(supplier => supplier.Status == AccountStatuses.Active);
         if (!canListAll)
-            query = query.Where(supplier => db.Projects.Any(project =>
-                project.SupplierId == supplier.Id && project.ResponsibleUserId == current.Id));
+            query = query.Where(supplier => db.ProjectGroups.Any(group => group.SupplierId == supplier.Id
+                && (group.ResponsibleUserId == current.Id || group.CreatedBy == current.Id)));
         var rows = await query.OrderBy(supplier => supplier.Id)
             .Select(supplier => new SupplierOption(supplier.Id, supplier.Name))
             .ToListAsync(ct);
@@ -166,7 +166,9 @@ internal sealed partial class ProjectService(
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
-        await ProjectDictionaryService.RequireOptionReadAsync(conn, tx, current, ct);
+        AccessService.RequireInternal(current);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "project:transfer", ct);
         await using var db = EfDb.Use(conn, tx);
         var rows = await EligibleOwners(db)
             .OrderBy(owner => owner.RealName).ThenBy(owner => owner.Id)
@@ -308,38 +310,29 @@ internal sealed partial class ProjectService(
     }
 
     /// <summary>
-    /// Users who may own a project: active internal accounts with project:list, placed directly in an
-    /// active section whose department and division (when present) are active too.
+    /// Users who may own a project: active internal accounts granted project:list through an active role.
+    /// The section is the user's direct section when it and its ancestors are active, otherwise null.
     /// </summary>
-    private static IQueryable<EligibleOwnerRow> EligibleOwners(YfDbContext db) =>
+    internal static IQueryable<EligibleOwnerRow> EligibleOwners(YfDbContext db) =>
         from user in db.Users
-        join section in db.Departments on user.DepartmentId equals (ulong?)section.Id
         where user.UserType == UserTypes.Internal
               && user.Status == AccountStatuses.Active
-              && section.Kind == "SECTION"
-              && section.Status == AccountStatuses.Active
-              && (section.ParentId == null || db.Departments.Any(parent =>
-                  parent.Id == section.ParentId
-                  && parent.Kind == "DEPARTMENT"
-                  && parent.Status == AccountStatuses.Active
-                  && (parent.ParentId == null || db.Departments.Any(root =>
-                      root.Id == parent.ParentId
-                      && root.Kind == "DIVISION"
-                      && root.Status == AccountStatuses.Active
-                      && root.ParentId == null))))
-              && (from userRole in db.UserRoles
-                  join role in db.Roles on userRole.RoleId equals role.Id
-                  join rolePermission in db.RolePermissions on role.Id equals rolePermission.RoleId
-                  join permission in db.Permissions on rolePermission.PermissionId equals permission.Id
-                  where userRole.UserId == user.Id
-                        && role.Status == AccountStatuses.Active
-                        && permission.Code == "project:list"
-                  select permission.Id).Any()
+              && AccessService.UsersWithPermission(db, "project:list").Contains(user.Id)
         select new EligibleOwnerRow
         {
             Id = user.Id, EmployeeNo = user.EmployeeNo, RealName = user.RealName,
-            SectionId = section.Id, SectionName = section.Name,
+            SectionId = ActiveSections(db).Where(section => section.Id == user.DepartmentId)
+                .Select(section => (ulong?)section.Id).FirstOrDefault(),
+            SectionName = ActiveSections(db).Where(section => section.Id == user.DepartmentId)
+                .Select(section => section.Name).FirstOrDefault(),
         };
+
+    private static IQueryable<Department> ActiveSections(YfDbContext db) =>
+        db.Departments.Where(section => section.Kind == "SECTION" && section.Status == AccountStatuses.Active
+            && (section.ParentId == null || db.Departments.Any(parent => parent.Id == section.ParentId
+                && parent.Kind == "DEPARTMENT" && parent.Status == AccountStatuses.Active
+                && (parent.ParentId == null || db.Departments.Any(root => root.Id == parent.ParentId
+                    && root.Kind == "DIVISION" && root.Status == AccountStatuses.Active && root.ParentId == null)))));
 
     internal static async Task<ProjectMetadataInput> ValidateMetadataAsync(
         MySqlConnection conn,
@@ -515,13 +508,13 @@ internal sealed partial class ProjectService(
         public string Status { get; init; } = string.Empty;
     }
 
-    private sealed class EligibleOwnerRow
+    internal sealed class EligibleOwnerRow
     {
         public ulong Id { get; init; }
         public string EmployeeNo { get; init; } = string.Empty;
         public string RealName { get; init; } = string.Empty;
-        public ulong SectionId { get; init; }
-        public string SectionName { get; init; } = string.Empty;
+        public ulong? SectionId { get; init; }
+        public string? SectionName { get; init; }
     }
 
     private sealed class OwnerSelection

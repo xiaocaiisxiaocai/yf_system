@@ -30,6 +30,7 @@ internal static class ProjectReviewerService
                     && db.Permissions.Any(permission =>
                         permission.Id == rolePermission.PermissionId && permission.Code == "project:confirm"))))
             .Where(user => user.Id == project.ResponsibleUserId
+                || db.ProjectGroups.Any(group => group.Id == project.ProjectGroupId && group.CreatedBy == user.Id)
                 || db.UserRoles.Any(userRole =>
                     userRole.UserId == user.Id
                     && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == AccountStatuses.Active)

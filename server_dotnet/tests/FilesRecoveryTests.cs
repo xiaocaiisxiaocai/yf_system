@@ -556,7 +556,7 @@ public sealed class FilesRecoveryTests
                         );
                         CREATE TABLE user_roles(user_id BIGINT UNSIGNED NOT NULL, role_id BIGINT UNSIGNED NOT NULL);
                         CREATE TABLE role_permissions(role_id BIGINT UNSIGNED NOT NULL, permission_id BIGINT UNSIGNED NOT NULL);
-                        CREATE TABLE project_groups(id BIGINT UNSIGNED PRIMARY KEY);
+                        CREATE TABLE project_groups(id BIGINT UNSIGNED PRIMARY KEY, created_by BIGINT UNSIGNED NOT NULL DEFAULT 0);
                         CREATE TABLE projects(
                             id BIGINT UNSIGNED PRIMARY KEY, project_group_id BIGINT UNSIGNED NOT NULL,
                             supplier_id BIGINT UNSIGNED NOT NULL,

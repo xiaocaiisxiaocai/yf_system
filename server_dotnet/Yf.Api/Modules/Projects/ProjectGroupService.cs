@@ -281,6 +281,70 @@ internal sealed class ProjectGroupService(
         return result;
     }
 
+    internal async Task<ProjectGroupResponse> TransferAsync(
+        MySqlConnection conn,
+        CurrentUser actor,
+        ulong groupId,
+        ProjectGroupTransferRequest request,
+        string? ip,
+        CancellationToken ct)
+    {
+        if (!actor.IsInternal) throw ApiException.Forbidden();
+        if (request.ResponsibleUserId is not ulong targetId || targetId == 0)
+            throw ApiException.BadRequest("请选择新的负责人");
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        await AccessService.LockBusinessAsync(conn, tx, ct);
+        var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
+        var access = await ProjectGroupAccessService.RequireViewAsync(conn, tx, current, groupId, true, ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "project:transfer", ct);
+        if (access.ResponsibleUserId == targetId) throw ApiException.BadRequest("新负责人与当前负责人相同");
+        await using var db = EfDb.Use(conn, tx);
+        // Reviewers and pending-acceptance mail are derived from the owner, so keep them stable during acceptance.
+        if (await db.Projects.AnyAsync(project => project.ProjectGroupId == groupId
+                && project.Status == ProjectStatuses.PendingConfirmation, ct))
+            throw ApiException.Conflict("存在待验收子项目，暂不能变更负责人");
+        var owner = await ProjectService.EligibleOwners(db).Where(row => row.Id == targetId).SingleOrDefaultAsync(ct)
+            ?? throw ApiException.BadRequest("新负责人必须是启用且拥有项目列表权限的公司内部账号");
+        var before = await LoadGroupAsync(db, groupId, current.Id, ct);
+
+        await db.ProjectGroups.Where(group => group.Id == groupId).ExecuteUpdateAsync(setters => setters
+            .SetProperty(group => group.ResponsibleUserId, owner.Id)
+            .SetProperty(group => group.SectionId, owner.SectionId), ct);
+        // Access follows the owner, so completed subprojects move with the main project as well.
+        var childIds = await db.Projects.Where(project => project.ProjectGroupId == groupId)
+            .OrderBy(project => project.Id).Select(project => project.Id).ToArrayAsync(ct);
+        await db.Projects.Where(project => project.ProjectGroupId == groupId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(project => project.ResponsibleUserId, owner.Id)
+                .SetProperty(project => project.SectionId, owner.SectionId), ct);
+
+        var responsibleChange = new AuditChange("responsibleUserId", "负责人",
+            before.ResponsibleUserId is null ? null : new
+            {
+                id = before.ResponsibleUserId, employeeNo = before.ResponsibleUserEmployeeNo, name = before.ResponsibleUserName,
+            },
+            new { id = owner.Id, employeeNo = owner.EmployeeNo, name = owner.RealName });
+        var sectionChange = new AuditChange("sectionId", "课别",
+            before.SectionId is null ? null : new { id = before.SectionId, name = before.SectionName },
+            owner.SectionId is null ? null : new { id = owner.SectionId, name = owner.SectionName });
+        var audits = childIds.Select(childId => new AuditWrite(
+            "PROJECT_UPDATE", "project", childId, new
+            {
+                projectGroupId = groupId,
+                inheritedFromMainProject = true,
+                changedByMainProject = true,
+                changes = AuditChange.OnlyChanged(responsibleChange, sectionChange),
+            })).Append(new AuditWrite("PROJECT_GROUP_TRANSFER", "project_group", groupId, new
+        {
+            name = before.Name,
+            changes = AuditChange.OnlyChanged(responsibleChange, sectionChange),
+        })).ToArray();
+        await audit.WriteBatchAsync(conn, tx, current.Id, audits, ip, ct);
+        var result = ProjectJson.ProjectGroup(await LoadGroupAsync(db, groupId, current.Id, ct));
+        await tx.CommitAsync(ct);
+        return result;
+    }
+
     internal async Task<ProjectResponse> CreateSubprojectAsync(
         MySqlConnection conn,
         CurrentUser actor,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Badge, Button, Card, Descriptions, Empty, Form, Input, Message, Modal, Popconfirm, Progress, Space, Spin, Table, Tag, Typography,
+  Badge, Button, Card, Descriptions, Empty, Form, Input, Message, Modal, Popconfirm, Progress, Select, Space, Spin, Table, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconDown, IconPlus } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -20,6 +20,7 @@ import './ProjectDetail.css'
 import type { ApiResponses } from '../../api/types'
 
 interface ChildFormValues { name?: string; description?: string }
+type OwnerOption = ApiResponses['GET /project-owner-options'][number]
 
 function display(value?: string | null) { return value?.trim() || '-' }
 function suggestedCopyName(name: string) {
@@ -58,6 +59,12 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const copyJobsInitialized = useRef(false)
   const statusInFlight = useRef(new Set<number>())
   const [statusUpdating, setStatusUpdating] = useState<Set<number>>(() => new Set())
+  const [transferOpen, setTransferOpen] = useState(false)
+  const [ownerOptions, setOwnerOptions] = useState<OwnerOption[]>([])
+  const [ownerOptionsLoading, setOwnerOptionsLoading] = useState(false)
+  const [transferTarget, setTransferTarget] = useState<number | undefined>()
+  const [transferring, setTransferring] = useState(false)
+  const transferInFlight = useRef(false)
   const [form] = Form.useForm()
   const [copyForm] = Form.useForm()
   const { user, hasPerm } = useAuth()
@@ -203,6 +210,28 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     catch { /* 请求错误由统一拦截器提示，解除当前行锁后可重试。 */ }
     finally { statusInFlight.current.delete(project.id); setStatusUpdating(new Set(statusInFlight.current)) }
   }
+  const canTransfer = isInternal && hasPerm('project:transfer')
+  const openTransfer = () => {
+    setTransferTarget(undefined); setTransferOpen(true); setOwnerOptionsLoading(true)
+    http.get<ApiResponses['GET /project-owner-options']>('/project-owner-options')
+      .then((response) => setOwnerOptions(response.data))
+      .catch(() => { setOwnerOptions([]) /* 请求错误由统一拦截器提示。 */ })
+      .finally(() => setOwnerOptionsLoading(false))
+  }
+  const closeTransfer = () => { if (!transferring) setTransferOpen(false) }
+  const submitTransfer = async () => {
+    if (!transferTarget || transferInFlight.current) return
+    transferInFlight.current = true; setTransferring(true)
+    try {
+      await http.put<ApiResponses['PUT /project-groups/{id}/responsible']>(`/project-groups/${groupId}/responsible`, { responsibleUserId: transferTarget })
+      setTransferOpen(false)
+      // 转交后仍可访问：主项目创建人或具备查看全部项目权限；否则回到列表，避免停留在无权页面。
+      if (hasPerm('project:view_all') || data.group.createdBy === user?.id) { Message.success('负责人已变更'); load() }
+      else { Message.success('负责人已变更，您已不再负责该主项目'); navigate('/projects') }
+    } catch {
+      /* 请求错误由统一拦截器提示，保留弹窗供重试。 */
+    } finally { transferInFlight.current = false; setTransferring(false) }
+  }
   const remove = async (project: ProjectSummary) => {
     try { await http.delete<ApiResponses['DELETE /projects/{id}']>(`/projects/${project.id}`); Message.success('子项目已删除'); load() }
     catch { /* 请求错误由统一拦截器提示。 */ }
@@ -261,6 +290,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
           </div>
           <Space className="project-group-summary-actions">
             <Tag color={PROJECT_STATUS[group.status]?.color}>{PROJECT_STATUS[group.status]?.text}</Tag>
+            {canTransfer && <Button size="small" disabled={group.pendingCount > 0} title={group.pendingCount > 0 ? '存在待验收子项目，暂不能变更负责人' : undefined} onClick={openTransfer}>变更负责人</Button>}
             <Button
               type="text"
               size="small"
@@ -283,7 +313,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
           ]} />
           <div className="project-summary-description">
             <span className="project-summary-description-label">访问范围</span>
-            <Typography.Text>该 Robot 厂商的全部启用账号均可访问此主项目及其子项目。</Typography.Text>
+            <Typography.Text>该 Robot 厂商的全部启用账号均可访问此主项目及其子项目；公司内部由负责人、主项目创建人及具备查看全部项目权限的账号访问。</Typography.Text>
           </div>
           {group.description && <div className="project-summary-description"><span className="project-summary-description-label">主项目说明</span><Typography.Text>{group.description}</Typography.Text></div>}
         </div>}
@@ -314,6 +344,43 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
           <Form.Item label="子项目说明" field="description"><Input.TextArea rows={3} maxLength={500} showWordLimit placeholder="选填" /></Form.Item>
           {!editing && <div className="dialog-note">Robot 厂商、工令号、机型、Robot 料号与型号、负责人、课别、优先级和需求完成时间将从主项目继承。</div>}
         </Form>
+      </Modal>
+
+      <Modal
+        className="form-dialog"
+        title="变更负责人"
+        visible={transferOpen}
+        onOk={submitTransfer}
+        onCancel={closeTransfer}
+        confirmLoading={transferring}
+        closable={!transferring}
+        maskClosable={!transferring}
+        escToExit={!transferring}
+        okText="确认变更"
+        okButtonProps={{ disabled: !transferTarget }}
+        unmountOnExit
+      >
+        <Form layout="vertical">
+          <Form.Item label="当前负责人"><Typography.Text>{responsible}</Typography.Text></Form.Item>
+          <Form.Item label="新负责人" required>
+            <Select
+              showSearch
+              allowClear
+              loading={ownerOptionsLoading}
+              placeholder="搜索姓名或工号"
+              value={transferTarget}
+              onChange={(value?: number) => setTransferTarget(value)}
+              filterOption={(input, option) => String(option?.props?.children ?? '').toLowerCase().includes(input.trim().toLowerCase())}
+            >
+              {ownerOptions.filter((owner) => owner.id !== group.responsibleUserId).map((owner) => (
+                <Select.Option key={owner.id} value={owner.id}>
+                  {`${owner.realName}（${owner.employeeNo}）${owner.sectionName ? ` · ${owner.sectionName}` : ''}`}
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+        </Form>
+        <div className="dialog-note">负责人和课别会同步到全部子项目。原负责人如不是主项目创建人且没有查看全部项目权限，将不再能访问该主项目。存在待验收子项目时不能变更。</div>
       </Modal>
 
       <Modal

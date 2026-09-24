@@ -141,7 +141,8 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await context.Database.OpenConnectionAsync(ct);
         var connection = context.Database.Connection();
         await AccessService.RequirePermissionAsync(connection, null, actor, "supplier:account", ct);
-        var owned = (await permissions.GetCodesAsync(connection, null, actor.Id, ct)).ToArray();
+        var owned = (await permissions.GetCodesAsync(connection, null, actor.Id, ct))
+            .Concat(RoleService.SupplierExclusivePermissionCodes).ToArray();
         var allowed = RoleService.SupplierPermissionCodes.ToArray();
         var isAdmin = await AccessService.IsSystemAdminAsync(connection, null, actor.Id, ct);
         var term = string.IsNullOrWhiteSpace(keyword) ? null : keyword.Trim();
@@ -297,8 +298,17 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var codes = await context.RolePermissions.Where(x => x.RoleId == roleId)
             .Join(context.Permissions, x => x.PermissionId, x => x.Id, (_, permission) => permission.Code).ToArrayAsync(ct);
         if (!RoleService.IsSupplierAccountPermissionSetAllowed(codes)) throw ApiException.BadRequest("供应商账号角色只能包含供应商自有项目所需权限");
-        await permissions.EnsureManageRoleAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, roleId, ct);
+        await EnsureSupplierRoleWithinCeilingAsync(context, actor, codes, ct);
         return role;
+    }
+
+    // Same delegation ceiling as internal roles, except supplier-only codes the manager cannot hold effectively.
+    private async Task EnsureSupplierRoleWithinCeilingAsync(YfDbContext context, CurrentUser actor, IEnumerable<string> codes, CancellationToken ct)
+    {
+        var connection = context.Database.Connection(); var transaction = context.Database.RequireTransaction();
+        if (await AccessService.IsSystemAdminAsync(connection, transaction, actor.Id, ct)) return;
+        var owned = (await permissions.GetCodesAsync(connection, transaction, actor.Id, ct)).ToHashSet(StringComparer.Ordinal);
+        if (codes.Any(code => !RoleService.SupplierExclusivePermissionCodes.Contains(code) && !owned.Contains(code))) throw ApiException.Forbidden();
     }
 
     private static Task<Supplier?> FindAsync(YfDbContext context, ulong id, CancellationToken ct) => context.Suppliers.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, ct);

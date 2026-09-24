@@ -30,7 +30,9 @@ public static class ProjectAccessService
             return db.Projects.Where(project => project.SupplierId == supplierId);
         }
         if (await HasPermissionAsync(db, current.Id, "project:view_all", ct)) return db.Projects;
-        return db.Projects.Where(project => project.ResponsibleUserId == current.Id);
+        var userId = current.Id;
+        return db.Projects.Where(project => project.ResponsibleUserId == userId
+            || db.ProjectGroups.Any(group => group.Id == project.ProjectGroupId && group.CreatedBy == userId));
     }
 
     public static async Task<ProjectAccess> RequireViewAsync(
@@ -165,8 +167,10 @@ public static class ProjectAccessService
                 throw ApiException.OutOfScope();
             return access;
         }
-        if (await HasPermissionAsync(db, current.Id, "project:view_all", ct)
-            || access.ResponsibleUserId == current.Id)
+        if (access.ResponsibleUserId == current.Id
+            || await HasPermissionAsync(db, current.Id, "project:view_all", ct)
+            || access.ProjectGroupId is ulong groupId
+                && await db.ProjectGroups.AnyAsync(group => group.Id == groupId && group.CreatedBy == current.Id, ct))
             return access;
         throw ApiException.OutOfScope();
     }

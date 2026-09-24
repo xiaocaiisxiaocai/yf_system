@@ -29,7 +29,8 @@ internal static class ProjectGroupAccessService
         }
         if (await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct))
             return db.ProjectGroups;
-        return db.ProjectGroups.Where(group => group.ResponsibleUserId == current.Id);
+        var userId = current.Id;
+        return db.ProjectGroups.Where(group => group.ResponsibleUserId == userId || group.CreatedBy == userId);
     }
 
     internal static async Task<ProjectGroupAccess> RequireViewAsync(
@@ -70,8 +71,8 @@ internal static class ProjectGroupAccessService
                 throw ApiException.OutOfScope();
             return access;
         }
-        if (await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct)
-            || access.ResponsibleUserId == current.Id)
+        if (access.ResponsibleUserId == current.Id || access.CreatedBy == current.Id
+            || await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct))
             return access;
         throw ApiException.OutOfScope();
     }

@@ -14,6 +14,13 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         "message:create", "project:submit", "project:withdraw"
     }.ToFrozenSet(StringComparer.Ordinal);
 
+    // Supplier-only workflow actions: internal accounts can never exercise them, so they are left out of
+    // the delegation ceiling when an internal manager assigns a supplier role.
+    internal static FrozenSet<string> SupplierExclusivePermissionCodes { get; } = new[]
+    {
+        "project:submit", "project:withdraw"
+    }.ToFrozenSet(StringComparer.Ordinal);
+
     public async Task<PermissionResponse[]> PermissionsAsync(CurrentUser actor, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);

@@ -120,7 +120,7 @@ export default function App() {
           <Route path="rbac/roles" element={<Guard menu="rbac:role" permission="role:manage"><RoleList /></Guard>} />
           <Route path="logs" element={<Guard menu="log:audit" permission="log:view"><AuditLog /></Guard>} />
           <Route path="system/config" element={<Guard menu="system:config" permission="config:manage"><SysConfig /></Guard>} />
-          <Route path="system/dictionaries" element={<Guard menu="system:config" permission="config:manage"><Dictionaries /></Guard>} />
+          <Route path="system/dictionaries" element={<Guard menu="system:dict" permission="dict:manage"><Dictionaries /></Guard>} />
           {token ? <Route path="*" element={<NotFound />} /> : null}
         </Route>
         <Route path="*" element={<NotFound />} />

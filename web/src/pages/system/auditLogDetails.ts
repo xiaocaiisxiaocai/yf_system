@@ -72,6 +72,7 @@ export const ACTIONS: Record<string, ActionMeta> = {
   PROJECT_CREATE: action('创建项目', 'PROJECT', '项目协作', 'arcoblue'),
   PROJECT_GROUP_CREATE: action('创建主项目', 'PROJECT', '项目协作', 'arcoblue'),
   PROJECT_GROUP_UPDATE: action('更新主项目', 'PROJECT', '项目协作', 'purple'),
+  PROJECT_GROUP_TRANSFER: action('变更项目负责人', 'PROJECT', '项目协作', 'purple'),
   PROJECT_GROUP_STATUS_AUTO: action('同步主项目状态', 'PROJECT', '项目协作', 'green'),
   PROJECT_GROUP_DELETE: action('删除主项目', 'PROJECT', '项目协作', 'red'),
   PROJECT_COPY: action('复制项目', 'PROJECT', '项目协作', 'purple'),

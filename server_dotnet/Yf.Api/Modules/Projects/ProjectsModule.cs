@@ -52,6 +52,8 @@ public static class ProjectsModule
             WithDb(context, (conn, actor, _, ct) => service.DetailAsync(conn, actor, id, ct)));
         api.MapPut("/project-groups/{id:long}", (HttpContext context, ulong id, ProjectUpsertRequest request, ProjectGroupService service) =>
             WithDb(context, (conn, actor, ip, ct) => service.UpdateAsync(conn, actor, id, request, ip, ct)));
+        api.MapPut("/project-groups/{id:long}/responsible", (HttpContext context, ulong id, ProjectGroupTransferRequest request, ProjectGroupService service) =>
+            WithDb(context, (conn, actor, ip, ct) => service.TransferAsync(conn, actor, id, request, ip, ct)));
         api.MapDelete("/project-groups/{id:long}", (HttpContext context, ulong id, ProjectGroupService service) =>
             WithDb(context, (conn, actor, ip, ct) => Empty(service.DeleteAsync(conn, actor, id, ip, ct))));
         api.MapPost("/project-groups/{id:long}/projects", (HttpContext context, ulong id, SubprojectUpsertRequest request, ProjectGroupService service) =>

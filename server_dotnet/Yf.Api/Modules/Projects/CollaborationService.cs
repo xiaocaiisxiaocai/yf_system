@@ -49,7 +49,8 @@ internal sealed class CollaborationService
             INNER JOIN projects p ON p.id=pa.project_id
             LEFT JOIN collaboration_reads cr ON cr.activity_id=pa.id AND cr.user_id={current.Id}
             WHERE pa.occurred_at>={cutoff}
-              AND (({current.IsInternal} AND ({canViewAll} OR p.responsible_user_id={current.Id}))
+              AND (({current.IsInternal} AND ({canViewAll} OR p.responsible_user_id={current.Id}
+                    OR EXISTS (SELECT 1 FROM project_groups pg WHERE pg.id=p.project_group_id AND pg.created_by={current.Id})))
                 OR (NOT {current.IsInternal} AND p.supplier_id={supplierId}))
             """).SingleAsync(ct);
         await tx.CommitAsync(ct);

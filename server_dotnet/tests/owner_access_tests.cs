@@ -26,7 +26,7 @@ public sealed class OwnerAccessTests
     private const ulong OtherSupplierUserId = 9_202;
 
     [Fact(Timeout = 120_000)]
-    public async Task ResponsibleUserScopesAccessAndCreationAssignsCreator()
+    public async Task ResponsibleUserAndMainProjectCreatorScopeAccessAndCreationAssignsCreator()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await OwnerAccessDatabase.CreateOrSkipAsync(ct);
@@ -51,7 +51,8 @@ public sealed class OwnerAccessTests
 
         await using var conn = await database.Database.OpenAsync(ct);
         Assert.Equal(OldOwnerId, (await ProjectAccessService.RequireViewAsync(conn, null, oldOwner, ProjectId, ct)).ResponsibleUserId);
-        await AssertOutOfScopeAsync(() => ProjectAccessService.RequireViewAsync(conn, null, creator, ProjectId, ct));
+        // The main project's creator keeps access even though someone else is now responsible.
+        await ProjectAccessService.RequireViewAsync(conn, null, creator, ProjectId, ct);
         await AssertOutOfScopeAsync(() => ProjectAccessService.RequireViewAsync(conn, null, oldMember, ProjectId, ct));
         await ProjectAccessService.RequireViewAsync(conn, null, viewAll, ProjectId, ct);
         await ProjectAccessService.RequireViewAsync(conn, null, viewAll, OwnerlessProjectId, ct);
@@ -61,7 +62,8 @@ public sealed class OwnerAccessTests
         await AssertForbiddenAsync(() => ProjectAccessService.RequireViewAsync(conn, null, ownerWithoutList, 10_003, ct));
 
         Assert.Equal(new ulong[] { ProjectGroupId }, await ListedProjectGroupIdsAsync(groups, conn, oldOwner, ct));
-        Assert.Empty(await ListedProjectGroupIdsAsync(groups, conn, creator, ct));
+        Assert.Equal(new ulong[] { 11_003UL, 11_002UL, ProjectGroupId },
+            await ListedProjectGroupIdsAsync(groups, conn, creator, ct));
         Assert.Empty(await ListedProjectGroupIdsAsync(groups, conn, oldMember, ct));
         Assert.Equal(new ulong[] { 11_003UL, 11_002UL, ProjectGroupId },
             await ListedProjectGroupIdsAsync(groups, conn, viewAll, ct));
@@ -73,12 +75,12 @@ public sealed class OwnerAccessTests
             Assert.Equal(OldOwnerId, detail.RootElement.GetProperty("responsibleUserId").GetUInt64());
             Assert.False(detail.RootElement.TryGetProperty("members", out _));
         }
-        await AssertOutOfScopeAsync(() => projects.DetailAsync(conn, creator, ProjectId, ct));
+        await projects.DetailAsync(conn, creator, ProjectId, ct);
         await AssertOutOfScopeAsync(() => projects.DetailAsync(conn, oldMember, ProjectId, ct));
 
         var files = FileService(database, audit);
         Assert.Equal(0UL, Total(await files.ListAsync(Context(oldOwner), ProjectId, ct)));
-        await AssertOutOfScopeAsync(() => files.ListAsync(Context(creator), ProjectId, ct));
+        Assert.Equal(0UL, Total(await files.ListAsync(Context(creator), ProjectId, ct)));
         await AssertOutOfScopeAsync(() => files.ListAsync(Context(oldMember), ProjectId, ct));
 
         await AssertActiveResponsibilityBlocksChangeAsync(() => users.SetStatusAsync(admin, OldOwnerId, "DISABLED", ct));
@@ -108,6 +110,74 @@ public sealed class OwnerAccessTests
             Assert.Equal(7001UL, created.RootElement.GetProperty("sectionId").GetUInt64());
         }
         await AssertOutOfScopeAsync(() => projects.DetailAsync(conn, newOwner, createdId, ct));
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task TransferMovesOwnershipToEveryChildAndKeepsCreatorAccess()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await OwnerAccessDatabase.CreateOrSkipAsync(ct);
+        await database.InitializeAsync(ct);
+        await database.SeedAsync(SeedSql, ct);
+        var audit = new AuditService([]);
+        var groupStatus = new ProjectGroupStatusService(audit);
+        var groups = new ProjectGroupService(audit, groupStatus);
+        var projects = new ProjectService(audit, database.Options, groupStatus);
+        var admin = Internal(1, "admin");
+        var creator = Internal(CreatorId, "owner-creator");
+        var oldOwner = Internal(OldOwnerId, "owner-old");
+        var newOwner = Internal(NewOwnerId, "owner-new");
+        await using var conn = await database.Database.OpenAsync(ct);
+
+        var options = (await projects.ProjectOwnerOptionsAsync(conn, admin, ct)).Select(owner => owner.Id).ToArray();
+        Assert.Contains(NewOwnerId, options);
+        Assert.Contains(1UL, options);
+        Assert.DoesNotContain(NoPermissionOwnerId, options);
+        Assert.DoesNotContain(SupplierUserId, options);
+        await AssertForbiddenAsync(() => projects.ProjectOwnerOptionsAsync(conn, oldOwner, ct));
+
+        await AssertForbiddenAsync(() => groups.TransferAsync(conn, oldOwner, ProjectGroupId,
+            new ProjectGroupTransferRequest { ResponsibleUserId = NewOwnerId }, null, ct));
+        await AssertBadRequestAsync(() => groups.TransferAsync(conn, admin, ProjectGroupId,
+            new ProjectGroupTransferRequest { ResponsibleUserId = OldOwnerId }, null, ct));
+        await AssertBadRequestAsync(() => groups.TransferAsync(conn, admin, ProjectGroupId,
+            new ProjectGroupTransferRequest { ResponsibleUserId = NoPermissionOwnerId }, null, ct));
+        await AssertBadRequestAsync(() => groups.TransferAsync(conn, admin, ProjectGroupId,
+            new ProjectGroupTransferRequest { ResponsibleUserId = SupplierUserId }, null, ct));
+        await AssertBadRequestAsync(() => groups.TransferAsync(conn, admin, ProjectGroupId,
+            new ProjectGroupTransferRequest(), null, ct));
+
+        await conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE projects SET status='PENDING_CONFIRMATION',confirm_side='COMPANY' WHERE id=@Id",
+            new { Id = ProjectId }, cancellationToken: ct));
+        var pending = await Assert.ThrowsAsync<ApiException>(() => groups.TransferAsync(conn, admin, ProjectGroupId,
+            new ProjectGroupTransferRequest { ResponsibleUserId = NewOwnerId }, null, ct));
+        Assert.Equal(409, pending.Status);
+        // Ended subprojects move too: access follows the owner.
+        await conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE projects SET status='COMPLETED',confirm_side=NULL WHERE id=@Id",
+            new { Id = ProjectId }, cancellationToken: ct));
+
+        using (var transferred = Json(await groups.TransferAsync(conn, admin, ProjectGroupId,
+                   new ProjectGroupTransferRequest { ResponsibleUserId = NewOwnerId }, null, ct)))
+        {
+            Assert.Equal(NewOwnerId, transferred.RootElement.GetProperty("responsibleUserId").GetUInt64());
+            Assert.Equal(7001UL, transferred.RootElement.GetProperty("sectionId").GetUInt64());
+        }
+        Assert.Equal(NewOwnerId, await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+            "SELECT responsible_user_id FROM projects WHERE id=@Id", new { Id = ProjectId }, cancellationToken: ct)));
+        await ProjectAccessService.RequireViewAsync(conn, null, newOwner, ProjectId, ct);
+        await ProjectAccessService.RequireViewAsync(conn, null, creator, ProjectId, ct);
+        await AssertOutOfScopeAsync(() => ProjectAccessService.RequireViewAsync(conn, null, oldOwner, ProjectId, ct));
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='PROJECT_GROUP_TRANSFER' AND target_id=@Id",
+            new { Id = ProjectGroupId.ToString() }, cancellationToken: ct)));
+    }
+
+    private static async Task AssertBadRequestAsync(Func<Task> action)
+    {
+        var error = await Assert.ThrowsAsync<ApiException>(action);
+        Assert.Equal(400, error.Status);
     }
 
     private static readonly string SeedSql = """

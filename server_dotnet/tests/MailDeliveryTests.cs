@@ -626,6 +626,10 @@ public sealed class MailDeliveryTests
                         id BIGINT UNSIGNED PRIMARY KEY,
                         status VARCHAR(16) NOT NULL
                     );
+                    CREATE TABLE project_groups(
+                        id BIGINT UNSIGNED PRIMARY KEY,
+                        created_by BIGINT UNSIGNED NOT NULL DEFAULT 0
+                    );
                     CREATE TABLE projects(
                         id BIGINT UNSIGNED PRIMARY KEY,
                         project_group_id BIGINT UNSIGNED NULL,

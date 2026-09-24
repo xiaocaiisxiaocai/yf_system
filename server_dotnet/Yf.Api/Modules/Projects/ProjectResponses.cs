@@ -181,7 +181,7 @@ public sealed record ProjectSummaryResponse(
 
 public sealed record SupplierOption(ulong Id, string Name);
 
-public sealed record ProjectOwnerOption(ulong Id, string EmployeeNo, string RealName, ulong SectionId, string SectionName);
+public sealed record ProjectOwnerOption(ulong Id, string EmployeeNo, string RealName, ulong? SectionId, string? SectionName);
 
 public sealed record ProjectCopyRecord(
     ulong CopyId, ulong SourceProjectId, ulong TargetProjectId, int FileCount, ulong TotalBytes, DateTime CreatedAt);

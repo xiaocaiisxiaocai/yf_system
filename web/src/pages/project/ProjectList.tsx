@@ -213,10 +213,10 @@ export default function ProjectList() {
     missingCreateOptions.push({ message: '暂无启用的供应商，请先新增或启用供应商。', path: '/suppliers', permission: 'supplier:manage', action: '维护供应商' })
   if (!metadataOptionsLoading && !metadataOptionsError) {
     if (!priorities.length)
-      missingCreateOptions.push({ message: '暂无启用的优先级，请在数据字典中维护。', path: '/system/dictionaries', permission: 'config:manage', action: '维护优先级' })
+      missingCreateOptions.push({ message: '暂无启用的优先级，请在数据字典中维护。', path: '/system/dictionaries', permission: 'dict:manage', action: '维护优先级' })
   }
   if (selectedSupplierId && !robotPartsLoading && !robotPartsError && robotParts.length === 0 && !editing?.robotPartId)
-    missingCreateOptions.push({ message: '所选 Robot 厂商暂无启用的料号，请先维护料号。', path: '/system/dictionaries', permission: 'config:manage', action: '维护 Robot 料号' })
+    missingCreateOptions.push({ message: '所选 Robot 厂商暂无启用的料号，请先维护料号。', path: '/system/dictionaries', permission: 'dict:manage', action: '维护 Robot 料号' })
   const robotPartOptionsRequired = !editing || selectedRobotPartId !== null
   const submitOptionsBlocked = metadataOptionsLoading || metadataOptionsError || robotPartOptionsRequired && (robotPartsLoading || robotPartsError)
     || (!editing && (supplierOptionsLoading || supplierOptionsError || missingCreateOptions.length > 0))

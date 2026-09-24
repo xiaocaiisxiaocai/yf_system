@@ -457,10 +457,14 @@ internal sealed class ProjectCopyService(
                 SourceName = copy.SourceProjectName,
                 SourceSupplierId = source.SupplierId,
                 SourceResponsibleUserId = source.ResponsibleUserId,
+                SourceGroupCreatorId = db.ProjectGroups.Where(mainProject => mainProject.Id == source.ProjectGroupId)
+                    .Select(mainProject => mainProject.CreatedBy).FirstOrDefault(),
                 TargetProjectId = copy.TargetProjectId,
                 TargetName = copy.TargetProjectName,
                 TargetSupplierId = target.SupplierId,
                 TargetResponsibleUserId = target.ResponsibleUserId,
+                TargetGroupCreatorId = db.ProjectGroups.Where(mainProject => mainProject.Id == target.ProjectGroupId)
+                    .Select(mainProject => mainProject.CreatedBy).FirstOrDefault(),
                 CopiedByName = copy.CopiedByName,
                 FileCount = copy.FileCount,
                 TotalBytes = copy.TotalBytes,
@@ -476,8 +480,9 @@ internal sealed class ProjectCopyService(
             var relatedId = row.SourceProjectId == projectId ? row.TargetProjectId : row.SourceProjectId;
             var relatedSupplierId = relatedId == row.SourceProjectId ? row.SourceSupplierId : row.TargetSupplierId;
             var relatedResponsibleId = relatedId == row.SourceProjectId ? row.SourceResponsibleUserId : row.TargetResponsibleUserId;
+            var relatedGroupCreatorId = relatedId == row.SourceProjectId ? row.SourceGroupCreatorId : row.TargetGroupCreatorId;
             var canViewRelated = current.IsInternal
-                ? canViewAll || relatedResponsibleId == current.Id
+                ? canViewAll || relatedResponsibleId == current.Id || relatedGroupCreatorId == current.Id
                 : current.SupplierId is not null && current.SupplierId == relatedSupplierId;
             if (!canViewRelated) { restricted = true; continue; }
             var item = HistoryItem(row, relatedId, relatedId == row.SourceProjectId ? row.SourceName : row.TargetName);
@@ -993,10 +998,12 @@ internal sealed class ProjectCopyService(
         public string SourceName { get; init; } = string.Empty;
         public ulong SourceSupplierId { get; init; }
         public ulong? SourceResponsibleUserId { get; init; }
+        public ulong SourceGroupCreatorId { get; init; }
         public ulong TargetProjectId { get; init; }
         public string TargetName { get; init; } = string.Empty;
         public ulong TargetSupplierId { get; init; }
         public ulong? TargetResponsibleUserId { get; init; }
+        public ulong TargetGroupCreatorId { get; init; }
         public string CopiedByName { get; init; } = string.Empty;
         public ulong FileCount { get; init; }
         public ulong TotalBytes { get; init; }

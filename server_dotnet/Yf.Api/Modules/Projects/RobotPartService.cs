@@ -14,7 +14,7 @@ internal sealed class RobotPartService(AuditService audit)
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         AccessService.RequireInternal(current);
-        await AccessService.RequirePermissionAsync(conn, tx, current, "config:manage", ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "dict:manage", ct);
         await using var db = EfDb.Use(conn, tx);
         var result = await db.Suppliers.AsNoTracking().OrderBy(supplier => supplier.Id)
             .Select(supplier => new RobotPartSupplierOption(supplier.Id, supplier.Name, supplier.Status))

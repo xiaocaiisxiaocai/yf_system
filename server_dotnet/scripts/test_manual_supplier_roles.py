@@ -16,7 +16,9 @@ def run_manual_supplier_role_checks(admin, conn, check):
         'sortNo': 0,
     })
 
-    account_operator_role = _role(admin, ['supplier:list', 'supplier:account'])
+    # Deliberately without file:preview so the delegation ceiling can still be observed below.
+    account_operator_role = _role(admin, ['supplier:list', 'supplier:account', 'dashboard', 'project:list',
+                                          'file:upload', 'file:download', 'message:create'])
     account_operator_password = _password()
     account_operator_employee = 'supplier_accounts_' + secrets.token_hex(4)
     account_operator_user = admin.call('POST', '/api/v1/admin/users', {
@@ -38,6 +40,28 @@ def run_manual_supplier_role_checks(admin, conn, check):
     account_operator.call('PUT', f"/api/v1/admin/suppliers/{supplier['id']}", {'name': '越权改名'}, expected=403)
     check('supplier account permission can read suppliers and manage accounts without supplier mutation authority',
           any(row['id'] == supplier['id'] for row in visible_suppliers['list']))
+
+    # Submit/withdraw are supplier-only, so an internal operator may grant them without holding them;
+    # every other code in the supplier role must still be within the operator's own permissions.
+    workflow_role = _role(admin, ['dashboard', 'project:list', 'file:upload', 'file:download', 'message:create',
+                                  'project:submit', 'project:withdraw'])
+    beyond_operator = _role(admin, ['dashboard', 'project:list', 'file:preview', 'project:submit'])
+    operator_options = {role['id'] for role in account_operator.call('GET', '/api/v1/admin/supplier-role-options')}
+    check('supplier role options ignore supplier-only codes but keep the delegation ceiling',
+          workflow_role in operator_options and beyond_operator not in operator_options)
+
+    def operator_create(role_id, expected=200):
+        return account_operator.call('POST', f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
+            'employeeNo': 'delegated_' + secrets.token_hex(5), 'realName': '委派供应商账号',
+            'email': 'delegated@example.invalid', 'password': _password(), 'roleId': role_id,
+        }, expected=expected)
+
+    delegated = operator_create(workflow_role)
+    operator_create(beyond_operator, expected=403)
+    account_operator.call('PUT', f"/api/v1/admin/supplier-accounts/{delegated['id']}/status", {'status': 'DISABLED'})
+    reenabled = account_operator.call('PUT', f"/api/v1/admin/supplier-accounts/{delegated['id']}/status", {'status': 'ACTIVE'})
+    check('supplier account operator can create and re-enable accounts holding submit/withdraw',
+          delegated['roleId'] == workflow_role and reenabled['status'] == 'ACTIVE')
 
     def create(role_id=None, expected=200):
         body = {'employeeNo': 'manual_' + secrets.token_hex(5), 'realName': '手工角色测试',

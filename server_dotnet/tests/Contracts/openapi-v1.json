@@ -1783,6 +1783,56 @@
         }
       }
     },
+    "/api/v1/project-groups/{id}/responsible": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectGroupTransferRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectGroupResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/project-groups/{id}/projects": {
       "post": {
         "tags": [
@@ -6584,6 +6634,20 @@
         },
         "additionalProperties": false
       },
+      "ProjectGroupTransferRequest": {
+        "required": [
+          "responsibleUserId"
+        ],
+        "type": "object",
+        "properties": {
+          "responsibleUserId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "ProjectOwnerOption": {
         "required": [
           "employeeNo",
@@ -6606,10 +6670,12 @@
           },
           "sectionId": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "nullable": true
           },
           "sectionName": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
