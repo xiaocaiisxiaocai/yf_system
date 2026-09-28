@@ -3,7 +3,7 @@ using Dapper;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class DataQueryPlanEvidenceTests
 {
     [Fact(Timeout = 180_000)]
@@ -139,7 +139,7 @@ public sealed class DataQueryPlanEvidenceTests
             note = "Temporary migrated database only; candidate indexes are dropped with the database.",
             plans,
         };
-        await File.WriteAllTextAsync(output, JsonSerializer.Serialize(evidence, new JsonSerializerOptions { WriteIndented = true }), ct);
+        await File.WriteAllTextAsync(output, JsonSerializer.Serialize(evidence, TestJson.Indented), ct);
         Assert.True(File.Exists(output));
     }
 

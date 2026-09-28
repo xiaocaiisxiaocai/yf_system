@@ -10,7 +10,7 @@ using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class RealtimeSecurityTests
 {
     [Fact]
@@ -139,6 +139,14 @@ public sealed class RealtimeSecurityTests
             """, ct);
         Assert.Equal(ProjectRealtimeAuthorization.Skip,
             await authorizer.AuthorizeProjectAsync(connection, 1001, ct));
+        // A transfer snapshot names the former owner, who is still told the project changed (and then loses it on refetch).
+        var afterTransfer = await authorizer.ResolveAudienceAsync(1001, ct);
+        Assert.NotNull(afterTransfer);
+        Assert.Empty(ProjectRealtimeAuthorizer.SelectCandidates([connection], afterTransfer));
+        var withFormerOwner = afterTransfer with { FormerInternalUserIds = new HashSet<ulong> { 101 } };
+        Assert.Equal([connection], ProjectRealtimeAuthorizer.SelectCandidates([connection], withFormerOwner));
+        Assert.Equal(ProjectRealtimeAuthorization.Deliver,
+            (await authorizer.AuthorizeProjectAsync([connection], withFormerOwner, ct))[(101UL, "realtime-session")]);
 
         await database.SeedAsync("""
             UPDATE projects SET responsible_user_id=101 WHERE id=1001;
@@ -296,10 +304,7 @@ public sealed class RealtimeSecurityTests
 
         internal async Task InitializeAsync(CancellationToken ct)
         {
-            var previousPassword = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD");
-            Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", "Realtime#" + Guid.NewGuid().ToString("N")[..8] + "!");
-            try { await SchemaBootstrap.InitializeEmptyAsync(Database, ct); }
-            finally { Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", previousPassword); }
+            await SchemaBootstrap.InitializeEmptyAsync(Database, "Realtime#" + Guid.NewGuid().ToString("N")[..8] + "!", ct);
         }
 
         internal async Task SeedAsync(string sql, CancellationToken ct)

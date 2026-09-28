@@ -98,6 +98,9 @@ public sealed class SystemService(AppDb db, AuditService audit)
             var parts = (value ?? "").Split(',').Select(x => x.Trim().ToLowerInvariant()).ToArray();
             if (parts.Length == 0 || parts.Any(x => x.Length is < 1 or > 16 || x.Any(c => !char.IsAsciiLetterOrDigit(c))))
                 throw ApiException.BadRequest("文件扩展名参数无效");
+            // 发给供应商的资料必须含 STEP 3D 图（上传资料要求契约），白名单去掉 step/stp 会让内部上传全部失败。
+            if (!parts.Any(part => Yf.Api.Modules.Files.UploadMaterialRules.StepFileExtensions.Contains(part, StringComparer.Ordinal)))
+                throw ApiException.BadRequest("允许的文件类型必须包含 step 或 stp（发给供应商的资料需要 STEP 格式 3D 图）");
             return string.Join(',', parts.Distinct().Order(StringComparer.Ordinal));
         }
         return value;

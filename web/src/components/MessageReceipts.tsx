@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
 import { Button, Typography } from '@arco-design/web-react'
 import { useQuery } from '@tanstack/react-query'
-import http from '../api/client'
+import { useShallow } from 'zustand/react/shallow'
+import http, { type QuietRequestConfig } from '../api/client'
 import { createSessionQueryScope, queryClient } from '../api/queryClient'
 import type { ApiResponses } from '../api/types'
 import { useAuth } from '../store/auth'
@@ -29,7 +30,9 @@ export async function loadReadCounts(ids: number[], signal?: AbortSignal): Promi
     const batch = ids.slice(start, start + RECEIPT_SYNC_CONCURRENCY)
     const results = await Promise.all(batch.map(async (id) => {
       try {
-        const response = await http.get<ApiResponses['GET /messages/{id}/reads']>(`/messages/${id}/reads`, { signal })
+        // 后台同步：失败只跳过该条，不能每条留言各弹一次网络错误提示。
+        const config: QuietRequestConfig = { signal, quietNetworkError: true }
+        const response = await http.get<ApiResponses['GET /messages/{id}/reads']>(`/messages/${id}/reads`, config)
         if (!Array.isArray(response.data?.readers) || !Array.isArray(response.data?.unread)) return null
         const readers = response.data.readers
         const unread = response.data.unread
@@ -49,11 +52,19 @@ export function ReceiptBody({ id, refreshKey = 0, onLoaded }: {
   refreshKey?: number
   onLoaded?: (id: number, readCount: number, totalCount: number) => void
 }) {
-  const scope = createSessionQueryScope(useAuth())
+  const scope = createSessionQueryScope(useAuth(useShallow((state) => ({
+    user: state.user,
+    generation: state.generation,
+    permissions: state.permissions,
+    menus: state.menus,
+    mustChangePassword: state.mustChangePassword,
+  }))))
   const query = useQuery<{ id: number; names: string[]; readCount: number; totalCount: number }>({
     queryKey: ['messages', 'receipt-body', scope, id, refreshKey],
     queryFn: async ({ signal }) => {
-      const response = await http.get<ApiResponses['GET /messages/{id}/reads']>(`/messages/${id}/reads`, { signal })
+      // 失败在气泡内联显示“回执加载失败 / 重试”，不再额外弹出网络错误提示。
+      const config: QuietRequestConfig = { signal, quietNetworkError: true }
+      const response = await http.get<ApiResponses['GET /messages/{id}/reads']>(`/messages/${id}/reads`, config)
       return {
         id,
         names: response.data.readers.map((reader: Reader) => reader.realName),

@@ -341,6 +341,7 @@ foreach ($name in @('install-iis.ps1', 'maintain-iis.ps1', 'maintenance-common.p
 $productionPath = Join-Path $outputRoot 'appsettings.Production.json'
 $productionSettings = Get-Content -LiteralPath (Join-Path $deployRoot 'appsettings.example.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $configurationMode = 'bundled-private'
+$insecureCookiesOverride = $false
 if (!$ExternalConfigurationTemplate) {
     $productionSettings.App.ConnectionString = $publishDefaults.App.ConnectionString
     $productionSettings.App.JwtSecret = $publishDefaults.App.JwtSecret
@@ -354,12 +355,25 @@ if (!$ExternalConfigurationTemplate) {
     if ($publishDefaults.App.PSObject.Properties['CookieSecure']) {
         $productionSettings.App.CookieSecure = [bool]$publishDefaults.App.CookieSecure
     }
+    # The backend accepts CookieSecure=false outside Development only for a loopback
+    # WebBaseUrl or with an explicit App.AllowInsecureCookies opt-in. A private HTTP
+    # package (only reachable via -AllowInsecurePrivateConfiguration) must carry that
+    # opt-in or the site refuses to start; it is recorded in the manifest.
+    $packagedOrigin = $null
+    $needsInsecureCookies = !$productionSettings.App.CookieSecure -and
+        [Uri]::TryCreate([string]$productionSettings.App.WebBaseUrl, [UriKind]::Absolute, [ref]$packagedOrigin) -and
+        $packagedOrigin.Scheme -eq 'http' -and !$packagedOrigin.IsLoopback
+    if ($needsInsecureCookies -and !$AllowInsecurePrivateConfiguration) {
+        throw 'Insecure cookies for a non-loopback HTTP origin require -AllowInsecurePrivateConfiguration.'
+    }
+    $insecureCookiesOverride = [bool]$needsInsecureCookies
 } else {
     $configurationMode = 'external-template'
     $productionSettings.App.ConnectionString = ''
     $productionSettings.App.JwtSecret = ''
     $productionSettings.App.BootstrapPassword = ''
 }
+$productionSettings.App | Add-Member -NotePropertyName AllowInsecureCookies -NotePropertyValue $insecureCookiesOverride -Force
 $storageRoot = Get-FullLocalPath ([string]$productionSettings.App.StorageRoot) 'App.StorageRoot'
 Write-Utf8NoBom $productionPath (($productionSettings | ConvertTo-Json -Depth 8) + "`n")
 Copy-Item -LiteralPath $noticesSource -Destination (Join-Path $outputRoot 'THIRD-PARTY-NOTICES.md')
@@ -576,6 +590,7 @@ $packageManifest = [ordered]@{
         mode = $configurationMode
         containsSecrets = !$ExternalConfigurationTemplate
         insecureOverride = [bool]$AllowInsecurePrivateConfiguration
+        insecureCookies = [bool]$insecureCookiesOverride
     }
     files = $payloadFiles
 }

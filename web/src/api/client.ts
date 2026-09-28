@@ -13,6 +13,8 @@ let refreshingProfile: ProfileRefresh | null = null
 export type QuietRequestConfig = AxiosRequestConfig & {
   /** 仅抑制可重试的网络、超时、限流和服务端错误提示；鉴权与权限错误仍正常处理。 */
   quietNetworkError?: boolean
+  /** 调用方自行汇总展示业务拒绝（400/403/404/413/422）时抑制逐条提示；鉴权、会话冲突仍正常处理。 */
+  quietClientError?: boolean
 }
 type SessionConfig = QuietRequestConfig & { _retried?: boolean; authGeneration?: number }
 const isCurrentSession = (config?: SessionConfig) => !config || config.authGeneration === useAuth.getState().generation
@@ -283,8 +285,10 @@ http.interceptors.response.use(
       || status === 429
       || (typeof status === 'number' && status >= 500)
     )
+    const quietClientError = cfg?.quietClientError === true && typeof status === 'number'
+      && [400, 403, 404, 413, 422].includes(status)
     // 40303 由跳转承载
-    if (biz !== 40303 && !quietTransientError) Message.error(msg)
+    if (biz !== 40303 && !quietTransientError && !quietClientError) Message.error(msg)
     return Promise.reject(error)
   }
 )

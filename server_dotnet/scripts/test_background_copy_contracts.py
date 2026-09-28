@@ -37,7 +37,8 @@ def run_background_copy_checks(client, conn, check, supplier_id):
         client, client, conn, supplier_id, "后台复制-" + secrets.token_hex(5))
     client.call("PUT", f"/api/v1/projects/{source['id']}/status", {"status": "IN_PROGRESS"})
     payload = b"%PDF-1.4\n" + b"background-copy-fixture\n" * 25000 + b"%%EOF\n"
-    file_id, _, _ = _upload_chunks(client, source["id"], "background-copy.pdf", payload)
+    # 内部发给供应商的资料须含 STEP（上传资料要求契约-2026-09-24），用 STEP 文件保持源项目只有一个文件。
+    file_id, _, _ = _upload_chunks(client, source["id"], "background-copy.step", payload)
     assert file_id is not None
     name = "后台复制目标-" + secrets.token_hex(5)
     request = {"name": name, "idempotencyKey": secrets.token_hex(16)}

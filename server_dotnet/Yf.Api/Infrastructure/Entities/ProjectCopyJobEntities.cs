@@ -23,6 +23,10 @@ public sealed class ProjectCopyJob
     public string Status { get; set; } = null!;
     public string? ExecutionToken { get; set; }
     public ulong WorkerEpoch { get; set; }
+    /// <summary>How many times a transient lock failure (deadlock / lock-wait timeout) returned the job to the queue.</summary>
+    public uint RetryCount { get; set; }
+    /// <summary>A pending job is not claimed before this database-clock time (retry backoff).</summary>
+    public DateTime? NextAttemptAt { get; set; }
     public ulong FilesTotal { get; set; }
     public ulong FilesCopied { get; set; }
     public ulong BytesTotal { get; set; }
@@ -59,6 +63,8 @@ public sealed class ProjectCopyJobConfig : IEntityTypeConfiguration<ProjectCopyJ
         b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired();
         b.Property(x => x.ExecutionToken).HasColumnName("execution_token").HasMaxLength(32);
         b.Property(x => x.WorkerEpoch).HasColumnName("worker_epoch");
+        b.Property(x => x.RetryCount).HasColumnName("retry_count");
+        b.Property(x => x.NextAttemptAt).HasColumnName("next_attempt_at").HasColumnType("datetime(6)");
         b.Property(x => x.FilesTotal).HasColumnName("files_total");
         b.Property(x => x.FilesCopied).HasColumnName("files_copied");
         b.Property(x => x.BytesTotal).HasColumnName("bytes_total");

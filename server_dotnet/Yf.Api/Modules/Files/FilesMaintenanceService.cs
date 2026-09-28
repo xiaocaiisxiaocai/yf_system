@@ -185,7 +185,12 @@ public sealed class FilesMaintenanceService(
         }
     }
 
-    private async Task VerifyReferencedBlobFilesAsync(CancellationToken ct)
+    /// <summary>
+    /// Re-hashes referenced blobs in keyset order with a per-cycle byte budget, so one maintenance cycle
+    /// cannot saturate storage I/O; the cursor resumes on the next cycle. At least one blob is verified per
+    /// cycle so a single blob larger than the budget still makes progress.
+    /// </summary>
+    internal async Task VerifyReferencedBlobFilesAsync(CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
         ReferencedBlob[] rows;
@@ -202,16 +207,33 @@ public sealed class FilesMaintenanceService(
             return;
         }
         var root = FileStorage.Root(options.StorageRoot);
+        var budget = (ulong)options.BlobVerifyBytesPerCycle;
+        ulong hashed = 0;
+        var verified = 0;
         foreach (var blob in rows)
         {
+            if (verified > 0 && hashed + blob.SizeBytes > budget) break;
             verifyAfterBlobId = blob.Id;
-            try { FileBlobStore.VerifyBoundPhysicalFile(root, blob.StoragePath, blob.Sha256, blob.SizeBytes, ct); }
+            verified++;
+            hashed += blob.SizeBytes;
+            try { await FileBlobStore.VerifyBoundPhysicalFileAsync(root, blob.StoragePath, blob.Sha256, blob.SizeBytes, ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception error)
             {
                 logger.LogError(error, "引用中的 blob 文件缺失或异常 {BlobId} {Sha256}", blob.Id, blob.Sha256);
             }
         }
     }
+
+    internal ulong VerifyCursor => verifyAfterBlobId;
+    internal string? OrphanScanCursor => orphanScanAfterPath;
+
+    /// <summary>
+    /// Sort key matching <see cref="EnumerateRegularFiles"/>'s depth-first order: a directory separator
+    /// sorts before every file-name character, so a parent's subtree precedes its longer-named siblings.
+    /// </summary>
+    private static string ScanKey(string path) =>
+        path.Replace(Path.DirectorySeparatorChar, '\u0001').Replace(Path.AltDirectorySeparatorChar, '\u0001');
 
     internal async Task PurgeOrphanBlobFilesAsync(CancellationToken ct)
     {
@@ -227,7 +249,12 @@ public sealed class FilesMaintenanceService(
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         var scan = EnumerateRegularFiles(blobRoot, ct);
         if (orphanScanAfterPath is not null)
-            scan = scan.SkipWhile(path => !string.Equals(path, orphanScanAfterPath, comparison)).Skip(1);
+        {
+            // Resume strictly after the cursor by ordinal position, so a cursor file deleted in the
+            // meantime (for example the orphan this scan just removed) does not restart the scan.
+            var after = ScanKey(orphanScanAfterPath);
+            scan = scan.SkipWhile(path => string.CompareOrdinal(ScanKey(path), after) <= 0);
+        }
         var candidates = scan.Take(100).ToArray();
         if (candidates.Length == 0)
         {

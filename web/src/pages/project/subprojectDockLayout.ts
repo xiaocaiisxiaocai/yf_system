@@ -93,6 +93,10 @@ export function buildDefaultLayout(
 }
 
 const STORAGE_PREFIX = 'yf-subproject-dock:v1'
+/** Timestamp index of saved layouts (`{ [storageKey]: lastUsedMs }`), used to bound how many keys accumulate. */
+export const LAYOUT_INDEX_KEY = `${STORAGE_PREFIX}:index`
+/** Saved layouts kept per browser; the least recently used ones beyond this are removed. */
+export const MAX_SAVED_LAYOUTS = 50
 
 export function layoutStorageKey(userId: number | undefined, groupId: number) {
   return `${STORAGE_PREFIX}:${userId ?? 0}:${groupId}`
@@ -104,13 +108,55 @@ function sameIds(a: readonly string[], b: readonly string[]) {
   return b.every((item) => set.has(item))
 }
 
+function storage(): Storage | undefined {
+  try { return globalThis.localStorage ?? undefined } catch { return undefined }
+}
+
+function readIndex(store: Storage): Record<string, number> {
+  try {
+    const parsed = JSON.parse(store.getItem(LAYOUT_INDEX_KEY) ?? '{}') as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(Object.entries(parsed as Record<string, unknown>)
+      .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1])))
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Records `key` as used now (or forgets it) and evicts the least recently used layouts beyond MAX_SAVED_LAYOUTS.
+ * Layout keys saved before the index existed are adopted as the oldest entries so they are evicted first.
+ */
+function updateIndex(key: string, action: 'touch' | 'forget') {
+  const store = storage()
+  if (!store) return
+  try {
+    const index = readIndex(store)
+    const present = new Set<string>()
+    for (let i = 0; i < store.length; i += 1) {
+      const name = store.key(i)
+      if (name && name !== LAYOUT_INDEX_KEY && name.startsWith(`${STORAGE_PREFIX}:`)) present.add(name)
+    }
+    for (const name of present) if (!(name in index)) index[name] = 0
+    for (const name of Object.keys(index)) if (!present.has(name) && name !== key) delete index[name]
+    if (action === 'touch') index[key] = Date.now()
+    else delete index[key]
+    const ordered = Object.entries(index).sort((a, b) => b[1] - a[1])
+    for (const [name] of ordered.slice(MAX_SAVED_LAYOUTS)) {
+      store.removeItem(name)
+      delete index[name]
+    }
+    store.setItem(LAYOUT_INDEX_KEY, JSON.stringify(index))
+  } catch { /* 存储不可用或已满时不维护索引；布局本身仍按原样读写。 */ }
+}
+
 /**
  * A layout the viewer arranged earlier, only when it holds exactly the current subprojects.
  * Storage may be unavailable (private mode, blocked site data); the default layout is used then.
  */
 export function loadSavedLayout(key: string, projects: readonly DockSubproject[]): SerializedDockview | null {
   try {
-    const raw = globalThis.localStorage?.getItem(key)
+    const raw = storage()?.getItem(key)
     if (!raw) return null
     const parsed = JSON.parse(raw) as SerializedDockview
     if (!parsed?.grid?.root || !parsed.panels || typeof parsed.panels !== 'object') return null
@@ -125,6 +171,7 @@ export function loadSavedLayout(key: string, projects: readonly DockSubproject[]
     })
     // Popout windows are disabled on this page; a stale entry would reference panels that no longer exist.
     if (parsed.popoutGroups?.length) return null
+    updateIndex(key, 'touch')
     return parsed
   } catch {
     return null
@@ -132,9 +179,16 @@ export function loadSavedLayout(key: string, projects: readonly DockSubproject[]
 }
 
 export function saveLayout(key: string, layout: SerializedDockview) {
-  try { globalThis.localStorage?.setItem(key, JSON.stringify(layout)) } catch { /* 存储不可用时仅本次会话保留布局。 */ }
+  try {
+    storage()?.setItem(key, JSON.stringify(layout))
+  } catch {
+    /* 存储不可用或已满时仅本次会话保留布局。 */
+    return
+  }
+  updateIndex(key, 'touch')
 }
 
 export function clearSavedLayout(key: string) {
-  try { globalThis.localStorage?.removeItem(key) } catch { /* 存储不可用时无需清理。 */ }
+  try { storage()?.removeItem(key) } catch { /* 存储不可用时无需清理。 */ }
+  updateIndex(key, 'forget')
 }

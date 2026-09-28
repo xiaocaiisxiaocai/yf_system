@@ -7,7 +7,7 @@ using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class MessageImageTests
 {
     [Fact(Timeout = 120_000)]
@@ -206,7 +206,7 @@ public sealed class MessageImageTests
         : [];
 
     private static JsonElement Json(object value) =>
-        JsonSerializer.SerializeToElement(value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        JsonSerializer.SerializeToElement(value, TestJson.Web);
 
     private sealed class LocalDatabaseScope(
         MySqlConnection administration,
@@ -268,10 +268,7 @@ public sealed class MessageImageTests
         public async Task InitializeAsync(CancellationToken ct)
         {
             Directory.CreateDirectory(Options.StorageRoot);
-            var previousPassword = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD");
-            Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", "Images#" + Guid.NewGuid().ToString("N")[..8]);
-            try { await SchemaBootstrap.InitializeEmptyAsync(Database, ct); }
-            finally { Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", previousPassword); }
+            await SchemaBootstrap.InitializeEmptyAsync(Database, "Images#" + Guid.NewGuid().ToString("N")[..8], ct);
         }
 
         public async Task SeedAsync(string sql, CancellationToken ct)

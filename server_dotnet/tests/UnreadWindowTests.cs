@@ -4,7 +4,7 @@ using Yf.Api.Modules.Projects;
 namespace Yf.Api.Tests;
 
 /// <summary>Only the last UnreadWindow.Days days count as unread; older items are treated as read.</summary>
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class UnreadWindowTests
 {
     [Fact(Timeout = 120_000)]

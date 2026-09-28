@@ -5,6 +5,7 @@ using Konscious.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Identity;
 
 namespace Yf.Api.Tests;
@@ -262,12 +263,16 @@ public sealed class LoginThrottleTests
         Assert.Equal(shortened.SessionExpiresAt, current.SessionExpiresAt);
         Assert.Equal(shortened.SessionExpiresAt, current.ExpiresAt);
 
+        Assert.Equal(RefreshRevokeReasons.Rotated, await scope.RevokeReasonAsync(login.Refresh, ct));
+
         // A rotated token is never accepted again. Replaying it immediately revokes the
-        // current generation from the same family as well.
+        // current generation from the same family as well, and is audited as a replay.
         var replay = await Assert.ThrowsAsync<ApiException>(() =>
             scope.Service().RefreshAsync(login.Refresh, "192.0.2.212", ct));
         Assert.Equal(401, replay.Status);
         Assert.Equal(0, await scope.SessionsAsync(1, ct));
+        Assert.Equal(RefreshRevokeReasons.Replay, await scope.RevokeReasonAsync(rotated.Refresh, ct));
+        Assert.Equal(1, await scope.ReplayAuditsAsync(ct));
         await using var connection = await scope.OpenAsync(ct);
         Assert.False(await scope.Service().HasActiveSessionAsync(
             connection, null, 1, current.SessionId, ct));
@@ -288,8 +293,70 @@ public sealed class LoginThrottleTests
             connection, null, 1, expiredState.SessionId, ct));
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task StaleTokensRevokedForOtherReasonsAreRejectedWithoutReplayAudit()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await LoginDatabase.CreateAsync(ct);
+        var loggedOut = await scope.LoginWithRefreshAsync("target", scope.Password, "192.0.2.230", ct);
+        await scope.Service().LogoutAsync(loggedOut.Refresh, null, "192.0.2.230", ct);
+        Assert.Equal(RefreshRevokeReasons.Logout, await scope.RevokeReasonAsync(loggedOut.Refresh, ct));
+
+        var stale = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Service().RefreshAsync(loggedOut.Refresh, "192.0.2.231", ct));
+        Assert.Equal(401, stale.Status);
+        Assert.Equal(RefreshRevokeReasons.Logout, await scope.RevokeReasonAsync(loggedOut.Refresh, ct));
+        Assert.Equal(0, await scope.ReplayAuditsAsync(ct));
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task LoginBeyondTheSessionCapRevokesTheOldestFamilies()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await LoginDatabase.CreateAsync(ct);
+        scope.Options.MaxActiveSessionsPerUser = 2;
+        var first = await scope.LoginWithRefreshAsync("target", scope.Password, "192.0.2.240", ct);
+        var second = await scope.LoginWithRefreshAsync("target", scope.Password, "192.0.2.241", ct);
+        // Rotating the oldest family does not make it newer: the cap orders by session creation.
+        var firstRotated = await scope.Service().RefreshAsync(first.Refresh, "192.0.2.240", ct);
+        var third = await scope.LoginWithRefreshAsync("target", scope.Password, "192.0.2.242", ct);
+        var other = await scope.LoginWithRefreshAsync("unaffected", scope.Password, "192.0.2.243", ct);
+
+        Assert.Equal(2, await scope.SessionsAsync(1, ct));
+        Assert.Equal(1, await scope.SessionsAsync(2, ct));
+        Assert.Equal(RefreshRevokeReasons.SessionCap, await scope.RevokeReasonAsync(firstRotated.Refresh, ct));
+        Assert.Equal(RefreshRevokeReasons.Rotated, await scope.RevokeReasonAsync(first.Refresh, ct));
+        Assert.Null(await scope.RevokeReasonAsync(second.Refresh, ct));
+        Assert.Null(await scope.RevokeReasonAsync(third.Refresh, ct));
+        Assert.Null(await scope.RevokeReasonAsync(other.Refresh, ct));
+
+        var evicted = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Service().RefreshAsync(firstRotated.Refresh, "192.0.2.244", ct));
+        Assert.Equal(401, evicted.Status);
+        Assert.Equal(0, await scope.ReplayAuditsAsync(ct));
+        var refreshed = await scope.Service().RefreshAsync(second.Refresh, "192.0.2.245", ct);
+        Assert.False(string.IsNullOrEmpty(refreshed.Refresh));
+    }
+
     private sealed class LoginDatabase(MySqlConnection admin, string name, AppOptions options, string password, string legacyPassword) : IAsyncDisposable
     {
+        public AppOptions Options => options;
+
+        public async Task<string?> RevokeReasonAsync(string rawToken, CancellationToken ct)
+        {
+            await using var conn = await _db.OpenAsync(ct);
+            return await conn.ExecuteScalarAsync<string?>(new CommandDefinition(
+                "SELECT revoke_reason FROM refresh_tokens WHERE token_hash=@hash",
+                new { hash = TokenService.HashRefreshToken(rawToken) }, cancellationToken: ct));
+        }
+
+        public async Task<int> ReplayAuditsAsync(CancellationToken ct)
+        {
+            await using var conn = await _db.OpenAsync(ct);
+            return await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM audit_logs WHERE action='LOGIN_FAILED' AND target_type='refresh_token'", cancellationToken: ct));
+        }
+
         private readonly AppDb _db = new(options);
         private readonly Lazy<IDbContextFactory<YfDbContext>> _dbContextFactory = new(() => EfTestSupport.DbContextFactory(options));
         public string Password { get; } = password;

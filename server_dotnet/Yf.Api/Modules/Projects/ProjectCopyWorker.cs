@@ -122,7 +122,11 @@ internal sealed class ProjectCopyWorker(
         if (state.Epoch != workerEpoch)
             throw new InvalidOperationException("Project copy worker epoch is stale.");
         var job = await db.ProjectCopyJobs
-            .FromSqlRaw("SELECT * FROM project_copy_jobs WHERE status='pending' ORDER BY created_at,id LIMIT 1 FOR UPDATE")
+            .FromSqlRaw("""
+                SELECT * FROM project_copy_jobs
+                WHERE status='pending' AND (next_attempt_at IS NULL OR next_attempt_at <= UTC_TIMESTAMP(6))
+                ORDER BY created_at,id LIMIT 1 FOR UPDATE
+                """)
             .SingleOrDefaultAsync(ct);
         if (job is null)
         {
@@ -137,6 +141,7 @@ internal sealed class ProjectCopyWorker(
         job.FilesCopied = 0;
         job.BytesCopied = 0;
         job.Error = null;
+        job.NextAttemptAt = null;
         job.StartedAt = now;
         job.CompletedAt = null;
         job.UpdatedAt = now;

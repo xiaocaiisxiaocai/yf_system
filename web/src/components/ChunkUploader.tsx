@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, Checkbox, Modal, Progress, Typography, Message, Space } from '@arco-design/web-react'
+import { Alert, Button, Checkbox, Modal, Progress, Typography, Message, Space } from '@arco-design/web-react'
 import { IconUpload, IconClose } from '@arco-design/web-react/icon'
 import { fmtSize } from '../api/types'
 import { createChunkHasher, fileMd5, uploadFingerprint } from '../api/file-hash'
@@ -10,6 +10,8 @@ import {
   putUploadChunk,
   submitUploadMd5,
 } from '../api/uploads'
+import { companyMaterialNameError, isStepFile } from '../utils/uploadMaterialRules'
+import UploadMaterialGuide, { type UploadDirection } from './UploadMaterialGuide'
 
 interface Props {
   projectId: number
@@ -20,12 +22,19 @@ interface Props {
   /** 整批文件全部确认上传成功、且没有取消或移除时触发一次。 */
   onAllUploaded?: () => void
   onSubmitForAcceptance?: () => Promise<void>
+  /** 上传方向：C2S（公司发给供应商）校验资料要求，S2C（供应商发给公司）只展示资料示例。 */
+  direction?: UploadDirection
+  /**
+   * 子项目已有可用的公司发给供应商 STEP 文件时为 true，用于隐藏“本批没有 STEP”提示。
+   * 仅是前端尽力判断（来自文件列表），服务端在初始化与合并时仍会权威校验。
+   */
+  hasCompanyStep?: boolean
 }
 
 type Phase =
   | 'queued' | 'interrupted' | 'hashing' | 'uploading' | 'merging'
   | 'merge-uncertain' | 'merge-invalid' | 'cancelling' | 'cancel-failed'
-  | 'done' | 'cancelled'
+  | 'done' | 'cancelled' | 'rejected'
 
 const LOCKING_PHASES: Phase[] = ['merging', 'cancelling']
 
@@ -49,6 +58,26 @@ interface Entry {
   percent: number
   /** 已开始但在等待并发名额，尚未计算校验值。 */
   waiting?: boolean
+  /** 等待同批 STEP 文件建立上传会话（公司发给供应商时，服务端要求先有 STEP）。 */
+  awaitingStep?: boolean
+  /** 服务端业务规则拒绝（初始化或合并时的 4xx）的提示；此状态不可续传。 */
+  rejectedMessage?: string
+}
+
+interface RunOptions {
+  /** 非 STEP 文件在此之后才初始化上传。 */
+  stepGate?: Promise<void>
+  /** STEP 文件的上传会话建立后调用，放行同批其它文件。 */
+  onInitialized?: () => void
+}
+
+function waitForGate(gate: Promise<void>, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve()
+    const done = () => { signal.removeEventListener('abort', done); resolve() }
+    signal.addEventListener('abort', done, { once: true })
+    void gate.then(done)
+  })
 }
 
 let nextEntryKey = 0
@@ -117,9 +146,29 @@ function isDefinitiveIntegrityFailure(error: unknown): boolean {
     && /^(合并文件大小不符|文件 MD5 校验失败)/.test(message)
 }
 
-function phaseLabel(phase: Phase, percent: number, waiting = false): string {
+/** 服务端按业务规则拒绝的错误：初始化或合并阶段出现即终止，续传不会改变结果。 */
+class UploadRejectedError extends Error {}
+
+const REJECTION_STATUSES = new Set([400, 403, 404, 413, 422])
+
+/** 初始化或合并返回的业务拒绝（4xx，不含会话冲突、限流、超时和完整性失败）；返回服务端提示。 */
+function businessRejectionMessage(error: unknown, stage: 'init' | 'merge'): string | undefined {
+  const failure = error as { code?: string; response?: { status?: number; data?: { message?: unknown } } }
+  if (failure?.code === 'ERR_CANCELED') return undefined
+  const status = failure?.response?.status
+  if (typeof status !== 'number' || !REJECTION_STATUSES.has(status)) return undefined
+  // 合并时 404 表示会话状态未知（可能已过期或已提交），保留“结果待确认”流程。
+  if (stage === 'merge' && status === 404) return undefined
+  if (isDefinitiveIntegrityFailure(error)) return undefined
+  const message = failure.response?.data?.message
+  return typeof message === 'string' && message.trim() ? message : '服务端拒绝了该文件'
+}
+
+function phaseLabel(phase: Phase, percent: number, waiting = false, awaitingStep = false): string {
   switch (phase) {
-    case 'queued': return waiting ? '排队中，前面的文件完成后自动开始' : '待上传'
+    case 'queued':
+      if (awaitingStep) return '等待同批 STEP 文件开始上传'
+      return waiting ? '排队中，前面的文件完成后自动开始' : '待上传'
     case 'interrupted': return '上传中断，可点击重新上传从断点续传'
     case 'hashing': return `正在校验文件内容 ${percent}%`
     case 'uploading': return `分片上传中 ${percent}%（中断后可续传）`
@@ -130,11 +179,12 @@ function phaseLabel(phase: Phase, percent: number, waiting = false): string {
     case 'cancel-failed': return '取消未确认，请重试'
     case 'done': return '已完成'
     case 'cancelled': return '已取消'
+    case 'rejected': return '服务端拒绝，未上传'
     default: return ''
   }
 }
 
-export default function ChunkUploader({ projectId, visible, onClose, onDone, onAllUploaded, onSubmitForAcceptance }: Props) {
+export default function ChunkUploader({ projectId, visible, onClose, onDone, onAllUploaded, onSubmitForAcceptance, direction, hasCompanyStep = false }: Props) {
   const [entries, setEntries] = useState<Entry[]>([])
   const attemptsRef = useRef<Map<string, Attempt>>(new Map())
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -143,14 +193,22 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
   const batchCancelledRef = useRef(false)
   const closingRef = useRef(false)
   const mountedRef = useRef(true)
+  /** 本批已提示过的拒绝原因：同一原因只弹一次，逐个文件的原因显示在各自行内。 */
+  const rejectionToastsRef = useRef<Set<string>>(new Set())
   const [closing, setClosing] = useState(false)
   const [submitForAcceptance, setSubmitForAcceptance] = useState(false)
   const uploadSlots = useRef(createUploadSlots(MAX_CONCURRENT_FILES)).current
   const chunkUploadSlots = useRef(createUploadSlots(MAX_CONCURRENT_CHUNKS)).current
 
   const locking = closing || entries.some((e) => LOCKING_PHASES.includes(e.phase))
-  const hasQueued = entries.some((e) => e.phase === 'queued' || e.phase === 'interrupted')
-  const canAddMore = !locking && entries.every((e) => e.phase === 'queued' || e.phase === 'interrupted')
+  const companyRules = direction === 'C2S'
+  const nameError = (entry: Entry) => (companyRules ? companyMaterialNameError(entry.file.name) : null)
+  const pending = entries.filter((e) => e.phase === 'queued' || e.phase === 'interrupted')
+  const hasQueued = pending.length > 0
+  const hasNameErrors = pending.some((e) => nameError(e) !== null)
+  const missingStepInBatch = companyRules && !hasCompanyStep && hasQueued
+    && !entries.some((e) => isStepFile(e.file.name) && e.phase !== 'cancelled' && e.phase !== 'rejected')
+  const canAddMore = !locking && entries.every((e) => e.phase === 'queued' || e.phase === 'interrupted' || e.phase === 'rejected')
 
   const patchEntry = (key: string, patch: Partial<Entry>) =>
     setEntries((list) => list.map((e) => (e.key === key ? { ...e, ...patch } : e)))
@@ -161,6 +219,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     batchNotifiedRef.current = false
     batchStartedRef.current = false
     batchCancelledRef.current = false
+    rejectionToastsRef.current.clear()
     setSubmitForAcceptance(false)
     setEntries([])
   }
@@ -205,6 +264,13 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries])
 
+  const reject = (key: string, message: string) => {
+    patchEntry(key, { phase: 'rejected', rejectedMessage: message, waiting: false, awaitingStep: false })
+    if (rejectionToastsRef.current.has(message)) return
+    rejectionToastsRef.current.add(message)
+    Message.error(message)
+  }
+
   const confirmMerge = async (key: string, attempt: Attempt, fileName: string) => {
     if (attemptsRef.current.get(key) !== attempt || attempt.cancelled || attempt.merging || !attempt.sessionId) return
     attempt.merging = true
@@ -212,7 +278,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     attempt.mergeInvalid = false
     patchEntry(key, { phase: 'merging' })
     try {
-      await mergeUpload(attempt.sessionId)
+      await mergeUpload(attempt.sessionId, { quietClientError: true })
       if (attemptsRef.current.get(key) !== attempt || attempt.cancelled) return
       attempt.mergePending = false
       patchEntry(key, { phase: 'done', percent: 100 })
@@ -220,7 +286,12 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
       onDone()
     } catch (error) {
       if (attemptsRef.current.get(key) === attempt && !attempt.cancelled) {
-        if (isDefinitiveIntegrityFailure(error)) {
+        const rejection = businessRejectionMessage(error, 'merge')
+        if (rejection !== undefined) {
+          // 合并时服务端复核业务规则（如 STEP 要求）失败：终态拒绝，不提供重试确认。
+          attempt.mergePending = false
+          reject(key, rejection)
+        } else if (isDefinitiveIntegrityFailure(error)) {
           attempt.mergePending = false
           attempt.mergeInvalid = true
           patchEntry(key, { phase: 'merge-invalid' })
@@ -235,7 +306,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     }
   }
 
-  const runEntry = async (key: string, file: File) => {
+  const runEntry = async (key: string, file: File, options: RunOptions = {}) => {
     const previous = attemptsRef.current.get(key)
     if (closingRef.current || previous?.running || previous?.merging || previous?.cancelling || previous?.mergePending) return
     let finish!: () => void
@@ -246,6 +317,12 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     let release: Release | undefined
     let chunkHasher: ReturnType<typeof createChunkHasher> | undefined
     try {
+      if (options.stepGate) {
+        patchEntry(key, { awaitingStep: true })
+        await waitForGate(options.stepGate, attempt.controller.signal)
+        patchEntry(key, { awaitingStep: false })
+        if (!isCurrent()) return
+      }
       release = await uploadSlots.acquire(attempt.controller.signal, () => patchEntry(key, { waiting: true }))
       if (!release || !isCurrent()) return
       chunkHasher = createChunkHasher()
@@ -273,9 +350,15 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
         fileSize: file.size,
         fileLastModified: file.lastModified,
         fileFingerprint: fingerprint,
+      }, { quietClientError: true }).catch((error: unknown) => {
+        const rejection = businessRejectionMessage(error, 'init')
+        if (rejection === undefined) throw error
+        if (isCurrent()) reject(key, rejection)
+        throw new UploadRejectedError(rejection)
       })
       const sid: string = init.data.sessionId
       attempt.sessionId = sid
+      options.onInitialized?.()
       if (!isCurrent()) return
       const chunkSize: number = init.data.chunkSize
       const total: number = init.data.totalChunks
@@ -340,26 +423,41 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
       await submitUploadMd5(sid, digest)
       if (!isCurrent()) return
       await confirmMerge(key, attempt, file.name)
-    } catch {
+    } catch (error) {
       attempt.controller.abort()
-      if (isCurrent()) {
+      if (isCurrent() && !(error instanceof UploadRejectedError)) {
         patchEntry(key, { phase: 'interrupted' })
       }
     } finally {
       chunkHasher?.dispose()
       release?.()
-      patchEntry(key, { waiting: false })
+      patchEntry(key, { waiting: false, awaitingStep: false })
       attempt.running = false
       attempt.finish()
     }
   }
 
   const startAll = async () => {
-    if (closingRef.current || locking) return
+    if (closingRef.current || locking || hasNameErrors) return
     batchStartedRef.current = true
-    await Promise.all(entries
-      .filter((entry) => entry.phase === 'queued' || entry.phase === 'interrupted')
-      .map((entry) => runEntry(entry.key, entry.file)))
+    rejectionToastsRef.current.clear()
+    const runnable = entries.filter((entry) => entry.phase === 'queued' || entry.phase === 'interrupted')
+    const steps = companyRules ? runnable.filter((entry) => isStepFile(entry.file.name)) : []
+    if (steps.length === 0 || steps.length === runnable.length) {
+      await Promise.all(runnable.map((entry) => runEntry(entry.key, entry.file)))
+      return
+    }
+    // 服务端要求公司发给供应商的其它文件之前已有 STEP 文件或正在上传的 STEP 会话：
+    // 同批 STEP 先建立会话，其余文件随后开始；STEP 全部失败时也放行，由服务端给出明确提示。
+    let openGate!: () => void
+    const stepGate = new Promise<void>((resolve) => { openGate = resolve })
+    const stepRuns = steps.map((entry) => runEntry(entry.key, entry.file, { onInitialized: openGate }))
+    void Promise.allSettled(stepRuns).then(() => openGate())
+    await Promise.all([
+      ...stepRuns,
+      ...runnable.filter((entry) => !isStepFile(entry.file.name))
+        .map((entry) => runEntry(entry.key, entry.file, { stepGate })),
+    ])
   }
 
   const cancelEntry = async (key: string): Promise<boolean> => {
@@ -474,13 +572,14 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
         ) : (
           <>
             <Button onClick={closeAll}>关闭</Button>
-            <Button type="primary" aria-label="上传所选文件" disabled={!hasQueued} onClick={startAll} icon={<IconUpload />}>
-              上传所选文件{hasQueued ? `（${entries.filter((e) => e.phase === 'queued' || e.phase === 'interrupted').length}）` : ''}
+            <Button type="primary" aria-label="上传所选文件" disabled={!hasQueued || hasNameErrors} onClick={startAll} icon={<IconUpload />}>
+              上传所选文件{hasQueued ? `（${pending.length}）` : ''}
             </Button>
           </>
         )
       }
     >
+      {direction && <UploadMaterialGuide direction={direction} />}
       <input
         ref={fileInputRef}
         type="file"
@@ -501,10 +600,27 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
         <Checkbox checked={submitForAcceptance} disabled={!canAddMore}
           onChange={setSubmitForAcceptance}>全部上传成功后提交验收</Checkbox>
       </div>}
+      <div aria-live="polite">
+        {missingStepInBatch && (
+          <Alert type="warning" style={{ marginTop: 12 }}
+            content="本批没有 STEP 文件。若本子项目还没有上传过 STEP 3D 图，其它文件会被拒绝，请一并选择 .step/.stp 文件。" />
+        )}
+      </div>
+      <div aria-live="polite">
+        {hasNameErrors && (
+          <Alert type="error" style={{ marginTop: 12 }} content="有文件名不符合要求，请移除后按规则重命名再选择。" />
+        )}
+      </div>
       {totalCount > 0 && (
         <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {entries.map((entry) => (
-            <div key={entry.key} style={{ overflowWrap: 'anywhere' }}>
+          {entries.map((entry) => {
+            const entryError = entry.phase === 'rejected'
+              ? entry.rejectedMessage ?? null
+              : (entry.phase === 'queued' || entry.phase === 'interrupted') ? nameError(entry) : null
+            const errorId = `upload-entry-error-${entry.key}`
+            return (
+            <div key={entry.key} style={{ overflowWrap: 'anywhere' }} role="group" aria-label={entry.file.name}
+              aria-describedby={entryError ? errorId : undefined}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Typography.Text style={{ flex: 1 }}>
                   {entry.file.name}（{fmtSize(entry.file.size)}）
@@ -527,8 +643,9 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
                   {(entry.phase === 'hashing' || entry.phase === 'uploading') && (
                     <Button size="mini" status="danger" onClick={() => cancelEntry(entry.key)}>取消</Button>
                   )}
-                  {(entry.phase === 'queued' || entry.phase === 'interrupted') && (
+                  {(entry.phase === 'queued' || entry.phase === 'interrupted' || entry.phase === 'rejected') && (
                     <Button size="mini" icon={<IconClose />} aria-label={`移除「${entry.file.name}」`}
+                      aria-describedby={entryError ? errorId : undefined}
                       onClick={() => removeQueued(entry.key)} />
                   )}
                 </Space>
@@ -536,15 +653,21 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
               {entry.phase !== 'queued' && entry.phase !== 'cancelled' && (
                 <Progress
                   percent={entry.percent}
-                  status={entry.phase === 'merge-invalid' ? 'error' : entry.phase === 'done' ? 'success' : undefined}
+                  status={entry.phase === 'merge-invalid' || entry.phase === 'rejected' ? 'error' : entry.phase === 'done' ? 'success' : undefined}
                   style={{ marginTop: 4 }}
                 />
               )}
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {phaseLabel(entry.phase, entry.percent, entry.waiting)}
+                {phaseLabel(entry.phase, entry.percent, entry.waiting, entry.awaitingStep)}
               </Typography.Text>
+              <div aria-live="polite">
+                {entryError && (
+                  <Typography.Text className="upload-entry-error" id={errorId}>{entryError}</Typography.Text>
+                )}
+              </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </Modal>

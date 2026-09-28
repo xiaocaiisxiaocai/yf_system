@@ -92,7 +92,20 @@ function updateFeedData(
   key: MessageFeedKey,
   update: (data: MessageFeedData) => MessageFeedData,
 ) {
-  queryClient.setQueryData<MessageFeedData>(key, current => current ? update(current) : current)
+  const query = queryClient.getQueryCache().find<unknown, Error, MessageFeedData>({ queryKey: key, exact: true })
+  const current = query?.state.data
+  if (!query || !current) return
+  const data = update(current)
+  // setQueryData dispatches success and would erase a failed next-page request and its retry control.
+  if (query.state.status === 'error') {
+    query.setState({
+      data,
+      dataUpdateCount: query.state.dataUpdateCount + 1,
+      dataUpdatedAt: Date.now(),
+    })
+    return
+  }
+  queryClient.setQueryData<MessageFeedData>(key, data)
 }
 
 function mapFeedMessages(

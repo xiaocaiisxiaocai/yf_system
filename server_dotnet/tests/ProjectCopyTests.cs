@@ -9,7 +9,7 @@ using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class ProjectCopyTests
 {
     [Fact(Timeout = 120_000)]
@@ -300,7 +300,7 @@ public sealed class ProjectCopyTests
         INSERT INTO project_work_orders(project_id,work_order_no,sort_no) VALUES(7101,'WO-COPY',0),(7102,'WO-EMPTY',0);
         """;
 
-    private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+    private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, TestJson.Web));
     private sealed class CopiedFile { public ulong Id { get; init; } public ulong? BlobId { get; init; } public string StoragePath { get; init; } = "";
         public ulong UploaderId { get; init; } public string Direction { get; init; } = ""; public string Sha256 { get; init; } = ""; }
     private sealed class ProjectTimestamps

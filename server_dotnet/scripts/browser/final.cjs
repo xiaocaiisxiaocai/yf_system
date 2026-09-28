@@ -52,7 +52,7 @@ async function assertExcelGrid(dialog, expectedRows) {
       await page.getByRole('row').filter({ hasText: 'vendor-response.xlsx' }).waitFor();
       await page.getByRole('checkbox').first().locator('..').click();
       const download = page.waitForEvent('download');
-      await page.getByRole('button', { name: '打包下载（2）', exact: true }).click();
+      await page.getByRole('button', { name: '打包下载（3）', exact: true }).click();
       const item = await download;
       await item.saveAs(OUT + '/browser-batch.zip');
       assert.equal(await item.failure(), null);

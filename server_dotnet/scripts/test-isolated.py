@@ -27,7 +27,7 @@ import zipfile
 import pymysql
 from test_host_artifacts import verify_test_host_artifacts
 from test_identity_contracts import run_identity_checks
-from test_file_contracts import run_file_checks
+from test_file_contracts import run_file_checks, run_upload_material_checks
 from test_native_download_contracts import run_native_download_checks
 from test_background_copy_contracts import run_background_copy_checks
 from test_role_fixtures import assert_admin_only_initialization, install_legacy_test_roles
@@ -274,6 +274,39 @@ def stop_process(owned):
             owned.wait()
 
 
+def free_loopback_url():
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return f"http://127.0.0.1:{listener.getsockname()[1]}"
+
+
+def prepare_content_root(parent):
+    """An owned, otherwise empty ASP.NET content root for every child API process.
+
+    The API resolves appsettings.json and the optional, git-ignored appsettings.Local.json relative
+    to its content root (the working directory by default). Running from Yf.Api would load a
+    developer's local database/JWT/URL settings into the suite. Only the build output's committed
+    appsettings.json is copied here (appsettings.Local.json is never copied to build output), so
+    tests see the shipped defaults plus the process-scoped App__* overrides and nothing else.
+    """
+    content_root = Path(parent) / "content-root"
+    content_root.mkdir()
+    shipped = DLL.parent / "appsettings.json"
+    if shipped.is_file():
+        shutil.copy2(shipped, content_root / "appsettings.json")
+    return content_root
+
+
+def api_output(completed):
+    return ((completed.stdout or b"").decode(errors="replace") + "\n"
+            + (completed.stderr or b"").decode(errors="replace"))
+
+
+def refused_with(completed, expected_text):
+    """A refusal only counts when the process failed for the documented reason (not e.g. a port conflict)."""
+    return completed.returncode != 0 and expected_text in api_output(completed)
+
+
 def wait_for_http_ready(process, probe, target, timeout_seconds=60.0, interval_seconds=0.1):
     deadline = time.monotonic() + timeout_seconds
     attempts = 0
@@ -314,26 +347,44 @@ try:
         base = f"http://127.0.0.1:{port}"
         initial = "Yf9!" + secrets.token_urlsafe(9)
         changed = "Yf9!" + secrets.token_urlsafe(9)
+        content_root = prepare_content_root(temp)
         env = {
             key: value for key, value in os.environ.items()
             if not key.lower().startswith(("app__", "app:"))
-            and key.upper() not in {"YF_CONFIG_PATH", "YF_BOOTSTRAP_PASSWORD"}
+            and key.upper() not in {
+                "YF_CONFIG_PATH", "YF_BOOTSTRAP_PASSWORD", "ASPNETCORE_CONTENTROOT", "ASPNETCORE_WEBROOT",
+                "DOTNET_CONTENTROOT", "ASPNETCORE_URLS", "DOTNET_URLS", "URLS",
+            }
         }
         env.update({"App__ConnectionString": f"Server={cs(url.hostname)};Port={url.port or 3306};Database={name};User ID={cs(user)};Password={cs(password)}",
                     "App__JwtSecret": secrets.token_urlsafe(48), "App__StorageRoot": str(storage),
                     "App__WebBaseUrl": base, "App__CookieSecure": "false", "App__WorkerEnabled": "false",
                     "App__CopyWorkerEnabled": "true",
                     "App__Smtp__Host": "", "ASPNETCORE_URLS": base, "YF_BOOTSTRAP_PASSWORD": initial,
+                    "ASPNETCORE_CONTENTROOT": str(content_root),
                     "Logging__LogLevel__Default": "Warning",
                     "Logging__LogLevel__Microsoft.Hosting.Lifetime": "Information"})
-        initialized = subprocess.run(["dotnet", str(DLL), "--initialize-database"], cwd=API, env=env, capture_output=True)
+        if PUBLISHED:
+            # The content root is the owned empty directory; the published SPA is still served.
+            env["ASPNETCORE_WEBROOT"] = str(API / "wwwroot")
+
+        def run_api(*arguments, timeout):
+            # A fresh explicit --urls per one-shot run: a leaked "Urls" setting or an occupied port
+            # can never make a refusal check pass, and nothing binds the shared test port.
+            return subprocess.run(
+                ["dotnet", str(DLL), *arguments, "--urls", free_loopback_url()],
+                cwd=content_root, env=env, capture_output=True, timeout=timeout,
+            )
+
+        initialized = run_api("--initialize-database", timeout=300)
         if initialized.returncode:
             raise RuntimeError(".NET empty database initialization failed: " + initialized.stderr.decode(errors="replace")[:1500])
         check("standalone empty database initialization", True)
         assert_admin_only_initialization(conn)
         check("empty initialization creates only the admin user and system administrator role", True)
-        refused = subprocess.run(["dotnet", str(DLL), "--initialize-database"], cwd=API, env=env, capture_output=True)
-        check("initializer refuses nonempty database", refused.returncode != 0)
+        refused = run_api("--initialize-database", timeout=120)
+        check("initializer refuses nonempty database",
+              refused_with(refused, "Initialization refused: target database is not empty"))
         del env["YF_BOOTSTRAP_PASSWORD"]
         # Legacy role fixtures are test-only; production initialization remains admin-only.
         install_legacy_test_roles(conn)
@@ -358,10 +409,7 @@ try:
               and [row[0] for row in expected_history] == source_migrations)
 
         for _ in range(2):
-            migration = subprocess.run(
-                ["dotnet", str(DLL), "--migrate-database"],
-                cwd=API, env=env, capture_output=True,
-            )
+            migration = run_api("--migrate-database", timeout=300)
             if migration.returncode:
                 raise RuntimeError(
                     "EF migration on current database failed: "
@@ -380,44 +428,32 @@ try:
             # Corrupt only this owned disposable fixture to prove startup and
             # migration refuse an unmanaged nonempty database without applying DDL.
             cursor.execute("DELETE FROM __EFMigrationsHistory")
-        stale_schema = subprocess.run(
-            ["dotnet", str(DLL)], cwd=API, env=env, capture_output=True, timeout=20,
-        )
-        check("startup refuses missing EF migration history", stale_schema.returncode != 0)
-        refused_migration = subprocess.run(
-            ["dotnet", str(DLL), "--migrate-database"],
-            cwd=API, env=env, capture_output=True, timeout=20,
-        )
+        stale_schema = run_api(timeout=60)
+        check("startup refuses missing EF migration history",
+              refused_with(stale_schema, "Database has unapplied EF Core migrations"))
+        refused_migration = run_api("--migrate-database", timeout=60)
         check("explicit migration refuses empty EF history on a nonempty database",
-              refused_migration.returncode != 0)
+              refused_with(refused_migration, "Migration refused: EF migration history is empty"))
         with conn.cursor() as cursor:
             cursor.executemany(
                 "INSERT INTO __EFMigrationsHistory(MigrationId,ProductVersion) VALUES(%s,%s)",
                 expected_history,
             )
-        current_migration = subprocess.run(
-            ["dotnet", str(DLL), "--migrate-database"],
-            cwd=API, env=env, capture_output=True,
-        )
+        current_migration = run_api("--migrate-database", timeout=300)
         if current_migration.returncode:
             raise RuntimeError(
                 "EF migration failed after restoring the owned test history: "
                 + current_migration.stderr.decode(errors="replace")[:1500]
             )
-        conversion = subprocess.run(
-            ["dotnet", str(DLL), "--convert-file-blobs"],
-            cwd=API, env=env, capture_output=True, timeout=60,
-        )
+        conversion = run_api("--convert-file-blobs", timeout=120)
         conversion_lines = [line for line in conversion.stdout.decode(errors="replace").splitlines() if line.strip()]
         conversion_result = json.loads(conversion_lines[-1]) if conversion.returncode == 0 and conversion_lines else {}
         check("explicit file content conversion is a repeatable one-shot command",
               conversion_result.get("convertedFiles") == 0 and conversion_result.get("removedLegacyFiles") is None)
-        misplaced_cleanup = subprocess.run(
-            ["dotnet", str(DLL), "--remove-legacy-content"],
-            cwd=API, env=env, capture_output=True, timeout=20,
-        )
+        misplaced_cleanup = run_api("--remove-legacy-content", timeout=60)
         check("legacy content cleanup is refused outside the conversion command",
-              misplaced_cleanup.returncode != 0)
+              refused_with(misplaced_cleanup,
+                           "--remove-legacy-content is only valid together with --convert-file-blobs"))
         if not TEST_HOST.is_file():
             raise RuntimeError("Build server_dotnet/TestHost/Yf.Api.TestHost.csproj before HTTP testing")
         test_dll = TEST_HOST
@@ -437,7 +473,7 @@ try:
         check("test host uses exact API assembly and managed runtime dependencies", True)
         api_log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(api_log_path, "wb") as log:
-            process = subprocess.Popen(production_command, cwd=API, env=env, stdout=log, stderr=log)
+            process = subprocess.Popen(production_command, cwd=content_root, env=env, stdout=log, stderr=log)
             stack.callback(stop_process, process)
             client = Client(base)
             try:
@@ -464,7 +500,7 @@ try:
                 unknown = client.call("GET", "/api/unknown", expected=404)
                 check("published config binaries and unknown API are not exposed", unknown["code"] == 40401)
             stop_process(process)
-            process = subprocess.Popen(host_command, cwd=API, env=env, stdout=log, stderr=log)
+            process = subprocess.Popen(host_command, cwd=content_root, env=env, stdout=log, stderr=log)
             stack.callback(stop_process, process)
             client = Client(base)
             try:
@@ -519,10 +555,15 @@ try:
             _, project = _create_project_group(
                 client, client, conn, sid, ".NET 隔离项目")
             pid = project["id"]
+            # Starting requires an enabled supplier account that can submit.
+            flow_password = "Yf9!" + secrets.token_urlsafe(9)
+            changed_flow_password = "Yf9!" + secrets.token_urlsafe(9)
+            flow_user = client.call("POST", f"/api/v1/admin/suppliers/{sid}/accounts", {"employeeNo": "workflow_supplier", "password": flow_password, "realName": "验收供应商", "email": "workflow@example.invalid"})
             client.call("PUT", f"/api/v1/projects/{pid}/status", {"status": "IN_PROGRESS"})
             check("supplier/project creation and project start", True)
             pdf = b"%PDF-1.4\n" + b"test data\n" * 40000 + b"%%EOF\n"
-            upload = init_upload(client, pid, "regression.pdf", pdf)
+            # Internal (company-to-supplier) upload on a fresh subproject: opt in to the STEP prerequisite fixture.
+            upload = init_upload(client, pid, "regression.pdf", pdf, ensure_step=True)
             session = upload["sessionId"]
             size = upload["chunkSize"]
             check("upload uses the updated chunk-size setting", size == 262144)
@@ -552,6 +593,7 @@ try:
             if FILES_ONLY:
                 raise FileContractsComplete()
             run_background_copy_checks(client, conn, check, sid)
+            run_upload_material_checks(client, conn, check, sid)
             run_recent_route_contracts(client, Client, conn, check)
             recovery_bytes = b"%PDF-1.4\nowned interrupted merge regression\n%%EOF\n"
             recovery = init_upload(client, pid, "recovery.pdf", recovery_bytes)
@@ -571,9 +613,6 @@ try:
             for suffix in ("", "/summary", "/activities", "/files", "/messages"):
                 client.call("GET", f"/api/v1/projects/{pid}" + suffix)
             check("project detail and collaboration read routes", True)
-            flow_password = "Yf9!" + secrets.token_urlsafe(9)
-            changed_flow_password = "Yf9!" + secrets.token_urlsafe(9)
-            flow_user = client.call("POST", f"/api/v1/admin/suppliers/{sid}/accounts", {"employeeNo": "workflow_supplier", "password": flow_password, "realName": "验收供应商", "email": "workflow@example.invalid"})
             supplier_client = Client(base)
             first_flow_login = supplier_client.login("workflow_supplier", flow_password)
             supplier_client.call("GET", "/api/v1/project-groups", expected=403)

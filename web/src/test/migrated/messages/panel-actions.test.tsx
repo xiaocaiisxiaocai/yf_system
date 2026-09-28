@@ -180,8 +180,11 @@ describe('留言撰写、发送与分页', () => {
   it('a failed second message page can be retried without losing or duplicating messages', async () => {
     const rows = Array.from({ length: 41 }, (_, index) => messageRow(41 - index, { content: `message ${41 - index}` }))
     let appendFailures = 2
-    messageMocks.get.mockImplementation(async (_url: string, { params }: { params: { beforeId?: number } }) => {
-      const beforeId = params.beforeId
+    messageMocks.get.mockImplementation(async (url: string, config?: { params?: { beforeId?: number } }) => {
+      if (url.startsWith('/messages/')) {
+        return { data: { readers: [{ userId: 9, realName: '测试用户', userType: 'INTERNAL' }], unread: [] } }
+      }
+      const beforeId = config?.params?.beforeId
       if (beforeId && appendFailures > 0) {
         appendFailures -= 1
         throw new Error('transient page failure')
@@ -194,6 +197,9 @@ describe('留言撰写、发送与分页', () => {
     await screen.findByText('message 41')
     await user.click(loadMoreButton()!)
     expect(renderedMessageIds(container)).toEqual(rows.slice(0, 20).map(row => row.id))
+    await user.click(screen.getAllByRole('button', { name: '查看留言回执：0/1' })[0])
+    await screen.findByRole('button', { name: '查看留言回执：1/1' })
+    expect(screen.getByRole('button', { name: '重试' })).toBeVisible()
     await user.click(screen.getByRole('button', { name: '重试' }))
     expect(renderedMessageIds(container)).toEqual(rows.slice(0, 20).map(row => row.id))
     await user.click(screen.getByRole('button', { name: '重试' }))

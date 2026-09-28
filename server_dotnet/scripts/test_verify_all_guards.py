@@ -70,24 +70,51 @@ class VerificationConfigurationContracts(unittest.TestCase):
         self.assertNotIn('"URLS": base', source)
         self.assertIn('["dotnet", str(DLL), "--urls", base]', source)
 
+    def test_verify_all_output_root_and_ipv6_loopback_are_supported(self):
+        source = SCRIPT.read_text(encoding="utf-8-sig")
+        self.assertIn("[string]$OutputRoot", source)
+        self.assertIn("$env:YF_VERIFY_ALL_OUTPUT_ROOT", source)
+        # [Uri]::Host returns "[::1]" for IPv6 literals; the guard must strip brackets.
+        self.assertIn("$testDatabaseUri.Host.Trim('[', ']')", source)
+        self.assertIn("[Net.IPAddress]::TryParse($databaseHost", source)
+
 
 @unittest.skipUnless(os.name == "nt", "Windows PowerShell entry point")
 class VerifyAllGuards(unittest.TestCase):
-    def reject(self, overrides, step):
+    """Guard runs write their (intentionally failed) summaries to a private temp
+    output root so they never pollute the real .artifacts/tests/verify-all."""
+
+    def setUp(self):
+        temp_root = ROOT / ".artifacts/tests/tmp"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        self._output = tempfile.TemporaryDirectory(prefix="yf_verify_guard_out_", dir=temp_root)
+        self.addCleanup(self._output.cleanup)
+        self.output_root = Path(self._output.name)
+
+    def environment(self, overrides=None):
         env = os.environ.copy()
         env.pop("YF_TEST_DATABASE_URL", None)
         env.pop("YF_UPDATE_OPENAPI", None)
-        env.update(overrides)
+        env["YF_VERIFY_ALL_OUTPUT_ROOT"] = str(self.output_root)
+        env.update(overrides or {})
+        return env
+
+    def load_report(self, run):
+        match = re.search(r"Report: (.+summary\.json)", run.stdout)
+        self.assertIsNotNone(match, run.stdout + run.stderr)
+        path = Path(match.group(1).strip()).resolve()
+        self.assertTrue(path.is_relative_to(self.output_root.resolve()), path)
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+
+    def reject(self, overrides, step):
+        env = self.environment(overrides)
         temp_root = ROOT / ".artifacts/tests/tmp"
-        temp_root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="yf_verify_guard_", dir=temp_root) as cwd:
             run = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(SCRIPT)],
                 env=env, cwd=cwd, capture_output=True, text=True, errors="replace", timeout=30)
         self.assertEqual(1, run.returncode, run.stdout + run.stderr)
         self.assertNotIn("Argument types do not match", run.stderr)
-        match = re.search(r"Report: (.+summary\.json)", run.stdout)
-        self.assertIsNotNone(match, run.stdout + run.stderr)
-        report = json.loads(Path(match.group(1).strip()).read_text(encoding="utf-8-sig"))
+        report = self.load_report(run)
         self.assertEqual("failed", report["status"])
         self.assertFalse(report["fullCoverage"])
         self.assertEqual("failed", next(row for row in report["steps"] if row["name"] == step)["status"])
@@ -106,9 +133,7 @@ class VerifyAllGuards(unittest.TestCase):
                     "database-configuration")
 
     def test_missing_database_fails_closed_before_restore(self):
-        env = os.environ.copy()
-        env.pop("YF_TEST_DATABASE_URL", None)
-        env.pop("YF_UPDATE_OPENAPI", None)
+        env = self.environment()
         run = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(SCRIPT)],
             env=env,
@@ -119,9 +144,7 @@ class VerifyAllGuards(unittest.TestCase):
             timeout=30,
         )
         self.assertEqual(1, run.returncode, run.stdout + run.stderr)
-        match = re.search(r"Report: (.+summary\.json)", run.stdout)
-        self.assertIsNotNone(match, run.stdout + run.stderr)
-        report = json.loads(Path(match.group(1).strip()).read_text(encoding="utf-8-sig"))
+        report = self.load_report(run)
         self.assertEqual("failed", report["status"])
         self.assertFalse(report["fullCoverage"])
         self.assertFalse(report["allowSkips"])

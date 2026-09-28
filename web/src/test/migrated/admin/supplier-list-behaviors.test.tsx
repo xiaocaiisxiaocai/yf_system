@@ -456,6 +456,8 @@ describe('重复搜索运行时注册用例', () => {
     const search = screen.getByPlaceholderText('工号 / 姓名 / 邮箱')
     fireEvent.click(search.closest('.arco-input-search')!.querySelector<HTMLElement>('.arco-icon-search')!)
     expect(await screen.findByText('加载失败')).toBeVisible()
+    // 刷新失败只在表格上方提示，上次加载的行仍然可见。
+    expect(screen.getByText('cached-user')).toBeVisible()
     expect(queryClient.getQueriesData({ queryKey: ['admin-users'] }).some(([, data]) => data !== undefined)).toBe(true)
   })
 })

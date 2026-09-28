@@ -7,11 +7,11 @@ using Yf.Api.Modules.Files;
 namespace Yf.Api.Tests;
 
 // MigratedTestDatabase changes process-wide bootstrap state, so it must not run beside other DB tests.
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class FileBlobStoreTests
 {
     [Fact(Timeout = 60_000)]
-    public async Task FreshlyStagedContentReplacesUnregisteredCanonicalContentWithoutHashingInsideTransaction()
+    public async Task FreshlyStagedContentReplacesUnregisteredCanonicalButNeverOverwritesRegisteredSameSizeContent()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
@@ -38,13 +38,29 @@ public sealed class FileBlobStoreTests
             var canonical = FileBlobStore.AbsolutePath(root, sha);
             Assert.Equal(content, await File.ReadAllBytesAsync(canonical, ct));
 
-            // Same-length canonical corruption is rejected by copy verification and repaired by a
-            // duplicate upload's already verified staging file without hashing under database locks.
+            // A registered blob is immutable and may be streaming: a same-size canonical file is never
+            // overwritten by a duplicate upload (even one held open by a reader), the staging copy is dropped.
             await File.WriteAllBytesAsync(canonical, [4, 3, 2, 1], ct);
             var corrupt = Assert.Throws<ApiException>(() =>
                 FileBlobStore.VerifyBoundPhysicalFile(root, FileBlobStore.RelativePath(sha), sha,
                     (ulong)content.Length, ct));
             Assert.Equal(409, corrupt.Status);
+            var duplicateStaging = Path.Combine(root, "staging-duplicate.tmp");
+            await File.WriteAllBytesAsync(duplicateStaging, content, ct);
+            await using (var reader = new FileStream(canonical, FileMode.Open, FileAccess.Read, FileShare.Read))
+            await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+            await using (var db = EfDb.Use(conn, tx))
+            {
+                await FileBlobStore.ResolveForReferenceAsync(db, root,
+                    new FileBlobStore.PreparedBlob(sha, (ulong)content.Length, duplicateStaging),
+                    expectedBlobId: null, DateTime.UtcNow, ct);
+                await tx.CommitAsync(ct);
+            }
+            Assert.False(File.Exists(duplicateStaging));
+            Assert.Equal(new byte[] { 4, 3, 2, 1 }, await File.ReadAllBytesAsync(canonical, ct));
+
+            // A size mismatch is external damage and is repaired from the verified staging file.
+            await File.WriteAllBytesAsync(canonical, [7, 7], ct);
             var repairStaging = Path.Combine(root, "staging-repair.tmp");
             await File.WriteAllBytesAsync(repairStaging, content, ct);
             await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
@@ -55,7 +71,46 @@ public sealed class FileBlobStoreTests
                     expectedBlobId: null, DateTime.UtcNow, ct);
                 await tx.CommitAsync(ct);
             }
+            Assert.False(File.Exists(repairStaging));
             Assert.Equal(content, await File.ReadAllBytesAsync(canonical, ct));
+
+            if (OperatingSystem.IsWindows())
+            {
+                // A reader without FILE_SHARE_DELETE blocks the repair: retried briefly, then a 409
+                // conflict; the verified staging file is left for the caller to clean up or retry.
+                await File.WriteAllBytesAsync(canonical, [7, 7], ct);
+                var blockedStaging = Path.Combine(root, "staging-blocked.tmp");
+                await File.WriteAllBytesAsync(blockedStaging, content, ct);
+                await using (var reader = new FileStream(canonical, FileMode.Open, FileAccess.Read, FileShare.Read))
+                await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+                await using (var db = EfDb.Use(conn, tx))
+                {
+                    var busy = await Assert.ThrowsAsync<ApiException>(() => FileBlobStore.ResolveForReferenceAsync(db, root,
+                        new FileBlobStore.PreparedBlob(sha, (ulong)content.Length, blockedStaging),
+                        expectedBlobId: null, DateTime.UtcNow, ct));
+                    Assert.Equal(409, busy.Status);
+                    Assert.Equal(40901, busy.Code);
+                }
+                Assert.Equal(new byte[] { 7, 7 }, await File.ReadAllBytesAsync(canonical, ct));
+
+                // The service's own readers share delete access, so they never block a repair.
+                await using (var reader = new FileStream(canonical, FileMode.Open, FileAccess.Read,
+                                 FileShare.Read | FileShare.Delete))
+                await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+                await using (var db = EfDb.Use(conn, tx))
+                {
+                    await FileBlobStore.ResolveForReferenceAsync(db, root,
+                        new FileBlobStore.PreparedBlob(sha, (ulong)content.Length, blockedStaging),
+                        expectedBlobId: null, DateTime.UtcNow, ct);
+                    await tx.CommitAsync(ct);
+                    // The open reader keeps streaming the previous content it opened.
+                    var old = new byte[2];
+                    Assert.Equal(2, await reader.ReadAsync(old, ct));
+                    Assert.Equal(new byte[] { 7, 7 }, old);
+                }
+                Assert.Equal(content, await File.ReadAllBytesAsync(canonical, ct));
+                Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(canonical)!, "*.replaced-*"));
+            }
 
             // A canonical file left without a database row (unknown commit outcome) is not trusted blindly.
             var claimed = new byte[] { 9, 8, 7, 6 };

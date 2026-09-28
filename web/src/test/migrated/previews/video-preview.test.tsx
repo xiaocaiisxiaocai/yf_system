@@ -52,6 +52,61 @@ describe('video preview', () => {
     expect(load).toHaveBeenCalled()
   })
 
+  it('video renewal failures retry with backoff without interrupting playback and fail only at expiry', async () => {
+    vi.useFakeTimers()
+    const grant = { data: { url: '/api/v1/files/7/media', expiresInSeconds: 300 } }
+    mocks.post.mockResolvedValueOnce(grant).mockRejectedValue(new Error('offline'))
+    render(<VideoPreview fileId={7} />)
+    const player = screen.getByLabelText('视频预览') as HTMLVideoElement
+    await vi.waitFor(() => expect(player).toHaveAttribute('src', '/api/v1/files/7/media'))
+    fireEvent.loadedMetadata(player)
+    pause.mockClear()
+
+    // Renewal at half-life fails, then retries after 5s, 10s, 20s, 30s, 30s...
+    await act(async () => { await vi.advanceTimersByTimeAsync(150_000) })
+    expect(mocks.post).toHaveBeenCalledTimes(2)
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+    expect(mocks.post).toHaveBeenCalledTimes(3)
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(mocks.post).toHaveBeenCalledTimes(4)
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+    expect(mocks.post).toHaveBeenCalledTimes(5)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(pause).not.toHaveBeenCalled()
+    expect(player).toHaveAttribute('src', '/api/v1/files/7/media')
+
+    // Keeps retrying until the grant is about to expire (300s minus the safety margin), then fails.
+    await act(async () => { await vi.advanceTimersByTimeAsync(110_000) })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+    expect(screen.getByRole('alert')).toHaveTextContent('视频无法播放')
+    expect(pause).toHaveBeenCalled()
+    const attempts = mocks.post.mock.calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(300_000) })
+    expect(mocks.post).toHaveBeenCalledTimes(attempts)
+  })
+
+  it('video renewal recovers after a transient failure and resets its backoff', async () => {
+    vi.useFakeTimers()
+    const grant = { data: { url: '/api/v1/files/7/media', expiresInSeconds: 300 } }
+    mocks.post.mockReset()
+    mocks.post.mockResolvedValueOnce(grant).mockRejectedValueOnce(new Error('offline')).mockResolvedValue(grant)
+    render(<VideoPreview fileId={7} />)
+    const player = screen.getByLabelText('视频预览') as HTMLVideoElement
+    await vi.waitFor(() => expect(player).toHaveAttribute('src', '/api/v1/files/7/media'))
+    fireEvent.loadedMetadata(player)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(155_000) })
+    expect(mocks.post).toHaveBeenCalledTimes(3)
+    // The recovered grant schedules the next renewal at its half-life again.
+    await act(async () => { await vi.advanceTimersByTimeAsync(149_000) })
+    expect(mocks.post).toHaveBeenCalledTimes(3)
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+    expect(mocks.post).toHaveBeenCalledTimes(4)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('视频预览')).toBe(player)
+  })
+
   it('video rejects foreign origins, query credentials, and mismatched file endpoints', async () => {
     for (const url of [
       'https://example.invalid/api/v1/files/7/media',

@@ -10,7 +10,7 @@ using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class BackgroundProjectCopyTests
 {
     [Fact(Timeout = 120_000)]

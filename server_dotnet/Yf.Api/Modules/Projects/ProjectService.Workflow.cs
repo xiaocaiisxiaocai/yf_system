@@ -30,6 +30,10 @@ internal sealed partial class ProjectService
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
         var requested = request.Status ?? string.Empty;
         var (to, action) = ProjectWorkflowRules.ManagementTransition(project.Status, requested);
+        if (action is "START" or "RESTART")
+        {
+            await EnsureSupplierCanSubmitAsync(conn, tx, project.SupplierId, ct);
+        }
         if (action == "TERMINATE" && await CountActiveUploadsAsync(conn, tx, projectId, ct) > 0)
         {
             throw ApiException.Conflict("项目仍有活动上传会话，不能终止");
@@ -38,6 +42,35 @@ internal sealed partial class ProjectService
         var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
         return result;
+    }
+
+    internal const string SupplierDisabledStartMessage = "项目所属厂商已停用，请先启用厂商后再开始项目";
+    internal const string SupplierWithoutActiveUserStartMessage = "项目所属厂商尚未添加启用的用户，请先添加或启用厂商用户后再开始项目";
+    internal const string SupplierWithoutSubmitterStartMessage =
+        "项目所属厂商的启用用户都没有提交验收权限，请先为厂商用户分配包含“提交项目验收”权限的角色后再开始项目";
+
+    /// <summary>
+    /// START/RESTART hands the subproject to the supplier, so the supplier company must be active and at least one
+    /// of its active supplier accounts must effectively hold <c>project:submit</c> (through an active role).
+    /// </summary>
+    private static async Task EnsureSupplierCanSubmitAsync(MySqlConnection conn, MySqlTransaction tx, ulong supplierId, CancellationToken ct)
+    {
+        await using var db = EfDb.Use(conn, tx);
+        if (!await db.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == AccountStatuses.Active, ct))
+        {
+            throw ApiException.Conflict(SupplierDisabledStartMessage);
+        }
+        var activeUsers = db.Users.Where(user => user.SupplierId == supplierId
+            && user.UserType == UserTypes.Supplier && user.Status == AccountStatuses.Active);
+        if (!await activeUsers.AnyAsync(ct))
+        {
+            throw ApiException.Conflict(SupplierWithoutActiveUserStartMessage);
+        }
+        var submitters = AccessService.UsersWithPermission(db, "project:submit");
+        if (!await activeUsers.AnyAsync(user => submitters.Contains(user.Id), ct))
+        {
+            throw ApiException.Conflict(SupplierWithoutSubmitterStartMessage);
+        }
     }
 
     internal async Task<ProjectResponse> SubmitAsync(
@@ -254,7 +287,8 @@ internal sealed partial class ProjectService
             statusLogId,
         }, ip, ct);
         await groupStatus.RecalculateAsync(
-            conn, tx, project.ProjectGroupId, actor.Id, project.Id, ct, groupAlreadyLocked: true);
+            conn, tx, project.ProjectGroupId, actor.Id, project.Id, ct, groupAlreadyLocked: true,
+            allowCompletion: action == "CONFIRM");
         return statusLogId;
     }
 

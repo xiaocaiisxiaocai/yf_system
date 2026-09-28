@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using MailKit.Net.Smtp;
@@ -19,6 +21,20 @@ public sealed class MailService
     private readonly ISmtpDelivery smtp;
     private readonly SmtpSettingsService settings;
     private readonly AppOptions options;
+    private readonly TimeProvider time;
+    private readonly object breakerGate = new();
+    private DateTimeOffset breakerOpenUntil = DateTimeOffset.MinValue;
+    private TimeSpan breakerDelay = TimeSpan.Zero;
+    private string? breakerSettingsKey;
+    private long nextExpirySweepTicks;
+
+    /// <summary>First pause after SMTP itself is unavailable; doubles on every consecutive failure.</summary>
+    internal static readonly TimeSpan BreakerInitialDelay = TimeSpan.FromMinutes(1);
+    internal static readonly TimeSpan BreakerMaximumDelay = TimeSpan.FromMinutes(30);
+    internal static readonly TimeSpan ExpirySweepInterval = TimeSpan.FromMinutes(1);
+    internal const string ExpiredPendingReason = "待发送邮件超过有效期，已取消";
+    internal const string ExpiredPendingAuditReason = "PENDING_EXPIRED";
+    internal const string SmtpUnavailableAuditReason = "SMTP_UNAVAILABLE";
 
     public MailService(
         AppDb db,
@@ -34,13 +50,15 @@ public sealed class MailService
         AppOptions options,
         AuditService audit,
         ILogger<MailService> logger,
-        ISmtpDelivery smtp)
+        ISmtpDelivery smtp,
+        TimeProvider? time = null)
     {
         this.db = db;
         this.audit = audit;
         this.logger = logger;
         this.smtp = smtp;
         this.options = options;
+        this.time = time ?? TimeProvider.System;
         settings = new(db, options, audit);
     }
 
@@ -104,7 +122,7 @@ public sealed class MailService
                 CreatedAt = log.CreatedAt,
             })
             .ToListAsync(ct);
-        var latestSentAt = await context.EmailOutbox.Where(mail => mail.Status == "SENT")
+        var latestSentAt = await context.EmailOutbox.Where(mail => mail.Status == MailStatuses.Sent)
             .Select(mail => mail.SentAt).MaxAsync(ct);
         var latestFailedAt = await context.AuditLogs.Where(log => log.Action == "EMAIL_FAILED")
             .Select(log => (DateTime?)log.CreatedAt).MaxAsync(ct);
@@ -115,8 +133,8 @@ public sealed class MailService
             configured ? MaskEmail(cfg.From) : null,
             notificationPolicy.GlobalEnabled,
             notificationPolicy.ToResponse(),
-            new MailQueueCounts(counts.GetValueOrDefault("PENDING"), counts.GetValueOrDefault("SENDING"),
-                counts.GetValueOrDefault("SENT"), counts.GetValueOrDefault("FAILED"), counts.GetValueOrDefault("CANCELLED")),
+            new MailQueueCounts(counts.GetValueOrDefault(MailStatuses.Pending), counts.GetValueOrDefault(MailStatuses.Sending),
+                counts.GetValueOrDefault(MailStatuses.Sent), counts.GetValueOrDefault(MailStatuses.Failed), counts.GetValueOrDefault(MailStatuses.Cancelled)),
             latestSentAt,
             latestFailedAt,
             missingCount,
@@ -161,7 +179,7 @@ public sealed class MailService
         {
             await using var context = EfDb.Use(conn);
             var ids = await context.EmailOutbox
-                .Where(mail => (mail.Status == "SENT" || mail.Status == "FAILED" || mail.Status == "CANCELLED")
+                .Where(mail => (mail.Status == MailStatuses.Sent || mail.Status == MailStatuses.Failed || mail.Status == MailStatuses.Cancelled)
                     && mail.CreatedAt < cutoff)
                 .OrderBy(mail => mail.Id).Select(mail => mail.Id).Take(PurgeBatchSize).ToArrayAsync(ct);
             if (ids.Length == 0) break;
@@ -185,11 +203,16 @@ public sealed class MailService
             policy = await EmailNotificationPolicy.LoadAsync(conn, null, ct);
             if (!policy.GlobalEnabled)
             {
-                await CancelPolicyDisabledAsync(conn, ct);
+                await CancelPendingAsync(conn, null, EmailNotificationPolicy.DisabledReason,
+                    EmailNotificationPolicy.DisabledAuditReason, ct);
                 return 0;
             }
+            // Expiry runs whether or not SMTP is configured: a queue that can never be sent must not
+            // deliver days-old notifications the moment somebody configures SMTP.
+            await CancelExpiredPendingAsync(conn, ct);
             resolved = await settings.ResolveAsync(conn, null, ct);
             if (!resolved.Configured) return 0;
+            if (BreakerOpen(resolved.Options)) return 0;
             await using var context = EfDb.Use(conn);
             var now = await DatabaseUtcNowAsync(context, ct);
             pending = await (
@@ -198,9 +221,9 @@ public sealed class MailService
                 from recipient in recipients.DefaultIfEmpty()
                 where mail.EventType != "STORAGE_WARNING"
                       && mail.SentAt == null
-                      && ((mail.Status == "PENDING"
+                      && ((mail.Status == MailStatuses.Pending
                            && (mail.NextAttemptAt == null || mail.NextAttemptAt <= now))
-                          || (mail.Status == "SENDING" && mail.NextAttemptAt <= now))
+                          || (mail.Status == MailStatuses.Sending && mail.NextAttemptAt <= now))
                 orderby mail.Id
                 select new MailRow
                 {
@@ -220,10 +243,19 @@ public sealed class MailService
         }
         // One SMTP connection (connect + authenticate) serves the whole batch instead of every message.
         var batch = smtp.OpenBatch();
+        var unavailable = false;
         try
         {
             foreach (var mail in pending)
-                await DeliverAsync(batch, resolved, mail, ct);
+            {
+                // Connection, authentication, TLS, timeout and sender failures affect every message:
+                // stop the batch instead of burning each message's retry budget on the same outage.
+                if (await DeliverAsync(batch, resolved, mail, ct) == DeliveryOutcome.ServiceUnavailable)
+                {
+                    unavailable = true;
+                    break;
+                }
+            }
         }
         finally
         {
@@ -232,10 +264,12 @@ public sealed class MailService
                 logger.LogWarning("SMTP batch connection cleanup failed ({ErrorType}); accepted messages stay sent.",
                     closed.DisconnectFailureType);
         }
-        return pending.Length;
+        return unavailable ? 0 : pending.Length;
     }
 
-    private async Task DeliverAsync(ISmtpBatch batch, ResolvedSmtpSettings resolved, MailRow mail, CancellationToken ct)
+    private enum DeliveryOutcome { Skipped, Completed, ServiceUnavailable }
+
+    private async Task<DeliveryOutcome> DeliverAsync(ISmtpBatch batch, ResolvedSmtpSettings resolved, MailRow mail, CancellationToken ct)
     {
         DateTime lease;
         await using (var claimConnection = await db.OpenAsync(ct))
@@ -254,13 +288,13 @@ public sealed class MailService
                     : item.NextAttemptAt == mail.NextAttemptAt)
                 && (item.NextAttemptAt == null || item.NextAttemptAt <= claimNow));
             var claimed = await claimQuery.ExecuteUpdateAsync(setters => setters
-                .SetProperty(item => item.Status, "SENDING")
+                .SetProperty(item => item.Status, MailStatuses.Sending)
                 .SetProperty(item => item.DedupeKey,
-                    item => item.EventType == "FILE_UPLOADED" ? null : item.DedupeKey)
+                    item => item.EventType == CoalescedFileEvent || item.EventType == CoalescedMessageEvent ? null : item.DedupeKey)
                 .SetProperty(item => item.NextAttemptAt, lease), ct);
-            if (claimed != 1) return;
+            if (claimed != 1) return DeliveryOutcome.Skipped;
             var claimedMail = await claimContext.EmailOutbox.AsNoTracking()
-                .Where(item => item.Id == mail.Id && item.Status == "SENDING" && item.NextAttemptAt == lease)
+                .Where(item => item.Id == mail.Id && item.Status == MailStatuses.Sending && item.NextAttemptAt == lease)
                 .Select(item => new
                 {
                     item.RecipientEmail,
@@ -268,8 +302,8 @@ public sealed class MailService
                     item.Body,
                 })
                 .SingleAsync(ct);
-            // Enqueue and claim serialize on the outbox row. Reload after claiming so
-            // a file appended immediately before this claim is included in this send.
+            // Enqueue and claim serialize on the outbox row. Reload after claiming so a file or
+            // message appended immediately before this claim is included in this send.
             mail.RecipientEmail = claimedMail.RecipientEmail;
             mail.Subject = claimedMail.Subject;
             mail.Body = claimedMail.Body;
@@ -310,12 +344,12 @@ public sealed class MailService
                         : ProjectNotificationService.StaleProjectMailReason;
                 var cancelled = await claimContext.EmailOutbox.Where(item =>
                         item.Id == mail.Id
-                        && item.Status == "SENDING"
+                        && item.Status == MailStatuses.Sending
                         && item.NextAttemptAt == lease)
                     .ExecuteUpdateAsync(setters => setters
-                        .SetProperty(item => item.Status, "CANCELLED")
+                        .SetProperty(item => item.Status, MailStatuses.Cancelled)
                         .SetProperty(item => item.DedupeKey,
-                            item => item.EventType == "FILE_UPLOADED" ? null : item.DedupeKey)
+                            item => item.EventType == CoalescedFileEvent || item.EventType == CoalescedMessageEvent ? null : item.DedupeKey)
                         .SetProperty(item => item.NextAttemptAt, (DateTime?)null)
                         .SetProperty(item => item.LastError, reason), ct);
                 if (cancelled == 1)
@@ -330,7 +364,7 @@ public sealed class MailService
                         new
                         {
                             eventType = mail.EventType,
-                            status = "CANCELLED",
+                            status = MailStatuses.Cancelled,
                             reason = policyDisabled
                                 ? EmailNotificationPolicy.DisabledAuditReason
                                 : !recipientAddressValid
@@ -343,16 +377,17 @@ public sealed class MailService
                         ct);
                 }
                 await claimTransaction.CommitAsync(ct);
-                return;
+                return DeliveryOutcome.Skipped;
             }
             await claimTransaction.CommitAsync(ct);
         }
         // SMTP may take a minute. The durable lease protects this message;
         // no pooled database connection is needed while waiting on the network.
-        string status = "SENT";
+        string status = MailStatuses.Sent;
         string? error = null;
         var retries = mail.RetryCount;
-        int? retryDelaySeconds = null;
+        TimeSpan? retryDelay = null;
+        var serviceUnavailable = false;
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -362,34 +397,46 @@ public sealed class MailService
             if (delivery.DisconnectFailureType is not null)
                 logger.LogWarning("SMTP message {OutboxId} was accepted, but connection cleanup failed ({ErrorType}).",
                     mail.Id, delivery.DisconnectFailureType);
+            ResetBreaker();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            retries++;
             error = ex is OperationCanceledException ? "SMTP 连接超时" : SanitizeError(ex.Message);
+            var kind = ClassifyFailure(ex);
             logger.LogWarning(
-                "SMTP delivery for outbox {OutboxId} failed ({ErrorType}, {SafeError}); sanitized stack: {SanitizedStack}",
-                mail.Id, ex.GetType().Name, error, SanitizedExceptionTrace(ex));
-            var terminal = retries >= 3 || ex is FormatException || ex is SmtpCommandException command && (int)command.StatusCode >= 500;
-            status = terminal ? "FAILED" : "PENDING";
-            if (!terminal) retryDelaySeconds = 30 * (1 << Math.Clamp(retries - 1, 0, 6));
+                "SMTP delivery for outbox {OutboxId} failed ({ErrorType}, {FailureKind}, {SafeError}); sanitized stack: {SanitizedStack}",
+                mail.Id, ex.GetType().Name, kind, error, SanitizedExceptionTrace(ex));
+            if (kind == SmtpFailureKind.ServiceUnavailable)
+            {
+                // Not this message's fault: keep its retry budget and wait for the circuit breaker.
+                serviceUnavailable = true;
+                status = MailStatuses.Pending;
+                retryDelay = TripBreaker(resolved.Options);
+            }
+            else
+            {
+                retries++;
+                var terminal = retries >= 3 || kind == SmtpFailureKind.PermanentForMessage;
+                status = terminal ? MailStatuses.Failed : MailStatuses.Pending;
+                if (!terminal) retryDelay = TimeSpan.FromSeconds(30 * (1 << Math.Clamp(retries - 1, 0, 6)));
+            }
         }
         // Once SendAsync has returned, the SMTP server accepted the message. Persist that
         // outcome during a short window independent of host shutdown; a QUIT failure must
         // not turn a known delivery into a retry and send a duplicate message.
-        using var completion = status == "SENT" ? new CancellationTokenSource(TimeSpan.FromSeconds(15)) : null;
+        using var completion = status == MailStatuses.Sent ? new CancellationTokenSource(TimeSpan.FromSeconds(15)) : null;
         var completionToken = completion?.Token ?? ct;
         await using var conn = await db.OpenAsync(completionToken);
         await using var tx = await AppDb.BeginTransactionAsync(conn, completionToken);
         await using var context = EfDb.Use(conn, tx);
         var completionNow = await DatabaseUtcNowAsync(context, completionToken);
-        var nextAttemptAt = retryDelaySeconds is { } seconds ? completionNow.AddSeconds(seconds) : (DateTime?)null;
+        var nextAttemptAt = retryDelay is { } delay ? completionNow.Add(delay) : (DateTime?)null;
         var completionQuery = context.EmailOutbox.Where(item =>
             item.Id == mail.Id
-            && item.Status == "SENDING"
+            && item.Status == MailStatuses.Sending
             && item.NextAttemptAt == lease);
-        var changed = status == "SENT"
+        var changed = status == MailStatuses.Sent
             ? await completionQuery.ExecuteUpdateAsync(setters => setters
                 .SetProperty(item => item.Status, status)
                 .SetProperty(item => item.RetryCount, retries)
@@ -401,14 +448,136 @@ public sealed class MailService
                 .SetProperty(item => item.RetryCount, retries)
                 .SetProperty(item => item.LastError, error)
                 .SetProperty(item => item.NextAttemptAt, nextAttemptAt), completionToken);
-        if (changed == 1) await audit.WriteAsync(conn, tx, null, status == "SENT" ? "EMAIL_SENT" : status == "FAILED" ? "EMAIL_FAILED" : "EMAIL_RETRY", "email_outbox", mail.Id, new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error }, null, completionToken);
+        if (changed == 1)
+        {
+            var action = status == MailStatuses.Sent ? "EMAIL_SENT" : status == MailStatuses.Failed ? "EMAIL_FAILED" : "EMAIL_RETRY";
+            object detail = serviceUnavailable
+                ? new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error, reason = SmtpUnavailableAuditReason }
+                : new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error };
+            await audit.WriteAsync(conn, tx, null, action, "email_outbox", mail.Id, detail, null, completionToken);
+        }
         await tx.CommitAsync(completionToken);
+        return serviceUnavailable ? DeliveryOutcome.ServiceUnavailable : DeliveryOutcome.Completed;
     }
+
+    private const string CoalescedFileEvent = "FILE_UPLOADED";
+    private const string CoalescedMessageEvent = "MESSAGE_CREATED";
+
+    internal enum SmtpFailureKind
+    {
+        /// <summary>Retry this message later (4xx, unknown errors); consumes one of its retries.</summary>
+        Transient,
+        /// <summary>This message can never be delivered (5xx for the recipient or the content, invalid recipient).</summary>
+        PermanentForMessage,
+        /// <summary>SMTP itself is unusable (connect, TLS, authentication, timeout, sender rejected).</summary>
+        ServiceUnavailable,
+    }
+
+    internal static SmtpFailureKind ClassifyFailure(Exception error) => error switch
+    {
+        SmtpSenderAddressException => SmtpFailureKind.ServiceUnavailable,
+        FormatException => SmtpFailureKind.PermanentForMessage,
+        SmtpCommandException { ErrorCode: SmtpErrorCode.SenderNotAccepted or SmtpErrorCode.UnexpectedStatusCode }
+            => SmtpFailureKind.ServiceUnavailable,
+        SmtpCommandException command when (int)command.StatusCode >= 500 => SmtpFailureKind.PermanentForMessage,
+        SmtpCommandException => SmtpFailureKind.Transient,
+        MailKit.Security.AuthenticationException
+            or SslHandshakeException
+            or System.Security.Authentication.AuthenticationException
+            or SmtpProtocolException
+            or MailKit.ServiceNotConnectedException
+            or MailKit.ServiceNotAuthenticatedException
+            or SocketException
+            or IOException
+            or TimeoutException
+            or OperationCanceledException => SmtpFailureKind.ServiceUnavailable,
+        _ => SmtpFailureKind.Transient,
+    };
+
+    /// <summary>The current circuit-breaker pause (zero while SMTP is healthy).</summary>
+    internal TimeSpan CurrentBreakerDelay
+    {
+        get { lock (breakerGate) return breakerDelay; }
+    }
+
+    private bool BreakerOpen(SmtpOptions smtpOptions)
+    {
+        var key = SettingsKey(smtpOptions);
+        lock (breakerGate)
+        {
+            if (breakerSettingsKey != key)
+            {
+                // Changed SMTP settings deserve an immediate attempt.
+                breakerDelay = TimeSpan.Zero;
+                breakerOpenUntil = DateTimeOffset.MinValue;
+                breakerSettingsKey = key;
+                return false;
+            }
+            return time.GetUtcNow() < breakerOpenUntil;
+        }
+    }
+
+    private TimeSpan TripBreaker(SmtpOptions smtpOptions)
+    {
+        var key = SettingsKey(smtpOptions);
+        TimeSpan delay;
+        lock (breakerGate)
+        {
+            if (breakerSettingsKey != key) breakerDelay = TimeSpan.Zero;
+            breakerSettingsKey = key;
+            breakerDelay = breakerDelay == TimeSpan.Zero ? BreakerInitialDelay
+                : breakerDelay * 2 < BreakerMaximumDelay ? breakerDelay * 2 : BreakerMaximumDelay;
+            breakerOpenUntil = time.GetUtcNow() + breakerDelay;
+            delay = breakerDelay;
+        }
+        logger.LogWarning("SMTP unavailable; mail delivery paused for {Delay}.", delay);
+        return delay;
+    }
+
+    private void ResetBreaker()
+    {
+        lock (breakerGate)
+        {
+            breakerDelay = TimeSpan.Zero;
+            breakerOpenUntil = DateTimeOffset.MinValue;
+        }
+    }
+
+    private static string SettingsKey(SmtpOptions value) => string.Join('\n',
+        value.Host, value.Port, value.Security, value.Username, value.From,
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.Password ?? ""))));
 
     internal const int CancellationBatchSize = 1000;
 
-    private async Task CancelPolicyDisabledAsync(MySqlConnection conn, CancellationToken ct)
+    /// <summary>
+    /// Cancels PENDING rows older than <see cref="AppOptions.MailPendingTtlDays"/>. A cheap indexed probe
+    /// (idx_outbox_status_created) runs at most once per <see cref="ExpirySweepInterval"/>; rows are locked
+    /// only when something has actually expired.
+    /// </summary>
+    private async Task CancelExpiredPendingAsync(MySqlConnection conn, CancellationToken ct)
     {
+        var now = time.GetUtcNow().UtcTicks;
+        var due = Interlocked.Read(ref nextExpirySweepTicks);
+        if (now < due || Interlocked.CompareExchange(ref nextExpirySweepTicks, now + ExpirySweepInterval.Ticks, due) != due)
+            return;
+        DateTime cutoff;
+        await using (var context = EfDb.Use(conn))
+        {
+            cutoff = (await DatabaseUtcNowAsync(context, ct)).AddDays(-options.MailPendingTtlDays);
+            if (!await context.EmailOutbox.AnyAsync(mail => mail.Status == MailStatuses.Pending
+                    && mail.CreatedAt < cutoff && mail.SentAt == null && mail.EventType != "STORAGE_WARNING", ct))
+                return;
+        }
+        var cancelled = await CancelPendingAsync(conn, cutoff, ExpiredPendingReason, ExpiredPendingAuditReason, ct);
+        if (cancelled > 0)
+            logger.LogWarning("Cancelled {Count} outbox rows still pending after {Days} days.", cancelled, options.MailPendingTtlDays);
+    }
+
+    /// <summary>Cancels PENDING rows (all of them, or those created before <paramref name="createdBefore"/>).</summary>
+    private async Task<int> CancelPendingAsync(
+        MySqlConnection conn, DateTime? createdBefore, string lastError, string auditReason, CancellationToken ct)
+    {
+        var total = 0;
         while (true)
         {
             await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
@@ -418,10 +587,12 @@ public sealed class MailService
                 SELECT id,event_type
                 FROM email_outbox
                 WHERE event_type<>'STORAGE_WARNING' AND sent_at IS NULL AND status='PENDING'
+                  AND (@cutoff IS NULL OR created_at<@cutoff)
                 ORDER BY id
                 LIMIT {CancellationBatchSize}
                 FOR UPDATE
                 """;
+            select.Parameters.AddWithValue("@cutoff", createdBefore is { } cutoff ? cutoff : DBNull.Value);
             var rows = new List<DisabledMailRow>(CancellationBatchSize);
             await using (var reader = await select.ExecuteReaderAsync(ct))
             {
@@ -439,13 +610,13 @@ public sealed class MailService
             var changed = await itemContext.EmailOutbox.Where(mail =>
                     Enumerable.Contains(ids, mail.Id)
                     && mail.SentAt == null
-                    && mail.Status == "PENDING")
+                    && mail.Status == MailStatuses.Pending)
                 .ExecuteUpdateAsync(setters => setters
-                    .SetProperty(mail => mail.Status, "CANCELLED")
+                    .SetProperty(mail => mail.Status, MailStatuses.Cancelled)
                     .SetProperty(mail => mail.DedupeKey,
-                        mail => mail.EventType == "FILE_UPLOADED" ? null : mail.DedupeKey)
+                        mail => mail.EventType == CoalescedFileEvent || mail.EventType == CoalescedMessageEvent ? null : mail.DedupeKey)
                     .SetProperty(mail => mail.NextAttemptAt, (DateTime?)null)
-                    .SetProperty(mail => mail.LastError, EmailNotificationPolicy.DisabledReason), ct);
+                    .SetProperty(mail => mail.LastError, lastError), ct);
             if (changed != rows.Count)
                 throw new InvalidOperationException("待发送邮件批量取消数量不一致");
             await audit.WriteBatchAsync(conn, tx, null,
@@ -453,13 +624,15 @@ public sealed class MailService
                     "EMAIL_CANCELLED_STALE",
                     "email_outbox",
                     row.Id,
-                    new { eventType = row.EventType, status = "CANCELLED", reason = EmailNotificationPolicy.DisabledAuditReason }))
+                    new { eventType = row.EventType, status = MailStatuses.Cancelled, reason = auditReason }))
                     .ToArray(),
                 null,
                 ct);
             await tx.CommitAsync(ct);
+            total += rows.Count;
             if (rows.Count < CancellationBatchSize) break;
         }
+        return total;
     }
     private sealed class DisabledMailRow { public ulong Id { get; init; } public string EventType { get; init; } = ""; }
     private static async Task<bool> IsCurrentPendingAcceptanceAsync(
@@ -552,6 +725,9 @@ public sealed class MailService
     }
 }
 
+/// <summary>The configured sender address is invalid: a configuration problem, not a problem of one message.</summary>
+internal sealed class SmtpSenderAddressException() : FormatException("发件地址无效");
+
 internal sealed record SmtpEnvelope(string Recipient, string Subject, string Body);
 internal sealed record SmtpDeliveryResult(string? DisconnectFailureType);
 
@@ -596,7 +772,7 @@ internal sealed class MailKitSmtpDelivery : ISmtpDelivery
     {
         if (!MailboxAddress.TryParse(options.From, out var from)
             && !MailboxAddress.TryParse(options.Username, out from))
-            throw new FormatException("发件地址无效");
+            throw new SmtpSenderAddressException();
         if (!MailboxAddress.TryParse(envelope.Recipient, out var to))
             throw new FormatException("收件地址无效");
 
@@ -663,6 +839,11 @@ internal sealed class MailKitSmtpBatch : ISmtpBatch
             }
             await client.SendAsync(message, ct);
             return new(null);
+        }
+        catch (SmtpCommandException) when (client is { IsConnected: true })
+        {
+            // A rejected recipient or message leaves the session usable (MailKit resets it).
+            throw;
         }
         catch
         {

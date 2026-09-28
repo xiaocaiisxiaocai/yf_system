@@ -17,6 +17,7 @@ import {
   IconMenuUnfold,
 } from '@arco-design/web-react/icon'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../store/auth'
 import http, { withAuthLock } from '../api/client'
 import CollaborationNotifications from '../components/CollaborationNotifications'
@@ -37,7 +38,14 @@ const MENU_ITEMS = [
 ]
 
 export default function AdminLayout() {
-  const { generation, menus, permissions, token, user, logout } = useAuth()
+  const { generation, menus, permissions, token, user, logout } = useAuth(useShallow((state) => ({
+    generation: state.generation,
+    menus: state.menus,
+    permissions: state.permissions,
+    token: state.token,
+    user: state.user,
+    logout: state.logout,
+  })))
   const nav = useNavigate()
   const loc = useLocation()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)

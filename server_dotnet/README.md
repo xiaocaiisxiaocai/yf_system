@@ -44,7 +44,7 @@
 需要 .NET 8 SDK、MySQL（现有结构兼容 MySQL 5.7/8）以及现有数据对应的独立存储目录。
 
 1. 将 `deploy/appsettings.example.json` 复制到 **IIS 网站以外**的私有目录，填写连接串、随机 JWT 密钥、存储绝对路径和网站来源。该文件包含机密，不要提交版本库。
-2. 本地 HTTP 调试设置 `CookieSecure=false`，`WebBaseUrl=http://127.0.0.1:5180`。正式 HTTPS 必须为 `true`。
+2. 本地 HTTP 调试设置 `CookieSecure=false`，`WebBaseUrl=http://127.0.0.1:5180`。正式 HTTPS 必须为 `true`。非 Development 环境下，`CookieSecure=false` 只接受回环 `WebBaseUrl` 或显式 `App:AllowInsecureCookies=true`（非回环 HTTP 私有部署），HTTPS 地址一律拒绝。可选 `App:LogDirectory`（应用目录之外的绝对路径）启用按天滚动的 compact JSON 文件日志（`yf-api-YYYYMMDD.clef`，单文件 100 MiB 续写，保留 31 个，不记录查询字符串）。会话/上传/批量下载/blob 校验/待发邮件 TTL 等限额键（`MaxActiveSessionsPerUser`、`UploadMaxActiveSessionsPerUser`、`UploadMaxPendingBytesPerUser`、`BlobVerifyBytesPerCycle`、`BatchDownloadMinBytesPerMinute`、`BatchDownloadMaxDurationMinutes`、`MailPendingTtlDays`）的默认值和范围见 `deploy/appsettings.example.json` 与 `deploy/README.md`。
 3. 在 `server_dotnet` 目录执行：
 
 ```powershell
@@ -77,7 +77,7 @@ powershell -NoProfile -File .\server_dotnet\scripts\check-dev.ps1 -ConfigPath 'D
 
 脚本默认检查 `Yf.Api/appsettings.Local.json`，输出 JSON，失败返回非零。它先构建源码，再检查实际生效的配置、数据库迁移和存储目录的临时文件读写与清理。检查不执行数据库初始化或清理，不创建业务记录、不发送邮件、不启动后台任务。已有 `App__*` 环境变量仍参与配置覆盖，检查和正常启动应使用相同环境。
 
-`readyForStartup=true` 仅表示本次依赖检查通过，不能证明 API 已监听。启动后还需检查 `http://127.0.0.1:8080/health` 与实际登录/业务接口；现有 `/health` 只检查数据库连接。
+`readyForStartup=true` 仅表示本次依赖检查通过，不能证明 API 已监听。启动后还需检查 `http://127.0.0.1:8080/health` 与实际登录/业务接口；`/health` 返回 `db` 与 `storage`（存储目录读写探测）状态，两者均为 `up` 时才返回 200，否则 503。
 
 常见检查结果：
 
@@ -112,7 +112,7 @@ dotnet run --project .\Yf.Api -- --migrate-database
 
 当前移除 OEM 的升级迁移会删除 OEM 表和专属数据。对已有数据库执行前必须完成可验证的备份；仅更新程序而不执行迁移时，启动校验会因迁移未完成而拒绝启动。
 
-升级命令使用数据库命名锁防止并发迁移，只接受已经由 EF 历史管理的非空数据库，然后调用当前程序集内的生成迁移。空数据库必须使用 `--initialize-database`，由 `InitialCreate` 建表后在一个 EF 事务内创建 `admin`、系统管理员角色、35 个权限及 13 个系统参数。MySQL DDL 不能完整回滚；迁移中断后不要手工补历史，应检查现场并重建开发库。
+升级命令使用数据库命名锁防止并发迁移，只接受已经由 EF 历史管理的非空数据库，然后调用当前程序集内的生成迁移。空数据库必须使用 `--initialize-database`，由 `InitialCreate` 建表后在一个 EF 事务内创建 `admin`、系统管理员角色、35 个权限及 13 个系统参数。MySQL DDL 不能完整回滚；迁移中断后不要手工补历史，应检查现场并重建开发库。Dapper → EF Core Code-First 的迁移过程与数据库生命周期规则记录在 [EF-CORE-MIGRATION.md](EF-CORE-MIGRATION.md)。
 
 在线文件预览支持 PDF、XLS、XLSX、PPTX，以及 PNG、JPG、JPEG、GIF、WebP、BMP 图片，统一使用 `GET /api/v1/files/{id}/content`，并受 50 MiB 单文件上限、`file:preview` 权限和项目可见范围约束。图片响应按扩展名返回规范 MIME 类型，不信任历史文件记录中的 MIME。视频预览支持 MP4、WebM 和 OGV，不整文件缓冲，也不使用文档/图片预览上限；浏览器先用正常 Bearer 会话调用 `POST /api/v1/files/{id}/media-session`，接口返回同源 `url` 和 300 秒有效期并设置仅限该文件媒体路径的 HttpOnly Cookie。随后原生 `<video>` 对 `GET /api/v1/files/{id}/media` 发起 Range 请求，每次请求都重新验证登录会话、账号状态、预览权限和项目范围。前端可在有效期过半时续签，媒体 URL 保持不变。
 
@@ -166,7 +166,7 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
 powershell -NoProfile -ExecutionPolicy Bypass -File D:\Temp\yf_system\server_dotnet\scripts\verify-all.ps1
 ```
 
-脚本使用锁定依赖，依次验证 .NET 8 的 API/TestHost/测试构建、完整 .NET 套件、EF 模型与迁移快照一致性、真实 HTTP 契约，以及 `npm ci`、lint、前端测试和构建。每次生成独立的 `.artifacts/tests/verify-all/<时间-随机ID>/summary.json` 和各步骤日志；任何执行失败返回非零。`-IncludeMaintenance` 额外验证真实 MySQL 备份恢复；`-SkipHttp` 明确跳过 HTTP。数据库连接只能显式提供本机 `YF_TEST_DATABASE_URL`，脚本不读取开发配置中的凭据；未提供时报告数据库覆盖缺失，不可当作完整通过。
+脚本使用锁定依赖，依次验证 .NET 8 的 API/TestHost/测试构建、完整 .NET 套件、EF 模型与迁移快照一致性、真实 HTTP 契约，以及 `npm ci`、lint、前端测试和构建。每次生成独立的 `.artifacts/tests/verify-all/<时间-随机ID>/summary.json` 和各步骤日志（输出根目录可用 `-OutputRoot` 参数或 `YF_VERIFY_ALL_OUTPUT_ROOT` 环境变量改到别处，参数优先；脚本自测即用临时目录，不写入真实报告目录）；任何执行失败返回非零。`-IncludeMaintenance` 额外验证真实 MySQL 备份恢复；`-SkipHttp` 明确跳过 HTTP。数据库连接只能显式提供本机 `YF_TEST_DATABASE_URL`（主机为 `localhost`、`127.0.0.1` 或 `[::1]`），脚本不读取开发配置中的凭据；未提供时报告数据库覆盖缺失，不可当作完整通过。
 
 脚本禁止 `YF_UPDATE_OPENAPI=1`，避免验证时重写契约快照；不会执行业务库迁移、修改 IIS 或启动浏览器。可选 `PerformanceBenchmarks.HotReadEndpointsOverLargeHistory` 基准默认跳过，报告会单列，不冒充已完成性能基准；设置 `YF_PERF_BENCHMARK=1` 才启用。
 
@@ -260,9 +260,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish-iis.ps1
   -MySql 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe'
 ```
 
-Restore 的新数据库名必须不同于当前数据库，执行前由 DBA 确认其中表、routines、events 全部为空；新程序目录、新存储和新外部配置也必须与当前资源及备份互相独立。恢复沿用备份内程序和 schema，不能同时传 `-MigrateDatabase`，并且恢复配置必须保持当前站点完全相同的 HTTPS origin。备份包含外部配置、数据库、程序和存储，也包含密钥与业务数据，必须在网站目录之外使用受限 ACL 和加密备份介质保护，禁止提交版本库或长期放在普通共享目录。
+Restore 的新数据库名必须不同于当前数据库，执行前由 DBA 确认其中表、routines、events 全部为空；新程序目录、新存储和新外部配置也必须与当前资源及备份互相独立。恢复沿用备份内程序和 schema，不能同时传 `-MigrateDatabase`，并且恢复配置必须保持当前站点完全相同的 HTTPS origin。恢复配置必须沿用备份中外部配置的 `App:JwtSecret`：数据库内 SMTP 授权码按该密钥派生加密，已签发令牌也依赖它；换用新密钥会导致授权码无法解密（需在页面重填），所有登录会话失效。备份包含外部配置、数据库、程序和存储，也包含密钥与业务数据，必须在网站目录之外使用受限 ACL 和加密备份介质保护，禁止提交版本库或长期放在普通共享目录。
 
-维护期间脚本只停止该命名站点的专属应用池，并等待其 worker 全部退出；它不能排除其他 IIS 站点、服务、计划任务或远程实例写同一数据库和存储，管理员必须在维护窗口前停止所有外部写入者。任一步骤或恢复启动后的 HTTPS `/health` 检查失败，应用池保持停止。旧数据库、存储和程序不会被删除，新数据库导入失败时可能留有部分数据；调查后换新的空目标重试。完整参数、路径隔离、回退和灾难恢复步骤见发布包内 `README.md`。新机器必须先用备份对应版本的 `install-iis.ps1` 创建同名站点，再运行 Restore；该流程不承诺从裸机一键恢复。
+维护期间脚本只停止该命名站点的专属应用池，并等待其 worker 全部退出；它不能排除其他 IIS 站点、服务、计划任务或远程实例写同一数据库和存储，管理员必须在维护窗口前停止所有外部写入者。任一步骤或恢复启动后的 HTTPS `/health` 检查失败，应用池保持停止。首次安装同样在启动后探测 `/health`（`App.AutoInitializeDatabase` 不为 `true` 或传 `-SkipHealthCheck` 时跳过并警告）：应用级启动失败（如 IIS 500.30、配置或迁移历史校验不通过）会使安装失败并按安装回滚路径删除本次创建的站点和应用池。旧数据库、存储和程序不会被删除，新数据库导入失败时可能留有部分数据；调查后换新的空目标重试。完整参数、路径隔离、回退和灾难恢复步骤见发布包内 `README.md`。新机器必须先用备份对应版本的 `install-iis.ps1` 创建同名站点，再运行 Restore；该流程不承诺从裸机一键恢复。
 
 
 当前开发机未创建或操作真实 IIS 站点，只能读取 Microsoft.Web.Administration 默认配置；维护测试不构成目标服务器 IIS、证书、权限或网络验收。

@@ -245,7 +245,8 @@ def run_collaboration_checks(admin, Client, conn, check):
     check("collaboration and dashboard messages require the project menu",
           dashboard_messages is not None)
 
-    file_id, _, _ = _upload_chunks(first, project_id, "协作链接.pdf", b"collaboration-link")
+    file_id, _, _ = _upload_chunks(
+        first, project_id, "协作链接.pdf", b"collaboration-link", ensure_step=True)
     supplier_before_submit = first_supplier_client.call("GET", "/api/v1/collaboration/summary")
     supplier_notifications_before = first_supplier_client.call(
         "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false")

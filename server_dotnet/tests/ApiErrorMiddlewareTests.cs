@@ -78,7 +78,7 @@ public sealed class ApiErrorMiddlewareTests
     }
 }
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class ApiErrorMiddlewareLockTests
 {
     [Fact]

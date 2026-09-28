@@ -11,21 +11,45 @@ public sealed class AppOptions
     public string BootstrapPassword { get; set; } = "";
     public string WebBaseUrl { get; set; } = "http://127.0.0.1:5273";
     public bool CookieSecure { get; set; } = true;
+    /// <summary>
+    /// Explicit opt-in for CookieSecure=false outside Development when WebBaseUrl is a non-loopback HTTP origin
+    /// (private LAN deployments without TLS). Never allowed for an HTTPS WebBaseUrl.
+    /// </summary>
+    public bool AllowInsecureCookies { get; set; }
     public bool TrustLoopbackProxy { get; set; }
+    /// <summary>
+    /// Optional absolute directory for daily-rolling compact-JSON log files (outside the application
+    /// directory). Empty keeps only the default logging providers.
+    /// </summary>
+    public string LogDirectory { get; set; } = "";
     public bool WorkerEnabled { get; set; } = true;
     /// <summary>Runs durable user-requested project copy jobs independently of maintenance workers.</summary>
     public bool CopyWorkerEnabled { get; set; } = true;
     public int AccessTtlMinutes { get; set; } = 30;
     public int RefreshTtlDays { get; set; } = 7;
     public int AbsoluteSessionLifetimeDays { get; set; } = 30;
+    /// <summary>Maximum concurrently active login sessions per account; the oldest are revoked on a new login.</summary>
+    public int MaxActiveSessionsPerUser { get; set; } = 20;
     public long UploadMaxFileSize { get; set; } = 2L * 1024 * 1024 * 1024; // matches the seeded upload.max_file_size
     public int UploadChunkSize { get; set; } = 10 * 1024 * 1024;
     /// <summary>Audit log rows older than this many days are deleted by the retention worker.</summary>
     public int AuditRetentionDays { get; set; } = 30;
     /// <summary>Sent, failed and cancelled outbox rows older than this many days are deleted by the mail worker.</summary>
     public int MailRetentionDays { get; set; } = 90;
+    /// <summary>Outbox rows still PENDING this many days after they were queued are cancelled instead of sent.</summary>
+    public int MailPendingTtlDays { get; set; } = 3;
     /// <summary>Terminal upload-session rows and their temporary directories are retained for recovery before deletion.</summary>
     public int UploadSessionRetentionDays { get; set; } = 90;
+    /// <summary>Maximum unexpired UPLOADING/MERGING upload sessions one account may hold at once.</summary>
+    public int UploadMaxActiveSessionsPerUser { get; set; } = 20;
+    /// <summary>Maximum declared bytes of one account's unexpired, not yet merged upload sessions.</summary>
+    public long UploadMaxPendingBytesPerUser { get; set; } = 20L * 1024 * 1024 * 1024;
+    /// <summary>Maximum bytes the files maintenance worker re-hashes per cycle while verifying referenced blobs.</summary>
+    public long BlobVerifyBytesPerCycle { get; set; } = 2L * 1024 * 1024 * 1024;
+    /// <summary>A batch ZIP download that delivers fewer bytes than this within any 60-second window is aborted.</summary>
+    public long BatchDownloadMinBytesPerMinute { get; set; } = 64 * 1024;
+    /// <summary>A batch ZIP download still running after this many minutes is aborted.</summary>
+    public int BatchDownloadMaxDurationMinutes { get; set; } = 120;
     public SmtpOptions Smtp { get; set; } = new();
 
     public void Validate()
@@ -50,14 +74,51 @@ public sealed class AppOptions
         if (AccessTtlMinutes is < 1 or > 1440 || RefreshTtlDays is < 1 or > 365
             || AbsoluteSessionLifetimeDays is < 1 or > 365)
             throw new InvalidOperationException("Invalid token lifetime.");
+        if (MaxActiveSessionsPerUser is < 1 or > 1000)
+            throw new InvalidOperationException("App:MaxActiveSessionsPerUser must be between 1 and 1000.");
         if (AuditRetentionDays is < 1 or > 3650) throw new InvalidOperationException("App:AuditRetentionDays must be between 1 and 3650.");
         if (MailRetentionDays is < 1 or > 3650) throw new InvalidOperationException("App:MailRetentionDays must be between 1 and 3650.");
+        if (MailPendingTtlDays is < 1 or > 365) throw new InvalidOperationException("App:MailPendingTtlDays must be between 1 and 365.");
         if (UploadSessionRetentionDays is < 30 or > 3650) throw new InvalidOperationException("App:UploadSessionRetentionDays must be between 30 and 3650.");
+        if (UploadMaxActiveSessionsPerUser is < 1 or > 1000)
+            throw new InvalidOperationException("App:UploadMaxActiveSessionsPerUser must be between 1 and 1000.");
+        if (UploadMaxPendingBytesPerUser is < 1024L * 1024 * 1024 or > 16L * 1024 * 1024 * 1024 * 1024)
+            throw new InvalidOperationException("App:UploadMaxPendingBytesPerUser must be between 1 GiB and 16 TiB.");
+        if (BlobVerifyBytesPerCycle is < 64L * 1024 * 1024 or > 1024L * 1024 * 1024 * 1024)
+            throw new InvalidOperationException("App:BlobVerifyBytesPerCycle must be between 64 MiB and 1 TiB.");
+        if (BatchDownloadMinBytesPerMinute is < 1 or > 1024L * 1024 * 1024)
+            throw new InvalidOperationException("App:BatchDownloadMinBytesPerMinute must be between 1 byte and 1 GiB.");
+        if (BatchDownloadMaxDurationMinutes is < 5 or > 1440)
+            throw new InvalidOperationException("App:BatchDownloadMaxDurationMinutes must be between 5 and 1440.");
         Smtp.Validate();
+    }
+
+    /// <summary>
+    /// Refuses non-secure auth cookies unless the site is a loopback/development setup or the operator
+    /// explicitly opted in for a plain-HTTP private deployment. An HTTPS site always requires secure cookies.
+    /// </summary>
+    public void ValidateCookieSecurity(bool isDevelopment)
+    {
+        if (CookieSecure) return;
+        if (!Uri.TryCreate(WebBaseUrl, UriKind.Absolute, out var web))
+            throw new InvalidOperationException("App:WebBaseUrl must be an HTTP(S) origin.");
+        if (web.Scheme == Uri.UriSchemeHttps)
+            throw new InvalidOperationException("App:CookieSecure must be true when App:WebBaseUrl uses HTTPS.");
+        if (isDevelopment || web.IsLoopback || AllowInsecureCookies) return;
+        throw new InvalidOperationException(
+            "App:CookieSecure=false is only allowed in Development, for a loopback App:WebBaseUrl, or with App:AllowInsecureCookies=true.");
     }
 
     public void ValidateStorageLocation(string applicationRoot)
     {
+        if (!string.IsNullOrWhiteSpace(LogDirectory))
+        {
+            if (!Path.IsPathFullyQualified(LogDirectory))
+                throw new InvalidOperationException("App:LogDirectory must be an absolute path.");
+            if (Overlaps(ResolveComparisonPath(LogDirectory), ResolveComparisonPath(applicationRoot),
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                throw new InvalidOperationException("App:LogDirectory must be separate from the application directory and its public web files.");
+        }
         // Compare the resolved paths, not only their textual forms. A junction
         // or symlink used as StorageRoot must not be able to point back into
         // the application tree and bypass the isolation check.

@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  buildDefaultLayout, gridShape, groupRows, layoutStorageKey, loadSavedLayout, panelIdFor, projectIdOfPanel, saveLayout,
+  LAYOUT_INDEX_KEY, MAX_SAVED_LAYOUTS, buildDefaultLayout, clearSavedLayout, gridShape, groupRows, layoutStorageKey,
+  loadSavedLayout, panelIdFor, projectIdOfPanel, saveLayout,
 } from '../pages/project/subprojectDockLayout'
 
 const projects = (count: number) => Array.from({ length: count }, (_, index) => ({ id: index + 1, name: `子项目 ${index + 1}` }))
@@ -64,5 +65,49 @@ describe('subproject dock default layout', () => {
     expect(projectIdOfPanel(panelIdFor(42))).toBe(42)
     expect(projectIdOfPanel('subproject-abc')).toBeNull()
     expect(projectIdOfPanel('subproject-0')).toBeNull()
+  })
+  it('keeps only the most recently used saved layouts and adopts legacy keys as the oldest', () => {
+    const legacy = layoutStorageKey(9, 999)
+    localStorage.setItem(legacy, JSON.stringify(buildDefaultLayout(projects(1), 800, 600)))
+    const now = vi.spyOn(Date, 'now')
+    try {
+      for (let group = 1; group <= MAX_SAVED_LAYOUTS + 5; group += 1) {
+        now.mockReturnValue(1_000 + group)
+        saveLayout(layoutStorageKey(9, group), buildDefaultLayout(projects(1), 800, 600))
+      }
+      // Loading a layout marks it as recently used, so it survives the next eviction.
+      now.mockReturnValue(5_000)
+      expect(loadSavedLayout(layoutStorageKey(9, 6), projects(1))).not.toBeNull()
+      now.mockReturnValue(6_000)
+      saveLayout(layoutStorageKey(9, 1000), buildDefaultLayout(projects(1), 800, 600))
+    } finally {
+      now.mockRestore()
+    }
+    const layoutKeys = Object.keys(localStorage).filter((key) => key.startsWith('yf-subproject-dock:v1:') && key !== LAYOUT_INDEX_KEY)
+    expect(layoutKeys).toHaveLength(MAX_SAVED_LAYOUTS)
+    expect(localStorage.getItem(legacy)).toBeNull()
+    expect(localStorage.getItem(layoutStorageKey(9, 6))).not.toBeNull()
+    expect(localStorage.getItem(layoutStorageKey(9, 7))).toBeNull()
+    expect(localStorage.getItem(layoutStorageKey(9, 1000))).not.toBeNull()
+    expect(Object.keys(JSON.parse(localStorage.getItem(LAYOUT_INDEX_KEY)!))).toHaveLength(MAX_SAVED_LAYOUTS)
+
+    clearSavedLayout(layoutStorageKey(9, 1000))
+    expect(JSON.parse(localStorage.getItem(LAYOUT_INDEX_KEY)!)).not.toHaveProperty(layoutStorageKey(9, 1000))
+  })
+
+  it('tolerates storage that throws on every access', () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked') })
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked') })
+    const removeItem = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw new Error('blocked') })
+    try {
+      const key = layoutStorageKey(1, 1)
+      expect(() => saveLayout(key, buildDefaultLayout(projects(1), 800, 600))).not.toThrow()
+      expect(loadSavedLayout(key, projects(1))).toBeNull()
+      expect(() => clearSavedLayout(key)).not.toThrow()
+    } finally {
+      getItem.mockRestore()
+      setItem.mockRestore()
+      removeItem.mockRestore()
+    }
   })
 })

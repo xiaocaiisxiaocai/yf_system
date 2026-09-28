@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Empty, Select, Spin, Tag, Timeline, Typography } from '@arco-design/web-react'
-import http from '../api/client'
+import http, { type QuietRequestConfig } from '../api/client'
 import { type ConfirmSide, PROJECT_STATUS, fmtTime } from '../api/types'
 import type { ApiResponses } from '../api/types'
 
@@ -157,6 +157,9 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
   const requestSeq = useRef(0)
   const cursor = useRef<string | null>(null)
   const inFlight = useRef<{ mode: 'initial' | 'append'; queryKey: string } | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  // 当前列表对应的查询；重新进入标签页或刷新同一查询时保留旧列表，只有换项目/筛选时才清空。
+  const listQueryKey = useRef<string | null>(null)
   const queryKey = `${projectId}:${filter ?? ''}`
 
   const load = useCallback(async (append: boolean) => {
@@ -167,6 +170,9 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
 
     const seq = ++requestSeq.current
     const requestRevision = currentRevision.current
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     inFlight.current = { mode: append ? 'append' : 'initial', queryKey }
     if (append) {
       setAppending(true)
@@ -175,18 +181,26 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
       setLoading(true)
       setLoadError(false)
       setAppendError(false)
-      setList([])
-      setNextCursor(null)
-      cursor.current = null
+      if (listQueryKey.current !== queryKey) {
+        setList([])
+        setNextCursor(null)
+        cursor.current = null
+      }
     }
 
     try {
       const params: { pageSize: number; type?: ActivityType; cursor?: string } = { pageSize: 20 }
       if (filter) params.type = filter
       if (append && cursor.current) params.cursor = cursor.current
-      const response = await http.get<ApiResponses['GET /projects/{id}/activities']>(`/projects/${projectId}/activities`, { params })
+      // 失败由面板内的错误行承载，瞬时网络错误不再弹出全局提示。
+      const response = await http.get<ApiResponses['GET /projects/{id}/activities']>(`/projects/${projectId}/activities`, {
+        params,
+        signal: controller.signal,
+        quietNetworkError: true,
+      } as QuietRequestConfig)
       if (!mounted.current || seq !== requestSeq.current) return
       const data = parseResponse(response.data)
+      listQueryKey.current = queryKey
       setList((current) => {
         if (!append) return data.list
         const ids = new Set(current.map((item) => item.id))
@@ -204,6 +218,7 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
         else setLoadError(true)
       }
     } finally {
+      if (abortRef.current === controller) abortRef.current = null
       if (mounted.current && seq === requestSeq.current) {
         inFlight.current = null
         setLoading(false)
@@ -216,6 +231,12 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
     if (!active) {
       requestSeq.current += 1
       inFlight.current = null
+      abortRef.current?.abort()
+      abortRef.current = null
+      // Hidden tabs cancel their request, so its spinner must not stay on when the tab is shown again.
+      // eslint-disable-next-line react/set-state-in-effect
+      setLoading(false)
+      setAppending(false)
       return
     }
     // Loading is the external synchronization triggered by entering this tab.
@@ -229,6 +250,7 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
       mounted.current = false
       requestSeq.current += 1
       inFlight.current = null
+      abortRef.current?.abort()
     }
   }, [])
 
@@ -297,7 +319,13 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
       </div>
 
       <div className="project-activity-feed">
-        {loadError ? (
+        {loadError && list.length > 0 && (
+          <div className="project-activity-error" role="status">
+            <Typography.Text type="warning">项目动态刷新失败，当前显示上次数据。</Typography.Text>
+            <Button size="small" onClick={() => load(false)}>重试</Button>
+          </div>
+        )}
+        {loadError && list.length === 0 ? (
           <div className="project-activity-error">
             <Typography.Text type="error">项目动态加载失败</Typography.Text>
             <Button size="small" onClick={() => load(false)}>重试</Button>

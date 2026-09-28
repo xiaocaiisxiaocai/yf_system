@@ -13,7 +13,7 @@ vi.mock('../../../store/auth', async () => {
 })
 
 import MessagePanel from '../../../components/MessagePanel'
-import { ReceiptBody } from '../../../components/MessageReceipts'
+import { ReceiptBody, loadReadCounts } from '../../../components/MessageReceipts'
 import {
   deferred,
   messagePage,
@@ -80,6 +80,20 @@ describe('留言回执刷新与详情', () => {
     installVisibleRects()
   })
   afterEach(() => vi.useRealTimers())
+
+  it('background read-count sync is quiet and skips failed messages without per-message toasts', async () => {
+    messageMocks.get.mockImplementation(async (url: string) => {
+      if (url === '/messages/2/reads') throw new Error('network down')
+      return { data: { readers: [{ userId: 11, realName: '读者 A', userType: 'INTERNAL' }], unread: [{ userId: 12 }] } }
+    })
+    await expect(loadReadCounts([1, 2, 3])).resolves.toEqual([
+      { id: 1, readCount: 1, totalCount: 2 },
+      { id: 3, readCount: 1, totalCount: 2 },
+    ])
+    for (const id of [1, 2, 3]) {
+      expect(messageMocks.get).toHaveBeenCalledWith(`/messages/${id}/reads`, expect.objectContaining({ quietNetworkError: true }))
+    }
+  })
 
   it('message receipt requests ignore late responses and closing invalidates them', async () => {
     const requests = new Map<number, ReceiptPending[]>()

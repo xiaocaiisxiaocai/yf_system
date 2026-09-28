@@ -78,7 +78,7 @@ public sealed class FileService(
         if (inline && Math.Max(row.SizeBytes, physicalSize) > PreviewMaximumBytes)
             throw ApiException.BadRequest($"文件超过 {PreviewMaximumBytes / 1024 / 1024} MiB，不能在线预览，请下载原文件查看");
 
-        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 64 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         try
         {
@@ -134,7 +134,7 @@ public sealed class FileService(
         var row = await LoadAvailableAsync(conn, id, ct);
         await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
         var filePath = ResolveExisting(row, ct);
-        var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+        var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 64 * 1024,
             FileOptions.Asynchronous | FileOptions.RandomAccess);
         try
         {
@@ -188,8 +188,12 @@ public sealed class FileService(
             throw;
         }
         SetNoStore(context.Response);
-        return new ZipStreamResult(batch.Entries, $"yf_files_{Guid.NewGuid():D}.zip", lease);
+        return new ZipStreamResult(batch.Entries, $"yf_files_{Guid.NewGuid():D}.zip", lease, BatchWatchdogLimits());
     }
+
+    private TransferWatchdogLimits BatchWatchdogLimits() => new(
+        options.BatchDownloadMinBytesPerMinute, TransferWatchdogLimits.DefaultWindow,
+        TimeSpan.FromMinutes(options.BatchDownloadMaxDurationMinutes));
 
     public async Task<MediaSessionResponse> CreateMediaSessionAsync(HttpContext context, ulong id, CancellationToken ct)
     {
@@ -235,7 +239,7 @@ public sealed class FileService(
         }
         catch (FileNotFoundException) { throw ApiException.NotFound(); }
 
-        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 64 * 1024,
             FileOptions.Asynchronous | FileOptions.RandomAccess);
         try
         {
@@ -297,20 +301,32 @@ public sealed class FileService(
         SetNoStore(context.Response);
         // Stream the archive as it is compressed instead of staging up to 256 MiB on disk first, so the
         // download starts immediately. The limiter lease is held until the stream completes.
-        return new ZipStreamResult(batch.Entries, $"yf_files_{Guid.NewGuid():D}.zip", lease);
+        return new ZipStreamResult(batch.Entries, $"yf_files_{Guid.NewGuid():D}.zip", lease, BatchWatchdogLimits());
     }
 
     /// <summary>
     /// ZipArchive on .NET 8 writes synchronously, which Kestrel forbids on the response body. The archive
     /// is written into a pipe on a worker thread while the request copies the pipe to the client
-    /// asynchronously; pipe back-pressure bounds memory use.
+    /// asynchronously; pipe back-pressure bounds memory use. A <see cref="TransferWatchdog"/> aborts the
+    /// transfer when the client stops accepting data (or the producer stops producing) for a whole window, or
+    /// when the maximum duration is exceeded, so a stuck download releases its limiter slot and file handles.
     /// </summary>
-    internal sealed class ZipStreamResult(IReadOnlyList<ArchiveSource> sources, string fileName, IDisposable lease) : IResult
+    internal sealed class ZipStreamResult(
+        IReadOnlyList<ArchiveSource> sources, string fileName, IDisposable lease, TransferWatchdogLimits? limits = null) : IResult
     {
+        internal static readonly TransferWatchdogLimits DefaultLimits =
+            new(64 * 1024, TransferWatchdogLimits.DefaultWindow, TimeSpan.FromMinutes(120));
+
         public async Task ExecuteAsync(HttpContext httpContext)
         {
             using var _ = lease;
-            var ct = httpContext.RequestAborted;
+            using var watchdog = new TransferWatchdog(limits ?? DefaultLimits, httpContext.RequestAborted);
+            var ct = watchdog.Token;
+            // A stalled write may not observe the token (IIS in-process); aborting the connection always unblocks it.
+            using var abortOnVerdict = ct.Register(() =>
+            {
+                if (watchdog.Verdict != TransferWatchdogVerdict.Healthy) httpContext.Abort();
+            });
             httpContext.Response.ContentType = "application/zip";
             httpContext.Response.Headers.ContentDisposition =
                 new System.Net.Mime.ContentDisposition { FileName = fileName, DispositionType = "attachment" }.ToString();
@@ -331,7 +347,18 @@ public sealed class FileService(
             }, CancellationToken.None);
             try
             {
-                await pipe.Reader.CopyToAsync(httpContext.Response.Body, ct);
+                var body = httpContext.Response.Body;
+                while (true)
+                {
+                    var read = await pipe.Reader.ReadAsync(ct);
+                    foreach (var segment in read.Buffer)
+                    {
+                        await body.WriteAsync(segment, ct);
+                        watchdog.Report(segment.Length);
+                    }
+                    pipe.Reader.AdvanceTo(read.Buffer.End);
+                    if (read.IsCompleted || read.IsCanceled) break;
+                }
                 await pipe.Reader.CompleteAsync();
             }
             catch (Exception error)
@@ -340,7 +367,13 @@ public sealed class FileService(
                 // Never let a truncated archive look like a finished download.
                 httpContext.Abort();
                 try { await producer; } catch { }
-                if (error is OperationCanceledException && ct.IsCancellationRequested) return;
+                if (error is OperationCanceledException && ct.IsCancellationRequested)
+                {
+                    if (watchdog.Verdict != TransferWatchdogVerdict.Healthy)
+                        httpContext.RequestServices?.GetService<ILoggerFactory>()?.CreateLogger<ZipStreamResult>().LogWarning(
+                            "Batch download aborted by watchdog ({Verdict}) after {Bytes} bytes.", watchdog.Verdict, watchdog.Transferred);
+                    return;
+                }
                 throw;
             }
             await producer;
@@ -360,7 +393,7 @@ public sealed class FileService(
                 var entryName = UniqueEntryName(Path.GetFileName(source.OriginalName), usedNames);
                 var entry = archive.CreateEntry(entryName, CompressionLevelFor(entryName));
                 await using var entryStream = entry.Open();
-                await using var input = new FileStream(source.Path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                await using var input = new FileStream(source.Path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
                     64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
                 int read;
                 while ((read = await input.ReadAsync(buffer.AsMemory(0, 64 * 1024), ct)) != 0)

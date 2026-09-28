@@ -66,17 +66,19 @@ async function choose(page, scope, placeholder, optionName) {
   await page.getByRole('option', { name: optionName, exact: true }).click();
 }
 
+// Uploads one file or a same-batch set through the real dialog; returns the merged id of the first file.
 async function upload(page, projectId, file) {
+  const files = Array.isArray(file) ? file : [file];
   await page.getByRole('tab', { name: '文件', exact: true }).click();
   await page.getByRole('button', { name: '上传文件', exact: true }).click();
-  await page.getByLabel('选择上传文件').setInputFiles(file);
+  await page.getByLabel('选择上传文件').setInputFiles(files);
   const result = await action(
     page,
     '/merge',
     'POST',
     () => page.getByRole('button', { name: '上传所选文件', exact: true }).click(),
   );
-  await page.getByRole('row').filter({ hasText: path.basename(file) }).waitFor();
+  for (const item of files) await page.getByRole('row').filter({ hasText: path.basename(item) }).waitFor();
   return result.id;
 }
 
@@ -184,8 +186,9 @@ async function preview(page, name, kind, label) {
         projects[key] = { id: project.id, groupId: group.id, groupName, name: project.name };
         await creatorPage.getByRole('link', { name: groupName, exact: true }).waitFor();
         await creatorPage.getByRole('link', { name: groupName, exact: true }).click();
-        await creatorPage.getByRole('button', { name: childName, exact: true }).waitFor();
-        await creatorPage.getByRole('button', { name: childName, exact: true }).click();
+        await creatorPage.locator('.subproject-dock-tab-name').getByText(childName, { exact: true }).waitFor();
+        await creatorPage.getByRole('button', { name: '在独立页面打开当前子项目', exact: true }).click();
+        await creatorPage.waitForURL(s.base + '/projects/' + project.id);
         await creatorPage.getByRole('button', { name: '开始', exact: true }).waitFor();
         await action(creatorPage, '/projects/' + project.id + '/status', 'PUT',
           () => creatorPage.getByRole('button', { name: '开始', exact: true }).click());
@@ -200,13 +203,19 @@ async function preview(page, name, kind, label) {
     const vendorB = await openUser('b');
     const pdf = OUT + '/valid-preview.pdf';
     const xlsx = OUT + '/vendor-response.xlsx';
+    const step = OUT + '/assembly-3d.step';
     for (const key of ['a', 'b']) {
       const vendor = key === 'a' ? vendorA : vendorB;
       const project = projects[key];
       await navigate(internal, '/projects/' + project.id);
       await internal.getByRole('tab', { name: '文件', exact: true }).waitFor();
-      await record(key + ' 内部负责人上传PDF，供应商实际预览及下载SHA一致', async () => {
-        project.pdfId = await upload(internal, project.id, pdf);
+      await record(key + ' 内部负责人同批上传STEP与PDF，供应商实际预览及下载SHA一致', async () => {
+        // STEP 必须先于同批非 STEP 文件初始化（上传资料要求契约-2026-09-24），因此首个合并的是 STEP。
+        await upload(internal, project.id, [pdf, step]);
+        const uploaded = await json(creator.context, creator.token, 'GET',
+          '/projects/' + project.id + '/files?keyword=valid-preview.pdf&page=1&pageSize=10');
+        assert.equal(uploaded.total, 1);
+        project.pdfId = uploaded.list[0].id;
         await navigate(vendor, '/projects/' + project.id);
         await vendor.getByRole('row').filter({ hasText: 'valid-preview.pdf' }).waitFor();
         await preview(vendor, 'valid-preview.pdf', 'pdf', key + '-vendor-pdf');
@@ -250,12 +259,13 @@ async function preview(page, name, kind, label) {
         const project = projects[other];
         await navigate(session.page, '/projects/' + project.id);
         await session.page.getByText('项目加载失败或没有访问权限', { exact: true }).waitFor();
-        for (const url of [
-          '/projects/' + project.id,
-          '/projects/' + project.id + '/messages',
-          '/files/' + project.pdfId + '/content',
-          '/files/' + project.excelId + '/download',
-        ]) await json(session.context, session.token, 'GET', url, undefined, 403);
+        for (const [url, status] of [
+          ['/projects/' + project.id, 403],
+          ['/projects/' + project.id + '/messages', 403],
+          // File endpoints conceal out-of-scope resources through RequireViewOrNotFoundAsync.
+          ['/files/' + project.pdfId + '/content', 404],
+          ['/files/' + project.excelId + '/download', 404],
+        ]) await json(session.context, session.token, 'GET', url, undefined, status);
       }
     });
 

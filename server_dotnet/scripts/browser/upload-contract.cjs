@@ -24,14 +24,31 @@ function fileFingerprint(fileName, bytes, fileLastModified = FIXTURE_LAST_MODIFI
   return sha256(Buffer.from(canonical, 'utf8'));
 }
 
-async function initUpload(context, token, projectId, fileName, bytes, fileLastModified = FIXTURE_LAST_MODIFIED) {
-  return (await api(context, 'POST', '/uploads/init', {
+// 公司内部发给供应商的非 STEP 文件要求子项目已有 STEP 3D 图（上传资料要求契约-2026-09-24）。
+// 夹具默认不做任何补救：规则拒绝会原样抛出。只有显式传 { ensureStep: true } 的调用方（内部账号向可能
+// 还没有 STEP 的子项目上传非 STEP 夹具）才会在遇到该拒绝时先补传一个 STEP 文件再重试；
+// 规则本身由 HTTP 契约与浏览器业务流程显式验证。
+const STEP_REQUIRED_MARKER = '至少需要一个 STEP 格式 3D 图';
+const COMPANY_STEP_FIXTURE_NAME = 'fixture-assembly.step';
+const COMPANY_STEP_FIXTURE_BYTES = Buffer.from('ISO-10303-21; fixture assembly');
+
+async function initUpload(
+  context, token, projectId, fileName, bytes, fileLastModified = FIXTURE_LAST_MODIFIED, { ensureStep = false } = {},
+) {
+  const request = () => api(context, 'POST', '/uploads/init', {
     projectId,
     fileName,
     fileSize: bytes.length,
     fileLastModified,
     fileFingerprint: fileFingerprint(fileName, bytes, fileLastModified),
-  }, token)).json();
+  }, token);
+  try {
+    return (await request()).json();
+  } catch (error) {
+    if (!ensureStep || !String(error && error.message).includes(STEP_REQUIRED_MARKER)) throw error;
+  }
+  await uploadFixture(context, token, projectId, COMPANY_STEP_FIXTURE_NAME, COMPANY_STEP_FIXTURE_BYTES);
+  return (await request()).json();
 }
 
 async function putChunk(context, token, sessionId, index, chunk, label = '') {
@@ -52,8 +69,10 @@ async function putChunk(context, token, sessionId, index, chunk, label = '') {
   return response;
 }
 
-async function uploadFixture(context, token, projectId, fileName, bytes) {
-  const initialized = await initUpload(context, token, projectId, fileName, bytes);
+async function uploadFixture(context, token, projectId, fileName, bytes, { ensureStep = false } = {}) {
+  const initialized = await initUpload(
+    context, token, projectId, fileName, bytes, FIXTURE_LAST_MODIFIED, { ensureStep },
+  );
   for (let index = 0; index < initialized.totalChunks; index += 1) {
     const start = index * initialized.chunkSize;
     await putChunk(

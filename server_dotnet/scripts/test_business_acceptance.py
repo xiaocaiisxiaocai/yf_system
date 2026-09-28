@@ -45,8 +45,11 @@ def _activate_user(admin_client, Client, check, employee_no, initial_password, u
     return actor
 
 
-def _upload_chunks(actor, project_id, file_name, content):
-    initialized, state, merged = upload_bytes(actor, project_id, file_name, content)
+def _upload_chunks(actor, project_id, file_name, content, *, ensure_step=False):
+    """ensure_step=True: an internal actor uploading non-STEP material to a subproject that may not
+    have a STEP 3D drawing yet first gets the fixture STEP file (上传资料要求契约-2026-09-24)."""
+    initialized, state, merged = upload_bytes(
+        actor, project_id, file_name, content, ensure_step=ensure_step)
     return merged["id"], initialized["totalChunks"], state["uploadedChunks"]
 
 
@@ -412,11 +415,11 @@ def run_business_acceptance(client, Client, conn, check):
     internal_b_bytes = (b"company-to-supplier-b\n" * 16000) + b"EOF-B"
     supplier_b_bytes = (b"supplier-b-to-company\n" * 16000) + b"EOF-SB"
     file_a_company, chunks_a_company, uploaded_a_company = _upload_chunks(
-        internal_client, project_a, "company-a.zip", internal_a_bytes)
+        internal_client, project_a, "company-a.zip", internal_a_bytes, ensure_step=True)
     file_a_supplier, chunks_a_supplier, uploaded_a_supplier = _upload_chunks(
         supplier_a_client, project_a, "supplier-a.zip", supplier_a_bytes)
     file_b_company, chunks_b_company, uploaded_b_company = _upload_chunks(
-        internal_client, project_b, "company-b.zip", internal_b_bytes)
+        internal_client, project_b, "company-b.zip", internal_b_bytes, ensure_step=True)
     file_b_supplier, chunks_b_supplier, uploaded_b_supplier = _upload_chunks(
         supplier_b_client, project_b, "supplier-b.zip", supplier_b_bytes)
     files_a = supplier_a_client.call("GET", f"/api/v1/projects/{project_a}/files?pageSize=100")

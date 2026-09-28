@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
+using Yf.Api.Modules.SystemManagement;
 
 namespace Yf.Api.Modules.Projects;
 
@@ -213,9 +214,9 @@ internal sealed partial class ProjectService(
             await db.UploadSessions.AnyAsync(upload => upload.ProjectId == projectId, ct));
         var deletionAudience = await BuildDeletionAudienceAsync(db, project, ct);
         await db.EmailOutbox.Where(mail => mail.ProjectId == projectId
-                && (mail.Status == "PENDING" || mail.Status == "SENDING"))
+                && (mail.Status == MailStatuses.Pending || mail.Status == MailStatuses.Sending))
             .ExecuteUpdateAsync(setters => setters
-                .SetProperty(mail => mail.Status, "CANCELLED")
+                .SetProperty(mail => mail.Status, MailStatuses.Cancelled)
                 .SetProperty(mail => mail.NextAttemptAt, (DateTime?)null)
                 .SetProperty(mail => mail.LastError, "项目已删除，邮件已取消"), ct);
         // Preserve delivery history while releasing the restrictive project foreign key.
@@ -231,6 +232,9 @@ internal sealed partial class ProjectService(
         }
         await groupStatus.RecalculateAsync(
             conn, tx, project.ProjectGroupId, current.Id, null, ct, groupAlreadyLocked: true);
+        // The main project's subproject list (and possibly its status) changed for every sibling workspace.
+        var siblingIds = await db.Projects.Where(item => item.ProjectGroupId == project.ProjectGroupId)
+            .OrderBy(item => item.Id).Select(item => item.Id).ToArrayAsync(ct);
         await tx.CommitAsync(ct);
         if (realtime is not null)
         {
@@ -238,6 +242,14 @@ internal sealed partial class ProjectService(
             catch (Exception error)
             {
                 if (logger is not null) LogDeletionRealtimePublishFailure(logger, projectId, error);
+            }
+            foreach (var siblingId in siblingIds)
+            {
+                try { await realtime.PublishAsync(siblingId, RealtimeChangeKinds.Project, CancellationToken.None); }
+                catch (Exception error)
+                {
+                    if (logger is not null) LogDeletionRealtimePublishFailure(logger, siblingId, error);
+                }
             }
         }
     }

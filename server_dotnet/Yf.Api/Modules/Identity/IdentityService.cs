@@ -96,12 +96,14 @@ public sealed class IdentityService(
         var sessionExpiresAt = dbNow.AddDays(options.AbsoluteSessionLifetimeDays);
         var refresh = await IssueRefreshAsync(context, user.Id, sessionId, clientIp, dbNow,
             dbNow, sessionExpiresAt, ct);
+        var evictedSessions = await EnforceSessionCapAsync(context, user.Id, dbNow, ct);
         var accessToken = tokens.IssueAccess(user.Id, user.EmployeeNo, sessionId);
         var grants = await permissions.GetCodesAndMenusAsync(context.Database.Connection(), context.Database.Transaction(), user.Id, ct);
         var response = new LoginResponse(accessToken.Token, accessToken.ExpiresAt, user.MustChangePassword,
             grants.Permissions, grants.Menus, await BriefAsync(context, user, ct));
         await tx.CommitAsync(ct);
-        await AuditBestEffortAsync(context.Database.Connection(), user.Id, user.EmployeeNo, "LOGIN", null, null, null, clientIp, ct);
+        await AuditBestEffortAsync(context.Database.Connection(), user.Id, user.EmployeeNo, "LOGIN", null, null,
+            evictedSessions > 0 ? new { evictedSessions, reason = RefreshRevokeReasons.SessionCap } : null, clientIp, ct);
         return (response, refresh.Token, refresh.ExpiresAt);
     }
 
@@ -124,10 +126,16 @@ public sealed class IdentityService(
         {
             if (row.Revoked)
             {
-                await RevokeSessionAsync(context, row.UserId, row.SessionId, ct);
+                // Presenting any revoked token kills what is left of its family, but only reuse of a
+                // rotated token is a replay signal; a token revoked by logout, password change, an
+                // administrator or the session cap is simply stale (e.g. an old tab).
+                var replay = row.RevokeReason == RefreshRevokeReasons.Rotated;
+                await RevokeSessionAsync(context, row.UserId, row.SessionId,
+                    replay ? RefreshRevokeReasons.Replay : row.RevokeReason ?? RefreshRevokeReasons.Replay, ct);
                 await tx.CommitAsync(ct);
-                await AuditBestEffortAsync(context.Database.Connection(), row.UserId, null, "LOGIN_FAILED", "refresh_token", null,
-                    new { reason = "refresh token reuse detected" }, clientIp, ct);
+                if (replay)
+                    await AuditBestEffortAsync(context.Database.Connection(), row.UserId, null, "LOGIN_FAILED", "refresh_token", null,
+                        new { reason = "refresh token reuse detected" }, clientIp, ct);
             }
             throw ApiException.Unauthorized("登录状态已失效，请重新登录");
         }
@@ -136,6 +144,7 @@ public sealed class IdentityService(
         // Already exclusively locked by the FOR UPDATE read above, so nothing else
         // could have raced this revoke between that read and this write.
         row.Revoked = true;
+        row.RevokeReason = RefreshRevokeReasons.Rotated;
         await context.SaveChangesAsync(ct);
         var next = await IssueRefreshAsync(context, user.Id, row.SessionId, clientIp, dbNow,
             row.SessionCreatedAt, row.SessionExpiresAt, ct);
@@ -180,7 +189,7 @@ public sealed class IdentityService(
             await context.Users.FromSqlInterpolated($"SELECT * FROM users WHERE id = {uid} FOR UPDATE").AsNoTracking().SingleOrDefaultAsync(ct);
         foreach (var target in targets)
         {
-            if (await RevokeSessionAsync(context, target.UserId, target.SessionId, ct) > 0)
+            if (await RevokeSessionAsync(context, target.UserId, target.SessionId, RefreshRevokeReasons.Logout, ct) > 0)
                 await audit.WriteAsync(context.Database.Connection(), context.Database.Transaction(), target.UserId, "LOGOUT", null, null, null, clientIp, ct);
         }
         await tx.CommitAsync(ct);
@@ -217,7 +226,8 @@ public sealed class IdentityService(
         user.FailedLoginAttempts = 0;
         user.LockedUntil = null;
         await context.SaveChangesAsync(ct);
-        await RevokeAllAsync(context.Database.Connection(), context.Database.RequireTransaction(), current.Id, ct);
+        await RevokeAllAsync(context.Database.Connection(), context.Database.RequireTransaction(), current.Id,
+            RefreshRevokeReasons.PasswordChanged, ct);
         await audit.WriteAsync(context.Database.Connection(), context.Database.Transaction(), current.Id, "PASSWORD_CHANGE", null, null, null, null, ct);
         await tx.CommitAsync(ct);
     }
@@ -270,11 +280,38 @@ public sealed class IdentityService(
             && !token.Revoked && token.ExpiresAt > dbNow && token.SessionExpiresAt > dbNow, ct);
     }
 
-    internal static async Task RevokeAllAsync(MySqlConnection conn, MySqlTransaction tx, ulong userId, CancellationToken ct)
+    internal static async Task RevokeAllAsync(MySqlConnection conn, MySqlTransaction tx, ulong userId, string reason, CancellationToken ct)
     {
         await using var context = EfDb.Use(conn, tx);
-        await context.RefreshTokens.Where(token => token.UserId == userId)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(token => token.Revoked, true), ct);
+        // Already revoked rows keep their original reason so a later replay is still classified correctly.
+        await context.RefreshTokens.Where(token => token.UserId == userId && !token.Revoked)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(token => token.Revoked, true)
+                .SetProperty(token => token.RevokeReason, reason), ct);
+    }
+
+    /// <summary>
+    /// Revokes the oldest still-active session families of <paramref name="userId"/> beyond
+    /// App:MaxActiveSessionsPerUser. Callers hold the user row lock, so concurrent logins serialize here.
+    /// </summary>
+    private async Task<int> EnforceSessionCapAsync(YfDbContext context, ulong userId, DateTime dbNow, CancellationToken ct)
+    {
+        var active = await context.RefreshTokens.AsNoTracking()
+            .Where(t => t.UserId == userId && !t.Revoked && t.ExpiresAt > dbNow && t.SessionExpiresAt > dbNow)
+            .Select(t => t.SessionId).Distinct().ToListAsync(ct);
+        if (active.Count <= options.MaxActiveSessionsPerUser) return 0;
+        // Order families by when the session began; session_created_at has second precision,
+        // so break ties with the family's first token id (rotation does not make a family newer).
+        var families = await context.RefreshTokens.AsNoTracking()
+            .Where(t => t.UserId == userId && active.Contains(t.SessionId))
+            .GroupBy(t => t.SessionId)
+            .Select(g => new { SessionId = g.Key, CreatedAt = g.Min(t => t.SessionCreatedAt), FirstId = g.Min(t => t.Id) })
+            .ToListAsync(ct);
+        var evicted = families.OrderBy(x => x.CreatedAt).ThenBy(x => x.FirstId)
+            .Take(families.Count - options.MaxActiveSessionsPerUser).Select(x => x.SessionId).ToArray();
+        await context.RefreshTokens.Where(t => t.UserId == userId && !t.Revoked && evicted.Contains(t.SessionId))
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.Revoked, true)
+                .SetProperty(t => t.RevokeReason, RefreshRevokeReasons.SessionCap), ct);
+        return evicted.Length;
     }
 
     private async Task<IssuedRefresh> IssueRefreshAsync(YfDbContext context, ulong userId, string sessionId, string clientIp,
@@ -300,9 +337,9 @@ public sealed class IdentityService(
 
     private static DateTime Min(DateTime left, DateTime right) => left <= right ? left : right;
 
-    private static async Task<int> RevokeSessionAsync(YfDbContext context, ulong userId, string sessionId, CancellationToken ct) =>
+    private static async Task<int> RevokeSessionAsync(YfDbContext context, ulong userId, string sessionId, string reason, CancellationToken ct) =>
         await context.RefreshTokens.Where(t => t.UserId == userId && t.SessionId == sessionId && !t.Revoked)
-            .ExecuteUpdateAsync(s => s.SetProperty(t => t.Revoked, true), ct);
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.Revoked, true).SetProperty(t => t.RevokeReason, reason), ct);
 
     private static async Task<bool> IsSupplierActiveAsync(YfDbContext context, User user, CancellationToken ct)
     {

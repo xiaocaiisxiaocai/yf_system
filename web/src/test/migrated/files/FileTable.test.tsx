@@ -30,7 +30,10 @@ vi.mock('../../../store/collaboration', () => ({
     status: mocks.status,
   }),
 }))
-vi.mock('../../../components/ChunkUploader', () => ({ default: () => <div data-testid="chunk-uploader" /> }))
+vi.mock('../../../components/ChunkUploader', () => ({
+  default: ({ hasCompanyStep }: { hasCompanyStep?: boolean }) =>
+    <div data-testid="chunk-uploader" data-has-company-step={String(Boolean(hasCompanyStep))} />,
+}))
 vi.mock('../../../components/PdfPreview', () => ({ default: () => <div data-testid="pdf-preview" /> }))
 vi.mock('../../../components/ExcelPreview', () => ({ default: () => <div data-testid="excel-preview" /> }))
 vi.mock('../../../components/PptxPreview', () => ({ default: () => <div data-testid="pptx-preview" /> }))
@@ -272,5 +275,37 @@ describe('FileTable DOM contracts', () => {
     await userEvent.click(tableRow('图纸.pdf').getByRole('button', { name: '下载文件' }))
 
     expect(mocks.downloadFile).toHaveBeenCalledWith(7)
+  })
+  it('aborts a superseded file list request when the list reloads or unmounts', async () => {
+    const signals: AbortSignal[] = []
+    mocks.get.mockImplementation((_url: string, config: { signal: AbortSignal }) => {
+      signals.push(config.signal)
+      return new Promise(() => undefined)
+    })
+    const view = render(<FileTable projectId={1} projectStatus="IN_PROGRESS" />)
+    await waitFor(() => expect(signals).toHaveLength(1))
+    mocks.revision = 'next'
+    view.rerender(<FileTable projectId={1} projectStatus="IN_PROGRESS" compact />)
+    await waitFor(() => expect(signals).toHaveLength(2))
+    expect(signals[0].aborted).toBe(true)
+    view.unmount()
+    expect(signals[1].aborted).toBe(true)
+  })
+
+  it('tells the company uploader when the subproject already has a C2S STEP file', async () => {
+    mocks.permissions.add('file:upload')
+    mocks.get.mockImplementation((_url: string, config: { params: { keyword?: string } }) => Promise.resolve(response(
+      config.params.keyword === '.stp' ? [row(9, 'assembly.STP', 'STP', 10)] : [row(1, 'a.pdf', 'pdf', 10)],
+    )))
+    render(<FileTable projectId={1} projectStatus="IN_PROGRESS" />)
+    await screen.findByText('a.pdf')
+    fireEvent.click(screen.getByRole('button', { name: '上传文件' }))
+
+    await waitFor(() => expect(screen.getByTestId('chunk-uploader')).toHaveAttribute('data-has-company-step', 'true'))
+    const lookups = mocks.get.mock.calls.filter(([, config]) => ['.step', '.stp'].includes(config.params.keyword))
+    expect(lookups.map(([, config]) => config.params)).toEqual([
+      { page: 1, pageSize: 100, direction: 'C2S', keyword: '.step' },
+      { page: 1, pageSize: 100, direction: 'C2S', keyword: '.stp' },
+    ])
   })
 })

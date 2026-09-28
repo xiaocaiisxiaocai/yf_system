@@ -1,6 +1,7 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { Message } from '@arco-design/web-react'
 
 const mocks = vi.hoisted(() => ({
   post: vi.fn(),
@@ -53,7 +54,7 @@ function installDefaultHttp() {
   mocks.blobSha256.mockResolvedValue('c'.repeat(64))
 }
 
-function renderUploader(offerSubmit = false) {
+function renderUploader(offerSubmit = false, direction?: 'C2S' | 'S2C', hasCompanyStep?: boolean) {
   const callbacks = {
     onClose: vi.fn<() => void>(),
     onDone: vi.fn<() => void>(),
@@ -67,6 +68,8 @@ function renderUploader(offerSubmit = false) {
     onDone={callbacks.onDone}
     onAllUploaded={callbacks.onAllUploaded}
     onSubmitForAcceptance={offerSubmit ? callbacks.onSubmitForAcceptance : undefined}
+    direction={direction}
+    hasCompanyStep={hasCompanyStep}
   />)
   return { ...view, callbacks }
 }
@@ -687,5 +690,130 @@ describe('ChunkUploader DOM contracts', () => {
     fireEvent.click(startButton())
     await waitFor(() => expect(callbacks.onDone).toHaveBeenCalledOnce())
     expect(events).toEqual(['init', 'delete', 'init', 'merge'])
+  })
+})
+
+describe('ChunkUploader upload material rules', () => {
+  beforeEach(() => {
+    mocks.post.mockReset()
+    mocks.put.mockReset()
+    mocks.delete.mockReset()
+    mocks.createChunkHasher.mockReset()
+    mocks.createChunkHasher.mockImplementation(() => ({ sha256: mocks.blobSha256, dispose: mocks.disposeHasher }))
+    installDefaultHttp()
+  })
+
+  it('initializes a same-batch STEP file before other company-to-supplier files', async () => {
+    let releaseStep!: () => void
+    mocks.post.mockImplementation((url: string, body?: { fileName?: string }) => {
+      if (url !== '/uploads/init') return Promise.resolve({ data: { id: 99 } })
+      const response = initResponse(body?.fileName ?? 'session')
+      if (body?.fileName !== 'assembly.step') return Promise.resolve(response)
+      return new Promise((resolve) => { releaseStep = () => resolve(response) })
+    })
+    renderUploader(false, 'C2S')
+    choose(uploadFile('说明.pdf'), uploadFile('assembly.step'))
+    fireEvent.click(startButton())
+
+    expect(await screen.findByText('等待同批 STEP 文件开始上传')).toBeVisible()
+    await waitFor(() => expect(sessionCalls('init')).toHaveLength(1))
+    expect(sessionCalls('init')[0][1]).toMatchObject({ fileName: 'assembly.step' })
+    releaseStep()
+    await waitFor(() => expect(sessionCalls('merge')).toHaveLength(2))
+    expect(sessionCalls('init').map(([, body]) => (body as { fileName: string }).fileName))
+      .toEqual(['assembly.step', '说明.pdf'])
+  })
+
+  it('blocks misnamed company Excel files and warns when the batch has no STEP', () => {
+    renderUploader(false, 'C2S')
+    expect(screen.getByText('发给供应商的资料要求')).toBeVisible()
+    choose(uploadFile('动作流程.xlsx'))
+
+    expect(startButton()).toBeDisabled()
+    expect(screen.getByText(/Excel 需按「CSLR-XXX XXX机 210XXX-X 动作流程\.xlsx」命名/)).toBeVisible()
+    expect(screen.getByText(/本批没有 STEP 文件/)).toBeVisible()
+    fireEvent.click(startButton())
+    expect(sessionCalls('init')).toHaveLength(0)
+  })
+
+  it('accepts a traditional-Chinese motion-flow workbook name for company uploads', () => {
+    renderUploader(false, 'C2S')
+    choose(uploadFile('CSLR-605 放板機 2105931-1 動作流程.xlsx'), uploadFile('assembly.stp'))
+
+    expect(startButton()).toBeEnabled()
+    expect(screen.queryByText(/本批没有 STEP 文件/)).toBeNull()
+    expect(screen.queryByText(/Excel 需按/)).toBeNull()
+  })
+
+  it('shows supplier examples without restricting supplier-to-company files', async () => {
+    renderUploader(false, 'S2C')
+    const examples = screen.getByRole('group', { name: '上传资料示例' })
+    expect(examples.querySelectorAll('img')).toHaveLength(2)
+    choose(uploadFile('动作流程.xlsx'))
+
+    expect(startButton()).toBeEnabled()
+    expect(screen.queryByText(/本批没有 STEP 文件/)).toBeNull()
+    fireEvent.click(startButton())
+    await screen.findByText('已完成')
+  })
+  it('hides the missing-STEP warning when the subproject already has a company STEP file', () => {
+    renderUploader(false, 'C2S', true)
+    choose(uploadFile('说明.pdf'))
+
+    expect(startButton()).toBeEnabled()
+    expect(screen.queryByText(/本批没有 STEP 文件/)).toBeNull()
+  })
+
+  it('business rejections at init become a terminal state with one aggregated toast', async () => {
+    const stepMessage = '发给供应商的资料至少需要一个 STEP 格式 3D 图（.step/.stp），请先上传或与本批文件一起上传 STEP 文件'
+    const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
+    mocks.post.mockImplementation((url: string) => {
+      if (url === '/uploads/init') return Promise.reject({ response: { status: 400, data: { code: 40001, message: stepMessage } } })
+      return Promise.resolve({ data: { id: 99 } })
+    })
+    renderUploader(false, 'C2S')
+    choose(uploadFile('说明.pdf'), uploadFile('图纸.pdf'))
+    fireEvent.click(startButton())
+
+    await waitFor(() => expect(screen.getAllByText(stepMessage)).toHaveLength(2))
+    expect(sessionCalls('init')).toHaveLength(2)
+    expect(sessionCalls('init').every(([, , config]) => (config as { quietClientError?: boolean }).quietClientError)).toBe(true)
+    expect(toast.mock.calls.filter(([message]) => message === stepMessage)).toHaveLength(1)
+    expect(within(screen.getByRole('dialog')).queryByText(/上传中断/)).toBeNull()
+    expect(screen.getAllByText('服务端拒绝，未上传')).toHaveLength(2)
+    expect(startButton()).toBeDisabled()
+    expect(mocks.put).not.toHaveBeenCalled()
+    const row = screen.getByRole('group', { name: '说明.pdf' })
+    const error = row.querySelector('.upload-entry-error')!
+    expect(error.id).toBeTruthy()
+    expect(row).toHaveAttribute('aria-describedby', error.id)
+    expect(error.parentElement).toHaveAttribute('aria-live', 'polite')
+    toast.mockRestore()
+  })
+
+  it('a merge-time business rejection is terminal instead of awaiting confirmation', async () => {
+    const stepMessage = '发给供应商的资料至少需要一个 STEP 格式 3D 图（.step/.stp），请先上传或与本批文件一起上传 STEP 文件'
+    const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
+    mocks.post.mockImplementation((url: string, body?: { fileName?: string }) => {
+      if (url === '/uploads/init') return Promise.resolve(initResponse(body?.fileName ?? 'session'))
+      if (String(url).endsWith('/merge')) return Promise.reject({ response: { status: 400, data: { message: stepMessage } } })
+      return Promise.resolve({ data: {} })
+    })
+    const { callbacks } = renderUploader(false, 'C2S', true)
+    choose(uploadFile('说明.pdf'))
+    fireEvent.click(startButton())
+
+    expect(await screen.findByText(stepMessage)).toBeVisible()
+    expect(sessionCalls('merge')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: '重试确认' })).toBeNull()
+    const row = screen.getByRole('group', { name: '说明.pdf' })
+    expect(within(row).getByText('服务端拒绝，未上传')).toBeVisible()
+    expect(within(row).queryByText(/上传中断|结果待确认/)).toBeNull()
+    expect(toast).toHaveBeenCalledTimes(1)
+    expect(callbacks.onDone).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '移除「说明.pdf」' }))
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalledWith('/uploads/说明.pdf'))
+    toast.mockRestore()
   })
 })

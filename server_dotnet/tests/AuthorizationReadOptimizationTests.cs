@@ -8,9 +8,12 @@ using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class AuthorizationReadOptimizationTests
 {
+    // The seeded system administrator (1) plus the test user (9_200).
+    private static readonly ulong[] ExpectedProjectListUsers = [1UL, 9_200UL];
+
     [Fact]
     public async Task AppDbValidatesOnceAndEfContextsStayBoundToTheirOwnConnection()
     {
@@ -102,7 +105,7 @@ public sealed class AuthorizationReadOptimizationTests
         {
             var permittedUsers = await AccessService.UsersWithPermission(context, "project:list").ToArrayAsync(ct);
             // The seeded system administrator also retains project:list.
-            Assert.Equal(new ulong[] { 1UL, 9_200UL }, permittedUsers.Order().ToArray());
+            Assert.Equal(ExpectedProjectListUsers, permittedUsers.Order().ToArray());
         }
         await tx.RollbackAsync(ct);
     }

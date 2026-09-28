@@ -13,31 +13,16 @@ internal static class ProjectReviewerService
         CancellationToken ct)
     {
         await using var db = EfDb.Use(conn, tx);
+        // Same effective-grant definition (active roles only) as every other permission check.
+        var listers = AccessService.UsersWithPermission(db, "project:list");
+        var confirmers = AccessService.UsersWithPermission(db, "project:confirm");
+        var viewAll = AccessService.UsersWithPermission(db, "project:view_all");
         var rows = await db.Users
             .Where(user => user.Status == AccountStatuses.Active && user.UserType == UserTypes.Internal)
-            .Where(user => db.UserRoles.Any(userRole =>
-                userRole.UserId == user.Id
-                && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == AccountStatuses.Active)
-                && db.RolePermissions.Any(rolePermission =>
-                    rolePermission.RoleId == userRole.RoleId
-                    && db.Permissions.Any(permission =>
-                        permission.Id == rolePermission.PermissionId && permission.Code == "project:list"))))
-            .Where(user => db.UserRoles.Any(userRole =>
-                userRole.UserId == user.Id
-                && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == AccountStatuses.Active)
-                && db.RolePermissions.Any(rolePermission =>
-                    rolePermission.RoleId == userRole.RoleId
-                    && db.Permissions.Any(permission =>
-                        permission.Id == rolePermission.PermissionId && permission.Code == "project:confirm"))))
+            .Where(user => listers.Contains(user.Id) && confirmers.Contains(user.Id))
             .Where(user => user.Id == project.ResponsibleUserId
                 || db.ProjectGroups.Any(group => group.Id == project.ProjectGroupId && group.CreatedBy == user.Id)
-                || db.UserRoles.Any(userRole =>
-                    userRole.UserId == user.Id
-                    && db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == AccountStatuses.Active)
-                    && db.RolePermissions.Any(rolePermission =>
-                        rolePermission.RoleId == userRole.RoleId
-                        && db.Permissions.Any(permission =>
-                            permission.Id == rolePermission.PermissionId && permission.Code == "project:view_all"))))
+                || viewAll.Contains(user.Id))
             .OrderBy(user => user.Id)
             .Select(user => new UserRow
             {

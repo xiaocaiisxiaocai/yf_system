@@ -6,9 +6,12 @@ using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class EfTransactionTests
 {
+    private static readonly int[] PageSource = [1, 2, 3];
+    private static readonly int[] SecondPage = [2, 3];
+
     [Fact(Timeout = 120_000)]
     public async Task BorrowedContextSharesWritesAndRollbackWithoutClosingTheOwnersConnection()
     {
@@ -38,10 +41,10 @@ public sealed class EfTransactionTests
     [Fact]
     public void HugePageOffsetDoesNotOverflowIntoTheFirstPage()
     {
-        var source = new[] { 1, 2, 3 }.AsQueryable();
+        var source = PageSource.AsQueryable();
         Assert.Empty(source.Page((ulong)int.MaxValue + 1, 20));
         Assert.Empty(source.Page(ulong.MaxValue, 20));
-        Assert.Equal(new[] { 2, 3 }, source.Page(1, 2));
+        Assert.Equal(SecondPage, source.Page(1, 2));
     }
 
     [Fact(Timeout = 120_000)]

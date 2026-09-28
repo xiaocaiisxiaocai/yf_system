@@ -5,8 +5,8 @@ import type { ApiResponses } from './types'
 export type UploadedChunkDigest = UploadedChunkDigestResponse
 export type UploadInitResult = UploadInitResponse
 
-export function initUpload(request: InitUploadRequest) {
-  return http.post<UploadInitResult>('/uploads/init', request)
+export function initUpload(request: InitUploadRequest, config: Pick<QuietRequestConfig, 'quietClientError'> = {}) {
+  return http.post<UploadInitResult>('/uploads/init', request, config as QuietRequestConfig)
 }
 
 export function putUploadChunk(
@@ -30,8 +30,11 @@ export function submitUploadMd5(sessionId: string, fileMd5: string) {
   return http.post<ApiResponses['POST /uploads/{sessionId}/md5']>(`/uploads/${sessionId}/md5`, { fileMd5 })
 }
 
-export function mergeUpload(sessionId: string) {
-  return http.post<ApiResponses['POST /uploads/{sessionId}/merge']>(`/uploads/${sessionId}/merge`, undefined, { timeout: 10 * 60 * 1000 })
+export function mergeUpload(sessionId: string, config: Pick<QuietRequestConfig, 'quietClientError'> = {}) {
+  return http.post<ApiResponses['POST /uploads/{sessionId}/merge']>(`/uploads/${sessionId}/merge`, undefined, {
+    ...config,
+    timeout: 10 * 60 * 1000,
+  } as QuietRequestConfig)
 }
 
 export function abortUpload(sessionId: string) {

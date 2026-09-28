@@ -51,13 +51,16 @@ async function createProjectGroup(context, token, supplierId, name) {
       const held = new Promise(resolve => { release = resolve; });
       let arrived;
       const firstArrived = new Promise(resolve => { arrived = resolve; });
+      let fulfilled;
+      const firstSettled = new Promise(resolve => { fulfilled = resolve; });
       const summaryPath = '/api/v1/projects/' + raceProject.id + '/summary';
       let requests = 0;
       const handler = async route => {
         if (++requests !== 1) return route.continue();
         const response = await route.fetch();
         assert.equal((await response.json()).unreadMessages, 1, 'old snapshot must contain a real unread message');
-        arrived(); await held; await route.fulfill({ response });
+        arrived(); await held;
+        try { await route.fulfill({ response }); } finally { fulfilled(); }
       };
       try {
         const supplierPage = await supplierContext.newPage(); track(supplierPage, 'summary-race-supplier');
@@ -74,8 +77,9 @@ async function createProjectGroup(context, token, supplierId, name) {
         await page.getByText('等待管理员实际阅读的摘要竞态留言', { exact: true }).waitFor();
         await read;
         assert.equal((await (await refreshed).json()).unreadMessages, 0);
-        const stale = page.waitForResponse(response => new URL(response.url()).pathname === summaryPath);
-        release(); await (await stale).finished();
+        // The refreshed summary aborts the stale request. Wait for the held route to settle;
+        // an aborted request does not emit the response event used by the old assertion.
+        release(); await firstSettled;
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         assert.equal(await page.getByRole('tab', { name: /留言/ }).locator('.arco-badge').count(), 0);
         assert.equal((await request('GET', '/projects/' + raceProject.id + '/summary')).unreadMessages, 0);
@@ -145,10 +149,22 @@ async function createProjectGroup(context, token, supplierId, name) {
       await page.getByRole('button', { name: '加载更多（20/24）', exact: true }).waitFor();
       assert.equal(await page.locator('.msg-item').count(), 20);
       page.expectedServerErrors = new Set([endpoint]);
-      await page.route('**' + endpoint + '?*', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"code":50301,"message":"分页测试暂时不可用"}' }), { times: 1 });
+      let rejectNextPage = true;
+      const rejectAppend = route => {
+        const url = new URL(route.request().url());
+        // Realtime synchronization also reads this endpoint; fail only the user's next-page request.
+        if (!rejectNextPage || Number(url.searchParams.get('page')) < 2) return route.continue();
+        rejectNextPage = false;
+        return route.fulfill({ status: 503, contentType: 'application/json', body: '{"code":50301,"message":"分页测试暂时不可用"}' });
+      };
+      await page.route('**' + endpoint + '?*', rejectAppend);
       await page.getByRole('button', { name: '加载更多（20/24）', exact: true }).click();
       await page.getByText('加载失败', { exact: true }).waitFor(); assert.equal(await page.locator('.msg-item').count(), 20);
-      const retried = waitList(); await page.getByRole('button', { name: '重试', exact: true }).click(); await retried;
+      await Promise.all([
+        waitList(),
+        page.locator('.message-append-error').getByRole('button', { name: '重试', exact: true }).click(),
+      ]);
+      await page.unroute('**' + endpoint + '?*', rejectAppend);
       await page.getByText(first.content, { exact: true }).waitFor();
       const ids = await page.locator('.msg-item').evaluateAll(nodes => nodes.map(node => node.dataset.messageId));
       assert.equal(ids.length, 24); assert.equal(new Set(ids).size, 24);

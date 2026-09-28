@@ -131,6 +131,8 @@ internal static class DevelopmentDataReset
         await using (var gate = await MySqlNamedLock.TryAcquireAsync(
             conn, MySqlNamedLock.Name("development-reset", plan.Database), 0, ct)
             ?? throw new InvalidOperationException("Another development reset is running."))
+        await using (var running = await AppRunningLease.TryAcquireAsync(conn, ct)
+            ?? throw new InvalidOperationException("The application is still running against this database. Stop the site before resetting."))
         await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
         await using (var db = EfDb.Use(conn, tx))
         {

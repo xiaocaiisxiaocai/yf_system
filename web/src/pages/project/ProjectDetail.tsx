@@ -17,6 +17,8 @@ import FileTable from '../../components/FileTable'
 import MessagePanel from '../../components/MessagePanel'
 import ProjectActivityPanel from '../../components/ProjectActivityPanel'
 import ProjectWorkflowPanel from '../../components/ProjectWorkflowPanel'
+import { useDisconnectedPoll } from '../../hooks/useDisconnectedPoll'
+import { projectAccessLostStatus, useProjectAccessLost } from '../../hooks/useProjectAccessLost'
 import { useCollaboration } from '../../store/collaboration'
 import { isAxiosError } from 'axios'
 import './ProjectDetail.css'
@@ -189,6 +191,9 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const [loadErrorFor, setLoadErrorFor] = useState<number | null>(null)
   const [missingProjectFor, setMissingProjectFor] = useState<number | null>(null)
   const [siblings, setSiblings] = useState<ProjectSummary[]>([])
+  // 曾成功展示过本项目后，刷新得到 403/404 说明权限已调整或项目已删除：提示后回到列表。
+  const everLoaded = useRef(false)
+  const handleAccessLost = useProjectAccessLost('子项目')
   const currentGroupId = project?.id === pid ? project.projectGroupId : undefined
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
@@ -202,7 +207,13 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const messagesTargetId = tab === 'messages' ? targetId : undefined
 
   const fetchProject = useCallback(async (signal?: AbortSignal) => {
-    const r = await http.get<ApiResponses['GET /projects/{id}']>(`/projects/${pid}`, { signal })
+    // 后台刷新失败由页面内的“项目更新失败”提示承载，瞬时网络错误不再逐次弹出全局提示；
+    // 已加载后的 403/404 由本页统一提示并跳转，不再叠加拦截器的逐条错误提示。
+    const r = await http.get<ApiResponses['GET /projects/{id}']>(`/projects/${pid}`, {
+      signal,
+      quietNetworkError: true,
+      quietClientError: everLoaded.current,
+    } as QuietRequestConfig)
     return r.data as Project
   }, [pid])
 
@@ -211,23 +222,28 @@ function ProjectDetailContent({ id }: { id?: string }) {
     try {
       const next = await fetchProject()
       if (seq !== projectSeq.current) return
+      everLoaded.current = true
       setProject(next)
       setLoadErrorFor(null)
       setMissingProjectFor(null)
     } catch (error: unknown) {
       if (seq !== projectSeq.current) return
+      const lost = projectAccessLostStatus(error)
+      if (lost && everLoaded.current && handleAccessLost(lost)) return
       // 权限丢失或资源不存在时清除旧内容；瞬时错误保留快照并提供重试。
       setLoadErrorFor(pid)
       const status = isAxiosError(error) ? error.response?.status : undefined
       setMissingProjectFor(status === 404 ? pid : null)
       if (status === 403 || status === 404) setProject(null)
     }
-  }, [fetchProject, pid])
+  }, [fetchProject, handleAccessLost, pid])
 
   const fetchSummary = useCallback(async (signal?: AbortSignal) => {
+    // 概览只在详情已加载后请求；其 403/404 交由详情刷新统一提示，不单独弹出错误。
     const r = await http.get<ApiResponses['GET /projects/{id}/summary']>(`/projects/${pid}/summary`, {
       signal,
       quietNetworkError: true,
+      quietClientError: true,
     } as QuietRequestConfig)
     return r.data as Summary
   }, [pid])
@@ -246,6 +262,29 @@ function ProjectDetailContent({ id }: { id?: string }) {
       if (summaryAbort.current === controller) summaryAbort.current = null
     }
   }, [fetchSummary])
+
+  const summaryRef = useRef(summary)
+  useEffect(() => { summaryRef.current = summary })
+
+  // 实时通道未连接时按退避节奏轮询概览；动态指纹变化意味着有新留言、文件或流程变更，
+  // 更新概览会让留言面板的 poll 修订号变化并重新拉取，同时静默刷新项目详情。
+  const pollWhileDisconnected = useCallback(async (signal: AbortSignal) => {
+    let next: Summary
+    try {
+      next = await fetchSummary(signal)
+    } catch (error: unknown) {
+      // 概览 403/404 可能是权限已调整或项目已删除；重新获取详情确认，由详情请求统一提示和跳转。
+      if (!signal.aborted && projectAccessLostStatus(error)) void loadProject()
+      throw error
+    }
+    if (signal.aborted) return
+    const previous = summaryRef.current
+    if (next.activityRevision === previous.activityRevision && next.unreadMessages === previous.unreadMessages) return
+    summarySeq.current += 1
+    setSummary(next)
+    if (next.activityRevision !== previous.activityRevision) await loadProject()
+  }, [fetchSummary, loadProject])
+  useDisconnectedPoll(validProjectId && project?.id === pid && !realtimeConnected, pollWhileDisconnected)
 
   const handleActivityNavigate = useCallback((type: string, target: number) => {
     if (!Number.isSafeInteger(target) || target <= 0) return
@@ -279,12 +318,15 @@ function ProjectDetailContent({ id }: { id?: string }) {
     fetchProject(controller.signal)
       .then((next) => {
         if (!active || seq !== projectSeq.current) return
+        everLoaded.current = true
         setProject(next)
         setLoadErrorFor(null)
         setMissingProjectFor(null)
       })
       .catch((error: unknown) => {
-        if (active && seq === projectSeq.current) {
+        if (active && !controller.signal.aborted && seq === projectSeq.current) {
+          const lost = projectAccessLostStatus(error)
+          if (lost && everLoaded.current && handleAccessLost(lost)) return
           setLoadErrorFor(pid)
           const status = isAxiosError(error) ? error.response?.status : undefined
           setMissingProjectFor(status === 404 ? pid : null)
@@ -296,7 +338,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
       if (projectSeq.current === seq) projectSeq.current += 1
       controller.abort()
     }
-  }, [fetchProject, liveActivity, pid, reconnected, validProjectId])
+  }, [fetchProject, handleAccessLost, liveActivity, pid, reconnected, validProjectId])
 
   useEffect(() => {
     if (!currentGroupId) return
@@ -554,7 +596,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
       >
         <div className="project-copy-history">
           <div className="project-copy-history-note">
-            复制项目会生成独立文件副本并保留复制履历；留言、流程及验收状态、已读回执和通知不会复制。
+            复制项目会生成独立的文件记录（内容与原项目共享，互不影响）并保留复制履历；留言、流程及验收状态、已读回执和通知不会复制。
           </div>
           {historyLoading && !copyHistory ? (
             <div className="project-copy-load-state"><Spin size={28} /></div>

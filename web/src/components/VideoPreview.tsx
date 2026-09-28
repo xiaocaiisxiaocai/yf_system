@@ -4,6 +4,14 @@ import http, { type QuietRequestConfig } from '../api/client'
 
 type MediaSession = { url: string; expiresInSeconds: number }
 
+// 续期失败时在当前授权到期前按退避重试；只有授权真的到期（留出余量）才判定失败，
+// 期间不打断正在播放的视频。
+const RENEW_RETRY_BASE_MS = 5_000
+const RENEW_RETRY_MAX_MS = 30_000
+const EXPIRY_MARGIN_MS = 2_000
+
+class InvalidMediaSessionError extends Error {}
+
 function VideoDocument({ fileId }: { fileId: number }) {
   const player = useRef<HTMLVideoElement>(null)
   const [attempt, setAttempt] = useState(0)
@@ -16,6 +24,8 @@ function VideoDocument({ fileId }: { fileId: number }) {
     let renewal: ReturnType<typeof setTimeout> | undefined
     const controller = new AbortController()
     const video = player.current
+    let expiresAt = 0
+    let retryDelay = RENEW_RETRY_BASE_MS
     const fail = () => {
       if (!active) return
       clearTimeout(loadTimer.current)
@@ -33,11 +43,28 @@ function VideoDocument({ fileId }: { fileId: number }) {
         const url = new URL(data.url, window.location.origin)
         if (url.origin !== window.location.origin || url.pathname !== `/api/v1/files/${fileId}/media`
           || url.search || url.hash || !Number.isFinite(data.expiresInSeconds) || data.expiresInSeconds < 10) {
-          throw new Error('Invalid media session')
+          throw new InvalidMediaSessionError('Invalid media session')
         }
+        expiresAt = Date.now() + data.expiresInSeconds * 1000
+        retryDelay = RENEW_RETRY_BASE_MS
         setSource(url.pathname)
         renewal = setTimeout(() => { void authorize() }, Math.min(data.expiresInSeconds * 500, 240000))
-      } catch { fail() }
+      } catch (error) {
+        if (!active) return
+        // 首次授权失败或服务端返回了不可信的地址：立即失败。
+        if (!expiresAt || error instanceof InvalidMediaSessionError) {
+          fail()
+          return
+        }
+        const remaining = expiresAt - Date.now() - EXPIRY_MARGIN_MS
+        if (remaining <= 0) {
+          fail()
+          return
+        }
+        const delay = Math.min(retryDelay, remaining)
+        retryDelay = Math.min(retryDelay * 2, RENEW_RETRY_MAX_MS)
+        renewal = setTimeout(() => { void authorize() }, delay)
+      }
     }
     loadTimer.current = setTimeout(fail, 60000)
     void authorize()

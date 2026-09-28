@@ -10,6 +10,7 @@ import FileTable from '../../components/FileTable'
 import MessagePanel from '../../components/MessagePanel'
 import ProjectActivityPanel from '../../components/ProjectActivityPanel'
 import ProjectWorkflowPanel from '../../components/ProjectWorkflowPanel'
+import { useDisconnectedPoll } from '../../hooks/useDisconnectedPoll'
 import { useCollaboration } from '../../store/collaboration'
 import { SubprojectDockContext } from './subprojectDockContext'
 import type { SubprojectPanelParams } from './subprojectDockLayout'
@@ -43,9 +44,16 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
   const reconnected = useCollaboration((state) => state.reconnectRevision ?? 0)
   const realtimeConnected = useCollaboration((state) => state.realtimeStatus === 'connected')
   const projectSeq = useRef(0)
+  const projectInFlight = useRef(0)
   const summarySeq = useRef(0)
   const summaryAbort = useRef<AbortController | null>(null)
   const rowUpdatedAt = row?.updatedAt
+  // 面板不自行跳转：已加载后失去访问时只通知主项目刷新一次，由主项目页统一判断
+  // 是整个主项目无权访问（提示并回到列表）还是仅该子项目被删除（由停靠区移除面板）。
+  const everLoaded = useRef(false)
+  const accessLossReported = useRef(false)
+  const onGroupChangedRef = useRef(onGroupChanged)
+  useEffect(() => { onGroupChangedRef.current = onGroupChanged })
 
   // 隐藏在标签页后面的面板不能把留言标记为已读。
   useEffect(() => {
@@ -55,9 +63,16 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
 
   const loadProject = useCallback(async (signal?: AbortSignal) => {
     const seq = ++projectSeq.current
+    projectInFlight.current += 1
     try {
-      const response = await http.get<ApiResponses['GET /projects/{id}']>(`/projects/${pid}`, { signal, quietNetworkError: true } as QuietRequestConfig)
+      const response = await http.get<ApiResponses['GET /projects/{id}']>(`/projects/${pid}`, {
+        signal,
+        quietNetworkError: true,
+        // 已加载后的 403/404 由主项目页统一提示，不再叠加拦截器的逐条错误提示。
+        quietClientError: everLoaded.current,
+      } as QuietRequestConfig)
       if (seq !== projectSeq.current) return
+      everLoaded.current = true
       setProject(response.data as Project)
       setMissing(false)
       setLoadError(false)
@@ -65,8 +80,16 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
       if (signal?.aborted || seq !== projectSeq.current) return
       const status = isAxiosError(error) ? error.response?.status : undefined
       // 权限丢失或资源不存在时清除旧内容；瞬时错误保留快照并提供重试。
-      if (status === 403 || status === 404) { setProject(null); setMissing(true) }
+      if (status === 403 || status === 404) {
+        setProject(null); setMissing(true)
+        if (everLoaded.current && !accessLossReported.current) {
+          accessLossReported.current = true
+          onGroupChangedRef.current()
+        }
+      }
       setLoadError(true)
+    } finally {
+      projectInFlight.current -= 1
     }
   }, [pid])
 
@@ -79,6 +102,7 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
       const response = await http.get<ApiResponses['GET /projects/{id}/summary']>(`/projects/${pid}/summary`, {
         signal: controller.signal,
         quietNetworkError: true,
+        quietClientError: true,
       } as QuietRequestConfig)
       if (!controller.signal.aborted && seq === summarySeq.current) setSummary(response.data as Summary)
     } catch {
@@ -97,7 +121,18 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
       projectSeq.current += 1
       controller.abort()
     }
-  }, [liveActivity, loadProject, reconnected, rowUpdatedAt])
+  }, [liveActivity, loadProject, reconnected])
+
+  // 主项目列表里的行比已加载的详情新（例如其他人改了状态）时才补拉一次；
+  // 本面板自己触发的 refreshAll 会同时刷新详情和主项目，行更新到达时详情已是最新或仍在请求中，不再重复拉取。
+  const projectUpdatedAt = project?.updatedAt
+  useEffect(() => {
+    if (!rowUpdatedAt || !projectUpdatedAt || projectInFlight.current > 0) return
+    if (!(Date.parse(rowUpdatedAt) > Date.parse(projectUpdatedAt))) return
+    // The group row is newer than the loaded detail, so the detail is refetched from the server.
+    // eslint-disable-next-line react/set-state-in-effect
+    void loadProject()
+  }, [loadProject, projectUpdatedAt, rowUpdatedAt])
 
   useEffect(() => {
     if (project?.id !== pid) return
@@ -109,6 +144,35 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
       summaryAbort.current?.abort()
     }
   }, [liveActivity, liveMessages, loadSummary, pid, project?.id, reconnected])
+
+  const summaryRef = useRef(summary)
+  useEffect(() => { summaryRef.current = summary })
+
+  // 实时通道未连接时，只轮询可见面板的概览（退避节奏见 useDisconnectedPoll）；
+  // 动态指纹变化时更新概览让留言面板重新拉取，并静默刷新子项目详情。
+  const pollWhileDisconnected = useCallback(async (signal: AbortSignal) => {
+    let response: { data: unknown }
+    try {
+      response = await http.get<ApiResponses['GET /projects/{id}/summary']>(`/projects/${pid}/summary`, {
+        signal,
+        quietNetworkError: true,
+        quietClientError: true,
+      } as QuietRequestConfig)
+    } catch (error: unknown) {
+      // 概览 403/404 可能意味着失去访问或子项目已删除；重新获取详情确认并通知主项目。
+      const status = isAxiosError(error) ? error.response?.status : undefined
+      if (!signal.aborted && (status === 403 || status === 404)) void loadProject()
+      throw error
+    }
+    if (signal.aborted) return
+    const next = response.data as Summary
+    const previous = summaryRef.current
+    if (next.activityRevision === previous.activityRevision && next.unreadMessages === previous.unreadMessages) return
+    summarySeq.current += 1
+    setSummary(next)
+    if (next.activityRevision !== previous.activityRevision) await loadProject()
+  }, [loadProject, pid])
+  useDisconnectedPoll(visible && project?.id === pid && !realtimeConnected, pollWhileDisconnected)
 
   const refreshAll = useCallback(() => {
     void loadProject()

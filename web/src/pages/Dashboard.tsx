@@ -6,6 +6,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../api/client'
 import { createSessionQueryScope, queryClient } from '../api/queryClient'
 import { fmtTime } from '../api/types'
+import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../store/auth'
 import { useCollaboration } from '../store/collaboration'
 import '../styles/dashboard-collaboration.css'
@@ -75,7 +76,14 @@ export default function Dashboard() {
   const [messagePage, setMessagePage] = useState(1)
   const [unreadOnly, setUnreadOnly] = useState(true)
   const observedRevision = useRef<string | null>(null)
-  const auth = useAuth()
+  // 只订阅用到的字段；token 静默刷新等无关变化不再重渲染整个工作台。
+  const auth = useAuth(useShallow((state) => ({
+    user: state.user,
+    generation: state.generation,
+    permissions: state.permissions,
+    menus: state.menus,
+    mustChangePassword: state.mustChangePassword,
+  })))
   const [sessionUserId, sessionGeneration, sessionGrants] = createSessionQueryScope(auth)
   const sessionScope = useMemo(
     () => [sessionUserId, sessionGeneration, sessionGrants] as const,
@@ -160,6 +168,8 @@ export default function Dashboard() {
   const messageLoading = messageQuery.isFetching
   const messageError = messageQuery.isError && !messageQuery.data
   const messageRefreshError = messageQuery.isRefetchError && !!messageQuery.data
+  // 两个刷新按钮都会重拉概览、待验收和留言，加载态要覆盖全部三个请求。
+  const dashboardRefreshing = loading || pendingLoading || messageLoading
   const refetchSummary = summaryQuery.refetch
   const refetchPending = pendingQuery.refetch
   const refetchMessages = messageQuery.refetch
@@ -275,7 +285,7 @@ export default function Dashboard() {
           <h1>工作台{user ? ` · ${user.realName}` : ''}</h1>
           <Typography.Text type="secondary">{isSupplier ? '跟进待公司验收与未读留言' : '优先处理公司内部验收与未读留言'}</Typography.Text>
         </div>
-        <Button size="small" loading={pendingLoading || messageLoading} onClick={refreshDashboard}>刷新工作台</Button>
+        <Button size="small" loading={dashboardRefreshing} onClick={refreshDashboard}>刷新工作台</Button>
       </div>
 
       <Grid.Row className="dashboard-workbench" gutter={[16, 16]}>
@@ -292,7 +302,7 @@ export default function Dashboard() {
                 {pendingData.total > 0 && <Tag color="orange">{pendingData.total}</Tag>}
               </div>
             )}
-            extra={<Button size="small" loading={pendingLoading} onClick={refreshDashboard}>刷新</Button>}
+            extra={<Button size="small" loading={dashboardRefreshing} onClick={refreshDashboard}>刷新</Button>}
           >
             {pendingRefreshError && !pendingLoading && (
               <div className="dashboard-stale-notice" role="status">

@@ -60,7 +60,7 @@ internal static class FileBlobStore
         Func<ulong, Task>? reportProgress, CancellationToken ct)
     {
         var normalizedHash = NormalizeSha256(expectedSha256);
-        await using var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+        await using var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
             BufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
         await using var output = new FileStream(stagingPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
             BufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
@@ -99,6 +99,38 @@ internal static class FileBlobStore
     internal static void VerifyBoundPhysicalFile(string root, string storagePath, string sha256, ulong sizeBytes,
         CancellationToken ct)
     {
+        var path = ResolveBoundPhysicalFile(root, storagePath, sha256, sizeBytes, ct);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
+            BufferSize, FileOptions.SequentialScan);
+        var actual = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        if (!actual.Equals(NormalizeSha256(sha256), StringComparison.Ordinal))
+            throw ApiException.Conflict("文件内容 SHA-256 校验失败，无法复制");
+    }
+
+    /// <summary>Streaming, asynchronous variant for background verification of large blobs.</summary>
+    internal static async Task VerifyBoundPhysicalFileAsync(string root, string storagePath, string sha256,
+        ulong sizeBytes, CancellationToken ct)
+    {
+        var path = ResolveBoundPhysicalFile(root, storagePath, sha256, sizeBytes, ct);
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
+            BufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+        try
+        {
+            int read;
+            while ((read = await stream.ReadAsync(buffer.AsMemory(0, BufferSize), ct)) != 0)
+                hash.AppendData(buffer, 0, read);
+        }
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
+        var actual = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        if (!actual.Equals(NormalizeSha256(sha256), StringComparison.Ordinal))
+            throw ApiException.Conflict("文件内容 SHA-256 校验失败，无法复制");
+    }
+
+    private static string ResolveBoundPhysicalFile(string root, string storagePath, string sha256, ulong sizeBytes,
+        CancellationToken ct)
+    {
         var expectedRelative = RelativePath(sha256);
         if (!storagePath.Equals(expectedRelative, StringComparison.Ordinal))
             throw ApiException.Conflict("文件内容引用路径异常，无法复制");
@@ -108,11 +140,7 @@ internal static class FileBlobStore
         { throw ApiException.Conflict("文件内容缺失或存储路径异常，无法复制"); }
         if ((ulong)new FileInfo(path).Length != sizeBytes)
             throw ApiException.Conflict("文件内容大小校验失败，无法复制");
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
-            BufferSize, FileOptions.SequentialScan);
-        var actual = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-        if (!actual.Equals(NormalizeSha256(sha256), StringComparison.Ordinal))
-            throw ApiException.Conflict("文件内容 SHA-256 校验失败，无法复制");
+        return path;
     }
 
     /// <summary>
@@ -136,8 +164,12 @@ internal static class FileBlobStore
             if (blob.SizeBytes != prepared.SizeBytes
                 || !blob.StoragePath.Equals(relativePath, StringComparison.Ordinal))
                 throw new InvalidOperationException("SHA-256 内容记录与存储元数据冲突");
-            EnsureCanonicalAvailable(root, canonicalPath, prepared,
-                replaceExisting: !string.IsNullOrWhiteSpace(prepared.StagingPath), ct);
+            // A registered blob is immutable and may be streamed right now. Identical SHA-256 and size
+            // mean identical content by construction, so a same-size canonical file is never replaced
+            // (Windows refuses to replace a file that a download holds open). Only a size mismatch
+            // (external damage) is repaired from the caller's verified staging file.
+            await EnsureCanonicalAvailableAsync(root, canonicalPath, prepared,
+                CanonicalReplacement.WhenSizeDiffers, ct);
             blob.State = FileBlobStates.Ready;
             blob.GarbageCollectionStartedAt = null;
             await db.SaveChangesAsync(ct);
@@ -145,7 +177,9 @@ internal static class FileBlobStore
             return blob;
         }
 
-        EnsureCanonicalAvailable(root, canonicalPath, prepared, replaceExisting: true, ct);
+        // No row references this path yet, so nobody streams it: an unknown-commit remnant is not
+        // trusted blindly and is replaced with the caller's verified staging file.
+        await EnsureCanonicalAvailableAsync(root, canonicalPath, prepared, CanonicalReplacement.Always, ct);
         blob = new FileBlob
         {
             Sha256 = sha256,
@@ -184,40 +218,102 @@ internal static class FileBlobStore
         return normalized;
     }
 
-    /// <param name="replaceExisting">
-    /// Replace canonical content with the caller's already verified staging file. This repairs unknown
-    /// commit or external-corruption remnants without hashing disk content while database locks are held.
-    /// </param>
-    private static void EnsureCanonicalAvailable(string root, string canonicalPath, PreparedBlob prepared,
-        bool replaceExisting, CancellationToken ct)
+    private enum CanonicalReplacement { Always, WhenSizeDiffers }
+
+    private const int ReplaceAttempts = 5;
+    private static readonly TimeSpan ReplaceRetryDelay = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// Makes sure the canonical path holds the prepared content. Replacing uses only the caller's
+    /// already verified staging file, so no disk content is hashed while database locks are held.
+    /// </summary>
+    private static async Task EnsureCanonicalAvailableAsync(string root, string canonicalPath, PreparedBlob prepared,
+        CanonicalReplacement replacement, CancellationToken ct)
     {
         var directory = Path.GetDirectoryName(canonicalPath)
             ?? throw new InvalidOperationException("blob 存储目录无效");
         FileStorage.CreateDirectoryWithin(root, directory, ct);
+        var hasStaging = !string.IsNullOrWhiteSpace(prepared.StagingPath) && File.Exists(prepared.StagingPath);
         if (!File.Exists(canonicalPath))
         {
-            if (string.IsNullOrWhiteSpace(prepared.StagingPath) || !File.Exists(prepared.StagingPath))
+            if (!hasStaging)
                 throw ApiException.Conflict("文件内容缺失，无法建立引用");
             try
             {
-                File.Move(prepared.StagingPath, canonicalPath, overwrite: false);
+                File.Move(prepared.StagingPath!, canonicalPath, overwrite: false);
             }
             catch (IOException) when (File.Exists(canonicalPath))
             {
-                if (replaceExisting)
-                    File.Move(prepared.StagingPath, canonicalPath, overwrite: true);
+                // Lost a race with another publisher of the same content; fall through to the checks below.
             }
         }
-        else if (replaceExisting)
-        {
-            if (string.IsNullOrWhiteSpace(prepared.StagingPath) || !File.Exists(prepared.StagingPath))
-                throw ApiException.Conflict("发现已有文件内容，但缺少已校验暂存文件，无法建立引用");
-            File.Move(prepared.StagingPath, canonicalPath, overwrite: true);
-        }
+        else if (replacement == CanonicalReplacement.Always && !hasStaging)
+            throw ApiException.Conflict("发现已有文件内容，但缺少已校验暂存文件，无法建立引用");
+
+        if (File.Exists(canonicalPath) && hasStaging && File.Exists(prepared.StagingPath)
+            && (replacement == CanonicalReplacement.Always || !HasExpectedSize(root, canonicalPath, prepared, ct)))
+            await ReplaceWithRetryAsync(prepared.StagingPath!, canonicalPath, ct);
 
         var resolved = FileStorage.ResolveExistingFile(root, canonicalPath, ct);
         if ((ulong)new FileInfo(resolved).Length != prepared.SizeBytes)
+        {
+            if (!hasStaging)
+                throw ApiException.Conflict("发现已有文件内容，但缺少已校验暂存文件，无法建立引用");
             throw new InvalidOperationException("全局 blob 路径存在不同大小的内容");
+        }
+    }
+
+    private static bool HasExpectedSize(string root, string canonicalPath, PreparedBlob prepared, CancellationToken ct)
+    {
+        var resolved = FileStorage.ResolveExistingFile(root, canonicalPath, ct);
+        return (ulong)new FileInfo(resolved).Length == prepared.SizeBytes;
+    }
+
+    /// <summary>
+    /// Windows refuses to overwrite a file that is open, even when every reader shares delete access.
+    /// The service's readers open blobs with FILE_SHARE_DELETE, so the old file is first renamed aside
+    /// (allowed while such readers stream it; they keep reading the old content) and then deleted.
+    /// A foreign handle without FILE_SHARE_DELETE blocks even that; retry briefly, then report a
+    /// retryable conflict. Callers hold the per-SHA lease, so no other publisher races this path.
+    /// </summary>
+    private static async Task ReplaceWithRetryAsync(string stagingPath, string canonicalPath, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(stagingPath, canonicalPath, overwrite: true);
+                return;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException
+                                          && File.Exists(stagingPath))
+            {
+                if (TryReplaceAside(stagingPath, canonicalPath)) return;
+                if (attempt >= ReplaceAttempts)
+                    throw ApiException.Conflict("相同文件内容正在被读取，暂时无法写入，请稍后重试");
+                await Task.Delay(ReplaceRetryDelay, ct);
+            }
+        }
+    }
+
+    private static bool TryReplaceAside(string stagingPath, string canonicalPath)
+    {
+        var aside = $"{canonicalPath}.replaced-{Guid.NewGuid():N}";
+        try { File.Move(canonicalPath, aside, overwrite: false); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
+        try
+        {
+            File.Move(stagingPath, canonicalPath, overwrite: false);
+        }
+        catch
+        {
+            // Put the previous content back rather than leaving the canonical path empty.
+            try { File.Move(aside, canonicalPath, overwrite: false); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            throw;
+        }
+        // Delete-pending until the last reader closes; a leftover name is not a SHA-256 and is never served.
+        try { File.Delete(aside); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        return true;
     }
 
     private static void TryDelete(string? path)

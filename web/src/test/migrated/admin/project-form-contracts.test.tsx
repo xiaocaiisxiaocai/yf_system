@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { Message } from '@arco-design/web-react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -116,8 +117,10 @@ describe('主项目表单与刷新契约', () => {
     expect(await screen.findByRole('heading', { name: '新主项目' })).toBeVisible()
   })
 
-  it('main-project authorization loss clears the stale project and its open write dialogs', async () => {
+  it('main-project authorization loss after loading warns once, drops open write dialogs and returns to the list', async () => {
+    const warning = vi.spyOn(Message, 'warning').mockImplementation(() => () => {})
     for (const status of [403, 404]) {
+      warning.mockClear()
       const project = { id: 31, name: '旧子项目', description: '旧说明', status: 'DRAFT', unreadMessages: 0 }
       let requests = 0
       mocks.get.mockImplementation(async (url: string) => {
@@ -141,16 +144,23 @@ describe('主项目表单与刷新契约', () => {
       view.rerender(
         <MemoryRouter initialEntries={['/project-groups/3']}>
           <SwitchProject />
-          <Routes><Route path="/project-groups/:id" element={<ProjectGroupDetail />} /></Routes>
+          <Routes>
+            <Route path="/project-groups/:id" element={<ProjectGroupDetail />} />
+            <Route path="/projects" element={<div>项目列表页</div>} />
+          </Routes>
         </MemoryRouter>,
       )
 
-      expect(await screen.findByText('主项目加载失败或没有访问权限')).toBeVisible()
+      expect(await screen.findByText('项目列表页')).toBeInTheDocument()
+      expect(warning).toHaveBeenCalledTimes(1)
+      expect(warning).toHaveBeenCalledWith(status === 404 ? '该主项目已被删除' : '该主项目负责人已变更或权限已调整，您已无权访问')
+      expect(screen.queryByText('主项目加载失败或没有访问权限')).not.toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: '旧主项目' })).not.toBeInTheDocument()
       expect(screen.queryByText('编辑子项目')).not.toBeInTheDocument()
       expect(screen.queryAllByText('复制子项目')).toHaveLength(0)
       view.unmount()
     }
+    warning.mockRestore()
   })
 
   it('main-project transient refresh failure preserves the last snapshot with a retry state', async () => {

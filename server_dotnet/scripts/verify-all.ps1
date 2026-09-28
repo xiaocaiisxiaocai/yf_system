@@ -5,7 +5,9 @@
 
 .DESCRIPTION
     The script is cwd-independent and writes one immutable run directory below
-    .artifacts/tests/verify-all.  It never reads appsettings.Local.json or user
+    .artifacts/tests/verify-all (override with -OutputRoot or the
+    YF_VERIFY_ALL_OUTPUT_ROOT environment variable; the parameter wins).
+    It never reads appsettings.Local.json or user
     secrets.  Database-backed .NET tests and the HTTP contract suite run only
     when the caller explicitly supplies a local YF_TEST_DATABASE_URL.
 
@@ -20,7 +22,8 @@ param(
     [switch]$SkipHttp,
     [switch]$IncludeMaintenance,
     [switch]$AllowSkips,
-    [switch]$SelfTestNpmCiPreflight
+    [switch]$SelfTestNpmCiPreflight,
+    [string]$OutputRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,7 +33,14 @@ $scriptDirectory = Split-Path -Parent $scriptFile
 $serverRoot = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $serverRoot '..'))
 $webRoot = Join-Path $repositoryRoot 'web'
-$artifactRoot = Join-Path $repositoryRoot '.artifacts\tests\verify-all'
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $OutputRoot = $env:YF_VERIFY_ALL_OUTPUT_ROOT
+}
+$artifactRoot = if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    Join-Path $repositoryRoot '.artifacts\tests\verify-all'
+} else {
+    $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputRoot)
+}
 
 New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
 $runId = '{0}-{1}' -f ([DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')), ([Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -506,7 +516,14 @@ try {
         $validUri = [Uri]::TryCreate($testDatabaseUrl, [UriKind]::Absolute, [ref]$testDatabaseUri)
         $localHost = $false
         if ($validUri) {
-            $localHost = $testDatabaseUri.Host -in @('127.0.0.1', 'localhost', '::1')
+            # [Uri].Host keeps the brackets of an IPv6 literal and Windows PowerShell
+            # expands it ([0000:...:0001]); normalize through IPAddress before comparing.
+            $databaseHost = $testDatabaseUri.Host.Trim('[', ']')
+            $databaseAddress = $null
+            if ([Net.IPAddress]::TryParse($databaseHost, [ref]$databaseAddress)) {
+                $databaseHost = $databaseAddress.ToString()
+            }
+            $localHost = $databaseHost -in @('127.0.0.1', 'localhost', '::1')
         }
         if (-not $validUri -or $testDatabaseUri.Scheme -ine 'mysql' -or -not $localHost) {
             $script:DatabaseMode = 'invalid-url'

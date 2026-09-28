@@ -107,18 +107,23 @@ describe('ProjectList migrated behavior', () => {
 
     pending.get(8)!.resolve({ data: [{ id: 101, supplierId: 8, supplierName: '厂商甲', partNumber: 'A-101', model: '旧响应型号', enabled: true, inUse: false, sortNo: 1 }] })
     fireEvent.click(document.getElementById('robotPartId_input')!)
-    // Wait until the dropdown is really open: before that, "A-101 absent" is trivially true, and an
-    // Escape that reaches the modal instead of the dropdown closes the whole create dialog under load.
-    expect(await screen.findByRole('option', { name: 'B-202' })).toBeVisible()
+    const selectedPartOption = await screen.findByRole('option', { name: 'B-202' })
+    expect(selectedPartOption).toBeVisible()
     expect(screen.queryByRole('option', { name: 'A-101' })).not.toBeInTheDocument()
-    fireEvent.keyDown(document.getElementById('robotPartId_input')!, { key: 'Escape', code: 'Escape' })
+    fireEvent.click(selectedPartOption)
     await waitFor(() => expect(screen.queryByRole('option', { name: 'B-202' })).not.toBeInTheDocument())
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(dialog.isConnected).toBe(true)
+    expect(dialog).toBeVisible()
 
     await selectById('priorityId_input', '普通')
-    await user.click(within(dialog).getByPlaceholderText('选择需求完成时间'))
+    const completionDate = within(dialog).getByPlaceholderText('选择需求完成时间')
+    await user.click(completionDate)
     fireEvent.click(await screen.findByText('30', { selector: '.arco-picker-cell-in-view .arco-picker-date-value' }))
-    await user.click(within(dialog).getByRole('button', { name: '创建主项目' }))
+    await waitFor(() => expect(completionDate).toHaveValue('2026-09-30'))
+    await waitFor(() => expect(document.querySelector('.arco-picker-container')).not.toBeInTheDocument())
+    const createButton = within(dialog).getByRole('button', { name: '创建主项目' })
+    await waitFor(() => expect(createButton).toBeEnabled())
+    await user.click(createButton)
 
     await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1))
     expect(mocks.post).toHaveBeenCalledWith('/project-groups', {

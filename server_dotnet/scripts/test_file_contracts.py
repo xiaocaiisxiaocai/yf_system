@@ -11,6 +11,7 @@ from pathlib import Path
 import secrets
 
 from file_blob_fixture import insert_blob_file
+from test_business_acceptance import _create_project_group
 from upload_contract import (
     FINGERPRINT_SAMPLE_SIZE,
     file_fingerprint,
@@ -387,3 +388,37 @@ def run_file_checks(client, conn, check, pid, fid):
             cursor.execute("UPDATE files SET storage_path=%s WHERE id=%s", (original_storage_path, fid))
         outside_file.unlink(missing_ok=True)
         outside_dir.rmdir()
+
+
+def run_upload_material_checks(client, conn, check, supplier_id):
+    """Company-to-supplier material rules (docs/上传资料要求契约-2026-09-24.md) on a fresh subproject."""
+    _, project = _create_project_group(client, client, conn, supplier_id, "上传资料要求-" + secrets.token_hex(5))
+    project_id = project["id"]
+    client.call("PUT", f"/api/v1/projects/{project_id}/status", {"status": "IN_PROGRESS"})
+    pdf = b"%PDF-1.4\nupload material rules\n%%EOF\n"
+    step = b"ISO-10303-21; upload material rules"
+    workbook_name = "CSLR-605 放板機 2105931-1 動作流程.xlsx"
+    workbook = b"PK\x03\x04 upload material workbook"
+
+    missing_step = client.call(
+        "POST", "/api/v1/uploads/init", init_request(project_id, "说明.pdf", pdf), expected=400)
+    misnamed = client.call(
+        "POST", "/api/v1/uploads/init", init_request(project_id, "动作流程.xlsx", workbook), expected=400)
+    check("company upload without any STEP 3D drawing is rejected before a session exists",
+          missing_step.get("code") == 40001 and "STEP" in missing_step["message"])
+    check("company Excel upload must follow the CSLR motion-flow naming rule",
+          misnamed.get("code") == 40001 and "CSLR-XXX XXX机 210XXX-X 动作流程.xlsx" in misnamed["message"])
+
+    step_session = client.call("POST", "/api/v1/uploads/init", init_request(project_id, "装配.step", step))
+    same_batch = client.call("POST", "/api/v1/uploads/init", init_request(project_id, workbook_name, workbook))
+    check("an in-flight STEP session admits a correctly named same-batch workbook",
+          bool(step_session["sessionId"]) and bool(same_batch["sessionId"]))
+    _abort(client, same_batch["sessionId"])
+    _abort(client, step_session["sessionId"])
+    client.call("POST", "/api/v1/uploads/init", init_request(project_id, "说明.pdf", pdf), expected=400)
+
+    _upload_file(client, project_id, "装配.stp", step)
+    accepted = client.call("POST", "/api/v1/uploads/init", init_request(project_id, "说明.pdf", pdf))
+    _abort(client, accepted["sessionId"])
+    check("an aborted STEP session no longer counts and an available STEP file admits other material",
+          bool(accepted["sessionId"]))

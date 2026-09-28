@@ -35,8 +35,24 @@ public sealed class RefreshToken
     public DateTime SessionExpiresAt { get; set; }
     public DateTime ExpiresAt { get; set; }
     public bool Revoked { get; set; }
+    /// <summary>Why the token was revoked (<see cref="RefreshRevokeReasons"/>); null while active or for legacy rows.</summary>
+    public string? RevokeReason { get; set; }
     public string? Ip { get; set; }
     public DateTime CreatedAt { get; set; }
+}
+
+public static class RefreshRevokeReasons
+{
+    /// <summary>Superseded by a newer token of the same session family; reuse of this token is a replay.</summary>
+    public const string Rotated = "ROTATED";
+    public const string Logout = "LOGOUT";
+    public const string PasswordChanged = "PASSWORD_CHANGED";
+    /// <summary>Revoked by an administrator action (account/supplier disable, password reset).</summary>
+    public const string Admin = "ADMIN";
+    /// <summary>Evicted because the account exceeded App:MaxActiveSessionsPerUser.</summary>
+    public const string SessionCap = "SESSION_CAP";
+    /// <summary>The family was revoked because an already revoked token was presented again.</summary>
+    public const string Replay = "REPLAY";
 }
 
 public sealed class UserConfig : IEntityTypeConfiguration<User>
@@ -86,6 +102,7 @@ public sealed class RefreshTokenConfig : IEntityTypeConfiguration<RefreshToken>
         b.Property(x => x.SessionExpiresAt).HasColumnName("session_expires_at").HasColumnType("datetime");
         b.Property(x => x.ExpiresAt).HasColumnName("expires_at").HasColumnType("datetime");
         b.Property(x => x.Revoked).HasColumnName("revoked").HasDefaultValue(false);
+        b.Property(x => x.RevokeReason).HasColumnName("revoke_reason").HasMaxLength(32);
         b.Property(x => x.Ip).HasColumnName("ip").HasMaxLength(64);
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
         b.HasIndex(x => x.TokenHash).IsUnique().HasDatabaseName("token_hash");

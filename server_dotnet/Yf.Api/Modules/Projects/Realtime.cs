@@ -114,13 +114,20 @@ internal enum ProjectRealtimeAuthorization
     Disconnect,
 }
 
+/// <summary>
+/// Who may be told that a project changed. <paramref name="FormerInternalUserIds"/> lists internal accounts that
+/// could see the project immediately before the change but may no longer (a former owner after an ownership
+/// transfer): they receive the change-kind signal so their open workspace refetches and learns it lost access.
+/// The signal carries no data, so this reveals nothing they did not already see.
+/// </summary>
 internal sealed record ProjectRealtimeAudience(
     ulong ProjectId,
     ulong SupplierId,
     ulong? ResponsibleUserId,
     IReadOnlySet<ulong> ViewAllUserIds,
     IReadOnlySet<ulong> SupplierUserIds,
-    ulong? GroupCreatorId);
+    ulong? GroupCreatorId,
+    IReadOnlySet<ulong>? FormerInternalUserIds = null);
 
 internal sealed class ProjectRealtimeAuthorizer(AppDb database)
 {
@@ -220,8 +227,46 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
         connections.Where(connection => connection.UserId == audience.ResponsibleUserId
                 || connection.UserId == audience.GroupCreatorId
                 || audience.ViewAllUserIds.Contains(connection.UserId)
-                || audience.SupplierUserIds.Contains(connection.UserId))
+                || audience.SupplierUserIds.Contains(connection.UserId)
+                || IsFormerInternalViewer(audience, connection.UserId))
             .ToArray();
+
+    private static bool IsFormerInternalViewer(ProjectRealtimeAudience audience, ulong userId) =>
+        audience.FormerInternalUserIds is { } former && former.Contains(userId);
+
+    /// <summary>
+    /// Snapshots the current audience of every listed project inside the caller's transaction, so a change that
+    /// narrows visibility (ownership transfer, deletion) can still reach the people who saw the project before it.
+    /// </summary>
+    internal static async Task<IReadOnlyList<ProjectRealtimeAudience>> SnapshotAudiencesAsync(
+        YfDbContext db, IReadOnlyCollection<ulong> projectIds, CancellationToken ct)
+    {
+        if (projectIds.Count == 0) return [];
+        var ids = projectIds.Distinct().ToArray();
+        var projects = await db.Projects.Where(project => Enumerable.Contains(ids, project.Id))
+            .OrderBy(project => project.Id)
+            .Select(project => new
+            {
+                project.Id,
+                project.SupplierId,
+                project.ResponsibleUserId,
+                GroupCreatorId = db.ProjectGroups.Where(group => group.Id == project.ProjectGroupId)
+                    .Select(group => (ulong?)group.CreatedBy).SingleOrDefault(),
+            }).ToArrayAsync(ct);
+        if (projects.Length == 0) return [];
+        var viewAll = (await db.Users.Where(user => user.Status == AccountStatuses.Active
+                && AccessService.UsersWithPermission(db, "project:view_all").Contains(user.Id))
+            .Select(user => user.Id).ToArrayAsync(ct)).ToHashSet();
+        var supplierIds = projects.Select(project => project.SupplierId).Distinct().ToArray();
+        var supplierUsers = (await db.Users.Where(user => user.SupplierId != null
+                && Enumerable.Contains(supplierIds, user.SupplierId.Value)
+                && user.Status == AccountStatuses.Active)
+            .Select(user => new { user.Id, SupplierId = user.SupplierId!.Value }).ToArrayAsync(ct))
+            .ToLookup(user => user.SupplierId, user => user.Id);
+        return projects.Select(project => new ProjectRealtimeAudience(project.Id, project.SupplierId,
+                project.ResponsibleUserId, viewAll, supplierUsers[project.SupplierId].ToHashSet(), project.GroupCreatorId))
+            .ToArray();
+    }
 
     internal async Task<IReadOnlyDictionary<(ulong UserId, string SessionId), ProjectRealtimeAuthorization>> AuthorizeProjectAsync(
         IReadOnlyCollection<RealtimeConnection> candidates,
@@ -289,6 +334,7 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
             if (!fact.HasProjectList || fact.ProjectSupplierId is null) continue;
             var visible = fact.UserType == UserTypes.Internal
                 ? fact.HasViewAll || fact.ProjectResponsibleUserId == key.UserId || fact.ProjectGroupCreatorId == key.UserId
+                    || IsFormerInternalViewer(audience, key.UserId)
                 : fact.SupplierId is ulong supplierId && supplierId == fact.ProjectSupplierId;
             if (visible) decisions[key] = ProjectRealtimeAuthorization.Deliver;
         }

@@ -9,6 +9,7 @@ import http, { type QuietRequestConfig } from '../../api/client'
 import { createSessionQueryScope, queryClient } from '../../api/queryClient'
 import { actionSlots } from '../../components/ActionSlots'
 import PasswordInput from '../../components/PasswordInput'
+import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
 import { passwordRule } from '../../utils/password'
@@ -63,14 +64,20 @@ function isAuthorizationError(error: unknown): boolean {
 }
 
 export default function UserList() {
-  const auth = useAuth()
+  const auth = useAuth(useShallow((state) => ({
+    user: state.user,
+    generation: state.generation,
+    permissions: state.permissions,
+    menus: state.menus,
+    mustChangePassword: state.mustChangePassword,
+  })))
+  const canDelete = useAuth((state) => state.hasPerm('user:delete'))
   const [sessionUserId, sessionGeneration, sessionGrants] = createSessionQueryScope(auth)
   const sessionScope = useMemo(
     () => [sessionUserId, sessionGeneration, sessionGrants] as const,
     [sessionGeneration, sessionGrants, sessionUserId],
   )
   const me = auth.user
-  const canDelete = auth.hasPerm('user:delete')
   const [keyword, setKeyword] = useState('')
   const [departmentId, setDepartmentId] = useState<number>()
   const [status, setStatus] = useState<string>()
@@ -110,11 +117,15 @@ export default function UserList() {
   const authorizationError = isAuthorizationError(usersQuery.error) || isAuthorizationError(optionsQuery.error)
   const data = !authorizationError && usersQuery.data ? usersQuery.data : { list: [], total: 0, page, pageSize }
   const loading = usersQuery.isFetching
-  const loadError = usersQuery.isError && !usersQuery.isFetching
-  const depts = authorizationError ? [] : optionsQuery.data?.depts ?? []
+  // 只有在还没有任何数据时才用错误视图替换表格；后台刷新失败保留上次加载的列表并在上方提示。
+  const usersFailed = usersQuery.isError && !usersQuery.isFetching
+  const loadError = usersFailed && (authorizationError || !usersQuery.data)
+  const refreshError = usersFailed && !loadError
   const roles = authorizationError ? [] : optionsQuery.data?.roles ?? []
   const optionsLoading = optionsQuery.isFetching
   const optionsError = optionsQuery.isError && !optionsQuery.isFetching
+  const loadedDepts = authorizationError ? undefined : optionsQuery.data?.depts
+  const deptTreeData = useMemo(() => toTreeData(loadedDepts ?? []), [loadedDepts])
   const editingRoleId = editing?.roleId ?? editing?.roleIds?.[0]
   const editingRoleUnavailable = editingRoleId != null
     && !optionsLoading
@@ -211,6 +222,7 @@ export default function UserList() {
 
   const toggle = async (u: UserRow) => {
     await statusMutation.mutateAsync(u)
+    Message.success(u.status === 'ACTIVE' ? '用户已禁用' : '用户已启用')
   }
 
   const remove = async (u: UserRow) => {
@@ -284,7 +296,7 @@ export default function UserList() {
             allowClear
             placeholder="全部组织"
             style={{ width: 180 }}
-            treeData={toTreeData(depts)}
+            treeData={deptTreeData}
             loading={optionsLoading}
             disabled={optionsError}
             value={departmentId ? String(departmentId) : undefined}
@@ -330,6 +342,13 @@ export default function UserList() {
           </Button>
         </Space>
       </div>
+      {refreshError && (
+        <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 8 }}>
+          <Typography.Text type="error">加载失败</Typography.Text>
+          <Typography.Text type="secondary">当前显示上次加载的数据</Typography.Text>
+          <Button size="small" onClick={() => { void usersQuery.refetch() }}>重试</Button>
+        </div>
+      )}
       {loadError ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
           <Typography.Text type="error">加载失败</Typography.Text>
@@ -459,7 +478,7 @@ export default function UserList() {
               <Input placeholder="name@example.com" />
             </Form.Item>
             <Form.Item label="所属组织" field="departmentId" rules={[{ required: true, message: '请选择所属组织' }]}>
-              <TreeSelect placeholder="选择组织" treeData={toTreeData(depts)} loading={optionsLoading} disabled={optionsError} />
+              <TreeSelect placeholder="选择组织" treeData={deptTreeData} loading={optionsLoading} disabled={optionsError} />
             </Form.Item>
             <Form.Item label="角色" field="roleId" rules={[{ required: true, message: '请选择角色' }]}>
               <Select showSearch placeholder="选择角色" loading={optionsLoading} disabled={optionsError}>

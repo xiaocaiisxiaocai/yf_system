@@ -174,7 +174,7 @@ async function createPptx(marker) {
     const imageName = 'browser-image-' + suffix + '.png';
     const pptxName = 'browser-slides-' + suffix + '.pptx';
     const videoName = 'browser-video-' + suffix + '.webm';
-    await uploadApi(uploadContext, adminToken, project.id, imageName, media.png);
+    await uploadApi(uploadContext, adminToken, project.id, imageName, media.png, { ensureStep: true });
     await uploadApi(uploadContext, adminToken, project.id, pptxName, pptx);
     await uploadApi(uploadContext, adminToken, project.id, videoName, media.webm);
 

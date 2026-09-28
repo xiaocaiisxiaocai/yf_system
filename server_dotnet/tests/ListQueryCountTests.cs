@@ -8,7 +8,7 @@ using Yf.Api.Modules.Identity;
 namespace Yf.Api.Tests;
 
 /// <summary>Admin lists must cost a fixed number of queries per page, not a few per row (N+1).</summary>
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class ListQueryCountTests
 {
     [Fact(Timeout = 120_000)]
@@ -77,7 +77,7 @@ public sealed class ListQueryCountTests
         Assert.All(await suppliers.AccountsAsync(admin, 701, ct), account => Assert.StartsWith("计数角色", account.RoleName));
     }
 
-    private static IDbContextFactory<YfDbContext> CountingFactory(AppOptions options, CommandCounter counter)
+    private static Factory CountingFactory(AppOptions options, CommandCounter counter)
     {
         var connectionString = AppDb.BuildConnectionString(options);
         var contextOptions = new DbContextOptionsBuilder<YfDbContext>()

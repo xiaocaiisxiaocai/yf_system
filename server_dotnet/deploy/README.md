@@ -1,6 +1,6 @@
 # ASP.NET Core + React IIS 正式安装
 
-本包在**目标 Windows 服务器**使用，不需要 Rust、Node.js 或源码。程序使用 .NET 8 x64 framework-dependent 发布；需要先安装 IIS、IIS Application Initialization、.NET 8 Hosting Bundle 和 MySQL。正式对外使用应配置 HTTPS 证书；现有开发站点若暂用 HTTP，发布配置中的 `WebBaseUrl` 必须与实际地址一致且 `CookieSecure=false`。
+本包在**目标 Windows 服务器**使用，不需要 Rust、Node.js 或源码。程序使用 .NET 8 x64 framework-dependent 发布；需要先安装 IIS、IIS Application Initialization、.NET 8 Hosting Bundle 和 MySQL。正式对外使用应配置 HTTPS 证书；现有开发站点若暂用 HTTP，发布配置中的 `WebBaseUrl` 必须与实际地址一致且 `CookieSecure=false`；非回环 HTTP 地址在 Production 下还必须显式设置 `App.AllowInsecureCookies=true`，否则应用拒绝启动（见下文“升级注意”）。
 
 实时协作使用 SignalR，建议在目标服务器的 IIS 角色服务中启用 **WebSocket Protocol**（Windows Server 功能名 `Web-WebSockets`）。反向代理也需允许 WebSocket Upgrade；Hub 路径为 `/api/v1/collaboration/live`，前后端保持同源。未启用 WebSocket 时 SignalR 可尝试其他传输，连接失败时前端恢复轮询。不要记录 Hub 的 `access_token` 查询参数，IIS 日志应移除 URI Query（`cs-uri-query`）字段或配置等效的脱敏日志；它用于浏览器的 WebSocket/SSE 握手，包含短期访问令牌。
 
@@ -11,7 +11,7 @@
 ## 准备
 
 1. 将 `deloy` 下生成的整个版本文件夹复制到服务器的独立临时目录，保留其中 `manifest.json`，安装脚本会据此检查全部文件。默认不生成 ZIP；如果打包时显式使用了 `-CreateArchive`，则将 ZIP 与 `.sha256` 一并复制到服务器，核对哈希后解压。
-2. 默认发布仍将本机私有默认值写入 `appsettings.Production.json`，包括数据库连接、JWT、实际访问地址、存储目录及本次包独立生成的初始管理员密码；`appsettings.json` 仅保留日志等基础设置。发布脚本默认拒绝脏工作区、HTTP/不安全 Cookie 和 root 数据库账号，始终执行 `npm ci`，并对输出目录以及 ZIP/校验边车设置仅当前账号、SYSTEM、Administrators 可读写的 ACL。隔离环境确有需要时必须显式传 `-AllowDirty` 或 `-AllowInsecurePrivateConfiguration`，对应选择会记录在 manifest。将默认发布包作为含凭据的私有制品保管，不要放入公开下载位置或给应用池写权限。直接把包作为现有 IIS 站点物理目录时，程序会读取包内配置；若使用正式安装脚本，则把配置复制到网站外复核后作为 `-ConfigPath` 传入。已有站点升级须保留原 JWT 和数据库配置。SMTP 在系统「系统参数」页面保存到数据库，尚未设置时不发送邮件。
+2. 默认发布仍将本机私有默认值写入 `appsettings.Production.json`，包括数据库连接、JWT、实际访问地址、存储目录及本次包独立生成的初始管理员密码；`appsettings.json` 仅保留日志等基础设置。发布脚本默认拒绝脏工作区、HTTP/不安全 Cookie 和 root 数据库账号，始终执行 `npm ci`，并对输出目录以及 ZIP/校验边车设置仅当前账号、SYSTEM、Administrators 可读写的 ACL。隔离环境确有需要时必须显式传 `-AllowDirty` 或 `-AllowInsecurePrivateConfiguration`，对应选择会记录在 manifest。`-AllowInsecurePrivateConfiguration` 且 `WebBaseUrl` 为非回环 HTTP、`CookieSecure=false` 时，发布脚本自动写入 `App.AllowInsecureCookies=true` 并在 manifest 记录 `configuration.insecureCookies=true`；HTTPS 包和外部配置模板一律为 `false`，`verify-release.py` 与安装/维护脚本会拒绝 HTTPS 配置中的 `true`。将默认发布包作为含凭据的私有制品保管，不要放入公开下载位置或给应用池写权限。直接把包作为现有 IIS 站点物理目录时，程序会读取包内配置；若使用正式安装脚本，则把配置复制到网站外复核后作为 `-ConfigPath` 传入。已有站点升级须保留原 JWT 和数据库配置。SMTP 在系统「系统参数」页面保存到数据库，尚未设置时不发送邮件。
    若不允许制品携带环境机密，发布时传 `-ExternalConfigurationTemplate`。该模式保留空的连接串、JWT 和初始密码，仅能配合下文正式安装脚本及一份已在服务器外部准备好的完整 `ConfigPath` 使用，不能直接绑定启动。
 3. 发布包默认开启 `App.AutoInitializeDatabase=true` 和项目复制 worker。第一次启动时，如果配置的数据库不存在，会自动创建；如果是空库，会执行 EF Core 迁移建表并创建 `admin`。MySQL 账号需要目标库的创建、建表及数据读写权限；协作文件和复制任务暂存目录使用网站外的 `StorageRoot`，应用池身份需要该目录的修改权限。
 4. 初始登录账号为 `admin`，初始密码查看私有包 `appsettings.Production.json` 中的 `App.BootstrapPassword`。发布脚本为每个私有包独立随机生成，不写回本机默认值，也不输出到日志；首次登录必须修改。已初始化的数据库在重启或升级时不会重建、重新播种或重置管理员密码；初始化完成后应从实际部署配置中移除初始密码。外部配置模板模式由管理员在服务器外部配置中另行生成并保管该密码。
@@ -22,7 +22,7 @@
 
 本版本的升级迁移会删除 OEM 表、权限和专属配置，其中 OEM 业务数据不可恢复；对已有数据库执行 `--migrate-database` 前必须完成可验证的备份。只复制新程序而不迁移时，启动校验会拒绝旧的迁移状态。
 
-当前升级还包含第 9 个 EF 迁移 `20260923141854_AddProjectCopyJobs`，创建持久化 `project_copy_jobs` 队列、`project_copy_worker_state` epoch 状态，以及幂等、领取、主项目任务列表索引。已有非空数据库不会在普通启动时自动升级；必须在停写、备份后执行 `dotnet .\Yf.Api.dll --migrate-database`，再启动启用复制 worker 的新版本。迁移未完成时不能先开放新前端的复制入口。
+每个版本包含的 EF 迁移以发布包内程序集为准（`Yf.Api/Infrastructure/Migrations`，按时间戳排序）；升级前把目标库 `__EFMigrationsHistory` 的最后一条与新版本的最新迁移对照，确认本次需要执行哪些迁移。例如 `20260923141854_AddProjectCopyJobs` 创建持久化 `project_copy_jobs` 队列、`project_copy_worker_state` epoch 状态及相关索引，其后的版本仍可能追加新迁移。已有非空数据库不会在普通启动时自动升级；只要新版本比目标库多出任何迁移，就必须在停写、备份后执行 `dotnet .\Yf.Api.dll --migrate-database`，再启动新版本。迁移未完成时不能先开放依赖新表的前端入口（如复制）。
 
 ## 绑定现有开发 IIS 站点
 
@@ -40,9 +40,40 @@
   -SiteRoot 'C:\inetpub\yf_system_dotnet'
 ```
 
-脚本核对包文件 SHA-256、程序包/站点/配置/存储独立路径、证书、Hosting Bundle 和运行时，然后创建新应用池、新 HTTPS 站点。应用池会被明确设置并回读验证为 `processModel.maxProcesses=1`；无法保持单 worker 时安装停止。复制包后会清空站点内 `appsettings.json` 和 `appsettings.Production.json` 的凭据回退，正式站点只使用 `YF_CONFIG_PATH` 指向的外部配置；升级和恢复也执行同样处理。它关闭配置文件 ACL 继承，只保留当前管理员、SYSTEM、Administrators 完全控制和应用池身份只读；业务存储只给应用池修改，程序目录只读。前后端同站点、同来源，不需要 ARR、URL Rewrite 或 Rust Windows 服务。
+脚本核对包文件 SHA-256、程序包/站点/配置/存储独立路径、证书、Hosting Bundle 和运行时，然后创建新应用池、新 HTTPS 站点。应用池会被明确设置并回读验证为 `processModel.maxProcesses=1`；无法保持单 worker 时安装停止。复制包后会清空站点内 `appsettings.json` 和 `appsettings.Production.json` 的凭据回退，正式站点只使用 `YF_CONFIG_PATH` 指向的外部配置；升级和恢复也执行同样处理。清空凭据回退时只清除 `App` 下的连接串、JWT、存储/日志路径、初始密码和 SMTP 密码并关闭自动初始化，`Logging`、`Serilog`、`AllowedHosts` 等非敏感设置保持发布包原值；`web.config` 中的 `YF_CONFIG_PATH`、`ASPNETCORE_ENVIRONMENT`、`DOTNET_ENVIRONMENT` 按名称替换为唯一一项（重复键会让 IIS 整站报 500.19）。它关闭配置文件 ACL 继承，只保留当前管理员、SYSTEM、Administrators 完全控制和应用池身份只读；程序目录只读。前后端同站点、同来源，不需要 ARR、URL Rewrite 或 Rust Windows 服务。
 
-脚本拒绝已存在站点/应用池和非空目标目录，不覆盖其他部署。所有预检完成后才开始写入；复制、ACL、应用池、站点、证书绑定或启动失败时，脚本删除本次创建的站点/池和复制内容，并恢复配置、存储及原有空站点目录的 ACL，随后可用原命令重跑。若警告回滚不完整，保持现场并先处理列出的准确资源。它不自动开放防火墙、不修改 DNS，也不停止现有后端服务。请按实际网络环境配置 DNS、443/TCP 与 HTTPS 证书，并在停写窗口切换入口。
+业务存储目录（`App.StorageRoot`）和日志目录（`App.LogDirectory`，见下文“日志”）使用显式 ACL：关闭继承并丢弃目录上原有的继承/显式项，只保留 `SYSTEM` 与 `BUILTIN\Administrators` 完全控制（管理员不会被锁在目录外）以及 `IIS AppPool\<应用池名>` 修改权限。子项随后继承这三项；子项上已有的显式 ACE 不会被改动。安装新站点和 Restore 的新存储都按此设置；Upgrade 沿用现有存储，只追加应用池修改权限，不删除运维已添加的 ACE。备份账号、杀毒或监控等额外主体需要访问时，安装后由管理员按最小权限显式添加，不要重新开启继承或授予 Users/Everyone。
+
+启动站点后，脚本从配置的 HTTPS 来源（`https://<HostName>[:端口]`）检查 `/health`，要求 `status=ok, db=up`（`/health` 同时返回 `storage=up|down`，数据库和存储目录读写探测都正常时才为 200/`status=ok`，否则 503/`status=degraded`），默认最多等待 180 秒（`-HealthCheckWaitSeconds`、`-HealthRequestTimeoutSeconds` 可调）；PowerShell 5.1 会显式启用 TLS 1.2，超时报错会附带最后一次失败原因。检查失败按下述规则整体回滚，因此配置错误、数据库不可达或应用启动失败（HTTP 500.30）不会留下半安装站点。探测需要在服务器本机能按 `HostName` 解析到本站；DNS 尚未切换时可在 hosts 中临时指向本机，或传 `-SkipHealthCheck` 并在切换后人工检查。外部配置 `App.AutoInitializeDatabase` 不为 `true` 时空库需另行显式初始化，脚本跳过该检查并给出警告，初始化后必须人工检查 `/health`。
+
+脚本拒绝已存在站点/应用池和非空目标目录，不覆盖其他部署。所有预检完成后才开始写入；复制、ACL、应用池、站点、证书绑定、启动或 `/health` 检查失败时，脚本删除本次创建的站点/池和复制内容以及本次新建且仍为空的日志目录，并恢复配置、存储、已有日志目录及原有空站点目录的 ACL，随后可用原命令重跑。若警告回滚不完整，保持现场并先处理列出的准确资源。它不自动开放防火墙、不修改 DNS，也不停止现有后端服务。请按实际网络环境配置 DNS、443/TCP 与 HTTPS 证书，并在停写窗口切换入口。
+
+### 日志
+
+在外部配置中设置 `App.LogDirectory`（站点、程序包、配置和存储目录之外的本地绝对路径，见 `appsettings.example.json`）后，应用除写入 IIS/事件日志外，还会在该目录按天滚动写入 compact JSON 格式的应用日志；旧文件由应用按保留份数和单文件大小上限自动清理（文件名 `yf-api-YYYYMMDD.clef`，每天一个，单文件超过 100 MiB 时按大小续写新文件，最多保留 31 个文件），无需计划任务。请求日志只记录方法、路径、状态码和耗时，**从不记录查询字符串**（SignalR 握手的 `access_token` 在查询字符串中）；IIS 日志字段同样由安装脚本去掉 `cs-uri-query`。未设置 `App.LogDirectory` 时不写文件日志。
+
+安装时 `-LogRoot` 可省略，默认取外部配置中的 `App.LogDirectory`；安装脚本不改写外部配置，因此显式传入 `-LogRoot` 时必须与配置中的值一致，否则拒绝安装。目录不存在时会创建，并与业务存储使用同样的显式 ACL。Upgrade/Restore 若发现配置的日志目录不存在，也会创建并设置该 ACL；已存在时只追加应用池修改权限。日志可能包含账号、IP 和业务对象 ID，按内部运维数据保管，不要放在网站目录或共享给普通用户。
+
+### 其他运行配置
+
+以下 `App` 键均有安全默认值（见 `appsettings.example.json`），一般无需修改；超出范围时应用拒绝启动：
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `MaxActiveSessionsPerUser` | 20 | 每个账号的有效登录会话上限（1–1000），超出时撤销最旧会话 |
+| `UploadMaxActiveSessionsPerUser` | 20 | 每个账号同时进行中的分块上传会话上限（1–1000） |
+| `UploadMaxPendingBytesPerUser` | 21474836480（20 GiB） | 每个账号未完成上传的总字节上限（1 GiB–16 TiB） |
+| `BlobVerifyBytesPerCycle` | 2147483648（2 GiB） | 后台每轮校验共享 blob 的字节预算（64 MiB–1 TiB） |
+| `BatchDownloadMinBytesPerMinute` | 65536 | 批量 ZIP 下载任一 60 秒窗口内传输少于该字节数即中止 |
+| `BatchDownloadMaxDurationMinutes` | 120 | 单次批量 ZIP 下载的最长时长（5–1440 分钟） |
+| `MailPendingTtlDays` | 3 | 待发送邮件超过该天数仍未发出即取消（1–365） |
+| `AllowInsecureCookies` | false | 仅用于非回环 HTTP 私有部署时允许 `CookieSecure=false`；HTTPS 站点下无效且被部署脚本拒绝 |
+
+应用运行期间持有 MySQL 命名锁 `yf:app-running:<哈希>`；开发数据重置在锁被占用时拒绝执行。
+
+### 升级注意：HTTP 私有站点
+
+本版本起，Production 环境下 `CookieSecure=false` 只在 `WebBaseUrl` 为回环地址或显式设置 `App.AllowInsecureCookies=true` 时被接受，`WebBaseUrl` 为 HTTPS 时一律要求 `CookieSecure=true`。直接以包目录作为站点、使用非回环 HTTP 地址的现有开发/隔离站点，若沿用旧配置升级会启动失败（IIS 500.30）：请用新版本发布脚本重新打包（自动写入该键），或在实际配置中手工加入 `"AllowInsecureCookies": true`。正式 HTTPS 站点不受影响。
 
 如果配置文件父目录不允许应用池遍历，还需由管理员给对应应用池授予父目录“遍历文件夹”权限；父目录本身不能给应用池或广泛主体写入/删除子项权限，否则仍可能替换配置文件。不要给网站目录业务文件写权限，不要给 Everyone、Users 或 Authenticated Users 配置读权限。组织确需额外备份/运维主体读取配置时，安装后由管理员按最小权限显式添加，并重新核对应用池仍然只有读取权限。
 
@@ -52,7 +83,7 @@
 
 维护只支持由独立应用池承载、没有子应用的现有 IIS 站点。应用池必须使用 `ApplicationPoolIdentity`、不加载用户 profile，并保持 `processModel.maxProcesses=1`；维护脚本在停止任何进程前检查这些条件，web garden 配置会被拒绝。站点必须使用外部 JSON 作为唯一主配置，由 `web.config` 中唯一的 `YF_CONFIG_PATH` 指向该文件，并以 in-process 的 `dotnet .\Yf.Api.dll` 标准形式启动。执行前移除站点、应用池、应用池默认值、机器和当前 PowerShell 中的 `App__*` / `App:*` 高优先级覆盖；维护脚本会拒绝这些覆盖和继承的额外 `YF_CONFIG_PATH`，防止备份、迁移或健康检查连接到另一套资源。正式配置的 `WebBaseUrl` 必须是实际 HTTPS 来源，`CookieSecure` 必须为 `true`。
 
-服务器需安装与目标 MySQL 兼容的 5.7 或更高版本 `mysql.exe`、`mysqldump.exe` 客户端；若不在 `PATH`，按下例传绝对路径。脚本只检查客户端可执行文件存在，版本和服务器兼容性需在维护窗口前确认。所有目录必须是互不包含的本地绝对路径，不能经过 junction/symlink 等重解析点；备份目录、新程序目录和恢复存储目录必须不存在或为空。
+服务器需安装与目标 MySQL 兼容的 5.7 或更高版本 `mysql.exe`、`mysqldump.exe` 客户端；若不在 `PATH`，按下例传绝对路径。备份前脚本读取 `mysqldump --help`/`--version` 并（提供 `-MySql` 时）查询服务器版本：客户端支持时追加 `--set-gtid-purged=OFF`，避免开启 GTID 的源库在转储中写入需要 SUPER 权限的 `GTID_PURGED`；仅当 MySQL 8 客户端备份 5.7 服务器时追加 `--column-statistics=0`（MariaDB 客户端不追加）。探测输出保存在备份目录的 `dump-help.stderr.log`、`dump-version.stderr.log`、`server-version.stderr.log`。其他版本兼容性仍需在维护窗口前确认。所有目录必须是互不包含的本地绝对路径，不能经过 junction/symlink 等重解析点；备份目录、新程序目录和恢复存储目录必须不存在或为空。
 
 数据库位于 `localhost`、`127.0.0.1` 或 `::1` 时，为兼容隔离测试和同机维护，连接串可以继续使用 `None`、`Disabled`、`Preferred` 等现有 `SSL Mode`。任何非回环数据库都必须设置 `SSL Mode=VerifyFull`，维护脚本会传给 `mysql`/`mysqldump` 为 `VERIFY_IDENTITY`，拒绝 `Preferred`、`Required` 和 `VerifyCA`，避免加密降级或只验 CA 不验主机名。私有 CA 可在连接串中使用 `CACertificateFile`、`CA Certificate File`、`SslCa` 或 `SSL CA` 指向网站、存储和包目录之外的本地绝对只读文件；脚本核对文件存在且无重解析点，并把它传为 `ssl-ca`。客户端证书/私钥仍不由维护脚本接管，需单独配置受控的备份客户端。
 
@@ -68,7 +99,9 @@
   -MySqlDump 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe'
 ```
 
-备份包含当前程序、独立存储、外部 JSON 配置、数据库表、触发器、存储过程和事件，并用清单记录文件 SHA-256；manifest 会显式标记 `containsSecrets=true`、`protection=restricted-acl`。它同时包含数据库凭据、JWT/SMTP 等密钥、业务数据和上传文件，目录 ACL 只解决本机访问控制，不是静态加密；必须放在网站目录之外受限且已启用 BitLocker、EFS 或等效受控加密的备份介质上，限制管理员/备份账号访问，不提交源码库，不通过普通文件共享长期暴露，并按保留策略安全清除。保留明文目录格式是为了维持现有跨机恢复合同；复制到其他介质前由运维层负责加密。远程数据库必须先满足上面的 `VerifyFull` 证书身份验证要求，不能依靠网络边界代替传输加密。
+备份包含当前程序、独立存储、外部 JSON 配置、数据库表、触发器、存储过程和事件。`mysqldump` 使用 `--single-transaction --routines --triggers --events`，因此备份账号除 `SELECT`、`SHOW VIEW`、`TRIGGER` 外还需要目标库的 `EVENT` 权限（导出存储过程需能读取其定义），缺少时备份失败，日志见备份目录 `dump.stderr.log`。备份目录用清单记录文件 SHA-256；manifest 会显式标记 `containsSecrets=true`、`protection=restricted-acl`。它同时包含数据库凭据、JWT/SMTP 等密钥、业务数据和上传文件，目录 ACL 只解决本机访问控制，不是静态加密；必须放在网站目录之外受限且已启用 BitLocker、EFS 或等效受控加密的备份介质上，限制管理员/备份账号访问，不提交源码库，不通过普通文件共享长期暴露，并按保留策略安全清除。
+
+维护脚本**不做备份轮转**：每次 Backup/Upgrade 都要求新的空 `-BackupDirectory`，完整复制程序和全部存储文件，旧备份不会被自动删除，磁盘占用随次数线性增长。按组织保留策略人工清理：先确认更新的备份已通过清单校验（或已成功恢复演练）且不再是某次迁移的回退基线，再删除整个旧备份目录，例如 `Remove-Item -LiteralPath 'E:\YfBackups\2026-09-11-before-upgrade' -Recurse`。不要只删除其中的 `database.sql` 或 `storage`，否则该备份的清单校验会失败、无法恢复；也不要把清理写成自动任务而误删仍需要的回退点。（开发机 `scripts/restart-dev.ps1` 的 `before-restart.sql` 仅默认保留最近 5 份，由 `-KeepBackups` 调整，与本节正式备份无关。）保留明文目录格式是为了维持现有跨机恢复合同；复制到其他介质前由运维层负责加密。远程数据库必须先满足上面的 `VerifyFull` 证书身份验证要求，不能依靠网络边界代替传输加密。
 
 ### Upgrade
 
@@ -103,7 +136,7 @@
 
 Restore 使用备份内的程序和 schema，不接受 `-MigrateDatabase`。若导入失败，新数据库可能只写入了一部分；保留失败现场供 DBA 判断，换另一套全新的空目标重试。成功恢复后如需升级，再使用与目标版本对应的 `Upgrade` 流程。
 
-三种操作都会先停止该站点的专属应用池并等待其工作进程全部退出。脚本只管理这个命名站点的专属池，不能排除其他 IIS 站点、Windows 服务、计划任务、命令行工具或远程实例继续写同一数据库和存储；管理员必须在维护窗口前识别并停止所有外部写入者。新程序会在切换路径前执行一次离线 readiness；原池本来在运行时，切换后从配置中的同一 HTTPS 来源检查 `/health` 的 `status=ok, db=up`，默认最多等待 120 秒，可用 `-HealthCheckWaitSeconds` 和 `-HealthRequestTimeoutSeconds` 调整。未执行数据库迁移时，后续失败会自动恢复原 `physicalPath`，但池保持停止供人工核查；一旦 `-MigrateDatabase` 已开始，脚本绝不自动启动可能不兼容的旧版本，也不切回旧路径。此时按本次受保护备份恢复到一套新数据库、新存储、新程序目录和匹配配置，再切换站点。脚本不会删除旧数据库、旧存储或旧程序目录；旧资源确认不再需要前，按成套回退边界保留。
+三种操作都会先停止该站点的专属应用池并等待其工作进程全部退出。脚本只管理这个命名站点的专属池，不能排除其他 IIS 站点、Windows 服务、计划任务、命令行工具或远程实例继续写同一数据库和存储；管理员必须在维护窗口前识别并停止所有外部写入者。新程序复制并写入站点配置、授予权限后，会在执行 `--migrate-database`/`--convert-file-blobs` 和切换路径之前做一次部署预检：核对新包必需文件、外部配置中的连接串/JWT（至少 32 字节）/存储/`WebBaseUrl`、存储目录读写探测和应用池修改权限、配置的日志目录读写，以及包 `runtimeconfig` 要求的 .NET 运行时；该预检不连数据库、不要求迁移已完成，失败时不会触及数据库。迁移后的最终 schema 由启动校验和 `/health` 确认；原池本来在运行时，切换后从配置中的同一 HTTPS 来源检查 `/health` 的 `status=ok, db=up`，默认最多等待 120 秒，可用 `-HealthCheckWaitSeconds` 和 `-HealthRequestTimeoutSeconds` 调整。未执行数据库迁移时，后续失败会自动恢复原 `physicalPath`，但池保持停止供人工核查；一旦 `-MigrateDatabase` 已开始，脚本绝不自动启动可能不兼容的旧版本，也不切回旧路径。此时按本次受保护备份恢复到一套新数据库、新存储、新程序目录和匹配配置，再切换站点。脚本不会删除旧数据库、旧存储或旧程序目录；旧资源确认不再需要前，按成套回退边界保留。
 
 `Restore` 维护的是现有 IIS 站点，不会在裸机上创建 IIS、证书、绑定或应用池。灾难恢复到新机器时，先安装 IIS、Hosting Bundle、证书和 MySQL 客户端，使用**备份所对应版本**的发布包创建与备份同名的专属站点，例如：
 
@@ -134,7 +167,7 @@ Restore 使用备份内的程序和 schema，不接受 `-MigrateDatabase`。若�
 - `mysqldump` 备份中的触发器带有 `DEFINER=<账号>@<主机>`。恢复到另一台服务器时，该账号必须在目标 MySQL 上存在（或恢复前把 `DEFINER` 改为目标账号），否则恢复失败，或此后对用户/供应商/会话表的写入报 “definer does not exist”。开发机的维护测试使用同一账号，覆盖不到跨账号恢复。
 - 修订号只有一行：登录、刷新、注销及用户、供应商写入都会在同一事务中更新它，这些写入在该行上串行。这是有意取舍；若出现登录高峰排队，先检查长事务。
 
-- 检查 `https://实际主机名/health` 返回 `status=ok, db=up`。
+- 检查 `https://实际主机名/health` 返回 `status=ok, db=up, storage=up`。
 - 打开根页面，首次改密后检查菜单、权限、项目提交/确认，以及真实 PDF 预览和下载。
 - 从主项目提交一次复制，确认 `POST /api/v1/projects/{id}/copy` 返回 202，主项目复制任务列表显示文件/字节进度；回收应用池后确认未完成任务从持久队列恢复，成功任务可进入目标子项目。同一 `idempotencyKey` 重试必须指向同一任务。
 - 配置 SMTP 后检查管理员邮件状态与实际收件；后台邮件有持久队列、认领租约和重试。发送采用至少一次语义，极端断电可能重复，不能当作严格一次投递。

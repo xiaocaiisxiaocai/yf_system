@@ -1,7 +1,8 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { Message } from '@arco-design/web-react'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deferred } from './testUtils'
 
 const mocks = vi.hoisted(() => ({
@@ -93,7 +94,9 @@ function defaultGet(url: string) {
 
 function RouteControls() {
   const navigate = useNavigate()
+  const location = useLocation()
   return <>
+    <output aria-label="当前路径">{location.pathname}</output>
     <button onClick={() => navigate('/projects/2')}>转到项目2</button>
     <button onClick={() => navigate('/projects/bad')}>转到无效地址</button>
     <button onClick={() => navigate('/projects/1')}>返回项目1</button>
@@ -116,6 +119,7 @@ describe('ProjectDetail migrated behavior', () => {
       revision: 'global-1', status: 'ready', messageRevisions: {}, receiptRevisions: {}, activityRevisions: {}, reconnectRevision: 0, realtimeStatus: 'connected',
     }
   })
+  afterEach(() => { vi.restoreAllMocks() })
 
   it('invalid project route identifiers render a recoverable error without API calls', async () => {
     renderDetail('/projects/not-a-number')
@@ -177,7 +181,8 @@ describe('ProjectDetail migrated behavior', () => {
     await waitFor(() => expect(screen.queryByRole('heading', { name: '过期后台项目' })).not.toBeInTheDocument())
   })
 
-  it('an operation refresh clears stale project content after authorization loss', async () => {
+  it('an operation refresh after authorization loss warns once and returns to the project list', async () => {
+    const warning = vi.spyOn(Message, 'warning').mockImplementation(() => () => {})
     let calls = 0
     mocks.get.mockImplementation((url: string) => {
       if (url === '/projects/1') {
@@ -193,11 +198,27 @@ describe('ProjectDetail migrated behavior', () => {
     renderDetail()
     expect(await screen.findByRole('heading', { name: '敏感项目' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '完成操作后刷新' }))
-    expect(await screen.findByText('项目加载失败或没有访问权限')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByLabelText('当前路径')).toHaveTextContent(/^\/projects$/))
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(warning).toHaveBeenCalledWith('该子项目负责人已变更或权限已调整，您已无权访问')
     expect(screen.queryByRole('heading', { name: '敏感项目' })).not.toBeInTheDocument()
+    expect(screen.queryByText('项目加载失败或没有访问权限')).not.toBeInTheDocument()
+  })
+
+  it('an initial authorization failure keeps the no-access state without redirecting', async () => {
+    const warning = vi.spyOn(Message, 'warning').mockImplementation(() => () => {})
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/projects/1') return Promise.reject({ isAxiosError: true, response: { status: 403 } })
+      throw new Error(`unexpected GET ${url}`)
+    })
+    renderDetail()
+    expect(await screen.findByText('项目加载失败或没有访问权限')).toBeInTheDocument()
+    expect(screen.getByLabelText('当前路径')).toHaveTextContent('/projects/1')
+    expect(warning).not.toHaveBeenCalled()
   })
 
   it('project deletion refreshes only the affected detail while message events refresh only its summary', async () => {
+    const warning = vi.spyOn(Message, 'warning').mockImplementation(() => () => {})
     let projectCalls = 0
     let summaryCalls = 0
     let deleted = false
@@ -232,9 +253,11 @@ describe('ProjectDetail migrated behavior', () => {
     deleted = true
     mocks.collaboration.activityRevisions = { 1: 1, 2: 1 }
     view.rerender(<MemoryRouter initialEntries={['/projects/1?tab=messages']}><RouteControls /><Routes><Route path="/projects/:id" element={<ProjectDetail />} /></Routes></MemoryRouter>)
-    expect(await screen.findByText('项目不存在或已删除')).toBeInTheDocument()
+    // 已加载的项目被删除时提示一次并回到项目列表，而不是停留在“不存在”页面。
+    await waitFor(() => expect(screen.getByLabelText('当前路径')).toHaveTextContent(/^\/projects$/))
     expect(projectCalls).toBe(2)
-    expect(screen.getByRole('button', { name: '返回项目列表' })).toBeInTheDocument()
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(warning).toHaveBeenCalledWith('该子项目已被删除')
     expect(screen.queryByRole('heading', { name: '待删除项目' })).not.toBeInTheDocument()
   })
 
@@ -281,6 +304,44 @@ describe('ProjectDetail migrated behavior', () => {
     mocks.collaboration.reconnectRevision = 1
     view.rerender(<MemoryRouter initialEntries={['/projects/1?tab=messages']}><Routes><Route path="/projects/:id" element={<ProjectDetail />} /></Routes></MemoryRouter>)
     expect(await screen.findByLabelText('messages-panel')).toHaveAttribute('data-revision', 'live:4:1')
+  })
+
+  it('new message during disconnect appears', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      let activityRevision = 'a1'
+      let summaryCalls = 0
+      let projectCalls = 0
+      mocks.collaboration.realtimeStatus = 'disconnected'
+      mocks.get.mockImplementation((url: string) => {
+        if (url === '/projects/1') { projectCalls += 1; return Promise.resolve({ data: project() }) }
+        if (url === '/projects/1/summary') {
+          summaryCalls += 1
+          return Promise.resolve({ data: { unreadMessages: activityRevision === 'a1' ? 0 : 1, activityRevision } })
+        }
+        return defaultGet(url)
+      })
+      const view = renderDetail('/projects/1?tab=messages')
+      await waitFor(() => expect(screen.getByLabelText('messages-panel')).toHaveAttribute('data-revision', 'poll:a1:0:0'))
+      const initialSummaryCalls = summaryCalls
+
+      // 另一端在实时断开期间发了留言：概览动态指纹变化，留言面板的修订号随之变化并重新拉取。
+      activityRevision = 'a2'
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+      await waitFor(() => expect(screen.getByLabelText('messages-panel')).toHaveAttribute('data-revision', 'poll:a2:0:0'))
+      expect(summaryCalls).toBe(initialSummaryCalls + 1)
+      await waitFor(() => expect(screen.getByRole('tab', { name: /留言/ }).querySelector('.arco-badge')).toHaveTextContent('1'))
+      await waitFor(() => expect(projectCalls).toBe(2))
+
+      // 实时恢复后停止兜底轮询。
+      mocks.collaboration.realtimeStatus = 'connected'
+      view.rerender(<MemoryRouter initialEntries={['/projects/1?tab=messages']}><RouteControls /><Routes><Route path="/projects/:id" element={<ProjectDetail />} /></Routes></MemoryRouter>)
+      const connectedCalls = summaryCalls
+      await act(async () => { await vi.advanceTimersByTimeAsync(120_000) })
+      expect(summaryCalls).toBe(connectedCalls)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('project detail activity URL tab and target navigation preserve valid tab state', async () => {

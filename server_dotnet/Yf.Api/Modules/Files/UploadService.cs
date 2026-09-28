@@ -72,6 +72,15 @@ public sealed partial class UploadService(
                 return await InitResponseAsync(existing, resumed: true, ct);
             }
 
+            // Material rules apply to new sessions only; resuming an existing session is never re-rejected.
+            if (actor.IsInternal && UploadMaterialRules.IsSpreadsheet(request.FileName)
+                && !UploadMaterialRules.IsMotionFlowWorkbookName(request.FileName))
+                throw ApiException.BadRequest(UploadMaterialRules.MotionFlowNamingMessage);
+
+            // Serializes this account's session creation so concurrent inits cannot overshoot the quota.
+            await using var quotaLease = await MySqlNamedLock.TryAcquireAsync(conn,
+                MySqlNamedLock.Name("upload-quota", conn.Database, actor.Id), 10, ct)
+                ?? throw ApiException.Conflict("上传会话正在创建，请稍后重试");
             var sessionId = Guid.NewGuid().ToString("D");
             var root = FileStorage.Root(options.StorageRoot);
             var tempDir = FileStorage.SessionDirectory(root, sessionId);
@@ -85,6 +94,10 @@ public sealed partial class UploadService(
                 await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, request.ProjectId, ct);
                 await using var ef = EfDb.Use(conn, tx);
                 var dbNow = await DbNowAsync(ef, ct);
+                if (current.IsInternal && !UploadMaterialRules.IsStepFile(request.FileName)
+                    && !await HasCompanyStepMaterialAsync(ef, request.ProjectId, dbNow, null, ct))
+                    throw ApiException.BadRequest(UploadMaterialRules.StepRequiredMessage);
+                await EnsureUploadQuotaAsync(ef, current.Id, request.FileSize, dbNow, ct);
                 ef.UploadSessions.Add(new UploadSession
                 {
                     Id = sessionId,
@@ -320,6 +333,52 @@ public sealed partial class UploadService(
         if (allowed.Length > 0 && !allowed.Contains(extension, StringComparer.Ordinal))
             throw ApiException.BadRequest($"不支持的文件类型 .{extension}");
         return extension;
+    }
+
+    /// <summary>
+    /// Per-account upload quota: unexpired UPLOADING/MERGING sessions and their declared, not yet merged
+    /// bytes. Only new sessions are checked; resuming or merging an existing session is never rejected.
+    /// </summary>
+    private async Task EnsureUploadQuotaAsync(
+        YfDbContext ef, ulong uploaderId, ulong requestedBytes, DateTime dbNow, CancellationToken ct)
+    {
+        var active = new[] { "UPLOADING", "MERGING" };
+        var sizes = await ef.UploadSessions
+            .Where(session => session.UploaderId == uploaderId && session.ExpiresAt > dbNow
+                && Enumerable.Contains(active, session.Status))
+            .Select(session => session.FileSize).ToListAsync(ct);
+        if (sizes.Count >= options.UploadMaxActiveSessionsPerUser)
+            throw ApiException.Conflict(
+                $"当前账号未完成的上传任务已达上限（{options.UploadMaxActiveSessionsPerUser} 个），请等待现有上传完成或取消后再上传");
+        var pending = sizes.Aggregate(0UL, (total, size) => total + size);
+        if (pending + requestedBytes > (ulong)options.UploadMaxPendingBytesPerUser)
+            throw ApiException.Conflict(
+                $"当前账号未完成上传的文件总大小超过上限（{FormatQuotaBytes(options.UploadMaxPendingBytesPerUser)}），请等待现有上传完成或取消后再上传");
+    }
+
+    private static string FormatQuotaBytes(long bytes) => bytes % (1024L * 1024 * 1024) == 0
+        ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / (1024L * 1024 * 1024)} GiB")
+        : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024 * 1024):0.##} GiB");
+
+    // 公司发给供应商的非 STEP 文件，需要本子项目已有可用的 C2S STEP 文件，或内部账号正在上传/合并
+    // STEP 文件（同一批次并发上传时 STEP 会话先创建即可）。新建会话时校验，合并时排除本会话再校验一次；
+    // 恢复已有会话不重复校验。
+    internal static async Task<bool> HasCompanyStepMaterialAsync(
+        YfDbContext ef, ulong projectId, DateTime dbNow, string? excludeSessionId, CancellationToken ct)
+    {
+        var extensions = UploadMaterialRules.StepFileExtensions.ToArray();
+        if (await ef.Files.AnyAsync(file => file.ProjectId == projectId && file.Direction == "C2S"
+                && file.Status == FileStatuses.Available && Enumerable.Contains(extensions, file.Ext), ct))
+            return true;
+        var active = new[] { "UPLOADING", "MERGING" };
+        var sessionNames = await (
+            from session in ef.UploadSessions
+            join user in ef.Users on session.UploaderId equals user.Id
+            where session.ProjectId == projectId && user.UserType == UserTypes.Internal
+                && session.ExpiresAt > dbNow && Enumerable.Contains(active, session.Status)
+                && (excludeSessionId == null || session.Id != excludeSessionId)
+            select session.FileName).ToListAsync(ct);
+        return sessionNames.Any(UploadMaterialRules.IsStepFile);
     }
 
     // A name without a dot has no extension; it must not be mistaken for one (a file named "pdf").

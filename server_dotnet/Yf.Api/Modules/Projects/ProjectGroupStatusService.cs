@@ -14,7 +14,8 @@ internal sealed class ProjectGroupStatusService(AuditService audit)
         ulong actorId,
         ulong? triggerProjectId,
         CancellationToken ct,
-        bool groupAlreadyLocked = false)
+        bool groupAlreadyLocked = false,
+        bool allowCompletion = false)
     {
         await using var db = EfDb.Use(conn, tx);
         var group = groupAlreadyLocked
@@ -34,6 +35,10 @@ internal sealed class ProjectGroupStatusService(AuditService audit)
         var completed = Count(ProjectStatuses.Completed);
         var terminated = Count(ProjectStatuses.Terminated);
         var next = DeriveStatus(total, draft, completed, terminated);
+        // Only the acceptance confirmation of the last open subproject completes a main project. Other changes
+        // that happen to leave every remaining subproject completed (e.g. deleting a draft or terminated one)
+        // keep the current main-project status instead of completing it without an acceptance.
+        if (next == ProjectStatuses.Completed && !allowCompletion && group.Status != ProjectStatuses.Completed) return group.Status;
         if (next == group.Status) return next;
 
         var action = next switch

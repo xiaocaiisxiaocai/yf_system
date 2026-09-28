@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, Badge, Button, Drawer, Empty, Pagination, Spin, Tabs, Tag, Typography } from '@arco-design/web-react'
 import { IconNotification } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
+import { useShallow } from 'zustand/react/shallow'
 import http, { type QuietRequestConfig } from '../api/client'
 import { fmtTime } from '../api/types'
 import { useAuth } from '../store/auth'
@@ -52,7 +53,12 @@ function notificationRoute(item: CollaborationNotification): string {
 
 export default function CollaborationNotifications() {
   const nav = useNavigate()
-  const { revision, unreadCount, status, refresh } = useCollaboration()
+  const { revision, unreadCount, status, refresh } = useCollaboration(useShallow((state) => ({
+    revision: state.revision,
+    unreadCount: state.unreadCount,
+    status: state.status,
+    refresh: state.refresh,
+  })))
   const [visible, setVisible] = useState(false)
   const [unreadOnly, setUnreadOnly] = useState(true)
   const [list, setList] = useState<CollaborationNotification[]>([])
@@ -67,11 +73,14 @@ export default function CollaborationNotifications() {
   const requestSequence = useRef(0)
   const listController = useRef<AbortController | null>(null)
   const markingIds = useRef(new Set<number>())
+  // 标记已查看会改变未查看数，从而改变概览 revision；这期间的 revision 变化由 markViewed 自己判定，
+  // 避免把“自己刚标记已查看”误报成“有新的协作动态”。
+  const markingDepth = useRef(0)
 
   useEffect(() => startCollaborationPolling(), [])
 
   useEffect(() => {
-    if (!visible || !revision) return
+    if (!visible || !revision || markingDepth.current > 0) return
     if (!knownRevision.current) {
       knownRevision.current = revision
       return
@@ -149,7 +158,12 @@ export default function CollaborationNotifications() {
       .slice(0, 100)
     if (pendingIds.length === 0) return true
     const requestGeneration = useAuth.getState().generation
+    const before = useCollaboration.getState()
+    // 标记前列表已与概览同步（没有待刷新的新动态）时，标记后的 revision 变化若没有带来更新的通知，
+    // 就只是自己的已查看状态变化，直接同步 knownRevision。
+    const syncedBefore = Boolean(knownRevision.current) && knownRevision.current === before.revision
     pendingIds.forEach((id) => markingIds.current.add(id))
+    markingDepth.current += 1
     setMarking((current) => new Set([...current, ...pendingIds]))
     try {
       await http.post<ApiResponses['POST /collaboration/reads']>('/collaboration/reads', { ids: pendingIds })
@@ -157,10 +171,17 @@ export default function CollaborationNotifications() {
       const selected = new Set(pendingIds)
       setList((current) => current.map((item) => selected.has(item.id) ? { ...item, read: true } : item))
       await useCollaboration.getState().refresh()
+      const after = useCollaboration.getState()
+      if (syncedBefore && after.revision && after.latestId <= before.latestId) knownRevision.current = after.revision
       return true
     } catch {
       return false
     } finally {
+      markingDepth.current -= 1
+      if (markingDepth.current === 0 && useAuth.getState().generation === requestGeneration) {
+        const current = useCollaboration.getState().revision
+        if (knownRevision.current && current && knownRevision.current !== current) setNewContentAvailable(true)
+      }
       if (useAuth.getState().generation === requestGeneration) {
         const selected = new Set(pendingIds)
         setMarking((current) => new Set([...current].filter((id) => !selected.has(id))))

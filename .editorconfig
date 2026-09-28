@@ -1,0 +1,20 @@
+# Editor basics only: no analyzer/style severities here (they would surface as build warnings).
+# Line endings are also enforced by .gitattributes (* text=auto eol=lf).
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+
+[*.{ts,tsx,js,jsx,cjs,mjs,mts,cts,vue,json,jsonc,css,less,html,svg,yml,yaml}]
+indent_size = 2
+
+[*.{csproj,props,targets,xml,config}]
+indent_size = 2
+
+# Keep PowerShell scripts ASCII-only: Windows PowerShell 5.1 reads BOM-less files as ANSI.
+[*.ps1]
+indent_size = 4

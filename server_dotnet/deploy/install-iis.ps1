@@ -5,7 +5,10 @@
 Install the ASP.NET Core + React package as a new HTTPS IIS site on the target server.
 .DESCRIPTION
 Fresh-site installation only. Existing IIS sites, pools and nonempty destination folders
-are refused. Database initialization is a separate explicit command; no data is migrated.
+are refused. No data is migrated. With App.AutoInitializeDatabase=true the application creates
+and seeds an absent or empty database on first start and the installer then requires /health
+to report status=ok, db=up (otherwise it rolls back); without it, initialization is a separate
+explicit command and /health must be checked manually afterwards.
 #>
 [CmdletBinding()]
 param(
@@ -16,7 +19,15 @@ param(
     [string]$SiteName = 'YfSystemDotNet',
     [string]$AppPoolName = 'YfSystemDotNet',
     [string]$SiteRoot = 'C:\inetpub\yf_system_dotnet',
-    [ValidateRange(1,65535)][int]$HttpsPort = 443
+    [ValidateRange(1,65535)][int]$HttpsPort = 443,
+    # Serilog file directory. Defaults to App.LogDirectory from -ConfigPath (the same way StorageRoot
+    # comes from the configuration); when both are given they must name the same directory.
+    [string]$LogRoot,
+    # After starting the site, /health must report status=ok, db=up or the installation is rolled back.
+    # Only skip when the host name cannot be reached from this server (for example DNS not switched yet).
+    [switch]$SkipHealthCheck,
+    [ValidateRange(30,600)][int]$HealthCheckWaitSeconds = 180,
+    [ValidateRange(2,30)][int]$HealthRequestTimeoutSeconds = 10
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
@@ -54,8 +65,24 @@ if (!(Test-Path -LiteralPath $storage -PathType Container)) { throw 'Create the 
 foreach ($other in @($PackageRoot,$SiteRoot,$ConfigPath)) {
     if ((Within $storage $other) -or (Within $other $storage)) { throw 'Package, destination, external configuration and storage must be separate.' }
 }
+$configuredLogRoot = if ($config.App.PSObject.Properties['LogDirectory'] -and ![string]::IsNullOrWhiteSpace([string]$config.App.LogDirectory)) { FullPath $config.App.LogDirectory } else { '' }
+if ($LogRoot) {
+    $LogRoot = FullPath $LogRoot
+    if (!$configuredLogRoot) { throw 'Add the same path as App.LogDirectory to the external configuration; the installer does not rewrite it.' }
+    if (!$LogRoot.Equals($configuredLogRoot,[StringComparison]::OrdinalIgnoreCase)) { throw '-LogRoot differs from App.LogDirectory in the external configuration.' }
+} else {
+    $LogRoot = $configuredLogRoot
+}
+if ($LogRoot) {
+    NoLinks $LogRoot
+    foreach ($other in @($PackageRoot,$SiteRoot,$ConfigPath,$storage)) {
+        if ((Within $LogRoot $other) -or (Within $other $LogRoot)) { throw 'The log directory must be separate from package, destination, configuration and storage.' }
+    }
+    if ((Test-Path -LiteralPath $LogRoot) -and !(Test-Path -LiteralPath $LogRoot -PathType Container)) { throw 'The log directory path is a file.' }
+}
 $origin = 'https://' + $HostName + $(if ($HttpsPort -eq 443) { '' } else { ':'+$HttpsPort })
 if ($config.App.CookieSecure -ne $true -or $config.App.WebBaseUrl.TrimEnd('/') -ne $origin) { throw 'Production configuration requires CookieSecure=true and WebBaseUrl equal to the HTTPS site origin.' }
+if ($config.App.PSObject.Properties['AllowInsecureCookies'] -and $config.App.AllowInsecureCookies -eq $true) { throw 'Production HTTPS configuration must not set App.AllowInsecureCookies=true.' }
 if ([string]::IsNullOrWhiteSpace($config.App.ConnectionString) -or [Text.Encoding]::UTF8.GetByteCount($config.App.JwtSecret) -lt 32) { throw 'Database connection and a random JWT secret (at least 32 bytes) are required.' }
 $manifestPath = Join-Path $PackageRoot 'manifest.json'
 if (!(Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Package manifest missing.' }
@@ -80,6 +107,7 @@ foreach ($required in @('Yf.Api.dll','Yf.Api.runtimeconfig.json','web.config','w
 . (Join-Path $PackageRoot 'maintenance-common.ps1')
 Assert-YfManifest $PackageRoot | Out-Null
 Assert-YfSeparate @($PackageRoot,$SiteRoot,$ConfigPath,$storage)
+if ($LogRoot) { Assert-YfSeparate @($PackageRoot,$SiteRoot,$ConfigPath,$storage,$LogRoot) }
 $maintenanceConfig = Read-YfMaintenanceConfig $ConfigPath
 if ($maintenanceConfig.Storage -ne $storage) { throw 'Configuration storage path changed during validation.' }
 Assert-YfPublishedConfig $PackageRoot
@@ -103,6 +131,9 @@ if (Get-WebBinding | Where-Object { $_.bindingInformation -eq $bindingInfo }) { 
 $siteRootExisted = Test-Path -LiteralPath $SiteRoot -PathType Container
 $siteRootAcl = if ($siteRootExisted) { Get-Acl -LiteralPath $SiteRoot } else { $null }
 $storageAcl = Get-Acl -LiteralPath $storage
+$logRootExisted = $LogRoot -and (Test-Path -LiteralPath $LogRoot -PathType Container)
+$logRootAcl = if ($logRootExisted) { Get-Acl -LiteralPath $LogRoot } else { $null }
+$createdLogRoot = $false
 $configAcl = Get-Acl -LiteralPath $ConfigPath
 $copiedTargets = @()
 $createdPool = $false
@@ -116,16 +147,7 @@ try {
         Copy-Item -LiteralPath $item.FullName -Destination $destination -Recurse
     }
     Set-YfExternalConfigurationFallback $SiteRoot
-    $webConfigPath = Join-Path $SiteRoot 'web.config'
-    [xml]$webConfig = Get-Content -LiteralPath $webConfigPath -Raw -Encoding UTF8
-    $asp = $webConfig.SelectSingleNode('//aspNetCore')
-    if (!$asp) { throw 'Published ASP.NET Core IIS configuration missing.' }
-    $environment = $asp.SelectSingleNode('environmentVariables')
-    if (!$environment) { $environment = $webConfig.CreateElement('environmentVariables'); $asp.AppendChild($environment) | Out-Null }
-    foreach ($pair in @(@('YF_CONFIG_PATH',$ConfigPath),@('ASPNETCORE_ENVIRONMENT','Production'))) {
-        $node = $webConfig.CreateElement('environmentVariable'); $node.SetAttribute('name',$pair[0]); $node.SetAttribute('value',$pair[1]); $environment.AppendChild($node) | Out-Null
-    }
-    $webConfig.Save($webConfigPath)
+    Set-YfWebConfigEnvironment (Join-Path $SiteRoot 'web.config') $ConfigPath
     # Realtime collaboration prefers WebSockets. Without the IIS WebSocket Protocol role service
     # (Windows Server feature Web-WebSockets) SignalR falls back to slower transports or polling.
     if (!(Get-WebGlobalModule -Name 'WebSocketModule' -ErrorAction SilentlyContinue)) {
@@ -145,8 +167,12 @@ try {
     $identity = 'IIS AppPool\' + $AppPoolName
     & icacls.exe $SiteRoot /grant "${identity}:(OI)(CI)RX" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application read permissions.' }
-    & icacls.exe $storage /grant "${identity}:(OI)(CI)M" | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Unable to grant storage permissions.' }
+    # Business storage: inheritance off; SYSTEM and Administrators FullControl, pool identity Modify.
+    Set-YfApplicationDirectoryAcl $storage $identity
+    if ($LogRoot) {
+        if (!$logRootExisted) { New-Item -ItemType Directory -Path $LogRoot | Out-Null; $createdLogRoot = $true }
+        Set-YfApplicationDirectoryAcl $LogRoot $identity
+    }
     Protect-YfConfigurationFile $ConfigPath $identity
     New-Website -Name $SiteName -PhysicalPath $SiteRoot -ApplicationPool $AppPoolName -Port $HttpsPort -HostHeader $HostName -Ssl -SslFlags 1 | Out-Null
     $createdSite = $true
@@ -159,8 +185,19 @@ try {
     Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $SiteName -Filter 'system.webServer/security/requestFiltering/requestLimits' -Name maxAllowedContentLength -Value 67108864
     Start-WebAppPool -Name $AppPoolName
     Start-Website -Name $SiteName
+    # An app-level startup failure (HTTP 500.30, bad configuration, unreachable database) is only
+    # visible over HTTP. With AutoInitializeDatabase=false the empty database is initialized later
+    # by an explicit command, so the application cannot report healthy yet and the probe is skipped.
+    if ($SkipHealthCheck) {
+        Write-Warning "Health check skipped by request. Check $origin/health manually before opening the site."
+    } elseif (!$config.App.PSObject.Properties['AutoInitializeDatabase'] -or $config.App.AutoInitializeDatabase -ne $true) {
+        Write-Warning "AutoInitializeDatabase is off: initialize the database explicitly, then check $origin/health manually."
+    } else {
+        Wait-YfHealth $origin $HealthCheckWaitSeconds $HealthRequestTimeoutSeconds
+        Write-Host "Health check passed: $origin/health reports status=ok, db=up."
+    }
     Write-Host "Installed new site: $origin"
-    Write-Host "Check $origin/health and browser login from the target network. Database was not initialized or migrated by this installer."
+    Write-Host "Check browser login from the target network. Existing databases were not migrated by this installer."
 } catch {
     $originalError = $_
     $cleanupErrors = @()
@@ -174,6 +211,12 @@ try {
         } catch { $cleanupErrors += 'application pool' }
     }
     try { Set-Acl -LiteralPath $storage -AclObject $storageAcl } catch { $cleanupErrors += 'storage ACL' }
+    if ($createdLogRoot) {
+        # Remove only an empty directory this run created; log files written by a failed start are kept.
+        try { if (!@(Get-ChildItem -LiteralPath $LogRoot -Force).Count) { Remove-Item -LiteralPath $LogRoot } } catch { $cleanupErrors += 'log directory' }
+    } elseif ($logRootAcl) {
+        try { Set-Acl -LiteralPath $LogRoot -AclObject $logRootAcl } catch { $cleanupErrors += 'log directory ACL' }
+    }
     try { Set-Acl -LiteralPath $ConfigPath -AclObject $configAcl } catch { $cleanupErrors += 'configuration ACL' }
     foreach ($target in $copiedTargets) {
         try { if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force } } catch { $cleanupErrors += $target }

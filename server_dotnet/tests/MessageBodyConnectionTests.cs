@@ -10,7 +10,7 @@ using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class MessageBodyConnectionTests
 {
     [Theory(Timeout = 120_000)]
@@ -193,7 +193,7 @@ public sealed class MessageBodyConnectionTests
         public override async ValueTask DisposeAsync()
         {
             await inner.DisposeAsync();
-            GC.SuppressFinalize(this);
+            await base.DisposeAsync();
         }
     }
 }

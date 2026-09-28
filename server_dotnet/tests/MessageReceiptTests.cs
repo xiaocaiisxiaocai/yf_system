@@ -6,7 +6,7 @@ using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class MessageReceiptTests
 {
     [Fact(Timeout = 60_000)]
@@ -153,6 +153,66 @@ public sealed class MessageReceiptTests
         Assert.Empty(await service.ReceiptsAsync(conn, admin, 1001, [], ct));
     }
 
+    [Fact(Timeout = 60_000)]
+    public async Task MessageEmailsAreCoalescedPerRecipientWithinTheSummaryWindow()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await LocalDatabaseScope.CreateOrSkipAsync("message_summary", ct);
+        await database.InitializeAsync(ct);
+        await database.SeedAsync("""
+            INSERT INTO system_configs(cfg_key,cfg_value) VALUES('notify.enabled','true')
+            ON DUPLICATE KEY UPDATE cfg_value='true';
+            INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'汇总供应商','ACTIVE',1);
+            INSERT INTO roles(id,name,description,is_built_in,status)
+            VALUES(9001,'汇总内部','汇总测试角色',0,'ACTIVE'),(9002,'汇总供应商','汇总测试角色',0,'ACTIVE');
+            INSERT INTO role_permissions(role_id,permission_id)
+            SELECT r.role_id,p.id
+            FROM (SELECT 9001 AS role_id UNION ALL SELECT 9002) r
+            CROSS JOIN permissions p
+            WHERE p.code IN ('project:list','message:create');
+            INSERT INTO users
+                (id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password)
+            VALUES
+                (101,'summary-owner','unused','负责人','owner@example.invalid','INTERNAL',NULL,'ACTIVE',0),
+                (201,'summary-supplier','unused','供应商','supplier@example.invalid','SUPPLIER',100,'ACTIVE',0);
+            INSERT INTO user_roles(user_id,role_id) VALUES(101,9001),(201,9002);
+            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
+            VALUES(5001,'汇总主项目',100,'IN_PROGRESS',101,101);
+            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
+            VALUES(1001,5001,'汇总项目',100,'IN_PROGRESS',101,101);
+            """, ct);
+        var service = new MessageService(new AuditService([new ProjectActivityService()]), database.Options);
+        var supplier = new CurrentUser(201, "summary-supplier", "SUPPLIER", 100);
+
+        await using var conn = await database.Database.OpenAsync(ct);
+        var first = await service.CreateAsync(conn, supplier, 1001, new MessageCreateRequest { Content = "第一条" }, null, null, ct);
+        var second = await service.CreateAsync(conn, supplier, 1001, new MessageCreateRequest { Content = "第二条" }, null, null, ct);
+
+        var row = await conn.QuerySingleAsync<(string Status, int RetryCount, string DedupeKey, string Body, long DelaySeconds)>(
+            new CommandDefinition("""
+                SELECT status,retry_count,dedupe_key,body,TIMESTAMPDIFF(SECOND,created_at,next_attempt_at)
+                FROM email_outbox WHERE event_type='MESSAGE_CREATED'
+                """, cancellationToken: ct));
+        Assert.Equal(("PENDING", 0), (row.Status, row.RetryCount));
+        Assert.Equal(ProjectNotificationService.MessageSummaryDedupeKey(1001, 101), row.DedupeKey);
+        Assert.Equal(ProjectNotificationService.MessageSummaryDelayMinutes * 60, row.DelaySeconds);
+        Assert.Contains($"/projects/1001?tab=messages&target={first.Id}", row.Body);
+        Assert.Contains($"/projects/1001?tab=messages&target={second.Id}", row.Body);
+        Assert.Contains("第一条", row.Body);
+        Assert.Contains("第二条", row.Body);
+
+        // Once the worker claims the summary, the next message starts a new one.
+        await conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE email_outbox SET status='SENDING',dedupe_key=NULL WHERE event_type='MESSAGE_CREATED'", cancellationToken: ct));
+        var third = await service.CreateAsync(conn, supplier, 1001, new MessageCreateRequest { Content = "第三条" }, null, null, ct);
+        var bodies = (await conn.QueryAsync<string>(new CommandDefinition(
+            "SELECT body FROM email_outbox WHERE event_type='MESSAGE_CREATED' ORDER BY id", cancellationToken: ct))).ToArray();
+        Assert.Equal(2, bodies.Length);
+        Assert.DoesNotContain($"target={third.Id}", bodies[0]);
+        Assert.Contains($"target={third.Id}", bodies[1]);
+        Assert.DoesNotContain($"target={first.Id}", bodies[1]);
+    }
+
     [Fact]
     public void MessageIdQueryIsPositiveDeduplicatedAndBounded()
     {
@@ -175,7 +235,7 @@ public sealed class MessageReceiptTests
     }
 
     private static JsonElement Json(object value) =>
-        JsonSerializer.SerializeToElement(value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        JsonSerializer.SerializeToElement(value, TestJson.Web);
 
     private sealed class LocalDatabaseScope(
         MySqlConnection administration,
@@ -235,12 +295,7 @@ public sealed class MessageReceiptTests
 
         public async Task InitializeAsync(CancellationToken ct)
         {
-            var previousPassword = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD");
-            Environment.SetEnvironmentVariable(
-                "YF_BOOTSTRAP_PASSWORD",
-                "Receipt#" + Guid.NewGuid().ToString("N")[..8] + "!");
-            try { await SchemaBootstrap.InitializeEmptyAsync(Database, ct); }
-            finally { Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", previousPassword); }
+            await SchemaBootstrap.InitializeEmptyAsync(Database, "Receipt#" + Guid.NewGuid().ToString("N")[..8] + "!", ct);
         }
 
         public async Task SeedAsync(string sql, CancellationToken ct)

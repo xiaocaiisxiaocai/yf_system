@@ -91,7 +91,8 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
             if (accountIds.Length > 0)
                 revokedSessionCount = await context.RefreshTokens
                     .Where(x => Enumerable.Contains(accountIds, x.UserId) && !x.Revoked)
-                    .ExecuteUpdateAsync(s => s.SetProperty(x => x.Revoked, true), ct);
+                    .ExecuteUpdateAsync(s => s.SetProperty(x => x.Revoked, true)
+                        .SetProperty(x => x.RevokeReason, RefreshRevokeReasons.Admin), ct);
         }
         await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, "SUPPLIER_STATUS", "supplier", id,
             new
@@ -235,7 +236,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         else await EnsureSupplierAccountWithinCeilingAsync(context, actor, user, ct);
         if (user.Status == status) return AccountJson(user);
         await context.Users.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, status), ct);
-        if (status == AccountStatuses.Disabled) await IdentityService.RevokeAllAsync(context.Database.Connection(), context.Database.RequireTransaction(), id, ct);
+        if (status == AccountStatuses.Disabled) await IdentityService.RevokeAllAsync(context.Database.Connection(), context.Database.RequireTransaction(), id, RefreshRevokeReasons.Admin, ct);
         await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, "SUPPLIER_ACCOUNT_STATUS", "user", id, new
         {
             user.EmployeeNo, oldStatus = user.Status, newStatus = status, sessionsRevoked = status == AccountStatuses.Disabled, targetName = AccountAuditName(user),
@@ -259,7 +260,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await EnsureSupplierAccountWithinCeilingAsync(context, actor, user, ct);
         await context.Users.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.PasswordHash, hash)
             .SetProperty(x => x.MustChangePassword, true).SetProperty(x => x.FailedLoginAttempts, 0).SetProperty(x => x.LockedUntil, (DateTime?)null), ct);
-        await IdentityService.RevokeAllAsync(context.Database.Connection(), context.Database.RequireTransaction(), id, ct);
+        await IdentityService.RevokeAllAsync(context.Database.Connection(), context.Database.RequireTransaction(), id, RefreshRevokeReasons.Admin, ct);
         await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, "SUPPLIER_ACCOUNT_RESET_PASSWORD", "user", id, new
         {
             user.EmployeeNo, sessionsRevoked = true, mustChangePassword = true, passwordChanged = true, targetName = AccountAuditName(user),

@@ -18,6 +18,7 @@ import './SubprojectDock.css'
 
 const COMPACT_QUERY = '(max-width: 720px)'
 const SAVE_DELAY_MS = 300
+const MAX_GRID_COLUMNS = 3
 
 const dockTheme: DockviewTheme = { ...themeLight, name: 'yf-light', className: 'dockview-theme-light yf-dockview-theme', gap: 8 }
 
@@ -87,34 +88,111 @@ function panelSetKey(projects: readonly DockSubproject[]) {
   return projects.map((project) => project.id).sort((a, b) => a - b).join(',')
 }
 
+/** 新增子项目面板的位置：不足三列时在最右侧新开一组，否则作为标签加入面板最少的一组；窄屏单组布局始终加入该组。 */
+function addPosition(api: DockviewApi, compact: boolean) {
+  const grid = api.groups.filter((group) => group.api.location.type === 'grid')
+  if (!grid.length) return undefined
+  if (!compact && grid.length < MAX_GRID_COLUMNS) return { referenceGroup: grid[grid.length - 1], direction: 'right' as const }
+  const target = grid.reduce((least, group) => (group.panels.length < least.panels.length ? group : least))
+  return { referenceGroup: target, direction: 'within' as const }
+}
+
 const SubprojectDock = forwardRef<SubprojectDockHandle, Props>(function SubprojectDock({ groupId, userId, projects, context }, ref) {
   const apiRef = useRef<DockviewApi | null>(null)
   const appliedSetRef = useRef<string | null>(null)
   const storageKeyRef = useRef('')
+  const compactRef = useRef(false)
+  /** 自己调用 fromJSON/addPanel/removePanel 引起的布局事件不当作用户调整。 */
+  const programmaticRef = useRef(false)
+  /** 只有恢复过保存的布局或用户动过布局后才写入存储；默认布局不落盘。 */
+  const customizedRef = useRef(false)
   const projectsRef = useRef(projects)
   // 布局回调在 dockview 的事件里读取最新子项目；布局副作用先于下面的同步 effect 执行。
   useLayoutEffect(() => { projectsRef.current = projects }, [projects])
   const setKey = useMemo(() => panelSetKey(projects), [projects])
 
-  const applyLayout = useCallback((api: DockviewApi, preferSaved: boolean) => {
-    const current = projectsRef.current
-    const compact = typeof window.matchMedia === 'function' && window.matchMedia(COMPACT_QUERY).matches
-    storageKeyRef.current = `${layoutStorageKey(userId, groupId)}${compact ? ':compact' : ''}`
-    appliedSetRef.current = panelSetKey(current)
-    if (!current.length) { api.clear(); return }
-    const saved = preferSaved ? loadSavedLayout(storageKeyRef.current, current) : null
-    const layout = saved ?? buildDefaultLayout(current, api.width || 1200, api.height || 640, { singleGroup: compact })
-    try {
-      api.fromJSON(layout)
-    } catch {
-      // 保存的布局与当前版本不兼容时回退默认布局，不能让整个页面失效。
-      clearSavedLayout(storageKeyRef.current)
-      api.fromJSON(buildDefaultLayout(current, api.width || 1200, api.height || 640, { singleGroup: compact }))
-    }
-  }, [groupId, userId])
-
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const layoutSubscription = useRef<{ dispose: () => void } | null>(null)
+
+  const cancelPendingSave = () => {
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = undefined
+  }
+
+  const scheduleSave = useCallback((api: DockviewApi) => {
+    cancelPendingSave()
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = undefined
+      if (customizedRef.current && appliedSetRef.current && api.panels.length) saveLayout(storageKeyRef.current, api.toJSON())
+    }, SAVE_DELAY_MS)
+  }, [])
+
+  /** dockview 在微任务里合并派发布局事件；标记在其之后清除，期间的事件都来自本组件的程序化调整。 */
+  const programmatic = (mutate: () => void) => {
+    programmaticRef.current = true
+    try {
+      mutate()
+    } finally {
+      queueMicrotask(() => { programmaticRef.current = false })
+    }
+  }
+
+  /** 整体套用布局：仅在首次挂载（或首次有子项目）与用户点击“重置布局”时使用。 */
+  const applyLayout = useCallback((api: DockviewApi, preferSaved: boolean) => {
+    const current = projectsRef.current
+    // 窄屏（≤720px）只在挂载和重置时判断：之后窗口跨过断点不重排、不重建面板，避免子项目面板被卸载重载。
+    const compact = typeof window.matchMedia === 'function' && window.matchMedia(COMPACT_QUERY).matches
+    compactRef.current = compact
+    storageKeyRef.current = `${layoutStorageKey(userId, groupId)}${compact ? ':compact' : ''}`
+    appliedSetRef.current = panelSetKey(current)
+    cancelPendingSave()
+    if (!current.length) { programmatic(() => api.clear()); return }
+    const saved = preferSaved ? loadSavedLayout(storageKeyRef.current, current) : null
+    customizedRef.current = saved !== null
+    const layout = saved ?? buildDefaultLayout(current, api.width || 1200, api.height || 640, { singleGroup: compact })
+    programmatic(() => {
+      try {
+        api.fromJSON(layout)
+      } catch {
+        // 保存的布局与当前版本不兼容时回退默认布局，不能让整个页面失效。
+        clearSavedLayout(storageKeyRef.current)
+        customizedRef.current = false
+        api.fromJSON(buildDefaultLayout(current, api.width || 1200, api.height || 640, { singleGroup: compact }))
+      }
+    })
+  }, [groupId, userId])
+
+  /** 子项目增删时原地增删面板，其余面板保持挂载（不重新 fromJSON，面板里的列表、滚动与播放不受影响）。 */
+  const syncPanels = useCallback((api: DockviewApi) => {
+    const current = projectsRef.current
+    if (appliedSetRef.current === null || api.panels.length === 0 || current.length === 0) {
+      applyLayout(api, true)
+      return
+    }
+    const wanted = new Set(current.map((project) => panelIdFor(project.id)))
+    programmatic(() => {
+      api.panels
+        .filter((panel) => projectIdOfPanel(panel.id) !== null && !wanted.has(panel.id))
+        .forEach((panel) => api.removePanel(panel))
+      current.forEach((project) => {
+        const id = panelIdFor(project.id)
+        if (api.getPanel(id)) return
+        const position = addPosition(api, compactRef.current)
+        api.addPanel<SubprojectPanelParams>({
+          id,
+          component: SUBPROJECT_PANE_COMPONENT,
+          tabComponent: SUBPROJECT_TAB_COMPONENT,
+          title: project.name,
+          params: { projectId: project.id },
+          inactive: true,
+          ...(position ? { position } : {}),
+        })
+      })
+    })
+    appliedSetRef.current = panelSetKey(current)
+    // 用户保存过的布局随面板集合一起更新，否则下次打开时集合不符会退回默认布局。
+    if (customizedRef.current) scheduleSave(api)
+  }, [applyLayout, scheduleSave])
 
   const onReady = useCallback((event: DockviewReadyEvent) => {
     apiRef.current = event.api
@@ -122,31 +200,30 @@ const SubprojectDock = forwardRef<SubprojectDockHandle, Props>(function Subproje
     // 用户拖拽、调整大小或切换标签后保存布局，同一账号再次打开同一主项目时恢复。
     layoutSubscription.current?.dispose()
     layoutSubscription.current = event.api.onDidLayoutChange(() => {
-      if (saveTimer.current) clearTimeout(saveTimer.current)
-      saveTimer.current = setTimeout(() => {
-        if (appliedSetRef.current && event.api.panels.length) saveLayout(storageKeyRef.current, event.api.toJSON())
-      }, SAVE_DELAY_MS)
+      if (programmaticRef.current) return
+      customizedRef.current = true
+      scheduleSave(event.api)
     })
-  }, [applyLayout])
+  }, [applyLayout, scheduleSave])
 
   useEffect(() => () => {
-    if (saveTimer.current) clearTimeout(saveTimer.current)
+    cancelPendingSave()
     layoutSubscription.current?.dispose()
   }, [])
 
-  // 子项目增删后按新数量重新套用默认网格（1-3 个一行、4 个 2×2）；只改名时原地更新标题。
+  // 子项目增删后增量增删面板；只改名时原地更新标题。
   useEffect(() => {
     const api = apiRef.current
     if (!api) return
     if (appliedSetRef.current !== setKey) {
-      applyLayout(api, true)
+      syncPanels(api)
       return
     }
     projects.forEach((project) => {
       const panel = api.getPanel(panelIdFor(project.id))
       if (panel && panel.title !== project.name) panel.api.setTitle(project.name)
     })
-  }, [applyLayout, projects, setKey])
+  }, [projects, setKey, syncPanels])
 
   useImperativeHandle(ref, () => ({
     resetLayout: () => {

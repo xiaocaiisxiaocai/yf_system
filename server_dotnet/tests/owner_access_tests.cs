@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Dapper;
 using Microsoft.AspNetCore.Http;
@@ -10,7 +11,7 @@ using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class OwnerAccessTests
 {
     private const ulong ProjectId = 10_001;
@@ -171,7 +172,7 @@ public sealed class OwnerAccessTests
         await AssertOutOfScopeAsync(() => ProjectAccessService.RequireViewAsync(conn, null, oldOwner, ProjectId, ct));
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
             "SELECT COUNT(*) FROM audit_logs WHERE action='PROJECT_GROUP_TRANSFER' AND target_id=@Id",
-            new { Id = ProjectGroupId.ToString() }, cancellationToken: ct)));
+            new { Id = ProjectGroupId.ToString(CultureInfo.InvariantCulture) }, cancellationToken: ct)));
     }
 
     private static async Task AssertBadRequestAsync(Func<Task> action)
@@ -333,7 +334,7 @@ public sealed class OwnerAccessTests
     }
 
     private static JsonDocument Json(object value) =>
-        JsonDocument.Parse(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        JsonDocument.Parse(JsonSerializer.Serialize(value, TestJson.Web));
 
     private sealed class OwnerAccessDatabase(
         MySqlConnection administration,
@@ -395,10 +396,7 @@ public sealed class OwnerAccessTests
 
         internal async Task InitializeAsync(CancellationToken ct)
         {
-            var previousPassword = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD");
-            Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", "Owner#" + Guid.NewGuid().ToString("N")[..12]);
-            try { await SchemaBootstrap.InitializeEmptyAsync(Database, ct); }
-            finally { Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", previousPassword); }
+            await SchemaBootstrap.InitializeEmptyAsync(Database, "Owner#" + Guid.NewGuid().ToString("N")[..12], ct);
         }
 
         internal async Task SeedAsync(string sql, CancellationToken ct)

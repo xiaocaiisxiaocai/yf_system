@@ -51,7 +51,7 @@ Write-Output 'PASS shared deployment guards were exercised; IIS was not used'
 $missingDefaultsParent=Join-Path $root 'missing-defaults-parent'
 Reject { Write-YfMySqlDefaults $source $missingDefaultsParent } 'credential defaults write failure handled'
 if (Test-Path -LiteralPath $missingDefaultsParent) { throw 'Credential defaults failure created an unexpected path.' }
-New-YfBackup $application $source $backup $dumpClient 'isolated-test'
+New-YfBackup $application $source $backup $dumpClient 'isolated-test' $sqlClient
 Write-Output 'PASS actual MySQL and storage backup'
 $ownedManifest=Assert-YfBackupSite $backup 'ISOLATED-TEST'
 if ($ownedManifest.siteName -ne 'isolated-test') { throw 'Site ownership guard did not return the validated manifest.' }
@@ -67,7 +67,7 @@ try {
     Write-YfJson $manifestPath $unsupported
     Reject { Assert-YfManifest $backup 'yf-offline-backup' } 'unsupported backup manifest schema refused'
 } finally { [IO.File]::WriteAllBytes($manifestPath,$originalManifest) }
-Reject { New-YfBackup $application $source $backup $dumpClient 'isolated-test' } 'existing backup refused'
+Reject { New-YfBackup $application $source $backup $dumpClient 'isolated-test' $sqlClient } 'existing backup refused'
 if (@(Get-ChildItem -LiteralPath $backup -Filter '*.cnf').Count) { throw 'Credential file remains after backup.' }
 $sql=Join-Path $backup 'database.sql'
 $original=[IO.File]::ReadAllBytes($sql)

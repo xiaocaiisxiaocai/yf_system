@@ -30,6 +30,31 @@ public sealed class DatabaseHealthProbeTests
     }
 
     [Fact]
+    public async Task StorageProbeReusesAHealthyResultLongerAndDetectsAnUnwritableRoot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = new DateTime(2026, 9, 27, 12, 0, 0, DateTimeKind.Utc);
+        var probe = new DatabaseHealthProbe(() => now, DatabaseHealthProbe.StorageHealthyCacheDuration);
+        var root = Path.Combine(Path.GetTempPath(), "yf_health_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Task<bool> Check(CancellationToken token) => DevelopmentReadiness.ProbeRootAsync(root, token);
+            Assert.True(await probe.IsUpAsync(Check, ct));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+            Directory.Delete(root);
+            now += DatabaseHealthProbe.HealthyCacheDuration;
+            Assert.True(await probe.IsUpAsync(Check, ct));
+            now += DatabaseHealthProbe.StorageHealthyCacheDuration;
+            Assert.False(await probe.IsUpAsync(Check, ct));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task ConcurrentChecksShareOneProbeAndAThrowingProbeReportsDown()
     {
         var ct = TestContext.Current.CancellationToken;

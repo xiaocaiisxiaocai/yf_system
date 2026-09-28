@@ -99,7 +99,7 @@ async function choose(page, placeholder, optionName) {
     const sourceOnlyMessage = '只属于复制源项目的留言-' + marker;
     await api(adminContext, 'PUT', '/projects/' + childControlSource.id + '/status',
       { status: 'IN_PROGRESS' }, adminToken);
-    await uploadBytes(adminContext, adminToken, childControlSource.id, copiedFileName, tinyFile);
+    await uploadBytes(adminContext, adminToken, childControlSource.id, copiedFileName, tinyFile, { ensureStep: true });
     await api(adminContext, 'POST', '/projects/' + childControlSource.id + '/messages',
       { content: sourceOnlyMessage }, adminToken);
 
@@ -110,7 +110,9 @@ async function choose(page, placeholder, optionName) {
         adminContext, adminToken, f.suppliers.a.id,
         prefix + '-' + String(index + 1).padStart(2, '0'), defaults);
       await api(adminContext, 'PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' }, adminToken);
-      await uploadBytes(adminContext, adminToken, project.id, prefix + '-' + index + '.zip', tinyFile);
+      await uploadBytes(
+        adminContext, adminToken, project.id, prefix + '-' + index + '.zip', tinyFile, { ensureStep: true },
+      );
       if (index === 0) {
         await api(supplierContext, 'POST', '/projects/' + project.id + '/messages', {
           content: messageText,
@@ -373,7 +375,7 @@ async function choose(page, placeholder, optionName) {
       assert.equal(acceptedJob.projectGroupId, childControlSource.groupId);
       assert.equal(acceptedJob.targetName, copyName);
       assert(['pending', 'running', 'succeeded'].includes(acceptedJob.status));
-      assert.equal(acceptedJob.filesTotal, 1);
+      assert.equal(acceptedJob.filesTotal, 2); // The internal-upload fixture also includes its required STEP.
       assert.equal(acceptedJob.result, null);
       const jobCard = page.locator('[data-copy-job-id="' + acceptedJob.jobId + '"]');
       await jobCard.waitFor();
@@ -381,10 +383,10 @@ async function choose(page, placeholder, optionName) {
       const copied = await waitForCopyJob(
         adminContext, adminToken, childControlSource.groupId, acceptedJob.jobId,
       );
-      assert.equal(copied.result.copyFileCount, 1);
+      assert.equal(copied.result.copyFileCount, 2);
       assert(Number.isSafeInteger(copied.result.projectId) && copied.result.projectId > 0);
       await jobCard.getByText('已完成', { exact: true }).waitFor();
-      await jobCard.getByText('已复制 1 个文件', { exact: true }).waitFor();
+      await jobCard.getByText('已复制 2 个文件', { exact: true }).waitFor();
       const jobsDrawer = page.locator('.project-copy-jobs-drawer');
       await jobsDrawer.locator('.arco-drawer-close-icon').click();
       await jobsDrawer.waitFor({ state: 'hidden' });
@@ -393,7 +395,9 @@ async function choose(page, placeholder, optionName) {
       await (await pane(copied.result.projectId, copyName))
         .getByRole('button', { name: '在独立页面打开' + copyName, exact: true }).click();
       await page.waitForURL(s.base + '/projects/' + copied.result.projectId);
+      await page.getByLabel('子项目工作区', { exact: true }).waitFor({ state: 'detached' });
       await page.getByRole('row').filter({ hasText: copiedFileName }).waitFor();
+      await page.getByRole('row').filter({ hasText: 'fixture-assembly.step' }).waitFor();
       await page.getByRole('button', { name: '查看复制履历', exact: true }).click();
       const history = page.locator('.project-copy-history-drawer');
       await history.getByRole('heading', { name: '复制来源', exact: true }).waitFor();

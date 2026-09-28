@@ -75,7 +75,7 @@ public sealed class SmtpSettingsTests
     public void PublicViewAndGenericConfigDoNotExposeCredential()
     {
         var resolved = new ResolvedSmtpSettings(new SmtpOptions { Host = "smtp.example.invalid", Password = "authorization-code" }, false);
-        var json = JsonSerializer.Serialize(resolved.View, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var json = JsonSerializer.Serialize(resolved.View, TestJson.Web);
         Assert.DoesNotContain("authorization-code", json);
         Assert.DoesNotContain("\"password\":", json);
         Assert.True(resolved.View.HasPassword);

@@ -33,25 +33,29 @@ function Test-YfWorkersStopped([string]$Pool) {
 }
 function Set-YfSiteConfig([string]$Root,[string]$ExternalConfig) {
     Set-YfExternalConfigurationFallback $Root
-    $file = Join-Path $Root 'web.config'
-    [xml]$xml = Get-Content -LiteralPath $file -Raw -Encoding UTF8
-    $asp = $xml.SelectSingleNode('//aspNetCore')
-    if (!$asp) { throw 'ASP.NET Core IIS configuration missing.' }
-    $variables = $asp.SelectSingleNode('environmentVariables')
-    if (!$variables) { $variables=$xml.CreateElement('environmentVariables'); $asp.AppendChild($variables) | Out-Null }
-    foreach ($pair in @(@('YF_CONFIG_PATH',$ExternalConfig),@('ASPNETCORE_ENVIRONMENT','Production'))) {
-        foreach ($existing in @($variables.SelectNodes('environmentVariable'))) {
-            if ($existing.GetAttribute('name') -eq $pair[0]) { $variables.RemoveChild($existing) | Out-Null }
-        }
-        $node=$xml.CreateElement('environmentVariable'); $node.SetAttribute('name',$pair[0]); $node.SetAttribute('value',$pair[1]); $variables.AppendChild($node) | Out-Null
-    }
-    $xml.Save($file)
+    Set-YfWebConfigEnvironment (Join-Path $Root 'web.config') $ExternalConfig
 }
-function Grant-YfApplicationAccess([string]$Root,$Config,[string]$Pool) {
+function Grant-YfApplicationAccess([string]$Root,$Config,[string]$Pool,[switch]$NewStorage) {
     $identity='IIS AppPool\'+$Pool
-    foreach ($grant in @(@($Root,"${identity}:(OI)(CI)RX"),@($Config.Storage,"${identity}:(OI)(CI)M"))) {
-        & icacls.exe $grant[0] /grant $grant[1] | Out-Null
+    & icacls.exe $Root /grant "${identity}:(OI)(CI)RX" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application pool access.' }
+    if ($NewStorage) {
+        # Restored storage is new: only SYSTEM, Administrators and the pool identity get access.
+        Set-YfApplicationDirectoryAcl $Config.Storage $identity
+    } else {
+        # Existing production storage keeps its reviewed ACL; only make sure the pool can modify it.
+        & icacls.exe $Config.Storage /grant "${identity}:(OI)(CI)M" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application pool access.' }
+    }
+    $logDirectory=Get-YfLogDirectory $Config
+    if ($logDirectory) {
+        if (!(Test-Path -LiteralPath $logDirectory)) {
+            New-Item -ItemType Directory -Path $logDirectory | Out-Null
+            Set-YfApplicationDirectoryAcl $logDirectory $identity
+        } else {
+            & icacls.exe $logDirectory /grant "${identity}:(OI)(CI)M" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application pool access to the log directory.' }
+        }
     }
     Protect-YfConfigurationFile $Config.Path $identity
 }
@@ -74,24 +78,6 @@ function Invoke-YfMigration([string]$Root,[string]$ExternalConfig) {
         foreach ($name in $saved.Keys) { Set-Item -LiteralPath ('Env:\'+$name) -Value $saved[$name] }
     }
 }
-function Invoke-YfReadiness([string]$Root,[string]$ExternalConfig) {
-    $saved=@{}
-    foreach ($item in Get-ChildItem Env:) {
-        if ($item.Name -match '^App(__|:)' -or $item.Name -eq 'YF_CONFIG_PATH') { $saved[$item.Name]=$item.Value; Remove-Item -LiteralPath ('Env:\'+$item.Name) }
-    }
-    try {
-        $env:YF_CONFIG_PATH=$ExternalConfig
-        Push-Location $Root
-        try {
-            & dotnet (Join-Path $Root 'Yf.Api.dll') --check-development-readiness
-            if ($LASTEXITCODE -ne 0) { throw 'New deployment readiness check failed; pool remains stopped.' }
-        } finally { Pop-Location }
-    } finally {
-        Remove-Item Env:\YF_CONFIG_PATH -ErrorAction SilentlyContinue
-        foreach ($name in $saved.Keys) { Set-Item -LiteralPath ('Env:\'+$name) -Value $saved[$name] }
-    }
-}
-
 Import-Module WebAdministration -ErrorAction Stop
 $site=Get-Website -Name $SiteName -ErrorAction Stop
 if (!$site -or $site.Name -ne $SiteName) { throw 'Named IIS site was not found.' }
@@ -109,6 +95,7 @@ $currentConfig=Read-YfMaintenanceConfig $configNodes[0].GetAttribute('value')
 Assert-YfPublishedConfig $currentRoot -AllowConfigPath
 Assert-YfEffectiveConfiguration $SiteName $pool $currentConfig.Path $currentConfig.Origin
 if ($currentConfig.Origin -notlike 'https://*' -or $currentConfig.Config.App.CookieSecure -ne $true) { throw 'Maintenance requires a production HTTPS origin and secure cookies.' }
+if ($currentConfig.Config.App.PSObject.Properties['AllowInsecureCookies'] -and $currentConfig.Config.App.AllowInsecureCookies -eq $true) { throw 'Maintenance requires App.AllowInsecureCookies to be absent or false.' }
 $backupRoot=Get-YfFullPath $BackupDirectory
 Assert-YfSeparate @($currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupRoot)
 if ($currentConfig.CaFile) { Assert-YfSeparate @($currentConfig.CaFile,$currentRoot,$backupRoot) }
@@ -117,6 +104,7 @@ if ($Action -eq 'Restore') {
     $targetConfig=Read-YfMaintenanceConfig $RestoreConfigPath
     if ($targetConfig.Database -eq $currentConfig.Database) { throw 'Use a different database name for restore.' }
     if ($targetConfig.Origin -ne $currentConfig.Origin -or $targetConfig.Config.App.CookieSecure -ne $true) { throw 'Restore must retain the current HTTPS site origin and secure cookies.' }
+    if ($targetConfig.Config.App.PSObject.Properties['AllowInsecureCookies'] -and $targetConfig.Config.App.AllowInsecureCookies -eq $true) { throw 'Restore requires App.AllowInsecureCookies to be absent or false.' }
     Assert-YfBackupSite $backupRoot $SiteName | Out-Null
     Assert-YfPublishedConfig (Join-Path $backupRoot 'application') -AllowConfigPath
     Get-Command $MySql -ErrorAction Stop | Out-Null
@@ -135,6 +123,8 @@ if ($Action -ne 'Backup') {
         if ($targetConfig.CaFile) { Assert-YfSeparate @($targetConfig.CaFile,$currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupRoot,$NewSiteRoot) }
         Assert-YfEmptyDirectory $targetConfig.Storage
     }
+    $logDirectory=Get-YfLogDirectory $targetConfig
+    if ($logDirectory) { Assert-YfNoLinks $logDirectory; $paths+=$logDirectory }
     Assert-YfSeparate $paths
     Get-Command dotnet -ErrorAction Stop | Out-Null
 }
@@ -162,29 +152,26 @@ try {
     if ($Action -eq 'Restore') {
         Restore-YfBackup $backupRoot $targetConfig $NewSiteRoot $MySql
     } else {
-        New-YfBackup $currentRoot $currentConfig $backupRoot $MySqlDump $SiteName
+        New-YfBackup $currentRoot $currentConfig $backupRoot $MySqlDump $SiteName $MySql
         if ($Action -eq 'Upgrade') { Copy-YfTree $PackageRoot $NewSiteRoot }
     }
     if ($Action -ne 'Backup') {
         Set-YfSiteConfig $NewSiteRoot $targetConfig.Path
-        Grant-YfApplicationAccess $NewSiteRoot $targetConfig $pool
+        Grant-YfApplicationAccess $NewSiteRoot $targetConfig $pool -NewStorage:($Action -eq 'Restore')
+        # Offline readiness of the NEW package and configuration before any schema change:
+        # payload, required settings, storage/log read-write, pool storage grant and runtime.
+        Assert-YfDeploymentReadiness $NewSiteRoot $targetConfig ('IIS AppPool\'+$pool)
         if ($MigrateDatabase) {
             $migrationAttempted=$true
             Invoke-YfMigration $NewSiteRoot $targetConfig.Path
         }
-        Invoke-YfReadiness $NewSiteRoot $targetConfig.Path
         Set-ItemProperty ('IIS:\Sites\'+$SiteName) -Name physicalPath -Value $NewSiteRoot
         $pathSwitched=$true
     }
     if ($wasRunning) {
         Start-WebAppPool -Name $pool
-        $healthy=$false
-        $healthDeadline=[DateTime]::UtcNow.AddSeconds($HealthCheckWaitSeconds)
-        while ([DateTime]::UtcNow -lt $healthDeadline) {
-            try { $health=Invoke-RestMethod ($targetConfig.Origin.TrimEnd('/')+'/health') -TimeoutSec $HealthRequestTimeoutSeconds; if ($health.status -eq 'ok' -and $health.db -eq 'up') { $healthy=$true; break } } catch { }
-            Start-Sleep -Seconds 2
-        }
-        if (!$healthy) { throw 'HTTPS health check failed; pool will remain stopped for investigation.' }
+        try { Wait-YfHealth $targetConfig.Origin $HealthCheckWaitSeconds $HealthRequestTimeoutSeconds }
+        catch { throw ($_.Exception.Message + ' The pool will remain stopped for investigation.') }
     }
     Write-Host "$Action completed for $SiteName. Backup: $backupRoot"
     if (!$wasRunning) { Write-Host 'The application pool was already stopped and remains stopped.' }

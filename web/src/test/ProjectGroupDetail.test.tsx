@@ -1,16 +1,25 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { Message } from '@arco-design/web-react'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   put: vi.fn(),
   delete: vi.fn(),
+  perms: ['project:create'] as string[],
+  collaboration: {
+    revision: 'revision-1',
+    status: 'ready',
+    realtimeStatus: 'connected',
+    activityRevisions: {} as Record<number, number>,
+    reconnectRevision: 0,
+  },
 }))
 
-vi.mock('../api/client', () => ({ default: mocks }))
+vi.mock('../api/client', () => ({ default: { get: mocks.get, post: mocks.post, put: mocks.put, delete: mocks.delete } }))
 vi.mock('dockview-react', () => import('./dockviewMock'))
 vi.mock('../components/FileTable', () => ({ default: () => <div>文件列表</div> }))
 vi.mock('../components/MessagePanel', () => ({ default: () => <div>留言列表</div> }))
@@ -19,15 +28,12 @@ vi.mock('../components/ProjectActivityPanel', () => ({ default: () => <div>动�
 vi.mock('../store/auth', () => ({
   useAuth: () => ({
     user: { id: 1, userType: 'INTERNAL' },
-    hasPerm: (permission: string) => permission === 'project:create',
+    hasPerm: (permission: string) => mocks.perms.includes(permission),
   }),
 }))
 
 vi.mock('../store/collaboration', () => ({
-  useCollaboration: (selector: (state: { revision: string; status: string }) => unknown) => selector({
-    revision: 'revision-1',
-    status: 'ready',
-  }),
+  useCollaboration: (selector: (state: typeof mocks.collaboration) => unknown) => selector(mocks.collaboration),
 }))
 
 import ProjectGroupDetail from '../pages/project/ProjectGroupDetail'
@@ -103,8 +109,14 @@ function renderPage() {
   )
 }
 
+function resetSharedMocks() {
+  mocks.perms = ['project:create']
+  mocks.collaboration = { revision: 'revision-1', status: 'ready', realtimeStatus: 'connected', activityRevisions: {}, reconnectRevision: 0 }
+}
+
 describe('子项目后台复制任务', () => {
   beforeEach(() => {
+    resetSharedMocks()
     mocks.get.mockReset()
     mocks.post.mockReset()
     mocks.put.mockReset()
@@ -235,5 +247,172 @@ describe('子项目后台复制任务', () => {
     expect(mocks.post).not.toHaveBeenCalled()
     await user.click(copyButton)
     expect(mocks.post).not.toHaveBeenCalled()
+  })
+})
+
+describe('主项目刷新范围', () => {
+  const draftDetail = { ...detail, projects: [{ ...detail.projects[0], status: 'DRAFT' }] }
+  const calls = (target: string) => mocks.get.mock.calls.filter(([url]) => url === target).length
+
+  beforeEach(() => {
+    resetSharedMocks()
+    mocks.get.mockReset()
+    mocks.delete.mockReset()
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/project-groups/3') return Promise.resolve({ data: draftDetail })
+      if (url === '/project-groups/3/copy-jobs') return Promise.resolve({ data: { jobs: [copyJob({ status: 'succeeded', result: { projectId: 88, copyFileCount: 4 } })] } })
+      const pane = subprojectGet(url)
+      if (pane) return pane
+      throw new Error(`unexpected GET ${url}`)
+    })
+  })
+
+  it('deleting a subproject refreshes the group without resetting the copy-job list', async () => {
+    mocks.perms = ['project:create', 'project:delete']
+    mocks.delete.mockResolvedValue({ data: {} })
+    const user = userEvent.setup()
+    renderPage()
+    const copyButton = await screen.findByRole('button', { name: '复制' })
+    await waitFor(() => expect(copyButton).toBeEnabled())
+    const groupReads = calls('/project-groups/3')
+    const jobReads = calls('/project-groups/3/copy-jobs')
+
+    await user.click(screen.getByRole('button', { name: '删除' }))
+    fireEvent.click(await screen.findByRole('button', { name: '确定' }))
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalledWith('/projects/9'))
+    await waitFor(() => expect(calls('/project-groups/3')).toBe(groupReads + 1))
+    expect(calls('/project-groups/3/copy-jobs')).toBe(jobReads)
+    // 复制任务快照未被重置，复制入口保持可用。
+    expect(screen.getByRole('button', { name: '复制' })).toBeEnabled()
+  })
+
+  it('reacts only to realtime signals for projects of this group', async () => {
+    const view = renderPage()
+    await screen.findByRole('heading', { name: '主项目 A' })
+    await waitFor(() => expect(calls('/project-groups/3')).toBe(1))
+    const rerender = () => view.rerender(
+      <MemoryRouter initialEntries={['/project-groups/3']}><Routes><Route path="/project-groups/:id" element={<ProjectGroupDetail />} /></Routes></MemoryRouter>,
+    )
+
+    // 已知的其他项目变更和连接状态下的全局指纹变化都不应重拉本主项目。
+    mocks.collaboration = { ...mocks.collaboration, activityRevisions: { 50: 1 } }
+    rerender()
+    await waitFor(() => expect(calls('/project-groups/3')).toBe(2))
+    mocks.collaboration = { ...mocks.collaboration, activityRevisions: { 50: 2 }, revision: 'revision-2', status: 'loading' }
+    rerender()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(calls('/project-groups/3')).toBe(2)
+
+    mocks.collaboration = { ...mocks.collaboration, activityRevisions: { 50: 2, 9: 1 }, status: 'ready' }
+    rerender()
+    await waitFor(() => expect(calls('/project-groups/3')).toBe(3))
+
+    // 实时断开时退回全局轮询指纹。
+    mocks.collaboration = { ...mocks.collaboration, realtimeStatus: 'disconnected' }
+    rerender()
+    await waitFor(() => expect(calls('/project-groups/3')).toBe(4))
+    mocks.collaboration = { ...mocks.collaboration, revision: 'revision-3' }
+    rerender()
+    await waitFor(() => expect(calls('/project-groups/3')).toBe(5))
+  })
+
+  it('ignores a stale owner-options response after the transfer dialog is reopened', async () => {
+    mocks.perms = ['project:transfer']
+    const requests: Array<{ resolve: (value: unknown) => void }> = []
+    const base = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/project-owner-options') return new Promise((resolve) => { requests.push({ resolve }) })
+      return base(url)
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '变更负责人' }))
+    await user.click(await screen.findByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: '变更负责人' }))
+    await waitFor(() => expect(requests).toHaveLength(2))
+
+    requests[1].resolve({ data: [{ id: 21, realName: '新负责人', employeeNo: 'E21', sectionName: null }] })
+    requests[0].resolve({ data: [{ id: 20, realName: '过期候选人', employeeNo: 'E20', sectionName: null }] })
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('combobox'))
+    expect(await screen.findByText('新负责人（E21）')).toBeInTheDocument()
+    expect(screen.queryByText('过期候选人（E20）')).not.toBeInTheDocument()
+  })
+})
+
+describe('已加载主项目失去访问', () => {
+  const calls = (target: string) => mocks.get.mock.calls.filter(([url]) => url === target).length
+  let groupStatus: number | null = null
+
+  function PathProbe() {
+    return <output aria-label="当前路径">{useLocation().pathname}</output>
+  }
+  function tree() {
+    return (
+      <MemoryRouter initialEntries={['/project-groups/3']}>
+        <PathProbe />
+        <Routes>
+          <Route path="/project-groups/:id" element={<ProjectGroupDetail />} />
+          <Route path="/projects" element={<div>项目列表页</div>} />
+        </Routes>
+      </MemoryRouter>
+    )
+  }
+
+  beforeEach(() => {
+    resetSharedMocks()
+    groupStatus = null
+    mocks.get.mockReset()
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/project-groups/3') {
+        return groupStatus
+          ? Promise.reject({ isAxiosError: true, response: { status: groupStatus } })
+          : Promise.resolve({ data: detail })
+      }
+      if (url === '/project-groups/3/copy-jobs') return Promise.resolve({ data: { jobs: [] } })
+      const pane = subprojectGet(url)
+      if (pane) return pane
+      throw new Error(`unexpected GET ${url}`)
+    })
+  })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('a realtime refetch returning 403 warns once and replaces the route with the project list', async () => {
+    const warning = vi.spyOn(Message, 'warning').mockImplementation(() => () => {})
+    const view = render(tree())
+    await screen.findByRole('heading', { name: '主项目 A' })
+    await waitFor(() => expect(calls('/project-groups/3')).toBe(1))
+
+    // 他人把负责人转走后，实时信号触发的重拉返回 403。
+    groupStatus = 403
+    mocks.collaboration = { ...mocks.collaboration, reconnectRevision: 1 }
+    view.rerender(tree())
+    expect(await screen.findByText('项目列表页')).toBeInTheDocument()
+    expect(screen.getByLabelText('当前路径')).toHaveTextContent(/^\/projects$/)
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(warning).toHaveBeenCalledWith('该主项目负责人已变更或权限已调整，您已无权访问')
+    expect(screen.queryByText('主项目加载失败或没有访问权限')).not.toBeInTheDocument()
+  })
+
+  it('a refetch returning 404 reports the deletion', async () => {
+    const warning = vi.spyOn(Message, 'warning').mockImplementation(() => () => {})
+    const view = render(tree())
+    await screen.findByRole('heading', { name: '主项目 A' })
+    groupStatus = 404
+    mocks.collaboration = { ...mocks.collaboration, reconnectRevision: 1 }
+    view.rerender(tree())
+    expect(await screen.findByText('项目列表页')).toBeInTheDocument()
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(warning).toHaveBeenCalledWith('该主项目已被删除')
+  })
+
+  it('an initial 403 keeps the no-access state without redirecting', async () => {
+    const warning = vi.spyOn(Message, 'warning').mockImplementation(() => () => {})
+    groupStatus = 403
+    render(tree())
+    expect(await screen.findByText('主项目加载失败或没有访问权限')).toBeInTheDocument()
+    expect(screen.getByLabelText('当前路径')).toHaveTextContent('/project-groups/3')
+    expect(warning).not.toHaveBeenCalled()
   })
 })

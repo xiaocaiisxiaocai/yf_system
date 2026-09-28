@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Yf.Api.Infrastructure;
@@ -12,7 +13,7 @@ namespace Yf.Api.Tests;
 /// activities, half of them read). Skipped unless YF_PERF_BENCHMARK=1; writes timings and the slowest
 /// SQL statements to .artifacts/tests/perf/. Not an assertion of speed: it produces comparable numbers.
 /// </summary>
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class PerformanceBenchmarks
 {
     private const int Rounds = 5;
@@ -30,7 +31,7 @@ public sealed class PerformanceBenchmarks
         var dashboard = new DashboardService();
         var groups = new ProjectGroupService(new AuditService([]), null!);
         var report = new StringBuilder();
-        report.AppendLine($"History: 100000 messages, 100000 activities over ~2 years, 50% read; 20 groups x 5 projects; {Rounds} rounds, first is warm-up");
+        report.AppendLine(CultureInfo.InvariantCulture, $"History: 100000 messages, 100000 activities over ~2 years, 50% read; 20 groups x 5 projects; {Rounds} rounds, first is warm-up");
 
         var benchmarks = new (string Name, Func<MySqlConnector.MySqlConnection, Task> Run)[]
         {
@@ -56,9 +57,9 @@ public sealed class PerformanceBenchmarks
                 capture.Stop();
             }
             var measured = times.Skip(1).ToArray();
-            report.AppendLine($"{name,-28} median {Median(measured),7:F0} ms   rounds {string.Join(", ", measured.Select(t => t.ToString("F0")))}");
+            report.AppendLine(CultureInfo.InvariantCulture, $"{name,-28} median {Median(measured),7:F0} ms   rounds {string.Join(", ", measured.Select(t => t.ToString("F0", CultureInfo.InvariantCulture)))}");
             foreach (var (sql, ms) in capture.Slowest(2))
-                report.AppendLine($"    {ms,6:F0} ms  {sql}");
+                report.AppendLine(CultureInfo.InvariantCulture, $"    {ms,6:F0} ms  {sql}");
         }
 
         var directory = Path.Combine(RepositoryRoot(), ".artifacts", "tests", "perf");

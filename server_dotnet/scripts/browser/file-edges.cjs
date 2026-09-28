@@ -89,7 +89,8 @@ async function assertExcelGrid(dialog, expectedRows) {
     const c2sNames = [];
     const s2cNames = [];
     for (let index = 0; index < 7; index++) {
-      const name = prefix + '-c2s-' + String(index).padStart(2, '0') + '.zip';
+      // 内部发给供应商须先有 STEP 3D 图（上传资料要求契约-2026-09-24），首个 C2S 夹具用 STEP 保持计数不变。
+      const name = prefix + '-c2s-' + String(index).padStart(2, '0') + (index === 0 ? '.step' : '.zip');
       const bytes = Buffer.from('C2S|' + suffix + '|' + index);
       await uploadApi(internalApi, f.users.manager.token, project.id, name, bytes);
       c2sNames.push(name);

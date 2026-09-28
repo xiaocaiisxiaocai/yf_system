@@ -104,7 +104,7 @@ internal static class DevelopmentReadiness
         }
     }
 
-    private static async Task<bool> ProbeRootAsync(string root, CancellationToken ct)
+    internal static async Task<bool> ProbeRootAsync(string root, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) return false;
         var path = Path.Combine(root, $".yf-readiness-{Guid.NewGuid():N}.tmp");

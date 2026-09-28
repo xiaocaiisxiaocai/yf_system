@@ -315,6 +315,33 @@ describe('组织、角色与权限行为', () => {
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/users/9', expect.objectContaining({ roleId: 41 })))
   })
 
+  it('user status toggle confirms success and a failed background refresh keeps the loaded table', async () => {
+    mocks.permissions = ['user:manage']
+    mocks.users = [{
+      id: 9, employeeNo: 'e9', realName: '在职用户', email: 'e9@example.invalid',
+      departmentId: 4, departmentName: '研发部', roleId: 7, roleName: '内部成员', status: 'ACTIVE', createdAt: '',
+    }]
+    render(<UserList />)
+    const row = (await screen.findByText('在职用户')).closest('tr')!
+    let userListCalls = 0
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/admin/users') {
+        userListCalls += 1
+        throw new Error('refresh failed')
+      }
+      if (url === '/departments' || url === '/admin/user-role-options') return { data: [] }
+      return { data: page() }
+    })
+    fireEvent.click(within(row).getByRole('button', { name: '禁用' }))
+    fireEvent.click(await screen.findByRole('button', { name: '确定' }))
+
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/users/9/status', { status: 'DISABLED' }))
+    expect(await screen.findByText('用户已禁用')).toBeInTheDocument()
+    await waitFor(() => expect(userListCalls).toBeGreaterThan(0))
+    expect(await screen.findByText('当前显示上次加载的数据')).toBeVisible()
+    expect(screen.getByText('在职用户')).toBeInTheDocument()
+  })
+
   it('built-in roles never expose hard delete while custom roles still can', async () => {
     mocks.permissions = ['role:manage', 'role:delete']
     mocks.roles = [

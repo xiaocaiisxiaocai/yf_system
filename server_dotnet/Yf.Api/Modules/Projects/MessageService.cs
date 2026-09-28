@@ -164,12 +164,14 @@ internal sealed class MessageService(
                 }));
                 await db.SaveChangesAsync(ct);
                 var notificationContent = content.Length == 0 ? "[图片]" : content;
-                await ProjectNotificationService.EnqueueMessageAsync(conn, tx, project, messageId, notificationContent, current, options.WebBaseUrl, audit, ct);
+                // One participant load serves both the e-mail recipients and the response's read state.
+                var participants = await ProjectNotificationService.ParticipantsAsync(conn, tx, project, ct);
+                await ProjectNotificationService.EnqueueMessageAsync(conn, tx, project, messageId, notificationContent, current,
+                    options.WebBaseUrl, audit, ct, participants);
                 await audit.WriteAsync(conn, tx, current.Id, "MESSAGE_CREATE", "message", messageId,
                     new { projectId, imageCount = stored.Count }, ip, ct);
                 var message = await LoadMessageAsync(db, messageId, false, ct);
                 var persistedImages = await LoadImagesAsync(db, [messageId], ct);
-                var participants = await ProjectNotificationService.ParticipantsAsync(conn, tx, project, ct);
                 var response = MessageJson(message, [], persistedImages,
                     participants.Select(user => user.Id).ToHashSet(), current.Id);
                 await tx.CommitAsync(ct);

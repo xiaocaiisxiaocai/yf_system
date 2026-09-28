@@ -9,8 +9,14 @@ namespace Yf.Api.Modules.Projects;
 
 internal sealed class ProjectGroupService(
     AuditService audit,
-    ProjectGroupStatusService groupStatus)
+    ProjectGroupStatusService groupStatus,
+    IProjectRealtimePublisher? realtime = null,
+    ILogger<ProjectGroupService>? logger = null)
 {
+    private static readonly Action<ILogger, ulong, Exception?> LogRealtimePublishFailure =
+        LoggerMessage.Define<ulong>(LogLevel.Warning, new EventId(1, "ProjectGroupRealtimePublishFailed"),
+            "Realtime publish failed after main project commit for project {ProjectId}");
+
     internal async Task<PageResponse<ProjectGroupResponse>> ListAsync(
         MySqlConnection conn,
         CurrentUser actor,
@@ -284,7 +290,12 @@ internal sealed class ProjectGroupService(
         })).ToArray();
         await audit.WriteBatchAsync(conn, tx, current.Id, updateAudits, ip, ct);
         var result = ProjectJson.ProjectGroup(await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false));
+        // Name and description changes write no subproject activity, so tell every subproject (completed ones
+        // too: they still show the main project's name) directly.
+        var affected = await db.Projects.Where(project => project.ProjectGroupId == groupId)
+            .OrderBy(project => project.Id).Select(project => project.Id).ToArrayAsync(ct);
         await tx.CommitAsync(ct);
+        await PublishAfterCommitAsync(affected);
         return result;
     }
 
@@ -313,6 +324,10 @@ internal sealed class ProjectGroupService(
         var owner = await ProjectService.EligibleOwners(db).Where(row => row.Id == targetId).SingleOrDefaultAsync(ct)
             ?? throw ApiException.BadRequest("新负责人必须是启用且拥有项目列表权限的公司内部账号");
         var before = await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false);
+        // Snapshot who can see each subproject before access moves, so the former owner is told as well.
+        var audiencesBefore = await ProjectRealtimeAuthorizer.SnapshotAudiencesAsync(db,
+            await db.Projects.Where(project => project.ProjectGroupId == groupId)
+                .Select(project => project.Id).ToArrayAsync(ct), ct);
 
         await db.ProjectGroups.Where(group => group.Id == groupId).ExecuteUpdateAsync(setters => setters
             .SetProperty(group => group.ResponsibleUserId, owner.Id)
@@ -349,7 +364,41 @@ internal sealed class ProjectGroupService(
         await audit.WriteBatchAsync(conn, tx, current.Id, audits, ip, ct);
         var result = ProjectJson.ProjectGroup(await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false));
         await tx.CommitAsync(ct);
+        await PublishAfterCommitAsync(audiencesBefore.Select(audience => audience with
+        {
+            ResponsibleUserId = owner.Id,
+            FormerInternalUserIds = audience.ResponsibleUserId is ulong formerOwner && formerOwner != owner.Id
+                ? new HashSet<ulong> { formerOwner }
+                : null,
+        }));
         return result;
+    }
+
+    /// <summary>Pushes a coalesced <c>project</c> signal after commit; a push failure never undoes the commit.</summary>
+    private async Task PublishAfterCommitAsync(IEnumerable<ulong> projectIds)
+    {
+        if (realtime is null) return;
+        foreach (var projectId in projectIds)
+        {
+            try { await realtime.PublishAsync(projectId, RealtimeChangeKinds.Project, CancellationToken.None); }
+            catch (Exception error)
+            {
+                if (logger is not null) LogRealtimePublishFailure(logger, projectId, error);
+            }
+        }
+    }
+
+    private async Task PublishAfterCommitAsync(IEnumerable<ProjectRealtimeAudience> audiences)
+    {
+        if (realtime is null) return;
+        foreach (var audience in audiences)
+        {
+            try { await realtime.PublishAsync(audience, RealtimeChangeKinds.Project, CancellationToken.None); }
+            catch (Exception error)
+            {
+                if (logger is not null) LogRealtimePublishFailure(logger, audience.ProjectId, error);
+            }
+        }
     }
 
     internal async Task<ProjectResponse> CreateSubprojectAsync(
@@ -475,10 +524,10 @@ internal sealed class ProjectGroupService(
                      select new
                      {
                          ProjectGroupId = perGroup.Key,
-                         Total = perGroup.LongCount(),
-                         Completed = perGroup.LongCount(project => project.Status == ProjectStatuses.Completed),
-                         Pending = perGroup.LongCount(project => project.Status == ProjectStatuses.PendingConfirmation),
-                         Terminated = perGroup.LongCount(project => project.Status == ProjectStatuses.Terminated),
+                         Total = (long?)perGroup.LongCount(),
+                         Completed = (long?)perGroup.LongCount(project => project.Status == ProjectStatuses.Completed),
+                         Pending = (long?)perGroup.LongCount(project => project.Status == ProjectStatuses.PendingConfirmation),
+                         Terminated = (long?)perGroup.LongCount(project => project.Status == ProjectStatuses.Terminated),
                      };
         return
             from mainProject in query
@@ -524,10 +573,10 @@ internal sealed class ProjectGroupService(
                 CompletedAt = mainProject.CompletedAt,
                 CreatedAt = mainProject.CreatedAt,
                 UpdatedAt = mainProject.UpdatedAt,
-                SubprojectCount = count == null ? 0 : (ulong)count.Total,
-                CompletedCount = count == null ? 0 : (ulong)count.Completed,
-                PendingCount = count == null ? 0 : (ulong)count.Pending,
-                TerminatedCount = count == null ? 0 : (ulong)count.Terminated,
+                SubprojectCount = (ulong)(count.Total ?? 0),
+                CompletedCount = (ulong)(count.Completed ?? 0),
+                PendingCount = (ulong)(count.Pending ?? 0),
+                TerminatedCount = (ulong)(count.Terminated ?? 0),
             };
     }
 

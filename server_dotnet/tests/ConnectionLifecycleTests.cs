@@ -11,12 +11,12 @@ using Yf.Api.Modules.SystemManagement;
 namespace Yf.Api.Tests;
 
 [CollectionDefinition("Connection lifecycle database tests", DisableParallelization = true)]
-public sealed class ConnectionLifecycleCollection
+public sealed class ConnectionLifecycleCollectionDefinition
 {
     public const string Name = "Connection lifecycle database tests";
 }
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class ConnectionLifecycleTests
 {
     [Theory(Timeout = 30_000)]
@@ -100,16 +100,7 @@ public sealed class ConnectionLifecycleTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await LocalDatabaseScope.CreateOrSkipAsync("bootstrap", ct);
-        var previousPassword = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD");
-        Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", "PoolLifecycle#2026!");
-        try
-        {
-            await SchemaBootstrap.InitializeEmptyAsync(database.Database, ct);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", previousPassword);
-        }
+        await SchemaBootstrap.InitializeEmptyAsync(database.Database, "PoolLifecycle#2026!", ct);
 
         await using var connection = await database.Database.OpenAsync(ct);
         Assert.Equal(EfDatabaseLifecycle.InitialMigrationId,
@@ -135,10 +126,7 @@ public sealed class ConnectionLifecycleTests
         var root = Path.Combine(Path.GetTempPath(), "yf_reset_" + Guid.NewGuid().ToString("N"));
         database.Options.StorageRoot = root;
         database.Options.JwtSecret = new string('z', 48);
-        var previousPassword = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD");
-        Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", "Reset#" + Guid.NewGuid().ToString("N")[..12]);
-        try { await SchemaBootstrap.InitializeEmptyAsync(database.Database, ct); }
-        finally { Environment.SetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD", previousPassword); }
+        await SchemaBootstrap.InitializeEmptyAsync(database.Database, "Reset#" + Guid.NewGuid().ToString("N")[..12], ct);
         Directory.CreateDirectory(Path.Combine(root, "files", "2026"));
         Directory.CreateDirectory(Path.Combine(root, "tmp", "owned"));
         await File.WriteAllTextAsync(Path.Combine(root, "files", "2026", "sample.pdf"), "owned file", ct);
@@ -181,6 +169,20 @@ public sealed class ConnectionLifecycleTests
             Assert.Equal(27, plan.Counts["robot_parts"]);
             await Assert.ThrowsAsync<InvalidOperationException>(() => DevelopmentDataReset.ResetAsync(database.Options, "wrong-db", plan.StorageRoot, ct));
             Assert.True(File.Exists(Path.Combine(root, "files", "2026", "sample.pdf")));
+            // Like the site, the lease holder uses its own non-pooled connection.
+            await using (var app = new MySqlConnection(new MySqlConnectionStringBuilder(database.Options.ConnectionString) { Pooling = false }.ConnectionString))
+            {
+                await app.OpenAsync(ct);
+                // A running site holds the application lease; reset must refuse before touching anything.
+                await using var lease = await AppRunningLease.TryAcquireAsync(app, ct);
+                Assert.NotNull(lease);
+                var running = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    DevelopmentDataReset.ResetAsync(database.Options, plan.Database, plan.StorageRoot, ct));
+                Assert.Contains("still running", running.Message);
+                Assert.True(File.Exists(Path.Combine(root, "files", "2026", "sample.pdf")));
+                await using var check = await database.Database.OpenAsync(ct);
+                Assert.Equal(2, await check.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM users"));
+            }
             var result = await DevelopmentDataReset.ResetAsync(database.Options, plan.Database, plan.StorageRoot, ct);
             Assert.True(result.ResetCompleted);
             Assert.Equal(1, result.Counts["users"]);

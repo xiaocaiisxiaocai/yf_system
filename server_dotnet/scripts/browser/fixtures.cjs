@@ -28,6 +28,8 @@ const XLSX=require(process.env.YF_PROJECT_ROOT+'/web/node_modules/xlsx');
  }
  fs.writeFileSync(OUT+'/fixtures.private.json',JSON.stringify(fixtures));
  fs.copyFileSync(process.env.YF_PROJECT_ROOT+'/web/test/fixtures/pdf-compatibility.pdf',OUT+'/valid-preview.pdf');
+ // 公司发给供应商的资料须含 STEP 3D 图（上传资料要求契约-2026-09-24），业务流程与 PDF 同批上传。
+ fs.writeFileSync(OUT+'/assembly-3d.step','ISO-10303-21;\nHEADER;\nFILE_NAME(\'assembly-3d.step\');\nENDSEC;\nEND-ISO-10303-21;\n');
  const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet([['公司','验收结果'],['甲公司','PASS']]),'验收');
  XLSX.writeFile(book,OUT+'/vendor-response.xlsx');
  console.log('Created disposable API fixtures and valid document samples.');

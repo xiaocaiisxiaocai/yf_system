@@ -72,7 +72,7 @@ public static class PasswordService
     private static async Task<string> CreateTimingDummyAsync()
     {
         var salt = Encoding.ASCII.GetBytes("yf-login-dummy-salt");
-        var argon = new Konscious.Security.Cryptography.Argon2id(Encoding.UTF8.GetBytes("dummy-login#2026")) { Salt = salt, MemorySize = 19456, Iterations = 2, DegreeOfParallelism = 1 };
+        using var argon = new Konscious.Security.Cryptography.Argon2id(Encoding.UTF8.GetBytes("dummy-login#2026")) { Salt = salt, MemorySize = 19456, Iterations = 2, DegreeOfParallelism = 1 };
         return $"$argon2id$v=19$m=19456,t=2,p=1${Convert.ToBase64String(salt).TrimEnd('=')}${Convert.ToBase64String(await argon.GetBytesAsync(32)).TrimEnd('=')}";
     }
 
@@ -100,13 +100,16 @@ public static class PasswordService
             throw workload == PasswordWorkload.Login
                 ? LoginBusyException()
                 : ApiException.PasswordRateLimited("密码处理繁忙，请稍后再试");
+        var passwordBytes = Encoding.UTF8.GetBytes(password);
         try
         {
-            Argon2 argon = algorithm switch
+            // Argon2 is a DeriveBytes: dispose it so its internal buffers are released, and wipe our
+            // copy of the password bytes (the managed string itself cannot be wiped).
+            using Argon2 argon = algorithm switch
             {
-                "argon2id" => new Argon2id(Encoding.UTF8.GetBytes(password)),
-                "argon2i" => new Argon2i(Encoding.UTF8.GetBytes(password)),
-                "argon2d" => new Argon2d(Encoding.UTF8.GetBytes(password)),
+                "argon2id" => new Argon2id(passwordBytes),
+                "argon2i" => new Argon2i(passwordBytes),
+                "argon2d" => new Argon2d(passwordBytes),
                 _ => throw new InvalidOperationException("Unsupported Argon2 algorithm")
             };
             argon.Salt = salt;
@@ -115,7 +118,11 @@ public static class PasswordService
             argon.DegreeOfParallelism = parallelism;
             return await argon.GetBytesAsync(hashBytes);
         }
-        finally { HashSlots.Release(); }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(passwordBytes);
+            HashSlots.Release();
+        }
     }
 
     internal static ApiException LoginBusyException() =>

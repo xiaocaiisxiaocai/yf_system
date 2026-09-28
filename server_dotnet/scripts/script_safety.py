@@ -23,18 +23,62 @@ def clean_dotnet_config_environment(source: Mapping[str, str] | None = None) -> 
     }
 
 
-def validate_zip_entries(entries: Iterable[zipfile.ZipInfo]) -> None:
-    """Reject paths that are unsafe or ambiguous on the Windows release target."""
+# Characters Windows rejects in a path segment (plus ASCII control characters).
+_WINDOWS_ILLEGAL_CHARACTERS = frozenset('<>:"|?*') | frozenset(chr(code) for code in range(32))
+# Device names are reserved with or without an extension ("NUL", "nul.txt", "COM1.log").
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"COM{index}" for index in range(1, 10)}
+    | {f"LPT{index}" for index in range(1, 10)}
+    | {"COM\u00b9", "COM\u00b2", "COM\u00b3", "LPT\u00b9", "LPT\u00b2", "LPT\u00b3"}
+)
+# Release packages are well below these; the limits bound a hostile or corrupt archive
+# (zip bomb / entry flood) before anything is extracted.
+MAX_ARCHIVE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+MAX_ARCHIVE_ENTRIES = 50_000
+
+
+def _is_unsafe_windows_segment(segment: str) -> bool:
+    if not segment or segment in {".", ".."}:
+        return True
+    if segment[-1] in {".", " "}:
+        return True
+    if any(character in _WINDOWS_ILLEGAL_CHARACTERS for character in segment):
+        return True
+    return segment.split(".", 1)[0].rstrip(" ").upper() in _WINDOWS_RESERVED_NAMES
+
+
+def validate_zip_entries(
+    entries: Iterable[zipfile.ZipInfo],
+    *,
+    max_total_bytes: int = MAX_ARCHIVE_TOTAL_BYTES,
+    max_entries: int = MAX_ARCHIVE_ENTRIES,
+) -> None:
+    """Reject paths that are unsafe or ambiguous on the Windows release target.
+
+    Also bounds the declared uncompressed size and the number of entries so a
+    verification run cannot be used to fill the disk.
+    """
 
     targets: set[str] = set()
+    total_bytes = 0
+    count = 0
     for entry in entries:
+        count += 1
+        if count > max_entries:
+            raise RuntimeError("Archive has too many entries")
+        total_bytes += max(entry.file_size, 0)
+        if total_bytes > max_total_bytes:
+            raise RuntimeError("Archive uncompressed size limit exceeded")
         path = PurePosixPath(entry.filename)
+        segments = entry.filename[:-1].split("/") if entry.filename.endswith("/") else entry.filename.split("/")
         if (
             path.is_absolute()
             or ".." in path.parts
             or "\\" in entry.filename
             or ":" in entry.filename
             or (entry.external_attr >> 16) & 0o170000 == 0o120000
+            or any(_is_unsafe_windows_segment(segment) for segment in segments)
         ):
             raise RuntimeError("Unsafe archive path")
         target = path.as_posix().rstrip("/").casefold()

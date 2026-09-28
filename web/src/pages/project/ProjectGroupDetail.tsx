@@ -9,6 +9,7 @@ import http, { type QuietRequestConfig } from '../../api/client'
 import { createProjectCopyJob, unwrapCopyJob } from '../../api/copyJobs'
 import ProjectCopyJobsPanel from '../../components/project-copy-jobs/ProjectCopyJobsPanel'
 import { isCopyJobActive, useProjectCopyJobs } from '../../hooks/useProjectCopyJobs'
+import { projectAccessLostStatus, useProjectAccessLost } from '../../hooks/useProjectAccessLost'
 import { useAuth } from '../../store/auth'
 import { useCollaboration } from '../../store/collaboration'
 import {
@@ -39,9 +40,19 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const groupId = Number(id)
   const validId = Number.isSafeInteger(groupId) && groupId > 0
   const navigate = useNavigate()
-  const revision = useCollaboration((state) => state.revision)
-  const syncStatus = useCollaboration((state) => state.status)
   const [data, setData] = useState<ProjectGroupDetailData | null>(null)
+  const projectIdsKey = useMemo(() => (data?.projects ?? []).map((project) => project.id).join(','), [data?.projects])
+  // 只对本主项目相关的信号重新拉取：本组子项目的实时变更、重连、新出现的项目（可能是新增到本组的子项目），
+  // 以及实时断开时的全局轮询指纹。其他项目的实时事件和协作快照的加载状态不触发重拉。
+  const groupSignal = useCollaboration((state) => {
+    const revisions = state.activityRevisions ?? {}
+    // 只拼接已有实时变更的子项目，首次加载得到子项目列表时信号不变，避免重复拉取。
+    const live = projectIdsKey
+      ? projectIdsKey.split(',').filter((projectId) => revisions[Number(projectId)]).map((projectId) => `${projectId}:${revisions[Number(projectId)]}`).join(',')
+      : ''
+    const fallback = state.realtimeStatus === 'connected' ? 'live' : state.revision
+    return `${live}|${Object.keys(revisions).length}|${state.reconnectRevision ?? 0}|${fallback}`
+  })
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [summaryExpanded, setSummaryExpanded] = useState(false)
@@ -67,6 +78,10 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const [transferTarget, setTransferTarget] = useState<number | undefined>()
   const [transferring, setTransferring] = useState(false)
   const transferInFlight = useRef(false)
+  const ownerOptionsSeq = useRef(0)
+  // 曾成功展示过主项目后，刷新得到 403/404 说明负责人已被他人变更或主项目已删除：提示后回到列表。
+  const everLoaded = useRef(false)
+  const handleAccessLost = useProjectAccessLost('主项目')
   const [form] = Form.useForm()
   const [copyForm] = Form.useForm()
   const { user, hasPerm } = useAuth()
@@ -85,10 +100,14 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     if (!validId) return
     let active = true
     const controller = new AbortController()
-    http.get<ApiResponses['GET /project-groups/{id}']>(`/project-groups/${groupId}`, { signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
-      .then((response) => { if (active) { setData(response.data as ProjectGroupDetailData); setLoadError(false) } })
+    // 已加载后的 403/404 由本页统一提示并跳转，不再叠加拦截器的逐条错误提示。
+    const quietClientError = everLoaded.current
+    http.get<ApiResponses['GET /project-groups/{id}']>(`/project-groups/${groupId}`, { signal: controller.signal, quietNetworkError: true, quietClientError } as QuietRequestConfig)
+      .then((response) => { if (active) { everLoaded.current = true; setData(response.data as ProjectGroupDetailData); setLoadError(false) } })
       .catch((error: unknown) => {
-        if (!active) return
+        if (!active || controller.signal.aborted) return
+        const lost = projectAccessLostStatus(error)
+        if (lost && everLoaded.current && handleAccessLost(lost)) return
         setLoadError(true)
         if (isAxiosError(error) && (error.response?.status === 403 || error.response?.status === 404)) {
           setData(null)
@@ -99,7 +118,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false; controller.abort() }
-  }, [groupId, groupRefreshKey, reloadKey, revision, syncStatus, validId])
+  }, [groupId, groupRefreshKey, groupSignal, handleAccessLost, reloadKey, validId])
 
   useEffect(() => {
     if (!canReadCopyJobs || copyJobs.unavailable) {
@@ -128,8 +147,9 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
         newSuccess = true
       }
     })
-    if (newSuccess) load()
-  }, [canReadCopyJobs, copyJobs.jobs, copyJobs.loading, copyJobs.ready, copyJobs.unavailable, load])
+    // 新副本只影响子项目列表；刷新主项目即可，不重置正在显示的复制任务列表。
+    if (newSuccess) refreshGroup()
+  }, [canReadCopyJobs, copyJobs.jobs, copyJobs.loading, copyJobs.ready, copyJobs.unavailable, refreshGroup])
 
   const projects = data?.projects
   const projectMap = useMemo(() => new Map((projects ?? []).map((project) => [project.id, project])), [projects])
@@ -151,9 +171,10 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     if (pending) copyForm.setFieldsValue({ name: pending.name })
   }, [copyForm, copyReady])
   const remove = useCallback(async (project: ProjectSummary) => {
-    try { await http.delete<ApiResponses['DELETE /projects/{id}']>(`/projects/${project.id}`); Message.success('子项目已删除'); load() }
+    // 删除只需刷新主项目；load() 会递增复制任务的 generation，导致任务列表清空闪烁。
+    try { await http.delete<ApiResponses['DELETE /projects/{id}']>(`/projects/${project.id}`); Message.success('子项目已删除'); refreshGroup() }
     catch { /* 请求错误由统一拦截器提示。 */ }
-  }, [load])
+  }, [refreshGroup])
   const dockContext = useMemo<SubprojectDockContextValue>(() => ({
     projects: projectMap,
     onGroupChanged: refreshGroup,
@@ -188,7 +209,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       } else {
         await http.post<ApiResponses['POST /project-groups/{id}/projects']>(`/project-groups/${groupId}/projects`, values); Message.success('子项目已创建并继承主项目资料')
       }
-      setChildModalOpen(false); load()
+      setChildModalOpen(false); refreshGroup()
     } catch {
       /* 请求错误由统一拦截器提示，保留弹窗内容供重试。 */
     } finally { saveInFlight.current = false; setSaving(false) }
@@ -238,13 +259,15 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   }
   const canTransfer = isInternal && hasPerm('project:transfer')
   const openTransfer = () => {
+    // 快速关闭再打开时，只接受最后一次打开的候选人响应。
+    const seq = ++ownerOptionsSeq.current
     setTransferTarget(undefined); setTransferOpen(true); setOwnerOptionsLoading(true)
     http.get<ApiResponses['GET /project-owner-options']>('/project-owner-options')
-      .then((response) => setOwnerOptions(response.data))
-      .catch(() => { setOwnerOptions([]) /* 请求错误由统一拦截器提示。 */ })
-      .finally(() => setOwnerOptionsLoading(false))
+      .then((response) => { if (seq === ownerOptionsSeq.current) setOwnerOptions(response.data) })
+      .catch(() => { if (seq === ownerOptionsSeq.current) setOwnerOptions([]) /* 请求错误由统一拦截器提示。 */ })
+      .finally(() => { if (seq === ownerOptionsSeq.current) setOwnerOptionsLoading(false) })
   }
-  const closeTransfer = () => { if (!transferring) setTransferOpen(false) }
+  const closeTransfer = () => { if (!transferring) { ownerOptionsSeq.current += 1; setOwnerOptionsLoading(false); setTransferOpen(false) } }
   const submitTransfer = async () => {
     if (!transferTarget || transferInFlight.current) return
     transferInFlight.current = true; setTransferring(true)

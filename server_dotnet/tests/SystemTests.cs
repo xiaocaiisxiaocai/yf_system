@@ -26,6 +26,8 @@ public class SystemTests
     [InlineData("notify.enabled", "yes")]
     [InlineData("notify.internal.enabled", "yes")]
     [InlineData("upload.allowed_exts", "pdf,../exe")]
+    [InlineData("upload.allowed_exts", "pdf,xlsx")]
+    [InlineData("upload.allowed_exts", "stpx,steps")]
     [InlineData("security.management_lock", "anything")]
     [InlineData("SECURITY.MANAGEMENT_LOCK", "anything")]
     [InlineData(" security.management_lock ", "anything")]
@@ -36,7 +38,7 @@ public class SystemTests
 
     [Fact]
     public void ExtensionsAreNormalizedAndDeduplicated()
-        => Assert.Equal("jpg,pdf", SystemService.NormalizeConfig("upload.allowed_exts", " PDF,jpg,pdf "));
+        => Assert.Equal("jpg,pdf,stp", SystemService.NormalizeConfig("upload.allowed_exts", " PDF,jpg,pdf,STP "));
 
     [Theory]
     [InlineData("notify.enabled")]
@@ -146,6 +148,37 @@ public class SystemTests
         options.Validate();
 
         Assert.True(options.Smtp.IsConfigured);
+    }
+
+    [Theory]
+    [InlineData(true, "https://yf.example.invalid", false, false, true)]
+    [InlineData(false, "https://yf.example.invalid", true, true, false)]
+    [InlineData(false, "http://127.0.0.1:5273", false, false, true)]
+    [InlineData(false, "http://localhost:5273", false, false, true)]
+    [InlineData(false, "http://yf.lan.invalid", true, false, true)]
+    [InlineData(false, "http://yf.lan.invalid", false, true, true)]
+    [InlineData(false, "http://yf.lan.invalid", false, false, false)]
+    public void InsecureCookiesRequireLoopbackDevelopmentOrExplicitOptIn(
+        bool cookieSecure, string webBaseUrl, bool development, bool allowInsecure, bool accepted)
+    {
+        var options = ValidOptions();
+        options.CookieSecure = cookieSecure;
+        options.WebBaseUrl = webBaseUrl;
+        options.AllowInsecureCookies = allowInsecure;
+
+        if (accepted) options.ValidateCookieSecurity(development);
+        else Assert.Throws<InvalidOperationException>(() => options.ValidateCookieSecurity(development));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1001)]
+    public void SessionCapMustBeBounded(int value)
+    {
+        var options = ValidOptions();
+        options.MaxActiveSessionsPerUser = value;
+
+        Assert.Throws<InvalidOperationException>(() => options.Validate());
     }
 
     [Theory]

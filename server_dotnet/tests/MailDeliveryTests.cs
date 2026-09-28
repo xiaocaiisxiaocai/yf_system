@@ -1,4 +1,5 @@
 using Dapper;
+using MailKit.Net.Smtp;
 using Microsoft.Extensions.Logging.Abstractions;
 using MySqlConnector;
 using System.Text.Json;
@@ -174,7 +175,7 @@ public sealed class MailDeliveryTests
                 "SELECT COUNT(*) FROM audit_logs WHERE action='EMAIL_CANCELLED_STALE' AND target_id='1'", cancellationToken: ct)));
         }
         using var status = JsonDocument.Parse(JsonSerializer.Serialize(
-            await service.StatusAsync(ct), new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            await service.StatusAsync(ct), TestJson.Web));
         Assert.Equal(1, status.RootElement.GetProperty("queue").GetProperty("cancelled").GetInt64());
         Assert.Contains(status.RootElement.GetProperty("recent").EnumerateArray(),
             row => row.GetProperty("action").GetString() == "EMAIL_CANCELLED_STALE");
@@ -414,6 +415,221 @@ public sealed class MailDeliveryTests
             "SELECT COUNT(*) FROM email_outbox WHERE status='SENT'", cancellationToken: ct)));
     }
 
+    [Fact(Timeout = 60_000)]
+    public async Task UnavailableSmtpPausesTheBatchWithoutSpendingRetriesAndBacksOff()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var seed = await scope.Database.OpenAsync(ct))
+            await seed.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO email_outbox(id,event_type,recipient_email,subject,body,status,retry_count)
+                VALUES(2,'TEST_NOTIFICATION','second@example.invalid','subject','body','PENDING',0),
+                      (3,'TEST_NOTIFICATION','third@example.invalid','subject','body','PENDING',0)
+                """, cancellationToken: ct));
+        var clock = new ManualUtcClock(new DateTimeOffset(2026, 9, 27, 0, 0, 0, TimeSpan.Zero));
+        var delivery = new ScriptedDelivery(_ => new MailKit.Security.AuthenticationException("535 bad credentials"));
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]),
+            NullLogger<MailService>.Instance, delivery, clock);
+
+        Assert.Equal(0, await service.FlushAsync(ct));
+        Assert.Single(delivery.Attempts);
+        Assert.Equal(TimeSpan.FromMinutes(1), service.CurrentBreakerDelay);
+        await using (var connection = await scope.Database.OpenAsync(ct))
+        {
+            var rows = (await connection.QueryAsync<OutboxState>(new CommandDefinition(
+                "SELECT status AS Status,retry_count AS RetryCount,next_attempt_at AS NextAttemptAt,sent_at AS SentAt FROM email_outbox ORDER BY id",
+                cancellationToken: ct))).ToArray();
+            Assert.All(rows, row => Assert.Equal(("PENDING", 0), (row.Status, row.RetryCount)));
+            Assert.Equal(1, await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM email_outbox WHERE next_attempt_at IS NOT NULL", cancellationToken: ct)));
+            Assert.InRange(await connection.ExecuteScalarAsync<long>(new CommandDefinition(
+                "SELECT TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(),next_attempt_at) FROM email_outbox WHERE next_attempt_at IS NOT NULL",
+                cancellationToken: ct)), 50, 60);
+            Assert.Contains(MailService.SmtpUnavailableAuditReason, await connection.ExecuteScalarAsync<string>(new CommandDefinition(
+                "SELECT detail FROM audit_logs WHERE action='EMAIL_RETRY'", cancellationToken: ct)));
+        }
+
+        // While the breaker is open nothing is attempted, even rows that are already due.
+        Assert.Equal(0, await service.FlushAsync(ct));
+        Assert.Single(delivery.Attempts);
+
+        clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(0, await service.FlushAsync(ct));
+        Assert.Equal(2, delivery.Attempts.Count);
+        Assert.Equal(TimeSpan.FromMinutes(2), service.CurrentBreakerDelay);
+
+        clock.Advance(TimeSpan.FromMinutes(2));
+        delivery.Failure = _ => null;
+        await using (var connection = await scope.Database.OpenAsync(ct))
+            await connection.ExecuteAsync(new CommandDefinition(
+                "UPDATE email_outbox SET next_attempt_at=NULL", cancellationToken: ct));
+        Assert.Equal(3, await service.FlushAsync(ct));
+        Assert.Equal(TimeSpan.Zero, service.CurrentBreakerDelay);
+        await using (var connection = await scope.Database.OpenAsync(ct))
+            Assert.Equal(3, await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM email_outbox WHERE status='SENT' AND retry_count=0", cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task PermanentRecipientRejectionFailsOnlyThatMessage()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var seed = await scope.Database.OpenAsync(ct))
+            await seed.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO email_outbox(id,event_type,recipient_email,subject,body,status,retry_count)
+                VALUES(2,'TEST_NOTIFICATION','rejected@example.invalid','subject','body','PENDING',0),
+                      (3,'TEST_NOTIFICATION','busy@example.invalid','subject','body','PENDING',0)
+                """, cancellationToken: ct));
+        var delivery = new ScriptedDelivery(envelope => envelope.Recipient switch
+        {
+            "rejected@example.invalid" => new SmtpCommandException(SmtpErrorCode.RecipientNotAccepted,
+                SmtpStatusCode.MailboxUnavailable, "550 no such user"),
+            "busy@example.invalid" => new SmtpCommandException(SmtpErrorCode.RecipientNotAccepted,
+                SmtpStatusCode.MailboxBusy, "450 mailbox busy"),
+            _ => null,
+        });
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]),
+            NullLogger<MailService>.Instance, delivery);
+
+        Assert.Equal(3, await service.FlushAsync(ct));
+
+        Assert.Equal(TimeSpan.Zero, service.CurrentBreakerDelay);
+        await using var connection = await scope.Database.OpenAsync(ct);
+        var rows = (await connection.QueryAsync<OutboxState>(new CommandDefinition(
+            "SELECT status AS Status,retry_count AS RetryCount,next_attempt_at AS NextAttemptAt,sent_at AS SentAt FROM email_outbox ORDER BY id",
+            cancellationToken: ct))).ToArray();
+        Assert.Equal(("SENT", 0), (rows[0].Status, rows[0].RetryCount));
+        Assert.Equal(("FAILED", 1), (rows[1].Status, rows[1].RetryCount));
+        Assert.Null(rows[1].NextAttemptAt);
+        Assert.Equal(("PENDING", 1), (rows[2].Status, rows[2].RetryCount));
+        Assert.NotNull(rows[2].NextAttemptAt);
+    }
+
+    [Theory]
+    [InlineData("auth", nameof(MailService.SmtpFailureKind.ServiceUnavailable))]
+    [InlineData("socket", nameof(MailService.SmtpFailureKind.ServiceUnavailable))]
+    [InlineData("timeout", nameof(MailService.SmtpFailureKind.ServiceUnavailable))]
+    [InlineData("sender", nameof(MailService.SmtpFailureKind.ServiceUnavailable))]
+    [InlineData("from-address", nameof(MailService.SmtpFailureKind.ServiceUnavailable))]
+    [InlineData("rcpt-550", nameof(MailService.SmtpFailureKind.PermanentForMessage))]
+    [InlineData("bad-recipient", nameof(MailService.SmtpFailureKind.PermanentForMessage))]
+    [InlineData("rcpt-450", nameof(MailService.SmtpFailureKind.Transient))]
+    [InlineData("other", nameof(MailService.SmtpFailureKind.Transient))]
+    public void SmtpFailuresAreClassifiedByWhoCanFixThem(string failure, string expected)
+    {
+        Exception error = failure switch
+        {
+            "auth" => new MailKit.Security.AuthenticationException("535"),
+            "socket" => new System.Net.Sockets.SocketException(10061),
+            "timeout" => new TimeoutException(),
+            "sender" => new SmtpCommandException(SmtpErrorCode.SenderNotAccepted, SmtpStatusCode.MailboxUnavailable, "550 sender"),
+            "from-address" => new SmtpSenderAddressException(),
+            "rcpt-550" => new SmtpCommandException(SmtpErrorCode.RecipientNotAccepted, SmtpStatusCode.MailboxUnavailable, "550"),
+            "bad-recipient" => new FormatException("bad address"),
+            "rcpt-450" => new SmtpCommandException(SmtpErrorCode.RecipientNotAccepted, SmtpStatusCode.MailboxBusy, "450"),
+            _ => new InvalidOperationException(),
+        };
+        Assert.Equal(expected, MailService.ClassifyFailure(error).ToString());
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task StalePendingMailExpiresEvenWithoutSmtpConfiguration()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        scope.Options.Smtp.Host = string.Empty;
+        await using (var seed = await scope.Database.OpenAsync(ct))
+            await seed.ExecuteAsync(new CommandDefinition("""
+                UPDATE email_outbox SET created_at=UTC_TIMESTAMP(3) - INTERVAL 4 DAY WHERE id=1;
+                INSERT INTO email_outbox(id,event_type,recipient_email,subject,body,status,retry_count,created_at)
+                VALUES(2,'TEST_NOTIFICATION','fresh@example.invalid','subject','body','PENDING',0,UTC_TIMESTAMP(3) - INTERVAL 2 DAY);
+                """, cancellationToken: ct));
+        var delivery = new CaptureSettingsDelivery();
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]),
+            NullLogger<MailService>.Instance, delivery);
+
+        Assert.Equal(0, await service.FlushAsync(ct));
+
+        Assert.Empty(delivery.Seen);
+        await using var connection = await scope.Database.OpenAsync(ct);
+        var expired = await connection.QuerySingleAsync<OutboxState>(new CommandDefinition(
+            "SELECT status AS Status,last_error AS LastError FROM email_outbox WHERE id=1", cancellationToken: ct));
+        Assert.Equal(("CANCELLED", MailService.ExpiredPendingReason), (expired.Status, expired.LastError));
+        Assert.Equal("PENDING", await connection.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT status FROM email_outbox WHERE id=2", cancellationToken: ct)));
+        Assert.Contains(MailService.ExpiredPendingAuditReason, await connection.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT detail FROM audit_logs WHERE action='EMAIL_CANCELLED_STALE' AND target_id='1'", cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ProjectMailIsCancelledWhenTheSupplierCompanyIsDisabledAfterEnqueue()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var conn = await scope.Database.OpenAsync(ct))
+        {
+            await conn.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO permissions(id,code) VALUES(10,'project:list');
+                INSERT INTO roles(id,status) VALUES(10,'ACTIVE');
+                INSERT INTO role_permissions(role_id,permission_id) VALUES(10,10);
+                INSERT INTO suppliers(id,status) VALUES(100,'ACTIVE');
+                INSERT INTO users(id,employee_no,email,user_type,supplier_id,status,must_change_password)
+                VALUES(10,'supplier-user','supplier@example.invalid','SUPPLIER',100,'ACTIVE',0),
+                      (11,'owner','owner@example.invalid','INTERNAL',NULL,'ACTIVE',1);
+                INSERT INTO user_roles(user_id,role_id) VALUES(10,10),(11,10);
+                INSERT INTO projects(id,project_group_id,supplier_id,created_by,responsible_user_id,status,confirm_side)
+                VALUES(7,1,100,11,11,'IN_PROGRESS',NULL);
+                UPDATE email_outbox
+                SET event_type='MESSAGE_CREATED',project_id=7,recipient_user_id=10,recipient_email='supplier@example.invalid'
+                WHERE id=1;
+                """, cancellationToken: ct));
+            await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+            {
+                Assert.True(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, tx, 7, 10, ct));
+                // An account that still has to change its initial password cannot see anything yet.
+                Assert.False(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, tx, 7, 11, ct));
+                await tx.CommitAsync(ct);
+            }
+            await conn.ExecuteAsync(new CommandDefinition(
+                "UPDATE suppliers SET status='DISABLED' WHERE id=100", cancellationToken: ct));
+            await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+            {
+                Assert.False(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, tx, 7, 10, ct));
+                await tx.CommitAsync(ct);
+            }
+        }
+        var delivery = new CaptureSettingsDelivery();
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]), NullLogger<MailService>.Instance, delivery);
+
+        await service.FlushAsync(ct);
+
+        Assert.Empty(delivery.Seen);
+        await using var check = await scope.Database.OpenAsync(ct);
+        var row = await check.QuerySingleAsync<OutboxState>(new CommandDefinition(
+            "SELECT status AS Status,last_error AS LastError FROM email_outbox WHERE id=1", cancellationToken: ct));
+        Assert.Equal(("CANCELLED", ProjectNotificationService.StaleProjectMailReason), (row.Status, row.LastError));
+    }
+
+    private sealed class ManualUtcClock(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset now = start;
+        public override DateTimeOffset GetUtcNow() => now;
+        public void Advance(TimeSpan by) => now += by;
+    }
+
+    /// <summary>A batch whose sends fail per recipient according to <see cref="Failure"/> (null = accepted).</summary>
+    private sealed class ScriptedDelivery(Func<SmtpEnvelope, Exception?> failure) : ISmtpDelivery
+    {
+        public Func<SmtpEnvelope, Exception?> Failure { get; set; } = failure;
+        public List<string> Attempts { get; } = [];
+        public Task<SmtpDeliveryResult> SendAsync(SmtpOptions options, SmtpEnvelope envelope, CancellationToken ct)
+        {
+            Attempts.Add(envelope.Recipient);
+            return Failure(envelope) is { } error ? Task.FromException<SmtpDeliveryResult>(error) : Task.FromResult(new SmtpDeliveryResult(null));
+        }
+    }
+
     private sealed class BatchRecordingDelivery : ISmtpDelivery
     {
         public List<int> SendsPerBatch { get; } = [];
@@ -478,7 +694,9 @@ public sealed class MailDeliveryTests
             CancellationToken ct)
         {
             SendCount++;
-            throw new IOException("simulated failure before SMTP accepted the message");
+            // A 4xx reply is a per-message transient failure: it consumes one retry.
+            throw new SmtpCommandException(SmtpErrorCode.MessageNotAccepted, SmtpStatusCode.ErrorInProcessing,
+                "simulated 451 before SMTP accepted the message");
         }
     }
 
@@ -602,7 +820,8 @@ public sealed class MailDeliveryTests
                         email VARCHAR(128) NOT NULL DEFAULT '',
                         user_type VARCHAR(16) NOT NULL,
                         supplier_id BIGINT UNSIGNED NULL,
-                        status VARCHAR(16) NOT NULL
+                        status VARCHAR(16) NOT NULL,
+                        must_change_password TINYINT(1) NOT NULL DEFAULT 0
                     );
                     CREATE TABLE permissions(
                         id BIGINT UNSIGNED PRIMARY KEY,

@@ -150,9 +150,10 @@ async function assertInsideViewport(locator, page, label) {
 
     const deleteName = prefix + '-delete.pdf';
     const pdfName = prefix + '-two-pages.pdf';
-    const excelName = prefix + '-fallback.xlsx';
+    // 内部发给供应商的 Excel 须符合动作流程命名（上传资料要求契约-2026-09-24），这里同时覆盖繁体写法。
+    const excelName = 'CSLR-' + suffix + ' 控件機 210' + suffix.slice(0, 6) + '-1 動作流程.xlsx';
     const deleteFile = await uploadFixture(
-      context, auth.accessToken, project.id, deleteName, twoPagePdf('DELETE'),
+      context, auth.accessToken, project.id, deleteName, twoPagePdf('DELETE'), { ensureStep: true },
     );
     const pdfFile = await uploadFixture(
       context, auth.accessToken, project.id, pdfName, twoPagePdf('MULTIPAGE'),
@@ -224,9 +225,9 @@ async function assertInsideViewport(locator, page, label) {
           assert.equal((await failed).status(), 503);
           await page.getByText('验收模拟文件删除失败', { exact: true }).waitFor();
         });
-        if (await popconfirm().count()) {
-          await popconfirm().getByRole('button', { name: '取消', exact: true }).click();
-        }
+        // The failed action may already be closing its popup; don't race an animated cancel button.
+        await page.getByRole('tab', { name: '文件', exact: true }).click();
+        await popconfirm().waitFor({ state: 'hidden' });
         await row(deleteName).waitFor();
         assert.equal((await listFiles(deleteName)).total, 1, 'failed delete does not change persistence');
 

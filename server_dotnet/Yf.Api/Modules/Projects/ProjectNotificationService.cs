@@ -11,6 +11,15 @@ internal static class ProjectNotificationService
     internal const string SupersededAcceptanceMailReason = "验收申请已失效或收件人已无验收权限，通知已取消";
     internal const string StaleProjectMailReason = "收件人已无项目访问权限，通知已取消";
 
+    /// <summary>Message e-mails for one recipient and subproject are merged within this window.</summary>
+    internal const int MessageSummaryDelayMinutes = 2;
+    private const int MessageSummaryMaximumBodyBytes = 60_000;
+
+    /// <summary>
+    /// Queues a MESSAGE_CREATED summary for every eligible recipient on the other side. Like the
+    /// FILE_UPLOADED summary, one PENDING row per (subproject, recipient) collects the messages posted
+    /// within <see cref="MessageSummaryDelayMinutes"/> minutes; every entry keeps its own precise link.
+    /// </summary>
     internal static async Task EnqueueMessageAsync(
         MySqlConnection conn,
         MySqlTransaction tx,
@@ -20,26 +29,56 @@ internal static class ProjectNotificationService
         CurrentUser actor,
         string baseUrl,
         AuditService audit,
-        CancellationToken ct)
+        CancellationToken ct,
+        IReadOnlyList<UserRow>? participants = null)
     {
-        var preview = Truncate(content, 80);
+        var recipients = await SelectRecipientsAsync(
+            conn, tx, project, "MESSAGE_CREATED", OppositeSide(actor), ["project:list"], [], false, actor.Id,
+            ct, audit, participants);
+        if (recipients.Count == 0) return;
+
+        var safeProjectName = SafeMailLine(project.Name, 100);
+        var preview = SafeMailLine(content, 80);
         var suffix = content.EnumerateRunes().Count() > 80 ? "…" : string.Empty;
-        var targetUrl = ProjectUrl(baseUrl, project.Id, "messages", messageId);
-        await EnqueueAsync(
-            conn,
-            tx,
-            project,
-            "MESSAGE_CREATED",
-            OppositeSide(actor),
-            ["project:list"],
-            [],
-            false,
-            actor.Id,
-            $"[协作平台] 项目「{project.Name}」有新留言",
-            $"项目：{project.Name}\n留言人：工号 {actor.EmployeeNo}\n内容：{preview}{suffix}\n\n请登录平台查看：{targetUrl}\n\n（本邮件由系统自动发送）",
-            ct,
-            audit);
+        var entry = $"- 留言人：工号 {SafeMailLine(actor.EmployeeNo, 64)}\n  内容：{preview}{suffix}\n  {ProjectUrl(baseUrl, project.Id, "messages", messageId)}\n";
+        var subject = $"[协作平台] 项目「{safeProjectName}」有新留言";
+        var body = $"项目：{safeProjectName}\n以下留言请登录平台查看（本邮件由系统自动发送）：\n\n{entry}";
+        await using var db = EfDb.Use(conn, tx);
+        var createdAt = await DbClock.UtcNowAsync(db, ct, 3);
+        var nextAttemptAt = createdAt.AddMinutes(MessageSummaryDelayMinutes);
+        foreach (var recipient in recipients)
+        {
+            var dedupeKey = MessageSummaryDedupeKey(project.Id, recipient.Id);
+            // Same window protocol as the file summary: only an untouched, delayed PENDING row keeps the
+            // key; claimed, retried, sent or oversized rows release it so a new window starts.
+            await db.Database.ExecuteSqlInterpolatedAsync($$"""
+                UPDATE email_outbox
+                SET dedupe_key=NULL
+                WHERE dedupe_key={{dedupeKey}}
+                  AND (status<>'PENDING' OR retry_count<>0 OR sent_at IS NOT NULL OR next_attempt_at IS NULL
+                       OR OCTET_LENGTH(body)+OCTET_LENGTH({{entry}})>{{MessageSummaryMaximumBodyBytes}})
+                """, ct);
+            await db.Database.ExecuteSqlInterpolatedAsync($$"""
+                INSERT INTO email_outbox
+                    (event_type,project_id,dedupe_key,recipient_user_id,recipient_email,
+                     subject,body,status,retry_count,next_attempt_at,last_error,sent_at,created_at)
+                VALUES
+                    ('MESSAGE_CREATED',{{project.Id}},{{dedupeKey}},{{recipient.Id}},{{recipient.Email}},
+                     {{subject}},{{body}},'PENDING',0,{{nextAttemptAt}},NULL,NULL,{{createdAt}})
+                ON DUPLICATE KEY UPDATE
+                    recipient_email=IF(status='PENDING' AND retry_count=0 AND sent_at IS NULL AND next_attempt_at IS NOT NULL,
+                                       VALUES(recipient_email),recipient_email),
+                    body=IF(status='PENDING' AND retry_count=0 AND sent_at IS NULL AND next_attempt_at IS NOT NULL,
+                            CONCAT(body,{{entry}}),body)
+                """, ct);
+        }
     }
+
+    internal static string MessageSummaryDedupeKey(ulong projectId, ulong recipientUserId) =>
+        $"message-summary:{projectId}:{recipientUserId}";
+
+    private static string SafeMailLine(string value, int maximumRunes) =>
+        Yf.Api.Modules.Files.UploadService.SafeMailLine(value, maximumRunes);
 
     internal static async Task EnqueueWorkflowAsync(
         MySqlConnection conn,
@@ -257,14 +296,14 @@ internal static class ProjectNotificationService
         // Its worker must record the accepted/failure result; an expired lease is
         // re-claimed later and cancelled by the worker's current-request check.
         await using var db = EfDb.Use(conn, tx);
-        var cancellableStatuses = new[] { "PENDING", "FAILED" };
+        var cancellableStatuses = new[] { MailStatuses.Pending, MailStatuses.Failed };
         return await db.EmailOutbox
             .Where(mail => mail.ProjectId == projectId
                 && mail.EventType == "PROJECT_SUBMITTED"
                 && mail.SentAt == null
                 && Enumerable.Contains(cancellableStatuses, mail.Status))
             .ExecuteUpdateAsync(update => update
-                .SetProperty(mail => mail.Status, "CANCELLED")
+                .SetProperty(mail => mail.Status, MailStatuses.Cancelled)
                 .SetProperty(mail => mail.NextAttemptAt, (DateTime?)null)
                 .SetProperty(mail => mail.LastError, reason), ct);
     }
@@ -322,13 +361,52 @@ internal static class ProjectNotificationService
         CancellationToken ct,
         AuditService? audit = null)
     {
+        var recipients = await SelectRecipientsAsync(conn, tx, project, eventType, targetSide,
+            requiredSidePermissions, targetUsers, sideOrUsers, excludeUser, ct, audit);
+        if (recipients.Count == 0) return;
+        await using var db = EfDb.Use(conn, tx);
+        var databaseNow = await DbClock.UtcNowAsync(db, ct, 3);
+        db.EmailOutbox.AddRange(recipients.Select(recipient => new EmailOutbox
+        {
+            EventType = eventType,
+            ProjectId = project.Id,
+            RecipientUserId = recipient.Id,
+            RecipientEmail = recipient.Email,
+            Subject = subject,
+            Body = body,
+            Status = MailStatuses.Pending,
+            RetryCount = 0,
+            CreatedAt = databaseNow,
+        }));
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// The recipients an event is queued for: current participants (optionally already loaded by the
+    /// caller in the same transaction) plus explicit users, filtered by policy, side, side permissions
+    /// (one bulk grant query) and e-mail presence (missing addresses are audited when an audit is given).
+    /// </summary>
+    private static async Task<IReadOnlyList<UserRow>> SelectRecipientsAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        ProjectRow project,
+        string eventType,
+        string? targetSide,
+        IReadOnlyCollection<string> requiredSidePermissions,
+        IReadOnlyCollection<ulong> targetUsers,
+        bool sideOrUsers,
+        ulong? excludeUser,
+        CancellationToken ct,
+        AuditService? audit = null,
+        IReadOnlyList<UserRow>? participants = null)
+    {
         var policy = await EmailNotificationPolicy.LoadAsync(conn, tx, ct);
         if (!policy.Allows(eventType, null))
         {
-            return;
+            return [];
         }
 
-        var recipients = (await ParticipantsAsync(conn, tx, project, ct)).ToList();
+        var recipients = (participants ?? await ParticipantsAsync(conn, tx, project, ct)).ToList();
         if (targetUsers.Count > 0)
         {
             var participantIds = recipients.Select(user => user.Id).ToHashSet();
@@ -361,8 +439,7 @@ internal static class ProjectNotificationService
                 }
             }
         }
-        var seenRecipients = new HashSet<ulong>();
-        var pending = new List<EmailOutbox>();
+        var candidates = new List<(UserRow Recipient, bool NeedsSidePermissions)>();
         foreach (var recipient in recipients)
         {
             if (excludeUser == recipient.Id)
@@ -381,10 +458,17 @@ internal static class ProjectNotificationService
             {
                 continue;
             }
-            if (sideMatch
-                && !userMatch
-                && requiredSidePermissions.Count > 0
-                && !await HasAllPermissionsAsync(conn, tx, recipient.Id, requiredSidePermissions, ct))
+            candidates.Add((recipient, sideMatch && !userMatch && requiredSidePermissions.Count > 0));
+        }
+        var sidePermitted = await UsersWithAllPermissionsAsync(conn, tx,
+            candidates.Where(item => item.NeedsSidePermissions).Select(item => item.Recipient.Id).ToArray(),
+            requiredSidePermissions, ct);
+
+        var seenRecipients = new HashSet<ulong>();
+        var selected = new List<UserRow>();
+        foreach (var (recipient, needsSidePermissions) in candidates)
+        {
+            if (needsSidePermissions && !sidePermitted.Contains(recipient.Id))
             {
                 continue;
             }
@@ -401,28 +485,9 @@ internal static class ProjectNotificationService
             {
                 continue;
             }
-
-            pending.Add(new EmailOutbox
-            {
-                EventType = eventType,
-                ProjectId = project.Id,
-                RecipientUserId = recipient.Id,
-                RecipientEmail = recipient.Email,
-                Subject = subject,
-                Body = body,
-                Status = "PENDING",
-                RetryCount = 0,
-            });
+            selected.Add(recipient);
         }
-
-        if (pending.Count > 0)
-        {
-            await using var db = EfDb.Use(conn, tx);
-            var databaseNow = await DbClock.UtcNowAsync(db, ct, 3);
-            foreach (var mail in pending) mail.CreatedAt = databaseNow;
-            db.EmailOutbox.AddRange(pending);
-            await db.SaveChangesAsync(ct);
-        }
+        return selected;
     }
 
     internal static async Task<bool> IsCurrentProjectRecipientAsync(
@@ -433,8 +498,14 @@ internal static class ProjectNotificationService
         CancellationToken ct)
     {
         await using var db = EfDb.Use(conn, tx);
+        // Mirrors what the recipient could see after signing in: an enabled account that is not waiting
+        // for a forced password change and, for supplier accounts, an enabled supplier company.
         var recipient = await db.Users
-            .Where(user => user.Id == recipientId && user.Status == AccountStatuses.Active)
+            .Where(user => user.Id == recipientId
+                && user.Status == AccountStatuses.Active
+                && !user.MustChangePassword
+                && (user.UserType != UserTypes.Supplier
+                    || db.Suppliers.Any(supplier => supplier.Id == user.SupplierId && supplier.Status == AccountStatuses.Active)))
             .Select(user => new UserRow
             {
                 Id = user.Id,
@@ -466,15 +537,27 @@ internal static class ProjectNotificationService
         }
     }
 
-    private static async Task<bool> HasAllPermissionsAsync(
+    /// <summary>The subset of <paramref name="userIds"/> holding every permission, in one grant query.</summary>
+    private static async Task<IReadOnlySet<ulong>> UsersWithAllPermissionsAsync(
         MySqlConnection conn,
         MySqlTransaction tx,
-        ulong userId,
+        IReadOnlyCollection<ulong> userIds,
         IReadOnlyCollection<string> permissions,
         CancellationToken ct)
     {
-        var granted = await AccessService.PermissionCodesAsync(conn, tx, userId, ct);
-        return permissions.All(permission => granted.Contains(permission, StringComparer.Ordinal));
+        if (userIds.Count == 0 || permissions.Count == 0) return new HashSet<ulong>(userIds);
+        var ids = userIds.Distinct().ToArray();
+        var codes = permissions.Distinct(StringComparer.Ordinal).ToArray();
+        await using var db = EfDb.Use(conn, tx);
+        var grants = await AccessService.EffectivePermissionGrants(db)
+            .Where(grant => Enumerable.Contains(ids, grant.UserId) && Enumerable.Contains(codes, grant.Code))
+            .Select(grant => new { grant.UserId, grant.Code })
+            .Distinct()
+            .ToArrayAsync(ct);
+        return grants.GroupBy(grant => grant.UserId)
+            .Where(group => codes.All(code => group.Any(grant => string.Equals(grant.Code, code, StringComparison.Ordinal))))
+            .Select(group => group.Key)
+            .ToHashSet();
     }
 
     private static string OppositeSide(CurrentUser actor) => actor.IsInternal ? "SUPPLIER" : "COMPANY";
@@ -521,5 +604,4 @@ internal static class ProjectNotificationService
     private static string ProjectUrl(string baseUrl, ulong projectId, string tab, ulong? targetId = null) =>
         $"{baseUrl.TrimEnd('/')}/projects/{projectId}?tab={tab}" + (targetId is null ? string.Empty : $"&target={targetId.Value}");
 
-    private static string Truncate(string value, int count) => string.Concat(value.EnumerateRunes().Take(count));
 }

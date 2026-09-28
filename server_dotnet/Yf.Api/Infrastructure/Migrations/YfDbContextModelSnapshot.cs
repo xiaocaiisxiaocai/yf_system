@@ -1040,6 +1040,10 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(64)")
                         .HasColumnName("idempotency_key");
 
+                    b.Property<DateTime?>("NextAttemptAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("next_attempt_at");
+
                     b.Property<ulong>("ProjectGroupId")
                         .HasColumnType("bigint unsigned")
                         .HasColumnName("project_group_id");
@@ -1065,6 +1069,10 @@ namespace Yf.Api.Infrastructure.Migrations
                     b.Property<ulong?>("ResultProjectId")
                         .HasColumnType("bigint unsigned")
                         .HasColumnName("result_project_id");
+
+                    b.Property<uint>("RetryCount")
+                        .HasColumnType("int unsigned")
+                        .HasColumnName("retry_count");
 
                     b.Property<ulong>("SourceProjectId")
                         .HasColumnType("bigint unsigned")
@@ -1562,6 +1570,11 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("varchar(64)")
                         .HasColumnName("ip");
+
+                    b.Property<string>("RevokeReason")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("revoke_reason");
 
                     b.Property<bool>("Revoked")
                         .ValueGeneratedOnAdd()

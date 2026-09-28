@@ -266,7 +266,211 @@ public sealed class ProjectGroupTests
             "SELECT updated_at FROM projects WHERE id=@Id", new { Id = childIds[1] }, cancellationToken: ct)));
     }
 
-    private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+    [Fact(Timeout = 90_000)]
+    public async Task EmptyMainProjectCanBeDeletedWithAuditAndDependentRowsCascaded()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_group_delete", ct);
+        await database.InitializeBusinessFixtureAsync(ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO suppliers(id,name,status,created_at,updated_at)
+            VALUES(8701,'删除主项目供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES(8702,'group-delete-owner','unused','删除主项目负责人','group-delete@example.test','INTERNAL','ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(8702,1);
+            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id,created_at,updated_at)
+            VALUES(8703,'待删除空主项目',8701,'DRAFT',8702,8702,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO project_group_work_orders(project_group_id,work_order_no,sort_no,created_at)
+            VALUES(8703,'WO-DELETE-GROUP',0,UTC_TIMESTAMP(3));
+            INSERT INTO project_group_status_logs(project_group_id,from_status,to_status,action,operator_id,created_at)
+            VALUES(8703,NULL,'DRAFT','CREATE',8702,UTC_TIMESTAMP(3));
+            """, ct);
+
+        var actor = new CurrentUser(8702, "group-delete-owner", "INTERNAL", null);
+        var audit = new AuditService([]);
+        var groups = new ProjectGroupService(audit, new ProjectGroupStatusService(audit));
+        await using var conn = await database.Database.OpenAsync(ct);
+
+        await groups.DeleteAsync(conn, actor, 8703, null, ct);
+
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM project_groups WHERE id=8703"));
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM project_group_work_orders WHERE project_group_id=8703"));
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM project_group_status_logs WHERE project_group_id=8703"));
+        var detail = await conn.QuerySingleAsync<string>(new CommandDefinition("""
+            SELECT detail FROM audit_logs
+            WHERE action='PROJECT_GROUP_DELETE' AND target_type='project_group' AND target_id='8703'
+            """, cancellationToken: ct));
+        Assert.Contains("待删除空主项目", detail, StringComparison.Ordinal);
+    }
+
+    [Theory(Timeout = 90_000)]
+    [InlineData(ProjectStatuses.Terminated, ProjectStatuses.Terminated)]
+    [InlineData(ProjectStatuses.Draft, ProjectStatuses.InProgress)]
+    public async Task DeletingTheLastOpenSubprojectNeverAutoCompletesTheMainProject(string deletedStatus, string groupStatusBefore)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_group_delete_complete", ct);
+        await database.InitializeBusinessFixtureAsync(ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO suppliers(id,name,status,created_at,updated_at)
+            VALUES(8801,'删除完成测试供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
+            VALUES(8802,NULL,'删除完成测试课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES(8803,'delete-complete-owner','unused','删除完成负责人','delete-complete@example.test','INTERNAL',8802,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(8803,1);
+            INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
+            VALUES(8804,8801,'DELETE-COMPLETE-PART','删除完成型号',1,'ACTIVE');
+            INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
+            VALUES(8805,'PRIORITY','删除完成优先级',NULL,1,'ACTIVE');
+            """, ct);
+
+        var actor = new CurrentUser(8803, "delete-complete-owner", "INTERNAL", null);
+        var audit = new AuditService([]);
+        var groupStatus = new ProjectGroupStatusService(audit);
+        var groups = new ProjectGroupService(audit, groupStatus);
+        var projects = new ProjectService(audit, new AppOptions(), groupStatus);
+        await using var conn = await database.Database.OpenAsync(ct);
+        using var created = Json(await groups.CreateAsync(conn, actor, new ProjectUpsertRequest
+        {
+            Name = "删除不自动完成主项目",
+            SupplierId = 8801,
+            WorkOrderNos = ["WO-DELETE-COMPLETE"],
+            MachineModel = "删除完成机型",
+            RobotPartId = 8804,
+            PriorityId = 8805,
+            ExpectedCompletionDate = "2026-12-31",
+            SubprojectNames = ["已验收子项目", "待删除子项目"],
+        }, null, ct));
+        var groupId = created.RootElement.GetProperty("id").GetUInt64();
+        var ids = (await conn.QueryAsync<ulong>(new CommandDefinition(
+            "SELECT id FROM projects WHERE project_group_id=@GroupId ORDER BY id", new { GroupId = groupId },
+            cancellationToken: ct))).ToArray();
+        await conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE projects SET status='COMPLETED' WHERE id=@Completed; UPDATE projects SET status=@Deleted WHERE id=@Target",
+            new { Completed = ids[0], Target = ids[1], Deleted = deletedStatus }, cancellationToken: ct));
+        await using (var sync = await AppDb.BeginTransactionAsync(conn, ct))
+        {
+            await groupStatus.RecalculateAsync(conn, sync, groupId, actor.Id, null, ct);
+            await sync.CommitAsync(ct);
+        }
+        Assert.Equal(groupStatusBefore, await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT status FROM project_groups WHERE id=@GroupId", new { GroupId = groupId }, cancellationToken: ct)));
+
+        await projects.DeleteAsync(conn, actor, ids[1], null, ct);
+
+        Assert.Equal(1L, await conn.ExecuteScalarAsync<long>(new CommandDefinition(
+            "SELECT COUNT(*) FROM projects WHERE project_group_id=@GroupId", new { GroupId = groupId }, cancellationToken: ct)));
+        var state = await conn.QuerySingleAsync<GroupState>(new CommandDefinition(
+            "SELECT status AS Status,completed_at AS CompletedAt FROM project_groups WHERE id=@GroupId",
+            new { GroupId = groupId }, cancellationToken: ct));
+        Assert.Equal(groupStatusBefore, state.Status);
+        Assert.Null(state.CompletedAt);
+        Assert.Equal(0L, await conn.ExecuteScalarAsync<long>(new CommandDefinition(
+            "SELECT COUNT(*) FROM project_group_status_logs WHERE project_group_id=@GroupId AND action='AUTO_COMPLETE'",
+            new { GroupId = groupId }, cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 90_000)]
+    public async Task MainProjectChangesNotifyEverySubprojectAndTransferAlsoReachesTheFormerOwner()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_group_realtime", ct);
+        await database.InitializeBusinessFixtureAsync(ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO suppliers(id,name,status,created_at,updated_at)
+            VALUES(8901,'实时主项目供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
+            VALUES(8902,NULL,'实时主项目课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES(8903,'realtime-group-owner','unused','实时原负责人','realtime-old@example.test','INTERNAL',8902,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8907,'realtime-group-new','unused','实时新负责人','realtime-new@example.test','INTERNAL',8902,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(8903,1),(8907,1);
+            INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
+            VALUES(8904,8901,'REALTIME-GROUP-PART','实时型号',1,'ACTIVE');
+            INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
+            VALUES(8905,'PRIORITY','实时优先级',NULL,1,'ACTIVE');
+            """, ct);
+
+        var actor = new CurrentUser(8903, "realtime-group-owner", "INTERNAL", null);
+        var audit = new AuditService([]);
+        var groupStatus = new ProjectGroupStatusService(audit);
+        var publisher = new RecordingPublisher();
+        var groups = new ProjectGroupService(audit, groupStatus, publisher);
+        var projects = new ProjectService(audit, new AppOptions(), groupStatus, publisher);
+        await using var conn = await database.Database.OpenAsync(ct);
+        var request = new ProjectUpsertRequest
+        {
+            Name = "实时主项目",
+            SupplierId = 8901,
+            WorkOrderNos = ["WO-REALTIME"],
+            MachineModel = "实时机型",
+            RobotPartId = 8904,
+            PriorityId = 8905,
+            ExpectedCompletionDate = "2026-12-31",
+            SubprojectNames = ["实时子项目一", "实时子项目二"],
+        };
+        using var created = Json(await groups.CreateAsync(conn, actor, request, null, ct));
+        var groupId = created.RootElement.GetProperty("id").GetUInt64();
+        var ids = (await conn.QueryAsync<ulong>(new CommandDefinition(
+            "SELECT id FROM projects WHERE project_group_id=@GroupId ORDER BY id", new { GroupId = groupId },
+            cancellationToken: ct))).ToArray();
+
+        // Name and description alone write no subproject activity; every subproject still hears about it.
+        publisher.Calls.Clear();
+        await groups.UpdateAsync(conn, actor, groupId, new ProjectUpsertRequest
+        {
+            Name = "实时主项目-改名",
+            Description = "新的说明",
+            SupplierId = request.SupplierId,
+            WorkOrderNos = request.WorkOrderNos,
+            MachineModel = request.MachineModel,
+            RobotPartId = request.RobotPartId,
+            PriorityId = request.PriorityId,
+            ExpectedCompletionDate = request.ExpectedCompletionDate,
+        }, null, ct);
+        Assert.Equal(ids.Select(id => (id, RealtimeChangeKinds.Project)).ToArray(),
+            publisher.Calls.Select(call => (call.ProjectId, call.Kind)).ToArray());
+        Assert.All(publisher.Calls, call => Assert.Null(call.Audience));
+
+        // A transfer reaches the new owner and, from the pre-change snapshot, the former one.
+        publisher.Calls.Clear();
+        await groups.TransferAsync(conn, actor, groupId, new ProjectGroupTransferRequest { ResponsibleUserId = 8907 }, null, ct);
+        Assert.Equal(ids, publisher.Calls.Select(call => call.ProjectId).ToArray());
+        Assert.All(publisher.Calls, call =>
+        {
+            Assert.Equal(RealtimeChangeKinds.Project, call.Kind);
+            var audience = Assert.IsType<ProjectRealtimeAudience>(call.Audience);
+            Assert.Equal(8907UL, audience.ResponsibleUserId);
+            Assert.Equal([8903UL], audience.FormerInternalUserIds!.ToArray());
+            Assert.Equal(8901UL, audience.SupplierId);
+            Assert.Contains(8903UL, audience.ViewAllUserIds);
+        });
+
+        // Deleting a subproject changes the main project every remaining sibling shows.
+        publisher.Calls.Clear();
+        var newOwner = new CurrentUser(8907, "realtime-group-new", "INTERNAL", null);
+        await projects.DeleteAsync(conn, newOwner, ids[1], null, ct);
+        Assert.Equal([ids[1], ids[0]], publisher.Calls.Select(call => call.ProjectId).ToArray());
+        Assert.All(publisher.Calls, call => Assert.Equal(RealtimeChangeKinds.Project, call.Kind));
+    }
+
+    private sealed class RecordingPublisher : IProjectRealtimePublisher
+    {
+        internal List<(ulong ProjectId, string Kind, ProjectRealtimeAudience? Audience)> Calls { get; } = [];
+        public Task PublishAsync(ulong projectId, string kind, CancellationToken ct = default)
+        { Calls.Add((projectId, kind, null)); return Task.CompletedTask; }
+        public Task PublishAsync(ProjectRealtimeAudience audience, string kind, CancellationToken ct = default)
+        { Calls.Add((audience.ProjectId, kind, audience)); return Task.CompletedTask; }
+    }
+
+    private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, TestJson.Web));
     private sealed class Child
     {
         public ulong Id { get; init; }

@@ -48,6 +48,58 @@ class ScriptSafetyTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "Duplicate archive path"):
                     validate_zip_entries(map(zipfile.ZipInfo, names))
 
+    def test_zip_paths_reject_names_windows_cannot_represent(self):
+        validate_zip_entries([
+            zipfile.ZipInfo("package/console.txt"),
+            zipfile.ZipInfo("package/CONFIG/nulls.json"),
+            zipfile.ZipInfo("package/LPT10.txt"),
+            zipfile.ZipInfo("package/.well-known/file"),
+            zipfile.ZipInfo("package/dir/"),
+        ])
+        for name in (
+            "package/file.",
+            "package/file ",
+            "package/folder./file.txt",
+            "package/folder /file.txt",
+            "package/CON",
+            "package/con.txt",
+            "package/Nul.tar.gz",
+            "package/AUX/file.txt",
+            "package/PRN",
+            "package/COM1",
+            "package/com9.log",
+            "package/LPT1",
+            "package/lpt9.txt",
+            "package/CON .txt",
+            "package/a<b",
+            "package/a>b",
+            "package/a\"b",
+            "package/a|b",
+            "package/a?b",
+            "package/a*b",
+            "package/a\x01b",
+            "package/a:b",
+            "package//double",
+            "/absolute.txt",
+            "package/../escape.txt",
+        ):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(RuntimeError, "Unsafe archive path"):
+                    validate_zip_entries([zipfile.ZipInfo(name)])
+
+    def test_zip_total_size_and_entry_count_are_bounded(self):
+        def sized(name, size):
+            info = zipfile.ZipInfo(name)
+            info.file_size = size
+            return info
+
+        validate_zip_entries([sized("package/a.bin", 60), sized("package/b.bin", 40)], max_total_bytes=100)
+        with self.assertRaisesRegex(RuntimeError, "uncompressed size limit"):
+            validate_zip_entries([sized("package/a.bin", 60), sized("package/b.bin", 41)], max_total_bytes=100)
+        validate_zip_entries([zipfile.ZipInfo(f"package/{index}.txt") for index in range(3)], max_entries=3)
+        with self.assertRaisesRegex(RuntimeError, "too many entries"):
+            validate_zip_entries([zipfile.ZipInfo(f"package/{index}.txt") for index in range(4)], max_entries=3)
+
     def test_release_verifier_rejects_duplicate_members_before_extraction(self):
         TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="yf_verify_duplicate_", dir=TEST_TEMP_ROOT) as directory:

@@ -217,6 +217,8 @@ async function chooseNotificationTab(drawer, name) {
       actorPage.setDefaultTimeout(12000);
       try {
         await actorPage.goto(s.base + `/projects/${project.id}?tab=messages&target=${liveMessage.id}`);
+        // The composer mounts before its target feed finishes loading; sending is gated until then.
+        await actorPage.locator(`[data-message-id="${liveMessage.id}"]`).getByText(liveMessageText, { exact: true }).waitFor();
         const actorInput = actorPage.getByPlaceholder('输入留言，Ctrl+Enter 发送', { exact: true });
         await actorInput.fill(adminText);
         await action(actorPage, `/projects/${project.id}/messages`, 'POST',
@@ -397,11 +399,20 @@ async function chooseNotificationTab(drawer, name) {
       // Keep the injected failure active until the UI has rendered the
       // degraded state.  The realtime poller may immediately retry after a
       // single 503, which otherwise makes this assertion race the recovery.
-      const failSummary = route => route.fulfill({
-        status: 503,
-        contentType: 'application/json',
-        body: '{"code":50301,"message":"协作摘要测试暂时不可用"}',
-      });
+      let recovering = false;
+      let releaseRecovery;
+      const recoveryGate = new Promise(resolve => { releaseRecovery = resolve; });
+      const failSummary = async route => {
+        if (recovering) {
+          await recoveryGate;
+          return route.continue();
+        }
+        return route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: '{"code":50301,"message":"协作摘要测试暂时不可用"}',
+        });
+      };
       await adminPage.route('**' + summaryPath, failSummary);
       const failed = waitResponse(adminPage, '/collaboration/summary', 'GET', 503);
       // Install the failure before navigation so a long-running realtime
@@ -410,17 +421,17 @@ async function chooseNotificationTab(drawer, name) {
       await adminPage.getByRole('heading', { name: new RegExp('^工作台 · ') }).waitFor();
       await failed;
       await adminPage.getByRole('status').filter({ hasText: '更新暂时中断' }).waitFor();
-      await adminPage.unroute('**' + summaryPath, failSummary);
       const restored = waitResponse(adminPage, '/collaboration/summary');
       const recoveredMessages = waitResponse(adminPage, '/dashboard/messages');
       const retrySummary = adminPage.getByRole('button', { name: '重新获取协作通知', exact: true });
       await retrySummary.waitFor({ state: 'visible' });
-      // SignalR/dashboard revisions may replace the button between the wait
-      // and click. Dispatch on the currently attached semantic control to
-      // avoid a false detached-element failure in the browser contract.
-      await retrySummary.evaluate((button) => button.click());
+      // Hold automatic recovery responses until the user has clicked Retry, so the control
+      // cannot disappear between locating it and activating it.
+      recovering = true;
+      try { await retrySummary.click(); } finally { releaseRecovery(); }
       await restored;
       await recoveredMessages;
+      await adminPage.unroute('**' + summaryPath, failSummary);
       await adminPage.getByText('更新暂时中断', { exact: true }).waitFor({ state: 'hidden' });
       const onlineRefresh = waitResponse(adminPage, '/collaboration/summary');
       await adminPage.evaluate(() => window.dispatchEvent(new Event('online')));

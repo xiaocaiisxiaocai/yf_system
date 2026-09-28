@@ -93,7 +93,11 @@ try:
             str(Path(os.environ["WINDIR"]) / "System32/WindowsPowerShell/v1.0/Modules"),
             str(Path(os.environ["ProgramFiles"]) / "WindowsPowerShell/Modules"),
         ])
-        result = subprocess.run(command, env=child_env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        try:
+            result = subprocess.run(command, env=child_env, capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace", timeout=1800)
+        except subprocess.TimeoutExpired:
+            raise SystemExit("Maintenance PowerShell fixture timed out after 1800 seconds")
         print(result.stdout, end="")
         if result.returncode:
             # The script suppresses database diagnostics that could contain credentials.
@@ -117,15 +121,27 @@ try:
                   "payloadSha256": hashlib.sha256(payload).hexdigest(),
                   "targetIisTested": False}
 finally:
-    try:
-        with connection.cursor() as cursor:
-            for schema in created:
-                if not schema.startswith("yf_test_maintenance_"):
-                    raise RuntimeError("Unexpected cleanup schema")
+    # Each owned schema is dropped independently so one failure cannot leave the others behind.
+    cleanup_errors = []
+    for schema in created:
+        try:
+            if not schema.startswith("yf_test_maintenance_"):
+                raise RuntimeError("Unexpected cleanup schema")
+            with connection.cursor() as cursor:
                 cursor.execute(f"DROP DATABASE `{schema}`")
-    finally:
+        except Exception as error:  # noqa: BLE001 - keep cleaning, report below
+            cleanup_errors.append(f"{schema}: {type(error).__name__}")
+    try:
         connection.close()
-    print("Owned maintenance test schemas removed")
+    except Exception as error:  # noqa: BLE001
+        cleanup_errors.append(f"close: {type(error).__name__}")
+    if cleanup_errors:
+        print("CLEANUP FAILURE " + "; ".join(cleanup_errors))
+    else:
+        print("Owned maintenance test schemas removed")
+
+if cleanup_errors:
+    raise SystemExit("Maintenance cleanup failed: " + "; ".join(cleanup_errors))
 
 if report is None:
     raise RuntimeError("Maintenance checks completed without evidence")

@@ -27,20 +27,59 @@ function Assert-YfPublishedConfig([string]$Root,[switch]$AllowConfigPath) {
     Assert-YfLaunch $asp.GetAttribute('processPath') $asp.GetAttribute('arguments') $asp.GetAttribute('hostingModel')
     Assert-YfEnvironmentNames @($asp.SelectNodes('environmentVariables/environmentVariable') | ForEach-Object { $_.GetAttribute('name') }) -AllowConfigPath:$AllowConfigPath
 }
+function Set-YfJsonMember($Object,[string]$Name,$Value) {
+    if ($Object.PSObject.Properties[$Name]) { $Object.$Name = $Value }
+    else { $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value }
+}
+function Clear-YfBundledSecrets([string]$Path) {
+    # Clear only credentials and resource bindings; keep Logging, Serilog, AllowedHosts and
+    # every other non-secret setting so the published defaults keep working.
+    $raw = [IO.File]::ReadAllText($Path)
+    $settings = if ([string]::IsNullOrWhiteSpace($raw)) { $null } else { $raw | ConvertFrom-Json }
+    if ($null -eq $settings -or $settings -isnot [Management.Automation.PSCustomObject]) { $settings = New-Object PSObject }
+    $app = if ($settings.PSObject.Properties['App']) { $settings.App } else { $null }
+    if ($null -eq $app -or $app -isnot [Management.Automation.PSCustomObject]) { $app = New-Object PSObject; Set-YfJsonMember $settings 'App' $app }
+    foreach ($name in @('ConnectionString','JwtSecret','StorageRoot','BootstrapPassword','LogDirectory')) { Set-YfJsonMember $app $name '' }
+    Set-YfJsonMember $app 'AutoInitializeDatabase' $false
+    if ($app.PSObject.Properties['Smtp'] -and $app.Smtp -is [Management.Automation.PSCustomObject] -and $app.Smtp.PSObject.Properties['Password']) {
+        $app.Smtp.Password = ''
+    }
+    [IO.File]::WriteAllText($Path, (($settings | ConvertTo-Json -Depth 32) + "`n"), (New-Object Text.UTF8Encoding($false)))
+}
 function Set-YfExternalConfigurationFallback([string]$Root) {
     # A direct-bind package has usable appsettings.Production.json. Formal IIS installation
     # and maintenance use YF_CONFIG_PATH instead and must fail closed if it is lost.
     $settings = Join-Path $Root 'appsettings.json'
     if (!(Test-Path -LiteralPath $settings -PathType Leaf)) { throw 'Published appsettings.json is missing.' }
-    $empty = '{"App":{"ConnectionString":"","JwtSecret":"","StorageRoot":"","AutoInitializeDatabase":false,"BootstrapPassword":""}}' + "`n"
-    $encoding = New-Object Text.UTF8Encoding($false)
-    [IO.File]::WriteAllText($settings, $empty, $encoding)
-    foreach ($name in @('appsettings.Production.json', 'appsettings.example.json')) {
+    foreach ($name in @('appsettings.json', 'appsettings.Production.json', 'appsettings.example.json')) {
         $environmentSettings = Join-Path $Root $name
-        if (Test-Path -LiteralPath $environmentSettings -PathType Leaf) {
-            [IO.File]::WriteAllText($environmentSettings, $empty, $encoding)
+        if (Test-Path -LiteralPath $environmentSettings -PathType Leaf) { Clear-YfBundledSecrets $environmentSettings }
+    }
+}
+function Set-YfWebConfigEnvironment([string]$WebConfigPath,[string]$ExternalConfig) {
+    # Replace, never append: publish-iis.ps1 already writes ASPNETCORE_ENVIRONMENT, and a
+    # duplicate environmentVariable key makes IIS fail the whole site with HTTP 500.19.
+    [xml]$xml = Get-Content -LiteralPath $WebConfigPath -Raw -Encoding UTF8
+    $nodes = @($xml.SelectNodes('//aspNetCore'))
+    if ($nodes.Count -ne 1) { throw 'Published ASP.NET Core IIS configuration missing.' }
+    $asp = $nodes[0]
+    $variableLists = @($asp.SelectNodes('environmentVariables'))
+    if ($variableLists.Count -gt 1) {
+        for ($i = 1; $i -lt $variableLists.Count; $i++) {
+            foreach ($child in @($variableLists[$i].SelectNodes('environmentVariable'))) { $variableLists[0].AppendChild($child) | Out-Null }
+            $asp.RemoveChild($variableLists[$i]) | Out-Null
         }
     }
+    $variables = if ($variableLists.Count) { $variableLists[0] } else { $null }
+    if (!$variables) { $variables = $xml.CreateElement('environmentVariables'); $asp.AppendChild($variables) | Out-Null }
+    $wanted = [ordered]@{ YF_CONFIG_PATH = $ExternalConfig; ASPNETCORE_ENVIRONMENT = 'Production'; DOTNET_ENVIRONMENT = 'Production' }
+    foreach ($name in $wanted.Keys) {
+        foreach ($existing in @($variables.SelectNodes('environmentVariable'))) {
+            if ([string]::Equals($existing.GetAttribute('name'), $name, [StringComparison]::OrdinalIgnoreCase)) { $variables.RemoveChild($existing) | Out-Null }
+        }
+        $node = $xml.CreateElement('environmentVariable'); $node.SetAttribute('name', $name); $node.SetAttribute('value', [string]$wanted[$name]); $variables.AppendChild($node) | Out-Null
+    }
+    $xml.Save($WebConfigPath)
 }
 function Assert-YfConfigurationEnvironment(
     [object[]]$AspNetCoreVariables,
@@ -160,6 +199,125 @@ function Protect-YfDirectory([string]$Path) {
     }
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
+function ConvertTo-YfSid($Identity) {
+    if ($Identity -is [Security.Principal.SecurityIdentifier]) { return $Identity }
+    return (New-Object Security.Principal.NTAccount ([string]$Identity)).Translate([Security.Principal.SecurityIdentifier])
+}
+function Set-YfApplicationDirectoryAcl([string]$Path, $ModifyIdentity) {
+    # Business storage and log directories: inheritance disabled, SYSTEM and BUILTIN\Administrators
+    # keep FullControl (admins are never locked out), the application pool identity gets Modify,
+    # and every other inherited or explicit ACE on the directory itself is dropped. Child items
+    # re-inherit these rules; explicit ACEs already set on child items are left as they are.
+    if (!(Test-Path -LiteralPath $Path -PathType Container)) { throw 'Application directory is missing.' }
+    Assert-YfNoLinks $Path
+    $modifySid = ConvertTo-YfSid $ModifyIdentity
+    $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
+    $acl = New-Object Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true,$false)
+    foreach ($sid in @((New-Object Security.Principal.SecurityIdentifier 'S-1-5-18'),(New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544'))) {
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl',$inherit,'None','Allow')))
+    }
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($modifySid,'Modify',$inherit,'None','Allow')))
+    Set-Acl -LiteralPath $Path -AclObject $acl
+    Assert-YfApplicationDirectoryAcl $Path $modifySid
+}
+function Assert-YfApplicationDirectoryAcl([string]$Path, $ModifyIdentity) {
+    $modifySid = ConvertTo-YfSid $ModifyIdentity
+    $allowed = @('S-1-5-18','S-1-5-32-544',$modifySid.Value)
+    $applied = Get-Acl -LiteralPath $Path
+    $rules = @($applied.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+    $modifyMask = [Security.AccessControl.FileSystemRights]::Modify
+    $identityRules = @($rules | Where-Object { $_.IdentityReference -eq $modifySid -and $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band $modifyMask) -eq $modifyMask })
+    $unexpected = @($rules | Where-Object { $allowed -notcontains $_.IdentityReference.Value })
+    if (!$applied.AreAccessRulesProtected -or $identityRules.Count -lt 1 -or $unexpected.Count) {
+        throw 'Application directory ACL verification failed; only SYSTEM, Administrators and the application pool identity may have access.'
+    }
+}
+function Wait-YfHealth([string]$Origin,[int]$WaitSeconds,[int]$RequestTimeoutSeconds) {
+    # Windows PowerShell 5.1 may default to TLS 1.0/1.1; IIS sites commonly require TLS 1.2+.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $url = $Origin.TrimEnd('/') + '/health'
+    $lastError = 'no response'
+    $deadline = [DateTime]::UtcNow.AddSeconds($WaitSeconds)
+    do {
+        try {
+            $health = Invoke-RestMethod -Uri $url -TimeoutSec $RequestTimeoutSeconds -UseBasicParsing
+            if ($health -is [Management.Automation.PSCustomObject] -and $health.PSObject.Properties['status'] -and $health.PSObject.Properties['db'] -and
+                $health.status -eq 'ok' -and $health.db -eq 'up') { return }
+            $text = [string]($health | ConvertTo-Json -Compress -Depth 3)
+            if ($text.Length -gt 200) { $text = $text.Substring(0,200) + '...' }
+            $lastError = 'unexpected /health response: ' + $text
+        } catch {
+            $lastError = $_.Exception.Message
+        }
+        if ([DateTime]::UtcNow -ge $deadline) { break }
+        Start-Sleep -Seconds 2
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "HTTPS health check of $url did not report status=ok, db=up within $WaitSeconds seconds. Last error: $lastError"
+}
+function Test-YfAspNetRuntime([string]$ApplicationRoot) {
+    # The package's own runtimeconfig decides the required shared frameworks.
+    $runtimeConfig = Get-Content -LiteralPath (Join-Path $ApplicationRoot 'Yf.Api.runtimeconfig.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $frameworks = @()
+    if ($runtimeConfig.runtimeOptions.PSObject.Properties['frameworks']) { $frameworks += @($runtimeConfig.runtimeOptions.frameworks) }
+    if ($runtimeConfig.runtimeOptions.PSObject.Properties['framework']) { $frameworks += $runtimeConfig.runtimeOptions.framework }
+    if (!$frameworks.Count) { throw 'Package runtimeconfig does not name a shared framework.' }
+    $installed = @(& dotnet --list-runtimes)
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to list installed .NET runtimes.' }
+    foreach ($framework in $frameworks) {
+        $major = ([string]$framework.version).Split('.')[0]
+        if (!($installed -match ('^' + [regex]::Escape([string]$framework.name) + ' ' + $major + '\.'))) {
+            throw "Required runtime $($framework.name) $($framework.version) is not installed."
+        }
+    }
+}
+function Test-YfStorageReadWrite([string]$Path) {
+    $probe = Join-Path $Path ('.yf-maintenance-probe-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    $content = [Text.Encoding]::ASCII.GetBytes('yf-maintenance-readiness')
+    try {
+        [IO.File]::WriteAllBytes($probe, $content)
+        $read = [IO.File]::ReadAllBytes($probe)
+        if ([Convert]::ToBase64String($read) -ne [Convert]::ToBase64String($content)) { throw 'mismatch' }
+    } catch {
+        throw 'Storage read/write probe failed; check the storage path and disk.'
+    } finally {
+        if (Test-Path -LiteralPath $probe -PathType Leaf) { Remove-Item -LiteralPath $probe -Force }
+    }
+}
+function Assert-YfDeploymentReadiness([string]$ApplicationRoot,$Config,[string]$ApplicationIdentity) {
+    # Offline pre-check of a NEW application directory and its external configuration before any
+    # schema migration or file conversion. Pending EF migrations are expected at this point, so the
+    # database schema is not validated here; the post-start /health check covers the final state.
+    foreach ($required in @('Yf.Api.dll','Yf.Api.runtimeconfig.json','web.config','wwwroot\index.html')) {
+        if (!(Test-Path -LiteralPath (Join-Path $ApplicationRoot $required) -PathType Leaf)) { throw "Readiness: application payload missing $required." }
+    }
+    $app = $Config.Config.App
+    foreach ($name in @('ConnectionString','JwtSecret','StorageRoot','WebBaseUrl')) {
+        if (!$app.PSObject.Properties[$name] -or [string]::IsNullOrWhiteSpace([string]$app.$name)) { throw "Readiness: App.$name is required in the external configuration." }
+    }
+    if ([Text.Encoding]::UTF8.GetByteCount([string]$app.JwtSecret) -lt 32) { throw 'Readiness: App.JwtSecret must be at least 32 bytes.' }
+    if (!(Test-Path -LiteralPath $Config.Storage -PathType Container)) { throw 'Readiness: storage directory is missing.' }
+    Assert-YfNoLinks $Config.Storage
+    Test-YfStorageReadWrite $Config.Storage
+    if ($ApplicationIdentity) {
+        $sid = ConvertTo-YfSid $ApplicationIdentity
+        $modifyMask = [Security.AccessControl.FileSystemRights]::Modify
+        $grants = @((Get-Acl -LiteralPath $Config.Storage).GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | Where-Object {
+            $_.IdentityReference -eq $sid -and $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band $modifyMask) -eq $modifyMask })
+        if (!$grants.Count) { throw 'Readiness: the application pool identity has no Modify permission on storage.' }
+    }
+    $logDirectory = Get-YfLogDirectory $Config
+    if ($logDirectory) {
+        if (!(Test-Path -LiteralPath $logDirectory -PathType Container)) { throw 'Readiness: configured App.LogDirectory is missing.' }
+        Test-YfStorageReadWrite $logDirectory
+    }
+    Test-YfAspNetRuntime $ApplicationRoot
+}
+function Get-YfLogDirectory($Config) {
+    $app = $Config.Config.App
+    if (!$app.PSObject.Properties['LogDirectory'] -or [string]::IsNullOrWhiteSpace([string]$app.LogDirectory)) { return '' }
+    return Get-YfFullPath ([string]$app.LogDirectory)
+}
 function Protect-YfConfigurationFile([string]$Path, $ReadIdentity) {
     if (!(Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'Configuration file is missing.' }
     $readSid = if ($ReadIdentity -is [Security.Principal.SecurityIdentifier]) {
@@ -234,7 +392,16 @@ function Read-YfMaintenanceConfig([string]$Path) {
         }
         $origin = [Uri]$config.App.WebBaseUrl
         if (!$origin.IsAbsoluteUri -or $origin.Scheme -notin @('http','https')) { throw 'Invalid origin.' }
-    } catch { throw 'Unable to read maintenance configuration. Check paths, TCP database settings and JSON; credentials are not printed.' }
+    } catch {
+        # Messages thrown above never contain configuration values; anything else (JSON parser,
+        # connection-string builder) could echo credentials and is replaced by a generic message.
+        $safeMessages = @('Unsupported database settings.','Remote database maintenance requires SSL Mode=VerifyFull.',
+            'Database CA certificate file is missing.','Client certificate connections need a separately configured backup client.',
+            'Maintenance paths must not overlap.','Reparse points are not allowed in maintenance paths.','Invalid origin.',
+            'Use an absolute local disk path.','Drive roots are not allowed.')
+        if ($safeMessages -contains $_.Exception.Message) { throw ('Unable to read maintenance configuration: ' + $_.Exception.Message) }
+        throw 'Unable to read maintenance configuration. Check paths, TCP database settings and JSON; credentials are not printed.'
+    }
     return [pscustomobject]@{ Path=$Path; Storage=$storage; Database=$database; Server=$server; Port=$port; User=$user; Password=$password; SslMode=$sslModes[$ssl]; CaFile=$caFile; Origin=$config.App.WebBaseUrl; Config=$config }
 }
 function ConvertTo-YfMySqlOption([string]$Value) {
@@ -324,7 +491,37 @@ function Assert-YfBackupSite([string]$BackupRoot,[string]$SiteName) {
     }
     return $manifest
 }
-function New-YfBackup([string]$ApplicationRoot,$Config,[string]$Destination,[string]$MySqlDump,[string]$SiteName) {
+function Get-YfMySqlMajorMinor([string]$VersionText) {
+    # "mysqldump  Ver 8.0.36 for Win64", "mysqldump  Ver 10.13 Distrib 5.7.44, for Win64", "5.7.44-log"
+    $match = [regex]::Match([string]$VersionText,'Distrib\s+(\d+)\.(\d+)')
+    if (!$match.Success) { $match = [regex]::Match([string]$VersionText,'Ver\s+(\d+)\.(\d+)') }
+    if (!$match.Success) { $match = [regex]::Match([string]$VersionText,'^\s*(\d+)\.(\d+)') }
+    if (!$match.Success) { return $null }
+    return [version]("{0}.{1}" -f $match.Groups[1].Value,$match.Groups[2].Value)
+}
+function Get-YfMySqlDumpCompatibilityArguments([string]$HelpText,[string]$ClientVersionText,[string]$ServerVersionText) {
+    # --set-gtid-purged=OFF keeps a GTID-enabled source from writing SET @@GLOBAL.GTID_PURGED into the
+    # dump (restoring it needs SUPER and fails on a target with its own GTID history). MariaDB and very
+    # old clients do not know the option. --column-statistics=0 is needed only when a MySQL 8 client
+    # dumps a 5.7 server, which has no information_schema.COLUMN_STATISTICS.
+    $arguments = @()
+    if ($HelpText -match '--set-gtid-purged') { $arguments += '--set-gtid-purged=OFF' }
+    $client = Get-YfMySqlMajorMinor $ClientVersionText
+    $server = Get-YfMySqlMajorMinor $ServerVersionText
+    if ($HelpText -match '--column-statistics' -and $client -and $client.Major -ge 8 -and $ClientVersionText -notmatch 'MariaDB' -and
+        $server -and $server -lt [version]'8.0') {
+        $arguments += '--column-statistics=0'
+    }
+    return ,$arguments
+}
+function Get-YfServerVersion($Config,[string]$Defaults,[string]$MySql,[string]$LogDirectory) {
+    # Best effort: without a usable mysql client the server version stays unknown.
+    if ([string]::IsNullOrWhiteSpace($MySql) -or !(Get-Command $MySql -ErrorAction SilentlyContinue)) { return '' }
+    $probe = Invoke-YfNativeCapture $MySql @("--defaults-file=$Defaults",'--batch','--skip-column-names','--execute=SELECT VERSION()') (Join-Path $LogDirectory 'server-version.stderr.log')
+    if ($probe.ExitCode -ne 0 -or @($probe.Output).Count -ne 1) { return '' }
+    return ([string]@($probe.Output)[0]).Trim()
+}
+function New-YfBackup([string]$ApplicationRoot,$Config,[string]$Destination,[string]$MySqlDump,[string]$SiteName,[string]$MySql='') {
     $ApplicationRoot = Get-YfFullPath $ApplicationRoot
     $Destination = Get-YfFullPath $Destination
     $paths = @($ApplicationRoot,$Config.Storage,$Config.Path,$Destination)
@@ -340,7 +537,13 @@ function New-YfBackup([string]$ApplicationRoot,$Config,[string]$Destination,[str
     try {
         $defaults = Write-YfMySqlDefaults $Config $Destination
         $sql = Join-Path $Destination 'database.sql'
-        $dump=Invoke-YfNativeCapture $MySqlDump @("--defaults-file=$defaults",'--single-transaction','--routines','--triggers','--events','--hex-blob','--no-tablespaces',"--result-file=$sql",$Config.Database) (Join-Path $Destination 'dump.stderr.log')
+        $help=Invoke-YfNativeCapture $MySqlDump @('--help') (Join-Path $Destination 'dump-help.stderr.log')
+        $clientVersion=Invoke-YfNativeCapture $MySqlDump @('--version') (Join-Path $Destination 'dump-version.stderr.log')
+        $serverVersion=Get-YfServerVersion $Config $defaults $MySql $Destination
+        $compatibility=Get-YfMySqlDumpCompatibilityArguments (@($help.Output) -join "`n") (@($clientVersion.Output) -join "`n") $serverVersion
+        # --events requires the EVENT privilege on the database (see deploy/README.md).
+        $dumpArguments=@("--defaults-file=$defaults",'--single-transaction','--routines','--triggers','--events','--hex-blob','--no-tablespaces') + $compatibility + @("--result-file=$sql",$Config.Database)
+        $dump=Invoke-YfNativeCapture $MySqlDump $dumpArguments (Join-Path $Destination 'dump.stderr.log')
         if ($dump.ExitCode -ne 0 -or !(Test-Path -LiteralPath $sql) -or (Get-Item -LiteralPath $sql).Length -eq 0) { throw 'Database backup failed. Inspect the protected backup log.' }
     } finally {
         if ($defaults -and (Test-Path -LiteralPath $defaults -PathType Leaf)) { Remove-Item -LiteralPath $defaults -Force }

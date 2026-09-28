@@ -9,6 +9,8 @@ start the backend and wait for /health -> restart `npm run dev` and wait for the
 Only a local database (127.0.0.1/localhost) is accepted. Only listeners that are clearly this
 project's backend (Yf.Api.dll) or Vite (web\node_modules\...vite) are stopped; any other owner aborts.
 Logs, the backup and result.json go to .artifacts/runtime/restart-dev/<UTC timestamp>/.
+After a successful backup only the newest -KeepBackups (default 5) before-restart.sql files are kept;
+older ones are deleted from their run directories (logs and result.json stay).
 
 .EXAMPLE
 powershell -NoProfile -File .\scripts\restart-dev.ps1 `
@@ -25,6 +27,8 @@ param(
     [string]$StorageRoot,
     [string]$MysqlDumpPath,
     [switch]$SkipBackup,
+    # Keep only the newest N before-restart.sql backups (each lives in its timestamped run directory).
+    [ValidateRange(1, 100)][int]$KeepBackups = 5,
     [switch]$SkipFrontend,
     [int]$BackendPort = 8080,
     [int]$FrontendPort = 5180
@@ -57,6 +61,20 @@ function Wait-Until([scriptblock]$Probe, $Process, [int]$Seconds) {
         Start-Sleep -Milliseconds 500
     }
     return $false
+}
+
+function Remove-OldRestartBackups([string]$RunsRoot, [int]$Keep) {
+    # Only exact before-restart.sql files inside timestamped run directories are removed.
+    if (!(Test-Path -LiteralPath $RunsRoot -PathType Container)) { return }
+    $backups = @(Get-ChildItem -LiteralPath $RunsRoot -Directory |
+        Where-Object { $_.Name -match '^\d{8}-\d{6}-\d{3}$' -and !($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+        ForEach-Object { Get-Item -LiteralPath (Join-Path $_.FullName 'before-restart.sql') -ErrorAction SilentlyContinue } |
+        Where-Object { $_ -and !($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+        Sort-Object { $_.Directory.Name } -Descending)
+    foreach ($old in @($backups | Select-Object -Skip $Keep)) {
+        Remove-Item -LiteralPath $old.FullName -Force
+        Write-Host "Pruned old backup: $($old.FullName)"
+    }
 }
 
 function Get-ConnectionOption($Builder, [string[]]$Names, [switch]$Required) {
@@ -156,6 +174,7 @@ if (!$SkipBackup) {
         if (Test-Path -LiteralPath $defaultsPath -PathType Leaf) { Remove-Item -LiteralPath $defaultsPath -Force }
     }
     Write-Host "Backup: $backupPath"
+    Remove-OldRestartBackups (Split-Path -Parent $runRoot) $KeepBackups
 }
 
 # --- Backend: build in isolation, stop, migrate, start ---

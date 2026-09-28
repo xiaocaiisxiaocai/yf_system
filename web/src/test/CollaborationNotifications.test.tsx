@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -7,11 +7,14 @@ const mocks = vi.hoisted(() => {
   const state = {
     revision: 'revision-1',
     unreadCount: 1,
+    latestId: 7,
     status: 'ready' as const,
     refresh: vi.fn(async () => undefined),
   }
   return {
     state,
+    initial: { revision: 'revision-1', unreadCount: 1, latestId: 7 },
+    store: null as null | { setState: (partial: Partial<typeof state>) => void; getState: () => typeof state },
     authState: { generation: 1 },
     get: vi.fn(),
     post: vi.fn(),
@@ -34,10 +37,9 @@ vi.mock('../store/auth', () => ({
 
 vi.mock('../store/collaboration', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/collaboration')>()
-  const useCollaboration = Object.assign(
-    () => mocks.state,
-    { getState: () => mocks.state },
-  )
+  const { create } = await import('zustand')
+  const useCollaboration = create(() => mocks.state)
+  mocks.store = useCollaboration
   return {
     ...actual,
     useCollaboration,
@@ -98,7 +100,9 @@ describe('协作通知行为', () => {
   beforeEach(() => {
     mocks.get.mockResolvedValue({ data: page() })
     mocks.post.mockResolvedValue({ data: {} })
+    mocks.state.refresh.mockReset()
     mocks.state.refresh.mockResolvedValue(undefined)
+    mocks.store!.setState({ ...mocks.initial })
   })
 
   it('通过真实交互呈现留言语义，并完成已查看与目标导航', async () => {
@@ -122,6 +126,42 @@ describe('协作通知行为', () => {
 
     await user.click(title)
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/projects/11?tab=messages&target=29')
+  })
+
+  it('自己标记已查看导致的概览变化不会误报新动态，真正的新动态仍会提示', async () => {
+    mocks.get.mockResolvedValue({
+      data: { ...page(), list: [notification(), notification({ id: 6, title: '另一条留言' })], total: 2, unreadCount: 2 },
+    })
+    // 标记后概览刷新：未查看数变化 -> revision 变化，但没有更新的通知（latestId 不变）。
+    mocks.state.refresh.mockImplementation(async () => {
+      mocks.store!.setState({ revision: 'revision-2', unreadCount: 1, latestId: 7 })
+    })
+    const user = userEvent.setup()
+    renderNotifications()
+    await user.click(screen.getByRole('button', { name: '协作动态通知，1 条未查看' }))
+    await screen.findByRole('button', { name: '查看通知：新增留言' })
+
+    await user.click(screen.getByRole('button', { name: '标记为已查看：新增留言' }))
+    await waitFor(() => expect(mocks.state.refresh).toHaveBeenCalledOnce())
+    await waitFor(() => expect(screen.getByRole('button', { name: '查看通知：新增留言' }).closest('article')).toHaveAttribute('data-read', 'true'))
+    expect(screen.queryByText('有新的协作动态')).not.toBeInTheDocument()
+
+    // 之后真正到达的新通知仍然提示刷新。
+    act(() => mocks.store!.setState({ revision: 'revision-3', unreadCount: 2, latestId: 8 }))
+    expect(await screen.findByText('有新的协作动态')).toBeVisible()
+  })
+
+  it('标记期间到达的新通知不会被已查看同步吞掉', async () => {
+    mocks.state.refresh.mockImplementation(async () => {
+      mocks.store!.setState({ revision: 'revision-2', unreadCount: 1, latestId: 9 })
+    })
+    const user = userEvent.setup()
+    renderNotifications()
+    await user.click(screen.getByRole('button', { name: '协作动态通知，1 条未查看' }))
+    await screen.findByRole('button', { name: '查看通知：新增留言' })
+
+    await user.click(screen.getByRole('button', { name: '标记为已查看：新增留言' }))
+    expect(await screen.findByText('有新的协作动态')).toBeVisible()
   })
 
   it('拒绝格式错误的网络条目，并向用户呈现可重试状态', async () => {

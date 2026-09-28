@@ -24,6 +24,10 @@ internal sealed class ProjectCopyService(
         LoggerMessage.Define<ulong>(LogLevel.Warning, new EventId(2, "ProjectCopyExecutionFailed"),
             "Project copy job {JobId} failed");
 
+    private static readonly Action<ILogger, ulong, uint, double, Exception?> LogTransientRetry =
+        LoggerMessage.Define<ulong, uint, double>(LogLevel.Warning, new EventId(3, "ProjectCopyTransientRetry"),
+            "Project copy job {JobId} hit a database lock conflict; retry {Retry} in {DelaySeconds}s");
+
     internal async Task<ProjectCopyJobResponse> EnqueueAsync(MySqlConnection conn, CurrentUser actor,
         ulong sourceProjectId, ProjectCopyRequest request, string? ip, CancellationToken ct)
     {
@@ -170,6 +174,18 @@ internal sealed class ProjectCopyService(
             // negative outcome. A database outage leaves RUNNING intact for the next lease owner.
             if (!await ResolveUnknownOutcomeAsync(unknown, CancellationToken.None)) throw;
             CleanupExecutionDirectory(jobId, executionToken, CancellationToken.None);
+        }
+        catch (Exception error) when (ProjectCopyRetryPolicy.RetryDelay(error, execution.RetryCount) is { } delay)
+        {
+            // Deadlock / lock-wait timeout: the copy transaction rolled back as a whole, so queue it again.
+            if (logger is not null) LogTransientRetry(logger, jobId, execution.RetryCount + 1, delay.TotalSeconds, error);
+            if (await RetryLaterAsync(jobId, executionToken, expectedWorkerEpoch, delay, CancellationToken.None))
+            {
+                CleanupExecutionDirectory(jobId, executionToken, CancellationToken.None);
+                return;
+            }
+            throw new InvalidOperationException(
+                "Project copy job retry could not be persisted; the lease cycle must recover it.", error);
         }
         catch (Exception error)
         {
@@ -854,6 +870,42 @@ internal sealed class ProjectCopyService(
                     .SetProperty(job => job.ExecutionToken, (string?)null)
                     .SetProperty(job => job.Error, error)
                     .SetProperty(job => job.CompletedAt, now)
+                    .SetProperty(job => job.UpdatedAt, now), ct);
+            await tx.CommitAsync(ct);
+            return changed == 1;
+        }
+        catch { return false; }
+    }
+
+    private async Task<bool> RetryLaterAsync(
+        ulong jobId, string executionToken, ulong workerEpoch, TimeSpan delay, CancellationToken ct)
+    {
+        try
+        {
+            await using var conn = await database.OpenAsync(ct);
+            await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+            await using var db = EfDb.Use(conn, tx);
+            var state = await db.ProjectCopyWorkerStates
+                .FromSqlRaw("SELECT * FROM project_copy_worker_state WHERE id=1 FOR UPDATE")
+                .SingleAsync(ct);
+            if (state.Epoch != workerEpoch)
+            {
+                await tx.CommitAsync(ct);
+                return false;
+            }
+            var now = await DatabaseUtcNowAsync(db, ct);
+            var notBefore = now + delay;
+            var changed = await db.ProjectCopyJobs
+                .Where(job => job.Id == jobId && job.Status == ProjectCopyJobStatuses.Running
+                    && job.ExecutionToken == executionToken && job.WorkerEpoch == workerEpoch)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(job => job.Status, ProjectCopyJobStatuses.Pending)
+                    .SetProperty(job => job.ExecutionToken, (string?)null)
+                    .SetProperty(job => job.FilesCopied, 0UL)
+                    .SetProperty(job => job.BytesCopied, 0UL)
+                    .SetProperty(job => job.Error, (string?)null)
+                    .SetProperty(job => job.RetryCount, job => job.RetryCount + 1)
+                    .SetProperty(job => job.NextAttemptAt, notBefore)
                     .SetProperty(job => job.UpdatedAt, now), ct);
             await tx.CommitAsync(ct);
             return changed == 1;

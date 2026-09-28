@@ -19,8 +19,13 @@ from script_safety import (
 )
 from test_first_start import verify_first_start
 
+USAGE = "Usage: python verify-release.py <published-release-directory | release.zip>"
+if len(sys.argv) != 2 or sys.argv[1] in ("-h", "--help") or not sys.argv[1].strip():
+    raise SystemExit(USAGE)
 source = Path(__file__).resolve().parents[2]
 archive = Path(sys.argv[1]).resolve()
+if not archive.exists():
+    raise SystemExit(f"Release input not found: {archive}\n{USAGE}")
 directory_input = archive.is_dir()
 artifacts = source / ".artifacts"
 test_temp_root = artifacts / "tests" / "tmp"
@@ -178,12 +183,25 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
             raise RuntimeError("Packaged WebBaseUrl is not the real site origin")
         if (origin.scheme == "http") == bool(settings.get("CookieSecure")):
             raise RuntimeError("Packaged CookieSecure does not match the site scheme")
+        insecure_cookies = settings.get("AllowInsecureCookies", False)
+        if not isinstance(insecure_cookies, bool):
+            raise RuntimeError("Packaged AllowInsecureCookies must be a boolean")
+        loopback_http = origin.scheme == "http" and (
+            origin.hostname == "localhost" or origin.hostname == "::1" or origin.hostname.startswith("127."))
+        if insecure_cookies != (origin.scheme == "http" and not loopback_http):
+            raise RuntimeError("Packaged AllowInsecureCookies must be set only for a non-loopback HTTP origin")
+        if not legacy_private_configuration and (
+                configuration.get("insecureCookies", False) is not insecure_cookies
+                or (insecure_cookies and configuration.get("insecureOverride") is not True)):
+            raise RuntimeError("Insecure cookie opt-in is not recorded as an explicit override in the manifest")
         if len(settings["JwtSecret"].encode("utf-8")) < 32:
             raise RuntimeError("Packaged JWT secret is too short")
     else:
         if configuration.get("containsSecrets") is not False or any(
                 settings.get(key) for key in ("ConnectionString", "JwtSecret", "BootstrapPassword")):
             raise RuntimeError("External configuration template contains bundled secrets")
+        if settings.get("AllowInsecureCookies") is True or configuration.get("insecureCookies") is True:
+            raise RuntimeError("External configuration template must not opt in to insecure cookies")
     if not ntpath.isabs(settings["StorageRoot"]):
         raise RuntimeError("Packaged storage root must be an absolute Windows path")
     if any(key in settings for key in ("OemStorageRoot", "OemScanner")):
@@ -205,7 +223,12 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
     env["YF_TEST_API_DIR"] = str(package)
     published_report = Path(temp) / "dotnet-published-results.json"
     env["YF_TEST_RESULTS_PATH"] = str(published_report)
-    run = subprocess.run([sys.executable, str(source / "server_dotnet/scripts/test-isolated.py")], env=env, cwd=source)
+    try:
+        # Generous bound for the full published HTTP suite; a hung child must not block forever.
+        run = subprocess.run([sys.executable, str(source / "server_dotnet/scripts/test-isolated.py")],
+                             env=env, cwd=source, timeout=3600)
+    except subprocess.TimeoutExpired:
+        raise SystemExit("Published HTTP suite timed out after 3600 seconds")
     if run.returncode:
         raise SystemExit(run.returncode)
     http_report = json.loads(published_report.read_text(encoding="utf-8"))

@@ -92,6 +92,28 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
     expect(screen.queryByRole('button', { name: /开始|终止/ })).not.toBeInTheDocument()
   })
 
+  it.each([
+    ['DRAFT', '开始'],
+    ['TERMINATED', '重新开始'],
+  ])('keeps %s unchanged when the supplier has no active account and allows retry', async (status, label) => {
+    mocks.auth.permissions = ['project:status']
+    mocks.put.mockRejectedValueOnce({ response: { data: {
+      code: 40901,
+      message: '项目所属厂商尚未添加启用的用户，请先添加或启用厂商用户后再开始项目',
+    } } })
+    const changed = vi.fn()
+    render(<ProjectWorkflowPanel project={{ id: 17, status } as never} onChanged={changed} />)
+
+    await userEvent.click(screen.getByRole('button', { name: label }))
+    await waitFor(() => expect(screen.getByRole('button', { name: label })).not.toHaveClass('arco-btn-loading'))
+    expect(mocks.put).toHaveBeenCalledTimes(1)
+    expect(changed).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: label }))
+    await waitFor(() => expect(changed).toHaveBeenCalledTimes(1))
+    expect(mocks.put).toHaveBeenCalledTimes(2)
+  })
+
   it('only suppliers can submit a project for company acceptance', async () => {
     mocks.auth.permissions = ['project:submit']
     const { rerender } = render(<ProjectWorkflowPanel project={{ id: 1, status: 'IN_PROGRESS' } as never} onChanged={() => undefined} />)

@@ -63,6 +63,7 @@ public static class ApiApplication
         var builder = CreateConfiguredBuilder(args);
         var options = builder.Configuration.GetSection("App").Get<AppOptions>() ?? new();
         options.Validate();
+        options.ValidateCookieSecurity(builder.Environment.IsDevelopment());
         options.ValidateStorageLocation(builder.Environment.ContentRootPath);
         if (inspectDevelopment || resetDevelopment)
         {
@@ -103,11 +104,13 @@ public static class ApiApplication
             return null;
         }
         await FileBlobBackfill.EnsureConvertedAsync(new AppDb(options), options.StorageRoot);
+        var fileLogger = FileLogging.Configure(builder, options);
         builder.WebHost.ConfigureKestrel(k => { k.AddServerHeader = false; k.Limits.MaxRequestBodySize = 64L * 1024 * 1024; });
         builder.Services.Configure<IISServerOptions>(o => o.MaxRequestBodySize = 64L * 1024 * 1024);
         builder.Services.Configure<RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton(options).AddSingleton<AppDb>().AddSingleton<AccessService>().AddSingleton<AuditService>();
+        builder.Services.AddHostedService<AppRunningLease>();
         var efConnectionString = AppDb.BuildConnectionString(options);
         builder.Services.AddPooledDbContextFactory<YfDbContext>(db => db.UseMySql(
             efConnectionString, EfDb.ServerVersion).AddInterceptors(UtcDatabaseSession.Instance));
@@ -120,6 +123,7 @@ public static class ApiApplication
         var allowedWebOrigin = new Uri(options.WebBaseUrl).GetLeftPart(UriPartial.Authority);
         var webSocketOptions = new WebSocketOptions();
         webSocketOptions.AllowedOrigins.Add(allowedWebOrigin);
+        FileLogging.UseRequestLogging(app, fileLogger);
         app.UseWebSockets(webSocketOptions);
         app.UseMiddleware<ApiErrorMiddleware>();
         app.Use(async (context, next) =>
@@ -161,10 +165,16 @@ public static class ApiApplication
         app.UseMiddleware<IdentityMiddleware>();
         app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime();
         var healthProbe = new DatabaseHealthProbe();
+        // Storage writes cost more than a ping and the disk changes state rarely: reuse a healthy result longer.
+        var storageProbe = new DatabaseHealthProbe(healthyCacheDuration: DatabaseHealthProbe.StorageHealthyCacheDuration);
         app.MapGet("/health", async (IDbContextFactory<YfDbContext> factory, CancellationToken ct) =>
-            await healthProbe.IsUpAsync(factory, ct)
-                ? Results.Json(new { status = "ok", db = "up" })
-                : Results.Json(new { status = "degraded", db = "down" }, statusCode: 503));
+        {
+            // Anonymous: report only up/down per dependency, never paths or error text.
+            var db = await healthProbe.IsUpAsync(factory, ct);
+            var storage = await storageProbe.IsUpAsync(token => DevelopmentReadiness.ProbeRootAsync(options.StorageRoot, token), ct);
+            var body = new { status = db && storage ? "ok" : "degraded", db = db ? "up" : "down", storage = storage ? "up" : "down" };
+            return db && storage ? Results.Json(body) : Results.Json(body, statusCode: 503);
+        });
         app.Map("/api/{**path}", () => Results.Json(new ApiErrorResponse(40401, "接口不存在"), statusCode: 404));
         if (File.Exists(Path.Combine(app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot"), "index.html")))
             app.MapFallbackToFile("index.html");
@@ -219,9 +229,11 @@ public static class ApiApplication
 /// Concurrent probes share one in-flight check, and a healthy result is reused briefly. A failed
 /// check is not cached, so startup polling sees the database as soon as it becomes reachable.
 /// </summary>
-internal sealed class DatabaseHealthProbe(Func<DateTime>? clock = null)
+internal sealed class DatabaseHealthProbe(Func<DateTime>? clock = null, TimeSpan? healthyCacheDuration = null)
 {
     internal static readonly TimeSpan HealthyCacheDuration = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan StorageHealthyCacheDuration = TimeSpan.FromSeconds(30);
+    private readonly TimeSpan cacheDuration = healthyCacheDuration ?? HealthyCacheDuration;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Func<DateTime> clock = clock ?? (() => DateTime.UtcNow);
     private long healthyUntilTicks;
@@ -244,7 +256,7 @@ internal sealed class DatabaseHealthProbe(Func<DateTime>? clock = null)
             bool up;
             try { up = await probe(ct); }
             catch { up = false; }
-            Interlocked.Exchange(ref healthyUntilTicks, up ? (clock() + HealthyCacheDuration).Ticks : 0);
+            Interlocked.Exchange(ref healthyUntilTicks, up ? (clock() + cacheDuration).Ticks : 0);
             return up;
         }
         finally { gate.Release(); }

@@ -6,7 +6,7 @@ using Yf.Api.Modules.Identity;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class IdentityRevisionDatabaseTests
 {
     [Fact(Timeout = 120_000)]

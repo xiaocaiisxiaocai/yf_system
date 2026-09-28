@@ -7,7 +7,7 @@ using Yf.Api.Modules.Identity;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class AdminLifecycleTests
 {
     [Fact(Timeout = 120_000)]
@@ -127,7 +127,7 @@ public sealed class AdminLifecycleTests
     }
 
     private static JsonElement Json(object value) =>
-        JsonSerializer.SerializeToElement(value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        JsonSerializer.SerializeToElement(value, TestJson.Web);
 
     private sealed class DepartmentState
     {

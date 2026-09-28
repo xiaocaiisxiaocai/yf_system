@@ -139,4 +139,33 @@ describe('ProjectActivityPanel migrated behavior', () => {
     expect(mocks.get.mock.calls[1][1].params).toEqual({ pageSize: 20, cursor: 'cursor-1' })
     expect(mocks.get.mock.calls[2][1].params).toEqual({ pageSize: 20, cursor: 'cursor-1' })
   })
+
+  it('re-entering the tab keeps the loaded rows, aborts hidden requests and keeps rows on a quiet refresh failure', async () => {
+    const configs: Array<{ signal?: AbortSignal; quietNetworkError?: boolean }> = []
+    let call = 0
+    const second = deferred<ReturnType<typeof response>>()
+    mocks.get.mockImplementation((_url: string, config: { signal?: AbortSignal; quietNetworkError?: boolean }) => {
+      configs.push(config)
+      call += 1
+      if (call === 1) return Promise.resolve(response([row(1)]))
+      if (call === 2) return second.promise
+      return Promise.reject(Object.assign(new Error('offline'), { isAxiosError: true, code: 'ERR_NETWORK' }))
+    })
+    const { rerender } = render(<ProjectActivityPanel projectId={1} active />)
+    await waitFor(() => expect(document.querySelector('[data-activity-id="1"]')).toBeInTheDocument())
+    expect(configs[0].quietNetworkError).toBe(true)
+
+    rerender(<ProjectActivityPanel projectId={1} active={false} />)
+    rerender(<ProjectActivityPanel projectId={1} active />)
+    await waitFor(() => expect(configs).toHaveLength(2))
+    // 重新进入时旧列表保持可见，不闪成空白。
+    expect(document.querySelector('[data-activity-id="1"]')).toBeInTheDocument()
+    rerender(<ProjectActivityPanel projectId={1} active={false} />)
+    expect(configs[1].signal?.aborted).toBe(true)
+
+    rerender(<ProjectActivityPanel projectId={1} active />)
+    expect(await screen.findByText('项目动态刷新失败，当前显示上次数据。')).toBeInTheDocument()
+    expect(document.querySelector('[data-activity-id="1"]')).toBeInTheDocument()
+    expect(screen.queryByText('项目动态加载失败')).not.toBeInTheDocument()
+  })
 })

@@ -14,10 +14,9 @@ import type { Supplier } from './components/supplierTypes'
 import { useSupplierListState } from './hooks/useSupplierListState'
 
 export default function SupplierList() {
-  const { hasPerm } = useAuth()
-  const canManageSuppliers = hasPerm('supplier:manage')
-  const canManageAccounts = hasPerm('supplier:account')
-  const canDelete = hasPerm('supplier:delete')
+  const canManageSuppliers = useAuth((state) => state.hasPerm('supplier:manage'))
+  const canManageAccounts = useAuth((state) => state.hasPerm('supplier:account'))
+  const canDelete = useAuth((state) => state.hasPerm('supplier:delete'))
   const {
     data, loading, status, page, pageSize, loadError,
     load, search, clearSearch, changeStatus, changePage,

@@ -181,7 +181,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             await EnsureRoleAssignableAsync(context, roleIds[0], ct);
         }
         await context.Users.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, status), ct);
-        if (status == AccountStatuses.Disabled) await IdentityService.RevokeAllAsync(connection, dbTransaction, id, ct);
+        if (status == AccountStatuses.Disabled) await IdentityService.RevokeAllAsync(connection, dbTransaction, id, RefreshRevokeReasons.Admin, ct);
         await audit.WriteAsync(connection, dbTransaction, actor.Id, "USER_STATUS", "user", id, new
         {
             user.EmployeeNo, oldStatus = user.Status, newStatus = status, targetName = UserAuditName(user),
@@ -205,7 +205,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         await permissionCeiling.EnsureManageUserAsync(connection, dbTransaction, actor, id, ct);
         await context.Users.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.PasswordHash, hash)
             .SetProperty(x => x.MustChangePassword, true).SetProperty(x => x.FailedLoginAttempts, 0).SetProperty(x => x.LockedUntil, (DateTime?)null), ct);
-        await IdentityService.RevokeAllAsync(connection, dbTransaction, id, ct);
+        await IdentityService.RevokeAllAsync(connection, dbTransaction, id, RefreshRevokeReasons.Admin, ct);
         await audit.WriteAsync(connection, dbTransaction, actor.Id, "USER_RESET_PASSWORD", "user", id, new
         {
             user.EmployeeNo, sessionsRevoked = true, mustChangePassword = true, passwordChanged = true, targetName = UserAuditName(user),

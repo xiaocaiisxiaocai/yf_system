@@ -2,6 +2,7 @@ using Dapper;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 using MySqlConnector;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Yf.Api.Infrastructure;
@@ -58,7 +59,7 @@ public sealed class FilesRecoveryTests
         await scope.InsertSessionAsync(sessionId, "UPLOADING", expired: false);
         Assert.False(await scope.IsExpiredByDatabaseAsync(sessionId));
         var body = new BlockingOneByteStream();
-        var context = scope.ChunkContext([1]);
+        var context = FilesDatabaseScope.ChunkContext([1]);
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var put = scope.Upload.PutChunkAsync(context, sessionId, 0, body, operation.Token);
         var released = false;
@@ -104,7 +105,7 @@ public sealed class FilesRecoveryTests
         Assert.Equal([1], await File.ReadAllBytesAsync(
             FileStorage.ChunkPath(scope.StorageRoot, sessionId, 0), ct));
         var uploaded = Assert.Single((await scope.Upload.GetAsync(
-            scope.Context(), sessionId, ct)).UploadedChunks);
+            FilesDatabaseScope.Context(), sessionId, ct)).UploadedChunks);
         Assert.Equal(0U, uploaded.Index);
         Assert.Equal(Sha256Hex([1]), uploaded.Sha256);
     }
@@ -117,8 +118,8 @@ public sealed class FilesRecoveryTests
         var request = UploadRequest("same.bin", [1]);
 
         var calls = await Task.WhenAll(
-            scope.Upload.InitAsync(scope.Context(), request, ct),
-            scope.Upload.InitAsync(scope.Context(), request, ct));
+            scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct),
+            scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct));
         var ids = calls.Select(result => result.SessionId).ToArray();
 
         Assert.NotNull(ids[0]);
@@ -147,21 +148,21 @@ public sealed class FilesRecoveryTests
         var original = new byte[] { 1 };
         var replacement = new byte[] { 2 };
         var request = UploadRequest("resume.bin", original);
-        var initialized = await scope.Upload.InitAsync(scope.Context(), request, ct);
+        var initialized = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct);
 
         using (var body = new MemoryStream(original))
-            await scope.Upload.PutChunkAsync(scope.ChunkContext(original), initialized.SessionId, 0, body, ct);
+            await scope.Upload.PutChunkAsync(FilesDatabaseScope.ChunkContext(original), initialized.SessionId, 0, body, ct);
 
         using (var body = new MemoryStream(replacement))
         {
             var mismatched = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.PutChunkAsync(
-                scope.ChunkContext(replacement, Sha256Hex(original)), initialized.SessionId, 0, body, ct));
+                FilesDatabaseScope.ChunkContext(replacement, Sha256Hex(original)), initialized.SessionId, 0, body, ct));
             Assert.Equal(400, mismatched.Status);
         }
         Assert.Equal(original, await File.ReadAllBytesAsync(
             FileStorage.ChunkPath(scope.StorageRoot, initialized.SessionId, 0), ct));
 
-        var resumed = await scope.Upload.InitAsync(scope.Context(), request, ct);
+        var resumed = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct);
         Assert.Equal(initialized.SessionId, resumed.SessionId);
         Assert.True(resumed.Resumed);
         var originalDigest = Assert.Single(resumed.UploadedChunks);
@@ -169,9 +170,9 @@ public sealed class FilesRecoveryTests
         Assert.Equal(Sha256Hex(original), originalDigest.Sha256);
 
         using (var body = new MemoryStream(replacement))
-            await scope.Upload.PutChunkAsync(scope.ChunkContext(replacement), initialized.SessionId, 0, body, ct);
+            await scope.Upload.PutChunkAsync(FilesDatabaseScope.ChunkContext(replacement), initialized.SessionId, 0, body, ct);
         var replacedDigest = Assert.Single((await scope.Upload.GetAsync(
-            scope.Context(), initialized.SessionId, ct)).UploadedChunks);
+            FilesDatabaseScope.Context(), initialized.SessionId, ct)).UploadedChunks);
         Assert.Equal(Sha256Hex(replacement), replacedDigest.Sha256);
         Assert.Equal(replacement, await File.ReadAllBytesAsync(
             FileStorage.ChunkPath(scope.StorageRoot, initialized.SessionId, 0), ct));
@@ -185,9 +186,9 @@ public sealed class FilesRecoveryTests
         var original = new byte[] { 1, 2, 3, 4 };
         var tampered = new byte[] { 4, 3, 2, 1 };
         var request = UploadRequest("tampered.bin", original);
-        var initialized = await scope.Upload.InitAsync(scope.Context(), request, ct);
+        var initialized = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct);
         using (var body = new MemoryStream(original))
-            await scope.Upload.PutChunkAsync(scope.ChunkContext(original), initialized.SessionId, 0, body, ct);
+            await scope.Upload.PutChunkAsync(FilesDatabaseScope.ChunkContext(original), initialized.SessionId, 0, body, ct);
 
         var chunkPath = FileStorage.ChunkPath(scope.StorageRoot, initialized.SessionId, 0);
         var originalSidecar = await File.ReadAllTextAsync(chunkPath + ".sha256", ct);
@@ -195,8 +196,8 @@ public sealed class FilesRecoveryTests
 
         Assert.Equal(Sha256Hex(original), SidecarDigest(originalSidecar));
         Assert.Empty((await scope.Upload.GetAsync(
-            scope.Context(), initialized.SessionId, ct)).UploadedChunks);
-        var resumed = await scope.Upload.InitAsync(scope.Context(), request, ct);
+            FilesDatabaseScope.Context(), initialized.SessionId, ct)).UploadedChunks);
+        var resumed = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct);
         Assert.Equal(initialized.SessionId, resumed.SessionId);
         Assert.True(resumed.Resumed);
         Assert.Empty(resumed.UploadedChunks);
@@ -209,21 +210,21 @@ public sealed class FilesRecoveryTests
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
         var content = new byte[] { 5, 6, 7, 8 };
         var request = UploadRequest("sidecar.bin", content);
-        var initialized = await scope.Upload.InitAsync(scope.Context(), request, ct);
+        var initialized = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct);
         using (var body = new MemoryStream(content))
-            await scope.Upload.PutChunkAsync(scope.ChunkContext(content), initialized.SessionId, 0, body, ct);
+            await scope.Upload.PutChunkAsync(FilesDatabaseScope.ChunkContext(content), initialized.SessionId, 0, body, ct);
 
         var chunkPath = FileStorage.ChunkPath(scope.StorageRoot, initialized.SessionId, 0);
         var fields = (await File.ReadAllTextAsync(chunkPath + ".sha256", ct)).Trim().Split(' ');
         var chunk = new FileInfo(chunkPath);
-        Assert.Equal([Sha256Hex(content), chunk.Length.ToString(), chunk.LastWriteTimeUtc.Ticks.ToString()], fields);
+        Assert.Equal([Sha256Hex(content), chunk.Length.ToString(CultureInfo.InvariantCulture), chunk.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture)], fields);
 
         // Status polling never rereads a legacy chunk. Merge still hashes it and accepts valid content.
         await File.WriteAllTextAsync(chunkPath + ".sha256", Sha256Hex(content), ct);
-        Assert.Empty((await scope.Upload.GetAsync(scope.Context(), initialized.SessionId, ct)).UploadedChunks);
-        await scope.Upload.SubmitMd5Async(scope.Context(), initialized.SessionId,
+        Assert.Empty((await scope.Upload.GetAsync(FilesDatabaseScope.Context(), initialized.SessionId, ct)).UploadedChunks);
+        await scope.Upload.SubmitMd5Async(FilesDatabaseScope.Context(), initialized.SessionId,
             new SubmitUploadMd5Request(Md5Hex(content)), ct);
-        var merged = await scope.Upload.MergeAsync(scope.Context(), initialized.SessionId, ct);
+        var merged = await scope.Upload.MergeAsync(FilesDatabaseScope.Context(), initialized.SessionId, ct);
         Assert.Equal(Sha256Hex(content), merged.Sha256);
     }
 
@@ -235,13 +236,13 @@ public sealed class FilesRecoveryTests
         var firstContent = Enumerable.Repeat((byte)0x11, 4096).ToArray();
         var secondContent = Enumerable.Repeat((byte)0x22, 4096).ToArray();
         var request = UploadRequest("overlap.bin", firstContent);
-        var initialized = await scope.Upload.InitAsync(scope.Context(), request, ct);
+        var initialized = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct);
         await using var firstBody = new GatedPayloadStream(firstContent);
         await using var secondBody = new GatedPayloadStream(secondContent);
         var firstPut = scope.Upload.PutChunkAsync(
-            scope.ChunkContext(firstContent), initialized.SessionId, 0, firstBody, ct);
+            FilesDatabaseScope.ChunkContext(firstContent), initialized.SessionId, 0, firstBody, ct);
         var secondPut = scope.Upload.PutChunkAsync(
-            scope.ChunkContext(secondContent), initialized.SessionId, 0, secondBody, ct);
+            FilesDatabaseScope.ChunkContext(secondContent), initialized.SessionId, 0, secondBody, ct);
         var puts = Task.WhenAll(firstPut, secondPut);
 
         try
@@ -265,11 +266,11 @@ public sealed class FilesRecoveryTests
         var actualSha256 = Sha256Hex(actual);
         Assert.Equal(actualSha256, SidecarDigest(await File.ReadAllTextAsync(chunkPath + ".sha256", ct)));
         var uploaded = Assert.Single((await scope.Upload.GetAsync(
-            scope.Context(), initialized.SessionId, ct)).UploadedChunks);
+            FilesDatabaseScope.Context(), initialized.SessionId, ct)).UploadedChunks);
         Assert.Equal(0U, uploaded.Index);
         Assert.Equal(actualSha256, uploaded.Sha256);
 
-        await scope.Upload.SubmitMd5Async(scope.Context(), initialized.SessionId,
+        await scope.Upload.SubmitMd5Async(FilesDatabaseScope.Context(), initialized.SessionId,
             new SubmitUploadMd5Request(Md5Hex(actual)), ct);
         Assert.Equal(Md5Hex(actual), await scope.FileMd5Async(initialized.SessionId));
     }
@@ -286,9 +287,9 @@ public sealed class FilesRecoveryTests
 
         Assert.False(await scope.IsExpiredByDatabaseAsync(activeId));
         Assert.True(await scope.IsExpiredByDatabaseAsync(expiredId));
-        await scope.Upload.GetAsync(scope.Context(), activeId, ct);
+        await scope.Upload.GetAsync(FilesDatabaseScope.Context(), activeId, ct);
         var expired = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Upload.GetAsync(scope.Context(), expiredId, ct));
+            scope.Upload.GetAsync(FilesDatabaseScope.Context(), expiredId, ct));
         Assert.Equal(409, expired.Status);
     }
 
@@ -305,11 +306,11 @@ public sealed class FilesRecoveryTests
         Assert.False(await scope.IsExpiredByDatabaseAsync(activeId));
         Assert.True(await scope.IsExpiredByDatabaseAsync(expiredId));
         using var activeBody = new MemoryStream([1]);
-        await scope.Upload.PutChunkAsync(scope.ChunkContext([1]), activeId, 0,
+        await scope.Upload.PutChunkAsync(FilesDatabaseScope.ChunkContext([1]), activeId, 0,
             activeBody, ct);
         using var expiredBody = new MemoryStream([1]);
         var expired = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Upload.PutChunkAsync(scope.ChunkContext([1]), expiredId, 0,
+            scope.Upload.PutChunkAsync(FilesDatabaseScope.ChunkContext([1]), expiredId, 0,
                 expiredBody, ct));
         Assert.Equal(409, expired.Status);
         Assert.True(File.Exists(FileStorage.ChunkPath(scope.StorageRoot, activeId, 0)));
@@ -333,11 +334,11 @@ public sealed class FilesRecoveryTests
         Assert.True(await scope.IsExpiredByDatabaseAsync(expiredId));
         Assert.True(await scope.IsExpiredByDatabaseAsync(expiredMergingId));
         var incomplete = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Upload.MergeAsync(scope.Context(), activeId, ct));
+            scope.Upload.MergeAsync(FilesDatabaseScope.Context(), activeId, ct));
         var expired = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Upload.MergeAsync(scope.Context(), expiredId, ct));
+            scope.Upload.MergeAsync(FilesDatabaseScope.Context(), expiredId, ct));
         var expiredMerging = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Upload.MergeAsync(scope.Context(), expiredMergingId, ct));
+            scope.Upload.MergeAsync(FilesDatabaseScope.Context(), expiredMergingId, ct));
         Assert.Equal(400, incomplete.Status);
         Assert.Equal(409, expired.Status);
         Assert.Equal(409, expiredMerging.Status);
@@ -356,11 +357,11 @@ public sealed class FilesRecoveryTests
         Assert.False(await scope.IsExpiredByDatabaseAsync(sessionId));
 
         var incomplete = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Upload.MergeAsync(scope.Context(), sessionId, ct));
+            scope.Upload.MergeAsync(FilesDatabaseScope.Context(), sessionId, ct));
         Assert.Equal(409, incomplete.Status);
         Assert.Equal("MERGING", await scope.StatusAsync(sessionId));
 
-        await scope.Upload.AbortAsync(scope.Context(), sessionId, ct);
+        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), sessionId, ct);
         Assert.Equal("ABORTED", await scope.StatusAsync(sessionId));
         Assert.False(Directory.Exists(FileStorage.SessionDirectory(scope.StorageRoot, sessionId)));
     }
@@ -372,14 +373,14 @@ public sealed class FilesRecoveryTests
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
         var payload = new byte[] { 1 };
         var initialized = await scope.Upload.InitAsync(
-            scope.Context(), UploadRequest("wrong-md5.bin", payload), ct);
+            FilesDatabaseScope.Context(), UploadRequest("wrong-md5.bin", payload), ct);
         using (var body = new MemoryStream(payload))
-            await scope.Upload.PutChunkAsync(scope.ChunkContext(payload), initialized.SessionId, 0, body, ct);
-        await scope.Upload.SubmitMd5Async(scope.Context(), initialized.SessionId,
+            await scope.Upload.PutChunkAsync(FilesDatabaseScope.ChunkContext(payload), initialized.SessionId, 0, body, ct);
+        await scope.Upload.SubmitMd5Async(FilesDatabaseScope.Context(), initialized.SessionId,
             new SubmitUploadMd5Request(new string('0', 32)), ct);
 
         var mismatch = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Upload.MergeAsync(scope.Context(), initialized.SessionId, ct));
+            scope.Upload.MergeAsync(FilesDatabaseScope.Context(), initialized.SessionId, ct));
 
         Assert.Equal(400, mismatch.Status);
         Assert.Equal("UPLOADING", await scope.StatusAsync(initialized.SessionId));
@@ -480,9 +481,9 @@ public sealed class FilesRecoveryTests
                 INSERT INTO users(id,employee_no,user_type,supplier_id,status,must_change_password,email,real_name)
                 VALUES(2,'T002','INTERNAL',NULL,'ACTIVE',FALSE,NULL,'Outsider');
                 INSERT INTO user_roles(user_id,role_id) VALUES(2,1);
-                INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,
+                INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,
                                   mime_type,sha256,storage_path,status,deleted_at,created_at)
-                VALUES(1,1,'C2S','private-file-name.pdf','stored.pdf','pdf',1,'application/pdf',NULL,
+                VALUES(1,1,1,'C2S','private-file-name.pdf','stored.pdf','pdf',1,'application/pdf',NULL,
                        'files/2026/09/stored.pdf','DELETED',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6));
                 """, cancellationToken: ct));
         }
@@ -497,6 +498,240 @@ public sealed class FilesRecoveryTests
         Assert.DoesNotContain("private-file-name.pdf", error.Message, StringComparison.Ordinal);
     }
 
+    [Fact(Timeout = 30_000)]
+    public async Task InternalUploadsRequireStepMaterialAndMotionFlowWorkbookNaming()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var connection = await scope.Database.OpenAsync(ct))
+        {
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE system_configs SET cfg_value='bin,step,stp,xlsx,xls' WHERE cfg_key='upload.allowed_exts';
+                UPDATE files SET status='DELETED', deleted_at=UTC_TIMESTAMP(6) WHERE id=900;
+                """, cancellationToken: ct));
+        }
+
+        var workbook = UploadRequest("CSLR-605 六軸雙工位放板機 2105931-1 動作流程.xlsx", [2]);
+        var noStep = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(FilesDatabaseScope.Context(), workbook, ct));
+        Assert.Equal(UploadMaterialRules.StepRequiredMessage, noStep.Message);
+        var badName = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("动作流程.xlsx", [3]), ct));
+        Assert.Equal(UploadMaterialRules.MotionFlowNamingMessage, badName.Message);
+        var legacyWorkbook = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("CSLR-605 放板机 2105931-1 动作流程.xls", [4]), ct));
+        Assert.Equal(UploadMaterialRules.MotionFlowNamingMessage, legacyWorkbook.Message);
+
+        // 同一批次里 STEP 会话先建立后，其余资料即可并发初始化；STEP 会话中止后恢复限制。
+        var step = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("CSLR-605 放板機2105931-1.STEP", [5]), ct);
+        var accepted = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), workbook, ct);
+        Assert.NotNull(accepted.SessionId);
+        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), step.SessionId!, ct);
+        await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("notes.bin", [6]), ct));
+
+        await using (var connection = await scope.Database.OpenAsync(ct))
+        {
+            await connection.ExecuteAsync(new CommandDefinition(
+                "UPDATE files SET status='AVAILABLE', deleted_at=NULL WHERE id=900", cancellationToken: ct));
+        }
+        Assert.NotNull((await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("notes.bin", [6]), ct)).SessionId);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task MergeRechecksStepMaterialAndKeepsRejectedSessionResumable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        await scope.ExecuteAsync("UPDATE system_configs SET cfg_value='bin,step' WHERE cfg_key='upload.allowed_exts'", ct);
+        var payload = new byte[] { 42 };
+        var initialized = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("notes.bin", payload), ct);
+        using (var body = new MemoryStream(payload))
+            await scope.Upload.PutChunkAsync(FilesDatabaseScope.ChunkContext(payload), initialized.SessionId, 0, body, ct);
+        await scope.Upload.SubmitMd5Async(FilesDatabaseScope.Context(), initialized.SessionId,
+            new SubmitUploadMd5Request(Md5Hex(payload)), ct);
+
+        // The STEP file that satisfied the rule at init is gone by merge time.
+        await scope.ExecuteAsync("UPDATE files SET status='DELETED', deleted_at=UTC_TIMESTAMP(6) WHERE id=900", ct);
+        var rejected = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Upload.MergeAsync(FilesDatabaseScope.Context(), initialized.SessionId, ct));
+        Assert.Equal(400, rejected.Status);
+        Assert.Equal(UploadMaterialRules.StepRequiredMessage, rejected.Message);
+        Assert.Equal("UPLOADING", await scope.StatusAsync(initialized.SessionId));
+        Assert.Equal(payload, await File.ReadAllBytesAsync(
+            FileStorage.ChunkPath(scope.StorageRoot, initialized.SessionId, 0), ct));
+
+        // Another active internal STEP session satisfies the rule again; the same session then merges.
+        var step = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("assembly.step", [43]), ct);
+        var merged = await scope.Upload.MergeAsync(FilesDatabaseScope.Context(), initialized.SessionId, ct);
+        Assert.Equal(Sha256Hex(payload), merged.Sha256);
+
+        // A rejected session can still be cancelled.
+        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), step.SessionId!, ct);
+        var second = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("assembly.step", [44]), ct);
+        var other = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("other.bin", [45]), ct);
+        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), second.SessionId!, ct);
+        using (var body = new MemoryStream(new byte[] { 45 }))
+            await scope.Upload.PutChunkAsync(FilesDatabaseScope.ChunkContext([45]), other.SessionId, 0, body, ct);
+        await scope.Upload.SubmitMd5Async(FilesDatabaseScope.Context(), other.SessionId, new SubmitUploadMd5Request(Md5Hex([45])), ct);
+        await Assert.ThrowsAsync<ApiException>(() => scope.Upload.MergeAsync(FilesDatabaseScope.Context(), other.SessionId, ct));
+        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), other.SessionId, ct);
+        Assert.Equal("ABORTED", await scope.StatusAsync(other.SessionId));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ResumingAnExistingWorkbookSessionIsNotRejectedByNamingRule()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        await scope.ExecuteAsync("UPDATE system_configs SET cfg_value='bin,step,xlsx' WHERE cfg_key='upload.allowed_exts'", ct);
+        var request = UploadRequest("动作流程.xlsx", [3]);
+        var fresh = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct));
+        Assert.Equal(UploadMaterialRules.MotionFlowNamingMessage, fresh.Message);
+
+        // A session created before the naming rule (or by an older client) must stay resumable.
+        var sessionId = Guid.NewGuid().ToString("D");
+        await scope.InsertSessionAsync(sessionId, "UPLOADING", expired: false,
+            fileName: "动作流程.xlsx", fingerprint: Sha256Hex([3]));
+        var resumed = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct);
+        Assert.True(resumed.Resumed);
+        Assert.Equal(sessionId, resumed.SessionId);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task UploadQuotaLimitsActiveSessionsAndPendingBytesPerAccount()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct, options =>
+        {
+            options.UploadMaxActiveSessionsPerUser = 2;
+            options.UploadMaxPendingBytesPerUser = 5;
+        });
+        var first = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("a.bin", [1, 1]), ct);
+        var second = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("b.bin", [2, 2]), ct);
+
+        var tooMany = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("c.bin", [3]), ct));
+        Assert.Equal(409, tooMany.Status);
+        Assert.Equal(40901, tooMany.Code);
+        Assert.Contains("上限", tooMany.Message, StringComparison.Ordinal);
+
+        // Resuming an existing session never counts against the quota.
+        var resumed = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("a.bin", [1, 1]), ct);
+        Assert.Equal(first.SessionId, resumed.SessionId);
+
+        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), second.SessionId, ct);
+        var tooLarge = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("d.bin", [4, 4, 4, 4]), ct));
+        Assert.Equal(409, tooLarge.Status);
+        Assert.Contains("总大小", tooLarge.Message, StringComparison.Ordinal);
+        Assert.NotNull((await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("e.bin", [5, 5, 5]), ct)).SessionId);
+
+        // Expired sessions no longer occupy the quota.
+        await scope.ExecuteAsync("UPDATE upload_sessions SET expires_at=UTC_TIMESTAMP(6)-INTERVAL 1 MINUTE", ct);
+        Assert.NotNull((await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("f.bin", [6, 6, 6, 6, 6]), ct)).SessionId);
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task OrphanBlobScanCursorAdvancesPastDeletedCursorFile()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        // 150 recent (grace period) files: the first cycle scans 100 and parks the cursor on the 100th.
+        var paths = new List<string>();
+        for (var index = 0; index < 150; index++)
+        {
+            var sha = Sha256Hex(BitConverter.GetBytes(index));
+            var path = FileBlobStore.AbsolutePath(scope.StorageRoot, sha);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllBytesAsync(path, [1], ct);
+            paths.Add(path);
+        }
+
+        await scope.Maintenance.PurgeOrphanBlobFilesAsync(ct);
+        var cursor = scope.Maintenance.OrphanScanCursor;
+        Assert.NotNull(cursor);
+        File.Delete(cursor);
+
+        // The next cycle resumes strictly after the (now missing) cursor instead of restarting.
+        await scope.Maintenance.PurgeOrphanBlobFilesAsync(ct);
+        var next = scope.Maintenance.OrphanScanCursor;
+        Assert.NotNull(next);
+        Assert.NotEqual(cursor, next);
+        var ordered = paths.Where(File.Exists)
+            .OrderBy(path => path.Replace(Path.DirectorySeparatorChar, '\u0001'), StringComparer.Ordinal).ToList();
+        Assert.Equal(ordered[^1], next);
+
+        // After the tail, the scan wraps around to the beginning.
+        await scope.Maintenance.PurgeOrphanBlobFilesAsync(ct);
+        Assert.Null(scope.Maintenance.OrphanScanCursor);
+        await scope.Maintenance.PurgeOrphanBlobFilesAsync(ct);
+        Assert.Equal(ordered[99], scope.Maintenance.OrphanScanCursor);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ReferencedBlobVerificationRespectsPerCycleByteBudget()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct,
+            options => options.BlobVerifyBytesPerCycle = 10);
+        var ids = new List<ulong>();
+        await using (var connection = await scope.Database.OpenAsync(ct))
+        {
+            // The fixture's STEP record has no file on disk; leave it out of the referenced set.
+            await connection.ExecuteAsync(new CommandDefinition(
+                "UPDATE files SET status='PURGED' WHERE id=900", cancellationToken: ct));
+            for (var index = 0; index < 4; index++)
+            {
+                var content = Enumerable.Repeat((byte)(index + 1), 4).ToArray();
+                var sha = Sha256Hex(content);
+                var path = FileBlobStore.AbsolutePath(scope.StorageRoot, sha);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                await File.WriteAllBytesAsync(path, content, ct);
+                var id = await connection.ExecuteScalarAsync<ulong>(new CommandDefinition("""
+                    INSERT INTO file_blobs(sha256,size_bytes,storage_path,state,created_at)
+                    VALUES(@Sha,4,@Path,'READY',UTC_TIMESTAMP(6));
+                    SELECT LAST_INSERT_ID();
+                    """, new { Sha = sha, Path = FileBlobStore.RelativePath(sha) }, cancellationToken: ct));
+                await connection.ExecuteAsync(new CommandDefinition("""
+                    INSERT INTO files(project_id,uploader_id,blob_id,direction,original_name,stored_name,ext,
+                                      size_bytes,sha256,storage_path,status,created_at)
+                    VALUES(1,1,@Id,'C2S','v.bin','v.bin','bin',4,@Sha,@Path,'AVAILABLE',UTC_TIMESTAMP(6))
+                    """, new { Id = id, Sha = sha, Path = FileBlobStore.RelativePath(sha) }, cancellationToken: ct));
+                ids.Add(id);
+            }
+        }
+
+        // Budget 10 bytes with 4-byte blobs: two blobs per cycle, then the cursor wraps.
+        await scope.Maintenance.VerifyReferencedBlobFilesAsync(ct);
+        Assert.Equal(ids[1], scope.Maintenance.VerifyCursor);
+        await scope.Maintenance.VerifyReferencedBlobFilesAsync(ct);
+        Assert.Equal(ids[3], scope.Maintenance.VerifyCursor);
+        await scope.Maintenance.VerifyReferencedBlobFilesAsync(ct);
+        Assert.Equal(0UL, scope.Maintenance.VerifyCursor);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task AsyncBlobVerificationDetectsSameSizeCorruption()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var root = Path.Combine(Path.GetTempPath(), "yf-verify-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var content = new byte[] { 1, 2, 3, 4 };
+            var sha = Sha256Hex(content);
+            var path = FileBlobStore.AbsolutePath(root, sha);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllBytesAsync(path, content, ct);
+            await FileBlobStore.VerifyBoundPhysicalFileAsync(root, FileBlobStore.RelativePath(sha), sha, 4, ct);
+            await File.WriteAllBytesAsync(path, [4, 3, 2, 1], ct);
+            var corrupt = await Assert.ThrowsAsync<ApiException>(() =>
+                FileBlobStore.VerifyBoundPhysicalFileAsync(root, FileBlobStore.RelativePath(sha), sha, 4, ct));
+            Assert.Equal(409, corrupt.Status);
+        }
+        finally { try { Directory.Delete(root, recursive: true); } catch { } }
+    }
+
     private static InitUploadRequest UploadRequest(string fileName, byte[] content) =>
         new(1, fileName, (ulong)content.LongLength, 1_700_000_000_000, Sha256Hex(content));
 
@@ -505,8 +740,12 @@ public sealed class FilesRecoveryTests
     private static string Sha256Hex(byte[] content) =>
         Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
 
+    // MD5 is required here: these tests exercise the legacy client-submitted MD5 digest contract
+    // (SubmitMd5Async / deferred legacy digests), not a security decision made by the test.
+#pragma warning disable CA5351
     private static string Md5Hex(byte[] content) =>
         Convert.ToHexString(MD5.HashData(content)).ToLowerInvariant();
+#pragma warning restore CA5351
 
     private sealed class FilesDatabaseScope : IAsyncDisposable
     {
@@ -539,7 +778,8 @@ public sealed class FilesRecoveryTests
         public FileService Files { get; }
         public string StorageRoot { get; }
 
-        public static async Task<FilesDatabaseScope> CreateOrSkipAsync(CancellationToken ct)
+        public static async Task<FilesDatabaseScope> CreateOrSkipAsync(
+            CancellationToken ct, Action<AppOptions>? configure = null)
         {
             var raw = Environment.GetEnvironmentVariable("YF_TEST_DATABASE_URL");
             if (string.IsNullOrWhiteSpace(raw)) Assert.Skip("YF_TEST_DATABASE_URL is not set");
@@ -578,6 +818,7 @@ public sealed class FilesRecoveryTests
                     WorkerEnabled = false,
                     JwtSecret = "files-recovery-test-secret-at-least-32-bytes"
                 };
+                configure?.Invoke(options);
                 var database = new AppDb(options);
                 await using (var connection = await database.OpenAsync(ct))
                 {
@@ -689,6 +930,15 @@ public sealed class FilesRecoveryTests
                         INSERT INTO project_groups(id) VALUES(1);
                         INSERT INTO projects(id,project_group_id,supplier_id,created_by,status,confirm_side,name,responsible_user_id)
                             VALUES(1,1,1,1,'IN_PROGRESS',NULL,'File Test',1);
+                        -- 内部账号发给供应商的非 STEP 文件要求子项目已有 STEP 3D 图；该记录只满足资料规则，
+                        -- 其 blob 不在磁盘上，回收测试不会触及仍被引用的可用文件。
+                        INSERT INTO file_blobs(id,sha256,size_bytes,storage_path,state,created_at)
+                            VALUES(900,REPEAT('f',64),1,'blobs/sha256/ff/fixture-step','READY',UTC_TIMESTAMP(6));
+                        INSERT INTO files
+                            (id,project_id,uploader_id,blob_id,direction,original_name,stored_name,ext,size_bytes,
+                             storage_path,status,created_at)
+                            VALUES(900,1,1,900,'C2S','fixture-assembly.step','fixture-step','step',1,
+                                   'blobs/sha256/ff/fixture-step','AVAILABLE',UTC_TIMESTAMP(6));
                         """, cancellationToken: ct));
                 }
                 var maintenance = new FilesMaintenanceService(
@@ -711,7 +961,14 @@ public sealed class FilesRecoveryTests
             }
         }
 
-        public async Task InsertSessionAsync(string id, string status, bool expired, string? fileMd5 = null)
+        public async Task ExecuteAsync(string sql, CancellationToken ct)
+        {
+            await using var connection = await Database.OpenAsync(ct);
+            await connection.ExecuteAsync(new CommandDefinition(sql, cancellationToken: ct));
+        }
+
+        public async Task InsertSessionAsync(string id, string status, bool expired, string? fileMd5 = null,
+            string fileName = "sample.bin", string? fingerprint = null)
         {
             Directory.CreateDirectory(FileStorage.SessionDirectory(StorageRoot, id));
             await using var connection = await Database.OpenAsync();
@@ -720,7 +977,7 @@ public sealed class FilesRecoveryTests
                     (id,project_id,uploader_id,file_name,file_size,file_last_modified,file_fingerprint,
                      file_md5,chunk_size,total_chunks,
                      temp_dir,status,result_file_id,expires_at,created_at,updated_at)
-                VALUES(@Id,1,1,'sample.bin',1,1700000000000,@FileFingerprint,
+                VALUES(@Id,1,1,@FileName,1,1700000000000,@FileFingerprint,
                        @FileMd5,1,1,@TempDir,@Status,NULL,
                        CASE WHEN @Expired THEN UTC_TIMESTAMP(6)-INTERVAL 1 MINUTE
                             ELSE UTC_TIMESTAMP(6)+INTERVAL 1 HOUR END,
@@ -731,8 +988,9 @@ public sealed class FilesRecoveryTests
                 TempDir = FileStorage.SessionDirectory(StorageRoot, id),
                 Status = status,
                 Expired = expired,
-                FileFingerprint = Sha256Hex([1]),
-                FileMd5 = fileMd5
+                FileFingerprint = fingerprint ?? Sha256Hex([1]),
+                FileMd5 = fileMd5,
+                FileName = fileName
             });
         }
 
@@ -755,7 +1013,7 @@ public sealed class FilesRecoveryTests
                 """, new { Id = id });
         }
 
-        public DefaultHttpContext Context(long? contentLength = null)
+        public static DefaultHttpContext Context(long? contentLength = null)
         {
             var context = new DefaultHttpContext();
             context.Items[typeof(CurrentUser)] = new CurrentUser(1, "T001", "INTERNAL", null);
@@ -763,14 +1021,14 @@ public sealed class FilesRecoveryTests
             return context;
         }
 
-        public DefaultHttpContext ChunkContext(byte[] content, string? declaredDigest = null)
+        public static DefaultHttpContext ChunkContext(byte[] content, string? declaredDigest = null)
         {
             var context = Context(content.LongLength);
             context.Request.Headers["X-Chunk-SHA256"] = declaredDigest ?? Sha256Hex(content);
             return context;
         }
 
-        public Task KillConnectionAsync(int serverThread, CancellationToken ct) =>
+        public Task<int> KillConnectionAsync(int serverThread, CancellationToken ct) =>
             administration.ExecuteAsync(new CommandDefinition(
                 $"KILL CONNECTION {serverThread}", cancellationToken: ct));
 

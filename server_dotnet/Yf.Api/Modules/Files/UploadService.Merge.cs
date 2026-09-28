@@ -41,6 +41,9 @@ public sealed partial class UploadService
         if ((uint)uploaded.Count != session.TotalChunks)
             throw ApiException.BadRequest($"分片不完整：已传 {uploaded.Count}/{session.TotalChunks}");
         FileStorage.EnsureFreeSpace(options.StorageRoot, session.FileSize);
+        // Fail fast before hashing; the session stays UPLOADING and can be merged again or cancelled.
+        await using (var precheck = EfDb.Use(conn))
+            await EnsureStepMaterialForMergeAsync(precheck, actor, session, ct);
         session = await ClaimMergeAsync(conn, actor, session, ct);
         var lease = session.UpdatedAt;
         try
@@ -97,6 +100,9 @@ public sealed partial class UploadService
 
             var direction = current.IsInternal ? "C2S" : "S2C";
             await using var ef = EfDb.Use(conn, tx);
+            // Authoritative re-check inside the write transaction. A rejection resets the merge lease to
+            // UPLOADING (MergeAsync catch), so the uploaded chunks stay resumable and cancellable.
+            await EnsureStepMaterialForMergeAsync(ef, current, session, ct);
             var now = await DbNowAsync(ef, ct);
             // The per-SHA lease stays owned through COMMIT. Publication is immutable and
             // may safely outlive an unknown COMMIT outcome; it is never rollback-cleaned.
@@ -147,6 +153,20 @@ public sealed partial class UploadService
         {
             TryDeleteFile(mergeTemp, "merge-staging-finalize");
         }
+    }
+
+    /// <summary>
+    /// An internal account's non-STEP file needs an available C2S STEP file in the subproject, or another
+    /// active internal STEP upload session. Re-checked at merge because the STEP session that satisfied
+    /// the rule at init may have been cancelled or may have expired meanwhile.
+    /// </summary>
+    private static async Task EnsureStepMaterialForMergeAsync(
+        YfDbContext ef, CurrentUser uploader, UploadSessionRow session, CancellationToken ct)
+    {
+        if (!uploader.IsInternal || UploadMaterialRules.IsStepFile(session.FileName)) return;
+        var dbNow = await DbNowAsync(ef, ct);
+        if (!await HasCompanyStepMaterialAsync(ef, session.ProjectId, dbNow, session.Id, ct))
+            throw ApiException.BadRequest(UploadMaterialRules.StepRequiredMessage);
     }
 
     private async Task<UploadSessionRow> ClaimMergeAsync(

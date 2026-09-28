@@ -6,7 +6,7 @@ using Yf.Api.Modules.SystemManagement;
 namespace Yf.Api.Tests;
 
 // Keep maintenance and initialization fixtures isolated from process-wide configuration tests.
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class MaintenanceWorkerTests
 {
     [Fact(Timeout = 120_000)]

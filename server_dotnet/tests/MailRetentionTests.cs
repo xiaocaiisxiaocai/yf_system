@@ -5,7 +5,7 @@ using Yf.Api.Modules.SystemManagement;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class MailRetentionTests
 {
     [Fact]

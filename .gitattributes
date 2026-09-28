@@ -10,3 +10,17 @@
 *.xls binary
 *.zip binary
 *.exe binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.pptx binary
+*.docx binary
+*.mp4 binary
+*.webm binary
+*.ogv binary
+*.7z binary
+*.gz binary
+*.br binary
+*.dll binary

@@ -232,5 +232,5 @@ public sealed class ProjectMetadataTests
     }
 
     private static JsonDocument Json(object value) =>
-        JsonDocument.Parse(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        JsonDocument.Parse(JsonSerializer.Serialize(value, TestJson.Web));
 }

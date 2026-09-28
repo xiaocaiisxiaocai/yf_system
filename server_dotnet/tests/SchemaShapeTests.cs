@@ -10,7 +10,7 @@ using Yf.Api.Infrastructure.Entities;
 
 namespace Yf.Api.Tests;
 
-[Collection(ConnectionLifecycleCollection.Name)]
+[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class SchemaShapeTests
 {
     private static readonly string[] ExpectedMigrations =
@@ -29,6 +29,8 @@ public sealed class SchemaShapeTests
         "20260924025646_AddDictionaryAndOwnerTransferPermissions",
         "20260924062314_HardenDataIntegrityAndRetention",
         "20260924065611_NarrowIdentityRevisionTriggers",
+        "20260928015854_AddProjectCopyJobRetry",
+        "20260928063650_AddRefreshTokenRevokeReason",
     ];
 
     [Fact]
