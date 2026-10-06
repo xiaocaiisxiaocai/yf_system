@@ -51,6 +51,8 @@ public sealed class AppOptions
     /// <summary>A batch ZIP download still running after this many minutes is aborted.</summary>
     public int BatchDownloadMaxDurationMinutes { get; set; } = 120;
     public SmtpOptions Smtp { get; set; } = new();
+    /// <summary>Independent local OEM content root, excluded from collaboration backups. Empty disables file transfer.</summary>
+    public string OemStorageRoot { get; set; } = "";
 
     public void Validate()
     {
@@ -91,6 +93,13 @@ public sealed class AppOptions
         if (BatchDownloadMaxDurationMinutes is < 5 or > 1440)
             throw new InvalidOperationException("App:BatchDownloadMaxDurationMinutes must be between 5 and 1440.");
         Smtp.Validate();
+        if (OemStorageRoot.Length > 0)
+        {
+            if (!Path.IsPathFullyQualified(OemStorageRoot) || OemStorageRoot.StartsWith(@"\", StringComparison.Ordinal))
+                throw new InvalidOperationException("App:OemStorageRoot must be an absolute local path.");
+            if (Path.GetFullPath(OemStorageRoot).TrimEnd(Path.DirectorySeparatorChar) == Path.GetPathRoot(OemStorageRoot)?.TrimEnd(Path.DirectorySeparatorChar))
+                throw new InvalidOperationException("App:OemStorageRoot cannot be a drive root.");
+        }
     }
 
     /// <summary>
@@ -127,6 +136,14 @@ public sealed class AppOptions
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         if (Overlaps(storage, app, comparison))
             throw new InvalidOperationException("StorageRoot must be separate from the application directory and its public web files.");
+        if (OemStorageRoot.Length > 0)
+        {
+            var oem = ResolveComparisonPath(OemStorageRoot);
+            if (Overlaps(oem, app, comparison) || Overlaps(oem, storage, comparison))
+                throw new InvalidOperationException("OemStorageRoot must be separate from the application and collaboration storage directories.");
+            if (!string.IsNullOrWhiteSpace(LogDirectory) && Overlaps(oem, ResolveComparisonPath(LogDirectory), comparison))
+                throw new InvalidOperationException("OemStorageRoot must be separate from the log directory.");
+        }
     }
 
     private static bool Overlaps(string left, string right, StringComparison comparison) =>

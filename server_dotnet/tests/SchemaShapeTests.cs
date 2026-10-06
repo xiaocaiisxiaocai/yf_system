@@ -31,6 +31,9 @@ public sealed class SchemaShapeTests
         "20260924065611_NarrowIdentityRevisionTriggers",
         "20260928015854_AddProjectCopyJobRetry",
         "20260928063650_AddRefreshTokenRevokeReason",
+        "20261006015013_RestoreOemPlatform",
+        "20261006031500_ReplaceOemMalwareScanningWithValidation",
+        "20261006032324_AddOemDirectoryDeletePermissions",
     ];
 
     [Fact]
@@ -45,7 +48,8 @@ public sealed class SchemaShapeTests
         await resource.CopyToAsync(buffer, TestContext.Current.CancellationToken);
         var bytes = buffer.ToArray();
 
-        Assert.Equal("daced1ae638796f5a4f097b9e1025834ab6abe409266d20096f0ff73d26de384",
+        // Pin the committed LF bytes required by .gitattributes, not a historical CRLF checkout.
+        Assert.Equal("619ddd881df93162ea679942e3879b3b8672d3dcfa8ce4840bfcb656d8f23ccd",
             Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
         using var document = JsonDocument.Parse(bytes);
         Assert.Equal("aa2256021de680a4b03c8bff32d9df2684ef56d5b47efadb86c47583429b11ab",
@@ -195,6 +199,64 @@ public sealed class SchemaShapeTests
     }
 
     [Fact(Timeout = 120_000)]
+    public async Task RestoreOemPlatformPreservesReusedHistoricalPermissionIds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("restore_oem_permission_ids", ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync("20260928063650_AddRefreshTokenRevokeReason", ct);
+        await database.ExecuteAsync("""
+            INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at)
+            VALUES(1,'系统管理员',1,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
+            INSERT INTO permissions(id,code,name,type,parent_id,sort_no) VALUES
+              (1,'dashboard','工作台','MENU',NULL,0),
+              (5,'org:dept','组织架构','MENU',NULL,4);
+            INSERT INTO permissions(id,code,name,type,parent_id,sort_no) VALUES
+              (100,'custom:slot100','自定义权限 100','ACTION',NULL,100),
+              (101,'custom:slot101','自定义权限 101','ACTION',NULL,101),
+              (102,'custom:slot102','自定义权限 102','ACTION',NULL,102),
+              (103,'custom:slot103','自定义权限 103','ACTION',NULL,103),
+              (104,'custom:slot104','自定义权限 104','ACTION',NULL,104),
+              (105,'custom:slot105','自定义权限 105','ACTION',NULL,105),
+              (106,'custom:slot106','自定义权限 106','ACTION',NULL,106),
+              (107,'custom:slot107','自定义权限 107','ACTION',NULL,107),
+              (108,'custom:slot108','自定义权限 108','ACTION',NULL,108),
+              (109,'custom:slot109','自定义权限 109','ACTION',NULL,109),
+              (110,'custom:slot110','自定义权限 110','ACTION',NULL,110),
+              (111,'custom:slot111','自定义权限 111','ACTION',NULL,111),
+              (112,'custom:slot112','自定义权限 112','ACTION',NULL,112),
+              (113,'custom:slot113','自定义权限 113','ACTION',NULL,113);
+            """, ct);
+
+        await migrator.MigrateAsync("20261006015013_RestoreOemPlatform", ct);
+
+        await using var conn = await database.Database.OpenAsync(ct);
+        Assert.Equal(14, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM permissions WHERE id BETWEEN 100 AND 113 AND code LIKE 'custom:slot%'"));
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM permissions WHERE id BETWEEN 100 AND 113 AND (code='oem' OR code LIKE 'oem:%' OR code='dept:leader_manage')"));
+        Assert.Equal(14, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM permissions WHERE code='oem' OR code LIKE 'oem:%' OR code='dept:leader_manage'"));
+        Assert.Equal(14, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM role_permissions WHERE role_id=1"));
+        Assert.Equal(12, await conn.ExecuteScalarAsync<int>("""
+            SELECT COUNT(*) FROM permissions child
+            INNER JOIN permissions parent ON parent.id=child.parent_id
+            WHERE child.code LIKE 'oem:%' AND parent.code='oem'
+            """));
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("""
+            SELECT COUNT(*) FROM permissions child
+            INNER JOIN permissions parent ON parent.id=child.parent_id
+            WHERE child.code='dept:leader_manage' AND parent.code='org:dept'
+            """));
+        Assert.Equal(30, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.%'"));
+        Assert.Equal(19, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'oem\\_%'"));
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task EmptyDatabaseInitializationUsesEfHistoryAndAdminOnlySeeds()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -208,14 +270,36 @@ public sealed class SchemaShapeTests
             Assert.False(await TableExistsAsync(conn, "seaql_migrations", ct));
             Assert.Equal("admin", await conn.ExecuteScalarAsync<string>("SELECT employee_no FROM users"));
             Assert.Equal("系统管理员", await conn.ExecuteScalarAsync<string>("SELECT name FROM roles"));
-            Assert.Equal(37, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
-            Assert.Equal(37, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(53, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
+            Assert.Equal(53, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='log:delete'"));
-            Assert.Equal(14, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
-            Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE id BETWEEN 100 AND 113"));
+            Assert.Equal(16, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='oem' OR code LIKE 'oem:%' OR code='dept:leader_manage'"));
+            Assert.Equal(42, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
+            Assert.Equal(28, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.%'"));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.scan.%'"));
+            Assert.Equal(19, await conn.ExecuteScalarAsync<int>(
                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'oem\\_%'"));
-            Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
-                "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND (column_name LIKE 'oem\\_%' OR column_name IN ('recipient_realm','recipient_account_id','actor_realm','actor_account_id','leader_account_id'))"));
+            Assert.Equal(6, await conn.ExecuteScalarAsync<int>(
+                """
+                SELECT COUNT(*) FROM information_schema.columns
+                WHERE table_schema=DATABASE() AND (
+                    (table_name='email_outbox' AND column_name IN ('oem_transfer_id','recipient_realm','recipient_account_id'))
+                    OR (table_name='audit_logs' AND column_name IN ('actor_realm','actor_account_id'))
+                    OR (table_name='departments' AND column_name='leader_account_id'))
+                """));
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_templates WHERE id=1 AND is_default=1"));
+            Assert.Equal(2, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_template_nodes WHERE template_id=1"));
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_retention_templates WHERE id=1 AND mode='KEEP'"));
+            Assert.Equal("NO", await conn.ExecuteScalarAsync<string>("""
+                SELECT is_nullable FROM information_schema.columns
+                WHERE table_schema=DATABASE() AND table_name='oem_refresh_tokens' AND column_name='session_expires_at'
+                """));
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("""
+                SELECT COUNT(*) FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND table_name='oem_refresh_tokens'
+                  AND index_name='idx_oem_refresh_tokens_session_expires' AND column_name='session_expires_at'
+                """));
             Assert.Equal(3, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM project_dictionaries WHERE type='PRIORITY'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
                 "SELECT COUNT(*) FROM project_dictionaries WHERE type IN ('ROBOT_VENDOR','ROBOT_MODEL')"));

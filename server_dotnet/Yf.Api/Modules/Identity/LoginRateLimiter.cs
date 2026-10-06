@@ -16,18 +16,28 @@ public sealed class LoginRateLimiter
     private readonly object _passwordChangeSync = new();
 
     public bool AllowLogin(string clientIp, string employeeNo)
+        => AllowLogin(IdentityRealms.Internal, clientIp, employeeNo);
+
+    public bool AllowLogin(string realm, string clientIp, string employeeNo)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(realm);
         var normalizedIp = NormalizeIp(clientIp);
         return Allow(_loginIpRates, _loginIpSync, normalizedIp, 60)
-            && Allow(_loginAccountRates, _loginAccountSync, $"{normalizedIp}:{employeeNo}", 10);
+            && Allow(_loginAccountRates, _loginAccountSync, $"{realm}:{normalizedIp}:{employeeNo}", 10);
     }
 
     /// <summary>
     /// Every self-service old-password check costs one Argon2 derivation from the shared login pool, so
     /// attempts (not only failures) are limited per account, independent of the client IP.
     /// </summary>
-    public bool AllowPasswordChange(ulong userId) =>
-        Allow(_passwordChangeRates, _passwordChangeSync, userId.ToString(CultureInfo.InvariantCulture), MaximumPasswordChangeAttempts);
+    public bool AllowPasswordChange(ulong userId) => AllowPasswordChange(IdentityRealms.Internal, userId);
+
+    public bool AllowPasswordChange(string realm, ulong userId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(realm);
+        return Allow(_passwordChangeRates, _passwordChangeSync,
+            $"{realm}:{userId.ToString(CultureInfo.InvariantCulture)}", MaximumPasswordChangeAttempts);
+    }
 
     internal const int MaximumPasswordChangeAttempts = 5;
 

@@ -5,8 +5,10 @@ using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Modules.Identity;
 
-public sealed class IdentityMiddleware(RequestDelegate next)
+public sealed class IdentityMiddleware(RequestDelegate next, IEnumerable<IRealmIdentityExtension> realms)
 {
+    private readonly IRealmIdentityExtension[] realmExtensions = ValidateRealmExtensions(realms);
+
     private static readonly HashSet<string> PublicPaths = new(StringComparer.Ordinal)
     {
         "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/refresh"
@@ -17,7 +19,8 @@ public sealed class IdentityMiddleware(RequestDelegate next)
         var ct = context.RequestAborted;
         var path = context.Request.Path.Value ?? "";
         if (!context.Request.Path.StartsWithSegments("/api/v1") || PublicPaths.Contains(path)
-            || IsMediaRequest(context.Request) || IsNativeDownloadRequest(context.Request))
+            || IsMediaRequest(context.Request) || IsNativeDownloadRequest(context.Request)
+            || realmExtensions.Any(realm => IsAnonymousPath(realm, context.Request)))
         {
             await next(context);
             return;
@@ -28,6 +31,17 @@ public sealed class IdentityMiddleware(RequestDelegate next)
         catch (SecurityTokenExpiredException) { throw new ApiException(401, 40102, "登录状态已过期"); }
         catch (ApiException) { throw; }
         catch { throw ApiException.Unauthorized("登录状态无效"); }
+
+        if (claims.Realm != IdentityRealms.Internal)
+        {
+            var realm = realmExtensions.SingleOrDefault(extension => extension.Realm == claims.Realm)
+                ?? throw ApiException.Unauthorized("登录状态无效");
+            if (!context.Request.Path.StartsWithSegments(realm.PathPrefix))
+                throw new ApiException(403, 40304, "该账号无权访问此系统");
+            await realm.AuthenticateAsync(context, claims, ct);
+            await next(context);
+            return;
+        }
 
         // Authentication owns only its lookup connection, not the downstream request. Cache hits
         // still probe the database revision and clock, so committed revocation and expiry are never
@@ -41,6 +55,24 @@ public sealed class IdentityMiddleware(RequestDelegate next)
         context.Items[typeof(CurrentUser)] = new CurrentUser(row.Id, row.EmployeeNo, row.UserType, row.SupplierId, claims.SessionId);
         context.Items[typeof(AccessClaims)] = claims;
         await next(context);
+    }
+
+    internal static bool IsAnonymousPath(IRealmIdentityExtension realm, HttpRequest request) =>
+        request.Path.StartsWithSegments(realm.PathPrefix) && realm.IsAnonymousPath(request);
+
+    private static IRealmIdentityExtension[] ValidateRealmExtensions(IEnumerable<IRealmIdentityExtension> realms)
+    {
+        var extensions = realms.ToArray();
+        foreach (var extension in extensions)
+        {
+            if (string.IsNullOrWhiteSpace(extension.Realm) || extension.Realm == IdentityRealms.Internal)
+                throw new InvalidOperationException("Realm extensions must use a non-internal realm name.");
+            if (!extension.PathPrefix.HasValue || !extension.PathPrefix.Value!.StartsWith("/api/v1/", StringComparison.Ordinal))
+                throw new InvalidOperationException("Realm extensions must use an API path prefix below /api/v1.");
+        }
+        if (extensions.GroupBy(extension => extension.Realm, StringComparer.Ordinal).Any(group => group.Count() != 1))
+            throw new InvalidOperationException("Identity realm names must be unique.");
+        return extensions;
     }
 
     internal static bool TryGetAccessToken(HttpRequest request, out string token)

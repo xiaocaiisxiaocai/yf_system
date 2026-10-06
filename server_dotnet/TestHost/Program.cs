@@ -1,5 +1,6 @@
 using System.Net;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Oem.Common;
 
 // This executable is never published by publish-iis.ps1 and may only listen on loopback.
 var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
@@ -22,7 +23,38 @@ var app = await ApiApplication.BuildAsync(args, builder =>
 });
 if (app is not null)
 {
+    // Browser/API tests disable the regular workers for deterministic behavior. The OEM
+    // flow still needs file validation and promotion to advance, so this test-only opt-in
+    // drives only those two jobs. This entrypoint is never published.
+    Task? oemJobs = null;
+    if (Environment.GetEnvironmentVariable("YF_TESTHOST_OEM_PROCESS") == "1")
+    {
+        var jobs = app.Services.GetServices<IOemBackgroundJob>()
+            .Where(job => job.Name is "validate" or "promote")
+            .ToArray();
+        if (jobs.Length != 2)
+            throw new InvalidOperationException("OEM validate/promote jobs are not registered.");
+        var stopping = app.Lifetime.ApplicationStopping;
+        oemJobs = Task.Run(async () =>
+        {
+            while (!stopping.IsCancellationRequested)
+            {
+                foreach (var job in jobs)
+                {
+                    try { await job.RunOnceAsync(stopping); }
+                    catch (OperationCanceledException) when (stopping.IsCancellationRequested) { return; }
+                    catch (Exception error)
+                    {
+                        app.Logger.LogWarning("Test OEM job {Job} failed: {Error}", job.Name, error.GetType().Name);
+                    }
+                }
+                try { await Task.Delay(500, stopping); }
+                catch (OperationCanceledException) { return; }
+            }
+        });
+    }
     await app.RunAsync();
+    if (oemJobs is not null) await oemJobs;
 }
 
 static bool IsLoopbackUrl(string? value) =>

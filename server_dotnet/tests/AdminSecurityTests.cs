@@ -31,4 +31,13 @@ public sealed class AdminSecurityTests
     {
         Assert.Equal(expected, UserService.RequiresLastActiveAdminProtection(targetStatus, activeAdminCount));
     }
+
+    [Theory]
+    [InlineData("ACTIVE", "INTERNAL", true)]
+    [InlineData("DISABLED", "INTERNAL", false)]
+    [InlineData("ACTIVE", "SUPPLIER", false)]
+    public void DepartmentLeaderMustBeAnActiveInternalAccount(string status, string userType, bool expected)
+    {
+        Assert.Equal(expected, DepartmentService.IsEligibleLeader(status, userType));
+    }
 }

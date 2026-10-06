@@ -136,14 +136,13 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
         for name in sorted(actual)
     }
     release_manifest = None if directory_input else validate_release_sidecars(archive, manifest, actual_files)
+    if release_manifest is not None and release_manifest.get("oem") != manifest.get("oem"):
+        raise RuntimeError("Release sidecar OEM provenance does not match the packaged manifest")
     required = {"Yf.Api.dll", "Yf.Api.runtimeconfig.json", "web.config", "wwwroot/index.html", "precompressed-assets.json",
-                "install-iis.ps1", "maintain-iis.ps1", "maintenance-common.ps1", "README.md"}
+                "install-iis.ps1",
+                "maintain-iis.ps1", "maintenance-common.ps1", "README.md", "SharpCompress.dll"}
     if not required.issubset(actual):
         raise RuntimeError("Required application or maintenance payload is missing")
-    if any(name.lower().startswith("clamav/") or "/oem" in name.lower()
-           or name.lower() in {"install-clamav.ps1", "update-clamav.ps1", "clamav-database.ps1", "sharpcompress.dll"}
-           for name in actual):
-        raise RuntimeError("OEM or antivirus payload is still included")
     build = manifest.get("build", {})
     if (build.get("targetFramework") != "net8.0" or build.get("runtimeIdentifier") != "win-x64"
             or build.get("selfContained") is not False or not str(build.get("sdkVersion", "")).startswith("8.")):
@@ -204,8 +203,28 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
             raise RuntimeError("External configuration template must not opt in to insecure cookies")
     if not ntpath.isabs(settings["StorageRoot"]):
         raise RuntimeError("Packaged storage root must be an absolute Windows path")
-    if any(key in settings for key in ("OemStorageRoot", "OemScanner")):
-        raise RuntimeError("Packaged application still contains OEM settings")
+    if "OemStorageRoot" not in settings or not isinstance(settings.get("OemStorageRoot"), str):
+        raise RuntimeError("Packaged application is missing the OEM storage setting")
+    if "OemScanner" in settings:
+        raise RuntimeError("Packaged application contains removed OEM scanner settings")
+    oem_root = settings.get("OemStorageRoot", "")
+    if oem_root:
+        _, oem_tail = ntpath.splitdrive(ntpath.normpath(oem_root))
+        if not ntpath.isabs(oem_root) or oem_root.startswith("\\\\") or not oem_tail.strip("\\/"):
+            raise RuntimeError("Packaged OEM storage root must be an absolute non-root local Windows path")
+        collaboration_root = ntpath.normcase(ntpath.normpath(settings["StorageRoot"]))
+        normalized_oem_root = ntpath.normcase(ntpath.normpath(oem_root))
+        if (normalized_oem_root == collaboration_root
+                or normalized_oem_root.startswith(collaboration_root.rstrip("\\") + "\\")
+                or collaboration_root.startswith(normalized_oem_root.rstrip("\\") + "\\")):
+            raise RuntimeError("OEM storage root overlaps collaboration storage")
+    if configuration_mode == "external-template" and oem_root:
+        raise RuntimeError("External configuration template must leave OEM storage unconfigured until explicitly configured")
+    oem_manifest = manifest.get("oem")
+    if not isinstance(oem_manifest, dict):
+        raise RuntimeError("Release manifest is missing OEM configuration provenance")
+    if oem_manifest.keys() != {"storageConfigured"} or oem_manifest.get("storageConfigured") is not bool(oem_root):
+        raise RuntimeError("Release manifest OEM configuration does not match the payload")
     web_config = ElementTree.parse(package / "web.config")
     asp = web_config.find(".//aspNetCore")
     if asp is None or asp.get("processPath") != "dotnet" or asp.get("arguments") != r".\Yf.Api.dll" or asp.get("hostingModel") != "inprocess":
@@ -247,6 +266,7 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
               "legacyConfigurationModeInferred": legacy_private_configuration,
               "bundledConfigurationValidated": configuration_mode == "bundled-private",
               "externalConfigurationTemplateValidated": configuration_mode == "external-template",
+              "oemConfiguration": {"storageConfigured": bool(oem_root)},
               "testHostExcludedFromPayload": True,
               "publishedFirstStart": first_start,
               "publishedUnitHttp": http_report, "targetIisTested": False, "realSmtpTested": False}

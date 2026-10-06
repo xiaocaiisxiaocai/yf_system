@@ -261,6 +261,132 @@ public sealed class MailDeliveryTests
     }
 
     [Fact(Timeout = 30_000)]
+    public async Task ExternalMailUsesItsOwnPolicyWhenCollaborationNotificationsAreDisabled()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var conn = await scope.Database.OpenAsync(ct))
+        {
+            await conn.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO system_configs(cfg_key,cfg_value) VALUES('notify.enabled','false')
+                ON DUPLICATE KEY UPDATE cfg_value='false';
+                UPDATE email_outbox SET event_type='MESSAGE_CREATED' WHERE id=1;
+                INSERT INTO email_outbox(
+                    id,event_type,dedupe_key,recipient_realm,recipient_account_id,oem_transfer_id,
+                    recipient_email,subject,body,status,retry_count)
+                VALUES(2,'OEM_TEST','oem:test:7','oem',41,73,'external@example.invalid','external','body','PENDING',0);
+                """, cancellationToken: ct));
+        }
+        var policy = new ExternalPolicy(_ => OutboxDecision.Allow);
+        var delivery = new CaptureSettingsDelivery();
+        var service = new MailService(
+            scope.Database,
+            scope.Options,
+            new AuditService([]),
+            NullLogger<MailService>.Instance,
+            delivery,
+            policies: [policy]);
+
+        Assert.Equal(1, await service.FlushAsync(ct));
+
+        var evaluated = Assert.Single(policy.Seen);
+        Assert.Equal("oem", evaluated.RecipientRealm);
+        Assert.Equal(41UL, evaluated.RecipientAccountId);
+        Assert.Equal(73UL, evaluated.OemTransferId);
+        Assert.Equal("external@example.invalid", evaluated.RecipientEmail);
+        Assert.Single(delivery.Seen);
+        await using (var check = await scope.Database.OpenAsync(ct))
+        {
+            Assert.Equal("CANCELLED", await check.ExecuteScalarAsync<string>(
+                new CommandDefinition("SELECT status FROM email_outbox WHERE id=1", cancellationToken: ct)));
+            Assert.Equal("SENT", await check.ExecuteScalarAsync<string>(
+                new CommandDefinition("SELECT status FROM email_outbox WHERE id=2", cancellationToken: ct)));
+            Assert.Equal(1, await check.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM audit_logs WHERE action='OEM_EMAIL_SENT' AND target_id='2'", cancellationToken: ct)));
+        }
+        var status = await service.StatusAsync(ct);
+        Assert.Equal(0UL, status.Queue.Sent);
+        Assert.Equal(1UL, status.Queue.Cancelled);
+        Assert.DoesNotContain(status.Recent, entry => entry.Action.StartsWith("OEM_", StringComparison.Ordinal));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ExternalPolicyCancelsStaleRecipientBeforeSmtp()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var conn = await scope.Database.OpenAsync(ct))
+        {
+            await conn.ExecuteAsync(new CommandDefinition("""
+                UPDATE email_outbox
+                SET event_type='OEM_TEST',recipient_realm='oem',recipient_account_id=41,oem_transfer_id=73
+                WHERE id=1;
+                """, cancellationToken: ct));
+        }
+        var policy = new ExternalPolicy(_ =>
+            OutboxDecision.Cancel("外部收件账号已失效", "OEM_RECIPIENT_UNAUTHORIZED"));
+        var delivery = new CaptureSettingsDelivery();
+        var service = new MailService(
+            scope.Database,
+            scope.Options,
+            new AuditService([]),
+            NullLogger<MailService>.Instance,
+            delivery,
+            policies: [policy]);
+
+        Assert.Equal(1, await service.FlushAsync(ct));
+
+        Assert.Empty(delivery.Seen);
+        Assert.Single(policy.Seen);
+        await using var check = await scope.Database.OpenAsync(ct);
+        var row = await check.QuerySingleAsync<OutboxState>(new CommandDefinition(
+            "SELECT status AS Status,last_error AS LastError FROM email_outbox WHERE id=1", cancellationToken: ct));
+        Assert.Equal(("CANCELLED", "外部收件账号已失效"), (row.Status, row.LastError));
+        Assert.Contains("OEM_RECIPIENT_UNAUTHORIZED", await check.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT detail FROM audit_logs WHERE action='OEM_EMAIL_CANCELLED_STALE' AND target_id='1'", cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ExternalMailIsCancelledWhenRecipientEmailChangesAfterEnqueue()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var conn = await scope.Database.OpenAsync(ct))
+        {
+            await conn.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO users(id,employee_no,real_name,email,user_type,status)
+                VALUES(41,'internal-41','内部收件人','old@example.invalid','INTERNAL','ACTIVE');
+                UPDATE email_outbox
+                SET event_type='OEM_TEST',recipient_realm='internal',recipient_account_id=41,
+                    recipient_email='old@example.invalid',oem_transfer_id=73
+                WHERE id=1;
+                UPDATE users SET email='new@example.invalid' WHERE id=41;
+                """, cancellationToken: ct));
+        }
+        var policy = new CurrentEmailPolicy();
+        var delivery = new CaptureSettingsDelivery();
+        var service = new MailService(
+            scope.Database,
+            scope.Options,
+            new AuditService([]),
+            NullLogger<MailService>.Instance,
+            delivery,
+            policies: [policy]);
+
+        Assert.Equal(1, await service.FlushAsync(ct));
+
+        Assert.Empty(delivery.Seen);
+        var evaluated = Assert.Single(policy.Seen);
+        Assert.Equal("old@example.invalid", evaluated.RecipientEmail);
+        await using var check = await scope.Database.OpenAsync(ct);
+        var row = await check.QuerySingleAsync<OutboxState>(new CommandDefinition(
+            "SELECT status AS Status,last_error AS LastError FROM email_outbox WHERE id=1", cancellationToken: ct));
+        Assert.Equal(("CANCELLED", "外部收件账号或地址已失效"), (row.Status, row.LastError));
+        Assert.Contains("OEM_RECIPIENT_ADDRESS_STALE", await check.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT detail FROM audit_logs WHERE action='OEM_EMAIL_CANCELLED_STALE' AND target_id='1'", cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 30_000)]
     public async Task QueuedKnownMailIsCancelledWhenItsRecipientAudienceIsDisabled()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -611,6 +737,42 @@ public sealed class MailDeliveryTests
         Assert.Equal(("CANCELLED", ProjectNotificationService.StaleProjectMailReason), (row.Status, row.LastError));
     }
 
+    private sealed class ExternalPolicy(Func<OutboxMailInfo, OutboxDecision> evaluate) : IOutboxRecipientPolicy
+    {
+        public string EventTypePrefix => "OEM_";
+        public string AuditActionPrefix => "OEM_";
+        public List<OutboxMailInfo> Seen { get; } = [];
+
+        public Task<OutboxDecision> EvaluateAsync(
+            MySqlConnection conn, MySqlTransaction tx, OutboxMailInfo mail, CancellationToken ct)
+        {
+            Seen.Add(mail);
+            return Task.FromResult(evaluate(mail));
+        }
+    }
+
+    private sealed class CurrentEmailPolicy : IOutboxRecipientPolicy
+    {
+        public string EventTypePrefix => "OEM_";
+        public string AuditActionPrefix => "OEM_";
+        public List<OutboxMailInfo> Seen { get; } = [];
+
+        public async Task<OutboxDecision> EvaluateAsync(
+            MySqlConnection conn, MySqlTransaction tx, OutboxMailInfo mail, CancellationToken ct)
+        {
+            Seen.Add(mail);
+            var current = await conn.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
+                "SELECT email FROM users WHERE id=@id AND status='ACTIVE'",
+                new { id = mail.RecipientAccountId },
+                tx,
+                cancellationToken: ct));
+            return !string.IsNullOrWhiteSpace(current)
+                   && string.Equals(current.Trim(), mail.RecipientEmail.Trim(), StringComparison.OrdinalIgnoreCase)
+                ? OutboxDecision.Allow
+                : OutboxDecision.Cancel("外部收件账号或地址已失效", "OEM_RECIPIENT_ADDRESS_STALE");
+        }
+    }
+
     private sealed class ManualUtcClock(DateTimeOffset start) : TimeProvider
     {
         private DateTimeOffset now = start;
@@ -791,6 +953,9 @@ public sealed class MailDeliveryTests
                         project_id BIGINT UNSIGNED NULL,
                         dedupe_key VARCHAR(128) NULL,
                         recipient_user_id BIGINT UNSIGNED NULL,
+                        recipient_realm VARCHAR(16) NULL,
+                        recipient_account_id BIGINT UNSIGNED NULL,
+                        oem_transfer_id BIGINT UNSIGNED NULL,
                         recipient_email VARCHAR(128) NOT NULL,
                         subject VARCHAR(255) NOT NULL,
                         body TEXT NOT NULL,
@@ -805,6 +970,8 @@ public sealed class MailDeliveryTests
                     CREATE TABLE audit_logs(
                         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                         user_id BIGINT UNSIGNED NULL,
+                        actor_realm VARCHAR(16) NULL,
+                        actor_account_id BIGINT UNSIGNED NULL,
                         employee_no VARCHAR(64) NULL,
                         action VARCHAR(100) NOT NULL,
                         target_type VARCHAR(100) NULL,

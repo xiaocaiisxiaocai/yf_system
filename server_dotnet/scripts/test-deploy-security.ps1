@@ -51,10 +51,11 @@ try {
 
     $installScript=Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\deploy\install-iis.ps1') -Raw -Encoding UTF8
     if ($installScript -notmatch [regex]::Escape('foreach ($other in @($PackageRoot,$SiteRoot,$ConfigPath))') -or
-        $installScript -notmatch [regex]::Escape('Assert-YfSeparate @($PackageRoot,$SiteRoot,$ConfigPath,$storage,$LogRoot)') -or
+        $installScript -notmatch [regex]::Escape('Assert-YfSeparate $separatePaths') -or
         $installScript -notmatch [regex]::Escape('Set-YfWebConfigEnvironment (Join-Path $SiteRoot ''web.config'') $ConfigPath') -or
         $installScript -match [regex]::Escape('CreateElement(''environmentVariable'')') -or
         $installScript -notmatch [regex]::Escape('Set-YfApplicationDirectoryAcl $storage $identity') -or
+        $installScript -notmatch [regex]::Escape('Set-YfApplicationDirectoryAcl $oemStorage $identity') -or
         $installScript -notmatch [regex]::Escape('Wait-YfHealth $origin $HealthCheckWaitSeconds $HealthRequestTimeoutSeconds') -or
         $installScript -notmatch [regex]::Escape('(Within $storage $other) -or (Within $other $storage)') -or
         $installScript -notmatch [regex]::Escape('$maintenanceConfig = Read-YfMaintenanceConfig $ConfigPath') -or
@@ -158,11 +159,29 @@ try {
             throw "Deployment example App.$key does not match the backend default."
         }
     }
-    Write-Output 'PASS insecure cookie opt-in is private-HTTP only and the example carries backend defaults'
+    if ($example.OemStorageRoot -ne '' -or $example.PSObject.Properties['OemScanner']) {
+        throw 'Deployment example must keep OEM storage unconfigured and omit removed scanner settings.'
+    }
+    foreach ($removed in @('IncludeClamAvBundle','ClamAvCacheDirectory','ClamAvDatabaseSnapshotDirectory','UseExistingClamAvCacheOnly','prepare-clamav.ps1','install-clamav.ps1','update-clamav.ps1','clamav-database.ps1','OemScanner')) {
+        if ($publishScript -match [regex]::Escape($removed)) {
+            throw "Publish script still contains removed antivirus or scanner support: $removed"
+        }
+    }
+    if ($publishScript -notmatch [regex]::Escape("throw 'App.OemStorageRoot must be independent from App.StorageRoot.'") -or
+        $verifyReleaseScript -notmatch [regex]::Escape('OEM storage root overlaps collaboration storage') -or
+        $verifyReleaseScript -notmatch [regex]::Escape('Packaged application contains removed OEM scanner settings')) {
+        throw 'Release scripts are missing the OEM storage safety checks.'
+    }
+    foreach ($removed in @('validate_clamav_bundle','clamav/database','eicar-smoke.zip','Copy-ClamAvDatabaseSnapshot')) {
+        if ($verifyReleaseScript -match [regex]::Escape($removed)) {
+            throw "Release verification still contains removed antivirus verification function or payload: $removed"
+        }
+    }
+    Write-Output 'PASS insecure cookie and OEM storage defaults remain explicit'
     $externalConfigPath='D:\YfConfig\appsettings.Production.json'
     $externalSite=Join-Path $root 'external-site'
     New-Item -ItemType Directory -Path $externalSite | Out-Null
-    $bundled='{"Logging":{"LogLevel":{"Default":"Warning"}},"Serilog":{"MinimumLevel":"Information"},"AllowedHosts":"*","App":{"ConnectionString":"fixture-db","JwtSecret":"fixture-jwt","StorageRoot":"D:\\fixture","LogDirectory":"D:\\fixture-logs","AutoInitializeDatabase":true,"BootstrapPassword":"fixture-bootstrap","CookieSecure":true,"Smtp":{"Host":"smtp.fixture","Password":"fixture-smtp"}}}'
+    $bundled='{"Logging":{"LogLevel":{"Default":"Warning"}},"Serilog":{"MinimumLevel":"Information"},"AllowedHosts":"*","App":{"ConnectionString":"fixture-db","JwtSecret":"fixture-jwt","StorageRoot":"D:\\fixture","OemStorageRoot":"E:\\fixture-oem","LogDirectory":"D:\\fixture-logs","AutoInitializeDatabase":true,"BootstrapPassword":"fixture-bootstrap","CookieSecure":true,"Smtp":{"Host":"smtp.fixture","Password":"fixture-smtp"}}}'
     [IO.File]::WriteAllText((Join-Path $externalSite 'appsettings.json'),$bundled,(New-Object Text.UTF8Encoding($false)))
     [IO.File]::WriteAllText((Join-Path $externalSite 'appsettings.example.json'),$bundled,(New-Object Text.UTF8Encoding($false)))
     [IO.File]::WriteAllText((Join-Path $externalSite 'appsettings.Production.json'),$bundled,(New-Object Text.UTF8Encoding($false)))
@@ -170,8 +189,8 @@ try {
     foreach ($name in @('appsettings.json','appsettings.Production.json','appsettings.example.json')) {
         $cleared=Get-Content -LiteralPath (Join-Path $externalSite $name) -Raw | ConvertFrom-Json
         $app=$cleared.App
-        if ($app.ConnectionString -or $app.JwtSecret -or $app.StorageRoot -or $app.LogDirectory -or $app.AutoInitializeDatabase -or
-            $app.BootstrapPassword -or $app.Smtp.Password) {
+        if ($app.ConnectionString -or $app.JwtSecret -or $app.StorageRoot -or $app.OemStorageRoot -or $app.LogDirectory -or $app.AutoInitializeDatabase -or
+            $app.BootstrapPassword -or $app.Smtp.Password -or $app.PSObject.Properties['OemScanner']) {
             throw 'Formal IIS site retained bundled credentials or storage configuration.'
         }
         if ($cleared.Logging.LogLevel.Default -ne 'Warning' -or $cleared.Serilog.MinimumLevel -ne 'Information' -or
@@ -372,6 +391,23 @@ try {
         if ($local.SslMode -ne 'DISABLED') { throw 'Local database compatibility mode was not preserved.' }
     }
     Write-Output 'PASS loopback database compatibility modes remain available'
+
+    $oemStorage=Join-Path $root 'oem-storage'
+    New-Item -ItemType Directory -Path $oemStorage | Out-Null
+    $oemConfigPath=Write-TestConfig 'oem-valid.json' 'localhost' 'None'
+    $oemConfig=Get-Content -LiteralPath $oemConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $oemConfig.App | Add-Member -NotePropertyName OemStorageRoot -NotePropertyValue $oemStorage
+    Write-YfJson $oemConfigPath $oemConfig
+    $parsedOem=Read-YfMaintenanceConfig $oemConfigPath
+    if ($parsedOem.OemStorage -ne $oemStorage) {
+        throw 'Maintenance configuration did not preserve the independent OEM storage path.'
+    }
+    $overlapConfigPath=Write-TestConfig 'oem-overlap.json' 'localhost' 'None'
+    $overlapConfig=Get-Content -LiteralPath $overlapConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $overlapConfig.App | Add-Member -NotePropertyName OemStorageRoot -NotePropertyValue (Join-Path $storage 'oem')
+    Write-YfJson $overlapConfigPath $overlapConfig
+    Reject { Read-YfMaintenanceConfig $overlapConfigPath } 'OEM and collaboration storage overlap refused' 'Maintenance paths must not overlap.'
+    Write-Output 'PASS maintenance keeps OEM storage independent and refuses overlap'
 
     foreach ($mode in @('None','Disabled','Preferred','Required','VerifyCA')) {
         $path=Write-TestConfig ('remote-'+$mode+'.json') 'db.example.test' $mode

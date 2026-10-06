@@ -13,14 +13,20 @@
 1. 将 `deloy` 下生成的整个版本文件夹复制到服务器的独立临时目录，保留其中 `manifest.json`，安装脚本会据此检查全部文件。默认不生成 ZIP；如果打包时显式使用了 `-CreateArchive`，则将 ZIP 与 `.sha256` 一并复制到服务器，核对哈希后解压。
 2. 默认发布仍将本机私有默认值写入 `appsettings.Production.json`，包括数据库连接、JWT、实际访问地址、存储目录及本次包独立生成的初始管理员密码；`appsettings.json` 仅保留日志等基础设置。发布脚本默认拒绝脏工作区、HTTP/不安全 Cookie 和 root 数据库账号，始终执行 `npm ci`，并对输出目录以及 ZIP/校验边车设置仅当前账号、SYSTEM、Administrators 可读写的 ACL。隔离环境确有需要时必须显式传 `-AllowDirty` 或 `-AllowInsecurePrivateConfiguration`，对应选择会记录在 manifest。`-AllowInsecurePrivateConfiguration` 且 `WebBaseUrl` 为非回环 HTTP、`CookieSecure=false` 时，发布脚本自动写入 `App.AllowInsecureCookies=true` 并在 manifest 记录 `configuration.insecureCookies=true`；HTTPS 包和外部配置模板一律为 `false`，`verify-release.py` 与安装/维护脚本会拒绝 HTTPS 配置中的 `true`。将默认发布包作为含凭据的私有制品保管，不要放入公开下载位置或给应用池写权限。直接把包作为现有 IIS 站点物理目录时，程序会读取包内配置；若使用正式安装脚本，则把配置复制到网站外复核后作为 `-ConfigPath` 传入。已有站点升级须保留原 JWT 和数据库配置。SMTP 在系统「系统参数」页面保存到数据库，尚未设置时不发送邮件。
    若不允许制品携带环境机密，发布时传 `-ExternalConfigurationTemplate`。该模式保留空的连接串、JWT 和初始密码，仅能配合下文正式安装脚本及一份已在服务器外部准备好的完整 `ConfigPath` 使用，不能直接绑定启动。
-3. 发布包默认开启 `App.AutoInitializeDatabase=true` 和项目复制 worker。第一次启动时，如果配置的数据库不存在，会自动创建；如果是空库，会执行 EF Core 迁移建表并创建 `admin`。MySQL 账号需要目标库的创建、建表及数据读写权限；协作文件和复制任务暂存目录使用网站外的 `StorageRoot`，应用池身份需要该目录的修改权限。
+3. 发布包默认开启 `App.AutoInitializeDatabase=true` 和项目复制 worker。第一次启动时，如果配置的数据库不存在，会自动创建；如果是空库，会执行 EF Core 迁移建表并创建 `admin`。MySQL 账号需要目标库的创建、建表及数据读写权限；协作文件和复制任务暂存目录使用网站外的 `StorageRoot`，应用池身份需要该目录的修改权限。OEM 默认保持 `OemStorageRoot=""`，不影响协作站点启动；配置 OEM 时必须使用独立的 OEM 根。应用不内置病毒库或恶意软件扫描服务。
 4. 初始登录账号为 `admin`，初始密码查看私有包 `appsettings.Production.json` 中的 `App.BootstrapPassword`。发布脚本为每个私有包独立随机生成，不写回本机默认值，也不输出到日志；首次登录必须修改。已初始化的数据库在重启或升级时不会重建、重新播种或重置管理员密码；初始化完成后应从实际部署配置中移除初始密码。外部配置模板模式由管理员在服务器外部配置中另行生成并保管该密码。
 
 自动初始化只处理不存在或完全为空的数据库，并以数据库锁协调并发启动。非空数据库只检查 EF 迁移历史和必要种子，绝不自动执行升级迁移。历史不匹配、旧版待迁移或初始化中断留下的部分表都会停止并报错，不会删除现有数据或自动重试 DDL。已有数据库升级仍需先备份，再显式运行 `dotnet .\Yf.Api.dll --migrate-database`。
 
 如果禁用 `App.AutoInitializeDatabase`，仍可先手动创建空库，设置进程环境变量 `YF_BOOTSTRAP_PASSWORD`，再执行 `dotnet .\Yf.Api.dll --initialize-database`。正式安装脚本使用的外部配置也应包含上述初始化选项；启动后已存在的数据库不会要求保留初始密码。
 
-本版本的升级迁移会删除 OEM 表、权限和专属配置，其中 OEM 业务数据不可恢复；对已有数据库执行 `--migrate-database` 前必须完成可验证的备份。只复制新程序而不迁移时，启动校验会拒绝旧的迁移状态。
+本版本迁移链包含恢复后的 OEM 表、权限和专属配置。对已有数据库执行 `--migrate-database` 前必须完成可验证的备份，并逐条核对实际待执行迁移；只复制新程序而不迁移时，启动校验会拒绝旧的迁移状态。独立 `OemStorageRoot` 不进入本脚本的协作备份，不能用数据库/协作存储备份替代 OEM 文件保留方案。
+
+### OEM 与独立存储
+
+完整 OEM 配置、归档结构检查和验收边界见 [OEM 当前集成与部署](../docs/OEM当前集成与部署-2026-10-05.md)。`OemStorageRoot` 必须预先创建为本地独立目录；安装脚本核对它与包、站点、配置和 `StorageRoot` 双向不重叠，并将 ACL 限制为 SYSTEM、Administrators 与应用池身份。上传内容仍进行普通文件格式和归档结构检查（包括 SharpCompress 支持的格式），该检查不等同于恶意软件扫描。
+
+发布包不包含病毒库、扫描服务安装/更新脚本或病毒扫描验证步骤。
 
 每个版本包含的 EF 迁移以发布包内程序集为准（`Yf.Api/Infrastructure/Migrations`，按时间戳排序）；升级前把目标库 `__EFMigrationsHistory` 的最后一条与新版本的最新迁移对照，确认本次需要执行哪些迁移。例如 `20260923141854_AddProjectCopyJobs` 创建持久化 `project_copy_jobs` 队列、`project_copy_worker_state` epoch 状态及相关索引，其后的版本仍可能追加新迁移。已有非空数据库不会在普通启动时自动升级；只要新版本比目标库多出任何迁移，就必须在停写、备份后执行 `dotnet .\Yf.Api.dll --migrate-database`，再启动新版本。迁移未完成时不能先开放依赖新表的前端入口（如复制）。
 
@@ -42,7 +48,7 @@
 
 脚本核对包文件 SHA-256、程序包/站点/配置/存储独立路径、证书、Hosting Bundle 和运行时，然后创建新应用池、新 HTTPS 站点。应用池会被明确设置并回读验证为 `processModel.maxProcesses=1`；无法保持单 worker 时安装停止。复制包后会清空站点内 `appsettings.json` 和 `appsettings.Production.json` 的凭据回退，正式站点只使用 `YF_CONFIG_PATH` 指向的外部配置；升级和恢复也执行同样处理。清空凭据回退时只清除 `App` 下的连接串、JWT、存储/日志路径、初始密码和 SMTP 密码并关闭自动初始化，`Logging`、`Serilog`、`AllowedHosts` 等非敏感设置保持发布包原值；`web.config` 中的 `YF_CONFIG_PATH`、`ASPNETCORE_ENVIRONMENT`、`DOTNET_ENVIRONMENT` 按名称替换为唯一一项（重复键会让 IIS 整站报 500.19）。它关闭配置文件 ACL 继承，只保留当前管理员、SYSTEM、Administrators 完全控制和应用池身份只读；程序目录只读。前后端同站点、同来源，不需要 ARR、URL Rewrite 或 Rust Windows 服务。
 
-业务存储目录（`App.StorageRoot`）和日志目录（`App.LogDirectory`，见下文“日志”）使用显式 ACL：关闭继承并丢弃目录上原有的继承/显式项，只保留 `SYSTEM` 与 `BUILTIN\Administrators` 完全控制（管理员不会被锁在目录外）以及 `IIS AppPool\<应用池名>` 修改权限。子项随后继承这三项；子项上已有的显式 ACE 不会被改动。安装新站点和 Restore 的新存储都按此设置；Upgrade 沿用现有存储，只追加应用池修改权限，不删除运维已添加的 ACE。备份账号、杀毒或监控等额外主体需要访问时，安装后由管理员按最小权限显式添加，不要重新开启继承或授予 Users/Everyone。
+业务存储目录（`App.StorageRoot`）、OEM 文件目录（非空 `App.OemStorageRoot`）和日志目录（`App.LogDirectory`，见下文“日志”）使用显式 ACL：关闭继承并丢弃目录上原有的继承/显式项，只保留 `SYSTEM` 与 `BUILTIN\Administrators` 完全控制（管理员不会被锁在目录外）以及 `IIS AppPool\<应用池名>` 修改权限。子项随后继承这三项；子项上已有的显式 ACE 不会被改动。安装新站点和 Restore 的新存储都按此设置；Upgrade 沿用现有存储，只追加应用池修改权限，不删除运维已添加的 ACE。备份账号或监控等额外主体需要访问时，安装后由管理员按最小权限显式添加，不要重新开启继承或授予 Users/Everyone。
 
 启动站点后，脚本从配置的 HTTPS 来源（`https://<HostName>[:端口]`）检查 `/health`，要求 `status=ok, db=up`（`/health` 同时返回 `storage=up|down`，数据库和存储目录读写探测都正常时才为 200/`status=ok`，否则 503/`status=degraded`），默认最多等待 180 秒（`-HealthCheckWaitSeconds`、`-HealthRequestTimeoutSeconds` 可调）；PowerShell 5.1 会显式启用 TLS 1.2，超时报错会附带最后一次失败原因。检查失败按下述规则整体回滚，因此配置错误、数据库不可达或应用启动失败（HTTP 500.30）不会留下半安装站点。探测需要在服务器本机能按 `HostName` 解析到本站；DNS 尚未切换时可在 hosts 中临时指向本机，或传 `-SkipHealthCheck` 并在切换后人工检查。外部配置 `App.AutoInitializeDatabase` 不为 `true` 时空库需另行显式初始化，脚本跳过该检查并给出警告，初始化后必须人工检查 `/health`。
 
@@ -68,6 +74,7 @@
 | `BatchDownloadMaxDurationMinutes` | 120 | 单次批量 ZIP 下载的最长时长（5–1440 分钟） |
 | `MailPendingTtlDays` | 3 | 待发送邮件超过该天数仍未发出即取消（1–365） |
 | `AllowInsecureCookies` | false | 仅用于非回环 HTTP 私有部署时允许 `CookieSecure=false`；HTTPS 站点下无效且被部署脚本拒绝 |
+| `OemStorageRoot` | 空 | OEM 专属本地根；必须与程序、配置、日志、协作 `StorageRoot` 和备份目录独立，空值表示未配置 OEM 文件入口 |
 
 应用运行期间持有 MySQL 命名锁 `yf:app-running:<哈希>`；开发数据重置在锁被占用时拒绝执行。
 
@@ -99,7 +106,7 @@
   -MySqlDump 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe'
 ```
 
-备份包含当前程序、独立存储、外部 JSON 配置、数据库表、触发器、存储过程和事件。`mysqldump` 使用 `--single-transaction --routines --triggers --events`，因此备份账号除 `SELECT`、`SHOW VIEW`、`TRIGGER` 外还需要目标库的 `EVENT` 权限（导出存储过程需能读取其定义），缺少时备份失败，日志见备份目录 `dump.stderr.log`。备份目录用清单记录文件 SHA-256；manifest 会显式标记 `containsSecrets=true`、`protection=restricted-acl`。它同时包含数据库凭据、JWT/SMTP 等密钥、业务数据和上传文件，目录 ACL 只解决本机访问控制，不是静态加密；必须放在网站目录之外受限且已启用 BitLocker、EFS 或等效受控加密的备份介质上，限制管理员/备份账号访问，不提交源码库，不通过普通文件共享长期暴露，并按保留策略安全清除。
+备份包含当前程序、协作 `StorageRoot`、外部 JSON 配置、数据库表、触发器、存储过程和事件；不复制独立 `OemStorageRoot`。脚本仍把 OEM 根纳入路径隔离，禁止备份目录位于其中或包含它。`mysqldump` 使用 `--single-transaction --routines --triggers --events`，因此备份账号除 `SELECT`、`SHOW VIEW`、`TRIGGER` 外还需要目标库的 `EVENT` 权限（导出存储过程需能读取其定义），缺少时备份失败，日志见备份目录 `dump.stderr.log`。备份目录用清单记录文件 SHA-256；manifest 会显式标记 `containsSecrets=true`、`protection=restricted-acl`。它同时包含数据库凭据、JWT/SMTP 等密钥、业务数据和协作上传文件，目录 ACL 只解决本机访问控制，不是静态加密；必须放在网站目录之外受限且已启用 BitLocker、EFS 或等效受控加密的备份介质上，限制管理员/备份账号访问，不提交源码库，不通过普通文件共享长期暴露，并按保留策略安全清除。Restore 使用新的空 OEM 根并写入存储核对标记，历史 OEM 文件在完成一致性核对前保持不可交付。
 
 维护脚本**不做备份轮转**：每次 Backup/Upgrade 都要求新的空 `-BackupDirectory`，完整复制程序和全部存储文件，旧备份不会被自动删除，磁盘占用随次数线性增长。按组织保留策略人工清理：先确认更新的备份已通过清单校验（或已成功恢复演练）且不再是某次迁移的回退基线，再删除整个旧备份目录，例如 `Remove-Item -LiteralPath 'E:\YfBackups\2026-09-11-before-upgrade' -Recurse`。不要只删除其中的 `database.sql` 或 `storage`，否则该备份的清单校验会失败、无法恢复；也不要把清理写成自动任务而误删仍需要的回退点。（开发机 `scripts/restart-dev.ps1` 的 `before-restart.sql` 仅默认保留最近 5 份，由 `-KeepBackups` 调整，与本节正式备份无关。）保留明文目录格式是为了维持现有跨机恢复合同；复制到其他介质前由运维层负责加密。远程数据库必须先满足上面的 `VerifyFull` 证书身份验证要求，不能依靠网络边界代替传输加密。
 

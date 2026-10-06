@@ -9,6 +9,7 @@ using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Admin;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Identity;
+using Yf.Api.Modules.Oem;
 using Yf.Api.Modules.Projects;
 using Yf.Api.Modules.SystemManagement;
 
@@ -31,6 +32,8 @@ public sealed class OpenApiContractTests
         "GET /api/v1/files/{id}/media",
         "POST /api/v1/files/batch-download",
         "GET /api/v1/messages/{messageId}/images/{imageId}",
+        "GET /api/v1/oem/files/{id}/content",
+        "GET /api/v1/oem/files/{id}/download",
     };
 
     [Fact]
@@ -85,7 +88,7 @@ public sealed class OpenApiContractTests
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Testing" });
         builder.Services.AddSingleton(new AppOptions { WorkerEnabled = false }).AddSingleton<AppDb>().AddSingleton<AccessService>().AddSingleton<AuditService>();
-        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule();
+        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen(options =>
         {
@@ -96,7 +99,7 @@ public sealed class OpenApiContractTests
             options.SchemaFilter<PresentPropertiesRequiredFilter>();
         });
         await using var app = builder.Build();
-        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule();
+        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapOemModule();
         // UseEndpoints publishes the mapped routes to the global EndpointDataSource that ApiExplorer reads;
         // the server and background workers are never started.
         app.UseRouting();

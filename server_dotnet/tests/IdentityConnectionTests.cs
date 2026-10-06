@@ -80,7 +80,7 @@ public sealed class IdentityConnectionTests
                 Assert.Equal(1, await business.ExecuteScalarAsync<int>(
                     new CommandDefinition("SELECT 1", cancellationToken: deadline.Token)));
                 downstreamCompleted = true;
-            });
+            }, []);
             await middleware.InvokeAsync(context, db, tokens, new IdentityProjectionCache());
             Assert.True(downstreamCompleted);
         }

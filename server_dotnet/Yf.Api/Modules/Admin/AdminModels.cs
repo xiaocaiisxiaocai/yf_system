@@ -33,6 +33,7 @@ public sealed record SupplierAccountCreate(
     [property: JsonRequired] string Email,
     ulong? RoleId = null);
 public sealed record SupplierAccountUpdate(string? RealName, string? Email);
+public sealed record DepartmentLeaderRequest(ulong? LeaderUserId);
 
 internal sealed class AdminUserRow
 {
@@ -82,8 +83,23 @@ internal static class AdminValidation
 
 public sealed record DepartmentResponse(ulong Id, string Name, ulong? ParentId, string Kind, int SortNo, string Status);
 
+public sealed record DepartmentLeaderBrief(ulong Id, string EmployeeNo, string RealName, bool Active);
+
+public sealed record DepartmentLeaderOption(
+    ulong Id, string EmployeeNo, string RealName, string? DepartmentName);
+
 public sealed record DepartmentTreeNode(
-    ulong Id, string Name, ulong? ParentId, string Kind, int SortNo, string Status, IReadOnlyList<DepartmentTreeNode> Children);
+    ulong Id,
+    string Name,
+    ulong? ParentId,
+    string Kind,
+    int SortNo,
+    string Status,
+    DepartmentLeaderBrief? Leader,
+    IReadOnlyList<DepartmentTreeNode> Children);
+
+public sealed record DepartmentLeaderResponse(
+    ulong Id, string Name, string Kind, DepartmentLeaderBrief? Leader);
 
 public sealed record PermissionResponse(
     ulong Id, string Code, string Name, string Type, ulong? ParentId, int SortNo, bool Grantable, bool SupplierAssignable);

@@ -37,6 +37,15 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(48)")
                         .HasColumnName("action");
 
+                    b.Property<ulong?>("ActorAccountId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("actor_account_id");
+
+                    b.Property<string>("ActorRealm")
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("actor_realm");
+
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime(3)")
@@ -72,6 +81,9 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnName("user_id");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ActorRealm")
+                        .HasDatabaseName("idx_audit_actor_realm");
 
                     b.HasIndex("CreatedAt")
                         .HasDatabaseName("idx_audit_time");
@@ -144,6 +156,10 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(16)")
                         .HasDefaultValue("DIVISION")
                         .HasColumnName("kind");
+
+                    b.Property<ulong?>("LeaderAccountId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("leader_account_id");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -231,15 +247,28 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("datetime(3)")
                         .HasColumnName("next_attempt_at");
 
+                    b.Property<ulong?>("OemTransferId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("oem_transfer_id");
+
                     b.Property<ulong?>("ProjectId")
                         .HasColumnType("bigint unsigned")
                         .HasColumnName("project_id");
+
+                    b.Property<ulong?>("RecipientAccountId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("recipient_account_id");
 
                     b.Property<string>("RecipientEmail")
                         .IsRequired()
                         .HasMaxLength(128)
                         .HasColumnType("varchar(128)")
                         .HasColumnName("recipient_email");
+
+                    b.Property<string>("RecipientRealm")
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("recipient_realm");
 
                     b.Property<ulong?>("RecipientUserId")
                         .HasColumnType("bigint unsigned")
@@ -274,6 +303,9 @@ namespace Yf.Api.Infrastructure.Migrations
                     b.HasIndex("DedupeKey")
                         .IsUnique()
                         .HasDatabaseName("uk_outbox_dedupe_key");
+
+                    b.HasIndex("OemTransferId")
+                        .HasDatabaseName("idx_outbox_oem_transfer");
 
                     b.HasIndex("ProjectId")
                         .HasDatabaseName("fk_outbox_project_v2");
@@ -2109,6 +2141,1476 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemAccount", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<ulong?>("CreatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("email");
+
+                    b.Property<string>("EmployeeNo")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("employee_no");
+
+                    b.Property<int>("FailedLoginAttempts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("failed_login_attempts");
+
+                    b.Property<DateTime?>("LastLoginAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("last_login_at");
+
+                    b.Property<string>("LastLoginIp")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("last_login_ip");
+
+                    b.Property<DateTime?>("LockedUntil")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("locked_until");
+
+                    b.Property<bool>("MustChangePassword")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true)
+                        .HasColumnName("must_change_password");
+
+                    b.Property<ulong>("OemCompanyId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("oem_company_id");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("varchar(255)")
+                        .HasColumnName("password_hash");
+
+                    b.Property<string>("RealName")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("real_name");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("ACTIVE")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EmployeeNo")
+                        .IsUnique()
+                        .HasDatabaseName("uk_oem_accounts_employee_no");
+
+                    b.HasIndex("OemCompanyId")
+                        .HasDatabaseName("idx_oem_accounts_company");
+
+                    b.ToTable("oem_accounts", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemCompany", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<string>("ContactEmail")
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("contact_email");
+
+                    b.Property<string>("ContactName")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("contact_name");
+
+                    b.Property<string>("ContactPhone")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("contact_phone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<ulong?>("CreatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Remark")
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("remark");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("ACTIVE")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique()
+                        .HasDatabaseName("uk_oem_companies_name");
+
+                    b.ToTable("oem_companies", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemDownloadLease", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)")
+                        .HasColumnName("id");
+
+                    b.Property<ulong>("FileId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("file_id");
+
+                    b.Property<DateTime>("HardDeadline")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("hard_deadline");
+
+                    b.Property<DateTime?>("LastProgressAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("last_progress_at");
+
+                    b.Property<DateTime>("LeaseUntil")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("lease_until");
+
+                    b.Property<string>("Owner")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("owner");
+
+                    b.Property<string>("SessionId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)")
+                        .HasColumnName("session_id");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId");
+
+                    b.HasIndex("FileId", "Status")
+                        .HasDatabaseName("idx_oem_download_leases_file");
+
+                    b.ToTable("oem_download_leases", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemDownloadRange", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<ulong>("EndOffset")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("end_offset");
+
+                    b.Property<string>("SessionId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)")
+                        .HasColumnName("session_id");
+
+                    b.Property<ulong>("StartOffset")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("start_offset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId", "StartOffset")
+                        .HasDatabaseName("idx_oem_download_ranges_session");
+
+                    b.ToTable("oem_download_ranges", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemDownloadSession", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("AbsoluteDeadline")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("absolute_deadline");
+
+                    b.Property<ulong>("ActorId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("actor_id");
+
+                    b.Property<string>("ActorRealm")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("actor_realm");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("completed_at");
+
+                    b.Property<ulong>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasDefaultValue(0ul)
+                        .HasColumnName("concurrency_version");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<ulong>("ExpectedSize")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("expected_size");
+
+                    b.Property<ulong>("FileId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("file_id");
+
+                    b.Property<string>("FileSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("char(64)")
+                        .HasColumnName("file_sha256")
+                        .IsFixedLength();
+
+                    b.Property<string>("FileStoredName")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)")
+                        .HasColumnName("file_stored_name");
+
+                    b.Property<DateTime?>("LastProgressAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("last_progress_at");
+
+                    b.Property<string>("LoginSessionId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("login_session_id");
+
+                    b.Property<string>("Purpose")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("purpose");
+
+                    b.Property<bool>("RecipientSide")
+                        .HasColumnType("tinyint(1)")
+                        .HasColumnName("recipient_side");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActorRealm", "ActorId")
+                        .HasDatabaseName("idx_oem_download_sessions_actor");
+
+                    b.HasIndex("FileId", "Status")
+                        .HasDatabaseName("idx_oem_download_sessions_file");
+
+                    b.ToTable("oem_download_sessions", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFilePromotion", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)")
+                        .HasColumnName("id");
+
+                    b.Property<int>("AttemptCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("attempt_count");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("completed_at");
+
+                    b.Property<ulong>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasDefaultValue(0ul)
+                        .HasColumnName("concurrency_version");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<ulong>("FileId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("file_id");
+
+                    b.Property<string>("FileSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("char(64)")
+                        .HasColumnName("file_sha256")
+                        .IsFixedLength();
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(1024)
+                        .HasColumnType("varchar(1024)")
+                        .HasColumnName("last_error");
+
+                    b.Property<string>("LeaseOwner")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("lease_owner");
+
+                    b.Property<DateTime?>("LeaseUntil")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("lease_until");
+
+                    b.Property<DateTime?>("NextAttemptAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("next_attempt_at");
+
+                    b.Property<ulong>("SizeBytes")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("size_bytes");
+
+                    b.Property<string>("SourcePath")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("source_path");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TargetPath")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("target_path");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FileId")
+                        .HasDatabaseName("idx_oem_promotions_file");
+
+                    b.HasIndex("Status", "NextAttemptAt")
+                        .HasDatabaseName("idx_oem_promotions_status_next");
+
+                    b.ToTable("oem_file_promotions", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFileScanJob", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<int>("AttemptCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("attempt_count");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("completed_at");
+
+                    b.Property<ulong>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasDefaultValue(0ul)
+                        .HasColumnName("concurrency_version");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("EngineName")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("engine_name");
+
+                    b.Property<string>("EngineVersion")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("engine_version");
+
+                    b.Property<ulong>("FileId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("file_id");
+
+                    b.Property<string>("FileSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("char(64)")
+                        .HasColumnName("file_sha256")
+                        .IsFixedLength();
+
+                    b.Property<ulong>("FileSizeBytes")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("file_size_bytes");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(1024)
+                        .HasColumnType("varchar(1024)")
+                        .HasColumnName("last_error");
+
+                    b.Property<string>("LeaseOwner")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("lease_owner");
+
+                    b.Property<DateTime?>("LeaseUntil")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("lease_until");
+
+                    b.Property<DateTime?>("NextAttemptAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("next_attempt_at");
+
+                    b.Property<string>("SignatureVersion")
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("signature_version");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("ThreatName")
+                        .HasMaxLength(255)
+                        .HasColumnType("varchar(255)")
+                        .HasColumnName("threat_name");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FileId")
+                        .HasDatabaseName("idx_oem_scan_jobs_file");
+
+                    b.HasIndex("Status", "NextAttemptAt")
+                        .HasDatabaseName("idx_oem_scan_jobs_status_next");
+
+                    b.ToTable("oem_file_scan_jobs", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFlowInstance", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<string>("BlockedReason")
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("blocked_reason");
+
+                    b.Property<ulong>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasDefaultValue(0ul)
+                        .HasColumnName("concurrency_version");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<int?>("CurrentSortNo")
+                        .HasColumnType("int")
+                        .HasColumnName("current_sort_no");
+
+                    b.Property<ulong>("InitiatorSectionId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("initiator_section_id");
+
+                    b.Property<ulong>("InitiatorUserId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("initiator_user_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("varchar(24)")
+                        .HasColumnName("status");
+
+                    b.Property<ulong>("TemplateId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("template_id");
+
+                    b.Property<string>("TemplateSnapshot")
+                        .IsRequired()
+                        .HasColumnType("json")
+                        .HasColumnName("template_snapshot");
+
+                    b.Property<ulong>("TransferId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("transfer_id");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("idx_oem_flow_instances_status");
+
+                    b.HasIndex("TemplateId");
+
+                    b.HasIndex("TransferId")
+                        .IsUnique()
+                        .HasDatabaseName("uk_oem_flow_instances_transfer");
+
+                    b.ToTable("oem_flow_instances", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFlowInstanceNode", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<string>("ApprovalMode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("approval_mode");
+
+                    b.Property<string>("ApproverSource")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("approver_source");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("completed_at");
+
+                    b.Property<ulong>("InstanceId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("instance_id");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("SkipReason")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("skip_reason");
+
+                    b.Property<int>("SortNo")
+                        .HasColumnType("int")
+                        .HasColumnName("sort_no");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("status");
+
+                    b.Property<bool>("UsedFallback")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false)
+                        .HasColumnName("used_fallback");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstanceId", "SortNo")
+                        .IsUnique()
+                        .HasDatabaseName("uk_oem_flow_instance_nodes_sort");
+
+                    b.ToTable("oem_flow_instance_nodes", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFlowTask", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<ulong>("ApproverUserId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("approver_user_id");
+
+                    b.Property<ulong>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasDefaultValue(0ul)
+                        .HasColumnName("concurrency_version");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime?>("DecidedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("decided_at");
+
+                    b.Property<ulong>("InstanceId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("instance_id");
+
+                    b.Property<ulong>("InstanceNodeId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("instance_node_id");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(1024)
+                        .HasColumnType("varchar(1024)")
+                        .HasColumnName("reason");
+
+                    b.Property<string>("ReassignReason")
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("reassign_reason");
+
+                    b.Property<ulong?>("ReassignedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("reassigned_by");
+
+                    b.Property<ulong?>("ReplacesTaskId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("replaces_task_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstanceId")
+                        .HasDatabaseName("idx_oem_flow_tasks_instance");
+
+                    b.HasIndex("InstanceNodeId")
+                        .HasDatabaseName("idx_oem_flow_tasks_node");
+
+                    b.HasIndex("ApproverUserId", "Status")
+                        .HasDatabaseName("idx_oem_flow_tasks_approver");
+
+                    b.ToTable("oem_flow_tasks", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFlowTemplate", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<ulong>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasDefaultValue(0ul)
+                        .HasColumnName("concurrency_version");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<ulong?>("CreatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("created_by");
+
+                    b.Property<bool>("IsDefault")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false)
+                        .HasColumnName("is_default");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("ACTIVE")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique()
+                        .HasDatabaseName("uk_oem_flow_templates_name");
+
+                    b.ToTable("oem_flow_templates", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFlowTemplateNode", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<string>("ApprovalMode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("approval_mode");
+
+                    b.Property<string>("ApproverSource")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("approver_source");
+
+                    b.Property<bool>("Enabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true)
+                        .HasColumnName("enabled");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("SelfPolicy")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("self_policy");
+
+                    b.Property<int>("SortNo")
+                        .HasColumnType("int")
+                        .HasColumnName("sort_no");
+
+                    b.Property<ulong>("TemplateId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("template_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TemplateId", "SortNo")
+                        .IsUnique()
+                        .HasDatabaseName("uk_oem_flow_nodes_template_sort");
+
+                    b.ToTable("oem_flow_template_nodes", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFlowTemplateNodeUser", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<ulong>("NodeId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("node_id");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("role");
+
+                    b.Property<ulong>("UserId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NodeId", "Role", "UserId")
+                        .IsUnique()
+                        .HasDatabaseName("uk_oem_flow_node_users");
+
+                    b.ToTable("oem_flow_template_node_users", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFlowTemplateScope", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<ulong>("DepartmentId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("department_id");
+
+                    b.Property<ulong>("TemplateId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("template_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DepartmentId")
+                        .IsUnique()
+                        .HasDatabaseName("uk_oem_flow_scopes_department");
+
+                    b.HasIndex("TemplateId")
+                        .HasDatabaseName("idx_oem_flow_scopes_template");
+
+                    b.ToTable("oem_flow_template_scopes", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemRefreshToken", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<ulong>("AccountId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("account_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("Ip")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("ip");
+
+                    b.Property<bool>("Revoked")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false)
+                        .HasColumnName("revoked");
+
+                    b.Property<DateTime>("SessionExpiresAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("session_expires_at");
+
+                    b.Property<string>("SessionId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("session_id");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("char(64)")
+                        .HasColumnName("token_hash")
+                        .IsFixedLength();
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId")
+                        .HasDatabaseName("idx_oem_refresh_tokens_account");
+
+                    b.HasIndex("SessionExpiresAt")
+                        .HasDatabaseName("idx_oem_refresh_tokens_session_expires");
+
+                    b.HasIndex("SessionId")
+                        .HasDatabaseName("idx_oem_refresh_tokens_session");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("uk_oem_refresh_tokens_hash");
+
+                    b.ToTable("oem_refresh_tokens", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemRetentionTemplate", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<ulong>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasDefaultValue(0ul)
+                        .HasColumnName("concurrency_version");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<ulong?>("CreatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("mode");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("name");
+
+                    b.Property<uint?>("ReceiptGraceMinutes")
+                        .HasColumnType("int unsigned")
+                        .HasColumnName("receipt_grace_minutes");
+
+                    b.Property<uint?>("ReleaseTtlMinutes")
+                        .HasColumnType("int unsigned")
+                        .HasColumnName("release_ttl_minutes");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("ACTIVE")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique()
+                        .HasDatabaseName("uk_oem_retention_templates_name");
+
+                    b.ToTable("oem_retention_templates", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemTransfer", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("closed_at");
+
+                    b.Property<ulong?>("ClosedById")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("closed_by_id");
+
+                    b.Property<string>("ClosedByRealm")
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("closed_by_realm");
+
+                    b.Property<string>("ClosedReason")
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("closed_reason");
+
+                    b.Property<ulong>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasDefaultValue(0ul)
+                        .HasColumnName("concurrency_version");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1024)
+                        .HasColumnType("varchar(1024)")
+                        .HasColumnName("description");
+
+                    b.Property<string>("Direction")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("varchar(24)")
+                        .HasColumnName("direction");
+
+                    b.Property<DateTime?>("ExpiresAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("expires_at");
+
+                    b.Property<ulong?>("InternalSenderUserId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("internal_sender_user_id");
+
+                    b.Property<string>("LifecycleStatus")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("varchar(24)")
+                        .HasColumnName("lifecycle_status");
+
+                    b.Property<string>("ManifestSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("char(64)")
+                        .HasColumnName("manifest_sha256")
+                        .IsFixedLength();
+
+                    b.Property<ulong>("OemCompanyId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("oem_company_id");
+
+                    b.Property<ulong?>("OemSenderAccountId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("oem_sender_account_id");
+
+                    b.Property<uint?>("ReceiptGraceMinutes")
+                        .HasColumnType("int unsigned")
+                        .HasColumnName("receipt_grace_minutes");
+
+                    b.Property<uint?>("ReleaseTtlMinutes")
+                        .HasColumnType("int unsigned")
+                        .HasColumnName("release_ttl_minutes");
+
+                    b.Property<DateTime?>("ReleasedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("released_at");
+
+                    b.Property<string>("RetentionMode")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("retention_mode");
+
+                    b.Property<ulong>("RetentionTemplateId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("retention_template_id");
+
+                    b.Property<DateTime?>("SentAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("sent_at");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("title");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InternalSenderUserId")
+                        .HasDatabaseName("idx_oem_transfers_internal_sender");
+
+                    b.HasIndex("OemSenderAccountId")
+                        .HasDatabaseName("idx_oem_transfers_oem_sender");
+
+                    b.HasIndex("RetentionTemplateId");
+
+                    b.HasIndex("LifecycleStatus", "ReleasedAt")
+                        .HasDatabaseName("idx_oem_transfers_status_released");
+
+                    b.HasIndex("OemCompanyId", "LifecycleStatus")
+                        .HasDatabaseName("idx_oem_transfers_company_status");
+
+                    b.ToTable("oem_transfers", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemTransferFile", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<ulong>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasDefaultValue(0ul)
+                        .HasColumnName("concurrency_version");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Ext")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("ext");
+
+                    b.Property<DateTime?>("FirstRecipientDownloadAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("first_recipient_download_at");
+
+                    b.Property<ulong?>("FirstRecipientId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("first_recipient_id");
+
+                    b.Property<string>("FirstRecipientRealm")
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("first_recipient_realm");
+
+                    b.Property<string>("Md5")
+                        .HasMaxLength(32)
+                        .HasColumnType("char(32)")
+                        .HasColumnName("md5")
+                        .IsFixedLength();
+
+                    b.Property<string>("MimeType")
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("mime_type");
+
+                    b.Property<string>("OriginalName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("varchar(255)")
+                        .HasColumnName("original_name");
+
+                    b.Property<string>("PayloadStatus")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("varchar(24)")
+                        .HasColumnName("payload_status");
+
+                    b.Property<int>("PurgeAttemptCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("purge_attempt_count");
+
+                    b.Property<DateTime?>("PurgeDueAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("purge_due_at");
+
+                    b.Property<string>("PurgeLastError")
+                        .HasMaxLength(1024)
+                        .HasColumnType("varchar(1024)")
+                        .HasColumnName("purge_last_error");
+
+                    b.Property<string>("PurgeLeaseOwner")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("purge_lease_owner");
+
+                    b.Property<DateTime?>("PurgeLeaseUntil")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("purge_lease_until");
+
+                    b.Property<DateTime?>("PurgeNextAttemptAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("purge_next_attempt_at");
+
+                    b.Property<string>("PurgeReason")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("purge_reason");
+
+                    b.Property<DateTime?>("PurgedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("purged_at");
+
+                    b.Property<string>("ScanStatus")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("scan_status");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("char(64)")
+                        .HasColumnName("sha256")
+                        .IsFixedLength();
+
+                    b.Property<ulong>("SizeBytes")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("size_bytes");
+
+                    b.Property<string>("StoragePath")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("storage_path");
+
+                    b.Property<string>("StoredName")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)")
+                        .HasColumnName("stored_name");
+
+                    b.Property<ulong>("TransferId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("transfer_id");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at");
+
+                    b.Property<ulong?>("UploadedByInternalUserId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("uploaded_by_internal_user_id");
+
+                    b.Property<ulong?>("UploadedByOemAccountId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("uploaded_by_oem_account_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StoredName")
+                        .IsUnique()
+                        .HasDatabaseName("uk_oem_transfer_files_stored_name");
+
+                    b.HasIndex("TransferId")
+                        .HasDatabaseName("idx_oem_transfer_files_transfer");
+
+                    b.HasIndex("PayloadStatus", "PurgeDueAt")
+                        .HasDatabaseName("idx_oem_transfer_files_purge_due");
+
+                    b.HasIndex("PayloadStatus", "PurgeNextAttemptAt")
+                        .HasDatabaseName("idx_oem_transfer_files_purge_retry");
+
+                    b.ToTable("oem_transfer_files", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemUploadSession", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)")
+                        .HasColumnName("id");
+
+                    b.Property<uint>("ChunkSize")
+                        .HasColumnType("int unsigned")
+                        .HasColumnName("chunk_size");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("FileMd5")
+                        .HasMaxLength(32)
+                        .HasColumnType("char(32)")
+                        .HasColumnName("file_md5")
+                        .IsFixedLength();
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("varchar(255)")
+                        .HasColumnName("file_name");
+
+                    b.Property<ulong>("FileSize")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("file_size");
+
+                    b.Property<ulong>("ReservedBytes")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("reserved_bytes");
+
+                    b.Property<ulong?>("ResultFileId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("result_file_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TempDir")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("temp_dir");
+
+                    b.Property<uint>("TotalChunks")
+                        .HasColumnType("int unsigned")
+                        .HasColumnName("total_chunks");
+
+                    b.Property<ulong>("TransferId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("transfer_id");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at");
+
+                    b.Property<ulong>("UploaderId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("uploader_id");
+
+                    b.Property<string>("UploaderRealm")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("uploader_realm");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Status", "ExpiresAt")
+                        .HasDatabaseName("idx_oem_upload_sessions_expiry");
+
+                    b.HasIndex("TransferId", "Status")
+                        .HasDatabaseName("idx_oem_upload_sessions_transfer");
+
+                    b.ToTable("oem_upload_sessions", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.CollaborationRead", b =>
                 {
                     b.HasOne("Yf.Api.Infrastructure.Entities.ProjectActivity", null)
@@ -2537,6 +4039,193 @@ namespace Yf.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_ur_user");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemAccount", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemCompany", null)
+                        .WithMany()
+                        .HasForeignKey("OemCompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_accounts_company");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemDownloadLease", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemDownloadSession", null)
+                        .WithMany()
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_download_leases_session");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemDownloadRange", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemDownloadSession", null)
+                        .WithMany()
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_download_ranges_session");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemDownloadSession", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemTransferFile", null)
+                        .WithMany()
+                        .HasForeignKey("FileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_download_sessions_file");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFilePromotion", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemTransferFile", null)
+                        .WithMany()
+                        .HasForeignKey("FileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_promotions_file");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFileScanJob", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemTransferFile", null)
+                        .WithMany()
+                        .HasForeignKey("FileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_scan_jobs_file");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFlowInstance", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemFlowTemplate", null)
+                        .WithMany()
+                        .HasForeignKey("TemplateId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_flow_instances_template");
+
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemTransfer", null)
+                        .WithMany()
+                        .HasForeignKey("TransferId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_flow_instances_transfer");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFlowInstanceNode", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemFlowInstance", null)
+                        .WithMany()
+                        .HasForeignKey("InstanceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_flow_instance_nodes_instance");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFlowTask", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemFlowInstance", null)
+                        .WithMany()
+                        .HasForeignKey("InstanceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_flow_tasks_instance");
+
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemFlowInstanceNode", null)
+                        .WithMany()
+                        .HasForeignKey("InstanceNodeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_flow_tasks_node");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFlowTemplateNode", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemFlowTemplate", null)
+                        .WithMany()
+                        .HasForeignKey("TemplateId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_flow_nodes_template");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFlowTemplateNodeUser", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemFlowTemplateNode", null)
+                        .WithMany()
+                        .HasForeignKey("NodeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_flow_node_users_node");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemFlowTemplateScope", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemFlowTemplate", null)
+                        .WithMany()
+                        .HasForeignKey("TemplateId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_flow_scopes_template");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemRefreshToken", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemAccount", null)
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_refresh_tokens_account");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemTransfer", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemCompany", null)
+                        .WithMany()
+                        .HasForeignKey("OemCompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_transfers_company");
+
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemAccount", null)
+                        .WithMany()
+                        .HasForeignKey("OemSenderAccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_oem_transfers_oem_sender");
+
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemRetentionTemplate", null)
+                        .WithMany()
+                        .HasForeignKey("RetentionTemplateId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_transfers_retention");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemTransferFile", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemTransfer", null)
+                        .WithMany()
+                        .HasForeignKey("TransferId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_transfer_files_transfer");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemUploadSession", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemTransfer", null)
+                        .WithMany()
+                        .HasForeignKey("TransferId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_upload_sessions_transfer");
                 });
 #pragma warning restore 612, 618
         }

@@ -1,6 +1,6 @@
 # 供应商协作平台
 
-React + TypeScript 前端、ASP.NET Core 8 后端、MySQL 数据库。后端唯一入口是 `server_dotnet`。
+React + TypeScript 前端、ASP.NET Core 8 后端、MySQL 数据库，包含协作平台与独立 OEM 双向文件传递。后端唯一入口是 `server_dotnet`。
 
 ## 目录
 
@@ -46,11 +46,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\server_dotnet\scripts\publ
 
 本机发布默认值保存在被 Git 忽略的 `server_dotnet/deploy/publish-defaults.local.json`，无需命令行传参。发布脚本将数据库连接、JWT、实际 `WebBaseUrl` 及存储目录写入发布包的 `appsettings.Production.json`；JWT 首次自动生成并在本机复用。发布包默认支持首次启动自动建库、EF 迁移建表及创建管理员；初始密码在 `appsettings.Production.json` 的 `App.BootstrapPassword`，首次登录必须修改，重启不会重置。已有非空库仍需显式升级迁移。首次发布前必须在该私有默认值文件中填写目标站点 `WebBaseUrl`，必要时覆盖 `StorageRoot` 和 `CookieSecure`。非回环 HTTP 私有包需 `-AllowInsecurePrivateConfiguration`，脚本会同时写入 `App.AllowInsecureCookies=true`（否则 Production 拒绝 `CookieSecure=false`）。源码中的通用配置模板保留占位符；会话/上传/下载/日志等其余 `App` 配置键及默认值见 `server_dotnet/deploy/appsettings.example.json` 与 `server_dotnet/deploy/README.md`。已有站点升级应保留其原 JWT 和数据库配置，不要直接用新包的配置覆盖。
 
-打包与目标服务器安装是两步：包内包含 `install-iis.ps1`、`maintain-iis.ps1` 及部署说明，服务器操作见 [IIS 部署说明](server_dotnet/deploy/README.md)。目标服务器的站点、外部配置、数据库、存储和备份路径仍按部署契约隔离，不属于开发机临时输出。
+打包与目标服务器安装是两步：包内包含 `install-iis.ps1`、`maintain-iis.ps1` 及部署说明，服务器操作见 [IIS 部署说明](server_dotnet/deploy/README.md)。目标服务器的站点、外部配置、数据库、存储和备份路径仍按部署契约隔离，不属于开发机临时输出。当前 OEM 不内置病毒库或病毒扫描服务；OEM 存储仍须使用独立路径并按部署说明设置 ACL，细节见 [OEM 当前集成与部署](server_dotnet/docs/OEM当前集成与部署-2026-10-05.md)。
 
 安装脚本在站点启动后探测 HTTPS `/health`（外部配置 `App.AutoInitializeDatabase` 不为 `true` 或传 `-SkipHealthCheck` 时跳过并警告，需人工检查）；应用级启动失败（如 IIS 500.30）会让安装失败并回滚本次创建的站点和应用池，升级/恢复则由维护脚本的 `/health` 检查把关。恢复时外部配置必须沿用备份中的 `App:JwtSecret`，否则 SMTP 授权码无法解密且已签发令牌全部失效。
 
-OEM 方案已暂停；当前前后端与新发布包均不包含 OEM 功能或病毒库。新增的数据库迁移会删除 OEM 表及专属数据；已有数据库只有在备份后显式执行迁移才会发生删除，恢复方案前需重新评估数据和迁移边界。
+OEM 已恢复双向传递、审批、删除、通知和审计，并保留常规文件格式与归档结构检查。普通协作部署默认保持 OEM 未配置；启用时必须提供独立 `OemStorageRoot`，不能混入协作共享 blob。当前版本不提供内置病毒库或恶意软件扫描，配置、发布和恢复边界见 [OEM 当前集成与部署](server_dotnet/docs/OEM当前集成与部署-2026-10-05.md)。
 
 ## 整理约定
 

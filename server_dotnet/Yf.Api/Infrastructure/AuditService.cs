@@ -18,6 +18,30 @@ public interface IProjectAuditCapture
     }
 }
 
+/// <summary>Partitions the shared audit table between collaboration and OEM views.</summary>
+public static class AuditScopes
+{
+    public const string OemActionPrefix = "OEM_";
+    public const string OemRealm = "oem";
+    public const string OemConfigPrefix = "oem.";
+
+    public static readonly System.Linq.Expressions.Expression<Func<AuditLog, bool>> IsOemRow =
+        log => log.ActorRealm == OemRealm || log.Action.StartsWith(OemActionPrefix);
+
+    public static readonly System.Linq.Expressions.Expression<Func<AuditLog, bool>> IsCollaborationRow =
+        log => (log.ActorRealm == null || log.ActorRealm != OemRealm)
+               && !log.Action.StartsWith(OemActionPrefix);
+
+    public static bool IsOemAction(string action) =>
+        action.StartsWith(OemActionPrefix, StringComparison.Ordinal);
+
+    public static bool IsCollaboration(AuditLog audit) =>
+        audit.ActorRealm != OemRealm && !IsOemAction(audit.Action);
+}
+
+/// <summary>An actor from outside users; its id is stored with its realm, never in AuditLog.UserId.</summary>
+public sealed record AuditRealmActor(string Realm, ulong AccountId, string EmployeeNo, string? Name);
+
 public sealed record AuditWrite(
     string Action,
     string? TargetType,
@@ -28,10 +52,10 @@ public sealed class AuditService(IEnumerable<IProjectAuditCapture> captures, IHt
 {
     public async Task<ulong> WriteAsync(MySqlConnection db, MySqlTransaction? tx, ulong? actorId,
         string action, string? targetType, ulong? targetId, object? detail, string? ip, CancellationToken ct = default,
-        string? employeeNoOverride = null)
+        string? employeeNoOverride = null, AuditRealmActor? realmActor = null)
     {
         var ids = await WriteBatchAsync(db, tx, actorId,
-            [new AuditWrite(action, targetType, targetId, detail)], ip, ct, employeeNoOverride);
+            [new AuditWrite(action, targetType, targetId, detail)], ip, ct, employeeNoOverride, realmActor);
         return ids[0];
     }
 
@@ -46,12 +70,19 @@ public sealed class AuditService(IEnumerable<IProjectAuditCapture> captures, IHt
         IReadOnlyCollection<AuditWrite> writes,
         string? ip,
         CancellationToken ct = default,
-        string? employeeNoOverride = null)
+        string? employeeNoOverride = null,
+        AuditRealmActor? realmActor = null)
     {
         if (writes.Count == 0) return [];
+        if (actorId is not null && realmActor is not null)
+            throw new ArgumentException("A realm actor cannot also be a users-table actor.", nameof(actorId));
         await using var ef = EfDb.Use(db, tx);
-        var actor = actorId is null ? null : await ef.Users.Where(user => user.Id == actorId.Value)
-                .Select(user => new AuditActor(user.EmployeeNo, user.RealName)).SingleOrDefaultAsync(ct);
+        var actor = realmActor is not null
+            ? new AuditActor(realmActor.EmployeeNo, realmActor.Name)
+            : actorId is null
+                ? null
+                : await ef.Users.Where(user => user.Id == actorId.Value)
+                    .Select(user => new AuditActor(user.EmployeeNo, user.RealName)).SingleOrDefaultAsync(ct);
         var employeeNo = employeeNoOverride ?? actor?.EmployeeNo;
         var context = accessor?.HttpContext;
         if (string.IsNullOrWhiteSpace(ip) && context is not null)
@@ -87,12 +118,18 @@ public sealed class AuditService(IEnumerable<IProjectAuditCapture> captures, IHt
                 Detail = payload.ToJsonString(JsonDefaults.Web),
                 Ip = ip,
                 CreatedAt = createdAt,
+                ActorRealm = realmActor?.Realm,
+                ActorAccountId = realmActor?.AccountId,
             });
         }
         ef.AuditLogs.AddRange(auditLogs);
         await ef.SaveChangesAsync(ct);
-        foreach (var capture in captures)
-            await capture.CaptureBatchAsync(db, tx, auditLogs, actor?.RealName, ct);
+        var collaborationAudits = auditLogs.Where(AuditScopes.IsCollaboration).ToArray();
+        if (collaborationAudits.Length > 0)
+        {
+            foreach (var capture in captures)
+                await capture.CaptureBatchAsync(db, tx, collaborationAudits, actor?.RealName, ct);
+        }
         return auditLogs.Select(audit => audit.Id).ToArray();
     }
 

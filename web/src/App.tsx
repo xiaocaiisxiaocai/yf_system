@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Result, Spin } from '@arco-design/web-react'
 import { useAuth } from './store/auth'
 import { bootAuth, isSafeLoginReturnPath } from './api/client'
+import { OEM_UI_ENABLED } from './features'
 
 const AdminLayout = lazy(() => import('./layouts/AdminLayout'))
 const Login = lazy(() => import('./pages/Login'))
@@ -20,6 +21,22 @@ const RoleList = lazy(() => import('./pages/rbac/RoleList'))
 const AuditLog = lazy(() => import('./pages/system/AuditLog'))
 const SysConfig = lazy(() => import('./pages/system/SysConfig'))
 const Dictionaries = lazy(() => import('./pages/system/Dictionaries'))
+// OEM is kept as a separate business line: internal staff reuse their current
+// session, while vendor accounts use the isolated /oem-portal session.
+const OemInternalLayout = lazy(() => import('./oem/layouts/OemLayouts').then((m) => ({ default: m.OemInternalLayout })))
+const OemLanding = lazy(() => import('./oem/layouts/OemLayouts').then((m) => ({ default: m.OemLanding })))
+const PortalLayout = lazy(() => import('./oem/layouts/OemLayouts').then((m) => ({ default: m.PortalLayout })))
+const OemTransferList = lazy(() => import('./oem/pages/TransferListPage'))
+const OemTransferDetail = lazy(() => import('./oem/pages/TransferDetailPage'))
+const OemApprovals = lazy(() => import('./oem/pages/ApprovalInboxPage'))
+const OemRecovery = lazy(() => import('./oem/pages/BlockedRecoveryPage'))
+const OemCompanies = lazy(() => import('./oem/pages/admin/CompaniesPage'))
+const OemFlowTemplates = lazy(() => import('./oem/pages/admin/FlowTemplatesPage'))
+const OemRetention = lazy(() => import('./oem/pages/admin/PolicyPages').then((m) => ({ default: m.RetentionPage })))
+const OemSettings = lazy(() => import('./oem/pages/admin/PolicyPages').then((m) => ({ default: m.SettingsPage })))
+const OemAudit = lazy(() => import('./oem/pages/admin/PolicyPages').then((m) => ({ default: m.AuditPage })))
+const PortalLogin = lazy(() => import('./oem/pages/portal/PortalAuthPages').then((m) => ({ default: m.PortalLoginPage })))
+const PortalChangePassword = lazy(() => import('./oem/pages/portal/PortalAuthPages').then((m) => ({ default: m.PortalChangePasswordPage })))
 
 function PageLoader() {
   return (
@@ -60,6 +77,12 @@ export function Guard({ children, menu, permission, anyPermission }: { children:
     return <Result status="403" title="无操作权限" subTitle="当前账号仅有此菜单权限，请联系管理员分配相应操作权限。" />
   }
   return children
+}
+
+function OrganizationRoute() {
+  const canManageLeaders = useAuth((state) => state.user?.userType === 'INTERNAL'
+    && state.permissions.includes('dept:leader_manage'))
+  return <Guard menu={canManageLeaders ? undefined : 'org:dept'}><DeptManage /></Guard>
 }
 
 export default function App() {
@@ -113,6 +136,28 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginRoute />} />
         <Route path="/change-password" element={<Authenticated><ChangePassword /></Authenticated>} />
+        <Route path="/oem/admin/leaders" element={<Guard><Navigate to="/org/depts" replace /></Guard>} />
+        {OEM_UI_ENABLED && <>
+          <Route path="/oem" element={<Guard><OemInternalLayout /></Guard>}>
+            <Route index element={<OemLanding />} />
+            <Route path="transfers" element={<Guard anyPermission={['oem:transfer_view', 'oem:transfer_create']}><OemTransferList /></Guard>} />
+            <Route path="transfers/:id" element={<Guard anyPermission={['oem:transfer_view', 'oem:transfer_create', 'oem:flow_approve', 'oem:approval_recover']}><OemTransferDetail /></Guard>} />
+            <Route path="approvals" element={<Guard permission="oem:flow_approve"><OemApprovals /></Guard>} />
+            <Route path="recovery" element={<Guard permission="oem:approval_recover"><OemRecovery /></Guard>} />
+            <Route path="admin/companies" element={<Guard anyPermission={['oem:company_manage', 'oem:account_manage']}><OemCompanies /></Guard>} />
+            <Route path="admin/flow-templates" element={<Guard permission="oem:flow_template_manage"><OemFlowTemplates /></Guard>} />
+            <Route path="admin/retention" element={<Guard permission="oem:retention_template_manage"><OemRetention /></Guard>} />
+            <Route path="admin/settings" element={<Guard anyPermission={['oem:file_policy_manage', 'oem:notify_manage']}><OemSettings /></Guard>} />
+            <Route path="admin/audit" element={<Guard permission="oem:audit_view"><OemAudit /></Guard>} />
+          </Route>
+          <Route path="/oem-portal/login" element={<PortalLogin />} />
+          <Route path="/oem-portal/change-password" element={<PortalChangePassword />} />
+          <Route path="/oem-portal" element={<PortalLayout />}>
+            <Route index element={<Navigate to="transfers" replace />} />
+            <Route path="transfers" element={<OemTransferList />} />
+            <Route path="transfers/:id" element={<OemTransferDetail />} />
+          </Route>
+        </>}
         <Route
           path="/"
           element={
@@ -128,7 +173,7 @@ export default function App() {
           <Route path="projects/:id" element={<Guard menu="project:list"><ProjectDetail /></Guard>} />
           <Route path="suppliers" element={<Guard menu="supplier:list" anyPermission={['supplier:manage', 'supplier:account']}><SupplierList /></Guard>} />
           <Route path="org/users" element={<Guard menu="org:user" permission="user:manage"><UserList /></Guard>} />
-          <Route path="org/depts" element={<Guard menu="org:dept"><DeptManage /></Guard>} />
+          <Route path="org/depts" element={<OrganizationRoute />} />
           <Route path="rbac/roles" element={<Guard menu="rbac:role" permission="role:manage"><RoleList /></Guard>} />
           <Route path="logs" element={<Guard menu="log:audit" permission="log:view"><AuditLog /></Guard>} />
           <Route path="system/config" element={<Guard menu="system:config" permission="config:manage"><SysConfig /></Guard>} />

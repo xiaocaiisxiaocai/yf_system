@@ -47,6 +47,16 @@ function page(list: unknown[] = [], pageSize = 10) {
   return { list, total: list.length, page: 1, pageSize }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 function treeNode(label: string) {
   return screen.getByText(label).closest<HTMLElement>('.arco-tree-node')!
 }
@@ -62,6 +72,7 @@ function moreTrigger() {
 function installDefaultGet() {
   mocks.get.mockImplementation(async (url: string) => {
     if (url === '/departments') return { data: mocks.departments }
+    if (url === '/admin/department-leader-options') return { data: [] }
     if (url === '/permissions') return { data: mocks.permissionCatalog }
     if (url === '/admin/roles') return { data: page(mocks.roles, 20) }
     if (url === '/admin/user-role-options') return { data: mocks.roles.filter((role) => role.status === 'ACTIVE').map((role) => ({ id: role.id, name: role.name })) }
@@ -124,6 +135,134 @@ describe('组织、角色与权限行为', () => {
     await user.clear(search)
     await user.type(search, '不存在的组织')
     expect(screen.getByText('未找到匹配的组织')).toBeVisible()
+  })
+
+  it('sets a department leader from the latest candidate query and updates the current tree data once', async () => {
+    mocks.permissions = ['dept:leader_manage']
+    mocks.departments = [{ id: 1, name: '事业一部', kind: 'DIVISION', sortNo: 1, status: 'ACTIVE', leader: null, children: [] }]
+    const stale = deferred<{ data: Array<Record<string, unknown>> }>()
+    const latest = deferred<{ data: Array<Record<string, unknown>> }>()
+    const update = deferred<{ data: Record<string, unknown> }>()
+    mocks.get.mockImplementation(async (url: string, config?: { params?: { keyword?: string } }) => {
+      if (url === '/departments') return { data: mocks.departments }
+      if (url === '/admin/department-leader-options') {
+        if (config?.params?.keyword === '旧') return stale.promise
+        if (config?.params?.keyword === '新') return latest.promise
+        return { data: [] }
+      }
+      return { data: page() }
+    })
+    mocks.put.mockReturnValueOnce(update.promise)
+    const user = userEvent.setup()
+    render(<DeptManage />)
+
+    await user.click((await screen.findAllByText('事业一部'))[0])
+    expect(screen.queryByRole('button', { name: '新增事业部' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '编辑事业部' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '设置主管' }))
+
+    const search = screen.getByRole('textbox', { name: '搜索主管候选' })
+    fireEvent.change(search, { target: { value: '旧' } })
+    fireEvent.change(search, { target: { value: '新' } })
+    latest.resolve({ data: [{ id: 22, employeeNo: 'E022', realName: '新主管', departmentName: '制造部' }] })
+    expect(await screen.findByRole('radio', { name: /新主管.*E022.*制造部/ })).toBeVisible()
+    stale.resolve({ data: [{ id: 21, employeeNo: 'E021', realName: '旧主管', departmentName: '旧部门' }] })
+    await waitFor(() => expect(screen.queryByText('旧主管')).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('radio', { name: /新主管.*E022.*制造部/ }))
+    expect(screen.getByText('当前选择').parentElement).toHaveTextContent('新主管E022')
+    const save = screen.getByRole('button', { name: '保存主管' })
+    fireEvent.click(save)
+    fireEvent.click(save)
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
+    expect(mocks.put).toHaveBeenCalledWith('/admin/departments/1/leader', { leaderUserId: 22 })
+    update.resolve({ data: { id: 1, name: '事业一部', kind: 'DIVISION', leader: { id: 22, employeeNo: 'E022', realName: '新主管', active: true } } })
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByLabelText('事业一部主管配置')).toHaveTextContent('新主管')
+    await user.click(screen.getByRole('button', { name: '全部组织' }))
+    expect(screen.getByText('主管：新主管（E022）')).toBeVisible()
+  })
+
+  it('clears the configured leader and keeps the detail and child summary in sync', async () => {
+    mocks.permissions = ['dept:leader_manage']
+    mocks.departments = [{
+      id: 1, name: '事业一部', kind: 'DIVISION', sortNo: 1, status: 'ACTIVE',
+      leader: { id: 20, employeeNo: 'E020', realName: '原主管', active: true }, children: [],
+    }]
+    mocks.put.mockResolvedValueOnce({ data: { id: 1, name: '事业一部', kind: 'DIVISION', leader: null } })
+    const user = userEvent.setup()
+    render(<DeptManage />)
+
+    await user.click((await screen.findAllByText('事业一部'))[0])
+    await user.click(screen.getByRole('button', { name: '清空主管' }))
+    await user.click(await screen.findByRole('button', { name: '确认清空' }))
+
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/departments/1/leader', { leaderUserId: null }))
+    expect(screen.getByLabelText('事业一部主管配置')).toHaveTextContent('暂未配置主管')
+    await user.click(screen.getByRole('button', { name: '全部组织' }))
+    expect(screen.queryByText('主管：原主管（E020）')).not.toBeInTheDocument()
+  })
+
+  it('becomes read-only when leader permission is removed and discards the pending candidate response', async () => {
+    mocks.permissions = ['dept:leader_manage']
+    mocks.departments = [{
+      id: 1, name: '事业一部', kind: 'DIVISION', sortNo: 1, status: 'ACTIVE',
+      leader: { id: 20, employeeNo: 'E020', realName: '现任主管', active: true }, children: [],
+    }]
+    const pending = deferred<{ data: Array<Record<string, unknown>> }>()
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/departments') return { data: mocks.departments }
+      if (url === '/admin/department-leader-options') return pending.promise
+      return { data: page() }
+    })
+    const user = userEvent.setup()
+    const view = render(<DeptManage />)
+
+    await user.click((await screen.findAllByText('事业一部'))[0])
+    await user.click(screen.getByRole('button', { name: '更换主管' }))
+    expect(screen.getByRole('dialog', { name: /设置主管/ })).toBeVisible()
+    expect(screen.getByText('当前选择').parentElement).toHaveTextContent('现任主管E020')
+    expect(screen.getByRole('button', { name: '保存主管' })).toBeDisabled()
+    mocks.permissions = []
+    view.rerender(<DeptManage />)
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /设置主管/ })).not.toBeInTheDocument())
+    pending.resolve({ data: [{ id: 25, employeeNo: 'E025', realName: '迟到候选', departmentName: null }] })
+
+    await waitFor(() => expect(screen.queryByText('迟到候选')).not.toBeInTheDocument())
+    expect(screen.getByLabelText('事业一部主管配置')).toHaveTextContent('现任主管')
+    expect(screen.queryByRole('button', { name: '更换主管' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '清空主管' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the selected leader after a save error and allows a retry', async () => {
+    mocks.permissions = ['dept:leader_manage']
+    mocks.departments = [{ id: 1, name: '事业一部', kind: 'DIVISION', sortNo: 1, status: 'ACTIVE', leader: null, children: [] }]
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/departments') return { data: mocks.departments }
+      if (url === '/admin/department-leader-options') {
+        return { data: [{ id: 22, employeeNo: 'E022', realName: '候选主管', departmentName: '制造部' }] }
+      }
+      return { data: page() }
+    })
+    mocks.put
+      .mockRejectedValueOnce(new Error('save failed'))
+      .mockResolvedValueOnce({ data: { id: 1, name: '事业一部', kind: 'DIVISION', leader: { id: 22, employeeNo: 'E022', realName: '候选主管', active: true } } })
+    const user = userEvent.setup()
+    render(<DeptManage />)
+
+    await user.click((await screen.findAllByText('事业一部'))[0])
+    await user.click(screen.getByRole('button', { name: '设置主管' }))
+    const option = await screen.findByRole('radio', { name: /候选主管.*E022.*制造部/ })
+    await user.click(option)
+    await user.click(screen.getByRole('button', { name: '保存主管' }))
+
+    expect(await screen.findByText('主管配置保存失败，请重试')).toBeVisible()
+    expect(screen.getByRole('dialog', { name: /设置主管/ })).toBeVisible()
+    expect(option).toHaveAttribute('aria-checked', 'true')
+    await user.click(screen.getByRole('button', { name: '保存主管' }))
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /设置主管/ })).not.toBeInTheDocument())
   })
 
   it('hard delete actions require their dedicated delete permission', async () => {

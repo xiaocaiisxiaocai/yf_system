@@ -81,6 +81,37 @@ public sealed class DevelopmentReadinessTests
         Assert.Equal(["non-loopback-target"], report.Issues);
     }
 
+    [Fact]
+    public async Task ConfiguredButUnreadyOemDoesNotChangeCollaborationStartupReadiness()
+    {
+        var sandbox = Directory.CreateTempSubdirectory("yf_readiness_oem_independent_").FullName;
+        try
+        {
+            var applicationRoot = Directory.CreateDirectory(Path.Combine(sandbox, "app")).FullName;
+            var storage = Directory.CreateDirectory(Path.Combine(sandbox, "collaboration")).FullName;
+            var oemStorage = Directory.CreateDirectory(Path.Combine(sandbox, "oem")).FullName;
+            var options = ValidOptions(storage);
+            options.OemStorageRoot = oemStorage;
+
+            var report = await DevelopmentReadiness.CheckAsync(options, applicationRoot,
+                _ => Task.CompletedTask, TestContext.Current.CancellationToken);
+
+            Assert.True(report.ReadyForStartup);
+            Assert.Equal(new DevelopmentReadinessChecks(true, true, true, true, true), report.Checks);
+            Assert.Empty(report.Issues);
+            var oem = Assert.IsType<OemReadinessReport>(report.Oem);
+            Assert.False(oem.ReadyForTransfers);
+            Assert.Equal("ready", oem.Storage);
+            Assert.Equal("ready", oem.Worker);
+            Assert.Equal("not-verified", oem.Reconciliation);
+            Assert.Equal(["oem-reconciliation-not-verified"], oem.Issues);
+        }
+        finally
+        {
+            Directory.Delete(sandbox, recursive: true);
+        }
+    }
+
     private static AppOptions ValidOptions(string storageRoot) => new()
     {
         ConnectionString = "Server=127.0.0.1;Database=yf;User ID=yf;Password=test;SslMode=None",

@@ -9,7 +9,7 @@
     <UserSecretsId>yf-system-aspnet-development</UserSecretsId>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Test seams (e.g. the on-access scanner's simulated canary) are internal. -->
+    <!-- Internal policy and lifecycle helpers are exercised by the test assembly. -->
     <InternalsVisibleTo Include="Yf.Api.Tests" />
   </ItemGroup>
 
@@ -34,6 +34,7 @@
     <PackageReference Include="MySqlConnector" Version="2.6.2" />
     <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
     <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
+    <PackageReference Include="SharpCompress" Version="0.50.4" />
     <PackageReference Include="Serilog.Extensions.Logging" Version="8.0.0" />
     <PackageReference Include="Serilog.Formatting.Compact" Version="2.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />

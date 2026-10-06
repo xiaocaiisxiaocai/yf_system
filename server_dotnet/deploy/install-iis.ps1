@@ -65,6 +65,15 @@ if (!(Test-Path -LiteralPath $storage -PathType Container)) { throw 'Create the 
 foreach ($other in @($PackageRoot,$SiteRoot,$ConfigPath)) {
     if ((Within $storage $other) -or (Within $other $storage)) { throw 'Package, destination, external configuration and storage must be separate.' }
 }
+$oemStorage = ''
+if ($config.App.PSObject.Properties['OemStorageRoot'] -and ![string]::IsNullOrWhiteSpace([string]$config.App.OemStorageRoot)) {
+    $oemStorage = FullPath ([string]$config.App.OemStorageRoot)
+    NoLinks $oemStorage
+    if (!(Test-Path -LiteralPath $oemStorage -PathType Container)) { throw 'Create the independent OEM storage directory before installation.' }
+    foreach ($other in @($PackageRoot,$SiteRoot,$ConfigPath,$storage)) {
+        if ((Within $oemStorage $other) -or (Within $other $oemStorage)) { throw 'OEM storage must be separate from package, destination, configuration and collaboration storage.' }
+    }
+}
 $configuredLogRoot = if ($config.App.PSObject.Properties['LogDirectory'] -and ![string]::IsNullOrWhiteSpace([string]$config.App.LogDirectory)) { FullPath $config.App.LogDirectory } else { '' }
 if ($LogRoot) {
     $LogRoot = FullPath $LogRoot
@@ -75,7 +84,7 @@ if ($LogRoot) {
 }
 if ($LogRoot) {
     NoLinks $LogRoot
-    foreach ($other in @($PackageRoot,$SiteRoot,$ConfigPath,$storage)) {
+    foreach ($other in @($PackageRoot,$SiteRoot,$ConfigPath,$storage,$oemStorage) | Where-Object { $_ }) {
         if ((Within $LogRoot $other) -or (Within $other $LogRoot)) { throw 'The log directory must be separate from package, destination, configuration and storage.' }
     }
     if ((Test-Path -LiteralPath $LogRoot) -and !(Test-Path -LiteralPath $LogRoot -PathType Container)) { throw 'The log directory path is a file.' }
@@ -107,9 +116,14 @@ foreach ($required in @('Yf.Api.dll','Yf.Api.runtimeconfig.json','web.config','w
 . (Join-Path $PackageRoot 'maintenance-common.ps1')
 Assert-YfManifest $PackageRoot | Out-Null
 Assert-YfSeparate @($PackageRoot,$SiteRoot,$ConfigPath,$storage)
-if ($LogRoot) { Assert-YfSeparate @($PackageRoot,$SiteRoot,$ConfigPath,$storage,$LogRoot) }
+if ($oemStorage) { Assert-YfSeparate @($PackageRoot,$SiteRoot,$ConfigPath,$storage,$oemStorage) }
+if ($LogRoot) {
+    $separatePaths = @($PackageRoot,$SiteRoot,$ConfigPath,$storage,$oemStorage,$LogRoot) | Where-Object { $_ }
+    Assert-YfSeparate $separatePaths
+}
 $maintenanceConfig = Read-YfMaintenanceConfig $ConfigPath
 if ($maintenanceConfig.Storage -ne $storage) { throw 'Configuration storage path changed during validation.' }
+if ($maintenanceConfig.OemStorage -ne $oemStorage) { throw 'Configuration OEM storage path changed during validation.' }
 Assert-YfPublishedConfig $PackageRoot
 Import-Module WebAdministration -ErrorAction Stop
 if (Test-Path "IIS:\Sites\$SiteName") { throw 'IIS site already exists; follow documented upgrade procedure.' }
@@ -131,6 +145,7 @@ if (Get-WebBinding | Where-Object { $_.bindingInformation -eq $bindingInfo }) { 
 $siteRootExisted = Test-Path -LiteralPath $SiteRoot -PathType Container
 $siteRootAcl = if ($siteRootExisted) { Get-Acl -LiteralPath $SiteRoot } else { $null }
 $storageAcl = Get-Acl -LiteralPath $storage
+$oemStorageAcl = if ($oemStorage) { Get-Acl -LiteralPath $oemStorage } else { $null }
 $logRootExisted = $LogRoot -and (Test-Path -LiteralPath $LogRoot -PathType Container)
 $logRootAcl = if ($logRootExisted) { Get-Acl -LiteralPath $LogRoot } else { $null }
 $createdLogRoot = $false
@@ -169,6 +184,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application read permissions.' }
     # Business storage: inheritance off; SYSTEM and Administrators FullControl, pool identity Modify.
     Set-YfApplicationDirectoryAcl $storage $identity
+    if ($oemStorage) { Set-YfApplicationDirectoryAcl $oemStorage $identity }
     if ($LogRoot) {
         if (!$logRootExisted) { New-Item -ItemType Directory -Path $LogRoot | Out-Null; $createdLogRoot = $true }
         Set-YfApplicationDirectoryAcl $LogRoot $identity
@@ -211,6 +227,9 @@ try {
         } catch { $cleanupErrors += 'application pool' }
     }
     try { Set-Acl -LiteralPath $storage -AclObject $storageAcl } catch { $cleanupErrors += 'storage ACL' }
+    if ($oemStorageAcl) {
+        try { Set-Acl -LiteralPath $oemStorage -AclObject $oemStorageAcl } catch { $cleanupErrors += 'OEM storage ACL' }
+    }
     if ($createdLogRoot) {
         # Remove only an empty directory this run created; log files written by a failed start are kept.
         try { if (!@(Get-ChildItem -LiteralPath $LogRoot -Force).Count) { Remove-Item -LiteralPath $LogRoot } } catch { $cleanupErrors += 'log directory' }

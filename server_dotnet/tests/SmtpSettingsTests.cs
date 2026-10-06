@@ -80,6 +80,7 @@ public sealed class SmtpSettingsTests
         Assert.DoesNotContain("\"password\":", json);
         Assert.True(resolved.View.HasPassword);
         Assert.Throws<ApiException>(() => SystemService.NormalizeConfig(" MAIL.SMTP ", "{}"));
+        Assert.Throws<ApiException>(() => SystemService.NormalizeConfig(" OEM.Notify.Transfer ", "true"));
         Assert.Throws<ApiException>(() => SmtpSettingsService.Normalize(new("smtp.example.invalid", 465, "sender@example.invalid", "sender@example.invalid", "Auto", null), ""));
     }
 }

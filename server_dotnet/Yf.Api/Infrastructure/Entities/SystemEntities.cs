@@ -16,6 +16,10 @@ public sealed class AuditLog
     public string? Detail { get; set; }
     public string? Ip { get; set; }
     public DateTime CreatedAt { get; set; }
+    // Identity realm of the actor. Null means the historical internal/supplier
+    // `users` realm; `oem` rows store the OEM account id here and never in UserId.
+    public string? ActorRealm { get; set; }
+    public ulong? ActorAccountId { get; set; }
 }
 
 public sealed class EmailOutbox
@@ -34,6 +38,10 @@ public sealed class EmailOutbox
     public string? LastError { get; set; }
     public DateTime? SentAt { get; set; }
     public DateTime CreatedAt { get; set; }
+    // OEM mail carries its own recipient identity; collaboration mail leaves these null.
+    public string? RecipientRealm { get; set; }
+    public ulong? RecipientAccountId { get; set; }
+    public ulong? OemTransferId { get; set; }
 }
 
 public sealed class SystemConfig
@@ -63,6 +71,9 @@ public sealed class AuditLogConfig : IEntityTypeConfiguration<AuditLog>
         b.HasIndex(x => x.UserId).HasDatabaseName("idx_audit_user");
         b.HasIndex(x => new { x.Action, x.CreatedAt, x.Id }).HasDatabaseName("idx_audit_action_time");
         b.HasIndex(x => new { x.TargetType, x.TargetId, x.Id }).HasDatabaseName("idx_audit_target");
+        b.Property(x => x.ActorRealm).HasColumnName("actor_realm").HasMaxLength(16);
+        b.Property(x => x.ActorAccountId).HasColumnName("actor_account_id");
+        b.HasIndex(x => x.ActorRealm).HasDatabaseName("idx_audit_actor_realm");
         // Deliberately no FK on user_id: audit rows must survive account deletion/rename (employee_no is a snapshot).
     }
 }
@@ -92,6 +103,10 @@ public sealed class EmailOutboxConfig : IEntityTypeConfiguration<EmailOutbox>
         b.HasIndex(x => new { x.Status, x.NextAttemptAt }).HasDatabaseName("idx_outbox_status_next");
         b.HasIndex(x => new { x.Status, x.CreatedAt, x.Id }).HasDatabaseName("idx_outbox_status_created");
         b.HasIndex(x => x.ProjectId).HasDatabaseName("fk_outbox_project_v2");
+        b.Property(x => x.RecipientRealm).HasColumnName("recipient_realm").HasMaxLength(16);
+        b.Property(x => x.RecipientAccountId).HasColumnName("recipient_account_id");
+        b.Property(x => x.OemTransferId).HasColumnName("oem_transfer_id");
+        b.HasIndex(x => x.OemTransferId).HasDatabaseName("idx_outbox_oem_transfer");
         b.HasOne<Project>().WithMany().HasForeignKey(x => x.ProjectId).HasConstraintName("fk_outbox_project_v2").OnDelete(DeleteBehavior.Restrict);
         // Deliberately no FK on recipient_user_id: recipient_email is the durable snapshot used at send time.
     }

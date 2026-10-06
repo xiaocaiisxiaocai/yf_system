@@ -22,6 +22,8 @@ import { useAuth } from '../store/auth'
 import http, { withAuthLock } from '../api/client'
 import CollaborationNotifications from '../components/CollaborationNotifications'
 import type { ApiResponses } from '../api/types'
+import { OemEntryButton } from '../oem/layouts/OemLayouts'
+import { OEM_UI_ENABLED } from '../features'
 
 const { Sider, Header, Content } = Layout
 
@@ -57,7 +59,8 @@ export default function AdminLayout() {
     }
   })
 
-  const items = MENU_ITEMS.filter((m) => menus.includes(m.code))
+  const items = MENU_ITEMS.filter((m) => menus.includes(m.code)
+    || (m.code === 'org:dept' && user?.userType === 'INTERNAL' && permissions.includes('dept:leader_manage')))
   const hasMenus = items.length > 0
   const canUseCollaboration = Boolean(
     token && menus.includes('project:list') && permissions.includes('project:list'),
@@ -135,6 +138,7 @@ export default function AdminLayout() {
           <span>供应商协作平台</span>
         </div>
         <div className="layout-header-account">
+          {OEM_UI_ENABLED && <OemEntryButton />}
           {canUseCollaboration && <CollaborationNotifications key={`${generation}:${user?.id}`} />}
           <Dropdown
             trigger="click"

@@ -59,7 +59,8 @@ public sealed class SystemService(AppDb db, AuditService audit)
         await using var conn = await db.OpenAsync(ct);
         await using var context = EfDb.Use(conn);
         var hidden = new[] { "security.management_lock", "security.identity_revision", "mail.smtp", "storage.warn_percent" };
-        return await context.SystemConfigs.Where(config => !Enumerable.Contains(hidden, config.CfgKey))
+        return await context.SystemConfigs.Where(config => !Enumerable.Contains(hidden, config.CfgKey)
+                && !config.CfgKey.StartsWith(AuditScopes.OemConfigPrefix))
             .OrderBy(config => config.CfgKey)
             .Select(config => new SystemConfigResponse(config.CfgKey, config.CfgValue, config.Description, config.UpdatedAt))
             .ToArrayAsync(ct);
@@ -72,6 +73,8 @@ public sealed class SystemService(AppDb db, AuditService audit)
             throw ApiException.BadRequest("系统参数名称无效");
         var value = input?.Trim();
         if (key is "security.management_lock" or "security.identity_revision" or "mail.smtp") throw ApiException.BadRequest("请使用对应的专用配置入口");
+        if (key.StartsWith(AuditScopes.OemConfigPrefix, StringComparison.Ordinal))
+            throw ApiException.BadRequest($"未知系统参数：{key}");
         if (key == "storage.warn_percent") throw ApiException.BadRequest("存储告警阈值已停用");
         (long min, long max)? range = key switch
         {
@@ -150,7 +153,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
             throw ApiException.BadRequest("日志分类参数无效");
         await using var conn = await db.OpenAsync(ct);
         await using var context = EfDb.Use(conn);
-        var query = context.AuditLogs.AsNoTracking();
+        var query = context.AuditLogs.AsNoTracking().Where(AuditScopes.IsCollaborationRow);
         var action = request.Query["action"].ToString().Trim();
         var targetType = request.Query["targetType"].ToString().Trim();
         var targetId = request.Query["targetId"].ToString().Trim();

@@ -11,8 +11,13 @@ public sealed class TokenService(AppOptions options)
 {
     private readonly JwtSecurityTokenHandler handler = new() { MapInboundClaims = false };
     private readonly SymmetricSecurityKey signingKey = new(Encoding.UTF8.GetBytes(options.JwtSecret));
-    public (string Token, long ExpiresAt) IssueAccess(ulong userId, string employeeNo, string sessionId)
+    public (string Token, long ExpiresAt) IssueAccess(ulong userId, string employeeNo, string sessionId) =>
+        IssueAccess(userId, employeeNo, sessionId, IdentityRealms.Internal);
+
+    public (string Token, long ExpiresAt) IssueAccess(
+        ulong userId, string employeeNo, string sessionId, string realm)
     {
+        if (string.IsNullOrWhiteSpace(realm)) throw new ArgumentException("Identity realm is required.", nameof(realm));
         var now = DateTimeOffset.UtcNow;
         var expires = now.AddMinutes(options.AccessTtlMinutes);
         // Serialize the API's token contract directly so uid/iat/exp remain JSON numbers;
@@ -27,6 +32,9 @@ public sealed class TokenService(AppOptions options)
             ["iat"] = now.ToUnixTimeSeconds(),
             ["exp"] = expires.ToUnixTimeSeconds()
         };
+        // The historical internal token has no realm claim. Keeping one canonical
+        // encoding also prevents an attacker from presenting an explicit internal realm.
+        if (realm != IdentityRealms.Internal) claims["rlm"] = realm;
         var payload = Base64UrlEncoder.Encode(JsonSerializer.Serialize(claims));
         var signingInput = header + "." + payload;
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(options.JwtSecret));
@@ -68,7 +76,14 @@ public sealed class TokenService(AppOptions options)
             var employeeNo = subValue.GetString();
             var sessionId = sidValue.GetString();
             if (string.IsNullOrWhiteSpace(employeeNo) || string.IsNullOrWhiteSpace(sessionId)) return false;
-            claims = new(uid, employeeNo, sessionId, expiresAt);
+            var realm = IdentityRealms.Internal;
+            if (root.TryGetProperty("rlm", out var realmValue))
+            {
+                if (realmValue.ValueKind != JsonValueKind.String) return false;
+                realm = realmValue.GetString() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(realm) || realm == IdentityRealms.Internal) return false;
+            }
+            claims = new(uid, employeeNo, sessionId, expiresAt, realm);
             return true;
         }
         catch (JsonException) { return false; }
@@ -76,4 +91,15 @@ public sealed class TokenService(AppOptions options)
     }
 }
 
-public sealed record AccessClaims(ulong UserId, string EmployeeNo, string SessionId, long ExpiresAt);
+public sealed record AccessClaims(
+    ulong UserId,
+    string EmployeeNo,
+    string SessionId,
+    long ExpiresAt,
+    string Realm = IdentityRealms.Internal);
+
+public static class IdentityRealms
+{
+    /// <summary>The shared users table realm for internal staff and supplier accounts.</summary>
+    public const string Internal = "internal";
+}

@@ -39,8 +39,9 @@ function Clear-YfBundledSecrets([string]$Path) {
     if ($null -eq $settings -or $settings -isnot [Management.Automation.PSCustomObject]) { $settings = New-Object PSObject }
     $app = if ($settings.PSObject.Properties['App']) { $settings.App } else { $null }
     if ($null -eq $app -or $app -isnot [Management.Automation.PSCustomObject]) { $app = New-Object PSObject; Set-YfJsonMember $settings 'App' $app }
-    foreach ($name in @('ConnectionString','JwtSecret','StorageRoot','BootstrapPassword','LogDirectory')) { Set-YfJsonMember $app $name '' }
+    foreach ($name in @('ConnectionString','JwtSecret','StorageRoot','OemStorageRoot','BootstrapPassword','LogDirectory')) { Set-YfJsonMember $app $name '' }
     Set-YfJsonMember $app 'AutoInitializeDatabase' $false
+    if ($app.PSObject.Properties['OemScanner']) { $app.PSObject.Properties.Remove('OemScanner') }
     if ($app.PSObject.Properties['Smtp'] -and $app.Smtp -is [Management.Automation.PSCustomObject] -and $app.Smtp.PSObject.Properties['Password']) {
         $app.Smtp.Password = ''
     }
@@ -299,12 +300,22 @@ function Assert-YfDeploymentReadiness([string]$ApplicationRoot,$Config,[string]$
     if (!(Test-Path -LiteralPath $Config.Storage -PathType Container)) { throw 'Readiness: storage directory is missing.' }
     Assert-YfNoLinks $Config.Storage
     Test-YfStorageReadWrite $Config.Storage
+    if ($Config.OemStorage) {
+        if (!(Test-Path -LiteralPath $Config.OemStorage -PathType Container)) { throw 'Readiness: configured App.OemStorageRoot is missing.' }
+        Assert-YfNoLinks $Config.OemStorage
+        Test-YfStorageReadWrite $Config.OemStorage
+    }
     if ($ApplicationIdentity) {
         $sid = ConvertTo-YfSid $ApplicationIdentity
         $modifyMask = [Security.AccessControl.FileSystemRights]::Modify
         $grants = @((Get-Acl -LiteralPath $Config.Storage).GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | Where-Object {
             $_.IdentityReference -eq $sid -and $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band $modifyMask) -eq $modifyMask })
         if (!$grants.Count) { throw 'Readiness: the application pool identity has no Modify permission on storage.' }
+        if ($Config.OemStorage) {
+            $oemGrants = @((Get-Acl -LiteralPath $Config.OemStorage).GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | Where-Object {
+                $_.IdentityReference -eq $sid -and $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band $modifyMask) -eq $modifyMask })
+            if (!$oemGrants.Count) { throw 'Readiness: the application pool identity has no Modify permission on OEM storage.' }
+        }
     }
     $logDirectory = Get-YfLogDirectory $Config
     if ($logDirectory) {
@@ -368,6 +379,12 @@ function Read-YfMaintenanceConfig([string]$Path) {
         $builder = New-Object System.Data.Common.DbConnectionStringBuilder
         $builder.set_ConnectionString($config.App.ConnectionString)
         $storage = Get-YfFullPath $config.App.StorageRoot
+        $oemStorage = $null
+        if ($config.App.PSObject.Properties['OemStorageRoot'] -and ![string]::IsNullOrWhiteSpace([string]$config.App.OemStorageRoot)) {
+            $oemStorage = Get-YfFullPath ([string]$config.App.OemStorageRoot)
+            Assert-YfNoLinks $oemStorage
+            Assert-YfSeparate @($Path,$storage,$oemStorage)
+        }
         $database = Get-YfDbOption $builder @('Database','Initial Catalog')
         $server = Get-YfDbOption $builder @('Server','Host','Data Source','DataSource','Address','Addr','Network Address') 'localhost'
         $port = [int](Get-YfDbOption $builder @('Port') '3306')
@@ -385,7 +402,9 @@ function Read-YfMaintenanceConfig([string]$Path) {
             $caFile = Get-YfFullPath $caFile
             Assert-YfNoLinks $caFile
             if (!(Test-Path -LiteralPath $caFile -PathType Leaf)) { throw 'Database CA certificate file is missing.' }
-            Assert-YfSeparate @($Path,$storage,$caFile)
+            $caPaths = @($Path,$storage,$caFile)
+            if ($oemStorage) { $caPaths += $oemStorage }
+            Assert-YfSeparate $caPaths
         }
         foreach ($key in @('CertificateFile','Certificate File','CertificatePassword','Certificate Password','SslCert','SslKey')) {
             if ($builder.ContainsKey($key)) { throw 'Client certificate connections need a separately configured backup client.' }
@@ -402,7 +421,7 @@ function Read-YfMaintenanceConfig([string]$Path) {
         if ($safeMessages -contains $_.Exception.Message) { throw ('Unable to read maintenance configuration: ' + $_.Exception.Message) }
         throw 'Unable to read maintenance configuration. Check paths, TCP database settings and JSON; credentials are not printed.'
     }
-    return [pscustomobject]@{ Path=$Path; Storage=$storage; Database=$database; Server=$server; Port=$port; User=$user; Password=$password; SslMode=$sslModes[$ssl]; CaFile=$caFile; Origin=$config.App.WebBaseUrl; Config=$config }
+    return [pscustomobject]@{ Path=$Path; Storage=$storage; OemStorage=$oemStorage; Database=$database; Server=$server; Port=$port; User=$user; Password=$password; SslMode=$sslModes[$ssl]; CaFile=$caFile; Origin=$config.App.WebBaseUrl; Config=$config }
 }
 function ConvertTo-YfMySqlOption([string]$Value) {
     return '"'+$Value.Replace('\','\\').Replace('"','\"').Replace("`r",'\r').Replace("`n",'\n')+'"'
@@ -525,6 +544,7 @@ function New-YfBackup([string]$ApplicationRoot,$Config,[string]$Destination,[str
     $ApplicationRoot = Get-YfFullPath $ApplicationRoot
     $Destination = Get-YfFullPath $Destination
     $paths = @($ApplicationRoot,$Config.Storage,$Config.Path,$Destination)
+    if ($Config.OemStorage) { $paths += $Config.OemStorage }
     if ($Config.CaFile) { $paths += $Config.CaFile }
     Assert-YfSeparate $paths
     Assert-YfEmptyDirectory $Destination
@@ -563,10 +583,12 @@ function Restore-YfBackup([string]$BackupRoot,$Config,[string]$NewApplicationRoo
         if (!(Test-Path -LiteralPath (Join-Path $BackupRoot $name) -PathType Leaf)) { throw 'Required backup payload is missing.' }
     }
     $paths = @($BackupRoot,$Config.Storage,$Config.Path,$NewApplicationRoot)
+    if ($Config.OemStorage) { $paths += $Config.OemStorage }
     if ($Config.CaFile) { $paths += $Config.CaFile }
     Assert-YfSeparate $paths
     Assert-YfEmptyDirectory $NewApplicationRoot
     Assert-YfEmptyDirectory $Config.Storage
+    if ($Config.OemStorage) { Assert-YfEmptyDirectory $Config.OemStorage }
     $scratch = Join-Path ([IO.Path]::GetTempPath()) ('yf-restore-'+[guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $scratch | Out-Null
     Protect-YfDirectory $scratch
@@ -598,6 +620,12 @@ function Restore-YfBackup([string]$BackupRoot,$Config,[string]$NewApplicationRoo
             $null = $stderr.GetAwaiter().GetResult()
             if ($process.ExitCode -ne 0) { throw 'Database import failed. The new database may be partial; the original database is unchanged.' }
         } finally { $process.Dispose() }
+        $oemTableProbe = Invoke-YfNativeCapture $MySql @("--defaults-file=$defaults",'--batch','--skip-column-names',"--database=$($Config.Database)","--execute=SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='system_configs'") (Join-Path $scratch 'oem-probe.stderr.log')
+        if ($oemTableProbe.ExitCode -ne 0 -or @($oemTableProbe.Output).Count -ne 1) { throw 'Unable to inspect the restored database for OEM reconciliation.' }
+        if (([string]@($oemTableProbe.Output)[0]).Trim() -eq '1') {
+            $oemMarker = Invoke-YfNativeCapture $MySql @("--defaults-file=$defaults",("--database="+$Config.Database),"--execute=UPDATE system_configs SET cfg_value='RESTORED' WHERE cfg_key='oem.storage.reconcile_required'") (Join-Path $scratch 'oem-marker.stderr.log')
+            if ($oemMarker.ExitCode -ne 0) { throw 'Unable to mark OEM storage for reconciliation after restore.' }
+        }
         Copy-YfTree (Join-Path $BackupRoot 'storage') $Config.Storage
         Copy-YfTree (Join-Path $BackupRoot 'application') $NewApplicationRoot
     } finally {

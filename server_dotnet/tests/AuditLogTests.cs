@@ -1,5 +1,9 @@
+using Dapper;
+using Microsoft.AspNetCore.Http;
+using MySqlConnector;
 using System.Text.Json;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.SystemManagement;
 
 namespace Yf.Api.Tests;
@@ -94,4 +98,85 @@ public class AuditLogTests
                 Assert.Equal("DISABLED", change.After);
             });
     }
+
+    [Fact(Timeout = 120_000)]
+    public async Task RealmActorIsStoredOutsideUsersIdentityAndOemAuditSkipsProjectCapture()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
+        var capture = new RecordingCapture();
+        var audit = new AuditService([capture]);
+        await using var connection = await database.Database.OpenAsync(ct);
+
+        var id = await audit.WriteAsync(
+            connection,
+            null,
+            null,
+            "OEM_ACCOUNT_UPDATE",
+            "oem_account",
+            77,
+            new { targetName = "外部账号" },
+            null,
+            ct,
+            realmActor: new AuditRealmActor("oem", 41, "vendor_41", "厂商用户"));
+
+        var row = await connection.QuerySingleAsync<RealmAuditRow>(new CommandDefinition("""
+            SELECT user_id AS UserId,actor_realm AS ActorRealm,actor_account_id AS ActorAccountId,
+                   employee_no AS EmployeeNo,detail AS Detail
+            FROM audit_logs WHERE id=@id
+            """, new { id }, cancellationToken: ct));
+        Assert.Null(row.UserId);
+        Assert.Equal("oem", row.ActorRealm);
+        Assert.Equal(41UL, row.ActorAccountId);
+        Assert.Equal("vendor_41", row.EmployeeNo);
+        Assert.Contains("厂商用户", row.Detail);
+        Assert.Empty(capture.Seen);
+
+        await audit.WriteAsync(connection, null, null, "EMAIL_SENT", "email_outbox", 9,
+            new { status = "SENT" }, null, ct);
+        Assert.Single(capture.Seen);
+
+        var oemRequest = new DefaultHttpContext().Request;
+        oemRequest.QueryString = new QueryString("?action=OEM_ACCOUNT_UPDATE");
+        var collaborationView = await new SystemService(database.Database, audit).ListLogsAsync(oemRequest, ct);
+        Assert.Empty(collaborationView.List);
+        Assert.Equal(0UL, collaborationView.Total);
+    }
+
+    [Fact]
+    public async Task RealmActorCannotAlsoUseAUsersTableId()
+    {
+        var audit = new AuditService([]);
+        await using var unopened = new MySqlConnection();
+        await Assert.ThrowsAsync<ArgumentException>(() => audit.WriteAsync(
+            unopened,
+            null,
+            1,
+            "OEM_TEST",
+            null,
+            null,
+            null,
+            null,
+            TestContext.Current.CancellationToken,
+            realmActor: new AuditRealmActor("oem", 1, "external", null)));
+    }
+
+    private sealed class RecordingCapture : IProjectAuditCapture
+    {
+        public List<AuditLog> Seen { get; } = [];
+
+        public Task CaptureAsync(
+            MySqlConnection db, MySqlTransaction? tx, AuditLog audit, string? actorName, CancellationToken ct)
+        {
+            Seen.Add(audit);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record RealmAuditRow(
+        ulong? UserId,
+        string ActorRealm,
+        ulong ActorAccountId,
+        string EmployeeNo,
+        string Detail);
 }

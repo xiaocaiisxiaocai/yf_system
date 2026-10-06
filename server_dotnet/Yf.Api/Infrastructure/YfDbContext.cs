@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 using Yf.Api.Infrastructure.Entities;
+using Yf.Api.Modules.Oem.Data;
 
 namespace Yf.Api.Infrastructure;
 
@@ -48,6 +49,27 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<EmailOutbox> EmailOutbox => Set<EmailOutbox>();
     public DbSet<SystemConfig> SystemConfigs => Set<SystemConfig>();
+
+    // OEM business line (independent from the supplier collaboration tables above).
+    public DbSet<OemCompany> OemCompanies => Set<OemCompany>();
+    public DbSet<OemAccount> OemAccounts => Set<OemAccount>();
+    public DbSet<OemRefreshToken> OemRefreshTokens => Set<OemRefreshToken>();
+    public DbSet<OemRetentionTemplate> OemRetentionTemplates => Set<OemRetentionTemplate>();
+    public DbSet<OemTransfer> OemTransfers => Set<OemTransfer>();
+    public DbSet<OemTransferFile> OemTransferFiles => Set<OemTransferFile>();
+    public DbSet<OemUploadSession> OemUploadSessions => Set<OemUploadSession>();
+    public DbSet<OemFileScanJob> OemFileScanJobs => Set<OemFileScanJob>();
+    public DbSet<OemFilePromotion> OemFilePromotions => Set<OemFilePromotion>();
+    public DbSet<OemFlowTemplate> OemFlowTemplates => Set<OemFlowTemplate>();
+    public DbSet<OemFlowTemplateScope> OemFlowTemplateScopes => Set<OemFlowTemplateScope>();
+    public DbSet<OemFlowTemplateNode> OemFlowTemplateNodes => Set<OemFlowTemplateNode>();
+    public DbSet<OemFlowTemplateNodeUser> OemFlowTemplateNodeUsers => Set<OemFlowTemplateNodeUser>();
+    public DbSet<OemFlowInstance> OemFlowInstances => Set<OemFlowInstance>();
+    public DbSet<OemFlowInstanceNode> OemFlowInstanceNodes => Set<OemFlowInstanceNode>();
+    public DbSet<OemFlowTask> OemFlowTasks => Set<OemFlowTask>();
+    public DbSet<OemDownloadSession> OemDownloadSessions => Set<OemDownloadSession>();
+    public DbSet<OemDownloadRange> OemDownloadRanges => Set<OemDownloadRange>();
+    public DbSet<OemDownloadLease> OemDownloadLeases => Set<OemDownloadLease>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

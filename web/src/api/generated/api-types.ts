@@ -7,6 +7,11 @@ export interface ApiErrorResponse {
   requestId?: string | null
 }
 
+export interface ApprovalDecisionRequest {
+  version?: number | null
+  reason?: string | null
+}
+
 export interface AuditLogResponse {
   id: number
   userId: number | null
@@ -25,6 +30,11 @@ export interface AuditLogResponse {
 
 export interface BatchDownloadRequest {
   ids: Array<number>
+}
+
+export interface CancelTransferRequest {
+  reason: string
+  version?: number | null
 }
 
 export interface ChangePasswordRequest {
@@ -100,6 +110,31 @@ export interface DashboardSummaryResponse {
   recentMessages: Array<DashboardMessage>
 }
 
+export interface DepartmentLeaderBrief {
+  id: number
+  employeeNo: string
+  realName: string
+  active: boolean
+}
+
+export interface DepartmentLeaderOption {
+  id: number
+  employeeNo: string
+  realName: string
+  departmentName: string | null
+}
+
+export interface DepartmentLeaderRequest {
+  leaderUserId?: number | null
+}
+
+export interface DepartmentLeaderResponse {
+  id: number
+  name: string
+  kind: string
+  leader: DepartmentLeaderBrief
+}
+
 export interface DepartmentResponse {
   id: number
   name: string
@@ -116,6 +151,7 @@ export interface DepartmentTreeNode {
   kind: string
   sortNo: number
   status: string
+  leader: DepartmentLeaderBrief
   children: Array<DepartmentTreeNode>
 }
 
@@ -170,6 +206,49 @@ export interface FileResponse {
   mimeType: string | null
   sha256: string | null
   createdAt: string
+}
+
+export interface FlowNodeInput {
+  name: string
+  approverSource: string
+  approvalMode?: string | null
+  selfPolicy: string
+  enabled: boolean
+  approverUserIds?: Array<number> | null
+  fallbackUserIds?: Array<number> | null
+}
+
+export interface FlowTemplateCreate {
+  name: string
+  isDefault: boolean
+  nodes: Array<FlowNodeInput>
+  departmentIds?: Array<number> | null
+}
+
+export interface FlowTemplateDefinitionUpdate {
+  name: string
+  status: string
+  isDefault: boolean
+  nodes: Array<FlowNodeInput>
+  departmentIds?: Array<number> | null
+  version?: number | null
+}
+
+export interface FlowTemplateNodesUpdate {
+  nodes: Array<FlowNodeInput>
+  version?: number | null
+}
+
+export interface FlowTemplateScopesUpdate {
+  departmentIds: Array<number>
+  version?: number | null
+}
+
+export interface FlowTemplateUpdate {
+  name: string
+  status: string
+  isDefault: boolean
+  version?: number | null
 }
 
 export interface InitUploadRequest {
@@ -302,6 +381,454 @@ export interface NotificationPolicyResponse {
   internalEnabled: boolean
   supplierEnabled: boolean
   events: NotificationEventsResponse
+}
+
+export interface OemAccountBrief {
+  id: number
+  employeeNo: string
+  realName: string
+  email: string
+  companyId: number
+  companyName: string
+}
+
+export interface OemAccountCreate {
+  employeeNo: string
+  realName: string
+  email: string
+  password: string
+}
+
+export interface OemAccountResponse {
+  id: number
+  employeeNo: string
+  realName: string
+  email: string
+  companyId: number
+  status: string
+  mustChangePassword: boolean
+  locked: boolean
+  lastLoginAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface OemAccountUpdate {
+  realName: string
+  email: string
+}
+
+export interface OemApprovalInfoResponse {
+  instanceId: number
+  status: string
+  blockedReason: string | null
+  currentSortNo: number | null
+  version: number
+  templateName: string | null
+  nodes: Array<OemApprovalNodeResponse>
+}
+
+export interface OemApprovalNodeResponse {
+  sortNo: number
+  name: string
+  approverSource: string
+  approvalMode: string
+  status: string
+  skipReason: string | null
+  usedFallback: boolean
+  completedAt: string | null
+  tasks: Array<OemApprovalTaskResponse>
+}
+
+export interface OemApprovalTaskResponse {
+  id: number
+  status: string
+  approverUserId: number
+  approverName: string | null
+  approverEmployeeNo: string | null
+  reason: string | null
+  decidedAt: string | null
+  replacesTaskId: number | null
+  reassignReason: string | null
+  version: number
+}
+
+export interface OemAuditLogResponse {
+  id: number
+  action: string
+  actorRealm: string
+  actorId: number | null
+  employeeNo: string | null
+  targetType: string | null
+  targetId: string | null
+  ip: string | null
+  createdAt: string
+  detail: Record<string, unknown> | null
+}
+
+export interface OemChangePasswordRequest {
+  oldPassword: string
+  newPassword: string
+}
+
+export interface OemCompanyListItemResponse {
+  id: number
+  name: string
+  contactName: string | null
+  contactPhone: string | null
+  contactEmail: string | null
+  remark: string | null
+  status: string
+  createdAt: string
+  updatedAt: string
+  accountCount: number
+  activeAccountCount: number
+}
+
+export interface OemCompanyResponse {
+  id: number
+  name: string
+  contactName: string | null
+  contactPhone: string | null
+  contactEmail: string | null
+  remark: string | null
+  status: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface OemCompanyUpsert {
+  name: string
+  contactName?: string | null
+  contactPhone?: string | null
+  contactEmail?: string | null
+  remark?: string | null
+}
+
+export interface OemDownloadSessionResponse {
+  downloadSessionId: string
+  url: string
+  expiresAt: string
+  purpose: string
+}
+
+export interface OemDownloadStatusResponse {
+  downloadSessionId: string
+  status: string
+  purpose: string
+  createdAt: string
+  completedAt: string | null
+  expectedSize: number
+  deliveredBytes: number
+}
+
+export interface OemFileValidationStatusResponse {
+  id: number
+  validationStatus: string
+  payloadStatus: string
+}
+
+export interface OemFlowNodePersonResponse {
+  id: number
+  employeeNo: string | null
+  realName: string | null
+  eligible: boolean
+}
+
+export interface OemFlowNodeResponse {
+  sortNo: number
+  name: string
+  approverSource: string
+  approvalMode: string
+  selfPolicy: string
+  enabled: boolean
+  approvers: Array<OemFlowNodePersonResponse>
+  fallbacks: Array<OemFlowNodePersonResponse>
+}
+
+export interface OemFlowPersonResponse {
+  id: number
+  employeeNo: string
+  realName: string
+}
+
+export interface OemFlowScopeResponse {
+  id: number
+  name: string
+  kind: string
+  status: string
+}
+
+export interface OemFlowTemplateResponse {
+  id: number
+  name: string
+  isDefault: boolean
+  status: string
+  version: number
+  createdAt: string
+  updatedAt: string
+  nodes: Array<OemFlowNodeResponse>
+  scopes: Array<OemFlowScopeResponse>
+}
+
+export interface OemInternalUserOptionResponse {
+  id: number
+  employeeNo: string
+  realName: string
+  canApprove: boolean
+  departmentName: string | null
+}
+
+export interface OemLoginRequest {
+  employeeNo: string
+  password: string
+}
+
+export interface OemLoginResponse {
+  accessToken: string
+  expiresAt: number
+  mustChangePassword: boolean
+  account: OemAccountBrief
+}
+
+export interface OemMeResponse {
+  account: OemAccountBrief
+  mustChangePassword: boolean
+}
+
+export interface OemOptionResponse {
+  id: number
+  name: string
+}
+
+export interface OemPageResponseOfOemAuditLogResponse {
+  list: Array<OemAuditLogResponse>
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface OemPageResponseOfOemCompanyListItemResponse {
+  list: Array<OemCompanyListItemResponse>
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface OemPageResponseOfOemTransferSummaryResponse {
+  list: Array<OemTransferSummaryResponse>
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface OemPasswordReset {
+  newPassword: string
+}
+
+export interface OemPendingApprovalResponse {
+  taskId: number
+  version: number
+  transferId: number
+  title: string
+  companyName: string
+  senderName: string
+  senderEmployeeNo: string
+  nodeName: string
+  approvalMode: string
+  sentAt: string | null
+  activatedAt: string
+}
+
+export interface OemPersonRefResponse {
+  realm: string
+  id: number
+  employeeNo: string
+  realName: string
+}
+
+export interface OemRetentionTemplateResponse {
+  id: number
+  name: string
+  mode: string
+  releaseTtlMinutes: number | null
+  receiptGraceMinutes: number | null
+  status: string
+  version: number
+  summary: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface OemRoutingApproverResponse {
+  id: number
+  employeeNo: string
+  realName: string
+}
+
+export interface OemRoutingNodeResponse {
+  sortNo: number
+  name: string
+  approverSource: string
+  approvalMode: string
+  skipped: boolean
+  skipReason: string | null
+  usedFallback: boolean
+  scopeName: string | null
+  approvers: Array<OemRoutingApproverResponse>
+}
+
+export interface OemRoutingPreviewResponse {
+  ok: boolean
+  reason?: string | null
+  template?: OemOptionResponse
+  matchedScope?: OemRoutingScopeResponse
+  requiresApproval?: boolean | null
+  nodes?: Array<OemRoutingNodeResponse> | null
+}
+
+export interface OemRoutingScopeResponse {
+  id: number
+  name: string
+  kind: string
+}
+
+export interface OemSettingItem {
+  key: string
+  value?: string | null
+}
+
+export interface OemSettingResponse {
+  key: string
+  label: string
+  kind: string
+  value: string
+  min: number | null
+  max: number | null
+  readOnly: boolean
+  unsupportedReason: string | null
+  hint: string | null
+}
+
+export interface OemSettingsUpdate {
+  items: Array<OemSettingItem>
+}
+
+export interface OemStatusRequest {
+  status: string
+}
+
+export interface OemTokenResponse {
+  accessToken: string
+  expiresAt: number
+}
+
+export interface OemTransferCapabilitiesResponse {
+  canEdit: boolean
+  canSend: boolean
+  canDelete: boolean
+  canReadContent: boolean
+  contentPurpose: string
+}
+
+export interface OemTransferDetailResponse {
+  summary: OemTransferSummaryResponse
+  description: string | null
+  retention: OemTransferRetentionResponse
+  manifestSha256: string | null
+  expiresAt: string | null
+  closedReason: string | null
+  closedAt: string | null
+  capabilities: OemTransferCapabilitiesResponse
+  files: Array<OemTransferFileResponse>
+  approval: OemApprovalInfoResponse
+}
+
+export interface OemTransferFileResponse {
+  id: number
+  originalName: string
+  ext: string
+  sizeBytes: number
+  sha256: string
+  validationStatus: string
+  payloadStatus: string
+  validationAttempts: number | null
+  validationMessage: string | null
+  createdAt: string
+  firstRecipientDownloadAt: string | null
+  purgeDueAt: string | null
+  purgedAt: string | null
+  downloadable: boolean
+}
+
+export interface OemTransferRetentionResponse {
+  templateId: number
+  templateName: string | null
+  mode: string | null
+  releaseTtlMinutes: number | null
+  receiptGraceMinutes: number | null
+  summary: string | null
+}
+
+export interface OemTransferSummaryResponse {
+  id: number
+  direction: string
+  companyId: number
+  companyName: string | null
+  title: string
+  sender: OemPersonRefResponse
+  lifecycleStatus: string
+  approvalStatus: string | null
+  approvalBlockedReason: string | null
+  validationSummary: string | null
+  fileCount: number
+  totalBytes: number
+  availableCount: number
+  purgePendingCount: number
+  purgedCount: number
+  missingCount: number
+  createdAt: string
+  sentAt: string | null
+  releasedAt: string | null
+  version: number
+}
+
+export interface OemUploadInit {
+  fileName: string
+  fileSize: number
+  fileMd5?: string | null
+}
+
+export interface OemUploadSessionInitResponse {
+  sessionId: string
+  chunkSize: number
+  totalChunks: number
+  uploadedChunks: Array<number>
+  resumed: boolean
+}
+
+export interface OemUploadSessionResponse {
+  sessionId: string
+  status: string
+  chunkSize: number
+  totalChunks: number
+  fileName: string
+  fileSize: number
+  uploadedChunks: Array<number>
+  resultFileId: number | null
+  expired: boolean
+}
+
+export interface OemUploadedFileResponse {
+  id: number
+  transferId: number
+  originalName: string
+  ext: string
+  sizeBytes: number
+  sha256: string
+  validationStatus: string
+  payloadStatus: string
+  createdAt: string
 }
 
 export interface PageResponseOfAuditLogResponse {
@@ -649,6 +1176,28 @@ export interface ProjectUpsertRequest {
   subprojectNames?: Array<string> | null
 }
 
+export interface ReassignTaskRequest {
+  newApproverUserId: number
+  reason: string
+  version?: number | null
+}
+
+export interface RetentionTemplateCreate {
+  name: string
+  mode: string
+  releaseTtlMinutes?: number | null
+  receiptGraceMinutes?: number | null
+}
+
+export interface RetentionTemplateUpdate {
+  name: string
+  mode: string
+  releaseTtlMinutes?: number | null
+  receiptGraceMinutes?: number | null
+  status: string
+  version?: number | null
+}
+
 export interface RobotPartResponse {
   id: number
   supplierId: number
@@ -785,6 +1334,24 @@ export interface SystemConfigResponse {
   updatedAt: string
 }
 
+export interface TransferCreate {
+  title?: string | null
+  description?: string | null
+  oemCompanyId?: number | null
+  retentionTemplateId?: number | null
+}
+
+export interface TransferUpdate {
+  title?: string | null
+  description?: string | null
+  retentionTemplateId?: number | null
+  version?: number | null
+}
+
+export interface TransferVersionRequest {
+  version?: number | null
+}
+
 export interface UpdateProfileRequest {
   email: string
 }
@@ -863,9 +1430,11 @@ export interface UserUpdate {
 /** Success body of each endpoint, keyed by "METHOD path" relative to /api/v1 (the axios baseURL). */
 export interface ApiResponses {
   "GET /admin/audit-logs": PageResponseOfAuditLogResponse
+  "GET /admin/department-leader-options": Array<DepartmentLeaderOption>
   "POST /admin/departments": DepartmentResponse
   "DELETE /admin/departments/{id}": EmptyResponse
   "PUT /admin/departments/{id}": DepartmentResponse
+  "PUT /admin/departments/{id}/leader": DepartmentLeaderResponse
   "PUT /admin/departments/{id}/status": DepartmentResponse
   "GET /admin/roles": PageResponseOfRoleResponse
   "POST /admin/roles": RoleResponse
@@ -926,6 +1495,66 @@ export interface ApiResponses {
   "DELETE /messages/{id}": EmptyResponse
   "GET /messages/{id}/reads": MessageReadsResponse
   "GET /messages/{messageId}/images/{imageId}": Blob
+  "DELETE /oem/accounts/{id}": EmptyResponse
+  "GET /oem/accounts/{id}": OemAccountResponse
+  "PUT /oem/accounts/{id}": OemAccountResponse
+  "PUT /oem/accounts/{id}/password": EmptyResponse
+  "PUT /oem/accounts/{id}/status": OemAccountResponse
+  "GET /oem/approvals/pending": Array<OemPendingApprovalResponse>
+  "POST /oem/approvals/{taskId}/approve": OemTransferDetailResponse
+  "POST /oem/approvals/{taskId}/reassign": OemTransferDetailResponse
+  "POST /oem/approvals/{taskId}/reject": OemTransferDetailResponse
+  "GET /oem/approver-options": Array<OemFlowPersonResponse>
+  "GET /oem/audit-logs": OemPageResponseOfOemAuditLogResponse
+  "POST /oem/auth/login": OemLoginResponse
+  "POST /oem/auth/logout": EmptyResponse
+  "GET /oem/auth/me": OemMeResponse
+  "PUT /oem/auth/password": EmptyResponse
+  "POST /oem/auth/refresh": OemTokenResponse
+  "GET /oem/companies": OemPageResponseOfOemCompanyListItemResponse
+  "POST /oem/companies": OemCompanyResponse
+  "DELETE /oem/companies/{id}": EmptyResponse
+  "GET /oem/companies/{id}": OemCompanyResponse
+  "PUT /oem/companies/{id}": OemCompanyResponse
+  "GET /oem/companies/{id}/accounts": Array<OemAccountResponse>
+  "POST /oem/companies/{id}/accounts": OemAccountResponse
+  "PUT /oem/companies/{id}/status": OemCompanyResponse
+  "GET /oem/company-options": Array<OemOptionResponse>
+  "GET /oem/file-policies": Array<OemSettingResponse>
+  "PUT /oem/file-policies": Array<OemSettingResponse>
+  "DELETE /oem/files/{id}": EmptyResponse
+  "GET /oem/files/{id}/content": Blob
+  "GET /oem/files/{id}/download": Blob
+  "POST /oem/files/{id}/download-sessions": OemDownloadSessionResponse
+  "GET /oem/files/{id}/download-status": Array<OemDownloadStatusResponse>
+  "GET /oem/files/{id}/validation-status": OemFileValidationStatusResponse
+  "GET /oem/flow-templates": Array<OemFlowTemplateResponse>
+  "POST /oem/flow-templates": OemFlowTemplateResponse
+  "GET /oem/flow-templates/preview": OemRoutingPreviewResponse
+  "GET /oem/flow-templates/{id}": OemFlowTemplateResponse
+  "PUT /oem/flow-templates/{id}": OemFlowTemplateResponse
+  "PUT /oem/flow-templates/{id}/definition": OemFlowTemplateResponse
+  "PUT /oem/flow-templates/{id}/nodes": OemFlowTemplateResponse
+  "PUT /oem/flow-templates/{id}/scopes": OemFlowTemplateResponse
+  "GET /oem/internal-user-options": Array<OemInternalUserOptionResponse>
+  "GET /oem/notify-policies": Array<OemSettingResponse>
+  "PUT /oem/notify-policies": Array<OemSettingResponse>
+  "GET /oem/retention-template-options": Array<OemRetentionTemplateResponse>
+  "GET /oem/retention-templates": Array<OemRetentionTemplateResponse>
+  "POST /oem/retention-templates": OemRetentionTemplateResponse
+  "PUT /oem/retention-templates/{id}": OemRetentionTemplateResponse
+  "GET /oem/transfers": OemPageResponseOfOemTransferSummaryResponse
+  "POST /oem/transfers": OemTransferDetailResponse
+  "DELETE /oem/transfers/{id}": EmptyResponse
+  "GET /oem/transfers/{id}": OemTransferDetailResponse
+  "PUT /oem/transfers/{id}": OemTransferDetailResponse
+  "POST /oem/transfers/{id}/cancel": OemTransferDetailResponse
+  "POST /oem/transfers/{id}/send": OemTransferDetailResponse
+  "POST /oem/transfers/{id}/uploads/init": OemUploadSessionInitResponse
+  "DELETE /oem/uploads/{sessionId}": EmptyResponse
+  "GET /oem/uploads/{sessionId}": OemUploadSessionResponse
+  "PUT /oem/uploads/{sessionId}/chunks/{index}": EmptyResponse
+  "POST /oem/uploads/{sessionId}/merge": OemUploadedFileResponse
   "GET /permissions": Array<PermissionResponse>
   "GET /project-copies/{copyId}/files": PageResponseOfFileCopyHistoryItem
   "GET /project-copy-jobs/{jobId}": ProjectCopyJobResponse

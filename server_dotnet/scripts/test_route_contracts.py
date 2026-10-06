@@ -14,6 +14,9 @@ PUBLIC_OPERATIONS = {
     ("POST", "/api/v1/auth/login"),
     ("POST", "/api/v1/auth/logout"),
     ("POST", "/api/v1/auth/refresh"),
+    ("POST", "/api/v1/oem/auth/login"),
+    ("POST", "/api/v1/oem/auth/logout"),
+    ("POST", "/api/v1/oem/auth/refresh"),
 }
 HTTP_METHODS = {"get", "post", "put", "delete", "patch"}
 

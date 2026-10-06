@@ -21,7 +21,29 @@ interface DeptNode {
   parentId?: number | null
   sortNo: number
   status: 'ACTIVE' | 'DISABLED'
+  leader?: DepartmentLeader | null
   children?: DeptNode[]
+}
+
+interface DepartmentLeader {
+  id: number
+  employeeNo: string
+  realName: string
+  active: boolean
+}
+
+interface DepartmentLeaderOption {
+  id: number
+  employeeNo: string
+  realName: string
+  departmentName: string | null
+}
+
+interface DepartmentLeaderUpdate {
+  id: number
+  name: string
+  kind: OrgKind
+  leader: DepartmentLeader | null
 }
 
 interface DeptTreeData { key: string; title: React.ReactNode; children?: DeptTreeData[] }
@@ -94,6 +116,12 @@ function findNode(nodes: DeptNode[], id: number): DeptNode | null {
   return null
 }
 
+function updateLeader(nodes: DeptNode[], id: number, leader: DepartmentLeader | null): DeptNode[] {
+  return nodes.map((node) => node.id === id
+    ? { ...node, leader }
+    : { ...node, children: node.children ? updateLeader(node.children, id, leader) : node.children })
+}
+
 export default function DeptManage() {
   const canManage = useAuth((s) => s.hasPerm('dept:manage'))
   const canDelete = useAuth((s) => s.hasPerm('dept:delete'))
@@ -111,6 +139,19 @@ export default function DeptManage() {
   const [editing, setEditing] = useState<DeptNode | null>(null)
   const [parentForNew, setParentForNew] = useState<DeptNode | null>(null)
   const [form] = Form.useForm()
+  const [leaderOpen, setLeaderOpen] = useState(false)
+  const [leaderTarget, setLeaderTarget] = useState<DeptNode | null>(null)
+  const [leaderKeyword, setLeaderKeyword] = useState('')
+  const [leaderOptions, setLeaderOptions] = useState<DepartmentLeaderOption[]>([])
+  const [leaderOptionsLoading, setLeaderOptionsLoading] = useState(false)
+  const [leaderOptionsError, setLeaderOptionsError] = useState(false)
+  const [leaderDraft, setLeaderDraft] = useState<DepartmentLeaderOption | null>(null)
+  const [leaderSaving, setLeaderSaving] = useState(false)
+  const leaderModalSession = useRef(0)
+  const leaderRequestSequence = useRef(0)
+  const leaderModalOpen = useRef(false)
+  const leaderSaveInFlight = useRef(false)
+  const canManageLeader = useAuth((s) => s.hasPerm('dept:leader_manage'))
 
   const fetchTree = useCallback(async () => {
     const r = await http.get<ApiResponses['GET /departments']>('/departments')
@@ -144,6 +185,93 @@ export default function DeptManage() {
       active = false
     }
   }, [applyTree, fetchTree, reloadKey])
+
+  useEffect(() => () => {
+    leaderModalOpen.current = false
+    leaderRequestSequence.current += 1
+  }, [])
+
+  useEffect(() => {
+    if (canManageLeader) return
+    leaderModalOpen.current = false
+    leaderRequestSequence.current += 1
+  }, [canManageLeader])
+
+  const fetchLeaderOptions = useCallback(async (search: string, session: number) => {
+    const request = ++leaderRequestSequence.current
+    setLeaderOptionsLoading(true)
+    setLeaderOptionsError(false)
+    try {
+      const term = search.trim()
+      const response = await http.get<DepartmentLeaderOption[]>('/admin/department-leader-options', {
+        params: term ? { keyword: term } : undefined,
+      })
+      if (leaderModalOpen.current && session === leaderModalSession.current && request === leaderRequestSequence.current) {
+        setLeaderOptions(response.data)
+      }
+    } catch {
+      if (leaderModalOpen.current && session === leaderModalSession.current && request === leaderRequestSequence.current) {
+        setLeaderOptionsError(true)
+      }
+    } finally {
+      if (leaderModalOpen.current && session === leaderModalSession.current && request === leaderRequestSequence.current) {
+        setLeaderOptionsLoading(false)
+      }
+    }
+  }, [])
+
+  const openLeaderDialog = (target: DeptNode) => {
+    const session = leaderModalSession.current + 1
+    leaderModalSession.current = session
+    leaderModalOpen.current = true
+    setLeaderTarget(target)
+    setLeaderDraft(target.leader ? {
+      id: target.leader.id,
+      employeeNo: target.leader.employeeNo,
+      realName: target.leader.realName,
+      departmentName: null,
+    } : null)
+    setLeaderKeyword('')
+    setLeaderOptions([])
+    setLeaderOptionsError(false)
+    setLeaderOpen(true)
+    void fetchLeaderOptions('', session)
+  }
+
+  const closeLeaderDialog = () => {
+    leaderModalOpen.current = false
+    leaderRequestSequence.current += 1
+    setLeaderOpen(false)
+    setLeaderTarget(null)
+    setLeaderKeyword('')
+    setLeaderOptions([])
+    setLeaderOptionsError(false)
+  }
+
+  const saveLeader = async (target: DeptNode, leaderUserId: number | null) => {
+    if (leaderSaveInFlight.current) return false
+    leaderSaveInFlight.current = true
+    setLeaderSaving(true)
+    try {
+      const response = await http.put<DepartmentLeaderUpdate>(`/admin/departments/${target.id}/leader`, { leaderUserId })
+      const nextLeader = response.data.leader
+      setTree((current) => updateLeader(current, target.id, nextLeader))
+      setSelected((current) => current?.id === target.id ? { ...current, leader: nextLeader } : current)
+      Message.success(nextLeader ? '组织主管已更新' : '组织主管已清空')
+      return true
+    } catch {
+      Message.error('主管配置保存失败，请重试')
+      return false
+    } finally {
+      leaderSaveInFlight.current = false
+      setLeaderSaving(false)
+    }
+  }
+
+  const submitLeader = async () => {
+    if (!leaderTarget || !leaderDraft || leaderDraft.id === leaderTarget.leader?.id) return
+    if (await saveLeader(leaderTarget, leaderDraft.id)) closeLeaderDialog()
+  }
 
   const creatingKind: OrgKind = parentForNew
     ? (ORG_KIND[nodeKind(parentForNew)].childKind || 'SECTION')
@@ -345,6 +473,38 @@ export default function DeptManage() {
                   </div>
                 )}
               </div>
+              <section className="org-view-leader" aria-label={`${selected.name}主管配置`}>
+                <div className="org-view-leader-copy">
+                  <h3>组织主管</h3>
+                  {selected.leader ? (
+                    <div className="org-view-leader-person">
+                      <strong>{selected.leader.realName}</strong>
+                      <span>工号 {selected.leader.employeeNo}</span>
+                      {!selected.leader.active && <Tag color="red" size="small">账号已停用</Tag>}
+                    </div>
+                  ) : <Typography.Text type="secondary">暂未配置主管</Typography.Text>}
+                </div>
+                {canManageLeader && (
+                  <div className="org-view-leader-actions">
+                    <Button onClick={() => openLeaderDialog(selected)}>{selected.leader ? '更换主管' : '设置主管'}</Button>
+                    {selected.leader && <Button
+                      status="danger"
+                      disabled={leaderSaving}
+                      onClick={() => {
+                        const target = selected
+                        Modal.confirm({
+                          title: '清空组织主管',
+                          content: `确认清空“${target.name}”的组织主管？`,
+                          okText: '确认清空',
+                          cancelText: '取消',
+                          okButtonProps: { status: 'danger' },
+                          onOk: () => saveLeader(target, null),
+                        })
+                      }}
+                    >清空主管</Button>}
+                  </div>
+                )}
+              </section>
               {!selectedMeta.childLabel && <div className="org-view-leaf-info">
                 <h3>基本信息</h3>
                 <dl><div><dt>所属部门</dt><dd>{selectedParent?.name || '—'}</dd></div><div><dt>层级路径</dt><dd>{selectedPath}</dd></div></dl>
@@ -359,7 +519,7 @@ export default function DeptManage() {
             <div className="org-view-children-heading"><h3>{selected ? `直属${selectedMeta?.childLabel}` : '事业部'}</h3><span>{selected ? selectedChildrenCount : tree.length} 个</span></div>
             {loading ? <Spin /> : loadError ? <div className="org-view-tree-empty">组织加载失败<Button type="text" onClick={load}>重试</Button></div> : childNodes.length ? <div className="org-view-child-list">
               {childNodes.map((node) => <button type="button" className="org-view-child" key={node.id} onClick={() => navigateTo(node)}>
-                <span className="org-view-child-main"><strong>{node.name}</strong><small>{ORG_KIND[nodeKind(node)].label}{ORG_KIND[nodeKind(node)].childLabel ? ` · ${node.children?.length || 0} 个${ORG_KIND[nodeKind(node)].childLabel}` : ''}</small></span>
+                <span className="org-view-child-main"><strong>{node.name}</strong><small>{ORG_KIND[nodeKind(node)].label}{ORG_KIND[nodeKind(node)].childLabel ? ` · ${node.children?.length || 0} 个${ORG_KIND[nodeKind(node)].childLabel}` : ''}</small>{node.leader && <small className="org-view-child-leader">主管：{node.leader.realName}（{node.leader.employeeNo}）</small>}</span>
                 <span className={`org-view-child-status${node.status === 'DISABLED' ? ' is-disabled' : ''}`}>{node.status === 'ACTIVE' ? '启用' : '禁用'}</span><IconRight />
               </button>)}
             </div> : <div className="org-view-tree-empty">{selected ? `暂无直属${selectedMeta?.childLabel}` : '暂无事业部'}</div>}
@@ -401,6 +561,67 @@ export default function DeptManage() {
             </div>
           )}
         </Form>
+      </Modal>
+
+      <Modal
+        className="form-dialog org-view-leader-dialog"
+        title={leaderTarget ? `设置主管 · ${leaderTarget.name}` : '设置主管'}
+        visible={leaderOpen && canManageLeader}
+        unmountOnExit
+        afterClose={() => {
+          if (!canManageLeader) closeLeaderDialog()
+        }}
+        confirmLoading={leaderSaving}
+        closable={!leaderSaving}
+        maskClosable={!leaderSaving}
+        escToExit={!leaderSaving}
+        cancelButtonProps={{ disabled: leaderSaving }}
+        okButtonProps={{ disabled: !leaderDraft || leaderDraft.id === leaderTarget?.leader?.id || leaderOptionsLoading }}
+        okText="保存主管"
+        onOk={submitLeader}
+        onCancel={() => {
+          if (!leaderSaving) closeLeaderDialog()
+        }}
+      >
+        <div className="org-view-leader-search">
+          <Input
+            allowClear
+            prefix={<IconSearch />}
+            aria-label="搜索主管候选"
+            placeholder="搜索姓名或工号"
+            value={leaderKeyword}
+            onChange={(value) => {
+              setLeaderKeyword(value)
+              void fetchLeaderOptions(value, leaderModalSession.current)
+            }}
+          />
+          <div className="org-view-leader-selection" aria-live="polite">
+            <span>当前选择</span>
+            {leaderDraft
+              ? <strong>{leaderDraft.realName}<small>{leaderDraft.employeeNo}</small></strong>
+              : <Typography.Text type="secondary">请选择主管</Typography.Text>}
+          </div>
+          <div className="dialog-note">更换主管只影响后续审批流转，已发起的审批不会自动改派。</div>
+        </div>
+        <div className="org-view-leader-options" role="radiogroup" aria-label="主管候选">
+          {leaderOptionsLoading ? <div className="org-view-leader-option-state"><Spin /> 正在查询候选人</div>
+            : leaderOptionsError ? <div className="org-view-leader-option-state">
+              <Typography.Text type="error">候选人加载失败</Typography.Text>
+              <Button size="small" onClick={() => void fetchLeaderOptions(leaderKeyword, leaderModalSession.current)}>重试</Button>
+            </div>
+              : leaderOptions.length ? leaderOptions.map((option) => <button
+                type="button"
+                role="radio"
+                aria-checked={leaderDraft?.id === option.id}
+                className={`org-view-leader-option${leaderDraft?.id === option.id ? ' is-selected' : ''}`}
+                key={option.id}
+                onClick={() => setLeaderDraft(option)}
+              >
+                <span><strong>{option.realName}</strong><small>{option.employeeNo}</small></span>
+                <small>{option.departmentName || '未归属组织'}</small>
+              </button>)
+                : <div className="org-view-leader-option-state">未找到匹配的启用内部账号</div>}
+        </div>
       </Modal>
     </Card>
   )

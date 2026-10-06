@@ -62,6 +62,21 @@ public sealed class IdentitySecurityTests
     }
 
     [Fact]
+    public void LoginAndPasswordBudgetsDoNotCollideAcrossIdentityRealms()
+    {
+        var limiter = new LoginRateLimiter();
+        Assert.All(Enumerable.Range(1, 10),
+            _ => Assert.True(limiter.AllowLogin(IdentityRealms.Internal, "192.0.2.20", "same-login")));
+        Assert.False(limiter.AllowLogin(IdentityRealms.Internal, "192.0.2.20", "same-login"));
+        Assert.True(limiter.AllowLogin("oem", "192.0.2.20", "same-login"));
+
+        Assert.All(Enumerable.Range(1, LoginRateLimiter.MaximumPasswordChangeAttempts),
+            _ => Assert.True(limiter.AllowPasswordChange(IdentityRealms.Internal, 7)));
+        Assert.False(limiter.AllowPasswordChange(IdentityRealms.Internal, 7));
+        Assert.True(limiter.AllowPasswordChange("oem", 7));
+    }
+
+    [Fact]
     public void LoginHashQueueUsesTheLoginAndDownloadRateLimitCode()
     {
         var error = PasswordService.LoginBusyException();
@@ -148,6 +163,7 @@ public sealed class IdentitySecurityTests
         Assert.Equal((ulong)42, parsed.UserId);
         Assert.Equal("E00042", parsed.EmployeeNo);
         Assert.Equal("session-family", parsed.SessionId);
+        Assert.Equal(IdentityRealms.Internal, parsed.Realm);
 
         using var payload = JsonDocument.Parse(Base64UrlEncoder.DecodeBytes(issued.Token.Split('.')[1]));
         Assert.Equal(JsonValueKind.Number, payload.RootElement.GetProperty("uid").ValueKind);
@@ -155,6 +171,57 @@ public sealed class IdentitySecurityTests
         Assert.Equal(JsonValueKind.Number, payload.RootElement.GetProperty("exp").ValueKind);
         Assert.False(payload.RootElement.TryGetProperty("eno", out _));
         Assert.False(payload.RootElement.TryGetProperty("typ", out _));
+        Assert.False(payload.RootElement.TryGetProperty("rlm", out _));
+    }
+
+    [Fact]
+    public void NonInternalAccessTokenRoundTripsItsRealm()
+    {
+        var service = new TokenService(new AppOptions
+        {
+            JwtSecret = "identity-test-secret-with-at-least-32-bytes",
+            AccessTtlMinutes = 30
+        });
+
+        var issued = service.IssueAccess(42, "OEM00042", "oem-session", "oem");
+        var parsed = service.ParseAccess(issued.Token);
+
+        Assert.Equal("oem", parsed.Realm);
+        using var payload = JsonDocument.Parse(Base64UrlEncoder.DecodeBytes(issued.Token.Split('.')[1]));
+        Assert.Equal("oem", payload.RootElement.GetProperty("rlm").GetString());
+    }
+
+    [Fact]
+    public async Task RealmTokenIsAcceptedOnlyWithinItsRegisteredPrefix()
+    {
+        var service = new TokenService(new AppOptions
+        {
+            JwtSecret = "identity-test-secret-with-at-least-32-bytes",
+            AccessTtlMinutes = 30
+        });
+        var extension = new TestRealmExtension();
+        var downstream = false;
+        var middleware = new IdentityMiddleware(_ =>
+        {
+            downstream = true;
+            return Task.CompletedTask;
+        }, [extension]);
+        var token = service.IssueAccess(9, "OEM009", "realm-session", "oem").Token;
+        var accepted = new DefaultHttpContext();
+        accepted.Request.Path = "/api/v1/oem/transfers";
+        accepted.Request.Headers.Authorization = "Bearer " + token;
+
+        await middleware.InvokeAsync(accepted, null!, service, new IdentityProjectionCache());
+
+        Assert.True(extension.Authenticated);
+        Assert.True(downstream);
+
+        var rejected = new DefaultHttpContext();
+        rejected.Request.Path = "/api/v1/projects";
+        rejected.Request.Headers.Authorization = "Bearer " + token;
+        var error = await Assert.ThrowsAsync<ApiException>(() =>
+            middleware.InvokeAsync(rejected, null!, service, new IdentityProjectionCache()));
+        Assert.Equal(40304, error.Code);
     }
 
     [Fact]
@@ -207,5 +274,19 @@ public sealed class IdentitySecurityTests
         };
         var digest = await argon.GetBytesAsync(32);
         return $"$argon2id$v=19$m=4096,t=3,p=1${Convert.ToBase64String(salt).TrimEnd('=')}${Convert.ToBase64String(digest).TrimEnd('=')}";
+    }
+
+    private sealed class TestRealmExtension : IRealmIdentityExtension
+    {
+        public string Realm => "oem";
+        public PathString PathPrefix => "/api/v1/oem";
+        public bool Authenticated { get; private set; }
+        public bool IsAnonymousPath(HttpRequest request) => false;
+        public Task AuthenticateAsync(HttpContext context, AccessClaims claims, CancellationToken ct)
+        {
+            Authenticated = true;
+            context.Items[typeof(AccessClaims)] = claims;
+            return Task.CompletedTask;
+        }
     }
 }

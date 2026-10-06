@@ -349,6 +349,11 @@
           "Serilog": "2.10.0"
         }
       },
+      "SharpCompress": {
+        "type": "Transitive",
+        "resolved": "0.50.4",
+        "contentHash": "/hxjUR7DEX6mky8/LQXyrnrKioOL6D6veAID1EZpro+q4s02x5dHEYBV3qjEN6lDYYilDoQQ76BcmQj+lRx51w=="
+      },
       "System.CodeDom": {
         "type": "Transitive",
         "resolved": "6.0.0",
@@ -489,6 +494,7 @@
           "Serilog.Extensions.Logging": "[8.0.0, )",
           "Serilog.Formatting.Compact": "[2.0.0, )",
           "Serilog.Sinks.File": "[5.0.0, )",
+          "SharpCompress": "[0.50.4, )",
           "System.IdentityModel.Tokens.Jwt": "[8.23.0, )"
         }
       }

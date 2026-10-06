@@ -7,6 +7,7 @@ using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Admin;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Identity;
+using Yf.Api.Modules.Oem;
 using Yf.Api.Modules.Projects;
 using Yf.Api.Modules.SystemManagement;
 
@@ -18,6 +19,7 @@ public static class ApiApplication
     {
         var initializeDatabase = args.Contains("--initialize-database", StringComparer.Ordinal);
         var migrateDatabase = args.Contains("--migrate-database", StringComparer.Ordinal);
+        var oemMarkRestored = args.Contains("--oem-mark-restored", StringComparer.Ordinal);
         var inspectDevelopment = args.Contains("--inspect-development-data", StringComparer.Ordinal);
         var resetDevelopment = args.Contains("--reset-development-data", StringComparer.Ordinal);
         var checkDevelopmentReadiness = args.Contains("--check-development-readiness", StringComparer.Ordinal);
@@ -25,7 +27,7 @@ public static class ApiApplication
         var removeLegacyContent = args.Contains("--remove-legacy-content", StringComparer.Ordinal);
         if (removeLegacyContent && !convertFileBlobs)
             throw new ArgumentException("--remove-legacy-content is only valid together with --convert-file-blobs.");
-        if (new[] { initializeDatabase, migrateDatabase, inspectDevelopment, resetDevelopment, checkDevelopmentReadiness, convertFileBlobs }.Count(value => value) > 1)
+        if (new[] { initializeDatabase, migrateDatabase, inspectDevelopment, resetDevelopment, checkDevelopmentReadiness, convertFileBlobs, oemMarkRestored }.Count(value => value) > 1)
         {
             if (checkDevelopmentReadiness)
             {
@@ -34,7 +36,7 @@ public static class ApiApplication
             }
             throw new ArgumentException("Choose one database operation.");
         }
-        args = args.Where(x => x is not ("--initialize-database" or "--migrate-database" or "--inspect-development-data" or "--reset-development-data" or "--check-development-readiness" or "--convert-file-blobs" or "--remove-legacy-content")).ToArray();
+        args = args.Where(x => x is not ("--initialize-database" or "--migrate-database" or "--inspect-development-data" or "--reset-development-data" or "--check-development-readiness" or "--convert-file-blobs" or "--remove-legacy-content" or "--oem-mark-restored")).ToArray();
         if (checkDevelopmentReadiness)
         {
             DevelopmentReadinessReport result;
@@ -86,6 +88,13 @@ public static class ApiApplication
             await EfDatabaseLifecycle.MigrateAsync(new AppDb(options));
             return null;
         }
+        if (oemMarkRestored)
+        {
+            await EfDatabaseLifecycle.ValidateReadyAsync(new AppDb(options));
+            await Yf.Api.Modules.Oem.Maintenance.OemReconcileService.MarkRestoredAsync(new AppDb(options));
+            Console.WriteLine("OEM storage reconciliation required; OEM file access stays closed until reconciliation completes.");
+            return null;
+        }
         await EfDatabaseLifecycle.PrepareStartupAsync(options);
         if (convertFileBlobs)
         {
@@ -114,7 +123,7 @@ public static class ApiApplication
         var efConnectionString = AppDb.BuildConnectionString(options);
         builder.Services.AddPooledDbContextFactory<YfDbContext>(db => db.UseMySql(
             efConnectionString, EfDb.ServerVersion).AddInterceptors(UtcDatabaseSession.Instance));
-        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule();
+        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule();
         builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
             .WithOrigins(new Uri(options.WebBaseUrl).GetLeftPart(UriPartial.Authority))
             .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
@@ -163,7 +172,7 @@ public static class ApiApplication
         UsePublicStaticFilesBeforeRouting(app);
         app.UseCors();
         app.UseMiddleware<IdentityMiddleware>();
-        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime();
+        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime().MapOemModule();
         var healthProbe = new DatabaseHealthProbe();
         // Storage writes cost more than a ping and the disk changes state rarely: reuse a healthy result longer.
         var storageProbe = new DatabaseHealthProbe(healthyCacheDuration: DatabaseHealthProbe.StorageHealthyCacheDuration);

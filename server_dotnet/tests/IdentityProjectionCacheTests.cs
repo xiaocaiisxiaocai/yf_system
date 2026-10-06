@@ -95,6 +95,23 @@ public sealed class IdentityProjectionCacheTests
         }
     }
 
+    [Fact]
+    public async Task NonInternalRealmCannotPopulateSharedIdentityCache()
+    {
+        var cache = new IdentityProjectionCache();
+        var oemClaims = Claims with { Realm = "oem" };
+        var loaded = false;
+
+        await Assert.ThrowsAsync<ArgumentException>(() => cache.ResolveAsync(new(30, Now), oemClaims, _ =>
+        {
+            loaded = true;
+            return Task.FromResult<IdentityProjection?>(Projection(Now.AddMinutes(30), 1));
+        }, TestContext.Current.CancellationToken));
+
+        Assert.False(loaded);
+        Assert.Equal(0, cache.Count);
+    }
+
     private static IdentityProjection Projection(DateTime validUntil, int version) => new(
         Claims.UserId, $"cache-user-{version}", UserTypes.Internal, null,
         AccountStatuses.Active, false, false, validUntil);

@@ -12,6 +12,7 @@
 - `Yf.Api/Modules/Admin`：组织、账号、角色、供应商和供应商账号；权限委派上限与最后管理员保护。
 - `Yf.Api/Modules/Projects`：主项目、子项目、提交/确认/驳回/撤回、留言/已读、动态、工作台。
 - `Yf.Api/Modules/Files`：分片上传与续传、合并校验、下载、文档/视频 Range 预览、批量 ZIP、软删除和垃圾清理。
+- `Yf.Api/Modules/Oem`：OEM/公司双向传递、审批、隔离存储、文件格式与归档结构检查、安全交付、删除、通知、审计和独立存储。
 - `Yf.Api/Modules/System`：参数、日志、邮件 outbox 与 TLS SMTP 后台发送。
 - `Yf.Api/Infrastructure`：EF Core/MySQL、统一错误、事务权限门禁、审计及空库初始化。
 
@@ -43,7 +44,7 @@
 
 需要 .NET 8 SDK、MySQL（现有结构兼容 MySQL 5.7/8）以及现有数据对应的独立存储目录。
 
-1. 将 `deploy/appsettings.example.json` 复制到 **IIS 网站以外**的私有目录，填写连接串、随机 JWT 密钥、存储绝对路径和网站来源。该文件包含机密，不要提交版本库。
+1. 将 `deploy/appsettings.example.json` 复制到 **IIS 网站以外**的私有目录，填写连接串、随机 JWT 密钥、存储绝对路径和网站来源。该文件包含机密，不要提交版本库。模板默认不启用 OEM；完整 OEM 另配独立 `OemStorageRoot`，见 [OEM 当前集成与部署](docs/OEM当前集成与部署-2026-10-05.md)。
 2. 本地 HTTP 调试设置 `CookieSecure=false`，`WebBaseUrl=http://127.0.0.1:5180`。正式 HTTPS 必须为 `true`。非 Development 环境下，`CookieSecure=false` 只接受回环 `WebBaseUrl` 或显式 `App:AllowInsecureCookies=true`（非回环 HTTP 私有部署），HTTPS 地址一律拒绝。可选 `App:LogDirectory`（应用目录之外的绝对路径）启用按天滚动的 compact JSON 文件日志（`yf-api-YYYYMMDD.clef`，单文件 100 MiB 续写，保留 31 个，不记录查询字符串）。会话/上传/批量下载/blob 校验/待发邮件 TTL 等限额键（`MaxActiveSessionsPerUser`、`UploadMaxActiveSessionsPerUser`、`UploadMaxPendingBytesPerUser`、`BlobVerifyBytesPerCycle`、`BatchDownloadMinBytesPerMinute`、`BatchDownloadMaxDurationMinutes`、`MailPendingTtlDays`）的默认值和范围见 `deploy/appsettings.example.json` 与 `deploy/README.md`。
 3. 在 `server_dotnet` 目录执行：
 
@@ -110,7 +111,7 @@ $env:YF_CONFIG_PATH = 'D:\YfConfig\appsettings.Local.json'
 dotnet run --project .\Yf.Api -- --migrate-database
 ```
 
-当前移除 OEM 的升级迁移会删除 OEM 表和专属数据。对已有数据库执行前必须完成可验证的备份；仅更新程序而不执行迁移时，启动校验会因迁移未完成而拒绝启动。
+当前迁移链包含 OEM 恢复后的表、权限和配置。已有数据库升级前仍须按实际迁移差异完成可验证备份；协作维护备份不包含独立 `OemStorageRoot`，其恢复与核对边界见 [OEM 当前集成与部署](docs/OEM当前集成与部署-2026-10-05.md)。
 
 升级命令使用数据库命名锁防止并发迁移，只接受已经由 EF 历史管理的非空数据库，然后调用当前程序集内的生成迁移。空数据库必须使用 `--initialize-database`，由 `InitialCreate` 建表后在一个 EF 事务内创建 `admin`、系统管理员角色、35 个权限及 13 个系统参数。MySQL DDL 不能完整回滚；迁移中断后不要手工补历史，应检查现场并重建开发库。Dapper → EF Core Code-First 的迁移过程与数据库生命周期规则记录在 [EF-CORE-MIGRATION.md](EF-CORE-MIGRATION.md)。
 
@@ -132,7 +133,7 @@ dotnet run --project .\Yf.Api -- --migrate-database
 
 `Yf.Api/Infrastructure/Migrations` 及 `YfDbContextModelSnapshot` 是唯一 schema 权威。不要使用 `EnsureCreated`、手写建表脚本或直接修改 `__EFMigrationsHistory`；模型变化通过 `dotnet ef migrations add` 生成迁移并审查差异。
 
-IIS 发布包默认启用 `App.AutoInitializeDatabase=true`：首次启动自动创建不存在的数据库、对空库执行 EF 迁移并创建管理员。初始密码在发布包 `appsettings.Production.json` 的 `App.BootstrapPassword`，首次登录强制修改；后续重启不会重置账号。 已初始化数据库启动时若仍配置 `App.BootstrapPassword` 或 `YF_BOOTSTRAP_PASSWORD`，仅输出不含密码值的移除提醒，不重设密码、不修改配置文件。非空数据库仍只校验，不自动执行升级迁移（包括删除 OEM 数据的迁移）。MySQL 账号必须具备目标库创建和建表权限。
+IIS 发布包默认启用 `App.AutoInitializeDatabase=true`：首次启动自动创建不存在的数据库、对空库执行 EF 迁移并创建管理员。初始密码在发布包 `appsettings.Production.json` 的 `App.BootstrapPassword`，首次登录强制修改；后续重启不会重置账号。 已初始化数据库启动时若仍配置 `App.BootstrapPassword` 或 `YF_BOOTSTRAP_PASSWORD`，仅输出不含密码值的移除提醒，不重设密码、不修改配置文件。非空数据库仍只校验，不自动执行升级迁移；必须先备份并显式执行待应用迁移。MySQL 账号必须具备目标库创建和建表权限。
 
 不开启自动初始化时，也可由 DBA 先创建空库和专用账号，然后执行独立初始化：
 
@@ -226,9 +227,9 @@ python .\scripts\test-browser.py --output ..\.artifacts\tests\browser\browser-NE
 powershell -ExecutionPolicy Bypass -File .\scripts\publish-iis.ps1
 ```
 
-发布脚本参数以 `Get-Help .\scripts\publish-iis.ps1 -Detailed` 为准。默认在项目根 `deloy` 下创建唯一版本目录；也可用 `-FreshOutputDirectory` 指定该目录下尚不存在或为空的子目录，项目外路径会被拒绝。默认只生成版本文件夹，包含后端、`wwwroot` 前端、IIS 配置、安装脚本、说明及内部 `manifest.json`；仅显式增加 `-CreateArchive` 时生成 ZIP、发布清单和 SHA256 文件。发布脚本从被 Git 忽略的 `deploy/publish-defaults.local.json` 写出可直接供 IIS 读取的 `appsettings.Production.json`，其中包含数据库和 JWT 凭据；必须先填写实际 `WebBaseUrl`，必要时覆盖 `StorageRoot` 与 `CookieSecure`。将整个发布包作为私有制品复制到目标服务器，按包内 `README.md` 部署。不会在开发电脑上自动部署 IIS。
+发布脚本参数以 `Get-Help .\scripts\publish-iis.ps1 -Detailed` 为准。默认在项目根 `deloy` 下创建唯一版本目录；也可用 `-FreshOutputDirectory` 指定该目录下尚不存在或为空的子目录，项目外路径会被拒绝。默认只生成版本文件夹，包含后端、`wwwroot` 前端、IIS 配置、安装脚本、说明及内部 `manifest.json`；仅显式增加 `-CreateArchive` 时生成 ZIP、发布清单和 SHA256 文件。发布过程不下载、携带或安装病毒库/扫描服务；发布脚本从被 Git 忽略的 `deploy/publish-defaults.local.json` 写出可直接供 IIS 读取的 `appsettings.Production.json`，其中包含数据库和 JWT 凭据；必须先填写实际 `WebBaseUrl`，必要时覆盖 `StorageRoot`、`OemStorageRoot` 与 `CookieSecure`。将整个发布包作为私有制品复制到目标服务器，按包内 `README.md` 部署。不会在开发电脑上自动部署 IIS。
 
-开发机可直接运行 `python .\scripts\verify-release.py ..\deloy\<版本目录>` 验证默认发布文件夹；无需创建 ZIP。验证会在项目内临时目录复制制品，核对全部文件哈希与大小、实际 .NET 8 runtimeconfig、打包 SDK、IIS 启动配置及包内配置字段，再用该发布二进制执行隔离 HTTP 检查。若已用 `-CreateArchive` 生成 ZIP，也可传入 ZIP 路径；ZIP 模式额外核对 CRC、`.zip.sha256` 和 `.release-manifest.json`，不会跳过其校验。报告写入 `.artifacts/reports/releases`。测试报告、浏览器证据和可清理临时目录写入 `.artifacts/tests`。这些是开发机真实运行证据，不代表目标 IIS 或外部 SMTP 验收。
+开发机可直接运行 `python .\scripts\verify-release.py ..\deloy\<版本目录>` 验证默认发布文件夹；无需创建 ZIP。验证会在项目内临时目录复制制品，核对全部文件哈希与大小、实际 .NET 8 runtimeconfig、打包 SDK、IIS 启动配置、独立 OEM 存储配置、SharpCompress 归档检查依赖及包内配置字段，再用该发布二进制执行隔离 HTTP 检查。若已用 `-CreateArchive` 生成 ZIP，也可传入 ZIP 路径；ZIP 模式额外核对 CRC、`.zip.sha256` 和 `.release-manifest.json`，不会跳过其校验。报告写入 `.artifacts/reports/releases`。测试报告、浏览器证据和可清理临时目录写入 `.artifacts/tests`。这些是开发机制品证据，不代表目标 IIS、邮件或生产业务已经验收。
 
 ## IIS 正式服务器维护
 

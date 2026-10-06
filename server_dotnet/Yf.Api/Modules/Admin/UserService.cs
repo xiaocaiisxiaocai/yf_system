@@ -260,6 +260,8 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
 
     internal static async Task EnsureNoHistoryAsync(YfDbContext context, ulong id, CancellationToken ct)
     {
+        if (await context.Departments.AnyAsync(x => x.LeaderAccountId == id, ct))
+            throw ApiException.BadRequest("该账号仍是组织主管，请先清除或转交主管后再删除");
         if (await context.ProjectGroups.AnyAsync(x => x.ResponsibleUserId == id, ct) || await context.Projects.AnyAsync(x => x.ResponsibleUserId == id, ct))
             throw ApiException.BadRequest("该账号仍是主项目或子项目负责人，请先结束相关项目");
         if (await context.ProjectGroups.AnyAsync(x => x.CreatedBy == id, ct) || await context.ProjectGroupStatusLogs.AnyAsync(x => x.OperatorId == id, ct))
@@ -273,11 +275,24 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             || await context.CollaborationReads.AnyAsync(x => x.UserId == id, ct)
             || await context.Suppliers.AnyAsync(x => x.CreatedBy == id, ct)
             || await context.Users.AnyAsync(x => x.CreatedBy == id, ct)
-            || await context.EmailOutbox.AnyAsync(x => x.RecipientUserId == id, ct)
+            || await context.EmailOutbox.AnyAsync(x => x.RecipientUserId == id
+                || (x.RecipientRealm == IdentityRealms.Internal && x.RecipientAccountId == id), ct)
             || await context.AuditLogs.AnyAsync(x => x.UserId == id, ct)
             || await context.ProjectActivities.AnyAsync(x => x.ActorId == id, ct)
             || await context.ProjectCopies.AnyAsync(x => x.CopiedBy == id, ct)
-            || await context.ProjectCopyJobs.AnyAsync(x => x.RequestedBy == id, ct);
+            || await context.ProjectCopyJobs.AnyAsync(x => x.RequestedBy == id, ct)
+            || await context.OemCompanies.AnyAsync(x => x.CreatedBy == id, ct)
+            || await context.OemAccounts.AnyAsync(x => x.CreatedBy == id, ct)
+            || await context.OemRetentionTemplates.AnyAsync(x => x.CreatedBy == id, ct)
+            || await context.OemTransfers.AnyAsync(x => x.InternalSenderUserId == id
+                || x.ClosedByRealm == "internal" && x.ClosedById == id, ct)
+            || await context.OemTransferFiles.AnyAsync(x => x.UploadedByInternalUserId == id
+                || x.FirstRecipientRealm == "internal" && x.FirstRecipientId == id, ct)
+            || await context.OemFlowTemplates.AnyAsync(x => x.CreatedBy == id, ct)
+            || await context.OemFlowTemplateNodeUsers.AnyAsync(x => x.UserId == id, ct)
+            || await context.OemFlowInstances.AnyAsync(x => x.InitiatorUserId == id, ct)
+            || await context.OemFlowTasks.AnyAsync(x => x.ApproverUserId == id || x.ReassignedBy == id, ct)
+            || await context.OemDownloadSessions.AnyAsync(x => x.ActorRealm == "internal" && x.ActorId == id, ct);
         if (hasHistory) throw ApiException.BadRequest("该账号仍有业务或历史记录，请禁用账号，不要删除");
     }
 

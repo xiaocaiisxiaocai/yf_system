@@ -205,7 +205,6 @@ if ($isDirty -and !$AllowDirty) {
 if ($AllowInsecurePrivateConfiguration -and $ExternalConfigurationTemplate) {
     throw '-AllowInsecurePrivateConfiguration cannot be combined with -ExternalConfigurationTemplate.'
 }
-
 if ([string]::IsNullOrWhiteSpace($FreshOutputDirectory)) {
     $releaseId = 'Yf.System-{0}-{1}-{2}' -f [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'), $gitHead.Substring(0, 8), ([Guid]::NewGuid().ToString('N').Substring(0, 8))
     $FreshOutputDirectory = Join-Path $releasesRoot $releaseId
@@ -346,7 +345,7 @@ if (!$ExternalConfigurationTemplate) {
     $productionSettings.App.ConnectionString = $publishDefaults.App.ConnectionString
     $productionSettings.App.JwtSecret = $publishDefaults.App.JwtSecret
     $productionSettings.App.BootstrapPassword = New-RandomBase64 12
-    foreach ($name in @('StorageRoot', 'WebBaseUrl')) {
+    foreach ($name in @('StorageRoot', 'WebBaseUrl', 'OemStorageRoot')) {
         $override = $publishDefaults.App.PSObject.Properties[$name]
         if ($override -and ![string]::IsNullOrWhiteSpace([string]$override.Value)) {
             $productionSettings.App.$name = [string]$override.Value
@@ -375,6 +374,12 @@ if (!$ExternalConfigurationTemplate) {
 }
 $productionSettings.App | Add-Member -NotePropertyName AllowInsecureCookies -NotePropertyValue $insecureCookiesOverride -Force
 $storageRoot = Get-FullLocalPath ([string]$productionSettings.App.StorageRoot) 'App.StorageRoot'
+if (![string]::IsNullOrWhiteSpace([string]$productionSettings.App.OemStorageRoot)) {
+    $oemStorageRoot = Get-FullLocalPath ([string]$productionSettings.App.OemStorageRoot) 'App.OemStorageRoot'
+    if ((Test-Within $oemStorageRoot $storageRoot) -or (Test-Within $storageRoot $oemStorageRoot)) {
+        throw 'App.OemStorageRoot must be independent from App.StorageRoot.'
+    }
+}
 Write-Utf8NoBom $productionPath (($productionSettings | ConvertTo-Json -Depth 8) + "`n")
 Copy-Item -LiteralPath $noticesSource -Destination (Join-Path $outputRoot 'THIRD-PARTY-NOTICES.md')
 Copy-Item -LiteralPath $licensesSource -Destination (Join-Path $outputRoot 'licenses') -Recurse
@@ -553,12 +558,14 @@ if ($packagedSettings.App.ConnectionString -ne $productionSettings.App.Connectio
     $packagedSettings.App.JwtSecret -ne $productionSettings.App.JwtSecret -or
     $packagedSettings.App.BootstrapPassword -ne $productionSettings.App.BootstrapPassword -or
     $packagedSettings.App.StorageRoot -ne $productionSettings.App.StorageRoot -or
-    $packagedSettings.App.WebBaseUrl -ne $productionSettings.App.WebBaseUrl) {
+    $packagedSettings.App.WebBaseUrl -ne $productionSettings.App.WebBaseUrl -or
+    $packagedSettings.App.OemStorageRoot -ne $productionSettings.App.OemStorageRoot) {
     throw 'Packaged appsettings.Production.json does not match the selected configuration mode.'
 }
 foreach ($requiredPayload in @(
     'Yf.Api.dll', 'Yf.Api.runtimeconfig.json', 'web.config', 'wwwroot\index.html', 'precompressed-assets.json',
-    'install-iis.ps1', 'maintain-iis.ps1', 'maintenance-common.ps1'
+    'install-iis.ps1',
+    'maintain-iis.ps1', 'maintenance-common.ps1'
 )) {
     if (!(Test-Path -LiteralPath (Join-Path $outputRoot $requiredPayload) -PathType Leaf)) {
         throw "Required published payload is missing: $requiredPayload"
@@ -592,6 +599,9 @@ $packageManifest = [ordered]@{
         insecureOverride = [bool]$AllowInsecurePrivateConfiguration
         insecureCookies = [bool]$insecureCookiesOverride
     }
+    oem = [ordered]@{
+        storageConfigured = ![string]::IsNullOrWhiteSpace([string]$productionSettings.App.OemStorageRoot)
+    }
     files = $payloadFiles
 }
 $packageManifestPath = Join-Path $outputRoot 'manifest.json'
@@ -615,6 +625,7 @@ $releaseManifest = [ordered]@{
     source = $packageManifest.source
     build = $packageManifest.build
     configuration = $packageManifest.configuration
+    oem = $packageManifest.oem
     files = $allPackagedFiles
     archive = [ordered]@{
         path = $zipInfo.Name

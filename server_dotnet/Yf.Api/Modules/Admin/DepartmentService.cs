@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
+using Yf.Api.Modules.Identity;
 
 namespace Yf.Api.Modules.Admin;
 
@@ -11,14 +12,108 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
         AccessService.RequireInternal(actor);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         var all = await context.Departments.AsNoTracking().OrderBy(d => d.SortNo).ThenBy(d => d.Id).ToListAsync(ct);
+        var leaderIds = all.Where(department => department.LeaderAccountId.HasValue)
+            .Select(department => department.LeaderAccountId!.Value).Distinct().ToArray();
+        var leaders = leaderIds.Length == 0
+            ? new Dictionary<ulong, LeaderView>()
+            : await context.Users.AsNoTracking().Where(user => Enumerable.Contains(leaderIds, user.Id))
+                .Select(user => new LeaderView(user.Id, user.EmployeeNo, user.RealName, user.Status, user.UserType))
+                .ToDictionaryAsync(user => user.Id, ct);
         List<DepartmentTreeNode> Build(ulong? parent) => all.Where(x => x.ParentId == parent)
-            .Select(x => new DepartmentTreeNode(x.Id, x.Name, x.ParentId, x.Kind, x.SortNo, x.Status, Build(x.Id)))
+            .Select(x => new DepartmentTreeNode(
+                x.Id, x.Name, x.ParentId, x.Kind, x.SortNo, x.Status,
+                x.LeaderAccountId is ulong leaderId && leaders.TryGetValue(leaderId, out var leader)
+                    ? ToBrief(leader)
+                    : null,
+                Build(x.Id)))
             .ToList();
         return Build(null);
     }
 
     public Task<DepartmentResponse> CreateAsync(CurrentUser actor, DepartmentUpsert request, CancellationToken ct) => WriteAsync(actor, null, request, ct);
     public Task<DepartmentResponse> UpdateAsync(CurrentUser actor, ulong id, DepartmentUpsert request, CancellationToken ct) => WriteAsync(actor, id, request, ct);
+
+    public async Task<DepartmentLeaderOption[]> LeaderOptionsAsync(
+        CurrentUser actor, string? keyword, CancellationToken ct)
+    {
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        await ManagementAuthorization.RequireAsync(context, actor, "dept:leader_manage", ct);
+        var query = context.Users.AsNoTracking().Where(user =>
+            user.Status == AccountStatuses.Active && user.UserType == UserTypes.Internal);
+        var term = string.IsNullOrWhiteSpace(keyword) ? null : keyword.Trim();
+        if (term is not null)
+        {
+            var pattern = QueryValues.ContainsPattern(term);
+            query = query.Where(user =>
+                EF.Functions.Like(user.EmployeeNo, pattern, QueryValues.LikeEscape)
+                || EF.Functions.Like(user.RealName, pattern, QueryValues.LikeEscape));
+        }
+
+        var options = await query
+            .OrderBy(user => user.EmployeeNo)
+            .ThenBy(user => user.Id)
+            .Take(50)
+            .Select(user => new DepartmentLeaderOption(
+                user.Id,
+                user.EmployeeNo,
+                user.RealName,
+                context.Departments.Where(department => department.Id == user.DepartmentId)
+                    .Select(department => department.Name)
+                    .SingleOrDefault()))
+            .ToArrayAsync(ct);
+        await transaction.CommitAsync(ct);
+        return options;
+    }
+
+    public async Task<DepartmentLeaderResponse> SetLeaderAsync(
+        CurrentUser actor, ulong id, ulong? leaderUserId, CancellationToken ct)
+    {
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        await ManagementAuthorization.RequireAsync(context, actor, "dept:leader_manage", ct);
+        var department = await context.Departments
+            .FromSqlInterpolated($"SELECT * FROM departments WHERE id = {id} FOR UPDATE")
+            .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+        LeaderView? leader = null;
+        if (leaderUserId is ulong userId)
+        {
+            leader = await context.Users.AsNoTracking().Where(user => user.Id == userId)
+                .Select(user => new LeaderView(user.Id, user.EmployeeNo, user.RealName, user.Status, user.UserType))
+                .SingleOrDefaultAsync(ct) ?? throw ApiException.BadRequest("主管账号不存在");
+            if (!IsEligibleLeader(leader.Status, leader.UserType))
+                throw ApiException.BadRequest("主管必须是启用的内部账号");
+        }
+
+        var previousId = department.LeaderAccountId;
+        if (previousId != leaderUserId)
+        {
+            department.LeaderAccountId = leaderUserId;
+            await context.SaveChangesAsync(ct);
+            var previous = previousId is ulong oldId
+                ? await context.Users.AsNoTracking().Where(user => user.Id == oldId)
+                    .Select(user => new { user.Id, user.EmployeeNo, user.RealName }).SingleOrDefaultAsync(ct)
+                : null;
+            await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id,
+                "DEPT_LEADER_CHANGE", "department", id, new
+                {
+                    targetName = department.Name,
+                    changes = AuditChange.OnlyChanged(new AuditChange("leader", "主管", previous,
+                        leader is null ? null : new { leader.Id, leader.EmployeeNo, leader.RealName }))
+                }, null, ct);
+        }
+        await transaction.CommitAsync(ct);
+        return new DepartmentLeaderResponse(department.Id, department.Name, department.Kind,
+            leader is null ? null : ToBrief(leader));
+    }
+
+    internal static bool IsEligibleLeader(string status, string userType) =>
+        status == AccountStatuses.Active && userType == UserTypes.Internal;
+
+    private static DepartmentLeaderBrief ToBrief(LeaderView leader) =>
+        new(leader.Id, leader.EmployeeNo, leader.RealName, IsEligibleLeader(leader.Status, leader.UserType));
+
+    private sealed record LeaderView(ulong Id, string EmployeeNo, string RealName, string Status, string UserType);
 
     private async Task<DepartmentResponse> WriteAsync(CurrentUser actor, ulong? id, DepartmentUpsert request, CancellationToken ct)
     {

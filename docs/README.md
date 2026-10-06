@@ -10,10 +10,11 @@
 | [开发数据初始化说明](开发数据初始化说明.md) | 新库初始化与开发数据清理 |
 | [Office 预览源码接入说明](Office预览源码接入说明.md) | Excel／PDF／PPTX 预览源码与构建 |
 | [留言图片说明](留言图片说明.md) | 留言图片的格式、数量与大小限制 |
+| [OEM 当前集成与部署](../server_dotnet/docs/OEM当前集成与部署-2026-10-05.md) | 当前 OEM 范围、独立存储、无内置病毒扫描、发布与恢复边界 |
 
 ## 业务契约
 
-业务规则的权威来源是 [`server_dotnet/docs/`](../server_dotnet/docs/) 中带日期的契约文档（如主项目与子项目协作、邮件提醒、上传资料要求、并发与错误响应、部署单实例约束）。同一主题以日期最新的契约为准。后端命令与部署见 [`server_dotnet/README.md`](../server_dotnet/README.md) 和 [`server_dotnet/deploy/README.md`](../server_dotnet/deploy/README.md)。
+业务规则的权威来源是 [`server_dotnet/docs/`](../server_dotnet/docs/) 中带日期的契约文档（如主项目与子项目协作、邮件提醒、上传资料要求、并发与错误响应、OEM 当前集成、部署单实例约束）。同一主题以日期最新的契约为准；2026-09-18/19 的三份 OEM 文档保留为历史设计与审查记录，现行运行配置和部署以 2026-10-05 集成说明为准。后端命令与部署见 [`server_dotnet/README.md`](../server_dotnet/README.md) 和 [`server_dotnet/deploy/README.md`](../server_dotnet/deploy/README.md)。
 
 ## 历史记录
 

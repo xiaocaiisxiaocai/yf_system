@@ -157,6 +157,11 @@ public sealed class ConnectionLifecycleTests
                     FROM project_groups g JOIN suppliers s ON s.name='待清理供应商' JOIN users u ON u.employee_no='discard'
                     WHERE g.name='待清理主项目';
                     INSERT INTO messages(project_id,sender_id,content) SELECT p.id,p.created_by,'待清理留言' FROM projects p;
+                    INSERT INTO oem_companies(name,status,created_at,updated_at)
+                    VALUES('待清理 OEM 厂商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+                    INSERT INTO oem_accounts(employee_no,password_hash,real_name,email,oem_company_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+                    SELECT 'oem-discard','unused','待清理 OEM 用户','oem-discard@example.invalid',id,'ACTIVE',1,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)
+                    FROM oem_companies WHERE name='待清理 OEM 厂商';
                     UPDATE system_configs SET cfg_value='false' WHERE cfg_key='notify.enabled';
                     INSERT INTO system_configs(cfg_key,cfg_value) VALUES('smtp.reset-test-secret','retained-test-value');
                     """);
@@ -167,6 +172,8 @@ public sealed class ConnectionLifecycleTests
             Assert.Equal(27, plan.RobotCatalogPartCount);
             Assert.Equal(8, plan.Counts["suppliers"]);
             Assert.Equal(27, plan.Counts["robot_parts"]);
+            Assert.Equal(1, plan.Counts["oem_companies"]);
+            Assert.Equal(1, plan.Counts["oem_accounts"]);
             await Assert.ThrowsAsync<InvalidOperationException>(() => DevelopmentDataReset.ResetAsync(database.Options, "wrong-db", plan.StorageRoot, ct));
             Assert.True(File.Exists(Path.Combine(root, "files", "2026", "sample.pdf")));
             // Like the site, the lease holder uses its own non-pooled connection.
@@ -187,7 +194,7 @@ public sealed class ConnectionLifecycleTests
             Assert.True(result.ResetCompleted);
             Assert.Equal(1, result.Counts["users"]);
             Assert.Equal(1, result.Counts["roles"]);
-            foreach (var table in new[] { "projects", "messages", "departments", "refresh_tokens", "audit_logs" }) Assert.Equal(0, result.Counts[table]);
+            foreach (var table in new[] { "projects", "messages", "departments", "refresh_tokens", "audit_logs", "oem_companies", "oem_accounts" }) Assert.Equal(0, result.Counts[table]);
             Assert.Equal(7, result.Counts["suppliers"]);
             Assert.Equal(27, result.Counts["robot_parts"]);
             Assert.True(result.RobotCatalogWillBeReinitialized);
@@ -204,6 +211,10 @@ public sealed class ConnectionLifecycleTests
                 Assert.Equal(passwordHash, await conn.ExecuteScalarAsync<string>("SELECT password_hash FROM users WHERE employee_no='admin'"));
                 Assert.Equal("retained-test-value", await conn.ExecuteScalarAsync<string>("SELECT cfg_value FROM system_configs WHERE cfg_key='smtp.reset-test-secret'"));
                 Assert.Equal("false", await conn.ExecuteScalarAsync<string>("SELECT cfg_value FROM system_configs WHERE cfg_key='notify.enabled'"));
+                Assert.Equal("RESTORED", await conn.ExecuteScalarAsync<string>("SELECT cfg_value FROM system_configs WHERE cfg_key='oem.storage.reconcile_required'"));
+                Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_templates WHERE id=1 AND is_default=1"));
+                Assert.Equal(2, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_template_nodes WHERE template_id=1"));
+                Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_retention_templates WHERE id=1"));
                 Assert.Equal(7, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
                 Assert.Equal(27, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
             }

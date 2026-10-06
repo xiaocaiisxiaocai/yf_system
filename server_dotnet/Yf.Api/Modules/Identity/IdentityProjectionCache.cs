@@ -36,6 +36,7 @@ public sealed class IdentityProjectionCache
     internal async Task<IdentityProjection?> ResolveAsync(
         AppDb db, AccessClaims claims, CancellationToken ct)
     {
+        RequireInternalRealm(claims);
         await using var connection = await db.OpenAsync(ct);
         var probe = await ProbeAsync(connection, ct);
         return await ResolveAsync(probe, claims,
@@ -48,6 +49,7 @@ public sealed class IdentityProjectionCache
         Func<CancellationToken, Task<IdentityProjection?>> loader,
         CancellationToken ct)
     {
+        RequireInternalRealm(claims);
         var key = new IdentityCacheKey(probe.Revision, claims.UserId, claims.SessionId);
         var revisionIsCurrent = Observe(probe.Revision);
         if (revisionIsCurrent && TryGet(key, probe.DatabaseNow, out var cached)) return cached;
@@ -59,6 +61,12 @@ public sealed class IdentityProjectionCache
             else loaded = loaded with { ValidUntil = null };
         }
         return loaded;
+    }
+
+    private static void RequireInternalRealm(AccessClaims claims)
+    {
+        if (claims.Realm != IdentityRealms.Internal)
+            throw new ArgumentException("The shared identity cache only accepts the internal realm.", nameof(claims));
     }
 
     private bool Observe(ulong revision)

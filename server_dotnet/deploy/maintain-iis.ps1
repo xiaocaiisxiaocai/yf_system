@@ -47,6 +47,18 @@ function Grant-YfApplicationAccess([string]$Root,$Config,[string]$Pool,[switch]$
         & icacls.exe $Config.Storage /grant "${identity}:(OI)(CI)M" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application pool access.' }
     }
+    if ($Config.OemStorage) {
+        if ($NewStorage -and !(Test-Path -LiteralPath $Config.OemStorage)) {
+            New-Item -ItemType Directory -Path $Config.OemStorage | Out-Null
+        }
+        if ($NewStorage) {
+            # OEM content is not restored from the collaboration backup; the new empty root gets a fresh restricted ACL.
+            Set-YfApplicationDirectoryAcl $Config.OemStorage $identity
+        } else {
+            & icacls.exe $Config.OemStorage /grant "${identity}:(OI)(CI)M" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application pool access to OEM storage.' }
+        }
+    }
     $logDirectory=Get-YfLogDirectory $Config
     if ($logDirectory) {
         if (!(Test-Path -LiteralPath $logDirectory)) {
@@ -97,7 +109,9 @@ Assert-YfEffectiveConfiguration $SiteName $pool $currentConfig.Path $currentConf
 if ($currentConfig.Origin -notlike 'https://*' -or $currentConfig.Config.App.CookieSecure -ne $true) { throw 'Maintenance requires a production HTTPS origin and secure cookies.' }
 if ($currentConfig.Config.App.PSObject.Properties['AllowInsecureCookies'] -and $currentConfig.Config.App.AllowInsecureCookies -eq $true) { throw 'Maintenance requires App.AllowInsecureCookies to be absent or false.' }
 $backupRoot=Get-YfFullPath $BackupDirectory
-Assert-YfSeparate @($currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupRoot)
+$currentPaths=@($currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupRoot)
+if ($currentConfig.OemStorage) { $currentPaths += $currentConfig.OemStorage }
+Assert-YfSeparate $currentPaths
 if ($currentConfig.CaFile) { Assert-YfSeparate @($currentConfig.CaFile,$currentRoot,$backupRoot) }
 if ($Action -eq 'Restore') {
     if ($MigrateDatabase) { throw 'Restore uses the backed-up application and schema; migration must be a separate later upgrade.' }
@@ -117,11 +131,14 @@ if ($Action -ne 'Backup') {
     $NewSiteRoot=Get-YfFullPath $NewSiteRoot
     Assert-YfEmptyDirectory $NewSiteRoot
     $paths=@($currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupRoot,$NewSiteRoot)
+    if ($currentConfig.OemStorage) { $paths += $currentConfig.OemStorage }
     if ($currentConfig.CaFile) { Assert-YfSeparate @($currentConfig.CaFile,$currentRoot,$backupRoot,$NewSiteRoot) }
     if ($Action -eq 'Restore') {
         $paths+=@($targetConfig.Storage,$targetConfig.Path)
+        if ($targetConfig.OemStorage) { $paths += $targetConfig.OemStorage }
         if ($targetConfig.CaFile) { Assert-YfSeparate @($targetConfig.CaFile,$currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupRoot,$NewSiteRoot) }
         Assert-YfEmptyDirectory $targetConfig.Storage
+        if ($targetConfig.OemStorage) { Assert-YfEmptyDirectory $targetConfig.OemStorage }
     }
     $logDirectory=Get-YfLogDirectory $targetConfig
     if ($logDirectory) { Assert-YfNoLinks $logDirectory; $paths+=$logDirectory }
@@ -130,7 +147,9 @@ if ($Action -ne 'Backup') {
 }
 if ($Action -eq 'Upgrade') {
     $PackageRoot=Get-YfFullPath $PackageRoot
-    Assert-YfSeparate @($PackageRoot,$currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupRoot,$NewSiteRoot)
+    $upgradePaths=@($PackageRoot,$currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupRoot,$NewSiteRoot)
+    if ($currentConfig.OemStorage) { $upgradePaths += $currentConfig.OemStorage }
+    Assert-YfSeparate $upgradePaths
     if ($currentConfig.CaFile) { Assert-YfSeparate @($currentConfig.CaFile,$PackageRoot,$currentRoot,$backupRoot,$NewSiteRoot) }
     Assert-YfManifest $PackageRoot | Out-Null
     Assert-YfPublishedConfig $PackageRoot

@@ -81,6 +81,9 @@ describe('ProjectList migrated behavior', () => {
   })
 
   it('robot part selection ignores late vendors, rejects stale parts, and submits only the new contract', async () => {
+    // The date picker opens the current month; keep the selected September date deterministic.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 8, 15, 12))
     const pending = new Map<number, ReturnType<typeof deferred<{ data: unknown[] }>>>()
     mocks.get.mockImplementation((url: string, config?: { params?: { supplierId?: number } }) => {
       if (url !== '/robot-parts') return successfulGet(url, config)

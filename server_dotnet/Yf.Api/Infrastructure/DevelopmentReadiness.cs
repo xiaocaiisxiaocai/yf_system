@@ -1,5 +1,6 @@
 using System.Net;
 using MySqlConnector;
+using Yf.Api.Modules.Oem.Policies;
 
 namespace Yf.Api.Infrastructure;
 
@@ -13,7 +14,8 @@ internal sealed record DevelopmentReadinessChecks(
 internal sealed record DevelopmentReadinessReport(
     bool ReadyForStartup,
     DevelopmentReadinessChecks Checks,
-    IReadOnlyList<string> Issues);
+    IReadOnlyList<string> Issues,
+    OemReadinessReport? Oem = null);
 
 /// <summary>
 /// Performs a bounded, local-only preflight without constructing the application host. Database
@@ -42,12 +44,38 @@ internal static class DevelopmentReadiness
             await EfDatabaseLifecycle.ValidateReadyAsync(connection, cancellationToken);
             await Yf.Api.Modules.Files.FileBlobBackfill.ValidateInvariantAsync(connection,
                 Path.GetFullPath(options.StorageRoot), cancellationToken);
+            if (string.IsNullOrWhiteSpace(options.OemStorageRoot))
+                return OemReadinessDatabaseEvidence.NotVerified;
+
+            try
+            {
+                await using var db = EfDb.Use(connection);
+                var settings = await OemSettings.LoadAsync(db, cancellationToken);
+                return new OemReadinessDatabaseEvidence(!settings.ReconcileRequired);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch
+            {
+                // OEM settings are optional readiness evidence. Missing or unreadable rows must not
+                // turn an otherwise healthy collaboration database into a startup failure.
+                return OemReadinessDatabaseEvidence.NotVerified;
+            }
+        }, ct);
+
+    internal static Task<DevelopmentReadinessReport> CheckAsync(
+        AppOptions options,
+        string applicationRoot,
+        Func<CancellationToken, Task> validateDatabase,
+        CancellationToken ct) => CheckAsync(options, applicationRoot, async cancellationToken =>
+        {
+            await validateDatabase(cancellationToken);
+            return OemReadinessDatabaseEvidence.NotVerified;
         }, ct);
 
     internal static async Task<DevelopmentReadinessReport> CheckAsync(
         AppOptions options,
         string applicationRoot,
-        Func<CancellationToken, Task> validateDatabase,
+        Func<CancellationToken, Task<OemReadinessDatabaseEvidence>> validateDatabase,
         CancellationToken ct)
     {
         var issues = new List<string>();
@@ -65,9 +93,10 @@ internal static class DevelopmentReadiness
             return new(false, new(true, false, false, false, false), ["non-loopback-target"]);
 
         var databaseReady = false;
+        var oemDatabaseEvidence = OemReadinessDatabaseEvidence.NotVerified;
         try
         {
-            await validateDatabase(ct);
+            oemDatabaseEvidence = await validateDatabase(ct);
             databaseReady = true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -85,8 +114,9 @@ internal static class DevelopmentReadiness
 
         var checks = new DevelopmentReadinessChecks(
             true, true, databaseReady, storageReady, workerReady);
+        var oem = await OemReadiness.CheckAsync(options, oemDatabaseEvidence, ct);
         return new(checks.Configuration && checks.LocalTargets && checks.Database
-            && checks.Storage && checks.Worker, checks, issues);
+            && checks.Storage && checks.Worker, checks, issues, oem);
     }
 
     private static bool UsesOnlyLoopbackTargets(AppOptions options)

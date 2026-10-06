@@ -48,6 +48,7 @@ directory.
 | Mono.TextTemplating | 3.0.0 | Transitive | `licenses/dotnet-LICENSE.txt` |
 | MySqlConnector | 2.6.2 | Direct | `licenses/MySqlConnector-LICENSE.txt` |
 | Pomelo.EntityFrameworkCore.MySql | 9.0.0 | Direct | `licenses/Pomelo.EntityFrameworkCore.MySql-LICENSE.txt` |
+| SharpCompress | 0.50.4 | Direct | `licenses/SharpCompress-LICENSE.txt` |
 | System.CodeDom | 6.0.0 | Transitive | `licenses/dotnet-LICENSE.txt` |
 | System.Collections.Immutable | 7.0.0 | Transitive | `licenses/dotnet-LICENSE.txt` |
 | System.Composition | 7.0.0 | Transitive | `licenses/dotnet-LICENSE.txt` |
@@ -76,6 +77,8 @@ directory.
 - Pomelo.EntityFrameworkCore.MySql 9.0.0 declares MIT in its NuGet metadata.
   Its bundled license is from package repository commit
   `58dd6883cb9616fe49f671b943a826b459c0117f`.
+- SharpCompress 0.50.4 declares MIT in its NuGet metadata. The distributed
+  license is the complete `LICENSE.txt` carried by the restored package.
 - Konscious.Security.Cryptography.Argon2 1.3.1 and Blake2 1.1.1 declare MIT.
   Their shared license is from package repository commit
   `4ed95a5377e411506ca6868409b5c7d7ecaa859b` at
