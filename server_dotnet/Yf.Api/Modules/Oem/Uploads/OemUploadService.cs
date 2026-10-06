@@ -39,7 +39,7 @@ public sealed partial class OemUploadService(
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
         var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
-        OemTransferService.EnsureOwnDraft(current, transfer);
+        await OemTransferService.EnsureOwnDraftAsync(uow, current, transfer, ct);
         if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
         var settings = await OemSettings.LoadAsync(uow.Db, ct);
         if (settings.ReconcileRequired) throw new ApiException(503, 50302, "系统正在进行存储核对，暂时不能上传");
@@ -124,6 +124,7 @@ public sealed partial class OemUploadService(
         {
             var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
             session = await LoadOwnSessionAsync(uow, current, sessionId, forUpdate: false, ct);
+            if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
             await OemSettings.EnsureStorageSettledAsync(uow.Db, "上传", ct);
             if (session.Status != UploadStatuses.Uploading) throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
             if (session.ExpiresAt <= uow.Now) throw ApiException.Conflict("上传会话已过期，请重新发起");
@@ -136,6 +137,7 @@ public sealed partial class OemUploadService(
         var path = storage.ChunkPath(sessionId, (uint)index);
         storage.SessionDirectory(sessionId, create: true, ct);
         var temporary = path + $".{Guid.NewGuid():N}.uploading";
+        var open = true;
         try
         {
             await WriteExactAsync(request.Body, temporary, expected, ct);
@@ -150,6 +152,34 @@ public sealed partial class OemUploadService(
         finally
         {
             TryDeleteFile(temporary);
+            open = await RemoveIfClosedAsync(sessionId);
+        }
+        if (!open) throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
+    }
+
+    /// <summary>
+    /// Chunk writes do not take the merge lock (chunks upload in parallel), so an abort, expiry or
+    /// completed merge may have removed the session directory while a chunk was being written and
+    /// the write recreated it. Re-reads the committed status and removes the directory of a session
+    /// that is no longer open; false when it was removed.
+    /// </summary>
+    private async Task<bool> RemoveIfClosedAsync(string sessionId)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            string? status;
+            await using (var uow = await OemUnitOfWork.ReadAsync(dbFactory, timeout.Token))
+                status = await uow.Db.OemUploadSessions.AsNoTracking().Where(item => item.Id == sessionId)
+                    .Select(item => item.Status).SingleOrDefaultAsync(timeout.Token);
+            if (status is UploadStatuses.Uploading or UploadStatuses.Merging) return true;
+            await TryDeleteDirectoryAsync(storage.SessionDirectory(sessionId, create: false, timeout.Token));
+            return false;
+        }
+        catch (Exception error)
+        {
+            logger.LogWarning("OEM chunk session recheck failed ({ErrorType}).", error.GetType().Name);
+            return true;
         }
     }
 
@@ -182,6 +212,7 @@ public sealed partial class OemUploadService(
         {
             current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
             session = await LoadOwnSessionAsync(uow, current, sessionId, forUpdate: true, ct);
+            if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
             if (session.Status == UploadStatuses.Completed && session.ResultFileId is ulong done)
             {
                 await uow.CommitAsync(ct);
@@ -223,7 +254,8 @@ public sealed partial class OemUploadService(
             {
                 current = await OemAuthorizer.RecheckAsync(uow, current, ct);
                 var transfer = await OemTransferProgression.LockTransferAsync(uow, session.TransferId, ct);
-                OemTransferService.EnsureOwnDraft(current, transfer);
+                await OemTransferService.EnsureOwnDraftAsync(uow, current, transfer, ct);
+                if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
                 var locked = await LoadOwnSessionAsync(uow, current, sessionId, forUpdate: true, ct);
                 if (locked.Status != UploadStatuses.Merging) throw ApiException.Conflict("上传会话状态已变化，请重新查询");
                 // Re-checked right before the file appears in quarantine: the reconcile
@@ -268,7 +300,11 @@ public sealed partial class OemUploadService(
         }
         catch (Exception error)
         {
-            if (movedTo is not null && !committed) TryDeleteFile(movedTo);
+            // A commit can succeed even though CommitAsync reported a fault (e.g. the connection
+            // dropped while the OK was in flight). Only delete the stored file when a fresh read
+            // proves the row was not committed; when that is unknown, keep it (an orphan file is
+            // recoverable by reconcile, a committed row pointing at a deleted file is not).
+            if (movedTo is not null && !committed && await MergeCommittedAsync(sessionId) == false) TryDeleteFile(movedTo);
             TryDeleteFile(mergeTemp);
             await ResetMergeAsync(sessionId);
             if (error is UnauthorizedAccessException or FileNotFoundException)
@@ -280,28 +316,39 @@ public sealed partial class OemUploadService(
         }
     }
 
-    /// <summary>Maintenance: expire stale sessions, release their reservations and remove chunk directories.</summary>
+    /// <summary>
+    /// Maintenance: expire stale sessions, release their reservations and remove chunk directories.
+    /// Each session is expired under its merge lock, so a merge (or abort) that is still running —
+    /// a large merge may outlive the session TTL — is skipped and never loses its chunks mid-merge.
+    /// </summary>
     public async Task<int> ExpireStaleSessionsAsync(CancellationToken ct)
     {
         if (!storage.IsConfigured) return 0;
-        string[] ids;
-        await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))
+        string[] candidates;
+        await using (var read = await OemUnitOfWork.ReadAsync(dbFactory, ct))
+            candidates = await read.Db.OemUploadSessions.AsNoTracking()
+                .Where(session => (session.Status == UploadStatuses.Uploading || session.Status == UploadStatuses.Merging) && session.ExpiresAt <= read.Now)
+                .OrderBy(session => session.ExpiresAt).Select(session => session.Id).Take(200).ToArrayAsync(ct);
+        var expired = 0;
+        foreach (var id in candidates)
         {
-            var stale = await uow.Db.OemUploadSessions
-                .Where(session => (session.Status == UploadStatuses.Uploading || session.Status == UploadStatuses.Merging) && session.ExpiresAt <= uow.Now)
-                .Take(200).ToArrayAsync(ct);
-            foreach (var session in stale)
+            await using var mergeLock = await TryAcquireMergeLockAsync(id, ct);
+            if (mergeLock is null) continue;
+            await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))
             {
+                var session = await uow.Db.OemUploadSessions
+                    .FromSqlInterpolated($"SELECT * FROM oem_upload_sessions WHERE id = {id} FOR UPDATE").SingleOrDefaultAsync(ct);
+                if (session is null || session.Status is not (UploadStatuses.Uploading or UploadStatuses.Merging) || session.ExpiresAt > uow.Now) continue;
                 session.Status = UploadStatuses.Expired;
                 session.ReservedBytes = 0;
                 session.UpdatedAt = uow.Now;
+                await uow.Db.SaveChangesAsync(ct);
+                await uow.CommitAsync(ct);
             }
-            await uow.Db.SaveChangesAsync(ct);
-            await uow.CommitAsync(ct);
-            ids = stale.Select(session => session.Id).ToArray();
+            await TryDeleteDirectoryAsync(storage.SessionDirectory(id, create: false, ct));
+            expired++;
         }
-        foreach (var id in ids) await TryDeleteDirectoryAsync(storage.SessionDirectory(id, create: false, ct));
-        return ids.Length;
+        return expired;
     }
 
     private async Task<OemUploadedFileResponse> FileJsonAsync(ulong fileId, CancellationToken ct)
@@ -330,14 +377,41 @@ public sealed partial class OemUploadService(
         }
     }
 
+    /// <summary>Whether a fresh read shows the merge committed; null when the database cannot answer.</summary>
+    private async Task<bool?> MergeCommittedAsync(string sessionId)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, timeout.Token);
+            return await uow.Db.OemUploadSessions.AsNoTracking().AnyAsync(session => session.Id == sessionId
+                && session.Status == UploadStatuses.Completed && session.ResultFileId != null, timeout.Token);
+        }
+        catch (Exception error)
+        {
+            logger.LogWarning("OEM merge commit check failed ({ErrorType}); the merged file is kept for reconcile.", error.GetType().Name);
+            return null;
+        }
+    }
+
     private async Task<MySqlNamedLockLease> AcquireMergeLockAsync(string sessionId, CancellationToken ct)
     {
         if (!Guid.TryParseExact(sessionId, "D", out _)) throw ApiException.NotFound();
+        return await TryAcquireMergeLockAsync(sessionId, ct) ?? throw ApiException.Conflict("该文件正在合并，请稍候");
+    }
+
+    private async Task<MySqlNamedLockLease?> TryAcquireMergeLockAsync(string sessionId, CancellationToken ct)
+    {
         var connection = await appDb.OpenAsync(ct);
         try
         {
             var name = MySqlNamedLock.Name("oem-merge", connection.Database, sessionId);
-            var lease = await MySqlNamedLock.TryAcquireAsync(connection, name, 0, ct) ?? throw ApiException.Conflict("该文件正在合并，请稍候");
+            var lease = await MySqlNamedLock.TryAcquireAsync(connection, name, 0, ct);
+            if (lease is null)
+            {
+                await connection.DisposeAsync();
+                return null;
+            }
             return new MySqlNamedLockLease(connection, lease);
         }
         catch

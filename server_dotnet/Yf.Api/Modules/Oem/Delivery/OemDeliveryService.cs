@@ -78,6 +78,10 @@ public sealed class OemDeliveryService(
     /// <summary>Starts a logical download session and hands the browser a path-scoped HttpOnly grant cookie.</summary>
     public async Task<OemDownloadSessionResponse> StartAsync(HttpContext context, OemActor actor, ulong fileId, CancellationToken ct)
     {
+        // The grant and cookie are checked against this process's clock, the session row against
+        // the database clock; the app-clock expiry is derived from a DB-clock duration, anchored
+        // before the database clock is read so it can only err early.
+        var appAnchor = DateTimeOffset.UtcNow;
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
         var (file, transfer, capabilities) = await LoadReadableAsync(uow, current, fileId, ct);
@@ -99,14 +103,15 @@ public sealed class OemDeliveryService(
             targetName = file.OriginalName, transferId = transfer.Id, downloadSessionId = session.Id, session.Purpose, recipientSide = session.RecipientSide,
         }, ct);
         await uow.CommitAsync(ct);
-        var expiresAt = new DateTimeOffset(DateTime.SpecifyKind(Min(deadline, uow.Now.Add(GrantLifetime)), DateTimeKind.Utc));
-        var token = grants.Issue(new DownloadGrant(current.Realm, current.Id, current.LoginSessionId, session.Id, fileId, file.StoredName, expiresAt.ToUnixTimeSeconds()));
+        var expiresAt = DateTime.SpecifyKind(Min(deadline, uow.Now.Add(GrantLifetime)), DateTimeKind.Utc);
+        var appExpiresAt = appAnchor + (expiresAt - uow.Now);
+        var token = grants.Issue(new DownloadGrant(current.Realm, current.Id, current.LoginSessionId, session.Id, fileId, file.StoredName, appExpiresAt.ToUnixTimeSeconds()));
         context.Response.Cookies.Append(OemDownloadGrantService.CookieName(fileId), token, new CookieOptions
         {
             HttpOnly = true, Secure = options.CookieSecure, SameSite = SameSiteMode.Strict,
-            Path = OemDownloadGrantService.CookiePath(fileId), Expires = expiresAt,
+            Path = OemDownloadGrantService.CookiePath(fileId), Expires = appExpiresAt,
         });
-        return new OemDownloadSessionResponse(session.Id, OemDownloadGrantService.CookiePath(fileId), expiresAt.UtcDateTime, session.Purpose);
+        return new OemDownloadSessionResponse(session.Id, OemDownloadGrantService.CookiePath(fileId), expiresAt, session.Purpose);
     }
 
     /// <summary>Streams the file (or one byte range) for a cookie-authenticated download session.</summary>
@@ -120,8 +125,11 @@ public sealed class OemDeliveryService(
         OemTransferFile file;
         ByteRange range;
         DateTime hardDeadline;
+        DateTime appHardDeadline;
         TimeSpan idleTimeout;
         string path;
+        // Anchor for converting the DB-clock deadline into this process's clock (see StartAsync).
+        var appAnchor = DateTime.UtcNow;
         await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))
         {
             var actor = await LiveActorAsync(uow, grant, ct);
@@ -158,6 +166,7 @@ public sealed class OemDeliveryService(
             idleTimeout = settings.IdleTimeout;
             hardDeadline = Min(session.AbsoluteDeadline, uow.Now.Add(settings.MaxRequestDuration));
             if (locked.PurgeDueAt is DateTime purgeDue) hardDeadline = Min(hardDeadline, purgeDue.Add(settings.PurgeDrain));
+            appHardDeadline = appAnchor + (hardDeadline - uow.Now);
             leaseId = Guid.NewGuid().ToString("D");
             uow.Db.OemDownloadLeases.Add(new OemDownloadLease
             {
@@ -172,7 +181,7 @@ public sealed class OemDeliveryService(
         var delivered = false;
         try
         {
-            delivered = await SendRangeAsync(context, path, file, range, leaseId, hardDeadline, idleTimeout, ct);
+            delivered = await SendRangeAsync(context, path, file, range, leaseId, appHardDeadline, idleTimeout, ct);
         }
         finally
         {
@@ -194,8 +203,9 @@ public sealed class OemDeliveryService(
             ranges.Where(range => range.SessionId == item.Id).Aggregate(0UL, (sum, range) => sum + range.EndOffset - range.StartOffset + 1))).ToArray();
     }
 
+    /// <param name="appHardDeadline">Hard deadline in this process's UTC clock (the lease row keeps the DB-clock one).</param>
     private async Task<bool> SendRangeAsync(HttpContext context, string path, OemTransferFile file, ByteRange range, string leaseId,
-        DateTime hardDeadline, TimeSpan idleTimeout, CancellationToken ct)
+        DateTime appHardDeadline, TimeSpan idleTimeout, CancellationToken ct)
     {
         var partial = range.Start != 0 || range.End != file.SizeBytes - 1;
         var response = context.Response;
@@ -210,7 +220,7 @@ public sealed class OemDeliveryService(
         response.Headers.ContentDisposition = disposition.ToString();
 
         using var guard = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var remainingUntilDeadline = DateTime.SpecifyKind(hardDeadline, DateTimeKind.Utc) - DateTime.UtcNow;
+        var remainingUntilDeadline = appHardDeadline - DateTime.UtcNow;
         guard.CancelAfter(remainingUntilDeadline > TimeSpan.Zero ? remainingUntilDeadline : TimeSpan.Zero);
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
         stream.Seek((long)range.Start, SeekOrigin.Begin);

@@ -96,6 +96,15 @@ public sealed class OemTransferProgression(OemApprovalEngine engine, OemAuditWri
     internal async Task ReleaseAsync(OemUnitOfWork uow, OemTransfer transfer, OemActor? actor, CancellationToken ct)
     {
         TransferStateMachine.Ensure(transfer.LifecycleStatus, TransferLifecycle.Released);
+        // Files can become undeliverable while approval runs (reconcile may mark one STORAGE_LOST),
+        // so the release decision re-reads them under the transfer lock and fails closed.
+        var files = await TransferFilesState.LoadAsync(uow.Db, transfer.Id, ct);
+        if (!files.AllReady)
+        {
+            await CloseAsync(uow, transfer, TransferLifecycle.Blocked,
+                files.AnyValidationFailure ? "附件未通过文件校验" : "附件已丢失或不可用，未能发布", null, PurgeReasons.Blocked, ct);
+            return;
+        }
         var snapshot = new RetentionSnapshot(transfer.RetentionMode!, transfer.ReleaseTtlMinutes, transfer.ReceiptGraceMinutes);
         transfer.LifecycleStatus = TransferLifecycle.Released;
         transfer.ReleasedAt = uow.Now;

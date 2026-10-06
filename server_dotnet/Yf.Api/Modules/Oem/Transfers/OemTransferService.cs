@@ -146,10 +146,8 @@ public sealed class OemTransferService(
         var transfer = await LockOwnDraftAsync(uow, current, id, version, ct);
         if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
         await OemSettings.EnsureStorageSettledAsync(uow.Db, "发送", ct);
-        if (current is OemAccountActor && !await uow.Db.OemCompanies.AnyAsync(company => company.Id == transfer.OemCompanyId && company.Status == OemStatus.Active, ct))
-            throw ApiException.Forbidden();
-        if (current is InternalOemActor && !await uow.Db.OemCompanies.AnyAsync(company => company.Id == transfer.OemCompanyId && company.Status == OemStatus.Active, ct))
-            throw ApiException.BadRequest("目标厂商已停用");
+        if (!await uow.Db.OemCompanies.AnyAsync(company => company.Id == transfer.OemCompanyId && company.Status == OemStatus.Active, ct))
+            throw current is OemAccountActor ? ApiException.Forbidden() : ApiException.BadRequest("目标厂商已停用");
         if (current is InternalOemActor)
             await OemRecipientPolicy.RequireEnabledAccountAsync(uow.Db, transfer.OemCompanyId, ct);
         var activeUploads = await uow.Db.OemUploadSessions.AnyAsync(session => session.TransferId == id
@@ -200,7 +198,7 @@ public sealed class OemTransferService(
         var transferId = await uow.Db.OemTransferFiles.Where(file => file.Id == fileId).Select(file => (ulong?)file.TransferId).SingleOrDefaultAsync(ct)
             ?? throw ApiException.NotFound();
         var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
-        EnsureOwnDraft(current, transfer);
+        await EnsureOwnDraftAsync(uow, current, transfer, ct);
         var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {fileId} FOR UPDATE").SingleAsync(ct);
         if (file.PurgeReason == PurgeReasons.FileRemoved) throw ApiException.NotFound();
         file.PurgeReason = PurgeReasons.FileRemoved;
@@ -214,17 +212,27 @@ public sealed class OemTransferService(
         await dispatcher.CommitAsync(uow, ct);
     }
 
-    internal static void EnsureOwnDraft(OemActor actor, OemTransfer transfer)
+    /// <summary>
+    /// Only the actual sender may change a draft. A caller who cannot see the transfer at all
+    /// gets 404 (never 403), so draft state and existence do not leak across senders or vendors.
+    /// </summary>
+    internal static async Task EnsureOwnDraftAsync(OemUnitOfWork uow, OemActor actor, OemTransfer transfer, CancellationToken ct)
     {
         var isSender = actor is OemAccountActor ? transfer.OemSenderAccountId == actor.Id : transfer.InternalSenderUserId == actor.Id;
-        if (!isSender) throw transfer.LifecycleStatus == TransferLifecycle.Draft ? ApiException.NotFound() : ApiException.Forbidden();
+        if (!isSender)
+        {
+            if (transfer.LifecycleStatus == TransferLifecycle.Draft
+                || !(await OemTransferReader.CapabilitiesAsync(uow, actor, transfer, ct)).View)
+                throw ApiException.NotFound();
+            throw ApiException.Forbidden();
+        }
         if (transfer.LifecycleStatus != TransferLifecycle.Draft) throw ApiException.Conflict("传递单已发送，附件和内容不能再修改");
     }
 
     private static async Task<OemTransfer> LockOwnDraftAsync(OemUnitOfWork uow, OemActor actor, ulong id, ulong expectedVersion, CancellationToken ct)
     {
         var transfer = await OemTransferProgression.LockTransferAsync(uow, id, ct);
-        EnsureOwnDraft(actor, transfer);
+        await EnsureOwnDraftAsync(uow, actor, transfer, ct);
         OemValidation.MatchVersion(transfer.ConcurrencyVersion, expectedVersion);
         return transfer;
     }
