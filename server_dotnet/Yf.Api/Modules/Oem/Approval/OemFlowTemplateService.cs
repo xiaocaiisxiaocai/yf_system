@@ -218,8 +218,8 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
         var query = uow.Db.Users.AsNoTracking().Where(user => user.Status == OemStatus.Active && user.UserType == "INTERNAL");
         if (!string.IsNullOrWhiteSpace(keyword))
         {
-            var pattern = "%" + keyword.Trim() + "%";
-            query = query.Where(user => EF.Functions.Like(user.RealName, pattern) || EF.Functions.Like(user.EmployeeNo, pattern));
+            var pattern = QueryValues.ContainsPattern(keyword.Trim());
+            query = query.Where(user => EF.Functions.Like(user.RealName, pattern, QueryValues.LikeEscape) || EF.Functions.Like(user.EmployeeNo, pattern, QueryValues.LikeEscape));
         }
         var ids = await query.OrderBy(user => user.EmployeeNo).Select(user => user.Id).Take(500).ToArrayAsync(ct);
         var eligible = await ApprovalPlanningService.EligibleIdsAsync(uow.Db, ids, ct);
@@ -241,8 +241,8 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
         var query = uow.Db.Users.AsNoTracking().Where(user => user.Status == OemStatus.Active && user.UserType == "INTERNAL");
         if (!string.IsNullOrWhiteSpace(keyword))
         {
-            var pattern = "%" + keyword.Trim() + "%";
-            query = query.Where(user => EF.Functions.Like(user.RealName, pattern) || EF.Functions.Like(user.EmployeeNo, pattern));
+            var pattern = QueryValues.ContainsPattern(keyword.Trim());
+            query = query.Where(user => EF.Functions.Like(user.RealName, pattern, QueryValues.LikeEscape) || EF.Functions.Like(user.EmployeeNo, pattern, QueryValues.LikeEscape));
         }
         var users = await query.OrderBy(user => user.EmployeeNo).Take(50)
             .Select(user => new { user.Id, user.EmployeeNo, user.RealName, user.DepartmentId }).ToArrayAsync(ct);

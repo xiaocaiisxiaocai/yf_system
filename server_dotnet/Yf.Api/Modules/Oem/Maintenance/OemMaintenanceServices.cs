@@ -641,10 +641,10 @@ public sealed class OemAuditQueryService(IDbContextFactory<YfDbContext> dbFactor
         var keyword = request.Query["keyword"].ToString().Trim();
         if (keyword.Length > 0)
         {
-            var pattern = "%" + keyword + "%";
-            query = query.Where(log => (log.EmployeeNo != null && EF.Functions.Like(log.EmployeeNo, pattern))
-                || EF.Functions.Like(log.Action, pattern)
-                || (log.Detail != null && EF.Functions.Like(EF.Functions.JsonUnquote(log.Detail), pattern)));
+            var pattern = QueryValues.ContainsPattern(keyword);
+            query = query.Where(log => (log.EmployeeNo != null && EF.Functions.Like(log.EmployeeNo, pattern, QueryValues.LikeEscape))
+                || EF.Functions.Like(log.Action, pattern, QueryValues.LikeEscape)
+                || (log.Detail != null && EF.Functions.Like(EF.Functions.JsonUnquote(log.Detail), pattern, QueryValues.LikeEscape)));
         }
         foreach (var name in new[] { "start", "end" })
         {

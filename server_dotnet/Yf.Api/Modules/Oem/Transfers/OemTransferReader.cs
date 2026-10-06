@@ -62,8 +62,8 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         var keyword = request.Query["keyword"].ToString().Trim();
         if (keyword.Length > 0)
         {
-            var pattern = "%" + keyword + "%";
-            query = query.Where(transfer => EF.Functions.Like(transfer.Title, pattern));
+            var pattern = QueryValues.ContainsPattern(keyword);
+            query = query.Where(transfer => EF.Functions.Like(transfer.Title, pattern, QueryValues.LikeEscape));
         }
         var total = (ulong)await query.LongCountAsync(ct);
         var rows = await query.OrderByDescending(transfer => transfer.Id).Page(offset, size).AsNoTracking().ToArrayAsync(ct);
