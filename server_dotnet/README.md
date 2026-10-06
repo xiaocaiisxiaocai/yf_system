@@ -229,7 +229,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish-iis.ps1
 
 发布脚本参数以 `Get-Help .\scripts\publish-iis.ps1 -Detailed` 为准。默认在项目根 `deloy` 下创建唯一版本目录；也可用 `-FreshOutputDirectory` 指定该目录下尚不存在或为空的子目录，项目外路径会被拒绝。默认只生成版本文件夹，包含后端、`wwwroot` 前端、IIS 配置、安装脚本、说明及内部 `manifest.json`；仅显式增加 `-CreateArchive` 时生成 ZIP、发布清单和 SHA256 文件。发布过程不下载、携带或安装病毒库/扫描服务；发布脚本从被 Git 忽略的 `deploy/publish-defaults.local.json` 写出可直接供 IIS 读取的 `appsettings.Production.json`，其中包含数据库和 JWT 凭据；必须先填写实际 `WebBaseUrl`，必要时覆盖 `StorageRoot`、`OemStorageRoot` 与 `CookieSecure`。将整个发布包作为私有制品复制到目标服务器，按包内 `README.md` 部署。不会在开发电脑上自动部署 IIS。
 
-开发机可直接运行 `python .\scripts\verify-release.py ..\deloy\<版本目录>` 验证默认发布文件夹；无需创建 ZIP。验证会在项目内临时目录复制制品，核对全部文件哈希与大小、实际 .NET 8 runtimeconfig、打包 SDK、IIS 启动配置、独立 OEM 存储配置、SharpCompress 归档检查依赖及包内配置字段，再用该发布二进制执行隔离 HTTP 检查。若已用 `-CreateArchive` 生成 ZIP，也可传入 ZIP 路径；ZIP 模式额外核对 CRC、`.zip.sha256` 和 `.release-manifest.json`，不会跳过其校验。报告写入 `.artifacts/reports/releases`。测试报告、浏览器证据和可清理临时目录写入 `.artifacts/tests`。这些是开发机制品证据，不代表目标 IIS、邮件或生产业务已经验收。
+开发机可直接运行 `python .\scripts\verify-release.py ..\deloy\<版本目录>` 验证默认发布文件夹；无需创建 ZIP。验证会在项目内临时目录复制制品，核对全部文件哈希与大小、实际 .NET 8 runtimeconfig、打包 SDK、IIS 启动配置、独立 OEM 存储配置、SharpCompress 归档检查依赖及其许可证文件（`THIRD-PARTY-NOTICES.md`、`licenses/SharpCompress-LICENSE.txt`、`licenses/Apache-2.0.txt`、`licenses/Apache-Commons-Compress-NOTICE.txt`）及包内配置字段，再用该发布二进制执行隔离 HTTP 检查。若已用 `-CreateArchive` 生成 ZIP，也可传入 ZIP 路径；ZIP 模式额外核对 CRC、`.zip.sha256` 和 `.release-manifest.json`，不会跳过其校验。报告写入 `.artifacts/reports/releases`。测试报告、浏览器证据和可清理临时目录写入 `.artifacts/tests`。这些是开发机制品证据，不代表目标 IIS、邮件或生产业务已经验收。
 
 ## IIS 正式服务器维护
 

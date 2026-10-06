@@ -60,6 +60,11 @@ class VerificationConfigurationContracts(unittest.TestCase):
             self.assertIn("'" + gate + "'", source)
         self.assertIn("[switch]$AllowSkips", source)
         self.assertIn("if (-not $AllowSkips -and -not $fullCoverage)", source)
+        # npm ci must be preceded by the preflight that refuses to run while a process
+        # (e.g. a Vite dev server) still references web/node_modules.
+        self.assertIn("Get-ProcessesReferencingNodeModules", source)
+        self.assertLess(source.index("Invoke-NpmCiNativeBindingPreflight -NodeModulesRoot"),
+                        source.index("-Name 'npm-ci' -FilePath"))
 
     def test_http_runner_records_probe_failures_and_bypasses_proxies(self):
         source = (ROOT / "server_dotnet/scripts/test-isolated.py").read_text(encoding="utf-8")
@@ -121,6 +126,15 @@ class VerifyAllGuards(unittest.TestCase):
         for row in report["steps"]:
             if row["name"].startswith(("restore-", "build-", "npm-")):
                 self.assertEqual("skipped", row["status"])
+
+    def test_npm_ci_preflight_blocks_locked_bindings_and_running_processes(self):
+        # Fixture-only self-test: it never touches web/node_modules and stops only its own child.
+        run = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(SCRIPT), "-SelfTestNpmCiPreflight"],
+            env=self.environment(), cwd=ROOT, capture_output=True, text=True, errors="replace", timeout=90)
+        self.assertEqual(0, run.returncode, run.stdout + run.stderr)
+        self.assertIn("blocks a running process that references node_modules", run.stdout)
+        self.assertIn("blocks a real locked file without changing it", run.stdout)
 
     def test_verification_cannot_rewrite_openapi_snapshot(self):
         snapshot = ROOT / "server_dotnet/tests/Contracts/openapi-v1.json"

@@ -231,11 +231,48 @@ function Assert-Passed {
     }
 }
 
+function Get-ProcessesReferencingNodeModules {
+    param([Parameter(Mandatory = $true)][string]$NodeModulesRoot)
+
+    # Windows only: Win32_Process exposes command lines of the caller's processes.
+    # Elsewhere the native-binding lock probe below still applies.
+    if (-not ($IsWindows -or $PSVersionTable.PSEdition -eq 'Desktop')) {
+        return @()
+    }
+    $root = [IO.Path]::GetFullPath($NodeModulesRoot).TrimEnd('\', '/')
+    $needles = @($root, $root.Replace('\', '/'))
+    $found = @()
+    foreach ($process in @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)) {
+        if ($process.ProcessId -eq $PID) { continue }
+        $hit = $false
+        foreach ($text in @([string]$process.CommandLine, [string]$process.ExecutablePath)) {
+            if ([string]::IsNullOrEmpty($text)) { continue }
+            foreach ($needle in $needles) {
+                if ($text.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $hit = $true; break }
+            }
+            if ($hit) { break }
+        }
+        if ($hit) {
+            $found += ('{0} (pid {1})' -f $process.Name, $process.ProcessId)
+        }
+    }
+    return @($found | Sort-Object -Unique)
+}
+
 function Assert-NpmCiNativeBindingsAvailable {
     param([Parameter(Mandatory = $true)][string]$NodeModulesRoot)
 
     if (-not (Test-Path -LiteralPath $NodeModulesRoot -PathType Container)) {
         return @{ nodeModulesPresent = $false; nativeFilesChecked = 0 }
+    }
+
+    # npm ci deletes node_modules before reinstalling. A running Vite/Node process started
+    # from this tree (e.g. `npm run dev`) keeps rolldown's native binding mapped, so npm ci
+    # would fail with EPERM only after the dependency tree is already gone. Fail first.
+    $referencing = @(Get-ProcessesReferencingNodeModules -NodeModulesRoot $NodeModulesRoot)
+    if ($referencing.Count -gt 0) {
+        throw ('npm ci was not started because {0} running process(es) reference {1}: {2}. Stop the Vite dev server or other Node process started from this web directory, then re-run verification (or verify in an isolated worktree with its own node_modules). This script will not stop processes or delete files to bypass the check.' -f
+            $referencing.Count, [IO.Path]::GetFullPath($NodeModulesRoot), ($referencing -join ', '))
     }
 
     $root = [IO.Path]::GetFullPath($NodeModulesRoot).TrimEnd('\', '/')
@@ -331,6 +368,42 @@ function Invoke-NpmCiNativeBindingPreflightSelfTest {
         $missing = Assert-NpmCiNativeBindingsAvailable -NodeModulesRoot (Join-Path $fixtureRoot 'missing-node_modules')
         if ($empty.nativeFilesChecked -ne 0 -or $missing.nativeFilesChecked -ne 0 -or $missing.nodeModulesPresent) {
             throw 'Empty or absent node_modules did not pass the npm ci preflight.'
+        }
+        if ($IsWindows -or $PSVersionTable.PSEdition -eq 'Desktop') {
+            # A child process whose command line names the fixture tree stands in for a Vite dev
+            # server started from web/node_modules. Only this self-test's own child is stopped.
+            $fixtureScript = Join-Path $bindingDirectory 'vite.js'
+            $shellExe = (Get-Process -Id $PID).Path
+            $holderProcess = Start-Process -FilePath $shellExe -PassThru -WindowStyle Hidden -ArgumentList @(
+                '-NoProfile', '-Command', ('Start-Sleep -Seconds 60 # "{0}"' -f $fixtureScript))
+            try {
+                $pidPattern = '\(pid {0}\)$' -f $holderProcess.Id
+                $deadline = [DateTime]::UtcNow.AddSeconds(15)
+                $seen = $false
+                while (-not $seen -and [DateTime]::UtcNow -lt $deadline) {
+                    $seen = @(Get-ProcessesReferencingNodeModules -NodeModulesRoot $nodeModules |
+                        Where-Object { $_ -match $pidPattern }).Count -gt 0
+                    if (-not $seen) { Start-Sleep -Milliseconds 200 }
+                }
+                $processMessage = ''
+                try {
+                    Assert-NpmCiNativeBindingsAvailable -NodeModulesRoot $nodeModules | Out-Null
+                } catch {
+                    $processMessage = $_.Exception.Message
+                }
+                if (-not $seen -or $processMessage -notmatch 'Stop the Vite dev server' -or
+                    $processMessage -notmatch ('pid {0}\)' -f $holderProcess.Id) -or
+                    -not (Test-Path -LiteralPath $nodeModules -PathType Container)) {
+                    throw 'npm ci preflight did not fail early for a running process that references node_modules.'
+                }
+            } finally {
+                if (-not $holderProcess.HasExited) { Stop-Process -Id $holderProcess.Id -Force -ErrorAction SilentlyContinue }
+                [void]$holderProcess.WaitForExit(10000)
+            }
+            if (@(Get-ProcessesReferencingNodeModules -NodeModulesRoot $nodeModules).Count -ne 0) {
+                throw 'npm ci preflight still reports a process after the fixture process exited.'
+            }
+            Write-Host 'PASS npm ci preflight blocks a running process that references node_modules.'
         }
         Write-Host 'PASS npm ci native-binding preflight blocks a real locked file without changing it; empty node_modules passes.'
     } finally {

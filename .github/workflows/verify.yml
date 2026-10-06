@@ -49,7 +49,21 @@ jobs:
         shell: pwsh
         run: ./server_dotnet/scripts/verify-all.ps1
       - name: Scan .NET dependencies
-        run: dotnet list server_dotnet/Yf.Api/Yf.Api.csproj package --vulnerable --include-transitive
+        # `dotnet list package --vulnerable` exits 0 even when it reports vulnerabilities,
+        # so fail explicitly on its report marker (and on any command failure).
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=0
+          for project in server_dotnet/Yf.Api/Yf.Api.csproj; do
+            output="$(dotnet list "$project" package --vulnerable --include-transitive 2>&1)"
+            echo "$output"
+            if grep -q "has the following vulnerable packages" <<<"$output"; then
+              echo "::error file=$project::Vulnerable NuGet packages reported for $project"
+              status=1
+            fi
+          done
+          exit "$status"
       - name: Audit production web dependencies
         working-directory: web
         run: npm audit --omit=dev
@@ -59,4 +73,25 @@ jobs:
         with:
           name: verify-all-report
           path: .artifacts/tests/verify-all/
+          if-no-files-found: ignore
+
+  deploy-security:
+    # Deployment/maintenance scripts target IIS on Windows PowerShell 5.1 (ACLs, Protect-YfDirectory),
+    # so this self-test cannot run on the Linux job. It needs no database, IIS or MySQL client.
+    # The full maintenance suite (test-maintenance.py / verify-all -IncludeMaintenance) is not run in CI:
+    # it needs mysql.exe/mysqldump.exe plus a MySQL server, and Windows runners cannot host the
+    # MySQL service container used by the Linux job.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run deployment security self-test
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File ./server_dotnet/scripts/test-deploy-security.ps1
+      - name: Upload deployment security scratch
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-security-scratch
+          path: .artifacts/tests/tmp/
           if-no-files-found: ignore
