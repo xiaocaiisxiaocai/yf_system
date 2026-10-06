@@ -69,6 +69,7 @@ public static class OemModule
         services.AddSingleton<OemDeliveryService>();
         services.AddSingleton<OemPurgeService>();
         services.AddSingleton<OemReconcileService>();
+        services.AddSingleton<OemSessionCleanupService>();
         services.AddSingleton<OemAuditQueryService>();
 
         // Background duties, driven by one composite hosted worker.
@@ -86,6 +87,8 @@ public static class OemModule
             ct => provider.GetRequiredService<OemPurgeService>().ExpireDraftsAsync(provider.GetRequiredService<OemTransferService>(), ct)));
         services.AddSingleton<IOemBackgroundJob>(provider => new DelegateOemJob("reconcile", TimeSpan.FromMinutes(10),
             ct => provider.GetRequiredService<OemReconcileService>().RunOnceAsync(ct)));
+        services.AddSingleton<IOemBackgroundJob>(provider => new DelegateOemJob("session-cleanup", TimeSpan.FromHours(1),
+            ct => provider.GetRequiredService<OemSessionCleanupService>().RunOnceAsync(ct)));
         services.AddHostedService<OemBackgroundWorker>();
         return services;
     }

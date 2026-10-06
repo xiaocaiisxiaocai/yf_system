@@ -622,6 +622,7 @@ public static class ArchiveInspector
 
         // Never incorporate an attacker-controlled entry name into a filesystem path.
         var temp = Path.Combine(workDirectory, $"nested-{Guid.NewGuid():N}.tmp");
+        EnsureWorkspaceSpace(workDirectory, declaredLength, budget);
         try
         {
             FileStream output;
@@ -641,6 +642,26 @@ public static class ArchiveInspector
                 : await InspectSharpArchiveAsync(temp, detected, limits, depth + 1, workDirectory, budget, ct);
         }
         finally { TryDelete(temp); }
+    }
+
+    /// <summary>
+    /// Refuses to spill a nested archive when the work volume cannot hold it. The bound is the
+    /// declared entry size, capped by what the expansion budget still allows (a forged size
+    /// cannot demand more than the budget would ever let through). A shortfall is an
+    /// environment problem, so it surfaces as a retryable <see cref="ArchiveWorkspaceException"/>.
+    /// </summary>
+    private static void EnsureWorkspaceSpace(string workDirectory, long declaredLength, Budget budget)
+    {
+        var remaining = Math.Max(0, budget.Limits.MaxExpandedBytes - budget.ActualExpandedBytes);
+        var required = (ulong)Math.Min(Math.Max(0, declaredLength), remaining);
+        // The parent (the uploads area) is a stable path on the same volume; the per-run
+        // work directory itself is not used as the key of the resolved-root cache.
+        var volumeProbe = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(workDirectory)) ?? workDirectory;
+        try { FileStorage.EnsureFreeSpace(volumeProbe, required); }
+        catch (Exception error) when (error is Infrastructure.ApiException or IOException or UnauthorizedAccessException)
+        {
+            throw new ArchiveWorkspaceException(error);
+        }
     }
 
     private static async Task<long> DrainAsync(Stream input, Stream output, byte[] buffer, Budget budget, CancellationToken ct)

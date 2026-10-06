@@ -25,6 +25,8 @@ public sealed class OemPurgeService(
 {
     private const int AlertAfterAttempts = 5;
     private static readonly string Owner = $"{Environment.MachineName}:{Environment.ProcessId}";
+    private readonly OemItemBackoff<ulong> purgeBackoff = new();
+    private readonly OemItemBackoff<ulong> draftBackoff = new();
 
     public async Task<int> RunOnceAsync(CancellationToken ct)
     {
@@ -33,7 +35,9 @@ public sealed class OemPurgeService(
         await using (var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct))
         {
             if ((await OemSettings.LoadAsync(uow.Db, ct)).ReconcileRequired) return 0;
+            var suppressed = purgeBackoff.Suppressed();
             candidates = await uow.Db.OemTransferFiles.AsNoTracking()
+                .Where(file => !suppressed.Contains(file.Id))
                 .Where(file => ((file.PayloadStatus == PayloadStatuses.Quarantined || file.PayloadStatus == PayloadStatuses.Available)
                         && file.PurgeDueAt != null && file.PurgeDueAt <= uow.Now)
                     || (file.PayloadStatus == PayloadStatuses.Promoting && file.PurgeDueAt != null && file.PurgeDueAt <= uow.Now
@@ -45,7 +49,19 @@ public sealed class OemPurgeService(
         }
         var purged = 0;
         foreach (var id in candidates)
-            if (await PurgeOneAsync(id, ct)) purged++;
+        {
+            try
+            {
+                if (await PurgeOneAsync(id, ct)) purged++;
+                purgeBackoff.Succeeded(id);
+            }
+            catch (Exception error) when (!ct.IsCancellationRequested)
+            {
+                // Isolate a row that keeps throwing so the rest of the batch still progresses.
+                purgeBackoff.Failed(id);
+                logger.LogError(error, "OEM purge of file {FileId} failed; it is retried later.", id);
+            }
+        }
         return purged;
     }
 
@@ -157,22 +173,39 @@ public sealed class OemPurgeService(
         await using (var read = await OemUnitOfWork.ReadAsync(dbFactory, ct))
         {
             var cutoff = read.Now.Subtract((await OemSettings.LoadAsync(read.Db, ct)).DraftTtl);
+            var suppressed = draftBackoff.Suppressed();
             ids = await read.Db.OemTransfers.AsNoTracking()
                 .Where(transfer => transfer.LifecycleStatus == TransferLifecycle.Draft && transfer.UpdatedAt <= cutoff)
+                .Where(transfer => !suppressed.Contains(transfer.Id))
                 .OrderBy(transfer => transfer.Id).Select(transfer => transfer.Id).Take(50).ToArrayAsync(ct);
         }
         var expired = 0;
         foreach (var id in ids)
         {
-            await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
-            var transfer = await OemTransferProgression.LockTransferAsync(uow, id, ct);
-            var cutoff = uow.Now.Subtract((await OemSettings.LoadAsync(uow.Db, ct)).DraftTtl);
-            if (transfer.LifecycleStatus != TransferLifecycle.Draft || transfer.UpdatedAt > cutoff) continue;
-            await transfers.AbandonAsync(uow, transfer, null, "草稿超过保留期限", PurgeReasons.DraftExpired, ct);
-            await dispatcher.CommitAsync(uow, ct);
-            expired++;
+            try
+            {
+                if (await ExpireDraftAsync(transfers, id, ct)) expired++;
+                draftBackoff.Succeeded(id);
+            }
+            catch (Exception error) when (!ct.IsCancellationRequested)
+            {
+                // A draft that cannot be abandoned must not block the drafts after it.
+                draftBackoff.Failed(id);
+                logger.LogError(error, "OEM draft {TransferId} could not be expired; it is retried later.", id);
+            }
         }
         return expired;
+    }
+
+    private async Task<bool> ExpireDraftAsync(OemTransferService transfers, ulong id, CancellationToken ct)
+    {
+        await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+        var transfer = await OemTransferProgression.LockTransferAsync(uow, id, ct);
+        var cutoff = uow.Now.Subtract((await OemSettings.LoadAsync(uow.Db, ct)).DraftTtl);
+        if (transfer.LifecycleStatus != TransferLifecycle.Draft || transfer.UpdatedAt > cutoff) return false;
+        await transfers.AbandonAsync(uow, transfer, null, "草稿超过保留期限", PurgeReasons.DraftExpired, ct);
+        await dispatcher.CommitAsync(uow, ct);
+        return true;
     }
 }
 
@@ -194,13 +227,25 @@ public sealed class OemReconcileService(
 {
     public const string RestoredMarker = "RESTORED";
 
+    /// <summary>
+    /// The routine check stats every on-disk row and walks both content areas, so it runs at
+    /// most hourly; the job itself ticks more often so a restore marker is handled promptly.
+    /// </summary>
+    internal static readonly TimeSpan RoutineInterval = TimeSpan.FromHours(1);
+
+    private DateTime nextRoutineCheck = DateTime.MinValue;
+
     public async Task<int> RunOnceAsync(CancellationToken ct)
     {
         if (!storage.IsConfigured) return 0;
         bool restoring;
         await using (var read = await OemUnitOfWork.ReadAsync(dbFactory, ct))
             restoring = (await OemSettings.LoadAsync(read.Db, ct)).ReconcileRequired;
-        return restoring ? await ReconcileAfterRestoreAsync(ct) : await RoutineCheckAsync(ct);
+        if (restoring) return await ReconcileAfterRestoreAsync(ct);
+        if (DateTime.UtcNow < nextRoutineCheck) return 0;
+        var result = await RoutineCheckAsync(ct);
+        nextRoutineCheck = DateTime.UtcNow + RoutineInterval;
+        return result;
     }
 
     /// <summary>Writes the restore marker (used by <c>--oem-mark-restored</c> after a manual database restore).</summary>
@@ -219,7 +264,20 @@ public sealed class OemReconcileService(
         await using (var read = await OemUnitOfWork.ReadAsync(dbFactory, ct))
             prepared = await read.Db.OemFilePromotions.AsNoTracking().Where(item => item.Status == PromotionStatuses.Prepared)
                 .Select(item => item.Id).ToArrayAsync(ct);
-        foreach (var id in prepared) await promotions.PromoteAsync(id, ct);
+        var unresolved = 0;
+        foreach (var id in prepared)
+        {
+            try { await promotions.PromoteAsync(id, ct); }
+            catch (Exception error) when (!ct.IsCancellationRequested)
+            {
+                // Keep resuming the other moves, but never clear the restore marker while one
+                // is unresolved: the whole reconcile is retried on the next run.
+                unresolved++;
+                logger.LogError(error, "OEM reconcile could not resume promotion {PromotionId}.", id);
+            }
+        }
+        if (unresolved > 0)
+            throw new InvalidOperationException($"OEM reconcile left {unresolved} promotion(s) unresolved; it will be retried.");
 
         var missing = await MarkMissingAsync(PayloadStatuses.MissingUnverified, ct);
         int purgedClaims;
@@ -305,7 +363,13 @@ public sealed class OemReconcileService(
         HashSet<string> activeSessions;
         await using (var read = await OemUnitOfWork.ReadAsync(dbFactory, ct))
         {
-            known = (await read.Db.OemTransferFiles.AsNoTracking().Select(file => file.StoredName).ToArrayAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // Every row whose content is or may be on disk protects its stored name. Only PURGED
+            // rows are left out: their content was deleted before the row reached that terminal
+            // state, so a file still carrying such a name is a genuine orphan. Lost/missing rows
+            // stay protected because their content may legitimately reappear.
+            known = (await read.Db.OemTransferFiles.AsNoTracking()
+                .Where(file => file.PayloadStatus != PayloadStatuses.Purged)
+                .Select(file => file.StoredName).ToArrayAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
             activeSessions = (await read.Db.OemUploadSessions.AsNoTracking()
                 .Where(session => session.Status == Transfers.UploadStatuses.Uploading || session.Status == Transfers.UploadStatuses.Merging)
                 .Select(session => session.Id).ToArrayAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -349,11 +413,32 @@ public sealed class OemReconcileService(
         if (Directory.Exists(uploads))
         {
             IReadOnlyList<DirectoryInfo> uploadDirectories;
-            try { uploadDirectories = EnumerateDirectChildrenWithoutReparsePoints(root, uploads, ct); }
+            IReadOnlyList<FileInfo> strayFiles;
+            try { (uploadDirectories, strayFiles) = EnumerateDirectChildrenWithoutReparsePoints(root, uploads, ct); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
-                logger.LogWarning("OEM upload area validation failed ({ErrorType}); the area was left untouched.", error.GetType().Name);
-                uploadDirectories = [];
+                logger.LogWarning(error, "OEM upload area validation failed; the area was left untouched.");
+                (uploadDirectories, strayFiles) = ([], []);
+            }
+            // Uploads only ever create session directories; a plain file there is debris. It is
+            // removed once stale instead of making the whole uploads cleanup fail forever.
+            foreach (var info in strayFiles)
+            {
+                if (info.LastWriteTimeUtc > cutoff) continue;
+                try
+                {
+                    var resolved = FileStorage.ResolveExistingFile(root, info.FullName, ct);
+                    if (!string.Equals(Path.GetFullPath(info.FullName), resolved,
+                            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                        throw new InvalidOperationException("OEM upload stray file path changed during cleanup");
+                    var size = new FileInfo(resolved).Length;
+                    File.Delete(resolved);
+                    deleted.Add((info.Name, size));
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+                {
+                    logger.LogWarning(error, "OEM upload stray file cleanup failed.");
+                }
             }
             foreach (var info in uploadDirectories)
             {
@@ -406,20 +491,21 @@ public sealed class OemReconcileService(
         return files;
     }
 
-    private static IReadOnlyList<DirectoryInfo> EnumerateDirectChildrenWithoutReparsePoints(
+    private static (IReadOnlyList<DirectoryInfo> Directories, IReadOnlyList<FileInfo> Files) EnumerateDirectChildrenWithoutReparsePoints(
         string root, string directory, CancellationToken ct)
     {
         var parent = ValidatedDirectory(root, directory, ct);
         var children = new List<DirectoryInfo>();
+        var files = new List<FileInfo>();
         foreach (var entry in parent.EnumerateFileSystemInfos("*", SearchOption.TopDirectoryOnly))
         {
             ct.ThrowIfCancellationRequested();
             if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
                 throw new InvalidOperationException("OEM upload area contains a reparse point");
             if (entry is DirectoryInfo child) children.Add(ValidatedDirectory(root, child.FullName, ct));
-            else throw new InvalidOperationException("OEM upload area contains an unexpected file");
+            else if (entry is FileInfo file) files.Add(file);
         }
-        return children;
+        return (children, files);
     }
 
     private static DirectoryInfo ValidatedDirectory(string root, string directory, CancellationToken ct)
@@ -488,6 +574,53 @@ public sealed class OemReconcileService(
         {
             return false;
         }
+    }
+}
+
+/// <summary>
+/// Bounded cleanup of OEM session bookkeeping that otherwise grows forever: refresh tokens
+/// expired for longer than the retention, and download sessions that finished (or passed their
+/// absolute deadline) longer ago. Download ranges and leases go with their session through
+/// the ON DELETE CASCADE foreign keys. Deleted rows are unusable already; who downloaded what
+/// stays in the audit log, which also keeps account-deletion history checks intact.
+/// </summary>
+public sealed class OemSessionCleanupService(IDbContextFactory<YfDbContext> dbFactory, ILogger<OemSessionCleanupService> logger)
+{
+    internal static readonly TimeSpan Retention = TimeSpan.FromDays(30);
+    internal const int BatchSize = 500;
+    internal const int MaximumBatchesPerRun = 20;
+
+    public async Task<int> RunOnceAsync(CancellationToken ct)
+    {
+        var tokens = 0;
+        var sessions = 0;
+        for (var batch = 0; batch < MaximumBatchesPerRun; batch++)
+        {
+            await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+            var cutoff = uow.Now.Subtract(Retention);
+            var ids = await uow.Db.OemRefreshTokens.AsNoTracking()
+                .Where(token => token.ExpiresAt < cutoff || token.SessionExpiresAt < cutoff)
+                .OrderBy(token => token.Id).Select(token => token.Id).Take(BatchSize).ToArrayAsync(ct);
+            if (ids.Length == 0) break;
+            tokens += await uow.Db.OemRefreshTokens.Where(token => ids.Contains(token.Id)).ExecuteDeleteAsync(ct);
+            await uow.CommitAsync(ct);
+            if (ids.Length < BatchSize) break;
+        }
+        for (var batch = 0; batch < MaximumBatchesPerRun; batch++)
+        {
+            await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+            var cutoff = uow.Now.Subtract(Retention);
+            var ids = await uow.Db.OemDownloadSessions.AsNoTracking()
+                .Where(session => (session.CompletedAt != null && session.CompletedAt < cutoff) || session.AbsoluteDeadline < cutoff)
+                .OrderBy(session => session.CreatedAt).Select(session => session.Id).Take(BatchSize).ToArrayAsync(ct);
+            if (ids.Length == 0) break;
+            sessions += await uow.Db.OemDownloadSessions.Where(session => ids.Contains(session.Id)).ExecuteDeleteAsync(ct);
+            await uow.CommitAsync(ct);
+            if (ids.Length < BatchSize) break;
+        }
+        if (tokens + sessions > 0)
+            logger.LogInformation("OEM session cleanup removed {Tokens} refresh token(s) and {Sessions} download session(s).", tokens, sessions);
+        return tokens + sessions;
     }
 }
 
