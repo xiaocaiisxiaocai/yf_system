@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { Alert, Button, Card, Form, Input, InputNumber, Message, Select, Space, Spin, Switch, Table, Tabs, Typography } from '@arco-design/web-react'
 import { fmtTime } from '../../../api/types'
 import type { AuditRow, RetentionTemplate, SettingItem } from '../../api/types'
 import { useCan, useOem } from '../../OemContext'
-import { useLoadEffect } from '../../useLoadEffect'
+import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 
 const MODES = [
   { value: 'KEEP', label: '不自动删除' },
@@ -100,13 +100,26 @@ function SettingsForm({ group }: { group: 'file' | 'notify' }) {
   const [items, setItems] = useState<SettingItem[]>([])
   const [values, setValues] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const beginRequest = useLatestRequest()
   const load = useCallback(async () => {
-    const list = await api.settings(group)
-    // Do not let a stale server response revive the retired antivirus settings.
-    const visible = group === 'file' ? list.filter((item) => !item.key.startsWith('oem.scan.')) : list
-    setItems(visible)
-    setValues(Object.fromEntries(visible.map((item) => [item.key, item.value])))
-  }, [api, group])
+    const isLatest = beginRequest()
+    setLoading(true)
+    setError('')
+    try {
+      const list = await api.settings(group)
+      if (!isLatest()) return
+      // Do not let a stale server response revive the retired antivirus settings.
+      const visible = group === 'file' ? list.filter((item) => !item.key.startsWith('oem.scan.')) : list
+      setItems(visible)
+      setValues(Object.fromEntries(visible.map((item) => [item.key, item.value])))
+    } catch {
+      if (isLatest()) setError('策略加载失败，请重试')
+    } finally {
+      if (isLatest()) setLoading(false)
+    }
+  }, [api, group, beginRequest])
   useLoadEffect(load)
 
   const save = async () => {
@@ -117,6 +130,8 @@ function SettingsForm({ group }: { group: 'file' | 'notify' }) {
       await api.updateSettings(group, changed)
       Message.success('已保存')
       await load()
+    } catch {
+      // The HTTP layer already reported the failure; keep the user's edits for a retry.
     } finally {
       setSaving(false)
     }
@@ -130,23 +145,26 @@ function SettingsForm({ group }: { group: 'file' | 'notify' }) {
           按需设置文件类型、上传容量、压缩包结构及下载限制。
         </Typography.Paragraph>
       )}
-      {items.map((item) => (
-        <Space key={item.key} align="start" wrap style={{ width: '100%', padding: '8px 0' }}>
-          <span style={{ display: 'inline-block', width: 260, lineHeight: '32px' }}>{item.label}</span>
-          {item.kind === 'boolean'
-            ? <Switch aria-label={item.label} disabled={item.readOnly} checked={values[item.key] === 'true'} onChange={(checked) => setValues((v) => ({ ...v, [item.key]: String(checked) }))} />
-            : item.kind === 'integer'
-              ? <InputNumber style={{ width: 220 }} value={Number(values[item.key])}
-                  min={item.min ?? undefined} max={item.max ?? undefined} aria-label={item.label} disabled={item.readOnly}
-                  onChange={(value) => setValues((v) => ({ ...v, [item.key]: value === undefined ? '' : String(value) }))} />
-            : <Input style={{ width: item.kind === 'extensions' ? 520 : 220 }} value={values[item.key]}
-                aria-label={item.label} disabled={item.readOnly}
-                onChange={(value) => setValues((v) => ({ ...v, [item.key]: value }))} />}
-          {item.unsupportedReason && <Typography.Text type="warning">{item.unsupportedReason}</Typography.Text>}
-          {item.hint && <Typography.Text type="secondary">{item.hint}</Typography.Text>}
-        </Space>
-      ))}
-      <Button type="primary" disabled={!changed} loading={saving} onClick={() => void save()}>保存更改</Button>
+      {error && <Alert type="error" content={error} action={<Button size="small" onClick={() => void load()} disabled={saving}>重新加载</Button>} />}
+      <Spin loading={loading} style={{ display: 'block' }}>
+        {items.map((item) => (
+          <Space key={item.key} align="start" wrap style={{ width: '100%', padding: '8px 0' }}>
+            <span style={{ display: 'inline-block', width: 260, lineHeight: '32px' }}>{item.label}</span>
+            {item.kind === 'boolean'
+              ? <Switch aria-label={item.label} disabled={item.readOnly} checked={values[item.key] === 'true'} onChange={(checked) => setValues((v) => ({ ...v, [item.key]: String(checked) }))} />
+              : item.kind === 'integer'
+                ? <InputNumber style={{ width: 220 }} value={Number(values[item.key])}
+                    min={item.min ?? undefined} max={item.max ?? undefined} aria-label={item.label} disabled={item.readOnly}
+                    onChange={(value) => setValues((v) => ({ ...v, [item.key]: value === undefined ? '' : String(value) }))} />
+              : <Input style={{ width: item.kind === 'extensions' ? 520 : 220 }} value={values[item.key]}
+                  aria-label={item.label} disabled={item.readOnly}
+                  onChange={(value) => setValues((v) => ({ ...v, [item.key]: value }))} />}
+            {item.unsupportedReason && <Typography.Text type="warning">{item.unsupportedReason}</Typography.Text>}
+            {item.hint && <Typography.Text type="secondary">{item.hint}</Typography.Text>}
+          </Space>
+        ))}
+      </Spin>
+      <Button type="primary" disabled={!changed || loading} loading={saving} onClick={() => void save()}>保存更改</Button>
     </Space>
   )
 }
@@ -169,14 +187,31 @@ export function AuditPage() {
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [keyword, setKeyword] = useState('')
-  useEffect(() => {
-    void api.auditLogs({ page, pageSize: 20, keyword: keyword || undefined }).then((result) => { setRows(result.list); setTotal(result.total) })
-  }, [api, page, keyword])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const beginRequest = useLatestRequest()
+  const load = useCallback(async () => {
+    const isLatest = beginRequest()
+    setLoading(true)
+    setError('')
+    try {
+      const result = await api.auditLogs({ page, pageSize: 20, keyword: keyword || undefined })
+      if (!isLatest()) return
+      setRows(result.list)
+      setTotal(result.total)
+    } catch {
+      if (isLatest()) setError('审计日志加载失败，请重试')
+    } finally {
+      if (isLatest()) setLoading(false)
+    }
+  }, [api, page, keyword, beginRequest])
+  useLoadEffect(load)
 
   return (
     <Card title="OEM 审计日志">
       <Input.Search allowClear placeholder="搜索账号、动作或内容" style={{ width: 280, marginBottom: 12 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
-      <Table rowKey="id" data={rows} pagination={{ current: page, total, pageSize: 20, onChange: setPage }} columns={[
+      {error && <Alert type="error" style={{ marginBottom: 12 }} content={error} action={<Button size="small" onClick={() => void load()}>重新加载</Button>} />}
+      <Table rowKey="id" loading={loading} data={rows} pagination={{ current: page, total, pageSize: 20, onChange: setPage }} columns={[
         { title: '时间', width: 170, render: (_: unknown, row: AuditRow) => fmtTime(row.createdAt) },
         { title: '动作', dataIndex: 'action', width: 230 },
         {

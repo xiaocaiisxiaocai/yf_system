@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Checkbox, Form, Input, Message, Modal, Radio, Select, Space, Table, Typography } from '@arco-design/web-react'
 import { IconUpload } from '@arco-design/web-react/icon'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
 import type { CompanyOption, TransferSummary } from '../api/types'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
 import { ApprovalTag, LifecycleTag, ValidationTag } from '../components/StatusTags'
 import { DIRECTION_LABEL, LIFECYCLE_OPTIONS } from '../components/statusLabels'
 import { useCan, useOem } from '../OemContext'
+import { useLatestRequest, useLoadEffect } from '../useLoadEffect'
 
 const NO_RECEIVING_ACCOUNT_REASON = '该厂商没有启用的登录账号，请先新增或启用账号后再发送'
 
@@ -33,31 +34,34 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   const [draftId, setDraftId] = useState<number | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [createOutcomeUnknown, setCreateOutcomeUnknown] = useState(false)
+  /** Set when an existing draft's recipient can no longer receive files. */
+  const [recipientBlocked, setRecipientBlocked] = useState<string | null>(null)
+  const [discarding, setDiscarding] = useState(false)
+  const beginCompanyRequest = useLatestRequest()
 
   const loadCompanyOptions = useCallback(async (): Promise<CompanyOption[]> => {
-    // Keep the initial state update off the effect's synchronous call stack.
-    await Promise.resolve()
+    const isLatest = beginCompanyRequest()
     setCompanyOptionsLoading(true)
     setCompanyOptionsError(null)
     try {
       const options = await api.companyOptions()
-      setCompanies(options)
+      if (isLatest()) setCompanies(options)
       return options
     } catch (error) {
       const message = requestError(error, '目标 OEM 厂商加载失败，请稍后重试')
-      setCompanies([])
-      setCompanyOptionsError(message)
+      // Keep the previous options so the chosen vendor still shows its name, not a bare id.
+      if (isLatest()) setCompanyOptionsError(message)
       throw new Error(message)
     } finally {
-      setCompanyOptionsLoading(false)
+      if (isLatest()) setCompanyOptionsLoading(false)
     }
-  }, [api])
+  }, [api, beginCompanyRequest])
 
-  useEffect(() => {
-    if (!visible || realm !== 'internal') return
-    const timer = window.setTimeout(() => { void loadCompanyOptions().catch(() => undefined) }, 0)
-    return () => window.clearTimeout(timer)
-  }, [visible, realm, loadCompanyOptions])
+  const loadInitialCompanies = useCallback(
+    () => (visible && realm === 'internal' ? loadCompanyOptions() : undefined),
+    [visible, realm, loadCompanyOptions],
+  )
+  useLoadEffect(loadInitialCompanies)
 
   const finish = (id: number, message: string) => {
     void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
@@ -89,6 +93,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
     submitLocked.current = true
     setSaving(true)
     setSubmitError(null)
+    setRecipientBlocked(null)
     try {
       if (!uploader.current?.hasFiles()) {
         Message.warning('请先选择要发送的文件')
@@ -107,9 +112,17 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         // A draft can stay open while its recipient account is disabled. Refresh
         // the options before resuming uploads so an invalid recipient never gets
         // another upload attempt; the server still checks again when sending.
-        const latestCompanies = draftId !== null ? await loadCompanyOptions() : companies
+        // A failed refresh is already shown next to the vendor field, with a retry action.
+        const latestCompanies = draftId !== null ? await loadCompanyOptions().catch(() => null) : companies
+        if (!latestCompanies) return
         const company = latestCompanies.find((item) => item.id === oemCompanyId)
-        if (!company?.canReceive) throw new Error(company?.unavailableReason || NO_RECEIVING_ACCOUNT_REASON)
+        if (!company?.canReceive) {
+          const reason = company?.unavailableReason || NO_RECEIVING_ACCOUNT_REASON
+          // The draft is bound to its vendor: offer a way out instead of repeating the same error.
+          if (draftId !== null) setRecipientBlocked(reason)
+          else setSubmitError(reason)
+          return
+        }
       }
       if (!activeDraftId) {
         let created
@@ -160,8 +173,39 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
     }
   }
 
+  const openDraft = (id: number) => {
+    void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
+    onClose()
+    navigate(`${base}/transfers/${id}`)
+  }
+
+  /** Deletes a draft bound to an unavailable vendor so the sender can choose another one. */
+  const discardDraft = async () => {
+    if (!draftId || submitLocked.current) return
+    submitLocked.current = true
+    setDiscarding(true)
+    try {
+      const current = await api.transfer(draftId)
+      if (leaveFinishedDraft(current)) return
+      await api.deleteDraft(draftId, current.summary.version)
+      void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
+      // The deleted draft took its uploads with it: the local files start over on the next draft.
+      uploader.current?.resetForNewDraft()
+      setDraftId(null)
+      setRecipientBlocked(null)
+      setSubmitError(null)
+      form.resetFields(['oemCompanyId'])
+      Message.success('草稿已删除，请重新选择厂商后提交')
+    } catch (error) {
+      setSubmitError(`删除草稿失败：${requestError(error)}`)
+    } finally {
+      submitLocked.current = false
+      setDiscarding(false)
+    }
+  }
+
   const close = () => {
-    if (saving) return
+    if (saving || discarding) return
     if (createOutcomeUnknown) {
       void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
       onClose()
@@ -176,11 +220,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       content: '已创建的草稿和成功上传的文件会保留，不会自动删除。你可以现在打开草稿继续，或稍后从列表进入。',
       okText: '打开草稿',
       cancelText: '留在列表',
-      onOk: () => {
-        void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
-        onClose()
-        navigate(`${base}/transfers/${draftId}`)
-      },
+      onOk: () => openDraft(draftId),
       onCancel: () => {
         void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
         onClose()
@@ -189,6 +229,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   }
 
   const actionText = realm === 'internal' ? '提交审批' : '发送文件'
+  const busy = saving || discarding
   return (
     <Modal
       title="发送文件"
@@ -197,11 +238,11 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       onOk={submit}
       okText={actionText}
       confirmLoading={saving}
-      closable={!saving}
-      maskClosable={!saving}
-      escToExit={!saving}
-      cancelButtonProps={{ disabled: saving }}
-      okButtonProps={{ disabled: fileCount === 0 || createOutcomeUnknown
+      closable={!busy}
+      maskClosable={!busy}
+      escToExit={!busy}
+      cancelButtonProps={{ disabled: busy }}
+      okButtonProps={{ disabled: fileCount === 0 || createOutcomeUnknown || discarding || recipientBlocked !== null
         || (realm === 'internal' && (companyOptionsLoading || !!companyOptionsError || !companies.some((company) => company.canReceive))) }}
       unmountOnExit
     >
@@ -210,7 +251,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
           <Form.Item field="oemCompanyId" label="目标 OEM 厂商" extra="至少需要一个启用的 OEM 登录账号才能发送。" rules={[{ required: true, message: '请选择厂商' }]}>
             <Select
               showSearch
-              disabled={saving || draftId !== null || companyOptionsLoading || !!companyOptionsError}
+              disabled={busy || draftId !== null || companyOptionsLoading || !!companyOptionsError}
               placeholder="选择厂商"
               options={companies.map((company) => ({
                 value: company.id,
@@ -252,14 +293,27 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
           )} />
         )}
         <Form.Item label="文件" required>
-          <OemUploader ref={uploader} deferred disabled={saving} onQueueChange={setFileCount} />
+          <OemUploader ref={uploader} deferred disabled={busy} onQueueChange={setFileCount} />
         </Form.Item>
+        {recipientBlocked && draftId && (
+          <Alert type="warning" style={{ marginBottom: 12 }} content={(
+            <Space direction="vertical" size="small">
+              <span>草稿的目标厂商当前无法接收文件：{recipientBlocked}</span>
+              <span>草稿已绑定该厂商。可在厂商启用账号后打开草稿继续，或删除草稿后重新选择厂商。</span>
+              <Space size="small">
+                <Button size="small" disabled={busy} onClick={() => openDraft(draftId)}>打开草稿</Button>
+                <Button size="small" status="danger" loading={discarding} disabled={saving}
+                  onClick={() => void discardDraft()}>删除草稿并重新选择</Button>
+              </Space>
+            </Space>
+          )} />
+        )}
         {submitError && <Alert type="error" content={submitError} />}
         {createOutcomeUnknown && (
           <Alert type="warning" style={{ marginTop: 12 }}
             content="草稿创建结果未知。请关闭窗口并从列表确认，避免重复创建传递单。" />
         )}
-        {draftId && !saving && (
+        {draftId && !busy && !recipientBlocked && (
           <Alert type="info" style={{ marginTop: 12 }} content="草稿已创建。再次提交只会继续失败或未完成的文件，不会重复上传成功文件。" />
         )}
       </Form>
@@ -311,7 +365,15 @@ export default function TransferListPage() {
         onRow={(row) => ({ onClick: () => navigate(`${base}/transfers/${row.id}`), style: { cursor: 'pointer' } })}
         pagination={{ current: page, total, pageSize: 20, onChange: setPage }}
         columns={[
-          { title: '文件', dataIndex: 'title', width: 260, ellipsis: true, render: (value: string) => <Typography.Text bold title={value}>{value}</Typography.Text> },
+          {
+            title: '文件', dataIndex: 'title', width: 260, ellipsis: true,
+            // A real link keeps rows reachable by keyboard; the row click remains a mouse shortcut.
+            render: (value: string, row: TransferSummary) => (
+              <Link to={`${base}/transfers/${row.id}`} title={value} onClick={(event) => event.stopPropagation()}>
+                <Typography.Text bold>{value}</Typography.Text>
+              </Link>
+            ),
+          },
           { title: '方向', dataIndex: 'direction', width: 120, render: (value: TransferSummary['direction']) => DIRECTION_LABEL[value] },
           { title: '厂商', dataIndex: 'companyName', width: 160 },
           { title: '发送人', width: 120, render: (_: unknown, row: TransferSummary) => row.sender.realName },

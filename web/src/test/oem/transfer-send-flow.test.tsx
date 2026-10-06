@@ -316,4 +316,69 @@ describe('OEM 一键发送文件', () => {
     expect(merge).toHaveBeenCalledTimes(1)
     expect(api.send).not.toHaveBeenCalled()
   })
+
+  it('已有草稿的厂商不再可接收时给出打开或删除草稿的出路，删除后可重新选择厂商', async () => {
+    const user = userEvent.setup()
+    const companyOptions = vi.fn()
+      .mockResolvedValueOnce([{ id: 9, name: '甲厂', canReceive: true, unavailableReason: null }])
+      .mockResolvedValue([
+        { id: 9, name: '甲厂', canReceive: false, unavailableReason: '甲厂账号已停用' },
+        { id: 10, name: '乙厂', canReceive: true, unavailableReason: null },
+      ])
+    const merge = vi.fn().mockRejectedValueOnce(new Error('merge failed')).mockResolvedValue({})
+    const deleteDraft = vi.fn().mockResolvedValue(undefined)
+    const api = createApi({ companyOptions, merge, deleteDraft } as Partial<OemApi>)
+    renderList(api)
+    const dialog = await openInternalDialog(user)
+    await choose(dialog, user, '换厂商.pdf')
+    await user.click(within(dialog).getByRole('button', { name: '提交审批' }))
+    await within(dialog).findByText('部分文件上传失败。已上传成功的文件不会重复，请修复失败项后再次提交。')
+
+    await user.click(within(dialog).getByRole('button', { name: '提交审批' }))
+
+    expect(await within(dialog).findByText('草稿的目标厂商当前无法接收文件：甲厂账号已停用')).toBeInTheDocument()
+    expect(companyOptions).toHaveBeenCalledTimes(2)
+    expect(merge).toHaveBeenCalledTimes(1)
+    expect(api.send).not.toHaveBeenCalled()
+    expect(within(dialog).getByRole('button', { name: '提交审批' })).toBeDisabled()
+    expect(within(dialog).getByRole('button', { name: '打开草稿' })).toBeEnabled()
+
+    await user.click(within(dialog).getByRole('button', { name: '删除草稿并重新选择' }))
+
+    await waitFor(() => expect(deleteDraft).toHaveBeenCalledWith(41, 4))
+    await waitFor(() => expect(within(dialog).queryByText(/草稿的目标厂商当前无法接收文件/)).not.toBeInTheDocument())
+    expect(within(dialog).getByRole('combobox')).not.toHaveClass('arco-select-disabled')
+    expect(within(dialog).getByText('等待提交')).toBeInTheDocument()
+  })
+
+  it('已有草稿重新核对厂商失败时保留原选项，只在厂商区域提示一次且不继续上传', async () => {
+    const user = userEvent.setup()
+    const companyOptions = vi.fn()
+      .mockResolvedValueOnce([{ id: 9, name: '甲厂', canReceive: true, unavailableReason: null }])
+      .mockRejectedValueOnce({ response: { data: { message: '厂商服务暂不可用' } } })
+    const merge = vi.fn().mockRejectedValueOnce(new Error('merge failed')).mockResolvedValue({})
+    const api = createApi({ companyOptions, merge } as Partial<OemApi>)
+    renderList(api)
+    const dialog = await openInternalDialog(user)
+    await choose(dialog, user, '核对失败.pdf')
+    await user.click(within(dialog).getByRole('button', { name: '提交审批' }))
+    await within(dialog).findByText('部分文件上传失败。已上传成功的文件不会重复，请修复失败项后再次提交。')
+
+    await user.click(within(dialog).getByRole('button', { name: '提交审批' }))
+
+    expect(await within(dialog).findByText('目标 OEM 厂商加载失败：厂商服务暂不可用')).toBeInTheDocument()
+    expect(within(dialog).getAllByText(/厂商服务暂不可用/)).toHaveLength(1)
+    // The chosen vendor keeps its name instead of collapsing to a bare id.
+    expect(within(dialog).getByText('甲厂')).toBeInTheDocument()
+    expect(merge).toHaveBeenCalledTimes(1)
+    expect(api.send).not.toHaveBeenCalled()
+  })
+
+  it('标题单元格是指向详情的链接，键盘也能进入', async () => {
+    const api = createApi({
+      listTransfers: vi.fn().mockResolvedValue({ list: [detail(41, 'SEALED').summary], total: 1, page: 1, pageSize: 20 }),
+    } as Partial<OemApi>)
+    renderList(api)
+    expect(await screen.findByRole('link', { name: '图纸.zip' })).toHaveAttribute('href', '/oem/transfers/41')
+  })
 })

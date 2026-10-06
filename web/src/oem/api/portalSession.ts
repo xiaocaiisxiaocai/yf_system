@@ -4,7 +4,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { Message } from '@arco-design/web-react'
 import { useEffect } from 'react'
-import { withAuthLock } from '../../api/client'
+import { REFRESH_TIMEOUT_MS, withAuthLock } from '../../api/client'
 import { createAppQueryClient } from '../../api/queryClient'
 import type { AccountBrief, ApiResponses } from './types'
 
@@ -103,10 +103,10 @@ async function refreshSession(generation = usePortalAuth.getState().generation):
     refreshingGeneration = generation
     const pending = withAuthLock(async () => {
       if (usePortalAuth.getState().generation !== generation) return false
-      const response = await axios.post<ApiResponses['POST /oem/auth/refresh']>('/api/v1/oem/auth/refresh', null, { withCredentials: true, timeout: 60000 })
+      const response = await axios.post<ApiResponses['POST /oem/auth/refresh']>('/api/v1/oem/auth/refresh', null, { withCredentials: true, timeout: REFRESH_TIMEOUT_MS })
       const token = response.data?.accessToken
       if (typeof token !== 'string' || token.length === 0) throw new Error('OEM 刷新响应格式无效')
-      const me = await axios.get<ApiResponses['GET /oem/auth/me']>('/api/v1/oem/auth/me', { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 })
+      const me = await axios.get<ApiResponses['GET /oem/auth/me']>('/api/v1/oem/auth/me', { headers: { Authorization: `Bearer ${token}` }, timeout: REFRESH_TIMEOUT_MS })
       if (usePortalAuth.getState().generation !== generation
         || !isPortalAccount(me.data?.account)
         || typeof me.data?.mustChangePassword !== 'boolean') return false
