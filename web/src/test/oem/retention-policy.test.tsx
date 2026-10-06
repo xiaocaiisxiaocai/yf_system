@@ -9,6 +9,7 @@ import { RetentionPage } from '../../oem/pages/admin/PolicyPages'
 const policy: RetentionTemplate = {
   id: 1, name: '原有统一策略', mode: 'AFTER_RELEASE', releaseTtlMinutes: 60,
   receiptGraceMinutes: null, status: 'ACTIVE', version: 3, summary: '发布 1 小时后删除',
+  createdAt: '2026-10-05T00:00:00Z', updatedAt: '2026-10-05T00:00:00Z',
 }
 
 function setup(api: Partial<OemApi>) {

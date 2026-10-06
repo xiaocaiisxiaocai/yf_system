@@ -52,7 +52,7 @@ function detail(id: number, lifecycleStatus: TransferDetail['summary']['lifecycl
 function createApi(overrides: Partial<OemApi> = {}): OemApi {
   return {
     listTransfers: vi.fn().mockResolvedValue({ list: [], total: 0, page: 1, pageSize: 20 }),
-    companyOptions: vi.fn().mockResolvedValue([{ id: 9, name: '甲厂' }]),
+    companyOptions: vi.fn().mockResolvedValue([{ id: 9, name: '甲厂', canReceive: true, unavailableReason: null }]),
     createTransfer: vi.fn().mockResolvedValue(detail(41)),
     initUpload: vi.fn().mockImplementation((_id: number, body: { fileName: string }) => Promise.resolve({
       sessionId: body.fileName,
@@ -113,6 +113,45 @@ async function choose(dialog: HTMLElement, user: ReturnType<typeof userEvent.set
 describe('OEM 一键发送文件', () => {
   beforeEach(() => {
     hashMocks.fileMd5.mockResolvedValue('md5')
+  })
+
+  it('没有启用账号的厂商在下拉中禁用并显示原因', async () => {
+    const user = userEvent.setup()
+    const api = createApi({
+      companyOptions: vi.fn().mockResolvedValue([{
+        id: 9,
+        name: '甲厂',
+        canReceive: false,
+        unavailableReason: '该厂商没有启用的登录账号，请先新增或启用账号后再发送',
+      }]),
+    } as Partial<OemApi>)
+    renderList(api)
+
+    await user.click(await screen.findByRole('button', { name: '发送文件' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('combobox'))
+    const option = await screen.findByRole('option', { name: /甲厂.*该厂商没有启用的登录账号/ })
+    expect(option).toHaveClass('arco-select-option-disabled')
+    expect(await within(dialog).findByText('至少需要一个启用的 OEM 登录账号才能发送。')).toBeInTheDocument()
+  })
+
+  it('所有厂商都没有启用账号时阻止提交', async () => {
+    const user = userEvent.setup()
+    const api = createApi({
+      companyOptions: vi.fn().mockResolvedValue([
+        { id: 9, name: '甲厂', canReceive: false, unavailableReason: '该厂商没有启用的登录账号，请先新增或启用账号后再发送' },
+        { id: 10, name: '乙厂', canReceive: false, unavailableReason: '该厂商没有启用的登录账号，请先新增或启用账号后再发送' },
+      ]),
+    } as Partial<OemApi>)
+    renderList(api)
+
+    await user.click(await screen.findByRole('button', { name: '发送文件' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '阻止.pdf'))
+    const submit = within(dialog).getByRole('button', { name: '提交审批' })
+    expect(await within(dialog).findByText('当前没有可接收的 OEM 厂商，请先新增或启用至少一个 OEM 登录账号后再发送。')).toBeInTheDocument()
+    expect(submit).toBeDisabled()
+    expect(api.createTransfer).not.toHaveBeenCalled()
   })
 
   it('只选厂商和多个文件即可依次建草稿、断点上传、读最新版本并提交审批', async () => {

@@ -84,6 +84,13 @@ Reject { Restore-YfBackup $backup $guarded (Join-Path $root 'guarded-app') $sqlC
 if ((Test-Path -LiteralPath (Join-Path $root 'guarded-app')) -or (Test-Path -LiteralPath $guarded.Storage)) { throw 'Rejected tableless-schema restore created application or storage files.' }
 Restore-YfBackup $backup $target $restored $sqlClient
 Write-Output 'PASS restore into new empty database and directories'
+$reuse=Read-YfMaintenanceConfig (Join-Path $root 'reuse.json')
+$reuseApp=Join-Path $root 'reuse-app'
+Reject { Restore-YfBackup $backup $reuse $reuseApp $sqlClient } 'nonempty OEM storage refused without ReuseOemStorage'
+if (Test-Path -LiteralPath $reuseApp) { throw 'Rejected OEM restore created application files.' }
+Restore-YfBackup $backup $reuse $reuseApp $sqlClient -ReuseOemStorage
+if ([IO.File]::ReadAllText((Join-Path $reuse.OemStorage 'available\ab\keep.bin')) -ne 'live oem content') { throw 'Reused OEM storage content changed.' }
+Write-Output 'PASS restore reuses the live OEM root and marks it for reconciliation'
 Reject { Restore-YfBackup $backup $second (Join-Path $root 'second-app') $sqlClient } 'nonempty database refused'
 if (Test-Path -LiteralPath (Join-Path $root 'second-app')) { throw 'Rejected restore created application files.' }
 foreach ($relative in @('wwwroot\index.html','Yf.Api.dll','web.config')) {

@@ -106,7 +106,7 @@
   -MySqlDump 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe'
 ```
 
-备份包含当前程序、协作 `StorageRoot`、外部 JSON 配置、数据库表、触发器、存储过程和事件；不复制独立 `OemStorageRoot`。脚本仍把 OEM 根纳入路径隔离，禁止备份目录位于其中或包含它。`mysqldump` 使用 `--single-transaction --routines --triggers --events`，因此备份账号除 `SELECT`、`SHOW VIEW`、`TRIGGER` 外还需要目标库的 `EVENT` 权限（导出存储过程需能读取其定义），缺少时备份失败，日志见备份目录 `dump.stderr.log`。备份目录用清单记录文件 SHA-256；manifest 会显式标记 `containsSecrets=true`、`protection=restricted-acl`。它同时包含数据库凭据、JWT/SMTP 等密钥、业务数据和协作上传文件，目录 ACL 只解决本机访问控制，不是静态加密；必须放在网站目录之外受限且已启用 BitLocker、EFS 或等效受控加密的备份介质上，限制管理员/备份账号访问，不提交源码库，不通过普通文件共享长期暴露，并按保留策略安全清除。Restore 使用新的空 OEM 根并写入存储核对标记，历史 OEM 文件在完成一致性核对前保持不可交付。
+备份包含当前程序、协作 `StorageRoot`、外部 JSON 配置、数据库表、触发器、存储过程和事件；不复制独立 `OemStorageRoot`。脚本仍把 OEM 根纳入路径隔离，禁止备份目录位于其中或包含它。`mysqldump` 使用 `--single-transaction --routines --triggers --events`，因此备份账号除 `SELECT`、`SHOW VIEW`、`TRIGGER` 外还需要目标库的 `EVENT` 权限（导出存储过程需能读取其定义），缺少时备份失败，日志见备份目录 `dump.stderr.log`。备份目录用清单记录文件 SHA-256；manifest 会显式标记 `containsSecrets=true`、`protection=restricted-acl`。它同时包含数据库凭据、JWT/SMTP 等密钥、业务数据和协作上传文件，目录 ACL 只解决本机访问控制，不是静态加密；必须放在网站目录之外受限且已启用 BitLocker、EFS 或等效受控加密的备份介质上，限制管理员/备份账号访问，不提交源码库，不通过普通文件共享长期暴露，并按保留策略安全清除。Restore 默认使用新的空 OEM 根并写入存储核对标记；由于 OEM 文件不备份，核对后历史 OEM 文件会被永久标记为 `MISSING_UNVERIFIED`，不可再交付（不是“暂时不可交付”）。只有沿用现有 OEM 根时（见下文 `-ReuseOemStorage`），备份时仍在盘上的文件才能继续交付。
 
 维护脚本**不做备份轮转**：每次 Backup/Upgrade 都要求新的空 `-BackupDirectory`，完整复制程序和全部存储文件，旧备份不会被自动删除，磁盘占用随次数线性增长。按组织保留策略人工清理：先确认更新的备份已通过清单校验（或已成功恢复演练）且不再是某次迁移的回退基线，再删除整个旧备份目录，例如 `Remove-Item -LiteralPath 'E:\YfBackups\2026-09-11-before-upgrade' -Recurse`。不要只删除其中的 `database.sql` 或 `storage`，否则该备份的清单校验会失败、无法恢复；也不要把清理写成自动任务而误删仍需要的回退点。（开发机 `scripts/restart-dev.ps1` 的 `before-restart.sql` 仅默认保留最近 5 份，由 `-KeepBackups` 调整，与本节正式备份无关。）保留明文目录格式是为了维持现有跨机恢复合同；复制到其他介质前由运维层负责加密。远程数据库必须先满足上面的 `VerifyFull` 证书身份验证要求，不能依靠网络边界代替传输加密。
 
@@ -125,7 +125,7 @@
   -MigrateDatabase
 ```
 
-只有该版本确实要求 schema 升级时才传 `-MigrateDatabase`；否则省略。升级继续使用当前数据库、存储和外部配置。不要直接覆盖当前程序目录，也不要同时让新旧版本写同一套资源。
+只有该版本确实要求 schema 升级时才传 `-MigrateDatabase`；否则省略。升级继续使用当前数据库、存储和外部配置。OEM 文件根不进入备份，升级也不改动其中的文件；配置中新启用 `OemStorageRoot` 时，必须先创建该目录，脚本会在停止应用池之前检查。不要直接覆盖当前程序目录，也不要同时让新旧版本写同一套资源。
 
 ### Restore
 
@@ -140,6 +140,10 @@
   -RestoreConfigPath 'D:\YfConfig\appsettings.Restored.json' `
   -MySql 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe'
 ```
+
+`-ReuseOemStorage` 让恢复沿用当前 `OemStorageRoot`（恢复配置中的 OEM 根必须与当前配置完全相同），不要求其为空、也不重置其 ACL。典型用途是迁移失败后的回退：升级前的离线备份与 OEM 根是在同一次停池期间形成的，沿用后数据库与文件一致。恢复后应用启动时按 `RESTORED` 标记核对：库中有记录但实体缺失的文件置 `MISSING_UNVERIFIED`；备份后才被晋升到 `available/` 的同名文件，经大小与 SHA-256 核对一致后移回库中记录的位置（审计 `OEM_RECONCILE_FILE_RELOCATED`）；备份之后上传的孤儿文件被删除。备份早于 OEM schema 时不能使用该参数。
+
+不经脚本、手工把数据库恢复到较早时点而继续沿用 OEM 根时，必须在启动站点前用同一外部配置执行 `dotnet .\Yf.Api.dll --oem-mark-restored` 写入核对标记；否则恢复点之后上传的文件不会被识别为孤儿，库中已不存在的文件也不会被核对。
 
 Restore 使用备份内的程序和 schema，不接受 `-MigrateDatabase`。若导入失败，新数据库可能只写入了一部分；保留失败现场供 DBA 判断，换另一套全新的空目标重试。成功恢复后如需升级，再使用与目标版本对应的 `Upgrade` 流程。
 

@@ -24,7 +24,7 @@ if url.scheme != "mysql" or url.hostname not in ("localhost", "127.0.0.1", "::1"
 connection = pymysql.connect(host=url.hostname, port=url.port or 3306,
                              user=unquote(url.username or ""), password=unquote(url.password or ""),
                              charset="utf8mb4", autocommit=True)
-schemas = ["yf_test_maintenance_" + secrets.token_hex(8) for _ in range(3)]
+schemas = ["yf_test_maintenance_" + secrets.token_hex(8) for _ in range(4)]
 created = []
 report = None
 try:
@@ -35,6 +35,8 @@ try:
         cursor.execute(f"CREATE TABLE `{schemas[0]}`.evidence(id INT PRIMARY KEY,content TEXT,payload LONGBLOB)")
         payload = bytes(range(256)) * 100
         cursor.execute(f"INSERT INTO `{schemas[0]}`.evidence VALUES(1,%s,%s)", ("中文备份；quotes ' \"", payload))
+        cursor.execute(f"CREATE TABLE `{schemas[0]}`.system_configs(cfg_key VARCHAR(100) PRIMARY KEY,cfg_value TEXT NOT NULL)")
+        cursor.execute(f"INSERT INTO `{schemas[0]}`.system_configs VALUES('oem.storage.reconcile_required','')")
         cursor.execute(f"CREATE PROCEDURE `{schemas[2]}`.keep_procedure() SELECT 'preserve-procedure'")
         cursor.execute(f"""CREATE EVENT `{schemas[2]}`.keep_event
                         ON SCHEDULE EVERY 1 DAY STARTS CURRENT_TIMESTAMP + INTERVAL 1 DAY
@@ -72,18 +74,26 @@ try:
         (storage / "files").mkdir(parents=True)
         (storage / "files/中文 file.bin").write_bytes(payload)
         (storage / "empty-directory").mkdir()
+        # The live OEM root is never backed up; Restore may reuse it for reconciliation.
+        live_oem = root / "oem-live"
+        (live_oem / "available/ab").mkdir(parents=True)
+        (live_oem / "available/ab/keep.bin").write_bytes(b"live oem content")
         def quote(value):
             return '"' + str(value).replace('"', '""') + '"'
         for name, schema, path in (("source", schemas[0], storage),
                                    ("target", schemas[1], root / "target-storage"),
                                    ("second", schemas[1], root / "second-storage"),
-                                   ("guarded", schemas[2], root / "guarded-storage")):
+                                   ("guarded", schemas[2], root / "guarded-storage"),
+                                   ("reuse", schemas[3], root / "reuse-storage")):
             cs = (f"Server={quote(url.hostname)};Port={url.port or 3306};Database={schema};"
                   f"User ID={quote(unquote(url.username or ''))};Password={quote(unquote(url.password or ''))};SslMode=Preferred")
-            (root / (name + ".json")).write_text(json.dumps({"App": {
+            app_config = {
                 "ConnectionString": cs, "StorageRoot": str(path),
                 "WebBaseUrl": "https://isolated.invalid", "CookieSecure": True
-            }}), encoding="utf-8")
+            }
+            if name == "reuse":
+                app_config["OemStorageRoot"] = str(live_oem)
+            (root / (name + ".json")).write_text(json.dumps({"App": app_config}), encoding="utf-8")
         command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                    str(source / "server_dotnet/scripts/test-maintenance.ps1"), "-FixtureRoot", str(root)]
         child_env = os.environ.copy()
@@ -108,6 +118,11 @@ try:
                 cursor.execute(f"SELECT content,payload FROM `{schema}`.evidence WHERE id=1")
                 text, recovered = cursor.fetchone()
                 assert text == "中文备份；quotes ' \"" and recovered == payload
+            for schema in (schemas[1], schemas[3]):
+                cursor.execute(f"SELECT cfg_value FROM `{schema}`.system_configs WHERE cfg_key='oem.storage.reconcile_required'")
+                assert cursor.fetchone()[0] == "RESTORED", "Restore did not mark OEM storage for reconciliation"
+            cursor.execute(f"SELECT cfg_value FROM `{schemas[0]}`.system_configs WHERE cfg_key='oem.storage.reconcile_required'")
+            assert cursor.fetchone()[0] == "", "Backup changed the source OEM reconcile marker"
             cursor.execute("""SELECT ROUTINE_DEFINITION FROM information_schema.routines
                             WHERE routine_schema=%s AND routine_name='keep_procedure'""", (schemas[2],))
             assert cursor.fetchone()[0] == procedure_before

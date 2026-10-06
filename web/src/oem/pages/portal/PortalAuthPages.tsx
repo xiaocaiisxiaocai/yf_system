@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Form, Input, Message, Typography } from '@arco-design/web-react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import type { ApiResponses } from '../../api/types'
 import { bootPortalSession, portalHttp, portalLogin, PORTAL_BASE, usePortalAuth, usePortalSessionSync } from '../../api/portalSession'
 
 const shell = { display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: 'var(--color-fill-2)' } as const
@@ -54,7 +55,7 @@ export function PortalChangePasswordPage() {
     }
     setLoading(true)
     try {
-      await portalHttp.put('/oem/auth/password', { oldPassword: values.oldPassword, newPassword: values.newPassword })
+      await portalHttp.put<ApiResponses['PUT /oem/auth/password']>('/oem/auth/password', { oldPassword: values.oldPassword, newPassword: values.newPassword })
       // A password change revokes every session: sign in again with the new password.
       usePortalAuth.getState().logout()
       Message.success('密码已修改，请使用新密码重新登录')

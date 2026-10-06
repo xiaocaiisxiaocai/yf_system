@@ -1,19 +1,21 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Checkbox, Form, Input, Message, Modal, Radio, Select, Space, Table, Typography } from '@arco-design/web-react'
 import { IconUpload } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
-import type { Option, TransferSummary } from '../api/types'
+import type { CompanyOption, TransferSummary } from '../api/types'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
 import { ApprovalTag, LifecycleTag, ValidationTag } from '../components/StatusTags'
 import { DIRECTION_LABEL, LIFECYCLE_OPTIONS } from '../components/statusLabels'
 import { useCan, useOem } from '../OemContext'
 
-function requestError(error: unknown): string {
+const NO_RECEIVING_ACCOUNT_REASON = '该厂商没有启用的登录账号，请先新增或启用账号后再发送'
+
+function requestError(error: unknown, fallback = '操作失败，请重试'): string {
   return (error as { response?: { data?: { message?: string } } })?.response?.data?.message
     || (error instanceof Error ? error.message : '')
-    || '操作失败，请重试'
+    || fallback
 }
 
 function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
@@ -23,17 +25,39 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   const [form] = Form.useForm()
   const uploader = useRef<OemUploaderHandle>(null)
   const submitLocked = useRef(false)
-  const [companies, setCompanies] = useState<Option[]>([])
+  const [companies, setCompanies] = useState<CompanyOption[]>([])
+  const [companyOptionsLoading, setCompanyOptionsLoading] = useState(false)
+  const [companyOptionsError, setCompanyOptionsError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [fileCount, setFileCount] = useState(0)
   const [draftId, setDraftId] = useState<number | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [createOutcomeUnknown, setCreateOutcomeUnknown] = useState(false)
 
+  const loadCompanyOptions = useCallback(async (): Promise<CompanyOption[]> => {
+    // Keep the initial state update off the effect's synchronous call stack.
+    await Promise.resolve()
+    setCompanyOptionsLoading(true)
+    setCompanyOptionsError(null)
+    try {
+      const options = await api.companyOptions()
+      setCompanies(options)
+      return options
+    } catch (error) {
+      const message = requestError(error, '目标 OEM 厂商加载失败，请稍后重试')
+      setCompanies([])
+      setCompanyOptionsError(message)
+      throw new Error(message)
+    } finally {
+      setCompanyOptionsLoading(false)
+    }
+  }, [api])
+
   useEffect(() => {
-    if (!visible) return
-    if (realm === 'internal') void api.companyOptions().then(setCompanies)
-  }, [visible, api, realm])
+    if (!visible || realm !== 'internal') return
+    const timer = window.setTimeout(() => { void loadCompanyOptions().catch(() => undefined) }, 0)
+    return () => window.clearTimeout(timer)
+  }, [visible, realm, loadCompanyOptions])
 
   const finish = (id: number, message: string) => {
     void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
@@ -70,10 +94,23 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         Message.warning('请先选择要发送的文件')
         return
       }
-      const oemCompanyId = realm === 'internal'
-        ? (await form.validate() as { oemCompanyId: number }).oemCompanyId
-        : undefined
       let activeDraftId = draftId
+      if (activeDraftId) {
+        // A previous send response may have been lost. Confirm the draft is still writable
+        // before applying the current recipient-account check or resuming uploads.
+        const current = await api.transfer(activeDraftId)
+        if (leaveFinishedDraft(current)) return
+      }
+      let oemCompanyId: number | undefined
+      if (realm === 'internal') {
+        oemCompanyId = (await form.validate() as { oemCompanyId: number }).oemCompanyId
+        // A draft can stay open while its recipient account is disabled. Refresh
+        // the options before resuming uploads so an invalid recipient never gets
+        // another upload attempt; the server still checks again when sending.
+        const latestCompanies = draftId !== null ? await loadCompanyOptions() : companies
+        const company = latestCompanies.find((item) => item.id === oemCompanyId)
+        if (!company?.canReceive) throw new Error(company?.unavailableReason || NO_RECEIVING_ACCOUNT_REASON)
+      }
       if (!activeDraftId) {
         let created
         try {
@@ -87,11 +124,6 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         }
         activeDraftId = created.summary.id
         setDraftId(activeDraftId)
-      } else {
-        // A previous send response may have been lost. Confirm the draft is still writable
-        // before resuming uploads or attempting another send.
-        const current = await api.transfer(activeDraftId)
-        if (leaveFinishedDraft(current)) return
       }
       const uploaded = await uploader.current.uploadAll(activeDraftId)
       if (!uploaded) {
@@ -169,20 +201,55 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       maskClosable={!saving}
       escToExit={!saving}
       cancelButtonProps={{ disabled: saving }}
-      okButtonProps={{ disabled: fileCount === 0 || createOutcomeUnknown }}
+      okButtonProps={{ disabled: fileCount === 0 || createOutcomeUnknown
+        || (realm === 'internal' && (companyOptionsLoading || !!companyOptionsError || !companies.some((company) => company.canReceive))) }}
       unmountOnExit
     >
       <Form form={form} layout="vertical">
         {realm === 'internal' && (
-          <Form.Item field="oemCompanyId" label="目标 OEM 厂商" rules={[{ required: true, message: '请选择厂商' }]}>
+          <Form.Item field="oemCompanyId" label="目标 OEM 厂商" extra="至少需要一个启用的 OEM 登录账号才能发送。" rules={[{ required: true, message: '请选择厂商' }]}>
             <Select
               showSearch
-              disabled={saving || draftId !== null}
+              disabled={saving || draftId !== null || companyOptionsLoading || !!companyOptionsError}
               placeholder="选择厂商"
-              options={companies.map((company) => ({ value: company.id, label: company.name }))}
+              options={companies.map((company) => ({
+                value: company.id,
+                label: company.canReceive ? company.name : `${company.name}（${company.unavailableReason || NO_RECEIVING_ACCOUNT_REASON}）`,
+                disabled: !company.canReceive,
+              }))}
               filterOption={(input, option) => String(option?.props?.children ?? '').includes(input)}
             />
           </Form.Item>
+        )}
+        {realm === 'internal' && companyOptionsLoading && (
+          <Alert type="info" style={{ marginBottom: 12 }} content="正在加载可发送的 OEM 厂商…" />
+        )}
+        {realm === 'internal' && companyOptionsError && (
+          <Alert type="error" style={{ marginBottom: 12 }} content={(
+            <Space size="small">
+              <span>目标 OEM 厂商加载失败：{companyOptionsError}</span>
+              <Button type="text" size="small" loading={companyOptionsLoading} disabled={saving || companyOptionsLoading}
+                onClick={() => void loadCompanyOptions().catch(() => undefined)}>刷新厂商</Button>
+            </Space>
+          )} />
+        )}
+        {realm === 'internal' && !companyOptionsLoading && !companyOptionsError && companies.length === 0 && (
+          <Alert type="warning" style={{ marginBottom: 12 }} content={(
+            <Space size="small">
+              <span>暂无可发送的 OEM 厂商，请先启用厂商后再试。</span>
+              <Button type="text" size="small" loading={companyOptionsLoading} disabled={saving || companyOptionsLoading}
+                onClick={() => void loadCompanyOptions().catch(() => undefined)}>刷新厂商</Button>
+            </Space>
+          )} />
+        )}
+        {realm === 'internal' && !companyOptionsLoading && !companyOptionsError && companies.length > 0 && !companies.some((company) => company.canReceive) && (
+          <Alert type="warning" style={{ marginBottom: 12 }} content={(
+            <Space size="small">
+              <span>当前没有可接收的 OEM 厂商，请先新增或启用至少一个 OEM 登录账号后再发送。</span>
+              <Button type="text" size="small" loading={companyOptionsLoading} disabled={saving || companyOptionsLoading}
+                onClick={() => void loadCompanyOptions().catch(() => undefined)}>刷新厂商</Button>
+            </Space>
+          )} />
         )}
         <Form.Item label="文件" required>
           <OemUploader ref={uploader} deferred disabled={saving} onQueueChange={setFileCount} />

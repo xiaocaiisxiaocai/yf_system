@@ -146,6 +146,17 @@ public sealed class OemSettings(IReadOnlyDictionary<string, string?> values)
         return new OemSettings(values);
     }
 
+    /// <summary>
+    /// Rejects storage-changing work while the post-restore reconcile runs: it deletes
+    /// every unknown stored file, so content written meanwhile could be lost.
+    /// </summary>
+    public static async Task EnsureStorageSettledAsync(YfDbContext db, string action, CancellationToken ct)
+    {
+        var flag = await db.SystemConfigs.AsNoTracking().Where(config => config.CfgKey == OemSettingCatalog.ReconcileRequired)
+            .Select(config => config.CfgValue).SingleOrDefaultAsync(ct);
+        if (!string.IsNullOrWhiteSpace(flag)) throw new ApiException(503, 50302, $"系统正在进行存储核对，暂时不能{action}");
+    }
+
     public string Raw(string key)
     {
         var definition = OemSettingCatalog.Get(key);

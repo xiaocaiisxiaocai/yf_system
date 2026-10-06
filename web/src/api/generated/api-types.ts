@@ -132,7 +132,7 @@ export interface DepartmentLeaderResponse {
   id: number
   name: string
   kind: string
-  leader: DepartmentLeaderBrief
+  leader: DepartmentLeaderBrief | null
 }
 
 export interface DepartmentResponse {
@@ -151,7 +151,7 @@ export interface DepartmentTreeNode {
   kind: string
   sortNo: number
   status: string
-  leader: DepartmentLeaderBrief
+  leader: DepartmentLeaderBrief | null
   children: Array<DepartmentTreeNode>
 }
 
@@ -485,6 +485,13 @@ export interface OemCompanyListItemResponse {
   activeAccountCount: number
 }
 
+export interface OemCompanyOptionResponse {
+  id: number
+  name: string
+  canReceive: boolean
+  unavailableReason: string | null
+}
+
 export interface OemCompanyResponse {
   id: number
   name: string
@@ -675,14 +682,14 @@ export interface OemRoutingNodeResponse {
   skipReason: string | null
   usedFallback: boolean
   scopeName: string | null
-  approvers: Array<OemRoutingApproverResponse>
+  approvers: Array<OemRoutingApproverResponse | null>
 }
 
 export interface OemRoutingPreviewResponse {
   ok: boolean
   reason?: string | null
-  template?: OemOptionResponse
-  matchedScope?: OemRoutingScopeResponse
+  template?: OemOptionResponse | null
+  matchedScope?: OemRoutingScopeResponse | null
   requiresApproval?: boolean | null
   nodes?: Array<OemRoutingNodeResponse> | null
 }
@@ -741,7 +748,7 @@ export interface OemTransferDetailResponse {
   closedAt: string | null
   capabilities: OemTransferCapabilitiesResponse
   files: Array<OemTransferFileResponse>
-  approval: OemApprovalInfoResponse
+  approval: OemApprovalInfoResponse | null
 }
 
 export interface OemTransferFileResponse {
@@ -963,7 +970,7 @@ export interface ProjectCopyHistoryItem {
 }
 
 export interface ProjectCopyHistoryResponse {
-  source: ProjectCopyHistoryItem
+  source: ProjectCopyHistoryItem | null
   copies: Array<ProjectCopyHistoryItem>
   hasRestrictedRelations: boolean
 }
@@ -983,7 +990,7 @@ export interface ProjectCopyJobResponse {
   bytesTotal: number
   bytesCopied: number
   error: string | null
-  result: ProjectCopyJobResult
+  result: ProjectCopyJobResult | null
   createdAt: string
   startedAt: string | null
   completedAt: string | null
@@ -1036,7 +1043,7 @@ export interface ProjectDetailResponse {
   expectedCompletionDate: string | null
   hasCopyHistory: boolean
   unreadMessages: number
-  copySource: ProjectCopySourceRef
+  copySource: ProjectCopySourceRef | null
   createdAt: string
   updatedAt: string
   rejectReason: string | null
@@ -1144,7 +1151,7 @@ export interface ProjectResponse {
   expectedCompletionDate: string | null
   hasCopyHistory: boolean
   unreadMessages: number
-  copySource: ProjectCopySourceRef
+  copySource: ProjectCopySourceRef | null
   createdAt: string
   updatedAt: string
 }
@@ -1519,7 +1526,7 @@ export interface ApiResponses {
   "GET /oem/companies/{id}/accounts": Array<OemAccountResponse>
   "POST /oem/companies/{id}/accounts": OemAccountResponse
   "PUT /oem/companies/{id}/status": OemCompanyResponse
-  "GET /oem/company-options": Array<OemOptionResponse>
+  "GET /oem/company-options": Array<OemCompanyOptionResponse>
   "GET /oem/file-policies": Array<OemSettingResponse>
   "PUT /oem/file-policies": Array<OemSettingResponse>
   "DELETE /oem/files/{id}": EmptyResponse

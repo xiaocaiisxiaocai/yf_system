@@ -49,10 +49,9 @@ export type ProjectCopyJobStatus = 'pending' | 'running' | 'succeeded' | 'failed
 
 export type ProjectCopyJobResult = Api.ProjectCopyJobResult
 
-/** Generated DTO plus narrowed status and nullable result semantics from the runtime contract. */
-export type ProjectCopyJob = Omit<Api.ProjectCopyJobResponse, 'status' | 'result'> & {
+/** Generated DTO with the status narrowed to the known lifecycle values. */
+export type ProjectCopyJob = Omit<Api.ProjectCopyJobResponse, 'status'> & {
   status: ProjectCopyJobStatus
-  result: ProjectCopyJobResult | null
 }
 
 /** POST and single-job GET return this flat record; only the group list wraps { jobs }. */

@@ -6,16 +6,10 @@ import { Message } from '@arco-design/web-react'
 import { useEffect } from 'react'
 import { withAuthLock } from '../../api/client'
 import { createAppQueryClient } from '../../api/queryClient'
+import type { AccountBrief, ApiResponses } from './types'
 
 /** OEM vendor account (realm=oem). Never mixed with the collaboration user store. */
-export interface PortalAccount {
-  id: number
-  employeeNo: string
-  realName: string
-  email: string
-  companyId: number
-  companyName: string
-}
+export type PortalAccount = AccountBrief
 
 export interface PortalAuthState {
   /** Access token lives in memory only; a page reload re-issues it from the OEM refresh cookie. */
@@ -109,10 +103,10 @@ async function refreshSession(generation = usePortalAuth.getState().generation):
     refreshingGeneration = generation
     const pending = withAuthLock(async () => {
       if (usePortalAuth.getState().generation !== generation) return false
-      const response = await axios.post('/api/v1/oem/auth/refresh', null, { withCredentials: true, timeout: 60000 })
+      const response = await axios.post<ApiResponses['POST /oem/auth/refresh']>('/api/v1/oem/auth/refresh', null, { withCredentials: true, timeout: 60000 })
       const token = response.data?.accessToken
       if (typeof token !== 'string' || token.length === 0) throw new Error('OEM 刷新响应格式无效')
-      const me = await axios.get('/api/v1/oem/auth/me', { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 })
+      const me = await axios.get<ApiResponses['GET /oem/auth/me']>('/api/v1/oem/auth/me', { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 })
       if (usePortalAuth.getState().generation !== generation
         || !isPortalAccount(me.data?.account)
         || typeof me.data?.mustChangePassword !== 'boolean') return false
@@ -194,7 +188,7 @@ portalHttp.interceptors.response.use(
 )
 
 export async function portalLogin(employeeNo: string, password: string): Promise<boolean> {
-  const response = await portalHttp.post('/oem/auth/login', { employeeNo, password }, { withCredentials: true })
+  const response = await portalHttp.post<ApiResponses['POST /oem/auth/login']>('/oem/auth/login', { employeeNo, password }, { withCredentials: true })
   if (typeof response.data?.accessToken !== 'string'
     || !isPortalAccount(response.data?.account)
     || typeof response.data?.mustChangePassword !== 'boolean') throw new Error('OEM 登录响应格式无效')
@@ -203,6 +197,6 @@ export async function portalLogin(employeeNo: string, password: string): Promise
 }
 
 export async function portalLogout(): Promise<void> {
-  try { await portalHttp.post('/oem/auth/logout', null, { withCredentials: true }) } catch { /* 忽略 */ }
+  try { await portalHttp.post<ApiResponses['POST /oem/auth/logout']>('/oem/auth/logout', null, { withCredentials: true }) } catch { /* 忽略 */ }
   usePortalAuth.getState().logout()
 }

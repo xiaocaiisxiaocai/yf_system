@@ -23,7 +23,7 @@ public sealed class OemApprovalService(
     OemAuditWriter audit,
     OemTransferReader reader)
 {
-    public async Task<object> PendingAsync(OemActor actor, CancellationToken ct)
+    public async Task<IReadOnlyList<OemPendingApprovalResponse>> PendingAsync(OemActor actor, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.FlowApprove, ct);
@@ -38,16 +38,14 @@ public sealed class OemApprovalService(
             join company in db.OemCompanies on transfer.OemCompanyId equals company.Id
             join sender in db.Users on instance.InitiatorUserId equals sender.Id
             orderby task.CreatedAt
-            select new
-            {
-                taskId = task.Id, version = task.ConcurrencyVersion, transferId = transfer.Id, transfer.Title, companyName = company.Name,
-                senderName = sender.RealName, senderEmployeeNo = sender.EmployeeNo, nodeName = node.Name, node.ApprovalMode,
-                transfer.SentAt, activatedAt = instance.UpdatedAt,
-            }).AsNoTracking().ToArrayAsync(ct);
+            select new OemPendingApprovalResponse(
+                task.Id, task.ConcurrencyVersion, transfer.Id, transfer.Title, company.Name,
+                sender.RealName, sender.EmployeeNo, node.Name, node.ApprovalMode,
+                transfer.SentAt, instance.UpdatedAt)).AsNoTracking().ToArrayAsync(ct);
         return rows;
     }
 
-    public async Task<object> ApproveAsync(OemActor actor, ulong taskId, ApprovalDecisionRequest request, CancellationToken ct)
+    public async Task<OemTransferDetailResponse> ApproveAsync(OemActor actor, ulong taskId, ApprovalDecisionRequest request, CancellationToken ct)
     {
         var version = OemValidation.ExpectedVersion(request.Version);
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
@@ -62,7 +60,7 @@ public sealed class OemApprovalService(
         return await reader.DetailAsync(current, transfer.Id, ct);
     }
 
-    public async Task<object> RejectAsync(OemActor actor, ulong taskId, ApprovalDecisionRequest request, CancellationToken ct)
+    public async Task<OemTransferDetailResponse> RejectAsync(OemActor actor, ulong taskId, ApprovalDecisionRequest request, CancellationToken ct)
     {
         var version = OemValidation.ExpectedVersion(request.Version);
         var reason = OemValidation.RequiredText(request.Reason, "驳回原因", 512);
@@ -77,7 +75,7 @@ public sealed class OemApprovalService(
     }
 
     /// <summary>Recovery: replace the approver of an unfinished task (never approve on someone's behalf).</summary>
-    public async Task<object> ReassignAsync(OemActor actor, ulong taskId, ReassignTaskRequest request, CancellationToken ct)
+    public async Task<OemTransferDetailResponse> ReassignAsync(OemActor actor, ulong taskId, ReassignTaskRequest request, CancellationToken ct)
     {
         var version = OemValidation.ExpectedVersion(request.Version);
         var reason = OemValidation.RequiredText(request.Reason, "改派原因", 512);
@@ -112,7 +110,7 @@ public sealed class OemApprovalService(
     }
 
     /// <summary>Recovery: terminate a transfer that has not been released yet.</summary>
-    public async Task<object> CancelAsync(OemActor actor, ulong transferId, CancelTransferRequest request, CancellationToken ct)
+    public async Task<OemTransferDetailResponse> CancelAsync(OemActor actor, ulong transferId, CancelTransferRequest request, CancellationToken ct)
     {
         var version = OemValidation.ExpectedVersion(request.Version);
         var reason = OemValidation.RequiredText(request.Reason, "终止原因", 512);

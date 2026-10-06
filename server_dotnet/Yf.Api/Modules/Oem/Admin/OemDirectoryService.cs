@@ -22,7 +22,7 @@ public sealed record OemPasswordReset(string NewPassword);
 /// </summary>
 public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory, OemAuditWriter audit)
 {
-    public async Task<object> ListCompaniesAsync(OemActor actor, ulong page, uint size, ulong offset, string? keyword, string? status, CancellationToken ct)
+    public async Task<OemPageResponse<OemCompanyListItemResponse>> ListCompaniesAsync(OemActor actor, ulong page, uint size, ulong offset, string? keyword, string? status, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         // Account managers need the vendor list to reach the accounts they manage.
@@ -41,29 +41,34 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         }
         var total = (ulong)await query.LongCountAsync(ct);
         var rows = await query.OrderByDescending(company => company.Id).Page(offset, size)
-            .Select(company => new
-            {
+            .Select(company => new OemCompanyListItemResponse(
                 company.Id, company.Name, company.ContactName, company.ContactPhone, company.ContactEmail, company.Remark,
                 company.Status, company.CreatedAt, company.UpdatedAt,
-                accountCount = uow.Db.OemAccounts.LongCount(account => account.OemCompanyId == company.Id),
-                activeAccountCount = uow.Db.OemAccounts.LongCount(account => account.OemCompanyId == company.Id && account.Status == OemStatus.Active),
-            }).ToArrayAsync(ct);
-        return new { list = rows, total, page, pageSize = size };
+                uow.Db.OemAccounts.LongCount(account => account.OemCompanyId == company.Id),
+                uow.Db.OemAccounts.LongCount(account => account.OemCompanyId == company.Id && account.Status == OemStatus.Active)))
+            .ToArrayAsync(ct);
+        return new OemPageResponse<OemCompanyListItemResponse>(rows, total, page, size);
     }
 
     /// <summary>Active vendors for choosing a transfer target; available to anyone who may create or view internal transfers.</summary>
-    public async Task<object> CompanyOptionsAsync(OemActor actor, CancellationToken ct)
+    public async Task<IReadOnlyList<OemCompanyOptionResponse>> CompanyOptionsAsync(OemActor actor, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
         if (!await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferCreate, ct)
             && !await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferView, ct))
             throw ApiException.Forbidden();
-        return await uow.Db.OemCompanies.AsNoTracking().Where(company => company.Status == OemStatus.Active)
-            .OrderBy(company => company.Name).Select(company => new { company.Id, company.Name }).ToArrayAsync(ct);
+        var companies = await uow.Db.OemCompanies.AsNoTracking().Where(company => company.Status == OemStatus.Active)
+            .OrderBy(company => company.Name).Select(company => new
+            {
+                company.Id, company.Name,
+                CanReceive = uow.Db.OemAccounts.Any(account => account.OemCompanyId == company.Id && account.Status == OemStatus.Active),
+            }).ToArrayAsync(ct);
+        return companies.Select(company => new OemCompanyOptionResponse(company.Id, company.Name, company.CanReceive,
+            company.CanReceive ? null : OemRecipientPolicy.MissingAccountMessage)).ToArray();
     }
 
-    public async Task<object> CompanyDetailAsync(OemActor actor, ulong id, CancellationToken ct)
+    public async Task<OemCompanyResponse> CompanyDetailAsync(OemActor actor, ulong id, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
@@ -71,7 +76,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         return CompanyJson(company);
     }
 
-    public async Task<object> CreateCompanyAsync(OemActor actor, OemCompanyUpsert request, CancellationToken ct)
+    public async Task<OemCompanyResponse> CreateCompanyAsync(OemActor actor, OemCompanyUpsert request, CancellationToken ct)
     {
         var input = ValidateCompany(request);
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
@@ -89,7 +94,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         return CompanyJson(company);
     }
 
-    public async Task<object> UpdateCompanyAsync(OemActor actor, ulong id, OemCompanyUpsert request, CancellationToken ct)
+    public async Task<OemCompanyResponse> UpdateCompanyAsync(OemActor actor, ulong id, OemCompanyUpsert request, CancellationToken ct)
     {
         var input = ValidateCompany(request);
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
@@ -114,7 +119,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         return CompanyJson(company);
     }
 
-    public async Task<object> SetCompanyStatusAsync(OemActor actor, ulong id, string status, CancellationToken ct)
+    public async Task<OemCompanyResponse> SetCompanyStatusAsync(OemActor actor, ulong id, string status, CancellationToken ct)
     {
         var target = OemStatus.Normalize(status);
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
@@ -159,30 +164,31 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await uow.CommitAsync(ct);
     }
 
-    public async Task<object> ListAccountsAsync(OemActor actor, ulong companyId, CancellationToken ct)
+    public async Task<IReadOnlyList<OemAccountResponse>> ListAccountsAsync(OemActor actor, ulong companyId, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
         if (!await uow.Db.OemCompanies.AnyAsync(company => company.Id == companyId, ct)) throw ApiException.NotFound();
         var accounts = await uow.Db.OemAccounts.AsNoTracking().Where(account => account.OemCompanyId == companyId)
             .OrderBy(account => account.Id).ToArrayAsync(ct);
-        return accounts.Select(AccountJson);
+        return accounts.Select(account => AccountJson(account, uow.Now)).ToArray();
     }
 
-    public async Task<object> AccountDetailAsync(OemActor actor, ulong id, CancellationToken ct)
+    public async Task<OemAccountResponse> AccountDetailAsync(OemActor actor, ulong id, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
         var account = await uow.Db.OemAccounts.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, ct) ?? throw ApiException.NotFound();
-        return AccountJson(account);
+        return AccountJson(account, uow.Now);
     }
 
-    public async Task<object> CreateAccountAsync(OemActor actor, ulong companyId, OemAccountCreate request, CancellationToken ct)
+    public async Task<OemAccountResponse> CreateAccountAsync(OemActor actor, ulong companyId, OemAccountCreate request, CancellationToken ct)
     {
         var employeeNo = OemValidation.EmployeeNo(request.EmployeeNo);
         var realName = OemValidation.RequiredText(request.RealName, "姓名", 64);
         var email = OemValidation.Email(request.Email);
         PasswordService.Validate(request.Password);
+        await PrecheckAccountManageAsync(actor, ct);
         var hash = await PasswordService.HashAsync(request.Password, ct);
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
@@ -202,10 +208,10 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             targetName = $"{created.RealName}（{created.EmployeeNo}）", companyId, companyName = company.Name, created.Email,
         }, ct);
         await uow.CommitAsync(ct);
-        return AccountJson(created);
+        return AccountJson(created, uow.Now);
     }
 
-    public async Task<object> UpdateAccountAsync(OemActor actor, ulong id, OemAccountUpdate request, CancellationToken ct)
+    public async Task<OemAccountResponse> UpdateAccountAsync(OemActor actor, ulong id, OemAccountUpdate request, CancellationToken ct)
     {
         var realName = OemValidation.RequiredText(request.RealName, "姓名", 64);
         var email = OemValidation.Email(request.Email);
@@ -222,10 +228,10 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await audit.WriteAsync(uow, current, "OEM_ACCOUNT_UPDATE", "oem_account", id,
             new { targetName = $"{account.RealName}（{account.EmployeeNo}）", changes }, ct);
         await uow.CommitAsync(ct);
-        return AccountJson(account);
+        return AccountJson(account, uow.Now);
     }
 
-    public async Task<object> SetAccountStatusAsync(OemActor actor, ulong id, string status, CancellationToken ct)
+    public async Task<OemAccountResponse> SetAccountStatusAsync(OemActor actor, ulong id, string status, CancellationToken ct)
     {
         var target = OemStatus.Normalize(status);
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
@@ -248,12 +254,13 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             }, ct);
         }
         await uow.CommitAsync(ct);
-        return AccountJson(account);
+        return AccountJson(account, uow.Now);
     }
 
     public async Task ResetAccountPasswordAsync(OemActor actor, ulong id, OemPasswordReset request, CancellationToken ct)
     {
         PasswordService.Validate(request.NewPassword);
+        await PrecheckAccountManageAsync(actor, ct);
         var hash = await PasswordService.HashAsync(request.NewPassword, ct);
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
@@ -290,6 +297,16 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await uow.CommitAsync(ct);
     }
 
+    /// <summary>
+    /// Rejects unauthorised callers before the Argon2 hash is computed, so they cannot
+    /// occupy the hash slots shared with login. The write transaction re-checks.
+    /// </summary>
+    private async Task PrecheckAccountManageAsync(OemActor actor, CancellationToken ct)
+    {
+        await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
+        await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
+    }
+
     private static async Task EnsureNoAccountHistoryAsync(OemUnitOfWork uow, ulong id, CancellationToken ct)
     {
         var hasHistory = await uow.Db.OemTransfers.AnyAsync(transfer => transfer.OemSenderAccountId == id
@@ -318,16 +335,13 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         OemValidation.OptionalEmail(request.ContactEmail),
         OemValidation.OptionalText(request.Remark, "备注", 512));
 
-    private static object CompanyJson(OemCompany company) => new
-    {
+    private static OemCompanyResponse CompanyJson(OemCompany company) => new(
         company.Id, company.Name, company.ContactName, company.ContactPhone, company.ContactEmail, company.Remark,
-        company.Status, company.CreatedAt, company.UpdatedAt,
-    };
+        company.Status, company.CreatedAt, company.UpdatedAt);
 
-    private static object AccountJson(OemAccount account) => new
-    {
-        account.Id, account.EmployeeNo, account.RealName, account.Email, companyId = account.OemCompanyId, account.Status,
-        account.MustChangePassword, locked = account.LockedUntil.HasValue && account.LockedUntil > DateTime.UtcNow,
-        account.LastLoginAt, account.CreatedAt, account.UpdatedAt,
-    };
+    /// <param name="now">The unit of work's database clock, which is also what login lockout compares against.</param>
+    private static OemAccountResponse AccountJson(OemAccount account, DateTime now) => new(
+        account.Id, account.EmployeeNo, account.RealName, account.Email, account.OemCompanyId, account.Status,
+        account.MustChangePassword, account.LockedUntil.HasValue && account.LockedUntil > now,
+        account.LastLoginAt, account.CreatedAt, account.UpdatedAt);
 }

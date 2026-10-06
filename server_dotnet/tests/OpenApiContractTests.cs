@@ -97,6 +97,7 @@ public sealed class OpenApiContractTests
             options.SupportNonNullableReferenceTypes();
             options.OperationFilter<ErrorResponseFilter>();
             options.SchemaFilter<PresentPropertiesRequiredFilter>();
+            options.SchemaFilter<NullableReferencePropertiesFilter>();
         });
         await using var app = builder.Build();
         app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapOemModule();
@@ -143,6 +144,46 @@ public sealed class OpenApiContractTests
                 .ToHashSet(StringComparer.Ordinal);
             concrete.Required = new SortedSet<string>(properties.Keys.Where(name => !omittable.Contains(name)), StringComparer.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// Swashbuckle emits a bare $ref for a nullable reference-typed property (OpenAPI 3.0 cannot put
+    /// "nullable" beside "$ref"), so `Foo?` members and `List<Foo?>` items looked non-null to the
+    /// generated TypeScript. Wrap them as allOf + nullable, which web/scripts/generate-api-types.mjs
+    /// turns into `Foo | null`.
+    /// </summary>
+    private sealed class NullableReferencePropertiesFilter : ISchemaFilter
+    {
+        private static readonly System.Reflection.NullabilityInfoContext Nullability = new();
+
+        public void Apply(IOpenApiSchema schema, SchemaFilterContext context)
+        {
+            if (schema is not OpenApiSchema concrete || concrete.Properties is not { Count: > 0 } properties) return;
+            foreach (var property in context.Type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                var name = System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(property.Name);
+                if (!properties.TryGetValue(name, out var member)) continue;
+                // Nullability of a generic type parameter (e.g. PageResponse<T>.List) is not knowable here.
+                var declared = property.DeclaringType is { IsGenericType: true } generic
+                    ? generic.GetGenericTypeDefinition().GetProperty(property.Name)!
+                    : property;
+                if (declared.PropertyType.IsGenericParameter
+                    || declared.PropertyType.GenericTypeArguments.Any(argument => argument.IsGenericParameter)) continue;
+                var info = Nullability.Create(property);
+                if (member is OpenApiSchemaReference reference && info.ReadState == System.Reflection.NullabilityState.Nullable)
+                {
+                    properties[name] = NullableRef(reference);
+                }
+                else if (member is OpenApiSchema { Items: OpenApiSchemaReference item } array
+                    && (info.ElementType ?? info.GenericTypeArguments.FirstOrDefault())?.ReadState == System.Reflection.NullabilityState.Nullable)
+                {
+                    array.Items = NullableRef(item);
+                }
+            }
+        }
+
+        private static OpenApiSchema NullableRef(OpenApiSchemaReference reference) =>
+            new() { AllOf = [reference], Type = JsonSchemaType.Null };
     }
 
     /// <summary>Every operation may fail with the shared { code, message, requestId? } body.</summary>

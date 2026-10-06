@@ -27,17 +27,17 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
     public const int MaximumNodes = 10;
     public const int MaximumUsersPerNode = 20;
 
-    public async Task<object> ListAsync(OemActor actor, CancellationToken ct)
+    public async Task<IReadOnlyList<OemFlowTemplateResponse>> ListAsync(OemActor actor, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.FlowTemplateManage, ct);
         var templates = await uow.Db.OemFlowTemplates.AsNoTracking().OrderByDescending(item => item.IsDefault).ThenBy(item => item.Id).ToArrayAsync(ct);
-        var result = new List<object>(templates.Length);
+        var result = new List<OemFlowTemplateResponse>(templates.Length);
         foreach (var template in templates) result.Add(await JsonAsync(uow, template, ct));
         return result;
     }
 
-    public async Task<object> DetailAsync(OemActor actor, ulong id, CancellationToken ct)
+    public async Task<OemFlowTemplateResponse> DetailAsync(OemActor actor, ulong id, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.FlowTemplateManage, ct);
@@ -45,7 +45,7 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
         return await JsonAsync(uow, template, ct);
     }
 
-    public async Task<object> CreateAsync(OemActor actor, FlowTemplateCreate request, CancellationToken ct)
+    public async Task<OemFlowTemplateResponse> CreateAsync(OemActor actor, FlowTemplateCreate request, CancellationToken ct)
     {
         var name = OemValidation.RequiredText(request.Name, "模板名称", 64);
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
@@ -68,7 +68,7 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
         return await JsonAsync(uow, template, ct);
     }
 
-    public async Task<object> UpdateAsync(OemActor actor, ulong id, FlowTemplateUpdate request, CancellationToken ct)
+    public async Task<OemFlowTemplateResponse> UpdateAsync(OemActor actor, ulong id, FlowTemplateUpdate request, CancellationToken ct)
     {
         var name = OemValidation.RequiredText(request.Name, "模板名称", 64);
         var status = OemStatus.Normalize(request.Status);
@@ -94,7 +94,7 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
     }
 
     /// <summary>Replaces metadata, nodes and scopes in one transaction for the web editor.</summary>
-    public async Task<object> UpdateDefinitionAsync(OemActor actor, ulong id, FlowTemplateDefinitionUpdate request, CancellationToken ct)
+    public async Task<OemFlowTemplateResponse> UpdateDefinitionAsync(OemActor actor, ulong id, FlowTemplateDefinitionUpdate request, CancellationToken ct)
     {
         var name = OemValidation.RequiredText(request.Name, "模板名称", 64);
         var status = OemStatus.Normalize(request.Status);
@@ -135,7 +135,7 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
         return await JsonAsync(uow, template, ct);
     }
 
-    public async Task<object> ReplaceNodesAsync(OemActor actor, ulong id, FlowTemplateNodesUpdate request, CancellationToken ct)
+    public async Task<OemFlowTemplateResponse> ReplaceNodesAsync(OemActor actor, ulong id, FlowTemplateNodesUpdate request, CancellationToken ct)
     {
         var version = OemValidation.ExpectedVersion(request.Version);
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
@@ -156,7 +156,7 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
         return await JsonAsync(uow, template, ct);
     }
 
-    public async Task<object> ReplaceScopesAsync(OemActor actor, ulong id, FlowTemplateScopesUpdate request, CancellationToken ct)
+    public async Task<OemFlowTemplateResponse> ReplaceScopesAsync(OemActor actor, ulong id, FlowTemplateScopesUpdate request, CancellationToken ct)
     {
         var version = OemValidation.ExpectedVersion(request.Version);
         if (request.DepartmentIds is null || request.DepartmentIds.Length > 500) throw ApiException.BadRequest("适用组织数量无效");
@@ -178,7 +178,7 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
     }
 
     /// <summary>Shows how a send by <paramref name="userId"/> would be routed right now, without writing anything.</summary>
-    public async Task<object> PreviewAsync(OemActor actor, ulong userId, CancellationToken ct)
+    public async Task<OemRoutingPreviewResponse> PreviewAsync(OemActor actor, ulong userId, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.FlowTemplateManage, ct);
@@ -186,27 +186,29 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
         {
             var result = await planning.PlanAsync(uow, userId, ct);
             var names = await NamesAsync(uow, result.Plan.Nodes.SelectMany(node => node.Approvers), ct);
-            return new
-            {
-                ok = true,
-                template = new { result.Template.Id, result.Template.Name },
-                matchedScope = result.MatchedScope is null ? null : new { result.MatchedScope.Id, result.MatchedScope.Name, result.MatchedScope.Kind },
-                requiresApproval = !result.Plan.RequiresNoApproval,
-                nodes = result.Plan.Nodes.Select(node => new
-                {
-                    node.SortNo, node.Name, approverSource = node.Source, approvalMode = node.Mode, node.Skipped, node.SkipReason,
-                    node.UsedFallback, node.ScopeName, approvers = node.Approvers.Select(approver => names.GetValueOrDefault(approver)),
-                }),
-            };
+            return new OemRoutingPreviewResponse(
+                Ok: true,
+                Reason: null,
+                Template: new OemOptionResponse(result.Template.Id, result.Template.Name),
+                MatchedScope: result.MatchedScope is null
+                    ? null
+                    : new OemRoutingScopeResponse(result.MatchedScope.Id, result.MatchedScope.Name, result.MatchedScope.Kind),
+                RequiresApproval: !result.Plan.RequiresNoApproval,
+                Nodes: result.Plan.Nodes.Select(node => new OemRoutingNodeResponse(
+                    node.SortNo, node.Name, node.Source, node.Mode, node.Skipped, node.SkipReason,
+                    node.UsedFallback, node.ScopeName,
+                    node.Approvers.Select(approver => names.GetValueOrDefault(approver) is { } person
+                        ? new OemRoutingApproverResponse(person.Id, person.EmployeeNo, person.RealName)
+                        : null).ToArray())).ToArray());
         }
         catch (ApprovalPlanningException error)
         {
-            return new { ok = false, reason = error.Message };
+            return new OemRoutingPreviewResponse(Ok: false, Reason: error.Message, Template: null, MatchedScope: null, RequiresApproval: null, Nodes: null);
         }
     }
 
     /// <summary>Internal staff who may be named as approvers (active, holding oem:flow_approve).</summary>
-    public async Task<object> ApproverOptionsAsync(OemActor actor, string? keyword, CancellationToken ct)
+    public async Task<IReadOnlyList<OemFlowPersonResponse>> ApproverOptionsAsync(OemActor actor, string? keyword, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
@@ -222,14 +224,14 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
         var ids = await query.OrderBy(user => user.EmployeeNo).Select(user => user.Id).Take(500).ToArrayAsync(ct);
         var eligible = await ApprovalPlanningService.EligibleIdsAsync(uow.Db, ids, ct);
         var names = await NamesAsync(uow, eligible, ct);
-        return eligible.Take(100).Select(id => names[id]);
+        return eligible.Take(100).Select(id => names[id]).ToArray();
     }
 
     /// <summary>
     /// Active internal staff for picking organisation leaders or previewing routing, flagged
     /// with whether they may currently approve OEM transfers.
     /// </summary>
-    public async Task<object> InternalUserOptionsAsync(OemActor actor, string? keyword, CancellationToken ct)
+    public async Task<IReadOnlyList<OemInternalUserOptionResponse>> InternalUserOptionsAsync(OemActor actor, string? keyword, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
@@ -248,11 +250,9 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
         var departmentIds = users.Where(user => user.DepartmentId.HasValue).Select(user => user.DepartmentId!.Value).Distinct().ToArray();
         var departments = await uow.Db.Departments.AsNoTracking().Where(item => Enumerable.Contains(departmentIds, item.Id))
             .ToDictionaryAsync(item => item.Id, item => item.Name, ct);
-        return users.Select(user => new
-        {
-            user.Id, user.EmployeeNo, user.RealName, canApprove = eligible.Contains(user.Id),
-            departmentName = user.DepartmentId is ulong id ? departments.GetValueOrDefault(id) : null,
-        });
+        return users.Select(user => new OemInternalUserOptionResponse(
+            user.Id, user.EmployeeNo, user.RealName, eligible.Contains(user.Id),
+            user.DepartmentId is ulong id ? departments.GetValueOrDefault(id) : null)).ToArray();
     }
 
     private async Task<IReadOnlyList<FlowNodeInput>> ValidateNodesAsync(OemUnitOfWork uow, FlowNodeInput[]? nodes, CancellationToken ct)
@@ -361,7 +361,7 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
         template.UpdatedAt = uow.Now;
     }
 
-    private async Task<object> JsonAsync(OemUnitOfWork uow, OemFlowTemplate template, CancellationToken ct)
+    private async Task<OemFlowTemplateResponse> JsonAsync(OemUnitOfWork uow, OemFlowTemplate template, CancellationToken ct)
     {
         var definition = await planning.LoadTemplateAsync(uow, template.Id, ct);
         var people = definition.Nodes.SelectMany(node => node.Approvers.Concat(node.Fallbacks)).ToArray();
@@ -371,32 +371,24 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
             .Join(uow.Db.Departments, scope => scope.DepartmentId, department => department.Id,
                 (scope, department) => new { department.Id, department.Name, department.Kind, department.Status })
             .OrderBy(item => item.Id).ToArrayAsync(ct);
-        object Person(ulong id) => new
-        {
-            id, employeeNo = names.GetValueOrDefault(id)?.EmployeeNo, realName = names.GetValueOrDefault(id)?.RealName, eligible = eligible.Contains(id),
-        };
-        return new
-        {
-            template.Id, template.Name, template.IsDefault, template.Status, version = template.ConcurrencyVersion,
+        OemFlowNodePersonResponse Person(ulong id) => new(
+            id, names.GetValueOrDefault(id)?.EmployeeNo, names.GetValueOrDefault(id)?.RealName, eligible.Contains(id));
+        return new OemFlowTemplateResponse(
+            template.Id, template.Name, template.IsDefault, template.Status, template.ConcurrencyVersion,
             template.CreatedAt, template.UpdatedAt,
-            nodes = definition.Nodes.Select(node => new
-            {
-                node.SortNo, node.Name, approverSource = node.Source, approvalMode = node.Mode, selfPolicy = node.SelfPolicy, node.Enabled,
-                approvers = node.Approvers.Select(Person), fallbacks = node.Fallbacks.Select(Person),
-            }),
-            scopes,
-        };
+            definition.Nodes.Select(node => new OemFlowNodeResponse(
+                node.SortNo, node.Name, node.Source, node.Mode, node.SelfPolicy, node.Enabled,
+                node.Approvers.Select(Person).ToArray(), node.Fallbacks.Select(Person).ToArray())).ToArray(),
+            scopes.Select(scope => new OemFlowScopeResponse(scope.Id, scope.Name, scope.Kind, scope.Status)).ToArray());
     }
 
-    private static async Task<Dictionary<ulong, PersonName>> NamesAsync(OemUnitOfWork uow, IEnumerable<ulong> ids, CancellationToken ct)
+    private static async Task<Dictionary<ulong, OemFlowPersonResponse>> NamesAsync(OemUnitOfWork uow, IEnumerable<ulong> ids, CancellationToken ct)
     {
         var list = ids.Distinct().ToArray();
         if (list.Length == 0) return [];
         return await uow.Db.Users.AsNoTracking().Where(user => Enumerable.Contains(list, user.Id))
-            .Select(user => new PersonName(user.Id, user.EmployeeNo, user.RealName)).ToDictionaryAsync(user => user.Id, ct);
+            .Select(user => new OemFlowPersonResponse(user.Id, user.EmployeeNo, user.RealName)).ToDictionaryAsync(user => user.Id, ct);
     }
-
-    private sealed record PersonName(ulong Id, string EmployeeNo, string RealName);
 }
 
 internal static class FlowNodeInputExtensions

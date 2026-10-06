@@ -65,7 +65,7 @@ if (!(Test-Path -LiteralPath $storage -PathType Container)) { throw 'Create the 
 foreach ($other in @($PackageRoot,$SiteRoot,$ConfigPath)) {
     if ((Within $storage $other) -or (Within $other $storage)) { throw 'Package, destination, external configuration and storage must be separate.' }
 }
-$oemStorage = ''
+$oemStorage = $null
 if ($config.App.PSObject.Properties['OemStorageRoot'] -and ![string]::IsNullOrWhiteSpace([string]$config.App.OemStorageRoot)) {
     $oemStorage = FullPath ([string]$config.App.OemStorageRoot)
     NoLinks $oemStorage

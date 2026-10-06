@@ -575,7 +575,7 @@ function New-YfBackup([string]$ApplicationRoot,$Config,[string]$Destination,[str
     Write-YfJson (Join-Path $Destination 'manifest.json') $manifest
     Assert-YfManifest $Destination 'yf-offline-backup' | Out-Null
 }
-function Restore-YfBackup([string]$BackupRoot,$Config,[string]$NewApplicationRoot,[string]$MySql) {
+function Restore-YfBackup([string]$BackupRoot,$Config,[string]$NewApplicationRoot,[string]$MySql,[switch]$ReuseOemStorage) {
     $BackupRoot = Get-YfFullPath $BackupRoot
     $NewApplicationRoot = Get-YfFullPath $NewApplicationRoot
     $manifest = Assert-YfManifest $BackupRoot 'yf-offline-backup'
@@ -588,7 +588,10 @@ function Restore-YfBackup([string]$BackupRoot,$Config,[string]$NewApplicationRoo
     Assert-YfSeparate $paths
     Assert-YfEmptyDirectory $NewApplicationRoot
     Assert-YfEmptyDirectory $Config.Storage
-    if ($Config.OemStorage) { Assert-YfEmptyDirectory $Config.OemStorage }
+    if ($ReuseOemStorage -and !$Config.OemStorage) { throw 'ReuseOemStorage requires a configured App.OemStorageRoot.' }
+    # OEM files are never backed up. A reused root keeps its content and is reconciled
+    # against the restored database; otherwise the restore starts from a new empty root.
+    if ($Config.OemStorage -and !$ReuseOemStorage) { Assert-YfEmptyDirectory $Config.OemStorage }
     $scratch = Join-Path ([IO.Path]::GetTempPath()) ('yf-restore-'+[guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $scratch | Out-Null
     Protect-YfDirectory $scratch
@@ -623,8 +626,13 @@ function Restore-YfBackup([string]$BackupRoot,$Config,[string]$NewApplicationRoo
         $oemTableProbe = Invoke-YfNativeCapture $MySql @("--defaults-file=$defaults",'--batch','--skip-column-names',"--database=$($Config.Database)","--execute=SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='system_configs'") (Join-Path $scratch 'oem-probe.stderr.log')
         if ($oemTableProbe.ExitCode -ne 0 -or @($oemTableProbe.Output).Count -ne 1) { throw 'Unable to inspect the restored database for OEM reconciliation.' }
         if (([string]@($oemTableProbe.Output)[0]).Trim() -eq '1') {
-            $oemMarker = Invoke-YfNativeCapture $MySql @("--defaults-file=$defaults",("--database="+$Config.Database),"--execute=UPDATE system_configs SET cfg_value='RESTORED' WHERE cfg_key='oem.storage.reconcile_required'") (Join-Path $scratch 'oem-marker.stderr.log')
-            if ($oemMarker.ExitCode -ne 0) { throw 'Unable to mark OEM storage for reconciliation after restore.' }
+            $oemMarker = Invoke-YfNativeCapture $MySql @("--defaults-file=$defaults",'--batch','--skip-column-names',("--database="+$Config.Database),"--execute=UPDATE system_configs SET cfg_value='RESTORED' WHERE cfg_key='oem.storage.reconcile_required'; SELECT COUNT(*), COALESCE(SUM(cfg_value='RESTORED'),0) FROM system_configs WHERE cfg_key='oem.storage.reconcile_required'") (Join-Path $scratch 'oem-marker.stderr.log')
+            $markerState = if ($oemMarker.ExitCode -eq 0 -and @($oemMarker.Output).Count -eq 1) { ([string]@($oemMarker.Output)[0]).Trim() -split '\s+' } else { @() }
+            if ($markerState.Count -ne 2 -or ($markerState[0] -ne '0' -and $markerState[1] -ne '1')) { throw 'Unable to mark OEM storage for reconciliation after restore.' }
+            # A backup taken before the OEM schema existed has no marker row and no OEM records to reconcile.
+            if ($markerState[0] -eq '0' -and $ReuseOemStorage) { throw 'The backup predates the OEM schema; ReuseOemStorage cannot be reconciled against it.' }
+        } elseif ($ReuseOemStorage) {
+            throw 'The backup predates the OEM schema; ReuseOemStorage cannot be reconciled against it.'
         }
         Copy-YfTree (Join-Path $BackupRoot 'storage') $Config.Storage
         Copy-YfTree (Join-Path $BackupRoot 'application') $NewApplicationRoot

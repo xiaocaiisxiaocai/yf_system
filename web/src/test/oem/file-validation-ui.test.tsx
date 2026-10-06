@@ -36,6 +36,8 @@ describe('OEM 文件校验界面', () => {
         value: '5',
         min: 1,
         max: 20,
+        readOnly: false,
+        unsupportedReason: null,
         hint: '超出层级的压缩包将判定为无效',
       },
       {
@@ -45,6 +47,9 @@ describe('OEM 文件校验界面', () => {
         value: '48',
         min: 1,
         max: 2160,
+        readOnly: false,
+        unsupportedReason: null,
+        hint: null,
       },
       {
         key: 'oem.scan.block_on_stale_signatures',
@@ -53,6 +58,9 @@ describe('OEM 文件校验界面', () => {
         value: 'false',
         min: null,
         max: null,
+        readOnly: false,
+        unsupportedReason: null,
+        hint: null,
       },
     ]
     const api = {

@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Xml;
 using SharpCompress.Archives;
@@ -23,6 +24,8 @@ public static class FileSignatureInspector
     private static readonly byte[] Png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
     private static readonly byte[] SevenZip = [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C];
     private static readonly byte[] Rar = [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07]; // "Rar!" 0x1A 0x07
+    internal static ReadOnlySpan<byte> SevenZipSignature => SevenZip;
+    internal static ReadOnlySpan<byte> RarSignature => Rar;
     private static readonly byte[] ZipLocal = [0x50, 0x4B, 0x03, 0x04];
     private static readonly byte[] ZipEmpty = [0x50, 0x4B, 0x05, 0x06];
     private static readonly byte[] Elf = [0x7F, 0x45, 0x4C, 0x46];
@@ -88,7 +91,7 @@ public static class FileSignatureInspector
         return IsText(head) ? "text" : "binary";
     }
 
-    private static bool IsExecutable(ReadOnlySpan<byte> head)
+    internal static bool IsExecutable(ReadOnlySpan<byte> head)
     {
         if (head.StartsWith("MZ"u8) || head.StartsWith(Elf) || TrimLeading(head).StartsWith("#!"u8)) return true;
         foreach (var magic in MachO)
@@ -109,12 +112,21 @@ public static class FileSignatureInspector
     private static int IndexOf(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle) => haystack.IndexOf(needle);
 }
 
-public enum ArchiveOutcome { NotArchive, Accepted, Encrypted, LimitExceeded, Corrupt }
+public enum ArchiveOutcome { NotArchive, Accepted, Encrypted, LimitExceeded, Corrupt, Forbidden }
 
 public sealed record ArchiveVerdict(ArchiveOutcome Outcome, string? Reason)
 {
     public static readonly ArchiveVerdict NotArchive = new(ArchiveOutcome.NotArchive, null);
     public static readonly ArchiveVerdict Accepted = new(ArchiveOutcome.Accepted, null);
+}
+
+/// <summary>
+/// The validation work directory (not the inspected content) failed, for example because
+/// the volume is full. It is an environment problem and must stay retryable.
+/// </summary>
+public sealed class ArchiveWorkspaceException(Exception inner) : Exception("OEM validation work directory failed.", inner)
+{
+    internal static bool IsWorkspaceFault(Exception error) => error is IOException or UnauthorizedAccessException;
 }
 
 /// <summary>
@@ -141,8 +153,123 @@ public static class ArchiveInspector
             // OOXML containers: encrypted entries or zip bombs are refused, nested archives are not expected.
             "zip" => await InspectZipAsync(path, limits with { MaxDepth = 1 }, depth: 1, workDirectory, new Budget(limits), ooxml, ct),
             "rar" or "7z" => await InspectSharpArchiveAsync(path, detected, limits, depth: 1, workDirectory, new Budget(limits), ct),
-            _ => ArchiveVerdict.NotArchive,
+            _ => await ContainsEmbeddedArchiveAsync(path, ct)
+                ? new ArchiveVerdict(ArchiveOutcome.Forbidden, "文件中夹带了压缩包数据，禁止传递")
+                : ArchiveVerdict.NotArchive,
         };
+    }
+
+    private const int EmbeddedSignatureScanBytes = 1024 * 1024;
+    private const int ZipEndRecordLength = 22;
+    private const int MaxZipCommentLength = ushort.MaxValue;
+
+    /// <summary>
+    /// Archive readers do not need the archive at offset zero: ZIP is located from its
+    /// end record, and RAR/7z tools find a signature after a stub. A file that is not an
+    /// archive by its leading bytes must therefore not carry a complete ZIP end record at its
+    /// tail or a RAR/7z signature near its start; otherwise encryption and expansion limits
+    /// could be bypassed by prepending a few bytes.
+    /// </summary>
+    private static async Task<bool> ContainsEmbeddedArchiveAsync(string path, CancellationToken ct)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
+        if (ZipDirectory.FindEnd(stream, exactTail: true) is not null) return true;
+        stream.Seek(0, SeekOrigin.Begin);
+        var head = new byte[(int)Math.Min(stream.Length, EmbeddedSignatureScanBytes)];
+        await stream.ReadExactlyAsync(head, ct);
+        return head.Length > 1 && (head.AsSpan(1).IndexOf(FileSignatureInspector.RarSignature) >= 0
+            || head.AsSpan(1).IndexOf(FileSignatureInspector.SevenZipSignature) >= 0);
+    }
+
+    /// <summary>Unsafe names would let an extracting client write outside its target directory.</summary>
+    internal static bool UnsafeEntryName(string? name)
+    {
+        if (string.IsNullOrEmpty(name)) return false;
+        if (name.Contains('\0')) return true;
+        var normalized = name.Replace('\\', '/');
+        if (normalized.StartsWith('/')) return true;
+        if (normalized.Length >= 2 && char.IsAsciiLetter(normalized[0]) && normalized[1] == ':') return true;
+        return normalized.Split('/').Any(segment => segment == "..");
+    }
+
+    private static readonly ArchiveVerdict UnsafeEntry = new(ArchiveOutcome.Forbidden, "压缩包条目路径不安全（包含 ..、绝对路径或盘符）");
+
+    /// <summary>
+    /// Minimal ZIP central-directory reader used before <see cref="ZipFile"/> opens a file:
+    /// <c>ZipArchive</c> materialises every directory record before any limit applies, so a
+    /// small file declaring millions of records could exhaust memory.
+    /// </summary>
+    internal static class ZipDirectory
+    {
+        public sealed record End(long EndOffset, long DirectoryOffset, long DirectorySize);
+
+        public static End? FindEnd(Stream stream, bool exactTail)
+        {
+            var length = stream.Length;
+            if (length < ZipEndRecordLength) return null;
+            var tailLength = (int)Math.Min(length, ZipEndRecordLength + MaxZipCommentLength);
+            var tail = new byte[tailLength];
+            stream.Seek(length - tailLength, SeekOrigin.Begin);
+            stream.ReadExactly(tail);
+            for (var i = tailLength - ZipEndRecordLength; i >= 0; i--)
+            {
+                if (BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(i)) != 0x06054B50) continue;
+                var commentEnd = i + ZipEndRecordLength + BinaryPrimitives.ReadUInt16LittleEndian(tail.AsSpan(i + 20));
+                if (exactTail ? commentEnd != tailLength : commentEnd > tailLength) continue;
+                var endOffset = length - tailLength + i;
+                long size = BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(i + 12));
+                long offset = BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(i + 16));
+                var zip64 = size == uint.MaxValue || offset == uint.MaxValue
+                    || BinaryPrimitives.ReadUInt16LittleEndian(tail.AsSpan(i + 10)) == ushort.MaxValue;
+                if (zip64 && !TryReadZip64(stream, endOffset, ref offset, ref size)) continue;
+                if (offset < 0 || size < 0 || offset > endOffset - size) continue;
+                return new End(endOffset, offset, size);
+            }
+            return null;
+        }
+
+        private static bool TryReadZip64(Stream stream, long endOffset, ref long offset, ref long size)
+        {
+            if (endOffset < 20 + 56) return false;
+            var locator = new byte[20];
+            stream.Seek(endOffset - 20, SeekOrigin.Begin);
+            stream.ReadExactly(locator);
+            if (BinaryPrimitives.ReadUInt32LittleEndian(locator) != 0x07064B50) return false;
+            var recordOffset = BinaryPrimitives.ReadInt64LittleEndian(locator.AsSpan(8));
+            if (recordOffset < 0 || recordOffset > endOffset - 20 - 56) return false;
+            var record = new byte[56];
+            stream.Seek(recordOffset, SeekOrigin.Begin);
+            stream.ReadExactly(record);
+            if (BinaryPrimitives.ReadUInt32LittleEndian(record) != 0x06064B50) return false;
+            size = BinaryPrimitives.ReadInt64LittleEndian(record.AsSpan(40));
+            offset = BinaryPrimitives.ReadInt64LittleEndian(record.AsSpan(48));
+            return true;
+        }
+
+        /// <summary>Counts central-directory records, stopping after <paramref name="limit"/>; null when the directory is malformed.</summary>
+        public static long? CountRecords(string path, long limit)
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.SequentialScan);
+            var end = FindEnd(stream, exactTail: false);
+            if (end is null) return null;
+            stream.Seek(end.DirectoryOffset, SeekOrigin.Begin);
+            var header = new byte[46];
+            long consumed = 0, count = 0;
+            while (consumed < end.DirectorySize)
+            {
+                if (end.DirectorySize - consumed < header.Length) return null;
+                stream.ReadExactly(header);
+                if (BinaryPrimitives.ReadUInt32LittleEndian(header) != 0x02014B50) return null;
+                long variable = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(28))
+                    + BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(30))
+                    + BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(32));
+                consumed += header.Length + variable;
+                if (consumed > end.DirectorySize) return null;
+                stream.Seek(variable, SeekOrigin.Current);
+                if (++count > limit) return count;
+            }
+            return count;
+        }
     }
 
     private sealed class Budget(ArchiveLimits limits)
@@ -187,6 +314,10 @@ public static class ArchiveInspector
         CancellationToken ct)
     {
         if (depth > limits.MaxDepth) return new(ArchiveOutcome.LimitExceeded, "压缩包嵌套层级超出限制");
+        var remaining = Math.Max(0, limits.MaxEntries - budget.Entries);
+        var records = ZipDirectory.CountRecords(path, remaining);
+        if (records is null) return new(ArchiveOutcome.Corrupt, "压缩包目录已损坏或格式无效");
+        if (records > remaining) return new(ArchiveOutcome.LimitExceeded, "压缩包文件数量超出限制");
         ZipArchive archive;
         try { archive = ZipFile.OpenRead(path); }
         catch (InvalidDataException) { return new(ArchiveOutcome.Corrupt, "压缩包已损坏或格式无效"); }
@@ -200,6 +331,7 @@ public static class ArchiveInspector
             {
                 ct.ThrowIfCancellationRequested();
                 if (entry.IsEncrypted) return new(ArchiveOutcome.Encrypted, "不允许传递加密的压缩包");
+                if (UnsafeEntryName(entry.FullName)) return UnsafeEntry;
                 var metadata = AccountMetadata(budget, entry.Length, entry.CompressedLength);
                 if (metadata is not null) return metadata;
                 archiveExpanded += entry.Length;
@@ -333,6 +465,7 @@ public static class ArchiveInspector
                     var entry = reader.Entry;
                     ct.ThrowIfCancellationRequested();
                     if (entry.IsEncrypted) return new(ArchiveOutcome.Encrypted, "不允许传递加密的压缩包");
+                    if (UnsafeEntryName(entry.Key)) return UnsafeEntry;
                     var metadata = AccountMetadata(budget, entry.Size, entry.CompressedSize);
                     if (metadata is not null) return metadata;
                     archiveExpanded += entry.Size;
@@ -390,6 +523,7 @@ public static class ArchiveInspector
                 ct.ThrowIfCancellationRequested();
                 var entry = reader.Entry;
                 if (entry.IsEncrypted) return new(ArchiveOutcome.Encrypted, "不允许传递加密的压缩包");
+                if (UnsafeEntryName(entry.Key)) return UnsafeEntry;
                 var metadata = AccountMetadata(budget, entry.Size, entry.CompressedSize);
                 if (metadata is not null) return metadata;
                 archiveExpanded += entry.Size;
@@ -410,6 +544,7 @@ public static class ArchiveInspector
             {
                 ct.ThrowIfCancellationRequested();
                 if (entry.IsEncrypted) return new(ArchiveOutcome.Encrypted, "不允许传递加密的压缩包");
+                if (UnsafeEntryName(entry.Key)) return UnsafeEntry;
                 var metadata = AccountMetadata(budget, entry.Size, entry.CompressedSize);
                 if (metadata is not null) return metadata;
                 archiveExpanded += entry.Size;
@@ -472,6 +607,8 @@ public static class ArchiveInspector
             total += read;
             AccountActualBytes(budget, read);
         }
+        if (FileSignatureInspector.IsExecutable(buffer.AsSpan(0, headLength)))
+            return new(ArchiveOutcome.Forbidden, "压缩包内包含可执行程序，禁止传递");
         var detected = FileSignatureInspector.Detect(buffer.AsSpan(0, headLength));
         if (detected is not ("zip" or "rar" or "7z"))
         {
@@ -487,10 +624,15 @@ public static class ArchiveInspector
         var temp = Path.Combine(workDirectory, $"nested-{Guid.NewGuid():N}.tmp");
         try
         {
-            await using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
+            FileStream output;
+            try { output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan); }
+            catch (Exception error) when (ArchiveWorkspaceException.IsWorkspaceFault(error)) { throw new ArchiveWorkspaceException(error); }
+            await using (output)
             {
-                await output.WriteAsync(buffer.AsMemory(0, headLength), ct);
+                await WriteWorkspaceAsync(output, buffer.AsMemory(0, headLength), ct);
                 total += await DrainAsync(input, output, buffer, budget, ct);
+                try { await output.FlushAsync(ct); }
+                catch (Exception error) when (ArchiveWorkspaceException.IsWorkspaceFault(error)) { throw new ArchiveWorkspaceException(error); }
             }
             if (total != declaredLength)
                 return new(ArchiveOutcome.Corrupt, "压缩包条目实际大小与记录不符");
@@ -509,9 +651,16 @@ public static class ArchiveInspector
         {
             AccountActualBytes(budget, read);
             total += read;
-            await output.WriteAsync(buffer.AsMemory(0, read), ct);
+            await WriteWorkspaceAsync(output, buffer.AsMemory(0, read), ct);
         }
         return total;
+    }
+
+    /// <summary>Only writes go to the work directory; reads come from the archive and describe its content.</summary>
+    private static async ValueTask WriteWorkspaceAsync(Stream output, ReadOnlyMemory<byte> data, CancellationToken ct)
+    {
+        try { await output.WriteAsync(data, ct); }
+        catch (Exception error) when (ArchiveWorkspaceException.IsWorkspaceFault(error)) { throw new ArchiveWorkspaceException(error); }
     }
 
     private static void AccountActualBytes(Budget budget, int read)

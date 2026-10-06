@@ -1,5 +1,20 @@
 // Contracts of the OEM business line (/api/v1/oem). Kept separate from the
 // collaboration types: the two lines share no DTOs.
+//
+// Every DTO below is derived from the backend OpenAPI contract
+// (../../api/generated/api-types.ts, `npm run generate:api-types`); this file only
+// narrows enum-like string fields to the literal unions the UI relies on. A backend
+// field rename/removal/type change therefore surfaces as a compile error here or at
+// the use site instead of drifting silently.
+import type * as Api from '../../api/generated/api-types'
+
+export type { ApiResponses, ApiRoute } from '../../api/generated/api-types'
+
+/**
+ * Replaces fields of a generated DTO with narrower UI types. Every key of `N` must
+ * exist on `T`, so a field renamed or removed by the backend fails to compile here.
+ */
+type Narrow<T, N extends { [K in keyof N]: K extends keyof T ? unknown : never }> = Omit<T, keyof N> & N
 
 export type Realm = 'internal' | 'oem'
 export type Direction = 'INTERNAL_TO_OEM' | 'OEM_TO_INTERNAL'
@@ -8,266 +23,105 @@ export type ValidationStatus = 'PENDING' | 'VALIDATING' | 'VALID' | 'INVALID' | 
 export type PayloadStatus = 'QUARANTINED' | 'PROMOTING' | 'AVAILABLE' | 'PURGE_PENDING' | 'PURGED' | 'STORAGE_LOST' | 'MISSING_UNVERIFIED'
 export type ApprovalStatus = 'NOT_REQUIRED' | 'WAITING_FILES' | 'PENDING' | 'APPROVAL_BLOCKED' | 'APPROVED' | 'SKIPPED' | 'REJECTED' | 'CANCELLED'
 export type ContentPurpose = 'NONE' | 'RECIPIENT' | 'SENDER' | 'REVIEW'
+export type ActiveStatus = 'ACTIVE' | 'DISABLED'
+export type RetentionMode = 'KEEP' | 'AFTER_RELEASE' | 'AFTER_FIRST_RECEIPT' | 'FIRST_RECEIPT_OR_DEADLINE'
+export type ApproverSource = 'SECTION_LEADER' | 'DEPARTMENT_LEADER' | 'DIVISION_LEADER' | 'SPECIFIED_USERS'
+export type ApprovalMode = 'SINGLE' | 'ANY' | 'ALL'
+export type SelfPolicy = 'DESIGNATED' | 'SKIP' | 'BLOCK'
 
-export interface Page<T> {
-  list: T[]
-  total: number
-  page: number
-  pageSize: number
-}
+/** All OEM paged lists share one envelope (OemPageResponse<T>). */
+export type Page<T> = Omit<Api.OemPageResponseOfOemTransferSummaryResponse, 'list'> & { list: T[] }
 
-export interface PersonRef {
-  realm: Realm | 'unknown'
-  id: number
-  employeeNo: string
-  realName: string
-}
+export type PersonRef = Narrow<Api.OemPersonRefResponse, { realm: Realm | 'unknown' }>
 
-export interface TransferSummary {
-  id: number
+export type TransferSummary = Narrow<Api.OemTransferSummaryResponse, {
   direction: Direction
-  companyId: number
-  companyName: string
-  title: string
   sender: PersonRef
   lifecycleStatus: Lifecycle
   approvalStatus: ApprovalStatus | null
-  approvalBlockedReason: string | null
   validationSummary: ValidationStatus | null
-  fileCount: number
-  totalBytes: number
-  availableCount: number
-  purgePendingCount: number
-  purgedCount: number
-  missingCount: number
-  createdAt: string
-  sentAt: string | null
-  releasedAt: string | null
-  version: number
-}
+}>
 
-export interface TransferFile {
-  id: number
-  originalName: string
-  ext: string
-  sizeBytes: number
-  sha256: string
+export type TransferFile = Narrow<Api.OemTransferFileResponse, {
   validationStatus: ValidationStatus
   payloadStatus: PayloadStatus
-  validationAttempts: number | null
-  validationMessage: string | null
-  createdAt: string
-  firstRecipientDownloadAt: string | null
-  purgeDueAt: string | null
-  purgedAt: string | null
-  downloadable: boolean
-}
+}>
 
-export interface ApprovalTask {
-  id: number
-  status: string
-  approverUserId: number
-  approverName: string | null
-  approverEmployeeNo: string | null
-  reason: string | null
-  decidedAt: string | null
-  replacesTaskId: number | null
-  reassignReason: string | null
-  version: number
-}
+export type ApprovalTask = Api.OemApprovalTaskResponse
+export type ApprovalNode = Api.OemApprovalNodeResponse
+export type ApprovalInfo = Api.OemApprovalInfoResponse
 
-export interface ApprovalNode {
-  sortNo: number
-  name: string
-  approverSource: string
-  approvalMode: string
-  status: string
-  skipReason: string | null
-  usedFallback: boolean
-  completedAt: string | null
-  tasks: ApprovalTask[]
-}
+export type TransferCapabilities = Narrow<Api.OemTransferCapabilitiesResponse, { contentPurpose: ContentPurpose }>
 
-export interface ApprovalInfo {
-  instanceId: number
-  status: string
-  blockedReason: string | null
-  currentSortNo: number | null
-  version: number
-  templateName: string | null
-  nodes: ApprovalNode[]
-}
-
-export interface TransferDetail {
+export type TransferDetail = Narrow<Api.OemTransferDetailResponse, {
   summary: TransferSummary
-  description: string | null
-  retention: {
-    templateId: number
-    templateName: string | null
-    mode: string | null
-    releaseTtlMinutes: number | null
-    receiptGraceMinutes: number | null
-    summary: string | null
-  }
-  manifestSha256: string | null
-  expiresAt: string | null
-  closedReason: string | null
-  closedAt: string | null
-  capabilities: { canEdit: boolean; canSend: boolean; canDelete: boolean; canReadContent: boolean; contentPurpose: ContentPurpose }
+  capabilities: TransferCapabilities
   files: TransferFile[]
   approval: ApprovalInfo | null
-}
+}>
 
-export interface PendingTask {
-  taskId: number
-  version: number
-  transferId: number
-  title: string
-  companyName: string
-  senderName: string
-  senderEmployeeNo: string
-  nodeName: string
-  approvalMode: string
-  sentAt: string
-  activatedAt: string
-}
+export type PendingTask = Api.OemPendingApprovalResponse
 
-export interface Option {
-  id: number
-  name: string
-}
+export type Option = Api.OemOptionResponse
 
-export interface RetentionTemplate {
-  id: number
-  name: string
-  mode: 'KEEP' | 'AFTER_RELEASE' | 'AFTER_FIRST_RECEIPT' | 'FIRST_RECEIPT_OR_DEADLINE'
-  releaseTtlMinutes: number | null
-  receiptGraceMinutes: number | null
-  status: 'ACTIVE' | 'DISABLED'
-  version: number
-  summary: string
-}
+export type CompanyOption = Api.OemCompanyOptionResponse
 
-export interface Company {
-  id: number
-  name: string
-  contactName: string | null
-  contactPhone: string | null
-  contactEmail: string | null
-  remark: string | null
-  status: 'ACTIVE' | 'DISABLED'
-  accountCount?: number
-  activeAccountCount?: number
-  createdAt: string
-}
+export type RetentionTemplate = Narrow<Api.OemRetentionTemplateResponse, { mode: RetentionMode; status: ActiveStatus }>
 
-export interface VendorAccount {
-  id: number
-  employeeNo: string
-  realName: string
-  email: string
-  companyId: number
-  status: 'ACTIVE' | 'DISABLED'
-  mustChangePassword: boolean
-  locked: boolean
-  lastLoginAt: string | null
-}
+/** Single-company responses (create/update/status) carry no account counts; list rows do. */
+export type Company = Narrow<Api.OemCompanyResponse, { status: ActiveStatus }>
+  & Partial<Pick<Api.OemCompanyListItemResponse, 'accountCount' | 'activeAccountCount'>>
 
-export interface TemplatePerson {
-  id: number
-  employeeNo: string | null
-  realName: string | null
-  eligible: boolean
-}
+export type CompanyListItem = Narrow<Api.OemCompanyListItemResponse, { status: ActiveStatus }>
 
-export interface FlowNode {
-  sortNo: number
-  name: string
-  approverSource: 'SECTION_LEADER' | 'DEPARTMENT_LEADER' | 'DIVISION_LEADER' | 'SPECIFIED_USERS'
-  approvalMode: 'SINGLE' | 'ANY' | 'ALL'
-  selfPolicy: 'DESIGNATED' | 'SKIP' | 'BLOCK'
-  enabled: boolean
-  approvers: TemplatePerson[]
-  fallbacks: TemplatePerson[]
-}
+export type VendorAccount = Narrow<Api.OemAccountResponse, { status: ActiveStatus }>
 
-export interface FlowTemplate {
-  id: number
-  name: string
-  isDefault: boolean
-  status: 'ACTIVE' | 'DISABLED'
-  version: number
-  nodes: FlowNode[]
-  scopes: { id: number; name: string; kind: string; status: string }[]
-}
+export type TemplatePerson = Api.OemFlowNodePersonResponse
 
-export interface FlowNodeInput {
-  name: string
-  approverSource: FlowNode['approverSource']
-  approvalMode: FlowNode['approvalMode'] | null
-  selfPolicy: FlowNode['selfPolicy']
-  enabled: boolean
-  approverUserIds: number[]
-  fallbackUserIds: number[]
-}
+export type FlowNode = Narrow<Api.OemFlowNodeResponse, {
+  approverSource: ApproverSource
+  approvalMode: ApprovalMode
+  selfPolicy: SelfPolicy
+}>
 
-export interface RoutingPreview {
-  ok: boolean
-  reason?: string
-  template?: Option
-  matchedScope?: { id: number; name: string; kind: string } | null
-  requiresApproval?: boolean
-  nodes?: {
-    sortNo: number
-    name: string
-    approverSource: string
-    approvalMode: string
-    skipped: boolean
-    skipReason: string | null
-    usedFallback: boolean
-    scopeName: string | null
-    approvers: ({ id: number; employeeNo: string; realName: string } | null)[]
-  }[]
-}
+export type FlowTemplate = Narrow<Api.OemFlowTemplateResponse, { status: ActiveStatus; nodes: FlowNode[] }>
 
-export interface SettingItem {
-  key: string
-  label: string
-  kind: 'integer' | 'boolean' | 'extensions' | 'text'
-  value: string
-  min: number | null
-  max: number | null
-  readOnly?: boolean
-  unsupportedReason?: string | null
-  hint?: string | null
-}
+export type FlowNodeInput = Narrow<Api.FlowNodeInput, {
+  approverSource: ApproverSource
+  approvalMode?: ApprovalMode | null
+  selfPolicy: SelfPolicy
+}>
 
-export interface AuditRow {
-  id: number
-  action: string
-  actorRealm: Realm | 'system'
-  actorId: number | null
-  employeeNo: string | null
-  targetType: string | null
-  targetId: string | null
-  ip: string | null
-  createdAt: string
-  detail: Record<string, unknown> | null
-}
+export type RoutingNode = Api.OemRoutingNodeResponse
 
-export interface DepartmentNode {
-  id: number
-  name: string
+export type RoutingPreview = Narrow<Api.OemRoutingPreviewResponse, { nodes?: RoutingNode[] | null }>
+
+export type SettingItem = Narrow<Api.OemSettingResponse, { kind: 'integer' | 'boolean' | 'extensions' | 'text' }>
+
+export type AuditRow = Narrow<Api.OemAuditLogResponse, { actorRealm: Realm | 'system' }>
+
+export type DepartmentNode = Narrow<Api.DepartmentTreeNode, {
   kind: 'DIVISION' | 'DEPARTMENT' | 'SECTION'
-  status: string
-  leader: { id: number; employeeNo: string; realName: string; active: boolean } | null
   children: DepartmentNode[]
-}
+}>
 
-export interface UploadInit {
-  sessionId: string
-  chunkSize: number
-  totalChunks: number
-  uploadedChunks: number[]
-  resumed?: boolean
-}
+export type UploadInit = Api.OemUploadSessionInitResponse
+export type UploadedFile = Api.OemUploadedFileResponse
+export type DownloadSession = Api.OemDownloadSessionResponse
+export type ApproverOption = Api.OemFlowPersonResponse
+export type InternalUserOption = Api.OemInternalUserOptionResponse
+export type AccountBrief = Api.OemAccountBrief
+
+// Request bodies (generated request schemas, enum-like fields narrowed).
+export type TransferCreate = Api.TransferCreate
+export type TransferUpdate = Api.TransferUpdate
+export type UploadInitRequest = Api.OemUploadInit
+export type CompanyUpsert = Api.OemCompanyUpsert
+export type AccountCreate = Api.OemAccountCreate
+export type AccountUpdate = Api.OemAccountUpdate
+export type RetentionTemplateCreate = Narrow<Api.RetentionTemplateCreate, { mode: RetentionMode }>
+export type RetentionTemplateUpdate = Narrow<Api.RetentionTemplateUpdate, { mode: RetentionMode; status: ActiveStatus }>
+export type FlowTemplateCreate = Narrow<Api.FlowTemplateCreate, { nodes: FlowNodeInput[] }>
+export type FlowTemplateUpdate = Narrow<Api.FlowTemplateUpdate, { status: ActiveStatus }>
+export type FlowTemplateDefinitionUpdate = Narrow<Api.FlowTemplateDefinitionUpdate, { status: ActiveStatus; nodes: FlowNodeInput[] }>
+export type SettingUpdateItem = Api.OemSettingItem

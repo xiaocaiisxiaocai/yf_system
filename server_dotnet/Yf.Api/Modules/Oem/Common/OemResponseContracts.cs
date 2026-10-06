@@ -7,6 +7,8 @@ public sealed record OemPageResponse<T>(IReadOnlyList<T> List, ulong Total, ulon
 
 public sealed record OemOptionResponse(ulong Id, string Name);
 
+public sealed record OemCompanyOptionResponse(ulong Id, string Name, bool CanReceive, string? UnavailableReason);
+
 public sealed record OemCompanyListItemResponse(
     ulong Id,
     string Name,

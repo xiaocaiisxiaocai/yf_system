@@ -22,6 +22,7 @@ function company(overrides: Partial<Company> = {}): Company {
     accountCount: 1,
     activeAccountCount: 1,
     createdAt: '2026-10-05T00:00:00Z',
+    updatedAt: '2026-10-05T00:00:00Z',
     ...overrides,
   }
 }
@@ -37,6 +38,8 @@ function account(overrides: Partial<VendorAccount> = {}): VendorAccount {
     mustChangePassword: false,
     locked: false,
     lastLoginAt: null,
+    createdAt: '2026-10-05T00:00:00Z',
+    updatedAt: '2026-10-05T00:00:00Z',
     ...overrides,
   }
 }

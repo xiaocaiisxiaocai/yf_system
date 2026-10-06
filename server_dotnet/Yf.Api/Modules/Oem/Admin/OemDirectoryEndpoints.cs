@@ -13,7 +13,7 @@ internal static class OemDirectoryEndpoints
             return s.ListCompaniesAsync(OemActorAccessor.Get(c), p.Page, p.Size, p.Offset, c.Request.Query["keyword"], c.Request.Query["status"], ct);
         }).Produces<OemPageResponse<OemCompanyListItemResponse>>();
         oem.MapGet("/company-options", (HttpContext c, OemDirectoryService s, CancellationToken ct) =>
-            s.CompanyOptionsAsync(OemActorAccessor.Get(c), ct)).Produces<IReadOnlyList<OemOptionResponse>>();
+            s.CompanyOptionsAsync(OemActorAccessor.Get(c), ct)).Produces<IReadOnlyList<OemCompanyOptionResponse>>();
         oem.MapPost("/companies", (OemCompanyUpsert r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.CreateCompanyAsync(OemActorAccessor.Get(c), r, ct)).Produces<OemCompanyResponse>();
         oem.MapGet("/companies/{id:long}", (ulong id, HttpContext c, OemDirectoryService s, CancellationToken ct) =>

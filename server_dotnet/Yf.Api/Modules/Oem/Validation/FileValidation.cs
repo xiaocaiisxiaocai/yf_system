@@ -61,11 +61,23 @@ public sealed class OemFileValidationPipeline
         ArchiveVerdict archive;
         try { archive = await ArchiveInspector.InspectAsync(target.Path, extension, limits, workDirectory, ct); }
         catch (InvalidDataException) { archive = new ArchiveVerdict(ArchiveOutcome.Corrupt, "压缩包内容无效"); }
+        catch (Exception error) when (IsContentFault(error))
+        {
+            // Archive readers report malformed structures with arbitrary runtime exceptions
+            // (IOException, InvalidOperationException, ArgumentException...). The bytes were
+            // just read in full and matched the recorded SHA-256, so the content is the cause
+            // and the verdict is final.
+            archive = new ArchiveVerdict(ArchiveOutcome.Corrupt, "压缩包已损坏或格式无效");
+        }
 
         return archive.Outcome is ArchiveOutcome.Encrypted or ArchiveOutcome.LimitExceeded or ArchiveOutcome.Corrupt
+            or ArchiveOutcome.Forbidden
             ? ValidationResult.Invalid(archive.Reason ?? "压缩包内容无效")
             : ValidationResult.Valid;
     }
+
+    internal static bool IsContentFault(Exception error) =>
+        error is not (OperationCanceledException or ArchiveWorkspaceException or OutOfMemoryException);
 
     private static async Task<string?> ValidateIntegrityAsync(ValidationTarget target, CancellationToken ct)
     {

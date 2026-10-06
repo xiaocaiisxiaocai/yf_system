@@ -27,7 +27,7 @@ public sealed partial class OemUploadService(
     OemAuditWriter audit,
     ILogger<OemUploadService> logger)
 {
-    public async Task<object> InitAsync(OemActor actor, ulong transferId, OemUploadInit request, CancellationToken ct)
+    public async Task<OemUploadSessionInitResponse> InitAsync(OemActor actor, ulong transferId, OemUploadInit request, CancellationToken ct)
     {
         var name = ValidateFileName(request.FileName);
         var extension = ExtensionOf(name);
@@ -53,7 +53,7 @@ public sealed partial class OemUploadService(
                     && session.ExpiresAt > uow.Now)
                 .OrderByDescending(session => session.CreatedAt).FirstOrDefaultAsync(ct);
             if (resumable is not null)
-                return new { sessionId = resumable.Id, resumable.ChunkSize, resumable.TotalChunks, uploadedChunks = UploadedChunks(resumable), resumed = true };
+                return new OemUploadSessionInitResponse(resumable.Id, resumable.ChunkSize, resumable.TotalChunks, UploadedChunks(resumable), Resumed: true);
         }
 
         // Quota decisions for one vendor are serialised on the vendor row.
@@ -102,20 +102,18 @@ public sealed partial class OemUploadService(
             await TryDeleteDirectoryAsync(directory);
             throw;
         }
-        return new { sessionId, chunkSize, totalChunks = (uint)totalChunks, uploadedChunks = Array.Empty<uint>(), resumed = false };
+        return new OemUploadSessionInitResponse(sessionId, chunkSize, (uint)totalChunks, Array.Empty<uint>(), Resumed: false);
     }
 
-    public async Task<object> GetAsync(OemActor actor, string sessionId, CancellationToken ct)
+    public async Task<OemUploadSessionResponse> GetAsync(OemActor actor, string sessionId, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
         var session = await LoadOwnSessionAsync(uow, current, sessionId, forUpdate: false, ct);
-        return new
-        {
-            sessionId = session.Id, session.Status, session.ChunkSize, session.TotalChunks, session.FileName, session.FileSize,
-            uploadedChunks = session.Status == UploadStatuses.Uploading ? UploadedChunks(session) : [], resultFileId = session.ResultFileId,
-            expired = session.ExpiresAt <= uow.Now,
-        };
+        return new OemUploadSessionResponse(
+            session.Id, session.Status, session.ChunkSize, session.TotalChunks, session.FileName, session.FileSize,
+            session.Status == UploadStatuses.Uploading ? UploadedChunks(session) : [], session.ResultFileId,
+            Expired: session.ExpiresAt <= uow.Now);
     }
 
     public async Task PutChunkAsync(OemActor actor, string sessionId, int index, HttpRequest request, CancellationToken ct)
@@ -126,6 +124,7 @@ public sealed partial class OemUploadService(
         {
             var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
             session = await LoadOwnSessionAsync(uow, current, sessionId, forUpdate: false, ct);
+            await OemSettings.EnsureStorageSettledAsync(uow.Db, "上传", ct);
             if (session.Status != UploadStatuses.Uploading) throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
             if (session.ExpiresAt <= uow.Now) throw ApiException.Conflict("上传会话已过期，请重新发起");
         }
@@ -174,7 +173,7 @@ public sealed partial class OemUploadService(
         await TryDeleteDirectoryAsync(storage.SessionDirectory(sessionId, create: false, ct));
     }
 
-    public async Task<object> MergeAsync(OemActor actor, string sessionId, CancellationToken ct)
+    public async Task<OemUploadedFileResponse> MergeAsync(OemActor actor, string sessionId, CancellationToken ct)
     {
         await using var mergeLock = await AcquireMergeLockAsync(sessionId, ct);
         OemUploadSession session;
@@ -189,6 +188,7 @@ public sealed partial class OemUploadService(
                 return await FileJsonAsync(done, ct);
             }
             if (session.Status is not (UploadStatuses.Uploading or UploadStatuses.Merging)) throw ApiException.Conflict("会话已失效");
+            await OemSettings.EnsureStorageSettledAsync(uow.Db, "上传", ct);
             if (session.ExpiresAt <= uow.Now) throw ApiException.Conflict("上传会话已过期，请重新发起");
             var missing = Enumerable.Range(0, (int)session.TotalChunks).Select(i => (uint)i).Except(UploadedChunks(session)).Count();
             if (missing > 0) throw ApiException.BadRequest($"分片不完整：还缺 {missing} 个分片");
@@ -226,6 +226,9 @@ public sealed partial class OemUploadService(
                 OemTransferService.EnsureOwnDraft(current, transfer);
                 var locked = await LoadOwnSessionAsync(uow, current, sessionId, forUpdate: true, ct);
                 if (locked.Status != UploadStatuses.Merging) throw ApiException.Conflict("上传会话状态已变化，请重新查询");
+                // Re-checked right before the file appears in quarantine: the reconcile
+                // orphan sweep must never see a stored file whose row is not yet committed.
+                await OemSettings.EnsureStorageSettledAsync(uow.Db, "上传", ct);
                 File.Move(mergeTemp, target, overwrite: false);
                 movedTo = target;
                 var extension = ExtensionOf(session.FileName);
@@ -301,15 +304,13 @@ public sealed partial class OemUploadService(
         return ids.Length;
     }
 
-    private async Task<object> FileJsonAsync(ulong fileId, CancellationToken ct)
+    private async Task<OemUploadedFileResponse> FileJsonAsync(ulong fileId, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var file = await uow.Db.OemTransferFiles.AsNoTracking().SingleAsync(item => item.Id == fileId, ct);
-        return new
-        {
+        return new OemUploadedFileResponse(
             file.Id, file.TransferId, file.OriginalName, file.Ext, file.SizeBytes, file.Sha256,
-            validationStatus = file.ScanStatus, file.PayloadStatus, file.CreatedAt,
-        };
+            file.ScanStatus, file.PayloadStatus, file.CreatedAt);
     }
 
     private async Task ResetMergeAsync(string sessionId)

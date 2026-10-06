@@ -20,6 +20,9 @@ param(
     [string]$MySqlDump = 'mysqldump.exe',
     [string]$MySql = 'mysql.exe',
     [switch]$MigrateDatabase,
+    # Restore only: keep the current, non-backed-up OEM root instead of a new empty one
+    # (rolling back a failed upgrade). The restored database is reconciled against it.
+    [switch]$ReuseOemStorage,
     [ValidateRange(30,600)][int]$HealthCheckWaitSeconds = 120,
     [ValidateRange(2,30)][int]$HealthRequestTimeoutSeconds = 10
 )
@@ -35,7 +38,7 @@ function Set-YfSiteConfig([string]$Root,[string]$ExternalConfig) {
     Set-YfExternalConfigurationFallback $Root
     Set-YfWebConfigEnvironment (Join-Path $Root 'web.config') $ExternalConfig
 }
-function Grant-YfApplicationAccess([string]$Root,$Config,[string]$Pool,[switch]$NewStorage) {
+function Grant-YfApplicationAccess([string]$Root,$Config,[string]$Pool,[switch]$NewStorage,[switch]$ReuseOemStorage) {
     $identity='IIS AppPool\'+$Pool
     & icacls.exe $Root /grant "${identity}:(OI)(CI)RX" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application pool access.' }
@@ -51,7 +54,7 @@ function Grant-YfApplicationAccess([string]$Root,$Config,[string]$Pool,[switch]$
         if ($NewStorage -and !(Test-Path -LiteralPath $Config.OemStorage)) {
             New-Item -ItemType Directory -Path $Config.OemStorage | Out-Null
         }
-        if ($NewStorage) {
+        if ($NewStorage -and !$ReuseOemStorage) {
             # OEM content is not restored from the collaboration backup; the new empty root gets a fresh restricted ACL.
             Set-YfApplicationDirectoryAcl $Config.OemStorage $identity
         } else {
@@ -113,6 +116,7 @@ $currentPaths=@($currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupR
 if ($currentConfig.OemStorage) { $currentPaths += $currentConfig.OemStorage }
 Assert-YfSeparate $currentPaths
 if ($currentConfig.CaFile) { Assert-YfSeparate @($currentConfig.CaFile,$currentRoot,$backupRoot) }
+if ($ReuseOemStorage -and $Action -ne 'Restore') { throw 'ReuseOemStorage is only supported for Restore.' }
 if ($Action -eq 'Restore') {
     if ($MigrateDatabase) { throw 'Restore uses the backed-up application and schema; migration must be a separate later upgrade.' }
     $targetConfig=Read-YfMaintenanceConfig $RestoreConfigPath
@@ -121,6 +125,13 @@ if ($Action -eq 'Restore') {
     if ($targetConfig.Config.App.PSObject.Properties['AllowInsecureCookies'] -and $targetConfig.Config.App.AllowInsecureCookies -eq $true) { throw 'Restore requires App.AllowInsecureCookies to be absent or false.' }
     Assert-YfBackupSite $backupRoot $SiteName | Out-Null
     Assert-YfPublishedConfig (Join-Path $backupRoot 'application') -AllowConfigPath
+    if ($ReuseOemStorage) {
+        if (!$currentConfig.OemStorage -or !$targetConfig.OemStorage -or
+            ![string]::Equals($currentConfig.OemStorage,$targetConfig.OemStorage,[StringComparison]::OrdinalIgnoreCase)) {
+            throw 'ReuseOemStorage requires the restore configuration to keep the current App.OemStorageRoot.'
+        }
+        if (!(Test-Path -LiteralPath $targetConfig.OemStorage -PathType Container)) { throw 'The current OEM storage directory is missing.' }
+    }
     Get-Command $MySql -ErrorAction Stop | Out-Null
 } else {
     $targetConfig=$currentConfig
@@ -135,10 +146,13 @@ if ($Action -ne 'Backup') {
     if ($currentConfig.CaFile) { Assert-YfSeparate @($currentConfig.CaFile,$currentRoot,$backupRoot,$NewSiteRoot) }
     if ($Action -eq 'Restore') {
         $paths+=@($targetConfig.Storage,$targetConfig.Path)
-        if ($targetConfig.OemStorage) { $paths += $targetConfig.OemStorage }
+        if ($targetConfig.OemStorage -and !$ReuseOemStorage) { $paths += $targetConfig.OemStorage }
         if ($targetConfig.CaFile) { Assert-YfSeparate @($targetConfig.CaFile,$currentRoot,$currentConfig.Storage,$currentConfig.Path,$backupRoot,$NewSiteRoot) }
         Assert-YfEmptyDirectory $targetConfig.Storage
-        if ($targetConfig.OemStorage) { Assert-YfEmptyDirectory $targetConfig.OemStorage }
+        if ($targetConfig.OemStorage -and !$ReuseOemStorage) { Assert-YfEmptyDirectory $targetConfig.OemStorage }
+    } elseif ($targetConfig.OemStorage -and !(Test-Path -LiteralPath $targetConfig.OemStorage -PathType Container)) {
+        # Checked before the pool stops: enabling OEM during an upgrade needs the directory first.
+        throw 'Create the configured App.OemStorageRoot before maintenance; the pool was not stopped.'
     }
     $logDirectory=Get-YfLogDirectory $targetConfig
     if ($logDirectory) { Assert-YfNoLinks $logDirectory; $paths+=$logDirectory }
@@ -169,14 +183,14 @@ try {
         Start-Sleep -Milliseconds 200
     }
     if ($Action -eq 'Restore') {
-        Restore-YfBackup $backupRoot $targetConfig $NewSiteRoot $MySql
+        Restore-YfBackup $backupRoot $targetConfig $NewSiteRoot $MySql -ReuseOemStorage:$ReuseOemStorage
     } else {
         New-YfBackup $currentRoot $currentConfig $backupRoot $MySqlDump $SiteName $MySql
         if ($Action -eq 'Upgrade') { Copy-YfTree $PackageRoot $NewSiteRoot }
     }
     if ($Action -ne 'Backup') {
         Set-YfSiteConfig $NewSiteRoot $targetConfig.Path
-        Grant-YfApplicationAccess $NewSiteRoot $targetConfig $pool -NewStorage:($Action -eq 'Restore')
+        Grant-YfApplicationAccess $NewSiteRoot $targetConfig $pool -NewStorage:($Action -eq 'Restore') -ReuseOemStorage:$ReuseOemStorage
         # Offline readiness of the NEW package and configuration before any schema change:
         # payload, required settings, storage/log read-write, pool storage grant and runtime.
         Assert-YfDeploymentReadiness $NewSiteRoot $targetConfig ('IIS AppPool\'+$pool)

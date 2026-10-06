@@ -15,7 +15,7 @@ namespace Yf.Api.Modules.Oem.Transfers;
 /// </summary>
 public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
 {
-    public async Task<object> ListAsync(OemActor actor, HttpRequest request, CancellationToken ct)
+    public async Task<OemPageResponse<OemTransferSummaryResponse>> ListAsync(OemActor actor, HttpRequest request, CancellationToken ct)
     {
         var (page, size, offset) = QueryValues.Page(request);
         var approvalStatusInput = request.Query["approvalStatus"].ToString();
@@ -68,20 +68,20 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         var total = (ulong)await query.LongCountAsync(ct);
         var rows = await query.OrderByDescending(transfer => transfer.Id).Page(offset, size).AsNoTracking().ToArrayAsync(ct);
         var summaries = await SummariesAsync(uow, rows, ct);
-        return new { list = rows.Select(transfer => summaries[transfer.Id]), total, page, pageSize = size };
+        return new OemPageResponse<OemTransferSummaryResponse>(rows.Select(transfer => summaries[transfer.Id]).ToArray(), total, page, size);
     }
 
-    public Task<object> DetailAsync(OemActor actor, ulong id, CancellationToken ct) =>
+    public Task<OemTransferDetailResponse> DetailAsync(OemActor actor, ulong id, CancellationToken ct) =>
         DetailAsync(actor, id, allowRecoveryResult: false, ct);
 
     /// <summary>
     /// Returns the just-completed recovery command result without granting the caller a
     /// durable read scope after the transfer leaves APPROVAL_BLOCKED.
     /// </summary>
-    internal Task<object> RecoveryResultAsync(OemActor actor, ulong id, CancellationToken ct) =>
+    internal Task<OemTransferDetailResponse> RecoveryResultAsync(OemActor actor, ulong id, CancellationToken ct) =>
         DetailAsync(actor, id, allowRecoveryResult: true, ct);
 
-    private async Task<object> DetailAsync(OemActor actor, ulong id, bool allowRecoveryResult, CancellationToken ct)
+    private async Task<OemTransferDetailResponse> DetailAsync(OemActor actor, ulong id, bool allowRecoveryResult, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
@@ -102,56 +102,48 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             .Select(job => new { job.FileId, job.AttemptCount, job.LastError, job.Id }).ToArrayAsync(ct);
         var latestJobs = jobs.GroupBy(job => job.FileId).ToDictionary(group => group.Key, group => group.OrderByDescending(job => job.Id).First());
         var retentionTemplate = await uow.Db.OemRetentionTemplates.AsNoTracking().SingleOrDefaultAsync(item => item.Id == transfer.RetentionTemplateId, ct);
-        object? approval = null;
+        OemApprovalInfoResponse? approval = null;
         if (current is not OemAccountActor && transfer.Direction == TransferDirections.InternalToOem) approval = await ApprovalAsync(uow, id, ct);
         var now = uow.Now;
-        return new
-        {
+        return new OemTransferDetailResponse(
             summary,
-            description = capabilities.RecoveryOnly ? null : transfer.Description,
-            retention = new
-            {
-                templateId = transfer.RetentionTemplateId,
-                templateName = retentionTemplate?.Name,
-                mode = transfer.RetentionMode ?? retentionTemplate?.Mode,
-                releaseTtlMinutes = transfer.RetentionMode is null ? retentionTemplate?.ReleaseTtlMinutes : transfer.ReleaseTtlMinutes,
-                receiptGraceMinutes = transfer.RetentionMode is null ? retentionTemplate?.ReceiptGraceMinutes : transfer.ReceiptGraceMinutes,
-                summary = transfer.RetentionMode is not null
+            capabilities.RecoveryOnly ? null : transfer.Description,
+            new OemTransferRetentionResponse(
+                transfer.RetentionTemplateId,
+                retentionTemplate?.Name,
+                transfer.RetentionMode ?? retentionTemplate?.Mode,
+                transfer.RetentionMode is null ? retentionTemplate?.ReleaseTtlMinutes : transfer.ReleaseTtlMinutes,
+                transfer.RetentionMode is null ? retentionTemplate?.ReceiptGraceMinutes : transfer.ReceiptGraceMinutes,
+                transfer.RetentionMode is not null
                     ? OemRetentionTemplateService.Describe(transfer.RetentionMode, transfer.ReleaseTtlMinutes, transfer.ReceiptGraceMinutes)
-                    : retentionTemplate is null ? null : OemRetentionTemplateService.Describe(retentionTemplate.Mode, retentionTemplate.ReleaseTtlMinutes, retentionTemplate.ReceiptGraceMinutes),
-            },
-            manifestSha256 = capabilities.RecoveryOnly ? null : transfer.ManifestSha256,
+                    : retentionTemplate is null ? null : OemRetentionTemplateService.Describe(retentionTemplate.Mode, retentionTemplate.ReleaseTtlMinutes, retentionTemplate.ReceiptGraceMinutes)),
+            capabilities.RecoveryOnly ? null : transfer.ManifestSha256,
             transfer.ExpiresAt,
             transfer.ClosedReason,
             transfer.ClosedAt,
-            capabilities = new
-            {
-                canEdit = capabilities.EditDraft,
-                canSend = capabilities.EditDraft,
-                canDelete = capabilities.EditDraft,
-                canReadContent = capabilities.CanReadContent,
-                contentPurpose = capabilities.ContentAccess.ToString().ToUpperInvariant(),
-            },
-            files = files.Select(file =>
+            new OemTransferCapabilitiesResponse(
+                CanEdit: capabilities.EditDraft,
+                CanSend: capabilities.EditDraft,
+                CanDelete: capabilities.EditDraft,
+                CanReadContent: capabilities.CanReadContent,
+                ContentPurpose: capabilities.ContentAccess.ToString().ToUpperInvariant()),
+            files.Select(file =>
             {
                 latestJobs.TryGetValue(file.Id, out var job);
                 var ready = file.ScanStatus == ValidationStatuses.Valid && file.PayloadStatus == PayloadStatuses.Available
                     && (file.PurgeDueAt is null || file.PurgeDueAt > now);
-                return new
-                {
+                return new OemTransferFileResponse(
                     file.Id, file.OriginalName, file.Ext, file.SizeBytes, file.Sha256,
-                    validationStatus = file.ScanStatus, file.PayloadStatus,
-                    validationAttempts = job?.AttemptCount,
-                    validationMessage = ValidationMessage(file.ScanStatus, job?.LastError),
+                    ValidationStatus: file.ScanStatus, file.PayloadStatus,
+                    ValidationAttempts: job?.AttemptCount,
+                    ValidationMessage: ValidationMessage(file.ScanStatus, job?.LastError),
                     file.CreatedAt, file.FirstRecipientDownloadAt, file.PurgeDueAt, file.PurgedAt,
-                    downloadable = capabilities.CanReadContent && ready,
-                };
-            }),
-            approval,
-        };
+                    Downloadable: capabilities.CanReadContent && ready);
+            }).ToArray(),
+            approval);
     }
 
-    public async Task<object> FileValidationStatusAsync(OemActor actor, ulong fileId, CancellationToken ct)
+    public async Task<OemFileValidationStatusResponse> FileValidationStatusAsync(OemActor actor, ulong fileId, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
@@ -159,7 +151,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         var transfer = await uow.Db.OemTransfers.AsNoTracking().SingleAsync(item => item.Id == file.TransferId, ct);
         var capabilities = await CapabilitiesAsync(uow, current, transfer, ct);
         if (!capabilities.View || capabilities.RecoveryOnly) throw ApiException.NotFound();
-        return new { file.Id, validationStatus = file.ScanStatus, file.PayloadStatus };
+        return new OemFileValidationStatusResponse(file.Id, file.ScanStatus, file.PayloadStatus);
     }
 
     /// <summary>Capability evaluation shared by detail, preview and download.</summary>
@@ -212,7 +204,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         _ => null,
     };
 
-    private static async Task<Dictionary<ulong, object>> SummariesAsync(OemUnitOfWork uow, IReadOnlyCollection<OemTransfer> transfers, CancellationToken ct)
+    private static async Task<Dictionary<ulong, OemTransferSummaryResponse>> SummariesAsync(OemUnitOfWork uow, IReadOnlyCollection<OemTransfer> transfers, CancellationToken ct)
     {
         var db = uow.Db;
         var ids = transfers.Select(transfer => transfer.Id).ToArray();
@@ -230,7 +222,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             .Select(file => new { file.TransferId, file.SizeBytes, file.ScanStatus, file.PayloadStatus }).ToArrayAsync(ct);
         var instances = await db.OemFlowInstances.AsNoTracking().Where(instance => Enumerable.Contains(ids, instance.TransferId))
             .ToDictionaryAsync(instance => instance.TransferId, instance => new { instance.Status, instance.BlockedReason }, ct);
-        var result = new Dictionary<ulong, object>();
+        var result = new Dictionary<ulong, OemTransferSummaryResponse>();
         foreach (var transfer in transfers)
         {
             var own = files.Where(file => file.TransferId == transfer.Id).ToArray();
@@ -242,24 +234,23 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                 FlowInstanceStatuses.Completed => "APPROVED",
                 var value => value,
             };
-            object sender = transfer.InternalSenderUserId is ulong userId && users.TryGetValue(userId, out var user)
-                ? new { realm = OemRealms.Internal, id = userId, user.EmployeeNo, user.RealName }
+            var sender = transfer.InternalSenderUserId is ulong userId && users.TryGetValue(userId, out var user)
+                ? new OemPersonRefResponse(OemRealms.Internal, userId, user.EmployeeNo, user.RealName)
                 : transfer.OemSenderAccountId is ulong accountId && accounts.TryGetValue(accountId, out var account)
-                    ? new { realm = OemRealms.Oem, id = accountId, account.EmployeeNo, account.RealName }
-                    : new { realm = "unknown", id = 0UL, EmployeeNo = "", RealName = "" };
-            result[transfer.Id] = new
-            {
-                transfer.Id, transfer.Direction, companyId = transfer.OemCompanyId, companyName = companies.GetValueOrDefault(transfer.OemCompanyId),
-                transfer.Title, sender, lifecycleStatus = transfer.LifecycleStatus, approvalStatus,
-                approvalBlockedReason = instance?.Status == FlowInstanceStatuses.ApprovalBlocked ? instance.BlockedReason : null,
-                validationSummary = ValidationSummary(own.Select(file => file.ScanStatus).ToArray()),
-                fileCount = own.Length, totalBytes = own.Aggregate(0UL, (sum, file) => sum + file.SizeBytes),
-                availableCount = own.Count(file => file.PayloadStatus == PayloadStatuses.Available),
-                purgePendingCount = own.Count(file => file.PayloadStatus == PayloadStatuses.PurgePending),
-                purgedCount = own.Count(file => file.PayloadStatus == PayloadStatuses.Purged),
-                missingCount = own.Count(file => file.PayloadStatus is PayloadStatuses.StorageLost or PayloadStatuses.MissingUnverified),
-                transfer.CreatedAt, transfer.SentAt, transfer.ReleasedAt, version = transfer.ConcurrencyVersion,
-            };
+                    ? new OemPersonRefResponse(OemRealms.Oem, accountId, account.EmployeeNo, account.RealName)
+                    : new OemPersonRefResponse("unknown", 0UL, "", "");
+            result[transfer.Id] = new OemTransferSummaryResponse(
+                transfer.Id, transfer.Direction, transfer.OemCompanyId, companies.GetValueOrDefault(transfer.OemCompanyId),
+                transfer.Title, sender, transfer.LifecycleStatus, approvalStatus,
+                ApprovalBlockedReason: instance?.Status == FlowInstanceStatuses.ApprovalBlocked ? instance.BlockedReason : null,
+                ValidationSummary: ValidationSummary(own.Select(file => file.ScanStatus).ToArray()),
+                FileCount: own.Length,
+                TotalBytes: own.Aggregate(0UL, (sum, file) => sum + file.SizeBytes),
+                AvailableCount: own.Count(file => file.PayloadStatus == PayloadStatuses.Available),
+                PurgePendingCount: own.Count(file => file.PayloadStatus == PayloadStatuses.PurgePending),
+                PurgedCount: own.Count(file => file.PayloadStatus == PayloadStatuses.Purged),
+                MissingCount: own.Count(file => file.PayloadStatus is PayloadStatuses.StorageLost or PayloadStatuses.MissingUnverified),
+                transfer.CreatedAt, transfer.SentAt, transfer.ReleasedAt, transfer.ConcurrencyVersion);
         }
         return result;
     }
@@ -277,7 +268,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             : ValidationStatuses.Error;
     }
 
-    private static async Task<object?> ApprovalAsync(OemUnitOfWork uow, ulong transferId, CancellationToken ct)
+    private static async Task<OemApprovalInfoResponse?> ApprovalAsync(OemUnitOfWork uow, ulong transferId, CancellationToken ct)
     {
         var db = uow.Db;
         var instance = await db.OemFlowInstances.AsNoTracking().SingleOrDefaultAsync(item => item.TransferId == transferId, ct);
@@ -288,21 +279,15 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         var names = await db.Users.AsNoTracking().Where(user => Enumerable.Contains(people, user.Id))
             .ToDictionaryAsync(user => user.Id, user => new { user.EmployeeNo, user.RealName }, ct);
         var template = await db.OemFlowTemplates.AsNoTracking().Where(item => item.Id == instance.TemplateId).Select(item => item.Name).SingleOrDefaultAsync(ct);
-        return new
-        {
-            instanceId = instance.Id, instance.Status, instance.BlockedReason, instance.CurrentSortNo, version = instance.ConcurrencyVersion,
-            templateName = template,
-            nodes = nodes.Select(node => new
-            {
+        return new OemApprovalInfoResponse(
+            instance.Id, instance.Status, instance.BlockedReason, instance.CurrentSortNo, instance.ConcurrencyVersion,
+            template,
+            nodes.Select(node => new OemApprovalNodeResponse(
                 node.SortNo, node.Name, node.ApproverSource, node.ApprovalMode, node.Status, node.SkipReason, node.UsedFallback, node.CompletedAt,
-                tasks = tasks.Where(task => task.InstanceNodeId == node.Id).Select(task => new
-                {
-                    task.Id, task.Status, approverUserId = task.ApproverUserId,
-                    approverName = names.GetValueOrDefault(task.ApproverUserId)?.RealName,
-                    approverEmployeeNo = names.GetValueOrDefault(task.ApproverUserId)?.EmployeeNo,
-                    task.Reason, task.DecidedAt, task.ReplacesTaskId, task.ReassignReason, version = task.ConcurrencyVersion,
-                }),
-            }),
-        };
+                tasks.Where(task => task.InstanceNodeId == node.Id).Select(task => new OemApprovalTaskResponse(
+                    task.Id, task.Status, task.ApproverUserId,
+                    names.GetValueOrDefault(task.ApproverUserId)?.RealName,
+                    names.GetValueOrDefault(task.ApproverUserId)?.EmployeeNo,
+                    task.Reason, task.DecidedAt, task.ReplacesTaskId, task.ReassignReason, task.ConcurrencyVersion)).ToArray())).ToArray());
     }
 }

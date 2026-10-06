@@ -17,16 +17,16 @@ public sealed record OemSettingsUpdate(OemSettingItem[] Items);
 /// </summary>
 public sealed class OemRetentionTemplateService(IDbContextFactory<YfDbContext> dbFactory, OemAuditWriter audit)
 {
-    public async Task<object> ListAsync(OemActor actor, CancellationToken ct)
+    public async Task<IReadOnlyList<OemRetentionTemplateResponse>> ListAsync(OemActor actor, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.RetentionTemplateManage, ct);
         var rows = await uow.Db.OemRetentionTemplates.AsNoTracking().OrderBy(item => item.Id).ToArrayAsync(ct);
-        return rows.Select(Json);
+        return rows.Select(Json).ToArray();
     }
 
     /// <summary>The one effective template. The lowest id wins if legacy data contains multiple active rows.</summary>
-    public async Task<object> OptionsAsync(OemActor actor, CancellationToken ct)
+    public async Task<IReadOnlyList<OemRetentionTemplateResponse>> OptionsAsync(OemActor actor, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
@@ -37,7 +37,7 @@ public sealed class OemRetentionTemplateService(IDbContextFactory<YfDbContext> d
         return new[] { Json(template) };
     }
 
-    public async Task<object> CreateAsync(OemActor actor, RetentionTemplateCreate request, CancellationToken ct)
+    public async Task<OemRetentionTemplateResponse> CreateAsync(OemActor actor, RetentionTemplateCreate request, CancellationToken ct)
     {
         var name = OemValidation.RequiredText(request.Name, "策略名称", 64);
         RetentionStrategies.For(request.Mode).Validate(request.ReleaseTtlMinutes, request.ReceiptGraceMinutes);
@@ -59,7 +59,7 @@ public sealed class OemRetentionTemplateService(IDbContextFactory<YfDbContext> d
         return Json(template);
     }
 
-    public async Task<object> UpdateAsync(OemActor actor, ulong id, RetentionTemplateUpdate request, CancellationToken ct)
+    public async Task<OemRetentionTemplateResponse> UpdateAsync(OemActor actor, ulong id, RetentionTemplateUpdate request, CancellationToken ct)
     {
         var name = OemValidation.RequiredText(request.Name, "策略名称", 64);
         var status = OemStatus.Normalize(request.Status);
@@ -123,12 +123,10 @@ public sealed class OemRetentionTemplateService(IDbContextFactory<YfDbContext> d
         return rows.Select(item => item.Id).ToArray();
     }
 
-    private static object Json(OemRetentionTemplate template) => new
-    {
+    private static OemRetentionTemplateResponse Json(OemRetentionTemplate template) => new(
         template.Id, template.Name, template.Mode, template.ReleaseTtlMinutes, template.ReceiptGraceMinutes, template.Status,
-        version = template.ConcurrencyVersion, summary = Describe(template.Mode, template.ReleaseTtlMinutes, template.ReceiptGraceMinutes),
-        template.CreatedAt, template.UpdatedAt,
-    };
+        template.ConcurrencyVersion, Describe(template.Mode, template.ReleaseTtlMinutes, template.ReceiptGraceMinutes),
+        template.CreatedAt, template.UpdatedAt);
 
     /// <summary>Plain-language behaviour shown to senders, including the "kept until someone downloads" caveat.</summary>
     public static string Describe(string mode, uint? releaseTtl, uint? receiptGrace) => mode switch
@@ -155,9 +153,9 @@ public sealed class OemRetentionTemplateService(IDbContextFactory<YfDbContext> d
 /// </summary>
 public sealed class OemSettingsService(IDbContextFactory<YfDbContext> dbFactory, OemAuditWriter audit)
 {
-    public Task<object> GetAsync(OemActor actor, OemSettingGroup group, CancellationToken ct) => ReadAsync(actor, group, ct);
+    public Task<IReadOnlyList<OemSettingResponse>> GetAsync(OemActor actor, OemSettingGroup group, CancellationToken ct) => ReadAsync(actor, group, ct);
 
-    public async Task<object> UpdateAsync(OemActor actor, OemSettingGroup group, OemSettingsUpdate request, CancellationToken ct)
+    public async Task<IReadOnlyList<OemSettingResponse>> UpdateAsync(OemActor actor, OemSettingGroup group, OemSettingsUpdate request, CancellationToken ct)
     {
         if (group == OemSettingGroup.System) throw ApiException.Forbidden();
         if (request.Items is null || request.Items.Length is < 1 or > 100) throw ApiException.BadRequest("参数必须为 1–100 个项目");
@@ -194,7 +192,7 @@ public sealed class OemSettingsService(IDbContextFactory<YfDbContext> dbFactory,
         return await ReadAsync(actor, group, ct);
     }
 
-    private async Task<object> ReadAsync(OemActor actor, OemSettingGroup group, CancellationToken ct)
+    private async Task<IReadOnlyList<OemSettingResponse>> ReadAsync(OemActor actor, OemSettingGroup group, CancellationToken ct)
     {
         if (group == OemSettingGroup.System) throw ApiException.Forbidden();
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
@@ -203,16 +201,14 @@ public sealed class OemSettingsService(IDbContextFactory<YfDbContext> dbFactory,
         return OemSettingCatalog.All.Where(item => item.Group == group).Select(item =>
         {
             var value = settings.Raw(item.Key);
-            return new
-            {
-                item.Key, item.Label, kind = item.Kind.ToString().ToLowerInvariant(), value,
-                min = item.Kind == OemSettingKind.Integer ? item.Min : (long?)null,
-                max = item.Kind == OemSettingKind.Integer ? item.Max : (long?)null,
-                readOnly = item.IsReadOnly(),
-                unsupportedReason = item.UnsupportedReason,
-                hint = (string?)null,
-            };
-        });
+            return new OemSettingResponse(
+                item.Key, item.Label, item.Kind.ToString().ToLowerInvariant(), value,
+                Min: item.Kind == OemSettingKind.Integer ? item.Min : null,
+                Max: item.Kind == OemSettingKind.Integer ? item.Max : null,
+                ReadOnly: item.IsReadOnly(),
+                UnsupportedReason: item.UnsupportedReason,
+                Hint: null);
+        }).ToArray();
     }
 
     private static string PermissionFor(OemSettingGroup group) => group == OemSettingGroup.Notify

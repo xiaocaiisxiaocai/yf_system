@@ -118,6 +118,13 @@ public sealed class OemFileValidationService(
             logger.LogWarning("OEM validation of file {FileId} failed ({ErrorType}).", claim.FileId, error.GetType().Name);
             return ValidationResult.Error("文件校验过程出错");
         }
+        catch (Exception error) when (!ct.IsCancellationRequested)
+        {
+            // Any other failure still completes the job as a retryable error, so it counts
+            // toward ValidationMaxRetries instead of looping forever on lease expiry.
+            logger.LogError(error, "OEM validation of file {FileId} failed unexpectedly.", claim.FileId);
+            return ValidationResult.Error("文件校验过程出错");
+        }
         finally
         {
             if (workDirectory is not null)

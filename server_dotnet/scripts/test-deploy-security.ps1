@@ -409,6 +409,15 @@ try {
     Reject { Read-YfMaintenanceConfig $overlapConfigPath } 'OEM and collaboration storage overlap refused' 'Maintenance paths must not overlap.'
     Write-Output 'PASS maintenance keeps OEM storage independent and refuses overlap'
 
+    # The installer compares its own OEM path with Read-YfMaintenanceConfig; both must use
+    # $null for "OEM not configured" because PowerShell treats $null -ne '' as true.
+    $plain=Read-YfMaintenanceConfig (Write-TestConfig 'oem-unconfigured.json' 'localhost' 'None')
+    if ($null -ne $plain.OemStorage) { throw 'Unconfigured OEM storage must be reported as $null.' }
+    if ($installScript -notmatch [regex]::Escape('$oemStorage = $null') -or $installScript -match [regex]::Escape('$oemStorage = ''''')) {
+        throw 'Installer must initialise an unconfigured OEM storage path as $null to match the maintenance configuration.'
+    }
+    Write-Output 'PASS installer accepts configurations without OEM storage'
+
     foreach ($mode in @('None','Disabled','Preferred','Required','VerifyCA')) {
         $path=Write-TestConfig ('remote-'+$mode+'.json') 'db.example.test' $mode
         Reject { Read-YfMaintenanceConfig $path } "remote database $mode refused" 'Remote database maintenance requires SSL Mode=VerifyFull.'

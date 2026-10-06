@@ -76,7 +76,7 @@ public sealed class OemDeliveryService(
     }
 
     /// <summary>Starts a logical download session and hands the browser a path-scoped HttpOnly grant cookie.</summary>
-    public async Task<object> StartAsync(HttpContext context, OemActor actor, ulong fileId, CancellationToken ct)
+    public async Task<OemDownloadSessionResponse> StartAsync(HttpContext context, OemActor actor, ulong fileId, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
@@ -106,7 +106,7 @@ public sealed class OemDeliveryService(
             HttpOnly = true, Secure = options.CookieSecure, SameSite = SameSiteMode.Strict,
             Path = OemDownloadGrantService.CookiePath(fileId), Expires = expiresAt,
         });
-        return new { downloadSessionId = session.Id, url = OemDownloadGrantService.CookiePath(fileId), expiresAt = expiresAt.UtcDateTime, session.Purpose };
+        return new OemDownloadSessionResponse(session.Id, OemDownloadGrantService.CookiePath(fileId), expiresAt.UtcDateTime, session.Purpose);
     }
 
     /// <summary>Streams the file (or one byte range) for a cookie-authenticated download session.</summary>
@@ -180,7 +180,7 @@ public sealed class OemDeliveryService(
         }
     }
 
-    public async Task<object> StatusAsync(OemActor actor, ulong fileId, CancellationToken ct)
+    public async Task<IReadOnlyList<OemDownloadStatusResponse>> StatusAsync(OemActor actor, ulong fileId, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
@@ -189,11 +189,9 @@ public sealed class OemDeliveryService(
             .OrderByDescending(item => item.CreatedAt).Take(5).ToArrayAsync(ct);
         var ids = sessions.Select(item => item.Id).ToArray();
         var ranges = await uow.Db.OemDownloadRanges.AsNoTracking().Where(range => Enumerable.Contains(ids, range.SessionId)).ToArrayAsync(ct);
-        return sessions.Select(item => new
-        {
-            downloadSessionId = item.Id, item.Status, item.Purpose, item.CreatedAt, item.CompletedAt, item.ExpectedSize,
-            deliveredBytes = ranges.Where(range => range.SessionId == item.Id).Aggregate(0UL, (sum, range) => sum + range.EndOffset - range.StartOffset + 1),
-        });
+        return sessions.Select(item => new OemDownloadStatusResponse(
+            item.Id, item.Status, item.Purpose, item.CreatedAt, item.CompletedAt, item.ExpectedSize,
+            ranges.Where(range => range.SessionId == item.Id).Aggregate(0UL, (sum, range) => sum + range.EndOffset - range.StartOffset + 1))).ToArray();
     }
 
     private async Task<bool> SendRangeAsync(HttpContext context, string path, OemTransferFile file, ByteRange range, string leaseId,

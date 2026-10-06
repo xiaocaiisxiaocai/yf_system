@@ -266,6 +266,7 @@ public sealed class OemReconcileService(
                 .Select(file => new { file.Id, file.StoragePath, file.SizeBytes }).ToArrayAsync(ct))
                 .Select(file => (file.Id, file.StoragePath, file.SizeBytes)).ToArray();
         var marked = 0;
+        var restoring = status == PayloadStatuses.MissingUnverified;
         foreach (var candidate in files.Where(file => !Intact(file.Path, file.Size)))
         {
             await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
@@ -275,6 +276,13 @@ public sealed class OemReconcileService(
             // Re-check under the lock: a concurrent promotion or purge may have moved it legitimately.
             if (file.PayloadStatus is not (PayloadStatuses.Quarantined or PayloadStatuses.Available or PayloadStatuses.Promoting)
                 || Intact(file.StoragePath, file.SizeBytes)) continue;
+            if (restoring && await TryRelocateAsync(file, ct))
+            {
+                await audit.WriteAsync(uow, null, "OEM_RECONCILE_FILE_RELOCATED", "oem_file", file.Id,
+                    new { targetName = file.OriginalName, transferId, file.Sha256, file.SizeBytes }, ct);
+                await uow.CommitAsync(ct);
+                continue;
+            }
             file.PayloadStatus = status;
             file.ConcurrencyVersion++;
             file.UpdatedAt = uow.Now;
@@ -436,6 +444,39 @@ public sealed class OemReconcileService(
             throw new InvalidOperationException("OEM storage root is a reparse point");
     }
 
+    /// <summary>
+    /// After a database restore onto a reused OEM root, a file may have moved between areas
+    /// since the backup (a quarantined row whose content was promoted later). The restored
+    /// row is authoritative: identical content found under the same stored name in the other
+    /// area is moved back to the recorded path instead of being declared missing.
+    /// </summary>
+    private async Task<bool> TryRelocateAsync(Data.OemTransferFile file, CancellationToken ct)
+    {
+        try
+        {
+            var recorded = OemStorage.QuarantineRelative(file.StoredName) == file.StoragePath
+                ? OemStorage.AvailableRelative(file.StoredName)
+                : OemStorage.QuarantineRelative(file.StoredName);
+            if (recorded == file.StoragePath || !Intact(recorded, file.SizeBytes)) return false;
+            var source = storage.Absolute(recorded);
+            await using (var stream = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                var sha256 = Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(stream, ct));
+                if (!sha256.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)) return false;
+            }
+            var target = storage.Absolute(file.StoragePath);
+            storage.EnsureParent(target, ct);
+            File.Move(source, target, overwrite: false);
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            logger.LogWarning("OEM reconcile could not relocate file {FileId} ({ErrorType}).", file.Id, error.GetType().Name);
+            return false;
+        }
+    }
+
     private bool Intact(string relative, ulong size)
     {
         try
@@ -453,7 +494,7 @@ public sealed class OemReconcileService(
 /// <summary>OEM audit view: only OEM rows (and organisation-leader changes that drive OEM routing).</summary>
 public sealed class OemAuditQueryService(IDbContextFactory<YfDbContext> dbFactory)
 {
-    public async Task<object> ListAsync(OemActor actor, HttpRequest request, CancellationToken ct)
+    public async Task<OemPageResponse<OemAuditLogResponse>> ListAsync(OemActor actor, HttpRequest request, CancellationToken ct)
     {
         var (page, size, offset) = QueryValues.Page(request);
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
@@ -487,14 +528,18 @@ public sealed class OemAuditQueryService(IDbContextFactory<YfDbContext> dbFactor
                 log.Id, log.Action, actorRealm = log.ActorRealm ?? (log.UserId == null ? OemRealms.System : OemRealms.Internal),
                 actorId = log.ActorAccountId ?? log.UserId, log.EmployeeNo, log.TargetType, log.TargetId, log.Detail, log.Ip, log.CreatedAt,
             }).ToArrayAsync(ct);
-        return new
-        {
-            list = rows.Select(row => new
-            {
+        return new OemPageResponse<OemAuditLogResponse>(
+            rows.Select(row => new OemAuditLogResponse(
                 row.Id, row.Action, row.actorRealm, row.actorId, row.EmployeeNo, row.TargetType, row.TargetId, row.Ip, row.CreatedAt,
-                detail = row.Detail is null ? (System.Text.Json.JsonElement?)null : System.Text.Json.JsonDocument.Parse(row.Detail).RootElement.Clone(),
-            }),
-            total, page, pageSize = size,
-        };
+                ParseDetail(row.Detail))).ToArray(),
+            total, page, size);
+    }
+
+    /// <summary>Copies the stored detail out of a disposed document so pooled parser buffers are returned.</summary>
+    private static System.Text.Json.JsonElement? ParseDetail(string? detail)
+    {
+        if (detail is null) return null;
+        using var document = System.Text.Json.JsonDocument.Parse(detail);
+        return document.RootElement.Clone();
     }
 }

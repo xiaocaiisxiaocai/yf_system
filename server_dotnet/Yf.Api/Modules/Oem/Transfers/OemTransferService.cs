@@ -38,7 +38,7 @@ public sealed class OemTransferService(
 {
     internal const string DraftTitlePlaceholder = "待上传文件";
 
-    public async Task<object> CreateAsync(OemActor actor, TransferCreate request, CancellationToken ct)
+    public async Task<OemTransferDetailResponse> CreateAsync(OemActor actor, TransferCreate request, CancellationToken ct)
     {
         var title = DraftTitle(request.Title);
         var description = OemValidation.OptionalText(request.Description, "说明", 1024);
@@ -60,6 +60,7 @@ public sealed class OemTransferService(
             companyId = request.OemCompanyId ?? throw ApiException.BadRequest("请选择目标 OEM 厂商");
             if (!await uow.Db.OemCompanies.AnyAsync(company => company.Id == companyId && company.Status == OemStatus.Active, ct))
                 throw ApiException.BadRequest("目标厂商不存在或已停用");
+            await OemRecipientPolicy.RequireEnabledAccountAsync(uow.Db, companyId, ct);
             direction = TransferDirections.InternalToOem;
         }
         var retention = await OemRetentionTemplateService.EffectiveActiveAsync(uow.Db, ct);
@@ -79,7 +80,7 @@ public sealed class OemTransferService(
         return await reader.DetailAsync(current, transfer.Id, ct);
     }
 
-    public async Task<object> UpdateAsync(OemActor actor, ulong id, TransferUpdate request, CancellationToken ct)
+    public async Task<OemTransferDetailResponse> UpdateAsync(OemActor actor, ulong id, TransferUpdate request, CancellationToken ct)
     {
         var description = OemValidation.OptionalText(request.Description, "说明", 1024);
         var version = OemValidation.ExpectedVersion(request.Version);
@@ -137,17 +138,20 @@ public sealed class OemTransferService(
     /// Freezes the manifest and starts validation/approval/release. Outbound transfers are
     /// routed now: any routing problem fails the send and the transfer stays a draft.
     /// </summary>
-    public async Task<object> SendAsync(OemActor actor, ulong id, ulong? expectedVersion, CancellationToken ct)
+    public async Task<OemTransferDetailResponse> SendAsync(OemActor actor, ulong id, ulong? expectedVersion, CancellationToken ct)
     {
         var version = OemValidation.ExpectedVersion(expectedVersion);
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
         var transfer = await LockOwnDraftAsync(uow, current, id, version, ct);
         if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
+        await OemSettings.EnsureStorageSettledAsync(uow.Db, "发送", ct);
         if (current is OemAccountActor && !await uow.Db.OemCompanies.AnyAsync(company => company.Id == transfer.OemCompanyId && company.Status == OemStatus.Active, ct))
             throw ApiException.Forbidden();
         if (current is InternalOemActor && !await uow.Db.OemCompanies.AnyAsync(company => company.Id == transfer.OemCompanyId && company.Status == OemStatus.Active, ct))
             throw ApiException.BadRequest("目标厂商已停用");
+        if (current is InternalOemActor)
+            await OemRecipientPolicy.RequireEnabledAccountAsync(uow.Db, transfer.OemCompanyId, ct);
         var activeUploads = await uow.Db.OemUploadSessions.AnyAsync(session => session.TransferId == id
             && (session.Status == UploadStatuses.Uploading || session.Status == UploadStatuses.Merging) && session.ExpiresAt > uow.Now, ct);
         if (activeUploads) throw ApiException.Conflict("仍有附件正在上传，请等待上传完成或取消后再发送");
