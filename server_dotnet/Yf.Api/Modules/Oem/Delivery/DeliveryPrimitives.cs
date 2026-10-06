@@ -49,37 +49,52 @@ public readonly record struct ByteRange(ulong Start, ulong End)
 {
     public ulong Length => End - Start + 1;
 
-    /// <summary>Parses an HTTP Range header against a file size (null header means the whole file).</summary>
+    /// <summary>
+    /// Parses an HTTP Range header against a file size. A missing header, another range unit or
+    /// a syntactically invalid range is ignored (RFC 9110 §14.2) and means the whole file;
+    /// <paramref name="unsatisfiable"/> (416) is reserved for a valid range that does not fit
+    /// the file, and for multi-range requests, which are refused.
+    /// </summary>
     public static ByteRange? Parse(string? header, ulong size, out bool unsatisfiable)
     {
         unsatisfiable = false;
-        if (string.IsNullOrWhiteSpace(header)) return new ByteRange(0, size - 1);
+        var whole = new ByteRange(0, size - 1);
+        if (string.IsNullOrWhiteSpace(header)) return whole;
         var value = header.Trim();
-        if (!value.StartsWith("bytes=", StringComparison.OrdinalIgnoreCase) || value.Contains(','))
+        if (!value.StartsWith("bytes=", StringComparison.OrdinalIgnoreCase)) return whole;
+        if (value.Contains(','))
         {
             unsatisfiable = true;
             return null;
         }
-        var spec = value[6..].Split('-', 2);
-        if (spec.Length != 2) { unsatisfiable = true; return null; }
+        var spec = value[6..].Trim().Split('-', 2);
+        if (spec.Length != 2 || !IsDigits(spec[0]) || !IsDigits(spec[1])) return whole;
         ulong start, end;
         if (spec[0].Length == 0)
         {
-            // Suffix range: the last N bytes.
-            if (!ulong.TryParse(spec[1], out var suffix) || suffix == 0) { unsatisfiable = true; return null; }
+            // Suffix range: the last N bytes; a zero-length suffix can never be satisfied.
+            if (spec[1].Length == 0 || !ulong.TryParse(spec[1], out var suffix)) return whole;
+            if (suffix == 0) { unsatisfiable = true; return null; }
             start = suffix >= size ? 0 : size - suffix;
             end = size - 1;
         }
         else
         {
-            if (!ulong.TryParse(spec[0], out start)) { unsatisfiable = true; return null; }
+            if (!ulong.TryParse(spec[0], out start)) return whole;
             if (spec[1].Length == 0) end = size - 1;
-            else if (ulong.TryParse(spec[1], out var parsed)) end = Math.Min(parsed, size - 1);
-            else { unsatisfiable = true; return null; }
+            else if (ulong.TryParse(spec[1], out var parsed))
+            {
+                // last-pos < first-pos is an invalid range-spec, not an unsatisfiable one.
+                if (parsed < start) return whole;
+                end = Math.Min(parsed, size - 1);
+            }
+            else return whole;
         }
-        if (start >= size || end < start) { unsatisfiable = true; return null; }
+        if (start >= size) { unsatisfiable = true; return null; }
         return new ByteRange(start, end);
     }
+
+    private static bool IsDigits(string value) => value.All(char.IsAsciiDigit);
 }
 
 public sealed record DownloadGrant(string Realm, ulong ActorId, string LoginSessionId, string DownloadSessionId, ulong FileId, string StoredName, long ExpiresAt);

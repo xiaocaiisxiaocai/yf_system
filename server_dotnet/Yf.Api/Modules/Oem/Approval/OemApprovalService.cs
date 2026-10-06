@@ -48,13 +48,14 @@ public sealed class OemApprovalService(
     public async Task<OemTransferDetailResponse> ApproveAsync(OemActor actor, ulong taskId, ApprovalDecisionRequest request, CancellationToken ct)
     {
         var version = OemValidation.ExpectedVersion(request.Version);
+        var reason = OemValidation.OptionalText(request.Reason, "审批意见", 1024);
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.FlowApprove, ct);
         var (transfer, instance, task) = await LockAsync(uow, taskId, ct);
         EnsureDecidable(current, transfer, instance, task, version);
         var nodeComplete = await engine.ApproveAsync(uow, instance, task, ct);
         await audit.WriteAsync(uow, current, "OEM_APPROVAL_APPROVE", "oem_transfer", transfer.Id,
-            new { targetName = transfer.Title, taskId, reason = OemValidation.OptionalText(request.Reason, "审批意见", 1024) }, ct);
+            new { targetName = transfer.Title, taskId, reason }, ct);
         if (nodeComplete) await progression.ContinueApprovalAsync(uow, transfer, instance, current, ct);
         await dispatcher.CommitAsync(uow, ct);
         return await reader.DetailAsync(current, transfer.Id, ct);
