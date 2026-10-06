@@ -154,7 +154,9 @@ public sealed class DataQueryPlanEvidenceTests
     private static string FindRepositoryRoot()
     {
         for (var current = new DirectoryInfo(AppContext.BaseDirectory); current is not null; current = current.Parent)
-            if (Directory.Exists(Path.Combine(current.FullName, ".git"))) return current.FullName;
+            // ".git" is a directory in a normal clone and a file in a linked git worktree.
+            if (Directory.Exists(Path.Combine(current.FullName, ".git"))
+                || File.Exists(Path.Combine(current.FullName, ".git"))) return current.FullName;
         throw new InvalidOperationException("Repository root not found.");
     }
 }

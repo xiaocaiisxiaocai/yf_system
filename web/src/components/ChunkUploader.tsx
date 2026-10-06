@@ -67,6 +67,8 @@ interface Entry {
 interface RunOptions {
   /** 非 STEP 文件在此之后才初始化上传。 */
   stepGate?: Promise<void>
+  /** 非 STEP 文件在此之后才请求合并：服务端合并时只认已合并的 STEP 文件，不认进行中的 STEP 会话。 */
+  mergeGate?: Promise<void>
   /** STEP 文件的上传会话建立后调用，放行同批其它文件。 */
   onInitialized?: () => void
 }
@@ -171,7 +173,9 @@ function phaseLabel(phase: Phase, percent: number, waiting = false, awaitingStep
       return waiting ? '排队中，前面的文件完成后自动开始' : '待上传'
     case 'interrupted': return '上传中断，可点击重新上传从断点续传'
     case 'hashing': return `正在校验文件内容 ${percent}%`
-    case 'uploading': return `分片上传中 ${percent}%（中断后可续传）`
+    case 'uploading':
+      if (awaitingStep) return '等待同批 STEP 文件上传完成'
+      return `分片上传中 ${percent}%（中断后可续传）`
     case 'merging': return '服务端合并校验中…'
     case 'merge-uncertain': return '结果待确认，重试不会重复上传'
     case 'merge-invalid': return '完整性校验失败，需清理后重新上传'
@@ -422,6 +426,15 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
       if (!isCurrent()) return
       await submitUploadMd5(sid, digest)
       if (!isCurrent()) return
+      if (options.mergeGate) {
+        // 等待期间释放并发名额，避免排队中的同批 STEP 拿不到名额而互相等待。
+        release?.()
+        release = undefined
+        patchEntry(key, { awaitingStep: true })
+        await waitForGate(options.mergeGate, attempt.controller.signal)
+        patchEntry(key, { awaitingStep: false })
+        if (!isCurrent()) return
+      }
       await confirmMerge(key, attempt, file.name)
     } catch (error) {
       attempt.controller.abort()
@@ -447,16 +460,17 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
       await Promise.all(runnable.map((entry) => runEntry(entry.key, entry.file)))
       return
     }
-    // 服务端要求公司发给供应商的其它文件之前已有 STEP 文件或正在上传的 STEP 会话：
-    // 同批 STEP 先建立会话，其余文件随后开始；STEP 全部失败时也放行，由服务端给出明确提示。
+    // 服务端要求公司发给供应商的其它文件初始化时已有 STEP 文件或正在上传的 STEP 会话，合并时已有
+    // 合并完成的 STEP 文件：同批 STEP 先建立会话，其余文件随后开始上传，并在同批 STEP 全部结束后
+    // 再合并；STEP 全部失败时也放行，由服务端给出明确提示。
     let openGate!: () => void
     const stepGate = new Promise<void>((resolve) => { openGate = resolve })
     const stepRuns = steps.map((entry) => runEntry(entry.key, entry.file, { onInitialized: openGate }))
-    void Promise.allSettled(stepRuns).then(() => openGate())
+    const mergeGate = Promise.allSettled(stepRuns).then(() => openGate())
     await Promise.all([
       ...stepRuns,
       ...runnable.filter((entry) => !isStepFile(entry.file.name))
-        .map((entry) => runEntry(entry.key, entry.file, { stepGate })),
+        .map((entry) => runEntry(entry.key, entry.file, { stepGate, mergeGate })),
     ])
   }
 

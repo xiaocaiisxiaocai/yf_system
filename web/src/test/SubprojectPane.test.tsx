@@ -103,6 +103,40 @@ describe('SubprojectPane detail refresh', () => {
   })
 })
 
+describe('SubprojectPane stale in-flight detail', () => {
+  it('catches up once after an in-flight request returns a detail older than the newer group row', async () => {
+    let projectCalls = 0
+    mocks.get.mockReset()
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/projects/9') { projectCalls += 1; return Promise.resolve({ data: row(T1) }) }
+      if (url === '/projects/9/summary') return Promise.resolve({ data: { unreadMessages: 0, activityRevision: 'a1' } })
+      throw new Error(`unexpected GET ${url}`)
+    })
+    const user = userEvent.setup()
+    const view = render(ui(T1))
+    await screen.findByRole('button', { name: '流程操作' })
+    const stale = deferred<{ data: ProjectSummary }>()
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/projects/9') {
+        projectCalls += 1
+        return projectCalls === 2 ? stale.promise : Promise.resolve({ data: row(T3) })
+      }
+      if (url === '/projects/9/summary') return Promise.resolve({ data: { unreadMessages: 0, activityRevision: 'a1' } })
+      throw new Error(`unexpected GET ${url}`)
+    })
+    await user.click(screen.getByRole('button', { name: '流程操作' }))
+    expect(projectCalls).toBe(2)
+    // 请求进行中到达较新的行；该请求随后返回旧详情（T1 < T3），结束后应补拉一次。
+    view.rerender(ui(T3))
+    stale.resolve({ data: row(T1) })
+    await waitFor(() => expect(projectCalls).toBe(3))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    view.rerender(ui(T3))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(projectCalls).toBe(3)
+  })
+})
+
 describe('SubprojectPane access loss', () => {
   it('reports a lost subproject to the group once instead of navigating itself', async () => {
     let status: number | null = null

@@ -724,6 +724,27 @@ describe('ChunkUploader upload material rules', () => {
       .toEqual(['assembly.step', '说明.pdf'])
   })
 
+  it('merges same-batch company files only after the STEP file has been merged', async () => {
+    let releaseStepMerge!: () => void
+    mocks.post.mockImplementation((url: string, body?: { fileName?: string }) => {
+      if (url === '/uploads/init') return Promise.resolve(initResponse(body?.fileName ?? 'session'))
+      if (String(url).includes('assembly.step') && String(url).endsWith('/merge')) {
+        return new Promise((resolve) => { releaseStepMerge = () => resolve({ data: { id: 98 } }) })
+      }
+      return Promise.resolve({ data: { id: 99 } })
+    })
+    renderUploader(false, 'C2S')
+    choose(uploadFile('说明.pdf'), uploadFile('assembly.step'))
+    fireEvent.click(startButton())
+
+    expect(await screen.findByText('等待同批 STEP 文件上传完成')).toBeVisible()
+    await waitFor(() => expect(sessionCalls('merge')).toHaveLength(1))
+    expect(String(sessionCalls('merge')[0][0])).toContain('assembly.step')
+    releaseStepMerge()
+    await waitFor(() => expect(sessionCalls('merge')).toHaveLength(2))
+    expect(String(sessionCalls('merge')[1][0])).toContain('说明.pdf')
+  })
+
   it('blocks misnamed company Excel files and warns when the batch has no STEP', () => {
     renderUploader(false, 'C2S')
     expect(screen.getByText('发给供应商的资料要求')).toBeVisible()

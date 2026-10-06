@@ -42,7 +42,12 @@ function panelApi(panel: SerializedPanel) {
 /** Test hooks: the latest api instance and the mutations the component asked for. */
 // eslint-disable-next-line react/only-export-components
 export const dockviewMockState = {
-  api: undefined as undefined | { simulateUserLayoutChange: () => void; panels: { id: string }[] },
+  api: undefined as undefined | {
+    simulateUserLayoutChange: () => void
+    simulateActivePanelChange: (id: string) => void
+    simulateResize: () => void
+    panels: { id: string }[]
+  },
   fromJSONCalls: 0,
   addPanelCalls: [] as AddPanelOptions[],
   removedPanels: [] as string[],
@@ -74,6 +79,8 @@ export function DockviewReact({ className, components, onReady }: Props) {
     readyRef.current = true
     let current: SerializedPanel[] = []
     let nextGroup = 0
+    let activePanel: string | undefined
+    let sizeVersion = 0
     const listeners = new Set<() => void>()
     let queued = false
     const fireLayoutChange = () => {
@@ -102,7 +109,27 @@ export function DockviewReact({ className, components, onReady }: Props) {
         const groups = leafGroups(layout.grid?.root)
         commit(Object.values(layout.panels).map((panel) => ({ ...panel, group: groups.get(panel.id) ?? 'group-0' })))
       },
-      toJSON: () => ({ panels: Object.fromEntries(current.map((panel) => [panel.id, panel])) }),
+      toJSON: () => {
+        const groups = [...new Set(current.map((panel) => panel.group ?? 'group-0'))]
+        const active = current.find((panel) => panel.id === activePanel) ?? current[0]
+        return {
+          grid: {
+            root: {
+              type: 'branch',
+              size: 640 + sizeVersion,
+              data: groups.map((group) => {
+                const views = current.filter((panel) => (panel.group ?? 'group-0') === group).map((panel) => panel.id)
+                return { type: 'leaf', size: 400 + sizeVersion, data: { id: group, views, activeView: views.includes(active?.id ?? '') ? active?.id : views[0] } }
+              }),
+            },
+            width: 1200,
+            height: 640,
+            orientation: 'HORIZONTAL',
+          },
+          panels: Object.fromEntries(current.map(({ group: _group, ...panel }) => [panel.id, panel])),
+          ...(active ? { activeGroup: active.group ?? 'group-0' } : {}),
+        }
+      },
       clear: () => commit([]),
       getPanel: (id: string) => {
         const panel = current.find((item) => item.id === id)
@@ -128,8 +155,15 @@ export function DockviewReact({ className, components, onReady }: Props) {
       onDidMaximizedGroupChange: () => noop,
       hasMaximizedGroup: () => false,
       exitMaximizedGroup: () => undefined,
-      /** Test-only: simulates a user drag/resize, which dockview reports through onDidLayoutChange. */
-      simulateUserLayoutChange: fireLayoutChange,
+      /** Test-only: simulates a user drag-dock (the last panel moves into a new group), reported through onDidLayoutChange. */
+      simulateUserLayoutChange: () => {
+        const last = current[current.length - 1]
+        commit([...current.slice(0, -1), { ...last, group: `mock-group-${++nextGroup}` }])
+      },
+      /** Test-only: dockview also reports a mere tab activation through onDidLayoutChange. */
+      simulateActivePanelChange: (id: string) => { activePanel = id; fireLayoutChange() },
+      /** Test-only: sizes change (sash drag or container resize). */
+      simulateResize: () => { sizeVersion += 10; fireLayoutChange() },
     }
     dockviewMockState.api = api
     setContainerApi(api)
@@ -138,6 +172,7 @@ export function DockviewReact({ className, components, onReady }: Props) {
 
   return (
     <div className={className} data-testid="dockview">
+      <div className="dv-sash" data-testid="dock-sash" />
       {panels.map((panel) => {
         const Component = components[panel.contentComponent]
         return (

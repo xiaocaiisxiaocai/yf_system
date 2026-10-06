@@ -43,6 +43,22 @@ public sealed class SubprojectUpsertRequest
     public string? Description { get; init; }
 }
 
+/// <summary>
+/// Editing a subproject's name/description. <c>ExpectedUpdatedAt</c> is the <c>updatedAt</c> the editor
+/// loaded; when given and the subproject changed since, the update is rejected with 409/40901.
+/// </summary>
+public sealed class SubprojectUpdateRequest
+{
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; init; }
+
+    [JsonPropertyName("expectedUpdatedAt")]
+    public DateTime? ExpectedUpdatedAt { get; init; }
+}
+
 public sealed class ProjectCopyRequest
 {
     [JsonPropertyName("name")]

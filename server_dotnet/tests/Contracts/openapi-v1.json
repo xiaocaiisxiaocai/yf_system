@@ -2233,7 +2233,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SubprojectUpsertRequest"
+                "$ref": "#/components/schemas/SubprojectUpdateRequest"
               }
             }
           },
@@ -12044,6 +12044,30 @@
         "properties": {
           "fileMd5": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SubprojectUpdateRequest": {
+        "required": [
+          "description",
+          "expectedUpdatedAt",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "expectedUpdatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
           }
         },
         "additionalProperties": false

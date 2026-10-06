@@ -100,7 +100,8 @@ public sealed partial class UploadService
 
             var direction = current.IsInternal ? "C2S" : "S2C";
             await using var ef = EfDb.Use(conn, tx);
-            // Authoritative re-check inside the write transaction. A rejection resets the merge lease to
+            // Authoritative re-check inside the write transaction, after the project row lock taken by
+            // RequireFileUploadAsync. A rejection resets the merge lease to
             // UPLOADING (MergeAsync catch), so the uploaded chunks stay resumable and cancellable.
             await EnsureStepMaterialForMergeAsync(ef, current, session, ct);
             var now = await DbNowAsync(ef, ct);
@@ -156,16 +157,16 @@ public sealed partial class UploadService
     }
 
     /// <summary>
-    /// An internal account's non-STEP file needs an available C2S STEP file in the subproject, or another
-    /// active internal STEP upload session. Re-checked at merge because the STEP session that satisfied
-    /// the rule at init may have been cancelled or may have expired meanwhile.
+    /// An internal account's non-STEP file needs an available (merged, non-deleted) C2S STEP file in the
+    /// subproject before it is merged. An in-flight STEP session only admits a same-batch file at init: it may
+    /// still be cancelled or expire, so merge never counts it. Clients merge same-batch files after the STEP.
     /// </summary>
     private static async Task EnsureStepMaterialForMergeAsync(
         YfDbContext ef, CurrentUser uploader, UploadSessionRow session, CancellationToken ct)
     {
         if (!uploader.IsInternal || UploadMaterialRules.IsStepFile(session.FileName)) return;
         var dbNow = await DbNowAsync(ef, ct);
-        if (!await HasCompanyStepMaterialAsync(ef, session.ProjectId, dbNow, session.Id, ct))
+        if (!await HasCompanyStepMaterialAsync(ef, session.ProjectId, dbNow, includeActiveSessions: false, ct))
             throw ApiException.BadRequest(UploadMaterialRules.StepRequiredMessage);
     }
 

@@ -77,7 +77,7 @@ public static class ProjectsModule
                 QueryUlong(context, "page", 1), QueryUlong(context, "pageSize", 20), ct)));
         api.MapGet("/projects/{id:long}", (HttpContext context, ulong id, ProjectService service) =>
             WithDb(context, (conn, actor, _, ct) => service.DetailAsync(conn, actor, id, ct)));
-        api.MapPut("/projects/{id:long}", (HttpContext context, ulong id, SubprojectUpsertRequest request, ProjectService service) =>
+        api.MapPut("/projects/{id:long}", (HttpContext context, ulong id, SubprojectUpdateRequest request, ProjectService service) =>
             WithDb(context, (conn, actor, ip, ct) => service.UpdateSubprojectAsync(conn, actor, id, request, ip, ct)));
         api.MapDelete("/projects/{id:long}", (HttpContext context, ulong id, ProjectService service) =>
             WithDb(context, (conn, actor, ip, ct) => Empty(service.DeleteAsync(conn, actor, id, ip, ct))));

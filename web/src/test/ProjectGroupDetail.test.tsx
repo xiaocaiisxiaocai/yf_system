@@ -19,7 +19,10 @@ const mocks = vi.hoisted(() => ({
   },
 }))
 
-vi.mock('../api/client', () => ({ default: { get: mocks.get, post: mocks.post, put: mocks.put, delete: mocks.delete } }))
+vi.mock('../api/client', () => ({
+  default: { get: mocks.get, post: mocks.post, put: mocks.put, delete: mocks.delete },
+  getApiErrorCode: (error: unknown) => (error as { response?: { data?: { code?: number } } } | undefined)?.response?.data?.code,
+}))
 vi.mock('dockview-react', () => import('./dockviewMock'))
 vi.mock('../components/FileTable', () => ({ default: () => <div>文件列表</div> }))
 vi.mock('../components/MessagePanel', () => ({ default: () => <div>留言列表</div> }))
@@ -316,6 +319,42 @@ describe('主项目刷新范围', () => {
     await waitFor(() => expect(calls('/project-groups/3')).toBe(5))
   })
 
+  it('coalesces a burst of realtime signals without aborting the in-flight request', async () => {
+    const view = renderPage()
+    await screen.findByRole('heading', { name: '主项目 A' })
+    await waitFor(() => expect(calls('/project-groups/3')).toBe(1))
+    const rerender = () => view.rerender(
+      <MemoryRouter initialEntries={['/project-groups/3']}><Routes><Route path="/project-groups/:id" element={<ProjectGroupDetail />} /></Routes></MemoryRouter>,
+    )
+    const base = mocks.get.getMockImplementation()!
+    const pending: Array<{ resolve: () => void; signal?: AbortSignal }> = []
+    mocks.get.mockImplementation((url: string, config?: { signal?: AbortSignal }) => {
+      if (url !== '/project-groups/3') return base(url)
+      return new Promise((resolve) => { pending.push({ resolve: () => resolve({ data: draftDetail }), signal: config?.signal }) })
+    })
+
+    // 一批信号合并为一次重拉。
+    for (let revision = 1; revision <= 5; revision += 1) {
+      mocks.collaboration = { ...mocks.collaboration, activityRevisions: { 9: revision } }
+      rerender()
+    }
+    await waitFor(() => expect(pending).toHaveLength(1))
+    // 请求进行中继续到达的信号不中止它，只在完成后再拉一次。
+    for (let revision = 6; revision <= 10; revision += 1) {
+      mocks.collaboration = { ...mocks.collaboration, activityRevisions: { 9: revision } }
+      rerender()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    expect(pending).toHaveLength(1)
+    expect(pending[0].signal?.aborted).toBe(false)
+    pending[0].resolve()
+    await waitFor(() => expect(pending).toHaveLength(2))
+    pending[1].resolve()
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(pending).toHaveLength(2)
+    expect(calls('/project-groups/3')).toBe(3)
+  })
+
   it('ignores a stale owner-options response after the transfer dialog is reopened', async () => {
     mocks.perms = ['project:transfer']
     const requests: Array<{ resolve: (value: unknown) => void }> = []
@@ -338,6 +377,53 @@ describe('主项目刷新范围', () => {
     await user.click(within(dialog).getByRole('combobox'))
     expect(await screen.findByText('新负责人（E21）')).toBeInTheDocument()
     expect(screen.queryByText('过期候选人（E20）')).not.toBeInTheDocument()
+  })
+})
+
+describe('子项目编辑并发', () => {
+  const T1 = '2026-09-09T00:00:00.123456Z'
+  const T2 = '2026-09-09T00:05:00.654321Z'
+  let row = { ...detail.projects[0], updatedAt: T1 }
+
+  beforeEach(() => {
+    resetSharedMocks()
+    mocks.perms = ['project:update']
+    row = { ...detail.projects[0], updatedAt: T1 }
+    mocks.get.mockReset()
+    mocks.put.mockReset()
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/project-groups/3') return Promise.resolve({ data: { ...detail, projects: [row] } })
+      const pane = subprojectGet(url)
+      if (pane) return pane
+      throw new Error(`unexpected GET ${url}`)
+    })
+  })
+
+  it('sends the loaded version and, on a 409 conflict, warns and retries with the refreshed version', async () => {
+    mocks.put.mockImplementationOnce(() => {
+      // 他人已在此期间修改了子项目。
+      row = { ...row, name: '他人改名', updatedAt: T2 }
+      return Promise.reject({ isAxiosError: true, response: { status: 409, data: { code: 40901, message: '子项目已被他人修改，请刷新后重试' } } })
+    })
+    mocks.put.mockResolvedValueOnce({ data: { ...row, name: '我的名称' } })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '编辑' }))
+    const dialog = await screen.findByRole('dialog')
+    const name = within(dialog).getByPlaceholderText('子项目名称')
+    await user.clear(name)
+    await user.type(name, '我的名称')
+    await user.click(within(dialog).getByRole('button', { name: '保存子项目' }))
+
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
+    expect(mocks.put.mock.calls[0]).toEqual(['/projects/9', expect.objectContaining({ name: '我的名称', expectedUpdatedAt: T1 })])
+    expect(await within(dialog).findByText(/子项目已被他人修改，已刷新为最新数据（当前名称：他人改名）/)).toBeInTheDocument()
+    expect(within(dialog).getByPlaceholderText('子项目名称')).toHaveValue('我的名称')
+
+    await user.click(within(dialog).getByRole('button', { name: '保存子项目' }))
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(2))
+    expect(mocks.put.mock.calls[1]).toEqual(['/projects/9', expect.objectContaining({ name: '我的名称', expectedUpdatedAt: T2 })])
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 })
 

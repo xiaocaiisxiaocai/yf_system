@@ -68,11 +68,13 @@ internal sealed partial class ProjectService(
         return result;
     }
 
+    internal const string SubprojectChangedMessage = "子项目已被他人修改，请刷新后重试";
+
     internal async Task<ProjectResponse> UpdateSubprojectAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong projectId,
-        SubprojectUpsertRequest request,
+        SubprojectUpdateRequest request,
         string? ip,
         CancellationToken ct)
     {
@@ -85,6 +87,11 @@ internal sealed partial class ProjectService(
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:update", ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+        // Optimistic concurrency against the row locked above: an editor that loaded an older version must
+        // refresh instead of silently overwriting someone else's change.
+        if (request.ExpectedUpdatedAt is { } expectedUpdatedAt
+            && ProjectJson.Utc(project.UpdatedAt) != ProjectJson.Utc(expectedUpdatedAt))
+            throw ApiException.Conflict(SubprojectChangedMessage);
         if (project.Status is not (ProjectStatuses.Draft or ProjectStatuses.InProgress))
             throw ApiException.Conflict("子项目当前状态不可编辑");
         await EnsureNameUniqueAsync(conn, tx, name, projectId, ct);
