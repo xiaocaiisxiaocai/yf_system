@@ -1,12 +1,13 @@
 import { useCallback, useRef, useState } from 'react'
 import {
-  Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Space, Table, Tag, Tooltip, Typography,
+  Alert, Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import { fmtTime } from '../../../api/types'
 import type { Company, VendorAccount } from '../../api/types'
 import { useCan, useOem } from '../../OemContext'
-import { useLoadEffect } from '../../useLoadEffect'
+import { PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, passwordRule, validatePassword } from '../../../utils/password'
+import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 import './CompaniesPage.css'
 
 function deleteErrorMessage(error: unknown, fallback: string): string {
@@ -77,8 +78,16 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
     let password = ''
     Modal.confirm({
       title: `重置 ${account.realName} 的密码`,
-      content: <Input.Password placeholder="新的初始密码（6-20 位）" onChange={(value) => { password = value }} />,
+      content: <Input.Password autoFocus autoComplete="new-password" placeholder={`新的初始密码（${PASSWORD_MIN_CHARS}-${PASSWORD_MAX_CHARS} 个字符）`}
+        onChange={(value) => { password = value }} />,
       onOk: async () => {
+        const invalid = password ? validatePassword(password) : '请输入新的初始密码'
+        if (invalid) {
+          Message.warning(invalid)
+          // Keep the dialog open so the administrator can correct the password.
+          throw new Error(invalid)
+        }
+        // A failure is reported by the HTTP layer; the rejection keeps the dialog open for a retry.
         await api.resetAccountPassword(account.id, password)
         Message.success('已重置，账号下次登录须修改密码，现有登录已失效')
       },
@@ -207,7 +216,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
           <Form.Item field="realName" label="姓名" rules={[{ required: true }, { maxLength: 64 }]}><Input /></Form.Item>
           <Form.Item field="email" label="邮箱" rules={[{ required: true, type: 'email' }]}><Input /></Form.Item>
           {editing === 'new' && (
-            <Form.Item field="password" label="初始密码" rules={[{ required: true }, { minLength: 6, maxLength: 20 }]}><Input.Password /></Form.Item>
+            <Form.Item field="password" label="初始密码" rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}><Input.Password /></Form.Item>
           )}
         </Form>
       </Modal>
@@ -226,17 +235,31 @@ export default function CompaniesPage() {
   const [saving, setSaving] = useState(false)
   const [accountsOf, setAccountsOf] = useState<Company | null>(null)
   const [deleteError, setDeleteError] = useState('')
+  const [listLoading, setListLoading] = useState(false)
+  const [listError, setListError] = useState('')
   const deletingIdsRef = useRef(new Set<number>())
   const [deletingIds, setDeletingIds] = useState<ReadonlySet<number>>(new Set())
   const saveInFlight = useRef(false)
+  const beginRequest = useLatestRequest()
   const [form] = Form.useForm()
 
   const load = useCallback(async () => {
     if (!can.manageCompanies && !can.manageAccounts) return
-    const result = await api.companies({ page, pageSize: 20, keyword: keyword || undefined })
-    setRows(result.list)
-    setTotal(result.total)
-  }, [api, page, keyword, can.manageCompanies, can.manageAccounts])
+    const isLatest = beginRequest()
+    setListLoading(true)
+    try {
+      const result = await api.companies({ page, pageSize: 20, keyword: keyword || undefined })
+      if (!isLatest()) return
+      setRows(result.list)
+      setTotal(result.total)
+      setListError('')
+    } catch (error) {
+      if (isLatest()) setListError(deleteErrorMessage(error, '厂商列表加载失败，请重试'))
+      throw error
+    } finally {
+      if (isLatest()) setListLoading(false)
+    }
+  }, [api, page, keyword, can.manageCompanies, can.manageAccounts, beginRequest])
   useLoadEffect(load)
 
   const save = async () => {
@@ -316,9 +339,14 @@ export default function CompaniesPage() {
     )}>
       <Input.Search allowClear placeholder="搜索厂商名称" style={{ width: 260, marginBottom: 12 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
       {deleteError && <Typography.Text className="oem-delete-error" type="error" role="alert">{deleteError}</Typography.Text>}
+      {listError && (
+        <Alert type="error" style={{ marginBottom: 12 }} content={`厂商列表加载失败：${listError}`}
+          action={<Button size="small" loading={listLoading} onClick={() => void load().catch(() => undefined)}>重试</Button>} />
+      )}
       <Table
         className="oem-directory-table"
         rowKey="id"
+        loading={listLoading}
         data={rows}
         scroll={{ x: 1110 }}
         pagination={{ current: page, total, pageSize: 20, onChange: setPage }}

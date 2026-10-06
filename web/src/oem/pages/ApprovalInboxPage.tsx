@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Card, Table, Tag } from '@arco-design/web-react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { fmtTime } from '../../api/types'
 import type { PendingTask } from '../api/types'
 import { useOem } from '../OemContext'
@@ -19,7 +19,13 @@ export default function ApprovalInboxPage() {
       <Table rowKey="taskId" loading={approvals.isPending || approvals.isFetching} data={rows} pagination={false}
         onRow={(row) => ({ onClick: () => navigate(`${base}/transfers/${row.transferId}`), style: { cursor: 'pointer' } })}
         columns={[
-          { title: '传递单', dataIndex: 'title' },
+          {
+            title: '传递单', dataIndex: 'title',
+            // A real link keeps rows reachable by keyboard; the row click remains a mouse shortcut.
+            render: (value: string, row: PendingTask) => (
+              <Link to={`${base}/transfers/${row.transferId}`} onClick={(event) => event.stopPropagation()}>{value}</Link>
+            ),
+          },
           { title: '目标厂商', dataIndex: 'companyName', width: 180 },
           { title: '发送人', width: 160, render: (_: unknown, row: PendingTask) => `${row.senderName}（${row.senderEmployeeNo}）` },
           {

@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Button, Progress, Space, Typography } from '@arco-design/web-react'
-import { IconClose, IconUpload } from '@arco-design/web-react/icon'
+import { IconClose, IconRefresh, IconUpload } from '@arco-design/web-react/icon'
 import { fileMd5 } from '../../api/file-hash'
 import { fmtSize } from '../../api/types'
 import { useOem } from '../OemContext'
@@ -26,6 +26,8 @@ interface Entry {
 export interface OemUploaderHandle {
   /** Uploads queued and failed files only. Successfully merged files are never repeated. */
   uploadAll(transferId?: number): Promise<boolean>
+  /** Forgets server sessions after the draft was deleted; every local file is queued again. */
+  resetForNewDraft(): void
   hasFiles(): boolean
   isBusy(): boolean
 }
@@ -41,6 +43,45 @@ interface Props {
 }
 
 let nextKey = 0
+
+const CHUNK_RETRIES = 2
+const CHUNK_RETRY_BASE_MS = 500
+const TRANSIENT_CODES = new Set(['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET'])
+
+function statusOf(error: unknown): number | undefined {
+  return (error as { response?: { status?: number } })?.response?.status
+}
+
+/** Network drops, timeouts and gateway/server hiccups are worth an automatic chunk retry. */
+function isTransient(error: unknown): boolean {
+  const status = statusOf(error)
+  if (status !== undefined) return status === 408 || status === 429 || status >= 500
+  return TRANSIENT_CODES.has((error as { code?: string })?.code ?? '')
+}
+
+/** The server no longer knows the upload session (expired and purged, or its draft is gone). */
+function isSessionGone(error: unknown): boolean {
+  const status = statusOf(error)
+  return status === 404 || status === 410
+}
+
+function wait(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error('aborted'))
+      return
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(new Error('aborted'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
 
 function errorMessage(error: unknown): string {
   const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
@@ -72,7 +113,21 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
   useEffect(() => { onBusyChange?.(busy) }, [busy, onBusyChange])
   useEffect(() => { onQueueChange?.(entries.length) }, [entries.length, onQueueChange])
 
+  // One controller per mounted uploader: unmounting aborts in-flight chunk uploads and backoff waits.
+  const unmounted = useRef(false)
+  const abort = useRef<AbortController>(new AbortController())
+  useEffect(() => {
+    unmounted.current = false
+    const controller = new AbortController()
+    abort.current = controller
+    return () => {
+      unmounted.current = true
+      controller.abort()
+    }
+  }, [])
+
   const patch = (key: number, value: Partial<Entry>) => {
+    if (unmounted.current) return
     setEntries((list) => {
       const next = list.map((entry) => (entry.key === key ? { ...entry, ...value } : entry))
       entriesRef.current = next
@@ -80,53 +135,80 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
     })
   }
 
+  const putChunkWithRetry = async (sessionId: string, index: number, blob: Blob, signal: AbortSignal) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await api.putChunk(sessionId, index, blob, signal)
+        return
+      } catch (error) {
+        if (signal.aborted || attempt >= CHUNK_RETRIES || !isTransient(error)) throw error
+        await wait(CHUNK_RETRY_BASE_MS * 2 ** attempt, signal)
+      }
+    }
+  }
+
   const uploadOne = async (file: File, key: number, draftId: number): Promise<boolean> => {
-    try {
-      const saved = entriesRef.current.find((entry) => entry.key === key)
-      let md5 = saved?.md5
-      if (!md5) {
-        patch(key, { phase: 'hashing', error: undefined, percent: 0 })
-        md5 = await fileMd5(file)
-        patch(key, { md5 })
-      }
-      let session = saved?.session
-      if (!session) {
-        patch(key, { phase: 'uploading', error: undefined })
-        const init = await api.initUpload(draftId, { fileName: file.name, fileSize: file.size, fileMd5: md5 })
-        session = {
-          id: init.sessionId,
-          chunkSize: init.chunkSize,
-          totalChunks: init.totalChunks,
-          uploadedChunks: [...init.uploadedChunks],
-          mergeReady: false,
+    const signal = abort.current.signal
+    const saved = entriesRef.current.find((entry) => entry.key === key)
+    let md5 = saved?.md5
+    let session = saved?.session
+    // A resumed session the server no longer knows (404/410) is dropped and re-initialised once.
+    // Merged-ready sessions are never re-created: their merge may already have produced the file.
+    let mayRecreateSession = Boolean(session && !session.mergeReady)
+    for (;;) {
+      try {
+        if (!md5) {
+          patch(key, { phase: 'hashing', error: undefined, percent: 0 })
+          md5 = await fileMd5(file)
+          if (signal.aborted) return false
+          patch(key, { md5 })
         }
-        patch(key, { session })
-      }
-      const done = new Set(session.uploadedChunks)
-      if (!session.mergeReady) {
-        patch(key, { phase: 'uploading', error: undefined })
-        for (let index = 0; index < session.totalChunks; index++) {
-          if (!done.has(index)) {
-            const blob = file.slice(index * session.chunkSize, Math.min(file.size, (index + 1) * session.chunkSize))
-            await api.putChunk(session.id, index, blob)
-            done.add(index)
-            session = { ...session, uploadedChunks: [...done] }
-            patch(key, { session })
+        if (!session) {
+          patch(key, { phase: 'uploading', error: undefined })
+          const init = await api.initUpload(draftId, { fileName: file.name, fileSize: file.size, fileMd5: md5 })
+          session = {
+            id: init.sessionId,
+            chunkSize: init.chunkSize,
+            totalChunks: init.totalChunks,
+            uploadedChunks: [...init.uploadedChunks],
+            mergeReady: false,
           }
-          patch(key, { percent: session.totalChunks === 0 ? 100 : Math.round((done.size / session.totalChunks) * 100) })
+          patch(key, { session })
         }
-        session = { ...session, mergeReady: true }
-        patch(key, { session })
+        const done = new Set(session.uploadedChunks)
+        if (!session.mergeReady) {
+          patch(key, { phase: 'uploading', error: undefined })
+          for (let index = 0; index < session.totalChunks; index++) {
+            if (!done.has(index)) {
+              const blob = file.slice(index * session.chunkSize, Math.min(file.size, (index + 1) * session.chunkSize))
+              await putChunkWithRetry(session.id, index, blob, signal)
+              done.add(index)
+              session = { ...session, uploadedChunks: [...done] }
+              patch(key, { session })
+            }
+            patch(key, { percent: session.totalChunks === 0 ? 100 : Math.round((done.size / session.totalChunks) * 100) })
+          }
+          session = { ...session, mergeReady: true }
+          patch(key, { session })
+        }
+        patch(key, { phase: 'merging' })
+        // Merge is idempotent for a session. Reusing this id is essential when its response is lost.
+        await api.merge(session.id)
+        if (signal.aborted) return false
+        patch(key, { phase: 'done', percent: 100 })
+        onUploaded?.()
+        return true
+      } catch (error) {
+        if (signal.aborted) return false
+        if (mayRecreateSession && isSessionGone(error)) {
+          mayRecreateSession = false
+          session = undefined
+          patch(key, { session: undefined, percent: 0 })
+          continue
+        }
+        patch(key, { phase: 'failed', error: errorMessage(error) })
+        return false
       }
-      patch(key, { phase: 'merging' })
-      // Merge is idempotent for a session. Reusing this id is essential when its response is lost.
-      await api.merge(session.id)
-      patch(key, { phase: 'done', percent: 100 })
-      onUploaded?.()
-      return true
-    } catch (error) {
-      patch(key, { phase: 'failed', error: errorMessage(error) })
-      return false
     }
   }
 
@@ -145,8 +227,18 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
     return ok
   }
 
+  const resetForNewDraft = () => {
+    if (unmounted.current) return
+    setEntries((list) => {
+      const next = list.map((entry) => ({ key: entry.key, file: entry.file, md5: entry.md5, phase: 'queued' as const, percent: 0 }))
+      entriesRef.current = next
+      return next
+    })
+  }
+
   useImperativeHandle(ref, () => ({
     uploadAll,
+    resetForNewDraft,
     hasFiles: () => entriesRef.current.length > 0,
     isBusy: () => entriesRef.current.some((entry) => ['hashing', 'uploading', 'merging', 'cancelling'].includes(entry.phase)),
   }))
@@ -167,6 +259,7 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
   }
 
   const removeLocal = (key: number) => {
+    if (unmounted.current) return
     setEntries((list) => {
       const next = list.filter((entry) => entry.key !== key)
       entriesRef.current = next
@@ -175,17 +268,24 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
   }
 
   const remove = async (entry: Entry) => {
-    if (entry.session?.mergeReady) return
     if (entry.session) {
       patch(entry.key, { phase: 'cancelling', error: undefined })
       try {
         await api.abortUpload(entry.session.id)
       } catch (error) {
-        patch(entry.key, { phase: 'failed', error: `取消上传失败：${errorMessage(error)}` })
-        return
+        // A session the server no longer knows has nothing left to cancel.
+        if (!isSessionGone(error)) {
+          // A completed merge is rejected here; the merged file stays on the draft and can be removed there.
+          patch(entry.key, { phase: 'failed', error: `取消上传失败：${errorMessage(error)}` })
+          return
+        }
       }
     }
     removeLocal(entry.key)
+  }
+
+  const retry = (entry: Entry) => {
+    if (transferId && !busy && !disabled) void uploadSelected([entry], transferId)
   }
 
   const label = (entry: Entry) => ({
@@ -243,9 +343,15 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
                 <Typography.Text>{entry.file.name}</Typography.Text>
                 <Typography.Text type="secondary" style={{ marginLeft: 8 }}>{fmtSize(entry.file.size)}</Typography.Text>
               </span>
-              {(entry.phase === 'queued' || (entry.phase === 'failed' && !entry.session?.mergeReady)) && !busy && !disabled && (
-                <Button type="text" size="mini" status="danger" icon={<IconClose />}
-                  aria-label={`移除「${entry.file.name}」`} onClick={(event) => { event.stopPropagation(); void remove(entry) }} />
+              {(entry.phase === 'queued' || entry.phase === 'failed') && !busy && !disabled && (
+                <Space size={4}>
+                  {entry.phase === 'failed' && !deferred && transferId && (
+                    <Button type="text" size="mini" icon={<IconRefresh />}
+                      aria-label={`重试「${entry.file.name}」`} onClick={(event) => { event.stopPropagation(); retry(entry) }}>重试</Button>
+                  )}
+                  <Button type="text" size="mini" status="danger" icon={<IconClose />}
+                    aria-label={`移除「${entry.file.name}」`} onClick={(event) => { event.stopPropagation(); void remove(entry) }} />
+                </Space>
               )}
             </Space>
             <Progress
@@ -254,7 +360,7 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
               formatText={() => label(entry)}
             />
             {entry.phase === 'failed' && entry.session?.mergeReady && (
-              <Typography.Text type="secondary">合并结果尚未确认，请重试；关闭窗口后也可从草稿详情继续。</Typography.Text>
+              <Typography.Text type="secondary">合并结果尚未确认，请重试；关闭窗口后也可从草稿详情继续。移除前请确认附件列表中没有该文件。</Typography.Text>
             )}
           </div>
         ))}

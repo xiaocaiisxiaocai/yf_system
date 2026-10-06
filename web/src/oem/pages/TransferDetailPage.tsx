@@ -50,20 +50,38 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
   const [candidates, setCandidates] = useState<{ id: number; employeeNo: string; realName: string }[]>([])
   const [target, setTarget] = useState<number | undefined>()
   const [reason, setReason] = useState('')
+  const [deciding, setDeciding] = useState<'approve' | 'reject' | null>(null)
+  const decidingRef = useRef(false)
 
   const myTask = approval.nodes.flatMap((node) => node.tasks).find((task) => task.status === 'PENDING' && task.approverUserId === userId)
   const open = ['WAITING_FILES', 'IN_PROGRESS', 'APPROVAL_BLOCKED'].includes(approval.status)
 
-  const approve = async (task: ApprovalTask) => {
+  /** One decision at a time; failures are already reported by the HTTP layer. */
+  const decide = async (kind: 'approve' | 'reject', run: () => Promise<boolean>) => {
+    if (decidingRef.current) return
+    decidingRef.current = true
+    setDeciding(kind)
+    try {
+      await run()
+    } catch {
+      // Reported by the request layer; the task stays pending so the approver can retry.
+    } finally {
+      decidingRef.current = false
+      setDeciding(null)
+    }
+  }
+  const approve = (task: ApprovalTask) => decide('approve', async () => {
     onChanged(await api.approve(task.id, task.version))
     Message.success('已审批通过')
-  }
-  const reject = async (task: ApprovalTask) => {
+    return true
+  })
+  const reject = (task: ApprovalTask) => decide('reject', async () => {
     const text = await promptText('驳回传递单', '请输入驳回原因（发送人将收到通知）')
-    if (!text) return
+    if (!text) return false
     onChanged(await api.reject(task.id, task.version, text))
     Message.success('已驳回')
-  }
+    return true
+  })
   const searchCandidates = async (keyword: string) => setCandidates(await api.approverOptions(keyword))
   const submitReassign = async () => {
     if (!reassigning || !target || !reason.trim()) {
@@ -90,8 +108,10 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
         <Alert type="info" style={{ marginBottom: 12 }} content={
           <Space>
             <span>请审阅附件后处理此审批任务。</span>
-            <Button type="primary" size="small" onClick={() => void approve(myTask)}>审批通过</Button>
-            <Button status="danger" size="small" onClick={() => void reject(myTask)}>驳回</Button>
+            <Button type="primary" size="small" loading={deciding === 'approve'} disabled={deciding !== null}
+              onClick={() => void approve(myTask)}>审批通过</Button>
+            <Button status="danger" size="small" loading={deciding === 'reject'} disabled={deciding !== null}
+              onClick={() => void reject(myTask)}>驳回</Button>
           </Space>
         } />
       )}
@@ -169,6 +189,16 @@ export default function TransferDetailPage() {
   const missing = (detailQuery.error as { response?: { status?: number } } | null)?.response?.status === 404
 
   if (missing || !Number.isSafeInteger(id) || id <= 0) return <Result status="404" title="传递单不存在或无权查看" extra={<Button onClick={() => navigate(`${base}/transfers`)}>返回列表</Button>} />
+  if (!detail && detailQuery.isError) {
+    return (
+      <Result status="error" title="传递单加载失败" subTitle="网络或服务暂时不可用，请稍后重试。" extra={(
+        <Space>
+          <Button type="primary" loading={detailQuery.isFetching} onClick={() => void load()}>重试</Button>
+          <Button onClick={() => navigate(`${base}/transfers`)}>返回列表</Button>
+        </Space>
+      )} />
+    )
+  }
   if (!detail) return <Spin style={{ display: 'block', marginTop: 80 }} />
 
   const summary = detail.summary
@@ -239,10 +269,23 @@ export default function TransferDetailPage() {
     window.location.href = session.url
   }
   const preview = async (file: TransferFile) => {
-    const blob = await api.previewBlob(file.id)
-    const url = URL.createObjectURL(blob)
-    window.open(url, '_blank', 'noopener')
-    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    // Open the tab inside the click gesture so popup blockers allow it, then point it at the blob.
+    // 'noopener' would make window.open return null, so the opener link is cut by hand instead.
+    const target = window.open('', '_blank')
+    if (!target) {
+      Message.warning('浏览器阻止了新窗口，请允许本站弹出窗口后重试')
+      return
+    }
+    target.opener = null
+    try {
+      const blob = await api.previewBlob(file.id)
+      const url = URL.createObjectURL(blob)
+      target.location.href = url
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch {
+      // The HTTP layer already reported the failure.
+      target.close()
+    }
   }
   const removeFile = async (file: TransferFile) => {
     await api.removeFile(file.id)
@@ -259,14 +302,14 @@ export default function TransferDetailPage() {
           <Space>
             {caps.canSend && (
               <Button type="primary" loading={sending} disabled={detail.files.length === 0 || failedFiles || uploadBusy}
-                onClick={() => void send()}>{summary.direction === 'INTERNAL_TO_OEM' ? '提交审批' : '发送文件'}</Button>
+                onClick={() => void send().catch(() => undefined)}>{summary.direction === 'INTERNAL_TO_OEM' ? '提交审批' : '发送文件'}</Button>
             )}
             {caps.canDelete && (
               <Popconfirm title="删除草稿后附件将被清理，确定删除？" onOk={remove}>
                 <Button status="danger">删除草稿</Button>
               </Popconfirm>
             )}
-            {can.recover && summary.lifecycleStatus === 'SEALED' && <Button status="warning" onClick={() => void cancel()}>终止传递</Button>}
+            {can.recover && summary.lifecycleStatus === 'SEALED' && <Button status="warning" onClick={() => void cancel().catch(() => undefined)}>终止传递</Button>}
           </Space>
         }
       >
@@ -326,7 +369,7 @@ export default function TransferDetailPage() {
               title: '操作', width: 200,
               render: (_: unknown, file: TransferFile) => (
                 <Space>
-                  {file.downloadable && <Button size="small" icon={<IconDownload />} onClick={() => void download(file)}>下载</Button>}
+                  {file.downloadable && <Button size="small" icon={<IconDownload />} onClick={() => void download(file).catch(() => undefined)}>下载</Button>}
                   {file.downloadable && PREVIEWABLE.has(file.ext) && file.sizeBytes <= 50 * 1024 * 1024 && (
                     <Button size="small" icon={<IconEye />} onClick={() => void preview(file)}>预览</Button>
                   )}

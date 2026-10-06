@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Button, Card, Form, Input, Message, Typography } from '@arco-design/web-react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Button, Card, Form, Input, Message, Spin, Typography } from '@arco-design/web-react'
+import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { passwordRule } from '../../../utils/password'
 import type { ApiResponses } from '../../api/types'
 import { bootPortalSession, portalHttp, portalLogin, PORTAL_BASE, usePortalAuth, usePortalSessionSync } from '../../api/portalSession'
 
@@ -8,20 +9,24 @@ const shell = { display: 'flex', minHeight: '100vh', alignItems: 'center', justi
 
 export function PortalLoginPage() {
   usePortalSessionSync()
-  const navigate = useNavigate()
   const location = useLocation()
+  const { booted, token, mustChangePassword } = usePortalAuth()
   const [loading, setLoading] = useState(false)
   useEffect(() => { void bootPortalSession() }, [])
 
   const submit = async (values: { employeeNo: string; password: string }) => {
     setLoading(true)
     try {
-      const mustChange = await portalLogin(values.employeeNo.trim(), values.password)
-      const from = (location.state as { from?: string } | null)?.from
-      navigate(mustChange ? `${PORTAL_BASE}/change-password` : from || `${PORTAL_BASE}/transfers`, { replace: true })
+      // A successful login stores the session; the redirect below then leaves this page.
+      await portalLogin(values.employeeNo.trim(), values.password)
     } finally {
       setLoading(false)
     }
+  }
+
+  if (booted && token) {
+    const from = (location.state as { from?: string } | null)?.from
+    return <Navigate to={mustChangePassword ? `${PORTAL_BASE}/change-password` : from || `${PORTAL_BASE}/transfers`} replace />
   }
 
   return (
@@ -43,10 +48,9 @@ export function PortalLoginPage() {
 export function PortalChangePasswordPage() {
   usePortalSessionSync()
   const navigate = useNavigate()
-  const { token, mustChangePassword } = usePortalAuth()
+  const { booted, token, mustChangePassword } = usePortalAuth()
   const [loading, setLoading] = useState(false)
   useEffect(() => { void bootPortalSession() }, [])
-  useEffect(() => { if (usePortalAuth.getState().booted && !token) navigate(`${PORTAL_BASE}/login`, { replace: true }) }, [token, navigate])
 
   const submit = async (values: { oldPassword: string; newPassword: string; confirm: string }) => {
     if (values.newPassword !== values.confirm) {
@@ -65,13 +69,17 @@ export function PortalChangePasswordPage() {
     }
   }
 
+  // Bootstrap may fail to restore a session (expired refresh cookie): there is nothing to change then.
+  if (!booted) return <Spin style={{ display: 'block', marginTop: 120 }} tip="正在恢复登录状态…" />
+  if (!token) return <Navigate to={`${PORTAL_BASE}/login`} replace />
+
   return (
     <div style={shell}>
       <Card style={{ width: 380 }} title={mustChangePassword ? '首次登录请修改密码' : '修改密码'}>
         <Form layout="vertical" onSubmit={submit}>
-          <Form.Item field="oldPassword" label="当前密码" rules={[{ required: true }]}><Input.Password /></Form.Item>
-          <Form.Item field="newPassword" label="新密码" rules={[{ required: true }, { minLength: 6, maxLength: 20 }]}><Input.Password /></Form.Item>
-          <Form.Item field="confirm" label="确认新密码" rules={[{ required: true }]}><Input.Password /></Form.Item>
+          <Form.Item field="oldPassword" label="当前密码" rules={[{ required: true, message: '请输入当前密码' }]}><Input.Password autoComplete="current-password" /></Form.Item>
+          <Form.Item field="newPassword" label="新密码" rules={[{ required: true, message: '请输入新密码' }, passwordRule]}><Input.Password autoComplete="new-password" /></Form.Item>
+          <Form.Item field="confirm" label="确认新密码" rules={[{ required: true, message: '请再次输入新密码' }]}><Input.Password /></Form.Item>
           <Button type="primary" htmlType="submit" long loading={loading}>保存</Button>
         </Form>
       </Card>
