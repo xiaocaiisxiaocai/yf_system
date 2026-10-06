@@ -96,6 +96,7 @@ public sealed class OemRefreshTokenConfig : IEntityTypeConfiguration<OemRefreshT
         b.Property(x => x.SessionExpiresAt).Clock("session_expires_at");
         b.Property(x => x.ExpiresAt).Clock("expires_at");
         b.Property(x => x.Revoked).HasColumnName("revoked").HasDefaultValue(false);
+        b.Property(x => x.RevokeReason).OptionalText("revoke_reason", 32);
         b.Property(x => x.Ip).OptionalText("ip", 64);
         b.Property(x => x.CreatedAt).Clock("created_at");
         b.HasIndex(x => x.TokenHash).IsUnique().HasDatabaseName("uk_oem_refresh_tokens_hash");
@@ -156,6 +157,7 @@ public sealed class OemTransferConfig : IEntityTypeConfiguration<OemTransfer>
         b.HasIndex(x => x.InternalSenderUserId).HasDatabaseName("idx_oem_transfers_internal_sender");
         b.HasIndex(x => x.OemSenderAccountId).HasDatabaseName("idx_oem_transfers_oem_sender");
         b.HasIndex(x => new { x.LifecycleStatus, x.ReleasedAt }).HasDatabaseName("idx_oem_transfers_status_released");
+        b.HasIndex(x => new { x.ClosedByRealm, x.ClosedById }).HasDatabaseName("idx_oem_transfers_closed_by");
         b.HasOne<OemCompany>().WithMany().HasForeignKey(x => x.OemCompanyId)
             .HasConstraintName("fk_oem_transfers_company").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<OemAccount>().WithMany().HasForeignKey(x => x.OemSenderAccountId)
@@ -199,6 +201,10 @@ public sealed class OemTransferFileConfig : IEntityTypeConfiguration<OemTransfer
         b.Property(x => x.UpdatedAt).Clock("updated_at");
         b.HasIndex(x => x.StoredName).IsUnique().HasDatabaseName("uk_oem_transfer_files_stored_name");
         b.HasIndex(x => x.TransferId).HasDatabaseName("idx_oem_transfer_files_transfer");
+        // Account-deletion history probes run under the exclusive management lock and must not scan.
+        b.HasIndex(x => x.UploadedByOemAccountId).HasDatabaseName("idx_oem_transfer_files_oem_uploader");
+        b.HasIndex(x => x.UploadedByInternalUserId).HasDatabaseName("idx_oem_transfer_files_internal_uploader");
+        b.HasIndex(x => new { x.FirstRecipientRealm, x.FirstRecipientId }).HasDatabaseName("idx_oem_transfer_files_first_recipient");
         b.HasIndex(x => new { x.PayloadStatus, x.PurgeDueAt }).HasDatabaseName("idx_oem_transfer_files_purge_due");
         b.HasIndex(x => new { x.PayloadStatus, x.PurgeNextAttemptAt }).HasDatabaseName("idx_oem_transfer_files_purge_retry");
         b.HasOne<OemTransfer>().WithMany().HasForeignKey(x => x.TransferId)
@@ -229,6 +235,7 @@ public sealed class OemUploadSessionConfig : IEntityTypeConfiguration<OemUploadS
         b.Property(x => x.UpdatedAt).Clock("updated_at");
         b.HasIndex(x => new { x.TransferId, x.Status }).HasDatabaseName("idx_oem_upload_sessions_transfer");
         b.HasIndex(x => new { x.Status, x.ExpiresAt }).HasDatabaseName("idx_oem_upload_sessions_expiry");
+        b.HasIndex(x => new { x.UploaderRealm, x.UploaderId }).HasDatabaseName("idx_oem_upload_sessions_uploader");
         b.HasOne<OemTransfer>().WithMany().HasForeignKey(x => x.TransferId)
             .HasConstraintName("fk_oem_upload_sessions_transfer").OnDelete(DeleteBehavior.Restrict);
     }
@@ -303,6 +310,8 @@ public sealed class OemFlowTemplateConfig : IEntityTypeConfiguration<OemFlowTemp
         b.Property(x => x.CreatedAt).Clock("created_at");
         b.Property(x => x.UpdatedAt).Clock("updated_at");
         b.HasIndex(x => x.Name).IsUnique().HasDatabaseName("uk_oem_flow_templates_name");
+        // Default-template promotion locks the current defaults through this index.
+        b.HasIndex(x => x.IsDefault).HasDatabaseName("idx_oem_flow_templates_default");
     }
 }
 

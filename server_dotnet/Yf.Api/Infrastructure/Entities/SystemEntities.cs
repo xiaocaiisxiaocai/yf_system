@@ -73,7 +73,8 @@ public sealed class AuditLogConfig : IEntityTypeConfiguration<AuditLog>
         b.HasIndex(x => new { x.TargetType, x.TargetId, x.Id }).HasDatabaseName("idx_audit_target");
         b.Property(x => x.ActorRealm).HasColumnName("actor_realm").HasMaxLength(16);
         b.Property(x => x.ActorAccountId).HasColumnName("actor_account_id");
-        b.HasIndex(x => x.ActorRealm).HasDatabaseName("idx_audit_actor_realm");
+        // Composite so realm-account history probes (account deletion) seek instead of scanning a realm.
+        b.HasIndex(x => new { x.ActorRealm, x.ActorAccountId }).HasDatabaseName("idx_audit_actor_account");
         // Deliberately no FK on user_id: audit rows must survive account deletion/rename (employee_no is a snapshot).
     }
 }
@@ -107,6 +108,7 @@ public sealed class EmailOutboxConfig : IEntityTypeConfiguration<EmailOutbox>
         b.Property(x => x.RecipientAccountId).HasColumnName("recipient_account_id");
         b.Property(x => x.OemTransferId).HasColumnName("oem_transfer_id");
         b.HasIndex(x => x.OemTransferId).HasDatabaseName("idx_outbox_oem_transfer");
+        b.HasIndex(x => new { x.RecipientRealm, x.RecipientAccountId }).HasDatabaseName("idx_outbox_recipient_account");
         b.HasOne<Project>().WithMany().HasForeignKey(x => x.ProjectId).HasConstraintName("fk_outbox_project_v2").OnDelete(DeleteBehavior.Restrict);
         // Deliberately no FK on recipient_user_id: recipient_email is the durable snapshot used at send time.
     }

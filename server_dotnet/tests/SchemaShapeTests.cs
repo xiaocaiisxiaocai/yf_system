@@ -34,6 +34,7 @@ public sealed class SchemaShapeTests
         "20261006015013_RestoreOemPlatform",
         "20261006031500_ReplaceOemMalwareScanningWithValidation",
         "20261006032324_AddOemDirectoryDeletePermissions",
+        "20261006075638_HardenOemIdentityAndIndexes",
     ];
 
     [Fact]
@@ -299,6 +300,17 @@ public sealed class SchemaShapeTests
                 SELECT COUNT(*) FROM information_schema.statistics
                 WHERE table_schema=DATABASE() AND table_name='oem_refresh_tokens'
                   AND index_name='idx_oem_refresh_tokens_session_expires' AND column_name='session_expires_at'
+                """));
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("""
+                SELECT COUNT(*) FROM information_schema.columns
+                WHERE table_schema=DATABASE() AND table_name='oem_refresh_tokens' AND column_name='revoke_reason' AND is_nullable='YES'
+                """));
+            Assert.Equal(8, await conn.ExecuteScalarAsync<int>("""
+                SELECT COUNT(DISTINCT table_name, index_name) FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND index_name IN (
+                    'idx_oem_transfer_files_oem_uploader','idx_oem_transfer_files_internal_uploader',
+                    'idx_oem_transfer_files_first_recipient','idx_oem_transfers_closed_by','idx_oem_upload_sessions_uploader',
+                    'idx_outbox_recipient_account','idx_audit_actor_account','idx_oem_flow_templates_default')
                 """));
             Assert.Equal(3, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM project_dictionaries WHERE type='PRIORITY'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>(

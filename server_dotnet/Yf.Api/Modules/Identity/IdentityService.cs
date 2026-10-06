@@ -174,7 +174,10 @@ public sealed class IdentityService(
             try
             {
                 var claim = tokens.ParseAccess(bearer);
-                if (await HasActiveSessionAsync(context.Database.Connection(), null, claim.UserId, claim.SessionId, ct))
+                // Ids of another realm (e.g. an OEM account) live in a different table and must
+                // never be mistaken for an internal user's session.
+                if (claim.Realm == IdentityRealms.Internal
+                    && await HasActiveSessionAsync(context.Database.Connection(), null, claim.UserId, claim.SessionId, ct))
                     targets.Add((claim.UserId, claim.SessionId));
             }
             catch (Exception ex) when (ex is ApiException or SecurityTokenException or ArgumentException or FormatException)

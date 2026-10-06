@@ -70,6 +70,7 @@ public sealed class ApprovalPlanningService
             .ToDictionaryAsync(item => item.DepartmentId, item => item.Id, ct);
         var defaultTemplateId = await uow.Db.OemFlowTemplates.AsNoTracking()
             .Where(template => template.IsDefault && template.Status == OemStatus.Active)
+            .OrderBy(template => template.Id)
             .Select(template => (ulong?)template.Id).FirstOrDefaultAsync(ct);
         return TemplateSelection.Select(path, scopes, defaultTemplateId);
     }

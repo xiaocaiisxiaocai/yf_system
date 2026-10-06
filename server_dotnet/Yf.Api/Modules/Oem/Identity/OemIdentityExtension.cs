@@ -13,12 +13,13 @@ namespace Yf.Api.Modules.Oem.Identity;
 /// </summary>
 public sealed partial class OemIdentityExtension(IDbContextFactory<YfDbContext> dbFactory) : IRealmIdentityExtension
 {
-    private static readonly HashSet<string> AnonymousPosts = new(StringComparer.Ordinal)
+    // ASP.NET route literals are case-insensitive (see ApiRequestPolicy), so these path checks are too.
+    private static readonly HashSet<string> AnonymousPosts = new(StringComparer.OrdinalIgnoreCase)
     {
         OemApi.Prefix + "/auth/login", OemApi.Prefix + "/auth/refresh", OemApi.Prefix + "/auth/logout",
     };
 
-    private static readonly HashSet<string> PasswordPendingPaths = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> PasswordPendingPaths = new(StringComparer.OrdinalIgnoreCase)
     {
         OemApi.Prefix + "/auth/me", OemApi.Prefix + "/auth/password", OemApi.Prefix + "/auth/logout",
     };
@@ -29,7 +30,7 @@ public sealed partial class OemIdentityExtension(IDbContextFactory<YfDbContext> 
 
     public bool IsAnonymousPath(HttpRequest request)
     {
-        var path = request.Path.Value ?? string.Empty;
+        var path = NormalizedPath(request);
         if (HttpMethods.IsPost(request.Method) && AnonymousPosts.Contains(path)) return true;
         // File streams authenticate with a short-lived, path-scoped HttpOnly grant cookie
         // (see the delivery slice) so that browsers can download without a bearer header.
@@ -52,12 +53,15 @@ public sealed partial class OemIdentityExtension(IDbContextFactory<YfDbContext> 
             .SingleOrDefaultAsync(ct) ?? throw ApiException.Unauthorized("账号不存在");
         if (row.Status != OemStatus.Active) throw ApiException.Unauthorized("账号已被禁用");
         if (row.CompanyStatus != OemStatus.Active) throw ApiException.Unauthorized("所属厂商已被禁用");
-        if (row.MustChangePassword && !PasswordPendingPaths.Contains(context.Request.Path.Value ?? string.Empty))
+        if (row.MustChangePassword && !PasswordPendingPaths.Contains(NormalizedPath(context.Request)))
             throw new ApiException(403, 40303, "请先修改初始密码");
         context.Items[typeof(OemAccountActor)] = new OemAccountActor(row.Id, row.EmployeeNo, row.RealName, row.OemCompanyId, claims.SessionId);
         context.Items[typeof(AccessClaims)] = claims;
     }
 
-    [GeneratedRegex(@"^/api/v1/oem/files/[0-9]{1,20}/download$", RegexOptions.CultureInvariant)]
+    /// <summary>Routing also tolerates a trailing slash, matching <see cref="ApiRequestPolicy"/>.</summary>
+    private static string NormalizedPath(HttpRequest request) => (request.Path.Value ?? string.Empty).TrimEnd('/');
+
+    [GeneratedRegex(@"^/api/v1/oem/files/[0-9]{1,20}/download$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex CookieStreamPath();
 }
