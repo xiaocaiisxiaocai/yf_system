@@ -9,7 +9,10 @@ const mocks = vi.hoisted(() => ({
   post: vi.fn(),
 }))
 
-vi.mock('../../../api/client', () => ({ default: mocks }))
+vi.mock('../../../api/client', () => ({
+  default: mocks,
+  getApiErrorCode: (error: unknown) => (error as { response?: { data?: { code?: number } } } | undefined)?.response?.data?.code,
+}))
 vi.mock('dockview-react', () => import('../../dockviewMock'))
 vi.mock('../../../components/FileTable', () => ({ default: () => <div>文件列表</div> }))
 vi.mock('../../../components/MessagePanel', () => ({ default: () => <div>留言列表</div> }))

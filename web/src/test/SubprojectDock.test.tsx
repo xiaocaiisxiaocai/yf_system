@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { createRef, useEffect } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -35,7 +35,7 @@ function renderDock(projects: ProjectSummary[]) {
     </MemoryRouter>
   )
   const view = render(ui(projects))
-  return { ref, rerender: (items: ProjectSummary[]) => view.rerender(ui(items)) }
+  return { ref, rerender: (items: ProjectSummary[]) => view.rerender(ui(items)), unmount: () => view.unmount() }
 }
 
 /** Flushes dockview's buffered layout-change microtasks and the dock's debounced save. */
@@ -89,7 +89,10 @@ describe('SubprojectDock incremental layout', () => {
     await settle()
     act(() => dockviewMockState.api!.simulateUserLayoutChange())
     await settle()
-    expect(Object.keys(JSON.parse(localStorage.getItem(key)!).panels)).toEqual(['subproject-1', 'subproject-2'])
+    const saved = JSON.parse(localStorage.getItem(key)!)
+    expect(Object.keys(saved.panels)).toEqual(['subproject-1', 'subproject-2'])
+    // Subproject names are restored from the server, never kept in browser storage.
+    expect(JSON.stringify(saved)).not.toContain('子项目')
 
     rerender([project(1), project(2), project(3)])
     await settle()
@@ -107,5 +110,47 @@ describe('SubprojectDock incremental layout', () => {
     await settle()
     expect(dockviewMockState.fromJSONCalls).toBe(2)
     expect(localStorage.getItem(key)).toBeNull()
+  })
+
+  it('does not persist the default layout when only the active tab changes or the container resizes', async () => {
+    renderDock([project(1), project(2)])
+    await settle()
+    act(() => dockviewMockState.api!.simulateActivePanelChange('subproject-2'))
+    await settle()
+    act(() => dockviewMockState.api!.simulateResize())
+    await settle()
+    expect(localStorage.getItem(key)).toBeNull()
+  })
+
+  it('treats a sash drag that changes sizes as a user layout edit', async () => {
+    renderDock([project(1), project(2)])
+    await settle()
+    const sash = screen.getByTestId('dock-sash')
+    fireEvent.pointerDown(sash)
+    fireEvent.pointerUp(window)
+    await settle()
+    expect(localStorage.getItem(key)).toBeNull()
+
+    fireEvent.pointerDown(sash)
+    act(() => dockviewMockState.api!.simulateResize())
+    fireEvent.pointerUp(window)
+    await settle()
+    expect(localStorage.getItem(key)).not.toBeNull()
+  })
+
+  it('flushes a pending layout save on unmount instead of dropping it', async () => {
+    const view = renderDock([project(1), project(2)])
+    await settle()
+    act(() => dockviewMockState.api!.simulateUserLayoutChange())
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(localStorage.getItem(key)).toBeNull()
+    view.unmount()
+    expect(localStorage.getItem(key)).not.toBeNull()
+  })
+
+  it('exposes the workspace as a labelled region', async () => {
+    renderDock([project(1)])
+    await settle()
+    expect(screen.getByRole('region', { name: '子项目工作区' })).toBeInTheDocument()
   })
 })

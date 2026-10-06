@@ -45,6 +45,8 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
   const realtimeConnected = useCollaboration((state) => state.realtimeStatus === 'connected')
   const projectSeq = useRef(0)
   const projectInFlight = useRef(0)
+  const [projectSettled, setProjectSettled] = useState(0)
+  const caughtUpRow = useRef<string | null>(null)
   const summarySeq = useRef(0)
   const summaryAbort = useRef<AbortController | null>(null)
   const rowUpdatedAt = row?.updatedAt
@@ -90,6 +92,8 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
       setLoadError(true)
     } finally {
       projectInFlight.current -= 1
+      // 请求结束后重新比较主项目行与详情：请求期间到达的较新行不能因“请求进行中”被永久跳过。
+      if (projectInFlight.current === 0) setProjectSettled((value) => value + 1)
     }
   }, [pid])
 
@@ -125,14 +129,17 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
 
   // 主项目列表里的行比已加载的详情新（例如其他人改了状态）时才补拉一次；
   // 本面板自己触发的 refreshAll 会同时刷新详情和主项目，行更新到达时详情已是最新或仍在请求中，不再重复拉取。
+  // 同一行时间戳只补拉一次，服务端返回的详情仍旧时不会反复请求。
   const projectUpdatedAt = project?.updatedAt
   useEffect(() => {
     if (!rowUpdatedAt || !projectUpdatedAt || projectInFlight.current > 0) return
     if (!(Date.parse(rowUpdatedAt) > Date.parse(projectUpdatedAt))) return
+    if (caughtUpRow.current === rowUpdatedAt) return
+    caughtUpRow.current = rowUpdatedAt
     // The group row is newer than the loaded detail, so the detail is refetched from the server.
     // eslint-disable-next-line react/set-state-in-effect
     void loadProject()
-  }, [loadProject, projectUpdatedAt, rowUpdatedAt])
+  }, [loadProject, projectSettled, projectUpdatedAt, rowUpdatedAt])
 
   useEffect(() => {
     if (project?.id !== pid) return

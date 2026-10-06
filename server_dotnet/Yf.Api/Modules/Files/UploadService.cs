@@ -95,7 +95,7 @@ public sealed partial class UploadService(
                 await using var ef = EfDb.Use(conn, tx);
                 var dbNow = await DbNowAsync(ef, ct);
                 if (current.IsInternal && !UploadMaterialRules.IsStepFile(request.FileName)
-                    && !await HasCompanyStepMaterialAsync(ef, request.ProjectId, dbNow, null, ct))
+                    && !await HasCompanyStepMaterialAsync(ef, request.ProjectId, dbNow, includeActiveSessions: true, ct))
                     throw ApiException.BadRequest(UploadMaterialRules.StepRequiredMessage);
                 await EnsureUploadQuotaAsync(ef, current.Id, request.FileSize, dbNow, ct);
                 ef.UploadSessions.Add(new UploadSession
@@ -360,23 +360,23 @@ public sealed partial class UploadService(
         ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / (1024L * 1024 * 1024)} GiB")
         : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024 * 1024):0.##} GiB");
 
-    // 公司发给供应商的非 STEP 文件，需要本子项目已有可用的 C2S STEP 文件，或内部账号正在上传/合并
-    // STEP 文件（同一批次并发上传时 STEP 会话先创建即可）。新建会话时校验，合并时排除本会话再校验一次；
-    // 恢复已有会话不重复校验。
+    // 公司发给供应商的非 STEP 文件，需要本子项目已有可用的 C2S STEP 文件。新建会话时（includeActiveSessions）
+    // 内部账号正在上传/合并的 STEP 会话也计入，支持同一批次并发上传（STEP 会话先创建即可）；合并写入时只认
+    // 已合并、未删除的 STEP 文件，因为进行中的 STEP 会话随后可能被取消或过期。恢复已有会话不重复校验。
     internal static async Task<bool> HasCompanyStepMaterialAsync(
-        YfDbContext ef, ulong projectId, DateTime dbNow, string? excludeSessionId, CancellationToken ct)
+        YfDbContext ef, ulong projectId, DateTime dbNow, bool includeActiveSessions, CancellationToken ct)
     {
         var extensions = UploadMaterialRules.StepFileExtensions.ToArray();
         if (await ef.Files.AnyAsync(file => file.ProjectId == projectId && file.Direction == "C2S"
                 && file.Status == FileStatuses.Available && Enumerable.Contains(extensions, file.Ext), ct))
             return true;
+        if (!includeActiveSessions) return false;
         var active = new[] { "UPLOADING", "MERGING" };
         var sessionNames = await (
             from session in ef.UploadSessions
             join user in ef.Users on session.UploaderId equals user.Id
             where session.ProjectId == projectId && user.UserType == UserTypes.Internal
                 && session.ExpiresAt > dbNow && Enumerable.Contains(active, session.Status)
-                && (excludeSessionId == null || session.Id != excludeSessionId)
             select session.FileName).ToListAsync(ct);
         return sessionNames.Any(UploadMaterialRules.IsStepFile);
     }

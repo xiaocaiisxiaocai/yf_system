@@ -1285,6 +1285,12 @@ export interface SubmitUploadMd5Request {
   fileMd5: string
 }
 
+export interface SubprojectUpdateRequest {
+  name?: string | null
+  description?: string | null
+  expectedUpdatedAt?: string | null
+}
+
 export interface SubprojectUpsertRequest {
   name?: string | null
   description?: string | null

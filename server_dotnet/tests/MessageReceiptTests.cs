@@ -211,6 +211,33 @@ public sealed class MessageReceiptTests
         Assert.DoesNotContain($"target={third.Id}", bodies[0]);
         Assert.Contains($"target={third.Id}", bodies[1]);
         Assert.DoesNotContain($"target={first.Id}", bodies[1]);
+
+        // A worker claim that is still uncommitted while a message merges into the window must not swallow
+        // the message: the claim releases the dedupe key in the same statement, so the merge waits for it
+        // and then starts a fresh summary instead of appending to the claimed row.
+        // The scope's pool holds a single connection; the "worker" uses its own unpooled one.
+        await using var worker = new MySqlConnection(new MySqlConnectionStringBuilder(database.Options.ConnectionString)
+        {
+            Pooling = false,
+        }.ConnectionString);
+        await worker.OpenAsync(ct);
+        await using var claim = await AppDb.BeginTransactionAsync(worker, ct);
+        Assert.Equal(1, await worker.ExecuteAsync(new CommandDefinition("""
+            UPDATE email_outbox SET status='SENDING',dedupe_key=NULL,next_attempt_at=UTC_TIMESTAMP(3)
+            WHERE event_type='MESSAGE_CREATED' AND dedupe_key IS NOT NULL
+            """, transaction: claim, cancellationToken: ct)));
+        var racing = Task.Run(() => service.CreateAsync(conn, supplier, 1001,
+            new MessageCreateRequest { Content = "第四条" }, null, null, ct), ct);
+        await Task.Delay(500, ct);
+        await claim.CommitAsync(ct);
+        var fourth = await racing;
+        var rows = (await conn.QueryAsync<(string Status, string? DedupeKey, string Body)>(new CommandDefinition(
+            "SELECT status,dedupe_key,body FROM email_outbox WHERE event_type='MESSAGE_CREATED' ORDER BY id",
+            cancellationToken: ct))).ToArray();
+        Assert.Equal(3, rows.Length);
+        Assert.DoesNotContain($"target={fourth.Id}", rows[1].Body);
+        Assert.Equal(("PENDING", ProjectNotificationService.MessageSummaryDedupeKey(1001, 101)), (rows[2].Status, rows[2].DedupeKey));
+        Assert.Contains($"target={fourth.Id}", rows[2].Body);
     }
 
     [Fact]

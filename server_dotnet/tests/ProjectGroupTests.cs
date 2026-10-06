@@ -267,6 +267,71 @@ public sealed class ProjectGroupTests
     }
 
     [Fact(Timeout = 90_000)]
+    public async Task SubprojectEditRejectsAStaleExpectedUpdatedAt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_subproject_edit", ct);
+        await database.InitializeBusinessFixtureAsync(ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO suppliers(id,name,status,created_at,updated_at)
+            VALUES(8601,'编辑并发供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
+            VALUES(8602,NULL,'编辑并发课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES(8603,'edit-owner','unused','编辑负责人','edit@example.test','INTERNAL',8602,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(8603,1);
+            INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
+            VALUES(8605,8601,'EDIT-PART','编辑型号',1,'ACTIVE');
+            INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
+            VALUES(8606,'PRIORITY','编辑优先级',NULL,1,'ACTIVE');
+            """, ct);
+        var actor = new CurrentUser(8603, "edit-owner", "INTERNAL", null);
+        var audit = new AuditService([]);
+        var groupStatus = new ProjectGroupStatusService(audit);
+        var groups = new ProjectGroupService(audit, groupStatus);
+        var projects = new ProjectService(audit, database.Options, groupStatus);
+        await using var conn = await database.Database.OpenAsync(ct);
+        using var created = Json(await groups.CreateAsync(conn, actor, new ProjectUpsertRequest
+        {
+            Name = "编辑并发主项目",
+            SupplierId = 8601,
+            WorkOrderNos = ["WO-EDIT"],
+            MachineModel = "编辑机型",
+            RobotPartId = 8605,
+            PriorityId = 8606,
+            ExpectedCompletionDate = "2026-12-01",
+            SubprojectNames = ["编辑并发子项目"],
+        }, null, ct));
+        var projectId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+            "SELECT id FROM projects WHERE project_group_id=@GroupId",
+            new { GroupId = created.RootElement.GetProperty("id").GetUInt64() }, cancellationToken: ct));
+        // The editor's snapshot travels through JSON exactly as the frontend sends it back.
+        var loaded = Json(await projects.DetailAsync(conn, actor, projectId, ct)).RootElement
+            .GetProperty("updatedAt").GetDateTime();
+
+        var first = await projects.UpdateSubprojectAsync(conn, actor, projectId,
+            new SubprojectUpdateRequest { Name = "第一次编辑", ExpectedUpdatedAt = loaded }, null, ct);
+        Assert.Equal("第一次编辑", first.Name);
+        await conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE projects SET updated_at=DATE_ADD(updated_at, INTERVAL 1 SECOND) WHERE id=@Id",
+            new { Id = projectId }, cancellationToken: ct));
+
+        var stale = await Assert.ThrowsAsync<ApiException>(() => projects.UpdateSubprojectAsync(conn, actor, projectId,
+            new SubprojectUpdateRequest { Name = "过期编辑", ExpectedUpdatedAt = first.UpdatedAt }, null, ct));
+        Assert.Equal(409, stale.Status);
+        Assert.Equal(40901, stale.Code);
+        Assert.Equal(ProjectService.SubprojectChangedMessage, stale.Message);
+        Assert.Equal("第一次编辑", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT name FROM projects WHERE id=@Id", new { Id = projectId }, cancellationToken: ct)));
+
+        // Without the field (older clients) the edit still applies.
+        var unchecked_ = await projects.UpdateSubprojectAsync(conn, actor, projectId,
+            new SubprojectUpdateRequest { Name = "无版本编辑" }, null, ct);
+        Assert.Equal("无版本编辑", unchecked_.Name);
+    }
+
+    [Fact(Timeout = 90_000)]
     public async Task EmptyMainProjectCanBeDeletedWithAuditAndDependentRowsCascaded()
     {
         var ct = TestContext.Current.CancellationToken;

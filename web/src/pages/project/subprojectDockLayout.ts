@@ -178,9 +178,26 @@ export function loadSavedLayout(key: string, projects: readonly DockSubproject[]
   }
 }
 
+/**
+ * A comparable key for a serialized layout that ignores which group/tab is active and panel titles; with
+ * `ignoreSizes` it also ignores sizes and floating positions, leaving only the arrangement (groups, tabs,
+ * orientation, floating groups, maximized group). dockview reports active-tab changes and container resizes
+ * through the same layout-change event as real edits; this tells the two apart.
+ */
+export function layoutKey(layout: SerializedDockview, options: { ignoreSizes?: boolean } = {}): string {
+  const omitted = new Set(['activeGroup', 'activeView', 'title'])
+  if (options.ignoreSizes) ['size', 'width', 'height', 'position'].forEach((name) => omitted.add(name))
+  return JSON.stringify(layout, (name, value: unknown) => (omitted.has(name) ? undefined : value))
+}
+
 export function saveLayout(key: string, layout: SerializedDockview) {
+  // Titles are restored from the server on load; subproject names are not kept in browser storage.
+  const panels = Object.fromEntries(Object.entries(layout.panels).map(([id, panel]) => {
+    const { title: _title, ...rest } = panel
+    return [id, rest]
+  }))
   try {
-    storage()?.setItem(key, JSON.stringify(layout))
+    storage()?.setItem(key, JSON.stringify({ ...layout, panels }))
   } catch {
     /* 存储不可用或已满时仅本次会话保留布局。 */
     return

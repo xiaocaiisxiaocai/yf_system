@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, type PointerEvent as ReactPointerEvent, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Badge, Button, Tag } from '@arco-design/web-react'
 import { IconFullscreen, IconFullscreenExit, IconLaunch } from '@arco-design/web-react/icon'
 import {
@@ -11,13 +11,15 @@ import { PROJECT_STATUS, type ProjectSummary } from '../../api/types'
 import SubprojectPane from './SubprojectPane'
 import { SubprojectDockContext, type SubprojectDockContextValue } from './subprojectDockContext'
 import {
-  SUBPROJECT_PANE_COMPONENT, SUBPROJECT_TAB_COMPONENT, buildDefaultLayout, clearSavedLayout, layoutStorageKey, loadSavedLayout,
+  SUBPROJECT_PANE_COMPONENT, SUBPROJECT_TAB_COMPONENT, buildDefaultLayout, clearSavedLayout, layoutKey, layoutStorageKey, loadSavedLayout,
   panelIdFor, projectIdOfPanel, saveLayout, type DockSubproject, type SubprojectPanelParams,
 } from './subprojectDockLayout'
 import './SubprojectDock.css'
 
 const COMPACT_QUERY = '(max-width: 720px)'
 const SAVE_DELAY_MS = 300
+/** 拖动这些元素（分隔条、浮动面板的移动/缩放区域）是用户调整尺寸或位置。 */
+const RESIZE_HANDLE_SELECTOR = '.dv-sash, .dv-resize-container'
 const MAX_GRID_COLUMNS = 3
 
 const dockTheme: DockviewTheme = { ...themeLight, name: 'yf-light', className: 'dockview-theme-light yf-dockview-theme', gap: 8 }
@@ -35,7 +37,11 @@ function SubprojectTab({ params, api }: IDockviewPanelHeaderProps<SubprojectPane
     >
       <span className="subproject-dock-tab-name">{name}</span>
       {project && <Tag size="small" color={status?.color}>{status?.text || project.status}</Tag>}
-      {!!project?.unreadMessages && <Badge count={project.unreadMessages} dot={false} />}
+      {!!project?.unreadMessages && (
+        <span role="img" aria-label={`${project.unreadMessages} 条未读`}>
+          <Badge count={project.unreadMessages} dot={false} />
+        </span>
+      )}
     </div>
   )
 }
@@ -106,33 +112,55 @@ const SubprojectDock = forwardRef<SubprojectDockHandle, Props>(function Subproje
   const programmaticRef = useRef(false)
   /** 只有恢复过保存的布局或用户动过布局后才写入存储；默认布局不落盘。 */
   const customizedRef = useRef(false)
+  /** 最近一次程序化套用后的布局结构（不含活动标签与尺寸）；只切换标签或容器尺寸变化不算用户调整。 */
+  const baselineRef = useRef<string | null>(null)
   const projectsRef = useRef(projects)
   // 布局回调在 dockview 的事件里读取最新子项目；布局副作用先于下面的同步 effect 执行。
   useLayoutEffect(() => { projectsRef.current = projects }, [projects])
   const setKey = useMemo(() => panelSetKey(projects), [projects])
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const pendingSave = useRef<(() => void) | undefined>(undefined)
   const layoutSubscription = useRef<{ dispose: () => void } | null>(null)
 
   const cancelPendingSave = () => {
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = undefined
+    pendingSave.current = undefined
+  }
+
+  /** 卸载或离开页面时立即写入尚未落盘的调整，而不是丢弃。 */
+  const flushPendingSave = () => {
+    const save = pendingSave.current
+    cancelPendingSave()
+    try { save?.() } catch { /* dockview 已销毁时放弃本次保存。 */ }
   }
 
   const scheduleSave = useCallback((api: DockviewApi) => {
     cancelPendingSave()
+    const save = () => {
+      if (customizedRef.current && appliedSetRef.current && api.panels.length) saveLayout(storageKeyRef.current, api.toJSON())
+    }
+    pendingSave.current = save
     saveTimer.current = setTimeout(() => {
       saveTimer.current = undefined
-      if (customizedRef.current && appliedSetRef.current && api.panels.length) saveLayout(storageKeyRef.current, api.toJSON())
+      pendingSave.current = undefined
+      save()
     }, SAVE_DELAY_MS)
   }, [])
 
+  const markCustomized = useCallback((api: DockviewApi) => {
+    customizedRef.current = true
+    scheduleSave(api)
+  }, [scheduleSave])
+
   /** dockview 在微任务里合并派发布局事件；标记在其之后清除，期间的事件都来自本组件的程序化调整。 */
-  const programmatic = (mutate: () => void) => {
+  const programmatic = (api: DockviewApi, mutate: () => void) => {
     programmaticRef.current = true
     try {
       mutate()
     } finally {
+      baselineRef.current = layoutKey(api.toJSON(), { ignoreSizes: true })
       queueMicrotask(() => { programmaticRef.current = false })
     }
   }
@@ -146,11 +174,11 @@ const SubprojectDock = forwardRef<SubprojectDockHandle, Props>(function Subproje
     storageKeyRef.current = `${layoutStorageKey(userId, groupId)}${compact ? ':compact' : ''}`
     appliedSetRef.current = panelSetKey(current)
     cancelPendingSave()
-    if (!current.length) { programmatic(() => api.clear()); return }
+    if (!current.length) { programmatic(api, () => api.clear()); return }
     const saved = preferSaved ? loadSavedLayout(storageKeyRef.current, current) : null
     customizedRef.current = saved !== null
     const layout = saved ?? buildDefaultLayout(current, api.width || 1200, api.height || 640, { singleGroup: compact })
-    programmatic(() => {
+    programmatic(api, () => {
       try {
         api.fromJSON(layout)
       } catch {
@@ -170,7 +198,7 @@ const SubprojectDock = forwardRef<SubprojectDockHandle, Props>(function Subproje
       return
     }
     const wanted = new Set(current.map((project) => panelIdFor(project.id)))
-    programmatic(() => {
+    programmatic(api, () => {
       api.panels
         .filter((panel) => projectIdOfPanel(panel.id) !== null && !wanted.has(panel.id))
         .forEach((panel) => api.removePanel(panel))
@@ -199,15 +227,36 @@ const SubprojectDock = forwardRef<SubprojectDockHandle, Props>(function Subproje
     applyLayout(event.api, true)
     // 用户拖拽、调整大小或切换标签后保存布局，同一账号再次打开同一主项目时恢复。
     layoutSubscription.current?.dispose()
+    // dockview 切换活动标签、改标题、容器尺寸变化时也会派发 onDidLayoutChange：只有结构变化（拖动停靠、
+    // 浮动、最大化）才算用户调整；分隔条与浮动面板的拖动由下面的指针事件判断。
     layoutSubscription.current = event.api.onDidLayoutChange(() => {
-      if (programmaticRef.current) return
-      customizedRef.current = true
-      scheduleSave(event.api)
+      const structure = layoutKey(event.api.toJSON(), { ignoreSizes: true })
+      if (programmaticRef.current) { baselineRef.current = structure; return }
+      if (structure !== baselineRef.current) {
+        baselineRef.current = structure
+        markCustomized(event.api)
+      } else if (customizedRef.current) {
+        scheduleSave(event.api)
+      }
     })
-  }, [applyLayout, scheduleSave])
+  }, [applyLayout, markCustomized, scheduleSave])
+
+  /** 拖动分隔条或浮动面板：松开时尺寸/位置确有变化才算用户调整。 */
+  const onPointerDownCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const api = apiRef.current
+    if (!api || !(event.target instanceof Element) || !event.target.closest(RESIZE_HANDLE_SELECTOR)) return
+    const before = layoutKey(api.toJSON())
+    const finish = () => {
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      if (apiRef.current === api && layoutKey(api.toJSON()) !== before) markCustomized(api)
+    }
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+  }, [markCustomized])
 
   useEffect(() => () => {
-    cancelPendingSave()
+    flushPendingSave()
     layoutSubscription.current?.dispose()
   }, [])
 
@@ -244,7 +293,7 @@ const SubprojectDock = forwardRef<SubprojectDockHandle, Props>(function Subproje
 
   return (
     <SubprojectDockContext.Provider value={context}>
-      <div className="subproject-dock" aria-label="子项目工作区">
+      <div className="subproject-dock" role="region" aria-label="子项目工作区" onPointerDownCapture={onPointerDownCapture}>
         <DockviewReact
           className="subproject-dock-view"
           theme={dockTheme}

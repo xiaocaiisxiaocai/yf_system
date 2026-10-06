@@ -560,20 +560,30 @@ public sealed class FilesRecoveryTests
         Assert.Equal(payload, await File.ReadAllBytesAsync(
             FileStorage.ChunkPath(scope.StorageRoot, initialized.SessionId, 0), ct));
 
-        // Another active internal STEP session satisfies the rule again; the same session then merges.
+        // An in-flight STEP session admits a same-batch file at init only: it may still be cancelled or
+        // expire, so merge keeps rejecting until a STEP file is actually available.
         var step = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("assembly.step", [43]), ct);
+        var stillRejected = await Assert.ThrowsAsync<ApiException>(() =>
+            scope.Upload.MergeAsync(FilesDatabaseScope.Context(), initialized.SessionId, ct));
+        Assert.Equal(UploadMaterialRules.StepRequiredMessage, stillRejected.Message);
+        Assert.Equal("UPLOADING", await scope.StatusAsync(initialized.SessionId));
+        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), step.SessionId!, ct);
+
+        // Once a STEP file is available the same session merges.
+        await scope.ExecuteAsync("UPDATE files SET status='AVAILABLE', deleted_at=NULL WHERE id=900", ct);
         var merged = await scope.Upload.MergeAsync(FilesDatabaseScope.Context(), initialized.SessionId, ct);
         Assert.Equal(Sha256Hex(payload), merged.Sha256);
 
-        // A rejected session can still be cancelled.
-        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), step.SessionId!, ct);
+        // Same-batch file admitted by an in-flight STEP session whose STEP is later abandoned: merge is
+        // rejected and the session can still be cancelled.
+        await scope.ExecuteAsync("UPDATE files SET status='DELETED', deleted_at=UTC_TIMESTAMP(6) WHERE id=900", ct);
         var second = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("assembly.step", [44]), ct);
         var other = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("other.bin", [45]), ct);
-        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), second.SessionId!, ct);
         using (var body = new MemoryStream(new byte[] { 45 }))
             await scope.Upload.PutChunkAsync(FilesDatabaseScope.ChunkContext([45]), other.SessionId, 0, body, ct);
         await scope.Upload.SubmitMd5Async(FilesDatabaseScope.Context(), other.SessionId, new SubmitUploadMd5Request(Md5Hex([45])), ct);
         await Assert.ThrowsAsync<ApiException>(() => scope.Upload.MergeAsync(FilesDatabaseScope.Context(), other.SessionId, ct));
+        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), second.SessionId!, ct);
         await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), other.SessionId, ct);
         Assert.Equal("ABORTED", await scope.StatusAsync(other.SessionId));
     }

@@ -12,6 +12,7 @@
 - `Yf.Api/Modules/Admin`：组织、账号、角色、供应商和供应商账号；权限委派上限与最后管理员保护。
 - `Yf.Api/Modules/Projects`：主项目、子项目、提交/确认/驳回/撤回、留言/已读、动态、工作台。
 - `Yf.Api/Modules/Files`：分片上传与续传、合并校验、下载、文档/视频 Range 预览、批量 ZIP、软删除和垃圾清理。
+  文件内容按 SHA-256 存为共享 blob。重复上传已登记的内容时，只有磁盘上的 blob 文件大小不符才会用本次已校验的暂存文件修复；大小相同但内容损坏的 blob 不会被替换（Windows 下正在下载的文件无法替换，属于有意取舍），只能由后台 blob 校验（`BlobVerifyBytesPerCycle`）记录错误日志后从备份恢复。
 - `Yf.Api/Modules/Oem`：OEM/公司双向传递、审批、隔离存储、文件格式与归档结构检查、安全交付、删除、通知、审计和独立存储。
 - `Yf.Api/Modules/System`：参数、日志、邮件 outbox 与 TLS SMTP 后台发送。
 - `Yf.Api/Infrastructure`：EF Core/MySQL、统一错误、事务权限门禁、审计及空库初始化。

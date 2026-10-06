@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../api/client', () => ({
+  getApiErrorCode: (error: unknown) => (error as { response?: { data?: { code?: number } } } | undefined)?.response?.data?.code,
   default: {
     get: (...args: [string, unknown?]) => mocks.get(...args),
     post: mocks.post, put: mocks.put, delete: mocks.delete,

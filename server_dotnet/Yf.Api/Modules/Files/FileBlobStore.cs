@@ -167,7 +167,10 @@ internal static class FileBlobStore
             // A registered blob is immutable and may be streamed right now. Identical SHA-256 and size
             // mean identical content by construction, so a same-size canonical file is never replaced
             // (Windows refuses to replace a file that a download holds open). Only a size mismatch
-            // (external damage) is repaired from the caller's verified staging file.
+            // (external damage) is repaired from the caller's verified staging file. Trade-off: a same-size
+            // but corrupted canonical file (bit rot, manual tampering) is NOT repaired by a re-upload; it is
+            // only reported by the background blob verification (FilesMaintenanceService, error log) and
+            // must be restored from backup.
             await EnsureCanonicalAvailableAsync(root, canonicalPath, prepared,
                 CanonicalReplacement.WhenSizeDiffers, ct);
             blob.State = FileBlobStates.Ready;
