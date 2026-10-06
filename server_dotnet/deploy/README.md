@@ -24,7 +24,7 @@
 
 ### OEM 与独立存储
 
-完整 OEM 配置、归档结构检查和验收边界见 [OEM 当前集成与部署](../docs/OEM当前集成与部署-2026-10-05.md)。`OemStorageRoot` 必须预先创建为本地独立目录；安装脚本核对它与包、站点、配置和 `StorageRoot` 双向不重叠，并将 ACL 限制为 SYSTEM、Administrators 与应用池身份。上传内容仍进行普通文件格式和归档结构检查（包括 SharpCompress 支持的格式），该检查不等同于恶意软件扫描。
+完整 OEM 配置、归档结构检查和验收边界见 [OEM 当前集成与部署](../docs/OEM当前集成与部署-2026-10-05.md)。`OemStorageRoot` 必须预先创建为本地独立目录；安装脚本核对它与包、站点、配置、`StorageRoot` 和日志目录双向不重叠（安装不涉及备份目录；备份目录与 OEM 根的隔离由 `maintain-iis.ps1` 在维护时核对），并将 ACL 限制为 SYSTEM、Administrators 与应用池身份。上传内容仍进行普通文件格式和归档结构检查（包括 SharpCompress 支持的格式），该检查不等同于恶意软件扫描。
 
 发布包不包含病毒库、扫描服务安装/更新脚本或病毒扫描验证步骤。
 

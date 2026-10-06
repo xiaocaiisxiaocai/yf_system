@@ -178,6 +178,34 @@ class ScriptSafetyTests(unittest.TestCase):
             self.assertIn("Payload digest mismatch", result.stdout + result.stderr)
             self.assertEqual(before, {p.name: p.read_bytes() for p in package.iterdir()})
 
+    def test_release_verifier_requires_third_party_license_payload(self):
+        TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="yf_verify_licenses_", dir=TEST_TEMP_ROOT) as directory:
+            package = Path(directory) / "license-fixture"
+            present = ["Yf.Api.dll", "Yf.Api.runtimeconfig.json", "web.config", "wwwroot/index.html",
+                       "precompressed-assets.json", "install-iis.ps1", "maintain-iis.ps1",
+                       "maintenance-common.ps1", "README.md", "SharpCompress.dll",
+                       "licenses/SharpCompress-LICENSE.txt"]
+            entries = []
+            for name in present:
+                path = package / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(name.encode("utf-8"))
+                entries.append({"path": name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                "bytes": path.stat().st_size})
+            (package / "manifest.json").write_text(json.dumps({"files": entries}), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("verify-release.py")), str(package)],
+                capture_output=True, text=True, timeout=10,
+            )
+            output = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("license payload is missing", output)
+            for name in ("THIRD-PARTY-NOTICES.md", "licenses/Apache-2.0.txt",
+                         "licenses/Apache-Commons-Compress-NOTICE.txt"):
+                self.assertIn(name, output)
+            self.assertNotIn("licenses/SharpCompress-LICENSE.txt", output)
+
 
 if __name__ == "__main__":
     unittest.main()
