@@ -46,6 +46,8 @@ public sealed class OemRefreshToken
     public DateTime SessionExpiresAt { get; set; }
     public DateTime ExpiresAt { get; set; }
     public bool Revoked { get; set; }
+    /// <summary>Why the token was revoked (<see cref="Yf.Api.Infrastructure.Entities.RefreshRevokeReasons"/>); null while active or for legacy rows.</summary>
+    public string? RevokeReason { get; set; }
     public string? Ip { get; set; }
     public DateTime CreatedAt { get; set; }
 }

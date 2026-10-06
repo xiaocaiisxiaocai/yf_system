@@ -37,8 +37,8 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
         CurrentUser actor, string? keyword, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
-        await ManagementAuthorization.RequireAsync(context, actor, "dept:leader_manage", ct);
+        // A read-only lookup: the non-locking precheck avoids queueing on the exclusive management gate.
+        await ManagementAuthorization.PrecheckAsync(context, actor, "dept:leader_manage", ct);
         var query = context.Users.AsNoTracking().Where(user =>
             user.Status == AccountStatuses.Active && user.UserType == UserTypes.Internal);
         var term = string.IsNullOrWhiteSpace(keyword) ? null : keyword.Trim();
@@ -62,7 +62,6 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
                     .Select(department => department.Name)
                     .SingleOrDefault()))
             .ToArrayAsync(ct);
-        await transaction.CommitAsync(ct);
         return options;
     }
 
@@ -248,6 +247,9 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
         var row = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
         if (await context.Departments.AnyAsync(d => d.ParentId == id, ct)) throw ApiException.BadRequest("请先删除下级组织节点");
         if (await context.Users.AnyAsync(u => u.DepartmentId == id, ct)) throw ApiException.BadRequest("该组织仍有用户，请先调整用户归属或禁用组织");
+        // oem_flow_template_scopes.department_id has no FK, so check it explicitly instead of orphaning the binding.
+        if (await context.OemFlowTemplateScopes.AnyAsync(scope => scope.DepartmentId == id, ct))
+            throw ApiException.BadRequest("该组织仍绑定 OEM 审批模板，请先在审批模板中解除绑定");
         await audit.WriteAsync(context.Database.Connection(), context.Database.Transaction(), actor.Id, "DEPT_DELETE", "department", id, new { row.Name, row.Kind, targetName = row.Name, changes = Array.Empty<AuditChange>() }, null, ct);
         await context.Departments.Where(d => d.Id == id).ExecuteDeleteAsync(ct);
         await tx.CommitAsync(ct);

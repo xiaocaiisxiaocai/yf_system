@@ -203,11 +203,14 @@ public sealed class OemNotificationHandler(AppOptions options) : IOemEventHandle
         var fullSubject = Truncate("[OEM 文件传递] " + subject, 255);
         var key = Truncate(dedupeKey, 128);
         // Idempotent enqueue (a documented raw-SQL boundary): a repeated event never mails twice.
-        await uow.Db.Database.ExecuteSqlInterpolatedAsync($@"INSERT IGNORE INTO email_outbox
+        // Only a dedupe-key conflict is ignored; unlike INSERT IGNORE, truncation or other data
+        // errors still fail the business transaction.
+        await uow.Db.Database.ExecuteSqlInterpolatedAsync($@"INSERT INTO email_outbox
             (event_type, dedupe_key, project_id, recipient_user_id, recipient_email, subject, body, status, retry_count, next_attempt_at,
              created_at, recipient_realm, recipient_account_id, oem_transfer_id)
             VALUES ({eventType}, {key}, NULL, NULL, {recipient.Email.Trim()}, {fullSubject}, {body}, 'PENDING', 0, NULL,
-             UTC_TIMESTAMP(), {recipient.Realm}, {recipient.Id}, {transfer.Id})", ct);
+             UTC_TIMESTAMP(3), {recipient.Realm}, {recipient.Id}, {transfer.Id})
+            ON DUPLICATE KEY UPDATE id = id", ct);
     }
 
     private static string HumanSize(ulong bytes) => bytes switch

@@ -49,8 +49,10 @@ public sealed class OemAuthService(
         OemAccount? candidate;
         await using (var lookup = await dbFactory.CreateDbContextAsync(ct))
             candidate = await lookup.OemAccounts.AsNoTracking().SingleOrDefaultAsync(account => account.EmployeeNo == employeeNo, ct);
-        var matches = await PasswordService.VerifyAsync(request.Password,
-            candidate?.PasswordHash ?? await PasswordService.TimingDummyHashAsync(), ct);
+        // Await the same-cost dummy even when the account exists, so the first unknown-account
+        // request cannot be distinguished by the one-time dummy hash calculation.
+        var dummyHash = await PasswordService.TimingDummyHashAsync();
+        var matches = await PasswordService.VerifyAsync(request.Password, candidate?.PasswordHash ?? dummyHash, ct);
         if (candidate is null)
         {
             await using var auditContext = await dbFactory.CreateDbContextAsync(ct);
@@ -132,11 +134,16 @@ public sealed class OemAuthService(
         {
             if (row.Revoked)
             {
-                // Reuse of a rotated token: revoke the whole login family.
-                await RevokeSessionAsync(context, row.AccountId, row.SessionId, ct);
+                // Presenting any revoked token kills what is left of its family, but only reuse of a
+                // rotated token is a replay signal; a token revoked by logout, password change, an
+                // administrator or the session cap (or a legacy row without a reason) is simply stale.
+                var replay = row.RevokeReason == RefreshRevokeReasons.Rotated;
+                await RevokeSessionAsync(context, row.AccountId, row.SessionId,
+                    replay ? RefreshRevokeReasons.Replay : row.RevokeReason ?? RefreshRevokeReasons.Replay, ct);
                 await tx.CommitAsync(ct);
-                await AuditBestEffortAsync(context, account, account.EmployeeNo, "OEM_LOGIN_FAILED", clientIp,
-                    new { reason = "refresh token reuse detected" }, ct);
+                if (replay)
+                    await AuditBestEffortAsync(context, account, account.EmployeeNo, "OEM_LOGIN_FAILED", clientIp,
+                        new { reason = "refresh token reuse detected" }, ct);
             }
             throw ApiException.Unauthorized("登录状态已失效，请重新登录");
         }
@@ -144,6 +151,7 @@ public sealed class OemAuthService(
         if (!await context.OemCompanies.AnyAsync(company => company.Id == account.OemCompanyId && company.Status == OemStatus.Active, ct))
             throw ApiException.Unauthorized("所属厂商已被禁用");
         row.Revoked = true;
+        row.RevokeReason = RefreshRevokeReasons.Rotated;
         await context.SaveChangesAsync(ct);
         var next = await IssueRefreshAsync(context, account.Id, row.SessionId, clientIp, now, row.SessionExpiresAt, ct);
         var access = tokens.IssueAccess(account.Id, account.EmployeeNo, row.SessionId, OemRealms.Oem);
@@ -188,7 +196,7 @@ public sealed class OemAuthService(
         {
             var account = await context.OemAccounts.AsNoTracking().SingleOrDefaultAsync(item => item.Id == target.AccountId, ct);
             if (account is null) continue;
-            if (await RevokeSessionAsync(context, target.AccountId, target.SessionId, ct) > 0)
+            if (await RevokeSessionAsync(context, target.AccountId, target.SessionId, RefreshRevokeReasons.Logout, ct) > 0)
                 await audit.WriteAsync(context.Database.Connection(), context.Database.Transaction(), null, "OEM_LOGOUT", null, null,
                     null, clientIp, ct, null, RealmActor(account));
         }
@@ -229,7 +237,7 @@ public sealed class OemAuthService(
         account.LockedUntil = null;
         account.UpdatedAt = now;
         await context.SaveChangesAsync(ct);
-        await RevokeAllAsync(context, account.Id, ct);
+        await RevokeAllAsync(context, account.Id, RefreshRevokeReasons.PasswordChanged, ct);
         await audit.WriteAsync(context.Database.Connection(), context.Database.Transaction(), null, "OEM_PASSWORD_CHANGE", null, null,
             null, null, ct, null, RealmActor(account));
         await tx.CommitAsync(ct);
@@ -249,13 +257,22 @@ public sealed class OemAuthService(
             && !token.Revoked && token.ExpiresAt > now && token.SessionExpiresAt > now, ct);
 
     /// <summary>Revokes every refresh session of an account (disable, password reset/change).</summary>
-    internal static Task<int> RevokeAllAsync(YfDbContext context, ulong accountId, CancellationToken ct) =>
-        context.OemRefreshTokens.Where(token => token.AccountId == accountId && !token.Revoked)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(token => token.Revoked, true), ct);
+    /// <param name="reason">One of <see cref="RefreshRevokeReasons"/>; only <see cref="RefreshRevokeReasons.Rotated"/> marks later reuse as replay.</param>
+    internal static Task<int> RevokeAllAsync(YfDbContext context, ulong accountId, string reason, CancellationToken ct) =>
+        Revoke(context.OemRefreshTokens.Where(token => token.AccountId == accountId && !token.Revoked), reason, ct);
 
-    private static Task<int> RevokeSessionAsync(YfDbContext context, ulong accountId, string sessionId, CancellationToken ct) =>
-        context.OemRefreshTokens.Where(token => token.AccountId == accountId && token.SessionId == sessionId && !token.Revoked)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(token => token.Revoked, true), ct);
+    /// <summary>Revokes every refresh session of every account of one vendor in a single set-based update.</summary>
+    internal static Task<int> RevokeCompanyAsync(YfDbContext context, ulong companyId, string reason, CancellationToken ct) =>
+        Revoke(context.OemRefreshTokens.Where(token => !token.Revoked
+            && context.OemAccounts.Any(account => account.Id == token.AccountId && account.OemCompanyId == companyId)), reason, ct);
+
+    private static Task<int> RevokeSessionAsync(YfDbContext context, ulong accountId, string sessionId, string reason, CancellationToken ct) =>
+        Revoke(context.OemRefreshTokens.Where(token => token.AccountId == accountId && token.SessionId == sessionId && !token.Revoked), reason, ct);
+
+    private static Task<int> Revoke(IQueryable<OemRefreshToken> tokens, string reason, CancellationToken ct) =>
+        tokens.ExecuteUpdateAsync(setters => setters
+            .SetProperty(token => token.Revoked, true)
+            .SetProperty(token => token.RevokeReason, reason), ct);
 
     private static Task<OemAccount?> LockAccountAsync(YfDbContext context, ulong id, CancellationToken ct) =>
         context.OemAccounts.FromSqlInterpolated($"SELECT * FROM oem_accounts WHERE id = {id} FOR UPDATE").SingleOrDefaultAsync(ct);
@@ -286,9 +303,9 @@ public sealed class OemAuthService(
         var evicted = families.OrderBy(family => family.CreatedAt).ThenBy(family => family.FirstId)
             .Take(families.Count - options.MaxActiveSessionsPerUser)
             .Select(family => family.SessionId).ToArray();
-        await context.OemRefreshTokens
-            .Where(token => token.AccountId == accountId && !token.Revoked && evicted.Contains(token.SessionId))
-            .ExecuteUpdateAsync(setters => setters.SetProperty(token => token.Revoked, true), ct);
+        await Revoke(context.OemRefreshTokens
+            .Where(token => token.AccountId == accountId && !token.Revoked && evicted.Contains(token.SessionId)),
+            RefreshRevokeReasons.SessionCap, ct);
         return evicted.Length;
     }
 

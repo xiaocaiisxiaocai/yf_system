@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Data;
@@ -26,13 +27,15 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         // Account managers need the vendor list to reach the accounts they manage.
-        if (!await OemAuthorizer.HasAsync(uow, await OemAuthorizer.RecheckAsync(uow, actor, ct), OemPermissions.CompanyManage, ct))
-            await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
+        if (actor is not InternalOemActor) throw ApiException.Forbidden("仅公司内部账号可以执行该操作");
+        var current = (InternalOemActor)await OemAuthorizer.RecheckAsync(uow, actor, ct);
+        var codes = await OemAuthorizer.InternalPermissionsAsync(uow, current.User.Id, ct);
+        if (!codes.Contains(OemPermissions.CompanyManage) && !codes.Contains(OemPermissions.AccountManage)) throw ApiException.Forbidden();
         var query = uow.Db.OemCompanies.AsNoTracking();
         if (!string.IsNullOrWhiteSpace(keyword))
         {
-            var pattern = "%" + keyword.Trim() + "%";
-            query = query.Where(company => EF.Functions.Like(company.Name, pattern));
+            var pattern = QueryValues.ContainsPattern(keyword.Trim());
+            query = query.Where(company => EF.Functions.Like(company.Name, pattern, QueryValues.LikeEscape));
         }
         if (!string.IsNullOrWhiteSpace(status))
         {
@@ -133,10 +136,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             await uow.Db.SaveChangesAsync(ct);
             var revoked = 0;
             if (target == OemStatus.Disabled)
-            {
-                var accountIds = await uow.Db.OemAccounts.Where(account => account.OemCompanyId == id).Select(account => account.Id).ToArrayAsync(ct);
-                foreach (var accountId in accountIds) revoked += await OemAuthService.RevokeAllAsync(uow.Db, accountId, ct);
-            }
+                revoked = await OemAuthService.RevokeCompanyAsync(uow.Db, id, RefreshRevokeReasons.Admin, ct);
             await audit.WriteAsync(uow, current, "OEM_COMPANY_STATUS", "oem_company", id, new
             {
                 targetName = company.Name, revokedSessions = revoked,
@@ -246,7 +246,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             account.Status = target;
             account.UpdatedAt = uow.Now;
             await uow.Db.SaveChangesAsync(ct);
-            var revoked = target == OemStatus.Disabled ? await OemAuthService.RevokeAllAsync(uow.Db, id, ct) : 0;
+            var revoked = target == OemStatus.Disabled ? await OemAuthService.RevokeAllAsync(uow.Db, id, RefreshRevokeReasons.Admin, ct) : 0;
             await audit.WriteAsync(uow, current, "OEM_ACCOUNT_STATUS", "oem_account", id, new
             {
                 targetName = $"{account.RealName}（{account.EmployeeNo}）", revokedSessions = revoked,
@@ -271,7 +271,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         account.LockedUntil = null;
         account.UpdatedAt = uow.Now;
         await uow.Db.SaveChangesAsync(ct);
-        var revoked = await OemAuthService.RevokeAllAsync(uow.Db, id, ct);
+        var revoked = await OemAuthService.RevokeAllAsync(uow.Db, id, RefreshRevokeReasons.Admin, ct);
         await audit.WriteAsync(uow, current, "OEM_ACCOUNT_RESET_PASSWORD", "oem_account", id,
             new { targetName = $"{account.RealName}（{account.EmployeeNo}）", revokedSessions = revoked }, ct);
         await uow.CommitAsync(ct);

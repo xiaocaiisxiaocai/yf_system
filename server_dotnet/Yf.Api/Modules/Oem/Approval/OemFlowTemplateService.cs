@@ -336,8 +336,10 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
     private static async Task MakeDefaultAsync(OemUnitOfWork uow, OemFlowTemplate template, CancellationToken ct)
     {
         if (template.Status != OemStatus.Active) throw ApiException.BadRequest("停用的模板不能设为默认模板");
-        // Lock every current default so two concurrent promotions serialise.
-        var defaults = await uow.Db.OemFlowTemplates.FromSqlRaw("SELECT * FROM oem_flow_templates WHERE is_default=1 FOR UPDATE").ToArrayAsync(ct);
+        // Lock every current default so two concurrent promotions serialise; idx_oem_flow_templates_default
+        // keeps the lock to the default rows and ORDER BY id takes them in a deterministic order.
+        var defaults = await uow.Db.OemFlowTemplates
+            .FromSqlRaw("SELECT * FROM oem_flow_templates WHERE is_default=1 ORDER BY id FOR UPDATE").ToArrayAsync(ct);
         foreach (var previous in defaults.Where(item => item.Id != template.Id))
         {
             previous.IsDefault = false;

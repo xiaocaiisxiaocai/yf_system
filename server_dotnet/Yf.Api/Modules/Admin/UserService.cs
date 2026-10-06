@@ -292,6 +292,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             || await context.OemFlowTemplateNodeUsers.AnyAsync(x => x.UserId == id, ct)
             || await context.OemFlowInstances.AnyAsync(x => x.InitiatorUserId == id, ct)
             || await context.OemFlowTasks.AnyAsync(x => x.ApproverUserId == id || x.ReassignedBy == id, ct)
+            || await context.OemUploadSessions.AnyAsync(x => x.UploaderRealm == "internal" && x.UploaderId == id, ct)
             || await context.OemDownloadSessions.AnyAsync(x => x.ActorRealm == "internal" && x.ActorId == id, ct);
         if (hasHistory) throw ApiException.BadRequest("该账号仍有业务或历史记录，请禁用账号，不要删除");
     }
