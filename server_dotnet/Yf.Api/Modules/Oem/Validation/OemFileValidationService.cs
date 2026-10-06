@@ -14,6 +14,12 @@ namespace Yf.Api.Modules.Oem.Validation;
 /// that lost its lease — for example during an IIS overlapped recycle — can never
 /// write a result. Temporary failures back off and retry; only exhausted retries,
 /// or invalid content are final, and every final failure stays quarantined.
+/// <para>
+/// Row-lock order shared by every OEM writer: transfer → file → validation job / promotion.
+/// Purge, reconcile and transfer operations lock the transfer and then the file before
+/// touching jobs, so a job or promotion row is always resolved without a lock first and
+/// locked last (then re-validated). Taking them in any other order can deadlock.
+/// </para>
 /// </summary>
 public sealed class OemFileValidationService(
     IDbContextFactory<YfDbContext> dbFactory,
@@ -27,6 +33,11 @@ public sealed class OemFileValidationService(
 {
     private static readonly string Owner = $"{Environment.MachineName}:{Environment.ProcessId}";
 
+    /// <summary>Upper bound for handing a claimed job back during shutdown.</summary>
+    internal static readonly TimeSpan ReleaseTimeout = TimeSpan.FromSeconds(10);
+
+    private readonly OemItemBackoff<ulong> backoff = new();
+
     public async Task<int> RunOnceAsync(CancellationToken ct)
     {
         if (!storage.IsConfigured) return 0;
@@ -34,34 +45,71 @@ public sealed class OemFileValidationService(
         await using (var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct))
         {
             if ((await OemSettings.LoadAsync(uow.Db, ct)).ReconcileRequired) return 0;
+            var suppressed = backoff.Suppressed();
             candidates = await uow.Db.OemFileScanJobs.AsNoTracking()
                 .Where(job => (job.Status == ValidationJobStatuses.Pending && (job.NextAttemptAt == null || job.NextAttemptAt <= uow.Now))
                     || (job.Status == ValidationJobStatuses.Running && job.LeaseUntil <= uow.Now))
+                .Where(job => !suppressed.Contains(job.Id))
                 .OrderBy(job => job.Id).Select(job => job.Id).Take(4).ToArrayAsync(ct);
         }
         var processed = 0;
         foreach (var jobId in candidates)
         {
-            var claim = await ClaimAsync(jobId, ct);
-            if (claim is null) continue;
-            var result = await ExecuteAsync(claim, ct);
-            await CompleteAsync(claim, result, ct);
-            processed++;
+            ct.ThrowIfCancellationRequested();
+            Claim? claim = null;
+            try
+            {
+                claim = await ClaimAsync(jobId, ct);
+                if (claim is null) continue;
+                var result = await ExecuteAsync(claim, ct);
+                ct.ThrowIfCancellationRequested();
+                await CompleteAsync(claim, result, ct);
+                backoff.Succeeded(jobId);
+                processed++;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Shutdown: hand the job back now instead of leaving it RUNNING until its
+                // (size-scaled, possibly very long) lease expires after the restart.
+                if (claim is not null) await ReleaseAsync(claim);
+                throw;
+            }
+            catch (Exception error)
+            {
+                // One job that keeps failing must not block the others behind it.
+                backoff.Failed(jobId);
+                logger.LogError(error, "OEM validation job {JobId} failed; it is retried later.", jobId);
+            }
         }
         return processed;
     }
 
-    private sealed record Claim(ulong JobId, ulong Version, ulong FileId, string StoragePath, string Extension, ulong Size, string Sha256);
+    internal sealed record Claim(ulong JobId, ulong Version, ulong FileId, string StoragePath, string Extension, ulong Size, string Sha256);
 
-    private async Task<Claim?> ClaimAsync(ulong jobId, CancellationToken ct)
+    private sealed record LockedJob(OemTransfer Transfer, OemTransferFile File, OemFileScanJob Job);
+
+    /// <summary>Locks a job's transfer, file and job rows in the global order (transfer → file → job).</summary>
+    private static async Task<LockedJob?> LockJobAsync(OemUnitOfWork uow, ulong jobId, CancellationToken ct)
+    {
+        var target = await uow.Db.OemFileScanJobs.AsNoTracking().Where(job => job.Id == jobId)
+            .Join(uow.Db.OemTransferFiles, job => job.FileId, file => file.Id, (job, file) => new { job.FileId, file.TransferId })
+            .SingleOrDefaultAsync(ct);
+        if (target is null) return null;
+        var transfer = await OemTransferProgression.LockTransferAsync(uow, target.TransferId, ct);
+        var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {target.FileId} FOR UPDATE").SingleAsync(ct);
+        var job = await uow.Db.OemFileScanJobs.FromSqlInterpolated($"SELECT * FROM oem_file_scan_jobs WHERE id = {jobId} FOR UPDATE").SingleOrDefaultAsync(ct);
+        // A job never changes its file; re-validate after locking rather than trusting the unlocked read.
+        return job is null || job.FileId != file.Id || file.TransferId != transfer.Id ? null : new LockedJob(transfer, file, job);
+    }
+
+    internal async Task<Claim?> ClaimAsync(ulong jobId, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
-        var job = await uow.Db.OemFileScanJobs.FromSqlInterpolated($"SELECT * FROM oem_file_scan_jobs WHERE id = {jobId} FOR UPDATE").SingleOrDefaultAsync(ct);
-        if (job is null) return null;
+        if (await LockJobAsync(uow, jobId, ct) is not { } locked) return null;
+        var (file, job) = (locked.File, locked.Job);
         var claimable = (job.Status == ValidationJobStatuses.Pending && (job.NextAttemptAt is null || job.NextAttemptAt <= uow.Now))
             || (job.Status == ValidationJobStatuses.Running && job.LeaseUntil <= uow.Now);
         if (!claimable) return null;
-        var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {job.FileId} FOR UPDATE").SingleAsync(ct);
         if (file.PayloadStatus != PayloadStatuses.Quarantined || file.Sha256 != job.FileSha256 || file.SizeBytes != job.FileSizeBytes)
         {
             // The file left quarantine or changed: the job is obsolete and must never produce a verdict.
@@ -83,6 +131,40 @@ public sealed class OemFileValidationService(
         await uow.Db.SaveChangesAsync(ct);
         await uow.CommitAsync(ct);
         return new Claim(job.Id, job.ConcurrencyVersion, file.Id, file.StoragePath, file.Ext, file.SizeBytes, file.Sha256);
+    }
+
+    /// <summary>
+    /// Returns a claimed job to PENDING when the worker stops, so it is picked up right after
+    /// a restart. Fencing is preserved: nothing changes unless this worker still holds the
+    /// claim, and the version bump invalidates the abandoned attempt. Runs on its own short
+    /// timeout because the worker's token is already cancelled; on failure the lease simply expires.
+    /// </summary>
+    internal async Task ReleaseAsync(Claim claim)
+    {
+        using var timeout = new CancellationTokenSource(ReleaseTimeout);
+        try
+        {
+            await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, timeout.Token);
+            if (await LockJobAsync(uow, claim.JobId, timeout.Token) is not { } locked) return;
+            var (file, job) = (locked.File, locked.Job);
+            if (job.ConcurrencyVersion != claim.Version || job.Status != ValidationJobStatuses.Running) return;
+            job.Status = ValidationJobStatuses.Pending;
+            job.LeaseOwner = null;
+            job.LeaseUntil = null;
+            job.NextAttemptAt = null;
+            job.ConcurrencyVersion++;
+            if (file.PayloadStatus == PayloadStatuses.Quarantined && file.ScanStatus == ValidationStatuses.Validating)
+            {
+                file.ScanStatus = ValidationStatuses.Pending;
+                file.UpdatedAt = uow.Now;
+            }
+            await uow.Db.SaveChangesAsync(timeout.Token);
+            await uow.CommitAsync(timeout.Token);
+        }
+        catch (Exception error)
+        {
+            logger.LogWarning(error, "OEM validation job {JobId} could not be released on shutdown; it is reclaimed after its lease expires.", claim.JobId);
+        }
     }
 
     private async Task<ValidationResult> ExecuteAsync(Claim claim, CancellationToken ct)
@@ -140,12 +222,11 @@ public sealed class OemFileValidationService(
         string? promotionId = null;
         await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))
         {
-            var job = await uow.Db.OemFileScanJobs.FromSqlInterpolated($"SELECT * FROM oem_file_scan_jobs WHERE id = {claim.JobId} FOR UPDATE").SingleAsync(ct);
+            if (await LockJobAsync(uow, claim.JobId, ct) is not { } locked) return;
+            var (transfer, file, job) = (locked.Transfer, locked.File, locked.Job);
+            var transferId = transfer.Id;
             // Fencing: the lease was lost to another worker, or the job was changed meanwhile.
             if (job.ConcurrencyVersion != claim.Version || job.Status != ValidationJobStatuses.Running) return;
-            var transferId = await uow.Db.OemTransferFiles.Where(item => item.Id == claim.FileId).Select(item => item.TransferId).SingleAsync(ct);
-            var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
-            var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {claim.FileId} FOR UPDATE").SingleAsync(ct);
             var settings = await OemSettings.LoadAsync(uow.Db, ct);
             if (file.PayloadStatus != PayloadStatuses.Quarantined)
             {
@@ -232,7 +313,8 @@ public sealed class OemFileValidationService(
         if (promotionId is not null) await promotions.PromoteAsync(promotionId, ct);
     }
 
-    private TimeSpan Timeout(ulong sizeBytes)
+    /// <summary>Time budget for reading and hashing a file of the given size (validation timeout, promotion lease).</summary>
+    internal static TimeSpan Timeout(ulong sizeBytes)
     {
         var gigabytes = Math.Ceiling(sizeBytes / (1024d * 1024 * 1024));
         return TimeSpan.FromMinutes(15 + 2 * gigabytes);
@@ -264,6 +346,7 @@ public sealed class OemPromotionService(
 {
     private static readonly string Owner = $"{Environment.MachineName}:{Environment.ProcessId}";
     private const int MaximumAttempts = 10;
+    private readonly OemItemBackoff<string> backoff = new();
 
     public async Task<int> RunOnceAsync(CancellationToken ct)
     {
@@ -272,14 +355,28 @@ public sealed class OemPromotionService(
         await using (var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct))
         {
             if ((await OemSettings.LoadAsync(uow.Db, ct)).ReconcileRequired) return 0;
+            var suppressed = backoff.Suppressed();
             candidates = await uow.Db.OemFilePromotions.AsNoTracking()
                 .Where(item => item.Status == PromotionStatuses.Prepared && (item.LeaseUntil == null || item.LeaseUntil <= uow.Now)
                     && (item.NextAttemptAt == null || item.NextAttemptAt <= uow.Now))
+                .Where(item => !suppressed.Contains(item.Id))
                 .OrderBy(item => item.CreatedAt).Select(item => item.Id).Take(10).ToArrayAsync(ct);
         }
         var done = 0;
         foreach (var id in candidates)
-            if (await PromoteAsync(id, ct)) done++;
+        {
+            try
+            {
+                if (await PromoteAsync(id, ct)) done++;
+                backoff.Succeeded(id);
+            }
+            catch (Exception error) when (!ct.IsCancellationRequested)
+            {
+                // A promotion that keeps throwing is backed off so the later ones still run.
+                backoff.Failed(id);
+                logger.LogError(error, "OEM promotion {PromotionId} failed; it is retried later.", id);
+            }
+        }
         return done;
     }
 
@@ -291,7 +388,9 @@ public sealed class OemPromotionService(
             var promotion = await LockAsync(uow, promotionId, ct);
             if (promotion is null || promotion.Status != PromotionStatuses.Prepared || promotion.LeaseUntil > uow.Now) return false;
             promotion.LeaseOwner = Owner;
-            promotion.LeaseUntil = uow.Now.AddMinutes(10);
+            // Scales with the file like the validation timeout; the worst case hashes it twice
+            // (an existing target is verified, then the final check runs).
+            promotion.LeaseUntil = uow.Now.Add(OemFileValidationService.Timeout(promotion.SizeBytes) * 2);
             promotion.ConcurrencyVersion++;
             await uow.Db.SaveChangesAsync(ct);
             await uow.CommitAsync(ct);
@@ -323,19 +422,25 @@ public sealed class OemPromotionService(
             }
             if (failure is null && !lost) failure = await ValidateTargetAsync(target, claim.SizeBytes, claim.FileSha256, ct);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await ReleaseAsync(claim);
+            throw;
+        }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             failure = "移动文件失败";
-            logger.LogWarning("OEM promotion {PromotionId} failed ({ErrorType}).", promotionId, error.GetType().Name);
+            logger.LogWarning(error, "OEM promotion {PromotionId} failed.", promotionId);
         }
 
         await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))
         {
+            // Lock order: transfer → file → promotion (see OemFileValidationService).
+            var transferId = await uow.Db.OemTransferFiles.Where(item => item.Id == claim.FileId).Select(item => item.TransferId).SingleAsync(ct);
+            var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
+            var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {claim.FileId} FOR UPDATE").SingleAsync(ct);
             var promotion = await LockAsync(uow, promotionId, ct);
             if (promotion is null || promotion.ConcurrencyVersion != claim.ConcurrencyVersion || promotion.Status != PromotionStatuses.Prepared) return false;
-            var transferId = await uow.Db.OemTransferFiles.Where(item => item.Id == promotion.FileId).Select(item => item.TransferId).SingleAsync(ct);
-            var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
-            var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {promotion.FileId} FOR UPDATE").SingleAsync(ct);
             promotion.LeaseOwner = null;
             promotion.LeaseUntil = null;
             promotion.ConcurrencyVersion++;
@@ -383,6 +488,27 @@ public sealed class OemPromotionService(
                 await progression.AdvanceAsync(uow, transferId, null, ct);
             await dispatcher.CommitAsync(uow, ct);
             return file.PayloadStatus == PayloadStatuses.Available;
+        }
+    }
+
+    /// <summary>Clears this worker's promotion lease on shutdown (fenced by version) so a restart resumes at once.</summary>
+    private async Task ReleaseAsync(OemFilePromotion claim)
+    {
+        using var timeout = new CancellationTokenSource(OemFileValidationService.ReleaseTimeout);
+        try
+        {
+            await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, timeout.Token);
+            var promotion = await LockAsync(uow, claim.Id, timeout.Token);
+            if (promotion is null || promotion.ConcurrencyVersion != claim.ConcurrencyVersion || promotion.Status != PromotionStatuses.Prepared) return;
+            promotion.LeaseOwner = null;
+            promotion.LeaseUntil = null;
+            promotion.ConcurrencyVersion++;
+            await uow.Db.SaveChangesAsync(timeout.Token);
+            await uow.CommitAsync(timeout.Token);
+        }
+        catch (Exception error)
+        {
+            logger.LogWarning(error, "OEM promotion {PromotionId} could not be released on shutdown; it resumes after its lease expires.", claim.Id);
         }
     }
 

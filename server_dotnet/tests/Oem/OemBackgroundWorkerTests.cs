@@ -73,6 +73,42 @@ public sealed class OemBackgroundWorkerTests
     }
 
     [Fact]
+    public void RetryDelayBacksOffExponentiallyAndIsCapped()
+    {
+        var interval = TimeSpan.FromSeconds(3);
+        Assert.Equal(interval, OemBackgroundWorker.RetryDelay(interval, 0));
+        Assert.Equal(TimeSpan.FromSeconds(6), OemBackgroundWorker.RetryDelay(interval, 1));
+        Assert.Equal(TimeSpan.FromSeconds(24), OemBackgroundWorker.RetryDelay(interval, 3));
+        Assert.Equal(OemBackgroundWorker.MaximumBackoff, OemBackgroundWorker.RetryDelay(interval, 10));
+        Assert.Equal(OemBackgroundWorker.MaximumBackoff, OemBackgroundWorker.RetryDelay(interval, int.MaxValue));
+        // A job whose interval already exceeds the cap is never retried sooner than its interval.
+        Assert.Equal(TimeSpan.FromHours(1), OemBackgroundWorker.RetryDelay(TimeSpan.FromHours(1), 4));
+    }
+
+    [Fact]
+    public async Task ConsecutiveFailuresBackOffAndASuccessResetsTheInterval()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        // Fails four times, then succeeds: delays 40 + 80 + 160 + 320 ms before the 5th run,
+        // then the plain interval again.
+        var job = new FlakyJob(TimeSpan.FromMilliseconds(20), failures: 4);
+        using var worker = Create(job);
+
+        await worker.StartAsync(timeout.Token);
+        try
+        {
+            await job.RunReached(7).WaitAsync(timeout.Token);
+            var backedOff = job.TimeOf(5) - job.TimeOf(1);
+            Assert.True(backedOff >= TimeSpan.FromMilliseconds(550), $"5th run after {backedOff.TotalMilliseconds} ms; failures did not back off");
+            Assert.True(job.TimeOf(7) - job.TimeOf(5) < TimeSpan.FromMilliseconds(400), "the interval was not reset after a success");
+        }
+        finally
+        {
+            await worker.StopAsync(timeout.Token);
+        }
+    }
+
+    [Fact]
     public async Task StopCancelsRunningJobsAndCompletes()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -159,6 +195,51 @@ public sealed class OemBackgroundWorkerTests
         {
             if (Interlocked.Increment(ref runCount) >= target) TargetReached.TrySetResult();
             throw new InvalidOperationException("simulated job failure");
+        }
+    }
+
+    private sealed class FlakyJob(TimeSpan interval, int failures) : IOemBackgroundJob
+    {
+        private readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+        private readonly Dictionary<int, TaskCompletionSource> reached = [];
+        private int runCount;
+        public string Name => "flaky";
+        public TimeSpan Interval => interval;
+        private readonly List<TimeSpan> times = [];
+
+        public TimeSpan TimeOf(int run)
+        {
+            lock (reached) return times[run - 1];
+        }
+
+        public Task RunReached(int run)
+        {
+            lock (reached)
+            {
+                if (!reached.TryGetValue(run, out var source))
+                    reached[run] = source = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (Volatile.Read(ref runCount) >= run) source.TrySetResult();
+                return source.Task;
+            }
+        }
+
+        public Task RunOnceAsync(CancellationToken ct)
+        {
+            var run = Interlocked.Increment(ref runCount);
+            lock (reached)
+            {
+                times.Add(clock.Elapsed);
+                if (reached.TryGetValue(run, out var source)) source.TrySetResult();
+                else reached[run] = CompletedSource();
+            }
+            return run <= failures ? throw new InvalidOperationException("simulated outage") : Task.CompletedTask;
+        }
+
+        private static TaskCompletionSource CompletedSource()
+        {
+            var source = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            source.TrySetResult();
+            return source;
         }
     }
 
