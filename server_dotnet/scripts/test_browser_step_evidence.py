@@ -1,3 +1,4 @@
+import ast
 import json
 from pathlib import Path
 import sys
@@ -11,7 +12,20 @@ from browser_step_evidence import (
     validate_browser_step_evidence,
 )
 
+SCRIPTS = Path(__file__).resolve().parent
 TEST_TEMP_ROOT = Path(__file__).resolve().parents[2] / ".artifacts" / "tests" / "tmp"
+
+
+def _browser_step_registry():
+    """Read the --steps default/choices literals from test-browser.py without running it."""
+    tree = ast.parse((SCRIPTS / "test-browser.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "add_argument"
+                and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == "--steps"):
+            keywords = {keyword.arg: ast.literal_eval(keyword.value) for keyword in node.keywords
+                        if keyword.arg in ("default", "choices")}
+            return keywords["default"], keywords["choices"]
+    raise AssertionError("test-browser.py has no --steps argument")
 TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
 
 
@@ -77,6 +91,24 @@ class BrowserStepEvidenceTests(unittest.TestCase):
             result = validate_browser_step_evidence("fixtures", before_fixtures, after_fixtures, output)
             self.assertEqual(result["added"], 1)
             self.assertEqual(set(result["sampleSizes"]), {"valid-preview.pdf", "vendor-response.xlsx"})
+
+
+class BrowserStepRegistryTests(unittest.TestCase):
+    def test_every_registered_step_has_a_script_and_runs_by_default(self):
+        default, choices = _browser_step_registry()
+        self.assertEqual(default[:2], ["auth", "fixtures"])
+        self.assertEqual(len(default), len(set(default)))
+        self.assertEqual(sorted(default), sorted(choices))
+        for step in choices:
+            self.assertTrue((SCRIPTS / "browser" / (step + ".cjs")).is_file(), step)
+
+    def test_oem_step_is_registered_with_its_isolated_storage_and_job_loop(self):
+        default, _ = _browser_step_registry()
+        self.assertIn("oem", default)
+        runner = (SCRIPTS / "test-browser.py").read_text(encoding="utf-8")
+        self.assertIn("'App__OemStorageRoot': str(oem_storage_path)", runner)
+        self.assertIn("'YF_TESTHOST_OEM_PROCESS': '1'", runner)
+        self.assertIn("'ownedOemStorageRemoved'", runner)
 
 
 if __name__ == "__main__":

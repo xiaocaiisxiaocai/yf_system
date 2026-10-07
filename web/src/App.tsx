@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Result, Spin } from '@arco-design/web-react'
 import { useAuth } from './store/auth'
-import { bootAuth, isSafeLoginReturnPath } from './api/client'
+import { bootAuth, isOemPortalPath, isSafeLoginReturnPath } from './api/client'
 import { OEM_UI_ENABLED } from './features'
 
 const AdminLayout = lazy(() => import('./layouts/AdminLayout'))
@@ -88,16 +88,19 @@ function OrganizationRoute() {
 export default function App() {
   const booted = useAuth((s) => s.booted)
   const token = useAuth((s) => s.token)
+  const routeLocation = useLocation()
+  const portalRoute = isOemPortalPath(routeLocation.pathname)
 
   // 启动引导：内存中的 token 随刷新丢失，用 refresh cookie 静默换新
   useEffect(() => {
-    bootAuth()
-  }, [])
+    if (!portalRoute) void bootAuth()
+  }, [portalRoute])
 
   // 多标签页同步：其他标签登出 → 本地登出；其他标签切换账号 → 跟随刷新
   useEffect(() => {
+    if (portalRoute) return
     const onStorage = (e: StorageEvent) => {
-      if (e.key !== 'yf-auth') return
+      if (e.key !== 'yf-auth' || isOemPortalPath(location.pathname)) return
       try {
         const nextState = e.newValue ? JSON.parse(e.newValue)?.state ?? null : null
         const nextUser = nextState?.user ?? null
@@ -120,9 +123,9 @@ export default function App() {
     }
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
-  }, [])
+  }, [portalRoute])
 
-  if (!booted) {
+  if (!portalRoute && !booted) {
     return (
       <div className="app-boot">
         <img src="/saa-logo.svg" alt="SAA" />

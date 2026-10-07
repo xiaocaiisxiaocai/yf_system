@@ -1,6 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
+import axios from 'axios'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../../App'
@@ -116,6 +117,7 @@ describe('OEM 前端入口与路由', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    window.history.replaceState({}, '', '/')
   })
 
   it('只向有 OEM 权限的内部员工显示入口，并导航到其首个可用页面', async () => {
@@ -352,6 +354,112 @@ describe('OEM 前端入口与路由', () => {
     expect(screen.getByLabelText('登录账号')).toBeInTheDocument()
   })
 
+  it('厂商门户不启动或同步内部认证域', async () => {
+    useAuth.setState({
+      token: null,
+      user: internalUser,
+      permissions: ['oem:transfer_create'],
+      menus: [],
+      mustChangePassword: false,
+      booted: false,
+      generation: 12,
+    })
+    usePortalAuth.setState({
+      token: 'portal-token',
+      account: {
+        id: 31,
+        employeeNo: 'OEM31',
+        realName: '厂商用户',
+        email: 'oem31@example.test',
+        companyId: 9,
+        companyName: '测试代工厂',
+      },
+      mustChangePassword: false,
+      booted: true,
+      generation: 3,
+    })
+    const internalRefresh = vi.spyOn(axios, 'post').mockRejectedValue(new Error('内部刷新不应执行'))
+    vi.spyOn(portalHttp, 'get').mockImplementation(async (url) => {
+      if (url === '/oem/transfers') return { data: { list: [], total: 0, page: 1, pageSize: 20 } } as never
+      throw new Error(`unexpected GET ${String(url)}`)
+    })
+    const client = createAppQueryClient()
+
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/oem-portal/transfers']}>
+          <App />
+          <CurrentLocation />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByPlaceholderText('搜索传递记录')).toBeInTheDocument()
+    expect(internalRefresh).not.toHaveBeenCalled()
+    expect(useAuth.getState()).toMatchObject({ user: internalUser, token: null, booted: false })
+
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: 'yf-auth',
+        newValue: JSON.stringify({ state: { user: null }, version: 1 }),
+      }))
+    })
+
+    expect(screen.getByLabelText('当前地址')).toHaveTextContent('/oem-portal/transfers')
+    expect(useAuth.getState().user).toEqual(internalUser)
+    expect(usePortalAuth.getState()).toMatchObject({ token: 'portal-token', account: { id: 31 } })
+  })
+
+  it('内部页面仍同步其他标签的内部退出', async () => {
+    setInternalSession(['oem:transfer_create'])
+    vi.spyOn(http, 'get').mockImplementation(async (url) => {
+      if (url === '/oem/transfers') return { data: { list: [], total: 0, page: 1, pageSize: 20 } } as never
+      throw new Error(`unexpected GET ${String(url)}`)
+    })
+    const client = createAppQueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/oem/transfers']}><App /></MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(await screen.findByText('公司发出')).toBeInTheDocument()
+
+    window.history.replaceState({}, '', '/login')
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: 'yf-auth',
+        newValue: JSON.stringify({ state: { user: null }, version: 1 }),
+      }))
+    })
+
+    expect(useAuth.getState()).toMatchObject({ token: null, user: null })
+  })
+
+  it('已注册的内部监听器在当前地址进入门户后忽略迟到的退出事件', async () => {
+    setInternalSession(['oem:transfer_create'])
+    vi.spyOn(http, 'get').mockImplementation(async (url) => {
+      if (url === '/oem/transfers') return { data: { list: [], total: 0, page: 1, pageSize: 20 } } as never
+      throw new Error(`unexpected GET ${String(url)}`)
+    })
+    const client = createAppQueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/oem/transfers']}><App /></MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(await screen.findByText('公司发出')).toBeInTheDocument()
+
+    window.history.replaceState({}, '', '/oem-portal/transfers/2')
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: 'yf-auth',
+        newValue: JSON.stringify({ state: { user: null }, version: 1 }),
+      }))
+    })
+
+    expect(useAuth.getState()).toMatchObject({ token: 'internal-token', user: internalUser })
+  })
+
   it('厂商门户允许 OEM 账号创建回传单且不要求选择目标厂商', async () => {
     const user = userEvent.setup()
     usePortalAuth.setState({
@@ -387,5 +495,38 @@ describe('OEM 前端入口与路由', () => {
     expect(screen.queryByText('目标 OEM 厂商')).not.toBeInTheDocument()
     expect(screen.queryByText('标题')).not.toBeInTheDocument()
     expect(screen.queryByText('删除策略')).not.toBeInTheDocument()
+  })
+
+  it('移动导航按 Escape 关闭后把焦点还给触发按钮', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['oem:transfer_create'])
+    vi.spyOn(http, 'get').mockImplementation(async (url) => {
+      if (url === '/oem/transfers') return { data: { list: [], total: 0, page: 1, pageSize: 20 } } as never
+      throw new Error(`unexpected GET ${String(url)}`)
+    })
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 })
+    const client = createAppQueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/oem/transfers']}><App /></MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const trigger = await screen.findByRole('button', { name: '打开导航菜单' })
+
+    await user.click(trigger)
+    const drawer = await waitFor(() => {
+      const element = document.querySelector<HTMLElement>('.mobile-nav-drawer')
+      expect(element).not.toBeNull()
+      return element!
+    })
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+    expect(document.activeElement).not.toBe(document.body)
+
+    fireEvent.keyDown(drawer, { key: 'Escape', code: 'Escape', keyCode: 27, which: 27 })
+
+    await waitFor(() => expect(document.querySelector('.mobile-nav-drawer')).toBeNull())
+    await waitFor(() => expect(trigger).toHaveFocus())
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
   })
 })

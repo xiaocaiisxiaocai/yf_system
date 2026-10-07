@@ -133,6 +133,7 @@ describe('auth client migration', () => {
     vi.restoreAllMocks()
     vi.clearAllMocks()
     localStorage.clear()
+    window.history.replaceState({}, '', '/')
   })
 
   it('boot refresh consumes the complete response without a profile request', async () => {
@@ -401,6 +402,54 @@ describe('auth client migration', () => {
     expect(loaded.harness.replays.every((item) => item._retried && item.headers.Authorization === 'Bearer new-token')).toBe(true)
   })
 
+  it('an internal-client 401 cannot refresh, clear or redirect the OEM portal session', async () => {
+    const loaded = await loadClient()
+    seedSession(loaded.auth, 'internal-token', 7, 4)
+    window.history.replaceState({}, '', '/oem-portal/transfers/1')
+    const config = loaded.harness.requestHandlers[0]({ url: '/projects', method: 'GET', headers: {} })
+    const error = { config, response: { status: 401, data: { message: 'expired' } }, message: 'expired' }
+
+    await expect(loaded.harness.responseFailures[0](error)).rejects.toBe(error)
+
+    expect(loaded.harness.axios.post).not.toHaveBeenCalled()
+    expect(loaded.harness.replays).toEqual([])
+    expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'internal-token', user: { id: 7 }, generation: 4 })
+    expect(window.location.pathname).toBe('/oem-portal/transfers/1')
+  })
+
+  it('an internal refresh failure cannot logout after navigation enters the OEM portal', async () => {
+    const loaded = await loadClient()
+    seedSession(loaded.auth, 'internal-token', 7, 4)
+    window.history.replaceState({}, '', '/projects/1')
+    const refresh = deferred<never>()
+    loaded.harness.axios.post.mockReturnValue(refresh.promise)
+    const config = loaded.harness.requestHandlers[0]({ url: '/projects/1', method: 'GET', headers: {} })
+    const error = { config, response: { status: 401, data: { message: 'expired' } }, message: 'expired' }
+    const failure = loaded.harness.responseFailures[0](error)
+    await vi.waitFor(() => expect(loaded.harness.axios.post).toHaveBeenCalledOnce())
+
+    window.history.replaceState({}, '', '/oem-portal/transfers/2')
+    refresh.reject(new Error('refresh failed'))
+    await expect(failure).rejects.toBe(error)
+
+    expect(loaded.harness.replays).toEqual([])
+    expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'internal-token', user: { id: 7 }, generation: 4 })
+    expect(window.location.pathname).toBe('/oem-portal/transfers/2')
+  })
+
+  it('an internal forced-password response cannot redirect the OEM portal', async () => {
+    const loaded = await loadClient()
+    seedSession(loaded.auth, 'internal-token', 7, 4)
+    window.history.replaceState({}, '', '/oem-portal/transfers/2')
+    const config = loaded.harness.requestHandlers[0]({ url: '/projects/1', method: 'GET', headers: {} })
+    const error = { config, response: { status: 403, data: { code: 40303, message: 'change password' } }, message: 'forbidden' }
+
+    await expect(loaded.harness.responseFailures[0](error)).rejects.toBe(error)
+
+    expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'internal-token', mustChangePassword: false })
+    expect(window.location.pathname).toBe('/oem-portal/transfers/2')
+  })
+
   async function verifyProfileAndTokenRefreshRace(profileFirst: boolean) {
     const loaded = await loadClient()
     seedSession(loaded.auth, 'old-token', 1, 6)
@@ -476,5 +525,8 @@ describe('auth client migration', () => {
     expect(loaded.client.isSafeLoginReturnPath('/projects\\7')).toBe(false)
     expect(loaded.client.buildLoginRedirectHref('/projects/7', '?tab=messages', '#latest'))
       .toBe('/login?from=%2Fprojects%2F7%3Ftab%3Dmessages%23latest')
+    expect(loaded.client.isOemPortalPath('/oem-portal')).toBe(true)
+    expect(loaded.client.isOemPortalPath('/oem-portal/transfers/1')).toBe(true)
+    expect(loaded.client.isOemPortalPath('/oem')).toBe(false)
   })
 })

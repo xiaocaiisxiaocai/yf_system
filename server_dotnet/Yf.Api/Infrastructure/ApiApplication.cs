@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Migrations;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Yf.Api.Infrastructure;
@@ -122,7 +123,9 @@ public static class ApiApplication
         builder.Services.AddHostedService<AppRunningLease>();
         var efConnectionString = AppDb.BuildConnectionString(options);
         builder.Services.AddPooledDbContextFactory<YfDbContext>(db => db.UseMySql(
-            efConnectionString, EfDb.ServerVersion).AddInterceptors(UtcDatabaseSession.Instance));
+            efConnectionString, EfDb.ServerVersion)
+            .ReplaceService<IMigrator, PreflightMySqlMigrator>()
+            .AddInterceptors(UtcDatabaseSession.Instance));
         builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule();
         builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
             .WithOrigins(new Uri(options.WebBaseUrl).GetLeftPart(UriPartial.Authority))

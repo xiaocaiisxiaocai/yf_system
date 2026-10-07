@@ -40,8 +40,8 @@ TEST_TEMP_ROOT = TEST_ROOT / 'tmp'
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path)
 parser.add_argument('--continue-on-failure', action='store_true', help='Collect independent step failures; the run still fails if any step fails.')
-parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'dictionaries', 'preview-extras', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration'],
-    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'dictionaries', 'preview-extras'])
+parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'dictionaries', 'preview-extras', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'oem'],
+    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'dictionaries', 'preview-extras', 'oem'])
 args = parser.parse_args()
 if not __debug__:
     raise SystemExit('Do not run the browser suite with Python assertions disabled (-O/PYTHONOPTIMIZE).')
@@ -115,7 +115,7 @@ def wait_for_health(owned, base, timeout_seconds=120.0):
         try:
             with opener.open(base + '/health', timeout=5) as response:
                 body = response.read()
-            if json.loads(body) == {'status': 'ok', 'db': 'up'}:
+            if json.loads(body) == {'status': 'ok', 'db': 'up', 'storage': 'up'}:
                 return
             last = 'unexpected health body'
         except urllib.error.HTTPError as error:
@@ -147,6 +147,7 @@ connection = pymysql.connect(host=url.hostname, port=url.port or 3306,
 created = False
 process = None
 storage_path = None
+oem_storage_path = None
 result = {'status': 'fail', 'steps': args.steps, 'stepEvidence': [],
           'stepFailures': [], 'businessDatabaseTouched': False, 'smtpUsed': False}
 try:
@@ -158,6 +159,9 @@ try:
         temporary = scope.enter_context(tempfile.TemporaryDirectory(prefix='yf_browser_', dir=TEST_TEMP_ROOT))
         storage_path = Path(temporary).resolve() / 'storage'
         storage_path.mkdir()
+        # OEM bytes live only in their own root, separate from collaboration storage.
+        oem_storage_path = Path(temporary).resolve() / 'oem-storage'
+        oem_storage_path.mkdir()
         content_root = prepare_content_root(Path(temporary).resolve())
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', 0))
@@ -179,6 +183,9 @@ try:
             'App__JwtSecret': secrets.token_urlsafe(48), 'App__StorageRoot': str(storage_path),
             'App__WebBaseUrl': base, 'App__CookieSecure': 'false', 'App__WorkerEnabled': 'false',
             'App__Smtp__Host': '',
+            'App__OemStorageRoot': str(oem_storage_path),
+            # Workers stay off; the test-only TestHost loop runs just OEM validate/promote.
+            'YF_TESTHOST_OEM_PROCESS': '1',
             'ASPNETCORE_URLS': base, 'URLS': base, 'ASPNETCORE_WEBROOT': str(ROOT / 'web/dist'),
             'ASPNETCORE_CONTENTROOT': str(content_root),
             'YF_BOOTSTRAP_PASSWORD': initial, 'Logging__LogLevel__Default': 'Warning',
@@ -294,6 +301,7 @@ finally:
     result['cleanup'] = {'ownedProcessExited': process is None or process.poll() is not None,
         'ownedDatabaseDropped': database_dropped or not created,
         'ownedStorageRemoved': storage_path is None or not storage_path.exists(),
+        'ownedOemStorageRemoved': oem_storage_path is None or not oem_storage_path.exists(),
         'privateStateRemoved': not any(output.glob('*.private.json'))}
     (output / 'results.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
     print('Owned browser resources cleaned; result: ' + result['status'], flush=True)

@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Migrations;
 using MySqlConnector;
 
 namespace Yf.Api.Infrastructure;
@@ -28,6 +29,7 @@ internal static class EfDb
         var options = OptionsByConnection.GetValue(connection, static item =>
             new DbContextOptionsBuilder<YfDbContext>()
                 .UseMySql(item, ServerVersion)
+                .ReplaceService<IMigrator, PreflightMySqlMigrator>()
                 .AddInterceptors(UtcDatabaseSession.Instance)
                 .Options);
         var context = new YfDbContext(options);

@@ -210,6 +210,11 @@ export function isSafeLoginReturnPath(value: unknown): value is string {
     && !value.includes('\\') && ![...value].some((character) => character.charCodeAt(0) <= 32)
 }
 
+/** The OEM portal owns a separate account, refresh cookie and cross-tab session. */
+export function isOemPortalPath(pathname: string): boolean {
+  return pathname === '/oem-portal' || pathname.startsWith('/oem-portal/')
+}
+
 export function buildLoginRedirectHref(pathname: string, search = '', hash = ''): string {
   const candidate = `${pathname}${search}${hash}`
   const from = isSafeLoginReturnPath(candidate) ? candidate : '/'
@@ -251,13 +256,16 @@ http.interceptors.response.use(
     if (!isCurrentSession(cfg)) return Promise.reject(error)
     const status = error.response?.status
     const biz = error.response?.data?.code
-    if (status === 401 && cfg && !cfg._retried && !cfg.url?.includes('/auth/')) {
+    // A late collaboration request must not refresh, clear or redirect the independent OEM realm.
+    // Re-read the pathname after every await because the user may enter the portal while refresh is pending.
+    if (status === 401 && !isOemPortalPath(location.pathname) && cfg && !cfg._retried && !cfg.url?.includes('/auth/')) {
       cfg._retried = true
       const refreshed = await tryRefresh(cfg.authGeneration)
       if (!isCurrentSession(cfg)) return Promise.reject(error)
+      if (isOemPortalPath(location.pathname)) return Promise.reject(error)
       if (refreshed) return http(cfg)
     }
-    if (status === 401) {
+    if (status === 401 && !isOemPortalPath(location.pathname)) {
       useAuth.getState().logout()
       if (location.pathname !== '/login') {
         location.href = buildLoginRedirectHref(location.pathname, location.search, location.hash)
@@ -265,7 +273,7 @@ http.interceptors.response.use(
       }
     }
     // 40303 需先改密：跳强制改密页
-    if (biz === 40303 && location.pathname !== '/change-password') {
+    if (biz === 40303 && !isOemPortalPath(location.pathname) && location.pathname !== '/change-password') {
       useAuth.setState({ mustChangePassword: true })
       location.href = '/change-password'
     }

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Oem.Data;
 
@@ -102,7 +103,9 @@ public sealed class YfDbContextFactory : IDesignTimeDbContextFactory<YfDbContext
         var connectionString = Environment.GetEnvironmentVariable("YF_EF_DESIGN_CONNECTION")
             ?? throw new InvalidOperationException("Set YF_EF_DESIGN_CONNECTION to a disposable local MySQL connection string for design-time tooling.");
         var builder = new DbContextOptionsBuilder<YfDbContext>();
-        builder.UseMySql(connectionString, EfDb.ServerVersion).AddInterceptors(UtcDatabaseSession.Instance);
+        builder.UseMySql(connectionString, EfDb.ServerVersion)
+            .ReplaceService<IMigrator, PreflightMySqlMigrator>()
+            .AddInterceptors(UtcDatabaseSession.Instance);
         return new YfDbContext(builder.Options);
     }
 }

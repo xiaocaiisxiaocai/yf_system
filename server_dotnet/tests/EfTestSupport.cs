@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Yf.Api.Infrastructure;
 
 namespace Yf.Api.Tests;
@@ -15,6 +16,7 @@ internal static class EfTestSupport
         var connectionString = AppDb.BuildConnectionString(options);
         var builder = new DbContextOptionsBuilder<YfDbContext>()
             .UseMySql(connectionString, EfDb.ServerVersion)
+            .ReplaceService<IMigrator, PreflightMySqlMigrator>()
             .AddInterceptors(UtcDatabaseSession.Instance);
         return new SimpleDbContextFactory(builder.Options);
     }

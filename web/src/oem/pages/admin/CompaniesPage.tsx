@@ -424,7 +424,7 @@ export default function CompaniesPage() {
         unmountOnExit
       >
         <Form form={form} layout="vertical">
-          <Form.Item field="name" label="厂商名称" rules={[{ required: true }, { maxLength: 128 }]}><Input /></Form.Item>
+          <Form.Item field="name" label="厂商名称" rules={[{ required: true, message: '请输入厂商名称' }, { maxLength: 128 }]}><Input /></Form.Item>
           <Form.Item field="contactName" label="联系人"><Input maxLength={64} /></Form.Item>
           <Form.Item field="contactPhone" label="联系电话"><Input maxLength={32} /></Form.Item>
           <Form.Item field="contactEmail" label="联系邮箱" rules={[{ type: 'email' }]}><Input /></Form.Item>

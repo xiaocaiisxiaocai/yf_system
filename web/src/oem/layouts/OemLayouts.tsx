@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Button, Drawer, Dropdown, Layout, Menu, Result, Space, Spin } from '@arco-design/web-react'
 import {
   IconApps, IconCheckCircle, IconDown, IconFile, IconHistory, IconLeft, IconPoweroff, IconSafe, IconSettings,
@@ -26,6 +26,7 @@ function Shell({ title, subtitle, menu, account }: { title: string; subtitle?: s
   const navigate = useNavigate()
   const location = useLocation()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const mobileMenuTrigger = useRef<HTMLElement | null>(null)
   const items = menu.filter((item) => item.visible)
   const selected = items.filter((item) => location.pathname.startsWith(item.path)).sort((a, b) => b.path.length - a.path.length)[0]?.path
   const menuContent = (closeAfterNavigate = false) => (
@@ -39,7 +40,8 @@ function Shell({ title, subtitle, menu, account }: { title: string; subtitle?: s
   return (
     <Layout className="layout-shell oem-shell">
       <Header className="layout-header">
-        {items.length > 0 && <Button className="mobile-menu-trigger" type="text" aria-label="打开导航菜单"
+        {items.length > 0 && <Button ref={(node) => { mobileMenuTrigger.current = node as HTMLElement | null }}
+          className="mobile-menu-trigger" type="text" aria-label="打开导航菜单" aria-expanded={mobileMenuOpen}
           icon={<IconMenu />} onClick={() => setMobileMenuOpen(true)} />}
         <div className="layout-logo" title={subtitle ? `${title} · ${subtitle}` : title}>
           <img src="/saa-logo.svg" alt="SAA" />
@@ -56,7 +58,8 @@ function Shell({ title, subtitle, menu, account }: { title: string; subtitle?: s
       </Layout>
       {items.length > 0 && <Drawer className="mobile-nav-drawer" title={(
         <div className="drawer-brand"><img className="drawer-logo" src="/saa-logo.svg" alt="SAA" /><span>{title}</span></div>
-      )} placement="left" width={240} visible={mobileMenuOpen} footer={null} unmountOnExit onCancel={() => setMobileMenuOpen(false)}>
+      )} placement="left" width={240} visible={mobileMenuOpen} footer={null} unmountOnExit focusLock autoFocus
+        onCancel={() => setMobileMenuOpen(false)} afterClose={() => mobileMenuTrigger.current?.focus({ preventScroll: true })}>
         {menuContent(true)}
       </Drawer>}
     </Layout>

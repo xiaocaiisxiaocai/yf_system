@@ -109,25 +109,40 @@ public sealed class MigrationRoundTripTests
         Assert.Equal(latestData, await ReferenceDataAsync(database, ct));
     }
 
-    [Fact(Timeout = 180_000)]
-    public async Task RollingBackPastTheValidationMigrationFromLatestIsRefused()
+    [Theory(Timeout = 180_000)]
+    [InlineData(BeforeOem, false)]
+    [InlineData(BeforeOem, true)]
+    [InlineData(RestoreOem, false)]
+    [InlineData(RestoreOem, true)]
+    [InlineData("0", false)]
+    [InlineData("0", true)]
+    public async Task RollingBackPastTheValidationMigrationFromLatestIsRefusedBeforeAnyChanges(
+        string targetMigration, bool useAsync)
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("refuse_scan_rollback", ct);
         await database.InitializeAsync(ct);
-        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
-        var migrator = context.GetService<IMigrator>();
-
+        await SeedRollbackSentinelsAsync(database, ct);
         var latestSchema = await SchemaAsync(database, ct);
-        await Assert.ThrowsAsync<NotSupportedException>(() => migrator.MigrateAsync(BeforeOem, ct));
-        // EF reverts migration by migration, each in its own transaction: the reversible newer
-        // migrations are rolled back, then the irreversible one refuses. The history never drops
-        // below it and stays a consistent prefix that a forward migration completes again.
-        Assert.Equal(ReplaceScanning, await LastMigrationAsync(database, ct));
-        Assert.Contains(RestoreOem, await HistoryAsync(database, ct));
-        await migrator.MigrateAsync(cancellationToken: ct);
-        Assert.Equal(Latest, await LastMigrationAsync(database, ct));
+        var latestReferenceData = await ReferenceDataAsync(database, ct);
+        var latestHistory = await HistoryAsync(database, ct);
+        var latestBusinessData = await RollbackSentinelDataAsync(database, ct);
+
+        var refused = await AssertRollbackRefusedAsync(database, targetMigration, useAsync, ct);
+
+        Assert.Contains(ReplaceScanning, refused.Message, StringComparison.Ordinal);
+        Assert.Contains("backup", refused.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(latestSchema, await SchemaAsync(database, ct));
+        Assert.Equal(latestReferenceData, await ReferenceDataAsync(database, ct));
+        Assert.Equal(latestHistory, await HistoryAsync(database, ct));
+        Assert.Equal(latestBusinessData, await RollbackSentinelDataAsync(database, ct));
+
+        await using var connection = await database.Database.OpenAsync(ct);
+        Assert.Equal(new DateTime(2026, 10, 6, 12, 34, 56, 789),
+            await connection.ExecuteScalarAsync<DateTime>(
+                "SELECT activated_at FROM oem_flow_tasks WHERE id=910001"));
+        Assert.Equal("ADMIN_REVOKED", await connection.ExecuteScalarAsync<string>(
+            "SELECT revoke_reason FROM oem_refresh_tokens WHERE id=910001"));
     }
 
     [Fact(Timeout = 180_000)]
@@ -181,6 +196,102 @@ public sealed class MigrationRoundTripTests
     }
 
     private static readonly string[] PreOemCodes = ["dashboard", "org:dept", "org:user", "user:manage", "dept:manage"];
+
+    private static async Task<NotSupportedException> AssertRollbackRefusedAsync(
+        SchemaShapeTests.SchemaDatabaseScope database,
+        string targetMigration,
+        bool useAsync,
+        CancellationToken ct)
+    {
+        if (useAsync)
+        {
+            await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+            var migrator = context.GetService<IMigrator>();
+            return await Assert.ThrowsAsync<NotSupportedException>(() => migrator.MigrateAsync(targetMigration, ct));
+        }
+
+        await using var connection = await database.Database.OpenAsync(ct);
+        await using var contextFromOpenConnection = EfDb.Use(connection);
+        var synchronousMigrator = contextFromOpenConnection.GetService<IMigrator>();
+        return Assert.Throws<NotSupportedException>(() => synchronousMigrator.Migrate(targetMigration));
+    }
+
+    /// <summary>
+    /// Rows that a partial rollback would mutate or remove: custom destructive grants, OEM history,
+    /// and values introduced by reversible migrations that sit above the irreversible boundary.
+    /// </summary>
+    private static Task SeedRollbackSentinelsAsync(
+        SchemaShapeTests.SchemaDatabaseScope database,
+        CancellationToken ct) => database.ExecuteAsync("""
+            INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at)
+            VALUES(910001,'迁移回滚哨兵角色',0,'ACTIVE','2026-10-06 01:02:03.000','2026-10-06 01:02:04.000');
+            INSERT INTO role_permissions(role_id,permission_id)
+            SELECT 910001,id FROM permissions WHERE code IN ('oem:company_delete','oem:account_delete');
+
+            INSERT INTO oem_companies(id,name,status,created_by,created_at,updated_at)
+            VALUES(910001,'迁移回滚哨兵厂商','ACTIVE',1,'2026-10-06 02:00:00.000','2026-10-06 02:01:00.000');
+            INSERT INTO oem_accounts(id,employee_no,password_hash,real_name,email,oem_company_id,status,must_change_password,
+                failed_login_attempts,created_by,created_at,updated_at)
+            VALUES(910001,'rollback-sentinel','$argon2id$sentinel','迁移回滚哨兵账号','rollback-sentinel@example.invalid',
+                910001,'ACTIVE',0,0,1,'2026-10-06 03:00:00.000','2026-10-06 03:01:00.000');
+            INSERT INTO oem_refresh_tokens(id,account_id,session_id,token_hash,session_expires_at,expires_at,revoked,ip,created_at,revoke_reason)
+            VALUES(910001,910001,'rollback-sentinel-session',REPEAT('a',64),'2026-10-07 03:00:00.000',
+                '2026-10-07 04:00:00.000',1,'127.0.0.1','2026-10-06 03:02:00.000','ADMIN_REVOKED');
+
+            INSERT INTO oem_transfers(id,direction,oem_company_id,title,internal_sender_user_id,lifecycle_status,retention_template_id,
+                created_at,updated_at,concurrency_version)
+            VALUES(910001,'INTERNAL_TO_OEM',910001,'迁移回滚哨兵传递',1,'APPROVING',1,
+                '2026-10-06 04:00:00.000','2026-10-06 04:01:00.000',7);
+            INSERT INTO oem_flow_instances(id,transfer_id,template_id,initiator_user_id,initiator_section_id,status,
+                template_snapshot,current_sort_no,concurrency_version,created_at,updated_at)
+            VALUES(910001,910001,1,1,1,'IN_PROGRESS','{}',1,5,
+                '2026-10-06 05:00:00.000','2026-10-06 05:01:00.000');
+            INSERT INTO oem_flow_instance_nodes(id,instance_id,sort_no,name,approver_source,approval_mode,status,used_fallback)
+            VALUES(910001,910001,1,'迁移回滚哨兵节点','SECTION_LEADER','SINGLE','PENDING',0);
+            INSERT INTO oem_flow_tasks(id,instance_id,instance_node_id,approver_user_id,status,reason,concurrency_version,created_at,activated_at)
+            VALUES(910001,910001,910001,1,'PENDING','必须原样保留',3,'2026-10-06 06:00:00.000','2026-10-06 12:34:56.789');
+            """, ct);
+
+    private static async Task<string[]> RollbackSentinelDataAsync(
+        SchemaShapeTests.SchemaDatabaseScope database,
+        CancellationToken ct)
+    {
+        await using var connection = await database.Database.OpenAsync(ct);
+        var rows = await connection.QueryAsync<string>(new CommandDefinition("""
+            SELECT CONCAT_WS('|','role',id,name,is_built_in,status,DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s.%f'),DATE_FORMAT(updated_at,'%Y-%m-%d %H:%i:%s.%f'))
+            FROM roles WHERE id=910001
+            UNION ALL
+            SELECT CONCAT_WS('|','grant',rp.role_id,p.code) FROM role_permissions rp
+            INNER JOIN permissions p ON p.id=rp.permission_id WHERE rp.role_id=910001
+            UNION ALL
+            SELECT CONCAT_WS('|','company',id,name,status,created_by,DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s.%f'),DATE_FORMAT(updated_at,'%Y-%m-%d %H:%i:%s.%f'))
+            FROM oem_companies WHERE id=910001
+            UNION ALL
+            SELECT CONCAT_WS('|','account',id,employee_no,password_hash,real_name,email,oem_company_id,status,must_change_password,
+                failed_login_attempts,created_by,DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s.%f'),DATE_FORMAT(updated_at,'%Y-%m-%d %H:%i:%s.%f'))
+            FROM oem_accounts WHERE id=910001
+            UNION ALL
+            SELECT CONCAT_WS('|','refresh',id,account_id,session_id,token_hash,DATE_FORMAT(session_expires_at,'%Y-%m-%d %H:%i:%s.%f'),
+                DATE_FORMAT(expires_at,'%Y-%m-%d %H:%i:%s.%f'),revoked,ip,DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s.%f'),revoke_reason)
+            FROM oem_refresh_tokens WHERE id=910001
+            UNION ALL
+            SELECT CONCAT_WS('|','transfer',id,direction,oem_company_id,title,internal_sender_user_id,lifecycle_status,retention_template_id,
+                concurrency_version,DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s.%f'),DATE_FORMAT(updated_at,'%Y-%m-%d %H:%i:%s.%f'))
+            FROM oem_transfers WHERE id=910001
+            UNION ALL
+            SELECT CONCAT_WS('|','instance',id,transfer_id,template_id,initiator_user_id,initiator_section_id,status,template_snapshot,
+                current_sort_no,concurrency_version,DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s.%f'),DATE_FORMAT(updated_at,'%Y-%m-%d %H:%i:%s.%f'))
+            FROM oem_flow_instances WHERE id=910001
+            UNION ALL
+            SELECT CONCAT_WS('|','node',id,instance_id,sort_no,name,approver_source,approval_mode,status,used_fallback)
+            FROM oem_flow_instance_nodes WHERE id=910001
+            UNION ALL
+            SELECT CONCAT_WS('|','task',id,instance_id,instance_node_id,approver_user_id,status,reason,concurrency_version,
+                DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s.%f'),DATE_FORMAT(activated_at,'%Y-%m-%d %H:%i:%s.%f'))
+            FROM oem_flow_tasks WHERE id=910001
+            """, cancellationToken: ct));
+        return rows.Order(StringComparer.Ordinal).ToArray();
+    }
 
     /// <summary>What a database bootstrapped before the OEM restore holds: its catalog, the built-in admin and its role.</summary>
     private static Task SeedPreOemCatalogAsync(SchemaShapeTests.SchemaDatabaseScope database, CancellationToken ct) =>
