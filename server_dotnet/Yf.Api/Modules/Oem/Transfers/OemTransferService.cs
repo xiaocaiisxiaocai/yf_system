@@ -203,7 +203,7 @@ public sealed class OemTransferService(
             ?? throw ApiException.NotFound();
         var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
         await EnsureOwnDraftAsync(uow, current, transfer, ct);
-        var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {fileId} FOR UPDATE").SingleAsync(ct);
+        var file = await OemLocks.ForUpdate<OemTransferFile>(uow.Db, fileId).SingleAsync(ct);
         if (file.PurgeReason == PurgeReasons.FileRemoved) throw ApiException.NotFound();
         file.PurgeReason = PurgeReasons.FileRemoved;
         if (PayloadStatuses.OnDisk.Contains(file.PayloadStatus)) file.PurgeDueAt = uow.Now;

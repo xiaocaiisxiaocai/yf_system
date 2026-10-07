@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Oem.Common;
+using Yf.Api.Modules.Oem.Data;
 using Yf.Api.Modules.Oem.Delivery;
 using Yf.Api.Modules.Oem.Policies;
 using Yf.Api.Modules.Oem.Storage;
@@ -73,7 +74,7 @@ public sealed class OemPurgeService(
         {
             var transferId = await uow.Db.OemTransferFiles.Where(item => item.Id == fileId).Select(item => item.TransferId).SingleAsync(ct);
             await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
-            var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {fileId} FOR UPDATE").SingleAsync(ct);
+            var file = await OemLocks.ForUpdate<OemTransferFile>(uow.Db, fileId).SingleAsync(ct);
             var failedPromotions = await uow.Db.OemFilePromotions.AsNoTracking()
                 .Where(promotion => promotion.FileId == fileId && promotion.Status == PromotionStatuses.Failed).ToArrayAsync(ct);
             var due = (file.PayloadStatus is PayloadStatuses.Quarantined or PayloadStatuses.Available
@@ -132,7 +133,7 @@ public sealed class OemPurgeService(
         {
             var transferId = await uow.Db.OemTransferFiles.Where(item => item.Id == fileId).Select(item => item.TransferId).SingleAsync(ct);
             await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
-            var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {fileId} FOR UPDATE").SingleAsync(ct);
+            var file = await OemLocks.ForUpdate<OemTransferFile>(uow.Db, fileId).SingleAsync(ct);
             if (file.ConcurrencyVersion != claimVersion || file.PayloadStatus != PayloadStatuses.PurgePending) return false;
             file.PurgeLeaseOwner = null;
             file.PurgeLeaseUntil = null;
@@ -330,7 +331,7 @@ public sealed class OemReconcileService(
             await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
             var transferId = await uow.Db.OemTransferFiles.Where(item => item.Id == candidate.Id).Select(item => item.TransferId).SingleAsync(ct);
             await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
-            var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {candidate.Id} FOR UPDATE").SingleAsync(ct);
+            var file = await OemLocks.ForUpdate<OemTransferFile>(uow.Db, candidate.Id).SingleAsync(ct);
             // Re-check under the lock: a concurrent promotion or purge may have moved it legitimately.
             if (file.PayloadStatus is not (PayloadStatuses.Quarantined or PayloadStatuses.Available or PayloadStatuses.Promoting)
                 || Intact(file.StoragePath, file.SizeBytes)) continue;

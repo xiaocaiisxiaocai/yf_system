@@ -351,7 +351,7 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
 
     private static async Task<OemFlowTemplate> LockAsync(OemUnitOfWork uow, ulong id, ulong expectedVersion, CancellationToken ct)
     {
-        var template = await uow.Db.OemFlowTemplates.FromSqlInterpolated($"SELECT * FROM oem_flow_templates WHERE id = {id} FOR UPDATE")
+        var template = await OemLocks.ForUpdate<OemFlowTemplate>(uow.Db, id)
             .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         OemValidation.MatchVersion(template.ConcurrencyVersion, expectedVersion);
         return template;

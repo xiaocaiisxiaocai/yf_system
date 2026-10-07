@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
@@ -57,8 +58,8 @@ public sealed partial class OemUploadService(
         }
 
         // Quota decisions for one vendor are serialised on the vendor row.
-        await uow.Db.OemCompanies.FromSqlInterpolated($"SELECT * FROM oem_companies WHERE id = {transfer.OemCompanyId} FOR UPDATE").SingleAsync(ct);
-        // The new session references the uploader; lock order transfer → company → account (see OemAccountLock).
+        await OemLocks.ForUpdate<OemCompany>(uow.Db, transfer.OemCompanyId).SingleAsync(ct);
+        // The new session references the uploader; lock order transfer → company → account (see OemLocks).
         await OemAccountLock.ShareAsync(uow, current, ct);
         var onDisk = PayloadStatuses.OnDisk;
         var companyTransfers = uow.Db.OemTransfers.Where(item => item.OemCompanyId == transfer.OemCompanyId).Select(item => item.Id);
@@ -121,6 +122,7 @@ public sealed partial class OemUploadService(
     public async Task PutChunkAsync(OemActor actor, string sessionId, int index, HttpRequest request, CancellationToken ct)
     {
         if (index < 0) throw ApiException.BadRequest("分片序号越界");
+        var declaredDigest = DeclaredChunkDigest(request);
         OemUploadSession session;
         await using (var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct))
         {
@@ -142,7 +144,10 @@ public sealed partial class OemUploadService(
         var open = true;
         try
         {
-            await WriteExactAsync(request.Body, temporary, expected, ct);
+            var actualDigest = await WriteExactAsync(request.Body, temporary, expected, ct);
+            // Checked before the chunk replaces anything: a mismatching body never becomes a chunk.
+            if (declaredDigest is not null && !actualDigest.Equals(declaredDigest, StringComparison.Ordinal))
+                throw ApiException.BadRequest("分片 SHA-256 校验失败");
             if (File.Exists(path)) File.Delete(path);
             File.Move(temporary, path, overwrite: false);
         }
@@ -260,7 +265,7 @@ public sealed partial class OemUploadService(
                 if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
                 var locked = await LoadOwnSessionAsync(uow, current, sessionId, forUpdate: true, ct);
                 if (locked.Status != UploadStatuses.Merging) throw ApiException.Conflict("上传会话状态已变化，请重新查询");
-                // The new file references the uploader; lock order transfer → session → account (see OemAccountLock).
+                // The new file references the uploader; lock order transfer → session → account (see OemLocks).
                 await OemAccountLock.ShareAsync(uow, current, ct);
                 // Re-checked right before the file appears in quarantine: the reconcile
                 // orphan sweep must never see a stored file whose row is not yet committed.
@@ -340,8 +345,7 @@ public sealed partial class OemUploadService(
             if (mergeLock is null) continue;
             await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))
             {
-                var session = await uow.Db.OemUploadSessions
-                    .FromSqlInterpolated($"SELECT * FROM oem_upload_sessions WHERE id = {id} FOR UPDATE").SingleOrDefaultAsync(ct);
+                var session = await OemLocks.ForUpdate<OemUploadSession>(uow.Db, id).SingleOrDefaultAsync(ct);
                 if (session is null || session.Status is not (UploadStatuses.Uploading or UploadStatuses.Merging) || session.ExpiresAt > uow.Now) continue;
                 session.Status = UploadStatuses.Expired;
                 session.ReservedBytes = 0;
@@ -429,7 +433,7 @@ public sealed partial class OemUploadService(
     {
         if (!Guid.TryParseExact(sessionId, "D", out _)) throw ApiException.NotFound();
         var session = forUpdate
-            ? await uow.Db.OemUploadSessions.FromSqlInterpolated($"SELECT * FROM oem_upload_sessions WHERE id = {sessionId} FOR UPDATE").SingleOrDefaultAsync(ct)
+            ? await OemLocks.ForUpdate<OemUploadSession>(uow.Db, sessionId).SingleOrDefaultAsync(ct)
             : await uow.Db.OemUploadSessions.AsNoTracking().SingleOrDefaultAsync(item => item.Id == sessionId, ct);
         if (session is null || session.UploaderRealm != actor.Realm || session.UploaderId != actor.Id) throw ApiException.NotFound();
         return session;
@@ -449,9 +453,25 @@ public sealed partial class OemUploadService(
     private static ulong ExpectedChunkLength(OemUploadSession session, uint index) =>
         index == session.TotalChunks - 1 ? session.FileSize - (ulong)session.ChunkSize * (session.TotalChunks - 1) : session.ChunkSize;
 
-    private static async Task WriteExactAsync(Stream body, string path, ulong expected, CancellationToken ct)
+    /// <summary>
+    /// Optional <c>X-Chunk-SHA256</c> header, as in the collaboration upload: when present it must be
+    /// 64 hex characters (case-insensitive) and the chunk body must hash to it; absent means no check.
+    /// </summary>
+    private static string? DeclaredChunkDigest(HttpRequest request)
+    {
+        if (!request.Headers.TryGetValue(ChunkDigestHeader, out var values)) return null;
+        var declared = values.ToString().Trim().ToLowerInvariant();
+        if (!Sha256Pattern().IsMatch(declared)) throw ApiException.BadRequest("分片 SHA-256 摘要格式无效");
+        return declared;
+    }
+
+    internal const string ChunkDigestHeader = "X-Chunk-SHA256";
+
+    /// <summary>Writes exactly <paramref name="expected"/> bytes and returns their lowercase hex SHA-256.</summary>
+    private static async Task<string> WriteExactAsync(Stream body, string path, ulong expected, CancellationToken ct)
     {
         await using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var buffer = new byte[64 * 1024];
         ulong total = 0;
         int read;
@@ -460,9 +480,11 @@ public sealed partial class OemUploadService(
             total += (ulong)read;
             if (total > expected) throw ApiException.BadRequest("分片大小超出预期");
             await output.WriteAsync(buffer.AsMemory(0, read), ct);
+            hash.AppendData(buffer, 0, read);
         }
         if (total != expected) throw ApiException.BadRequest($"分片大小不符：期望 {expected}，实际 {total}");
         await output.FlushAsync(ct);
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
     internal static string ValidateFileName(string? value)
@@ -489,6 +511,9 @@ public sealed partial class OemUploadService(
 
     [GeneratedRegex("^[0-9a-fA-F]{32}$")]
     private static partial Regex Md5Pattern();
+
+    [GeneratedRegex("^[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
+    private static partial Regex Sha256Pattern();
 }
 
 /// <summary>Named MySQL lock plus the connection that owns it (the lock dies with the connection).</summary>

@@ -11,8 +11,8 @@ public sealed record ReassignTaskRequest(ulong NewApproverUserId, string Reason,
 public sealed record CancelTransferRequest(string Reason, ulong? Version);
 
 /// <summary>
-/// Approver and recovery operations. Lock order is always transfer → instance → task,
-/// matching the transfer progression, so concurrent approvals, reassignments and validation
+/// Approver and recovery operations. Rows are locked transfer → instance → task (the global
+/// order on <see cref="OemLocks"/>), matching the transfer progression, so concurrent approvals, reassignments and validation
 /// completions serialise without deadlocks; the task version rejects stale decisions.
 /// </summary>
 public sealed class OemApprovalService(
@@ -203,7 +203,7 @@ public sealed class OemApprovalService(
             .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         var transfer = await OemTransferProgression.LockTransferAsync(uow, located.TransferId, ct);
         var instance = await OemApprovalEngine.LockInstanceAsync(uow, located.InstanceId, ct);
-        var task = await uow.Db.OemFlowTasks.FromSqlInterpolated($"SELECT * FROM oem_flow_tasks WHERE id = {taskId} FOR UPDATE").SingleAsync(ct);
+        var task = await OemLocks.ForUpdate<OemFlowTask>(uow.Db, taskId).SingleAsync(ct);
         return (transfer, instance, task);
     }
 }

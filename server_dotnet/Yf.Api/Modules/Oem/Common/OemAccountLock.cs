@@ -1,5 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Oem.Data;
 
 namespace Yf.Api.Modules.Oem.Common;
 
@@ -10,20 +10,13 @@ namespace Yf.Api.Modules.Oem.Common;
 /// its history checks, so a reference can never appear between "no history" and the delete.
 /// The management gate already serialises these transactions; this keeps the guarantee local
 /// to the row instead of depending on the gate alone.
-///
-/// Lock order: the account row is always the last OEM row a writer locks (after transfer,
-/// file and company rows). Directory management locks company → account, and login only
-/// locks the account (and its refresh tokens), so taking it last never inverts an order.
-/// <c>LOCK IN SHARE MODE</c> keeps MySQL 5.7 compatibility.
+/// The account row is the last OEM row a writer locks — see the global order on <see cref="OemLocks"/>.
 /// </summary>
 internal static class OemAccountLock
 {
     public static async Task ShareAsync(OemUnitOfWork uow, OemActor actor, CancellationToken ct)
     {
         if (actor is not OemAccountActor account) return;
-        var locked = await uow.Db.Database
-            .SqlQuery<ulong>($"SELECT id AS Value FROM oem_accounts WHERE id = {account.AccountId} LOCK IN SHARE MODE")
-            .SingleOrDefaultAsync(ct);
-        if (locked == 0) throw ApiException.Forbidden();
+        if (!await OemLocks.ForShareAsync<OemAccount>(uow, account.AccountId, ct)) throw ApiException.Forbidden();
     }
 }

@@ -71,7 +71,7 @@ public sealed class OemApprovalEngine
             .SingleOrDefaultAsync(ct);
 
     public static async Task<OemFlowInstance> LockInstanceAsync(OemUnitOfWork uow, ulong instanceId, CancellationToken ct) =>
-        await uow.Db.OemFlowInstances.FromSqlInterpolated($"SELECT * FROM oem_flow_instances WHERE id = {instanceId} FOR UPDATE")
+        await OemLocks.ForUpdate<OemFlowInstance>(uow.Db, instanceId)
             .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
 
     /// <summary>

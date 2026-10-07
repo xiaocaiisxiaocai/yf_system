@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.EntityFrameworkCore;
 using SharpCompress.Common;
 using SharpCompress.Writers;
 using SharpCompress.Writers.SevenZip;
@@ -224,6 +225,63 @@ public sealed class OemInspectionTests
         {
             Directory.Delete(work, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task SolidAndNonSolidRarArchivesTakeTheSameEntryChecks()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var work = Directory.CreateTempSubdirectory("oem-rar-solid-").FullName;
+        try
+        {
+            // Fixtures from ssokolow/rar-test-files (CC0-1.0), build/testfile.rar{3,5}.solid.rar and
+            // build/testfile.rar5.rar: one 12-byte entry "testfile.txt".
+            var fixtures = new (string Name, bool Solid, string Base64)[]
+            {
+                ("rar3-solid.rar", true, "UmFyIRoHADvQcwgADQAAAAAAAAALIXSAgCwAGwAAAAwAAAAA/o/BbgAAISodNQwAIAAAAHRlc3RmaWxlLnR4dKcYVBNehL0MdSfwO2HcUnaQEg0Av4hn9qn/1MQ9ewBABwA="),
+                ("rar5-solid.rar", true, "UmFyIRoHAQAgtvoRCgEFBgQFAQGAgAAbCEy8IgICmwAGjAC2gwLQDlA6/o/BboAdAQx0ZXN0ZmlsZS50eHTGhBgwAi+zL9hTBVYqwVzjk5C/3+NbyYPzV5Add1ZRAwUEAA=="),
+                ("rar5.rar", false, "UmFyIRoHAQAzkrXlCgEFBgAFAQGAgAAkmeyhIgICjAAGjAC2gwLQDlA6/o/BboAAAQx0ZXN0ZmlsZS50eHRUZXN0aW5nIDEyMwodd1ZRAwUEAA=="),
+            };
+            foreach (var (name, solid, base64) in fixtures)
+            {
+                var path = Write(work, name, Convert.FromBase64String(base64));
+                using (var archive = SharpCompress.Archives.ArchiveFactory.OpenArchive(path, SharpCompress.Readers.ReaderOptions.ForFilePath))
+                    Assert.Equal(solid, archive.IsSolid);
+                Assert.Equal(ArchiveOutcome.Accepted, (await ArchiveInspector.InspectAsync(path, "rar", Limits, work, ct)).Outcome);
+                Assert.Equal(ArchiveOutcome.LimitExceeded,
+                    (await ArchiveInspector.InspectAsync(path, "rar", Limits with { MaxEntries = 0 }, work, ct)).Outcome);
+                Assert.Equal(ArchiveOutcome.LimitExceeded,
+                    (await ArchiveInspector.InspectAsync(path, "rar", Limits with { MaxExpandedBytes = 5 }, work, ct)).Outcome);
+            }
+        }
+        finally
+        {
+            Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RowLocksResolveTheOemTableAndKeyFromTheEfModel()
+    {
+        var options = new DbContextOptionsBuilder<Yf.Api.Infrastructure.YfDbContext>()
+            .UseMySql("Server=127.0.0.1;Database=offline", new MySqlServerVersion(new Version(8, 0, 36)))
+            .Options;
+        using var db = new Yf.Api.Infrastructure.YfDbContext(options);
+
+        Assert.Equal(("oem_transfers", "id"), OemLocks.Target<Yf.Api.Modules.Oem.Data.OemTransfer>(db));
+        Assert.Equal(("oem_transfer_files", "id"), OemLocks.Target<Yf.Api.Modules.Oem.Data.OemTransferFile>(db));
+        Assert.Equal(("oem_upload_sessions", "id"), OemLocks.Target<Yf.Api.Modules.Oem.Data.OemUploadSession>(db));
+        Assert.Equal(("oem_download_leases", "id"), OemLocks.Target<Yf.Api.Modules.Oem.Data.OemDownloadLease>(db));
+
+        var sql = EntityFrameworkQueryableExtensions.ToQueryString(
+            OemLocks.ForUpdate<Yf.Api.Modules.Oem.Data.OemTransferFile>(db, 42UL));
+        // The key is a parameter, never spliced into the SQL text.
+        Assert.Contains("SELECT * FROM `oem_transfer_files` WHERE `id` = @p0 FOR UPDATE", sql);
+
+        // Types outside the EF model, and mapped tables outside the OEM module, are refused.
+        Assert.Throws<InvalidOperationException>(() => OemLocks.Target<OemInspectionTests>(db));
+        Assert.Throws<InvalidOperationException>(() => OemLocks.Target<Yf.Api.Infrastructure.Entities.User>(db));
+        Assert.Throws<InvalidOperationException>(() => OemLocks.ForUpdate<Yf.Api.Infrastructure.Entities.User>(db, 1UL));
     }
 
     [Fact]

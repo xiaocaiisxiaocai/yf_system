@@ -339,8 +339,8 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     }
 
     /// <summary>
-    /// Locks the account's company and then the account, the same company → account order
-    /// used by <see cref="CreateAccountAsync"/>, so the active-account count read afterwards
+    /// Locks the account's company and then the account, the company → account order of
+    /// <see cref="OemLocks"/> also used by <see cref="CreateAccountAsync"/>, so the active-account count read afterwards
     /// cannot be changed by a concurrent create/disable/delete for the same company.
     /// </summary>
     private static async Task<OemAccount> LockAccountForCompanyChangeAsync(OemUnitOfWork uow, ulong id, CancellationToken ct)
@@ -368,11 +368,11 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     }
 
     private static async Task<OemCompany> LockCompanyAsync(OemUnitOfWork uow, ulong id, CancellationToken ct) =>
-        await uow.Db.OemCompanies.FromSqlInterpolated($"SELECT * FROM oem_companies WHERE id = {id} FOR UPDATE").SingleOrDefaultAsync(ct)
+        await OemLocks.ForUpdate<OemCompany>(uow.Db, id).SingleOrDefaultAsync(ct)
         ?? throw ApiException.NotFound();
 
     private static async Task<OemAccount> LockAccountAsync(OemUnitOfWork uow, ulong id, CancellationToken ct) =>
-        await uow.Db.OemAccounts.FromSqlInterpolated($"SELECT * FROM oem_accounts WHERE id = {id} FOR UPDATE").SingleOrDefaultAsync(ct)
+        await OemLocks.ForUpdate<OemAccount>(uow.Db, id).SingleOrDefaultAsync(ct)
         ?? throw ApiException.NotFound();
 
     private static OemCompanyUpsert ValidateCompany(OemCompanyUpsert request) => new(

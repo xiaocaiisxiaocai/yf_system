@@ -127,7 +127,7 @@ public sealed class OemAuthService(
         await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         await AccessService.LockBusinessAsync(context.Database.Connection(), context.Database.RequireTransaction(), ct);
         var account = await LockAccountAsync(context, found.AccountId, ct) ?? throw ApiException.Unauthorized("账号不存在");
-        var row = await context.OemRefreshTokens.FromSqlInterpolated($"SELECT * FROM oem_refresh_tokens WHERE id = {found.Id} FOR UPDATE")
+        var row = await OemLocks.ForUpdate<OemRefreshToken>(context, found.Id)
                       .SingleOrDefaultAsync(ct) ?? throw ApiException.Unauthorized("登录状态无效");
         var now = await OemClock.NowAsync(context, ct);
         if (row.Revoked || row.ExpiresAt <= now || row.SessionExpiresAt <= now)
@@ -190,7 +190,7 @@ public sealed class OemAuthService(
         await using var tx = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         await AccessService.LockBusinessAsync(context.Database.Connection(), context.Database.RequireTransaction(), ct);
         foreach (var accountId in targets.Select(item => item.AccountId).Distinct().Order())
-            await context.OemAccounts.FromSqlInterpolated($"SELECT * FROM oem_accounts WHERE id = {accountId} FOR UPDATE")
+            await OemLocks.ForUpdate<OemAccount>(context, accountId)
                 .AsNoTracking().SingleOrDefaultAsync(ct);
         foreach (var target in targets.OrderBy(item => item.AccountId))
         {
@@ -275,7 +275,7 @@ public sealed class OemAuthService(
             .SetProperty(token => token.RevokeReason, reason), ct);
 
     private static Task<OemAccount?> LockAccountAsync(YfDbContext context, ulong id, CancellationToken ct) =>
-        context.OemAccounts.FromSqlInterpolated($"SELECT * FROM oem_accounts WHERE id = {id} FOR UPDATE").SingleOrDefaultAsync(ct);
+        OemLocks.ForUpdate<OemAccount>(context, id).SingleOrDefaultAsync(ct);
 
     /// <summary>
     /// Revokes the oldest live OEM session families beyond the shared per-account cap.
