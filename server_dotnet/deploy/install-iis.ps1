@@ -125,6 +125,13 @@ $maintenanceConfig = Read-YfMaintenanceConfig $ConfigPath
 if ($maintenanceConfig.Storage -ne $storage) { throw 'Configuration storage path changed during validation.' }
 if ($maintenanceConfig.OemStorage -ne $oemStorage) { throw 'Configuration OEM storage path changed during validation.' }
 Assert-YfPublishedConfig $PackageRoot
+# Existing data is never silently re-ACL'd. Inspect every effective root rule and every
+# descendant explicit rule before creating IIS resources; empty/new roots are normalized below.
+foreach ($dataRoot in @($storage,$oemStorage,$LogRoot) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) }) {
+    if (@(Get-ChildItem -LiteralPath $dataRoot -Force).Count) {
+        Assert-YfNoUnexpectedApplicationTreeAccess $dataRoot @()
+    }
+}
 Import-Module WebAdministration -ErrorAction Stop
 if (Test-Path "IIS:\Sites\$SiteName") { throw 'IIS site already exists; follow documented upgrade procedure.' }
 if (Test-Path "IIS:\AppPools\$AppPoolName") { throw 'IIS application pool already exists; refusing to reuse another application pool.' }
@@ -180,14 +187,16 @@ try {
     $installedPool = Get-Item "IIS:\AppPools\$AppPoolName"
     Assert-YfApplicationPoolProcessModel ($installedPool.processModel.identityType.ToString()) ([bool]$installedPool.processModel.loadUserProfile) ([int]$installedPool.processModel.maxProcesses)
     $identity = 'IIS AppPool\' + $AppPoolName
-    & icacls.exe $SiteRoot /grant "${identity}:(OI)(CI)RX" | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application read permissions.' }
+    Set-YfApplicationDirectoryReadAcl $SiteRoot $identity
     # Business storage: inheritance off; SYSTEM and Administrators FullControl, pool identity Modify.
     Set-YfApplicationDirectoryAcl $storage $identity
+    Assert-YfNoUnexpectedApplicationTreeAccess $storage @($identity)
     if ($oemStorage) { Set-YfApplicationDirectoryAcl $oemStorage $identity }
+    if ($oemStorage) { Assert-YfNoUnexpectedApplicationTreeAccess $oemStorage @($identity) }
     if ($LogRoot) {
         if (!$logRootExisted) { New-Item -ItemType Directory -Path $LogRoot | Out-Null; $createdLogRoot = $true }
         Set-YfApplicationDirectoryAcl $LogRoot $identity
+        Assert-YfNoUnexpectedApplicationTreeAccess $LogRoot @($identity)
     }
     Protect-YfConfigurationFile $ConfigPath $identity
     New-Website -Name $SiteName -PhysicalPath $SiteRoot -ApplicationPool $AppPoolName -Port $HttpsPort -HostHeader $HostName -Ssl -SslFlags 1 | Out-Null

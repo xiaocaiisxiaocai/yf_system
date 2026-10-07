@@ -64,9 +64,9 @@ jobs:
             fi
           done
           exit "$status"
-      - name: Audit production web dependencies
+      - name: Audit web and build dependencies
         working-directory: web
-        run: npm audit --omit=dev
+        run: npm audit --include=dev
       - name: Upload verification report
         if: always()
         uses: actions/upload-artifact@v4

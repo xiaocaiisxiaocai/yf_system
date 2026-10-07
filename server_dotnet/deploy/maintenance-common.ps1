@@ -204,6 +204,49 @@ function ConvertTo-YfSid($Identity) {
     if ($Identity -is [Security.Principal.SecurityIdentifier]) { return $Identity }
     return (New-Object Security.Principal.NTAccount ([string]$Identity)).Translate([Security.Principal.SecurityIdentifier])
 }
+function Get-YfAllowedApplicationSids([object[]]$AdditionalIdentities=@()) {
+    $result = @('S-1-5-18','S-1-5-32-544')
+    foreach ($identity in @($AdditionalIdentities)) {
+        if ($null -ne $identity -and ![string]::IsNullOrWhiteSpace([string]$identity)) {
+            $result += (ConvertTo-YfSid $identity).Value
+        }
+    }
+    return @($result | Sort-Object -Unique)
+}
+function Test-YfSensitiveAccessRule($Rule) {
+    if ($Rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { return $false }
+    $mask = [Security.AccessControl.FileSystemRights]::Read -bor
+        [Security.AccessControl.FileSystemRights]::Write -bor
+        [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+        [Security.AccessControl.FileSystemRights]::Delete -bor
+        [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+        [Security.AccessControl.FileSystemRights]::TakeOwnership
+    return ($Rule.FileSystemRights -band $mask) -ne 0
+}
+function Assert-YfNoUnexpectedApplicationTreeAccess([string]$Path,[object[]]$AllowedIdentities=@()) {
+    if (!(Test-Path -LiteralPath $Path -PathType Container)) { throw 'Application data directory is missing.' }
+    Assert-YfNoLinks $Path
+    $allowed = Get-YfAllowedApplicationSids $AllowedIdentities
+    $unexpected = New-Object Collections.Generic.List[string]
+    $rootItem = Get-Item -LiteralPath $Path -Force
+    $items = @($rootItem) + @(Get-ChildItem -LiteralPath $Path -Recurse -Force)
+    foreach ($item in $items) {
+        # The root's inherited rules are effective on the whole tree, while descendants only need
+        # their explicit rules checked; inherited access was already checked at its originating ancestor.
+        $includeInherited = $item.FullName -eq $rootItem.FullName
+        $rules = @((Get-Acl -LiteralPath $item.FullName).GetAccessRules($true,$includeInherited,[Security.Principal.SecurityIdentifier]))
+        foreach ($rule in $rules) {
+            if ((Test-YfSensitiveAccessRule $rule) -and $allowed -notcontains $rule.IdentityReference.Value) {
+                $unexpected.Add("$($item.FullName) [$($rule.IdentityReference.Value):$($rule.FileSystemRights)]")
+                if ($unexpected.Count -ge 20) { break }
+            }
+        }
+        if ($unexpected.Count -ge 20) { break }
+    }
+    if ($unexpected.Count) {
+        throw ('Unexpected read/write ACL entries were found. No ACLs were changed. Review and remove or replace these entries before retrying: ' + ($unexpected -join '; '))
+    }
+}
 function Set-YfApplicationDirectoryAcl([string]$Path, $ModifyIdentity) {
     # Business storage and log directories: inheritance disabled, SYSTEM and BUILTIN\Administrators
     # keep FullControl (admins are never locked out), the application pool identity gets Modify,
@@ -232,6 +275,56 @@ function Assert-YfApplicationDirectoryAcl([string]$Path, $ModifyIdentity) {
     $unexpected = @($rules | Where-Object { $allowed -notcontains $_.IdentityReference.Value })
     if (!$applied.AreAccessRulesProtected -or $identityRules.Count -lt 1 -or $unexpected.Count) {
         throw 'Application directory ACL verification failed; only SYSTEM, Administrators and the application pool identity may have access.'
+    }
+}
+function Set-YfApplicationDirectoryReadAcl([string]$Path, $ReadIdentity) {
+    if (!(Test-Path -LiteralPath $Path -PathType Container)) { throw 'Application directory is missing.' }
+    Assert-YfNoLinks $Path
+    $readSid = ConvertTo-YfSid $ReadIdentity
+    $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
+    $rootAcl = New-Object Security.AccessControl.DirectorySecurity
+    $rootAcl.SetAccessRuleProtection($true,$false)
+    foreach ($sid in @((New-Object Security.Principal.SecurityIdentifier 'S-1-5-18'),(New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544'))) {
+        $rootAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl',$inherit,'None','Allow')))
+    }
+    $rootAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($readSid,'ReadAndExecute',$inherit,'None','Allow')))
+    Set-Acl -LiteralPath $Path -AclObject $rootAcl
+
+    # Package copies must never carry or inherit write access. Clear every descendant's explicit
+    # access rules and make it inherit the protected root. Ownership and audit rules are preserved.
+    foreach ($item in Get-ChildItem -LiteralPath $Path -Recurse -Force) {
+        $acl = Get-Acl -LiteralPath $item.FullName
+        foreach ($rule in @($acl.GetAccessRules($true,$false,[Security.Principal.SecurityIdentifier]))) {
+            [void]$acl.RemoveAccessRuleSpecific($rule)
+        }
+        $acl.SetAccessRuleProtection($false,$false)
+        Set-Acl -LiteralPath $item.FullName -AclObject $acl
+    }
+    Assert-YfApplicationDirectoryReadAcl $Path $readSid
+}
+function Assert-YfApplicationDirectoryReadAcl([string]$Path, $ReadIdentity) {
+    $readSid = ConvertTo-YfSid $ReadIdentity
+    Assert-YfNoUnexpectedApplicationTreeAccess $Path @($readSid)
+    $root = Get-Acl -LiteralPath $Path
+    $rules = @($root.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+    $writeMask = [Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+        [Security.AccessControl.FileSystemRights]::Delete -bor
+        [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+    $executeMask = [Security.AccessControl.FileSystemRights]::ReadAndExecute
+    $fullControl = [Security.AccessControl.FileSystemRights]::FullControl
+    $systemFull = @($rules | Where-Object { $_.IdentityReference.Value -eq 'S-1-5-18' -and $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band $fullControl) -eq $fullControl })
+    $adminsFull = @($rules | Where-Object { $_.IdentityReference.Value -eq 'S-1-5-32-544' -and $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band $fullControl) -eq $fullControl })
+    $readRules = @($rules | Where-Object { $_.IdentityReference -eq $readSid -and $_.AccessControlType -eq 'Allow' })
+    if (!$root.AreAccessRulesProtected -or !$systemFull.Count -or !$adminsFull.Count -or $readRules.Count -lt 1 -or
+        @($readRules | Where-Object { ($_.FileSystemRights -band $writeMask) -ne 0 }).Count -or
+        @($readRules | Where-Object { ($_.FileSystemRights -band $executeMask) -eq $executeMask -and ($_.FileSystemRights -band $writeMask) -eq 0 }).Count -lt 1) {
+        throw 'Application directory ACL verification failed; the application pool must have inherited ReadAndExecute without write access.'
+    }
+    foreach ($item in Get-ChildItem -LiteralPath $Path -Recurse -Force) {
+        $itemRules = @((Get-Acl -LiteralPath $item.FullName).GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+        if (@($itemRules | Where-Object { $_.IdentityReference -eq $readSid -and $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band $writeMask) -ne 0 }).Count) {
+            throw "Application payload grants write access to the application pool identity: $($item.FullName)"
+        }
     }
 }
 function Wait-YfHealth([string]$Origin,[int]$WaitSeconds,[int]$RequestTimeoutSeconds) {

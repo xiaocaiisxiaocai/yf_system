@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { expect, test } from 'vitest'
@@ -45,4 +46,28 @@ test.each(copies)('$directory parses many sibling brace groups without overflowi
   const output = expand(pattern, { max: 16, maxLength: 65536 })
   expect(output.length).toBeGreaterThan(0)
   expect(output.length).toBeLessThanOrEqual(16)
+})
+
+// CVE-2026-93749: a tiny indexed map used to drive a synchronous loop for its
+// attacker-controlled line offset. Keep a regressed dependency in a bounded child.
+test.each([
+  { line: 0, expected: 'drawing();' },
+  { line: 1_000_000_000_000, expected: 'rejected' },
+])('source-map-js handles indexed line offset $line safely', ({ line, expected }) => {
+  const code = `
+    const { SourceMapConsumer, SourceNode } = require('source-map-js');
+    try {
+      const consumer = new SourceMapConsumer({ version: 3, sections: [{
+        offset: { line: ${line}, column: 0 },
+        map: { version: 3, sources: ['drawing.js'], sourcesContent: ['drawing();'], names: [], mappings: 'AAAA' }
+      }] });
+      process.stdout.write(SourceNode.fromStringWithSourceMap('drawing();', consumer).toString());
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      process.stdout.write('rejected');
+    }
+  `
+  expect(execFileSync(process.execPath, ['--max-old-space-size=64', '-e', code], {
+    cwd: resolve('.'), encoding: 'utf8', timeout: 3000, windowsHide: true,
+  })).toBe(expected)
 })

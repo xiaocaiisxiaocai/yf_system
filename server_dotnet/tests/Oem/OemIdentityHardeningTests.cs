@@ -1,11 +1,79 @@
 using System.Net;
+using System.Net.Http.Json;
 using Dapper;
+using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Oem.Identity;
 
 namespace Yf.Api.Tests.Oem;
 
 public sealed class OemIdentityHardeningTests
 {
     private const string RefreshCookie = "oem_refresh_token";
+
+    [Fact(Timeout = 180_000)]
+    public async Task WrongPasswordsDoNotPersistAndLegacyLockDoesNotBlockOemLogin()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var admin = await host.LoginAdminAsync(ct);
+        await host.CreateVendorAsync(admin, "不锁定厂商", "no_lock_vendor", ct);
+        await using var connection = await host.OpenAsync(ct);
+        var accountId = await connection.ExecuteScalarAsync<ulong>(
+            "SELECT id FROM oem_accounts WHERE employee_no='no_lock_vendor'");
+        await connection.ExecuteAsync("""
+            UPDATE oem_accounts
+            SET failed_login_attempts=2147483647,locked_until=UTC_TIMESTAMP(3)+INTERVAL 1 DAY
+            WHERE id=@accountId
+            """, new { accountId });
+
+        var service = host.Service<OemAuthService>();
+        var legacy = await service.LoginAsync(new("no_lock_vendor", "Vendor#2026"), "192.0.2.1", ct);
+        Assert.Equal(accountId, legacy.Response.Account.Id);
+        Assert.Equal((0, (DateTime?)null), await AccountLockStateAsync());
+
+        for (var attempt = 2; attempt <= 11; attempt++)
+        {
+            var rejected = await Assert.ThrowsAsync<ApiException>(() => service.LoginAsync(
+                new("no_lock_vendor", "Vendor#2026-wrong"), "192.0.2." + attempt, ct));
+            Assert.Equal(HttpStatusCode.Unauthorized, (HttpStatusCode)rejected.Status);
+            Assert.Equal("账号或密码错误", rejected.Message);
+        }
+
+        Assert.Equal((0, (DateTime?)null), await AccountLockStateAsync());
+        Assert.Equal(10, await connection.ExecuteScalarAsync<int>("""
+            SELECT COUNT(*) FROM audit_logs
+            WHERE action='OEM_LOGIN_FAILED' AND actor_realm='oem' AND actor_account_id=@accountId
+            """, new { accountId }));
+        Assert.Equal(0, await connection.ExecuteScalarAsync<int>("""
+            SELECT COUNT(*) FROM audit_logs
+            WHERE action='OEM_LOGIN_LOCKED' AND actor_realm='oem' AND actor_account_id=@accountId
+            """, new { accountId }));
+        Assert.Equal(accountId, (await service.LoginAsync(
+            new("no_lock_vendor", "Vendor#2026"), "198.51.100.1", ct)).Response.Account.Id);
+
+        async Task<(int Failures, DateTime? LockedUntil)> AccountLockStateAsync()
+        {
+            var row = await connection.QuerySingleAsync<OemLockState>(
+                "SELECT failed_login_attempts Failures,locked_until LockedUntil FROM oem_accounts WHERE id=@accountId",
+                new { accountId });
+            return (row.Failures, row.LockedUntil);
+        }
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task OemAuthRejectsCrossSiteFetchWithoutOrigin()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var client = host.Anonymous();
+        client.Http.DefaultRequestHeaders.Remove("Origin");
+        client.Http.DefaultRequestHeaders.Add("Sec-Fetch-Site", "cross-site");
+
+        using var response = await client.Http.PostAsJsonAsync("/api/v1/oem/auth/login",
+            new { employeeNo = "unknown", password = "Unknown#2026" }, ct);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
 
     [Fact(Timeout = 240_000)]
     public async Task OnlyReuseOfARotatedRefreshTokenIsAuditedAsReplay()
@@ -150,4 +218,10 @@ public sealed class OemIdentityHardeningTests
     }
 
     private static string Hash(string token) => Yf.Api.Modules.Identity.TokenService.HashRefreshToken(token);
+
+    private sealed class OemLockState
+    {
+        public int Failures { get; init; }
+        public DateTime? LockedUntil { get; init; }
+    }
 }

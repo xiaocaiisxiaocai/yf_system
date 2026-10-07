@@ -56,6 +56,8 @@ try {
         $installScript -match [regex]::Escape('CreateElement(''environmentVariable'')') -or
         $installScript -notmatch [regex]::Escape('Set-YfApplicationDirectoryAcl $storage $identity') -or
         $installScript -notmatch [regex]::Escape('Set-YfApplicationDirectoryAcl $oemStorage $identity') -or
+        $installScript -notmatch [regex]::Escape('Set-YfApplicationDirectoryReadAcl $SiteRoot $identity') -or
+        $installScript -notmatch [regex]::Escape('Assert-YfNoUnexpectedApplicationTreeAccess $dataRoot @()') -or
         $installScript -notmatch [regex]::Escape('Wait-YfHealth $origin $HealthCheckWaitSeconds $HealthRequestTimeoutSeconds') -or
         $installScript -notmatch [regex]::Escape('(Within $storage $other) -or (Within $other $storage)') -or
         $installScript -notmatch [regex]::Escape('$maintenanceConfig = Read-YfMaintenanceConfig $ConfigPath') -or
@@ -127,6 +129,13 @@ try {
     if ($maintainScript.IndexOf('$migrationAttempted=$true',[StringComparison]::Ordinal) -gt
         $maintainScript.IndexOf('Invoke-YfMigration $NewSiteRoot $targetConfig.Path',[StringComparison]::Ordinal)) {
         throw 'Maintenance marks migration risk only after starting the migration.'
+    }
+    $aclPreflight=$maintainScript.IndexOf('Assert-YfNoUnexpectedApplicationTreeAccess $dataRoot @($preflightIdentity)',[StringComparison]::Ordinal)
+    $poolStop=$maintainScript.IndexOf('Stop-WebAppPool -Name $pool',[StringComparison]::Ordinal)
+    if ($aclPreflight -lt 0 -or $poolStop -lt 0 -or $aclPreflight -gt $poolStop -or
+        $maintainScript.IndexOf('Set-YfApplicationDirectoryReadAcl $Root $identity',[StringComparison]::Ordinal) -lt 0 -or
+        $maintainScript.IndexOf('Set-YfApplicationDirectoryAcl $Config.Storage $identity',[StringComparison]::Ordinal) -lt 0) {
+        throw 'Maintenance does not reject broad data ACLs before stopping the pool or protect the new application/data roots.'
     }
     $siteConfigured=$maintainScript.IndexOf('Set-YfSiteConfig $NewSiteRoot',[StringComparison]::Ordinal)
     $readinessCheck=$maintainScript.IndexOf('Assert-YfDeploymentReadiness $NewSiteRoot $targetConfig',[StringComparison]::Ordinal)
@@ -340,6 +349,82 @@ try {
         throw 'Application directory ACL is not limited to SYSTEM and Administrators (FullControl) plus the pool identity (Modify).'
     }
     Write-Output 'PASS storage and log directory ACL disables inheritance and keeps SYSTEM/Administrators FullControl'
+
+    $programParent=Join-Path $root 'program-parent'
+    $programRoot=Join-Path $programParent 'application'
+    New-Item -ItemType Directory -Path $programRoot | Out-Null
+    $programParentAcl=Get-Acl -LiteralPath $programParent
+    $programParentAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($usersSid,'Modify','ContainerInherit,ObjectInherit','None','Allow')))
+    Set-Acl -LiteralPath $programParent -AclObject $programParentAcl
+    New-Item -ItemType Directory -Path (Join-Path $programRoot 'bin') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $programRoot 'bin\Yf.Api.dll'),'fixture')
+    Set-YfApplicationDirectoryReadAcl $programRoot $readSid
+    $programAcl=Get-Acl -LiteralPath $programRoot
+    $programRules=@($programAcl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+    $programPoolRules=@($programRules | Where-Object { $_.IdentityReference -eq $readSid -and $_.AccessControlType -eq 'Allow' })
+    $programBroadRules=@($programRules | Where-Object { $_.IdentityReference -eq $usersSid -and $_.AccessControlType -eq 'Allow' })
+    $programWriteMask=[Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+    if (!$programAcl.AreAccessRulesProtected -or $programBroadRules.Count -ne 0 -or
+        !@($programPoolRules | Where-Object { ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadAndExecute) -eq [Security.AccessControl.FileSystemRights]::ReadAndExecute }).Count -or
+        @($programPoolRules | Where-Object { ($_.FileSystemRights -band $programWriteMask) -ne 0 }).Count) {
+        throw 'Program directory ACL did not remove inherited Users Modify or grant the pool read/execute only.'
+    }
+    $payloadRules=@((Get-Acl -LiteralPath (Join-Path $programRoot 'bin\Yf.Api.dll')).GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+    if (@($payloadRules | Where-Object { $_.IdentityReference -eq $usersSid -and $_.AccessControlType -eq 'Allow' }).Count -or
+        @($payloadRules | Where-Object { $_.IdentityReference -eq $readSid -and ($_.FileSystemRights -band $programWriteMask) -ne 0 }).Count) {
+        throw 'Program payload retained broad or application-pool write access.'
+    }
+    Write-Output 'PASS program directory removes inherited Users Modify and grants pool ReadAndExecute only'
+
+    $programWriteRoot=Join-Path $root 'program-root-with-extra-write'
+    New-Item -ItemType Directory -Path $programWriteRoot | Out-Null
+    Set-YfApplicationDirectoryReadAcl $programWriteRoot $readSid
+    $programWriteAcl=Get-Acl -LiteralPath $programWriteRoot
+    $programWriteAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($readSid,'WriteData','Allow')))
+    Set-Acl -LiteralPath $programWriteRoot -AclObject $programWriteAcl
+    Reject {
+        Assert-YfApplicationDirectoryReadAcl $programWriteRoot $readSid
+    } 'application root extra pool write rule refused even when RX rule exists' 'application pool must have inherited ReadAndExecute without write access'
+
+    $unsafeTree=Join-Path $root 'unsafe-data-tree'
+    New-Item -ItemType Directory -Path $unsafeTree | Out-Null
+    Set-YfApplicationDirectoryAcl $unsafeTree $readSid
+    $unsafeChild=Join-Path $unsafeTree 'existing'
+    New-Item -ItemType Directory -Path $unsafeChild | Out-Null
+    $unsafeFile=Join-Path $unsafeChild 'payload.bin'
+    [IO.File]::WriteAllText($unsafeFile,'fixture')
+    $unsafeChildAcl=Get-Acl -LiteralPath $unsafeChild
+    $unsafeChildAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($usersSid,'Modify','ContainerInherit,ObjectInherit','None','Allow')))
+    Set-Acl -LiteralPath $unsafeChild -AclObject $unsafeChildAcl
+    $unsafeFileAcl=Get-Acl -LiteralPath $unsafeFile
+    $unsafeFileAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($usersSid,'Read','Allow')))
+    Set-Acl -LiteralPath $unsafeFile -AclObject $unsafeFileAcl
+    Reject {
+        Assert-YfNoUnexpectedApplicationTreeAccess $unsafeTree @($readSid)
+    } 'explicit Users read/write on data descendants refused before deployment' 'No ACLs were changed'
+
+    $deleteOnlyTree=Join-Path $root 'delete-only-data-tree'
+    New-Item -ItemType Directory -Path $deleteOnlyTree | Out-Null
+    Set-YfApplicationDirectoryAcl $deleteOnlyTree $readSid
+    $deleteOnlyChild=Join-Path $deleteOnlyTree 'existing'
+    New-Item -ItemType Directory -Path $deleteOnlyChild | Out-Null
+    $deleteOnlyAcl=Get-Acl -LiteralPath $deleteOnlyChild
+    $deleteOnlyAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($usersSid,'DeleteSubdirectoriesAndFiles','Allow')))
+    Set-Acl -LiteralPath $deleteOnlyChild -AclObject $deleteOnlyAcl
+    Reject {
+        Assert-YfNoUnexpectedApplicationTreeAccess $deleteOnlyTree @($readSid)
+    } 'standalone DeleteSubdirectoriesAndFiles child ACE refused' 'No ACLs were changed'
+
+    $allowedTree=Join-Path $root 'allowed-data-tree'
+    New-Item -ItemType Directory -Path $allowedTree | Out-Null
+    Set-YfApplicationDirectoryAcl $allowedTree $readSid
+    $allowedFile=Join-Path $allowedTree 'payload.bin'
+    [IO.File]::WriteAllText($allowedFile,'fixture')
+    $allowedFileAcl=Get-Acl -LiteralPath $allowedFile
+    $allowedFileAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($readSid,'Read','Allow')))
+    Set-Acl -LiteralPath $allowedFile -AclObject $allowedFileAcl
+    Assert-YfNoUnexpectedApplicationTreeAccess $allowedTree @($readSid)
+    Write-Output 'PASS recursive data ACL audit rejects broad child access and accepts the fixed allow-list'
 
     $dumpHelp="  --set-gtid-purged[=name]`r`n  --column-statistics  Add ANALYZE TABLE statements"
     $mysql8='mysqldump  Ver 8.0.36 for Win64 on x86_64 (MySQL Community Server - GPL)'

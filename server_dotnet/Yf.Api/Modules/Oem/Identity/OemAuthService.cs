@@ -24,7 +24,7 @@ public sealed record OemMeResponse(OemAccountBrief Account, bool MustChangePassw
 
 /// <summary>
 /// Login, refresh rotation, logout and password change for OEM accounts. The flow
-/// mirrors the internal realm (same Argon2 policy, same lockout thresholds, same
+/// mirrors the internal realm (same Argon2 policy, source/IP throttling and
 /// rotation/replay semantics) but operates only on the OEM tables, so an OEM
 /// session can never resolve to an internal or supplier user.
 /// </summary>
@@ -72,25 +72,17 @@ public sealed class OemAuthService(
             await AuditBestEffortAsync(context, null, employeeNo, "OEM_LOGIN_FAILED", clientIp, null, ct);
             throw ApiException.Unauthorized(InvalidCredentials);
         }
-        if (account.LockedUntil is DateTime lockedUntil && lockedUntil > now)
-        {
-            await tx.RollbackAsync(ct);
-            await AuditBestEffortAsync(context, account, employeeNo, "OEM_LOGIN_FAILED", clientIp, null, ct);
-            throw ApiException.Unauthorized(InvalidCredentials);
-        }
         if (account.PasswordHash != candidate.PasswordHash)
             matches = await PasswordService.VerifyAsync(request.Password, account.PasswordHash, ct);
         if (!matches)
         {
-            var lockExpired = account.LockedUntil is DateTime previous && previous <= now;
-            var failures = lockExpired ? 1 : Math.Min(Math.Max(0, account.FailedLoginAttempts), IdentityService.MaximumFailedLogins) + 1;
-            account.FailedLoginAttempts = failures;
-            account.LockedUntil = failures >= IdentityService.MaximumFailedLogins ? now.AddMinutes(IdentityService.LoginLockMinutes) : null;
+            // Source/IP throttling remains the abuse control. Do not let unauthenticated
+            // failures create persistent state that can deny login to a known OEM account.
+            account.FailedLoginAttempts = 0;
+            account.LockedUntil = null;
             await context.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
-            var lockedNow = failures >= IdentityService.MaximumFailedLogins;
-            await AuditBestEffortAsync(context, account, employeeNo, lockedNow ? "OEM_LOGIN_LOCKED" : "OEM_LOGIN_FAILED", clientIp,
-                lockedNow ? new { failedAttempts = failures, lockMinutes = IdentityService.LoginLockMinutes } : null, ct);
+            await AuditBestEffortAsync(context, account, employeeNo, "OEM_LOGIN_FAILED", clientIp, null, ct);
             throw ApiException.Unauthorized(InvalidCredentials);
         }
         var company = await context.OemCompanies.AsNoTracking().SingleOrDefaultAsync(item => item.Id == account.OemCompanyId, ct);

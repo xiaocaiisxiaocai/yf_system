@@ -24,6 +24,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         AccessService.RequireInternal(actor);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await context.Database.OpenConnectionAsync(ct);
+        await AccessService.RequirePermissionAsync(context.Database.Connection(), null, actor, "role:manage", ct);
         var owned = (await ceiling.GetCodesAsync(context.Database.Connection(), null, actor.Id, ct)).ToHashSet(StringComparer.Ordinal);
         var isAdmin = await AccessService.IsSystemAdminAsync(context.Database.Connection(), null, actor.Id, ct);
         var all = await context.Permissions.AsNoTracking().OrderBy(p => p.SortNo).ThenBy(p => p.Id).ToListAsync(ct);

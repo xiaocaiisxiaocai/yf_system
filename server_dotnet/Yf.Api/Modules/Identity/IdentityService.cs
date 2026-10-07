@@ -15,9 +15,6 @@ public sealed class IdentityService(
     AuditService audit,
     ILogger<IdentityService>? logger = null)
 {
-    internal const int MaximumFailedLogins = 10;
-    internal const int LoginLockMinutes = 15;
-
     public async Task<(LoginResponse Response, string Refresh, DateTime RefreshExpiresAt)> LoginAsync(LoginRequest request, string clientIp, CancellationToken ct)
     {
         var employeeNo = request.EmployeeNo?.Trim() ?? "";
@@ -53,32 +50,25 @@ public sealed class IdentityService(
             await AuditBestEffortAsync(context.Database.Connection(), null, employeeNo, "LOGIN_FAILED", null, null, null, clientIp, ct);
             throw ApiException.Unauthorized("工号或密码错误");
         }
-        // The account row lock shares failure state across IPs, processes and restarts.
-        // Use the database clock (fetched once per transaction below); attempts during a
-        // lock must not extend its expiry.
+        // The account row lock keeps the credential recheck, status check and session issue
+        // atomic with concurrent password resets and account-management changes. Failed
+        // passwords are throttled in memory by source/IP; they do not persist victim-controlled
+        // failure counts or account locks.
         var dbNow = await DbClock.UtcNowAsync(context, ct);
-        var isLocked = user.LockedUntil is DateTime lockedUntil && lockedUntil > dbNow;
-        var lockExpired = user.LockedUntil is DateTime lu && lu <= dbNow;
-        if (isLocked)
-        {
-            await tx.RollbackAsync(ct);
-            await AuditBestEffortAsync(context.Database.Connection(), user.Id, employeeNo, "LOGIN_FAILED", null, null, null, clientIp, ct);
-            throw ApiException.Unauthorized("工号或密码错误");
-        }
         // Recheck a concurrently reset password, but avoid hashing twice under a
         // database lock when the credential we just verified has not changed.
         if (user.PasswordHash != candidate.PasswordHash)
             matches = await PasswordService.VerifyAsync(request.Password, user.PasswordHash, ct);
         if (!matches)
         {
-            var failures = lockExpired ? 1 : Math.Min(Math.Max(0, user.FailedLoginAttempts), MaximumFailedLogins) + 1;
-            user.FailedLoginAttempts = failures;
-            user.LockedUntil = failures >= MaximumFailedLogins ? dbNow.AddMinutes(LoginLockMinutes) : null;
+            // Normalize legacy lockout state without accumulating unauthenticated input.
+            // The columns remain for schema compatibility and administrative reset flows.
+            user.FailedLoginAttempts = 0;
+            user.LockedUntil = null;
             await context.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
-            var lockedNow = failures >= MaximumFailedLogins;
-            await AuditBestEffortAsync(context.Database.Connection(), user.Id, employeeNo, lockedNow ? "LOGIN_LOCKED" : "LOGIN_FAILED",
-                null, null, lockedNow ? new { failedAttempts = failures, lockMinutes = LoginLockMinutes } : null, clientIp, ct);
+            await AuditBestEffortAsync(context.Database.Connection(), user.Id, employeeNo, "LOGIN_FAILED",
+                null, null, null, clientIp, ct);
             throw ApiException.Unauthorized("工号或密码错误");
         }
         if (user.Status != AccountStatuses.Active || !await IsSupplierActiveAsync(context, user, ct))

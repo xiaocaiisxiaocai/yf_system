@@ -16,14 +16,14 @@ internal static class OemIdentityEndpoints
         var auth = oem.MapGroup("/auth");
         auth.MapPost("/login", async (OemLoginRequest request, HttpContext ctx, OemAuthService service, AppOptions options, CancellationToken ct) =>
         {
-            if (!IdentityModule.OriginAllowed(ctx.Request.Headers.Origin.ToString(), options.WebBaseUrl)) throw ApiException.Forbidden();
+            if (!IdentityModule.OriginAllowed(ctx.Request, options.WebBaseUrl)) throw ApiException.Forbidden();
             var result = await service.LoginAsync(request, ClientIp.Resolve(ctx, options), ct);
             SetRefreshCookie(ctx, result.Refresh, options);
             return Results.Json(result.Response);
         }).Produces<OemLoginResponse>();
         auth.MapPost("/refresh", async (HttpContext ctx, OemAuthService service, AppOptions options, CancellationToken ct) =>
         {
-            if (!IdentityModule.OriginAllowed(ctx.Request.Headers.Origin.ToString(), options.WebBaseUrl)) throw ApiException.Forbidden();
+            if (!IdentityModule.OriginAllowed(ctx.Request, options.WebBaseUrl)) throw ApiException.Forbidden();
             if (!ctx.Request.Cookies.TryGetValue(RefreshCookie, out var raw)) throw ApiException.Unauthorized("缺少登录凭证");
             var result = await service.RefreshAsync(raw, ClientIp.Resolve(ctx, options), ct);
             SetRefreshCookie(ctx, result.Refresh, options);
@@ -31,7 +31,7 @@ internal static class OemIdentityEndpoints
         }).Produces<OemTokenResponse>();
         auth.MapPost("/logout", async (HttpContext ctx, OemAuthService service, AppOptions options, CancellationToken ct) =>
         {
-            if (!IdentityModule.OriginAllowed(ctx.Request.Headers.Origin.ToString(), options.WebBaseUrl)) throw ApiException.Forbidden();
+            if (!IdentityModule.OriginAllowed(ctx.Request, options.WebBaseUrl)) throw ApiException.Forbidden();
             ctx.Request.Cookies.TryGetValue(RefreshCookie, out var refresh);
             await service.LogoutAsync(refresh, ctx.Request.Headers.Authorization.ToString(), ClientIp.Resolve(ctx, options), ct);
             ctx.Response.Cookies.Delete(RefreshCookie, new CookieOptions

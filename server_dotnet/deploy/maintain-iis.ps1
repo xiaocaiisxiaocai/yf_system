@@ -40,37 +40,25 @@ function Set-YfSiteConfig([string]$Root,[string]$ExternalConfig) {
 }
 function Grant-YfApplicationAccess([string]$Root,$Config,[string]$Pool,[switch]$NewStorage,[switch]$ReuseOemStorage) {
     $identity='IIS AppPool\'+$Pool
-    & icacls.exe $Root /grant "${identity}:(OI)(CI)RX" | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application pool access.' }
-    if ($NewStorage) {
-        # Restored storage is new: only SYSTEM, Administrators and the pool identity get access.
-        Set-YfApplicationDirectoryAcl $Config.Storage $identity
-    } else {
-        # Existing production storage keeps its reviewed ACL; only make sure the pool can modify it.
-        & icacls.exe $Config.Storage /grant "${identity}:(OI)(CI)M" | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application pool access.' }
-    }
+    Set-YfApplicationDirectoryReadAcl $Root $identity
+    # Existing nonempty trees were recursively audited before the pool stopped. Normalize each
+    # root now; allowed explicit descendant rules remain, and the post-check prevents drift.
+    Set-YfApplicationDirectoryAcl $Config.Storage $identity
+    Assert-YfNoUnexpectedApplicationTreeAccess $Config.Storage @($identity)
     if ($Config.OemStorage) {
         if ($NewStorage -and !(Test-Path -LiteralPath $Config.OemStorage)) {
             New-Item -ItemType Directory -Path $Config.OemStorage | Out-Null
         }
-        if ($NewStorage -and !$ReuseOemStorage) {
-            # OEM content is not restored from the collaboration backup; the new empty root gets a fresh restricted ACL.
-            Set-YfApplicationDirectoryAcl $Config.OemStorage $identity
-        } else {
-            & icacls.exe $Config.OemStorage /grant "${identity}:(OI)(CI)M" | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application pool access to OEM storage.' }
-        }
+        Set-YfApplicationDirectoryAcl $Config.OemStorage $identity
+        Assert-YfNoUnexpectedApplicationTreeAccess $Config.OemStorage @($identity)
     }
     $logDirectory=Get-YfLogDirectory $Config
     if ($logDirectory) {
         if (!(Test-Path -LiteralPath $logDirectory)) {
             New-Item -ItemType Directory -Path $logDirectory | Out-Null
-            Set-YfApplicationDirectoryAcl $logDirectory $identity
-        } else {
-            & icacls.exe $logDirectory /grant "${identity}:(OI)(CI)M" | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw 'Unable to grant application pool access to the log directory.' }
         }
+        Set-YfApplicationDirectoryAcl $logDirectory $identity
+        Assert-YfNoUnexpectedApplicationTreeAccess $logDirectory @($identity)
     }
     Protect-YfConfigurationFile $Config.Path $identity
 }
@@ -172,6 +160,18 @@ if ($Action -eq 'Upgrade') {
     }
 }
 if ($MigrateDatabase -and $Action -ne 'Upgrade') { throw 'MigrateDatabase is only supported for Upgrade.' }
+# Reject broad or unreviewed data ACLs while the current site is still running. New/empty
+# destinations are normalized after copy; nonempty trees must already contain only the fixed
+# SYSTEM/Administrators/application-pool identities, including explicit rules on descendants.
+if ($Action -ne 'Backup') {
+    $preflightIdentity='IIS AppPool\'+$pool
+    foreach ($dataRoot in @($targetConfig.Storage,$targetConfig.OemStorage,(Get-YfLogDirectory $targetConfig)) |
+        Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) }) {
+        if (@(Get-ChildItem -LiteralPath $dataRoot -Force).Count) {
+            Assert-YfNoUnexpectedApplicationTreeAccess $dataRoot @($preflightIdentity)
+        }
+    }
+}
 $wasRunning=(Get-WebAppPoolState -Name $pool).Value -eq 'Started'
 $migrationAttempted=$false
 $pathSwitched=$false

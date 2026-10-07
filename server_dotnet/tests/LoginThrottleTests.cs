@@ -87,47 +87,43 @@ public sealed class LoginThrottleTests
     }
 
     [Fact(Timeout = 120_000)]
-    public async Task LoginWithoutCaptchaKeepsFailuresAcrossIpsAndInstancesAndDoesNotExtendTheLock()
+    public async Task WrongPasswordsDoNotPersistFailureStateAndLegacyLocksDoNotBlockCorrectLogin()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await LoginDatabase.CreateAsync(ct);
         for (var attempt = 0; attempt < 10; attempt++)
             await scope.RejectAsync(attempt % 2 == 0 ? "target" : "TARGET", scope.Password + "wrong", "192.0.2." + (attempt + 1), ct);
 
-        var locked = await scope.StateAsync(ct);
-        Assert.Equal(10, locked.Failures);
-        Assert.NotNull(locked.LockedUntil);
-        Assert.InRange((locked.LockedUntil.Value - locked.Now).TotalMinutes, 14, 15.1);
-        await scope.RejectAsync("target", scope.Password, "198.51.100.1", ct);
-        await scope.RejectAsync("target", scope.Password + "wrong", "198.51.100.2", ct);
-        Assert.Equal(locked.LockedUntil, (await scope.StateAsync(ct)).LockedUntil);
+        var failed = await scope.StateAsync(ct);
+        Assert.Equal(0, failed.Failures);
+        Assert.Null(failed.LockedUntil);
         Assert.Equal(0, await scope.SessionsAsync(1, ct));
         await using (var audit = await scope.OpenAsync(ct))
-            Assert.Equal(1, await audit.ExecuteScalarAsync<int>(new CommandDefinition(
+        {
+            Assert.Equal(10, await audit.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM audit_logs WHERE action='LOGIN_FAILED' AND user_id=1", cancellationToken: ct)));
+            Assert.Equal(0, await audit.ExecuteScalarAsync<int>(new CommandDefinition(
                 "SELECT COUNT(*) FROM audit_logs WHERE action='LOGIN_LOCKED' AND user_id=1", cancellationToken: ct)));
+        }
         Assert.Equal(2UL, (await scope.LoginAsync("unaffected", scope.Password, "198.51.100.3", ct)).User.Id);
 
-        // Move only this fixture's persisted expiry; no clock or production limit is weakened.
-        await scope.ExecuteAsync("UPDATE users SET locked_until=UTC_TIMESTAMP()-INTERVAL 1 SECOND WHERE id=1", ct);
-        await scope.RejectAsync("target", scope.Password + "wrong", "203.0.113.1", ct);
-        var expired = await scope.StateAsync(ct);
-        Assert.Equal(1, expired.Failures);
-        Assert.Null(expired.LockedUntil);
+        // Existing rows from the former policy are compatibility data, not an authentication gate.
+        await scope.ExecuteAsync("UPDATE users SET failed_login_attempts=2147483647,locked_until=UTC_TIMESTAMP()+INTERVAL 1 DAY WHERE id=1", ct);
         Assert.Equal(1UL, (await scope.LoginAsync("target", scope.Password, "203.0.113.2", ct)).User.Id);
         Assert.Equal(0, (await scope.StateAsync(ct)).Failures);
         Assert.Null((await scope.StateAsync(ct)).LockedUntil);
     }
 
     [Fact(Timeout = 120_000)]
-    public async Task ConcurrentFailuresDoNotLoseCountsAndAuthenticatedPasswordChangeClearsTheLock()
+    public async Task ConcurrentFailuresDoNotPersistAndAuthenticatedPasswordChangeStillWins()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await LoginDatabase.CreateAsync(ct);
         await scope.LoginAsync("target", scope.Password, "192.0.2.100", ct);
         await Task.WhenAll(Enumerable.Range(1, 14).Select(attempt =>
             scope.RejectAsync("target", scope.Password + "wrong", "198.51.100." + attempt, ct)));
-        Assert.Equal(10, (await scope.StateAsync(ct)).Failures);
-        await scope.RejectAsync("target", scope.Password, "203.0.113.100", ct);
+        Assert.Equal(0, (await scope.StateAsync(ct)).Failures);
+        Assert.Null((await scope.StateAsync(ct)).LockedUntil);
 
         const string replacement = "NextLogin#2026";
         await scope.Service().ChangePasswordAsync(

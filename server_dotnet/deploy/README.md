@@ -46,9 +46,9 @@
   -SiteRoot 'C:\inetpub\yf_system_dotnet'
 ```
 
-脚本核对包文件 SHA-256、程序包/站点/配置/存储独立路径、证书、Hosting Bundle 和运行时，然后创建新应用池、新 HTTPS 站点。应用池会被明确设置并回读验证为 `processModel.maxProcesses=1`；无法保持单 worker 时安装停止。复制包后会清空站点内 `appsettings.json` 和 `appsettings.Production.json` 的凭据回退，正式站点只使用 `YF_CONFIG_PATH` 指向的外部配置；升级和恢复也执行同样处理。清空凭据回退时只清除 `App` 下的连接串、JWT、存储/日志路径、初始密码和 SMTP 密码并关闭自动初始化，`Logging`、`Serilog`、`AllowedHosts` 等非敏感设置保持发布包原值；`web.config` 中的 `YF_CONFIG_PATH`、`ASPNETCORE_ENVIRONMENT`、`DOTNET_ENVIRONMENT` 按名称替换为唯一一项（重复键会让 IIS 整站报 500.19）。它关闭配置文件 ACL 继承，只保留当前管理员、SYSTEM、Administrators 完全控制和应用池身份只读；程序目录只读。前后端同站点、同来源，不需要 ARR、URL Rewrite 或 Rust Windows 服务。
+脚本核对包文件 SHA-256、程序包/站点/配置/存储独立路径、证书、Hosting Bundle 和运行时，然后创建新应用池、新 HTTPS 站点。应用池会被明确设置并回读验证为 `processModel.maxProcesses=1`；无法保持单 worker 时安装停止。复制包后会清空站点内 `appsettings.json` 和 `appsettings.Production.json` 的凭据回退，正式站点只使用 `YF_CONFIG_PATH` 指向的外部配置；升级和恢复也执行同样处理。清空凭据回退时只清除 `App` 下的连接串、JWT、存储/日志路径、初始密码和 SMTP 密码并关闭自动初始化，`Logging`、`Serilog`、`AllowedHosts` 等非敏感设置保持发布包原值；`web.config` 中的 `YF_CONFIG_PATH`、`ASPNETCORE_ENVIRONMENT`、`DOTNET_ENVIRONMENT` 按名称替换为唯一一项（重复键会让 IIS 整站报 500.19）。它关闭配置文件 ACL 继承，只保留当前管理员、SYSTEM、Administrators 完全控制和应用池身份只读；程序目录关闭继承并递归清除包内显式访问项，只保留 SYSTEM、Administrators 完全控制和应用池 `ReadAndExecute`，不会保留父目录的 `Users`/`Authenticated Users` 写权限。前后端同站点、同来源，不需要 ARR、URL Rewrite 或 Rust Windows 服务。
 
-业务存储目录（`App.StorageRoot`）、OEM 文件目录（非空 `App.OemStorageRoot`）和日志目录（`App.LogDirectory`，见下文“日志”）使用显式 ACL：关闭继承并丢弃目录上原有的继承/显式项，只保留 `SYSTEM` 与 `BUILTIN\Administrators` 完全控制（管理员不会被锁在目录外）以及 `IIS AppPool\<应用池名>` 修改权限。子项随后继承这三项；子项上已有的显式 ACE 不会被改动。安装新站点和 Restore 的新存储都按此设置；Upgrade 沿用现有存储，只追加应用池修改权限，不删除运维已添加的 ACE。备份账号或监控等额外主体需要访问时，安装后由管理员按最小权限显式添加，不要重新开启继承或授予 Users/Everyone。
+业务存储目录（`App.StorageRoot`）、OEM 文件目录（非空 `App.OemStorageRoot`）和日志目录（`App.LogDirectory`，见下文“日志”）使用显式 ACL：关闭继承并丢弃根目录原有的继承/显式项，只保留 `SYSTEM` 与 `BUILTIN\Administrators` 完全控制（管理员不会被锁在目录外）以及 `IIS AppPool\<应用池名>` 修改权限。新建或空目录会自动规范；非空既有目录在安装或 Upgrade/Restore 停池前递归检查根目录的有效 ACE 和全部子项显式 ACE，只允许上述三类身份。发现 `Users`、`Authenticated Users`、旧服务账号或其他主体的读写权限时，脚本在不修改任何 ACL 的情况下列出路径和 SID 并停止；管理员须先确认这些权限是否仍有业务依据，再移除或改为受控的独立备份流程后重试。脚本不会为求通过而静默删除可能属于运维流程的子项 ACE。
 
 启动站点后，脚本从配置的 HTTPS 来源（`https://<HostName>[:端口]`）检查 `/health`，要求 `status=ok, db=up`（`/health` 同时返回 `storage=up|down`，数据库和存储目录读写探测都正常时才为 200/`status=ok`，否则 503/`status=degraded`），默认最多等待 180 秒（`-HealthCheckWaitSeconds`、`-HealthRequestTimeoutSeconds` 可调）；PowerShell 5.1 会显式启用 TLS 1.2，超时报错会附带最后一次失败原因。检查失败按下述规则整体回滚，因此配置错误、数据库不可达或应用启动失败（HTTP 500.30）不会留下半安装站点。探测需要在服务器本机能按 `HostName` 解析到本站；DNS 尚未切换时可在 hosts 中临时指向本机，或传 `-SkipHealthCheck` 并在切换后人工检查。外部配置 `App.AutoInitializeDatabase` 不为 `true` 时空库需另行显式初始化，脚本跳过该检查并给出警告，初始化后必须人工检查 `/health`。
 
@@ -58,7 +58,7 @@
 
 在外部配置中设置 `App.LogDirectory`（站点、程序包、配置和存储目录之外的本地绝对路径，见 `appsettings.example.json`）后，应用除写入 IIS/事件日志外，还会在该目录按天滚动写入 compact JSON 格式的应用日志；旧文件由应用按保留份数和单文件大小上限自动清理（文件名 `yf-api-YYYYMMDD.clef`，每天一个，单文件超过 100 MiB 时按大小续写新文件，最多保留 31 个文件），无需计划任务。请求日志只记录方法、路径、状态码和耗时，**从不记录查询字符串**（SignalR 握手的 `access_token` 在查询字符串中）；IIS 日志字段同样由安装脚本去掉 `cs-uri-query`。未设置 `App.LogDirectory` 时不写文件日志。
 
-安装时 `-LogRoot` 可省略，默认取外部配置中的 `App.LogDirectory`；安装脚本不改写外部配置，因此显式传入 `-LogRoot` 时必须与配置中的值一致，否则拒绝安装。目录不存在时会创建，并与业务存储使用同样的显式 ACL。Upgrade/Restore 若发现配置的日志目录不存在，也会创建并设置该 ACL；已存在时只追加应用池修改权限。日志可能包含账号、IP 和业务对象 ID，按内部运维数据保管，不要放在网站目录或共享给普通用户。
+安装时 `-LogRoot` 可省略，默认取外部配置中的 `App.LogDirectory`；安装脚本不改写外部配置，因此显式传入 `-LogRoot` 时必须与配置中的值一致，否则拒绝安装。目录不存在时会创建，并与业务存储使用同样的显式 ACL。Upgrade/Restore 对已有非空日志目录也在停池前执行递归 ACL 检查，通过后再规范根 ACL；不会只追加应用池权限并保留未知主体。日志可能包含账号、IP 和业务对象 ID，按内部运维数据保管，不要放在网站目录或共享给普通用户。
 
 ### 其他运行配置
 
