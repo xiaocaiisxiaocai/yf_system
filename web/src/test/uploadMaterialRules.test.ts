@@ -14,6 +14,9 @@ describe('company-to-supplier upload material rules', () => {
     'CSLR－605 JH机 210231－1 动作流程.xlsx',
     'CSLR-0123456789 一二三四五六七八九機 2100123456789-0123456789 動作流程.xlsx',
     'CSLR-605 一二三四五六七八九十機 210231-1 動作流程.xlsx',
+    'CSLR-605 JH机 210231-1 动作流程.xls',
+    'CSLR-605 JH機 210231-1 動作流程.xlsm',
+    'CSLR-605 JH机 210231-1 动作流程.XLSB',
   ])('accepts %s', (name) => {
     expect(isMotionFlowWorkbookName(name)).toBe(true)
     expect(companyMaterialNameError(name)).toBeNull()
@@ -26,7 +29,9 @@ describe('company-to-supplier upload material rules', () => {
     'CSLR-605 一二三四五六七八九十一機 210231-1 動作流程.xlsx',
     'CSLR-605 机 210231-1 动作流程.xlsx',
     'CSLR-605JH机 210231-1 动作流程.xlsx',
-    'CSLR-605 JH机 210231-1 动作流程.xls',
+    '动作流程.xls',
+    '动作流程.xlsm',
+    'CSLR-605 JH机 210231-1 流程.xlsb',
     'CSLX-605 JH机 210231-1 动作流程.xlsx',
     'CSLR-605 JH机 220231-1 动作流程.xlsx',
     'CSLR-605 JH机 210231-1 流程.xlsx',

@@ -86,7 +86,7 @@ internal static class BootstrapSeedCatalog
         ("notify.event.project_rejected", "true", "验收驳回邮件提醒"),
         ("notify.event.project_withdrawn", "true", "撤回验收邮件提醒"),
         ("security.management_lock", "1", "权限与高风险操作事务锁"),
-        ("upload.allowed_exts", "step,stp,iges,igs,stl,obj,fbx,dwg,dxf,pdf,doc,docx,xls,xlsx,ppt,pptx,png,jpg,jpeg,gif,webp,bmp,zip,rar,7z,mp4,webm,ogv", "允许上传的扩展名白名单"),
+        ("upload.allowed_exts", "step,stp,iges,igs,stl,obj,fbx,dwg,dxf,pdf,doc,docx,xls,xlsx,xlsm,xlsb,ppt,pptx,png,jpg,jpeg,gif,webp,bmp,zip,rar,7z,mp4,webm,ogv", "允许上传的扩展名白名单"),
         ("upload.chunk_size", "10485760", "分片大小（字节，默认 10MB）"),
         ("upload.max_file_size", "2147483648", "单文件大小上限（字节，默认 2GB）"),
         ("oem.upload.allowed_exts.internal_to_oem", "7z,doc,docx,dwg,dxf,igs,iges,jpeg,jpg,obj,pdf,png,ppt,pptx,rar,step,stl,stp,xls,xlsx,zip", "OEM 公司出站允许的扩展名"),

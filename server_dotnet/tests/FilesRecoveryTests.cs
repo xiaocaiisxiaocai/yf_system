@@ -506,7 +506,7 @@ public sealed class FilesRecoveryTests
         await using (var connection = await scope.Database.OpenAsync(ct))
         {
             await connection.ExecuteAsync(new CommandDefinition("""
-                UPDATE system_configs SET cfg_value='bin,step,stp,xlsx,xls' WHERE cfg_key='upload.allowed_exts';
+                UPDATE system_configs SET cfg_value='bin,step,stp,xlsx,xls,xlsm,xlsb' WHERE cfg_key='upload.allowed_exts';
                 UPDATE files SET status='DELETED', deleted_at=UTC_TIMESTAMP(6) WHERE id=900;
                 """, cancellationToken: ct));
         }
@@ -517,14 +517,24 @@ public sealed class FilesRecoveryTests
         var badName = await Assert.ThrowsAsync<ApiException>(() =>
             scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("动作流程.xlsx", [3]), ct));
         Assert.Equal(UploadMaterialRules.MotionFlowNamingMessage, badName.Message);
-        var legacyWorkbook = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("CSLR-605 放板机 2105931-1 动作流程.xls", [4]), ct));
-        Assert.Equal(UploadMaterialRules.MotionFlowNamingMessage, legacyWorkbook.Message);
+        // .xls/.xlsm/.xlsb 与 .xlsx 同等对待：命名合规时通过命名校验（仍受 STEP 先行约束），不合规时同一提示。
+        foreach (var extension in new[] { "xls", "xlsm", "xlsb" })
+        {
+            var namedWorkbook = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(
+                FilesDatabaseScope.Context(), UploadRequest($"CSLR-605 放板机 2105931-1 动作流程.{extension}", [4]), ct));
+            Assert.Equal(UploadMaterialRules.StepRequiredMessage, namedWorkbook.Message);
+            var misnamedWorkbook = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(
+                FilesDatabaseScope.Context(), UploadRequest($"动作流程.{extension}", [4]), ct));
+            Assert.Equal(UploadMaterialRules.MotionFlowNamingMessage, misnamedWorkbook.Message);
+        }
 
         // 同一批次里 STEP 会话先建立后，其余资料即可并发初始化；STEP 会话中止后恢复限制。
         var step = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("CSLR-605 放板機2105931-1.STEP", [5]), ct);
         var accepted = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), workbook, ct);
         Assert.NotNull(accepted.SessionId);
+        foreach (var extension in new[] { "xls", "xlsm", "xlsb" })
+            Assert.NotNull((await scope.Upload.InitAsync(FilesDatabaseScope.Context(),
+                UploadRequest($"CSLR-605 放板機 2105931-1 動作流程.{extension.ToUpperInvariant()}", [7]), ct)).SessionId);
         await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), step.SessionId!, ct);
         await Assert.ThrowsAsync<ApiException>(() =>
             scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("notes.bin", [6]), ct));

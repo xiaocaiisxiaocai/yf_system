@@ -59,5 +59,15 @@ public sealed class UploadMaterialRulesTests
         Assert.True(UploadMaterialRules.IsSpreadsheet("a.XLSX"));
         Assert.True(UploadMaterialRules.IsSpreadsheet("a.xls"));
         Assert.False(UploadMaterialRules.IsSpreadsheet("a.pdf"));
+        Assert.True(UploadMaterialRules.IsSpreadsheet("a.XLSM"));
+        Assert.True(UploadMaterialRules.IsSpreadsheet("a.xlsb"));
     }
+
+    [Theory]
+    [InlineData("动作流程.xls", "application/vnd.ms-excel")]
+    [InlineData("动作流程.XLSX", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
+    [InlineData("动作流程.xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12")]
+    [InlineData("动作流程.xlsb", "application/vnd.ms-excel.sheet.binary.macroEnabled.12")]
+    public void EveryAcceptedWorkbookExtensionHasAnExcelMimeType(string name, string expected) =>
+        Assert.Equal(expected, FileStorage.MimeType(name));
 }

@@ -20,7 +20,7 @@ export default function UploadMaterialGuide({ direction }: { direction: UploadDi
               如载具对接机构、输送机构、空压盒和手臂会经过的机构等。
             </li>
             <li>
-              <b>B. 动作流程说明 Excel</b>：命名为「{MOTION_FLOW_NAMING_EXAMPLE}」（每段 X 为 1~10 位，空格个数不限，机/機、动作/動作均可），
+              <b>B. 动作流程说明 Excel</b>：命名为「{MOTION_FLOW_NAMING_EXAMPLE}」（扩展名可为 .xls/.xlsx/.xlsm/.xlsb；每段 X 为 1~10 位，空格个数不限，机/機、动作/動作均可），
               并注明具体使用的手臂规格，如 15KG、25KG。
             </li>
           </ol>

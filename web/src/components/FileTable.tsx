@@ -65,7 +65,8 @@ function previewKind(ext: string, sizeBytes = 0): 'excel' | 'pdf' | 'pptx' | 'vi
   if (['mp4', 'webm', 'ogv'].includes(ext)) return 'video'
   if (ext === 'pptx' && sizeBytes <= 50 * 1024 * 1024) return 'pptx'
   // Excel 需要在浏览器内完整解析工作簿，限制在线预览体积以避免页面 OOM。
-  if ((ext === 'xlsx' || ext === 'xls') && sizeBytes <= 50 * 1024 * 1024) return 'excel'
+  // .xlsb 由预览器先经 SheetJS 转换（ExcelJS 无法解析二进制工作簿）。
+  if (['xls', 'xlsx', 'xlsm', 'xlsb'].includes(ext) && sizeBytes <= 50 * 1024 * 1024) return 'excel'
   // PDF.js 同样会在浏览器内完整缓冲文件；较大文件仅允许下载。
   if (ext === 'pdf' && sizeBytes <= PDF_PREVIEW_MAX_BYTES) return 'pdf'
   return 'none'
@@ -380,7 +381,7 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
       >
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'excel' && (
           <Suspense fallback={<div style={{ textAlign: 'center', padding: 60 }}>加载 Excel 渲染器…</div>}>
-            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><ExcelPreview fileId={preview.id} /></WatermarkedPreview>
+            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><ExcelPreview fileId={preview.id} ext={preview.ext} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'pdf' && <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><PdfPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>}

@@ -7,7 +7,7 @@ namespace Yf.Api.Modules.Files;
 public static partial class UploadMaterialRules
 {
     public const string MotionFlowNamingMessage =
-        "发给供应商的 Excel 需按「CSLR-XXX XXX机 210XXX-X 动作流程.xlsx」命名（每段 X 为 1~10 位，空格个数不限，机/機、动作/動作均可）";
+        "发给供应商的 Excel 需按「CSLR-XXX XXX机 210XXX-X 动作流程.xlsx」命名（扩展名可为 .xls/.xlsx/.xlsm/.xlsb；每段 X 为 1~10 位，空格个数不限，机/機、动作/動作均可）";
 
     public const string StepRequiredMessage =
         "发给供应商的资料至少需要一个 STEP 格式 3D 图（.step/.stp），请先上传或与本批文件一起上传 STEP 文件";
@@ -25,13 +25,13 @@ public static partial class UploadMaterialRules
 
     public static bool IsMotionFlowWorkbookName(string fileName) => MotionFlowWorkbookPattern().IsMatch(fileName);
 
-    // CSLR-XXX XXX机 210XXX-X 动作流程.xlsx：每段 X 为 1~10 位，各段之间的空白（含全角空格）个数不固定，
+    // CSLR-XXX XXX机 210XXX-X 动作流程.xlsx（.xls/.xlsx/.xlsm/.xlsb 同一规则）：每段 X 为 1~10 位，各段之间的空白（含全角空格）个数不固定，
     // 机/機、动作/動作 简繁均可。编号段取完整的字母数字串，避免把 "CSLR-605 机" 拆成编号 "60" + 机台 "5"；
     // 机台名称是 1~10 个任意字符并以 机/機 结尾。
     //
     // 语义以前端 JS 正则（/…/i，无 u 标志）为准，.NET 写成显式字符类以逐字符一致：
     // - 不用 RegexOptions.IgnoreCase：.NET 的大小写等价会让开尔文符号 U+212A、长 s U+017F 匹配 k / s，JS 不会；
-    //   只有 CSLR 与 xlsx 需要忽略大小写，用 [Cc] 这类 ASCII 字符类表达。
+    //   只有 CSLR 与扩展名需要忽略大小写，用 [Cc] 这类 ASCII 字符类表达。
     // - \s 用 JS 的空白集合（含 U+FEFF、U+2028/2029，不含 U+0085），\S 为其补集；
     // - . 用 JS 的定义（排除 \n \r U+2028 U+2029）；
     // - 结尾用 \z（.NET 的 $ 允许末尾多一个 \n）。
@@ -46,7 +46,7 @@ public static partial class UploadMaterialRules
         "^[Cc][Ss][Ll][Rr]" + Space + "*" + Dash + Space + "*" + Segment + "{1,10}(?!" + Segment + ")"
         + Space + "*" + NonSpace + AnyChar + "{0,9}?[机機]"
         + Space + "*210" + Segment + "{1,10}" + Space + "*" + Dash + Space + "*" + Segment + "{1,10}"
-        + Space + "*[动動]作流程" + Space + @"*\.[Xx][Ll][Ss][Xx]\z";
+        + Space + "*[动動]作流程" + Space + @"*\.[Xx][Ll][Ss][XxMmBb]?\z";
 
     [GeneratedRegex(MotionFlowWorkbookRegex, RegexOptions.CultureInvariant)]
     private static partial Regex MotionFlowWorkbookPattern();

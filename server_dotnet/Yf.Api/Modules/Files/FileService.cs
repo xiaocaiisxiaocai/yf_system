@@ -413,7 +413,7 @@ public sealed class FileService(
         var extension = Path.GetExtension(fileName).ToLowerInvariant();
         return extension is ".7z" or ".avi" or ".bmp" or ".docx" or ".gif" or ".gz" or ".jpeg" or ".jpg"
             or ".m4a" or ".m4v" or ".mkv" or ".mov" or ".mp3" or ".mp4" or ".ogg" or ".ogv" or ".pdf"
-            or ".png" or ".pptx" or ".rar" or ".webm" or ".webp" or ".xlsx" or ".xlsm" or ".zip"
+            or ".png" or ".pptx" or ".rar" or ".webm" or ".webp" or ".xlsx" or ".xlsm" or ".xlsb" or ".zip"
             ? CompressionLevel.NoCompression
             : CompressionLevel.Fastest;
     }
@@ -588,6 +588,8 @@ public sealed class FileService(
         extension.Equals("pdf", StringComparison.OrdinalIgnoreCase)
         || extension.Equals("xls", StringComparison.OrdinalIgnoreCase)
         || extension.Equals("xlsx", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals("xlsm", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals("xlsb", StringComparison.OrdinalIgnoreCase)
         || extension.Equals("pptx", StringComparison.OrdinalIgnoreCase)
         || extension.Equals("png", StringComparison.OrdinalIgnoreCase)
         || extension.Equals("jpg", StringComparison.OrdinalIgnoreCase)
