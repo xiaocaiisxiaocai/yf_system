@@ -87,6 +87,9 @@ public sealed class OemDeliveryService(
         var (file, transfer, capabilities) = await LoadReadableAsync(uow, current, fileId, ct);
         var settings = await OemSettings.LoadAsync(uow.Db, ct);
         var deadline = uow.Now.Add(settings.DownloadSessionTtl);
+        // The session (and later its first receipt) references the downloader; the account is
+        // locked last, after any transfer/file rows (see OemAccountLock).
+        await OemAccountLock.ShareAsync(uow, current, ct);
         if (file.PurgeDueAt is DateTime due && due.Add(settings.PurgeDrain) < deadline) deadline = due.Add(settings.PurgeDrain);
         var session = new OemDownloadSession
         {
@@ -331,6 +334,8 @@ public sealed class OemDeliveryService(
         }, ct);
         if (!session.RecipientSide || file.FirstRecipientDownloadAt is not null) return;
         var snapshot = new RetentionSnapshot(transfer.RetentionMode!, transfer.ReleaseTtlMinutes, transfer.ReceiptGraceMinutes);
+        // The receipt copies the session's actor, which already references the account (taken
+        // under OemAccountLock in StartAsync), so account deletion is refused here regardless.
         file.FirstRecipientDownloadAt = uow.Now;
         file.FirstRecipientRealm = session.ActorRealm;
         file.FirstRecipientId = session.ActorId;

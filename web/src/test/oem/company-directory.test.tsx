@@ -161,6 +161,49 @@ describe('OEM 厂商与账号目录', () => {
     expect(companies).toHaveBeenCalledTimes(2)
   })
 
+  it('账号停用被拒绝时在抽屉内显示服务端原因，不刷新列表', async () => {
+    const user = userEvent.setup()
+    const backendReason = '厂商至少需要保留一个启用账号；如需停止合作，请停用厂商'
+    const accounts = vi.fn().mockResolvedValue([account()])
+    const setAccountStatus = vi.fn().mockRejectedValue({ response: { status: 409, data: { code: 40901, message: backendReason } } })
+    renderDirectory(baseApi({ accounts, setAccountStatus }), ['oem:company_manage', 'oem:account_manage'])
+    const drawer = await openAccounts(user)
+    const accountRow = within(drawer).getByText('OEM_0031').closest('tr')!
+
+    await user.click(within(accountRow).getByRole('button', { name: '停用' }))
+    expect(setAccountStatus).toHaveBeenCalledWith(31, 'DISABLED')
+    expect(await within(drawer).findByRole('alert')).toHaveTextContent(`停用失败：${backendReason}`)
+    expect(accounts).toHaveBeenCalledTimes(1)
+    expect(within(accountRow).getByRole('button', { name: '停用' })).toBeVisible()
+  })
+
+  it('厂商停用被拒绝时显示进行中传递单的原因，成功后刷新列表', async () => {
+    const user = userEvent.setup()
+    const backendReason = '该厂商仍有 2 个进行中的传递单（已发送、尚未发布或关闭），请先终止或等待其完成后再停用厂商'
+    let shouldFail = true
+    const companies = vi.fn().mockImplementation(async () => page([company({ status: shouldFail ? 'ACTIVE' : 'DISABLED' })]))
+    const setCompanyStatus = vi.fn().mockImplementation(async () => {
+      if (shouldFail) throw { response: { status: 409, data: { code: 40901, message: backendReason } } }
+      return company({ status: 'DISABLED' })
+    })
+    renderDirectory(baseApi({ companies, setCompanyStatus }), ['oem:company_manage', 'oem:account_manage'])
+    const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
+
+    await user.click(within(row).getByRole('button', { name: '停用' }))
+    // The popconfirm is still animating in (pointer-events: none), so click it directly.
+    fireEvent.click(await screen.findByRole('button', { name: /确\s*定/ }))
+    expect(await screen.findByText(`停用失败：${backendReason}`)).toHaveAttribute('role', 'alert')
+    expect(setCompanyStatus).toHaveBeenCalledWith(7, 'DISABLED')
+    expect(companies).toHaveBeenCalledTimes(1)
+
+    shouldFail = false
+    await user.click(within(row).getByRole('button', { name: '停用' }))
+    const confirms = await screen.findAllByRole('button', { name: /确\s*定/ })
+    fireEvent.click(confirms.at(-1)!)
+    await waitFor(() => expect(companies).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByText(`停用失败：${backendReason}`)).not.toBeInTheDocument())
+  })
+
   it('厂商删除忽略同步重复确认，并在删掉末页唯一行后回退一页', async () => {
     const user = userEvent.setup()
     const pending = deferred<void>()

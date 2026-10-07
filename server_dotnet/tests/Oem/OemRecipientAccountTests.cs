@@ -23,7 +23,12 @@ public sealed class OemRecipientAccountTests
         Assert.Equal(OemRecipientPolicy.MissingAccountMessage, JsonNode.Parse(noAccount.Body)!["message"]!.GetValue<string>());
 
         var accountId = await CreateAccountAsync(world.Admin, companyId, "recipient_one", ct);
+        // An active vendor cannot lose its last active account; a vendor that was re-enabled
+        // after its accounts were disabled while it was disabled still has none.
+        await world.Admin.PutAsync($"/api/v1/oem/accounts/{accountId}/status", new { status = "DISABLED" }, ct).Status(HttpStatusCode.Conflict, 40901);
+        await world.Admin.PutAsync($"/api/v1/oem/companies/{companyId}/status", new { status = "DISABLED" }, ct).Ok();
         await world.Admin.PutAsync($"/api/v1/oem/accounts/{accountId}/status", new { status = "DISABLED" }, ct).Ok();
+        await world.Admin.PutAsync($"/api/v1/oem/companies/{companyId}/status", new { status = "ACTIVE" }, ct).Ok();
         await AssertOptionAsync(world.Sender, companyId, false, ct);
         await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId }, ct).Status(HttpStatusCode.BadRequest);
         await using (var conn = await host.OpenAsync(ct))
@@ -51,8 +56,12 @@ public sealed class OemRecipientAccountTests
         await host.UploadAsync(world.Sender, transferId, "drawing.pdf", OemTestHost.Pdf("recipient prerequisite"), ct);
         draft = await world.Sender.GetAsync($"/api/v1/oem/transfers/{transferId}", ct).Ok();
 
+        // The last active account can only go while the vendor is disabled (drafts are not in
+        // flight, so disabling is allowed); re-enabling the vendor leaves it without a recipient.
+        await world.Admin.PutAsync($"/api/v1/oem/companies/{companyId}/status", new { status = "DISABLED" }, ct).Ok();
         if (deleteAccount) await world.Admin.DeleteAsync($"/api/v1/oem/accounts/{accountId}", ct).Ok();
         else await world.Admin.PutAsync($"/api/v1/oem/accounts/{accountId}/status", new { status = "DISABLED" }, ct).Ok();
+        await world.Admin.PutAsync($"/api/v1/oem/companies/{companyId}/status", new { status = "ACTIVE" }, ct).Ok();
         await AssertOptionAsync(world.Sender, companyId, false, ct);
         var rejected = await world.Sender.PostAsync($"/api/v1/oem/transfers/{transferId}/send", new { version = Version(draft) }, ct)
             .Status(HttpStatusCode.BadRequest);

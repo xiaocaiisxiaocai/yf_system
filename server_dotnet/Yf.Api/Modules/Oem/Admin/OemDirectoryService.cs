@@ -5,6 +5,7 @@ using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Data;
 using Yf.Api.Modules.Oem.Identity;
+using Yf.Api.Modules.Oem.Transfers;
 
 namespace Yf.Api.Modules.Oem.Admin;
 
@@ -20,9 +21,13 @@ public sealed record OemPasswordReset(string NewPassword);
 /// or resetting a password, revokes the affected OEM sessions in the same transaction.
 /// Empty vendors and accounts may be physically deleted; records with business or
 /// historical references must be disabled so their identity remains explainable.
+/// An active vendor always keeps at least one active account, and a vendor cannot be
+/// disabled while transfers in either direction are still in flight.
 /// </summary>
 public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory, OemAuditWriter audit)
 {
+    internal const string LastActiveAccountMessage = "厂商至少需要保留一个启用账号；如需停止合作，请停用厂商";
+
     public async Task<OemPageResponse<OemCompanyListItemResponse>> ListCompaniesAsync(OemActor actor, ulong page, uint size, ulong offset, string? keyword, string? status, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
@@ -128,6 +133,15 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
         var company = await LockCompanyAsync(uow, id, ct);
+        if (company.Status != target && target == OemStatus.Disabled)
+        {
+            // Senders create and seal transfers under the business gate, which this management
+            // transaction holds exclusively, so the count cannot change before commit.
+            var inFlight = await uow.Db.OemTransfers.LongCountAsync(transfer => transfer.OemCompanyId == id
+                && transfer.LifecycleStatus == TransferLifecycle.Sealed, ct);
+            if (inFlight > 0)
+                throw ApiException.Conflict($"该厂商仍有 {inFlight} 个进行中的传递单（已发送、尚未发布或关闭），请先终止或等待其完成后再停用厂商");
+        }
         if (company.Status != target)
         {
             var previous = company.Status;
@@ -236,7 +250,8 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         var target = OemStatus.Normalize(status);
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
-        var account = await LockAccountAsync(uow, id, ct);
+        var account = await LockAccountForCompanyChangeAsync(uow, id, ct);
+        if (target == OemStatus.Disabled && account.Status == OemStatus.Active) await EnsureNotLastActiveAccountAsync(uow, account, ct);
         if (target == OemStatus.Active
             && !await uow.Db.OemCompanies.AnyAsync(company => company.Id == account.OemCompanyId && company.Status == OemStatus.Active, ct))
             throw ApiException.BadRequest("所属厂商已被禁用，不能启用账号");
@@ -282,7 +297,10 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
         await OemAuthorizer.RequireAsync(uow, current, OemPermissions.AccountDelete, ct);
-        var account = await LockAccountAsync(uow, id, ct);
+        // Account row lock first (FOR UPDATE), then the history checks: OEM writers that add
+        // references to an account hold a shared lock on that row (OemAccountLock).
+        var account = await LockAccountForCompanyChangeAsync(uow, id, ct);
+        if (account.Status == OemStatus.Active) await EnsureNotLastActiveAccountAsync(uow, account, ct);
         await EnsureNoAccountHistoryAsync(uow, id, ct);
         var revokedSessions = await uow.Db.OemRefreshTokens.Where(token => token.AccountId == id).ExecuteDeleteAsync(ct);
         await audit.WriteAsync(uow, current, "OEM_ACCOUNT_DELETE", "oem_account", id, new
@@ -318,6 +336,35 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             || await uow.Db.AuditLogs.AnyAsync(log => log.ActorRealm == OemRealms.Oem && log.ActorAccountId == id, ct)
             || await uow.Db.EmailOutbox.AnyAsync(mail => mail.RecipientRealm == OemRealms.Oem && mail.RecipientAccountId == id, ct);
         if (hasHistory) throw ApiException.BadRequest("该账号仍有传递、文件、通知、登录或审计历史，请停用账号，不要删除");
+    }
+
+    /// <summary>
+    /// Locks the account's company and then the account, the same company → account order
+    /// used by <see cref="CreateAccountAsync"/>, so the active-account count read afterwards
+    /// cannot be changed by a concurrent create/disable/delete for the same company.
+    /// </summary>
+    private static async Task<OemAccount> LockAccountForCompanyChangeAsync(OemUnitOfWork uow, ulong id, CancellationToken ct)
+    {
+        var companyId = await uow.Db.OemAccounts.AsNoTracking().Where(item => item.Id == id)
+            .Select(item => (ulong?)item.OemCompanyId).SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+        await LockCompanyAsync(uow, companyId, ct);
+        var account = await LockAccountAsync(uow, id, ct);
+        // An account never moves between companies; guard anyway so the lock is always the right one.
+        if (account.OemCompanyId != companyId) throw ApiException.Conflict("账号所属厂商已变化，请刷新后重试");
+        return account;
+    }
+
+    /// <summary>
+    /// An active vendor must keep at least one active account (like the last active admin);
+    /// a disabled vendor is exempt. Callers hold the company row lock.
+    /// </summary>
+    private static async Task EnsureNotLastActiveAccountAsync(OemUnitOfWork uow, OemAccount account, CancellationToken ct)
+    {
+        var companyActive = await uow.Db.OemCompanies.AnyAsync(company => company.Id == account.OemCompanyId && company.Status == OemStatus.Active, ct);
+        if (!companyActive) return;
+        var othersActive = await uow.Db.OemAccounts.AnyAsync(item => item.OemCompanyId == account.OemCompanyId
+            && item.Id != account.Id && item.Status == OemStatus.Active, ct);
+        if (!othersActive) throw ApiException.Conflict(LastActiveAccountMessage);
     }
 
     private static async Task<OemCompany> LockCompanyAsync(OemUnitOfWork uow, ulong id, CancellationToken ct) =>

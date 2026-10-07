@@ -65,10 +65,10 @@ public sealed class OemDeliveryTests
         Assert.True(beyond);
     }
 
-    private static async Task<(ulong TransferId, ulong FileId, byte[] Content)> ReleasedInboundAsync(OutboundWorld world, ulong retentionTemplateId, CancellationToken ct)
+    private static async Task<(ulong TransferId, ulong FileId, byte[] Content)> ReleasedInboundAsync(OutboundWorld world, CancellationToken ct)
     {
         var content = OemTestHost.Pdf(new string('d', 4000));
-        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "回传工装", retentionTemplateId }, ct).Ok();
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "回传工装" }, ct).Ok();
         var file = await world.Host.UploadAsync(world.Vendor, TransferId(draft), "fixture.pdf", content, ct);
         await world.Vendor.PostAsync($"/api/v1/oem/transfers/{TransferId(draft)}/send", new { version = Version(draft) + 1 }, ct).Ok();
         await world.Host.RunOemJobsAsync(ct);
@@ -88,9 +88,10 @@ public sealed class OemDeliveryTests
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
-        var retention = await world.Admin.PostAsync("/api/v1/oem/retention-templates",
+        // A newly created policy becomes the unified active policy for new transfers.
+        await world.Admin.PostAsync("/api/v1/oem/retention-templates",
             new { name = "下载后一小时", mode = "AFTER_FIRST_RECEIPT", receiptGraceMinutes = 60 }, ct).Ok();
-        var (transferId, fileId, content) = await ReleasedInboundAsync(world, retention.Id(), ct);
+        var (transferId, fileId, content) = await ReleasedInboundAsync(world, ct);
 
         // Sender-side reads (the vendor itself) and previews never count.
         await world.Vendor.PostAsync($"/api/v1/oem/files/{fileId}/download-sessions", null, ct).Ok();
@@ -138,9 +139,10 @@ public sealed class OemDeliveryTests
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
-        var retention = await world.Admin.PostAsync("/api/v1/oem/retention-templates",
+        // A newly created policy becomes the unified active policy for new transfers.
+        await world.Admin.PostAsync("/api/v1/oem/retention-templates",
             new { name = "发布后一天", mode = "AFTER_RELEASE", releaseTtlMinutes = 1440 }, ct).Ok();
-        var (_, fileId, _) = await ReleasedInboundAsync(world, retention.Id(), ct);
+        var (_, fileId, _) = await ReleasedInboundAsync(world, ct);
         string path;
         await using (var conn = await host.OpenAsync(ct))
         {
@@ -168,8 +170,8 @@ public sealed class OemDeliveryTests
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
-        var (_, lostId, _) = await ReleasedInboundAsync(world, world.KeepTemplateId, ct);
-        var (_, keptId, _) = await ReleasedInboundAsync(world, world.KeepTemplateId, ct);
+        var (_, lostId, _) = await ReleasedInboundAsync(world, ct);
+        var (_, keptId, _) = await ReleasedInboundAsync(world, ct);
         var oemRoot = Path.Combine(host.StorageRoot, "oem");
         await using (var conn = await host.OpenAsync(ct))
             File.Delete(Path.Combine(oemRoot, (await conn.ExecuteScalarAsync<string>("SELECT storage_path FROM oem_transfer_files WHERE id=@lostId", new { lostId }))!));
@@ -288,7 +290,7 @@ public sealed class OemDeliveryTests
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
-        var (transferId, fileId, content) = await ReleasedInboundAsync(world, world.KeepTemplateId, ct);
+        var (transferId, fileId, content) = await ReleasedInboundAsync(world, ct);
         var started = await world.Viewer.PostAsync($"/api/v1/oem/files/{fileId}/download-sessions", null, ct).Ok();
         var sessionId = started["downloadSessionId"]!.GetValue<string>();
         OemDownloadSession session;
