@@ -413,6 +413,16 @@ def run_upload_material_checks(client, conn, check, supplier_id):
     same_batch = client.call("POST", "/api/v1/uploads/init", init_request(project_id, workbook_name, workbook))
     check("an in-flight STEP session admits a correctly named same-batch workbook",
           bool(step_session["sessionId"]) and bool(same_batch["sessionId"]))
+    # 2026-10-06: .xls/.xlsm/.xlsb follow the same naming rule as .xlsx and are in the default allowlist.
+    for extension in ("xls", "xlsm", "xlsb"):
+        other = client.call("POST", "/api/v1/uploads/init",
+                            init_request(project_id, workbook_name[:-4] + extension, workbook))
+        rejected = client.call("POST", "/api/v1/uploads/init",
+                               init_request(project_id, "动作流程." + extension, workbook), expected=400)
+        check(f"company .{extension} workbook is accepted when named like .xlsx and rejected otherwise",
+              bool(other["sessionId"]) and rejected.get("code") == 40001
+              and "CSLR-XXX XXX机 210XXX-X 动作流程.xlsx" in rejected["message"])
+        _abort(client, other["sessionId"])
     _abort(client, same_batch["sessionId"])
     _abort(client, step_session["sessionId"])
     client.call("POST", "/api/v1/uploads/init", init_request(project_id, "说明.pdf", pdf), expected=400)

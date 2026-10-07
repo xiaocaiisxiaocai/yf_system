@@ -173,6 +173,8 @@ internal static class FileStorage
         ".pdf" => "application/pdf",
         ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ".xls" => "application/vnd.ms-excel",
+        ".xlsm" => "application/vnd.ms-excel.sheet.macroEnabled.12",
+        ".xlsb" => "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
         ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".doc" => "application/msword",
         ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
