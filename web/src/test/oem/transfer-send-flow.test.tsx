@@ -372,7 +372,8 @@ describe('OEM 一键发送文件', () => {
     expect(await within(dialog).findByText('目标 OEM 厂商加载失败：厂商服务暂不可用')).toBeInTheDocument()
     expect(within(dialog).getAllByText(/厂商服务暂不可用/)).toHaveLength(1)
     // The chosen vendor keeps its name instead of collapsing to a bare id.
-    expect(within(dialog).getByText('甲厂')).toBeInTheDocument()
+    // Scope to the select's rendered value: the option list may still be closing and contain the same text.
+    expect(dialog.querySelector('.arco-select-view-value')).toHaveTextContent('甲厂')
     expect(merge).toHaveBeenCalledTimes(1)
     expect(api.send).not.toHaveBeenCalled()
   })

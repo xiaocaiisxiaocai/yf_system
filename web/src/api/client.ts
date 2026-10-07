@@ -47,14 +47,16 @@ function isAuthLoginResponse(value: unknown): value is AuthLoginResponse {
  * 后到的一次会被服务端判为令牌重放并吊销整个会话。优先使用 Web Locks；它只在安全上下文（HTTPS/localhost）
  * 可用，内网 HTTP 部署时退回基于 localStorage 的租约锁。
  */
-export function withAuthLock<T>(operation: () => Promise<T>): Promise<T> {
+export function withAuthLock<T>(operation: () => Promise<T>, names: AuthLockNames = COLLABORATION_AUTH_LOCK): Promise<T> {
   if (typeof navigator !== 'undefined' && navigator.locks) {
-    return navigator.locks.request('yf-auth-session', operation)
+    return navigator.locks.request(names.lock, operation)
   }
-  return withStorageLease(operation)
+  return withStorageLease(operation, names.leaseKey)
 }
 
-const STORAGE_LOCK_KEY = 'yf:auth-refresh-lock'
+/** 每个身份域轮换各自的 refresh cookie，使用独立的锁名，避免一个域的刷新卡住另一个域。 */
+export interface AuthLockNames { lock: string; leaseKey: string }
+export const COLLABORATION_AUTH_LOCK: AuthLockNames = { lock: 'yf-auth-session', leaseKey: 'yf:auth-refresh-lock' }
 /** 刷新必须在租约内结束；持有期间持续续租，以覆盖后台标签计时器被节流的情况。 */
 export const REFRESH_TIMEOUT_MS = 45_000
 export const STORAGE_LEASE_MS = 90_000
@@ -62,8 +64,8 @@ const STORAGE_LEASE_RENEW_MS = 20_000
 const STORAGE_LOCK_WAIT_MS = 95_000
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-function readLease(): { owner: string; expires: number } | null {
-  const raw = window.localStorage.getItem(STORAGE_LOCK_KEY)
+function readLease(key: string): { owner: string; expires: number } | null {
+  const raw = window.localStorage.getItem(key)
   if (!raw) return null
   try {
     const value = JSON.parse(raw) as { owner?: unknown; expires?: unknown }
@@ -79,18 +81,18 @@ function readLease(): { owner: string; expires: number } | null {
  * localStorage 没有原子比较交换：写入后稍等再读回，只有读回仍是自己时才算拿到锁，
  * 足以把并发刷新串行化。存储不可用或等待超时时安全失败，绝不绕过锁执行旋转请求。
  */
-export async function withStorageLease<T>(operation: () => Promise<T>): Promise<T> {
+export async function withStorageLease<T>(operation: () => Promise<T>, key = COLLABORATION_AUTH_LOCK.leaseKey): Promise<T> {
   if (typeof window === 'undefined') return operation()
   const owner = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
   const giveUpAt = Date.now() + STORAGE_LOCK_WAIT_MS
   for (;;) {
     let acquired = false
     try {
-      const held = readLease()
+      const held = readLease(key)
       if (!held || held.expires <= Date.now()) {
-        window.localStorage.setItem(STORAGE_LOCK_KEY, JSON.stringify({ owner, expires: Date.now() + STORAGE_LEASE_MS }))
+        window.localStorage.setItem(key, JSON.stringify({ owner, expires: Date.now() + STORAGE_LEASE_MS }))
         await sleep(40)
-        acquired = readLease()?.owner === owner
+        acquired = readLease(key)?.owner === owner
       }
     } catch {
       throw new Error('无法安全协调登录状态，请检查浏览器存储设置后重试')
@@ -98,8 +100,8 @@ export async function withStorageLease<T>(operation: () => Promise<T>): Promise<
     if (acquired) {
       const renew = window.setInterval(() => {
         try {
-          if (readLease()?.owner !== owner) return
-          window.localStorage.setItem(STORAGE_LOCK_KEY, JSON.stringify({ owner, expires: Date.now() + STORAGE_LEASE_MS }))
+          if (readLease(key)?.owner !== owner) return
+          window.localStorage.setItem(key, JSON.stringify({ owner, expires: Date.now() + STORAGE_LEASE_MS }))
         } catch {
           // 当前租约仍覆盖刷新请求超时；后续等待方到期后会安全失败，不会无锁执行。
         }
@@ -109,7 +111,7 @@ export async function withStorageLease<T>(operation: () => Promise<T>): Promise<
       } finally {
         window.clearInterval(renew)
         try {
-          if (readLease()?.owner === owner) window.localStorage.removeItem(STORAGE_LOCK_KEY)
+          if (readLease(key)?.owner === owner) window.localStorage.removeItem(key)
         } catch {
           // 租约到期后自然失效。
         }
