@@ -117,6 +117,51 @@ public sealed class OemFlowHardeningTests
     }
 
     [Fact(Timeout = 240_000)]
+    public async Task OptionalChunkDigestHeaderIsVerifiedBeforeTheChunkIsStored()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var draft = await CreateOutboundAsync(world, "分片摘要", ct);
+        var content = OemTestHost.Pdf(new string('d', 4096));
+        var init = await world.Sender.PostAsync($"/api/v1/oem/transfers/{TransferId(draft)}/uploads/init",
+            new { fileName = "digest.pdf", fileSize = (ulong)content.Length }, ct).Ok();
+        var sessionId = init["sessionId"]!.GetValue<string>();
+        var chunkPath = host.Service<OemStorage>().ChunkPath(sessionId, 0);
+        var digest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(content)).ToLowerInvariant();
+        var wrong = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData("other"u8)).ToLowerInvariant();
+
+        async Task<(HttpStatusCode Status, string Body)> PutAsync(string? header)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/oem/uploads/{sessionId}/chunks/0") { Content = new ByteArrayContent(content) };
+            if (header is not null) request.Headers.TryAddWithoutValidation("X-Chunk-SHA256", header);
+            using var response = await world.Sender.Http.SendAsync(request, ct);
+            return (response.StatusCode, await response.Content.ReadAsStringAsync(ct));
+        }
+
+        // Malformed and mismatching digests are refused with 400/40001; nothing is stored.
+        foreach (var (header, message) in new[] { ("not-a-digest", "分片 SHA-256 摘要格式无效"), ("", "分片 SHA-256 摘要格式无效"), (wrong, "分片 SHA-256 校验失败") })
+        {
+            var (status, body) = await PutAsync(header);
+            Assert.Equal(HttpStatusCode.BadRequest, status);
+            Assert.Contains("40001", body);
+            Assert.Contains(message, body);
+            Assert.False(File.Exists(chunkPath));
+        }
+
+        // A matching digest (any case) is accepted; a later mismatch never replaces the stored chunk.
+        Assert.Equal(HttpStatusCode.OK, (await PutAsync(digest.ToUpperInvariant())).Status);
+        Assert.True(File.Exists(chunkPath));
+        Assert.Equal(HttpStatusCode.BadRequest, (await PutAsync(wrong)).Status);
+        Assert.Equal(content, await File.ReadAllBytesAsync(chunkPath, ct));
+        Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(chunkPath)!, "*.uploading"));
+
+        // Without the header the chunk is accepted unchecked, as before.
+        Assert.Equal(HttpStatusCode.OK, (await PutAsync(null)).Status);
+        await world.Sender.PostAsync($"/api/v1/oem/uploads/{sessionId}/merge", null, ct).Ok();
+    }
+
+    [Fact(Timeout = 240_000)]
     public async Task ALateChunkDoesNotResurrectAnAbortedSessionDirectory()
     {
         var ct = TestContext.Current.CancellationToken;

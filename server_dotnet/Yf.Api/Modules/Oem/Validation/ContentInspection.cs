@@ -517,51 +517,55 @@ public static class ArchiveInspector
         long archiveExpanded = 0;
         if (archive.IsSolid)
         {
+            // Solid RAR entries share one compression stream: read them once, in order,
+            // through the forward-only reader instead of reopening each entry.
             using var reader = archive.ExtractAllEntries();
             while (reader.MoveToNextEntry())
             {
-                ct.ThrowIfCancellationRequested();
-                var entry = reader.Entry;
-                if (entry.IsEncrypted) return new(ArchiveOutcome.Encrypted, "不允许传递加密的压缩包");
-                if (UnsafeEntryName(entry.Key)) return UnsafeEntry;
-                var metadata = AccountMetadata(budget, entry.Size, entry.CompressedSize);
-                if (metadata is not null) return metadata;
-                archiveExpanded += entry.Size;
-
-                if (entry.IsDirectory)
-                {
-                    if (entry.Size != 0) return new(ArchiveOutcome.Corrupt, "压缩包目录条目不能包含文件内容");
-                    continue;
-                }
-                await using var input = reader.OpenEntryStream();
-                var verdict = await InspectEntryAsync(input, entry.Size, limits, depth, workDirectory, budget, ct);
-                if (verdict.Outcome is not ArchiveOutcome.Accepted) return verdict;
+                var verdict = await InspectRarEntryAsync(reader.Entry, reader.OpenEntryStream, limits, depth, workDirectory, budget, ct);
+                if (verdict is not null) return verdict;
+                archiveExpanded += reader.Entry.Size;
             }
         }
         else
         {
             foreach (var entry in archive.Entries)
             {
-                ct.ThrowIfCancellationRequested();
-                if (entry.IsEncrypted) return new(ArchiveOutcome.Encrypted, "不允许传递加密的压缩包");
-                if (UnsafeEntryName(entry.Key)) return UnsafeEntry;
-                var metadata = AccountMetadata(budget, entry.Size, entry.CompressedSize);
-                if (metadata is not null) return metadata;
+                var verdict = await InspectRarEntryAsync(entry, entry.OpenEntryStream, limits, depth, workDirectory, budget, ct);
+                if (verdict is not null) return verdict;
                 archiveExpanded += entry.Size;
-
-                if (entry.IsDirectory)
-                {
-                    if (entry.Size != 0) return new(ArchiveOutcome.Corrupt, "压缩包目录条目不能包含文件内容");
-                    continue;
-                }
-                await using var input = entry.OpenEntryStream();
-                var verdict = await InspectEntryAsync(input, entry.Size, limits, depth, workDirectory, budget, ct);
-                if (verdict.Outcome is not ArchiveOutcome.Accepted) return verdict;
             }
         }
         return archiveExpanded / fileLength > limits.MaxRatio
             ? new(ArchiveOutcome.LimitExceeded, "压缩包压缩比异常")
             : ArchiveVerdict.Accepted;
+    }
+
+    /// <summary>
+    /// Checks one RAR entry (solid or not) and inspects its content; null to continue with the next
+    /// entry. Uses SharpCompress 0.50.4's synchronous entry API (see <see cref="InspectRarArchiveAsync"/>);
+    /// <paramref name="open"/> opens the entry's data from the reader (solid) or the archive (non-solid).
+    /// </summary>
+    private static async Task<ArchiveVerdict?> InspectRarEntryAsync(
+        IEntry entry,
+        Func<Stream> open,
+        ArchiveLimits limits,
+        int depth,
+        string workDirectory,
+        Budget budget,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (entry.IsEncrypted) return new(ArchiveOutcome.Encrypted, "不允许传递加密的压缩包");
+        if (UnsafeEntryName(entry.Key)) return UnsafeEntry;
+        var metadata = AccountMetadata(budget, entry.Size, entry.CompressedSize);
+        if (metadata is not null) return metadata;
+
+        if (entry.IsDirectory)
+            return entry.Size != 0 ? new(ArchiveOutcome.Corrupt, "压缩包目录条目不能包含文件内容") : null;
+        await using var input = open();
+        var verdict = await InspectEntryAsync(input, entry.Size, limits, depth, workDirectory, budget, ct);
+        return verdict.Outcome is ArchiveOutcome.Accepted ? null : verdict;
     }
 
     private static ArchiveVerdict? AccountMetadata(Budget budget, long expanded, long compressed)

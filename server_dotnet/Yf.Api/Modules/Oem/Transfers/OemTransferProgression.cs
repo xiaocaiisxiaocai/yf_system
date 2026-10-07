@@ -180,7 +180,7 @@ public sealed class OemTransferProgression(OemApprovalEngine engine, OemAuditWri
     }
 
     public static async Task<OemTransfer> LockTransferAsync(OemUnitOfWork uow, ulong transferId, CancellationToken ct) =>
-        await uow.Db.OemTransfers.FromSqlInterpolated($"SELECT * FROM oem_transfers WHERE id = {transferId} FOR UPDATE").SingleOrDefaultAsync(ct)
+        await OemLocks.ForUpdate<OemTransfer>(uow.Db, transferId).SingleOrDefaultAsync(ct)
         ?? throw ApiException.NotFound();
 
     internal static void Touch(OemUnitOfWork uow, OemTransfer transfer)

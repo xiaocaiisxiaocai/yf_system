@@ -516,6 +516,56 @@ public sealed class OemTransferFlowTests
     }
 
     [Fact(Timeout = 240_000)]
+    public async Task ResumedPromotionRehashesTheRenamedQuarantineFile()
+    {
+        // Only a promotion started by the validation worker right after hashing the file may skip
+        // the post-rename SHA-256; a resumed one (worker sweep, reconcile) must still detect a
+        // same-size change of the quarantine file even though it is a plain rename.
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var draft = await CreateOutboundAsync(world, "续做提升复核", ct);
+        var content = OemTestHost.Pdf(new string('y', 300_000));
+        var uploaded = await host.UploadAsync(world.Sender, TransferId(draft), "resume.pdf", content, ct);
+
+        var promotionId = Guid.NewGuid().ToString("D");
+        string sourcePath;
+        string targetPath;
+        await using (var conn = await host.OpenAsync(ct))
+        {
+            var file = await conn.QuerySingleAsync<(string StoredName, string StoragePath, ulong SizeBytes, string Sha256)>(
+                "SELECT stored_name AS StoredName, storage_path AS StoragePath, size_bytes AS SizeBytes, sha256 AS Sha256 " +
+                "FROM oem_transfer_files WHERE id=@id", new { id = uploaded.Id() });
+            var targetRelative = OemStorage.AvailableRelative(file.StoredName);
+            sourcePath = Path.Combine(host.StorageRoot, "oem", file.StoragePath);
+            targetPath = Path.Combine(host.StorageRoot, "oem", targetRelative);
+            var corrupt = content.ToArray();
+            corrupt[^2] ^= 0x33;
+            await File.WriteAllBytesAsync(sourcePath, corrupt, ct);
+            Assert.False(File.Exists(targetPath));
+
+            await conn.ExecuteAsync("UPDATE oem_transfer_files SET scan_status=@status, payload_status='PROMOTING' WHERE id=@id",
+                new { id = uploaded.Id(), status = ValidationStatuses.Valid });
+            await conn.ExecuteAsync(@"INSERT INTO oem_file_promotions
+                (id,file_id,file_sha256,size_bytes,source_path,target_path,status,attempt_count,concurrency_version,created_at)
+                VALUES (@promotionId,@fileId,@sha256,@sizeBytes,@source,@target,'PREPARED',0,0,UTC_TIMESTAMP(3))",
+                new { promotionId, fileId = uploaded.Id(), sha256 = file.Sha256, sizeBytes = file.SizeBytes, source = file.StoragePath, target = targetRelative });
+        }
+
+        Assert.False(await host.Service<OemPromotionService>().PromoteAsync(promotionId, ct));
+
+        // The rename happened, but the content was re-hashed and the file was not released.
+        Assert.False(File.Exists(sourcePath));
+        Assert.True(File.Exists(targetPath));
+        await using var db = await host.OpenAsync(ct);
+        var promotion = await db.QuerySingleAsync<(string Status, string LastError)>(
+            "SELECT status AS Status, last_error AS LastError FROM oem_file_promotions WHERE id=@promotionId", new { promotionId });
+        Assert.Equal("PREPARED", promotion.Status);
+        Assert.Equal("SHA-256 与校验快照不符", promotion.LastError);
+        Assert.Equal("PROMOTING", await db.ExecuteScalarAsync<string>("SELECT payload_status FROM oem_transfer_files WHERE id=@id", new { id = uploaded.Id() }));
+    }
+
+    [Fact(Timeout = 240_000)]
     public async Task UserAssignedToAnOemApprovalTemplateCannotBeHardDeleted()
     {
         var ct = TestContext.Current.CancellationToken;

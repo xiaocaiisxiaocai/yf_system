@@ -14,12 +14,8 @@ namespace Yf.Api.Modules.Oem.Validation;
 /// that lost its lease — for example during an IIS overlapped recycle — can never
 /// write a result. Temporary failures back off and retry; only exhausted retries,
 /// or invalid content are final, and every final failure stays quarantined.
-/// <para>
-/// Row-lock order shared by every OEM writer: transfer → file → validation job / promotion.
-/// Purge, reconcile and transfer operations lock the transfer and then the file before
-/// touching jobs, so a job or promotion row is always resolved without a lock first and
-/// locked last (then re-validated). Taking them in any other order can deadlock.
-/// </para>
+/// Row locks follow the global OEM order documented on <see cref="OemLocks"/>
+/// (transfer → file → validation job / promotion).
 /// </summary>
 public sealed class OemFileValidationService(
     IDbContextFactory<YfDbContext> dbFactory,
@@ -88,7 +84,7 @@ public sealed class OemFileValidationService(
 
     private sealed record LockedJob(OemTransfer Transfer, OemTransferFile File, OemFileScanJob Job);
 
-    /// <summary>Locks a job's transfer, file and job rows in the global order (transfer → file → job).</summary>
+    /// <summary>Locks a job's transfer, file and job rows in the global order (see <see cref="OemLocks"/>).</summary>
     private static async Task<LockedJob?> LockJobAsync(OemUnitOfWork uow, ulong jobId, CancellationToken ct)
     {
         var target = await uow.Db.OemFileScanJobs.AsNoTracking().Where(job => job.Id == jobId)
@@ -96,8 +92,8 @@ public sealed class OemFileValidationService(
             .SingleOrDefaultAsync(ct);
         if (target is null) return null;
         var transfer = await OemTransferProgression.LockTransferAsync(uow, target.TransferId, ct);
-        var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {target.FileId} FOR UPDATE").SingleAsync(ct);
-        var job = await uow.Db.OemFileScanJobs.FromSqlInterpolated($"SELECT * FROM oem_file_scan_jobs WHERE id = {jobId} FOR UPDATE").SingleOrDefaultAsync(ct);
+        var file = await OemLocks.ForUpdate<OemTransferFile>(uow.Db, target.FileId).SingleAsync(ct);
+        var job = await OemLocks.ForUpdate<OemFileScanJob>(uow.Db, jobId).SingleOrDefaultAsync(ct);
         // A job never changes its file; re-validate after locking rather than trusting the unlocked read.
         return job is null || job.FileId != file.Id || file.TransferId != transfer.Id ? null : new LockedJob(transfer, file, job);
     }
@@ -310,7 +306,7 @@ public sealed class OemFileValidationService(
             if (finalFailure) await progression.AdvanceAsync(uow, transferId, null, ct);
             await dispatcher.CommitAsync(uow, ct);
         }
-        if (promotionId is not null) await promotions.PromoteAsync(promotionId, ct);
+        if (promotionId is not null) await promotions.PromoteAfterValidationAsync(promotionId, ct);
     }
 
     /// <summary>Time budget for reading and hashing a file of the given size (validation timeout, promotion lease).</summary>
@@ -380,7 +376,16 @@ public sealed class OemPromotionService(
         return done;
     }
 
-    public async Task<bool> PromoteAsync(string promotionId, CancellationToken ct)
+    /// <summary>Promotes a prepared file; any target found on disk is verified by a full SHA-256.</summary>
+    public Task<bool> PromoteAsync(string promotionId, CancellationToken ct) => PromoteAsync(promotionId, sourceJustValidated: false, ct);
+
+    /// <summary>
+    /// Promotion started by the validation worker right after its VALID verdict, in the same process:
+    /// the quarantine bytes were just read in full and matched the recorded SHA-256.
+    /// </summary>
+    internal Task<bool> PromoteAfterValidationAsync(string promotionId, CancellationToken ct) => PromoteAsync(promotionId, sourceJustValidated: true, ct);
+
+    private async Task<bool> PromoteAsync(string promotionId, bool sourceJustValidated, CancellationToken ct)
     {
         OemFilePromotion claim;
         await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))
@@ -389,7 +394,7 @@ public sealed class OemPromotionService(
             if (promotion is null || promotion.Status != PromotionStatuses.Prepared || promotion.LeaseUntil > uow.Now) return false;
             promotion.LeaseOwner = Owner;
             // Scales with the file like the validation timeout; the worst case hashes it twice
-            // (an existing target is verified, then the final check runs).
+            // (an existing target is verified, then the final check runs). A fresh rename hashes nothing.
             promotion.LeaseUntil = uow.Now.Add(OemFileValidationService.Timeout(promotion.SizeBytes) * 2);
             promotion.ConcurrencyVersion++;
             await uow.Db.SaveChangesAsync(ct);
@@ -405,10 +410,12 @@ public sealed class OemPromotionService(
             var target = storage.Absolute(claim.TargetPath);
             var sourceExists = File.Exists(source);
             var targetExists = File.Exists(target);
+            var renamed = false;
             if (sourceExists && !targetExists)
             {
                 storage.EnsureParent(target, ct);
                 File.Move(source, target, overwrite: false);
+                renamed = true;
             }
             else if (sourceExists && targetExists)
             {
@@ -420,7 +427,18 @@ public sealed class OemPromotionService(
             {
                 lost = true;
             }
-            if (failure is null && !lost) failure = await ValidateTargetAsync(target, claim.SizeBytes, claim.FileSha256, ct);
+            // The full re-hash is skipped only when the provenance of the target is certain: the
+            // validation worker hashed the quarantine file moments ago in this process and this
+            // attempt itself renamed it (quarantine/ and available/ both live under OemStorageRoot,
+            // so the move is a metadata-only rename that does not rewrite the bytes); the size is
+            // still re-checked. Everything else is hashed in full: a target that already existed
+            // (both present: verified above; only the target: a crash between rename and commit, or a
+            // restore/reconcile placed it there) and every resumed or retried promotion from
+            // RunOnceAsync, whose quarantine file may have sat on disk or come back from a restore.
+            if (failure is null && !lost)
+                failure = renamed && sourceJustValidated
+                    ? ValidateTargetSize(target, claim.SizeBytes)
+                    : await ValidateTargetAsync(target, claim.SizeBytes, claim.FileSha256, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -435,10 +453,10 @@ public sealed class OemPromotionService(
 
         await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))
         {
-            // Lock order: transfer → file → promotion (see OemFileValidationService).
+            // Lock order: transfer → file → promotion (see OemLocks).
             var transferId = await uow.Db.OemTransferFiles.Where(item => item.Id == claim.FileId).Select(item => item.TransferId).SingleAsync(ct);
             var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
-            var file = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {claim.FileId} FOR UPDATE").SingleAsync(ct);
+            var file = await OemLocks.ForUpdate<OemTransferFile>(uow.Db, claim.FileId).SingleAsync(ct);
             var promotion = await LockAsync(uow, promotionId, ct);
             if (promotion is null || promotion.ConcurrencyVersion != claim.ConcurrencyVersion || promotion.Status != PromotionStatuses.Prepared) return false;
             promotion.LeaseOwner = null;
@@ -512,9 +530,12 @@ public sealed class OemPromotionService(
         }
     }
 
+    private static string? ValidateTargetSize(string path, ulong sizeBytes) =>
+        (ulong)new FileInfo(path).Length != sizeBytes ? "文件大小与记录不符" : null;
+
     internal static async Task<string?> ValidateTargetAsync(string path, ulong sizeBytes, string expectedSha256, CancellationToken ct)
     {
-        if ((ulong)new FileInfo(path).Length != sizeBytes) return "文件大小与记录不符";
+        if (ValidateTargetSize(path, sizeBytes) is { } sizeFailure) return sizeFailure;
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         var sha256 = Convert.ToHexString(await SHA256.HashDataAsync(stream, ct)).ToLowerInvariant();
@@ -522,5 +543,5 @@ public sealed class OemPromotionService(
     }
 
     private static Task<OemFilePromotion?> LockAsync(OemUnitOfWork uow, string id, CancellationToken ct) =>
-        uow.Db.OemFilePromotions.FromSqlInterpolated($"SELECT * FROM oem_file_promotions WHERE id = {id} FOR UPDATE").SingleOrDefaultAsync(ct);
+        OemLocks.ForUpdate<OemFilePromotion>(uow.Db, id).SingleOrDefaultAsync(ct);
 }

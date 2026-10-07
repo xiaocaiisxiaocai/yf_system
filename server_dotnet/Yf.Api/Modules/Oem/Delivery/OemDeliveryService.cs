@@ -160,7 +160,7 @@ public sealed class OemDeliveryService(
 
             // Admission and purge claiming serialise on the file row: a purge cannot slip
             // between this check and opening the file.
-            var locked = await uow.Db.OemTransferFiles.FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {fileId} FOR UPDATE").SingleAsync(ct);
+            var locked = await OemLocks.ForUpdate<OemTransferFile>(uow.Db, fileId).SingleAsync(ct);
             if (locked.PayloadStatus != PayloadStatuses.Available || locked.PurgeDueAt is DateTime due && due <= uow.Now)
                 throw new ApiException(410, 41003, "文件已到期或不可用");
             var active = await uow.Db.OemDownloadLeases.CountAsync(lease => lease.SessionId == session.Id
@@ -264,7 +264,7 @@ public sealed class OemDeliveryService(
     private async Task<bool> HeartbeatAsync(string leaseId, TimeSpan idleTimeout, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
-        var lease = await uow.Db.OemDownloadLeases.FromSqlInterpolated($"SELECT * FROM oem_download_leases WHERE id = {leaseId} FOR UPDATE").SingleOrDefaultAsync(ct);
+        var lease = await OemLocks.ForUpdate<OemDownloadLease>(uow.Db, leaseId).SingleOrDefaultAsync(ct);
         if (lease is null || lease.Status != DownloadLeaseStatuses.Active || lease.HardDeadline <= uow.Now) return false;
         lease.LastProgressAt = uow.Now;
         lease.LeaseUntil = Min(lease.HardDeadline, uow.Now.Add(idleTimeout));
@@ -278,15 +278,13 @@ public sealed class OemDeliveryService(
         try
         {
             await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
-            // Keep the same lock order as purge: transfer -> file -> session -> lease.
+            // Same lock order as purge: transfer → file → session → lease (see OemLocks).
             // Otherwise a purge holding the transfer/file rows can deadlock with a
             // completed download that held its lease before recording the receipt.
             await OemTransferProgression.LockTransferAsync(uow, file.TransferId, ct);
-            var lockedFile = await uow.Db.OemTransferFiles
-                .FromSqlInterpolated($"SELECT * FROM oem_transfer_files WHERE id = {file.Id} FOR UPDATE").SingleAsync(ct);
-            var lockedSession = await uow.Db.OemDownloadSessions
-                .FromSqlInterpolated($"SELECT * FROM oem_download_sessions WHERE id = {session.Id} FOR UPDATE").SingleAsync(ct);
-            var lease = await uow.Db.OemDownloadLeases.FromSqlInterpolated($"SELECT * FROM oem_download_leases WHERE id = {leaseId} FOR UPDATE").SingleAsync(ct);
+            var lockedFile = await OemLocks.ForUpdate<OemTransferFile>(uow.Db, file.Id).SingleAsync(ct);
+            var lockedSession = await OemLocks.ForUpdate<OemDownloadSession>(uow.Db, session.Id).SingleAsync(ct);
+            var lease = await OemLocks.ForUpdate<OemDownloadLease>(uow.Db, leaseId).SingleAsync(ct);
             var leaseValid = lease.Status == DownloadLeaseStatuses.Active;
             if (leaseValid) lease.Status = DownloadLeaseStatuses.Released;
             await uow.Db.SaveChangesAsync(ct);
