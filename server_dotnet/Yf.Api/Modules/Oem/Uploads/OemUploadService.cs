@@ -58,6 +58,8 @@ public sealed partial class OemUploadService(
 
         // Quota decisions for one vendor are serialised on the vendor row.
         await uow.Db.OemCompanies.FromSqlInterpolated($"SELECT * FROM oem_companies WHERE id = {transfer.OemCompanyId} FOR UPDATE").SingleAsync(ct);
+        // The new session references the uploader; lock order transfer → company → account (see OemAccountLock).
+        await OemAccountLock.ShareAsync(uow, current, ct);
         var onDisk = PayloadStatuses.OnDisk;
         var companyTransfers = uow.Db.OemTransfers.Where(item => item.OemCompanyId == transfer.OemCompanyId).Select(item => item.Id);
         var activeSessions = uow.Db.OemUploadSessions.Where(session => companyTransfers.Contains(session.TransferId)
@@ -258,6 +260,8 @@ public sealed partial class OemUploadService(
                 if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
                 var locked = await LoadOwnSessionAsync(uow, current, sessionId, forUpdate: true, ct);
                 if (locked.Status != UploadStatuses.Merging) throw ApiException.Conflict("上传会话状态已变化，请重新查询");
+                // The new file references the uploader; lock order transfer → session → account (see OemAccountLock).
+                await OemAccountLock.ShareAsync(uow, current, ct);
                 // Re-checked right before the file appears in quarantine: the reconcile
                 // orphan sweep must never see a stored file whose row is not yet committed.
                 await OemSettings.EnsureStorageSettledAsync(uow.Db, "上传", ct);

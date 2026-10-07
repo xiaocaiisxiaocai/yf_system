@@ -78,7 +78,7 @@ public sealed class OemNotificationTests
         // The OEM "released" switch suppresses recipient mail only.
         await world.Admin.PutAsync("/api/v1/oem/notify-policies",
             new { items = new[] { new { key = "oem.notify.event.transfer_released", value = "false" } } }, ct).Ok();
-        var inbound = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "回传", retentionTemplateId = world.KeepTemplateId }, ct).Ok();
+        var inbound = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "回传" }, ct).Ok();
         await host.UploadAsync(world.Vendor, TransferId(inbound), "r.pdf", OemTestHost.Pdf("r"), ct);
         await world.Vendor.PostAsync($"/api/v1/oem/transfers/{TransferId(inbound)}/send", new { version = Version(inbound) + 1 }, ct).Ok();
         await host.RunOemJobsAsync(ct);

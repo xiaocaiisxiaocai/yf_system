@@ -1351,13 +1351,11 @@ export interface TransferCreate {
   title?: string | null
   description?: string | null
   oemCompanyId?: number | null
-  retentionTemplateId?: number | null
 }
 
 export interface TransferUpdate {
   title?: string | null
   description?: string | null
-  retentionTemplateId?: number | null
   version?: number | null
 }
 

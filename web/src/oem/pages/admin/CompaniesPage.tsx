@@ -10,7 +10,7 @@ import { PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, passwordRule, validatePassword 
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 import './CompaniesPage.css'
 
-function deleteErrorMessage(error: unknown, fallback: string): string {
+function serverErrorMessage(error: unknown, fallback: string): string {
   const message = (error as { response?: { data?: { message?: unknown } } })?.response?.data?.message
   if (typeof message === 'string' && message.trim()) return message
   if (error instanceof Error && error.message.trim()) return error.message
@@ -38,7 +38,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
   const [rows, setRows] = useState<VendorAccount[]>([])
   const [editing, setEditing] = useState<VendorAccount | 'new' | null>(null)
   const [saving, setSaving] = useState(false)
-  const [deleteError, setDeleteError] = useState('')
+  const [actionError, setActionError] = useState('')
   const accountsRequestId = useRef(0)
   const deletingIdsRef = useRef(new Set<number>())
   const [deletingIds, setDeletingIds] = useState<ReadonlySet<number>>(new Set())
@@ -94,16 +94,29 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
     })
   }
 
+  // The server refuses e.g. disabling a vendor's last active account; keep its reason visible.
+  const toggleAccountStatus = async (account: VendorAccount) => {
+    const disabling = account.status === 'ACTIVE'
+    setActionError('')
+    try {
+      await api.setAccountStatus(account.id, disabling ? 'DISABLED' : 'ACTIVE')
+    } catch (error) {
+      setActionError(`${disabling ? '停用' : '启用'}失败：${serverErrorMessage(error, '操作失败，请稍后重试')}`)
+      return
+    }
+    await load()
+  }
+
   const removeAccount = async (account: VendorAccount) => {
     if (!company || deletingIdsRef.current.has(account.id)) return
     const pending = new Set(deletingIdsRef.current).add(account.id)
     deletingIdsRef.current = pending
     setDeletingIds(pending)
-    setDeleteError('')
+    setActionError('')
     try {
       await api.deleteAccount(account.id)
     } catch (error) {
-      setDeleteError(`删除失败：${deleteErrorMessage(error, '无法删除该账号，请稍后重试；如有业务历史请改为停用。')}`)
+      setActionError(`删除失败：${serverErrorMessage(error, '无法删除该账号，请稍后重试；如有业务历史请改为停用。')}`)
       return
     } finally {
       const remaining = new Set(deletingIdsRef.current)
@@ -116,7 +129,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
     Message.success('账号已删除')
     const refreshed = await Promise.allSettled([load(), onAccountDeleted(company, account)])
     if (refreshed.some((result) => result.status === 'rejected')) {
-      setDeleteError('账号已删除，但列表刷新失败；请重新打开账号抽屉重试。')
+      setActionError('账号已删除，但列表刷新失败；请重新打开账号抽屉重试。')
     }
   }
 
@@ -145,7 +158,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
       {can.manageAccounts ? (
         <>
           <Button type="primary" icon={<IconPlus />} style={{ marginBottom: 12 }} onClick={() => { form.resetFields(); setEditing('new') }}>新增账号</Button>
-          {deleteError && <Typography.Text className="oem-delete-error" type="error" role="alert">{deleteError}</Typography.Text>}
+          {actionError && <Typography.Text className="oem-delete-error" type="error" role="alert">{actionError}</Typography.Text>}
           <Table
             className="oem-account-table"
             rowKey="id"
@@ -174,7 +187,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
                     <Button size="mini" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>
                     <Button size="mini" onClick={() => reset(row)}>重置密码</Button>
                     <Button size="mini" status={row.status === 'ACTIVE' ? 'warning' : 'success'}
-                      onClick={async () => { await api.setAccountStatus(row.id, row.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE'); await load() }}>
+                      onClick={() => void toggleAccountStatus(row)}>
                       {row.status === 'ACTIVE' ? '停用' : '启用'}
                     </Button>
                     {can.deleteAccounts && (
@@ -234,7 +247,7 @@ export default function CompaniesPage() {
   const [editing, setEditing] = useState<Company | 'new' | null>(null)
   const [saving, setSaving] = useState(false)
   const [accountsOf, setAccountsOf] = useState<Company | null>(null)
-  const [deleteError, setDeleteError] = useState('')
+  const [actionError, setActionError] = useState('')
   const [listLoading, setListLoading] = useState(false)
   const [listError, setListError] = useState('')
   const deletingIdsRef = useRef(new Set<number>())
@@ -254,7 +267,7 @@ export default function CompaniesPage() {
       setTotal(result.total)
       setListError('')
     } catch (error) {
-      if (isLatest()) setListError(deleteErrorMessage(error, '厂商列表加载失败，请重试'))
+      if (isLatest()) setListError(serverErrorMessage(error, '厂商列表加载失败，请重试'))
       throw error
     } finally {
       if (isLatest()) setListLoading(false)
@@ -280,16 +293,29 @@ export default function CompaniesPage() {
     }
   }
 
+  // The server refuses disabling a vendor with in-flight transfers; keep its reason visible.
+  const toggleCompanyStatus = async (company: Company) => {
+    const disabling = company.status === 'ACTIVE'
+    setActionError('')
+    try {
+      await api.setCompanyStatus(company.id, disabling ? 'DISABLED' : 'ACTIVE')
+    } catch (error) {
+      setActionError(`${disabling ? '停用' : '启用'}失败：${serverErrorMessage(error, '操作失败，请稍后重试')}`)
+      return
+    }
+    await load()
+  }
+
   const removeCompany = async (company: Company) => {
     if (deletingIdsRef.current.has(company.id)) return
     const pending = new Set(deletingIdsRef.current).add(company.id)
     deletingIdsRef.current = pending
     setDeletingIds(pending)
-    setDeleteError('')
+    setActionError('')
     try {
       await api.deleteCompany(company.id)
     } catch (error) {
-      setDeleteError(`删除失败：${deleteErrorMessage(error, '无法删除该厂商，请稍后重试；如有业务历史请改为停用。')}`)
+      setActionError(`删除失败：${serverErrorMessage(error, '无法删除该厂商，请稍后重试；如有业务历史请改为停用。')}`)
       return
     } finally {
       const remaining = new Set(deletingIdsRef.current)
@@ -309,7 +335,7 @@ export default function CompaniesPage() {
     try {
       await load()
     } catch {
-      setDeleteError('厂商已删除，但列表刷新失败；请重新搜索或切换分页重试。')
+      setActionError('厂商已删除，但列表刷新失败；请重新搜索或切换分页重试。')
     }
   }
 
@@ -338,7 +364,7 @@ export default function CompaniesPage() {
       <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setEditing('new') }}>新增厂商</Button>
     )}>
       <Input.Search allowClear placeholder="搜索厂商名称" style={{ width: 260, marginBottom: 12 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
-      {deleteError && <Typography.Text className="oem-delete-error" type="error" role="alert">{deleteError}</Typography.Text>}
+      {actionError && <Typography.Text className="oem-delete-error" type="error" role="alert">{actionError}</Typography.Text>}
       {listError && (
         <Alert type="error" style={{ marginBottom: 12 }} content={`厂商列表加载失败：${listError}`}
           action={<Button size="small" loading={listLoading} onClick={() => void load().catch(() => undefined)}>重试</Button>} />
@@ -366,7 +392,7 @@ export default function CompaniesPage() {
                 {can.manageAccounts && <Button size="mini" onClick={() => setAccountsOf(row)}>账号</Button>}
                 {can.manageCompanies && <Button size="mini" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>}
                 {can.manageCompanies && <Popconfirm title={row.status === 'ACTIVE' ? '停用后该厂商所有账号将立即退出登录，确定？' : '确定启用该厂商？'}
-                  onOk={async () => { await api.setCompanyStatus(row.id, row.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE'); await load() }}>
+                  onOk={() => toggleCompanyStatus(row)}>
                   <Button size="mini" status={row.status === 'ACTIVE' ? 'warning' : 'success'}>{row.status === 'ACTIVE' ? '停用' : '启用'}</Button>
                 </Popconfirm>}
                 {can.manageCompanies && can.deleteCompanies && (

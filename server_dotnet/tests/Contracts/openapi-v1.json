@@ -12291,7 +12291,6 @@
         "required": [
           "description",
           "oemCompanyId",
-          "retentionTemplateId",
           "title"
         ],
         "type": "object",
@@ -12308,11 +12307,6 @@
             "type": "integer",
             "format": "int64",
             "nullable": true
-          },
-          "retentionTemplateId": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
           }
         },
         "additionalProperties": false
@@ -12320,7 +12314,6 @@
       "TransferUpdate": {
         "required": [
           "description",
-          "retentionTemplateId",
           "title",
           "version"
         ],
@@ -12332,11 +12325,6 @@
           },
           "description": {
             "type": "string",
-            "nullable": true
-          },
-          "retentionTemplateId": {
-            "type": "integer",
-            "format": "int64",
             "nullable": true
           },
           "version": {

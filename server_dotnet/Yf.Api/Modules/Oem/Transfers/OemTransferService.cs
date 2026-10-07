@@ -10,15 +10,17 @@ using Yf.Api.Modules.Oem.Validation;
 
 namespace Yf.Api.Modules.Oem.Transfers;
 
+/// <remarks>
+/// Retention is always the unified active policy; senders cannot choose it. A legacy
+/// <c>retentionTemplateId</c> member in the body is ignored by System.Text.Json.
+/// </remarks>
 public sealed record TransferCreate(
     string? Title = null,
     string? Description = null,
-    ulong? OemCompanyId = null,
-    ulong? RetentionTemplateId = null);
+    ulong? OemCompanyId = null);
 public sealed record TransferUpdate(
     string? Title = null,
     string? Description = null,
-    ulong? RetentionTemplateId = null,
     ulong? Version = null);
 public sealed record TransferVersionRequest(ulong? Version);
 
@@ -51,6 +53,8 @@ public sealed class OemTransferService(
             if (request.OemCompanyId is ulong requested && requested != account.CompanyId) throw ApiException.BadRequest("只能向本厂商创建传递单");
             direction = TransferDirections.OemToInternal;
             companyId = account.CompanyId;
+            // The draft references its vendor sender (see OemAccountLock).
+            await OemAccountLock.ShareAsync(uow, current, ct);
         }
         else
         {

@@ -22,6 +22,9 @@ public sealed class OemDirectoryDeletionTests
                 """, new { accountId });
         }
 
+        // The only active account of an active vendor is protected; retiring the vendor first lifts that.
+        await admin.DeleteAsync($"/api/v1/oem/accounts/{accountId}", ct).Status(HttpStatusCode.Conflict, 40901);
+        await admin.PutAsync($"/api/v1/oem/companies/{companyId}/status", new { status = "DISABLED" }, ct).Ok();
         await admin.DeleteAsync($"/api/v1/oem/accounts/{accountId}", ct).Ok();
         await using (var connection = await host.OpenAsync(ct))
         {
