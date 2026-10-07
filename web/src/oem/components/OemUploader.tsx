@@ -1,8 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { Button, Progress, Space, Typography } from '@arco-design/web-react'
+import { Button, Message, Progress, Space, Typography } from '@arco-design/web-react'
 import { IconClose, IconRefresh, IconUpload } from '@arco-design/web-react/icon'
-import { fileMd5 } from '../../api/file-hash'
+import { createChunkHasher, fileMd5, type ChunkHasher } from '../../api/file-hash'
 import { fmtSize } from '../../api/types'
+import { isQuietedError } from '../api/quietErrors'
 import { useOem } from '../OemContext'
 
 type Phase = 'queued' | 'hashing' | 'uploading' | 'merging' | 'cancelling' | 'done' | 'failed'
@@ -57,6 +58,15 @@ function isTransient(error: unknown): boolean {
   const status = statusOf(error)
   if (status !== undefined) return status === 408 || status === 429 || status >= 500
   return TRANSIENT_CODES.has((error as { code?: string })?.code ?? '')
+}
+
+/**
+ * The server rejected the chunk because its bytes did not match the declared `X-Chunk-SHA256`
+ * (corrupted in transit or the local file changed while being read). Worth one re-read and resend.
+ */
+function isDigestMismatch(error: unknown): boolean {
+  const response = (error as { response?: { status?: number; data?: { message?: string } } })?.response
+  return response?.status === 400 && /SHA-?256.*(校验失败|不一致|不匹配|mismatch)/i.test(response.data?.message ?? '')
 }
 
 /** The server no longer knows the upload session (expired and purged, or its draft is gone). */
@@ -135,14 +145,32 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
     })
   }
 
-  const putChunkWithRetry = async (sessionId: string, index: number, blob: Blob, signal: AbortSignal) => {
-    for (let attempt = 0; ; attempt++) {
+  /**
+   * Sends one chunk with its SHA-256 digest. Transient failures back off and retry; a digest
+   * mismatch re-reads the slice from the file, re-hashes and resends once. Every attempt is
+   * quiet: the global HTTP toast stays silent and uploadOne reports the item's final failure once.
+   */
+  const putChunkWithRetry = async (
+    sessionId: string, index: number, file: File, start: number, end: number, hasher: ChunkHasher, signal: AbortSignal,
+  ) => {
+    let transientRetries = 0
+    let digestRetried = false
+    for (;;) {
+      const blob = file.slice(start, end)
+      const sha256 = await hasher.sha256(blob)
+      if (signal.aborted) throw new Error('aborted')
       try {
-        await api.putChunk(sessionId, index, blob, signal)
+        await api.putChunk(sessionId, index, blob, sha256, signal, { quietNetworkError: true, quietClientError: true })
         return
       } catch (error) {
-        if (signal.aborted || attempt >= CHUNK_RETRIES || !isTransient(error)) throw error
-        await wait(CHUNK_RETRY_BASE_MS * 2 ** attempt, signal)
+        if (signal.aborted) throw error
+        if (isDigestMismatch(error) && !digestRetried) {
+          digestRetried = true
+          continue
+        }
+        if (transientRetries >= CHUNK_RETRIES || !isTransient(error)) throw error
+        await wait(CHUNK_RETRY_BASE_MS * 2 ** transientRetries, signal)
+        transientRetries++
       }
     }
   }
@@ -155,60 +183,69 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
     // A resumed session the server no longer knows (404/410) is dropped and re-initialised once.
     // Merged-ready sessions are never re-created: their merge may already have produced the file.
     let mayRecreateSession = Boolean(session && !session.mergeReady)
-    for (;;) {
-      try {
-        if (!md5) {
-          patch(key, { phase: 'hashing', error: undefined, percent: 0 })
-          md5 = await fileMd5(file)
-          if (signal.aborted) return false
-          patch(key, { md5 })
-        }
-        if (!session) {
-          patch(key, { phase: 'uploading', error: undefined })
-          const init = await api.initUpload(draftId, { fileName: file.name, fileSize: file.size, fileMd5: md5 })
-          session = {
-            id: init.sessionId,
-            chunkSize: init.chunkSize,
-            totalChunks: init.totalChunks,
-            uploadedChunks: [...init.uploadedChunks],
-            mergeReady: false,
+    let hasher: ChunkHasher | undefined
+    try {
+      for (;;) {
+        try {
+          if (!md5) {
+            patch(key, { phase: 'hashing', error: undefined, percent: 0 })
+            md5 = await fileMd5(file)
+            if (signal.aborted) return false
+            patch(key, { md5 })
           }
-          patch(key, { session })
-        }
-        const done = new Set(session.uploadedChunks)
-        if (!session.mergeReady) {
-          patch(key, { phase: 'uploading', error: undefined })
-          for (let index = 0; index < session.totalChunks; index++) {
-            if (!done.has(index)) {
-              const blob = file.slice(index * session.chunkSize, Math.min(file.size, (index + 1) * session.chunkSize))
-              await putChunkWithRetry(session.id, index, blob, signal)
-              done.add(index)
-              session = { ...session, uploadedChunks: [...done] }
-              patch(key, { session })
+          if (!session) {
+            patch(key, { phase: 'uploading', error: undefined })
+            const init = await api.initUpload(draftId, { fileName: file.name, fileSize: file.size, fileMd5: md5 })
+            session = {
+              id: init.sessionId,
+              chunkSize: init.chunkSize,
+              totalChunks: init.totalChunks,
+              uploadedChunks: [...init.uploadedChunks],
+              mergeReady: false,
             }
-            patch(key, { percent: session.totalChunks === 0 ? 100 : Math.round((done.size / session.totalChunks) * 100) })
+            patch(key, { session })
           }
-          session = { ...session, mergeReady: true }
-          patch(key, { session })
+          const done = new Set(session.uploadedChunks)
+          if (!session.mergeReady) {
+            patch(key, { phase: 'uploading', error: undefined })
+            for (let index = 0; index < session.totalChunks; index++) {
+              if (!done.has(index)) {
+                hasher ??= createChunkHasher()
+                await putChunkWithRetry(session.id, index, file, index * session.chunkSize,
+                  Math.min(file.size, (index + 1) * session.chunkSize), hasher, signal)
+                done.add(index)
+                session = { ...session, uploadedChunks: [...done] }
+                patch(key, { session })
+              }
+              patch(key, { percent: session.totalChunks === 0 ? 100 : Math.round((done.size / session.totalChunks) * 100) })
+            }
+            session = { ...session, mergeReady: true }
+            patch(key, { session })
+          }
+          patch(key, { phase: 'merging' })
+          // Merge is idempotent for a session. Reusing this id is essential when its response is lost.
+          await api.merge(session.id)
+          if (signal.aborted) return false
+          patch(key, { phase: 'done', percent: 100 })
+          onUploaded?.()
+          return true
+        } catch (error) {
+          if (signal.aborted) return false
+          if (mayRecreateSession && isSessionGone(error)) {
+            mayRecreateSession = false
+            session = undefined
+            patch(key, { session: undefined, percent: 0 })
+            continue
+          }
+          const message = errorMessage(error)
+          // Quieted chunk requests left the user-facing report to us: one toast per failed item.
+          if (isQuietedError(error) && !unmounted.current) Message.error(`「${file.name}」${message}`)
+          patch(key, { phase: 'failed', error: message })
+          return false
         }
-        patch(key, { phase: 'merging' })
-        // Merge is idempotent for a session. Reusing this id is essential when its response is lost.
-        await api.merge(session.id)
-        if (signal.aborted) return false
-        patch(key, { phase: 'done', percent: 100 })
-        onUploaded?.()
-        return true
-      } catch (error) {
-        if (signal.aborted) return false
-        if (mayRecreateSession && isSessionGone(error)) {
-          mayRecreateSession = false
-          session = undefined
-          patch(key, { session: undefined, percent: 0 })
-          continue
-        }
-        patch(key, { phase: 'failed', error: errorMessage(error) })
-        return false
       }
+    } finally {
+      hasher?.dispose()
     }
   }
 

@@ -5,7 +5,10 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const hashMocks = vi.hoisted(() => ({ fileMd5: vi.fn() }))
-vi.mock('../../api/file-hash', () => ({ fileMd5: hashMocks.fileMd5 }))
+vi.mock('../../api/file-hash', () => ({
+  fileMd5: hashMocks.fileMd5,
+  createChunkHasher: () => ({ sha256: async () => 'a'.repeat(64), dispose: () => undefined }),
+}))
 
 import { createAppQueryClient } from '../../api/queryClient'
 import type { OemApi } from '../../oem/api/OemApi'
