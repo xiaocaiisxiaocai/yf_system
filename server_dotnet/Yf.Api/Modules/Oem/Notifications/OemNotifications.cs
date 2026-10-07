@@ -125,7 +125,7 @@ public sealed class OemNotificationHandler(AppOptions options) : IOemEventHandle
                         $"{TransferStateMachine.Label(closed.Lifecycle)}：{transfer.Title}", closed.Lifecycle switch
                         {
                             TransferLifecycle.Rejected => "您发送的文件传递单已被审批驳回，如需重新发送请创建新的传递单。",
-                            TransferLifecycle.Blocked => "您发送的文件传递单中有附件未通过文件校验，传递单已被阻断，附件将被自动清理。",
+                            TransferLifecycle.Blocked => "您发送的文件传递单未能发布，已被阻断，附件将被自动清理。阻断原因见下方说明。",
                             _ => "您发送的文件传递单已被管理员终止。",
                         }, closed.Reason, ct);
                 break;

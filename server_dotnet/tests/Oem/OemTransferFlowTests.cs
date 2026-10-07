@@ -97,10 +97,10 @@ public sealed class OemTransferFlowTests
         // The vendor learns nothing before release; the approver cannot act before validation.
         Assert.Empty((await world.Vendor.GetAsync("/api/v1/oem/transfers", ct).Ok())["list"]!.AsArray());
         await world.Vendor.GetAsync($"/api/v1/oem/transfers/{id}", ct).Status(HttpStatusCode.NotFound);
-        Assert.Empty((await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok()).AsArray());
+        Assert.Empty((await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok())["list"]!.AsArray());
 
         await host.RunOemJobsAsync(ct);
-        var pending = (await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok()).AsArray();
+        var pending = (await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok())["list"]!.AsArray();
         var task = Assert.Single(pending)!;
         var detail = await world.Leader.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
         Assert.Equal("PENDING", detail["summary"]!["approvalStatus"]!.GetValue<string>());
@@ -212,7 +212,7 @@ public sealed class OemTransferFlowTests
         await host.UploadAsync(world.Sender, rejectedId, "a.pdf", OemTestHost.Pdf("a"), ct);
         await world.Sender.PostAsync($"/api/v1/oem/transfers/{rejectedId}/send", new { version = Version(rejected) + 1 }, ct).Ok();
         await host.RunOemJobsAsync(ct);
-        var task = (await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok()).AsArray().Single()!;
+        var task = (await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok())["list"]!.AsArray().Single()!;
         await world.Leader.PostAsync($"/api/v1/oem/approvals/{task.Id("taskId")}/reject", new { version = task["version"]!.GetValue<ulong>() }, ct)
             .Status(HttpStatusCode.BadRequest);
         var closed = await world.Leader.PostAsync($"/api/v1/oem/approvals/{task.Id("taskId")}/reject",

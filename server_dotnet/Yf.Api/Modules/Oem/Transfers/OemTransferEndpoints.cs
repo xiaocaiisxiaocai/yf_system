@@ -52,8 +52,8 @@ internal static class OemTransferEndpoints
             return EmptyResponse.Instance;
         }).Produces<EmptyResponse>();
 
-        oem.MapGet("/approvals/pending", (HttpContext c, OemApprovalService s, CancellationToken ct) => s.PendingAsync(OemActorAccessor.Get(c), ct))
-            .Produces<IReadOnlyList<OemPendingApprovalResponse>>();
+        oem.MapGet("/approvals/pending", (HttpContext c, OemApprovalService s, CancellationToken ct) => s.PendingAsync(OemActorAccessor.Get(c), c.Request, ct))
+            .Produces<OemPageResponse<OemPendingApprovalResponse>>();
         oem.MapPost("/approvals/{taskId:long}/approve", (ulong taskId, ApprovalDecisionRequest body, HttpContext c, OemApprovalService s, CancellationToken ct) =>
             s.ApproveAsync(OemActorAccessor.Get(c), taskId, body, ct)).Produces<OemTransferDetailResponse>();
         oem.MapPost("/approvals/{taskId:long}/reject", (ulong taskId, ApprovalDecisionRequest body, HttpContext c, OemApprovalService s, CancellationToken ct) =>

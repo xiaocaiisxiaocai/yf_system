@@ -96,7 +96,8 @@ export class OemApi {
     this.post<'POST /oem/files/{id}/download-sessions', DownloadSession>(`/oem/files/${fileId}/download-sessions`)
 
   // Approvals
-  pendingApprovals = () => this.get<'GET /oem/approvals/pending', PendingTask[]>('/oem/approvals/pending')
+  pendingApprovals = (params: { page?: number; pageSize?: number } = {}) =>
+    this.get<'GET /oem/approvals/pending', Page<PendingTask>>('/oem/approvals/pending', params)
   approve = (taskId: number, version: number, reason?: string) =>
     this.post<'POST /oem/approvals/{taskId}/approve', TransferDetail>(`/oem/approvals/${taskId}/approve`, { version, reason } satisfies Api.ApprovalDecisionRequest)
   reject = (taskId: number, version: number, reason: string) =>

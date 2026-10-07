@@ -42,7 +42,7 @@ public sealed class OemNotificationTests
         Assert.Equal(OemMailEvents.ApprovalPending, pending.EventType);
         Assert.Equal(("internal", world.LeaderId), (pending.RecipientRealm, pending.RecipientAccountId));
 
-        var task = (await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok()).AsArray().Single()!;
+        var task = (await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok())["list"]!.AsArray().Single()!;
         await world.Leader.PostAsync($"/api/v1/oem/approvals/{task.Id("taskId")}/approve", new { version = task["version"]!.GetValue<ulong>() }, ct).Ok();
         var mails = await MailsAsync(host, ct);
         var released = mails.Where(mail => mail.EventType == OemMailEvents.TransferReleased).ToArray();
