@@ -6,6 +6,7 @@ import {getDarkColor, getLightColor} from './color';
 import dayjs from 'dayjs';
 import {read, write} from 'xlsx';
 import {calcPosition} from './media';
+import {assertArchiveWithinLimits, ArchiveLimitError, spreadsheetArchiveLimits} from '../../../../../archive-limits.js';
 
 const themeColor = [
     '#FFFFFF',
@@ -120,18 +121,19 @@ function requestExcel(src, options) {
     });
 }
 
-export function readExcelData(buffer, xls){
+export async function readExcelData(buffer, xls){
     try {
+        await assertArchiveWithinLimits(buffer, spreadsheetArchiveLimits);
         if(xls){
             const workbook = read(buffer, {type: 'array'});
             buffer = write(workbook, { bookType: 'xlsx', type: 'array' });
+            await assertArchiveWithinLimits(buffer, spreadsheetArchiveLimits);
         }
         const wb = new Excel.Workbook();
-        return wb.xlsx.load(buffer);
-
-    }catch {
-        console.warn(e);
-        return Promise.reject(e);
+        return await wb.xlsx.load(buffer);
+    } catch (error) {
+        if (!(error instanceof ArchiveLimitError)) console.warn(error);
+        return Promise.reject(error);
     }
 }
 

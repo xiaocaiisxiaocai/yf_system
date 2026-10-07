@@ -28,6 +28,7 @@
     "dockview-react": "8.3.1",
     "exceljs": "4.4.0",
     "lodash": "4.18.1",
+    "pako": "1.0.11",
     "pdfjs-dist": "6.3.289",
     "pptx-preview": "0.0.19",
     "react": "^18.3.1",
@@ -55,7 +56,7 @@
     "vitest": "5.0.1"
   },
   "yfDependencyPolicy": {
-    "bundledPreviewRuntimeDependencies": ["dayjs", "exceljs", "lodash", "pptx-preview", "tinycolor2", "xlsx"],
+    "bundledPreviewRuntimeDependencies": ["dayjs", "exceljs", "lodash", "pako", "pptx-preview", "tinycolor2", "xlsx"],
     "reason": "These packages are imported by the vendored Excel/PPTX viewer sources and bundled into production preview assets."
   },
   "overrides": {

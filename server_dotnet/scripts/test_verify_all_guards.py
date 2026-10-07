@@ -19,7 +19,7 @@ class VerificationConfigurationContracts(unittest.TestCase):
         package = json.loads((web / "package.json").read_text(encoding="utf-8"))
         lint = package["scripts"]["lint"]
         self.assertIn("--deny-warnings", lint)
-        bundled = {"dayjs", "exceljs", "lodash", "pptx-preview", "tinycolor2", "xlsx"}
+        bundled = {"dayjs", "exceljs", "lodash", "pako", "pptx-preview", "tinycolor2", "xlsx"}
         self.assertTrue(bundled.issubset(package["dependencies"]))
         self.assertEqual(
             bundled,

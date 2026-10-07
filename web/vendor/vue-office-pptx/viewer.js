@@ -1,5 +1,6 @@
 import { init } from 'pptx-preview'
 import JSZip from 'jszip'
+import { assertArchiveWithinLimits, presentationArchiveLimits } from '../archive-limits.js'
 import { normalizePptx } from './normalize-pptx.js'
 import './viewer.css'
 
@@ -20,6 +21,7 @@ const notify = (type, detail = {}) => {
 }
 
 async function preflightPptx(buffer) {
+  await assertArchiveWithinLimits(buffer, presentationArchiveLimits)
   const zip = await JSZip.loadAsync(buffer, { createFolders: false })
   const entries = Object.values(zip.files)
   if (entries.length === 0 || entries.length > 5000) throw new Error('Invalid PPTX entry count')
