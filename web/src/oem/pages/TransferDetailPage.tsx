@@ -7,7 +7,9 @@ import { IconDownload, IconEye, IconLeft } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
 import type { ApprovalInfo, ApprovalTask, TransferDetail, TransferFile } from '../api/types'
+import OemFilePreview from '../components/OemFilePreview'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
+import { oemPreviewKind } from '../components/oemPreview'
 import { ApprovalTag, LifecycleTag, PayloadTag, ValidationTag } from '../components/StatusTags'
 import { DIRECTION_LABEL } from '../components/statusLabels'
 import { useCan, useOem } from '../OemContext'
@@ -165,6 +167,7 @@ export default function TransferDetailPage() {
   const sendLocked = useRef(false)
   const [uploadBusy, setUploadBusy] = useState(false)
   const [sending, setSending] = useState(false)
+  const [previewing, setPreviewing] = useState<TransferFile | null>(null)
   const recoveryScoped = realm === 'internal' && can.recover && !permissions.has('oem:transfer_view')
   const detailKey = ['oem', ...queryScope, 'transfer', id] as const
   const detailQuery = useQuery({
@@ -269,7 +272,12 @@ export default function TransferDetailPage() {
     window.location.href = session.url
   }
   const preview = async (file: TransferFile) => {
-    // Open the tab inside the click gesture so popup blockers allow it, then point it at the blob.
+    // PDF and images open in-page with the viewer watermark, like collaboration previews.
+    if (oemPreviewKind(file.ext)) {
+      setPreviewing(file)
+      return
+    }
+    // Other formats: open the tab inside the click gesture so popup blockers allow it, then point it at the blob.
     // 'noopener' would make window.open return null, so the opener link is cut by hand instead.
     const target = window.open('', '_blank')
     if (!target) {
@@ -387,6 +395,7 @@ export default function TransferDetailPage() {
       </Card>
 
       {detail.approval && realm === 'internal' && <ApprovalPanel detail={detail} onChanged={setDetail} />}
+      <OemFilePreview file={previewing} onClose={() => setPreviewing(null)} />
     </div>
   )
 }

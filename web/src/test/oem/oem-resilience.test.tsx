@@ -5,7 +5,10 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const hashMocks = vi.hoisted(() => ({ fileMd5: vi.fn() }))
-vi.mock('../../api/file-hash', () => ({ fileMd5: hashMocks.fileMd5 }))
+vi.mock('../../api/file-hash', () => ({
+  fileMd5: hashMocks.fileMd5,
+  createChunkHasher: () => ({ sha256: async () => 'a'.repeat(64), dispose: () => undefined }),
+}))
 
 import { createAppQueryClient } from '../../api/queryClient'
 import type { OemApi } from '../../oem/api/OemApi'
@@ -57,7 +60,7 @@ describe('OEM 上传队列的中止与失效会话', () => {
   it('卸载时中止正在上传的分片', async () => {
     const user = userEvent.setup()
     let signal: AbortSignal | undefined
-    const putChunk = vi.fn().mockImplementation((_id: string, _index: number, _blob: Blob, abort: AbortSignal) => {
+    const putChunk = vi.fn().mockImplementation((_id: string, _index: number, _blob: Blob, _sha256: string, abort: AbortSignal) => {
       signal = abort
       return new Promise(() => undefined)
     })

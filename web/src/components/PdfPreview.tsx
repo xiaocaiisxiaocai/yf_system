@@ -16,8 +16,12 @@ function parseZoom(value: string): PdfZoom {
   return value === 'page' || value === 'fit' ? value : Number(value)
 }
 
-function PdfDocument({ fileId, onRetry, toolbarContainer }: {
+/** Loads the PDF bytes for a non-collaboration source (e.g. OEM files); defaults to `/files/{id}/content`. */
+export type PdfContentLoader = (signal: AbortSignal) => Promise<ArrayBuffer>
+
+function PdfDocument({ fileId, loadContent, onRetry, toolbarContainer }: {
   fileId: number
+  loadContent?: PdfContentLoader
   onRetry: () => void
   toolbarContainer?: HTMLElement | null
 }) {
@@ -41,12 +45,14 @@ function PdfDocument({ fileId, onRetry, toolbarContainer }: {
 
     async function load() {
       try {
-        const [response, engine] = await Promise.all([
-          http.get<ArrayBuffer>(`/files/${fileId}/content`, {
-            responseType: 'arraybuffer',
-            signal: controller.signal,
-            quietNetworkError: true,
-          } as QuietRequestConfig),
+        const [data, engine] = await Promise.all([
+          loadContent
+            ? loadContent(controller.signal)
+            : http.get<ArrayBuffer>(`/files/${fileId}/content`, {
+              responseType: 'arraybuffer',
+              signal: controller.signal,
+              quietNetworkError: true,
+            } as QuietRequestConfig).then(response => response.data),
           import('./pdfEngine'),
         ])
         if (!active) return
@@ -71,7 +77,7 @@ function PdfDocument({ fileId, onRetry, toolbarContainer }: {
           },
         })
         viewerRef.current = viewer
-        await viewer.preview(new Uint8Array(response.data))
+        await viewer.preview(new Uint8Array(data))
       } catch (cause) {
         if (active) {
           setError(cause instanceof Error && cause.name === 'PasswordException'
@@ -88,6 +94,8 @@ function PdfDocument({ fileId, onRetry, toolbarContainer }: {
       if (viewerRef.current === viewer) viewerRef.current = null
       void viewer?.destroy()
     }
+    // The loader is fixed for a mounted document; PdfPreview remounts it per file and retry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId])
 
   const changePage = (value: number | undefined) => {
@@ -130,11 +138,13 @@ function PdfDocument({ fileId, onRetry, toolbarContainer }: {
   </section>
 }
 
-export default function PdfPreview({ fileId, toolbarContainer }: {
+export default function PdfPreview({ fileId, loadContent, toolbarContainer }: {
   fileId: number
+  /** Optional byte source replacing the collaboration content endpoint; `fileId` still keys the document. */
+  loadContent?: PdfContentLoader
   toolbarContainer?: HTMLElement | null
 }) {
   const [attempt, setAttempt] = useState(0)
   // Every file/retry owns a fresh request, loading task, virtual canvas list and worker.
-  return <PdfDocument key={`${fileId}:${attempt}`} fileId={fileId} toolbarContainer={toolbarContainer} onRetry={() => setAttempt(value => value + 1)} />
+  return <PdfDocument key={`${fileId}:${attempt}`} fileId={fileId} loadContent={loadContent} toolbarContainer={toolbarContainer} onRetry={() => setAttempt(value => value + 1)} />
 }

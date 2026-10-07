@@ -1,4 +1,5 @@
 import type { AxiosInstance, AxiosRequestConfig } from 'axios'
+import type { QuietRequestConfig } from '../../api/client'
 import type * as Api from '../../api/generated/api-types'
 import type {
   AccountCreate, AccountUpdate, ActiveStatus, ApiResponses, ApiRoute, ApprovalStatus, ApproverOption, AuditRow, Company,
@@ -80,18 +81,26 @@ export class OemApi {
   // Uploads
   initUpload = (transferId: number, body: UploadInitRequest) =>
     this.post<'POST /oem/transfers/{id}/uploads/init', UploadInit>(`/oem/transfers/${transferId}/uploads/init`, body)
-  putChunk = async (sessionId: string, index: number, blob: Blob, signal?: AbortSignal) => {
+  /**
+   * `sha256` is the chunk's lowercase hex SHA-256, sent as `X-Chunk-SHA256` for the server to verify.
+   * `quiet` uses the shared `QuietRequestConfig` flags so automatic retries do not raise global toasts.
+   */
+  putChunk = async (
+    sessionId: string, index: number, blob: Blob, sha256: string, signal?: AbortSignal,
+    quiet: Pick<QuietRequestConfig, 'quietNetworkError' | 'quietClientError'> = {},
+  ) => {
     await this.http.put<ApiResponses['PUT /oem/uploads/{sessionId}/chunks/{index}']>(`/oem/uploads/${sessionId}/chunks/${index}`, blob, {
-      headers: { 'Content-Type': 'application/octet-stream' }, signal, timeout: 0,
-    })
+      ...quiet,
+      headers: { 'Content-Type': 'application/octet-stream', 'X-Chunk-SHA256': sha256 }, signal, timeout: 0,
+    } as QuietRequestConfig)
   }
   merge = (sessionId: string) =>
     this.post<'POST /oem/uploads/{sessionId}/merge', UploadedFile>(`/oem/uploads/${sessionId}/merge`, {}, { timeout: 0 })
   abortUpload = (sessionId: string) => this.delete<'DELETE /oem/uploads/{sessionId}'>(`/oem/uploads/${sessionId}`)
 
   // Content
-  previewBlob = async (fileId: number) =>
-    (await this.http.get<ApiResponses['GET /oem/files/{id}/content']>(`/oem/files/${fileId}/content`, { responseType: 'blob', timeout: 0 })).data
+  previewBlob = async (fileId: number, signal?: AbortSignal) =>
+    (await this.http.get<ApiResponses['GET /oem/files/{id}/content']>(`/oem/files/${fileId}/content`, { responseType: 'blob', timeout: 0, signal })).data as Blob
   startDownload = (fileId: number) =>
     this.post<'POST /oem/files/{id}/download-sessions', DownloadSession>(`/oem/files/${fileId}/download-sessions`)
 

@@ -4,7 +4,9 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { Message } from '@arco-design/web-react'
 import { useEffect } from 'react'
-import { REFRESH_TIMEOUT_MS, withAuthLock } from '../../api/client'
+import { REFRESH_TIMEOUT_MS, type QuietRequestConfig } from '../../api/client'
+import { withPortalAuthLock } from './portalAuthLock'
+import { isQuietedError } from './quietErrors'
 import { createAppQueryClient } from '../../api/queryClient'
 import type { AccountBrief, ApiResponses } from './types'
 
@@ -82,7 +84,8 @@ usePortalAuth.subscribe((state, previous) => {
 
 let refreshing: Promise<boolean> | null = null
 let refreshingGeneration: number | undefined
-type PortalSessionConfig = InternalAxiosRequestConfig & { _retried?: boolean; authGeneration?: number }
+type PortalSessionConfig = InternalAxiosRequestConfig & QuietRequestConfig & { _retried?: boolean; authGeneration?: number }
+
 const isCurrentSession = (config?: PortalSessionConfig) =>
   !config || config.authGeneration === usePortalAuth.getState().generation
 
@@ -101,7 +104,7 @@ async function refreshSession(generation = usePortalAuth.getState().generation):
   if (usePortalAuth.getState().generation !== generation) return false
   if (!refreshing || refreshingGeneration !== generation) {
     refreshingGeneration = generation
-    const pending = withAuthLock(async () => {
+    const pending = withPortalAuthLock(async () => {
       if (usePortalAuth.getState().generation !== generation) return false
       const response = await axios.post<ApiResponses['POST /oem/auth/refresh']>('/api/v1/oem/auth/refresh', null, { withCredentials: true, timeout: REFRESH_TIMEOUT_MS })
       const token = response.data?.accessToken
@@ -182,7 +185,7 @@ portalHttp.interceptors.response.use(
     }
     const message = error.response?.data?.message
       || (error.code === 'ERR_NETWORK' ? '网络连接失败，请稍后重试' : error.code === 'ECONNABORTED' ? '请求超时，请稍后重试' : error.message)
-    Message.error(message || '网络错误')
+    if (!isQuietedError(error)) Message.error(message || '网络错误')
     return Promise.reject(error)
   },
 )
