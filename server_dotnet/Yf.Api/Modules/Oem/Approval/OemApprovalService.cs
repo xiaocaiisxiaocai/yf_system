@@ -23,12 +23,14 @@ public sealed class OemApprovalService(
     OemAuditWriter audit,
     OemTransferReader reader)
 {
-    public async Task<IReadOnlyList<OemPendingApprovalResponse>> PendingAsync(OemActor actor, CancellationToken ct)
+    /// <summary>The caller's pending tasks, oldest activation first; (activatedAt, taskId) keeps paging stable.</summary>
+    public async Task<OemPageResponse<OemPendingApprovalResponse>> PendingAsync(OemActor actor, HttpRequest request, CancellationToken ct)
     {
+        var (page, size, offset) = QueryValues.Page(request);
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.FlowApprove, ct);
         var db = uow.Db;
-        var rows = await (
+        var query =
             from task in db.OemFlowTasks
             where task.ApproverUserId == current.Id && task.Status == FlowTaskStatuses.Pending
             join instance in db.OemFlowInstances on task.InstanceId equals instance.Id
@@ -37,12 +39,16 @@ public sealed class OemApprovalService(
             join transfer in db.OemTransfers on instance.TransferId equals transfer.Id
             join company in db.OemCompanies on transfer.OemCompanyId equals company.Id
             join sender in db.Users on instance.InitiatorUserId equals sender.Id
-            orderby task.CreatedAt
-            select new OemPendingApprovalResponse(
-                task.Id, task.ConcurrencyVersion, transfer.Id, transfer.Title, company.Name,
-                sender.RealName, sender.EmployeeNo, node.Name, node.ApprovalMode,
-                transfer.SentAt, instance.UpdatedAt)).AsNoTracking().ToArrayAsync(ct);
-        return rows;
+            // Tasks activated before activated_at existed fall back to the instance's last change.
+            let activatedAt = task.ActivatedAt ?? instance.UpdatedAt
+            select new { task, activatedAt, transfer, company, sender, node };
+        var total = (ulong)await query.LongCountAsync(ct);
+        var rows = await query.OrderBy(row => row.activatedAt).ThenBy(row => row.task.Id).Page(offset, size)
+            .Select(row => new OemPendingApprovalResponse(
+                row.task.Id, row.task.ConcurrencyVersion, row.transfer.Id, row.transfer.Title, row.company.Name,
+                row.sender.RealName, row.sender.EmployeeNo, row.node.Name, row.node.ApprovalMode,
+                row.transfer.SentAt, row.activatedAt)).AsNoTracking().ToArrayAsync(ct);
+        return new OemPageResponse<OemPendingApprovalResponse>(rows, total, page, size);
     }
 
     public async Task<OemTransferDetailResponse> ApproveAsync(OemActor actor, ulong taskId, ApprovalDecisionRequest request, CancellationToken ct)

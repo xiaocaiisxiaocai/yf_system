@@ -6434,10 +6434,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/OemPendingApprovalResponse"
-                  }
+                  "$ref": "#/components/schemas/OemPageResponseOfOemPendingApprovalResponse"
                 }
               }
             }
@@ -9229,6 +9226,36 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/OemCompanyListItemResponse"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "pageSize": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OemPageResponseOfOemPendingApprovalResponse": {
+        "required": [
+          "list",
+          "page",
+          "pageSize",
+          "total"
+        ],
+        "type": "object",
+        "properties": {
+          "list": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OemPendingApprovalResponse"
             }
           },
           "total": {

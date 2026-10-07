@@ -35,6 +35,7 @@ public sealed class SchemaShapeTests
         "20261006031500_ReplaceOemMalwareScanningWithValidation",
         "20261006032324_AddOemDirectoryDeletePermissions",
         "20261006075638_HardenOemIdentityAndIndexes",
+        "20261007003436_AddOemApprovalTaskActivatedAt",
     ];
 
     [Fact]

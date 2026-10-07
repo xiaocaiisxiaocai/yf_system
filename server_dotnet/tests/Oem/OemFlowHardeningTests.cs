@@ -79,7 +79,7 @@ public sealed class OemFlowHardeningTests
         var file = await host.UploadAsync(world.Sender, id, "lost.pdf", OemTestHost.Pdf("lost"), ct);
         await world.Sender.PostAsync($"/api/v1/oem/transfers/{id}/send", new { version = Version(draft) + 1 }, ct).Ok();
         await host.RunOemJobsAsync(ct);
-        var task = Assert.Single((await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok()).AsArray())!;
+        var task = Assert.Single((await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok())["list"]!.AsArray())!;
 
         // Reconcile flags the file while the approval is pending.
         await using (var conn = await host.OpenAsync(ct))

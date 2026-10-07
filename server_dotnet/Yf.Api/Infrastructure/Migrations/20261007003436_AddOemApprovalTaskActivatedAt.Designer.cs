@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Yf.Api.Infrastructure;
 
@@ -11,9 +12,11 @@ using Yf.Api.Infrastructure;
 namespace Yf.Api.Infrastructure.Migrations
 {
     [DbContext(typeof(YfDbContext))]
-    partial class YfDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261007003436_AddOemApprovalTaskActivatedAt")]
+    partial class AddOemApprovalTaskActivatedAt
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

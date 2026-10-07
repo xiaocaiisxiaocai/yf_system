@@ -112,6 +112,7 @@ public sealed class OemApprovalEngine
         {
             if (usable.Contains(task))
             {
+                if (task.Status != FlowTaskStatuses.Pending) task.ActivatedAt = uow.Now;
                 task.Status = FlowTaskStatuses.Pending;
             }
             else
@@ -213,6 +214,8 @@ public sealed class OemApprovalEngine
         {
             InstanceId = instance.Id, InstanceNodeId = task.InstanceNodeId, ApproverUserId = newApproverId, Status = task.Status,
             ReplacesTaskId = task.Id, ReassignReason = reason, ReassignedBy = actorUserId, ConcurrencyVersion = 0, CreatedAt = uow.Now,
+            // The new approver's wait starts now; a WAITING replacement is stamped when its node activates.
+            ActivatedAt = task.Status == FlowTaskStatuses.Pending ? uow.Now : null,
         };
         task.Status = FlowTaskStatuses.Superseded;
         task.DecidedAt = uow.Now;

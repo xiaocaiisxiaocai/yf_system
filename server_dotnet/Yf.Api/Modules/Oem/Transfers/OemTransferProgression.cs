@@ -93,6 +93,12 @@ public sealed class OemTransferProgression(OemApprovalEngine engine, OemAuditWri
         }
     }
 
+    internal const string RecipientUnavailableReason = "收件厂商已停用或没有可用账号，未发布";
+
+    private static Task<bool> RecipientCanReceiveAsync(YfDbContext db, ulong companyId, CancellationToken ct) =>
+        db.OemCompanies.AnyAsync(company => company.Id == companyId && company.Status == OemStatus.Active
+            && db.OemAccounts.Any(account => account.OemCompanyId == company.Id && account.Status == OemStatus.Active), ct);
+
     internal async Task ReleaseAsync(OemUnitOfWork uow, OemTransfer transfer, OemActor? actor, CancellationToken ct)
     {
         TransferStateMachine.Ensure(transfer.LifecycleStatus, TransferLifecycle.Released);
@@ -103,6 +109,13 @@ public sealed class OemTransferProgression(OemApprovalEngine engine, OemAuditWri
         {
             await CloseAsync(uow, transfer, TransferLifecycle.Blocked,
                 files.AnyValidationFailure ? "附件未通过文件校验" : "附件已丢失或不可用，未能发布", null, PurgeReasons.Blocked, ct);
+            return;
+        }
+        // The vendor may be disabled (or lose every enabled account) while approval runs; releasing then
+        // would deliver to nobody, so the transfer is blocked instead (same predicate as at create/send time).
+        if (transfer.Direction == TransferDirections.InternalToOem && !await RecipientCanReceiveAsync(uow.Db, transfer.OemCompanyId, ct))
+        {
+            await CloseAsync(uow, transfer, TransferLifecycle.Blocked, RecipientUnavailableReason, null, PurgeReasons.Blocked, ct);
             return;
         }
         var snapshot = new RetentionSnapshot(transfer.RetentionMode!, transfer.ReleaseTtlMinutes, transfer.ReceiptGraceMinutes);

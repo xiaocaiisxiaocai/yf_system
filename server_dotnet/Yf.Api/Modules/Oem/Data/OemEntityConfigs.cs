@@ -420,6 +420,7 @@ public sealed class OemFlowTaskConfig : IEntityTypeConfiguration<OemFlowTask>
         b.Property(x => x.ReassignReason).OptionalText("reassign_reason", 512);
         b.Property(x => x.ReassignedBy).HasColumnName("reassigned_by");
         b.Property(x => x.DecidedAt).OptionalClock("decided_at");
+        b.Property(x => x.ActivatedAt).OptionalClock("activated_at");
         b.Property(x => x.ConcurrencyVersion).Version();
         b.Property(x => x.CreatedAt).Clock("created_at");
         b.HasIndex(x => x.InstanceNodeId).HasDatabaseName("idx_oem_flow_tasks_node");

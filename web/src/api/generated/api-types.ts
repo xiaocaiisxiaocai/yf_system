@@ -622,6 +622,13 @@ export interface OemPageResponseOfOemCompanyListItemResponse {
   pageSize: number
 }
 
+export interface OemPageResponseOfOemPendingApprovalResponse {
+  list: Array<OemPendingApprovalResponse>
+  total: number
+  page: number
+  pageSize: number
+}
+
 export interface OemPageResponseOfOemTransferSummaryResponse {
   list: Array<OemTransferSummaryResponse>
   total: number
@@ -1513,7 +1520,7 @@ export interface ApiResponses {
   "PUT /oem/accounts/{id}": OemAccountResponse
   "PUT /oem/accounts/{id}/password": EmptyResponse
   "PUT /oem/accounts/{id}/status": OemAccountResponse
-  "GET /oem/approvals/pending": Array<OemPendingApprovalResponse>
+  "GET /oem/approvals/pending": OemPageResponseOfOemPendingApprovalResponse
   "POST /oem/approvals/{taskId}/approve": OemTransferDetailResponse
   "POST /oem/approvals/{taskId}/reassign": OemTransferDetailResponse
   "POST /oem/approvals/{taskId}/reject": OemTransferDetailResponse
