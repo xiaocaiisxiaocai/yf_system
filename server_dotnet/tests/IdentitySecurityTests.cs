@@ -126,6 +126,26 @@ public sealed class IdentitySecurityTests
     }
 
     [Fact]
+    public void AccountLoginLimitAppliesAcrossSourcesAndIgnoresLetterCase()
+    {
+        var limiter = new LoginRateLimiter();
+        Assert.All(Enumerable.Range(1, LoginRateLimiter.MaximumAccountLoginAttempts), _ =>
+            Assert.True(limiter.AllowAccountLogin(IdentityRealms.Internal, 42, "target")));
+        Assert.False(limiter.AllowAccountLogin(IdentityRealms.Internal, 42, "TARGET"));
+        Assert.True(limiter.AllowAccountLogin(IdentityRealms.Internal, 43, "target"));
+        Assert.True(limiter.AllowAccountLogin("oem", 42, "target"));
+
+        // Unknown names are limited the same way, so a 429 does not reveal account existence.
+        Assert.All(Enumerable.Range(1, LoginRateLimiter.MaximumAccountLoginAttempts), _ =>
+            Assert.True(limiter.AllowAccountLogin(IdentityRealms.Internal, null, "ghost")));
+        Assert.False(limiter.AllowAccountLogin(IdentityRealms.Internal, null, " Ghost "));
+
+        var ipAccount = new LoginRateLimiter();
+        Assert.All(Enumerable.Range(1, 10), _ => Assert.True(ipAccount.AllowLogin("192.0.2.1", "target")));
+        Assert.False(ipAccount.AllowLogin("192.0.2.1", "Target"));
+    }
+
+    [Fact]
     public void RefreshCookieLifetimeCannotOutliveTheRefreshRowOrConfiguredTtl()
     {
         var now = new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero);

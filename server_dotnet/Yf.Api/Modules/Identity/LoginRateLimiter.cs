@@ -10,9 +10,11 @@ public sealed class LoginRateLimiter
     internal const int MaximumKeysPerPurpose = 8192;
     private readonly ConcurrentDictionary<string, Window> _loginIpRates = new();
     private readonly ConcurrentDictionary<string, Window> _loginAccountRates = new();
+    private readonly ConcurrentDictionary<string, Window> _loginGlobalAccountRates = new();
     private readonly ConcurrentDictionary<string, Window> _passwordChangeRates = new();
     private readonly object _loginIpSync = new();
     private readonly object _loginAccountSync = new();
+    private readonly object _loginGlobalAccountSync = new();
     private readonly object _passwordChangeSync = new();
 
     public bool AllowLogin(string clientIp, string employeeNo)
@@ -23,8 +25,29 @@ public sealed class LoginRateLimiter
         ArgumentException.ThrowIfNullOrWhiteSpace(realm);
         var normalizedIp = NormalizeIp(clientIp);
         return Allow(_loginIpRates, _loginIpSync, normalizedIp, 60)
-            && Allow(_loginAccountRates, _loginAccountSync, $"{realm}:{normalizedIp}:{employeeNo}", 10);
+            && Allow(_loginAccountRates, _loginAccountSync, $"{realm}:{normalizedIp}:{NormalizeLogin(employeeNo)}", 10);
     }
+
+    /// <summary>
+    /// Caps password attempts per account across all source addresses, so spreading guesses over
+    /// many IPs does not lift the per-account budget. It throttles instead of locking: nothing is
+    /// persisted, existing sessions are untouched, and the window resets after a minute. Callers
+    /// key a known account by its database id (the lookup collation already folds case) and an
+    /// unknown name by its normalized text, so both answer the same way and a 429 does not reveal
+    /// whether the account exists.
+    /// </summary>
+    public bool AllowAccountLogin(string realm, ulong? accountId, string employeeNo)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(realm);
+        var key = accountId is { } id
+            ? $"{realm}:id:{id.ToString(CultureInfo.InvariantCulture)}"
+            : $"{realm}:name:{NormalizeLogin(employeeNo)}";
+        return Allow(_loginGlobalAccountRates, _loginGlobalAccountSync, key, MaximumAccountLoginAttempts);
+    }
+
+    internal const int MaximumAccountLoginAttempts = 30;
+
+    private static string NormalizeLogin(string employeeNo) => employeeNo.Trim().ToUpperInvariant();
 
     /// <summary>
     /// Every self-service old-password check costs one Argon2 derivation from the shared login pool, so

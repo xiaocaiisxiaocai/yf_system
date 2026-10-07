@@ -26,6 +26,8 @@ public sealed class IdentityService(
         User? candidate;
         await using (var lookup = await dbFactory.CreateDbContextAsync(ct))
             candidate = await lookup.Users.AsNoTracking().SingleOrDefaultAsync(u => u.EmployeeNo == employeeNo, ct);
+        if (!loginRateLimiter.AllowAccountLogin(IdentityRealms.Internal, candidate?.Id, employeeNo))
+            throw ApiException.TooManyRequests("请求过于频繁，请稍后再试");
         // Initialize the same-cost dummy on the first attempt even when the account exists, so the
         // first unknown-account request cannot be distinguished by the extra Argon2 calculation.
         var dummyHash = await PasswordService.TimingDummyHashAsync();

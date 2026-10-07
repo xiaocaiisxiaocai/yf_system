@@ -49,6 +49,8 @@ public sealed class OemAuthService(
         OemAccount? candidate;
         await using (var lookup = await dbFactory.CreateDbContextAsync(ct))
             candidate = await lookup.OemAccounts.AsNoTracking().SingleOrDefaultAsync(account => account.EmployeeNo == employeeNo, ct);
+        if (!rateLimiter.AllowAccountLogin(OemRealms.Oem, candidate?.Id, employeeNo))
+            throw ApiException.TooManyRequests("请求过于频繁，请稍后再试");
         // Await the same-cost dummy even when the account exists, so the first unknown-account
         // request cannot be distinguished by the one-time dummy hash calculation.
         var dummyHash = await PasswordService.TimingDummyHashAsync();
