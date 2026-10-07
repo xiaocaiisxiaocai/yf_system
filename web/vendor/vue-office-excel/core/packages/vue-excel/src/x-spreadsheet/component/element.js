@@ -218,6 +218,16 @@ class Element {
     return this.el.innerHTML;
   }
 
+  // Workbook text must not be parsed as HTML. Callers that pass cell or sheet
+  // content use this; html() remains for static markup owned by the widget.
+  text(content) {
+    if (content !== undefined) {
+      this.el.textContent = content == null ? '' : String(content);
+      return this;
+    }
+    return this.el.textContent;
+  }
+
   val(v) {
     if (v !== undefined) {
       this.el.value = v;

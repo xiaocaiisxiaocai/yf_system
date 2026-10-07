@@ -21,6 +21,7 @@ import {
   sheetInitEvents,
 } from '../../../../vendor/vue-office-excel/core/packages/vue-excel/src/x-spreadsheet/component/sheet.js'
 import { h } from '../../../../vendor/vue-office-excel/core/packages/vue-excel/src/x-spreadsheet/component/element.js'
+import Editor from '../../../../vendor/vue-office-excel/core/packages/vue-excel/src/x-spreadsheet/component/editor.js'
 import { getFontSizePxByPt } from '../../../../vendor/vue-office-excel/core/packages/vue-excel/src/x-spreadsheet/core/font.js'
 
 describe('Excel vendor behavior migrated from node:test', () => {
@@ -82,6 +83,24 @@ describe('Excel vendor behavior migrated from node:test', () => {
     Object.defineProperty(nativeSelect, 'keyCode', { value: 65 })
     window.dispatchEvent(nativeSelect)
     expect(nativeSelect.defaultPrevented).toBe(false)
+  })
+
+  it('editor measurement keeps workbook text as text and does not create elements', () => {
+    const markup = '<img src=x onerror=alert(1)>'
+    const host = h('div').text(markup)
+    document.body.append(host.el)
+    expect(host.el.querySelector('img')).toBeNull()
+    expect(host.el.textContent).toBe(markup)
+
+    const editor = new Editor([], () => ({ width: 800, height: 600 }), 24)
+    document.body.append(editor.el.el)
+    editor.setOffset({ left: 10, top: 10, width: 80, height: 24, l: 10, t: 10 })
+    editor.setCell({ text: markup }, null)
+    const line = editor.el.el.querySelector('.textline')
+    expect(line?.querySelector('img')).toBeNull()
+    expect(line?.textContent).toBe(markup)
+    editor.clear()
+    expect(line?.textContent).toBe('')
   })
 
   it('auto-fit handles wrapped content, line breaks, merged titles, hidden cells and scoped columns', () => {
