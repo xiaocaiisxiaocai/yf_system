@@ -245,26 +245,29 @@
 
 .project-group-summary-heading {
   display: flex;
-  align-items: flex-start;
+  flex-wrap: wrap;
+  /* 操作按钮对齐两行信息的垂直中线，而不是只贴第一行。 */
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 8px 16px;
 }
 
 .project-group-summary-name {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   gap: 4px 10px;
   min-width: 0;
 }
 
-.project-group-summary-name .arco-tag {
-  align-self: center;
+.project-group-summary-name .arco-typography {
+  line-height: 30px;
 }
 
 .project-group-summary-title {
   min-width: 0;
-  flex: 1;
+  /* 信息区至少保留 360px；放不下时整排操作按钮换到下一行，而不是把信息挤成一列。 */
+  flex: 1 1 360px;
 }
 
 .project-group-summary-title h1 {
@@ -291,6 +294,7 @@
 
 .project-group-summary-facts b {
   margin-right: 6px;
+  white-space: nowrap;
   color: var(--color-text-3);
   font-weight: 400;
 }
@@ -301,12 +305,13 @@
 }
 
 .project-group-inline-progress .arco-progress {
-  width: 120px;
+  width: 72px;
   margin-right: 8px;
 }
 
 .project-group-inline-progress em {
   font-style: normal;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
@@ -315,8 +320,11 @@
 }
 
 .project-group-summary-actions {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  max-width: 100%;
+  margin-left: auto;
   align-items: center;
+  justify-content: flex-end;
 }
 
 .project-group-summary-actions .arco-icon-down {
@@ -329,9 +337,14 @@
 }
 
 .project-group-extra-info {
-  margin-top: 10px;
-  padding-top: 2px;
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px solid var(--color-neutral-3);
+}
+
+/* 末行去掉描述列表自带的下内边距，上下留白由卡片内边距决定，保持对称。 */
+.project-group-extra-info .arco-descriptions-row:last-child > td {
+  padding-bottom: 0;
 }
 
 .project-group-section-heading,

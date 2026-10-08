@@ -229,6 +229,9 @@ export default function ProjectList() {
     if (saveInFlight.current || submitOptionsBlocked) return
     saveInFlight.current = true; setSaving(true)
     try {
+  const createOptionsBusy = supplierOptionsLoading || metadataOptionsLoading
+  // 只在厂商加载失败或缺少必需基础数据时提供手动刷新（优先级/料号失败另有“重试加载选项”）；正常情况下不显示。
+  const createOptionsNeedRefresh = supplierOptionsError || missingCreateOptions.length > 0
       const values = await form.validate().catch(() => null) as ProjectGroupFormValues | null
       if (!values) return
       const robotPartId = nullableNumber(values.robotPartId)
@@ -284,7 +287,7 @@ export default function ProjectList() {
 
   return (
     <Card className="page-card page-card--table">
-      <div className="page-heading"><div><h1>项目协作</h1><p>按主项目归集资料，各子项目独立协作与验收</p></div></div>
+      <div className="page-heading"><div><h1>Robot仿真协作</h1><p>按主项目归集资料，各子项目独立协作与验收</p></div></div>
       <div className="page-toolbar responsive-toolbar">
         <Space wrap>
           <Input.Search allowClear placeholder="主项目名称" style={{ width: 240 }} onSearch={(value) => { setPage(1); setKeyword(value); load() }} onClear={() => { setPage(1); setKeyword(''); load() }} />
@@ -303,7 +306,7 @@ export default function ProjectList() {
 
       <Modal className="form-dialog" style={{ width: 760 }} title={editing ? '编辑主项目' : '新建主项目'} visible={modalOpen} onOk={submit} onCancel={closeModal} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okButtonProps={{ disabled: submitOptionsBlocked }} okText={editing ? '保存并同步' : '创建主项目'} unmountOnExit>
         <Form className="form-grid" form={form} layout="vertical">
-          {!editing && <div className="form-grid-full" style={{ display: 'grid', gap: 8 }}>
+          {!editing && (createOptionsBusy || createOptionsNeedRefresh) && <div className="form-grid-full" style={{ display: 'grid', gap: 8 }}>
             {(supplierOptionsLoading || metadataOptionsLoading) && <Typography.Text type="secondary">正在加载创建所需的基础数据…</Typography.Text>}
             {supplierOptionsError && <Alert type="error" content="Robot 厂商选项加载失败，请刷新基础数据后重试。" />}
             {missingCreateOptions.length > 0 && <Alert type="warning" title="创建前请补齐基础数据" content={<>
@@ -312,7 +315,7 @@ export default function ProjectList() {
                 : ' 请联系具有维护权限的管理员。'}</li>)}</ul>
               <span>可先填写项目资料，补齐后点击“刷新基础数据”继续。</span>
             </>} />}
-            <div><Button size="small" onClick={refreshCreateOptions} disabled={saving || supplierOptionsLoading || metadataOptionsLoading || robotPartsLoading}>刷新基础数据</Button></div>
+            {createOptionsNeedRefresh && <div><Button size="small" onClick={refreshCreateOptions} disabled={saving || supplierOptionsLoading || metadataOptionsLoading || robotPartsLoading}>刷新基础数据</Button></div>}
           </div>}
           <Form.Item className="form-grid-full" label="主项目名称" field="name" rules={[{ required: true, message: '请输入主项目名称' }, textLengthRule('主项目名称', 128)]}><Input placeholder="主项目名称" /></Form.Item>
           {!editing && <Form.Item className="form-grid-full" label="子项目" field="subprojectNames" rules={[{ required: true, message: '请至少创建一个子项目' }, { validator: (value, callback) => listRule('子项目', SUBPROJECT_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入子项目名称后按回车，可一次创建多个" /></Form.Item>}

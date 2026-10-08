@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Badge, Button, Card, Descriptions, Drawer, Empty, Form, Input, Message, Modal, Popconfirm, Progress, Select, Space, Spin, Tag, Typography,
+  Alert, Button, Card, Descriptions, Drawer, Empty, Form, Input, Message, Modal, Popconfirm, Progress, Select, Space, Spin, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconDown, IconPlus, IconRefresh } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -8,7 +8,7 @@ import { isAxiosError } from 'axios'
 import http, { getApiErrorCode, type QuietRequestConfig } from '../../api/client'
 import { createProjectCopyJob, unwrapCopyJob } from '../../api/copyJobs'
 import ProjectCopyJobsPanel from '../../components/project-copy-jobs/ProjectCopyJobsPanel'
-import { isCopyJobActive, useProjectCopyJobs } from '../../hooks/useProjectCopyJobs'
+import { useProjectCopyJobs } from '../../hooks/useProjectCopyJobs'
 import { projectAccessLostStatus, useProjectAccessLost } from '../../hooks/useProjectAccessLost'
 import { useAuth } from '../../store/auth'
 import { useCollaboration } from '../../store/collaboration'
@@ -83,6 +83,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const copyIdempotencyKey = useRef<string | null>(null)
   const pendingUnknownCopies = useRef(new Map<number, { idempotencyKey: string; name: string }>())
   const knownSucceededCopyJobs = useRef<Set<number>>(new Set())
+  const knownFailedCopyJobs = useRef<Set<number>>(new Set())
   const copyJobsInitialized = useRef(false)
   const [transferOpen, setTransferOpen] = useState(false)
   const [ownerOptions, setOwnerOptions] = useState<OwnerOption[]>([])
@@ -159,6 +160,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   useEffect(() => {
     if (!canReadCopyJobs || copyJobs.unavailable) {
       knownSucceededCopyJobs.current.clear()
+      knownFailedCopyJobs.current.clear()
       copyJobsInitialized.current = false
       copyIdempotencyKey.current = null
       pendingUnknownCopies.current.clear()
@@ -172,6 +174,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     if (!copyJobsInitialized.current) {
       copyJobs.jobs.forEach((job) => {
         if (job.status === 'succeeded') knownSucceededCopyJobs.current.add(job.jobId)
+        if (job.status === 'failed') knownFailedCopyJobs.current.add(job.jobId)
       })
       copyJobsInitialized.current = true
       return
@@ -181,6 +184,11 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       if (job.status === 'succeeded' && !knownSucceededCopyJobs.current.has(job.jobId)) {
         knownSucceededCopyJobs.current.add(job.jobId)
         newSuccess = true
+      }
+      // 没有常驻的任务入口，进度抽屉关闭后失败只能靠这里提示。
+      if (job.status === 'failed' && !knownFailedCopyJobs.current.has(job.jobId)) {
+        knownFailedCopyJobs.current.add(job.jobId)
+        Message.error(`子项目“${job.targetName}”复制失败：${job.error || '请稍后重试'}`)
       }
     })
     // 新副本只影响子项目列表；刷新主项目即可，不重置正在显示的复制任务列表。
@@ -279,7 +287,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       const response = await createProjectCopyJob(copySource.id, { name, idempotencyKey })
       const job = unwrapCopyJob(response.data)
       copyJobs.upsert(job)
-      Message.success('复制任务已创建，可在复制任务中查看进度')
+      Message.success('已开始复制，完成后会自动出现新子项目')
       setCopyJobsOpen(true)
       pendingUnknownCopies.current.delete(copySource.id)
       setCopyOutcomeUnknown(false)
@@ -344,7 +352,6 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     }
   }
 
-  const activeCopyJobs = copyJobs.jobs.filter(isCopyJobActive).length
   const showCopyJobs = canReadCopyJobs && !copyJobs.unavailable
 
   return (
@@ -368,15 +375,9 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
           </div>
           <Space className="project-group-summary-actions" wrap size={8}>
             {canCreateChild && <Button type="primary" size="small" icon={<IconPlus />} onClick={openCreate}>新增子项目</Button>}
-            {showCopyJobs && (
-              <Badge count={activeCopyJobs} dot={false}>
-                <Button size="small" onClick={() => setCopyJobsOpen(true)}>复制任务</Button>
-              </Badge>
-            )}
             {canTransfer && <Button size="small" disabled={group.pendingCount > 0} title={group.pendingCount > 0 ? '存在待验收子项目，暂不能变更负责人' : undefined} onClick={openTransfer}>变更负责人</Button>}
             {data.projects.length > 1 && <Button size="small" icon={<IconRefresh />} title="恢复默认的子项目面板布局" onClick={() => dockRef.current?.resetLayout()}>重置布局</Button>}
             <Button
-              type="text"
               size="small"
               aria-expanded={summaryExpanded}
               aria-controls="project-group-extra-info"
@@ -388,19 +389,14 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
           </Space>
         </div>
         {summaryExpanded && <div id="project-group-extra-info" className="project-group-extra-info">
-          <Descriptions className="project-metadata" column={{ xs: 1, sm: 2, md: 3, lg: 4 }} data={[
+          {/* Robot 厂商、负责人、需求完成时间已在标题下的摘要行展示，这里不再重复。 */}
+          <Descriptions className="project-metadata" tableLayout="fixed" labelStyle={{ width: 96 }} column={{ xs: 1, sm: 2, md: 3 }} data={[
             { label: '工令号', value: display(group.workOrderNos?.join('、')) }, { label: '机型', value: display(group.machineModel) },
-            { label: 'Robot 厂商', value: supplier }, { label: 'Robot 料号', value: display(group.robotPartNumber) }, { label: 'Robot 型号', value: display(group.robotModelName) },
-            { label: '负责人', value: responsible }, { label: '课别', value: display(group.sectionName) },
-            { label: '优先级', value: display(group.priorityName) }, { label: '需求完成时间', value: expectedCompletionDate },
+            { label: '课别', value: display(group.sectionName) }, { label: 'Robot 料号', value: display(group.robotPartNumber) },
+            { label: 'Robot 型号', value: display(group.robotModelName) }, { label: '优先级', value: display(group.priorityName) },
             ...(group.completedAt ? [{ label: '自动验收时间', value: fmtTime(group.completedAt) }] : []),
           ]} />
-          <div className="project-summary-description">
-            <span className="project-summary-description-label">访问范围</span>
-            <Typography.Text>该 Robot 厂商的全部启用账号均可访问此主项目及其子项目；公司内部由负责人、主项目创建人及具备查看全部项目权限的账号访问。</Typography.Text>
-          </div>
           {group.description && <div className="project-summary-description"><span className="project-summary-description-label">主项目说明</span><Typography.Text>{group.description}</Typography.Text></div>}
-          <div className="project-summary-description"><span className="project-summary-description-label">面板布局</span><Typography.Text type="secondary">拖动子项目标签可停靠到任意位置或合并为标签组，拖动分隔条调整大小，双击标签最大化；布局按账号保存在本浏览器。</Typography.Text></div>
         </div>}
       </Card>
 

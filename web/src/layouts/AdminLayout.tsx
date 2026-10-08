@@ -29,7 +29,7 @@ const { Sider, Header, Content } = Layout
 
 const MENU_ITEMS = [
   { code: 'dashboard', path: '/', label: '工作台', icon: <IconHome /> },
-  { code: 'project:list', path: '/projects', label: '项目协作', icon: <IconFile /> },
+  { code: 'project:list', path: '/projects', label: 'Robot仿真协作', icon: <IconFile /> },
   { code: 'supplier:list', path: '/suppliers', label: '供应商管理', icon: <IconUserGroup /> },
   { code: 'org:user', path: '/org/users', label: '用户管理', icon: <IconUser /> },
   { code: 'org:dept', path: '/org/depts', label: '组织架构', icon: <IconMindMapping /> },

@@ -107,7 +107,9 @@ describe('供应商与分页列表行为', () => {
 
     view = render(<MemoryRouter initialEntries={['/project-groups/3']}><Routes><Route path="/project-groups/:id" element={<ProjectGroupDetail />} /></Routes></MemoryRouter>)
     await user.click(await screen.findByRole('button', { name: '查看资料' }))
-    expect(screen.getByText(/该 Robot 厂商的全部启用账号均可访问/)).toBeVisible()
+    expect(screen.getByText('工令号')).toBeVisible()
+    // 访问范围说明只在新建主项目时提示，详情页资料区不再重复。
+    expect(screen.queryByText(/全部启用账号均可访问/)).not.toBeInTheDocument()
     view.unmount()
 
     view = render(<FileTable projectId={9} projectStatus="IN_PROGRESS" />)

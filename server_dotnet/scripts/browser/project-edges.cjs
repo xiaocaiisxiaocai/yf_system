@@ -73,7 +73,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
       await input.press('Enter');
     });
     await page.goto(s.base + '/projects');
-    await page.getByRole('heading', { name: '项目协作', exact: true }).waitFor();
+    await page.getByRole('heading', { name: 'Robot仿真协作', exact: true }).waitFor();
 
     await record('主项目名称清除、状态与 Robot 厂商筛选保持准确结果', async () => {
       const found = await search(prefix);
@@ -89,7 +89,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
         keyword: prefix, supplierId: f.suppliers.b.id, status: 'DRAFT', page: 1,
       });
       assert.equal(supplier.total, 1); assert.equal(supplier.list[0].id, groups[11].groupId);
-      await page.reload(); await page.getByRole('heading', { name: '项目协作', exact: true }).waitFor();
+      await page.reload(); await page.getByRole('heading', { name: 'Robot仿真协作', exact: true }).waitFor();
       const empty = await search(prefix + '-不存在'); assert.equal(empty.total, 0);
       const cleared = await listAction({ keyword: '', page: 1 }, async () => {
         const input = page.locator('.page-toolbar').getByPlaceholder('主项目名称', { exact: true });
@@ -252,7 +252,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
       await json('DELETE', '/projects/' + flow.id);
       await json('DELETE', '/project-groups/' + flow.groupId);
       await page.goto(s.base + '/projects');
-      await page.getByRole('heading', { name: '项目协作', exact: true }).waitFor();
+      await page.getByRole('heading', { name: 'Robot仿真协作', exact: true }).waitFor();
       await search(flow.groupName);
       assert.equal((await json('GET', '/project-groups?keyword=' + encodeURIComponent(flow.groupName))).total, 0);
     });
@@ -268,7 +268,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
         await json('DELETE', '/project-groups/' + item.groupId);
       }
       await page.reload();
-      await page.getByRole('heading', { name: '项目协作', exact: true }).waitFor();
+      await page.getByRole('heading', { name: 'Robot仿真协作', exact: true }).waitFor();
       await search(prefix);
       const remaining = await json('GET', '/project-groups?keyword=' + encodeURIComponent(prefix) + '&page=1&pageSize=10');
       assert.equal(remaining.total, 10); assert.equal(remaining.list.length, 10);
@@ -323,7 +323,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
         }
       }
       await page.goto(s.base + '/projects');
-      await page.getByRole('heading', { name: '项目协作', exact: true }).waitFor();
+      await page.getByRole('heading', { name: 'Robot仿真协作', exact: true }).waitFor();
       await search(statusPrefix);
       const groupedStatuses = [
         ['DRAFT', '草稿', [statuses.DRAFT.groupId]],

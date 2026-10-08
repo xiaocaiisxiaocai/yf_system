@@ -178,6 +178,30 @@ describe('子项目后台复制任务', () => {
     })
   })
 
+  it('reports a newly failed copy job once, but not failures that existed before the page opened', async () => {
+    const error = vi.spyOn(Message, 'error').mockImplementation(() => () => {})
+    const oldFailure = copyJob({ jobId: 70, targetName: '旧副本', status: 'failed', error: '旧错误', completedAt: '2026-09-22T01:00:00Z' })
+    const running = copyJob({ jobId: 72, status: 'running' })
+    const failed = copyJob({ jobId: 72, status: 'failed', error: '源文件内容校验失败', completedAt: '2026-09-23T01:01:00Z' })
+    let jobReads = 0
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/project-groups/3') return Promise.resolve({ data: detail })
+      if (url === '/project-groups/3/copy-jobs') {
+        jobReads += 1
+        return Promise.resolve({ data: { jobs: [jobReads > 1 ? failed : running, oldFailure] } })
+      }
+      const pane = subprojectGet(url)
+      if (pane) return pane
+      throw new Error(`unexpected GET ${url}`)
+    })
+    renderPage()
+
+    await waitFor(() => expect(error).toHaveBeenCalledWith('子项目“装配线升级 - 副本”复制失败：源文件内容校验失败'))
+    expect(error).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: '复制任务' })).not.toBeInTheDocument()
+    error.mockRestore()
+  })
+
   it('subproject copy requires a renamed project, blocks duplicate submits and keeps the dialog after failure', async () => {
     let rejectFirst: (reason?: unknown) => void = () => undefined
     mocks.post
