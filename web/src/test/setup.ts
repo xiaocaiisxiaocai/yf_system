@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { cleanup, configure } from '@testing-library/react'
-import { afterEach, vi } from 'vitest'
+import { afterAll, afterEach, vi } from 'vitest'
 
 // Parallel workers share the CPU; give findBy*/waitFor more headroom than the 1 s default.
 configure({ asyncUtilTimeout: 5_000 })
@@ -44,6 +44,24 @@ class TestResizeObserver implements ResizeObserver {
 
 globalThis.ResizeObserver = TestResizeObserver
 
-window.requestAnimationFrame = (callback) => window.setTimeout(() => callback(performance.now()), 0)
-window.cancelAnimationFrame = (handle) => window.clearTimeout(handle)
+// Arco animations re-arm a frame on every tick. Cancel what is still pending when the
+// file ends, or the callback fires after jsdom is gone and calls an undefined
+// requestAnimationFrame.
+const animationFrames = new Set<number>()
+window.requestAnimationFrame = (callback) => {
+  const handle = window.setTimeout(() => {
+    animationFrames.delete(handle)
+    callback(performance.now())
+  }, 0)
+  animationFrames.add(handle)
+  return handle
+}
+window.cancelAnimationFrame = (handle) => {
+  animationFrames.delete(handle)
+  window.clearTimeout(handle)
+}
+afterAll(() => {
+  for (const handle of animationFrames) window.clearTimeout(handle)
+  animationFrames.clear()
+})
 }
