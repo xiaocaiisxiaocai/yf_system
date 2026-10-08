@@ -5,6 +5,8 @@ export class Element {
   offset(value?: Record<string, number>): this | { top: number; left: number; height: number; width: number }
   contains(element: Node | null): boolean
   css(name: string, value?: string): this | string
+  text(): string
+  text(content: unknown): this
   show(): this
   hide(): this
 }
