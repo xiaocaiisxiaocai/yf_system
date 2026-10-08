@@ -13,7 +13,7 @@
 
 React 的 `PptxPreview` 通过现有鉴权接口读取 PPTX 字节，再传入独立的 `sandbox="allow-scripts"` iframe。`viewer.js` 沿用源码封装的 `init(...).preview(arrayBuffer)` 调用链，并补充本项目需要的翻页、缩放、错误通知和尺寸适配。
 
-`scripts/build-pptx-preview.mjs` 把本地渲染器及样式构建成带 CSP 的独立 HTML。iframe 没有同源权限，CSP 禁止网络、表单、对象、媒体和子页面；图片只允许文档内的 data/blob 数据。渲染后会移除超链接及非 data/blob 资源地址，界面不提供保存、下载、打印或编辑入口。
+`scripts/build-pptx-preview.mjs` 把本地渲染器及样式构建成带 CSP 的独立 HTML。iframe 没有同源权限，CSP 禁止网络、表单、对象、媒体和子页面；图片只允许文档内的 data/blob 数据。渲染后会移除超链接及非 data/blob 资源地址，界面不提供保存、下载、打印或编辑入口。构建时修补渲染器：文本段先在 `<textarea>` 中解码 XML 实体，再以 `textContent` 写入，不经过 `innerHTML`；依赖升级后若该写法重新出现，构建直接失败。
 
 打开压缩包前先按条目实际展开计数：条目数不超过 5000，单条目不超过 128 MiB，合计不超过 512 MiB。目录中自报的未压缩大小不会单独放行。结尾记录、中央目录与本地头不一致，或压缩流超出声明长度的压缩包直接拒绝，保证计数与 JSZip 读到的是同一结构。
 

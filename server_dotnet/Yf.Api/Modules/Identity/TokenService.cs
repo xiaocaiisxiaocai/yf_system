@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Cryptography;
 using System.Text;
@@ -9,8 +10,22 @@ namespace Yf.Api.Modules.Identity;
 
 public sealed class TokenService(AppOptions options)
 {
+    internal const string Issuer = "yf-api";
     private readonly JwtSecurityTokenHandler handler = new() { MapInboundClaims = false };
-    private readonly SymmetricSecurityKey signingKey = new(Encoding.UTF8.GetBytes(options.JwtSecret));
+    private readonly ConcurrentDictionary<string, SymmetricSecurityKey> realmKeys = new(StringComparer.Ordinal);
+
+    /// <summary>The audience a realm's access tokens carry and must be presented with.</summary>
+    internal static string AudienceFor(string realm) => "yf:" + realm;
+
+    /// <summary>
+    /// Each realm signs with its own key derived from App:JwtSecret, so a token minted for one realm
+    /// cannot verify in another even if its realm claim is rewritten.
+    /// </summary>
+    internal static byte[] SigningKeyFor(string secret, string realm) =>
+        HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes("yf-access-token/" + realm));
+
+    private SymmetricSecurityKey RealmKey(string realm) =>
+        realmKeys.GetOrAdd(realm, value => new SymmetricSecurityKey(SigningKeyFor(options.JwtSecret, value)));
     public (string Token, long ExpiresAt) IssueAccess(ulong userId, string employeeNo, string sessionId) =>
         IssueAccess(userId, employeeNo, sessionId, IdentityRealms.Internal);
 
@@ -25,6 +40,8 @@ public sealed class TokenService(AppOptions options)
         var header = Base64UrlEncoder.Encode(JsonSerializer.Serialize(new { alg = "HS256", typ = "JWT" }));
         var claims = new Dictionary<string, object>
         {
+            ["iss"] = Issuer,
+            ["aud"] = AudienceFor(realm),
             ["sub"] = employeeNo,
             ["uid"] = userId,
             ["sid"] = sessionId,
@@ -37,24 +54,47 @@ public sealed class TokenService(AppOptions options)
         if (realm != IdentityRealms.Internal) claims["rlm"] = realm;
         var payload = Base64UrlEncoder.Encode(JsonSerializer.Serialize(claims));
         var signingInput = header + "." + payload;
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(options.JwtSecret));
+        using var hmac = new HMACSHA256(SigningKeyFor(options.JwtSecret, realm));
         var signature = Base64UrlEncoder.Encode(hmac.ComputeHash(Encoding.ASCII.GetBytes(signingInput)));
         return (signingInput + "." + signature, expires.ToUnixTimeSeconds());
     }
 
     public AccessClaims ParseAccess(string token)
     {
+        // The realm only selects which key and audience to verify against; a rewritten realm
+        // claim fails the signature because the other realm's key signed nothing here.
+        var realm = ClaimedRealm(token) ?? throw ApiException.Unauthorized("登录状态无效");
         // Keep canonical JWT claim names so the API can read its own `sub` contract directly.
         handler.ValidateToken(token, new TokenValidationParameters
         {
-            ValidateIssuer = false, ValidateAudience = false, ValidateIssuerSigningKey = true,
-            IssuerSigningKey = signingKey, ValidateLifetime = true, ClockSkew = TimeSpan.Zero,
+            ValidateIssuer = true, ValidIssuer = Issuer,
+            ValidateAudience = true, ValidAudience = AudienceFor(realm),
+            ValidateIssuerSigningKey = true, IssuerSigningKey = RealmKey(realm),
+            ValidateLifetime = true, ClockSkew = TimeSpan.Zero,
             ValidAlgorithms = [SecurityAlgorithms.HmacSha256]
         }, out var validated);
         if (validated is not JwtSecurityToken jwt || !string.Equals(jwt.Header.Typ, "JWT", StringComparison.Ordinal)
             || !TryReadClaims(jwt.RawPayload, out var claims))
             throw ApiException.Unauthorized("登录状态无效");
         return claims;
+    }
+
+    /// <summary>Reads the unverified realm claim; null when the payload is malformed.</summary>
+    private static string? ClaimedRealm(string token)
+    {
+        var parts = token.Split('.');
+        if (parts.Length != 3) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(Base64UrlEncoder.DecodeBytes(parts[1]));
+            if (document.RootElement.ValueKind != JsonValueKind.Object) return null;
+            if (!document.RootElement.TryGetProperty("rlm", out var realm)) return IdentityRealms.Internal;
+            var value = realm.ValueKind == JsonValueKind.String ? realm.GetString() : null;
+            return string.IsNullOrWhiteSpace(value) || value == IdentityRealms.Internal ? null : value;
+        }
+        catch (JsonException) { return null; }
+        catch (FormatException) { return null; }
+        catch (ArgumentException) { return null; }
     }
 
     public static string NewRefreshToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))

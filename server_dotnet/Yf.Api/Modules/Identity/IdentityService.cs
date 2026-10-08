@@ -26,7 +26,7 @@ public sealed class IdentityService(
         User? candidate;
         await using (var lookup = await dbFactory.CreateDbContextAsync(ct))
             candidate = await lookup.Users.AsNoTracking().SingleOrDefaultAsync(u => u.EmployeeNo == employeeNo, ct);
-        if (!loginRateLimiter.AllowAccountLogin(IdentityRealms.Internal, candidate?.Id, employeeNo))
+        if (!loginRateLimiter.AllowAccountLogin(IdentityRealms.Internal, candidate?.Id, employeeNo, clientIp))
             throw ApiException.TooManyRequests("请求过于频繁，请稍后再试");
         // Initialize the same-cost dummy on the first attempt even when the account exists, so the
         // first unknown-account request cannot be distinguished by the extra Argon2 calculation.
@@ -94,6 +94,7 @@ public sealed class IdentityService(
         var response = new LoginResponse(accessToken.Token, accessToken.ExpiresAt, user.MustChangePassword,
             grants.Permissions, grants.Menus, await BriefAsync(context, user, ct));
         await tx.CommitAsync(ct);
+        loginRateLimiter.RecordSuccessfulLogin(IdentityRealms.Internal, user.Id, clientIp);
         await AuditBestEffortAsync(context.Database.Connection(), user.Id, user.EmployeeNo, "LOGIN", null, null,
             evictedSessions > 0 ? new { evictedSessions, reason = RefreshRevokeReasons.SessionCap } : null, clientIp, ct);
         return (response, refresh.Token, refresh.ExpiresAt);

@@ -42,7 +42,7 @@ function paragraph(text: string, properties = '') {
   return `<a:p><a:pPr>${properties}</a:pPr><a:r><a:rPr sz="3600"><a:ea typeface="宋体"/></a:rPr><a:t>${text}</a:t></a:r><a:endParaRPr/></a:p>`
 }
 
-async function textLayoutFixture() {
+async function textLayoutFixture(lastText = '末段') {
   const zip = new JSZip()
   zip.file('[Content_Types].xml', `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
     <Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
@@ -77,7 +77,7 @@ async function textLayoutFixture() {
     [
       paragraph('默认行距'),
       paragraph('显式段距', '<a:spcBef><a:spcPts val="240"/></a:spcBef><a:spcAft><a:spcPts val="360"/></a:spcAft>'),
-      paragraph('末段'),
+      paragraph(lastText),
     ].join(''),
     { x: 2735857, y: 943804, width: 2675262, height: 646331 },
   )
@@ -133,13 +133,31 @@ describe('patched PPTX renderer text layout migrated from node:test', () => {
     await server?.close()
   })
 
-  async function renderFixture() {
+  async function renderFixture(lastText?: string) {
     const host = document.createElement('main')
     document.body.append(host)
     const preview = renderer.init(host, { width: 960, height: 540 })
-    await preview.preview(await textLayoutFixture())
+    await preview.preview(await textLayoutFixture(lastText))
     return host
   }
+
+  it('slide text stays text: escaped entities still decode and CDATA never becomes elements', async () => {
+    const escaped = await renderFixture('&lt;b&gt;粗体&lt;/b&gt; A &amp; B &lt; C')
+    expect(Array.from(escaped.querySelectorAll('.text-wrapper p')).map(line => line.textContent))
+      .toContain('<b>粗体</b> A & B < C')
+    expect(escaped.querySelector('.text-wrapper b')).toBeNull()
+
+    // CDATA is well-formed XML, so it passes the XML preflight while carrying raw markup.
+    const cdata = await renderFixture('<![CDATA[<img src=x onerror=alert(1)><b>x</b>]]>')
+    expect(cdata.querySelector('.text-wrapper img, .text-wrapper b')).toBeNull()
+  })
+
+  it('patched renderer writes run text as plain text instead of HTML', () => {
+    expect(rendererSource).toContain('s.innerHTML=c;')
+    const patched = patchPptxRenderer(rendererSource)
+    expect(patched).not.toContain('s.innerHTML=c')
+    expect(patched).toContain('s.textContent=__yfText.value')
+  })
 
   it('paragraph layout has no invented top margin while preserving explicit fractional spacing', async () => {
     const host = await renderFixture()

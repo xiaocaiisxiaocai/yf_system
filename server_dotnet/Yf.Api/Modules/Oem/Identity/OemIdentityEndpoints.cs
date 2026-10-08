@@ -36,7 +36,7 @@ internal static class OemIdentityEndpoints
             await service.LogoutAsync(refresh, ctx.Request.Headers.Authorization.ToString(), ClientIp.Resolve(ctx, options), ct);
             ctx.Response.Cookies.Delete(RefreshCookie, new CookieOptions
             {
-                HttpOnly = true, Path = RefreshCookiePath, Secure = options.CookieSecure, SameSite = SameSiteMode.Lax,
+                HttpOnly = true, Path = RefreshCookiePath, Secure = options.CookieSecure, SameSite = SameSiteMode.Strict,
             });
             return EmptyResponse.Instance;
         }).Produces<EmptyResponse>();
@@ -55,7 +55,7 @@ internal static class OemIdentityEndpoints
     private static void SetRefreshCookie(HttpContext ctx, string token, AppOptions options) =>
         ctx.Response.Cookies.Append(RefreshCookie, token, new CookieOptions
         {
-            HttpOnly = true, Secure = options.CookieSecure, SameSite = SameSiteMode.Lax, Path = RefreshCookiePath,
+            HttpOnly = true, Secure = options.CookieSecure, SameSite = SameSiteMode.Strict, Path = RefreshCookiePath,
             MaxAge = TimeSpan.FromDays(options.RefreshTtlDays),
         });
 }

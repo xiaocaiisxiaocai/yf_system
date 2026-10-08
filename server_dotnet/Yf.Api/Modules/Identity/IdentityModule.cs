@@ -37,7 +37,7 @@ public static class IdentityModule
             if (!OriginAllowed(ctx.Request, options.WebBaseUrl)) throw ApiException.Forbidden();
             ctx.Request.Cookies.TryGetValue(RefreshCookie, out var refresh);
             await service.LogoutAsync(refresh, ctx.Request.Headers.Authorization.ToString(), ClientIp.Resolve(ctx, options), ct);
-            ctx.Response.Cookies.Delete(RefreshCookie, new CookieOptions { HttpOnly = true, Path = "/api/v1/auth", Secure = options.CookieSecure, SameSite = SameSiteMode.Lax });
+            ctx.Response.Cookies.Delete(RefreshCookie, new CookieOptions { HttpOnly = true, Path = "/api/v1/auth", Secure = options.CookieSecure, SameSite = SameSiteMode.Strict });
             return EmptyResponse.Instance;
         });
         auth.MapGet("/profile", async (HttpContext ctx, IdentityService service, CancellationToken ct) =>
@@ -60,7 +60,7 @@ public static class IdentityModule
         {
             HttpOnly = true,
             Secure = options.CookieSecure,
-            SameSite = SameSiteMode.Lax,
+            SameSite = SameSiteMode.Strict,
             Path = "/api/v1/auth",
             MaxAge = maxAge,
             Expires = expires

@@ -9,6 +9,10 @@ export function patchPptxRenderer(source) {
     ['s.hasOwnProperty("rIns")?Math.floor(s.rIns)+"px":"5px"', 's.hasOwnProperty("rIns")?s.rIns+"px":"7.2px"'],
     ['s.hasOwnProperty("bIns")?Math.floor(s.bIns)+"px":"3px"', 's.hasOwnProperty("bIns")?s.bIns+"px":"3.6px"'],
     ['s.hasOwnProperty("lIns")?Math.floor(s.lIns)+"px":"5px"', 's.hasOwnProperty("lIns")?s.lIns+"px":"7.2px"'],
+    // Run text still carries XML entity escapes (`&amp;`). Decode them in a <textarea>, whose
+    // content is parsed as text only, then write plain text: markup in a slide never becomes DOM.
+    ['s=document.createElement("span");s.innerHTML=c;',
+      's=document.createElement("span"),__yfText=document.createElement("textarea");__yfText.innerHTML=c;s.textContent=__yfText.value;'],
   ]
   let code = source
   for (const [before, after] of replacements) {
@@ -19,5 +23,6 @@ export function patchPptxRenderer(source) {
   code = code.replace(/Math\.round\((p\(parseInt\(o\["a:(?:off|ext)"\]\.attrs\.(?:x|y|cx|cy)\)\))\)/g,
     (_, precise) => { coordinates++; return precise })
   if (coordinates !== 8) throw new Error('PPTX renderer coordinate layout changed')
+  if (code.includes('s.innerHTML=c')) throw new Error('PPTX renderer still writes slide text as HTML')
   return code
 }

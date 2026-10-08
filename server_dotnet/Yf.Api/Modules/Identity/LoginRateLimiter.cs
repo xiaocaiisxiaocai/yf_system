@@ -11,10 +11,12 @@ public sealed class LoginRateLimiter
     private readonly ConcurrentDictionary<string, Window> _loginIpRates = new();
     private readonly ConcurrentDictionary<string, Window> _loginAccountRates = new();
     private readonly ConcurrentDictionary<string, Window> _loginGlobalAccountRates = new();
+    private readonly ConcurrentDictionary<string, KnownSources> _knownLoginSources = new();
     private readonly ConcurrentDictionary<string, Window> _passwordChangeRates = new();
     private readonly object _loginIpSync = new();
     private readonly object _loginAccountSync = new();
     private readonly object _loginGlobalAccountSync = new();
+    private readonly object _knownLoginSourcesSync = new();
     private readonly object _passwordChangeSync = new();
 
     public bool AllowLogin(string clientIp, string employeeNo)
@@ -35,17 +37,60 @@ public sealed class LoginRateLimiter
     /// key a known account by its database id (the lookup collation already folds case) and an
     /// unknown name by its normalized text, so both answer the same way and a 429 does not reveal
     /// whether the account exists.
+    /// A source that recently signed in to this account successfully skips this shared budget, so
+    /// a flood from elsewhere cannot keep the owner out; the IP and IP+account limits still apply.
     /// </summary>
-    public bool AllowAccountLogin(string realm, ulong? accountId, string employeeNo)
+    public bool AllowAccountLogin(string realm, ulong? accountId, string employeeNo, string clientIp)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(realm);
+        if (accountId is { } known && IsKnownLoginSource(realm, known, clientIp)) return true;
         var key = accountId is { } id
             ? $"{realm}:id:{id.ToString(CultureInfo.InvariantCulture)}"
             : $"{realm}:name:{NormalizeLogin(employeeNo)}";
         return Allow(_loginGlobalAccountRates, _loginGlobalAccountSync, key, MaximumAccountLoginAttempts);
     }
 
+    /// <summary>Remembers the source of a successful password sign-in for <see cref="AllowAccountLogin"/>.</summary>
+    public void RecordSuccessfulLogin(string realm, ulong accountId, string clientIp)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(realm);
+        var key = KnownSourceKey(realm, accountId);
+        var source = NormalizeIp(clientIp);
+        lock (_knownLoginSourcesSync)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (_knownLoginSources.Count >= MaximumKeysPerPurpose && !_knownLoginSources.ContainsKey(key))
+            {
+                foreach (var expired in _knownLoginSources.Where(x => now - x.Value.LastSeen >= KnownSourceLifetime))
+                    _knownLoginSources.TryRemove(expired.Key, out _);
+                if (_knownLoginSources.Count >= MaximumKeysPerPurpose) return;
+            }
+            var sources = _knownLoginSources.GetOrAdd(key, _ => new KnownSources());
+            sources.Seen[source] = now;
+            sources.LastSeen = now;
+            foreach (var stale in sources.Seen.Where(x => now - x.Value >= KnownSourceLifetime).Select(x => x.Key).ToArray())
+                sources.Seen.Remove(stale);
+            while (sources.Seen.Count > MaximumKnownSourcesPerAccount)
+                sources.Seen.Remove(sources.Seen.MinBy(x => x.Value).Key);
+        }
+    }
+
+    private bool IsKnownLoginSource(string realm, ulong accountId, string clientIp)
+    {
+        lock (_knownLoginSourcesSync)
+        {
+            return _knownLoginSources.TryGetValue(KnownSourceKey(realm, accountId), out var sources)
+                && sources.Seen.TryGetValue(NormalizeIp(clientIp), out var seen)
+                && DateTimeOffset.UtcNow - seen < KnownSourceLifetime;
+        }
+    }
+
+    private static string KnownSourceKey(string realm, ulong accountId) =>
+        $"{realm}:{accountId.ToString(CultureInfo.InvariantCulture)}";
+
     internal const int MaximumAccountLoginAttempts = 30;
+    internal const int MaximumKnownSourcesPerAccount = 8;
+    private static readonly TimeSpan KnownSourceLifetime = TimeSpan.FromDays(30);
 
     private static string NormalizeLogin(string employeeNo) => employeeNo.Trim().ToUpperInvariant();
 
@@ -92,4 +137,10 @@ public sealed class LoginRateLimiter
     }
 
     private sealed record Window(DateTimeOffset Start, int Count);
+
+    private sealed class KnownSources
+    {
+        public Dictionary<string, DateTimeOffset> Seen { get; } = new(StringComparer.Ordinal);
+        public DateTimeOffset LastSeen { get; set; }
+    }
 }

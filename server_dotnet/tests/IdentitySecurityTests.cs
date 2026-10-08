@@ -130,15 +130,30 @@ public sealed class IdentitySecurityTests
     {
         var limiter = new LoginRateLimiter();
         Assert.All(Enumerable.Range(1, LoginRateLimiter.MaximumAccountLoginAttempts), _ =>
-            Assert.True(limiter.AllowAccountLogin(IdentityRealms.Internal, 42, "target")));
-        Assert.False(limiter.AllowAccountLogin(IdentityRealms.Internal, 42, "TARGET"));
-        Assert.True(limiter.AllowAccountLogin(IdentityRealms.Internal, 43, "target"));
-        Assert.True(limiter.AllowAccountLogin("oem", 42, "target"));
+            Assert.True(limiter.AllowAccountLogin(IdentityRealms.Internal, 42, "target", "192.0.2.50")));
+        Assert.False(limiter.AllowAccountLogin(IdentityRealms.Internal, 42, "TARGET", "192.0.2.50"));
+        Assert.True(limiter.AllowAccountLogin(IdentityRealms.Internal, 43, "target", "192.0.2.50"));
+        Assert.True(limiter.AllowAccountLogin("oem", 42, "target", "192.0.2.50"));
 
         // Unknown names are limited the same way, so a 429 does not reveal account existence.
         Assert.All(Enumerable.Range(1, LoginRateLimiter.MaximumAccountLoginAttempts), _ =>
-            Assert.True(limiter.AllowAccountLogin(IdentityRealms.Internal, null, "ghost")));
-        Assert.False(limiter.AllowAccountLogin(IdentityRealms.Internal, null, " Ghost "));
+            Assert.True(limiter.AllowAccountLogin(IdentityRealms.Internal, null, "ghost", "192.0.2.50")));
+        Assert.False(limiter.AllowAccountLogin(IdentityRealms.Internal, null, " Ghost ", "192.0.2.50"));
+
+        // A source that recently signed in to the account keeps access while others are throttled.
+        var known = new LoginRateLimiter();
+        known.RecordSuccessfulLogin(IdentityRealms.Internal, 42, "198.51.100.7");
+        Assert.All(Enumerable.Range(1, LoginRateLimiter.MaximumAccountLoginAttempts), _ =>
+            Assert.True(known.AllowAccountLogin(IdentityRealms.Internal, 42, "target", "203.0.113.9")));
+        Assert.False(known.AllowAccountLogin(IdentityRealms.Internal, 42, "target", "203.0.113.10"));
+        Assert.True(known.AllowAccountLogin(IdentityRealms.Internal, 42, "target", "198.51.100.7"));
+        // The exemption is per account and per realm, and never applies to unknown names.
+        Assert.All(Enumerable.Range(1, LoginRateLimiter.MaximumAccountLoginAttempts), _ =>
+            known.AllowAccountLogin("oem", 42, "target", "203.0.113.9"));
+        Assert.False(known.AllowAccountLogin("oem", 42, "target", "198.51.100.7"));
+        Assert.All(Enumerable.Range(1, LoginRateLimiter.MaximumAccountLoginAttempts), _ =>
+            known.AllowAccountLogin(IdentityRealms.Internal, 43, "other", "203.0.113.9"));
+        Assert.False(known.AllowAccountLogin(IdentityRealms.Internal, 43, "other", "198.51.100.7"));
 
         var ipAccount = new LoginRateLimiter();
         Assert.All(Enumerable.Range(1, 10), _ => Assert.True(ipAccount.AllowLogin("192.0.2.1", "target")));
@@ -253,14 +268,12 @@ public sealed class IdentitySecurityTests
         var header = Base64UrlEncoder.Encode("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
         var body = Base64UrlEncoder.Encode(JsonSerializer.Serialize(new
         {
+            iss = TokenService.Issuer, aud = TokenService.AudienceFor(IdentityRealms.Internal),
             sub = "API001", uid = 18446744073709551614UL, sid = "api-session-family",
             jti = "api-jti", iat = now, exp = now + 1800
         }));
-        var signingInput = header + "." + body;
-        using var hmac = new System.Security.Cryptography.HMACSHA256(Encoding.UTF8.GetBytes(secret));
-        var signature = Base64UrlEncoder.Encode(hmac.ComputeHash(Encoding.ASCII.GetBytes(signingInput)));
 
-        var parsed = service.ParseAccess(signingInput + "." + signature);
+        var parsed = service.ParseAccess(Sign(header, body, TokenService.SigningKeyFor(secret, IdentityRealms.Internal)));
         Assert.Equal(18446744073709551614UL, parsed.UserId);
         Assert.Equal("API001", parsed.EmployeeNo);
         Assert.Equal("api-session-family", parsed.SessionId);
@@ -275,14 +288,47 @@ public sealed class IdentitySecurityTests
         var header = Base64UrlEncoder.Encode("{\"alg\":\"HS256\",\"typ\":\"MEDIA\"}");
         var body = Base64UrlEncoder.Encode(JsonSerializer.Serialize(new
         {
+            iss = TokenService.Issuer, aud = TokenService.AudienceFor(IdentityRealms.Internal),
             sub = "API001", uid = 42, sid = "api-session-family", iat = now, exp = now + 1800
         }));
-        var signingInput = header + "." + body;
-        using var hmac = new System.Security.Cryptography.HMACSHA256(Encoding.UTF8.GetBytes(secret));
-        var signature = Base64UrlEncoder.Encode(hmac.ComputeHash(Encoding.ASCII.GetBytes(signingInput)));
 
-        var error = Assert.Throws<ApiException>(() => service.ParseAccess(signingInput + "." + signature));
+        var error = Assert.Throws<ApiException>(() =>
+            service.ParseAccess(Sign(header, body, TokenService.SigningKeyFor(secret, IdentityRealms.Internal))));
         Assert.Equal(40101, error.Code);
+    }
+
+    [Fact]
+    public void AccessTokenIsBoundToItsRealmKeyAndAudience()
+    {
+        const string secret = "identity-test-secret-with-at-least-32-bytes";
+        var service = new TokenService(new AppOptions { JwtSecret = secret, AccessTtlMinutes = 30 });
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var header = Base64UrlEncoder.Encode("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
+        string Body(string? realm, string? audience) => Base64UrlEncoder.Encode(JsonSerializer.Serialize(
+            new Dictionary<string, object?>
+            {
+                ["iss"] = TokenService.Issuer, ["aud"] = audience, ["rlm"] = realm,
+                ["sub"] = "API001", ["uid"] = 42, ["sid"] = "s", ["iat"] = now, ["exp"] = now + 1800
+            }.Where(pair => pair.Value is not null).ToDictionary()));
+        var internalKey = TokenService.SigningKeyFor(secret, IdentityRealms.Internal);
+        var oemKey = TokenService.SigningKeyFor(secret, "oem");
+
+        // Before per-realm keys and audiences, tokens were signed with the raw secret and had no aud.
+        Assert.ThrowsAny<Exception>(() => service.ParseAccess(Sign(header, Body(null, null), Encoding.UTF8.GetBytes(secret))));
+        // An internal-key token cannot be relabelled as OEM, and an OEM token cannot drop its realm.
+        Assert.ThrowsAny<Exception>(() => service.ParseAccess(Sign(header, Body("oem", TokenService.AudienceFor("oem")), internalKey)));
+        Assert.ThrowsAny<Exception>(() => service.ParseAccess(Sign(header, Body(null, TokenService.AudienceFor(IdentityRealms.Internal)), oemKey)));
+        // The audience must match the realm whose key signed the token.
+        Assert.ThrowsAny<Exception>(() => service.ParseAccess(Sign(header, Body("oem", TokenService.AudienceFor(IdentityRealms.Internal)), oemKey)));
+
+        Assert.Equal("oem", service.ParseAccess(Sign(header, Body("oem", TokenService.AudienceFor("oem")), oemKey)).Realm);
+    }
+
+    private static string Sign(string header, string body, byte[] key)
+    {
+        var signingInput = header + "." + body;
+        using var hmac = new System.Security.Cryptography.HMACSHA256(key);
+        return signingInput + "." + Base64UrlEncoder.Encode(hmac.ComputeHash(Encoding.ASCII.GetBytes(signingInput)));
     }
 
     private static async Task<string> LegacyHashAsync(string password)

@@ -49,7 +49,7 @@ public sealed class OemAuthService(
         OemAccount? candidate;
         await using (var lookup = await dbFactory.CreateDbContextAsync(ct))
             candidate = await lookup.OemAccounts.AsNoTracking().SingleOrDefaultAsync(account => account.EmployeeNo == employeeNo, ct);
-        if (!rateLimiter.AllowAccountLogin(OemRealms.Oem, candidate?.Id, employeeNo))
+        if (!rateLimiter.AllowAccountLogin(OemRealms.Oem, candidate?.Id, employeeNo, clientIp))
             throw ApiException.TooManyRequests("请求过于频繁，请稍后再试");
         // Await the same-cost dummy even when the account exists, so the first unknown-account
         // request cannot be distinguished by the one-time dummy hash calculation.
@@ -106,6 +106,7 @@ public sealed class OemAuthService(
         var evictedSessions = await EnforceSessionCapAsync(context, account.Id, now, ct);
         var access = tokens.IssueAccess(account.Id, account.EmployeeNo, sessionId, OemRealms.Oem);
         await tx.CommitAsync(ct);
+        rateLimiter.RecordSuccessfulLogin(OemRealms.Oem, account.Id, clientIp);
         await AuditBestEffortAsync(context, account, account.EmployeeNo, "OEM_LOGIN", clientIp,
             evictedSessions > 0 ? new { evictedSessions, reason = RefreshRevokeReasons.SessionCap } : null, ct);
         return (new OemLoginResponse(access.Token, access.ExpiresAt, account.MustChangePassword, Brief(account, company)), refresh);
