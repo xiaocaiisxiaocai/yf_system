@@ -10936,6 +10936,8 @@
           "robotModelName",
           "robotPartId",
           "robotPartNumber",
+          "robotTypeId",
+          "robotTypeName",
           "sectionId",
           "sectionName",
           "status",
@@ -11044,6 +11046,15 @@
             "nullable": true
           },
           "priorityName": {
+            "type": "string",
+            "nullable": true
+          },
+          "robotTypeId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "robotTypeName": {
             "type": "string",
             "nullable": true
           },
@@ -11204,6 +11215,8 @@
           "robotModelName",
           "robotPartId",
           "robotPartNumber",
+          "robotTypeId",
+          "robotTypeName",
           "sectionId",
           "sectionName",
           "status",
@@ -11298,6 +11311,15 @@
             "nullable": true
           },
           "priorityName": {
+            "type": "string",
+            "nullable": true
+          },
+          "robotTypeId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "robotTypeName": {
             "type": "string",
             "nullable": true
           },
@@ -11430,6 +11452,8 @@
           "robotModelName",
           "robotPartId",
           "robotPartNumber",
+          "robotTypeId",
+          "robotTypeName",
           "sectionId",
           "sectionName",
           "status",
@@ -11541,6 +11565,15 @@
             "type": "string",
             "nullable": true
           },
+          "robotTypeId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "robotTypeName": {
+            "type": "string",
+            "nullable": true
+          },
           "expectedCompletionDate": {
             "type": "string",
             "nullable": true
@@ -11632,6 +11665,7 @@
           "name",
           "priorityId",
           "robotPartId",
+          "robotTypeId",
           "subprojectNames",
           "supplierId",
           "workOrderNos"
@@ -11667,6 +11701,11 @@
             "nullable": true
           },
           "priorityId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "robotTypeId": {
             "type": "integer",
             "format": "int64",
             "nullable": true

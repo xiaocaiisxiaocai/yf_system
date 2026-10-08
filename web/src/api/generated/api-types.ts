@@ -1047,6 +1047,8 @@ export interface ProjectDetailResponse {
   sectionName: string | null
   priorityId: number | null
   priorityName: string | null
+  robotTypeId: number | null
+  robotTypeName: string | null
   expectedCompletionDate: string | null
   hasCopyHistory: boolean
   unreadMessages: number
@@ -1102,6 +1104,8 @@ export interface ProjectGroupResponse {
   sectionName: string | null
   priorityId: number | null
   priorityName: string | null
+  robotTypeId: number | null
+  robotTypeName: string | null
   expectedCompletionDate: string | null
   completedAt: string | null
   createdAt: string
@@ -1155,6 +1159,8 @@ export interface ProjectResponse {
   sectionName: string | null
   priorityId: number | null
   priorityName: string | null
+  robotTypeId: number | null
+  robotTypeName: string | null
   expectedCompletionDate: string | null
   hasCopyHistory: boolean
   unreadMessages: number
@@ -1186,6 +1192,7 @@ export interface ProjectUpsertRequest {
   machineModel?: string | null
   robotPartId?: number | null
   priorityId?: number | null
+  robotTypeId?: number | null
   expectedCompletionDate?: string | null
   subprojectNames?: Array<string> | null
 }

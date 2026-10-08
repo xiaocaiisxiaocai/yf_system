@@ -400,6 +400,7 @@ internal sealed partial class ProjectService(
         if (workOrderNos.Length == 0)
             throw ApiException.BadRequest("请至少填写一个工令号");
         if (string.IsNullOrWhiteSpace(request.MachineModel)) throw ApiException.BadRequest("请填写机型");
+        if (request.RobotTypeId is null or 0) throw ApiException.BadRequest("请选择 Robot 类型");
         if (requireRobotPart && request.RobotPartId is null or 0) throw ApiException.BadRequest("请选择 Robot 料号");
         if (request.PriorityId is null or 0) throw ApiException.BadRequest("请选择优先级");
         if (string.IsNullOrWhiteSpace(request.ExpectedCompletionDate)) throw ApiException.BadRequest("请选择需求完成时间");
@@ -417,7 +418,7 @@ internal sealed partial class ProjectService(
             expectedCompletionDate = parsed.ToDateTime(TimeOnly.MinValue);
         }
         return new(workOrderNos, machineModel, request.RobotPartId,
-            null, null, request.PriorityId, expectedCompletionDate);
+            null, null, request.PriorityId, request.RobotTypeId, expectedCompletionDate);
     }
 
     /// <summary>
@@ -455,6 +456,8 @@ internal sealed partial class ProjectService(
     {
         await ValidateDictionaryAsync(conn, tx, input.PriorityId,
             ProjectDictionaryTypes.Priority, existing?.PriorityId, "优先级", ct);
+        await ValidateDictionaryAsync(conn, tx, input.RobotTypeId,
+            ProjectDictionaryTypes.RobotType, existing?.RobotTypeId, "Robot 类型", ct);
         if (input.RobotPartId is null)
         {
             if (existing?.RobotPartId is not null)
@@ -609,6 +612,7 @@ internal sealed partial class ProjectService(
         ulong? ResponsibleUserId,
         ulong? SectionId,
         ulong? PriorityId,
+        ulong? RobotTypeId,
         DateTime? ExpectedCompletionDate);
 
     private sealed class MetadataDictionaryRow

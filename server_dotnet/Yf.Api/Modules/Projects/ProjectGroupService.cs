@@ -111,6 +111,7 @@ internal sealed class ProjectGroupService(
             ResponsibleUserId = metadata.ResponsibleUserId,
             SectionId = metadata.SectionId,
             PriorityId = metadata.PriorityId,
+            RobotTypeId = metadata.RobotTypeId,
             ExpectedCompletionDate = ToDateOnly(metadata.ExpectedCompletionDate),
         };
         db.ProjectGroups.Add(group);
@@ -156,6 +157,7 @@ internal sealed class ProjectGroupService(
             metadata.ResponsibleUserId,
             metadata.SectionId,
             metadata.PriorityId,
+            metadata.RobotTypeId,
             metadata.ExpectedCompletionDate,
             subprojectIds = children.Select(child => child.Id).ToArray(),
             subprojectNames = childNames,
@@ -197,6 +199,7 @@ internal sealed class ProjectGroupService(
         {
             RobotPartId = before.RobotPartId,
             PriorityId = before.PriorityId,
+            RobotTypeId = before.RobotTypeId,
         }, access.SupplierId, ct);
         metadata = metadata with
         {
@@ -208,6 +211,7 @@ internal sealed class ProjectGroupService(
         var inheritedMetadataChanged = before.MachineModel != metadata.MachineModel
             || before.RobotPartId != metadata.RobotPartId
             || before.PriorityId != metadata.PriorityId
+            || before.RobotTypeId != metadata.RobotTypeId
             || before.ExpectedCompletionDate != metadata.ExpectedCompletionDate;
         var groupChanged = before.Name != name
             || before.Description != request.Description
@@ -230,6 +234,7 @@ internal sealed class ProjectGroupService(
                 .SetProperty(group => group.ResponsibleUserId, metadata.ResponsibleUserId)
                 .SetProperty(group => group.SectionId, metadata.SectionId)
                 .SetProperty(group => group.PriorityId, metadata.PriorityId)
+                .SetProperty(group => group.RobotTypeId, metadata.RobotTypeId)
                 .SetProperty(group => group.ExpectedCompletionDate, ToDateOnly(metadata.ExpectedCompletionDate)), ct);
         }
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
@@ -248,6 +253,7 @@ internal sealed class ProjectGroupService(
                     .SetProperty(project => project.MachineModel, metadata.MachineModel)
                     .SetProperty(project => project.RobotPartId, metadata.RobotPartId)
                     .SetProperty(project => project.PriorityId, metadata.PriorityId)
+                    .SetProperty(project => project.RobotTypeId, metadata.RobotTypeId)
                     .SetProperty(project => project.ExpectedCompletionDate, ToDateOnly(metadata.ExpectedCompletionDate)), ct);
             if (metadata.RobotPartId is not null)
             {
@@ -285,6 +291,7 @@ internal sealed class ProjectGroupService(
                 new("machineModel", "机型", before.MachineModel, metadata.MachineModel),
                 new("robotPartId", "Robot 料号", before.RobotPartId, metadata.RobotPartId),
                 new("priorityId", "优先级", before.PriorityId, metadata.PriorityId),
+                new("robotTypeId", "Robot 类型", before.RobotTypeId, metadata.RobotTypeId),
                 new("expectedCompletionDate", "预计完成日期",
                     DateValue(before.ExpectedCompletionDate), DateValue(metadata.ExpectedCompletionDate))),
         })).ToArray();
@@ -487,6 +494,7 @@ internal sealed class ProjectGroupService(
         ResponsibleUserId = metadata.ResponsibleUserId,
         SectionId = metadata.SectionId,
         PriorityId = metadata.PriorityId,
+        RobotTypeId = metadata.RobotTypeId,
         ExpectedCompletionDate = ToDateOnly(metadata.ExpectedCompletionDate),
     };
 
@@ -544,6 +552,8 @@ internal sealed class ProjectGroupService(
             from section in sections.DefaultIfEmpty()
             join priorityValue in db.ProjectDictionaries on mainProject.PriorityId equals (ulong?)priorityValue.Id into priorities
             from priority in priorities.DefaultIfEmpty()
+            join robotTypeValue in db.ProjectDictionaries on mainProject.RobotTypeId equals (ulong?)robotTypeValue.Id into robotTypes
+            from robotType in robotTypes.DefaultIfEmpty()
             join countValue in counts on mainProject.Id equals countValue.ProjectGroupId into countRows
             from count in countRows.DefaultIfEmpty()
             select new ProjectGroupRow
@@ -568,6 +578,8 @@ internal sealed class ProjectGroupService(
                 SectionName = section.Name,
                 PriorityId = mainProject.PriorityId,
                 PriorityName = priority.Name,
+                RobotTypeId = mainProject.RobotTypeId,
+                RobotTypeName = robotType.Name,
                 ExpectedCompletionDate = mainProject.ExpectedCompletionDate.HasValue
                     ? mainProject.ExpectedCompletionDate.GetValueOrDefault().ToDateTime(TimeOnly.MinValue) : null,
                 CompletedAt = mainProject.CompletedAt,
@@ -722,6 +734,7 @@ internal sealed class ProjectGroupService(
         group.ResponsibleUserId,
         group.SectionId,
         group.PriorityId,
+        group.RobotTypeId,
         group.ExpectedCompletionDate);
 
     internal static string? NormalizeGroupStatus(string? status)

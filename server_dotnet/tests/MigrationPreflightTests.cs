@@ -10,7 +10,7 @@ namespace Yf.Api.Tests;
 [Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class MigrationPreflightTests
 {
-    private const string Latest = "20261007003510_AllowMacroAndBinaryExcelUploads";
+    private const string Latest = "20261008071421_AddProjectRobotType";
     private const string Barrier = "20261006031500_ReplaceOemMalwareScanningWithValidation";
 
     [Fact(Timeout = 120_000)]

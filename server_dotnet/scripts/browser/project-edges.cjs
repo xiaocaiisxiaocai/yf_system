@@ -175,7 +175,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
       await dialog.waitFor({ state: 'hidden' });
     });
 
-    await record('缺少 Robot 料号和优先级时展示维护指引且刷新不清空表单', async () => {
+    await record('缺少 Robot 料号、优先级和 Robot 类型时展示维护指引且刷新不清空表单', async () => {
       const empty = route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
       await page.route('**/api/v1/project-dictionaries?*', empty);
       await page.route('**/api/v1/robot-parts?*', empty);
@@ -186,6 +186,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
       await page.getByRole('option', { name: f.suppliers.a.name, exact: true }).click();
       await dialog.getByText('所选 Robot 厂商暂无启用的料号', { exact: false }).waitFor();
       await dialog.getByText('暂无启用的优先级', { exact: false }).waitFor();
+      await dialog.getByText('暂无启用的 Robot 类型', { exact: false }).waitFor();
       assert(await dialog.getByRole('button', { name: '创建主项目', exact: true }).isDisabled());
       assert.equal(await dialog.getByRole('link', { name: '维护 Robot 料号（新窗口）', exact: true }).getAttribute('href'), '/system/dictionaries');
       await dialog.getByRole('textbox', { name: '主项目名称', exact: true }).fill('字典恢复草稿');
@@ -212,6 +213,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
         machineModel: detail.group.machineModel,
         robotPartId: detail.group.robotPartId,
         priorityId: detail.group.priorityId,
+        robotTypeId: detail.group.robotTypeId,
         expectedCompletionDate: detail.group.expectedCompletionDate,
       });
       const updated = await json('GET', '/project-groups/' + flow.groupId);

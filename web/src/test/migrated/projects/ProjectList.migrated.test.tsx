@@ -27,6 +27,13 @@ import ProjectList from '../../../pages/project/ProjectList'
 
 const suppliers = [{ id: 8, name: '厂商甲' }, { id: 9, name: '厂商乙' }]
 const priorities = [{ id: 14, type: 'PRIORITY', name: '普通', enabled: true, sortNo: 10, parentId: null, parentName: null, inUse: false }]
+const robotTypes = [{ id: 21, type: 'ROBOT_TYPE', name: '六轴', enabled: true, sortNo: 10, parentId: null, parentName: null, inUse: false }]
+type GetConfig = { params?: { supplierId?: number; type?: string } }
+
+function dictionaryOptions(config?: GetConfig, ready = true) {
+  if (!ready) return []
+  return config?.params?.type === 'ROBOT_TYPE' ? robotTypes : priorities
+}
 
 function page(list: unknown[] = []) {
   return { list, total: list.length, page: 1, pageSize: 10 }
@@ -51,10 +58,10 @@ async function enterCreatedOption(id: string, value: string) {
   fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
 }
 
-function successfulGet(url: string, config?: { params?: { supplierId?: number } }) {
+function successfulGet(url: string, config?: GetConfig) {
   if (url === '/project-groups') return Promise.resolve({ data: page() })
   if (url === '/supplier-options') return Promise.resolve({ data: suppliers })
-  if (url === '/project-dictionaries') return Promise.resolve({ data: priorities })
+  if (url === '/project-dictionaries') return Promise.resolve({ data: dictionaryOptions(config) })
   if (url === '/robot-parts') {
     const supplierId = config?.params?.supplierId
     return Promise.resolve({ data: [{
@@ -118,6 +125,7 @@ describe('ProjectList migrated behavior', () => {
     expect(dialog.isConnected).toBe(true)
     expect(dialog).toBeVisible()
 
+    await selectById('robotTypeId_input', '六轴')
     await selectById('priorityId_input', '普通')
     const completionDate = within(dialog).getByPlaceholderText('选择需求完成时间')
     await user.click(completionDate)
@@ -137,6 +145,7 @@ describe('ProjectList migrated behavior', () => {
       machineModel: 'M1',
       robotPartId: 202,
       priorityId: 14,
+      robotTypeId: 21,
       expectedCompletionDate: '2026-09-30',
       subprojectNames: ['子项目-A'],
     })
@@ -149,13 +158,13 @@ describe('ProjectList migrated behavior', () => {
       id: 3, name: '历史项目', description: null, supplierId: 8, supplierName: '历史厂商', status: 'DRAFT',
       workOrderNos: ['WO-OLD'], machineModel: 'M1', robotPartId: null, robotPartNumber: null, robotModelName: '历史型号',
       responsibleUserId: 5, responsibleUserEmployeeNo: '0004', responsibleUserName: '旧负责人', sectionId: null, sectionName: null,
-      priorityId: 14, priorityName: '普通', expectedCompletionDate: '2026-09-30', subprojectCount: 0, completedCount: 0,
-      pendingCount: 0, terminatedCount: 0, unreadMessages: 0,
+      priorityId: 14, priorityName: '普通', robotTypeId: null, robotTypeName: null, expectedCompletionDate: '2026-09-30',
+      subprojectCount: 0, completedCount: 0, pendingCount: 0, terminatedCount: 0, unreadMessages: 0,
     }
-    mocks.get.mockImplementation((url: string) => {
+    mocks.get.mockImplementation((url: string, config?: GetConfig) => {
       if (url === '/project-groups') return Promise.resolve({ data: page([historical]) })
       if (url === '/supplier-options') return Promise.resolve({ data: [{ id: 8, name: '历史厂商' }] })
-      if (url === '/project-dictionaries') return Promise.resolve({ data: priorities })
+      if (url === '/project-dictionaries') return Promise.resolve({ data: dictionaryOptions(config) })
       if (url === '/robot-parts') return Promise.reject(new Error('catalog temporarily unavailable'))
       throw new Error(`unexpected GET ${url}`)
     })
@@ -167,9 +176,14 @@ describe('ProjectList migrated behavior', () => {
     expect(within(dialog).getByDisplayValue('旧负责人（0004）')).toHaveAttribute('readonly')
     expect(within(dialog).getByDisplayValue('历史型号')).toHaveAttribute('readonly')
     await waitFor(() => expect(within(dialog).getByRole('button', { name: '保存并同步' })).toBeEnabled())
+    // Projects created before Robot 类型 existed have none; it is required, so saving asks for it first.
+    await user.click(within(dialog).getByRole('button', { name: '保存并同步' }))
+    expect(await within(dialog).findByText('请选择 Robot 类型')).toBeInTheDocument()
+    expect(mocks.put).not.toHaveBeenCalled()
+    await selectById('robotTypeId_input', '六轴')
     await user.click(within(dialog).getByRole('button', { name: '保存并同步' }))
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
-    expect(mocks.put.mock.calls[0][1]).toEqual(expect.objectContaining({ robotPartId: null, supplierId: 8 }))
+    expect(mocks.put.mock.calls[0][1]).toEqual(expect.objectContaining({ robotPartId: null, supplierId: 8, robotTypeId: 21 }))
     expect(mocks.put.mock.calls[0][1]).not.toHaveProperty('responsibleUserId')
   })
 
@@ -192,10 +206,10 @@ describe('ProjectList migrated behavior', () => {
 
   it('project creation explains missing prerequisites and refreshes without discarding entered data', async () => {
     let ready = false
-    mocks.get.mockImplementation((url: string, config?: { params?: { supplierId?: number } }) => {
+    mocks.get.mockImplementation((url: string, config?: GetConfig) => {
       if (url === '/project-groups') return Promise.resolve({ data: page() })
       if (url === '/supplier-options') return Promise.resolve({ data: ready ? suppliers : [] })
-      if (url === '/project-dictionaries') return Promise.resolve({ data: ready ? priorities : [] })
+      if (url === '/project-dictionaries') return Promise.resolve({ data: dictionaryOptions(config, ready) })
       if (url === '/robot-parts') return Promise.resolve({ data: [] })
       return successfulGet(url, config)
     })
@@ -207,6 +221,7 @@ describe('ProjectList migrated behavior', () => {
     await user.type(name, '已填写项目')
     expect(await within(dialog).findByText(/暂无启用的供应商，请先新增或启用供应商。/)).toBeInTheDocument()
     expect(within(dialog).getByText(/暂无启用的优先级，请在数据字典中维护。/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/暂无启用的 Robot 类型，请在数据字典中维护。/)).toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: '创建主项目' })).toBeDisabled()
 
     ready = true
@@ -218,13 +233,13 @@ describe('ProjectList migrated behavior', () => {
   it('required option sources expose loading and retry states and block submits until ready', async () => {
     const firstSupplier = deferred<{ data: unknown[] }>()
     let supplierAttempts = 0
-    mocks.get.mockImplementation((url: string) => {
+    mocks.get.mockImplementation((url: string, config?: GetConfig) => {
       if (url === '/project-groups') return Promise.resolve({ data: page() })
       if (url === '/supplier-options') {
         supplierAttempts += 1
         return supplierAttempts === 1 ? firstSupplier.promise : Promise.resolve({ data: suppliers })
       }
-      if (url === '/project-dictionaries') return Promise.resolve({ data: priorities })
+      if (url === '/project-dictionaries') return Promise.resolve({ data: dictionaryOptions(config) })
       if (url === '/robot-parts') return Promise.resolve({ data: [] })
       throw new Error(`unexpected GET ${url}`)
     })

@@ -8,12 +8,13 @@ namespace Yf.Api.Modules.Projects;
 internal static class ProjectDictionaryTypes
 {
     internal const string Priority = "PRIORITY";
+    internal const string RobotType = "ROBOT_TYPE";
 
     internal static string Normalize(string? value)
     {
         var normalized = (value ?? string.Empty).Trim().ToUpperInvariant();
-        if (normalized != Priority)
-            throw ApiException.BadRequest("type 仅支持 PRIORITY");
+        if (normalized is not (Priority or RobotType))
+            throw ApiException.BadRequest("type 仅支持 PRIORITY 或 ROBOT_TYPE");
         return normalized;
     }
 }
@@ -140,7 +141,7 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         if (name.Length is < 1 or > 128) throw ApiException.BadRequest("name 长度必须为 1-128 个字符");
         if (request.SortNo is < 0 or > 100000) throw ApiException.BadRequest("sortNo 必须为 0-100000");
         if (request.ParentId is not null)
-            throw ApiException.BadRequest("PRIORITY 不支持 parentId");
+            throw ApiException.BadRequest("字典项不支持 parentId");
         return new(type, name, request.ParentId, request.SortNo,
             request.Enabled ? AccountStatuses.Active : AccountStatuses.Disabled);
     }
@@ -156,8 +157,8 @@ internal sealed class ProjectDictionaryService(AuditService audit)
                 .Select(parent => parent.Name).FirstOrDefault(),
             SortNo = item.SortNo,
             Status = item.Status,
-            ProjectInUse = db.Projects.Any(project => project.PriorityId == item.Id)
-                || db.ProjectGroups.Any(group => group.PriorityId == item.Id),
+            ProjectInUse = db.Projects.Any(project => project.PriorityId == item.Id || project.RobotTypeId == item.Id)
+                || db.ProjectGroups.Any(group => group.PriorityId == item.Id || group.RobotTypeId == item.Id),
         });
 
     private static async Task<DictionaryRow?> FindAsync(

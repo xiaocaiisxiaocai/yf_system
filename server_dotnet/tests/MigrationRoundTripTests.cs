@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261007003510_AllowMacroAndBinaryExcelUploads";
+    private const string Latest = "20261008071421_AddProjectRobotType";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -69,9 +69,12 @@ public sealed class MigrationRoundTripTests
         var latestSchema = await SchemaAsync(database, ct);
         var latestData = await ReferenceDataAsync(database, ct);
 
-        // AllowMacroAndBinaryExcelUploads (Down keeps the whitelist) + AddOemApprovalTaskActivatedAt.
+        // AddProjectRobotType + AllowMacroAndBinaryExcelUploads (Down keeps the whitelist) + AddOemApprovalTaskActivatedAt.
         await migrator.MigrateAsync(HardenIdentity, ct);
-        Assert.DoesNotContain(await SchemaAsync(database, ct), line => line.StartsWith("column|oem_flow_tasks|activated_at|", StringComparison.Ordinal));
+        var rolledBack = await SchemaAsync(database, ct);
+        Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|oem_flow_tasks|activated_at|", StringComparison.Ordinal));
+        Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|project_groups|robot_type_id|", StringComparison.Ordinal));
+        Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|projects|robot_type_id|", StringComparison.Ordinal));
         Assert.Equal(latestData, await ReferenceDataAsync(database, ct));
         await migrator.MigrateAsync(cancellationToken: ct);
         Assert.Equal(latestSchema, await SchemaAsync(database, ct));

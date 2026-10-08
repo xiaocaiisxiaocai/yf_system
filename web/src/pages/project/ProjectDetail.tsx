@@ -477,6 +477,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
             { label: '工令号', value: detailText(project.workOrderNos?.join('、')) },
             { label: '机型', value: detailText(project.machineModel) },
             { label: 'Robot 厂商', value: detailText(project.supplierName) },
+            { label: 'Robot 类型', value: detailText(project.robotTypeName) },
             { label: 'Robot 料号', value: detailText(project.robotPartNumber) },
             { label: 'Robot 型号', value: detailText(project.robotModelName) },
             {

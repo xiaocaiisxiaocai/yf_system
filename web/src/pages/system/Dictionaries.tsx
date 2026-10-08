@@ -6,14 +6,17 @@ import http from '../../api/client'
 import './Dictionaries.css'
 import type { ApiResponses, ProjectDictionaryOption, RobotPart } from '../../api/types'
 
-type TabType = 'ROBOT_PART' | 'PRIORITY'
+type DictionaryType = 'ROBOT_TYPE' | 'PRIORITY'
+type TabType = DictionaryType | 'ROBOT_PART'
 type SupplierItem = ApiResponses['GET /robot-part-supplier-options'][number]
 type ManagedItem = RobotPart | ProjectDictionaryOption
 
 const TYPES: { key: TabType; name: string }[] = [
+  { key: 'ROBOT_TYPE', name: 'Robot 类型' },
   { key: 'ROBOT_PART', name: 'Robot 料号' },
   { key: 'PRIORITY', name: '优先级' },
 ]
+const EMPTY_DICTIONARIES: Record<DictionaryType, ProjectDictionaryOption[]> = { ROBOT_TYPE: [], PRIORITY: [] }
 const columnHeaderProps = () => ({ scope: 'col' }) as unknown as ReturnType<NonNullable<TableColumnProps['onHeaderCell']>>
 const withColumnHeaders = <T extends TableColumnProps>(columns: T[]) => columns.map((column) => ({ ...column, onHeaderCell: columnHeaderProps }))
 const isRobotPart = (item: ManagedItem): item is RobotPart => 'partNumber' in item
@@ -24,9 +27,9 @@ function expectArray<T>(value: unknown, label: string): T[] {
 }
 
 export default function Dictionaries() {
-  const [type, setType] = useState<TabType>('ROBOT_PART')
+  const [type, setType] = useState<TabType>('ROBOT_TYPE')
   const [parts, setParts] = useState<RobotPart[]>([])
-  const [priorities, setPriorities] = useState<ProjectDictionaryOption[]>([])
+  const [dictionaries, setDictionaries] = useState(EMPTY_DICTIONARIES)
   const [suppliers, setSuppliers] = useState<SupplierItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -44,15 +47,19 @@ export default function Dictionaries() {
     const seq = ++sequence.current
     setLoading(true); setError(false)
     try {
-      const [partResponse, priorityResponse, supplierResponse] = await Promise.all([
+      const [partResponse, robotTypeResponse, priorityResponse, supplierResponse] = await Promise.all([
         http.get<ApiResponses['GET /robot-parts']>('/robot-parts'),
+        http.get<ApiResponses['GET /project-dictionaries']>('/project-dictionaries', { params: { type: 'ROBOT_TYPE' } }),
         http.get<ApiResponses['GET /project-dictionaries']>('/project-dictionaries', { params: { type: 'PRIORITY' } }),
         http.get<ApiResponses['GET /robot-part-supplier-options']>('/robot-part-supplier-options'),
       ])
       const nextParts = expectArray<RobotPart>(partResponse.data, 'Robot 料号')
-      const nextPriorities = expectArray<ProjectDictionaryOption>(priorityResponse.data, '优先级')
+      const nextDictionaries = {
+        ROBOT_TYPE: expectArray<ProjectDictionaryOption>(robotTypeResponse.data, 'Robot 类型'),
+        PRIORITY: expectArray<ProjectDictionaryOption>(priorityResponse.data, '优先级'),
+      }
       const supplierRows = expectArray<SupplierItem>(supplierResponse.data, 'Robot 厂商')
-      if (seq === sequence.current) { setParts(nextParts); setPriorities(nextPriorities); setSuppliers(supplierRows) }
+      if (seq === sequence.current) { setParts(nextParts); setDictionaries(nextDictionaries); setSuppliers(supplierRows) }
     } catch {
       if (seq === sequence.current) setError(true)
     } finally {
@@ -69,14 +76,14 @@ export default function Dictionaries() {
   const startEdit = (item?: ManagedItem) => {
     if (loading || error) return
     setEditing(item ?? null); form.resetFields()
-    const rows = type === 'ROBOT_PART' ? parts : priorities
+    const rows = type === 'ROBOT_PART' ? parts : dictionaries[type]
     const sortNo = Math.min(100000, Math.max(0, ...rows.map((row) => row.sortNo)) + 10)
     if (type === 'ROBOT_PART') {
       const part = item && isRobotPart(item) ? item : null
       form.setFieldsValue(part ?? { supplierId, partNumber: '', model: '', sortNo, enabled: true })
     } else {
-      const priority = item && !isRobotPart(item) ? item : null
-      form.setFieldsValue(priority ?? { name: '', sortNo, enabled: true })
+      const entry = item && !isRobotPart(item) ? item : null
+      form.setFieldsValue(entry ?? { name: '', sortNo, enabled: true })
     }
     setOpen(true)
   }
@@ -93,10 +100,10 @@ export default function Dictionaries() {
         else await http.post<ApiResponses['POST /robot-parts']>('/robot-parts', body)
         Message.success('Robot 料号已保存')
       } else {
-        const body = { type: 'PRIORITY', name: values.name.trim(), parentId: null, sortNo: values.sortNo ?? 0, enabled: !!values.enabled }
+        const body = { type, name: values.name.trim(), parentId: null, sortNo: values.sortNo ?? 0, enabled: !!values.enabled }
         if (editing) await http.put<ApiResponses['PUT /project-dictionaries/{id}']>(`/project-dictionaries/${editing.id}`, body)
         else await http.post<ApiResponses['POST /project-dictionaries']>('/project-dictionaries', body)
-        Message.success('优先级已保存')
+        Message.success(`${label}已保存`)
       }
       setOpen(false); await load()
     } catch {
@@ -110,7 +117,7 @@ export default function Dictionaries() {
     try {
       if (isRobotPart(item)) await http.delete<ApiResponses['DELETE /robot-parts/{id}']>(`/robot-parts/${item.id}`)
       else await http.delete<ApiResponses['DELETE /project-dictionaries/{id}']>(`/project-dictionaries/${item.id}`)
-      Message.success(`${isRobotPart(item) ? 'Robot 料号' : '优先级'}已删除`); await load()
+      Message.success(`${label}已删除`); await load()
     } catch {
       // 服务端拒绝引用中的条目时保留当前行。
     }
@@ -119,7 +126,7 @@ export default function Dictionaries() {
   const search = keyword.trim().toLocaleLowerCase()
   const rows: ManagedItem[] = type === 'ROBOT_PART'
     ? parts.filter((item) => (!supplierId || item.supplierId === supplierId) && (!search || `${item.partNumber}\n${item.model}\n${item.supplierName}`.toLocaleLowerCase().includes(search)))
-    : priorities.filter((item) => !search || item.name.toLocaleLowerCase().includes(search))
+    : dictionaries[type].filter((item) => !search || item.name.toLocaleLowerCase().includes(search))
   rows.sort((a, b) => a.sortNo - b.sortNo || a.id - b.id)
   const hasFilter = Boolean(search || type === 'ROBOT_PART' && supplierId)
   const activeSuppliers = suppliers.filter((item) => item.status === 'ACTIVE')
@@ -152,7 +159,7 @@ export default function Dictionaries() {
 
   const editingPart = editing && isRobotPart(editing) ? editing : null
   return <Card className="page-card page-card--table dictionary-page">
-    <div className="page-heading"><div><h1>数据字典</h1><p>维护 Robot 料号、对应型号和项目优先级</p></div></div>
+    <div className="page-heading"><div><h1>数据字典</h1><p>维护 Robot 类型、Robot 料号及对应型号和项目优先级</p></div></div>
     <Tabs className="dictionary-tabs" activeTab={type} onChange={(value) => { setType(value as TabType); setKeyword(''); setSupplierId(undefined); setOpen(false); setEditing(null) }}>{TYPES.map((item) => <Tabs.TabPane key={item.key} title={item.name} />)}</Tabs>
     <div className="page-toolbar responsive-toolbar dictionary-toolbar">
       <Space wrap>
@@ -168,7 +175,7 @@ export default function Dictionaries() {
           <Form.Item field="supplierId" label="Robot 厂商" rules={[{ required: true, message: '请选择 Robot 厂商' }]} help={editingPart?.inUse ? '已被项目引用，厂商、料号和型号不可修改。' : undefined}><Select placeholder="选择 Robot 厂商" showSearch disabled={!!editingPart?.inUse} options={suppliers.filter((item) => item.status === 'ACTIVE' || item.id === editingPart?.supplierId).map((item) => ({ label: `${item.name}${item.status === 'ACTIVE' ? '' : '（已停用）'}`, value: item.id }))} /></Form.Item>
           <Form.Item field="partNumber" label="Robot 料号" rules={[{ required: true, message: '请输入 Robot 料号' }, { validator: (value, callback) => callback(!value?.trim() || Array.from(value.trim()).length > 128 ? 'Robot 料号需为 1–128 个字符' : undefined) }]}><Input placeholder="输入 Robot 料号" disabled={!!editingPart?.inUse} maxLength={128} showWordLimit /></Form.Item>
           <Form.Item field="model" label="Robot 型号" rules={[{ required: true, message: '请输入 Robot 型号' }, { validator: (value, callback) => callback(!value?.trim() || Array.from(value.trim()).length > 512 ? 'Robot 型号需为 1–512 个字符' : undefined) }]}><Input.TextArea placeholder="输入该料号对应的完整型号" disabled={!!editingPart?.inUse} autoSize={{ minRows: 2, maxRows: 5 }} maxLength={512} showWordLimit wordLimitPosition="outside" /></Form.Item>
-        </> : <Form.Item field="name" label="名称" rules={[{ required: true, message: '请输入名称' }, { validator: (value, callback) => callback(!value?.trim() || Array.from(value.trim()).length > 128 ? '名称需为 1–128 个字符' : undefined) }]}><Input placeholder="优先级" /></Form.Item>}
+        </> : <Form.Item field="name" label="名称" rules={[{ required: true, message: '请输入名称' }, { validator: (value, callback) => callback(!value?.trim() || Array.from(value.trim()).length > 128 ? '名称需为 1–128 个字符' : undefined) }]}><Input placeholder={label} /></Form.Item>}
         <Form.Item field="sortNo" label="排序号"><InputNumber min={0} max={100000} precision={0} style={{ width: '100%' }} /></Form.Item>
         <Form.Item field="enabled" label="启用" triggerPropName="checked"><Switch /></Form.Item>
       </Form>

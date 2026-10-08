@@ -18,6 +18,7 @@ public sealed class ProjectGroup
     public ulong? ResponsibleUserId { get; set; }
     public ulong? SectionId { get; set; }
     public ulong? PriorityId { get; set; }
+    public ulong? RobotTypeId { get; set; }
     public DateOnly? ExpectedCompletionDate { get; set; }
     public DateTime? CompletedAt { get; set; }
     public DateTime CreatedAt { get; set; }
@@ -63,6 +64,7 @@ public sealed class Project
     public ulong? ResponsibleUserId { get; set; }
     public ulong? SectionId { get; set; }
     public ulong? PriorityId { get; set; }
+    public ulong? RobotTypeId { get; set; }
     public DateOnly? ExpectedCompletionDate { get; set; }
 }
 
@@ -166,6 +168,7 @@ public sealed class ProjectGroupConfig : IEntityTypeConfiguration<ProjectGroup>
         b.Property(x => x.ResponsibleUserId).HasColumnName("responsible_user_id");
         b.Property(x => x.SectionId).HasColumnName("section_id");
         b.Property(x => x.PriorityId).HasColumnName("priority_id");
+        b.Property(x => x.RobotTypeId).HasColumnName("robot_type_id");
         b.Property(x => x.ExpectedCompletionDate).HasColumnName("expected_completion_date").HasColumnType("date");
         b.Property(x => x.CompletedAt).HasColumnName("completed_at").HasColumnType("datetime(3)");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
@@ -179,8 +182,10 @@ public sealed class ProjectGroupConfig : IEntityTypeConfiguration<ProjectGroup>
         b.HasIndex(x => x.RobotPartId).HasDatabaseName("idx_project_groups_robot_part");
         b.HasIndex(x => x.SectionId).HasDatabaseName("fk_project_groups_section");
         b.HasIndex(x => x.PriorityId).HasDatabaseName("fk_project_groups_priority");
+        b.HasIndex(x => x.RobotTypeId).HasDatabaseName("fk_project_groups_robot_type");
         b.HasOne<User>().WithMany().HasForeignKey(x => x.CreatedBy).HasConstraintName("fk_project_groups_created_by").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<ProjectDictionary>().WithMany().HasForeignKey(x => x.PriorityId).HasConstraintName("fk_project_groups_priority").OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProjectDictionary>().WithMany().HasForeignKey(x => x.RobotTypeId).HasConstraintName("fk_project_groups_robot_type").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<User>().WithMany().HasForeignKey(x => x.ResponsibleUserId).HasConstraintName("fk_project_groups_responsible_user").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<RobotPart>().WithMany().HasForeignKey(x => x.RobotPartId).HasConstraintName("fk_project_groups_robot_part").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<Department>().WithMany().HasForeignKey(x => x.SectionId).HasConstraintName("fk_project_groups_section").OnDelete(DeleteBehavior.Restrict);
@@ -250,6 +255,7 @@ public sealed class ProjectConfig : IEntityTypeConfiguration<Project>
         b.Property(x => x.ResponsibleUserId).HasColumnName("responsible_user_id");
         b.Property(x => x.SectionId).HasColumnName("section_id");
         b.Property(x => x.PriorityId).HasColumnName("priority_id");
+        b.Property(x => x.RobotTypeId).HasColumnName("robot_type_id");
         b.Property(x => x.ExpectedCompletionDate).HasColumnName("expected_completion_date").HasColumnType("date");
         b.HasIndex(x => x.Name).IsUnique().HasDatabaseName("uk_projects_name");
         b.HasIndex(x => x.SupplierId).HasDatabaseName("idx_projects_supplier");
@@ -258,10 +264,12 @@ public sealed class ProjectConfig : IEntityTypeConfiguration<Project>
         b.HasIndex(x => x.ResponsibleUserId).HasDatabaseName("idx_projects_responsible_user");
         b.HasIndex(x => x.SectionId).HasDatabaseName("idx_projects_section");
         b.HasIndex(x => x.PriorityId).HasDatabaseName("idx_projects_priority");
+        b.HasIndex(x => x.RobotTypeId).HasDatabaseName("idx_projects_robot_type");
         b.HasIndex(x => x.ExpectedCompletionDate).HasDatabaseName("idx_projects_expected_completion");
         b.HasIndex(x => new { x.ProjectGroupId, x.Id }).HasDatabaseName("idx_projects_group");
         b.HasOne<ProjectGroup>().WithMany().HasForeignKey(x => x.ProjectGroupId).HasConstraintName("fk_projects_group").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<ProjectDictionary>().WithMany().HasForeignKey(x => x.PriorityId).HasConstraintName("fk_projects_priority").OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProjectDictionary>().WithMany().HasForeignKey(x => x.RobotTypeId).HasConstraintName("fk_projects_robot_type").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<User>().WithMany().HasForeignKey(x => x.ResponsibleUserId).HasConstraintName("fk_projects_responsible_user").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<RobotPart>().WithMany().HasForeignKey(x => x.RobotPartId).HasConstraintName("fk_projects_robot_part").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<Department>().WithMany().HasForeignKey(x => x.SectionId).HasConstraintName("fk_projects_section").OnDelete(DeleteBehavior.Restrict);

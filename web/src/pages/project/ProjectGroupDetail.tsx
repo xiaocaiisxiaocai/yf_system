@@ -367,6 +367,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
             </div>
             <div className="project-group-summary-facts">
               <span><b>Robot 厂商</b>{supplier}</span>
+              <span><b>Robot 类型</b>{display(group.robotTypeName)}</span>
               <span><b>负责人</b>{responsible}</span>
               <span><b>需求完成时间</b>{expectedCompletionDate}</span>
               <span className="project-group-inline-progress"><b>验收进度</b><Progress percent={progress} size="small" showText={false} /><em>{group.completedCount}/{group.subprojectCount}</em></span>

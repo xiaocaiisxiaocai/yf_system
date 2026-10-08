@@ -432,6 +432,7 @@ public sealed class BackgroundProjectCopyTests
         const ulong supplierId = 99101;
         const ulong partId = 99102;
         const ulong priorityId = 99103;
+        const ulong robotTypeId = 99104;
         const ulong groupId = 99111;
         const ulong projectId = 99112;
         await conn.ExecuteAsync(new CommandDefinition($"""
@@ -440,11 +441,12 @@ public sealed class BackgroundProjectCopyTests
             INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
             VALUES({partId},{supplierId},'ASYNC-PART','异步复制型号',1,'ACTIVE');
             INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
-            VALUES({priorityId},'PRIORITY','后台复制优先级',NULL,1,'ACTIVE');
-            INSERT INTO project_groups(id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
-            VALUES({groupId},'后台复制主项目','测试',{supplierId},'DRAFT',@ActorId,'M1',{partId},@ActorId,NULL,{priorityId},'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-            INSERT INTO projects(id,project_group_id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
-            VALUES({projectId},{groupId},'后台复制源项目','测试',{supplierId},'DRAFT',@ActorId,'M1',{partId},@ActorId,NULL,{priorityId},'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            VALUES({priorityId},'PRIORITY','后台复制优先级',NULL,1,'ACTIVE'),
+                  ({robotTypeId},'ROBOT_TYPE','后台复制 Robot 类型',NULL,1,'ACTIVE');
+            INSERT INTO project_groups(id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,robot_type_id,expected_completion_date,created_at,updated_at)
+            VALUES({groupId},'后台复制主项目','测试',{supplierId},'DRAFT',@ActorId,'M1',{partId},@ActorId,NULL,{priorityId},{robotTypeId},'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO projects(id,project_group_id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,robot_type_id,expected_completion_date,created_at,updated_at)
+            VALUES({projectId},{groupId},'后台复制源项目','测试',{supplierId},'DRAFT',@ActorId,'M1',{partId},@ActorId,NULL,{priorityId},{robotTypeId},'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO project_group_work_orders(project_group_id,work_order_no,sort_no) VALUES({groupId},'WO-ASYNC',0);
             INSERT INTO project_work_orders(project_id,work_order_no,sort_no) VALUES({projectId},'WO-ASYNC',0);
             """, new { ActorId = actorId }, cancellationToken: ct));

@@ -72,19 +72,25 @@ def _project_metadata(conn, supplier_id):
             "WHERE type='PRIORITY' AND status='ACTIVE' ORDER BY sort_no,id LIMIT 1"
         )
         priority = cursor.fetchone()
-    if robot_part is None or priority is None:
-        raise AssertionError("test fixture is missing an active robot part or priority")
+        cursor.execute(
+            "SELECT id FROM project_dictionaries "
+            "WHERE type='ROBOT_TYPE' AND status='ACTIVE' ORDER BY sort_no,id LIMIT 1"
+        )
+        robot_type = cursor.fetchone()
+    if robot_part is None or priority is None or robot_type is None:
+        raise AssertionError("test fixture is missing an active robot part, priority or robot type")
     return {
         "workOrderNos": ["WO-" + secrets.token_hex(5)],
         "machineModel": "隔离回归机型",
         "robotPartId": robot_part[0],
         "priorityId": priority[0],
+        "robotTypeId": robot_type[0],
         "expectedCompletionDate": "2099-12-31",
     }
 
 
 def _ensure_project_metadata(admin_client, supplier_id):
-    """Create the minimum robot-part and priority metadata in the owned database."""
+    """Create the minimum robot-part, priority and robot-type metadata in the owned database."""
     parts = admin_client.call(
         "GET", f"/api/v1/robot-parts?supplierId={supplier_id}&enabledOnly=true")
     if not parts:
@@ -101,6 +107,16 @@ def _ensure_project_metadata(admin_client, supplier_id):
         admin_client.call("POST", "/api/v1/project-dictionaries", {
             "type": "PRIORITY",
             "name": "隔离回归优先级",
+            "parentId": None,
+            "sortNo": 10,
+            "enabled": True,
+        })
+    robot_types = admin_client.call(
+        "GET", "/api/v1/project-dictionaries?type=ROBOT_TYPE&enabledOnly=true")
+    if not robot_types:
+        admin_client.call("POST", "/api/v1/project-dictionaries", {
+            "type": "ROBOT_TYPE",
+            "name": "隔离回归 Robot 类型",
             "parentId": None,
             "sortNo": 10,
             "enabled": True,

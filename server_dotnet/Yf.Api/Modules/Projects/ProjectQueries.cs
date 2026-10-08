@@ -27,6 +27,8 @@ internal static class ProjectQueries
         from section in sections.DefaultIfEmpty()
         join priority in db.ProjectDictionaries on project.PriorityId equals (ulong?)priority.Id into priorities
         from priority in priorities.DefaultIfEmpty()
+        join robotType in db.ProjectDictionaries on project.RobotTypeId equals (ulong?)robotType.Id into robotTypes
+        from robotType in robotTypes.DefaultIfEmpty()
         select new ProjectRow
         {
             Id = project.Id,
@@ -57,6 +59,8 @@ internal static class ProjectQueries
             SectionName = section.Name,
             PriorityId = project.PriorityId,
             PriorityName = priority.Name,
+            RobotTypeId = project.RobotTypeId,
+            RobotTypeName = robotType.Name,
             ExpectedCompletionDate = project.ExpectedCompletionDate.HasValue
                 ? project.ExpectedCompletionDate.GetValueOrDefault().ToDateTime(TimeOnly.MinValue) : null,
             HasCopyHistory = db.ProjectCopies.Any(copy => copy.SourceProjectId == project.Id)

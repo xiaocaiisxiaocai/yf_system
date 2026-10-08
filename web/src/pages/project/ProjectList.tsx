@@ -24,6 +24,7 @@ interface ProjectGroupFormValues {
   machineModel?: string
   robotPartId?: number
   priorityId?: number
+  robotTypeId?: number
   expectedCompletionDate?: string
   subprojectNames?: string[]
 }
@@ -75,6 +76,7 @@ export default function ProjectList() {
   const [supplierOptionsLoading, setSupplierOptionsLoading] = useState(true)
   const [supplierOptionsError, setSupplierOptionsError] = useState(false)
   const [priorities, setPriorities] = useState<ProjectDictionaryOption[]>([])
+  const [robotTypes, setRobotTypes] = useState<ProjectDictionaryOption[]>([])
   const [metadataOptionsLoading, setMetadataOptionsLoading] = useState(false)
   const [metadataOptionsError, setMetadataOptionsError] = useState(false)
   const [robotParts, setRobotParts] = useState<RobotPart[]>([])
@@ -137,11 +139,13 @@ export default function ProjectList() {
   const loadMetadataOptions = useCallback(() => {
     const seq = ++optionsSeq.current
     setMetadataOptionsLoading(true); setMetadataOptionsError(false)
-    http.get<ApiResponses['GET /project-dictionaries']>('/project-dictionaries', {
-      params: { type: 'PRIORITY', enabledOnly: true }, quietNetworkError: true,
-    } as QuietRequestConfig).then((priorityResponse) => {
+    const dictionary = (type: 'PRIORITY' | 'ROBOT_TYPE') => http.get<ApiResponses['GET /project-dictionaries']>('/project-dictionaries', {
+      params: { type, enabledOnly: true }, quietNetworkError: true,
+    } as QuietRequestConfig)
+    Promise.all([dictionary('PRIORITY'), dictionary('ROBOT_TYPE')]).then(([priorityResponse, robotTypeResponse]) => {
       if (seq !== optionsSeq.current) return
       setPriorities(expectOptionList<ProjectDictionaryOption>(priorityResponse.data))
+      setRobotTypes(expectOptionList<ProjectDictionaryOption>(robotTypeResponse.data))
     }).catch(() => { if (seq === optionsSeq.current) setMetadataOptionsError(true) })
       .finally(() => { if (seq === optionsSeq.current) setMetadataOptionsLoading(false) })
   }, [])
@@ -177,7 +181,7 @@ export default function ProjectList() {
     form.setFieldsValue({
       name: group.name, description: group.description, supplierId: group.supplierId, workOrderNos: group.workOrderNos,
       machineModel: group.machineModel ?? undefined, robotPartId: group.robotPartId ?? undefined,
-      priorityId: group.priorityId ?? undefined, expectedCompletionDate: group.expectedCompletionDate ?? undefined,
+      priorityId: group.priorityId ?? undefined, robotTypeId: group.robotTypeId ?? undefined, expectedCompletionDate: group.expectedCompletionDate ?? undefined,
     })
     setSelectedSupplierId(group.supplierId); setSelectedRobotPartId(group.robotPartId ?? null); loadMetadataOptions()
     loadRobotParts(group.supplierId)
@@ -207,11 +211,16 @@ export default function ProjectList() {
   const priorityOptions = [...priorities]
   if (editing?.priorityId && !priorityOptions.some((item) => item.id === editing.priorityId))
     priorityOptions.push({ id: editing.priorityId, type: 'PRIORITY', name: editing.priorityName || '历史优先级', sortNo: 0, enabled: false, parentId: null, parentName: null, inUse: true })
+  const robotTypeOptions = [...robotTypes]
+  if (editing?.robotTypeId && !robotTypeOptions.some((item) => item.id === editing.robotTypeId))
+    robotTypeOptions.push({ id: editing.robotTypeId, type: 'ROBOT_TYPE', name: editing.robotTypeName || '历史 Robot 类型', sortNo: 0, enabled: false, parentId: null, parentName: null, inUse: true })
 
   const missingCreateOptions: { message: string; path: string; permission: string; action: string }[] = []
   if (!supplierOptionsLoading && !supplierOptionsError && suppliers.length === 0)
     missingCreateOptions.push({ message: '暂无启用的供应商，请先新增或启用供应商。', path: '/suppliers', permission: 'supplier:manage', action: '维护供应商' })
   if (!metadataOptionsLoading && !metadataOptionsError) {
+    if (!robotTypes.length)
+      missingCreateOptions.push({ message: '暂无启用的 Robot 类型，请在数据字典中维护。', path: '/system/dictionaries', permission: 'dict:manage', action: '维护 Robot 类型' })
     if (!priorities.length)
       missingCreateOptions.push({ message: '暂无启用的优先级，请在数据字典中维护。', path: '/system/dictionaries', permission: 'dict:manage', action: '维护优先级' })
   }
@@ -220,6 +229,9 @@ export default function ProjectList() {
   const robotPartOptionsRequired = !editing || selectedRobotPartId !== null
   const submitOptionsBlocked = metadataOptionsLoading || metadataOptionsError || robotPartOptionsRequired && (robotPartsLoading || robotPartsError)
     || (!editing && (supplierOptionsLoading || supplierOptionsError || missingCreateOptions.length > 0))
+  const createOptionsBusy = supplierOptionsLoading || metadataOptionsLoading
+  // 只在厂商加载失败或缺少必需基础数据时提供手动刷新（优先级/料号失败另有“重试加载选项”）；正常情况下不显示。
+  const createOptionsNeedRefresh = supplierOptionsError || missingCreateOptions.length > 0
   const refreshCreateOptions = () => {
     loadSupplierOptions(); loadMetadataOptions()
     if (selectedSupplierId) loadRobotParts(selectedSupplierId)
@@ -229,9 +241,6 @@ export default function ProjectList() {
     if (saveInFlight.current || submitOptionsBlocked) return
     saveInFlight.current = true; setSaving(true)
     try {
-  const createOptionsBusy = supplierOptionsLoading || metadataOptionsLoading
-  // 只在厂商加载失败或缺少必需基础数据时提供手动刷新（优先级/料号失败另有“重试加载选项”）；正常情况下不显示。
-  const createOptionsNeedRefresh = supplierOptionsError || missingCreateOptions.length > 0
       const values = await form.validate().catch(() => null) as ProjectGroupFormValues | null
       if (!values) return
       const robotPartId = nullableNumber(values.robotPartId)
@@ -241,7 +250,7 @@ export default function ProjectList() {
       const payload = {
         name: values.name, description: values.description, supplierId: Number(values.supplierId),
         workOrderNos: normalizeList(values.workOrderNos), machineModel: values.machineModel?.trim() || null,
-        robotPartId, priorityId: nullableNumber(values.priorityId),
+        robotPartId, priorityId: nullableNumber(values.priorityId), robotTypeId: nullableNumber(values.robotTypeId),
         expectedCompletionDate: values.expectedCompletionDate || null,
         subprojectNames: editing ? undefined : normalizeList(values.subprojectNames),
       }
@@ -265,6 +274,7 @@ export default function ProjectList() {
     { title: '工令号', dataIndex: 'workOrderNos', width: 190, ellipsis: true, render: (values?: string[]) => displayText(values?.join('、')) },
     { title: '机型', dataIndex: 'machineModel', width: 100, ellipsis: true, render: displayText },
     { title: 'Robot 厂商', dataIndex: 'supplierName', width: 110, ellipsis: true, render: displayText },
+    { title: 'Robot 类型', dataIndex: 'robotTypeName', width: 100, ellipsis: true, render: displayText },
     { title: 'Robot 料号', dataIndex: 'robotPartNumber', width: 120, ellipsis: true, render: displayText },
     { title: 'Robot 型号', dataIndex: 'robotModelName', width: 110, ellipsis: true, render: (value?: string | null) => <Tooltip content={displayText(value)}><span>{displayText(value)}</span></Tooltip> },
     { title: '负责人', dataIndex: 'responsibleUserName', width: 88, ellipsis: true, render: displayText },
@@ -322,8 +332,9 @@ export default function ProjectList() {
           <Form.Item className="form-grid-full" label="工令号" field="workOrderNos" rules={[{ required: true, message: '请至少填写一个工令号' }, { validator: (value, callback) => listRule('工令号', WORK_ORDER_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入工令号后按回车，可填写多个" /></Form.Item>
           <Form.Item label="机型" field="machineModel" rules={[{ required: true, message: '请填写机型' }, textLengthRule('机型', 128)]}><Input maxLength={128} showWordLimit placeholder="请输入机型" /></Form.Item>
           <Form.Item label="Robot 厂商" field="supplierId" rules={[{ required: true, message: '请选择 Robot 厂商' }]}><Select showSearch placeholder="选择 Robot 厂商" filterOption={optionFilter} loading={supplierOptionsLoading} disabled={!!editing || supplierOptionsLoading || supplierOptionsError} onChange={(value) => changeSupplier(value as number | undefined)}>{supplierFormOptions.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select></Form.Item>
+          <Form.Item label="Robot 类型" field="robotTypeId" rules={[{ required: true, message: '请选择 Robot 类型' }]}><Select allowClear showSearch placeholder="选择 Robot 类型" loading={metadataOptionsLoading} disabled={metadataOptionsLoading || metadataOptionsError} filterOption={optionFilter}>{robotTypeOptions.map((item) => <Select.Option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}{item.enabled ? '' : '（已停用）'}</Select.Option>)}</Select></Form.Item>
           <Form.Item label="Robot 料号" field="robotPartId" rules={editing && !editing.robotPartId ? [] : [{ required: true, message: '请选择 Robot 料号' }]} help={editing && !editing.robotPartId ? '历史项目可保留原型号；选择料号后将使用新料号对应型号。' : undefined}><Select allowClear showSearch placeholder={selectedSupplierId ? '选择 Robot 料号' : '请先选择 Robot 厂商'} loading={robotPartsLoading} disabled={!selectedSupplierId || robotPartsLoading || robotPartsError} filterOption={optionFilter} onChange={(value) => setSelectedRobotPartId(nullableNumber(value))}>{partOptions.map((item) => <Select.Option key={item.id} value={item.id} disabled={!item.enabled}>{item.partNumber}{item.enabled ? '' : '（已停用）'}</Select.Option>)}</Select></Form.Item>
-          <Form.Item label="Robot 型号（自动带出）"><Input.TextArea readOnly autoSize={{ minRows: 2, maxRows: 4 }} value={selectedPart?.model ?? (editing && !selectedRobotPartId ? editing.robotModelName ?? '' : '')} placeholder={selectedRobotPartId ? '所选料号未设置型号' : '选择 Robot 料号后自动带出'} /></Form.Item>
+          <Form.Item className="form-grid-full" label="Robot 型号（自动带出）"><Input.TextArea readOnly autoSize={{ minRows: 2, maxRows: 4 }} value={selectedPart?.model ?? (editing && !selectedRobotPartId ? editing.robotModelName ?? '' : '')} placeholder={selectedRobotPartId ? '所选料号未设置型号' : '选择 Robot 料号后自动带出'} /></Form.Item>
           <Form.Item label="负责人"><Input readOnly value={editing ? `${editing.responsibleUserName || '未设置'}${editing.responsibleUserEmployeeNo ? `（${editing.responsibleUserEmployeeNo}）` : ''}` : `${user?.realName || '当前用户'}${user?.employeeNo ? `（${user.employeeNo}）` : ''}`} /></Form.Item>
           <Form.Item label="课别" help={editing ? undefined : '按创建人的课别记录，未设置也可创建'}><Input readOnly value={editing ? editing.sectionName || '未设置' : '自动带出'} /></Form.Item>
           <Form.Item label="优先级" field="priorityId" rules={[{ required: true, message: '请选择优先级' }]}><Select allowClear showSearch placeholder="选择优先级" loading={metadataOptionsLoading} disabled={metadataOptionsLoading || metadataOptionsError} filterOption={optionFilter}>{priorityOptions.map((item) => <Select.Option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}{item.enabled ? '' : '（已停用）'}</Select.Option>)}</Select></Form.Item>
@@ -331,7 +342,7 @@ export default function ProjectList() {
           <Form.Item className="form-grid-full" label="主项目说明" field="description"><Input.TextArea rows={3} maxLength={500} showWordLimit wordLimitPosition="outside" placeholder="选填" /></Form.Item>
           <div className="form-grid-full dialog-note">所选 Robot 厂商的全部启用账号均可访问此主项目及其子项目。</div>
           {(metadataOptionsError || robotPartsError) && <div className="form-grid-full dialog-note dialog-note--danger">
-            <span>优先级或 Robot 料号选项加载失败，请重试。</span>
+            <span>Robot 类型、优先级或 Robot 料号选项加载失败，请重试。</span>
             <Button size="small" onClick={retryMetadataOptions}>重试加载选项</Button>
           </div>}
         </Form>

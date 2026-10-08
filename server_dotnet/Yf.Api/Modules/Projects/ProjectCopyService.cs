@@ -314,6 +314,7 @@ internal sealed class ProjectCopyService(
                 ResponsibleUserId = currentGroup.ResponsibleUserId,
                 SectionId = currentGroup.SectionId,
                 PriorityId = currentGroup.PriorityId,
+                RobotTypeId = currentGroup.RobotTypeId,
                 ExpectedCompletionDate = ToDateOnly(currentGroup.ExpectedCompletionDate),
             };
             db.Projects.Add(targetProject);
@@ -402,7 +403,8 @@ internal sealed class ProjectCopyService(
                 target = new { id = targetProjectId, name = targetName, status = ProjectStatuses.Draft,
                     currentGroup.SupplierId, currentGroup.WorkOrderNos, currentGroup.MachineModel,
                     currentGroup.RobotPartId, currentGroup.ResponsibleUserId,
-                    currentGroup.SectionId, currentGroup.PriorityId, currentGroup.ExpectedCompletionDate },
+                    currentGroup.SectionId, currentGroup.PriorityId, currentGroup.RobotTypeId,
+                    currentGroup.ExpectedCompletionDate },
                 fileCount = prepared.Count, totalBytes,
             }, ip, ct);
             await groupStatus.RecalculateAsync(
@@ -655,32 +657,32 @@ internal sealed class ProjectCopyService(
     {
         await ValidateCopyMetadataAsync(db, source.WorkOrderNos, source.MachineModel, source.SupplierId,
             source.RobotPartId, source.ResponsibleUserId, source.SectionId, source.PriorityId,
-            source.ExpectedCompletionDate, "源项目", ct);
+            source.RobotTypeId, source.ExpectedCompletionDate, "源项目", ct);
     }
 
     private static async Task ValidateGroupAsync(YfDbContext db, CopyGroupRow group, CancellationToken ct)
     {
         await ValidateCopyMetadataAsync(db, group.WorkOrderNos, group.MachineModel, group.SupplierId,
             group.RobotPartId, group.ResponsibleUserId, group.SectionId, group.PriorityId,
-            group.ExpectedCompletionDate, "主项目", ct);
+            group.RobotTypeId, group.ExpectedCompletionDate, "主项目", ct);
     }
 
     private static async Task ValidateCopyMetadataAsync(
         YfDbContext db, IReadOnlyCollection<string> workOrderNos, string? machineModel, ulong supplierId,
-        ulong? robotPartId, ulong? ownerId, ulong? sectionId, ulong? priorityId,
+        ulong? robotPartId, ulong? ownerId, ulong? sectionId, ulong? priorityId, ulong? robotTypeId,
         DateTime? expectedCompletionDate, string label, CancellationToken ct)
     {
         if (workOrderNos.Count == 0 || string.IsNullOrWhiteSpace(machineModel)
             || robotPartId is null or 0 || ownerId is null or 0
-            || priorityId is null or 0 || expectedCompletionDate is null)
+            || priorityId is null or 0 || robotTypeId is null or 0 || expectedCompletionDate is null)
             throw ApiException.Conflict($"{label}资料不完整，请先补齐必填信息后再复制");
         if (!await ValidMetadataAsync(db, supplierId, ownerId.Value, sectionId,
-                robotPartId.Value, priorityId.Value, ct))
+                robotPartId.Value, priorityId.Value, robotTypeId.Value, ct))
             throw ApiException.Conflict($"{label}关联资料已失效，请先更新负责人、课别、供应商或数据字典后再复制");
     }
 
     private static async Task<bool> ValidMetadataAsync(YfDbContext db, ulong supplierId, ulong ownerId, ulong? sectionId,
-        ulong robotPartId, ulong priorityId, CancellationToken ct)
+        ulong robotPartId, ulong priorityId, ulong robotTypeId, CancellationToken ct)
     {
         if (!await db.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == AccountStatuses.Active, ct))
             return false;
@@ -690,8 +692,11 @@ internal sealed class ProjectCopyService(
         if (!await db.RobotParts.AnyAsync(part => part.Id == robotPartId
                 && part.SupplierId == supplierId && part.Status == AccountStatuses.Active, ct))
             return false;
-        return await db.ProjectDictionaries.AnyAsync(priority => priority.Id == priorityId
-            && priority.Type == ProjectDictionaryTypes.Priority && priority.Status == AccountStatuses.Active, ct);
+        if (!await db.ProjectDictionaries.AnyAsync(priority => priority.Id == priorityId
+                && priority.Type == ProjectDictionaryTypes.Priority && priority.Status == AccountStatuses.Active, ct))
+            return false;
+        return await db.ProjectDictionaries.AnyAsync(robotType => robotType.Id == robotTypeId
+            && robotType.Type == ProjectDictionaryTypes.RobotType && robotType.Status == AccountStatuses.Active, ct);
     }
 
     private static async Task<ProjectRow> LoadProjectAsync(YfDbContext db, ulong projectId, CancellationToken ct)
@@ -717,6 +722,7 @@ internal sealed class ProjectCopyService(
             ResponsibleUserId = group.ResponsibleUserId,
             SectionId = group.SectionId,
             PriorityId = group.PriorityId,
+            RobotTypeId = group.RobotTypeId,
             ExpectedCompletionDate = group.ExpectedCompletionDate.HasValue
                 ? group.ExpectedCompletionDate.Value.ToDateTime(TimeOnly.MinValue) : null,
             UpdatedAt = group.UpdatedAt,
@@ -757,13 +763,14 @@ internal sealed class ProjectCopyService(
         && a.ConfirmSide == b.ConfirmSide && a.UpdatedAt == b.UpdatedAt && a.MachineModel == b.MachineModel
         && a.RobotPartId == b.RobotPartId
         && a.ResponsibleUserId == b.ResponsibleUserId && a.SectionId == b.SectionId && a.PriorityId == b.PriorityId
+        && a.RobotTypeId == b.RobotTypeId
         && a.ExpectedCompletionDate == b.ExpectedCompletionDate && a.WorkOrderNos.SequenceEqual(b.WorkOrderNos, StringComparer.Ordinal);
 
     private static bool SameGroupSnapshot(CopyGroupRow a, CopyGroupRow b) => a.Id == b.Id
         && a.SupplierId == b.SupplierId && a.Status == b.Status && a.UpdatedAt == b.UpdatedAt
         && a.MachineModel == b.MachineModel && a.RobotPartId == b.RobotPartId
         && a.LegacyRobotModelName == b.LegacyRobotModelName && a.ResponsibleUserId == b.ResponsibleUserId
-        && a.SectionId == b.SectionId && a.PriorityId == b.PriorityId
+        && a.SectionId == b.SectionId && a.PriorityId == b.PriorityId && a.RobotTypeId == b.RobotTypeId
         && a.ExpectedCompletionDate == b.ExpectedCompletionDate
         && a.WorkOrderNos.SequenceEqual(b.WorkOrderNos, StringComparer.Ordinal);
 
@@ -1034,7 +1041,8 @@ internal sealed class ProjectCopyService(
 
     private static object Snapshot(ProjectRow project) => new { id = project.Id, project.Name, project.Status,
         project.SupplierId, project.WorkOrderNos, project.MachineModel, project.RobotPartId,
-        project.ResponsibleUserId, project.SectionId, project.PriorityId, project.ExpectedCompletionDate };
+        project.ResponsibleUserId, project.SectionId, project.PriorityId, project.RobotTypeId,
+        project.ExpectedCompletionDate };
 
     private static ProjectCopyHistoryItem HistoryItem(CopyHistoryRow row, ulong projectId, string name) => new(row.CopyId,
         projectId, name, row.FileCount, row.TotalBytes, row.CopiedByName, ProjectJson.Utc(row.CreatedAt));
@@ -1068,6 +1076,7 @@ internal sealed class ProjectCopyService(
         public ulong? ResponsibleUserId { get; init; }
         public ulong? SectionId { get; init; }
         public ulong? PriorityId { get; init; }
+        public ulong? RobotTypeId { get; init; }
         public DateTime? ExpectedCompletionDate { get; init; }
         public DateTime UpdatedAt { get; init; }
     }

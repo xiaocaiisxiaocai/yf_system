@@ -75,6 +75,26 @@ describe('Dictionaries migrated behavior', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
+  it('robot type is the first, default tab and saves as a ROBOT_TYPE dictionary entry', async () => {
+    const user = userEvent.setup()
+    render(<Dictionaries />)
+
+    const tabs = Array.from(document.querySelectorAll('.arco-tabs-header-title-text')).map((tab) => tab.textContent)
+    expect(tabs).toEqual(['Robot 类型', 'Robot 料号', '优先级'])
+    await waitFor(() => expect(document.querySelector<HTMLButtonElement>('.dictionary-add')).toBeEnabled())
+    expect(document.querySelector('.dictionary-add')).toHaveAccessibleName('新增 Robot 类型')
+    expect(mocks.get).toHaveBeenCalledWith('/project-dictionaries', { params: { type: 'ROBOT_TYPE' } })
+
+    await user.click(document.querySelector<HTMLButtonElement>('.dictionary-add')!)
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByPlaceholderText('Robot 类型'), ' 六轴 ')
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/project-dictionaries', expect.objectContaining({
+      type: 'ROBOT_TYPE',
+      name: '六轴',
+    })))
+  })
+
   it('dictionary loading uses config-scoped supplier options and recovers without admin supplier access', async () => {
     let failed = true
     mocks.get.mockImplementation((url: string) => {
@@ -103,6 +123,7 @@ describe('Dictionaries migrated behavior', () => {
     const user = userEvent.setup()
     render(<Dictionaries />)
 
+    await user.click(screen.getByText('Robot 料号', { selector: '.arco-tabs-header-title-text' }))
     const row = await screen.findByRole('row', { name: /NB80-9\/2\.2/ })
     expect(within(row).getByRole('button', { name: '删除' })).toBeDisabled()
     await user.click(within(row).getByRole('button', { name: '编辑' }))

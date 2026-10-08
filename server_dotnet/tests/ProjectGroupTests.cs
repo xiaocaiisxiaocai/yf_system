@@ -30,7 +30,8 @@ public sealed class ProjectGroupTests
             INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
             VALUES(8402,8101,'GROUP-PART','主项目型号',1,'ACTIVE');
             INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
-            VALUES(8403,'PRIORITY','主项目优先级',NULL,1,'ACTIVE');
+            VALUES(8403,'PRIORITY','主项目优先级',NULL,1,'ACTIVE'),
+                  (1008403,'ROBOT_TYPE','主项目优先级-Robot类型',NULL,1,'ACTIVE');
             """, ct);
 
         var actor = new CurrentUser(8301, "group-owner", "INTERNAL", null);
@@ -48,6 +49,7 @@ public sealed class ProjectGroupTests
             MachineModel = "机型-G",
             RobotPartId = 8402,
             PriorityId = 8403,
+            RobotTypeId = 1008403,
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["子项目-A", "子项目-B"],
         }, null, ct));
@@ -180,7 +182,8 @@ public sealed class ProjectGroupTests
             INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
             VALUES(8505,8501,'FREEZE-PART','冻结型号',1,'ACTIVE');
             INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
-            VALUES(8506,'PRIORITY','冻结优先级',NULL,1,'ACTIVE');
+            VALUES(8506,'PRIORITY','冻结优先级',NULL,1,'ACTIVE'),
+                  (1008506,'ROBOT_TYPE','冻结优先级-Robot类型',NULL,1,'ACTIVE');
             """, ct);
 
         var actor = new CurrentUser(8503, "freeze-owner", "INTERNAL", null);
@@ -196,6 +199,7 @@ public sealed class ProjectGroupTests
             MachineModel = "旧机型",
             RobotPartId = 8505,
             PriorityId = 8506,
+            RobotTypeId = 1008506,
             ExpectedCompletionDate = "2026-12-01",
             SubprojectNames = ["已完成子项目", "活动子项目"],
         }, null, ct));
@@ -222,6 +226,7 @@ public sealed class ProjectGroupTests
             MachineModel = "新机型",
             RobotPartId = 8505,
             PriorityId = 8506,
+            RobotTypeId = 1008506,
             ExpectedCompletionDate = "2027-01-01",
         }, null, ct);
 
@@ -257,6 +262,7 @@ public sealed class ProjectGroupTests
             MachineModel = "新机型",
             RobotPartId = 8505,
             PriorityId = 8506,
+            RobotTypeId = 1008506,
             ExpectedCompletionDate = "2027-01-01",
         }, null, ct);
         Assert.Equal(auditCount, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
@@ -284,7 +290,8 @@ public sealed class ProjectGroupTests
             INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
             VALUES(8605,8601,'EDIT-PART','编辑型号',1,'ACTIVE');
             INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
-            VALUES(8606,'PRIORITY','编辑优先级',NULL,1,'ACTIVE');
+            VALUES(8606,'PRIORITY','编辑优先级',NULL,1,'ACTIVE'),
+                  (1008606,'ROBOT_TYPE','编辑优先级-Robot类型',NULL,1,'ACTIVE');
             """, ct);
         var actor = new CurrentUser(8603, "edit-owner", "INTERNAL", null);
         var audit = new AuditService([]);
@@ -300,6 +307,7 @@ public sealed class ProjectGroupTests
             MachineModel = "编辑机型",
             RobotPartId = 8605,
             PriorityId = 8606,
+            RobotTypeId = 1008606,
             ExpectedCompletionDate = "2026-12-01",
             SubprojectNames = ["编辑并发子项目"],
         }, null, ct));
@@ -392,7 +400,8 @@ public sealed class ProjectGroupTests
             INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
             VALUES(8804,8801,'DELETE-COMPLETE-PART','删除完成型号',1,'ACTIVE');
             INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
-            VALUES(8805,'PRIORITY','删除完成优先级',NULL,1,'ACTIVE');
+            VALUES(8805,'PRIORITY','删除完成优先级',NULL,1,'ACTIVE'),
+                  (1008805,'ROBOT_TYPE','删除完成优先级-Robot类型',NULL,1,'ACTIVE');
             """, ct);
 
         var actor = new CurrentUser(8803, "delete-complete-owner", "INTERNAL", null);
@@ -409,6 +418,7 @@ public sealed class ProjectGroupTests
             MachineModel = "删除完成机型",
             RobotPartId = 8804,
             PriorityId = 8805,
+            RobotTypeId = 1008805,
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["已验收子项目", "待删除子项目"],
         }, null, ct));
@@ -460,7 +470,8 @@ public sealed class ProjectGroupTests
             INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
             VALUES(8904,8901,'REALTIME-GROUP-PART','实时型号',1,'ACTIVE');
             INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
-            VALUES(8905,'PRIORITY','实时优先级',NULL,1,'ACTIVE');
+            VALUES(8905,'PRIORITY','实时优先级',NULL,1,'ACTIVE'),
+                  (1008905,'ROBOT_TYPE','实时优先级-Robot类型',NULL,1,'ACTIVE');
             """, ct);
 
         var actor = new CurrentUser(8903, "realtime-group-owner", "INTERNAL", null);
@@ -478,6 +489,7 @@ public sealed class ProjectGroupTests
             MachineModel = "实时机型",
             RobotPartId = 8904,
             PriorityId = 8905,
+            RobotTypeId = 1008905,
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["实时子项目一", "实时子项目二"],
         };
@@ -498,6 +510,7 @@ public sealed class ProjectGroupTests
             MachineModel = request.MachineModel,
             RobotPartId = request.RobotPartId,
             PriorityId = request.PriorityId,
+            RobotTypeId = request.RobotTypeId,
             ExpectedCompletionDate = request.ExpectedCompletionDate,
         }, null, ct);
         Assert.Equal(ids.Select(id => (id, RealtimeChangeKinds.Project)).ToArray(),

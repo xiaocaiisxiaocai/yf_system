@@ -66,7 +66,7 @@ export type CreateProjectCopyJobRequest = Omit<Api.ProjectCopyRequest, 'name' | 
   idempotencyKey: string
 }
 
-export type ProjectDictionaryType = 'PRIORITY'
+export type ProjectDictionaryType = 'PRIORITY' | 'ROBOT_TYPE'
 
 export type ProjectDictionaryOption = Omit<Api.ProjectDictionaryResponse, 'type'> & { type: ProjectDictionaryType }
 

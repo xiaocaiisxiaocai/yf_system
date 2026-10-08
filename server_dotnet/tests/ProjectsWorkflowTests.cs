@@ -40,15 +40,16 @@ public sealed class ProjectsWorkflowTests
     }
 
     [Fact]
-    public void ProjectDictionaryOnlyAcceptsPriority()
+    public void ProjectDictionaryOnlyAcceptsPriorityAndRobotType()
     {
         Assert.Equal("PRIORITY", ProjectDictionaryTypes.Normalize(" priority "));
+        Assert.Equal("ROBOT_TYPE", ProjectDictionaryTypes.Normalize(" robot_type "));
 
         foreach (var type in new string?[] { null, "ROBOT_VENDOR", "ROBOT_MODEL" })
         {
             var error = Assert.Throws<ApiException>(() => ProjectDictionaryTypes.Normalize(type));
             Assert.Equal(400, error.Status);
-            Assert.Equal("type 仅支持 PRIORITY", error.Message);
+            Assert.Equal("type 仅支持 PRIORITY 或 ROBOT_TYPE", error.Message);
         }
     }
 

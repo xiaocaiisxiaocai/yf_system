@@ -31,7 +31,8 @@ public sealed class ProjectStartPrerequisiteTests
             INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
             VALUES(9705,9701,'START-PART','开始条件测试型号',1,'ACTIVE');
             INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
-            VALUES(9706,'PRIORITY','开始条件测试优先级',NULL,1,'ACTIVE');
+            VALUES(9706,'PRIORITY','开始条件测试优先级',NULL,1,'ACTIVE'),
+                  (1009706,'ROBOT_TYPE','开始条件测试优先级-Robot类型',NULL,1,'ACTIVE');
             """, ct);
 
         var actor = new CurrentUser(9704, "start-owner", UserTypes.Internal, null);
@@ -48,6 +49,7 @@ public sealed class ProjectStartPrerequisiteTests
             MachineModel = "开始条件测试机型",
             RobotPartId = 9705,
             PriorityId = 9706,
+            RobotTypeId = 1009706,
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["开始条件子项目", "终止重启子项目"],
         }, null, ct);

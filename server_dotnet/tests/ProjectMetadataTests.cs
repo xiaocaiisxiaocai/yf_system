@@ -34,6 +34,14 @@ public sealed class ProjectMetadataTests
 
         var priorityId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
             "SELECT id FROM project_dictionaries WHERE type='PRIORITY' AND name='高'", cancellationToken: ct));
+        // Robot types are not seeded: they are maintained like any dictionary entry.
+        var robotTypeId = Id(await dictionaries.CreateAsync(conn, actor, new()
+        {
+            Type = " robot_type ",
+            Name = " 六轴 ",
+            SortNo = 10,
+            Enabled = true,
+        }, null, ct));
         var partId = Id(await robotParts.CreateAsync(conn, actor, new()
         {
             SupplierId = 8001,
@@ -90,10 +98,11 @@ public sealed class ProjectMetadataTests
             MachineModel = "M1",
             RobotPartId = partId,
             PriorityId = priorityId,
+            RobotTypeId = robotTypeId,
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["必填校验子项目"],
         };
-        foreach (var field in new[] { "workOrderNos", "machineModel", "robotPartId", "priorityId", "expectedCompletionDate" })
+        foreach (var field in new[] { "workOrderNos", "machineModel", "robotPartId", "priorityId", "robotTypeId", "expectedCompletionDate" })
         {
             var node = JsonSerializer.SerializeToNode(complete)!;
             node[field] = null;
@@ -101,6 +110,13 @@ public sealed class ProjectMetadataTests
             var error = await Assert.ThrowsAsync<ApiException>(() => groups.CreateAsync(conn, actor, missing, null, ct));
             Assert.Equal(400, error.Status);
         }
+
+        // A priority id is a dictionary entry of the wrong type for robotTypeId.
+        var notRobotType = CopyRequest(complete, name: "类型不匹配项目", robotTypeId: priorityId);
+        var notRobotTypeError = await Assert.ThrowsAsync<ApiException>(() =>
+            groups.CreateAsync(conn, actor, notRobotType, null, ct));
+        Assert.Equal(400, notRobotTypeError.Status);
+        Assert.Equal("Robot 类型不存在或类型不匹配", notRobotTypeError.Message);
 
         var wrongSupplier = CopyRequest(complete, otherSupplierPartId, "供应商不匹配项目");
         var wrongSupplierError = await Assert.ThrowsAsync<ApiException>(() =>
@@ -117,6 +133,7 @@ public sealed class ProjectMetadataTests
             MachineModel = " 机型-X ",
             RobotPartId = partId,
             PriorityId = priorityId,
+            RobotTypeId = robotTypeId,
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["元数据子项目"],
         }, null, ct);
@@ -131,6 +148,8 @@ public sealed class ProjectMetadataTests
             Assert.Equal(partId, root.GetProperty("robotPartId").GetUInt64());
             Assert.Equal("RP-001", root.GetProperty("robotPartNumber").GetString());
             Assert.Equal("Robot Model A", root.GetProperty("robotModelName").GetString());
+            Assert.Equal(robotTypeId, root.GetProperty("robotTypeId").GetUInt64());
+            Assert.Equal("六轴", root.GetProperty("robotTypeName").GetString());
             Assert.Equal(actor.Id, root.GetProperty("responsibleUserId").GetUInt64());
             Assert.Equal(JsonValueKind.Null, root.GetProperty("sectionId").ValueKind);
             Assert.Equal(JsonValueKind.Null, root.GetProperty("sectionName").ValueKind);
@@ -166,6 +185,7 @@ public sealed class ProjectMetadataTests
             MachineModel = "机型-X",
             RobotPartId = partId,
             PriorityId = priorityId,
+            RobotTypeId = robotTypeId,
             ExpectedCompletionDate = "2026-12-31",
         }, null, ct);
         using (var updatedJson = Json(updated))
@@ -194,6 +214,21 @@ public sealed class ProjectMetadataTests
         Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() =>
             robotParts.DeleteAsync(conn, actor, partId, null, ct))).Status);
 
+        // A referenced robot type can be disabled but not deleted; a disabled one is refused for new projects.
+        Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() =>
+            dictionaries.DeleteAsync(conn, actor, robotTypeId, null, ct))).Status);
+        await dictionaries.UpdateAsync(conn, actor, robotTypeId, new()
+        {
+            Type = "ROBOT_TYPE",
+            Name = "六轴",
+            SortNo = 10,
+            Enabled = false,
+        }, null, ct);
+        var disabledRobotType = await Assert.ThrowsAsync<ApiException>(() =>
+            groups.CreateAsync(conn, actor, CopyRequest(complete, name: "停用类型新项目"), null, ct));
+        Assert.Equal(400, disabledRobotType.Status);
+        Assert.Equal("Robot 类型已停用", disabledRobotType.Message);
+
         var oldDictionaryType = await Assert.ThrowsAsync<ApiException>(() => dictionaries.CreateAsync(conn, actor, new()
         {
             Type = "ROBOT_MODEL",
@@ -212,7 +247,7 @@ public sealed class ProjectMetadataTests
     }
 
     private static ProjectUpsertRequest CopyRequest(
-        ProjectUpsertRequest source, ulong? robotPartId = null, string? name = null) => new()
+        ProjectUpsertRequest source, ulong? robotPartId = null, string? name = null, ulong? robotTypeId = null) => new()
     {
         Name = name ?? source.Name,
         Description = source.Description,
@@ -221,6 +256,7 @@ public sealed class ProjectMetadataTests
         MachineModel = source.MachineModel,
         RobotPartId = robotPartId ?? source.RobotPartId,
         PriorityId = source.PriorityId,
+        RobotTypeId = robotTypeId ?? source.RobotTypeId,
         ExpectedCompletionDate = source.ExpectedCompletionDate,
         SubprojectNames = source.SubprojectNames,
     };

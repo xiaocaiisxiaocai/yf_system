@@ -215,21 +215,22 @@ public sealed class OwnerAccessTests
         INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
         VALUES(6002,8001,'OWNER-PART','负责人测试型号',1,'ACTIVE');
         INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
-        VALUES(6003,'PRIORITY','负责人测试优先级',NULL,1,'ACTIVE');
+        VALUES(6003,'PRIORITY','负责人测试优先级',NULL,1,'ACTIVE'),
+              (1006003,'ROBOT_TYPE','负责人测试优先级-Robot类型',NULL,1,'ACTIVE');
         INSERT INTO project_groups
           (id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,
-           responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
+           responsible_user_id,section_id,priority_id,robot_type_id,expected_completion_date,created_at,updated_at)
         VALUES
-          (11001,'负责人范围主项目','范围测试',8001,'DRAFT',9101,'M1',6002,9103,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (11002,'无负责人历史主项目','空负责人测试',8001,'DRAFT',9101,'M1',6002,NULL,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (11003,'无列表权限负责人主项目','权限门禁测试',8001,'DRAFT',9101,'M1',6002,9106,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+          (11001,'负责人范围主项目','范围测试',8001,'DRAFT',9101,'M1',6002,9103,7001,6003,1006003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (11002,'无负责人历史主项目','空负责人测试',8001,'DRAFT',9101,'M1',6002,NULL,7001,6003,1006003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (11003,'无列表权限负责人主项目','权限门禁测试',8001,'DRAFT',9101,'M1',6002,9106,7001,6003,1006003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
         INSERT INTO projects
           (id,project_group_id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,
-           responsible_user_id,section_id,priority_id,expected_completion_date,created_at,updated_at)
+           responsible_user_id,section_id,priority_id,robot_type_id,expected_completion_date,created_at,updated_at)
         VALUES
-          (10001,11001,'负责人范围项目','范围测试',8001,'DRAFT',9101,'M1',6002,9103,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (10002,11002,'无负责人历史项目','空负责人测试',8001,'DRAFT',9101,'M1',6002,NULL,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (10003,11003,'无列表权限负责人项目','权限门禁测试',8001,'DRAFT',9101,'M1',6002,9106,7001,6003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+          (10001,11001,'负责人范围项目','范围测试',8001,'DRAFT',9101,'M1',6002,9103,7001,6003,1006003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (10002,11002,'无负责人历史项目','空负责人测试',8001,'DRAFT',9101,'M1',6002,NULL,7001,6003,1006003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (10003,11003,'无列表权限负责人项目','权限门禁测试',8001,'DRAFT',9101,'M1',6002,9106,7001,6003,1006003,'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
         INSERT INTO project_group_work_orders(project_group_id,work_order_no,sort_no)
         VALUES(11001,'WO-OWNER',0),(11002,'WO-OWNERLESS',0),(11003,'WO-NO-LIST',0);
         INSERT INTO project_work_orders(project_id,work_order_no,sort_no)
@@ -245,6 +246,7 @@ public sealed class OwnerAccessTests
         MachineModel = "M1",
         RobotPartId = 6_002,
         PriorityId = 6_003,
+        RobotTypeId = 1006003,
         ExpectedCompletionDate = "2026-12-31",
     };
 
@@ -257,6 +259,7 @@ public sealed class OwnerAccessTests
         MachineModel = "M2",
         RobotPartId = 6_002,
         PriorityId = 6_003,
+        RobotTypeId = 1006003,
         ExpectedCompletionDate = "2027-01-31",
         SubprojectNames = ["创建后子项目"],
     };

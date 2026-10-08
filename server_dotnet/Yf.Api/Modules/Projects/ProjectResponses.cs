@@ -125,6 +125,8 @@ public record ProjectResponse
     public string? SectionName { get; init; }
     public ulong? PriorityId { get; init; }
     public string? PriorityName { get; init; }
+    public ulong? RobotTypeId { get; init; }
+    public string? RobotTypeName { get; init; }
     /// <summary>yyyy-MM-dd</summary>
     public string? ExpectedCompletionDate { get; init; }
     public bool HasCopyHistory { get; init; }
@@ -163,6 +165,8 @@ public sealed record ProjectGroupResponse(
     string? SectionName,
     ulong? PriorityId,
     string? PriorityName,
+    ulong? RobotTypeId,
+    string? RobotTypeName,
     // yyyy-MM-dd
     string? ExpectedCompletionDate,
     DateTime? CompletedAt,

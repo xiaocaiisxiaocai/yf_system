@@ -354,6 +354,7 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
         "machineModel": owned_current["machineModel"],
         "robotPartId": owned_current["robotPartId"],
         "priorityId": owned_current["priorityId"],
+        "robotTypeId": owned_current["robotTypeId"],
         "expectedCompletionDate": owned_current["expectedCompletionDate"],
     })
     added_child = client.call(

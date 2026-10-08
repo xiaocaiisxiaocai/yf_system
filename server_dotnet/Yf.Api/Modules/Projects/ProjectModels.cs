@@ -27,6 +27,9 @@ public sealed class ProjectUpsertRequest
     [JsonPropertyName("priorityId")]
     public ulong? PriorityId { get; init; }
 
+    [JsonPropertyName("robotTypeId")]
+    public ulong? RobotTypeId { get; init; }
+
     [JsonPropertyName("expectedCompletionDate")]
     public string? ExpectedCompletionDate { get; init; }
 
@@ -184,6 +187,8 @@ internal sealed class ProjectRow
     public string? SectionName { get; init; }
     public ulong? PriorityId { get; init; }
     public string? PriorityName { get; init; }
+    public ulong? RobotTypeId { get; init; }
+    public string? RobotTypeName { get; init; }
     public DateTime? ExpectedCompletionDate { get; init; }
     public bool HasCopyHistory { get; set; }
     public ulong UnreadMessages { get; set; }
@@ -214,6 +219,8 @@ internal sealed class ProjectGroupRow
     public string? SectionName { get; init; }
     public ulong? PriorityId { get; init; }
     public string? PriorityName { get; init; }
+    public ulong? RobotTypeId { get; init; }
+    public string? RobotTypeName { get; init; }
     public DateTime? ExpectedCompletionDate { get; init; }
     public DateTime? CompletedAt { get; init; }
     public DateTime CreatedAt { get; init; }
@@ -352,6 +359,8 @@ internal static class ProjectJson
         SectionName = row.SectionName,
         PriorityId = row.PriorityId,
         PriorityName = row.PriorityName,
+        RobotTypeId = row.RobotTypeId,
+        RobotTypeName = row.RobotTypeName,
         ExpectedCompletionDate = row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
         HasCopyHistory = row.HasCopyHistory,
         UnreadMessages = row.UnreadMessages,
@@ -383,6 +392,8 @@ internal static class ProjectJson
         row.SectionName,
         row.PriorityId,
         row.PriorityName,
+        row.RobotTypeId,
+        row.RobotTypeName,
         row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
         row.CompletedAt is { } completedAt ? Utc(completedAt) : null,
         Utc(row.CreatedAt),

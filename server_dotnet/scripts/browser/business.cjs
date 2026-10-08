@@ -147,6 +147,10 @@ async function preview(page, name, kind, label) {
     adminPage = await openUser('admin');
     const admin = sessions.admin;
     const priorities = await json(admin.context, admin.token, 'GET', '/project-dictionaries?type=PRIORITY&enabledOnly=true');
+    let robotTypes = await json(admin.context, admin.token, 'GET', '/project-dictionaries?type=ROBOT_TYPE&enabledOnly=true');
+    // Robot types are not seeded; the acceptance flow maintains one like an administrator would.
+    if (robotTypes.length === 0) robotTypes = [await json(admin.context, admin.token, 'POST', '/project-dictionaries',
+      { type: 'ROBOT_TYPE', name: '自动验收 Robot 类型', parentId: null, sortNo: 10, enabled: true })];
     assert(f.robotParts?.a?.id && f.robotParts?.b?.id && priorities.length > 0,
       'project creation options must be available');
     const creatorPage = await openUser('manager');
@@ -166,6 +170,7 @@ async function preview(page, name, kind, label) {
         await addToken(modal, '输入工令号后按回车，可填写多个', 'WO-' + crypto.randomBytes(4).toString('hex'));
         await modal.getByPlaceholder('请输入机型', { exact: true }).fill('自动验收机型');
         await choose(creatorPage, modal, '选择 Robot 厂商', f.suppliers[key].name);
+        await choose(creatorPage, modal, '选择 Robot 类型', robotTypes[0].name);
         await choose(creatorPage, modal, '选择 Robot 料号', f.robotParts[key].partNumber);
         await waitForFieldValue(
           modal.locator('.arco-form-item').filter({ hasText: 'Robot 型号（自动带出）' }).locator('textarea'),
