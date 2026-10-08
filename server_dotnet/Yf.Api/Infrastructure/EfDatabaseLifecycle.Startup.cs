@@ -86,7 +86,9 @@ internal static partial class EfDatabaseLifecycle
 
     private static Task<string> HashBootstrapPasswordAsync(AppOptions options, CancellationToken ct)
     {
-        var password = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD") ?? options.BootstrapPassword;
+        // An empty variable counts as unset: tooling that "clears" it may leave it defined but empty.
+        var environmentPassword = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD");
+        var password = string.IsNullOrEmpty(environmentPassword) ? options.BootstrapPassword : environmentPassword;
         if (string.IsNullOrWhiteSpace(password))
             throw new InvalidOperationException("First-start initialization requires App:BootstrapPassword or process environment YF_BOOTSTRAP_PASSWORD.");
         return PasswordService.HashAsync(password, ct);

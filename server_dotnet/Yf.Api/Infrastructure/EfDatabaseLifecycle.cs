@@ -12,8 +12,8 @@ internal static partial class EfDatabaseLifecycle
 
     internal static async Task InitializeEmptyAsync(AppDb database, CancellationToken ct = default)
     {
-        var password = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD")
-            ?? throw new InvalidOperationException(
+        var password = Environment.GetEnvironmentVariable("YF_BOOTSTRAP_PASSWORD") is { Length: > 0 } value ? value
+            : throw new InvalidOperationException(
                 "Initialization requires process environment YF_BOOTSTRAP_PASSWORD; passwords are never generated or printed.");
         await InitializeEmptyAsync(database, password, ct);
     }

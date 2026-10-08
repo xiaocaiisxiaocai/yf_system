@@ -142,6 +142,7 @@ public sealed partial class OemUploadService(
         storage.SessionDirectory(sessionId, create: true, ct);
         var temporary = path + $".{Guid.NewGuid():N}.uploading";
         var open = true;
+        var writeFailed = false;
         try
         {
             var actualDigest = await WriteExactAsync(request.Body, temporary, expected, ct);
@@ -154,14 +155,18 @@ public sealed partial class OemUploadService(
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
             logger.LogWarning("OEM chunk write failed ({ErrorType}).", error.GetType().Name);
-            throw new ApiException(503, 50303, "上传分片暂时无法写入，请稍后重试");
+            writeFailed = true;
         }
         finally
         {
             TryDeleteFile(temporary);
             open = await RemoveIfClosedAsync(sessionId);
         }
+        // An abort can remove the session directory under an in-flight write (POSIX allows it
+        // while the file is open), so the write then fails. Report the closed session, not a
+        // storage fault.
         if (!open) throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
+        if (writeFailed) throw new ApiException(503, 50303, "上传分片暂时无法写入，请稍后重试");
     }
 
     /// <summary>

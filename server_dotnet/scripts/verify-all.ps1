@@ -524,11 +524,23 @@ function Get-EnvironmentSnapshot {
     return [ordered]@{ values = $snapshot; names = $namesChanged }
 }
 
+# PowerShell passes $null to a .NET string parameter as "", and on Linux an empty
+# value leaves the variable defined. Remove it through the Env: drive instead.
+function Set-ProcessEnvironmentValue {
+    param([Parameter(Mandatory = $true)][string]$Name, [AllowNull()][string]$Value)
+
+    if ($null -eq $Value -or $Value.Length -eq 0) {
+        Remove-Item -LiteralPath "Env:$Name" -ErrorAction SilentlyContinue
+    } else {
+        [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
+    }
+}
+
 function Clear-ConfigurationEnvironment {
     param([Parameter(Mandatory = $true)][hashtable]$Snapshot)
 
     foreach ($name in $Snapshot.names) {
-        [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+        Set-ProcessEnvironmentValue -Name $name -Value $null
     }
 }
 
@@ -536,7 +548,7 @@ function Restore-ConfigurationEnvironment {
     param([Parameter(Mandatory = $true)][hashtable]$Snapshot)
 
     foreach ($name in $Snapshot.names) {
-        [Environment]::SetEnvironmentVariable($name, $Snapshot.values[$name], 'Process')
+        Set-ProcessEnvironmentValue -Name $name -Value $Snapshot.values[$name]
     }
 }
 
@@ -667,7 +679,7 @@ try {
         try {
             $step = Invoke-VerificationStep -Name 'http-isolated' -FilePath 'python' -Arguments @((Join-Path $serverRoot 'scripts\test-isolated.py')) -WorkingDirectory $repositoryRoot
         } finally {
-            [Environment]::SetEnvironmentVariable('YF_TEST_RESULTS_PATH', $previousResultsPath, 'Process')
+            Set-ProcessEnvironmentValue -Name 'YF_TEST_RESULTS_PATH' -Value $previousResultsPath
         }
         Assert-Passed $step
     }
