@@ -1,7 +1,9 @@
 """Check automatic local publishing defaults without building or exposing secrets."""
 import base64
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -9,8 +11,11 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / 'server_dotnet/scripts/publish-iis.ps1'
 TEMP = ROOT / '.artifacts/tests/tmp'
+# Windows PowerShell locally; PowerShell 7 on the Linux CI runner.
+POWERSHELL = 'powershell.exe' if os.name == 'nt' else shutil.which('pwsh')
 
 
+@unittest.skipUnless(POWERSHELL, 'PowerShell is not installed')
 class PublishDefaultsTests(unittest.TestCase):
     def invoke(self, path):
         quote = lambda value: "'" + str(value).replace("'", "''") + "'"
@@ -23,7 +28,7 @@ class PublishDefaultsTests(unittest.TestCase):
             "|ForEach-Object{Invoke-Expression $_.Extent.Text};"
             "$null=Initialize-PublishDefaults " + quote(path)
         )
-        return subprocess.run(['powershell.exe', '-NoProfile', '-Command', command],
+        return subprocess.run([POWERSHELL, '-NoProfile', '-Command', command],
                               capture_output=True, text=True)
 
     def invoke_validation(self, path, allow_insecure=False):
@@ -38,7 +43,7 @@ class PublishDefaultsTests(unittest.TestCase):
             "|ForEach-Object{Invoke-Expression $_.Extent.Text};"
             "$d=Initialize-PublishDefaults " + quote(path) + ";Assert-PrivatePublishDefaults $d" + allow
         )
-        return subprocess.run(['powershell.exe', '-NoProfile', '-Command', command],
+        return subprocess.run([POWERSHELL, '-NoProfile', '-Command', command],
                               capture_output=True, text=True)
 
     def fixture(self, directory, connection='Server=127.0.0.1;User ID=fixture;Password=sample+secret', jwt='',

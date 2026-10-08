@@ -37,7 +37,7 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = $env:YF_VERIFY_ALL_OUTPUT_ROOT
 }
 $artifactRoot = if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    Join-Path $repositoryRoot '.artifacts\tests\verify-all'
+    Join-Path $repositoryRoot '.artifacts/tests/verify-all'
 } else {
     $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputRoot)
 }
@@ -635,9 +635,9 @@ try {
     $script:DotnetSdkVersion = $sdkMatch.Groups[1].Value
     $sdkResult.details = @{ version = $script:DotnetSdkVersion; globalJson = (Join-Path $serverRoot 'global.json') }
 
-    $apiProject = '.\Yf.Api\Yf.Api.csproj'
-    $testHostProject = '.\TestHost\Yf.Api.TestHost.csproj'
-    $testsProject = '.\tests\Yf.Api.Tests.csproj'
+    $apiProject = './Yf.Api/Yf.Api.csproj'
+    $testHostProject = './TestHost/Yf.Api.TestHost.csproj'
+    $testsProject = './tests/Yf.Api.Tests.csproj'
     $restoreArguments = @('--locked-mode', '--verbosity', 'minimal')
     $buildArguments = @('--configuration', 'Debug', '--no-restore', '--verbosity', 'minimal')
 
@@ -677,7 +677,7 @@ try {
         $previousResultsPath = [Environment]::GetEnvironmentVariable('YF_TEST_RESULTS_PATH', 'Process')
         [Environment]::SetEnvironmentVariable('YF_TEST_RESULTS_PATH', (Join-Path $runRoot 'http-results.json'), 'Process')
         try {
-            $step = Invoke-VerificationStep -Name 'http-isolated' -FilePath 'python' -Arguments @((Join-Path $serverRoot 'scripts\test-isolated.py')) -WorkingDirectory $repositoryRoot
+            $step = Invoke-VerificationStep -Name 'http-isolated' -FilePath 'python' -Arguments @((Join-Path $serverRoot 'scripts/test-isolated.py')) -WorkingDirectory $repositoryRoot
         } finally {
             Set-ProcessEnvironmentValue -Name 'YF_TEST_RESULTS_PATH' -Value $previousResultsPath
         }
@@ -689,9 +689,9 @@ try {
     } elseif ([string]::IsNullOrWhiteSpace($testDatabaseUrl)) {
         [void](Add-SkippedResult -Name 'maintenance' -Reason 'YF_TEST_DATABASE_URL is not set; maintenance validation requires an explicit local test database.')
     } else {
-        $step = Invoke-VerificationStep -Name 'maintenance' -FilePath 'python' -Arguments @((Join-Path $serverRoot 'scripts\test-maintenance.py')) -WorkingDirectory $repositoryRoot
+        $step = Invoke-VerificationStep -Name 'maintenance' -FilePath 'python' -Arguments @((Join-Path $serverRoot 'scripts/test-maintenance.py')) -WorkingDirectory $repositoryRoot
         Assert-Passed $step
-        $maintenanceReport = Join-Path $repositoryRoot '.artifacts\tests\maintenance-results.json'
+        $maintenanceReport = Join-Path $repositoryRoot '.artifacts/tests/maintenance-results.json'
         if (Test-Path -LiteralPath $maintenanceReport -PathType Leaf) {
             Copy-Item -LiteralPath $maintenanceReport -Destination (Join-Path $runRoot 'maintenance-results.json') -Force
         }

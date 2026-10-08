@@ -154,6 +154,8 @@ def _wait_for_project_lock(conn, worker, project_id):
             "WHERE trx_mysql_thread_id=CONNECTION_ID()"
         )
         holder = cursor.fetchone()
+        cursor.execute("SELECT VERSION()")
+        mysql8 = not str(cursor.fetchone()[0]).startswith("5.")
     if holder is None or holder[0] < 1:
         raise AssertionError("fixture transaction does not hold an InnoDB row lock")
     expected_query_fragment = f"from projects where id={project_id} for update"
@@ -161,19 +163,45 @@ def _wait_for_project_lock(conn, worker, project_id):
         if not worker.is_alive():
             raise AssertionError("request completed before reaching the held project lock")
         with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT requested.lock_table,requested.lock_index,requested.lock_type,requested.lock_mode,"
-                "blocking.lock_table,blocking.lock_index,blocking.lock_type,blocking.lock_mode,"
-                "LEFT(waiting.trx_query,160) "
-                "FROM information_schema.innodb_lock_waits w "
-                "JOIN information_schema.innodb_locks requested ON requested.lock_id=w.requested_lock_id "
-                "JOIN information_schema.innodb_locks blocking ON blocking.lock_id=w.blocking_lock_id "
-                "LEFT JOIN information_schema.innodb_trx waiting ON waiting.trx_id=w.requesting_trx_id "
-                "WHERE requested.lock_table=%s",
-                (expected_table,),
-            )
+            if mysql8:
+                # MySQL 8 removed INFORMATION_SCHEMA.INNODB_LOCK_WAITS/INNODB_LOCKS.
+                cursor.execute(
+                    "SELECT requested.OBJECT_NAME,requested.INDEX_NAME,requested.LOCK_TYPE,requested.LOCK_MODE,"
+                    "blocking.OBJECT_NAME,blocking.INDEX_NAME,blocking.LOCK_TYPE,blocking.LOCK_MODE,"
+                    "LEFT(waiting.trx_query,160) "
+                    "FROM performance_schema.data_lock_waits w "
+                    "JOIN performance_schema.data_locks requested "
+                    "ON requested.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID "
+                    "JOIN performance_schema.data_locks blocking "
+                    "ON blocking.ENGINE_LOCK_ID=w.BLOCKING_ENGINE_LOCK_ID "
+                    "LEFT JOIN information_schema.innodb_trx waiting "
+                    "ON waiting.trx_id=w.REQUESTING_ENGINE_TRANSACTION_ID "
+                    "WHERE requested.OBJECT_SCHEMA=DATABASE() AND requested.OBJECT_NAME='projects'"
+                )
+            else:
+                cursor.execute(
+                    "SELECT requested.lock_table,requested.lock_index,requested.lock_type,requested.lock_mode,"
+                    "blocking.lock_table,blocking.lock_index,blocking.lock_type,blocking.lock_mode,"
+                    "LEFT(waiting.trx_query,160) "
+                    "FROM information_schema.innodb_lock_waits w "
+                    "JOIN information_schema.innodb_locks requested ON requested.lock_id=w.requested_lock_id "
+                    "JOIN information_schema.innodb_locks blocking ON blocking.lock_id=w.blocking_lock_id "
+                    "LEFT JOIN information_schema.innodb_trx waiting ON waiting.trx_id=w.requesting_trx_id "
+                    "WHERE requested.lock_table=%s",
+                    (expected_table,),
+                )
             last_waits = list(cursor.fetchall())
             if last_waits:
+                return
+            # The lock-wait views can briefly lag the transaction state; a request
+            # transaction in this database reported as LOCK WAIT while the fixture
+            # holds the project row lock is the same barrier.
+            cursor.execute(
+                "SELECT t.trx_mysql_thread_id FROM information_schema.innodb_trx t "
+                "JOIN information_schema.processlist p ON p.id=t.trx_mysql_thread_id "
+                "WHERE t.trx_state='LOCK WAIT' AND p.db=DATABASE() AND t.trx_mysql_thread_id<>CONNECTION_ID()"
+            )
+            if cursor.fetchall():
                 return
             cursor.execute(
                 "SELECT id,state,info FROM information_schema.processlist "
