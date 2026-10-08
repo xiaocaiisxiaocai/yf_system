@@ -748,6 +748,9 @@ describe('ChunkUploader upload material rules', () => {
   it('blocks misnamed company Excel files and warns when the batch has no STEP', () => {
     renderUploader(false, 'C2S')
     expect(screen.getByText('发给供应商的资料要求')).toBeVisible()
+    const examples = screen.getByRole('group', { name: '资料要求示例' })
+    expect(Array.from(examples.querySelectorAll('img')).map((image) => image.getAttribute('alt')))
+      .toEqual(['A. STEP 格式 3D 总装图示例', 'B. 动作流程说明 Excel 示例'])
     choose(uploadFile('动作流程.xlsx'))
 
     expect(startButton()).toBeDisabled()
