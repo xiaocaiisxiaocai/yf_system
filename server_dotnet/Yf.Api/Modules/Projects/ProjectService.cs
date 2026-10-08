@@ -201,6 +201,17 @@ internal sealed partial class ProjectService(
         {
             throw ApiException.Forbidden();
         }
+        // A copy target's files share blobs with its source. Like copy and upload, take the SHA named
+        // locks before the transaction, so releasing the last reference cannot race a new reference.
+        string[] copiedBlobShas;
+        await using (var lookup = EfDb.Use(conn))
+            copiedBlobShas = await lookup.ProjectCopies.AnyAsync(copy => copy.TargetProjectId == projectId, ct)
+                ? await (from file in lookup.Files
+                    join blob in lookup.FileBlobs on file.BlobId equals blob.Id
+                    where file.ProjectId == projectId
+                    select blob.Sha256).Distinct().ToArrayAsync(ct)
+                : [];
+        await using var blobLeases = await Files.FileBlobStore.AcquireAsync(conn, copiedBlobShas, ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockBusinessAsync(conn, tx, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
@@ -212,13 +223,48 @@ internal sealed partial class ProjectService(
         if (await db.ProjectCopyJobs.AnyAsync(job => job.SourceProjectId == projectId
                 && (job.Status == ProjectCopyJobStatuses.Pending || job.Status == ProjectCopyJobStatuses.Running), ct))
             throw ApiException.Conflict("项目仍有进行中的复制任务，请等待任务完成后再删除");
-        if (await db.ProjectCopies.AnyAsync(
-                copy => copy.SourceProjectId == projectId || copy.TargetProjectId == projectId, ct))
-            throw ApiException.Conflict("项目存在复制引用履历，不能删除");
+        // A source keeps its copy history; only the derived copy (the target) may be removed.
+        if (await db.ProjectCopies.AnyAsync(copy => copy.SourceProjectId == projectId, ct))
+            throw ApiException.Conflict("该子项目已被复制出副本，请先删除副本");
+        var copyRecord = await db.ProjectCopies.AsNoTracking()
+            .SingleOrDefaultAsync(copy => copy.TargetProjectId == projectId, ct);
+        // Only a never-started (DRAFT) copy may discard the files the copy brought in; once started, a copy
+        // follows the ordinary rule and any file or message blocks deletion. Uploads after the copy
+        // (even soft-deleted) always block.
+        var copyId = project.Status == ProjectStatuses.Draft ? copyRecord?.Id : null;
         ProjectWorkflowRules.EnsureNoDeletionDependencies(
-            await db.Files.AnyAsync(file => file.ProjectId == projectId, ct)
+            await db.Files.AnyAsync(file => file.ProjectId == projectId
+                    && !db.FileCopyRefs.Any(reference => reference.CopyId == copyId && reference.TargetFileId == file.Id), ct)
                 || await db.Messages.AnyAsync(message => message.ProjectId == projectId, ct),
             await db.UploadSessions.AnyAsync(upload => upload.ProjectId == projectId, ct));
+        ulong[] releasedBlobIds = [];
+        if (copyRecord is not null)
+        {
+            releasedBlobIds = await db.Files.Where(file => file.ProjectId == projectId && file.BlobId != null)
+                .Select(file => file.BlobId!.Value).Distinct().OrderBy(id => id).ToArrayAsync(ct);
+            var leased = copiedBlobShas.ToHashSet(StringComparer.Ordinal);
+            var currentShas = await db.FileBlobs.Where(blob => releasedBlobIds.Contains(blob.Id))
+                .Select(blob => blob.Sha256).ToArrayAsync(ct);
+            if (currentShas.Any(sha => !leased.Contains(sha)))
+                throw ApiException.Conflict("文件内容引用已变化，请刷新后重试");
+            // file_copy_refs cascade with the copy row; the jobs only point at the result for navigation.
+            await db.ProjectCopyJobs.Where(job => job.ResultProjectId == projectId || job.ResultCopyId == copyRecord.Id)
+                .ExecuteDeleteAsync(ct);
+            await db.ProjectCopies.Where(copy => copy.Id == copyRecord.Id).ExecuteDeleteAsync(ct);
+            await db.Files.Where(file => file.ProjectId == projectId).ExecuteDeleteAsync(ct);
+            var now = await DbClock.UtcNowAsync(db, ct);
+            foreach (var blobId in releasedBlobIds)
+            {
+                var blob = await db.FileBlobs
+                    .FromSqlInterpolated($"SELECT * FROM file_blobs WHERE id={blobId} FOR UPDATE")
+                    .SingleAsync(ct);
+                if (await db.Files.AnyAsync(file => file.BlobId == blobId, ct)) continue;
+                // Last reference released: FilesMaintenanceService removes the content in its next cycle.
+                blob.State = FileBlobStates.GarbageCollectionPending;
+                blob.GarbageCollectionStartedAt = now;
+            }
+            await db.SaveChangesAsync(ct);
+        }
         var deletionAudience = await BuildDeletionAudienceAsync(db, project, ct);
         await db.EmailOutbox.Where(mail => mail.ProjectId == projectId
                 && (mail.Status == MailStatuses.Pending || mail.Status == MailStatuses.Sending))
@@ -230,7 +276,16 @@ internal sealed partial class ProjectService(
         await db.EmailOutbox.Where(mail => mail.ProjectId == projectId)
             .ExecuteUpdateAsync(setters => setters.SetProperty(mail => mail.ProjectId, (ulong?)null), ct);
         await db.ProjectStatusLogs.Where(log => log.ProjectId == projectId).ExecuteDeleteAsync(ct);
-        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DELETE", "project", projectId, new { name = project.Name }, ip, ct);
+        object auditDetails = copyRecord is null
+            ? new { name = project.Name }
+            : new
+            {
+                name = project.Name,
+                copiedFromProjectId = copyRecord.SourceProjectId,
+                copiedFromProjectName = copyRecord.SourceProjectName,
+                copiedFileCount = copyRecord.FileCount,
+            };
+        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DELETE", "project", projectId, auditDetails, ip, ct);
         await db.ProjectActivities.Where(activity => activity.ProjectId == projectId).ExecuteDeleteAsync(ct);
         var deleted = await db.Projects.Where(item => item.Id == projectId).ExecuteDeleteAsync(ct);
         if (deleted != 1)

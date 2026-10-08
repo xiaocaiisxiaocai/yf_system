@@ -105,6 +105,17 @@ public sealed class BackgroundProjectCopyTests
                 "SELECT COUNT(*) FROM file_blobs WHERE id=@Id", new { Id = copied.BlobId }, cancellationToken: ct)));
             Assert.False(File.Exists(canonicalPath));
 
+            // The job's result points at the copy; deleting the copy drops the job with its history.
+            var projects = new ProjectService(new AuditService([]), database.Options,
+                new ProjectGroupStatusService(new AuditService([])));
+            await projects.DeleteAsync(conn, actor, finished.Result!.ProjectId, null, ct);
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM project_copy_jobs WHERE id=@Id", new { Id = accepted.JobId }, cancellationToken: ct)));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM project_copies WHERE source_project_id=@ProjectId",
+                new { ProjectId = source.ProjectId }, cancellationToken: ct)));
+            Assert.Empty((await service.ListJobsAsync(conn, actor, source.GroupId, ct)).Jobs);
+
             // Simulate a process stop after the durable GC_PENDING claim but before disk deletion.
             var pendingBytes = "pending-blob-restart"u8.ToArray();
             var pendingSha = Convert.ToHexString(SHA256.HashData(pendingBytes)).ToLowerInvariant();
