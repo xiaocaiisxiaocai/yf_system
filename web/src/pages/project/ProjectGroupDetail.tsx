@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, Card, Descriptions, Drawer, Empty, Form, Input, Message, Modal, Popconfirm, Progress, Select, Space, Spin, Tag, Typography,
+  Alert, Button, Card, Descriptions, Drawer, Dropdown, Empty, Form, Input, Menu, Message, Modal, Popconfirm, Select, Space, Spin, Tag, Typography,
 } from '@arco-design/web-react'
-import { IconDown, IconPlus, IconRefresh } from '@arco-design/web-react/icon'
+import { IconDown, IconLeft, IconMore, IconPlus } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
 import { isAxiosError } from 'axios'
 import http, { getApiErrorCode, type QuietRequestConfig } from '../../api/client'
@@ -336,7 +336,6 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     } finally { transferInFlight.current = false; setTransferring(false) }
   }
 
-  const progress = group.subprojectCount ? Math.round(group.completedCount / group.subprojectCount * 100) : 0
   const responsible = group.responsibleUserName
     ? `${group.responsibleUserName}${group.responsibleUserEmployeeNo ? `（${group.responsibleUserEmployeeNo}）` : ''}`
     : '-'
@@ -359,25 +358,32 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       {loadError && <div className="page-load-error"><Typography.Text type="warning">刷新失败，当前显示上次数据。</Typography.Text><Button size="small" onClick={load}>重试</Button></div>}
       <Card className="page-card project-group-summary-card">
         <div className="project-group-summary-heading">
-          <div className="project-group-summary-title">
-            <div className="project-group-summary-name">
-              <Typography.Text type="secondary">主项目</Typography.Text>
-              <h1>{group.name}</h1>
-              <Tag color={PROJECT_STATUS[group.status]?.color}>{PROJECT_STATUS[group.status]?.text}</Tag>
-            </div>
-            <div className="project-group-summary-facts">
-              <span><b>Robot 厂商</b>{supplier}</span>
-              <span><b>Robot 类型</b>{display(group.robotTypeName)}</span>
-              <span><b>负责人</b>{responsible}</span>
-              <span><b>需求完成时间</b>{expectedCompletionDate}</span>
-              <span className="project-group-inline-progress"><b>验收进度</b><Progress percent={progress} size="small" showText={false} /><em>{group.completedCount}/{group.subprojectCount}</em></span>
-              <span className="project-group-inline-metrics">待验收 {group.pendingCount} · 已终止 {group.terminatedCount}</span>
-            </div>
+          <div className="project-group-summary-name">
+            <Button className="project-group-back" size="small" shape="circle" icon={<IconLeft />} title="返回项目列表" aria-label="返回项目列表" onClick={() => navigate('/projects')} />
+            <h1 title={group.name}>{group.name}</h1>
+            <Tag color={PROJECT_STATUS[group.status]?.color}>{PROJECT_STATUS[group.status]?.text}</Tag>
           </div>
-          <Space className="project-group-summary-actions" wrap size={8}>
+          <dl className="project-group-summary-facts">
+            {[
+              ['Robot 厂商', supplier],
+              ['Robot 类型', display(group.robotTypeName)],
+              ['负责人', responsible],
+              ['Robot 负责人', display(group.robotOwnerName)],
+              ['需求完成时间', expectedCompletionDate],
+            ].map(([label, value]) => (
+              <div key={label}><dt>{label}</dt><dd title={value}>{value}</dd></div>
+            ))}
+            <div className="project-group-summary-progress">
+              <dt>验收进度</dt>
+              <dd>
+                <strong>{group.completedCount}/{group.subprojectCount}</strong>
+                {group.pendingCount > 0 && <Tag size="small" color="orange">待验收 {group.pendingCount}</Tag>}
+                {group.terminatedCount > 0 && <Tag size="small">已终止 {group.terminatedCount}</Tag>}
+              </dd>
+            </div>
+          </dl>
+          <Space className="project-group-summary-actions" size={8}>
             {canCreateChild && <Button type="primary" size="small" icon={<IconPlus />} onClick={openCreate}>新增子项目</Button>}
-            {canTransfer && <Button size="small" disabled={group.pendingCount > 0} title={group.pendingCount > 0 ? '存在待验收子项目，暂不能变更负责人' : undefined} onClick={openTransfer}>变更负责人</Button>}
-            {data.projects.length > 1 && <Button size="small" icon={<IconRefresh />} title="恢复默认的子项目面板布局" onClick={() => dockRef.current?.resetLayout()}>重置布局</Button>}
             <Button
               size="small"
               aria-expanded={summaryExpanded}
@@ -386,11 +392,25 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
             >
               {summaryExpanded ? '收起资料' : '查看资料'}<IconDown className={summaryExpanded ? 'is-expanded' : undefined} />
             </Button>
-            <Button size="small" onClick={() => navigate('/projects')}>返回项目列表</Button>
+            {(canTransfer || data.projects.length > 1) && <Dropdown
+              trigger="click"
+              position="br"
+              droplist={<Menu onClickMenuItem={(key) => {
+                if (key === 'transfer') openTransfer()
+                else if (key === 'reset-layout') dockRef.current?.resetLayout()
+              }}>
+                {canTransfer && <Menu.Item key="transfer" disabled={group.pendingCount > 0}>
+                  {group.pendingCount > 0 ? '变更负责人（存在待验收子项目）' : '变更负责人'}
+                </Menu.Item>}
+                {data.projects.length > 1 && <Menu.Item key="reset-layout">重置面板布局</Menu.Item>}
+              </Menu>}
+            >
+              <Button size="small" icon={<IconMore />} aria-label="更多操作" title="更多操作" />
+            </Dropdown>}
           </Space>
         </div>
         {summaryExpanded && <div id="project-group-extra-info" className="project-group-extra-info">
-          {/* Robot 厂商、负责人、需求完成时间已在标题下的摘要行展示，这里不再重复。 */}
+          {/* Robot 厂商、Robot 类型、负责人、Robot 负责人、需求完成时间和验收进度已在标题行展示，这里不再重复。 */}
           <Descriptions className="project-metadata" tableLayout="fixed" labelStyle={{ width: 96 }} column={{ xs: 1, sm: 2, md: 3 }} data={[
             { label: '工令号', value: display(group.workOrderNos?.join('、')) }, { label: '机型', value: display(group.machineModel) },
             { label: '课别', value: display(group.sectionName) }, { label: 'Robot 料号', value: display(group.robotPartNumber) },
@@ -442,7 +462,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
               content={`子项目已被他人修改，已刷新为最新数据（当前名称：${projectMap.get(editing.id)?.name ?? editing.name}）。请核对后再次保存，保存将覆盖为本弹窗中的内容。`}
             />
           )}
-          {!editing && <div className="dialog-note">Robot 厂商、工令号、机型、Robot 料号与型号、负责人、课别、优先级和需求完成时间将从主项目继承。</div>}
+          {!editing && <div className="dialog-note">Robot 厂商、工令号、机型、Robot 料号与型号、负责人、Robot 负责人、课别、优先级和需求完成时间将从主项目继承。</div>}
         </Form>
       </Modal>
 

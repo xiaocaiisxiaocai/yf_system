@@ -235,96 +235,134 @@
   overflow: hidden;
 }
 
-.project-group-summary-card {
+.page-card.project-group-summary-card {
   flex: 0 0 auto;
+  padding: 0;
 }
 
 .project-group-summary-card > .arco-card-body {
   padding: 12px 16px;
+  container-type: inline-size;
 }
 
+/* 一行三段：左侧返回 + 主项目名称，中间关键资料（等分、竖线分隔），右侧操作。 */
 .project-group-summary-heading {
   display: flex;
-  flex-wrap: wrap;
-  /* 操作按钮对齐两行信息的垂直中线，而不是只贴第一行。 */
   align-items: center;
-  justify-content: space-between;
-  gap: 8px 16px;
+  gap: 8px 24px;
 }
 
 .project-group-summary-name {
   display: flex;
-  flex-wrap: wrap;
+  flex: 0 1 auto;
   align-items: center;
-  gap: 4px 10px;
+  gap: 8px;
   min-width: 0;
+  max-width: 300px;
 }
 
-.project-group-summary-name .arco-typography {
-  line-height: 30px;
+.project-group-back {
+  flex: 0 0 auto;
 }
 
-.project-group-summary-title {
+.project-group-summary-name h1 {
   min-width: 0;
-  /* 信息区至少保留 360px；放不下时整排操作按钮换到下一行，而不是把信息挤成一列。 */
-  flex: 1 1 360px;
-}
-
-.project-group-summary-title h1 {
   margin: 0;
-  font-size: 20px;
+  overflow: hidden;
+  font-size: 18px;
   font-weight: 600;
-  line-height: 30px;
-  overflow-wrap: anywhere;
+  line-height: 28px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-group-summary-name .arco-tag {
+  flex: 0 0 auto;
 }
 
 .project-group-summary-facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 20px;
-  margin-top: 6px;
-  color: var(--color-text-2);
-  font-size: 13px;
-}
-
-.project-group-summary-facts span {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) minmax(0, 1.3fr);
   min-width: 0;
-  overflow-wrap: anywhere;
+  margin: 0;
 }
 
-.project-group-summary-facts b {
-  margin-right: 6px;
-  white-space: nowrap;
+.project-group-summary-facts > div {
+  min-width: 0;
+  padding: 0 16px;
+  border-left: 1px solid var(--color-neutral-3);
+}
+
+.project-group-summary-facts dt {
+  overflow: hidden;
   color: var(--color-text-3);
-  font-weight: 400;
-}
-
-.project-group-inline-progress {
-  display: inline-flex;
-  align-items: center;
-}
-
-.project-group-inline-progress .arco-progress {
-  width: 72px;
-  margin-right: 8px;
-}
-
-.project-group-inline-progress em {
-  font-style: normal;
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.project-group-summary-facts dd {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--color-text-1);
+  font-size: 14px;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-group-summary-progress dd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-group-summary-progress strong {
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
-.project-group-inline-metrics {
-  color: var(--color-text-3);
+.project-group-summary-progress .arco-tag {
+  margin: 0;
 }
 
 .project-group-summary-actions {
-  flex: 0 1 auto;
-  max-width: 100%;
+  flex: 0 0 auto;
   margin-left: auto;
-  align-items: center;
-  justify-content: flex-end;
+}
+
+/* 放不下一行时，资料移到第二行并占满宽度，返回/名称与操作按钮仍在第一行两端。 */
+@container (max-width: 1200px) {
+  .project-group-summary-heading {
+    flex-wrap: wrap;
+  }
+
+  .project-group-summary-facts {
+    order: 1;
+    flex-basis: 100%;
+    padding-top: 10px;
+    border-top: 1px solid var(--color-neutral-3);
+  }
+
+  .project-group-summary-facts > div:first-child {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+/* 再窄时资料改为每行三项。 */
+@container (max-width: 640px) {
+  .project-group-summary-facts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 8px;
+  }
+
+  .project-group-summary-facts > div:nth-child(3n + 1) {
+    padding-left: 0;
+    border-left: 0;
+  }
 }
 
 .project-group-summary-actions .arco-icon-down {
@@ -425,17 +463,5 @@
     height: auto;
     min-height: calc(100dvh - 76px);
     overflow: auto;
-  }
-
-  .project-group-summary-heading {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-  }
-
-  .project-group-summary-actions {
-    width: 100%;
-    justify-content: flex-end;
-    flex-wrap: wrap;
   }
 }

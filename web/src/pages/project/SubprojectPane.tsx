@@ -218,9 +218,9 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
     <div className="subproject-pane" data-subproject-id={pid}>
       {/* 说明、流程按钮与管理操作合并为一行，把高度留给文件和留言。 */}
       <div className="subproject-pane-toolbar">
-        <Typography.Text className="subproject-pane-description" type="secondary" title={row.description || undefined}>
-          {row.description?.trim() || '暂无子项目说明'}
-        </Typography.Text>
+        {row.description?.trim()
+          ? <Typography.Text className="subproject-pane-description" type="secondary" title={row.description}>{row.description.trim()}</Typography.Text>
+          : <span className="subproject-pane-spacer" aria-hidden="true" />}
         {project ? <ProjectWorkflowPanel compact project={project} onChanged={refreshAll} /> : !loadError && <Spin size={16} />}
         <div className="subproject-pane-actions">
           {renderManageActions(row)}
