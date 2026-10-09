@@ -63,6 +63,15 @@ function Wait-Until([scriptblock]$Probe, $Process, [int]$Seconds) {
     return $false
 }
 
+function Start-DetachedLogged([string]$WorkingDirectory, [string]$CommandLine, [string]$StdoutLog, [string]$StderrLog) {
+    # Start-Process with output redirection creates the child with handle inheritance, so a long-running
+    # server would also inherit this script's own stdout/stderr and keep any caller that captures them
+    # (a pipe, CI, an agent) waiting until the server exits. Shell-execute cmd.exe instead (no inherited
+    # handles) and let cmd write the logs. The returned process is cmd.exe; it exits when the server does.
+    $arguments = '/d /c "' + $CommandLine + ' 1>"' + $StdoutLog + '" 2>"' + $StderrLog + '""'
+    return Start-Process cmd.exe -ArgumentList $arguments -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru
+}
+
 function Remove-OldRestartBackups([string]$RunsRoot, [int]$Keep) {
     # Only exact before-restart.sql files inside timestamped run directories are removed.
     if (!(Test-Path -LiteralPath $RunsRoot -PathType Container)) { return }
@@ -202,24 +211,21 @@ Push-Location $apiRoot
 try {
     $migrationExit = Invoke-NativeLogged (Get-Command dotnet).Source @($apiDll, '--migrate-database') (Join-Path $runRoot 'migration.log')
     if ($migrationExit -ne 0) { throw "Migration failed; see $runRoot\migration.log" }
-    $backend = Start-Process (Get-Command dotnet).Source -ArgumentList ('"' + $apiDll + '"') -WorkingDirectory $apiRoot `
-        -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $runRoot 'backend.stdout.log') `
-        -RedirectStandardError (Join-Path $runRoot 'backend.stderr.log')
+    $backend = Start-DetachedLogged $apiRoot ('"' + (Get-Command dotnet).Source + '" "' + $apiDll + '"') `
+        (Join-Path $runRoot 'backend.stdout.log') (Join-Path $runRoot 'backend.stderr.log')
 } finally { Pop-Location }
 
 $backendReady = Wait-Until { $h = Invoke-RestMethod $healthUrl -TimeoutSec 2; $h.status -eq 'ok' -and $h.db -eq 'up' } $backend 45
 if (!$backendReady) { throw "Backend not healthy; see $runRoot\backend.*.log" }
-Write-Host "Backend ready: pid $($backend.Id), $healthUrl"
+$backendPid = (Get-ListenerOwner $BackendPort).ProcessId
+Write-Host "Backend ready: pid $backendPid, $healthUrl"
 
 # --- Frontend: restart Vite dev server (predev regenerates preview bundles) ---
 $frontendPid = $null
 if (!$SkipFrontend) {
     if ($frontendOwner) { Write-Host "Stopping Vite pid $($frontendOwner.ProcessId)"; Stop-Owner $frontendOwner }
-    $frontend = Start-Process cmd.exe -WorkingDirectory $webRoot -WindowStyle Hidden -PassThru `
-        -ArgumentList '/c', "npm run dev -- --host 127.0.0.1 --port $FrontendPort --strictPort" `
-        -RedirectStandardOutput (Join-Path $runRoot 'frontend.stdout.log') `
-        -RedirectStandardError (Join-Path $runRoot 'frontend.stderr.log')
+    $frontend = Start-DetachedLogged $webRoot "npm run dev -- --host 127.0.0.1 --port $FrontendPort --strictPort" `
+        (Join-Path $runRoot 'frontend.stdout.log') (Join-Path $runRoot 'frontend.stderr.log')
     $frontendReady = Wait-Until { (Invoke-WebRequest $frontendUrl -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } $frontend 90
     if (!$frontendReady) { throw "Frontend not ready; see $runRoot\frontend.*.log" }
     $frontendPid = (Get-ListenerOwner $FrontendPort).ProcessId
@@ -227,7 +233,7 @@ if (!$SkipFrontend) {
 }
 
 $result = [ordered]@{
-    backendPid = $backend.Id; backendUrl = "http://127.0.0.1:$BackendPort"
+    backendPid = $backendPid; backendUrl = "http://127.0.0.1:$BackendPort"
     frontendPid = $frontendPid; frontendUrl = if ($SkipFrontend) { $null } else { $frontendUrl }
     database = $DatabaseName; storageRoot = $StorageRoot; backup = $backupPath
 }

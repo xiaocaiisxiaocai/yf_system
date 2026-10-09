@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -46,9 +47,49 @@ class VerificationConfigurationContracts(unittest.TestCase):
         self.assertIn("--defaults-file=", restart)
         self.assertIn("@('user id', 'user', 'uid')", restart)
         self.assertLess(restart.index("$buildExit ="), restart.index("Stopping backend pid"))
+        # Servers must not inherit the script's own output handles (see the detached-start test below).
+        self.assertNotIn("-RedirectStandard", restart)
+        self.assertEqual(2, restart.count("$runRoot 'backend.stdout.log'") + restart.count("$runRoot 'frontend.stdout.log'"))
+        self.assertEqual(3, restart.count("Start-DetachedLogged"))
         check_dev = (scripts / "check-dev.ps1").read_text(encoding="utf-8-sig")
         self.assertIn("$ErrorActionPreference = 'Continue'", check_dev)
         self.assertIn("$buildExitCode = $LASTEXITCODE", check_dev)
+
+    @unittest.skipUnless(os.name == "nt", "Windows PowerShell handle inheritance")
+    def test_restart_dev_detached_server_does_not_hold_captured_output_open(self):
+        restart = (ROOT / "server_dotnet/scripts/restart-dev.ps1").read_text(encoding="utf-8-sig")
+        function = re.search(r"^function Start-DetachedLogged\(.*?^\}\r?$", restart, re.M | re.S)
+        self.assertIsNotNone(function)
+        with tempfile.TemporaryDirectory() as temp:
+            stdout_log, stderr_log = Path(temp, "child.stdout.log"), Path(temp, "child.stderr.log")
+            snippet = function.group(0) + f"""
+$child = Start-DetachedLogged '{temp}' 'ping -n 30 127.0.0.1' '{stdout_log}' '{stderr_log}'
+Write-Output "child=$($child.Id)"
+"""
+            # The caller captures stdout like a pipe/CI/agent would; it must return while the child still runs.
+            completed = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", snippet],
+                capture_output=True, text=True, timeout=20)
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            child = int(re.search(r"child=(\d+)", completed.stdout).group(1))
+            try:
+                running = subprocess.run(["tasklist", "/FI", f"PID eq {child}", "/NH"],
+                                         capture_output=True, text=True, timeout=20).stdout
+                self.assertIn(str(child), running)
+                for _ in range(50):
+                    if stdout_log.exists() and stdout_log.stat().st_size > 0:
+                        break
+                    time.sleep(0.1)
+                self.assertGreater(stdout_log.stat().st_size, 0)
+            finally:
+                subprocess.run(["taskkill", "/PID", str(child), "/T", "/F"], capture_output=True, timeout=20)
+                for _ in range(50):
+                    try:
+                        stdout_log.unlink(missing_ok=True)
+                        stderr_log.unlink(missing_ok=True)
+                        break
+                    except PermissionError:
+                        time.sleep(0.1)
 
     def test_full_gate_declares_all_non_browser_checks(self):
         source = SCRIPT.read_text(encoding="utf-8-sig")
