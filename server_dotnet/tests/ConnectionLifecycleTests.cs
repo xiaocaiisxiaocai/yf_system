@@ -168,10 +168,10 @@ public sealed class ConnectionLifecycleTests
             }
             var plan = await DevelopmentDataReset.InspectAsync(database.Options, ct);
             Assert.True(plan.RobotCatalogWillBeReinitialized);
-            Assert.Equal(7, plan.RobotCatalogSupplierCount);
-            Assert.Equal(27, plan.RobotCatalogPartCount);
-            Assert.Equal(8, plan.Counts["suppliers"]);
-            Assert.Equal(27, plan.Counts["robot_parts"]);
+            Assert.Equal(6, plan.RobotCatalogSupplierCount);
+            Assert.Equal(40, plan.RobotCatalogPartCount);
+            Assert.Equal(7, plan.Counts["suppliers"]);
+            Assert.Equal(40, plan.Counts["robot_parts"]);
             Assert.Equal(1, plan.Counts["oem_companies"]);
             Assert.Equal(1, plan.Counts["oem_accounts"]);
             await Assert.ThrowsAsync<InvalidOperationException>(() => DevelopmentDataReset.ResetAsync(database.Options, "wrong-db", plan.StorageRoot, ct));
@@ -195,11 +195,11 @@ public sealed class ConnectionLifecycleTests
             Assert.Equal(1, result.Counts["users"]);
             Assert.Equal(1, result.Counts["roles"]);
             foreach (var table in new[] { "projects", "messages", "departments", "refresh_tokens", "audit_logs", "oem_companies", "oem_accounts" }) Assert.Equal(0, result.Counts[table]);
-            Assert.Equal(7, result.Counts["suppliers"]);
-            Assert.Equal(27, result.Counts["robot_parts"]);
+            Assert.Equal(6, result.Counts["suppliers"]);
+            Assert.Equal(40, result.Counts["robot_parts"]);
             Assert.True(result.RobotCatalogWillBeReinitialized);
-            Assert.Equal(7, result.RobotCatalogSupplierCount);
-            Assert.Equal(27, result.RobotCatalogPartCount);
+            Assert.Equal(6, result.RobotCatalogSupplierCount);
+            Assert.Equal(40, result.RobotCatalogPartCount);
             Assert.Equal(permissionCount, result.Counts["permissions"]);
             Assert.Equal(permissionCount, result.Counts["role_permissions"]);
             Assert.Equal(1, result.Counts["user_roles"]);
@@ -215,13 +215,13 @@ public sealed class ConnectionLifecycleTests
                 Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_templates WHERE id=1 AND is_default=1"));
                 Assert.Equal(2, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_template_nodes WHERE template_id=1"));
                 Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_retention_templates WHERE id=1"));
-                Assert.Equal(7, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
-                Assert.Equal(27, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
+                Assert.Equal(6, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
+                Assert.Equal(40, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
             }
             var repeated = await DevelopmentDataReset.ResetAsync(database.Options, plan.Database, plan.StorageRoot, ct);
             Assert.True(repeated.ResetCompleted);
-            Assert.Equal(7, repeated.Counts["suppliers"]);
-            Assert.Equal(27, repeated.Counts["robot_parts"]);
+            Assert.Equal(6, repeated.Counts["suppliers"]);
+            Assert.Equal(40, repeated.Counts["robot_parts"]);
             await SchemaBootstrap.ValidateAsync(database.Database, ct);
         }
         finally

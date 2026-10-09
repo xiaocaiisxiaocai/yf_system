@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Files;
+using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Infrastructure;
 
@@ -78,8 +79,8 @@ internal static class DevelopmentDataReset
         bool PasswordPreserved = true,
         bool SettingsPreserved = true,
         bool RobotCatalogWillBeReinitialized = true,
-        int RobotCatalogSupplierCount = 7,
-        int RobotCatalogPartCount = 27);
+        int RobotCatalogSupplierCount = RobotPartCatalogSeed.SupplierCount,
+        int RobotCatalogPartCount = RobotPartCatalogSeed.PartCount);
 
     private static (string Database, string Root) ValidateTarget(AppOptions options)
     {
@@ -175,18 +176,31 @@ internal static class DevelopmentDataReset
             await db.Suppliers.ExecuteDeleteAsync(ct);
 
             var catalog = RobotPartCatalogSeed.Load();
-            var supplierNames = catalog.Select(item => item.SupplierName).Distinct(StringComparer.Ordinal).ToArray();
-            var suppliers = supplierNames.Select(name => new Supplier
-            {
-                Name = name,
-                Remark = "Robot 料号目录初始化（2026-09-23）",
-                Status = AccountStatuses.Active,
-                CreatedBy = null,
-            }).ToArray();
+            var suppliers = catalog.Parts.DistinctBy(item => item.SupplierName, StringComparer.Ordinal)
+                .Select(item => new Supplier
+                {
+                    Name = item.SupplierName,
+                    Remark = item.SupplierRemark,
+                    Status = AccountStatuses.Active,
+                    CreatedBy = null,
+                }).ToArray();
             db.Suppliers.AddRange(suppliers);
             await db.SaveChangesAsync(ct);
             var supplierIds = suppliers.ToDictionary(supplier => supplier.Name, supplier => supplier.Id, StringComparer.Ordinal);
-            db.RobotParts.AddRange(catalog.Select((item, index) => new RobotPart
+            // Dictionaries survive the reset; only re-add preset Robot types that were deleted.
+            var robotTypeNames = await db.ProjectDictionaries
+                .Where(item => item.Type == ProjectDictionaryTypes.RobotType)
+                .Select(item => item.Name).ToListAsync(ct);
+            db.ProjectDictionaries.AddRange(catalog.RobotTypes
+                .Where(type => !robotTypeNames.Contains(type.Name, StringComparer.OrdinalIgnoreCase))
+                .Select(type => new ProjectDictionary
+                {
+                    Type = ProjectDictionaryTypes.RobotType,
+                    Name = type.Name,
+                    SortNo = type.SortNo,
+                    Status = AccountStatuses.Active,
+                }));
+            db.RobotParts.AddRange(catalog.Parts.Select((item, index) => new RobotPart
             {
                 SupplierId = supplierIds[item.SupplierName],
                 PartNumber = item.PartNumber,

@@ -38,6 +38,7 @@ public sealed class SchemaShapeTests
         "20261007003436_AddOemApprovalTaskActivatedAt",
         "20261007003510_AllowMacroAndBinaryExcelUploads",
         "20261008071421_AddProjectRobotType",
+        "20261008085919_SeedArmCatalogAndRobotTypes",
     ];
 
     [Fact]
@@ -69,6 +70,42 @@ public sealed class SchemaShapeTests
             Assert.False(string.IsNullOrWhiteSpace(part.GetProperty("model").GetString()));
             Assert.True(part.GetProperty("sourceRow").GetInt32() > 1);
         });
+    }
+
+    [Fact]
+    public async Task ArmCatalogEmbeddedSnapshotIsCompleteAndPinned()
+    {
+        var assembly = typeof(AppDb).Assembly;
+        var resourceName = Assert.Single(assembly.GetManifestResourceNames(),
+            name => name.EndsWith("robot-catalog-20261008.json", StringComparison.Ordinal));
+        await using var resource = assembly.GetManifestResourceStream(resourceName);
+        Assert.NotNull(resource);
+        using var buffer = new MemoryStream();
+        await resource.CopyToAsync(buffer, TestContext.Current.CancellationToken);
+        var bytes = buffer.ToArray();
+
+        // The migration SQL is a frozen copy of these bytes; changing the JSON needs a new migration.
+        Assert.Equal("9232f2c6c80c403dd4b91e5f0c023b138decacbb6f524d8c7cfa7575a684e53b",
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+        using var document = JsonDocument.Parse(bytes);
+        Assert.Equal("d4592ee72ba6c45023caff0f26a7adbed2685e8c3ddd37b7fac843165c90aafe",
+            document.RootElement.GetProperty("source").GetProperty("sha256").GetString());
+        var parts = document.RootElement.GetProperty("parts").EnumerateArray().ToArray();
+        Assert.Equal(16, parts.Length);
+        Assert.Equal(5, parts.Select(part => part.GetProperty("supplierName").GetString())
+            .Distinct(StringComparer.Ordinal).Count());
+        Assert.All(parts, part => Assert.Equal(part.GetProperty("partNumber").GetString()!.Trim(),
+            part.GetProperty("partNumber").GetString()));
+        Assert.Equal(14, document.RootElement.GetProperty("source").GetProperty("excludedPartNumbers").GetArrayLength());
+        Assert.Equal(["C-TGP251730", "C-TER151430MI", "C-TER20B1760HI"], document.RootElement
+            .GetProperty("removedSixAxisParts").EnumerateArray()
+            .Select(part => part.GetProperty("partNumber").GetString()).ToArray());
+        Assert.Equal(["六轴", "三轴", "四轴", "SCARA四轴", "蜘蛛手"], document.RootElement.GetProperty("robotTypes")
+            .EnumerateArray().Select(type => type.GetProperty("name").GetString()).ToArray());
+
+        var catalog = RobotPartCatalogSeed.Load();
+        Assert.Equal(RobotPartCatalogSeed.PartCount, catalog.Parts.Length);
+        Assert.Equal(RobotPartCatalogSeed.RobotTypeCount, catalog.RobotTypes.Length);
     }
 
     [Theory(Timeout = 120_000)]
@@ -318,15 +355,75 @@ public sealed class SchemaShapeTests
             Assert.Equal(3, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM project_dictionaries WHERE type='PRIORITY'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
                 "SELECT COUNT(*) FROM project_dictionaries WHERE type IN ('ROBOT_VENDOR','ROBOT_MODEL')"));
-            Assert.Equal(7, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
-            Assert.Equal(27, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
-            Assert.Equal(9, await conn.ExecuteScalarAsync<int>("""
+            Assert.Equal(6, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
+            Assert.Equal(40, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM suppliers WHERE BINARY name IN (BINARY '安川', BINARY '埃斯顿', BINARY '愛普生', BINARY '阿童木')"));
+            Assert.Equal(15, await conn.ExecuteScalarAsync<int>("""
                 SELECT COUNT(*) FROM robot_parts rp
                 INNER JOIN suppliers s ON s.id=rp.supplier_id
                 WHERE BINARY s.name=BINARY '珞石'
                 """));
+            Assert.Equal(["六轴", "三轴", "四轴", "SCARA四轴", "蜘蛛手"], (await conn.QueryAsync<string>(
+                "SELECT name FROM project_dictionaries WHERE type='ROBOT_TYPE' AND status='ACTIVE' ORDER BY sort_no,id")).ToArray());
         }
         await SchemaBootstrap.ValidateAsync(database.Database, ct);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task ArmCatalogUpgradeRetiresCrossedOutPartsAndKeepsAdministratorData()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("arm_catalog_upgrade", ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync("20261008071421_AddProjectRobotType", ct);
+        // A project already uses 埃斯顿's crossed-out part; 安川's part is unused. An administrator had already
+        // created 翼菲 (disabled) and a disabled 六轴 type.
+        await database.ExecuteAsync("""
+            INSERT INTO suppliers(id,name,status,created_at,updated_at)
+            VALUES(8201,'翼菲','DISABLED','2026-01-01 00:00:00','2026-01-01 00:00:00');
+            INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
+            VALUES(8202,'ROBOT_TYPE','六轴',NULL,9,'DISABLED');
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES(8203,'arm-owner','unused','手臂项目负责人','arm@example.test','INTERNAL',NULL,'ACTIVE',0,0,'2026-01-01 00:00:00','2026-01-01 00:00:00');
+            INSERT INTO project_groups(id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,created_at,updated_at)
+            SELECT 8204,'埃斯顿主项目','',s.id,'DRAFT',8203,'机型',rp.id,8203,'2026-01-02 03:04:05','2026-01-02 03:04:05'
+            FROM robot_parts rp INNER JOIN suppliers s ON s.id=rp.supplier_id
+            WHERE BINARY s.name=BINARY '埃斯顿' AND rp.part_number='C-TER151430MI';
+            """, ct);
+        ulong anchuan, estun;
+        await using (var before = await database.Database.OpenAsync(ct))
+        {
+            anchuan = await before.ExecuteScalarAsync<ulong>("SELECT id FROM suppliers WHERE BINARY name=BINARY '安川'");
+            estun = await before.ExecuteScalarAsync<ulong>("SELECT id FROM suppliers WHERE BINARY name=BINARY '埃斯顿'");
+        }
+
+        await migrator.MigrateAsync("20261008085919_SeedArmCatalogAndRobotTypes", ct);
+
+        await using var conn = await database.Database.OpenAsync(ct);
+
+        // 安川: its only part was unused, so part and supplier are gone. 埃斯顿: the used part is only
+        // disabled, the unused one deleted, and the supplier stays because a project still needs it.
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers WHERE id=@Id", new { Id = anchuan }));
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers WHERE id=@Id", new { Id = estun }));
+        Assert.Equal(["C-TER151430MI|DISABLED"], (await conn.QueryAsync<string>(
+            "SELECT CONCAT(part_number,'|',status) FROM robot_parts WHERE supplier_id=@Id", new { Id = estun })).ToArray());
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM project_groups WHERE id=8204 AND robot_part_id IS NOT NULL"));
+        // Administrator data keeps its identity and status; nothing is inserted twice.
+        Assert.Equal("DISABLED", await conn.ExecuteScalarAsync<string>("SELECT status FROM suppliers WHERE id=8201"));
+        Assert.Equal(3, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts WHERE supplier_id=8201"));
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers WHERE BINARY name=BINARY '翼菲'"));
+        Assert.Equal("DISABLED", await conn.ExecuteScalarAsync<string>("SELECT status FROM project_dictionaries WHERE id=8202"));
+        Assert.Equal(5, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM project_dictionaries WHERE type='ROBOT_TYPE'"));
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM suppliers WHERE BINARY name IN (BINARY '愛普生', BINARY '阿童木')"));
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM robot_parts WHERE part_number IN ('C-TER20800SR','C-TLS6702S','C-TD3PM1300P5')"));
+        // 6 remaining seeded suppliers + 埃斯顿 kept for its project; 24 + 16 parts + the disabled 埃斯顿 part.
+        Assert.Equal(7, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
+        Assert.Equal(41, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
     }
 
     [Fact(Timeout = 120_000)]
@@ -433,8 +530,9 @@ public sealed class SchemaShapeTests
         Assert.Equal(ExpectedMigrations.Length,
             await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM __EFMigrationsHistory"));
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM users WHERE employee_no='admin'"));
-        Assert.Equal(27, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
-        Assert.Equal(7, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
+        Assert.Equal(40, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));
+        Assert.Equal(6, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
+        Assert.Equal(5, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM project_dictionaries WHERE type='ROBOT_TYPE'"));
     }
 
     [Fact(Timeout = 120_000)]

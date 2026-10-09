@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261008071421_AddProjectRobotType";
+    private const string Latest = "20261008085919_SeedArmCatalogAndRobotTypes";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -68,9 +68,13 @@ public sealed class MigrationRoundTripTests
         Assert.Equal(Latest, await LastMigrationAsync(database, ct));
         var latestSchema = await SchemaAsync(database, ct);
         var latestData = await ReferenceDataAsync(database, ct);
+        var latestCatalog = await CatalogCountsAsync(database, ct);
+        Assert.Equal((6, 40, 5), latestCatalog);
 
-        // AddProjectRobotType + AllowMacroAndBinaryExcelUploads (Down keeps the whitelist) + AddOemApprovalTaskActivatedAt.
+        // SeedArmCatalogAndRobotTypes (Down keeps the catalog, Up skips existing rows) + AddProjectRobotType
+        // + AllowMacroAndBinaryExcelUploads (Down keeps the whitelist) + AddOemApprovalTaskActivatedAt.
         await migrator.MigrateAsync(HardenIdentity, ct);
+        Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|oem_flow_tasks|activated_at|", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|project_groups|robot_type_id|", StringComparison.Ordinal));
@@ -79,6 +83,7 @@ public sealed class MigrationRoundTripTests
         await migrator.MigrateAsync(cancellationToken: ct);
         Assert.Equal(latestSchema, await SchemaAsync(database, ct));
         Assert.Equal(latestData, await ReferenceDataAsync(database, ct));
+        Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
 
         // ... + HardenOemIdentityAndIndexes.
         await migrator.MigrateAsync(DirectoryDelete, ct);
@@ -336,6 +341,15 @@ public sealed class MigrationRoundTripTests
     }
 
     /// <summary>Seeded reference data compared by natural keys (auto-increment ids may differ after a re-seed).</summary>
+    private static async Task<(int Suppliers, int Parts, int RobotTypes)> CatalogCountsAsync(
+        SchemaShapeTests.SchemaDatabaseScope database, CancellationToken ct)
+    {
+        await using var connection = await database.Database.OpenAsync(ct);
+        return (await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"),
+            await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"),
+            await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM project_dictionaries WHERE type='ROBOT_TYPE'"));
+    }
+
     private static async Task<string[]> ReferenceDataAsync(SchemaShapeTests.SchemaDatabaseScope database, CancellationToken ct)
     {
         await using var connection = await database.Database.OpenAsync(ct);

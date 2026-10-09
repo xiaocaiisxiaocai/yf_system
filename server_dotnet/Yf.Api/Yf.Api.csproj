@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Data\robot-parts-20260923.json" />
+    <EmbeddedResource Include="Data\robot-catalog-20261008.json" />
   </ItemGroup>
 
   <ItemGroup>

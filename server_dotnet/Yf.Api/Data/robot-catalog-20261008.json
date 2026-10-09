@@ -1,0 +1,194 @@
+{
+  "source": {
+    "fileName": "手臂料號-2026-10-7.xlsx",
+    "sha256": "d4592ee72ba6c45023caff0f26a7adbed2685e8c3ddd37b7fac843165c90aafe",
+    "sheets": [
+      "三(四)轴",
+      "SCARA四軸",
+      "蜘蛛手"
+    ],
+    "columns": {
+      "supplierName": "品牌",
+      "partNumber": "料號/料号",
+      "model": "SAP品名規格（最新）"
+    },
+    "normalizations": [
+      {
+        "sheet": "三(四)轴",
+        "cell": "D5",
+        "operation": "trim leading/trailing whitespace"
+      },
+      {
+        "sheet": "三(四)轴",
+        "cell": "C8",
+        "operation": "trim leading/trailing whitespace"
+      }
+    ],
+    "excludedPartNumbers": [
+      "C-TER20800SR",
+      "C-TER201000SRHI",
+      "C-TER201000SRHIC",
+      "C-TER201000SRHIA",
+      "C-TER201000SRHICA",
+      "C-TLS20BA04S1",
+      "C-TLS20BA04SRC90B",
+      "C-TLS6702S",
+      "C-MLS6702C",
+      "C-MLS10B802S",
+      "C-MLS10B803S",
+      "C-TLS20A04S",
+      "C-TD3PM1600P15",
+      "C-TD3PM1300P5"
+    ]
+  },
+  "removedSixAxisParts": [
+    {
+      "supplierName": "安川",
+      "partNumber": "C-TGP251730"
+    },
+    {
+      "supplierName": "埃斯顿",
+      "partNumber": "C-TER151430MI"
+    },
+    {
+      "supplierName": "埃斯顿",
+      "partNumber": "C-TER20B1760HI"
+    }
+  ],
+  "robotTypes": [
+    {
+      "name": "六轴",
+      "sortNo": 1
+    },
+    {
+      "name": "三轴",
+      "sortNo": 2
+    },
+    {
+      "name": "四轴",
+      "sortNo": 3
+    },
+    {
+      "name": "SCARA四轴",
+      "sortNo": 4
+    },
+    {
+      "name": "蜘蛛手",
+      "sortNo": 5
+    }
+  ],
+  "parts": [
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TNB1216R9533XBC5",
+      "model": "珞石三轴NB12-16KG-R953-3-防酸碱直出线5M-不含示教器",
+      "sheet": "三(四)轴",
+      "sourceRow": 3
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TNB1216R9534XBC5",
+      "model": "珞石四轴NB12-16KG-R953-4-防酸碱直出线5M-不含示教器",
+      "sheet": "三(四)轴",
+      "sourceRow": 4
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TNB12169534XBC5R",
+      "model": "珞石四軸NB12-16KG-R953-4-防酸堿右出線5M-不含示教器",
+      "sheet": "三(四)轴",
+      "sourceRow": 5
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TNB1216R9534XBCA",
+      "model": "珞石四轴NB12-16KG-R953-4-防酸碱直出线5M-不含示教器-发那科黄",
+      "sheet": "三(四)轴",
+      "sourceRow": 6
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TNB1220R9534XBC5",
+      "model": "珞石四轴NB12-20KG-R953-4-防酸碱直出线5M-不含示教器",
+      "sheet": "三(四)轴",
+      "sourceRow": 7
+    },
+    {
+      "supplierName": "珞石",
+      "partNumber": "C-TNB1225R9534XBC5",
+      "model": "珞石四轴NB12-25KG-R953-4-防酸碱直出线5M-不含示教器",
+      "sheet": "三(四)轴",
+      "sourceRow": 8
+    },
+    {
+      "supplierName": "海康",
+      "partNumber": "C-THSR251000R500AA",
+      "model": "海康SCARA機器人HSR25-1000-R500-A1-含防塵罩-不含示教器",
+      "sheet": "SCARA四軸",
+      "sourceRow": 3
+    },
+    {
+      "supplierName": "海康",
+      "partNumber": "C-THSR351000R500AA",
+      "model": "海康SCARA機器人HSR35-1000-R500-A1-含防塵罩-不含示教器",
+      "sheet": "SCARA四軸",
+      "sourceRow": 4
+    },
+    {
+      "supplierName": "海康",
+      "partNumber": "C-THSR251000R500A1",
+      "model": "海康SCARA機器人HSR25-1000-R500-A1-含防塵罩-含示教器",
+      "sheet": "SCARA四軸",
+      "sourceRow": 5
+    },
+    {
+      "supplierName": "海康",
+      "partNumber": "C-THSR351000R500A1",
+      "model": "海康SCARA機器人HSR35-1000-R500-A1-含防塵罩-含示教器",
+      "sheet": "SCARA四軸",
+      "sourceRow": 6
+    },
+    {
+      "supplierName": "匯川",
+      "partNumber": "C-TIRS20100Z42S5",
+      "model": "匯川SCARA機器人IR-CS20-100Z42S5(標配Z軸上罩)",
+      "sheet": "SCARA四軸",
+      "sourceRow": 14
+    },
+    {
+      "supplierName": "翼菲",
+      "partNumber": "C-TBAT1600S6",
+      "model": "翼菲蜘蛛手BAT-1600-S6,無CC-LINK,I/O各32點,NPN",
+      "sheet": "蜘蛛手",
+      "sourceRow": 3
+    },
+    {
+      "supplierName": "翼菲",
+      "partNumber": "C-TBAT1600S6A",
+      "model": "翼菲蜘蛛手BAT-1600-S6無CCLINK,I/O各32點NPN,三相220V",
+      "sheet": "蜘蛛手",
+      "sourceRow": 4
+    },
+    {
+      "supplierName": "翼菲",
+      "partNumber": "C-TBAT1300S6",
+      "model": "並聯機器人BAT1300-S6,無CC-LINK,I/O各32點,NPN型，三相",
+      "sheet": "蜘蛛手",
+      "sourceRow": 5
+    },
+    {
+      "supplierName": "發那科",
+      "partNumber": "C-TM2IA3SL",
+      "model": "發那科蜘蛛手 M-2iA/3SL(CC-LINK含30萬像素CCD)",
+      "sheet": "蜘蛛手",
+      "sourceRow": 12
+    },
+    {
+      "supplierName": "發那科",
+      "partNumber": "C-TM2IA3SLA",
+      "model": "發那科蜘蛛手 M-2iA/3SL(CC-LINK含130萬像素CCD)",
+      "sheet": "蜘蛛手",
+      "sourceRow": 13
+    }
+  ]
+}

@@ -34,11 +34,11 @@ public sealed class ProjectMetadataTests
 
         var priorityId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
             "SELECT id FROM project_dictionaries WHERE type='PRIORITY' AND name='高'", cancellationToken: ct));
-        // Robot types are not seeded: they are maintained like any dictionary entry.
+        // Besides the seeded presets, Robot types are maintained like any dictionary entry.
         var robotTypeId = Id(await dictionaries.CreateAsync(conn, actor, new()
         {
             Type = " robot_type ",
-            Name = " 六轴 ",
+            Name = " 测试类型 ",
             SortNo = 10,
             Enabled = true,
         }, null, ct));
@@ -149,7 +149,7 @@ public sealed class ProjectMetadataTests
             Assert.Equal("RP-001", root.GetProperty("robotPartNumber").GetString());
             Assert.Equal("Robot Model A", root.GetProperty("robotModelName").GetString());
             Assert.Equal(robotTypeId, root.GetProperty("robotTypeId").GetUInt64());
-            Assert.Equal("六轴", root.GetProperty("robotTypeName").GetString());
+            Assert.Equal("测试类型", root.GetProperty("robotTypeName").GetString());
             Assert.Equal(actor.Id, root.GetProperty("responsibleUserId").GetUInt64());
             Assert.Equal(JsonValueKind.Null, root.GetProperty("sectionId").ValueKind);
             Assert.Equal(JsonValueKind.Null, root.GetProperty("sectionName").ValueKind);
@@ -220,7 +220,7 @@ public sealed class ProjectMetadataTests
         await dictionaries.UpdateAsync(conn, actor, robotTypeId, new()
         {
             Type = "ROBOT_TYPE",
-            Name = "六轴",
+            Name = "测试类型",
             SortNo = 10,
             Enabled = false,
         }, null, ct);
