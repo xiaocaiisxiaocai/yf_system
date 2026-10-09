@@ -107,6 +107,7 @@ describe('ProjectList migrated behavior', () => {
     await enterCreatedOption('subprojectNames_input', '子项目-A')
     await enterCreatedOption('workOrderNos_input', 'WO-1')
     await user.type(within(dialog).getByPlaceholderText('请输入机型'), 'M1')
+    await user.type(within(dialog).getByPlaceholderText('请输入 Robot 负责人'), ' 张三 ')
 
     await selectById('supplierId_input', '厂商甲')
     await selectById('supplierId_input', '厂商乙')
@@ -146,6 +147,7 @@ describe('ProjectList migrated behavior', () => {
       robotPartId: 202,
       priorityId: 14,
       robotTypeId: 21,
+      robotOwnerName: '张三',
       expectedCompletionDate: '2026-09-30',
       subprojectNames: ['子项目-A'],
     })
@@ -179,11 +181,13 @@ describe('ProjectList migrated behavior', () => {
     // Projects created before Robot 类型 existed have none; it is required, so saving asks for it first.
     await user.click(within(dialog).getByRole('button', { name: '保存并同步' }))
     expect(await within(dialog).findByText('请选择 Robot 类型')).toBeInTheDocument()
+    expect(within(dialog).getByText('请填写 Robot 负责人')).toBeInTheDocument()
     expect(mocks.put).not.toHaveBeenCalled()
     await selectById('robotTypeId_input', '六轴')
+    await user.type(within(dialog).getByPlaceholderText('请输入 Robot 负责人'), '李四')
     await user.click(within(dialog).getByRole('button', { name: '保存并同步' }))
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
-    expect(mocks.put.mock.calls[0][1]).toEqual(expect.objectContaining({ robotPartId: null, supplierId: 8, robotTypeId: 21 }))
+    expect(mocks.put.mock.calls[0][1]).toEqual(expect.objectContaining({ robotPartId: null, supplierId: 8, robotTypeId: 21, robotOwnerName: '李四' }))
     expect(mocks.put.mock.calls[0][1]).not.toHaveProperty('responsibleUserId')
   })
 

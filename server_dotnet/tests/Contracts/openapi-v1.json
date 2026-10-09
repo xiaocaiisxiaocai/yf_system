@@ -10934,6 +10934,7 @@
           "responsibleUserId",
           "responsibleUserName",
           "robotModelName",
+          "robotOwnerName",
           "robotPartId",
           "robotPartNumber",
           "robotTypeId",
@@ -11028,6 +11029,10 @@
             "nullable": true
           },
           "responsibleUserName": {
+            "type": "string",
+            "nullable": true
+          },
+          "robotOwnerName": {
             "type": "string",
             "nullable": true
           },
@@ -11213,6 +11218,7 @@
           "responsibleUserId",
           "responsibleUserName",
           "robotModelName",
+          "robotOwnerName",
           "robotPartId",
           "robotPartNumber",
           "robotTypeId",
@@ -11293,6 +11299,10 @@
             "nullable": true
           },
           "responsibleUserName": {
+            "type": "string",
+            "nullable": true
+          },
+          "robotOwnerName": {
             "type": "string",
             "nullable": true
           },
@@ -11450,6 +11460,7 @@
           "responsibleUserId",
           "responsibleUserName",
           "robotModelName",
+          "robotOwnerName",
           "robotPartId",
           "robotPartNumber",
           "robotTypeId",
@@ -11544,6 +11555,10 @@
             "nullable": true
           },
           "responsibleUserName": {
+            "type": "string",
+            "nullable": true
+          },
+          "robotOwnerName": {
             "type": "string",
             "nullable": true
           },
@@ -11664,6 +11679,7 @@
           "machineModel",
           "name",
           "priorityId",
+          "robotOwnerName",
           "robotPartId",
           "robotTypeId",
           "subprojectNames",
@@ -11703,6 +11719,10 @@
           "priorityId": {
             "type": "integer",
             "format": "int64",
+            "nullable": true
+          },
+          "robotOwnerName": {
+            "type": "string",
             "nullable": true
           },
           "robotTypeId": {

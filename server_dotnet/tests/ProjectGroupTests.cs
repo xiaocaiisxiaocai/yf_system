@@ -50,6 +50,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8402,
             PriorityId = 8403,
             RobotTypeId = 1008403,
+            RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["子项目-A", "子项目-B"],
         }, null, ct));
@@ -200,6 +201,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8505,
             PriorityId = 8506,
             RobotTypeId = 1008506,
+            RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2026-12-01",
             SubprojectNames = ["已完成子项目", "活动子项目"],
         }, null, ct));
@@ -227,6 +229,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8505,
             PriorityId = 8506,
             RobotTypeId = 1008506,
+            RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2027-01-01",
         }, null, ct);
 
@@ -263,6 +266,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8505,
             PriorityId = 8506,
             RobotTypeId = 1008506,
+            RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2027-01-01",
         }, null, ct);
         Assert.Equal(auditCount, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
@@ -308,6 +312,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8605,
             PriorityId = 8606,
             RobotTypeId = 1008606,
+            RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2026-12-01",
             SubprojectNames = ["编辑并发子项目"],
         }, null, ct));
@@ -419,6 +424,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8804,
             PriorityId = 8805,
             RobotTypeId = 1008805,
+            RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["已验收子项目", "待删除子项目"],
         }, null, ct));
@@ -490,6 +496,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8904,
             PriorityId = 8905,
             RobotTypeId = 1008905,
+            RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["实时子项目一", "实时子项目二"],
         };
@@ -511,6 +518,7 @@ public sealed class ProjectGroupTests
             RobotPartId = request.RobotPartId,
             PriorityId = request.PriorityId,
             RobotTypeId = request.RobotTypeId,
+            RobotOwnerName = request.RobotOwnerName,
             ExpectedCompletionDate = request.ExpectedCompletionDate,
         }, null, ct);
         Assert.Equal(ids.Select(id => (id, RealtimeChangeKinds.Project)).ToArray(),

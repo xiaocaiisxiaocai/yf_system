@@ -401,12 +401,16 @@ internal sealed partial class ProjectService(
             throw ApiException.BadRequest("请至少填写一个工令号");
         if (string.IsNullOrWhiteSpace(request.MachineModel)) throw ApiException.BadRequest("请填写机型");
         if (request.RobotTypeId is null or 0) throw ApiException.BadRequest("请选择 Robot 类型");
+        if (string.IsNullOrWhiteSpace(request.RobotOwnerName)) throw ApiException.BadRequest("请填写 Robot 负责人");
         if (requireRobotPart && request.RobotPartId is null or 0) throw ApiException.BadRequest("请选择 Robot 料号");
         if (request.PriorityId is null or 0) throw ApiException.BadRequest("请选择优先级");
         if (string.IsNullOrWhiteSpace(request.ExpectedCompletionDate)) throw ApiException.BadRequest("请选择需求完成时间");
         var machineModel = string.IsNullOrWhiteSpace(request.MachineModel) ? null : request.MachineModel.Trim();
         if (machineModel is not null && RuneCount(machineModel) > 128)
             throw ApiException.BadRequest("机型不能超过 128 个字符");
+        var robotOwnerName = request.RobotOwnerName!.Trim();
+        if (RuneCount(robotOwnerName) > 64)
+            throw ApiException.BadRequest("Robot 负责人不能超过 64 个字符");
         DateTime? expectedCompletionDate = null;
         if (!string.IsNullOrWhiteSpace(request.ExpectedCompletionDate))
         {
@@ -418,7 +422,7 @@ internal sealed partial class ProjectService(
             expectedCompletionDate = parsed.ToDateTime(TimeOnly.MinValue);
         }
         return new(workOrderNos, machineModel, request.RobotPartId,
-            null, null, request.PriorityId, request.RobotTypeId, expectedCompletionDate);
+            null, robotOwnerName, null, request.PriorityId, request.RobotTypeId, expectedCompletionDate);
     }
 
     /// <summary>
@@ -610,6 +614,7 @@ internal sealed partial class ProjectService(
         string? MachineModel,
         ulong? RobotPartId,
         ulong? ResponsibleUserId,
+        string? RobotOwnerName,
         ulong? SectionId,
         ulong? PriorityId,
         ulong? RobotTypeId,

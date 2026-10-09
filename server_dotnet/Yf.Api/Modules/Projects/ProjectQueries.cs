@@ -55,6 +55,7 @@ internal static class ProjectQueries
             ResponsibleUserId = project.ResponsibleUserId,
             ResponsibleUserEmployeeNo = responsibleUser.EmployeeNo,
             ResponsibleUserName = responsibleUser.RealName,
+            RobotOwnerName = project.RobotOwnerName,
             SectionId = project.SectionId,
             SectionName = section.Name,
             PriorityId = project.PriorityId,

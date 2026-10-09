@@ -50,6 +50,7 @@ public sealed class ProjectStartPrerequisiteTests
             RobotPartId = 9705,
             PriorityId = 9706,
             RobotTypeId = 1009706,
+            RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["开始条件子项目", "终止重启子项目"],
         }, null, ct);

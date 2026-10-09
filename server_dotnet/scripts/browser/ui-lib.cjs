@@ -61,7 +61,7 @@ async function projectMetadata(c,token,supplierId){
  // A fresh database has no robot types (unlike priorities they are not seeded); create one on demand.
  let robotTypes=await(await api(c,'GET','/project-dictionaries?type=ROBOT_TYPE&enabledOnly=true',undefined,token)).json();
  if(robotTypes.length===0)robotTypes=[await(await api(c,'POST','/project-dictionaries',{type:'ROBOT_TYPE',name:'浏览器验收 Robot 类型',parentId:null,sortNo:10,enabled:true},token)).json()];
- return {robotPartId:parts[0].id,priorityId:priorities[0].id,robotTypeId:robotTypes[0].id,expectedCompletionDate:'2099-12-31'};
+ return {robotPartId:parts[0].id,priorityId:priorities[0].id,robotTypeId:robotTypes[0].id,robotOwnerName:'浏览器 Robot 负责人',expectedCompletionDate:'2099-12-31'};
 }
 async function navigate(p,url){await p.goto(s.base+url);await p.getByText('收起导航',{exact:true}).waitFor();}
 async function action(p,suffix,method,fn,expectedStatus=200){const [r]=await Promise.all([p.waitForResponse(r=>new URL(r.url()).pathname.endsWith(suffix)&&r.request().method()===method),Promise.resolve().then(fn)]);assert.equal(r.status(),expectedStatus,suffix);return r.json();}

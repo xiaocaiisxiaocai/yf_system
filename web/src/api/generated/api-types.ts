@@ -1043,6 +1043,7 @@ export interface ProjectDetailResponse {
   responsibleUserId: number | null
   responsibleUserEmployeeNo: string | null
   responsibleUserName: string | null
+  robotOwnerName: string | null
   sectionId: number | null
   sectionName: string | null
   priorityId: number | null
@@ -1100,6 +1101,7 @@ export interface ProjectGroupResponse {
   responsibleUserId: number | null
   responsibleUserEmployeeNo: string | null
   responsibleUserName: string | null
+  robotOwnerName: string | null
   sectionId: number | null
   sectionName: string | null
   priorityId: number | null
@@ -1155,6 +1157,7 @@ export interface ProjectResponse {
   responsibleUserId: number | null
   responsibleUserEmployeeNo: string | null
   responsibleUserName: string | null
+  robotOwnerName: string | null
   sectionId: number | null
   sectionName: string | null
   priorityId: number | null
@@ -1192,6 +1195,7 @@ export interface ProjectUpsertRequest {
   machineModel?: string | null
   robotPartId?: number | null
   priorityId?: number | null
+  robotOwnerName?: string | null
   robotTypeId?: number | null
   expectedCompletionDate?: string | null
   subprojectNames?: Array<string> | null

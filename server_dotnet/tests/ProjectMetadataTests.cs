@@ -99,10 +99,11 @@ public sealed class ProjectMetadataTests
             RobotPartId = partId,
             PriorityId = priorityId,
             RobotTypeId = robotTypeId,
+            RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["必填校验子项目"],
         };
-        foreach (var field in new[] { "workOrderNos", "machineModel", "robotPartId", "priorityId", "robotTypeId", "expectedCompletionDate" })
+        foreach (var field in new[] { "workOrderNos", "machineModel", "robotPartId", "priorityId", "robotTypeId", "robotOwnerName", "expectedCompletionDate" })
         {
             var node = JsonSerializer.SerializeToNode(complete)!;
             node[field] = null;
@@ -134,6 +135,7 @@ public sealed class ProjectMetadataTests
             RobotPartId = partId,
             PriorityId = priorityId,
             RobotTypeId = robotTypeId,
+            RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["元数据子项目"],
         }, null, ct);
@@ -150,6 +152,7 @@ public sealed class ProjectMetadataTests
             Assert.Equal("Robot Model A", root.GetProperty("robotModelName").GetString());
             Assert.Equal(robotTypeId, root.GetProperty("robotTypeId").GetUInt64());
             Assert.Equal("测试类型", root.GetProperty("robotTypeName").GetString());
+            Assert.Equal("Robot 负责人", root.GetProperty("robotOwnerName").GetString());
             Assert.Equal(actor.Id, root.GetProperty("responsibleUserId").GetUInt64());
             Assert.Equal(JsonValueKind.Null, root.GetProperty("sectionId").ValueKind);
             Assert.Equal(JsonValueKind.Null, root.GetProperty("sectionName").ValueKind);
@@ -186,6 +189,7 @@ public sealed class ProjectMetadataTests
             RobotPartId = partId,
             PriorityId = priorityId,
             RobotTypeId = robotTypeId,
+            RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2026-12-31",
         }, null, ct);
         using (var updatedJson = Json(updated))
@@ -257,6 +261,7 @@ public sealed class ProjectMetadataTests
         RobotPartId = robotPartId ?? source.RobotPartId,
         PriorityId = source.PriorityId,
         RobotTypeId = robotTypeId ?? source.RobotTypeId,
+        RobotOwnerName = source.RobotOwnerName,
         ExpectedCompletionDate = source.ExpectedCompletionDate,
         SubprojectNames = source.SubprojectNames,
     };

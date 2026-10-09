@@ -214,6 +214,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
         robotPartId: detail.group.robotPartId,
         priorityId: detail.group.priorityId,
         robotTypeId: detail.group.robotTypeId,
+        robotOwnerName: detail.group.robotOwnerName,
         expectedCompletionDate: detail.group.expectedCompletionDate,
       });
       const updated = await json('GET', '/project-groups/' + flow.groupId);

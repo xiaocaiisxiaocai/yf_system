@@ -16,6 +16,7 @@ public sealed class ProjectGroup
     public ulong? RobotPartId { get; set; }
     public string? LegacyRobotModelName { get; set; }
     public ulong? ResponsibleUserId { get; set; }
+    public string? RobotOwnerName { get; set; }
     public ulong? SectionId { get; set; }
     public ulong? PriorityId { get; set; }
     public ulong? RobotTypeId { get; set; }
@@ -62,6 +63,7 @@ public sealed class Project
     public ulong? RobotPartId { get; set; }
     public string? LegacyRobotModelName { get; set; }
     public ulong? ResponsibleUserId { get; set; }
+    public string? RobotOwnerName { get; set; }
     public ulong? SectionId { get; set; }
     public ulong? PriorityId { get; set; }
     public ulong? RobotTypeId { get; set; }
@@ -166,6 +168,7 @@ public sealed class ProjectGroupConfig : IEntityTypeConfiguration<ProjectGroup>
         b.Property(x => x.RobotPartId).HasColumnName("robot_part_id");
         b.Property(x => x.LegacyRobotModelName).HasColumnName("legacy_robot_model_name").HasMaxLength(512);
         b.Property(x => x.ResponsibleUserId).HasColumnName("responsible_user_id");
+        b.Property(x => x.RobotOwnerName).HasColumnName("robot_owner_name").HasMaxLength(64);
         b.Property(x => x.SectionId).HasColumnName("section_id");
         b.Property(x => x.PriorityId).HasColumnName("priority_id");
         b.Property(x => x.RobotTypeId).HasColumnName("robot_type_id");
@@ -253,6 +256,7 @@ public sealed class ProjectConfig : IEntityTypeConfiguration<Project>
         b.Property(x => x.RobotPartId).HasColumnName("robot_part_id");
         b.Property(x => x.LegacyRobotModelName).HasColumnName("legacy_robot_model_name").HasMaxLength(512);
         b.Property(x => x.ResponsibleUserId).HasColumnName("responsible_user_id");
+        b.Property(x => x.RobotOwnerName).HasColumnName("robot_owner_name").HasMaxLength(64);
         b.Property(x => x.SectionId).HasColumnName("section_id");
         b.Property(x => x.PriorityId).HasColumnName("priority_id");
         b.Property(x => x.RobotTypeId).HasColumnName("robot_type_id");

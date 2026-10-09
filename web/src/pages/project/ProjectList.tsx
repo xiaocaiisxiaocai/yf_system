@@ -25,6 +25,7 @@ interface ProjectGroupFormValues {
   robotPartId?: number
   priorityId?: number
   robotTypeId?: number
+  robotOwnerName?: string
   expectedCompletionDate?: string
   subprojectNames?: string[]
 }
@@ -181,7 +182,8 @@ export default function ProjectList() {
     form.setFieldsValue({
       name: group.name, description: group.description, supplierId: group.supplierId, workOrderNos: group.workOrderNos,
       machineModel: group.machineModel ?? undefined, robotPartId: group.robotPartId ?? undefined,
-      priorityId: group.priorityId ?? undefined, robotTypeId: group.robotTypeId ?? undefined, expectedCompletionDate: group.expectedCompletionDate ?? undefined,
+      priorityId: group.priorityId ?? undefined, robotTypeId: group.robotTypeId ?? undefined,
+      robotOwnerName: group.robotOwnerName ?? undefined, expectedCompletionDate: group.expectedCompletionDate ?? undefined,
     })
     setSelectedSupplierId(group.supplierId); setSelectedRobotPartId(group.robotPartId ?? null); loadMetadataOptions()
     loadRobotParts(group.supplierId)
@@ -251,6 +253,7 @@ export default function ProjectList() {
         name: values.name, description: values.description, supplierId: Number(values.supplierId),
         workOrderNos: normalizeList(values.workOrderNos), machineModel: values.machineModel?.trim() || null,
         robotPartId, priorityId: nullableNumber(values.priorityId), robotTypeId: nullableNumber(values.robotTypeId),
+        robotOwnerName: values.robotOwnerName?.trim() || null,
         expectedCompletionDate: values.expectedCompletionDate || null,
         subprojectNames: editing ? undefined : normalizeList(values.subprojectNames),
       }
@@ -278,6 +281,7 @@ export default function ProjectList() {
     { title: 'Robot 料号', dataIndex: 'robotPartNumber', width: 120, ellipsis: true, render: displayText },
     { title: 'Robot 型号', dataIndex: 'robotModelName', width: 110, ellipsis: true, render: (value?: string | null) => <Tooltip content={displayText(value)}><span>{displayText(value)}</span></Tooltip> },
     { title: '负责人', dataIndex: 'responsibleUserName', width: 88, ellipsis: true, render: displayText },
+    { title: 'Robot 负责人', dataIndex: 'robotOwnerName', width: 110, ellipsis: true, render: displayText },
     { title: '课别', dataIndex: 'sectionName', width: 88, ellipsis: true, render: displayText },
     { title: '优先级', dataIndex: 'priorityName', width: 76, align: 'center' as const, render: displayText },
     { title: '需求完成时间', dataIndex: 'expectedCompletionDate', width: 120, align: 'center' as const, render: displayText },
@@ -336,6 +340,7 @@ export default function ProjectList() {
           <Form.Item label="Robot 料号" field="robotPartId" rules={editing && !editing.robotPartId ? [] : [{ required: true, message: '请选择 Robot 料号' }]} help={editing && !editing.robotPartId ? '历史项目可保留原型号；选择料号后将使用新料号对应型号。' : undefined}><Select allowClear showSearch placeholder={selectedSupplierId ? '选择 Robot 料号' : '请先选择 Robot 厂商'} loading={robotPartsLoading} disabled={!selectedSupplierId || robotPartsLoading || robotPartsError} filterOption={optionFilter} onChange={(value) => setSelectedRobotPartId(nullableNumber(value))}>{partOptions.map((item) => <Select.Option key={item.id} value={item.id} disabled={!item.enabled}>{item.partNumber}{item.enabled ? '' : '（已停用）'}</Select.Option>)}</Select></Form.Item>
           <Form.Item className="form-grid-full" label="Robot 型号（自动带出）"><Input.TextArea readOnly autoSize={{ minRows: 2, maxRows: 4 }} value={selectedPart?.model ?? (editing && !selectedRobotPartId ? editing.robotModelName ?? '' : '')} placeholder={selectedRobotPartId ? '所选料号未设置型号' : '选择 Robot 料号后自动带出'} /></Form.Item>
           <Form.Item label="负责人"><Input readOnly value={editing ? `${editing.responsibleUserName || '未设置'}${editing.responsibleUserEmployeeNo ? `（${editing.responsibleUserEmployeeNo}）` : ''}` : `${user?.realName || '当前用户'}${user?.employeeNo ? `（${user.employeeNo}）` : ''}`} /></Form.Item>
+          <Form.Item label="Robot 负责人" field="robotOwnerName" rules={[{ required: true, message: '请填写 Robot 负责人' }, textLengthRule('Robot 负责人', 64)]}><Input maxLength={64} placeholder="请输入 Robot 负责人" /></Form.Item>
           <Form.Item label="课别" help={editing ? undefined : '按创建人的课别记录，未设置也可创建'}><Input readOnly value={editing ? editing.sectionName || '未设置' : '自动带出'} /></Form.Item>
           <Form.Item label="优先级" field="priorityId" rules={[{ required: true, message: '请选择优先级' }]}><Select allowClear showSearch placeholder="选择优先级" loading={metadataOptionsLoading} disabled={metadataOptionsLoading || metadataOptionsError} filterOption={optionFilter}>{priorityOptions.map((item) => <Select.Option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}{item.enabled ? '' : '（已停用）'}</Select.Option>)}</Select></Form.Item>
           <Form.Item label="需求完成时间" field="expectedCompletionDate" rules={[{ required: true, message: '请选择需求完成时间' }]}><DatePicker allowClear format="YYYY-MM-DD" placeholder="选择需求完成时间" style={{ width: '100%' }} /></Form.Item>

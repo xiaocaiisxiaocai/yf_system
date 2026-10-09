@@ -109,6 +109,7 @@ internal sealed class ProjectGroupService(
             RobotPartId = metadata.RobotPartId,
             LegacyRobotModelName = null,
             ResponsibleUserId = metadata.ResponsibleUserId,
+            RobotOwnerName = metadata.RobotOwnerName,
             SectionId = metadata.SectionId,
             PriorityId = metadata.PriorityId,
             RobotTypeId = metadata.RobotTypeId,
@@ -155,6 +156,7 @@ internal sealed class ProjectGroupService(
             metadata.MachineModel,
             metadata.RobotPartId,
             metadata.ResponsibleUserId,
+            metadata.RobotOwnerName,
             metadata.SectionId,
             metadata.PriorityId,
             metadata.RobotTypeId,
@@ -212,6 +214,7 @@ internal sealed class ProjectGroupService(
             || before.RobotPartId != metadata.RobotPartId
             || before.PriorityId != metadata.PriorityId
             || before.RobotTypeId != metadata.RobotTypeId
+            || before.RobotOwnerName != metadata.RobotOwnerName
             || before.ExpectedCompletionDate != metadata.ExpectedCompletionDate;
         var groupChanged = before.Name != name
             || before.Description != request.Description
@@ -235,6 +238,7 @@ internal sealed class ProjectGroupService(
                 .SetProperty(group => group.SectionId, metadata.SectionId)
                 .SetProperty(group => group.PriorityId, metadata.PriorityId)
                 .SetProperty(group => group.RobotTypeId, metadata.RobotTypeId)
+                .SetProperty(group => group.RobotOwnerName, metadata.RobotOwnerName)
                 .SetProperty(group => group.ExpectedCompletionDate, ToDateOnly(metadata.ExpectedCompletionDate)), ct);
         }
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
@@ -254,6 +258,7 @@ internal sealed class ProjectGroupService(
                     .SetProperty(project => project.RobotPartId, metadata.RobotPartId)
                     .SetProperty(project => project.PriorityId, metadata.PriorityId)
                     .SetProperty(project => project.RobotTypeId, metadata.RobotTypeId)
+                    .SetProperty(project => project.RobotOwnerName, metadata.RobotOwnerName)
                     .SetProperty(project => project.ExpectedCompletionDate, ToDateOnly(metadata.ExpectedCompletionDate)), ct);
             if (metadata.RobotPartId is not null)
             {
@@ -292,6 +297,7 @@ internal sealed class ProjectGroupService(
                 new("robotPartId", "Robot 料号", before.RobotPartId, metadata.RobotPartId),
                 new("priorityId", "优先级", before.PriorityId, metadata.PriorityId),
                 new("robotTypeId", "Robot 类型", before.RobotTypeId, metadata.RobotTypeId),
+                new("robotOwnerName", "Robot 负责人", before.RobotOwnerName, metadata.RobotOwnerName),
                 new("expectedCompletionDate", "预计完成日期",
                     DateValue(before.ExpectedCompletionDate), DateValue(metadata.ExpectedCompletionDate))),
         })).ToArray();
@@ -492,6 +498,7 @@ internal sealed class ProjectGroupService(
         RobotPartId = metadata.RobotPartId,
         LegacyRobotModelName = null,
         ResponsibleUserId = metadata.ResponsibleUserId,
+        RobotOwnerName = metadata.RobotOwnerName,
         SectionId = metadata.SectionId,
         PriorityId = metadata.PriorityId,
         RobotTypeId = metadata.RobotTypeId,
@@ -574,6 +581,7 @@ internal sealed class ProjectGroupService(
                 ResponsibleUserId = mainProject.ResponsibleUserId,
                 ResponsibleUserEmployeeNo = owner.EmployeeNo,
                 ResponsibleUserName = owner.RealName,
+                RobotOwnerName = mainProject.RobotOwnerName,
                 SectionId = mainProject.SectionId,
                 SectionName = section.Name,
                 PriorityId = mainProject.PriorityId,
@@ -732,6 +740,7 @@ internal sealed class ProjectGroupService(
         group.MachineModel,
         group.RobotPartId,
         group.ResponsibleUserId,
+        group.RobotOwnerName,
         group.SectionId,
         group.PriorityId,
         group.RobotTypeId,

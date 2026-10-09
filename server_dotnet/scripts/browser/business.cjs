@@ -169,6 +169,7 @@ async function preview(page, name, kind, label) {
         await addToken(modal, '输入子项目名称后按回车，可一次创建多个', childName);
         await addToken(modal, '输入工令号后按回车，可填写多个', 'WO-' + crypto.randomBytes(4).toString('hex'));
         await modal.getByPlaceholder('请输入机型', { exact: true }).fill('自动验收机型');
+        await modal.getByPlaceholder('请输入 Robot 负责人', { exact: true }).fill('自动验收 Robot 负责人');
         await choose(creatorPage, modal, '选择 Robot 厂商', f.suppliers[key].name);
         await choose(creatorPage, modal, '选择 Robot 类型', robotTypes[0].name);
         await choose(creatorPage, modal, '选择 Robot 料号', f.robotParts[key].partNumber);

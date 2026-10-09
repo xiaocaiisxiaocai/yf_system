@@ -214,6 +214,7 @@ def run_audit_checks(client, conn, check):
         "robotPartId": current_group["robotPartId"],
         "priorityId": current_group["priorityId"],
         "robotTypeId": current_group["robotTypeId"],
+        "robotOwnerName": current_group["robotOwnerName"],
         "expectedCompletionDate": current_group["expectedCompletionDate"],
     })
     project_update = _latest(client, "PROJECT_GROUP_UPDATE", group_id)

@@ -326,6 +326,7 @@ async function choose(page, placeholder, optionName) {
         robotPartId: group.group.robotPartId,
         priorityId: group.group.priorityId,
         robotTypeId: group.group.robotTypeId,
+        robotOwnerName: group.group.robotOwnerName,
         expectedCompletionDate: group.group.expectedCompletionDate,
       }, adminToken, 409);
     });

@@ -10,7 +10,7 @@ namespace Yf.Api.Tests;
 [Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class MigrationPreflightTests
 {
-    private const string Latest = "20261008085919_SeedArmCatalogAndRobotTypes";
+    private const string Latest = "20261009074458_AddProjectRobotOwnerName";
     private const string Barrier = "20261006031500_ReplaceOemMalwareScanningWithValidation";
 
     [Fact(Timeout = 120_000)]

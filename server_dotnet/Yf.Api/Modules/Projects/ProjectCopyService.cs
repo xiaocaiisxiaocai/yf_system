@@ -312,6 +312,7 @@ internal sealed class ProjectCopyService(
                 RobotPartId = currentGroup.RobotPartId,
                 LegacyRobotModelName = currentGroup.LegacyRobotModelName,
                 ResponsibleUserId = currentGroup.ResponsibleUserId,
+                RobotOwnerName = currentGroup.RobotOwnerName,
                 SectionId = currentGroup.SectionId,
                 PriorityId = currentGroup.PriorityId,
                 RobotTypeId = currentGroup.RobotTypeId,
@@ -402,7 +403,7 @@ internal sealed class ProjectCopyService(
                 copyId, source = Snapshot(currentSource),
                 target = new { id = targetProjectId, name = targetName, status = ProjectStatuses.Draft,
                     currentGroup.SupplierId, currentGroup.WorkOrderNos, currentGroup.MachineModel,
-                    currentGroup.RobotPartId, currentGroup.ResponsibleUserId,
+                    currentGroup.RobotPartId, currentGroup.ResponsibleUserId, currentGroup.RobotOwnerName,
                     currentGroup.SectionId, currentGroup.PriorityId, currentGroup.RobotTypeId,
                     currentGroup.ExpectedCompletionDate },
                 fileCount = prepared.Count, totalBytes,
@@ -656,24 +657,24 @@ internal sealed class ProjectCopyService(
     private static async Task ValidateSourceAsync(YfDbContext db, ProjectRow source, CancellationToken ct)
     {
         await ValidateCopyMetadataAsync(db, source.WorkOrderNos, source.MachineModel, source.SupplierId,
-            source.RobotPartId, source.ResponsibleUserId, source.SectionId, source.PriorityId,
+            source.RobotPartId, source.ResponsibleUserId, source.RobotOwnerName, source.SectionId, source.PriorityId,
             source.RobotTypeId, source.ExpectedCompletionDate, "源项目", ct);
     }
 
     private static async Task ValidateGroupAsync(YfDbContext db, CopyGroupRow group, CancellationToken ct)
     {
         await ValidateCopyMetadataAsync(db, group.WorkOrderNos, group.MachineModel, group.SupplierId,
-            group.RobotPartId, group.ResponsibleUserId, group.SectionId, group.PriorityId,
+            group.RobotPartId, group.ResponsibleUserId, group.RobotOwnerName, group.SectionId, group.PriorityId,
             group.RobotTypeId, group.ExpectedCompletionDate, "主项目", ct);
     }
 
     private static async Task ValidateCopyMetadataAsync(
         YfDbContext db, IReadOnlyCollection<string> workOrderNos, string? machineModel, ulong supplierId,
-        ulong? robotPartId, ulong? ownerId, ulong? sectionId, ulong? priorityId, ulong? robotTypeId,
+        ulong? robotPartId, ulong? ownerId, string? robotOwnerName, ulong? sectionId, ulong? priorityId, ulong? robotTypeId,
         DateTime? expectedCompletionDate, string label, CancellationToken ct)
     {
         if (workOrderNos.Count == 0 || string.IsNullOrWhiteSpace(machineModel)
-            || robotPartId is null or 0 || ownerId is null or 0
+            || robotPartId is null or 0 || ownerId is null or 0 || string.IsNullOrWhiteSpace(robotOwnerName)
             || priorityId is null or 0 || robotTypeId is null or 0 || expectedCompletionDate is null)
             throw ApiException.Conflict($"{label}资料不完整，请先补齐必填信息后再复制");
         if (!await ValidMetadataAsync(db, supplierId, ownerId.Value, sectionId,
@@ -720,6 +721,7 @@ internal sealed class ProjectCopyService(
             RobotPartId = group.RobotPartId,
             LegacyRobotModelName = group.LegacyRobotModelName,
             ResponsibleUserId = group.ResponsibleUserId,
+            RobotOwnerName = group.RobotOwnerName,
             SectionId = group.SectionId,
             PriorityId = group.PriorityId,
             RobotTypeId = group.RobotTypeId,
@@ -763,7 +765,7 @@ internal sealed class ProjectCopyService(
         && a.ConfirmSide == b.ConfirmSide && a.UpdatedAt == b.UpdatedAt && a.MachineModel == b.MachineModel
         && a.RobotPartId == b.RobotPartId
         && a.ResponsibleUserId == b.ResponsibleUserId && a.SectionId == b.SectionId && a.PriorityId == b.PriorityId
-        && a.RobotTypeId == b.RobotTypeId
+        && a.RobotTypeId == b.RobotTypeId && a.RobotOwnerName == b.RobotOwnerName
         && a.ExpectedCompletionDate == b.ExpectedCompletionDate && a.WorkOrderNos.SequenceEqual(b.WorkOrderNos, StringComparer.Ordinal);
 
     private static bool SameGroupSnapshot(CopyGroupRow a, CopyGroupRow b) => a.Id == b.Id
@@ -771,6 +773,7 @@ internal sealed class ProjectCopyService(
         && a.MachineModel == b.MachineModel && a.RobotPartId == b.RobotPartId
         && a.LegacyRobotModelName == b.LegacyRobotModelName && a.ResponsibleUserId == b.ResponsibleUserId
         && a.SectionId == b.SectionId && a.PriorityId == b.PriorityId && a.RobotTypeId == b.RobotTypeId
+        && a.RobotOwnerName == b.RobotOwnerName
         && a.ExpectedCompletionDate == b.ExpectedCompletionDate
         && a.WorkOrderNos.SequenceEqual(b.WorkOrderNos, StringComparer.Ordinal);
 
@@ -1041,7 +1044,7 @@ internal sealed class ProjectCopyService(
 
     private static object Snapshot(ProjectRow project) => new { id = project.Id, project.Name, project.Status,
         project.SupplierId, project.WorkOrderNos, project.MachineModel, project.RobotPartId,
-        project.ResponsibleUserId, project.SectionId, project.PriorityId, project.RobotTypeId,
+        project.ResponsibleUserId, project.RobotOwnerName, project.SectionId, project.PriorityId, project.RobotTypeId,
         project.ExpectedCompletionDate };
 
     private static ProjectCopyHistoryItem HistoryItem(CopyHistoryRow row, ulong projectId, string name) => new(row.CopyId,
@@ -1074,6 +1077,7 @@ internal sealed class ProjectCopyService(
         public ulong? RobotPartId { get; init; }
         public string? LegacyRobotModelName { get; init; }
         public ulong? ResponsibleUserId { get; init; }
+        public string? RobotOwnerName { get; init; }
         public ulong? SectionId { get; init; }
         public ulong? PriorityId { get; init; }
         public ulong? RobotTypeId { get; init; }

@@ -85,6 +85,7 @@ def _project_metadata(conn, supplier_id):
         "robotPartId": robot_part[0],
         "priorityId": priority[0],
         "robotTypeId": robot_type[0],
+        "robotOwnerName": "隔离回归 Robot 负责人",
         "expectedCompletionDate": "2099-12-31",
     }
 
@@ -142,6 +143,7 @@ def _create_project_group(creator_client, admin_client, conn, supplier_id, name)
         current.get("robotPartId") != metadata["robotPartId"]
         or not current.get("robotPartNumber")
         or not current.get("robotModelName")
+        or current.get("robotOwnerName") != metadata["robotOwnerName"]
         or "robotVendorId" in current
         or "robotVendorName" in current
         or "robotModelId" in current

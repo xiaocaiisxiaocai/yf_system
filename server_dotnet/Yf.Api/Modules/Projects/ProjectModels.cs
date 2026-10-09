@@ -27,6 +27,9 @@ public sealed class ProjectUpsertRequest
     [JsonPropertyName("priorityId")]
     public ulong? PriorityId { get; init; }
 
+    [JsonPropertyName("robotOwnerName")]
+    public string? RobotOwnerName { get; init; }
+
     [JsonPropertyName("robotTypeId")]
     public ulong? RobotTypeId { get; init; }
 
@@ -183,6 +186,7 @@ internal sealed class ProjectRow
     public ulong? ResponsibleUserId { get; init; }
     public string? ResponsibleUserEmployeeNo { get; init; }
     public string? ResponsibleUserName { get; init; }
+    public string? RobotOwnerName { get; init; }
     public ulong? SectionId { get; init; }
     public string? SectionName { get; init; }
     public ulong? PriorityId { get; init; }
@@ -215,6 +219,7 @@ internal sealed class ProjectGroupRow
     public ulong? ResponsibleUserId { get; init; }
     public string? ResponsibleUserEmployeeNo { get; init; }
     public string? ResponsibleUserName { get; init; }
+    public string? RobotOwnerName { get; init; }
     public ulong? SectionId { get; init; }
     public string? SectionName { get; init; }
     public ulong? PriorityId { get; init; }
@@ -355,6 +360,7 @@ internal static class ProjectJson
         ResponsibleUserId = row.ResponsibleUserId,
         ResponsibleUserEmployeeNo = row.ResponsibleUserEmployeeNo,
         ResponsibleUserName = row.ResponsibleUserName,
+        RobotOwnerName = row.RobotOwnerName,
         SectionId = row.SectionId,
         SectionName = row.SectionName,
         PriorityId = row.PriorityId,
@@ -388,6 +394,7 @@ internal static class ProjectJson
         row.ResponsibleUserId,
         row.ResponsibleUserEmployeeNo,
         row.ResponsibleUserName,
+        row.RobotOwnerName,
         row.SectionId,
         row.SectionName,
         row.PriorityId,

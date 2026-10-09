@@ -121,6 +121,7 @@ public record ProjectResponse
     public ulong? ResponsibleUserId { get; init; }
     public string? ResponsibleUserEmployeeNo { get; init; }
     public string? ResponsibleUserName { get; init; }
+    public string? RobotOwnerName { get; init; }
     public ulong? SectionId { get; init; }
     public string? SectionName { get; init; }
     public ulong? PriorityId { get; init; }
@@ -161,6 +162,7 @@ public sealed record ProjectGroupResponse(
     ulong? ResponsibleUserId,
     string? ResponsibleUserEmployeeNo,
     string? ResponsibleUserName,
+    string? RobotOwnerName,
     ulong? SectionId,
     string? SectionName,
     ulong? PriorityId,

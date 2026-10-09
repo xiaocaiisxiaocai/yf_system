@@ -443,10 +443,10 @@ public sealed class BackgroundProjectCopyTests
             INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
             VALUES({priorityId},'PRIORITY','后台复制优先级',NULL,1,'ACTIVE'),
                   ({robotTypeId},'ROBOT_TYPE','后台复制 Robot 类型',NULL,1,'ACTIVE');
-            INSERT INTO project_groups(id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,robot_type_id,expected_completion_date,created_at,updated_at)
-            VALUES({groupId},'后台复制主项目','测试',{supplierId},'DRAFT',@ActorId,'M1',{partId},@ActorId,NULL,{priorityId},{robotTypeId},'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-            INSERT INTO projects(id,project_group_id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,robot_type_id,expected_completion_date,created_at,updated_at)
-            VALUES({projectId},{groupId},'后台复制源项目','测试',{supplierId},'DRAFT',@ActorId,'M1',{partId},@ActorId,NULL,{priorityId},{robotTypeId},'2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO project_groups(id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,robot_type_id,robot_owner_name,expected_completion_date,created_at,updated_at)
+            VALUES({groupId},'后台复制主项目','测试',{supplierId},'DRAFT',@ActorId,'M1',{partId},@ActorId,NULL,{priorityId},{robotTypeId},'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO projects(id,project_group_id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,robot_type_id,robot_owner_name,expected_completion_date,created_at,updated_at)
+            VALUES({projectId},{groupId},'后台复制源项目','测试',{supplierId},'DRAFT',@ActorId,'M1',{partId},@ActorId,NULL,{priorityId},{robotTypeId},'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO project_group_work_orders(project_group_id,work_order_no,sort_no) VALUES({groupId},'WO-ASYNC',0);
             INSERT INTO project_work_orders(project_id,work_order_no,sort_no) VALUES({projectId},'WO-ASYNC',0);
             """, new { ActorId = actorId }, cancellationToken: ct));

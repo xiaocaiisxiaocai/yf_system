@@ -486,6 +486,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
                 ? `${project.responsibleUserName}${project.responsibleUserEmployeeNo ? `（${project.responsibleUserEmployeeNo}）` : ''}`
                 : '-',
             },
+            { label: 'Robot 负责人', value: detailText(project.robotOwnerName) },
             { label: '课别', value: detailText(project.sectionName) },
             { label: '优先级', value: detailText(project.priorityName) },
             { label: '需求完成时间', value: detailText(project.expectedCompletionDate) },
