@@ -447,6 +447,10 @@ function ProjectDetailContent({ id }: { id?: string }) {
       </div>
     )
 
+  const responsibleLabel = project.responsibleUserName
+    ? `${project.responsibleUserName}${project.responsibleUserEmployeeNo ? `（${project.responsibleUserEmployeeNo}）` : ''}`
+    : '-'
+
   return (
     <div className="project-detail-page">
       {loadErrorFor === pid && (
@@ -509,7 +513,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
           <dl className="project-group-summary-facts project-detail-facts">
             <div><dt>Robot 厂商</dt><dd title={project.supplierName || undefined}>{detailText(project.supplierName)}</dd></div>
             <div><dt>Robot 型号</dt><dd title={project.robotModelName || undefined}>{detailText(project.robotModelName)}</dd></div>
-            <div><dt>负责人</dt><dd>{project.responsibleUserName || '-'}</dd></div>
+            <div><dt>负责人</dt><dd>{responsibleLabel}</dd></div>
             <div><dt>工令号</dt><dd title={project.workOrderNos?.join('、') || undefined}>{detailText(project.workOrderNos?.join('、'))}</dd></div>
             <div><dt>优先级</dt><dd>{detailText(project.priorityName)}</dd></div>
             <div><dt>需求完成时间</dt><dd>{detailText(project.expectedCompletionDate)}</dd></div>
@@ -529,12 +533,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
             { label: 'Robot 类型', value: detailText(project.robotTypeName) },
             { label: 'Robot 料号', value: detailText(project.robotPartNumber) },
             { label: 'Robot 型号', value: detailText(project.robotModelName) },
-            {
-              label: '负责人',
-              value: project.responsibleUserName
-                ? `${project.responsibleUserName}${project.responsibleUserEmployeeNo ? `（${project.responsibleUserEmployeeNo}）` : ''}`
-                : '-',
-            },
+            { label: '负责人', value: responsibleLabel },
             { label: 'Robot 负责人', value: detailText(project.robotOwnerName) },
             { label: '课别', value: detailText(project.sectionName) },
             { label: '优先级', value: detailText(project.priorityName) },

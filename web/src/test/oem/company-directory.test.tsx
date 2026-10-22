@@ -1,14 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { AxiosInstance } from 'axios'
-import { Modal } from '@arco-design/web-react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { OemProvider } from '../../oem/OemContext'
 import { OemApi } from '../../oem/api/OemApi'
 import type { Company, Page, VendorAccount } from '../../oem/api/types'
 import CompaniesPage from '../../oem/pages/admin/CompaniesPage'
 
-afterEach(() => Modal.destroyAll())
 
 function company(overrides: Partial<Company> = {}): Company {
   return {

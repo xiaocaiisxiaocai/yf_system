@@ -448,9 +448,9 @@ function flattenDepartments(nodes, result = []) {
 
     await record('供应商及账号启停边界持久化', async () => {
       let drawer = currentDrawer();
-      let updated = await action(page, '/admin/supplier-accounts/' + account.id + '/status', 'PUT', () => (
-        accountRow().getByRole('button', { name: '禁用', exact: true }).click()
-      ));
+      // 禁用账号需要先在确认框里确认；启用不需要确认。
+      await accountRow().getByRole('button', { name: '禁用', exact: true }).click();
+      let updated = await action(page, '/admin/supplier-accounts/' + account.id + '/status', 'PUT', confirmPop);
       assert.equal(updated.status, 'DISABLED');
       await accountRow().getByRole('button', { name: '启用', exact: true }).waitFor();
       let savedAccount = (await readAccounts(supplier.id)).find((item) => item.id === account.id);

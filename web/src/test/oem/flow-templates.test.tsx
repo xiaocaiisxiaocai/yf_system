@@ -1,17 +1,12 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AxiosError } from 'axios'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Message, Modal } from '@arco-design/web-react'
+import { describe, expect, it, vi } from 'vitest'
 import type { OemApi } from '../../oem/api/OemApi'
 import type { FlowTemplate } from '../../oem/api/types'
 import { OemProvider } from '../../oem/OemContext'
 import FlowTemplatesPage from '../../oem/pages/admin/FlowTemplatesPage'
 
-afterEach(() => {
-  Modal.destroyAll()
-  Message.clear()
-})
 
 function person(id: number, realName: string) {
   return { id, employeeNo: `A${id}`, realName, eligible: true }

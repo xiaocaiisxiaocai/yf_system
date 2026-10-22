@@ -21,11 +21,14 @@ const {
     ).json();
 
     await navigate(page, '/system/dictionaries');
-    await record('项目基础数据页面显示 Robot 厂商、料号、型号和优先级合同', async () => {
-      await page.getByText('Robot 厂商', { exact: true }).first().waitFor();
-      await page.getByText('Robot 料号', { exact: true }).first().waitFor();
-      await page.getByText('Robot 型号', { exact: true }).first().waitFor();
-      await page.getByText('优先级', { exact: true }).first().waitFor();
+    await record('项目基础数据页面显示 Robot 类型、料号、型号、厂商和优先级合同', async () => {
+      // 默认停在「Robot 类型」页签；厂商与型号是「Robot 料号」页签的列。
+      for (const tab of ['Robot 类型', 'Robot 料号', '优先级']) {
+        await page.getByRole('tab', { name: tab, exact: true }).waitFor();
+      }
+      await page.getByRole('tab', { name: 'Robot 料号', exact: true }).click();
+      await page.getByRole('columnheader', { name: 'Robot 厂商', exact: true }).waitFor();
+      await page.getByRole('columnheader', { name: 'Robot 型号', exact: true }).waitFor();
     });
 
     const partNumber = 'BROWSER-' + suffix.toUpperCase();

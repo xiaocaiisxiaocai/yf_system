@@ -1,16 +1,14 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { Modal } from '@arco-design/web-react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createAppQueryClient } from '../../api/queryClient'
 import type { OemApi } from '../../oem/api/OemApi'
 import type { TransferDetail } from '../../oem/api/types'
 import { OemProvider } from '../../oem/OemContext'
 import TransferDetailPage from '../../oem/pages/TransferDetailPage'
 
-afterEach(() => Modal.destroyAll())
 
 function detail(): TransferDetail {
   return {

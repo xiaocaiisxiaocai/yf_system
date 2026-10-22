@@ -90,6 +90,11 @@ async function createGroup(context, token, supplierId, name, defaults) {
       });
       assert.equal(supplier.total, 1); assert.equal(supplier.list[0].id, groups[11].groupId);
       await page.reload(); await page.getByRole('heading', { name: 'Robot仿真协作', exact: true }).waitFor();
+      // 筛选和分页记在地址栏里，刷新后仍保留；回到不带条件的列表再继续。
+      const kept = new URL(page.url()).searchParams;
+      assert.equal(kept.get('status'), 'DRAFT');
+      assert.equal(kept.get('supplier'), String(f.suppliers.b.id));
+      await page.goto(s.base + '/projects'); await page.getByRole('heading', { name: 'Robot仿真协作', exact: true }).waitFor();
       const empty = await search(prefix + '-不存在'); assert.equal(empty.total, 0);
       const cleared = await listAction({ keyword: '', page: 1 }, async () => {
         const input = page.locator('.page-toolbar').getByPlaceholder('主项目名称', { exact: true });
@@ -216,6 +221,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
         robotTypeId: detail.group.robotTypeId,
         robotOwnerName: detail.group.robotOwnerName,
         expectedCompletionDate: detail.group.expectedCompletionDate,
+        expectedUpdatedAt: detail.group.updatedAt,
       });
       const updated = await json('GET', '/project-groups/' + flow.groupId);
       assert.equal(updated.group.name, updatedName);
@@ -348,8 +354,10 @@ async function createGroup(context, token, supplierId, name, defaults) {
       assert.equal(pendingGroup.group.pendingCount, 1);
       assert.equal(pendingGroup.projects[0].status, 'PENDING_CONFIRMATION');
       const active = statuses.IN_PROGRESS;
+      const activeGroup = await json('GET', '/project-groups/' + active.groupId);
       await json('PUT', '/project-groups/' + active.groupId, {
         name: active.groupName + '-保存',
+        expectedUpdatedAt: activeGroup.group.updatedAt,
         description: '主项目更新后说明',
         supplierId: f.suppliers.a.id,
         ...defaults,

@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { cleanup, configure } from '@testing-library/react'
+import { cleanup, configure, waitFor } from '@testing-library/react'
 import { afterAll, afterEach, vi } from 'vitest'
 
 // Parallel workers share the CPU; give findBy*/waitFor more headroom than the 1 s default.
@@ -16,6 +16,19 @@ afterEach(async () => {
   vi.unstubAllEnvs()
   vi.useRealTimers()
   if (typeof window !== 'undefined') {
+    // Modal.confirm 和 Message 挂在 Testing Library 的容器之外，cleanup 不会卸载它们；
+    // 关闭动画结束前它们还在 DOM 里，会让下一个用例查到残留的「确定」等按钮。等它们真正移除。
+    // 部分用例 mock 了 Arco，取不到 Modal/Message 时（Vitest 会直接抛错）跳过即可。
+    try {
+      const arco = await import('@arco-design/web-react')
+      arco.Modal.destroyAll()
+      arco.Message.clear()
+    } catch {
+      // 本文件 mock 了 Arco，没有真实的全局弹窗需要清理。
+    }
+    await waitFor(() => {
+      if (document.querySelector('.arco-modal-wrapper')) throw new Error('上一个用例的全局弹窗仍未移除')
+    }, { timeout: 3_000 })
     window.localStorage.clear()
     window.sessionStorage.clear()
   }

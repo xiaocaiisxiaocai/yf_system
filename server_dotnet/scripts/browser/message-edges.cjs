@@ -139,7 +139,10 @@ async function createProjectGroup(context, token, supplierId, name) {
       const sent = await action(page, relative, 'POST', () => input().press('Control+Enter'));
       await page.getByText(body, { exact: true }).waitFor();
       assert.equal((await request('GET', relative)).total, 2); assert.equal(await auditCount(sent.id), 1);
-      assert.equal(await pendingMail(), mailBefore + 1); page.expectedServerErrors.clear();
+      // 留言邮件在 2 分钟窗口内合并进同一封待发邮件：重试后的留言可能并入上一条的邮件，不一定新增一行。
+      const pendingAfter = await pendingMail();
+      assert(pendingAfter >= mailBefore && pendingAfter <= mailBefore + 1, `retried message queued ${pendingAfter - mailBefore} new mails`);
+      page.expectedServerErrors.clear();
     });
 
     const seeded = [];
