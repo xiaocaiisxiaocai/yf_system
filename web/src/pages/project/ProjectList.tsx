@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert, Badge, Button, Card, DatePicker, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
@@ -6,6 +6,9 @@ import { IconPlus } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
+import { ColumnResizeProvider, ColumnVisibilityPicker, ResizableHeaderCell } from '../../components/columnResize'
+import { columnLayoutStorageKey, withFlexibleColumn, type ColumnLayoutSpec } from '../../components/tableColumnLayout'
+import { useColumnLayout } from '../../components/useColumnLayout'
 import { useAuth } from '../../store/auth'
 import {
   type PageResp, type ProjectDictionaryOption, type ProjectGroup, type RobotPart, PROJECT_STATUS,
@@ -57,6 +60,27 @@ function cellText(value?: string | null) {
   return <span className="table-cell-text" title={text}>{text}</span>
 }
 
+// 默认列宽合计 1572，1920 视口下状态和未读仍在首屏。用户可隐藏列或拖动列宽，偏好按账号记在本机。
+// 容器还有剩余宽度时主项目名称保持设定宽度，其余列平分，避免名称列被拉得很宽。
+const PROJECT_LIST_COLUMNS: readonly ColumnLayoutSpec[] = [
+  { key: 'name', title: '主项目名称', defaultWidth: 120, minWidth: 96, locked: true },
+  { key: 'workOrderNos', title: '工令号', defaultWidth: 96, minWidth: 72 },
+  { key: 'machineModel', title: '机型', defaultWidth: 80, minWidth: 64 },
+  { key: 'supplierName', title: 'Robot 厂商', defaultWidth: 96, minWidth: 88 },
+  { key: 'robotTypeName', title: 'Robot 类型', defaultWidth: 100, minWidth: 88 },
+  { key: 'robotPartNumber', title: 'Robot 料号', defaultWidth: 116, minWidth: 88 },
+  { key: 'robotModelName', title: 'Robot 型号', defaultWidth: 88, minWidth: 80 },
+  { key: 'responsibleUserName', title: '负责人', defaultWidth: 84, minWidth: 72 },
+  { key: 'robotOwnerName', title: 'Robot 负责人', defaultWidth: 100, minWidth: 96 },
+  { key: 'sectionName', title: '课别', defaultWidth: 72, minWidth: 64 },
+  { key: 'priorityName', title: '优先级', defaultWidth: 76, minWidth: 72 },
+  { key: 'expectedCompletionDate', title: '需求完成时间', defaultWidth: 116, minWidth: 108 },
+  { key: 'progress', title: '子项目进度', defaultWidth: 112, minWidth: 96 },
+  { key: 'status', title: '状态', defaultWidth: 88, minWidth: 72 },
+  { key: 'unreadMessages', title: '未读留言', defaultWidth: 88, minWidth: 80 },
+  { key: 'actions', title: '操作', defaultWidth: 140, minWidth: 108, maxWidth: 280, locked: true },
+]
+
 function expectOptionList<T>(value: unknown): T[] {
   if (!Array.isArray(value)) throw new Error('选项接口返回格式错误')
   return value as T[]
@@ -96,6 +120,32 @@ export default function ProjectList() {
   const supplierOptionsSeq = useRef(0)
   const [form] = Form.useForm()
   const { hasPerm, user } = useAuth()
+  const columnLayout = useColumnLayout(columnLayoutStorageKey('project-groups', user?.id), PROJECT_LIST_COLUMNS)
+  const tableComponents = useMemo(() => ({ header: { cell: ResizableHeaderCell } }), [])
+  const tableHostRef = useRef<HTMLDivElement>(null)
+  const [tableWidth, setTableWidth] = useState(0)
+  useLayoutEffect(() => {
+    const host = tableHostRef.current
+    if (!host) return
+    let frame = 0
+    const measure = () => {
+      const body = host.querySelector<HTMLElement>('.arco-table-body')
+      const next = body?.clientWidth ?? 0
+      setTableWidth((current) => (current === next ? current : next))
+    }
+    measure()
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(measure)
+    })
+    observer.observe(host)
+    const body = host.querySelector('.arco-table-body')
+    if (body) observer.observe(body)
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+    }
+  }, [loadError])
   const isInternal = user?.userType === 'INTERNAL'
   const canDelete = isInternal && hasPerm('project:delete')
 
@@ -278,29 +328,28 @@ export default function ProjectList() {
     await http.delete<ApiResponses['DELETE /project-groups/{id}']>(`/project-groups/${group.id}`); Message.success('主项目已删除'); load()
   }
 
-  // 1920 视口、侧栏 200、内容与卡片内边距之后，表宽 1572 才能让状态和未读留在首屏。
-  const columns = [
-    { title: '主项目名称', dataIndex: 'name', width: 120, fixed: 'left' as const, ellipsis: true, render: (value: string, row: ProjectGroup) => <Link to={`/project-groups/${row.id}`} title={value}>{value}</Link> },
-    { title: '工令号', dataIndex: 'workOrderNos', width: 96, ellipsis: true, render: (values?: string[]) => cellText(values?.join('、')) },
-    { title: '机型', dataIndex: 'machineModel', width: 80, ellipsis: true, render: cellText },
-    { title: 'Robot 厂商', dataIndex: 'supplierName', width: 96, ellipsis: true, render: cellText },
-    { title: 'Robot 类型', dataIndex: 'robotTypeName', width: 100, ellipsis: true, render: cellText },
-    { title: 'Robot 料号', dataIndex: 'robotPartNumber', width: 116, ellipsis: true, render: cellText },
-    { title: 'Robot 型号', dataIndex: 'robotModelName', width: 88, ellipsis: true, render: (value?: string | null) => <Tooltip content={displayText(value)}><span className="table-cell-text">{displayText(value)}</span></Tooltip> },
-    { title: '负责人', dataIndex: 'responsibleUserName', width: 84, ellipsis: true, render: cellText },
-    { title: 'Robot 负责人', dataIndex: 'robotOwnerName', width: 100, ellipsis: true, render: cellText },
-    { title: '课别', dataIndex: 'sectionName', width: 72, ellipsis: true, render: cellText },
-    { title: '优先级', dataIndex: 'priorityName', width: 76, align: 'center' as const, render: cellText },
-    { title: '需求完成时间', dataIndex: 'expectedCompletionDate', width: 116, align: 'center' as const, render: cellText },
-    { title: '子项目进度', width: 112, align: 'center' as const, render: (_: unknown, row: ProjectGroup) => (
+  const columns = withFlexibleColumn(columnLayout.apply([
+    { key: 'name', title: '主项目名称', dataIndex: 'name', fixed: 'left' as const, align: 'center' as const, ellipsis: true, render: (value: string, row: ProjectGroup) => <Link to={`/project-groups/${row.id}`} title={value}>{value}</Link> },
+    { key: 'workOrderNos', title: '工令号', dataIndex: 'workOrderNos', ellipsis: true, render: (values?: string[]) => cellText(values?.join('、')) },
+    { key: 'machineModel', title: '机型', dataIndex: 'machineModel', ellipsis: true, render: cellText },
+    { key: 'supplierName', title: 'Robot 厂商', dataIndex: 'supplierName', ellipsis: true, render: cellText },
+    { key: 'robotTypeName', title: 'Robot 类型', dataIndex: 'robotTypeName', ellipsis: true, render: cellText },
+    { key: 'robotPartNumber', title: 'Robot 料号', dataIndex: 'robotPartNumber', ellipsis: true, render: cellText },
+    { key: 'robotModelName', title: 'Robot 型号', dataIndex: 'robotModelName', ellipsis: true, render: (value?: string | null) => <Tooltip content={displayText(value)}><span className="table-cell-text">{displayText(value)}</span></Tooltip> },
+    { key: 'responsibleUserName', title: '负责人', dataIndex: 'responsibleUserName', ellipsis: true, render: cellText },
+    { key: 'robotOwnerName', title: 'Robot 负责人', dataIndex: 'robotOwnerName', ellipsis: true, render: cellText },
+    { key: 'sectionName', title: '课别', dataIndex: 'sectionName', ellipsis: true, render: cellText },
+    { key: 'priorityName', title: '优先级', dataIndex: 'priorityName', align: 'center' as const, render: cellText },
+    { key: 'expectedCompletionDate', title: '需求完成时间', dataIndex: 'expectedCompletionDate', align: 'center' as const, render: cellText },
+    { key: 'progress', title: '子项目进度', align: 'center' as const, render: (_: unknown, row: ProjectGroup) => (
       <div className="project-group-progress" title={`已验收 ${row.completedCount} / ${row.subprojectCount}`}>
         <span>{row.completedCount}/{row.subprojectCount}</span>
         {row.pendingCount > 0 && <Tag size="small" color="orange">待验收 {row.pendingCount}</Tag>}
       </div>
     ) },
-    { title: '状态', dataIndex: 'status', width: 88, fixed: 'right' as const, align: 'center' as const, render: (value: string) => <Tag color={PROJECT_STATUS[value]?.color}>{PROJECT_STATUS[value]?.text || value}</Tag> },
-    { title: '未读留言', dataIndex: 'unreadMessages', width: 88, fixed: 'right' as const, align: 'center' as const, render: (value: number) => value > 0 ? <Badge count={value} /> : '-' },
-    { title: '操作', width: 140, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row: ProjectGroup) => actionSlots([
+    { key: 'status', title: '状态', dataIndex: 'status', fixed: 'right' as const, align: 'center' as const, render: (value: string) => <Tag color={PROJECT_STATUS[value]?.color}>{PROJECT_STATUS[value]?.text || value}</Tag> },
+    { key: 'unreadMessages', title: '未读留言', dataIndex: 'unreadMessages', fixed: 'right' as const, align: 'center' as const, render: (value: number) => value > 0 ? <Badge count={value} /> : '-' },
+    { key: 'actions', title: '操作', fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row: ProjectGroup) => actionSlots([
       <Button key="enter" size="mini" type="text" onClick={() => navigate(`/project-groups/${row.id}`)}>进入</Button>,
       isInternal && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(row.status) && (row.pendingCount > 0 ? (
         <Tooltip key="edit" content={`有 ${row.pendingCount} 个子项目待公司验收，暂不能编辑主项目资料`}>
@@ -309,7 +358,7 @@ export default function ProjectList() {
       ) : <Button key="edit" size="mini" type="text" onClick={() => openEdit(row)}>编辑</Button>),
       canDelete && row.subprojectCount === 0 && <Popconfirm key="delete" title={`确认删除空主项目“${row.name}”？`} onOk={() => remove(row)}><Button size="mini" type="text" status="danger">删除</Button></Popconfirm>,
     ], 'project-group') },
-  ]
+  ]), tableWidth, 'name')
 
   return (
     <Card className="page-card page-card--table">
@@ -323,12 +372,24 @@ export default function ProjectList() {
           {isInternal && <Select allowClear showSearch placeholder="Robot 厂商" style={{ width: 180 }} value={supplierId} loading={supplierOptionsLoading} disabled={supplierOptionsError} onChange={(value) => { setPage(1); setSupplierId(value as number | undefined); load() }}>{suppliers.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select>}
         </Space>
         <Space>
+          <ColumnVisibilityPicker
+            specs={PROJECT_LIST_COLUMNS}
+            hidden={columnLayout.hidden}
+            onToggle={columnLayout.toggle}
+            onShowAll={columnLayout.showAll}
+            onHideOptional={columnLayout.hideOptional}
+            onReset={columnLayout.reset}
+          />
           {supplierOptionsError && <Button size="small" onClick={loadSupplierOptions}>重试加载供应商</Button>}
           {isInternal && hasPerm('project:create') && <Button type="primary" icon={<IconPlus />} onClick={openCreate}>新建主项目</Button>}
         </Space>
       </div>
       {loadError ? <div className="page-load-error"><Typography.Text type="error">加载失败</Typography.Text><Button size="small" onClick={load}>重试</Button></div> :
-        <Table className="page-table" rowKey="id" loading={loading} columns={columns} data={data.list} scroll={{ x: columns.reduce((sum, column) => sum + column.width, 0), y: 'var(--page-table-scroll-y)' }} pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); load() } }} />}
+        <ColumnResizeProvider actions={columnLayout.actions}>
+          <div ref={tableHostRef} className="page-table-host">
+            <Table className="page-table page-table--resizable" rowKey="id" loading={loading} columns={columns} components={tableComponents} data={data.list} scroll={{ x: columns.reduce((sum, column) => sum + column.width, 0), y: 'var(--page-table-scroll-y)' }} pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); load() } }} />
+          </div>
+        </ColumnResizeProvider>}
 
       <Modal className="form-dialog" style={{ width: 760 }} title={editing ? '编辑主项目' : '新建主项目'} visible={modalOpen} onOk={submit} onCancel={closeModal} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okButtonProps={{ disabled: submitOptionsBlocked }} okText={editing ? '保存并同步' : '创建主项目'} unmountOnExit>
         <Form className="form-grid" form={form} layout="vertical">

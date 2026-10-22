@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import { Alert, Button, Checkbox, Modal, Progress, Typography, Message, Space } from '@arco-design/web-react'
 import { IconUpload, IconClose } from '@arco-design/web-react/icon'
 import { fmtSize } from '../api/types'
@@ -10,7 +10,7 @@ import {
   putUploadChunk,
   submitUploadMd5,
 } from '../api/uploads'
-import { companyMaterialNameError, isStepFile } from '../utils/uploadMaterialRules'
+import { isStepFile } from '../utils/uploadMaterialRules'
 import UploadMaterialGuide, { type UploadDirection } from './UploadMaterialGuide'
 
 interface Props {
@@ -200,16 +200,16 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
   /** 本批已提示过的拒绝原因：同一原因只弹一次，逐个文件的原因显示在各自行内。 */
   const rejectionToastsRef = useRef<Set<string>>(new Set())
   const [closing, setClosing] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const dragDepth = useRef(0)
   const [submitForAcceptance, setSubmitForAcceptance] = useState(false)
   const uploadSlots = useRef(createUploadSlots(MAX_CONCURRENT_FILES)).current
   const chunkUploadSlots = useRef(createUploadSlots(MAX_CONCURRENT_CHUNKS)).current
 
   const locking = closing || entries.some((e) => LOCKING_PHASES.includes(e.phase))
   const companyRules = direction === 'C2S'
-  const nameError = (entry: Entry) => (companyRules ? companyMaterialNameError(entry.file.name) : null)
   const pending = entries.filter((e) => e.phase === 'queued' || e.phase === 'interrupted')
   const hasQueued = pending.length > 0
-  const hasNameErrors = pending.some((e) => nameError(e) !== null)
   const missingStepInBatch = companyRules && !hasCompanyStep && hasQueued
     && !entries.some((e) => isStepFile(e.file.name) && e.phase !== 'cancelled' && e.phase !== 'rejected')
   const canAddMore = !locking && entries.every((e) => e.phase === 'queued' || e.phase === 'interrupted' || e.phase === 'rejected')
@@ -451,7 +451,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
   }
 
   const startAll = async () => {
-    if (closingRef.current || locking || hasNameErrors) return
+    if (closingRef.current || locking) return
     batchStartedRef.current = true
     rejectionToastsRef.current.clear()
     const runnable = entries.filter((entry) => entry.phase === 'queued' || entry.phase === 'interrupted')
@@ -556,7 +556,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     }
   }
 
-  const addFiles = (files: FileList | null) => {
+  const addFiles = (files: FileList | File[] | null) => {
     if (!canAddMore || closingRef.current || !files || files.length === 0) return
     if (entries.length === 0) {
       batchStartedRef.current = false
@@ -567,6 +567,35 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     }))
     setEntries((list) => [...list, ...additions])
     batchNotifiedRef.current = false
+  }
+
+  const fileDrag = (event: ReactDragEvent) => {
+    const types = event.dataTransfer?.types
+    return !!types && Array.from(types).includes('Files')
+  }
+  const onFileDragEnter = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!fileDrag(event)) return
+    event.preventDefault()
+    dragDepth.current += 1
+    if (canAddMore && !closingRef.current) setDragOver(true)
+  }
+  const onFileDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!fileDrag(event)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = canAddMore && !closingRef.current ? 'copy' : 'none'
+  }
+  const onFileDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!fileDrag(event) || dragDepth.current === 0) return
+    event.preventDefault()
+    dragDepth.current -= 1
+    if (dragDepth.current === 0) setDragOver(false)
+  }
+  const onFileDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!fileDrag(event)) return
+    event.preventDefault()
+    dragDepth.current = 0
+    setDragOver(false)
+    addFiles(event.dataTransfer.files)
   }
 
   const totalCount = entries.length
@@ -586,13 +615,20 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
         ) : (
           <>
             <Button onClick={closeAll}>关闭</Button>
-            <Button type="primary" aria-label="上传所选文件" disabled={!hasQueued || hasNameErrors} onClick={startAll} icon={<IconUpload />}>
+            <Button type="primary" aria-label="上传所选文件" disabled={!hasQueued} onClick={startAll} icon={<IconUpload />}>
               上传所选文件{hasQueued ? `（${pending.length}）` : ''}
             </Button>
           </>
         )
       }
     >
+      <div
+        className="upload-dialog-drop"
+        onDragEnter={onFileDragEnter}
+        onDragOver={onFileDragOver}
+        onDragLeave={onFileDragLeave}
+        onDrop={onFileDrop}
+      >
       {direction && <UploadMaterialGuide direction={direction} />}
       <input
         ref={fileInputRef}
@@ -607,9 +643,12 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
           if (fileInputRef.current) fileInputRef.current.value = ''
         }}
       />
-      <Button icon={<IconUpload />} aria-label="选择文件" disabled={!canAddMore} onClick={() => fileInputRef.current?.click()}>
-        {totalCount > 0 ? '继续选择文件' : '选择文件（可多选）'}
-      </Button>
+      <div className={`upload-dropzone${dragOver ? ' is-active' : ''}${canAddMore ? '' : ' is-disabled'}`}>
+        <Button icon={<IconUpload />} aria-label="选择文件" disabled={!canAddMore} onClick={() => fileInputRef.current?.click()}>
+          {totalCount > 0 ? '继续选择文件' : '选择文件（可多选）'}
+        </Button>
+        <span className="upload-dropzone-hint">{canAddMore ? '或将文件拖到此处' : '上传进行中，暂不能添加文件'}</span>
+      </div>
       {onSubmitForAcceptance && <div style={{ marginTop: 12 }}>
         <Checkbox checked={submitForAcceptance} disabled={!canAddMore}
           onChange={setSubmitForAcceptance}>全部上传成功后提交验收</Checkbox>
@@ -620,17 +659,10 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
             content="本批没有 STEP 文件。若本子项目还没有上传过 STEP 3D 图，其它文件会被拒绝，请一并选择 .step/.stp 文件。" />
         )}
       </div>
-      <div aria-live="polite">
-        {hasNameErrors && (
-          <Alert type="error" style={{ marginTop: 12 }} content="有文件名不符合要求，请移除后按规则重命名再选择。" />
-        )}
-      </div>
       {totalCount > 0 && (
         <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {entries.map((entry) => {
-            const entryError = entry.phase === 'rejected'
-              ? entry.rejectedMessage ?? null
-              : (entry.phase === 'queued' || entry.phase === 'interrupted') ? nameError(entry) : null
+            const entryError = entry.phase === 'rejected' ? entry.rejectedMessage ?? null : null
             const errorId = `upload-entry-error-${entry.key}`
             return (
             <div key={entry.key} style={{ overflowWrap: 'anywhere' }} role="group" aria-label={entry.file.name}
@@ -684,6 +716,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
           })}
         </div>
       )}
+      </div>
     </Modal>
   )
 }

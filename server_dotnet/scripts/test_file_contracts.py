@@ -402,26 +402,25 @@ def run_upload_material_checks(client, conn, check, supplier_id):
 
     missing_step = client.call(
         "POST", "/api/v1/uploads/init", init_request(project_id, "说明.pdf", pdf), expected=400)
-    misnamed = client.call(
+    plain_workbook = client.call(
         "POST", "/api/v1/uploads/init", init_request(project_id, "动作流程.xlsx", workbook), expected=400)
     check("company upload without any STEP 3D drawing is rejected before a session exists",
           missing_step.get("code") == 40001 and "STEP" in missing_step["message"])
-    check("company Excel upload must follow the CSLR motion-flow naming rule",
-          misnamed.get("code") == 40001 and "CSLR-XXX XXX机 210XXX-X 动作流程.xlsx" in misnamed["message"])
+    check("company Excel upload without STEP is rejected for the missing drawing, not the file name",
+          plain_workbook.get("code") == 40001 and "STEP" in plain_workbook["message"]
+          and "CSLR" not in plain_workbook["message"])
 
     step_session = client.call("POST", "/api/v1/uploads/init", init_request(project_id, "装配.step", step))
     same_batch = client.call("POST", "/api/v1/uploads/init", init_request(project_id, workbook_name, workbook))
-    check("an in-flight STEP session admits a correctly named same-batch workbook",
-          bool(step_session["sessionId"]) and bool(same_batch["sessionId"]))
-    # 2026-10-06: .xls/.xlsm/.xlsb follow the same naming rule as .xlsx and are in the default allowlist.
+    plain_after_step = client.call("POST", "/api/v1/uploads/init", init_request(project_id, "动作流程.xlsx", workbook))
+    check("an in-flight STEP session admits a same-batch workbook regardless of its name",
+          bool(step_session["sessionId"]) and bool(same_batch["sessionId"]) and bool(plain_after_step["sessionId"]))
+    _abort(client, plain_after_step["sessionId"])
     for extension in ("xls", "xlsm", "xlsb"):
         other = client.call("POST", "/api/v1/uploads/init",
-                            init_request(project_id, workbook_name[:-4] + extension, workbook))
-        rejected = client.call("POST", "/api/v1/uploads/init",
-                               init_request(project_id, "动作流程." + extension, workbook), expected=400)
-        check(f"company .{extension} workbook is accepted when named like .xlsx and rejected otherwise",
-              bool(other["sessionId"]) and rejected.get("code") == 40001
-              and "CSLR-XXX XXX机 210XXX-X 动作流程.xlsx" in rejected["message"])
+                            init_request(project_id, "动作流程." + extension, workbook))
+        check(f"company .{extension} workbook is accepted once a STEP session exists",
+              bool(other["sessionId"]))
         _abort(client, other["sessionId"])
     _abort(client, same_batch["sessionId"])
     _abort(client, step_session["sessionId"])

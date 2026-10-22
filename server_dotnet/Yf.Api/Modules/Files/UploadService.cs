@@ -72,11 +72,6 @@ public sealed partial class UploadService(
                 return await InitResponseAsync(existing, resumed: true, ct);
             }
 
-            // Material rules apply to new sessions only; resuming an existing session is never re-rejected.
-            if (actor.IsInternal && UploadMaterialRules.IsSpreadsheet(request.FileName)
-                && !UploadMaterialRules.IsMotionFlowWorkbookName(request.FileName))
-                throw ApiException.BadRequest(UploadMaterialRules.MotionFlowNamingMessage);
-
             // Serializes this account's session creation so concurrent inits cannot overshoot the quota.
             await using var quotaLease = await MySqlNamedLock.TryAcquireAsync(conn,
                 MySqlNamedLock.Name("upload-quota", conn.Database, actor.Id), 10, ct)

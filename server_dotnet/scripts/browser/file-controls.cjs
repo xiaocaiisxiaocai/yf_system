@@ -150,7 +150,7 @@ async function assertInsideViewport(locator, page, label) {
 
     const deleteName = prefix + '-delete.pdf';
     const pdfName = prefix + '-two-pages.pdf';
-    // 内部发给供应商的 Excel 须符合动作流程命名（上传资料要求契约-2026-09-24），这里同时覆盖繁体写法。
+    // 动作流程 Excel 不再校验文件名；这里仍用一份繁体名称覆盖上传。
     const excelName = 'CSLR-' + suffix + ' 控件機 210' + suffix.slice(0, 6) + '-1 動作流程.xlsx';
     const deleteFile = await uploadFixture(
       context, auth.accessToken, project.id, deleteName, twoPagePdf('DELETE'), { ensureStep: true },

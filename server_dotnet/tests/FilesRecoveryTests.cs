@@ -499,7 +499,7 @@ public sealed class FilesRecoveryTests
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task InternalUploadsRequireStepMaterialAndMotionFlowWorkbookNaming()
+    public async Task InternalUploadsRequireStepMaterial()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
@@ -514,18 +514,14 @@ public sealed class FilesRecoveryTests
         var workbook = UploadRequest("CSLR-605 六軸雙工位放板機 2105931-1 動作流程.xlsx", [2]);
         var noStep = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(FilesDatabaseScope.Context(), workbook, ct));
         Assert.Equal(UploadMaterialRules.StepRequiredMessage, noStep.Message);
-        var badName = await Assert.ThrowsAsync<ApiException>(() =>
+        var plainWorkbook = await Assert.ThrowsAsync<ApiException>(() =>
             scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("动作流程.xlsx", [3]), ct));
-        Assert.Equal(UploadMaterialRules.MotionFlowNamingMessage, badName.Message);
-        // .xls/.xlsm/.xlsb 与 .xlsx 同等对待：命名合规时通过命名校验（仍受 STEP 先行约束），不合规时同一提示。
+        Assert.Equal(UploadMaterialRules.StepRequiredMessage, plainWorkbook.Message);
         foreach (var extension in new[] { "xls", "xlsm", "xlsb" })
         {
-            var namedWorkbook = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(
-                FilesDatabaseScope.Context(), UploadRequest($"CSLR-605 放板机 2105931-1 动作流程.{extension}", [4]), ct));
-            Assert.Equal(UploadMaterialRules.StepRequiredMessage, namedWorkbook.Message);
-            var misnamedWorkbook = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(
+            var rejected = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(
                 FilesDatabaseScope.Context(), UploadRequest($"动作流程.{extension}", [4]), ct));
-            Assert.Equal(UploadMaterialRules.MotionFlowNamingMessage, misnamedWorkbook.Message);
+            Assert.Equal(UploadMaterialRules.StepRequiredMessage, rejected.Message);
         }
 
         // 同一批次里 STEP 会话先建立后，其余资料即可并发初始化；STEP 会话中止后恢复限制。
@@ -599,16 +595,16 @@ public sealed class FilesRecoveryTests
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task ResumingAnExistingWorkbookSessionIsNotRejectedByNamingRule()
+    public async Task ResumingAnExistingWorkbookSessionSkipsTheNewSessionStepCheck()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
         await scope.ExecuteAsync("UPDATE system_configs SET cfg_value='bin,step,xlsx' WHERE cfg_key='upload.allowed_exts'", ct);
         var request = UploadRequest("动作流程.xlsx", [3]);
         var fresh = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct));
-        Assert.Equal(UploadMaterialRules.MotionFlowNamingMessage, fresh.Message);
+        Assert.Equal(UploadMaterialRules.StepRequiredMessage, fresh.Message);
 
-        // A session created before the naming rule (or by an older client) must stay resumable.
+        // 续传已有会话，不再按新建会话检查 STEP。
         var sessionId = Guid.NewGuid().ToString("D");
         await scope.InsertSessionAsync(sessionId, "UPLOADING", expired: false,
             fileName: "动作流程.xlsx", fingerprint: Sha256Hex([3]));

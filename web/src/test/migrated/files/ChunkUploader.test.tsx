@@ -78,6 +78,12 @@ function choose(...files: File[]) {
   fireEvent.change(screen.getByLabelText('选择上传文件'), { target: { files } })
 }
 
+function dropFiles(...files: File[]) {
+  const zone = screen.getByText('或将文件拖到此处').closest('.upload-dialog-drop')
+  if (!zone) throw new Error('找不到拖放区域')
+  fireEvent.drop(zone, { dataTransfer: { files, types: ['Files'] } })
+}
+
 function startButton() {
   return screen.getByRole('button', { name: /^上传所选文件/ })
 }
@@ -110,6 +116,14 @@ describe('ChunkUploader DOM contracts', () => {
     mocks.createChunkHasher.mockReset()
     mocks.createChunkHasher.mockImplementation(() => ({ sha256: mocks.blobSha256, dispose: mocks.disposeHasher }))
     installDefaultHttp()
+  })
+
+  it('adds files dropped onto the upload dialog', () => {
+    renderUploader()
+    dropFiles(uploadFile('拖入.xlsx'), uploadFile('assembly.stp'))
+    expect(screen.getByText(/拖入\.xlsx/)).toBeVisible()
+    expect(screen.getByText(/assembly\.stp/)).toBeVisible()
+    expect(startButton()).toBeEnabled()
   })
 
   it('creates hash workers only after a file receives one of the two upload slots', async () => {
@@ -745,19 +759,18 @@ describe('ChunkUploader upload material rules', () => {
     expect(String(sessionCalls('merge')[1][0])).toContain('说明.pdf')
   })
 
-  it('blocks misnamed company Excel files and warns when the batch has no STEP', () => {
+  it('lets a company Excel file through and warns when the batch has no STEP', () => {
     renderUploader(false, 'C2S')
     expect(screen.getByText('发给供应商的资料要求')).toBeVisible()
+    expect(screen.queryByText(/CSLR-XXX XXX机 210XXX-X 动作流程/)).toBeNull()
     const examples = screen.getByRole('group', { name: '资料要求示例' })
     expect(Array.from(examples.querySelectorAll('img')).map((image) => image.getAttribute('alt')))
       .toEqual(['A. STEP 格式 3D 总装图示例', 'B. 动作流程说明 Excel 示例'])
     choose(uploadFile('动作流程.xlsx'))
 
-    expect(startButton()).toBeDisabled()
-    expect(screen.getByText(/Excel 需按「CSLR-XXX XXX机 210XXX-X 动作流程\.xlsx」命名/)).toBeVisible()
+    expect(startButton()).toBeEnabled()
+    expect(screen.queryByText(/Excel 需按/)).toBeNull()
     expect(screen.getByText(/本批没有 STEP 文件/)).toBeVisible()
-    fireEvent.click(startButton())
-    expect(sessionCalls('init')).toHaveLength(0)
   })
 
   it('accepts a traditional-Chinese motion-flow workbook name for company uploads', () => {

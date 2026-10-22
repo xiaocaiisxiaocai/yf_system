@@ -266,6 +266,18 @@ html, body, #root {
 .page-table .arco-table-pagination {
   flex: 0 0 auto;
 }
+/* 可调整列宽的表按像素锁列宽。表格宽度由各列合计决定，不使用 Arco 的 min-width:100%，
+   否则容器多出来的宽度会按比例分给每一列。主项目名称保持设定宽度，其余列平分剩余宽度。 */
+.page-table-host {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.page-table--resizable.arco-table table {
+  min-width: 0;
+}
 .audit-page {
   /* 短屏时给表头与分页预留完整空间，避免表体最后一行被分页栏覆盖。 */
   --page-table-scroll-y: max(180px, calc(100vh - 415px));
@@ -330,6 +342,48 @@ html, body, #root {
 .table-cell-stack > .arco-typography { margin: 0; }
 .table-cell-stack > .table-cell-text { width: 100%; }
 .table-cell-stack--left { align-items: flex-start; }
+
+/* 表头右缘可拖动列宽，默认不画竖线。把手落在单元格内边距上，避免被省略样式裁掉。 */
+.table-col-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 3;
+  box-sizing: border-box;
+  width: 10px;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 0;
+  cursor: col-resize;
+  touch-action: none;
+  appearance: none;
+}
+.table-col-resize:focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: -2px; }
+body.table-col-resizing,
+body.table-col-resizing * { cursor: col-resize !important; user-select: none !important; }
+.table-column-picker { display: flex; flex-direction: column; gap: 8px; width: 220px; }
+.table-column-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: min(320px, 50vh);
+  margin: 0;
+  padding: 4px 0;
+  overflow: auto;
+  border-top: 1px solid var(--app-border);
+  border-bottom: 1px solid var(--app-border);
+}
+.table-column-picker-list .arco-checkbox { display: flex; align-items: center; height: 28px; margin: 0; padding: 0 2px; }
+.table-column-picker-note { margin: 0; color: var(--app-text-muted); font-size: 12px; line-height: 18px; }
+.table-column-picker-actions { display: flex; justify-content: flex-end; }
 
 /* 工具栏与控件节奏统一 */
 .page-heading {
@@ -461,6 +515,23 @@ html, body, #root {
 .detail-heading p { margin: 4px 0 0; font-size: 13px; color: var(--app-text-muted); }
 .detail-heading + .arco-descriptions .arco-descriptions-item-value { overflow-wrap: anywhere; }
 .project-description { white-space: pre-wrap; overflow-wrap: anywhere; }
+.upload-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+  border: 1px dashed var(--color-border-3);
+  border-radius: 6px;
+  background: var(--color-fill-1);
+  text-align: center;
+}
+.upload-dropzone.is-active {
+  border-color: rgb(var(--primary-6));
+  background: var(--color-primary-light-1);
+}
+.upload-dropzone.is-disabled { opacity: 0.65; }
+.upload-dropzone-hint { color: var(--app-text-muted); font-size: 13px; line-height: 20px; }
 .upload-file-input { width: 100%; font: inherit; color: var(--app-text-muted); }
 .upload-file-input::file-selector-button { margin-right: 12px; padding: 6px 12px; border: 1px solid var(--app-border); border-radius: 6px; background: var(--color-fill-2); color: var(--color-text-1); font: inherit; cursor: pointer; }
 .upload-file-input:disabled::file-selector-button { cursor: not-allowed; opacity: 0.5; }
