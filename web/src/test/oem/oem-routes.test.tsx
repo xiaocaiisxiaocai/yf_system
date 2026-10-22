@@ -160,7 +160,7 @@ describe('OEM 前端入口与路由', () => {
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/org/depts')
     expect(screen.queryByRole('button', { name: '新增事业部' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'OEM 文件传递' })).not.toBeInTheDocument()
-    expect(get).toHaveBeenCalledWith('/departments')
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/departments'))
   })
 
   it('OEM 根路径按权限落到后台页面，而不是暴露无权的传递单页', async () => {
@@ -350,8 +350,9 @@ describe('OEM 前端入口与路由', () => {
       </QueryClientProvider>,
     )
 
-    expect(await screen.findByText('OEM 文件传递 · 厂商登录')).toBeInTheDocument()
+    expect(await screen.findByLabelText('SAA OEM 文件传递')).toBeInTheDocument()
     expect(screen.getByLabelText('登录账号')).toBeInTheDocument()
+    expect(screen.queryByText('账号由公司管理员开通。公司内部员工请通过公司门户登录。')).not.toBeInTheDocument()
   })
 
   it('厂商门户不启动或同步内部认证域', async () => {

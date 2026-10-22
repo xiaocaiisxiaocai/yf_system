@@ -71,7 +71,8 @@ html, body, #root {
   z-index: 2;
   box-sizing: border-box;
   width: 430px;
-  max-width: calc(100vw - 32px);
+  max-width: 100%;
+  min-width: 0;
   padding: 46px 44px;
   background: rgba(250, 252, 255, .97);
   border: 1px solid rgba(194, 220, 248, .72);
