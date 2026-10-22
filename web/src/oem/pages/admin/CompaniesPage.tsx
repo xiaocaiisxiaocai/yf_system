@@ -234,17 +234,21 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
       )}
       {can.manageAccounts ? (
         <>
-          <Space style={{ marginBottom: 12 }}>
-            <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setEditing('new') }}>新增账号</Button>
-            <ColumnVisibilityPicker
-              specs={OEM_ACCOUNT_COLUMNS}
-              hidden={accountTable.hidden}
-              onToggle={accountTable.toggle}
-              onShowAll={accountTable.showAll}
-              onHideOptional={accountTable.hideOptional}
-              onReset={accountTable.reset}
-            />
-          </Space>
+          {/* 与协作端供应商账号抽屉一致：左侧数量，右侧操作。 */}
+          <div className="drawer-toolbar">
+            <Typography.Text type="secondary">共 {rows.length} 个账号</Typography.Text>
+            <Space>
+              <ColumnVisibilityPicker
+                specs={OEM_ACCOUNT_COLUMNS}
+                hidden={accountTable.hidden}
+                onToggle={accountTable.toggle}
+                onShowAll={accountTable.showAll}
+                onHideOptional={accountTable.hideOptional}
+                onReset={accountTable.reset}
+              />
+              <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setEditing('new') }}>新增账号</Button>
+            </Space>
+          </div>
           {actionError && <Typography.Text className="oem-delete-error" type="error" role="alert">{actionError}</Typography.Text>}
           <ColumnResizeProvider actions={accountTable.actions}>
             <div ref={accountHostRef} className={accountTable.hostClassName}>

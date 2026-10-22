@@ -527,17 +527,12 @@ function ProjectDetailContent({ id }: { id?: string }) {
           size="small"
           column={{ xs: 1, sm: 2, md: 3, lg: 4 }}
           data={[
-            { label: '工令号', value: detailText(project.workOrderNos?.join('、')) },
+            // 上方摘要已显示厂商、型号、负责人、工令号、优先级和需求完成时间，这里只列其余资料。
             { label: '机型', value: detailText(project.machineModel) },
-            { label: 'Robot 厂商', value: detailText(project.supplierName) },
             { label: 'Robot 类型', value: detailText(project.robotTypeName) },
             { label: 'Robot 料号', value: detailText(project.robotPartNumber) },
-            { label: 'Robot 型号', value: detailText(project.robotModelName) },
-            { label: '负责人', value: responsibleLabel },
             { label: 'Robot 负责人', value: detailText(project.robotOwnerName) },
             { label: '课别', value: detailText(project.sectionName) },
-            { label: '优先级', value: detailText(project.priorityName) },
-            { label: '需求完成时间', value: detailText(project.expectedCompletionDate) },
             { label: '创建人', value: project.createdByName || '-' },
             { label: '更新时间', value: fmtTime(project.updatedAt) },
           ]}

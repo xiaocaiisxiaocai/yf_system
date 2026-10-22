@@ -82,6 +82,8 @@ html, body, #root {
 }
 .auth-heading { margin: 0 0 20px; color: #17243a; font-size: 20px; font-weight: 600; line-height: 30px; text-align: center; }
 .auth-heading--with-description { margin-bottom: 4px; }
+.oem-setting-size { line-height: 32px; }
+.drawer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .oem-account { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .oem-account-avatar { flex: 0 0 auto; background: rgb(var(--primary-6)); }
 .auth-description { margin: 0 0 24px; color: var(--color-text-3); font-size: 13px; line-height: 20px; text-align: center; }
@@ -96,6 +98,9 @@ html, body, #root {
 .auth-form > .arco-btn-primary { margin-top: 4px; box-shadow: 0 10px 26px rgba(22, 93, 255, .25); }
 .auth-notice { margin: -6px 0 20px; padding: 9px 12px; border: 1px solid #ffe0b3; border-radius: 6px; background: #fff7e8; color: #a86200; font-size: 13px; line-height: 20px; text-align: center; }
 .auth-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding-top: 2px; }
+/* 登录卡片底色接近 Arco 次要按钮的浅灰，次要按钮改为白底加描边，避免看起来像禁用。 */
+.auth-form .arco-btn-secondary:not(.arco-btn-disabled) { border: 1px solid #d9e1ec; background: #fff; color: var(--color-text-1); }
+.auth-form .arco-btn-secondary:not(.arco-btn-disabled):hover { border-color: rgb(var(--primary-5)); color: rgb(var(--primary-6)); }
 @media (max-width: 900px) {
   .auth-page { justify-content: center; padding: 92px 24px 32px; background-position: 38% center; }
   .auth-page::after { background: rgba(1, 14, 36, .42); }
@@ -966,7 +971,11 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
   }
   .layout-profile { gap: 6px; padding: 4px; }
   .layout-profile > span:not(.arco-avatar) { max-width: 98px; overflow: hidden; text-overflow: ellipsis; }
-  .mobile-menu-trigger { display: inline-flex; }
+  /* OEM 页面卡片标题在窄屏让出整行，右侧按钮换到下一行，不把标题挤成省略号。 */
+  .oem-shell .layout-content > .arco-card > .arco-card-header,
+  .oem-shell .layout-content > div > .arco-card:not(.arco-card-size-small) > .arco-card-header { flex-wrap: wrap; gap: 8px; }
+  .oem-shell .layout-content .arco-card-header-title { flex: 1 1 100%; white-space: normal; }
+  .mobile-menu-trigger { display: inline-flex; align-items: center; justify-content: center; }
   .layout-content { padding: 10px; }
   .page-card { padding: 12px; }
   .project-workflow { align-items: stretch; flex-direction: column; gap: 12px; }
@@ -1003,7 +1012,7 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 /* 平板宽度先收起侧栏，避免内容区被挤成过窄的双列。 */
 @media (min-width: 721px) and (max-width: 900px) {
   .layout-sider { display: none; }
-  .mobile-menu-trigger { display: inline-flex; }
+  .mobile-menu-trigger { display: inline-flex; align-items: center; justify-content: center; }
   .profile-grid { grid-template-columns: minmax(0, 1fr); }
 }
 

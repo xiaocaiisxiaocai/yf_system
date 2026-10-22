@@ -117,6 +117,26 @@ export function RetentionPage() {
   )
 }
 
+// 以字节为单位的设置：输入框旁换算成 MB/GB，避免管理员数位数。
+const BYTE_SETTING_KEYS = new Set([
+  'oem.upload.max_file_size',
+  'oem.upload.max_transfer_size',
+  'oem.upload.chunk_size',
+  'oem.upload.max_storage_per_company',
+  'oem.validation.archive_max_expanded_bytes',
+])
+
+function formatBytes(bytes: number) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${Number.isInteger(value) ? value : value.toFixed(2).replace(/\.?0+$/, '')} ${units[unit]}`
+}
+
 function SettingsForm({ group }: { group: 'file' | 'notify' }) {
   const { api } = useOem()
   const [items, setItems] = useState<SettingItem[]>([])
@@ -181,6 +201,9 @@ function SettingsForm({ group }: { group: 'file' | 'notify' }) {
               : <Input style={{ width: item.kind === 'extensions' ? 520 : 220 }} value={values[item.key]}
                   aria-label={item.label} disabled={item.readOnly}
                   onChange={(value) => setValues((v) => ({ ...v, [item.key]: value }))} />}
+            {BYTE_SETTING_KEYS.has(item.key) && Number(values[item.key]) > 0 && (
+              <Typography.Text type="secondary" className="oem-setting-size">约 {formatBytes(Number(values[item.key]))}</Typography.Text>
+            )}
             {item.unsupportedReason && <Typography.Text type="warning">{item.unsupportedReason}</Typography.Text>}
             {item.hint && <Typography.Text type="secondary">{item.hint}</Typography.Text>}
           </Space>

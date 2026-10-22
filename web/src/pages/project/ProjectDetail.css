@@ -22,8 +22,8 @@
 .project-detail-heading .detail-actions { flex: 0 1 auto; justify-content: flex-end; min-width: 0; }
 .project-detail-heading .project-workflow--compact { margin: 0; padding: 0; border: 0; background: transparent; }
 .project-detail-facts-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.project-detail-facts { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-.project-detail-facts > div:first-child { padding-left: 0; border-left: 0; }
+.project-group-summary-facts.project-detail-facts { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.project-group-summary-facts.project-detail-facts > div:first-child { padding-left: 0; border-left: 0; }
 .project-detail-summary-card .project-metadata { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--app-border); }
 .project-detail-summary-card .arco-descriptions-item-label,
 .project-detail-summary-card .arco-descriptions-item-value { padding-bottom: 2px; }
@@ -213,8 +213,8 @@
 .file-reference-button:hover { background: rgb(var(--primary-2)); }
 .file-reference-tag { flex: 0 0 auto; margin: 0; }
 @media (max-width: 1100px) {
-  .project-detail-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 8px; }
-  .project-detail-facts > div:nth-child(3n + 1) { padding-left: 0; border-left: 0; }
+  .project-group-summary-facts.project-detail-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 8px; }
+  .project-group-summary-facts.project-detail-facts > div:nth-child(3n + 1) { padding-left: 0; border-left: 0; }
 }
 
 @media (max-width: 720px) {
@@ -228,8 +228,9 @@
   .project-detail-summary-card .project-workflow--compact { gap: 8px; }
   .project-detail-heading { flex-direction: column; }
   .project-detail-facts-row { align-items: flex-start; flex-direction: column; }
-  .project-detail-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 8px; }
-  .project-detail-facts > div:nth-child(odd) { padding-left: 0; border-left: 0; }
+  .project-group-summary-facts.project-detail-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 8px; }
+  .project-group-summary-facts.project-detail-facts > div { padding-left: 12px; border-left: 1px solid var(--color-neutral-3); }
+  .project-group-summary-facts.project-detail-facts > div:nth-child(odd) { padding-left: 0; border-left: 0; }
   .message-panel > .message-composer { margin-bottom: 8px !important; }
   .message-panel .arco-textarea { max-height: 100px; }
   .project-copy-reference-bar,

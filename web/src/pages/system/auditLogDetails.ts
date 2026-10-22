@@ -183,6 +183,18 @@ function asIdArray(value: unknown): string[] {
     .map(String)
 }
 
+const SESSION_REVOKE_REASONS: Record<string, (detail: Record<string, unknown>) => string> = {
+  SESSION_CAP: (detail) => {
+    const count = Number(detail.evictedSessions)
+    return `登录会话超过上限，已自动退出最早的${Number.isFinite(count) && count > 0 ? ` ${count} 个` : ''}会话`
+  },
+  ROTATED: () => '登录凭据已轮换',
+  LOGOUT: () => '用户主动退出登录',
+  PASSWORD_CHANGED: () => '修改密码后注销全部会话',
+  ADMIN: () => '管理员操作（禁用账号或重置密码）注销了会话',
+  REPLAY: () => '检测到已作废的登录凭据被再次使用，已注销整组会话',
+}
+
 export function formatAuditValue(value: unknown): string {
   if (value == null || value === '') return '无'
   if (typeof value === 'boolean') return value ? '是' : '否'
@@ -415,7 +427,11 @@ export function detailNotes(row: AuditLogRow): DetailNote[] {
     notes.push({ label: '文件总大小', value: formatByteSize(detail.totalBytes), tone: 'normal' })
   }
   if (detail.passwordChanged === true) notes.push({ label: '邮箱凭据', value: '已更新（不记录密码或授权码）', tone: 'normal' })
-  const reason = cleanText(detail.reason)
+  const reasonCode = cleanText(detail.reason)
+  // 会话撤销原因是服务端的内部代码，显示为中文说明。
+  const reason = reasonCode && SESSION_REVOKE_REASONS[reasonCode]
+    ? SESSION_REVOKE_REASONS[reasonCode](detail)
+    : reasonCode
   if (reason) {
     const label = row.action === 'PROJECT_REJECT' ? '驳回原因'
       : row.action === 'PROJECT_TERMINATE' ? '终止原因'
