@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  columnLayoutStorageKey, normalizeColumnLayout, withFlexibleColumn, type ColumnLayoutSpec,
+  columnLayoutStorageKey, measureTableWidth, normalizeColumnLayout, withFlexibleColumn, type ColumnLayoutSpec,
 } from '../components/tableColumnLayout'
 
 const mocks = vi.hoisted(() => ({
@@ -75,6 +75,21 @@ describe('column layout storage', () => {
     expect(withFlexibleColumn(columns, 300, 'name')).toEqual(columns)
     expect(withFlexibleColumn(columns, Number.NaN, 'name')).toEqual(columns)
     expect(withFlexibleColumn([{ key: 'name', width: 120 }], 200, 'name')).toEqual([{ key: 'name', width: 120 }])
+  })
+
+  it('measures the table frame, not the body that shrinks to the columns', () => {
+    const host = document.createElement('div')
+    const container = document.createElement('div')
+    container.className = 'arco-table-container'
+    const body = document.createElement('div')
+    body.className = 'arco-table-body'
+    Object.defineProperty(container, 'clientWidth', { value: 900 })
+    Object.defineProperty(body, 'clientWidth', { value: 400 })
+    Object.defineProperty(body, 'offsetWidth', { value: 417 })
+    container.append(body)
+    host.append(container)
+    expect(measureTableWidth(host)).toBe(883)
+    expect(measureTableWidth(null)).toBe(0)
   })
 })
 

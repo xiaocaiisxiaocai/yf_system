@@ -4,6 +4,17 @@ import { fmtTime } from '../../../api/types'
 import type { AuditRow, RetentionTemplate, SettingItem } from '../../api/types'
 import { useCan, useOem } from '../../OemContext'
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
+import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../../components/columnResize'
+import { type ColumnLayoutSpec } from '../../../components/tableColumnLayout'
+import { useAdjustableColumns } from '../../../components/useAdjustableColumns'
+
+const OEM_AUDIT_COLUMNS: readonly ColumnLayoutSpec[] = [
+  { key: 'createdAt', title: '时间', defaultWidth: 170, minWidth: 140, locked: true },
+  { key: 'action', title: '动作', defaultWidth: 230, minWidth: 120 },
+  { key: 'actor', title: '操作人', defaultWidth: 180, minWidth: 110 },
+  { key: 'target', title: '对象', defaultWidth: 160, minWidth: 100 },
+  { key: 'detail', title: '详情', defaultWidth: 280, minWidth: 160 },
+]
 
 const MODES = [
   { value: 'KEEP', label: '不自动删除' },
@@ -182,13 +193,14 @@ export function SettingsPage() {
 }
 
 export function AuditPage() {
-  const { api } = useOem()
+  const { api, userId } = useOem()
   const [rows, setRows] = useState<AuditRow[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [keyword, setKeyword] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const tableHostRef = useRef<HTMLDivElement>(null)
   const beginRequest = useLatestRequest()
   const load = useCallback(async () => {
     const isLatest = beginRequest()
@@ -206,29 +218,54 @@ export function AuditPage() {
     }
   }, [api, page, keyword, beginRequest])
   useLoadEffect(load)
+  const auditColumns = [
+    { key: 'createdAt', title: '时间', render: (_: unknown, row: AuditRow) => fmtTime(row.createdAt) },
+    { key: 'action', title: '动作', dataIndex: 'action' },
+    {
+      key: 'actor', title: '操作人',
+      render: (_: unknown, row: AuditRow) => row.actorRealm === 'system' ? '系统'
+        : `${row.employeeNo ?? '-'}${row.actorRealm === 'oem' ? '（OEM）' : ''}`,
+    },
+    { key: 'target', title: '对象', render: (_: unknown, row: AuditRow) => (row.targetType ? `${row.targetType} #${row.targetId ?? ''}` : '-') },
+    {
+      key: 'detail', title: '详情',
+      render: (_: unknown, row: AuditRow) => {
+        const detail = { ...(row.detail ?? {}) }
+        delete (detail as Record<string, unknown>).auditContext
+        return <Typography.Text ellipsis={{ showTooltip: true }} style={{ maxWidth: 420 }}>{JSON.stringify(detail)}</Typography.Text>
+      },
+    },
+  ]
+  const table = useAdjustableColumns('oem-audit', userId, OEM_AUDIT_COLUMNS, auditColumns, 'createdAt', tableHostRef)
 
   return (
     <Card title="OEM 审计日志">
-      <Input.Search allowClear placeholder="搜索账号、动作或内容" style={{ width: 280, marginBottom: 12 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
+      <Space style={{ marginBottom: 12 }}>
+        <Input.Search allowClear placeholder="搜索账号、动作或内容" style={{ width: 280 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
+        <ColumnVisibilityPicker
+          specs={OEM_AUDIT_COLUMNS}
+          hidden={table.hidden}
+          onToggle={table.toggle}
+          onShowAll={table.showAll}
+          onHideOptional={table.hideOptional}
+          onReset={table.reset}
+        />
+      </Space>
       {error && <Alert type="error" style={{ marginBottom: 12 }} content={error} action={<Button size="small" onClick={() => void load()}>重新加载</Button>} />}
-      <Table rowKey="id" loading={loading} data={rows} pagination={{ current: page, total, pageSize: 20, onChange: setPage }} columns={[
-        { title: '时间', width: 170, render: (_: unknown, row: AuditRow) => fmtTime(row.createdAt) },
-        { title: '动作', dataIndex: 'action', width: 230 },
-        {
-          title: '操作人', width: 180,
-          render: (_: unknown, row: AuditRow) => row.actorRealm === 'system' ? '系统'
-            : `${row.employeeNo ?? '-'}${row.actorRealm === 'oem' ? '（OEM）' : ''}`,
-        },
-        { title: '对象', width: 160, render: (_: unknown, row: AuditRow) => (row.targetType ? `${row.targetType} #${row.targetId ?? ''}` : '-') },
-        {
-          title: '详情',
-          render: (_: unknown, row: AuditRow) => {
-            const detail = { ...(row.detail ?? {}) }
-            delete (detail as Record<string, unknown>).auditContext
-            return <Typography.Text ellipsis={{ showTooltip: true }} style={{ maxWidth: 420 }}>{JSON.stringify(detail)}</Typography.Text>
-          },
-        },
-      ]} />
+      <ColumnResizeProvider actions={table.actions}>
+        <div ref={tableHostRef} className={table.hostClassName}>
+          <Table
+            className={table.tableClassName}
+            rowKey="id"
+            loading={loading}
+            data={rows}
+            columns={table.columns}
+            components={table.components}
+            scroll={{ x: table.scrollX }}
+            pagination={{ current: page, total, pageSize: 20, onChange: setPage }}
+          />
+        </div>
+      </ColumnResizeProvider>
     </Card>
   )
 }

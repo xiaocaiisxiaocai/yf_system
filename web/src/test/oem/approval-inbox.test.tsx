@@ -50,6 +50,8 @@ describe('OEM approval inbox', () => {
     renderInbox({ pendingApprovals } as unknown as OemApi)
 
     expect(await screen.findByRole('link', { name: '图纸-1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '显示列' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '调整传递单列宽' })).toBeInTheDocument()
     expect(pendingApprovals).toHaveBeenLastCalledWith({ page: 1, pageSize: 20 })
     expect(screen.queryByRole('link', { name: '图纸-21' })).not.toBeInTheDocument()
 

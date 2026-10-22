@@ -13,6 +13,18 @@ import { oemPreviewKind } from '../components/oemPreview'
 import { ApprovalTag, LifecycleTag, PayloadTag, ValidationTag } from '../components/StatusTags'
 import { DIRECTION_LABEL } from '../components/statusLabels'
 import { useCan, useOem } from '../OemContext'
+import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
+import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
+import { useAdjustableColumns } from '../../components/useAdjustableColumns'
+
+const OEM_TRANSFER_FILE_COLUMNS: readonly ColumnLayoutSpec[] = [
+  { key: 'name', title: '文件名', defaultWidth: 240, minWidth: 140, locked: true },
+  { key: 'size', title: '大小', defaultWidth: 110, minWidth: 80 },
+  { key: 'validation', title: '文件校验', defaultWidth: 200, minWidth: 120 },
+  { key: 'payload', title: '存储', defaultWidth: 110, minWidth: 80 },
+  { key: 'receipt', title: '接收 / 删除', defaultWidth: 220, minWidth: 140 },
+  { key: 'actions', title: '操作', defaultWidth: 200, minWidth: 120, maxWidth: 320, locked: true },
+]
 
 const PREVIEWABLE = new Set(['pdf', 'png', 'jpg', 'jpeg'])
 
@@ -154,6 +166,84 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
         </Space>
       </Modal>
     </Card>
+  )
+}
+
+function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }: {
+  files: TransferFile[]
+  canEdit: boolean
+  onDownload: (file: TransferFile) => void
+  onPreview: (file: TransferFile) => void
+  onRemove: (file: TransferFile) => Promise<void>
+}) {
+  const { userId } = useOem()
+  const tableHostRef = useRef<HTMLDivElement>(null)
+  const columns = [
+    { key: 'name', title: '文件名', dataIndex: 'originalName' },
+    { key: 'size', title: '大小', render: (_: unknown, file: TransferFile) => fmtSize(file.sizeBytes) },
+    {
+      key: 'validation', title: '文件校验',
+      render: (_: unknown, file: TransferFile) => (
+        <Space direction="vertical" size={0}>
+          <ValidationTag value={file.validationStatus} />
+          {file.validationStatus !== 'VALID' && file.validationMessage && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{file.validationMessage}</Typography.Text>
+          )}
+        </Space>
+      ),
+    },
+    { key: 'payload', title: '存储', render: (_: unknown, file: TransferFile) => <PayloadTag value={file.payloadStatus} /> },
+    {
+      key: 'receipt', title: '接收 / 删除',
+      render: (_: unknown, file: TransferFile) => (
+        <Space direction="vertical" size={0} style={{ fontSize: 12 }}>
+          {file.firstRecipientDownloadAt && <span>首次接收：{fmtTime(file.firstRecipientDownloadAt)}</span>}
+          {file.purgedAt ? <span>已删除：{fmtTime(file.purgedAt)}</span> : file.purgeDueAt && <span>计划删除：{fmtTime(file.purgeDueAt)}</span>}
+        </Space>
+      ),
+    },
+    {
+      key: 'actions', title: '操作',
+      render: (_: unknown, file: TransferFile) => (
+        <Space>
+          {file.downloadable && <Button size="small" icon={<IconDownload />} onClick={() => onDownload(file)}>下载</Button>}
+          {file.downloadable && PREVIEWABLE.has(file.ext) && file.sizeBytes <= 50 * 1024 * 1024 && (
+            <Button size="small" icon={<IconEye />} onClick={() => onPreview(file)}>预览</Button>
+          )}
+          {canEdit && (
+            <Popconfirm title="移除该附件？" onOk={() => onRemove(file)}><Button size="small" status="danger">移除</Button></Popconfirm>
+          )}
+        </Space>
+      ),
+    },
+  ]
+  const table = useAdjustableColumns('oem-transfer-files', userId, OEM_TRANSFER_FILE_COLUMNS, columns, 'name', tableHostRef)
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <ColumnVisibilityPicker
+          specs={OEM_TRANSFER_FILE_COLUMNS}
+          hidden={table.hidden}
+          onToggle={table.toggle}
+          onShowAll={table.showAll}
+          onHideOptional={table.hideOptional}
+          onReset={table.reset}
+        />
+      </div>
+      <ColumnResizeProvider actions={table.actions}>
+        <div ref={tableHostRef} className={table.hostClassName}>
+          <Table
+            className={table.tableClassName}
+            rowKey="id"
+            data={files}
+            pagination={false}
+            columns={table.columns}
+            components={table.components}
+            scroll={{ x: table.scrollX }}
+          />
+        </div>
+      </ColumnResizeProvider>
+    </>
   )
 }
 
@@ -349,45 +439,13 @@ export default function TransferDetailPage() {
         {can.recover && !caps.canReadContent && detail.files.length === 0 ? (
           <Alert type="info" content="异常处置权限不包含附件内容；此页仅显示完成改派或终止所需的审批任务信息。" />
         ) : detail.files.length === 0 ? <Empty description="暂无附件" /> : (
-          <Table rowKey="id" data={detail.files} pagination={false} scroll={{ x: 900 }} columns={[
-            { title: '文件名', dataIndex: 'originalName' },
-            { title: '大小', width: 110, render: (_: unknown, file: TransferFile) => fmtSize(file.sizeBytes) },
-            {
-              title: '文件校验', width: 200,
-              render: (_: unknown, file: TransferFile) => (
-                <Space direction="vertical" size={0}>
-                  <ValidationTag value={file.validationStatus} />
-                  {file.validationStatus !== 'VALID' && file.validationMessage && (
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>{file.validationMessage}</Typography.Text>
-                  )}
-                </Space>
-              ),
-            },
-            { title: '存储', width: 110, render: (_: unknown, file: TransferFile) => <PayloadTag value={file.payloadStatus} /> },
-            {
-              title: '接收 / 删除', width: 220,
-              render: (_: unknown, file: TransferFile) => (
-                <Space direction="vertical" size={0} style={{ fontSize: 12 }}>
-                  {file.firstRecipientDownloadAt && <span>首次接收：{fmtTime(file.firstRecipientDownloadAt)}</span>}
-                  {file.purgedAt ? <span>已删除：{fmtTime(file.purgedAt)}</span> : file.purgeDueAt && <span>计划删除：{fmtTime(file.purgeDueAt)}</span>}
-                </Space>
-              ),
-            },
-            {
-              title: '操作', width: 200,
-              render: (_: unknown, file: TransferFile) => (
-                <Space>
-                  {file.downloadable && <Button size="small" icon={<IconDownload />} onClick={() => void download(file).catch(() => undefined)}>下载</Button>}
-                  {file.downloadable && PREVIEWABLE.has(file.ext) && file.sizeBytes <= 50 * 1024 * 1024 && (
-                    <Button size="small" icon={<IconEye />} onClick={() => void preview(file)}>预览</Button>
-                  )}
-                  {caps.canEdit && (
-                    <Popconfirm title="移除该附件？" onOk={() => removeFile(file)}><Button size="small" status="danger">移除</Button></Popconfirm>
-                  )}
-                </Space>
-              ),
-            },
-          ]} />
+          <TransferFilesTable
+            files={detail.files}
+            canEdit={caps.canEdit}
+            onDownload={(file) => void download(file).catch(() => undefined)}
+            onPreview={(file) => void preview(file)}
+            onRemove={removeFile}
+          />
         )}
         {summary.direction === 'OEM_TO_INTERNAL' || realm === 'oem' ? null : summary.lifecycleStatus === 'SEALED' && !caps.canReadContent && (
           <Typography.Text type="secondary">附件在文件校验与审批完成、正式发布前仅发送人和当前审批人可查看。</Typography.Text>

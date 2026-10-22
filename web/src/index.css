@@ -289,15 +289,35 @@ html, body, #root {
 
 
 /* 表格全局：表头加粗浅底、单元格不换行、数字等宽（时间/大小列对齐）。
- * 所有单元格统一建立裁剪边界，避免未显式 ellipsis 的自定义内容绘制到下一列。 */
+ * 所有单元格统一建立裁剪边界，避免未显式 ellipsis 的自定义内容绘制到下一列。
+ * 协作与 OEM 的每张表都画满框线：外框在容器上，竖线在单元格左边，首列左边交给外框，避免叠成双线。 */
 .arco-table-th {
   font-weight: 600;
   background: var(--color-fill-1);
 }
 .arco-table-th, .arco-table-td { border-color: var(--app-border); }
+.arco-table .arco-table-th,
+.arco-table .arco-table-td { border-left: 1px solid var(--app-border); }
+.arco-table .arco-table-th.arco-table-col-first,
+.arco-table .arco-table-td.arco-table-col-first { border-left: 0; }
 .arco-table .arco-table-th { color: #475467; background: #f7f9fc; }
 .arco-table .arco-table-td { color: #344054; vertical-align: middle; }
-.arco-table .arco-table-container { border-color: var(--app-border); border-radius: 7px 7px 0 0; }
+.arco-table .arco-table-container {
+  border: 1px solid var(--app-border);
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+}
+.arco-table .arco-table-container::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 1px;
+  background: var(--app-border);
+  z-index: 2;
+}
+.adjustable-table-host { min-width: 0; }
 .arco-table .arco-table-pagination { padding-top: 12px; }
 .arco-pagination { flex-wrap: wrap; gap: 8px; }
 .arco-pagination-total-text { flex-shrink: 0; height: auto; white-space: nowrap; }

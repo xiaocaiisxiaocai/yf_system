@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Checkbox, Form, Input, Message, Modal, Radio, Select, Space, Table, Typography } from '@arco-design/web-react'
 import { IconUpload } from '@arco-design/web-react/icon'
@@ -10,6 +10,19 @@ import { ApprovalTag, LifecycleTag, ValidationTag } from '../components/StatusTa
 import { DIRECTION_LABEL, LIFECYCLE_OPTIONS } from '../components/statusLabels'
 import { useCan, useOem } from '../OemContext'
 import { useLatestRequest, useLoadEffect } from '../useLoadEffect'
+import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
+import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
+import { useAdjustableColumns } from '../../components/useAdjustableColumns'
+
+const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
+  { key: 'title', title: '文件', defaultWidth: 260, minWidth: 140, locked: true },
+  { key: 'direction', title: '方向', defaultWidth: 120, minWidth: 88 },
+  { key: 'companyName', title: '厂商', defaultWidth: 160, minWidth: 96 },
+  { key: 'sender', title: '发送人', defaultWidth: 120, minWidth: 88 },
+  { key: 'status', title: '状态', defaultWidth: 220, minWidth: 140 },
+  { key: 'files', title: '附件', defaultWidth: 120, minWidth: 96 },
+  { key: 'sentAt', title: '提交时间', defaultWidth: 170, minWidth: 140 },
+]
 
 const NO_RECEIVING_ACCOUNT_REASON = '该厂商没有启用的登录账号，请先新增或启用账号后再发送'
 
@@ -322,7 +335,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
 }
 
 export default function TransferListPage() {
-  const { api, realm, base, queryScope } = useOem()
+  const { api, realm, base, queryScope, userId } = useOem()
   const can = useCan()
   const navigate = useNavigate()
   const [page, setPage] = useState(1)
@@ -331,6 +344,7 @@ export default function TransferListPage() {
   const [keyword, setKeyword] = useState('')
   const [mine, setMine] = useState(false)
   const [creating, setCreating] = useState(false)
+  const tableHostRef = useRef<HTMLDivElement>(null)
 
   const transfers = useQuery({
     queryKey: ['oem', ...queryScope, 'transfers', { page, direction, status, keyword, mine }],
@@ -338,6 +352,32 @@ export default function TransferListPage() {
   })
   const rows: TransferSummary[] = transfers.data?.list ?? []
   const total = transfers.data?.total ?? 0
+  const transferColumns = useMemo(() => [
+    {
+      key: 'title', title: '文件', dataIndex: 'title', ellipsis: true,
+      render: (value: string, row: TransferSummary) => (
+        <Link to={`${base}/transfers/${row.id}`} title={value} onClick={(event) => event.stopPropagation()}>
+          <Typography.Text bold>{value}</Typography.Text>
+        </Link>
+      ),
+    },
+    { key: 'direction', title: '方向', dataIndex: 'direction', render: (value: TransferSummary['direction']) => DIRECTION_LABEL[value] },
+    { key: 'companyName', title: '厂商', dataIndex: 'companyName' },
+    { key: 'sender', title: '发送人', render: (_: unknown, row: TransferSummary) => row.sender.realName },
+    {
+      key: 'status', title: '状态',
+      render: (_: unknown, row: TransferSummary) => (
+        <Space size={4} wrap>
+          <LifecycleTag value={row.lifecycleStatus} />
+          {row.direction === 'INTERNAL_TO_OEM' && row.lifecycleStatus === 'SEALED' && <ApprovalTag value={row.approvalStatus} />}
+          {row.lifecycleStatus === 'SEALED' && row.validationSummary !== 'VALID' && <ValidationTag value={row.validationSummary} />}
+        </Space>
+      ),
+    },
+    { key: 'files', title: '附件', render: (_: unknown, row: TransferSummary) => `${row.fileCount} 个 / ${fmtSize(row.totalBytes)}` },
+    { key: 'sentAt', title: '提交时间', render: (_: unknown, row: TransferSummary) => (row.sentAt ? fmtTime(row.sentAt) : '-') },
+  ], [base])
+  const table = useAdjustableColumns('oem-transfers', userId, OEM_TRANSFER_COLUMNS, transferColumns, 'title', tableHostRef)
 
   return (
     <Card
@@ -356,41 +396,30 @@ export default function TransferListPage() {
           onChange={(value) => { setStatus(value); setPage(1) }} />
         <Input.Search allowClear placeholder="搜索传递记录" style={{ width: 220 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
         <Checkbox checked={mine} onChange={(value) => { setMine(value); setPage(1) }}>只看我发送的</Checkbox>
+        <ColumnVisibilityPicker
+          specs={OEM_TRANSFER_COLUMNS}
+          hidden={table.hidden}
+          onToggle={table.toggle}
+          onShowAll={table.showAll}
+          onHideOptional={table.hideOptional}
+          onReset={table.reset}
+        />
       </Space>
-      <Table
-        rowKey="id"
-        scroll={{ x: 1170 }}
-        loading={transfers.isPending || transfers.isFetching}
-        data={rows}
-        onRow={(row) => ({ onClick: () => navigate(`${base}/transfers/${row.id}`), style: { cursor: 'pointer' } })}
-        pagination={{ current: page, total, pageSize: 20, onChange: setPage }}
-        columns={[
-          {
-            title: '文件', dataIndex: 'title', width: 260, ellipsis: true,
-            // A real link keeps rows reachable by keyboard; the row click remains a mouse shortcut.
-            render: (value: string, row: TransferSummary) => (
-              <Link to={`${base}/transfers/${row.id}`} title={value} onClick={(event) => event.stopPropagation()}>
-                <Typography.Text bold>{value}</Typography.Text>
-              </Link>
-            ),
-          },
-          { title: '方向', dataIndex: 'direction', width: 120, render: (value: TransferSummary['direction']) => DIRECTION_LABEL[value] },
-          { title: '厂商', dataIndex: 'companyName', width: 160 },
-          { title: '发送人', width: 120, render: (_: unknown, row: TransferSummary) => row.sender.realName },
-          {
-            title: '状态', width: 220,
-            render: (_: unknown, row: TransferSummary) => (
-              <Space size={4} wrap>
-                <LifecycleTag value={row.lifecycleStatus} />
-                {row.direction === 'INTERNAL_TO_OEM' && row.lifecycleStatus === 'SEALED' && <ApprovalTag value={row.approvalStatus} />}
-                {row.lifecycleStatus === 'SEALED' && row.validationSummary !== 'VALID' && <ValidationTag value={row.validationSummary} />}
-              </Space>
-            ),
-          },
-          { title: '附件', width: 120, render: (_: unknown, row: TransferSummary) => `${row.fileCount} 个 / ${fmtSize(row.totalBytes)}` },
-          { title: '提交时间', width: 170, render: (_: unknown, row: TransferSummary) => (row.sentAt ? fmtTime(row.sentAt) : '-') },
-        ]}
-      />
+      <ColumnResizeProvider actions={table.actions}>
+        <div ref={tableHostRef} className={table.hostClassName}>
+          <Table
+            className={table.tableClassName}
+            rowKey="id"
+            scroll={{ x: table.scrollX }}
+            loading={transfers.isPending || transfers.isFetching}
+            data={rows}
+            columns={table.columns}
+            components={table.components}
+            onRow={(row) => ({ onClick: () => navigate(`${base}/transfers/${row.id}`), style: { cursor: 'pointer' } })}
+            pagination={{ current: page, total, pageSize: 20, onChange: setPage }}
+          />
+        </div>
+      </ColumnResizeProvider>
       {creating && <CreateTransferModal visible onClose={() => setCreating(false)} />}
     </Card>
   )

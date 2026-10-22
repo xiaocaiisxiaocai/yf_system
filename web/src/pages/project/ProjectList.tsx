@@ -7,7 +7,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import { ColumnResizeProvider, ColumnVisibilityPicker, ResizableHeaderCell } from '../../components/columnResize'
-import { columnLayoutStorageKey, withFlexibleColumn, type ColumnLayoutSpec } from '../../components/tableColumnLayout'
+import { columnLayoutStorageKey, measureTableWidth, withFlexibleColumn, type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useColumnLayout } from '../../components/useColumnLayout'
 import { useAuth } from '../../store/auth'
 import {
@@ -129,8 +129,7 @@ export default function ProjectList() {
     if (!host) return
     let frame = 0
     const measure = () => {
-      const body = host.querySelector<HTMLElement>('.arco-table-body')
-      const next = body?.clientWidth ?? 0
+      const next = measureTableWidth(host)
       setTableWidth((current) => (current === next ? current : next))
     }
     measure()
@@ -139,8 +138,8 @@ export default function ProjectList() {
       frame = requestAnimationFrame(measure)
     })
     observer.observe(host)
-    const body = host.querySelector('.arco-table-body')
-    if (body) observer.observe(body)
+    const container = host.querySelector('.arco-table-container')
+    if (container) observer.observe(container)
     return () => {
       cancelAnimationFrame(frame)
       observer.disconnect()

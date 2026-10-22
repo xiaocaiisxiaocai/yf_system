@@ -6,6 +6,27 @@ import { IconPlus } from '@arco-design/web-react/icon'
 import { fmtTime } from '../../../api/types'
 import type { Company, VendorAccount } from '../../api/types'
 import { useCan, useOem } from '../../OemContext'
+import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../../components/columnResize'
+import { type ColumnLayoutSpec } from '../../../components/tableColumnLayout'
+import { useAdjustableColumns } from '../../../components/useAdjustableColumns'
+
+const OEM_ACCOUNT_COLUMNS: readonly ColumnLayoutSpec[] = [
+  { key: 'employeeNo', title: '登录账号', defaultWidth: 150, minWidth: 110, locked: true },
+  { key: 'realName', title: '姓名', defaultWidth: 110, minWidth: 80 },
+  { key: 'email', title: '邮箱', defaultWidth: 230, minWidth: 140 },
+  { key: 'status', title: '状态', defaultWidth: 190, minWidth: 120 },
+  { key: 'lastLoginAt', title: '最近登录', defaultWidth: 160, minWidth: 130 },
+  { key: 'actions', title: '操作', defaultWidth: 260, minWidth: 180, maxWidth: 360, locked: true },
+]
+
+const OEM_COMPANY_COLUMNS: readonly ColumnLayoutSpec[] = [
+  { key: 'name', title: '厂商名称', defaultWidth: 230, minWidth: 140, locked: true },
+  { key: 'contactName', title: '联系人', defaultWidth: 120, minWidth: 88 },
+  { key: 'contact', title: '联系方式', defaultWidth: 270, minWidth: 140 },
+  { key: 'accounts', title: '账号', defaultWidth: 100, minWidth: 72 },
+  { key: 'status', title: '状态', defaultWidth: 90, minWidth: 72 },
+  { key: 'actions', title: '操作', defaultWidth: 300, minWidth: 180, maxWidth: 420, locked: true },
+]
 import { PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, passwordRule, validatePassword } from '../../../utils/password'
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 import './CompaniesPage.css'
@@ -33,13 +54,14 @@ interface AccountsDrawerProps {
 }
 
 function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerProps) {
-  const { api } = useOem()
+  const { api, userId } = useOem()
   const can = useCan()
   const [rows, setRows] = useState<VendorAccount[]>([])
   const [editing, setEditing] = useState<VendorAccount | 'new' | null>(null)
   const [saving, setSaving] = useState(false)
   const [actionError, setActionError] = useState('')
   const accountsRequestId = useRef(0)
+  const accountHostRef = useRef<HTMLDivElement>(null)
   const deletingIdsRef = useRef(new Set<number>())
   const [deletingIds, setDeletingIds] = useState<ReadonlySet<number>>(new Set())
   const saveInFlight = useRef(false)
@@ -144,6 +166,48 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
     })
   }
 
+  const accountColumns = [
+    { key: 'employeeNo', title: '登录账号', dataIndex: 'employeeNo', ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
+    { key: 'realName', title: '姓名', dataIndex: 'realName', ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
+    { key: 'email', title: '邮箱', dataIndex: 'email', ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
+    {
+      key: 'status', title: '状态',
+      render: (_: unknown, row: VendorAccount) => (
+        <Space size={4}>
+          <Tag color={row.status === 'ACTIVE' ? 'green' : 'gray'} size="small">{row.status === 'ACTIVE' ? '启用' : '停用'}</Tag>
+          {row.mustChangePassword && <Tag size="small">待改密</Tag>}
+          {row.locked && <Tag color="red" size="small">已锁定</Tag>}
+        </Space>
+      ),
+    },
+    { key: 'lastLoginAt', title: '最近登录', render: (_: unknown, row: VendorAccount) => (row.lastLoginAt ? fmtTime(row.lastLoginAt) : '-') },
+    {
+      key: 'actions', title: '操作', fixed: 'right' as const,
+      render: (_: unknown, row: VendorAccount) => (
+        <Space size={4}>
+          <Button size="mini" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>
+          <Button size="mini" onClick={() => reset(row)}>重置密码</Button>
+          <Button size="mini" status={row.status === 'ACTIVE' ? 'warning' : 'success'}
+            onClick={() => void toggleAccountStatus(row)}>
+            {row.status === 'ACTIVE' ? '停用' : '启用'}
+          </Button>
+          {can.deleteAccounts && (
+            <Button
+              size="mini"
+              status="danger"
+              loading={deletingIds.has(row.id)}
+              disabled={deletingIds.has(row.id)}
+              onClick={() => confirmDeleteAccount(row)}
+            >
+              删除
+            </Button>
+          )}
+        </Space>
+      ),
+    },
+  ]
+  const accountTable = useAdjustableColumns('oem-company-accounts', userId, OEM_ACCOUNT_COLUMNS, accountColumns, 'employeeNo', accountHostRef, can.manageAccounts)
+
   return (
     <Drawer
       width="min(920px, 100vw)"
@@ -157,55 +221,31 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
     >
       {can.manageAccounts ? (
         <>
-          <Button type="primary" icon={<IconPlus />} style={{ marginBottom: 12 }} onClick={() => { form.resetFields(); setEditing('new') }}>新增账号</Button>
+          <Space style={{ marginBottom: 12 }}>
+            <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setEditing('new') }}>新增账号</Button>
+            <ColumnVisibilityPicker
+              specs={OEM_ACCOUNT_COLUMNS}
+              hidden={accountTable.hidden}
+              onToggle={accountTable.toggle}
+              onShowAll={accountTable.showAll}
+              onHideOptional={accountTable.hideOptional}
+              onReset={accountTable.reset}
+            />
+          </Space>
           {actionError && <Typography.Text className="oem-delete-error" type="error" role="alert">{actionError}</Typography.Text>}
-          <Table
-            className="oem-account-table"
-            rowKey="id"
-            data={rows}
-            pagination={false}
-            scroll={{ x: 1100 }}
-            columns={[
-              { title: '登录账号', dataIndex: 'employeeNo', width: 150, ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
-              { title: '姓名', dataIndex: 'realName', width: 110, ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
-              { title: '邮箱', dataIndex: 'email', width: 230, ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
-              {
-                title: '状态', width: 190,
-                render: (_: unknown, row: VendorAccount) => (
-                  <Space size={4}>
-                    <Tag color={row.status === 'ACTIVE' ? 'green' : 'gray'} size="small">{row.status === 'ACTIVE' ? '启用' : '停用'}</Tag>
-                    {row.mustChangePassword && <Tag size="small">待改密</Tag>}
-                    {row.locked && <Tag color="red" size="small">已锁定</Tag>}
-                  </Space>
-                ),
-              },
-              { title: '最近登录', width: 160, render: (_: unknown, row: VendorAccount) => (row.lastLoginAt ? fmtTime(row.lastLoginAt) : '-') },
-              {
-                title: '操作', width: 260, fixed: 'right' as const,
-                render: (_: unknown, row: VendorAccount) => (
-                  <Space size={4}>
-                    <Button size="mini" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>
-                    <Button size="mini" onClick={() => reset(row)}>重置密码</Button>
-                    <Button size="mini" status={row.status === 'ACTIVE' ? 'warning' : 'success'}
-                      onClick={() => void toggleAccountStatus(row)}>
-                      {row.status === 'ACTIVE' ? '停用' : '启用'}
-                    </Button>
-                    {can.deleteAccounts && (
-                      <Button
-                        size="mini"
-                        status="danger"
-                        loading={deletingIds.has(row.id)}
-                        disabled={deletingIds.has(row.id)}
-                        onClick={() => confirmDeleteAccount(row)}
-                      >
-                        删除
-                      </Button>
-                    )}
-                  </Space>
-                ),
-              },
-            ]}
-          />
+          <ColumnResizeProvider actions={accountTable.actions}>
+            <div ref={accountHostRef} className={accountTable.hostClassName}>
+              <Table
+                className={`oem-account-table ${accountTable.tableClassName}`}
+                rowKey="id"
+                data={rows}
+                pagination={false}
+                scroll={{ x: accountTable.scrollX }}
+                columns={accountTable.columns}
+                components={accountTable.components}
+              />
+            </div>
+          </ColumnResizeProvider>
         </>
       ) : <span>当前账号没有 OEM 账号管理权限。</span>}
       <Modal
@@ -238,7 +278,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
 }
 
 export default function CompaniesPage() {
-  const { api } = useOem()
+  const { api, userId } = useOem()
   const can = useCan()
   const [rows, setRows] = useState<Company[]>([])
   const [total, setTotal] = useState(0)
@@ -250,6 +290,7 @@ export default function CompaniesPage() {
   const [actionError, setActionError] = useState('')
   const [listLoading, setListLoading] = useState(false)
   const [listError, setListError] = useState('')
+  const companyHostRef = useRef<HTMLDivElement>(null)
   const deletingIdsRef = useRef(new Set<number>())
   const [deletingIds, setDeletingIds] = useState<ReadonlySet<number>>(new Set())
   const saveInFlight = useRef(false)
@@ -359,9 +400,57 @@ export default function CompaniesPage() {
     await load()
   }, [load])
 
+  const companyColumns = [
+    { key: 'name', title: '厂商名称', dataIndex: 'name', ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
+    { key: 'contactName', title: '联系人', dataIndex: 'contactName', ellipsis: true, render: (value: string | null) => <EllipsisText value={value} /> },
+    {
+      key: 'contact', title: '联系方式', ellipsis: true,
+      render: (_: unknown, row: Company) => <EllipsisText value={[row.contactPhone, row.contactEmail].filter(Boolean).join(' / ') || '-'} />,
+    },
+    { key: 'accounts', title: '账号', render: (_: unknown, row: Company) => `${row.activeAccountCount ?? 0} / ${row.accountCount ?? 0}` },
+    { key: 'status', title: '状态', render: (_: unknown, row: Company) => <Tag color={row.status === 'ACTIVE' ? 'green' : 'gray'}>{row.status === 'ACTIVE' ? '启用' : '停用'}</Tag> },
+    {
+      key: 'actions', title: '操作', fixed: 'right' as const,
+      render: (_: unknown, row: Company) => (
+        <Space size={4}>
+          {can.manageAccounts && <Button size="mini" onClick={() => setAccountsOf(row)}>账号</Button>}
+          {can.manageCompanies && <Button size="mini" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>}
+          {can.manageCompanies && <Popconfirm title={row.status === 'ACTIVE' ? '停用后该厂商所有账号将立即退出登录，确定？' : '确定启用该厂商？'}
+            onOk={() => toggleCompanyStatus(row)}>
+            <Button size="mini" status={row.status === 'ACTIVE' ? 'warning' : 'success'}>{row.status === 'ACTIVE' ? '停用' : '启用'}</Button>
+          </Popconfirm>}
+          {can.manageCompanies && can.deleteCompanies && (
+            <Button
+              size="mini"
+              status="danger"
+              loading={deletingIds.has(row.id)}
+              disabled={deletingIds.has(row.id)}
+              onClick={() => confirmDeleteCompany(row)}
+            >
+              删除
+            </Button>
+          )}
+        </Space>
+      ),
+    },
+  ]
+  const companyTable = useAdjustableColumns('oem-companies', userId, OEM_COMPANY_COLUMNS, companyColumns, 'name', companyHostRef)
+
   return (
-    <Card title="OEM 厂商与账号" extra={can.manageCompanies && (
-      <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setEditing('new') }}>新增厂商</Button>
+    <Card title="OEM 厂商与账号" extra={(
+      <Space>
+        <ColumnVisibilityPicker
+          specs={OEM_COMPANY_COLUMNS}
+          hidden={companyTable.hidden}
+          onToggle={companyTable.toggle}
+          onShowAll={companyTable.showAll}
+          onHideOptional={companyTable.hideOptional}
+          onReset={companyTable.reset}
+        />
+        {can.manageCompanies && (
+          <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setEditing('new') }}>新增厂商</Button>
+        )}
+      </Space>
     )}>
       <Input.Search allowClear placeholder="搜索厂商名称" style={{ width: 260, marginBottom: 12 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
       {actionError && <Typography.Text className="oem-delete-error" type="error" role="alert">{actionError}</Typography.Text>}
@@ -369,48 +458,20 @@ export default function CompaniesPage() {
         <Alert type="error" style={{ marginBottom: 12 }} content={`厂商列表加载失败：${listError}`}
           action={<Button size="small" loading={listLoading} onClick={() => void load().catch(() => undefined)}>重试</Button>} />
       )}
-      <Table
-        className="oem-directory-table"
-        rowKey="id"
-        loading={listLoading}
-        data={rows}
-        scroll={{ x: 1110 }}
-        pagination={{ current: page, total, pageSize: 20, onChange: setPage }}
-        columns={[
-          { title: '厂商名称', dataIndex: 'name', width: 230, ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
-          { title: '联系人', dataIndex: 'contactName', width: 120, ellipsis: true, render: (value: string | null) => <EllipsisText value={value} /> },
-          {
-            title: '联系方式', width: 270, ellipsis: true,
-            render: (_: unknown, row: Company) => <EllipsisText value={[row.contactPhone, row.contactEmail].filter(Boolean).join(' / ') || '-'} />,
-          },
-          { title: '账号', width: 100, render: (_: unknown, row: Company) => `${row.activeAccountCount ?? 0} / ${row.accountCount ?? 0}` },
-          { title: '状态', width: 90, render: (_: unknown, row: Company) => <Tag color={row.status === 'ACTIVE' ? 'green' : 'gray'}>{row.status === 'ACTIVE' ? '启用' : '停用'}</Tag> },
-          {
-            title: '操作', width: 300, fixed: 'right' as const,
-            render: (_: unknown, row: Company) => (
-              <Space size={4}>
-                {can.manageAccounts && <Button size="mini" onClick={() => setAccountsOf(row)}>账号</Button>}
-                {can.manageCompanies && <Button size="mini" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>}
-                {can.manageCompanies && <Popconfirm title={row.status === 'ACTIVE' ? '停用后该厂商所有账号将立即退出登录，确定？' : '确定启用该厂商？'}
-                  onOk={() => toggleCompanyStatus(row)}>
-                  <Button size="mini" status={row.status === 'ACTIVE' ? 'warning' : 'success'}>{row.status === 'ACTIVE' ? '停用' : '启用'}</Button>
-                </Popconfirm>}
-                {can.manageCompanies && can.deleteCompanies && (
-                  <Button
-                    size="mini"
-                    status="danger"
-                    loading={deletingIds.has(row.id)}
-                    disabled={deletingIds.has(row.id)}
-                    onClick={() => confirmDeleteCompany(row)}
-                  >
-                    删除
-                  </Button>
-                )}
-              </Space>
-            ),
-          },
-        ]}
-      />
+      <ColumnResizeProvider actions={companyTable.actions}>
+        <div ref={companyHostRef} className={companyTable.hostClassName}>
+          <Table
+            className={`oem-directory-table ${companyTable.tableClassName}`}
+            rowKey="id"
+            loading={listLoading}
+            data={rows}
+            columns={companyTable.columns}
+            components={companyTable.components}
+            scroll={{ x: companyTable.scrollX }}
+            pagination={{ current: page, total, pageSize: 20, onChange: setPage }}
+          />
+        </div>
+      </ColumnResizeProvider>
       <Modal
         title={editing === 'new' ? '新增厂商' : '编辑厂商'}
         visible={Boolean(editing)}

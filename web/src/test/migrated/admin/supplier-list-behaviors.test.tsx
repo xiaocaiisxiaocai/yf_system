@@ -268,6 +268,37 @@ describe('供应商与分页列表行为', () => {
     await waitFor(() => expect(screen.queryByText('旧供应商')).not.toBeInTheDocument())
   })
 
+  it('new supplier account selects the only supplier role by default', async () => {
+    installGet(async (url: string) => {
+      if (url.endsWith('/accounts')) return { data: [] }
+      if (url.endsWith('/supplier-role-options')) return { data: [{ id: 3, name: '供应商权限' }] }
+      return { data: page([supplierRow({ name: '川崎' })]) }
+    })
+    const user = userEvent.setup()
+    render(<SupplierList />)
+    await openAccounts(user, '川崎')
+    await user.click(screen.getByRole('button', { name: '新增账号' }))
+    const dialog = await screen.findByRole('dialog', { name: '新增供应商账号' })
+    expect(await within(dialog).findByText('供应商权限')).toBeVisible()
+  })
+
+  it('new supplier account prefers the built-in supplier role when several roles exist', async () => {
+    installGet(async (url: string) => {
+      if (url.endsWith('/accounts')) return { data: [] }
+      if (url.endsWith('/supplier-role-options')) {
+        return { data: [{ id: 9, name: '只读供应商' }, { id: 4, name: '供应商人员' }] }
+      }
+      return { data: page([supplierRow({ name: '川崎' })]) }
+    })
+    const user = userEvent.setup()
+    render(<SupplierList />)
+    await openAccounts(user, '川崎')
+    await user.click(screen.getByRole('button', { name: '新增账号' }))
+    const dialog = await screen.findByRole('dialog', { name: '新增供应商账号' })
+    expect(await within(dialog).findByText('供应商人员')).toBeVisible()
+    expect(within(dialog).queryByText('只读供应商')).not.toBeInTheDocument()
+  })
+
   it('supplier account drawer fits on desktop and keeps columns reachable on narrow screens without phone fields', async () => {
     installGet(async (url: string) => url.endsWith('/accounts') ? { data: [account(11, 'supplier-11')] } : { data: page([supplierRow()]) })
     const user = userEvent.setup()

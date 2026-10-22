@@ -12,6 +12,14 @@ import { passwordRule } from '../../../utils/password'
 import { textLengthRule } from '../../../utils/textRules'
 import type { Account, RoleOption, Supplier } from './supplierTypes'
 
+const builtInSupplierRoleName = '供应商人员'
+
+/** 新建账号时带上默认角色：内置「供应商人员」优先，否则仅有一个可选角色时用它。 */
+function defaultSupplierRoleId(options: readonly RoleOption[]) {
+  return options.find((role) => role.name === builtInSupplierRoleName)?.id
+    ?? (options.length === 1 ? options[0]?.id : undefined)
+}
+
 interface SupplierAccountsDrawerProps {
   supplier: Supplier | null
   onClose: () => void
@@ -86,7 +94,14 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
     try {
       const response = await http.get<ApiResponses['GET /admin/supplier-role-options']>('/admin/supplier-role-options', { quietNetworkError: true } as QuietRequestConfig)
       if (!Array.isArray(response.data)) throw new Error('Invalid supplier role options response')
-      if (roleOptionsRequestId.current === requestId) setRoleOptions(response.data as RoleOption[])
+      if (roleOptionsRequestId.current !== requestId) return
+      const options = response.data as RoleOption[]
+      setRoleOptions(options)
+      const selected = form.getFieldValue('roleId')
+      const roleId = defaultSupplierRoleId(options)
+      if ((selected === undefined || selected === null || selected === '') && roleId !== undefined) {
+        form.setFieldValue('roleId', roleId)
+      }
     } catch {
       if (roleOptionsRequestId.current === requestId) {
         setRoleOptions([])
@@ -95,7 +110,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
     } finally {
       if (roleOptionsRequestId.current === requestId) setRoleOptionsLoading(false)
     }
-  }, [])
+  }, [form])
 
   const submit = async () => {
     if (saveInFlight.current) return

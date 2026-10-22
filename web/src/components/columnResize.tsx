@@ -90,7 +90,7 @@ export function ColumnVisibilityPicker({ specs, hidden, onToggle, onShowAll, onH
               >{spec.title}</Checkbox>
             ))}
           </div>
-          <p className="table-column-picker-note">名称与操作列始终显示。拖动表头右缘调整列宽，双击恢复该列默认宽度。</p>
+          <p className="table-column-picker-note">{specs.some((spec) => spec.locked) ? `${specs.filter((spec) => spec.locked).map((spec) => spec.title).join('、')}始终显示。` : ''}拖动表头右缘调整列宽，双击恢复该列默认宽度。</p>
           <div className="table-column-picker-actions">
             <Button type="text" size="mini" onClick={onReset}>恢复默认</Button>
           </div>

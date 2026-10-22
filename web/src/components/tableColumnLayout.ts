@@ -84,6 +84,16 @@ export function withColumnWidth(layout: ColumnLayout, specs: readonly ColumnLayo
   return { hidden: layout.hidden, widths }
 }
 
+/** 表格外框的可用寬度。表體在列總寬較小時會跟著列縮回去，不能拿它當容器寬度。 */
+export function measureTableWidth(host: HTMLElement | null) {
+  if (!host) return 0
+  const container = host.querySelector<HTMLElement>('.arco-table-container')
+  const available = container?.clientWidth || host.clientWidth
+  const body = host.querySelector<HTMLElement>('.arco-table-body')
+  const scrollbar = body ? Math.max(0, body.offsetWidth - body.clientWidth) : 0
+  return Math.max(0, available - scrollbar)
+}
+
 /** 容器比各列寬度合計更寬時，指定列保持原寬，其餘列平分多出的寬度。 */
 export function withFlexibleColumn<T extends { key: string; width: number }>(
   columns: readonly T[],
