@@ -9,6 +9,7 @@ const output = path.resolve(root, '.pptx-preview-build')
 if (path.dirname(output) !== path.resolve(root)) throw new Error('Invalid viewer build directory')
 await build({
   configFile: false, root, publicDir: false, logLevel: 'warn',
+  cacheDir: path.join(root, 'node_modules', '.vite-pptx-preview'),
   plugins: [{
     name: 'pptx-drawingml-text-layout',
     transform(code, id) {

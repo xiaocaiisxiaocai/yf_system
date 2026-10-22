@@ -1,3 +1,5 @@
+import os from 'node:os'
+import path from 'node:path'
 import JSZip from 'jszip'
 import rendererSource from 'pptx-preview/dist/pptx-preview.es.js?raw'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -105,8 +107,12 @@ describe('patched PPTX renderer text layout migrated from node:test', () => {
     server = await createServer({
       root: process.cwd(),
       configFile: false,
+      // 开发服务器占用 node_modules/.vite/deps。此测试再开一个 Vite 时若共用该目录，
+      // Windows 上提交优化结果会把正在使用的 deps 改名，页面随后一直 504。
+      cacheDir: path.join(os.tmpdir(), 'yf-pptx-text-layout-vite'),
       appType: 'custom',
-      server: { middlewareMode: true },
+      optimizeDeps: { noDiscovery: true },
+      server: { middlewareMode: true, watch: null },
       plugins: [{
         name: 'pptx-drawingml-text-layout-test',
         enforce: 'pre',

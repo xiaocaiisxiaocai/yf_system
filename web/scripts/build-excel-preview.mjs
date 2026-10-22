@@ -8,6 +8,7 @@ const output = path.resolve(root, '.excel-preview-build')
 if (path.dirname(output) !== path.resolve(root)) throw new Error('Invalid viewer build directory')
 await build({
   configFile: false, root, publicDir: false, logLevel: 'warn',
+  cacheDir: path.join(root, 'node_modules', '.vite-excel-preview'),
   build: {
     outDir: output, emptyOutDir: true, minify: true,
     lib: { entry: path.join(root, 'vendor/vue-office-excel/viewer.js'), name: 'YfExcelPreview', formats: ['iife'], fileName: () => 'viewer.js', cssFileName: 'viewer' },

@@ -3,6 +3,8 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   plugins: [react()],
+  // 与 `vite dev` 的 node_modules/.vite 分开。测试进程里的依赖优化不能改走开发服务器正在使用的 deps。
+  cacheDir: 'node_modules/.vite-vitest',
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
