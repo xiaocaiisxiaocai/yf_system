@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Popconfirm, Space, Typography } from '@arco-design/web-react'
+import { Button, Popconfirm, Space, Tag, Tooltip, Typography } from '@arco-design/web-react'
+import { IconExclamationCircleFill } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
 import { abortUpload } from '../api/uploads'
 import { fmtSize } from '../api/types'
@@ -79,33 +80,42 @@ export default function ActiveUploadSessions({
 
   if (sessions.total <= 0) return null
   if (compact) {
-    return <Typography.Text type="warning">有 {sessions.total} 个未完成的上传</Typography.Text>
+    return (
+      <Tooltip content="未完成的上传会阻止提交验收和终止，可在文件页继续或取消。">
+        <Tag color="orange" className="active-upload-tag">{sessions.total} 个未完成上传</Tag>
+      </Tooltip>
+    )
   }
   return (
-    <div className="active-upload-sessions" aria-label="未完成的上传">
-      <Typography.Text type="warning">有 {sessions.total} 个未完成的上传。继续需要重新选择同一个文件。</Typography.Text>
+    <section className="active-upload-sessions" aria-label="未完成的上传">
+      <div className="active-upload-sessions-title">
+        <IconExclamationCircleFill />
+        <span>有 {sessions.total} 个未完成的上传，会阻止提交验收和终止。继续上传需要重新选择同一个文件。</span>
+      </div>
       <ul>
         {sessions.items.map((item) => (
           <li key={item.sessionId}>
-            <span title={item.fileName}>{item.fileName}</span>
-            <Typography.Text type="secondary">
-              {item.status === 'MERGING' ? '合并中' : '上传中'}
-              {' · '}{item.receivedChunks}/{item.totalChunks} 分片 · {fmtSize(item.fileSize)}
-              {' · '}{item.uploaderName}
-            </Typography.Text>
-            <Space>
+            <div className="active-upload-sessions-file">
+              <span title={item.fileName}>{item.fileName}</span>
+              <Typography.Text type="secondary">
+                {item.status === 'MERGING' ? '合并中' : '上传中'}
+                {' · '}{item.receivedChunks}/{item.totalChunks} 分片 · {fmtSize(item.fileSize)}
+                {' · '}{item.uploaderName}
+              </Typography.Text>
+            </div>
+            <Space size={4}>
               {item.canResume && onResume && (
-                <Button size="mini" onClick={onResume}>继续</Button>
+                <Button size="mini" type="primary" onClick={onResume}>继续</Button>
               )}
               {item.canAbort && (
                 <Popconfirm title="取消后已上传的分片会被丢弃，确认取消？" onOk={() => abort(item.sessionId)}>
-                  <Button size="mini" status="danger" loading={busyId === item.sessionId}>取消</Button>
+                  <Button size="mini" type="text" status="danger" loading={busyId === item.sessionId}>取消</Button>
                 </Popconfirm>
               )}
             </Space>
           </li>
         ))}
       </ul>
-    </div>
+    </section>
   )
 }

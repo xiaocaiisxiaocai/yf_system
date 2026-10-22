@@ -12,6 +12,7 @@ import { type PageResp } from '../../api/types'
 import type { ApiResponses } from '../../api/types'
 import type { PermissionResponse } from '../../api/generated/api-types'
 import LoadError from '../../components/LoadError'
+import EnterSubmit from '../../components/EnterSubmit'
 
 interface Role {
   id: number
@@ -282,13 +283,12 @@ export default function RoleList() {
             dataIndex: 'status',
             width: 70,
             align: 'center' as const,
-            render: (v: string) => (v === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="red">禁用</Tag>),
+            render: (v: string) => (v === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="gray">禁用</Tag>),
           },
           {
             title: '操作',
-            width: 264,
+            width: 240,
             fixed: 'right' as const,
-            align: 'center' as const,
             render: (_: unknown, r: Role) => actionSlots([
               <Button
                 key="permissions"
@@ -365,14 +365,14 @@ export default function RoleList() {
         onOk={submit}
         onCancel={() => { if (!saving) setEditOpen(false) }}
       >
-        <Form form={form} layout="vertical">
+        <Form onSubmit={() => void submit()} form={form} layout="vertical">
           <Form.Item label="角色名称" field="name" rules={[{ required: true, message: '请输入名称' }, textLengthRule('名称', 64)]}>
             <Input placeholder="角色名称" disabled={editing?.isBuiltIn} />
           </Form.Item>
           <Form.Item label="角色说明" field="description">
             <Input.TextArea rows={3} maxLength={255} placeholder="选填" />
           </Form.Item>
-        </Form>
+        <EnterSubmit /></Form>
       </Modal>
 
       <Drawer

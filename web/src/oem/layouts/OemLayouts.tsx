@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Button, Drawer, Dropdown, Layout, Menu, Result, Space, Spin } from '@arco-design/web-react'
+import { Avatar, Button, Drawer, Dropdown, Layout, Menu, Result, Space, Spin } from '@arco-design/web-react'
 import {
-  IconApps, IconCheckCircle, IconDown, IconFile, IconHistory, IconLeft, IconPoweroff, IconSafe, IconSettings,
+  IconApps, IconBranch, IconCheckCircle, IconDown, IconFile, IconHistory, IconLeft, IconPoweroff, IconSafe, IconSettings,
   IconMenu, IconStorage, IconUserGroup,
 } from '@arco-design/web-react/icon'
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
@@ -91,7 +91,7 @@ export function OemInternalLayout() {
     { path: '/oem/approvals', label: '待我审批', icon: <IconCheckCircle />, visible: has('oem:flow_approve') },
     { path: '/oem/recovery', label: '审批阻断处置', icon: <IconSafe />, visible: has('oem:approval_recover') },
     { path: '/oem/admin/companies', label: '厂商与账号', icon: <IconUserGroup />, visible: has('oem:company_manage') || has('oem:account_manage') },
-    { path: '/oem/admin/flow-templates', label: '审批模板', icon: <IconSafe />, visible: has('oem:flow_template_manage') },
+    { path: '/oem/admin/flow-templates', label: '审批模板', icon: <IconBranch />, visible: has('oem:flow_template_manage') },
     { path: '/oem/admin/retention', label: '删除策略', icon: <IconStorage />, visible: has('oem:retention_template_manage') },
     { path: '/oem/admin/settings', label: '文件策略与提醒', icon: <IconSettings />, visible: has('oem:file_policy_manage') || has('oem:notify_manage') },
     { path: '/oem/admin/audit', label: 'OEM 审计日志', icon: <IconHistory />, visible: has('oem:audit_view') },
@@ -102,7 +102,10 @@ export function OemInternalLayout() {
       <Shell title="OEM 文件传递" menu={menu} account={
         <Space>
           <Button type="text" icon={<IconLeft />} aria-label="返回协作平台" title="返回协作平台" style={{ color: 'inherit' }} onClick={() => navigate('/')}><span className="oem-return-label">返回协作平台</span></Button>
-          <span className="oem-account-name" title={user?.realName}>{user?.realName}</span>
+          <span className="oem-account">
+            <Avatar size={28} className="oem-account-avatar">{user?.realName?.slice(0, 1)}</Avatar>
+            <span className="oem-account-name" title={user?.realName}>{user?.realName}</span>
+          </span>
         </Space>
       } />
     </OemProvider>

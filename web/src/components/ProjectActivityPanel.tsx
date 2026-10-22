@@ -341,7 +341,7 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
                     <Timeline.Item key={item.id}>
                       <div className="project-activity-item" data-activity-id={item.id} data-activity-type={item.type}>
                         <div className="project-activity-meta">
-                          <Tag size="small" color={item.type === 'FILE' ? 'green' : item.type === 'MESSAGE' ? 'purple' : 'gray'}>
+                          <Tag size="small" color={item.type === 'FILE' ? 'green' : item.type === 'MESSAGE' ? 'arcoblue' : 'gray'}>
                             {ACTIVITY_TYPE_LABEL[item.type]}
                           </Tag>
                           <Typography.Text className="project-activity-actor">{item.actorName}</Typography.Text>

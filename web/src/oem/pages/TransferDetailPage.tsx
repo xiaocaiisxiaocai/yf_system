@@ -177,7 +177,7 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
             key={node.sortNo}
             title={<Space>{node.name}<Tag size="small">{SOURCE_LABEL[node.approverSource] ?? node.approverSource}</Tag>
               {node.approvalMode === 'ALL' && <Tag size="small" color="purple">会签</Tag>}
-              {node.approvalMode === 'ANY' && <Tag size="small" color="blue">或签</Tag>}
+              {node.approvalMode === 'ANY' && <Tag size="small" color="arcoblue">或签</Tag>}
               {node.usedFallback && <Tag size="small" color="orange">备用审批人</Tag>}</Space>}
             description={node.status === 'SKIPPED' ? '发送人即本节点审批人，按策略免审' : (
               <Space direction="vertical" size={2}>
@@ -189,7 +189,7 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
                     {task.reason && <Typography.Text type="secondary">原因：{task.reason}</Typography.Text>}
                     {task.reassignReason && <Typography.Text type="secondary">改派原因：{task.reassignReason}</Typography.Text>}
                     {can.recover && open && ['WAITING', 'PENDING'].includes(task.status) && (
-                      <Button size="mini" onClick={() => { setReassigning(task); setTarget(undefined); setReason(''); void searchCandidates('') }}>改派</Button>
+                      <Button size="mini" type="text" onClick={() => { setReassigning(task); setTarget(undefined); setReason(''); void searchCandidates('') }}>改派</Button>
                     )}
                   </Space>
                 ))}
@@ -461,7 +461,7 @@ export default function TransferDetailPage() {
                 <Button status="danger">删除草稿</Button>
               </Popconfirm>
             )}
-            {can.recover && summary.lifecycleStatus === 'SEALED' && <Button status="warning" loading={cancelling} onClick={() => void cancel()}>终止传递</Button>}
+            {can.recover && summary.lifecycleStatus === 'SEALED' && <Button status="danger" loading={cancelling} onClick={() => void cancel()}>终止传递</Button>}
           </Space>
         }
       >

@@ -47,7 +47,7 @@ export default function BlockedRecoveryPage() {
     { key: 'sentAt', title: '发送时间', render: (_: unknown, row: TransferSummary) => row.sentAt ? fmtTime(row.sentAt) : '-' },
     {
       key: 'actions', title: '操作',
-      render: (_: unknown, row: TransferSummary) => <Button size="mini" onClick={() => navigate(`${base}/transfers/${row.id}`)}>处置</Button>,
+      render: (_: unknown, row: TransferSummary) => <Button size="mini" type="text" onClick={() => navigate(`${base}/transfers/${row.id}`)}>处置</Button>,
     },
   ], [base, navigate])
   const table = useAdjustableColumns('oem-approval-recovery', userId, OEM_RECOVERY_COLUMNS, recoveryColumns, 'title', tableHostRef)

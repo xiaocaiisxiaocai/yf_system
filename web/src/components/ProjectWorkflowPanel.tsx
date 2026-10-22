@@ -10,6 +10,8 @@ import { useAuth } from '../store/auth'
 import type { ApiResponses } from '../api/types'
 import ActiveUploadSessions from './ActiveUploadSessions'
 
+type WorkflowAction = 'start' | 'terminate' | 'submit' | 'confirm' | 'reject' | 'withdraw'
+
 interface Props {
   project: Project
   onChanged: () => void
@@ -25,7 +27,9 @@ export default function ProjectWorkflowPanel({
 }: Props) {
   const { hasPerm, user } = useAuth()
   const [rejectOpen, setRejectOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
+  // 只让被点击的按钮转圈，其余流程按钮在请求期间禁用。
+  const [busyAction, setBusyAction] = useState<WorkflowAction | null>(null)
+  const busy = busyAction !== null
   const busyRef = useRef(false)
   const confirmSubmissionRef = useRef<number | null>(project.latestSubmissionId ?? null)
   const withdrawSubmissionRef = useRef<number | null>(project.latestSubmissionId ?? null)
@@ -33,16 +37,21 @@ export default function ProjectWorkflowPanel({
   const [rejectForm] = Form.useForm()
   const [localUploadRefresh, setLocalUploadRefresh] = useState(0)
 
-  const beginAction = () => {
+  const beginAction = (action: WorkflowAction) => {
     if (busyRef.current) return false
     busyRef.current = true
-    setBusy(true)
+    setBusyAction(action)
     return true
   }
   const finishAction = () => {
     busyRef.current = false
-    setBusy(false)
+    setBusyAction(null)
   }
+  const actionProps = (action: WorkflowAction) => ({
+    loading: busyAction === action,
+    disabled: busy && busyAction !== action,
+    size: compact ? 'small' as const : undefined,
+  })
   const noteWriteFailure = () => {
     setLocalUploadRefresh((value) => value + 1)
     onWriteFailed?.()
@@ -55,7 +64,7 @@ export default function ProjectWorkflowPanel({
   const canWithdraw = isSupplier && hasPerm('project:withdraw') && project.latestSubmitterId === user?.id
 
   const changeStatus = async (status: 'IN_PROGRESS' | 'TERMINATED') => {
-    if (!beginAction()) return
+    if (!beginAction(status === 'TERMINATED' ? 'terminate' : 'start')) return
     try {
       await http.put<ApiResponses['PUT /projects/{id}/status']>(`/projects/${project.id}/status`, { status })
       Message.success(status === 'IN_PROGRESS'
@@ -72,7 +81,7 @@ export default function ProjectWorkflowPanel({
   }
 
   const submitConfirmation = async () => {
-    if (!beginAction()) return
+    if (!beginAction('submit')) return
     try {
       await http.post<ApiResponses['POST /projects/{id}/submit']>(`/projects/${project.id}/submit`, { confirmSide: 'COMPANY' })
       Message.success('项目已提交公司验收')
@@ -91,7 +100,7 @@ export default function ProjectWorkflowPanel({
       Message.error('验收申请版本缺失，请刷新项目后重试')
       return
     }
-    if (!beginAction()) return
+    if (!beginAction('confirm')) return
     try {
       await http.post<ApiResponses['POST /projects/{id}/confirm']>(`/projects/${project.id}/confirm`, { expectedSubmissionId })
       Message.success('公司验收已通过')
@@ -109,7 +118,7 @@ export default function ProjectWorkflowPanel({
       Message.error('验收申请版本缺失，请关闭弹窗并刷新项目后重试')
       return
     }
-    if (!beginAction()) return
+    if (!beginAction('reject')) return
     try {
       const values = await rejectForm.validate().catch(() => null)
       if (!values) return
@@ -151,7 +160,7 @@ export default function ProjectWorkflowPanel({
       Message.error('验收申请版本缺失，请刷新项目后重试')
       return
     }
-    if (!beginAction()) return
+    if (!beginAction('withdraw')) return
     try {
       await http.post<ApiResponses['POST /projects/{id}/withdraw']>(`/projects/${project.id}/withdraw`, { expectedSubmissionId })
       Message.success('已撤回验收申请')
@@ -202,12 +211,12 @@ export default function ProjectWorkflowPanel({
       {showActions && (
         <Space className="project-workflow-actions" wrap>
           {canStatus && project.status === 'DRAFT' && (
-            <Button type="primary" icon={<IconPlayArrow />} loading={busy} onClick={() => changeStatus('IN_PROGRESS')}>
+            <Button type="primary" icon={<IconPlayArrow />} {...actionProps('start')} onClick={() => changeStatus('IN_PROGRESS')}>
               开始
             </Button>
           )}
           {canStatus && project.status === 'TERMINATED' && (
-            <Button type="primary" icon={<IconUndo />} loading={busy} onClick={() => changeStatus('IN_PROGRESS')}>
+            <Button type="primary" icon={<IconUndo />} {...actionProps('start')} onClick={() => changeStatus('IN_PROGRESS')}>
               重新开始
             </Button>
           )}
@@ -216,12 +225,12 @@ export default function ProjectWorkflowPanel({
               title="提交公司验收？"
               onOk={submitConfirmation}
             >
-              <Button type="primary" loading={busy}>提交公司验收</Button>
+              <Button type="primary" {...actionProps('submit')}>提交公司验收</Button>
             </Popconfirm>
           )}
           {canStatus && project.status === 'IN_PROGRESS' && (
             <Popconfirm title="终止项目后需要重新开始才能继续，确认终止？" onOk={() => changeStatus('TERMINATED')}>
-              <Button status="danger" icon={<IconStop />} loading={busy}>终止</Button>
+              <Button status="danger" icon={<IconStop />} {...actionProps('terminate')}>终止</Button>
             </Popconfirm>
           )}
           {isPending && canConfirm && (
@@ -232,14 +241,14 @@ export default function ProjectWorkflowPanel({
               }}
               onOk={confirmProject}
             >
-              <Button status="success" icon={<IconCheckCircle />} loading={busy}>验收通过</Button>
+              <Button type="primary" status="success" icon={<IconCheckCircle />} {...actionProps('confirm')}>验收通过</Button>
             </Popconfirm>
           )}
           {isPending && canConfirm && (
             <Button
               status="danger"
               icon={<IconCloseCircle />}
-              loading={busy}
+              {...actionProps('reject')}
               onClick={() => {
                 setRejectSubmissionId(project.latestSubmissionId ?? null)
                 setRejectOpen(true)
@@ -256,7 +265,7 @@ export default function ProjectWorkflowPanel({
               }}
               onOk={withdraw}
             >
-              <Button icon={<IconUndo />} loading={busy}>撤回</Button>
+              <Button icon={<IconUndo />} {...actionProps('withdraw')}>撤回</Button>
             </Popconfirm>
           )}
         </Space>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Button, Typography } from '@arco-design/web-react'
+import { Button, Tooltip, Typography } from '@arco-design/web-react'
+import { IconQuestionCircle } from '@arco-design/web-react/icon'
 import { createSessionQueryScope, queryClient } from '../api/queryClient'
 import { useAuth } from '../store/auth'
 import { fmtTime } from '../api/types'
@@ -335,11 +336,11 @@ export default function MessagePanel({
 
   return (
     <div className="message-panel">
-      <div className="section-heading">
-        <div>
-          <h2>协作留言（{visibleTotal}）</h2>
-          <Typography.Text type="secondary">已读回执仅统计项目负责人和关联供应商的全部启用账号。</Typography.Text>
-        </div>
+      <div className="message-panel-heading">
+        <h2>协作留言（{visibleTotal}）</h2>
+        <Tooltip content="已读回执仅统计项目负责人和关联供应商的全部启用账号。">
+          <IconQuestionCircle className="message-panel-help" aria-label="已读回执统计范围" tabIndex={0} />
+        </Tooltip>
       </div>
 
       {sync.syncError && (

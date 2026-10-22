@@ -19,6 +19,7 @@ import { normalizeList } from '../../utils/listValues'
 import { useCollaboration } from '../../store/collaboration'
 import type { ApiResponses } from '../../api/types'
 import LoadError from '../../components/LoadError'
+import EnterSubmit from '../../components/EnterSubmit'
 
 interface SupplierOpt { id: number; name: string }
 interface ProjectGroupFormValues {
@@ -68,18 +69,18 @@ const PROJECT_LIST_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'name', title: '主项目名称', defaultWidth: 120, minWidth: 96, locked: true },
   { key: 'workOrderNos', title: '工令号', defaultWidth: 96, minWidth: 72 },
   { key: 'machineModel', title: '机型', defaultWidth: 80, minWidth: 64 },
-  { key: 'supplierName', title: 'Robot 厂商', defaultWidth: 96, minWidth: 88 },
-  { key: 'robotTypeName', title: 'Robot 类型', defaultWidth: 100, minWidth: 88 },
-  { key: 'robotPartNumber', title: 'Robot 料号', defaultWidth: 116, minWidth: 88 },
-  { key: 'robotModelName', title: 'Robot 型号', defaultWidth: 88, minWidth: 80 },
+  { key: 'supplierName', title: 'Robot 厂商', defaultWidth: 112, minWidth: 104 },
+  { key: 'robotTypeName', title: 'Robot 类型', defaultWidth: 112, minWidth: 104 },
+  { key: 'robotPartNumber', title: 'Robot 料号', defaultWidth: 128, minWidth: 104 },
+  { key: 'robotModelName', title: 'Robot 型号', defaultWidth: 120, minWidth: 104 },
   { key: 'responsibleUserName', title: '负责人', defaultWidth: 84, minWidth: 72 },
-  { key: 'robotOwnerName', title: 'Robot 负责人', defaultWidth: 100, minWidth: 96 },
+  { key: 'robotOwnerName', title: 'Robot 负责人', defaultWidth: 124, minWidth: 116 },
   { key: 'sectionName', title: '课别', defaultWidth: 72, minWidth: 64 },
   { key: 'priorityName', title: '优先级', defaultWidth: 76, minWidth: 72 },
   { key: 'expectedCompletionDate', title: '需求完成时间', defaultWidth: 116, minWidth: 108 },
   { key: 'progress', title: '子项目进度', defaultWidth: 112, minWidth: 96 },
   { key: 'status', title: '状态', defaultWidth: 88, minWidth: 72 },
-  { key: 'unreadMessages', title: '未读留言', defaultWidth: 88, minWidth: 80 },
+  { key: 'unreadMessages', title: '未读留言', defaultWidth: 100, minWidth: 96 },
   { key: 'actions', title: '操作', defaultWidth: 140, minWidth: 108, maxWidth: 280, locked: true },
 ]
 
@@ -388,7 +389,7 @@ export default function ProjectList() {
   }
 
   const columns = withFlexibleColumn(columnLayout.apply([
-    { key: 'name', title: '主项目名称', dataIndex: 'name', fixed: 'left' as const, align: 'center' as const, ellipsis: true, render: (value: string, row: ProjectGroup) => <Link to={`/project-groups/${row.id}`} title={value}>{value}</Link> },
+    { key: 'name', title: '主项目名称', dataIndex: 'name', fixed: 'left' as const, ellipsis: true, render: (value: string, row: ProjectGroup) => <Link className="table-link" to={`/project-groups/${row.id}`} title={value}>{value}</Link> },
     { key: 'workOrderNos', title: '工令号', dataIndex: 'workOrderNos', ellipsis: true, render: (values?: string[]) => cellText(values?.join('、')) },
     { key: 'machineModel', title: '机型', dataIndex: 'machineModel', ellipsis: true, render: cellText },
     { key: 'supplierName', title: 'Robot 厂商', dataIndex: 'supplierName', ellipsis: true, render: cellText },
@@ -408,7 +409,7 @@ export default function ProjectList() {
     ) },
     { key: 'status', title: '状态', dataIndex: 'status', fixed: 'right' as const, align: 'center' as const, render: (value: string) => <Tag color={PROJECT_STATUS[value]?.color}>{PROJECT_STATUS[value]?.text || value}</Tag> },
     { key: 'unreadMessages', title: '未读留言', dataIndex: 'unreadMessages', fixed: 'right' as const, align: 'center' as const, render: (value: number) => value > 0 ? <Badge count={value} /> : '-' },
-    { key: 'actions', title: '操作', fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row: ProjectGroup) => actionSlots([
+    { key: 'actions', title: '操作', fixed: 'right' as const, render: (_: unknown, row: ProjectGroup) => actionSlots([
       <Button key="enter" size="mini" type="text" onClick={() => navigate(`/project-groups/${row.id}`)}>进入</Button>,
       isInternal && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(row.status) && (row.pendingCount > 0 ? (
         <Tooltip key="edit" content={`有 ${row.pendingCount} 个子项目待公司验收，暂不能编辑主项目资料`}>
@@ -457,7 +458,7 @@ export default function ProjectList() {
         </>}
 
       <Modal className="form-dialog" style={{ width: 760 }} title={editing ? '编辑主项目' : '新建主项目'} visible={modalOpen} onOk={submit} onCancel={closeModal} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okButtonProps={{ disabled: submitOptionsBlocked }} okText={editing ? '保存并同步' : '创建主项目'} unmountOnExit>
-        <Form className="form-grid" form={form} layout="vertical">
+        <Form onSubmit={() => void submit()} className="form-grid" form={form} layout="vertical">
           {!editing && (createOptionsBusy || createOptionsNeedRefresh) && <div className="form-grid-full" style={{ display: 'grid', gap: 8 }}>
             {(supplierOptionsLoading || metadataOptionsLoading) && <Typography.Text type="secondary">正在加载创建所需的基础数据…</Typography.Text>}
             {supplierOptionsError && <Alert type="error" content="Robot 厂商选项加载失败，请刷新基础数据后重试。" />}
@@ -472,7 +473,7 @@ export default function ProjectList() {
           {editing && editConflict && (
             <Alert className="form-grid-full" type="warning" content={`主项目已被他人修改，已刷新为最新数据（当前名称：${editing.name}）。请核对后再次保存，保存将覆盖为本弹窗中的内容。`} />
           )}
-          <Form.Item className="form-grid-full" label="主项目名称" field="name" rules={[{ required: true, message: '请输入主项目名称' }, textLengthRule('主项目名称', 128)]}><Input placeholder="主项目名称" /></Form.Item>
+          <Form.Item className="form-grid-full" label="主项目名称" field="name" rules={[{ required: true, message: '请输入主项目名称' }, textLengthRule('主项目名称', 128)]}><Input autoFocus placeholder="主项目名称" /></Form.Item>
           {!editing && <Form.Item className="form-grid-full" label="子项目" field="subprojectNames" rules={[{ required: true, message: '请至少创建一个子项目' }, { validator: (value, callback) => listRule('子项目', SUBPROJECT_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入子项目名称后按回车，可一次创建多个" /></Form.Item>}
           <Form.Item className="form-grid-full" label="工令号" field="workOrderNos" rules={[{ required: true, message: '请至少填写一个工令号' }, { validator: (value, callback) => listRule('工令号', WORK_ORDER_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入工令号后按回车，可填写多个" /></Form.Item>
           <Form.Item label="机型" field="machineModel" rules={[{ required: true, message: '请填写机型' }, textLengthRule('机型', 128)]}><Input maxLength={128} showWordLimit placeholder="请输入机型" /></Form.Item>
@@ -491,7 +492,7 @@ export default function ProjectList() {
             <span>Robot 类型、优先级或 Robot 料号选项加载失败，请重试。</span>
             <Button size="small" onClick={retryMetadataOptions}>重试加载选项</Button>
           </div>}
-        </Form>
+        <EnterSubmit /></Form>
       </Modal>
     </Card>
   )

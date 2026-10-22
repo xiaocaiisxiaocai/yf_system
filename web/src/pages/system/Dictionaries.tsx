@@ -6,6 +6,7 @@ import http from '../../api/client'
 import './Dictionaries.css'
 import type { ApiResponses, ProjectDictionaryOption, RobotPart } from '../../api/types'
 import LoadError from '../../components/LoadError'
+import EnterSubmit from '../../components/EnterSubmit'
 
 type DictionaryType = 'ROBOT_TYPE' | 'PRIORITY'
 type TabType = DictionaryType | 'ROBOT_PART'
@@ -146,7 +147,7 @@ export default function Dictionaries() {
       { title: 'Robot 型号', dataIndex: 'model', width: 280, ellipsis: true, render: (value: string) => <Tooltip content={value}><span>{value}</span></Tooltip> },
       { title: '排序号', dataIndex: 'sortNo', width: 90, align: 'center' as const },
       { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: RobotPart) => <Tag color={item.enabled ? 'green' : 'gray'}>{item.enabled ? '启用' : '停用'}</Tag> },
-      { title: '操作', width: 140, align: 'center' as const, render: (_: unknown, item: RobotPart) => <Space size={4}>
+      { title: '操作', width: 140, render: (_: unknown, item: RobotPart) => <Space size={4}>
         <Button type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button>
         {item.inUse ? <Tooltip content="已被项目引用，不能删除"><span><Button type="text" size="mini" status="danger" disabled>删除</Button></span></Tooltip> : <Popconfirm title={`删除 Robot 料号“${item.partNumber}”？`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm>}
       </Space> },
@@ -155,7 +156,7 @@ export default function Dictionaries() {
       { title: '名称', dataIndex: 'name', width: 280, ellipsis: true },
       { title: '排序号', dataIndex: 'sortNo', width: 90, align: 'center' as const },
       { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: ProjectDictionaryOption) => <Tag color={item.enabled ? 'green' : 'gray'}>{item.enabled ? '启用' : '停用'}</Tag> },
-      { title: '操作', width: 140, align: 'center' as const, render: (_: unknown, item: ProjectDictionaryOption) => <Space size={4}><Button type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button><Popconfirm title={`删除“${item.name}”？已被引用的条目不能删除。`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm></Space> },
+      { title: '操作', width: 140, render: (_: unknown, item: ProjectDictionaryOption) => <Space size={4}><Button type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button><Popconfirm title={`删除“${item.name}”？已被引用的条目不能删除。`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm></Space> },
     ])
 
   const editingPart = editing && isRobotPart(editing) ? editing : null
@@ -171,15 +172,15 @@ export default function Dictionaries() {
     </div>
     {error ? <LoadError message="基础数据加载失败" onRetry={load} /> : <Table<ManagedItem> className="page-table" rowKey="id" loading={loading} data={rows} pagination={{ pageSize: 20, showTotal: true, sizeCanChange: true }} noDataElement={loading ? <span /> : emptyContent} scroll={{ x: type === 'ROBOT_PART' ? 950 : 600, y: 'var(--page-table-scroll-y)' }} columns={columns as TableColumnProps<ManagedItem>[]} />}
     <Modal className="form-dialog" title={`${editing ? '编辑' : '新增'}${label}`} visible={open} onOk={save} onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okText={`${editing ? '保存' : '创建'}${label}`} cancelText="取消">
-      <Form form={form} layout="vertical" disabled={saving}>
+      <Form onSubmit={() => void save()} form={form} layout="vertical" disabled={saving}>
         {type === 'ROBOT_PART' ? <>
           <Form.Item field="supplierId" label="Robot 厂商" rules={[{ required: true, message: '请选择 Robot 厂商' }]} help={editingPart?.inUse ? '已被项目引用，厂商、料号和型号不可修改。' : undefined}><Select placeholder="选择 Robot 厂商" showSearch disabled={!!editingPart?.inUse} options={suppliers.filter((item) => item.status === 'ACTIVE' || item.id === editingPart?.supplierId).map((item) => ({ label: `${item.name}${item.status === 'ACTIVE' ? '' : '（已停用）'}`, value: item.id }))} /></Form.Item>
-          <Form.Item field="partNumber" label="Robot 料号" rules={[{ required: true, message: '请输入 Robot 料号' }, { validator: (value, callback) => callback(!value?.trim() || Array.from(value.trim()).length > 128 ? 'Robot 料号需为 1–128 个字符' : undefined) }]}><Input placeholder="输入 Robot 料号" disabled={!!editingPart?.inUse} maxLength={128} showWordLimit /></Form.Item>
+          <Form.Item field="partNumber" label="Robot 料号" rules={[{ required: true, message: '请输入 Robot 料号' }, { validator: (value, callback) => callback(!value?.trim() || Array.from(value.trim()).length > 128 ? 'Robot 料号需为 1–128 个字符' : undefined) }]}><Input autoFocus placeholder="输入 Robot 料号" disabled={!!editingPart?.inUse} maxLength={128} showWordLimit /></Form.Item>
           <Form.Item field="model" label="Robot 型号" rules={[{ required: true, message: '请输入 Robot 型号' }, { validator: (value, callback) => callback(!value?.trim() || Array.from(value.trim()).length > 512 ? 'Robot 型号需为 1–512 个字符' : undefined) }]}><Input.TextArea placeholder="输入该料号对应的完整型号" disabled={!!editingPart?.inUse} autoSize={{ minRows: 2, maxRows: 5 }} maxLength={512} showWordLimit wordLimitPosition="outside" /></Form.Item>
         </> : <Form.Item field="name" label="名称" rules={[{ required: true, message: '请输入名称' }, { validator: (value, callback) => callback(!value?.trim() || Array.from(value.trim()).length > 128 ? '名称需为 1–128 个字符' : undefined) }]}><Input placeholder={label} /></Form.Item>}
         <Form.Item field="sortNo" label="排序号"><InputNumber min={0} max={100000} precision={0} style={{ width: '100%' }} /></Form.Item>
         <Form.Item field="enabled" label="启用" triggerPropName="checked"><Switch /></Form.Item>
-      </Form>
+      <EnterSubmit /></Form>
     </Modal>
   </Card>
 }

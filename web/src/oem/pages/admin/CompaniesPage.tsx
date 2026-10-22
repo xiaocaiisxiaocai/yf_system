@@ -31,6 +31,7 @@ const OEM_COMPANY_COLUMNS: readonly ColumnLayoutSpec[] = [
 import { PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, passwordRule, validatePassword } from '../../../utils/password'
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 import './CompaniesPage.css'
+import EnterSubmit from '../../../components/EnterSubmit'
 
 function EllipsisText({ value }: { value: string | null | undefined }) {
   const text = value || '-'
@@ -192,15 +193,16 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
       key: 'actions', title: '操作', fixed: 'right' as const,
       render: (_: unknown, row: VendorAccount) => (
         <Space size={4}>
-          <Button size="mini" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>
-          <Button size="mini" onClick={() => reset(row)}>重置密码</Button>
-          <Button size="mini" status={row.status === 'ACTIVE' ? 'warning' : 'success'}
+          <Button size="mini" type="text" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>
+          <Button size="mini" type="text" onClick={() => reset(row)}>重置密码</Button>
+          <Button size="mini" type="text" status={row.status === 'ACTIVE' ? 'danger' : 'success'}
             onClick={() => void toggleAccountStatus(row)}>
             {row.status === 'ACTIVE' ? '停用' : '启用'}
           </Button>
           {can.deleteAccounts && (
             <Button
               size="mini"
+              type="text"
               status="danger"
               loading={deletingIds.has(row.id)}
               disabled={deletingIds.has(row.id)}
@@ -271,10 +273,10 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
         onOk={save}
         unmountOnExit
       >
-        <Form form={form} layout="vertical">
+        <Form onSubmit={() => void save()} form={form} layout="vertical">
           {editing === 'new' && (
             <Form.Item field="employeeNo" label="登录账号" rules={[{ required: true }, { match: /^[A-Za-z0-9_]{3,32}$/, message: '3~32 位字母/数字/下划线' }]}>
-              <Input />
+              <Input autoFocus />
             </Form.Item>
           )}
           <Form.Item field="realName" label="姓名" rules={[{ required: true }, { maxLength: 64 }]}><Input /></Form.Item>
@@ -282,7 +284,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
           {editing === 'new' && (
             <Form.Item field="password" label="初始密码" rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}><Input.Password /></Form.Item>
           )}
-        </Form>
+        <EnterSubmit /></Form>
       </Modal>
     </Drawer>
   )
@@ -424,15 +426,16 @@ export default function CompaniesPage() {
       key: 'actions', title: '操作', fixed: 'right' as const,
       render: (_: unknown, row: Company) => (
         <Space size={4}>
-          {can.manageAccounts && <Button size="mini" onClick={() => setAccountsOf(row)}>账号</Button>}
-          {can.manageCompanies && <Button size="mini" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>}
+          {can.manageAccounts && <Button size="mini" type="text" onClick={() => setAccountsOf(row)}>账号</Button>}
+          {can.manageCompanies && <Button size="mini" type="text" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>}
           {can.manageCompanies && <Popconfirm title={row.status === 'ACTIVE' ? '停用后该厂商所有账号将立即退出登录，确定？' : '确定启用该厂商？'}
             onOk={() => toggleCompanyStatus(row)}>
-            <Button size="mini" status={row.status === 'ACTIVE' ? 'warning' : 'success'}>{row.status === 'ACTIVE' ? '停用' : '启用'}</Button>
+            <Button size="mini" type="text" status={row.status === 'ACTIVE' ? 'danger' : 'success'}>{row.status === 'ACTIVE' ? '停用' : '启用'}</Button>
           </Popconfirm>}
           {can.manageCompanies && can.deleteCompanies && (
             <Button
               size="mini"
+              type="text"
               status="danger"
               loading={deletingIds.has(row.id)}
               disabled={deletingIds.has(row.id)}
@@ -495,13 +498,13 @@ export default function CompaniesPage() {
         onOk={save}
         unmountOnExit
       >
-        <Form form={form} layout="vertical">
-          <Form.Item field="name" label="厂商名称" rules={[{ required: true, message: '请输入厂商名称' }, { maxLength: 128 }]}><Input /></Form.Item>
+        <Form onSubmit={() => void save()} form={form} layout="vertical">
+          <Form.Item field="name" label="厂商名称" rules={[{ required: true, message: '请输入厂商名称' }, { maxLength: 128 }]}><Input autoFocus /></Form.Item>
           <Form.Item field="contactName" label="联系人"><Input maxLength={64} /></Form.Item>
           <Form.Item field="contactPhone" label="联系电话"><Input maxLength={32} /></Form.Item>
           <Form.Item field="contactEmail" label="联系邮箱" rules={[{ type: 'email' }]}><Input /></Form.Item>
           <Form.Item field="remark" label="备注"><Input.TextArea maxLength={512} /></Form.Item>
-        </Form>
+        <EnterSubmit /></Form>
       </Modal>
       <AccountsDrawer
         key={accountsOf?.id ?? 'closed'}

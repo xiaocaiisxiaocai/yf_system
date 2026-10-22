@@ -71,22 +71,22 @@ const MessageRow = memo(function MessageRow({
   ReceiptBody,
 }: MessageRowProps) {
   return <div
-    className={`msg-item${m.id === targetId ? ' msg-item-target' : ''}`}
+    className={`msg-item${m.id === targetId ? ' msg-item-target' : ''}${m.senderId === userId ? ' msg-item--mine' : ''}`}
     data-message-id={m.id}
     aria-label={m.id === targetId ? '当前定位留言' : undefined}
     data-unread={!m.readByMe && m.senderId !== userId ? 'true' : 'false'}
   >
     <Space align="start">
-      <Avatar size={32} style={{ background: m.senderType === 'SUPPLIER' ? '#7b61ff' : '#165dff' }}>
+      <Avatar size={32} className={m.senderType === 'SUPPLIER' ? 'msg-avatar msg-avatar--supplier' : 'msg-avatar'}>
         {m.senderName.slice(0, 1)}
       </Avatar>
       <div className="message-row-main">
         <Space size={8}>
           <Typography.Text bold>{m.senderName}</Typography.Text>
+          {m.senderId === userId && <span className="msg-mine-badge">我</span>}
           <Tag size="small" color={m.senderType === 'SUPPLIER' ? 'purple' : 'arcoblue'}>
             {m.senderType === 'SUPPLIER' ? '供应商' : '公司'}
           </Tag>
-          <Tag size="small" color="gray">项目留言</Tag>
           <Typography.Text type="secondary" className="message-row-time">{fmtTime(m.createdAt)}</Typography.Text>
         </Space>
         <div className="message-row-content">{m.content}</div>
@@ -111,9 +111,9 @@ const MessageRow = memo(function MessageRow({
               已读 {m.readCount}/{m.totalCount}
             </Button>
           </Popover>
-          {m.senderId === userId && <Button size="mini" type="text" onClick={() => onOpenReceipt(m.id)}>回执详情</Button>}
+          {m.senderId === userId && <Button className="msg-secondary-action" size="mini" type="text" onClick={() => onOpenReceipt(m.id)}>回执详情</Button>}
           {canDelete && <Popconfirm title="删除这条留言？删除后双方均不可见。" onOk={() => onRemove(m.id)}>
-            <Button size="mini" type="text" status="danger" icon={<IconDelete />}>删除</Button>
+            <Button className="msg-secondary-action" size="mini" type="text" status="danger" icon={<IconDelete />}>删除</Button>
           </Popconfirm>}
         </div>
       </div>

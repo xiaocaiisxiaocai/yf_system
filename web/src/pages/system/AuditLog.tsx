@@ -307,7 +307,10 @@ export default function AuditLog() {
                 return <div className="audit-action"><Tag color={meta.color}>{meta.label}</Tag><small title={value}>{meta.categoryLabel} · {value}</small></div>
               },
             },
-            { title: '内容摘要', width: 280, render: (_: unknown, row?: AuditLogRow) => row ? <Typography.Text ellipsis={{ showTooltip: true }}>{detailSummary(row)}</Typography.Text> : '-' },
+            { title: '内容摘要', width: 280, render: (_: unknown, row?: AuditLogRow) => {
+              const summary = row ? detailSummary(row) : '-'
+              return summary === '-' ? <Typography.Text type="secondary">-</Typography.Text> : <Typography.Text ellipsis={{ showTooltip: true }}>{summary}</Typography.Text>
+            } },
             {
               title: '对象', width: 180,
               render: (_: unknown, row?: AuditLogRow) => {
@@ -316,7 +319,7 @@ export default function AuditLog() {
                 return <div className="audit-target"><span title={identity.name}>{identity.name}</span><small title={identity.identifier}>{identity.identifier}</small></div>
               },
             },
-            { title: '操作', width: 120, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row?: AuditLogRow) => row ? actionSlots([
+            { title: '操作', width: 100, fixed: 'right' as const, render: (_: unknown, row?: AuditLogRow) => row ? actionSlots([
               <Button key="view" size="mini" type="text" icon={<IconEye />} onClick={() => setSelected(row)}>查看</Button>,
             ], 'single') : null },
           ]}

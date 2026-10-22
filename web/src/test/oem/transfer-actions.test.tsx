@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { Modal } from '@arco-design/web-react'
@@ -143,7 +143,8 @@ describe('OEM 终止与改派', () => {
     // Arco 选项在下拉动画期间是 pointer-events: none，userEvent 点不到。
     fireEvent.click(await screen.findByRole('option', { name: '新审批人（A0012）' }))
     fireEvent.change(screen.getByPlaceholderText('改派原因（必填）'), { target: { value: '原审批人离职' } })
-    const ok = screen.getByRole('button', { name: '确定' })
+    // 只在改派对话框内查找：上一用例的 Modal.confirm 在关闭动画结束前可能仍留在 DOM 里。
+    const ok = within(dialog).getByRole('button', { name: '确定' })
     await act(async () => {
       fireEvent.click(ok)
       fireEvent.click(ok)
@@ -153,7 +154,7 @@ describe('OEM 终止与改派', () => {
     expect(consoleError).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog', { name: '改派审批人' })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: '确定' }))
+    await user.click(within(dialog).getByRole('button', { name: '确定' }))
     expect(reassign).toHaveBeenCalledTimes(2)
     resolveReassign(detail())
     expect(await screen.findByText('已改派')).toBeInTheDocument()

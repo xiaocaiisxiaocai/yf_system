@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Alert, Button, Card, Checkbox, Empty, Form, Input, Message, Modal, Select, Space, Spin, Switch, Tag, TreeSelect, Typography,
+  Alert, Button, Card, Checkbox, Empty, Form, Input, Message, Modal, Select, Space, Spin, Switch, Tag, Tooltip, TreeSelect, Typography,
 } from '@arco-design/web-react'
 import { IconDelete, IconPlus } from '@arco-design/web-react/icon'
 import { isVersionConflict } from '../../../api/versionConflict'
@@ -130,7 +130,7 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
           <Card key={node.key} size="small" title={`节点 ${index + 1}`} extra={
             <Space>
               <Switch size="small" checked={node.enabled} onChange={(enabled) => patch(node.key, { enabled })} />
-              <Button size="mini" icon={<IconDelete />} disabled={nodes.length === 1} onClick={() => setNodes((list) => list.filter((item) => item.key !== node.key))} />
+              <Tooltip content="删除节点"><Button size="mini" type="text" status="danger" icon={<IconDelete />} aria-label={`删除节点 ${index + 1}`} disabled={nodes.length === 1} onClick={() => setNodes((list) => list.filter((item) => item.key !== node.key))} /></Tooltip>
             </Space>
           }>
             <Form layout="vertical">

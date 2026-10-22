@@ -14,6 +14,7 @@ import {
 } from '../store/collaboration'
 import '../styles/collaboration.css'
 import type { ApiResponses } from '../api/types'
+import LoadError from './LoadError'
 
 const PAGE_SIZE = 20
 
@@ -276,9 +277,8 @@ export default function CollaborationNotifications() {
           </div>
 
           {listFailed ? (
-            <div className="collaboration-list-state" role="alert">
-              <Empty description="通知列表加载失败" />
-              <Button type="primary" onClick={() => loadList(page, unreadOnly)}>重试</Button>
+            <div className="collaboration-list-state">
+              <LoadError message="通知列表加载失败" onRetry={() => loadList(page, unreadOnly)} />
             </div>
           ) : (
             <Spin loading={loading && list.length === 0} className="collaboration-list-spinner">

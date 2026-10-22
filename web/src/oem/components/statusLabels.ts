@@ -1,7 +1,7 @@
 import type { ApprovalStatus, Direction, Lifecycle, PayloadStatus, ValidationStatus } from '../api/types'
 
 /** Display labels and colours for OEM statuses (shared by tags, filters and detail views). */
-export type TagColor = 'gray' | 'blue' | 'green' | 'orange' | 'red' | 'arcoblue' | 'purple'
+export type TagColor = 'gray' | 'green' | 'orange' | 'red' | 'arcoblue' | 'purple'
 
 export const LIFECYCLE: Record<Lifecycle, [string, TagColor]> = {
   DRAFT: ['草稿', 'gray'],
@@ -9,13 +9,13 @@ export const LIFECYCLE: Record<Lifecycle, [string, TagColor]> = {
   RELEASED: ['已发送', 'green'],
   REJECTED: ['已驳回', 'red'],
   BLOCKED: ['文件阻断', 'red'],
-  CANCELLED: ['已终止', 'orange'],
+  CANCELLED: ['已终止', 'red'],
   ABANDONED: ['已废弃', 'gray'],
 }
 
 export const APPROVAL: Record<ApprovalStatus, [string, TagColor]> = {
   NOT_REQUIRED: ['无需审批', 'gray'],
-  WAITING_FILES: ['等待文件校验', 'blue'],
+  WAITING_FILES: ['等待文件校验', 'arcoblue'],
   PENDING: ['审批中', 'arcoblue'],
   APPROVAL_BLOCKED: ['审批阻断', 'orange'],
   APPROVED: ['审批通过', 'green'],
@@ -26,7 +26,7 @@ export const APPROVAL: Record<ApprovalStatus, [string, TagColor]> = {
 
 export const VALIDATION: Record<ValidationStatus, [string, TagColor]> = {
   PENDING: ['待校验', 'gray'],
-  VALIDATING: ['校验中', 'blue'],
+  VALIDATING: ['校验中', 'arcoblue'],
   VALID: ['校验通过', 'green'],
   INVALID: ['校验未通过', 'red'],
   ERROR: ['校验失败', 'red'],
@@ -34,7 +34,7 @@ export const VALIDATION: Record<ValidationStatus, [string, TagColor]> = {
 
 export const PAYLOAD: Record<PayloadStatus, [string, TagColor]> = {
   QUARANTINED: ['暂存中', 'gray'],
-  PROMOTING: ['入库中', 'blue'],
+  PROMOTING: ['入库中', 'arcoblue'],
   AVAILABLE: ['可用', 'green'],
   PURGE_PENDING: ['待删除', 'orange'],
   PURGED: ['已删除', 'gray'],

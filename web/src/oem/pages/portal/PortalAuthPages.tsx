@@ -34,7 +34,7 @@ export function PortalLoginPage() {
   }
 
   return (
-    <AuthShell brand={OEM_BRAND}>
+    <AuthShell brand={OEM_BRAND} title="账号登录" description="使用 OEM 厂商账号登录文件传递门户">
       <Form className="auth-form" form={form} layout="vertical" onSubmit={submit} autoComplete="on">
         <Form.Item field="employeeNo" rules={[{ required: true, message: '请输入登录账号' }]}>
           <Input size="large" prefix={<IconUser />} placeholder="请输入登录账号" aria-label="登录账号" autoComplete="username" disabled={loading} />

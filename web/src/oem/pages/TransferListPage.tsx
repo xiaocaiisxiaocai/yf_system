@@ -15,6 +15,7 @@ import { useLatestRequest, useLoadEffect } from '../useLoadEffect'
 import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
 import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
+import EnterSubmit from '../../components/EnterSubmit'
 
 const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'title', title: '文件', defaultWidth: 260, minWidth: 140, locked: true },
@@ -253,7 +254,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         || (realm === 'internal' && (companyOptionsLoading || !!companyOptionsError || !companies.some((company) => company.canReceive))) }}
       unmountOnExit
     >
-      <Form form={form} layout="vertical">
+      <Form onSubmit={() => void submit()} form={form} layout="vertical">
         {realm === 'internal' && (
           <Form.Item field="oemCompanyId" label="目标 OEM 厂商" extra="至少需要一个启用的 OEM 登录账号才能发送。" rules={[{ required: true, message: '请选择厂商' }]}>
             <Select
@@ -323,7 +324,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         {draftId && !busy && !recipientBlocked && (
           <Alert type="info" style={{ marginTop: 12 }} content="草稿已创建。再次提交只会继续失败或未完成的文件，不会重复上传成功文件。" />
         )}
-      </Form>
+      <EnterSubmit /></Form>
     </Modal>
   )
 }

@@ -1,4 +1,4 @@
-import { Spin, Tabs } from '@arco-design/web-react'
+import { Card, Spin, Tabs } from '@arco-design/web-react'
 import { useNavigate } from 'react-router-dom'
 import http from '../../api/client'
 import { fmtTime } from '../../api/types'
@@ -49,8 +49,13 @@ export default function SysConfig() {
   })
 
   return (
-    <div className="system-page">
-      <div className="page-heading"><div><h1>系统参数</h1></div></div>
+    <Card className="page-card page-card--table system-page">
+      <div className="page-heading">
+        <div>
+          <h1>系统参数</h1>
+          <p>上传限制、SMTP 发信与邮件提醒设置，修改后需保存才会生效。</p>
+        </div>
+      </div>
       {state.loadError ? (
         <LoadError onRetry={state.load} />
       ) : state.loading ? (
@@ -67,6 +72,6 @@ export default function SysConfig() {
           </Tabs>
         </>
       )}
-    </div>
+    </Card>
   )
 }

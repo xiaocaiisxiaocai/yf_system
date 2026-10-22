@@ -57,7 +57,7 @@ export function renderSystemConfigTable({
   return (
     <Card
       className="page-card system-config-card"
-      title="系统参数"
+      title="上传限制"
       extra={
         <Space size={8}>
           {dirty.length > 0 && <span className="system-config-dirty">已修改 {dirty.length} 项</span>}

@@ -2,6 +2,7 @@ import { Form, Input, Modal } from '@arco-design/web-react'
 import type { FormInstance } from '@arco-design/web-react'
 import { textLengthRule } from '../../../utils/textRules'
 import type { Supplier } from './supplierTypes'
+import EnterSubmit from '../../../components/EnterSubmit'
 
 interface SupplierEditModalProps {
   editing: Supplier | null
@@ -27,14 +28,14 @@ export function SupplierEditModal({ editing, editOpen, saving, form, onOk, onCan
       onOk={onOk}
       onCancel={onCancel}
     >
-      <Form form={form} layout="vertical">
+      <Form onSubmit={() => void onOk()} form={form} layout="vertical">
         <Form.Item label="供应商名称" field="name" rules={[{ required: true, message: '请输入名称' }, textLengthRule('供应商名称', 64)]}>
-          <Input placeholder="公司全称" />
+          <Input autoFocus placeholder="公司全称" />
         </Form.Item>
         <Form.Item label="备注" field="remark">
           <Input.TextArea rows={3} maxLength={500} placeholder="选填" />
         </Form.Item>
-      </Form>
+      <EnterSubmit /></Form>
     </Modal>
   )
 }

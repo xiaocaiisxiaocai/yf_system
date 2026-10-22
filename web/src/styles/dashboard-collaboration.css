@@ -116,7 +116,9 @@
 
 .dashboard-stat-link { display: block; color: inherit; text-decoration: none; }
 .dashboard-stat-link:focus-visible { border-radius: var(--app-radius); outline: 2px solid rgb(var(--primary-6)); outline-offset: 2px; }
-.dashboard-stat-card { transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease; }
+.dashboard-stat-card { border-color: var(--app-border); border-radius: var(--app-radius); box-shadow: 0 2px 8px rgb(25 42 70 / 3%); transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease; }
+.dashboard-stat-card .arco-statistic-title { color: var(--app-text-muted); font-size: 13px; }
+.dashboard-stat-card .arco-statistic-value { font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .dashboard-stat-link:hover .dashboard-stat-card {
   border-color: rgb(var(--primary-5));

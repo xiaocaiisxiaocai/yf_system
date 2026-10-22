@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Badge, Button, Card, Descriptions, Drawer, Empty, Spin, Table, Tabs, Tag, Typography } from '@arco-design/web-react'
+import { Badge, Button, Card, Descriptions, Drawer, Empty, Spin, Table, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
+import { IconDown, IconLeft, IconUp } from '@arco-design/web-react/icon'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
 import {
@@ -189,6 +190,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const summaryAbort = useRef<AbortController | null>(null)
   const historySeq = useRef(0)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [metadataOpen, setMetadataOpen] = useState(false)
   const [copyHistory, setCopyHistory] = useState<ProjectCopyHistory | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState(false)
@@ -454,16 +456,35 @@ function ProjectDetailContent({ id }: { id?: string }) {
         </div>
       )}
       <Card className="page-card project-detail-summary-card">
-        <div className="detail-heading">
-          <div>
-            <Typography.Text type="secondary">{project.projectGroupName || '主项目'} / 子项目</Typography.Text>
-            <h1>{project.name}</h1>
+        <div className="detail-heading project-detail-heading">
+          <div className="project-detail-title">
+            <Tooltip content="返回主项目">
+              <Button className="project-detail-back" shape="circle" size="small" icon={<IconLeft />} aria-label="返回主项目"
+                onClick={() => navigate(project.projectGroupId ? `/project-groups/${project.projectGroupId}` : '/projects')} />
+            </Tooltip>
+            <div className="project-detail-title-text">
+              <Typography.Text type="secondary" className="project-detail-breadcrumb" title={project.projectGroupName || undefined}>
+                {project.projectGroupName || '主项目'} / 子项目
+              </Typography.Text>
+              <div className="project-detail-name">
+                <h1 title={project.name}>{project.name}</h1>
+                <Tag color={PROJECT_STATUS[project.status]?.color}>
+                  {PROJECT_STATUS[project.status]?.text || project.status}
+                </Tag>
+              </div>
+            </div>
           </div>
           <div className="detail-actions">
-            <Tag color={PROJECT_STATUS[project.status]?.color}>
-              {PROJECT_STATUS[project.status]?.text || project.status}
-            </Tag>
-            <Button onClick={() => navigate(project.projectGroupId ? `/project-groups/${project.projectGroupId}` : '/projects')}>返回主项目</Button>
+            <ProjectWorkflowPanel
+              compact
+              project={project}
+              uploadRefresh={uploadActivityRefresh}
+              onWriteFailed={bumpUploadActivity}
+              onChanged={() => {
+                loadProject()
+                loadSummary()
+              }}
+            />
           </div>
         </div>
         {currentGroupId && siblings.length > 1 && (
@@ -484,8 +505,22 @@ function ProjectDetailContent({ id }: { id?: string }) {
             ))}
           </div>
         )}
-        <Descriptions
+        <div className="project-detail-facts-row">
+          <dl className="project-group-summary-facts project-detail-facts">
+            <div><dt>Robot 厂商</dt><dd title={project.supplierName || undefined}>{detailText(project.supplierName)}</dd></div>
+            <div><dt>Robot 型号</dt><dd title={project.robotModelName || undefined}>{detailText(project.robotModelName)}</dd></div>
+            <div><dt>负责人</dt><dd>{project.responsibleUserName || '-'}</dd></div>
+            <div><dt>工令号</dt><dd title={project.workOrderNos?.join('、') || undefined}>{detailText(project.workOrderNos?.join('、'))}</dd></div>
+            <div><dt>优先级</dt><dd>{detailText(project.priorityName)}</dd></div>
+            <div><dt>需求完成时间</dt><dd>{detailText(project.expectedCompletionDate)}</dd></div>
+          </dl>
+          <Button type="text" size="small" aria-expanded={metadataOpen} onClick={() => setMetadataOpen((open) => !open)}>
+            {metadataOpen ? '收起资料' : '全部资料'}{metadataOpen ? <IconUp /> : <IconDown />}
+          </Button>
+        </div>
+        {metadataOpen && <Descriptions
           className="project-metadata"
+          size="small"
           column={{ xs: 1, sm: 2, md: 3, lg: 4 }}
           data={[
             { label: '工令号', value: detailText(project.workOrderNos?.join('、')) },
@@ -507,7 +542,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
             { label: '创建人', value: project.createdByName || '-' },
             { label: '更新时间', value: fmtTime(project.updatedAt) },
           ]}
-        />
+        />}
         {project.hasCopyHistory && (
           <div className="project-copy-reference-bar">
             <div>
@@ -533,16 +568,6 @@ function ProjectDetailContent({ id }: { id?: string }) {
             </Typography.Ellipsis>
           </div>
         )}
-        <ProjectWorkflowPanel
-          compact
-          project={project}
-          uploadRefresh={uploadActivityRefresh}
-          onWriteFailed={bumpUploadActivity}
-          onChanged={() => {
-            loadProject()
-            loadSummary()
-          }}
-        />
       </Card>
 
       <Card className="page-card project-detail-tabs-card">

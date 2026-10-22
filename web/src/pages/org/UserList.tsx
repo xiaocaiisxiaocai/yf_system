@@ -16,6 +16,7 @@ import { passwordRule } from '../../utils/password'
 import type { ApiResponses } from '../../api/types'
 import type { DepartmentTreeNode as ApiDepartmentTreeNode } from '../../api/generated/api-types'
 import LoadError from '../../components/LoadError'
+import EnterSubmit from '../../components/EnterSubmit'
 
 interface UserRow {
   id: number
@@ -358,36 +359,35 @@ export default function UserList() {
           rowKey="id"
           loading={loading}
           data={data.list}
-          scroll={{ x: 1204, y: 'var(--page-table-scroll-y)' }}
+          scroll={{ x: 1060, y: 'var(--page-table-scroll-y)' }}
           columns={[
-          { title: '工号', dataIndex: 'employeeNo', width: 130, align: 'center' as const, ellipsis: true },
-          { title: '姓名', dataIndex: 'realName', width: 100, align: 'center' as const, ellipsis: true },
+          { title: '工号', dataIndex: 'employeeNo', width: 110, ellipsis: true },
+          { title: '姓名', dataIndex: 'realName', width: 110, ellipsis: true },
           {
             title: '组织',
             dataIndex: 'departmentName',
-            width: 150,
+            width: 140,
             render: (v?: string) => <span className="table-cell-wrap">{v || '-'}</span>,
           },
           {
             title: '角色',
             dataIndex: 'roleName',
-            width: 180,
+            width: 150,
             render: (v?: string) => (v ? <Tag size="small" className="table-cell-wrap">{v}</Tag> : '-'),
           },
-          { title: '邮箱', dataIndex: 'email', width: 130, ellipsis: true },
+          { title: '邮箱', dataIndex: 'email', ellipsis: true, render: (v?: string) => v || '-' },
           {
             title: '状态',
             dataIndex: 'status',
-            width: 70,
+            width: 72,
             align: 'center' as const,
-            render: (v: string) => (v === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="red">禁用</Tag>),
+            render: (v: string) => (v === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="gray">禁用</Tag>),
           },
-          { title: '最近登录', dataIndex: 'lastLoginAt', width: 180, align: 'center' as const, render: fmtTime },
+          { title: '最近登录', dataIndex: 'lastLoginAt', width: 160, render: fmtTime },
           {
             title: '操作',
-            width: 264,
+            width: 200,
             fixed: 'right' as const,
-            align: 'center' as const,
             render: (_: unknown, r: UserRow) => actionSlots([
                 <Button
                   key="edit"
@@ -453,12 +453,12 @@ export default function UserList() {
         onOk={submit}
         onCancel={() => { if (!saving) setEditOpen(false) }}
       >
-        <Form form={form} layout="vertical">
+        <Form onSubmit={() => void submit()} form={form} layout="vertical">
           <div className="form-grid">
             {!editing && (
               <>
                 <Form.Item label="工号" field="employeeNo" rules={[{ required: true, message: '请输入工号' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
-                  <Input placeholder="3-32 位字母、数字或下划线" />
+                  <Input autoFocus placeholder="3-32 位字母、数字或下划线" />
                 </Form.Item>
                 <Form.Item
                   label="初始密码"
@@ -494,7 +494,7 @@ export default function UserList() {
             </Form.Item>
           </div>
           {!editing && <div className="dialog-note">首次登录需改密</div>}
-        </Form>
+        <EnterSubmit /></Form>
       </Modal>
 
       <Modal
@@ -510,16 +510,16 @@ export default function UserList() {
         onOk={resetPwd}
         onCancel={closePasswordReset}
       >
-        <Form form={pwdForm} layout="vertical">
+        <Form onSubmit={() => void resetPwd()} form={pwdForm} layout="vertical">
           <Form.Item
             label="新密码"
             field="newPassword"
                 rules={[{ required: true, message: '请输入新密码' }, passwordRule]}
           >
-            <PasswordInput placeholder="6-20 位" />
+            <PasswordInput autoFocus placeholder="6-20 位" />
           </Form.Item>
           <div className="dialog-note">重置后，该用户的全部登录会话将立即退出</div>
-        </Form>
+        <EnterSubmit /></Form>
       </Modal>
     </Card>
   )

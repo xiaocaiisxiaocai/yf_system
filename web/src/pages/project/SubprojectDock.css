@@ -36,7 +36,7 @@
   box-sizing: border-box;
   overflow: hidden;
   border: 1px solid var(--app-border);
-  border-radius: var(--app-radius, 8px);
+  border-radius: var(--app-radius);
   box-shadow: 0 2px 8px rgb(25 42 70 / 3%);
 }
 /* dockview 的 .dv-view 默认 overflow: auto；面板组带边框后不能再让外层出现滚动条。 */
@@ -46,7 +46,7 @@
 .yf-dockview-theme .dv-tab { padding: 0 12px; }
 .yf-dockview-theme .dv-tab.dv-active-tab { box-shadow: inset 0 -2px 0 rgb(var(--primary-6)); }
 .yf-dockview-theme .dv-groupview.dv-inactive-group .dv-tab.dv-active-tab { box-shadow: inset 0 -2px 0 var(--color-neutral-4); }
-.yf-dockview-theme .dv-resize-container { border-radius: var(--app-radius, 8px); }
+.yf-dockview-theme .dv-resize-container { border-radius: var(--app-radius); }
 
 .subproject-dock-tab {
   display: inline-flex;
@@ -106,7 +106,6 @@
 .subproject-pane .project-workflow-summary:not(:has(.arco-typography)) { display: none; }
 .subproject-pane .project-workflow-status { margin-top: 0; }
 .subproject-pane .project-workflow-status > .arco-typography { max-width: 220px; }
-.subproject-pane .project-workflow-actions .arco-btn { height: 28px; padding: 0 12px; font-size: 13px; }
 .subproject-pane-tabs,
 .subproject-pane-tabs .arco-tabs-content-inner,
 .subproject-pane-tabs .arco-tabs-content-item-active,
@@ -120,6 +119,12 @@
 .subproject-pane-tabs .arco-tabs-content-item-active { overflow: auto; }
 .subproject-pane .project-activity { height: 100%; min-height: 0; }
 .subproject-pane .project-activity-feed { flex: 1 1 0; min-height: 0; overflow: auto; }
+
+/* 面板较窄：项目动态概览改为单行文字，不占三张卡片的高度。 */
+.subproject-pane .project-activity-summary { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 8px; }
+.subproject-pane .project-activity-summary-item { display: flex; align-items: baseline; gap: 6px; min-width: 0; padding: 0; border: 0; background: transparent; }
+.subproject-pane .project-activity-summary-value { margin-top: 0; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.subproject-pane .project-activity-summary-value--time { font-weight: 500; }
 
 @container (max-width: 520px) {
   .subproject-pane { padding: 6px 8px 8px; }
@@ -135,7 +140,7 @@
   align-items: center;
   justify-content: center;
   border: 1px dashed var(--app-border);
-  border-radius: var(--app-radius, 8px);
+  border-radius: var(--app-radius);
   background: #fff;
 }
 

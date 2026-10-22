@@ -39,22 +39,22 @@ export function MessageComposer({
     <div className="message-composer message-composer--images" onPaste={event => {
       if (!sending) pasteMessageImages(event, images, onImagesChange)
     }}>
-      <div className="message-composer-input-row">
-        <Input.TextArea
-          placeholder="输入留言，Ctrl+Enter 发送"
-          value={content}
-          onChange={onContentChange}
-          autoSize={{ minRows: 2, maxRows: 5 }}
-          style={{ flex: 1 }}
-          onKeyDown={(event) => {
-            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') onSend()
-          }}
-        />
-        <Button type="primary" icon={<IconSend />} onClick={onSend} disabled={(!content.trim() && !images.length) || loading && listLength === 0} loading={sending}>
+      <Input.TextArea
+        className="message-composer-input"
+        placeholder="输入留言，Ctrl+Enter 发送"
+        value={content}
+        onChange={onContentChange}
+        autoSize={{ minRows: 2, maxRows: 5 }}
+        onKeyDown={(event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') onSend()
+        }}
+      />
+      <div className="message-composer-footer">
+        <ImageComposer files={images} onChange={onImagesChange} disabled={sending} />
+        <Button className="message-composer-send" type="primary" size="small" icon={<IconSend />} onClick={onSend} disabled={(!content.trim() && !images.length) || loading && listLength === 0} loading={sending}>
           发送
         </Button>
       </div>
-      <ImageComposer files={images} onChange={onImagesChange} disabled={sending} />
     </div>
   )
 }

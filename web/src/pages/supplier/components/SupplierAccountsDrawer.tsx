@@ -11,6 +11,7 @@ import { type ApiResponses, fmtTime } from '../../../api/types'
 import { passwordRule } from '../../../utils/password'
 import { textLengthRule } from '../../../utils/textRules'
 import type { Account, RoleOption, Supplier } from './supplierTypes'
+import EnterSubmit from '../../../components/EnterSubmit'
 
 const builtInSupplierRoleName = '供应商人员'
 
@@ -248,14 +249,13 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
             dataIndex: 'status',
             width: 64,
             align: 'center' as const,
-            render: (value: string) => (value === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="red">禁用</Tag>),
+            render: (value: string) => (value === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="gray">禁用</Tag>),
           },
           { title: '最近登录', dataIndex: 'lastLoginAt', width: 140, align: 'center' as const, render: fmtTime },
           {
             title: '操作',
             width: 216,
             fixed: 'right' as const,
-            align: 'center' as const,
             render: (_: unknown, account: Account) => actionSlots([
               <Button
                 key="edit"
@@ -326,12 +326,12 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
         onOk={submit}
         onCancel={() => { if (!saving) setEditOpen(false) }}
       >
-        <Form form={form} layout="vertical">
+        <Form onSubmit={() => void submit()} form={form} layout="vertical">
           <div className="form-grid">
             {!editing && (
               <>
                 <Form.Item label="工号" field="employeeNo" rules={[{ required: true, message: '请输入工号' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
-                  <Input placeholder="3-32 位字母、数字或下划线" />
+                  <Input autoFocus placeholder="3-32 位字母、数字或下划线" />
                 </Form.Item>
                 <Form.Item
                   label="初始密码"
@@ -366,7 +366,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
               <Input placeholder="name@example.com" />
             </Form.Item>
           </div>
-        </Form>
+        <EnterSubmit /></Form>
       </Modal>
 
       <Modal
@@ -382,16 +382,16 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
         onOk={resetPwd}
         onCancel={closePasswordReset}
       >
-        <Form form={pwdForm} layout="vertical">
+        <Form onSubmit={() => void resetPwd()} form={pwdForm} layout="vertical">
           <Form.Item
             label="新密码"
             field="newPassword"
                 rules={[{ required: true, message: '请输入新密码' }, passwordRule]}
           >
-            <PasswordInput placeholder="6-20 位" />
+            <PasswordInput autoFocus placeholder="6-20 位" />
           </Form.Item>
           <div className="dialog-note">下次登录需改密</div>
-        </Form>
+        <EnterSubmit /></Form>
       </Modal>
     </Drawer>
   )

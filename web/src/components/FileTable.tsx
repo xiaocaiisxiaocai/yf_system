@@ -1,6 +1,6 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  Button, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
+  Button, Input, Message, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconUpload, IconDelete, IconClose, IconQuestionCircle } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
@@ -8,6 +8,7 @@ import { useAuth } from '../store/auth'
 import { type FileItem, type PageResp, PROJECT_STATUS, fmtSize, fmtTime } from '../api/types'
 import { actionSlots } from './ActionSlots'
 import ActiveUploadSessions from './ActiveUploadSessions'
+import LoadError from './LoadError'
 import ChunkUploader from './ChunkUploader'
 import PdfPreview from './PdfPreview'
 import { useCoalescedRefresh } from '../hooks/useCoalescedRefresh'
@@ -22,6 +23,11 @@ const ExcelPreview = lazy(() => import('./ExcelPreview'))
 const PptxPreview = lazy(() => import('./PptxPreview'))
 const VideoPreview = lazy(() => import('./VideoPreview'))
 const ImagePreview = lazy(() => import('./ImagePreview'))
+
+/** 预览渲染器按需加载时的统一占位：居中转圈加说明。 */
+function PreviewLoading({ text }: { text: string }) {
+  return <div className="pdf-preview-status" role="status"><Spin />{text}</div>
+}
 
 interface Props {
   projectId: number
@@ -42,6 +48,12 @@ const FILE_DIRECTION_HINT = '文件方向按上传账号自动记录；文件当
 const COLUMN_WIDTHS = {
   name: [200, 170], direction: [130, 116], size: [90, 72], uploader: [90, 76], createdAt: [180, 150], actions: [140, 108],
 } as const
+
+// 紧凑面板按实际宽度取舍列：放得下就不出现横向滚动，文件名列吃满剩余宽度。
+const COMPACT_MEDIUM_WIDTH = 640
+const COMPACT_NARROW_WIDTH = 480
+const COMPACT_NAME_MIN_WIDTH = 120
+const COMPACT_NARROW_ACTIONS_WIDTH = 76
 
 const PDF_PREVIEW_MAX_BYTES = 50 * 1024 * 1024
 /** 文件列表接口单页上限；STEP 探测只看每个关键字的第一页。 */
@@ -89,6 +101,18 @@ export default function FileTable({
   uploadRefresh = 0, onUploadActivityChanged,
 }: Props) {
   const w = compact ? 1 : 0
+  const hostRef = useRef<HTMLDivElement>(null)
+  const [hostWidth, setHostWidth] = useState(0)
+  useLayoutEffect(() => {
+    const host = hostRef.current
+    if (!compact || !host || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(([entry]) => setHostWidth(Math.round(entry.contentRect.width)))
+    observer.observe(host)
+    return () => observer.disconnect()
+  }, [compact])
+  // 宽度未知（首帧或测试环境）时按完整列处理。
+  const compactMedium = compact && hostWidth > 0 && hostWidth < COMPACT_MEDIUM_WIDTH
+  const compactNarrow = compact && hostWidth > 0 && hostWidth < COMPACT_NARROW_WIDTH
   const [previewToolbar, setPreviewToolbar] = useState<HTMLDivElement | null>(null)
   // 只响应本项目的实时信号；实时连接不可用时才退回全局轮询指纹（任何可见项目的变化都会改变它）。
   const liveActivity = useCollaboration((state) => state.activityRevisions?.[projectId] ?? 0)
@@ -228,7 +252,7 @@ export default function FileTable({
     {
       title: '文件名',
       dataIndex: 'originalName',
-      width: COLUMN_WIDTHS.name[w],
+      width: compactMedium ? undefined : COLUMN_WIDTHS.name[w],
       ellipsis: true,
       render: (v: string, r: FileItem) => (
         <Space size={4} className="file-name-cell">
@@ -250,35 +274,47 @@ export default function FileTable({
       ),
     },
     {
-      title: '方向', dataIndex: 'direction', width: COLUMN_WIDTHS.direction[w], align: 'center' as const,
-      render: (v: string) => v === 'C2S'
-        ? <Tag color="arcoblue">公司 → 供应商</Tag>
-        : <Tag color="purple">供应商 → 公司</Tag>,
+      title: '方向', dataIndex: 'direction', width: compactNarrow ? 84 : COLUMN_WIDTHS.direction[w], align: 'center' as const,
+      render: (v: string) => {
+        const full = v === 'C2S' ? '公司 → 供应商' : '供应商 → 公司'
+        const text = compactNarrow ? (v === 'C2S' ? '公→供' : '供→公') : full
+        return <Tag color={v === 'C2S' ? 'arcoblue' : 'purple'} title={full}>{text}</Tag>
+      },
     },
     { title: '大小', dataIndex: 'sizeBytes', width: COLUMN_WIDTHS.size[w], align: 'center' as const, render: fmtSize },
     { title: '上传人', dataIndex: 'uploaderName', width: COLUMN_WIDTHS.uploader[w], align: 'center' as const, ellipsis: true },
     { title: '上传时间', dataIndex: 'createdAt', width: COLUMN_WIDTHS.createdAt[w], align: 'center' as const, render: fmtTime },
     {
-      title: '操作', width: COLUMN_WIDTHS.actions[w], fixed: 'right' as const, align: 'center' as const,
+      title: '操作', width: compactNarrow ? COMPACT_NARROW_ACTIONS_WIDTH : COLUMN_WIDTHS.actions[w], fixed: compactMedium ? undefined : 'right' as const,
       render: (_: unknown, r: FileItem) => actionSlots([
         hasPerm('file:download') && (
-          <Button key="download" size="mini" type="text" icon={<IconDownload />} aria-label="下载文件"
-            onClick={() => { void downloadFile(r.id).catch(() => undefined) }}>下载</Button>
+          <Tooltip key="download" content="下载" disabled={!compactNarrow}>
+            <Button size="mini" type="text" icon={<IconDownload />} aria-label="下载文件"
+              onClick={() => { void downloadFile(r.id).catch(() => undefined) }}>{compactNarrow ? null : '下载'}</Button>
+          </Tooltip>
         ),
         r.canDelete && projectStatus === 'IN_PROGRESS' && (
           <Popconfirm key="delete" title={`删除文件「${r.originalName}」？`} onOk={() => remove(r)}>
-            <Button size="mini" type="text" status="danger" icon={<IconDelete />} aria-label="删除文件">删除</Button>
+            <Button size="mini" type="text" status="danger" icon={<IconDelete />} aria-label="删除文件">{compactNarrow ? null : '删除'}</Button>
           </Popconfirm>
         ),
       ], 'file'),
     },
-  ], [hasPerm, onOpenCopyHistory, projectStatus, remove, w])
-  const scrollX = compact
-    ? Object.values(COLUMN_WIDTHS).reduce((sum, widths) => sum + widths[1], 0) + (hasPerm('file:download') ? 40 : 0)
-    : 960
+  ].filter((column) => !(
+    (compactMedium && (column.dataIndex === 'uploaderName' || column.dataIndex === 'createdAt'))
+    || (compactNarrow && column.dataIndex === 'sizeBytes')
+  )), [compactMedium, compactNarrow, hasPerm, onOpenCopyHistory, projectStatus, remove, w])
+  const selectionWidth = hasPerm('file:download') ? 40 : 0
+  const compactContentWidth = columns.reduce((sum, column) => sum + (column.width ?? COMPACT_NAME_MIN_WIDTH), 0) + selectionWidth
+  // 放得下时不设横向滚动宽度，文件名列自然吃满；放不下才按内容宽度滚动。
+  const scrollX = compactMedium
+    ? (compactContentWidth > hostWidth - 2 ? compactContentWidth : undefined)
+    : compact
+      ? Object.values(COLUMN_WIDTHS).reduce((sum, widths) => sum + widths[1], 0) + selectionWidth
+      : 960
 
   return (
-    <div className={compact ? 'file-table file-table--compact' : 'file-table'}>
+    <div ref={hostRef} className={compact ? 'file-table file-table--compact' : 'file-table'}>
       <Space className="responsive-toolbar" size={compact ? 8 : undefined} style={{ marginBottom: compact ? 8 : 12, width: '100%', justifyContent: 'space-between' }}>
         <Space>
           <Select
@@ -343,10 +379,7 @@ export default function FileTable({
       />
 
       {loadError ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
-          <Typography.Text type="error">加载失败</Typography.Text>
-          <Button size="small" onClick={load}>重试</Button>
-        </div>
+        <LoadError onRetry={load} />
       ) : (
         <Table
           rowKey="id"
@@ -402,23 +435,23 @@ export default function FileTable({
         unmountOnExit
       >
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'excel' && (
-          <Suspense fallback={<div style={{ textAlign: 'center', padding: 60 }}>加载 Excel 渲染器…</div>}>
+          <Suspense fallback={<PreviewLoading text="加载 Excel 渲染器…" />}>
             <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><ExcelPreview fileId={preview.id} ext={preview.ext} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'pdf' && <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><PdfPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'image' && (
-          <Suspense fallback={<div role="status">加载图片预览…</div>}>
+          <Suspense fallback={<PreviewLoading text="加载图片预览…" />}>
             <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><ImagePreview fileId={preview.id} name={preview.originalName} toolbarContainer={previewToolbar} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'pptx' && (
-          <Suspense fallback={<div role="status">加载 PPTX 渲染器…</div>}>
+          <Suspense fallback={<PreviewLoading text="加载 PPTX 渲染器…" />}>
             <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><PptxPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'video' && (
-          <Suspense fallback={<div role="status">加载视频播放器…</div>}>
+          <Suspense fallback={<PreviewLoading text="加载视频播放器…" />}>
             <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><VideoPreview fileId={preview.id} /></WatermarkedPreview>
           </Suspense>
         )}

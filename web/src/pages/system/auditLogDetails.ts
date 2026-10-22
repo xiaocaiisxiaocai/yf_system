@@ -501,7 +501,7 @@ export function detailSummary(row: AuditLogRow): string {
   const parts = [detail.name, detail.fileName, detail.employeeNo, detail.projectId]
     .filter((value) => value != null && value !== '')
     .map(formatAuditValue)
-  return parts.join(' · ') || '查看详情'
+  return parts.join(' · ') || '-'
 }
 
 export function historicalNote(row: AuditLogRow): string | undefined {

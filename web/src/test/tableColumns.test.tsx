@@ -199,10 +199,10 @@ describe('project list columns', () => {
 
     await waitFor(() => {
       const widths = [...document.querySelectorAll('col')].map((col) => (col as HTMLElement).style.width)
-      // 表头、表体各一份。只有工令号变成 176，原来同宽的 Robot 厂商仍是 96。
+      // 表头、表体各一份。只有工令号从 96 变成 176；Robot 厂商、Robot 类型和子项目进度仍是默认的 112。
       expect(widths.filter((width) => width === '176px')).toHaveLength(2)
-      expect(widths.filter((width) => width === '96px')).toHaveLength(2)
-      expect(widths.filter((width) => width === '120px')).toHaveLength(2)
+      expect(widths.filter((width) => width === '96px')).toHaveLength(0)
+      expect(widths.filter((width) => width === '112px')).toHaveLength(6)
     })
     expect(savedLayout()?.widths).toEqual({ workOrderNos: 176 })
 

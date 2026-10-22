@@ -7,6 +7,7 @@ import { useAuth } from '../../store/auth'
 import './DeptManage.css'
 import type { ApiResponses } from '../../api/types'
 import LoadError from '../../components/LoadError'
+import EnterSubmit from '../../components/EnterSubmit'
 
 type OrgKind = 'DIVISION' | 'DEPARTMENT' | 'SECTION'
 
@@ -440,7 +441,7 @@ export default function DeptManage() {
                   <div className="org-view-identity-text">
                     <span className="org-view-detail-kind">{selectedMeta.label}</span>
                     <h2 className="org-view-name">{selected.name}</h2>
-                    <div className="org-view-detail-meta"><Tag color={selected.status === 'ACTIVE' ? 'green' : 'red'}>{selected.status === 'ACTIVE' ? '启用' : '禁用'}</Tag><span>排序号 {selected.sortNo}</span></div>
+                    <div className="org-view-detail-meta"><Tag color={selected.status === 'ACTIVE' ? 'green' : 'gray'}>{selected.status === 'ACTIVE' ? '启用' : '禁用'}</Tag><span>排序号 {selected.sortNo}</span></div>
                   </div>
                 </div>
                 {canManage && (
@@ -570,10 +571,10 @@ export default function DeptManage() {
           }
         }}
       >
-        <Form form={form} layout="vertical">
+        <Form onSubmit={() => void submit()} form={form} layout="vertical">
           <div className="form-grid">
             <Form.Item label={`${modalKindMeta.label}名称`} field="name" rules={[{ required: true, message: `请输入${modalKindMeta.label}名称` }]}>
-              <Input maxLength={64} placeholder={`请输入${modalKindMeta.label}名称`} />
+              <Input autoFocus maxLength={64} placeholder={`请输入${modalKindMeta.label}名称`} />
             </Form.Item>
             <Form.Item label="排序号" field="sortNo">
               <InputNumber min={0} precision={0} placeholder="数字越小越靠前" style={{ width: '100%' }} />
@@ -584,7 +585,7 @@ export default function DeptManage() {
               {parentForNew ? `将在“${parentForNew.name}”下创建${modalKindMeta.label}。` : '事业部将创建在组织架构顶层。'}
             </div>
           )}
-        </Form>
+        <EnterSubmit /></Form>
       </Modal>
 
       <Modal

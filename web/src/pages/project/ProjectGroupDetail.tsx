@@ -22,6 +22,8 @@ import SubprojectDock, { type SubprojectDockHandle } from './SubprojectDock'
 import type { SubprojectDockContextValue } from './subprojectDockContext'
 import './ProjectDetail.css'
 import type { ApiResponses } from '../../api/types'
+import EnterSubmit from '../../components/EnterSubmit'
+import LoadError from '../../components/LoadError'
 
 interface ChildFormValues { name?: string; description?: string }
 type OwnerOption = ApiResponses['GET /project-owner-options'][number]
@@ -222,7 +224,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
 
   if (!validId) return <div className="project-group-load-state"><Empty description="主项目地址无效" /><Button type="primary" onClick={() => navigate('/projects')}>返回项目列表</Button></div>
   if (loading && !data) return <div className="project-group-load-state"><Spin size={36} /></div>
-  if (!data) return <div className="project-group-load-state"><Empty description="主项目加载失败或没有访问权限" /><Button type="primary" onClick={load}>重试</Button></div>
+  if (!data) return <div className="project-group-load-state"><LoadError message="主项目加载失败或没有访问权限" onRetry={load} /></div>
 
   const group = data.group
   const openCreate = () => { setEditing(null); setEditConflict(false); form.resetFields(); setChildModalOpen(true) }
@@ -355,7 +357,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
               <dd>
                 <strong>{group.completedCount}/{group.subprojectCount}</strong>
                 {group.pendingCount > 0 && <Tag size="small" color="orange">待验收 {group.pendingCount}</Tag>}
-                {group.terminatedCount > 0 && <Tag size="small">已终止 {group.terminatedCount}</Tag>}
+                {group.terminatedCount > 0 && <Tag size="small" color="red">已终止 {group.terminatedCount}</Tag>}
               </dd>
             </div>
           </dl>
@@ -430,7 +432,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       )}
 
       <Modal className="form-dialog" title={editing ? '编辑子项目' : '新增子项目'} visible={childModalOpen} onOk={submitChild} onCancel={closeChildModal} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} okText={editing ? '保存子项目' : '创建子项目'} unmountOnExit>
-        <Form form={form} layout="vertical">
+        <Form onSubmit={() => void submitChild()} form={form} layout="vertical">
           <Form.Item label="子项目名称" field="name" rules={[{ required: true, message: '请输入子项目名称' }, textLengthRule('子项目名称', 128)]}><Input autoFocus placeholder="子项目名称" /></Form.Item>
           <Form.Item label="子项目说明" field="description"><Input.TextArea rows={3} maxLength={500} showWordLimit placeholder="选填" /></Form.Item>
           {editing && editConflict && (
@@ -440,7 +442,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
             />
           )}
           {!editing && <div className="dialog-note">Robot 厂商、工令号、机型、Robot 料号与型号、负责人、Robot 负责人、课别、优先级和需求完成时间将从主项目继承。</div>}
-        </Form>
+        <EnterSubmit /></Form>
       </Modal>
 
       <Modal
@@ -495,7 +497,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
         okButtonProps={{ disabled: !copyOutcomeUnknown && !copyJobs.ready }}
         unmountOnExit
       >
-        <Form form={copyForm} layout="vertical"><Form.Item label="新子项目名称" field="name" rules={[{ required: true, message: '请输入新子项目名称' }, textLengthRule('子项目名称', 128)]}><Input autoFocus disabled={copyOutcomeUnknown} placeholder="新子项目名称" /></Form.Item></Form>
+        <Form onSubmit={() => void submitCopy()} form={copyForm} layout="vertical"><Form.Item label="新子项目名称" field="name" rules={[{ required: true, message: '请输入新子项目名称' }, textLengthRule('子项目名称', 128)]}><Input autoFocus disabled={copyOutcomeUnknown} placeholder="新子项目名称" /></Form.Item><EnterSubmit /></Form>
         <div className="dialog-note">提交后台复制任务后可关闭弹窗；复制公共资料和当前项目文件，不复制留言、验收状态、已读回执和通知。</div>
         {copying && <div className="dialog-note" role="status">正在创建复制任务，请稍候。</div>}
         {copyOutcomeUnknown && <div className="dialog-note" role="alert">提交结果尚未确认，重试不会重复创建副本。任务会在后台继续执行；可暂时关闭，稍后从同一来源恢复。</div>}

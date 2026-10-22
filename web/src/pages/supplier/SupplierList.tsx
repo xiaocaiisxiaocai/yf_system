@@ -146,14 +146,13 @@ export default function SupplierList() {
               dataIndex: 'status',
               width: 70,
               align: 'center' as const,
-              render: (value: string) => (value === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="red">禁用</Tag>),
+              render: (value: string) => (value === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="gray">禁用</Tag>),
             },
             { title: '创建时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
             {
               title: '操作',
-              width: 254,
+              width: 240,
               fixed: 'right' as const,
-              align: 'center' as const,
               render: (_: unknown, supplier: Supplier) => actionSlots([
                 canManageAccounts && <Button key="accounts" size="mini" type="text" onClick={(event) => {
                   accountTrigger.current = (event?.currentTarget as HTMLButtonElement | undefined) ?? null

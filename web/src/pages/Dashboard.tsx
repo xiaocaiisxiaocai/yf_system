@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Button, Card, Collapse, Empty, Grid, List, Pagination, Result, Spin, Statistic, Tag, Typography } from '@arco-design/web-react'
-import { IconRight } from '@arco-design/web-react/icon'
+import { IconRight, IconRefresh } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../api/client'
 import { createSessionQueryScope, queryClient } from '../api/queryClient'
@@ -286,7 +286,7 @@ export default function Dashboard() {
           <h1>工作台{user ? ` · ${user.realName}` : ''}</h1>
           <Typography.Text type="secondary">{isSupplier ? '跟进待公司验收与未读留言' : '优先处理公司内部验收与未读留言'}</Typography.Text>
         </div>
-        <Button size="small" loading={dashboardRefreshing} onClick={refreshDashboard}>刷新工作台</Button>
+        <Button icon={<IconRefresh />} loading={dashboardRefreshing} onClick={refreshDashboard}>刷新工作台</Button>
       </div>
 
       <Grid.Row className="dashboard-workbench" gutter={[16, 16]}>
