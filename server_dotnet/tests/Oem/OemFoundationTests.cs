@@ -155,4 +155,96 @@ public sealed class OemFoundationTests
         var deptManager = await host.LoginInternalAsync("dept_mgr", "DeptMgr#2026x", ct);
         await deptManager.PutAsync($"/api/v1/admin/departments/{org.Section}/leader", new { leaderUserId = leaderId }, ct).Status(HttpStatusCode.Forbidden);
     }
+
+    [Fact(Timeout = 180_000)]
+    public async Task AccountsCannotLogIntoTheOtherBusinessLine()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var admin = await host.LoginAdminAsync(ct);
+        const string sharedName = "shared_cross";
+        const string internalPassword = "Internal#2026x";
+        const string supplierPassword = "Supplier#2026x";
+        const string oemPassword = "Vendor#2026";
+
+        var internalId = await host.CreateInternalUserAsync("staff_cross", internalPassword, [], null, ct);
+        var supplierId = await host.CreateSupplierUserAsync("supplier_cross", supplierPassword, ct);
+        await host.CreateVendorAsync(admin, "隔离厂商", "vendor_cross", ct);
+        var sharedInternalId = await host.CreateInternalUserAsync(sharedName, internalPassword, [], null, ct);
+        await host.CreateVendorAsync(admin, "同名厂商", sharedName, ct);
+
+        var anonymous = host.Anonymous();
+        await RejectCollaborationLogin(anonymous, "vendor_cross", oemPassword, ct);
+        await RejectCollaborationLogin(anonymous, sharedName, oemPassword, ct);
+        await RejectOemLogin(anonymous, "staff_cross", internalPassword, ct);
+        await RejectOemLogin(anonymous, "supplier_cross", supplierPassword, ct);
+        await RejectOemLogin(anonymous, sharedName, internalPassword, ct);
+        await RejectOemLogin(anonymous, "admin", OemTestHost.AdminPassword, ct);
+
+        await using (var connection = await host.OpenAsync(ct))
+        {
+            Assert.Equal(0, await connection.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM users WHERE employee_no IN ('vendor_cross')"));
+            Assert.Equal(0, await connection.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM oem_accounts WHERE employee_no IN ('staff_cross','supplier_cross','admin')"));
+            Assert.Equal(0, await connection.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM refresh_tokens WHERE user_id IN @ids",
+                new { ids = new[] { internalId, supplierId, sharedInternalId } }));
+            Assert.Equal(1, await connection.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM users WHERE employee_no=@sharedName", new { sharedName }));
+            Assert.Equal(1, await connection.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM oem_accounts WHERE employee_no=@sharedName", new { sharedName }));
+        }
+
+        var staff = await host.LoginInternalAsync("staff_cross", internalPassword, ct);
+        var supplier = await host.LoginInternalAsync("supplier_cross", supplierPassword, ct);
+        var sharedStaff = await host.LoginInternalAsync(sharedName, internalPassword, ct);
+        var vendor = await host.LoginOemAsync("vendor_cross", oemPassword, ct);
+        var sharedVendor = await host.LoginOemAsync(sharedName, oemPassword, ct);
+
+        await vendor.GetAsync("/api/v1/auth/profile", ct).Status(HttpStatusCode.Forbidden, 40304);
+        await vendor.GetAsync("/api/v1/project-groups", ct).Status(HttpStatusCode.Forbidden, 40304);
+        await sharedVendor.GetAsync("/api/v1/auth/profile", ct).Status(HttpStatusCode.Forbidden, 40304);
+        await supplier.GetAsync("/api/v1/oem/auth/me", ct).Status(HttpStatusCode.Forbidden, 40304);
+        await supplier.GetAsync("/api/v1/oem/companies", ct).Status(HttpStatusCode.Forbidden, 40304);
+        var portalOnly = await staff.GetAsync("/api/v1/oem/auth/me", ct).Status(HttpStatusCode.Forbidden, 40301);
+        Assert.Equal("该接口仅供 OEM 厂商账号使用", portalOnly.Json!["message"]!.GetValue<string>());
+
+        var oemRefresh = CookieValue(vendor, "/api/v1/oem/auth/refresh", "oem_refresh_token");
+        var staffRefresh = CookieValue(staff, "/api/v1/auth/refresh", "refresh_token");
+        var asCollaboration = host.Anonymous();
+        asCollaboration.Cookies.Add(new Uri(host.BaseAddress, "/api/v1/auth/refresh"), new Cookie("refresh_token", oemRefresh, "/api/v1/auth"));
+        var collaborationRefresh = await asCollaboration.PostAsync("/api/v1/auth/refresh", null, ct).Status(HttpStatusCode.Unauthorized, 40101);
+        Assert.Equal("登录状态无效", collaborationRefresh.Json!["message"]!.GetValue<string>());
+        var asOem = host.Anonymous();
+        asOem.Cookies.Add(new Uri(host.BaseAddress, "/api/v1/oem/auth/refresh"), new Cookie("oem_refresh_token", staffRefresh, "/api/v1/oem/auth"));
+        var oemRefreshResult = await asOem.PostAsync("/api/v1/oem/auth/refresh", null, ct).Status(HttpStatusCode.Unauthorized, 40101);
+        Assert.Equal("登录状态无效", oemRefreshResult.Json!["message"]!.GetValue<string>());
+
+        await staff.GetAsync("/api/v1/auth/profile", ct).Ok();
+        await sharedStaff.GetAsync("/api/v1/auth/profile", ct).Ok();
+        await vendor.GetAsync("/api/v1/oem/auth/me", ct).Ok();
+        await sharedVendor.GetAsync("/api/v1/oem/auth/me", ct).Ok();
+    }
+
+    private static async Task RejectCollaborationLogin(ApiClient client, string employeeNo, string password, CancellationToken ct)
+    {
+        var rejected = await client.PostAsync("/api/v1/auth/login", new { employeeNo, password }, ct)
+            .Status(HttpStatusCode.Unauthorized, 40101);
+        Assert.Equal("工号或密码错误", rejected.Json!["message"]!.GetValue<string>());
+    }
+
+    private static async Task RejectOemLogin(ApiClient client, string employeeNo, string password, CancellationToken ct)
+    {
+        var rejected = await client.PostAsync("/api/v1/oem/auth/login", new { employeeNo, password }, ct)
+            .Status(HttpStatusCode.Unauthorized, 40101);
+        Assert.Equal("账号或密码错误", rejected.Json!["message"]!.GetValue<string>());
+    }
+
+    private static string CookieValue(ApiClient client, string path, string name)
+    {
+        var cookie = client.Cookies.GetCookies(new Uri(client.Http.BaseAddress!, path))[name];
+        Assert.NotNull(cookie);
+        return cookie.Value;
+    }
 }
