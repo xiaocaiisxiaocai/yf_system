@@ -51,6 +51,12 @@ function nullableNumber(value: unknown): number | null {
 }
 
 function displayText(value?: string | null) { return value?.trim() || '-' }
+
+function cellText(value?: string | null) {
+  const text = displayText(value)
+  return <span className="table-cell-text" title={text}>{text}</span>
+}
+
 function expectOptionList<T>(value: unknown): T[] {
   if (!Array.isArray(value)) throw new Error('选项接口返回格式错误')
   return value as T[]
@@ -259,7 +265,7 @@ export default function ProjectList() {
       }
       if (editing) {
         await http.put<ApiResponses['PUT /project-groups/{id}']>(`/project-groups/${editing.id}`, payload)
-        Message.success('主项目资料已同步到全部子项目')
+        Message.success('主项目资料已保存，并同步到未完成的子项目')
       } else {
         await http.post<ApiResponses['POST /project-groups']>('/project-groups', payload)
         Message.success('主项目及子项目已创建')
@@ -272,23 +278,29 @@ export default function ProjectList() {
     await http.delete<ApiResponses['DELETE /project-groups/{id}']>(`/project-groups/${group.id}`); Message.success('主项目已删除'); load()
   }
 
+  // 1920 视口、侧栏 200、内容与卡片内边距之后，表宽 1572 才能让状态和未读留在首屏。
   const columns = [
-    { title: '主项目名称', dataIndex: 'name', width: 145, fixed: 'left' as const, ellipsis: true, render: (value: string, row: ProjectGroup) => <Link to={`/project-groups/${row.id}`}>{value}</Link> },
-    { title: '工令号', dataIndex: 'workOrderNos', width: 190, ellipsis: true, render: (values?: string[]) => displayText(values?.join('、')) },
-    { title: '机型', dataIndex: 'machineModel', width: 100, ellipsis: true, render: displayText },
-    { title: 'Robot 厂商', dataIndex: 'supplierName', width: 110, ellipsis: true, render: displayText },
-    { title: 'Robot 类型', dataIndex: 'robotTypeName', width: 100, ellipsis: true, render: displayText },
-    { title: 'Robot 料号', dataIndex: 'robotPartNumber', width: 120, ellipsis: true, render: displayText },
-    { title: 'Robot 型号', dataIndex: 'robotModelName', width: 110, ellipsis: true, render: (value?: string | null) => <Tooltip content={displayText(value)}><span>{displayText(value)}</span></Tooltip> },
-    { title: '负责人', dataIndex: 'responsibleUserName', width: 88, ellipsis: true, render: displayText },
-    { title: 'Robot 负责人', dataIndex: 'robotOwnerName', width: 110, ellipsis: true, render: displayText },
-    { title: '课别', dataIndex: 'sectionName', width: 88, ellipsis: true, render: displayText },
-    { title: '优先级', dataIndex: 'priorityName', width: 76, align: 'center' as const, render: displayText },
-    { title: '需求完成时间', dataIndex: 'expectedCompletionDate', width: 120, align: 'center' as const, render: displayText },
-    { title: '子项目进度', width: 142, align: 'center' as const, render: (_: unknown, row: ProjectGroup) => <div className="project-group-progress"><span>{row.completedCount}/{row.subprojectCount} 已验收</span>{row.pendingCount > 0 && <Tag size="small" color="orange">待验收 {row.pendingCount}</Tag>}</div> },
-    { title: '状态', dataIndex: 'status', width: 90, align: 'center' as const, render: (value: string) => <Tag color={PROJECT_STATUS[value]?.color}>{PROJECT_STATUS[value]?.text || value}</Tag> },
-    { title: '未读留言', dataIndex: 'unreadMessages', width: 88, align: 'center' as const, render: (value: number) => value > 0 ? <Badge count={value} /> : '-' },
-    { title: '操作', width: 190, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row: ProjectGroup) => actionSlots([
+    { title: '主项目名称', dataIndex: 'name', width: 120, fixed: 'left' as const, ellipsis: true, render: (value: string, row: ProjectGroup) => <Link to={`/project-groups/${row.id}`} title={value}>{value}</Link> },
+    { title: '工令号', dataIndex: 'workOrderNos', width: 96, ellipsis: true, render: (values?: string[]) => cellText(values?.join('、')) },
+    { title: '机型', dataIndex: 'machineModel', width: 80, ellipsis: true, render: cellText },
+    { title: 'Robot 厂商', dataIndex: 'supplierName', width: 96, ellipsis: true, render: cellText },
+    { title: 'Robot 类型', dataIndex: 'robotTypeName', width: 100, ellipsis: true, render: cellText },
+    { title: 'Robot 料号', dataIndex: 'robotPartNumber', width: 116, ellipsis: true, render: cellText },
+    { title: 'Robot 型号', dataIndex: 'robotModelName', width: 88, ellipsis: true, render: (value?: string | null) => <Tooltip content={displayText(value)}><span className="table-cell-text">{displayText(value)}</span></Tooltip> },
+    { title: '负责人', dataIndex: 'responsibleUserName', width: 84, ellipsis: true, render: cellText },
+    { title: 'Robot 负责人', dataIndex: 'robotOwnerName', width: 100, ellipsis: true, render: cellText },
+    { title: '课别', dataIndex: 'sectionName', width: 72, ellipsis: true, render: cellText },
+    { title: '优先级', dataIndex: 'priorityName', width: 76, align: 'center' as const, render: cellText },
+    { title: '需求完成时间', dataIndex: 'expectedCompletionDate', width: 116, align: 'center' as const, render: cellText },
+    { title: '子项目进度', width: 112, align: 'center' as const, render: (_: unknown, row: ProjectGroup) => (
+      <div className="project-group-progress" title={`已验收 ${row.completedCount} / ${row.subprojectCount}`}>
+        <span>{row.completedCount}/{row.subprojectCount}</span>
+        {row.pendingCount > 0 && <Tag size="small" color="orange">待验收 {row.pendingCount}</Tag>}
+      </div>
+    ) },
+    { title: '状态', dataIndex: 'status', width: 88, fixed: 'right' as const, align: 'center' as const, render: (value: string) => <Tag color={PROJECT_STATUS[value]?.color}>{PROJECT_STATUS[value]?.text || value}</Tag> },
+    { title: '未读留言', dataIndex: 'unreadMessages', width: 88, fixed: 'right' as const, align: 'center' as const, render: (value: number) => value > 0 ? <Badge count={value} /> : '-' },
+    { title: '操作', width: 140, fixed: 'right' as const, align: 'center' as const, render: (_: unknown, row: ProjectGroup) => actionSlots([
       <Button key="enter" size="mini" type="text" onClick={() => navigate(`/project-groups/${row.id}`)}>进入</Button>,
       isInternal && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(row.status) && (row.pendingCount > 0 ? (
         <Tooltip key="edit" content={`有 ${row.pendingCount} 个子项目待公司验收，暂不能编辑主项目资料`}>

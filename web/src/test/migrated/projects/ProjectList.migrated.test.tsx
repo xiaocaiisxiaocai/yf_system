@@ -189,6 +189,7 @@ describe('ProjectList migrated behavior', () => {
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
     expect(mocks.put.mock.calls[0][1]).toEqual(expect.objectContaining({ robotPartId: null, supplierId: 8, robotTypeId: 21, robotOwnerName: '李四' }))
     expect(mocks.put.mock.calls[0][1]).not.toHaveProperty('responsibleUserId')
+    expect(await screen.findByText('主项目资料已保存，并同步到未完成的子项目')).toBeInTheDocument()
   })
 
   it('main projects with pending child acceptance expose a disabled edit action and reason', async () => {
