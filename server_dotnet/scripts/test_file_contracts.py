@@ -31,6 +31,93 @@ def _abort(client, session_id):
     client.call("DELETE", f"/api/v1/uploads/{session_id}")
 
 
+def _check_active_upload_sessions(client, conn, check, pid, supplier_client, supplier_id):
+    """Blocking sessions are listed; expired UPLOADING is hidden; same-supplier abort is allowed."""
+    created = []
+    try:
+        pdf = b"%PDF-1.4\nactive-upload-list\n%%EOF\n"
+        initialized = init_upload(client, pid, "active-list.pdf", pdf)
+        session_id = initialized["sessionId"]
+        created.append(session_id)
+        put_chunk(client, session_id, 0, pdf)
+        listed = client.call("GET", f"/api/v1/projects/{pid}/upload-sessions")
+        item = next(row for row in listed["items"] if row["sessionId"] == session_id)
+        check(
+            "active upload list reports chunks and resume or abort rights",
+            listed["total"] >= 1
+            and item["receivedChunks"] == 1
+            and item["status"] == "UPLOADING"
+            and item["canResume"] is True
+            and item["canAbort"] is True
+            and "tempDir" not in item
+            and "fileFingerprint" not in item,
+        )
+        denied = supplier_client.call("DELETE", f"/api/v1/uploads/{session_id}", expected=403)
+        still = client.call("GET", f"/api/v1/uploads/{session_id}")
+        check(
+            "supplier cannot abort an internal upload session",
+            denied["code"] == 40301 and still["status"] == "UPLOADING",
+        )
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE upload_sessions SET expires_at=DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 HOUR) WHERE id=%s",
+                (session_id,),
+            )
+        hidden = client.call("GET", f"/api/v1/projects/{pid}/upload-sessions")
+        check(
+            "expired uploading session is omitted from the active list",
+            all(row["sessionId"] != session_id for row in hidden["items"]),
+        )
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE upload_sessions SET status='MERGING' WHERE id=%s", (session_id,))
+        merging = client.call("GET", f"/api/v1/projects/{pid}/upload-sessions")
+        merging_item = next(row for row in merging["items"] if row["sessionId"] == session_id)
+        check(
+            "expired merging session stays listed without resume",
+            merging_item["status"] == "MERGING"
+            and merging_item["canResume"] is False
+            and merging_item["canAbort"] is True,
+        )
+        _abort(client, session_id)
+        created.remove(session_id)
+        after_abort = client.call("GET", f"/api/v1/projects/{pid}/upload-sessions")
+        missing = client.call(
+            "DELETE", "/api/v1/uploads/00000000-0000-0000-0000-000000000000", expected=404)
+        check(
+            "abort removes the session and a missing id is not found",
+            all(row["sessionId"] != session_id for row in after_abort["items"])
+            and missing["code"] == 40401,
+        )
+
+        employee = "filepeer_" + secrets.token_hex(5)
+        password = _password()
+        account = client.call("POST", f"/api/v1/admin/suppliers/{supplier_id}/accounts", {
+            "employeeNo": employee, "password": password, "realName": "同供应商同事",
+            "email": employee + "@example.invalid",
+        })
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (account["id"],))
+        peer = type(client)(client.base)
+        peer.login(employee, password)
+        supplier_pdf = b"%PDF-1.4\nsupplier-owned\n%%EOF\n"
+        supplier_init = init_upload(supplier_client, pid, "supplier-active.pdf", supplier_pdf)
+        supplier_session = supplier_init["sessionId"]
+        created.append(supplier_session)
+        put_chunk(supplier_client, supplier_session, 0, supplier_pdf)
+        peer.call("DELETE", f"/api/v1/uploads/{supplier_session}")
+        created.remove(supplier_session)
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT status FROM upload_sessions WHERE id=%s", (supplier_session,))
+            peer_state = cursor.fetchone()[0]
+        check("same-supplier account can abort a supplier upload", peer_state == "ABORTED")
+    finally:
+        for session_id in list(created):
+            try:
+                _abort(client, session_id)
+            except AssertionError:
+                pass
+
+
 def _upload_file(client, project_id, file_name, content):
     _, _, merged = upload_bytes(client, project_id, file_name, content)
     return merged["id"]
@@ -247,6 +334,7 @@ def run_file_checks(client, conn, check, pid, fid):
         and listing["list"][0]["canDelete"] is False
         and status_after_denial == "AVAILABLE",
     )
+    _check_active_upload_sessions(client, conn, check, pid, supplier_client, supplier_id)
     client.call("DELETE", f"/api/v1/files/{disposable_fid}")
     with conn.cursor() as cursor:
         cursor.execute("SELECT status,deleted_at FROM files WHERE id=%s", (disposable_fid,))
@@ -388,6 +476,7 @@ def run_file_checks(client, conn, check, pid, fid):
             cursor.execute("UPDATE files SET storage_path=%s WHERE id=%s", (original_storage_path, fid))
         outside_file.unlink(missing_ok=True)
         outside_dir.rmdir()
+
 
 
 def run_upload_material_checks(client, conn, check, supplier_id):

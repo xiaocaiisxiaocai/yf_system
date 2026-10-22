@@ -754,10 +754,17 @@ internal sealed class ProjectCopyService(
             file.Ext, file.SizeBytes, file.MimeType, file.Sha256, file.StoragePath, file.Status, file.BlobId)).ToArray();
     }
 
-    private static async Task<ulong> ActiveUploadCountAsync(YfDbContext db, ulong projectId, CancellationToken ct) =>
-        (ulong)await db.UploadSessions.LongCountAsync(upload => upload.ProjectId == projectId
-            && (upload.Status == ProjectUploadSessionStatuses.Uploading
-                || upload.Status == ProjectUploadSessionStatuses.Merging), ct);
+    private static async Task<ulong> ActiveUploadCountAsync(YfDbContext db, ulong projectId, CancellationToken ct)
+    {
+        var dbNow = await DbClock.UtcNowAsync(db, ct);
+        var rows = await db.UploadSessions
+            .Where(upload => upload.ProjectId == projectId
+                && (upload.Status == ProjectUploadSessionStatuses.Uploading
+                    || upload.Status == ProjectUploadSessionStatuses.Merging))
+            .Select(upload => new { upload.Status, upload.ExpiresAt })
+            .ToListAsync(ct);
+        return checked((ulong)rows.Count(upload => UploadActivity.IsBlocking(upload.Status, upload.ExpiresAt, dbNow)));
+    }
 
     private static bool SameProjectSnapshot(ProjectRow a, ProjectRow b) => a.Id == b.Id
         && a.ProjectGroupId == b.ProjectGroupId && a.Name == b.Name

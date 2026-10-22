@@ -55,6 +55,6 @@ internal static class OemValidation
 
     public static void MatchVersion(ulong actual, ulong expected)
     {
-        if (actual != expected) throw ApiException.Conflict("数据已被他人修改，请刷新后重试");
+        if (actual != expected) throw ApiException.VersionConflict("数据已被他人修改，请刷新后重试");
     }
 }

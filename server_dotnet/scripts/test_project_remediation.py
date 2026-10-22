@@ -357,6 +357,7 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
         "robotTypeId": owned_current["robotTypeId"],
         "robotOwnerName": owned_current["robotOwnerName"],
         "expectedCompletionDate": owned_current["expectedCompletionDate"],
+        "expectedUpdatedAt": owned_current["updatedAt"],
     })
     added_child = client.call(
         "POST", f"/api/v1/project-groups/{owned_group['id']}/projects", {

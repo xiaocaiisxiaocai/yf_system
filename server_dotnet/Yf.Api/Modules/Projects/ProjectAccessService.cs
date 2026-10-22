@@ -199,3 +199,36 @@ internal static class ProjectUploadSessionStatuses
     internal const string Uploading = "UPLOADING";
     internal const string Merging = "MERGING";
 }
+
+/// <summary>
+/// Which upload sessions still block submit, terminate, and copy, and who may abort one.
+/// Expired <c>UPLOADING</c> rows do not block; <c>MERGING</c> always does.
+/// </summary>
+internal static class UploadActivity
+{
+    internal static bool IsBlocking(string status, DateTime expiresAt, DateTime dbNow) =>
+        status == ProjectUploadSessionStatuses.Merging
+        || (status == ProjectUploadSessionStatuses.Uploading && expiresAt > dbNow);
+
+    internal static bool CanAbort(
+        CurrentUser actor,
+        string projectStatus,
+        bool canUpload,
+        bool canDeleteFiles,
+        bool canChangeStatus,
+        bool canSubmit,
+        ulong uploaderId,
+        string uploaderUserType,
+        ulong? uploaderSupplierId)
+    {
+        if (actor.Id == uploaderId) return canUpload;
+        if (actor.IsInternal)
+            return projectStatus == ProjectStatuses.InProgress && (canDeleteFiles || canChangeStatus);
+        return actor.UserType == UserTypes.Supplier
+            && actor.SupplierId is ulong supplierId
+            && uploaderUserType == UserTypes.Supplier
+            && uploaderSupplierId == supplierId
+            && canUpload
+            && canSubmit;
+    }
+}

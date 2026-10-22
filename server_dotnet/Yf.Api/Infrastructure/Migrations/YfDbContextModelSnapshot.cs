@@ -556,6 +556,11 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
 
+                    b.Property<string>("ClientMessageId")
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)")
+                        .HasColumnName("client_message_id");
+
                     b.Property<string>("Content")
                         .IsRequired()
                         .HasColumnType("text")
@@ -602,6 +607,10 @@ namespace Yf.Api.Infrastructure.Migrations
                     b.HasIndex("ProjectId", "CreatedAt")
                         .HasDatabaseName("idx_msg_project_time");
 
+                    b.HasIndex("ProjectId", "SenderId", "ClientMessageId")
+                        .IsUnique()
+                        .HasDatabaseName("uk_messages_sender_client_id");
+
                     b.HasIndex("ProjectId", "Status", "Id")
                         .HasDatabaseName("idx_msg_project_status_id");
 
@@ -646,6 +655,12 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("varchar(255)")
                         .HasColumnName("original_name");
+
+                    b.Property<string>("Sha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("char(64)")
+                        .HasColumnName("sha256")
+                        .IsFixedLength();
 
                     b.Property<ulong>("SizeBytes")
                         .HasColumnType("bigint unsigned")

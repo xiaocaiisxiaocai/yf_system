@@ -38,6 +38,13 @@ public sealed class ProjectUpsertRequest
 
     [JsonPropertyName("subprojectNames")]
     public string?[]? SubprojectNames { get; init; }
+
+    /// <summary>
+    /// Required on <c>PUT /project-groups/{id}</c>. Missing or null is 400; a mismatch with the locked
+    /// row is 409/40903. Create ignores this field.
+    /// </summary>
+    [JsonPropertyName("expectedUpdatedAt")]
+    public DateTime? ExpectedUpdatedAt { get; init; }
 }
 
 public sealed class SubprojectUpsertRequest
@@ -51,7 +58,8 @@ public sealed class SubprojectUpsertRequest
 
 /// <summary>
 /// Editing a subproject's name/description. <c>ExpectedUpdatedAt</c> is the <c>updatedAt</c> the editor
-/// loaded; when given and the subproject changed since, the update is rejected with 409/40901.
+/// loaded; when given and the subproject changed since, the update is rejected with 409/40903.
+/// Omitting it keeps the previous last-write-wins behavior.
 /// </summary>
 public sealed class SubprojectUpdateRequest
 {
@@ -147,6 +155,10 @@ public sealed class MessageCreateRequest
 {
     [JsonPropertyName("content")]
     public string? Content { get; init; }
+
+    /// <summary>Optional idempotency key. A replay of the same sender, project, and payload returns the original message.</summary>
+    [JsonPropertyName("clientMessageId")]
+    public string? ClientMessageId { get; init; }
 }
 
 public sealed class MarkMessagesReadRequest
@@ -292,6 +304,7 @@ internal sealed class MessageImageRow
     public ulong SizeBytes { get; init; }
     public string MimeType { get; init; } = string.Empty;
     public string StoragePath { get; init; } = string.Empty;
+    public string? Sha256 { get; init; }
     public DateTime CreatedAt { get; init; }
 }
 

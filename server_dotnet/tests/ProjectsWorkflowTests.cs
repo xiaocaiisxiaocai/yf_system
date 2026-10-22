@@ -220,7 +220,41 @@ public sealed class ProjectsWorkflowTests
             ProjectService.EnsureExpectedSubmission(latest, 101));
 
         Assert.Equal(409, error.Status);
+        Assert.Equal(40903, error.Code);
         Assert.Equal("验收申请已更新，请刷新项目后重新操作", error.Message);
         ProjectService.EnsureExpectedSubmission(latest, 102);
+    }
+
+    [Fact]
+    public void ExpiredUploadingDoesNotBlockAndMergingAlwaysDoes()
+    {
+        var now = new DateTime(2026, 10, 22, 8, 0, 0, DateTimeKind.Utc);
+        Assert.False(UploadActivity.IsBlocking(ProjectUploadSessionStatuses.Uploading, now, now));
+        Assert.False(UploadActivity.IsBlocking(ProjectUploadSessionStatuses.Uploading, now.AddMinutes(-1), now));
+        Assert.True(UploadActivity.IsBlocking(ProjectUploadSessionStatuses.Uploading, now.AddMinutes(1), now));
+        Assert.True(UploadActivity.IsBlocking(ProjectUploadSessionStatuses.Merging, now.AddMinutes(-1), now));
+        Assert.False(UploadActivity.IsBlocking("ABORTED", now.AddHours(1), now));
+    }
+
+    [Fact]
+    public void AbortRightsStayWithTheUploaderAndNamedCrossUserRoles()
+    {
+        var now = DateTime.UtcNow;
+        var owner = new CurrentUser(1, "owner", UserTypes.Internal, null);
+        var reader = new CurrentUser(2, "reader", UserTypes.Internal, null);
+        var statusUser = new CurrentUser(3, "status", UserTypes.Internal, null);
+        var peer = new CurrentUser(4, "peer", UserTypes.Supplier, 9);
+        var otherSupplier = new CurrentUser(5, "other", UserTypes.Supplier, 8);
+        Assert.True(UploadActivity.CanAbort(owner, ProjectStatuses.Draft, true, false, false, false, 1, UserTypes.Internal, null));
+        Assert.False(UploadActivity.CanAbort(owner, ProjectStatuses.InProgress, false, true, true, false, 1, UserTypes.Internal, null));
+        Assert.False(UploadActivity.CanAbort(reader, ProjectStatuses.InProgress, true, false, false, false, 1, UserTypes.Internal, null));
+        Assert.True(UploadActivity.CanAbort(statusUser, ProjectStatuses.InProgress, false, false, true, false, 1, UserTypes.Internal, null));
+        Assert.True(UploadActivity.CanAbort(statusUser, ProjectStatuses.InProgress, false, true, false, false, 1, UserTypes.Supplier, 9));
+        Assert.False(UploadActivity.CanAbort(statusUser, ProjectStatuses.PendingConfirmation, false, true, true, false, 1, UserTypes.Internal, null));
+        Assert.True(UploadActivity.CanAbort(peer, ProjectStatuses.PendingConfirmation, true, false, false, true, 6, UserTypes.Supplier, 9));
+        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, true, false, false, true, 1, UserTypes.Internal, null));
+        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, true, false, false, false, 6, UserTypes.Supplier, 9));
+        Assert.False(UploadActivity.CanAbort(otherSupplier, ProjectStatuses.InProgress, true, false, false, true, 6, UserTypes.Supplier, 9));
+        Assert.NotEqual(default, now);
     }
 }

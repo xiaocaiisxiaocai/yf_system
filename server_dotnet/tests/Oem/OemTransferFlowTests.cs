@@ -117,7 +117,7 @@ public sealed class OemTransferFlowTests
         await world.Viewer.PostAsync($"/api/v1/oem/approvals/{task.Id("taskId")}/approve", new { version = task["version"]!.GetValue<ulong>() }, ct)
             .Status(HttpStatusCode.Forbidden);
         await world.Leader.PostAsync($"/api/v1/oem/approvals/{task.Id("taskId")}/approve", new { version = task["version"]!.GetValue<ulong>() + 3 }, ct)
-            .Status(HttpStatusCode.Conflict);
+            .Status(HttpStatusCode.Conflict, 40903);
         var released = await world.Leader.PostAsync($"/api/v1/oem/approvals/{task.Id("taskId")}/approve", new { version = task["version"]!.GetValue<ulong>() }, ct).Ok();
         Assert.Equal("RELEASED", Lifecycle(released));
         Assert.Equal("APPROVED", released["summary"]!["approvalStatus"]!.GetValue<string>());

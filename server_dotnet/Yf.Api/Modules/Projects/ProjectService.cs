@@ -91,7 +91,7 @@ internal sealed partial class ProjectService(
         // refresh instead of silently overwriting someone else's change.
         if (request.ExpectedUpdatedAt is { } expectedUpdatedAt
             && ProjectJson.Utc(project.UpdatedAt) != ProjectJson.Utc(expectedUpdatedAt))
-            throw ApiException.Conflict(SubprojectChangedMessage);
+            throw ApiException.VersionConflict(SubprojectChangedMessage);
         if (project.Status is not (ProjectStatuses.Draft or ProjectStatuses.InProgress))
             throw ApiException.Conflict("子项目当前状态不可编辑");
         await EnsureNameUniqueAsync(conn, tx, name, projectId, ct);
@@ -559,11 +559,14 @@ internal sealed partial class ProjectService(
         MySqlConnection conn, MySqlTransaction tx, ulong projectId, CancellationToken ct)
     {
         await using var db = EfDb.Use(conn, tx);
-        var count = await db.UploadSessions.LongCountAsync(upload =>
-            upload.ProjectId == projectId
-            && (upload.Status == ProjectUploadSessionStatuses.Uploading
-                || upload.Status == ProjectUploadSessionStatuses.Merging), ct);
-        return checked((ulong)count);
+        var dbNow = await DbClock.UtcNowAsync(db, ct);
+        var rows = await db.UploadSessions
+            .Where(upload => upload.ProjectId == projectId
+                && (upload.Status == ProjectUploadSessionStatuses.Uploading
+                    || upload.Status == ProjectUploadSessionStatuses.Merging))
+            .Select(upload => new { upload.Status, upload.ExpiresAt })
+            .ToListAsync(ct);
+        return checked((ulong)rows.Count(upload => UploadActivity.IsBlocking(upload.Status, upload.ExpiresAt, dbNow)));
     }
 
     private static Task<DateTime> DatabaseUtcNowAsync(YfDbContext db, CancellationToken ct) =>

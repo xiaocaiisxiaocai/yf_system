@@ -14,6 +14,136 @@ def _password():
     return "Yf9!" + secrets.token_urlsafe(9)
 
 
+def _multipart(fields, files):
+    boundary = "yfmsg" + secrets.token_hex(8)
+    parts = []
+    for name, value in fields:
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode()
+        )
+    for name, filename, content, mime in files:
+        header = (
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n"
+            f"Content-Type: {mime}\r\n\r\n"
+        )
+        parts.append(header.encode() + content + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    return b"".join(parts), "multipart/form-data; boundary=" + boundary
+
+
+def _check_message_client_id(first, conn, check, project_id):
+    client_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    content = "同一条幂等留言"
+
+    def side_effects(message_id):
+        # 留言邮件在 2 分钟窗口内合并进同一封信，所以比较重放前后的发件箱行数与内容长度，不假定每条留言新增一行。
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT COUNT(*), COALESCE(SUM(CHAR_LENGTH(body)), 0) FROM email_outbox "
+                "WHERE project_id=%s AND event_type='MESSAGE_CREATED'",
+                (project_id,),
+            )
+            outbox = cursor.fetchone()
+            cursor.execute(
+                "SELECT COUNT(*) FROM audit_logs WHERE action='MESSAGE_CREATE' AND target_id=%s",
+                (str(message_id),),
+            )
+            audits = cursor.fetchone()[0]
+        return outbox, audits
+
+    created = first.call(
+        "POST", f"/api/v1/projects/{project_id}/messages",
+        {"content": content, "clientMessageId": client_id.upper()},
+    )
+    after_create = side_effects(created["id"])
+    replay = first.call(
+        "POST", f"/api/v1/projects/{project_id}/messages",
+        {"content": content, "clientMessageId": client_id},
+    )
+    mismatch = first.call(
+        "POST", f"/api/v1/projects/{project_id}/messages",
+        {"content": content + "不同", "clientMessageId": client_id},
+        expected=409,
+    )
+    after_replay = side_effects(created["id"])
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT COUNT(*), MIN(client_message_id) FROM messages WHERE project_id=%s AND client_message_id=%s",
+            (project_id, client_id),
+        )
+        rows, stored_id = cursor.fetchone()
+    check(
+        "clientMessageId replay returns the original message without another side effect",
+        created["id"] == replay["id"]
+        and rows == 1
+        and stored_id == client_id
+        and mismatch["code"] == 40901
+        and "clientMessageId" in mismatch["message"]
+        and after_create[1] == 1
+        and after_replay == after_create,
+    )
+
+    png = bytes.fromhex("89504e470d0a1a0a0000000d49484452")
+    image_id = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
+    body, content_type = _multipart(
+        [("content", "带图幂等"), ("clientMessageId", image_id)],
+        [("images", "note.png", png, "image/png")],
+    )
+    with_image = first.call(
+        "POST", f"/api/v1/projects/{project_id}/messages", body,
+        headers={"Content-Type": content_type},
+    )
+    again_body, again_type = _multipart(
+        [("content", "带图幂等"), ("clientMessageId", image_id)],
+        [("images", "note.png", png, "image/png")],
+    )
+    replay_image = first.call(
+        "POST", f"/api/v1/projects/{project_id}/messages", again_body,
+        headers={"Content-Type": again_type},
+    )
+    flipped = png[:-1] + bytes([png[-1] ^ 0x01])
+    flipped_body, flipped_type = _multipart(
+        [("content", "带图幂等"), ("clientMessageId", image_id)],
+        [("images", "note.png", flipped, "image/png")],
+    )
+    image_conflict = first.call(
+        "POST", f"/api/v1/projects/{project_id}/messages", flipped_body,
+        headers={"Content-Type": flipped_type},
+        expected=409,
+    )
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT COUNT(*), CHAR_LENGTH(MIN(sha256)) FROM message_images WHERE message_id=%s",
+            (with_image["id"],),
+        )
+        image_rows, sha_len = cursor.fetchone()
+    check(
+        "image clientMessageId replay matches the sha256 sequence",
+        with_image["id"] == replay_image["id"]
+        and image_rows == 1
+        and sha_len == 64
+        and image_conflict["code"] == 40901,
+    )
+
+    omitted_a = first.call(
+        "POST", f"/api/v1/projects/{project_id}/messages",
+        {"content": "无编号甲-" + secrets.token_hex(4)},
+    )
+    omitted_b = first.call(
+        "POST", f"/api/v1/projects/{project_id}/messages",
+        {"content": "无编号乙-" + secrets.token_hex(4)},
+    )
+    invalid = first.call(
+        "POST", f"/api/v1/projects/{project_id}/messages",
+        {"content": "坏编号", "clientMessageId": "not-a-uuid"},
+        expected=400,
+    )
+    check(
+        "omitted clientMessageId inserts and a bad UUID is rejected",
+        omitted_a["id"] != omitted_b["id"] and "UUID" in invalid["message"],
+    )
+
+
 def _role(admin, codes):
     permissions = admin.call("GET", "/api/v1/permissions")
     by_code = {item["code"]: item["id"] for item in permissions}
@@ -215,6 +345,8 @@ def run_collaboration_checks(admin, Client, conn, check):
           dashboard_unread["pageSize"] == 2 and len(dashboard_unread["list"]) == 2
           and dashboard_unread["total"] == 3
           and all(item["unread"] and item["id"] != messages[1]["id"] for item in dashboard_unread["list"]))
+
+    _check_message_client_id(first, conn, check, project_id)
 
     removed_content = messages[2]["content"]
     removed_activity = message_activity_ids[messages[2]["id"]]

@@ -69,6 +69,8 @@ public sealed class ApiException(int status, int code, string message) : Excepti
     public static ApiException Conflict(string message) => new(409, 40901, message);
     /// <summary>A database lock wait timed out or a deadlock victim was rolled back; the request may simply be retried.</summary>
     public static ApiException Busy(string message = "系统繁忙，数据正被其他操作占用，请稍后重试") => new(409, 40902, message);
+    /// <summary>The caller's version or compare-and-swap token is stale. Refresh state and keep the user's input; do not replay the write.</summary>
+    public static ApiException VersionConflict(string message) => new(409, 40903, message);
     public static ApiException TooManyRequests(string message) => new(429, 42902, message);
     public static ApiException PasswordRateLimited(string message) => new(429, 42901, message);
 }

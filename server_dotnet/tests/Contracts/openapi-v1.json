@@ -3547,6 +3547,46 @@
         }
       }
     },
+    "/api/v1/projects/{projectId}/upload-sessions": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectUploadSessionListResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/uploads/init": {
       "post": {
         "tags": [
@@ -11672,10 +11712,101 @@
         },
         "additionalProperties": false
       },
+      "ProjectUploadSessionItemResponse": {
+        "required": [
+          "canAbort",
+          "canResume",
+          "createdAt",
+          "expiresAt",
+          "fileName",
+          "fileSize",
+          "receivedChunks",
+          "sessionId",
+          "status",
+          "totalChunks",
+          "uploaderEmployeeNo",
+          "uploaderId",
+          "uploaderName",
+          "uploaderUserType"
+        ],
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "fileSize": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "receivedChunks": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "totalChunks": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string"
+          },
+          "uploaderId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "uploaderName": {
+            "type": "string"
+          },
+          "uploaderEmployeeNo": {
+            "type": "string"
+          },
+          "uploaderUserType": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "canResume": {
+            "type": "boolean"
+          },
+          "canAbort": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProjectUploadSessionListResponse": {
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectUploadSessionItemResponse"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "ProjectUpsertRequest": {
         "required": [
           "description",
           "expectedCompletionDate",
+          "expectedUpdatedAt",
           "machineModel",
           "name",
           "priorityId",
@@ -11739,6 +11870,11 @@
             "items": {
               "type": "string"
             },
+            "nullable": true
+          },
+          "expectedUpdatedAt": {
+            "type": "string",
+            "format": "date-time",
             "nullable": true
           }
         },

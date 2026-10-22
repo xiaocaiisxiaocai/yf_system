@@ -50,3 +50,32 @@ public sealed record UploadSessionResponse(
 public sealed record UploadedChunkDigestResponse(uint Index, string Sha256);
 
 public sealed record MediaSessionResponse(string Url, int ExpiresInSeconds);
+
+public sealed record ProjectUploadSessionListResponse(
+    int Total,
+    IReadOnlyList<ProjectUploadSessionItemResponse> Items);
+
+public sealed record ProjectUploadSessionItemResponse(
+    string SessionId,
+    string FileName,
+    ulong FileSize,
+    int ReceivedChunks,
+    int TotalChunks,
+    string Status,
+    ulong UploaderId,
+    string UploaderName,
+    string UploaderEmployeeNo,
+    string UploaderUserType,
+    DateTime CreatedAt,
+    DateTime ExpiresAt,
+    bool CanResume,
+    bool CanAbort);
+
+/// <summary>
+/// Signals a collaboration change after an upload write commits.
+/// The realtime publisher itself stays internal to the projects module.
+/// </summary>
+public interface IStoredUploadNotifier
+{
+    Task PublishAsync(ulong projectId, string kind, CancellationToken ct = default);
+}

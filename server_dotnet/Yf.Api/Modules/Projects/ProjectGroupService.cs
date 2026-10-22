@@ -187,6 +187,8 @@ internal sealed class ProjectGroupService(
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         var access = await ProjectGroupAccessService.RequireViewAsync(conn, tx, current, groupId, true, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:update", ct);
+        if (request.ExpectedUpdatedAt is not { } expectedUpdatedAt)
+            throw ApiException.BadRequest("expectedUpdatedAt 必须为当前主项目的 updatedAt");
         if (access.Status is ProjectStatuses.Completed or ProjectStatuses.Terminated)
             throw ApiException.Conflict("主项目已结束，不能修改公共资料");
         if (access.SupplierId != request.SupplierId)
@@ -196,6 +198,8 @@ internal sealed class ProjectGroupService(
                 && project.Status == ProjectStatuses.PendingConfirmation, ct))
             throw ApiException.Conflict("存在待验收子项目，暂不能修改主项目资料");
         var before = await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false);
+        if (ProjectJson.Utc(before.UpdatedAt) != ProjectJson.Utc(expectedUpdatedAt))
+            throw ApiException.VersionConflict("主项目已被他人修改，请刷新后重试");
         await EnsureGroupNameUniqueAsync(db, name, groupId, ct);
         metadata = await ProjectService.ValidateMetadataAsync(conn, tx, metadata, new ProjectRow
         {
@@ -229,6 +233,7 @@ internal sealed class ProjectGroupService(
 
         try
         {
+            var now = await DbClock.UtcNowAsync(db, ct, 3);
             await db.ProjectGroups.Where(group => group.Id == groupId).ExecuteUpdateAsync(setters => setters
                 .SetProperty(group => group.Name, name)
                 .SetProperty(group => group.Description, request.Description)
@@ -239,7 +244,8 @@ internal sealed class ProjectGroupService(
                 .SetProperty(group => group.PriorityId, metadata.PriorityId)
                 .SetProperty(group => group.RobotTypeId, metadata.RobotTypeId)
                 .SetProperty(group => group.RobotOwnerName, metadata.RobotOwnerName)
-                .SetProperty(group => group.ExpectedCompletionDate, ToDateOnly(metadata.ExpectedCompletionDate)), ct);
+                .SetProperty(group => group.ExpectedCompletionDate, ToDateOnly(metadata.ExpectedCompletionDate))
+                .SetProperty(group => group.UpdatedAt, now), ct);
         }
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
         { throw ApiException.Conflict("主项目名称已存在"); }

@@ -9,6 +9,7 @@ public sealed class Message
     public ulong ProjectId { get; set; }
     public ulong SenderId { get; set; }
     public string Content { get; set; } = null!;
+    public string? ClientMessageId { get; set; }
     public string Status { get; set; } = null!;
     public ulong? DeletedBy { get; set; }
     public DateTime? DeletedAt { get; set; }
@@ -32,6 +33,7 @@ public sealed class MessageImage
     public ulong SizeBytes { get; set; }
     public string MimeType { get; set; } = null!;
     public string StoragePath { get; set; } = null!;
+    public string? Sha256 { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
@@ -45,6 +47,7 @@ public sealed class MessageConfig : IEntityTypeConfiguration<Message>
         b.Property(x => x.ProjectId).HasColumnName("project_id");
         b.Property(x => x.SenderId).HasColumnName("sender_id");
         b.Property(x => x.Content).HasColumnName("content").HasColumnType("text").IsRequired();
+        b.Property(x => x.ClientMessageId).HasColumnName("client_message_id").HasMaxLength(36);
         b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue("NORMAL");
         b.Property(x => x.DeletedBy).HasColumnName("deleted_by");
         b.Property(x => x.DeletedAt).HasColumnName("deleted_at").HasColumnType("datetime(3)");
@@ -54,6 +57,9 @@ public sealed class MessageConfig : IEntityTypeConfiguration<Message>
         b.HasIndex(x => new { x.ProjectId, x.Status, x.Id }).HasDatabaseName("idx_msg_project_status_id");
         // Bounds cross-project unread counts to the recent unread window (see UnreadWindow).
         b.HasIndex(x => x.CreatedAt).HasDatabaseName("idx_msg_created");
+        b.HasIndex(x => new { x.ProjectId, x.SenderId, x.ClientMessageId })
+            .IsUnique()
+            .HasDatabaseName("uk_messages_sender_client_id");
         b.HasOne<Project>().WithMany().HasForeignKey(x => x.ProjectId).HasConstraintName("fk_msg_project").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<User>().WithMany().HasForeignKey(x => x.SenderId).HasConstraintName("fk_msg_sender").OnDelete(DeleteBehavior.Restrict);
     }
@@ -89,6 +95,7 @@ public sealed class MessageImageConfig : IEntityTypeConfiguration<MessageImage>
         b.Property(x => x.SizeBytes).HasColumnName("size_bytes");
         b.Property(x => x.MimeType).HasColumnName("mime_type").HasMaxLength(32).IsRequired();
         b.Property(x => x.StoragePath).HasColumnName("storage_path").HasMaxLength(512).IsRequired();
+        b.Property(x => x.Sha256).HasColumnName("sha256").HasColumnType("char(64)").HasMaxLength(64).IsFixedLength();
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.HasIndex(x => x.StoredName).IsUnique().HasDatabaseName("uk_message_images_stored_name");
         b.HasIndex(x => new { x.MessageId, x.Id }).HasDatabaseName("idx_message_images_message");

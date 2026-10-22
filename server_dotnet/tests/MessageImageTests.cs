@@ -177,6 +177,98 @@ public sealed class MessageImageTests
     }
 
     [Fact]
+    public void ClientMessageIdMustBeACanonicalUuidWhenPresent()
+    {
+        Assert.Null(MessageService.NormalizeClientMessageId("  "));
+        Assert.Null(MessageService.NormalizeClientMessageId(null));
+        var id = Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+        Assert.Equal(id.ToString("D"), MessageService.NormalizeClientMessageId(id.ToString("D").ToUpperInvariant()));
+        var invalid = Assert.Throws<ApiException>(() => MessageService.NormalizeClientMessageId("not-a-uuid"));
+        Assert.Equal(400, invalid.Status);
+    }
+
+    [Fact(Timeout = 90_000)]
+    public async Task ClientMessageIdReplayReturnsTheOriginalMessageWithoutAnotherOutboxRow()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await LocalDatabaseScope.CreateOrSkipAsync("message_idem", ct);
+        await database.InitializeAsync(ct);
+        await database.SeedAsync("""
+            UPDATE users SET must_change_password=0 WHERE id=1;
+            INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'幂等供应商','ACTIVE',1);
+            INSERT INTO project_groups(id,name,supplier_id,status,created_by)
+            VALUES(5001,'幂等主项目',100,'IN_PROGRESS',1);
+            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by)
+            VALUES(1001,5001,'幂等项目',100,'IN_PROGRESS',1);
+            """, ct);
+        var publisher = new RecordingMessagePublisher();
+        var service = new MessageService(new AuditService([]), database.Options, publisher);
+        var admin = new CurrentUser(1, "admin", "INTERNAL", null);
+        await using var conn = await database.Database.OpenAsync(ct);
+        var clientMessageId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        var first = await service.CreateAsync(conn, admin, 1001,
+            new MessageCreateRequest { Content = "同一条", ClientMessageId = clientMessageId.ToUpperInvariant() }, null, ct);
+        var outbox = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM email_outbox");
+        var audits = await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='MESSAGE_CREATE'");
+        var replay = await service.CreateAsync(conn, admin, 1001,
+            new MessageCreateRequest { Content = "同一条", ClientMessageId = clientMessageId }, null, ct);
+        Assert.Equal(first.Id, replay.Id);
+        Assert.Equal(outbox, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM email_outbox"));
+        Assert.Equal(audits, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='MESSAGE_CREATE'"));
+        Assert.Equal(1, publisher.Calls.Count);
+
+        var mismatch = await Assert.ThrowsAsync<ApiException>(() => service.CreateAsync(conn, admin, 1001,
+            new MessageCreateRequest { Content = "不同内容", ClientMessageId = clientMessageId }, null, ct));
+        Assert.Equal(409, mismatch.Status);
+        Assert.Equal(40901, mismatch.Code);
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM messages"));
+
+        var png = Convert.FromHexString("89504e470d0a1a0a0000000d49484452");
+        var imageKey = "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        var withImage = await service.CreateAsync(conn, admin, 1001,
+            new MessageCreateRequest { Content = "带图", ClientMessageId = imageKey },
+            [File("shot.png", "image/png", png)], null, ct);
+        var imageReplay = await service.CreateAsync(conn, admin, 1001,
+            new MessageCreateRequest { Content = "带图", ClientMessageId = imageKey },
+            [File("shot.png", "image/png", png)], null, ct);
+        Assert.Equal(withImage.Id, imageReplay.Id);
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM message_images WHERE message_id=@Id", new { Id = withImage.Id }));
+        Assert.Equal(64, await conn.ExecuteScalarAsync<int>(
+            "SELECT CHAR_LENGTH(sha256) FROM message_images WHERE message_id=@Id", new { Id = withImage.Id }));
+        var other = (byte[])png.Clone();
+        other[^1] ^= 0x01;
+        var differentImage = await Assert.ThrowsAsync<ApiException>(() => service.CreateAsync(conn, admin, 1001,
+            new MessageCreateRequest { Content = "带图", ClientMessageId = imageKey },
+            [File("shot.png", "image/png", other)], null, ct));
+        Assert.Equal(40901, differentImage.Code);
+
+        var plain = await service.CreateAsync(conn, admin, 1001, new MessageCreateRequest { Content = "甲" }, null, ct);
+        var again = await service.CreateAsync(conn, admin, 1001, new MessageCreateRequest { Content = "乙" }, null, ct);
+        Assert.NotEqual(plain.Id, again.Id);
+        // 首次文字、带图、省略编号的两条都会发布；重放与内容冲突不会。
+        Assert.Equal(4, publisher.Calls.Count(call => call == 1001));
+        Assert.Equal(4, publisher.Calls.Count);
+    }
+
+    private sealed class RecordingMessagePublisher : IProjectRealtimePublisher
+    {
+        public List<ulong> Calls { get; } = [];
+        public Task PublishAsync(ulong projectId, string kind, CancellationToken ct = default)
+        {
+            Calls.Add(projectId);
+            return Task.CompletedTask;
+        }
+        public Task PublishAsync(ProjectRealtimeAudience audience, string kind, CancellationToken ct = default)
+        {
+            Calls.Add(audience.ProjectId);
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
     public void MultipartLimitOnlyMatchesTheExactMessageCreateRoute()
     {
         var context = new DefaultHttpContext();

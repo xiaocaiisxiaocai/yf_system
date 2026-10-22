@@ -394,21 +394,25 @@ def run_workflow_acceptance(client, Client, conn, check):
         check, conn, supplier_client, project_id,
         "withdrawal without expected submission version",
         "POST", f"/api/v1/projects/{project_id}/withdraw", {}, expected=400)
-    _expect_atomic_rejection(
+    stale_confirm = _expect_atomic_rejection(
         check, conn, internal_client, project_id,
         "confirmation with stale submission version",
         "POST", f"/api/v1/projects/{project_id}/confirm",
         {"expectedSubmissionId": stale_submission_id}, expected=409)
-    _expect_atomic_rejection(
+    stale_reject = _expect_atomic_rejection(
         check, conn, internal_client, project_id,
         "rejection with stale submission version",
         "POST", f"/api/v1/projects/{project_id}/reject",
         {"reason": "陈旧版本", "expectedSubmissionId": stale_submission_id}, expected=409)
-    _expect_atomic_rejection(
+    stale_withdraw = _expect_atomic_rejection(
         check, conn, supplier_client, project_id,
         "withdrawal with stale submission version",
         "POST", f"/api/v1/projects/{project_id}/withdraw",
         {"expectedSubmissionId": stale_submission_id}, expected=409)
+    check("stale workflow decisions use the version-conflict code",
+          stale_confirm["code"] == 40903
+          and stale_reject["code"] == 40903
+          and stale_withdraw["code"] == 40903)
     _expect_atomic_rejection(
         check, conn, client, project_id,
         "internal administrator withdrawal with the current submission version",

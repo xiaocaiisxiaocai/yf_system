@@ -40,6 +40,7 @@ public sealed class SchemaShapeTests
         "20261008071421_AddProjectRobotType",
         "20261008085919_SeedArmCatalogAndRobotTypes",
         "20261009074458_AddProjectRobotOwnerName",
+        "20261022085527_AddMessageClientId",
     ];
 
     [Fact]

@@ -106,6 +106,29 @@ public sealed class ProjectGroupTests
             conn, actor, children[0].Id, new ProjectSubmitRequest(), null, ct));
         Assert.Equal(403, internalSubmission.Status);
         var supplier = new CurrentUser(8302, "group-supplier", "SUPPLIER", 8101);
+        await conn.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO upload_sessions
+                (id,project_id,uploader_id,file_name,file_size,file_last_modified,file_fingerprint,
+                 chunk_size,total_chunks,temp_dir,status,expires_at,created_at,updated_at)
+            VALUES('11111111-1111-4111-8111-111111111111',@ProjectId,@UploaderId,'merging.bin',1,1,@Fingerprint,
+                   1048576,1,'tmp/merging','MERGING',UTC_TIMESTAMP()-INTERVAL 1 MINUTE,UTC_TIMESTAMP(),UTC_TIMESTAMP())
+            """, new { ProjectId = children[0].Id, UploaderId = supplier.Id, Fingerprint = new string('a', 64) },
+            cancellationToken: ct));
+        var blockedByMerge = await Assert.ThrowsAsync<ApiException>(() => projects.SubmitAsync(
+            conn, supplier, children[0].Id, new ProjectSubmitRequest(), null, ct));
+        Assert.Equal(409, blockedByMerge.Status);
+        Assert.Equal(40901, blockedByMerge.Code);
+        Assert.Equal("项目仍有活动上传会话，不能提交验收", blockedByMerge.Message);
+        await conn.ExecuteAsync(new CommandDefinition(
+            "DELETE FROM upload_sessions WHERE id='11111111-1111-4111-8111-111111111111'", cancellationToken: ct));
+        await conn.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO upload_sessions
+                (id,project_id,uploader_id,file_name,file_size,file_last_modified,file_fingerprint,
+                 chunk_size,total_chunks,temp_dir,status,expires_at,created_at,updated_at)
+            VALUES('22222222-2222-4222-8222-222222222222',@ProjectId,@UploaderId,'expired.bin',1,1,@Fingerprint,
+                   1048576,1,'tmp/expired','UPLOADING',UTC_TIMESTAMP()-INTERVAL 1 MINUTE,UTC_TIMESTAMP(),UTC_TIMESTAMP())
+            """, new { ProjectId = children[0].Id, UploaderId = supplier.Id, Fingerprint = new string('b', 64) },
+            cancellationToken: ct));
         using (var submitted = Json(await projects.SubmitAsync(
                    conn, supplier, children[0].Id, new ProjectSubmitRequest(), null, ct)))
         {
@@ -220,7 +243,9 @@ public sealed class ProjectGroupTests
             await sync.CommitAsync(ct);
         }
 
-        await groups.UpdateAsync(conn, actor, groupId, new ProjectUpsertRequest
+        var groupUpdatedAt = await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
+            "SELECT updated_at FROM project_groups WHERE id=@Id", new { Id = groupId }, cancellationToken: ct));
+        var renamed = await groups.UpdateAsync(conn, actor, groupId, new ProjectUpsertRequest
         {
             Name = "冻结测试主项目-更新",
             SupplierId = 8501,
@@ -231,6 +256,7 @@ public sealed class ProjectGroupTests
             RobotTypeId = 1008506,
             RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2027-01-01",
+            ExpectedUpdatedAt = groupUpdatedAt,
         }, null, ct);
 
         var rows = (await conn.QueryAsync<FrozenChild>(new CommandDefinition("""
@@ -268,6 +294,7 @@ public sealed class ProjectGroupTests
             RobotTypeId = 1008506,
             RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2027-01-01",
+            ExpectedUpdatedAt = renamed.UpdatedAt,
         }, null, ct);
         Assert.Equal(auditCount, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
             "SELECT COUNT(*) FROM audit_logs WHERE action IN ('PROJECT_GROUP_UPDATE','PROJECT_UPDATE')",
@@ -316,9 +343,61 @@ public sealed class ProjectGroupTests
             ExpectedCompletionDate = "2026-12-01",
             SubprojectNames = ["编辑并发子项目"],
         }, null, ct));
+        var groupId = created.RootElement.GetProperty("id").GetUInt64();
+        var groupUpdatedAt = created.RootElement.GetProperty("updatedAt").GetDateTime();
+        var groupUpdate = new ProjectUpsertRequest
+        {
+            Name = "编辑并发主项目",
+            SupplierId = 8601,
+            WorkOrderNos = ["WO-EDIT"],
+            MachineModel = "编辑机型",
+            RobotPartId = 8605,
+            PriorityId = 8606,
+            RobotTypeId = 1008606,
+            RobotOwnerName = "Robot 负责人",
+            ExpectedCompletionDate = "2026-12-01",
+        };
+        var missingVersion = await Assert.ThrowsAsync<ApiException>(() =>
+            groups.UpdateAsync(conn, actor, groupId, groupUpdate, null, ct));
+        Assert.Equal(400, missingVersion.Status);
+        Assert.Equal("expectedUpdatedAt 必须为当前主项目的 updatedAt", missingVersion.Message);
+        var staleGroup = await Assert.ThrowsAsync<ApiException>(() => groups.UpdateAsync(conn, actor, groupId,
+            new ProjectUpsertRequest
+            {
+                Name = "过期主项目名",
+                SupplierId = groupUpdate.SupplierId,
+                WorkOrderNos = groupUpdate.WorkOrderNos,
+                MachineModel = groupUpdate.MachineModel,
+                RobotPartId = groupUpdate.RobotPartId,
+                PriorityId = groupUpdate.PriorityId,
+                RobotTypeId = groupUpdate.RobotTypeId,
+                RobotOwnerName = groupUpdate.RobotOwnerName,
+                ExpectedCompletionDate = groupUpdate.ExpectedCompletionDate,
+                ExpectedUpdatedAt = groupUpdatedAt.AddMinutes(-5),
+            }, null, ct));
+        Assert.Equal(409, staleGroup.Status);
+        Assert.Equal(40903, staleGroup.Code);
+        Assert.Equal("主项目已被他人修改，请刷新后重试", staleGroup.Message);
+        Assert.Equal("编辑并发主项目", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT name FROM project_groups WHERE id=@Id", new { Id = groupId }, cancellationToken: ct)));
+        var renamedGroup = await groups.UpdateAsync(conn, actor, groupId, new ProjectUpsertRequest
+        {
+            Name = "编辑并发主项目-已核对",
+            SupplierId = groupUpdate.SupplierId,
+            WorkOrderNos = groupUpdate.WorkOrderNos,
+            MachineModel = groupUpdate.MachineModel,
+            RobotPartId = groupUpdate.RobotPartId,
+            PriorityId = groupUpdate.PriorityId,
+            RobotTypeId = groupUpdate.RobotTypeId,
+            RobotOwnerName = groupUpdate.RobotOwnerName,
+            ExpectedCompletionDate = groupUpdate.ExpectedCompletionDate,
+            ExpectedUpdatedAt = groupUpdatedAt,
+        }, null, ct);
+        Assert.Equal("编辑并发主项目-已核对", renamedGroup.Name);
+
         var projectId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
             "SELECT id FROM projects WHERE project_group_id=@GroupId",
-            new { GroupId = created.RootElement.GetProperty("id").GetUInt64() }, cancellationToken: ct));
+            new { GroupId = groupId }, cancellationToken: ct));
         // The editor's snapshot travels through JSON exactly as the frontend sends it back.
         var loaded = Json(await projects.DetailAsync(conn, actor, projectId, ct)).RootElement
             .GetProperty("updatedAt").GetDateTime();
@@ -333,7 +412,7 @@ public sealed class ProjectGroupTests
         var stale = await Assert.ThrowsAsync<ApiException>(() => projects.UpdateSubprojectAsync(conn, actor, projectId,
             new SubprojectUpdateRequest { Name = "过期编辑", ExpectedUpdatedAt = first.UpdatedAt }, null, ct));
         Assert.Equal(409, stale.Status);
-        Assert.Equal(40901, stale.Code);
+        Assert.Equal(40903, stale.Code);
         Assert.Equal(ProjectService.SubprojectChangedMessage, stale.Message);
         Assert.Equal("第一次编辑", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
             "SELECT name FROM projects WHERE id=@Id", new { Id = projectId }, cancellationToken: ct)));
@@ -502,6 +581,7 @@ public sealed class ProjectGroupTests
         };
         using var created = Json(await groups.CreateAsync(conn, actor, request, null, ct));
         var groupId = created.RootElement.GetProperty("id").GetUInt64();
+        var groupUpdatedAt = created.RootElement.GetProperty("updatedAt").GetDateTime();
         var ids = (await conn.QueryAsync<ulong>(new CommandDefinition(
             "SELECT id FROM projects WHERE project_group_id=@GroupId ORDER BY id", new { GroupId = groupId },
             cancellationToken: ct))).ToArray();
@@ -520,6 +600,7 @@ public sealed class ProjectGroupTests
             RobotTypeId = request.RobotTypeId,
             RobotOwnerName = request.RobotOwnerName,
             ExpectedCompletionDate = request.ExpectedCompletionDate,
+            ExpectedUpdatedAt = groupUpdatedAt,
         }, null, ct);
         Assert.Equal(ids.Select(id => (id, RealtimeChangeKinds.Project)).ToArray(),
             publisher.Calls.Select(call => (call.ProjectId, call.Kind)).ToArray());

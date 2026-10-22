@@ -216,6 +216,7 @@ def run_audit_checks(client, conn, check):
         "robotTypeId": current_group["robotTypeId"],
         "robotOwnerName": current_group["robotOwnerName"],
         "expectedCompletionDate": current_group["expectedCompletionDate"],
+        "expectedUpdatedAt": current_group["updatedAt"],
     })
     project_update = _latest(client, "PROJECT_GROUP_UPDATE", group_id)
     check("main project update audit reports exact labeled before and after values",

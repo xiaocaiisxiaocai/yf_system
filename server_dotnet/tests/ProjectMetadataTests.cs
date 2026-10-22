@@ -191,6 +191,7 @@ public sealed class ProjectMetadataTests
             RobotTypeId = robotTypeId,
             RobotOwnerName = "Robot 负责人",
             ExpectedCompletionDate = "2026-12-31",
+            ExpectedUpdatedAt = created.UpdatedAt,
         }, null, ct);
         using (var updatedJson = Json(updated))
         {

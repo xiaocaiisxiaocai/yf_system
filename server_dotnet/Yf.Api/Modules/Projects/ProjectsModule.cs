@@ -142,7 +142,13 @@ public static class ProjectsModule
                     throw ApiException.BadRequest("图片表单字段必须命名为 images");
                 if (form.TryGetValue("content", out var contents) && contents.Count > 1)
                     throw ApiException.BadRequest("content 表单字段只能出现一次");
-                request = new MessageCreateRequest { Content = contents.Count == 0 ? null : contents[0] };
+                if (form.TryGetValue("clientMessageId", out var clientMessageIds) && clientMessageIds.Count > 1)
+                    throw ApiException.BadRequest("clientMessageId 表单字段只能出现一次");
+                request = new MessageCreateRequest
+                {
+                    Content = contents.Count == 0 ? null : contents[0],
+                    ClientMessageId = clientMessageIds.Count == 0 ? null : clientMessageIds[0],
+                };
                 images = form.Files.ToArray();
             }
             else

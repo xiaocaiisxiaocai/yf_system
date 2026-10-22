@@ -366,6 +366,98 @@ public sealed class FilesRecoveryTests
         Assert.False(Directory.Exists(FileStorage.SessionDirectory(scope.StorageRoot, sessionId)));
     }
 
+    [Fact(Timeout = 60_000)]
+    public async Task ActiveUploadListHidesExpiredSessionsAndCrossUserAbortFollowsTheRules()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        await scope.ExecuteAsync("""
+            INSERT INTO suppliers(id,name,status) VALUES (1,'Supplier','ACTIVE');
+            INSERT INTO users(id,employee_no,user_type,supplier_id,status,must_change_password,email,real_name)
+            VALUES
+              (2,'T002','INTERNAL',NULL,'ACTIVE',0,NULL,'NoAbort'),
+              (3,'S001','SUPPLIER',1,'ACTIVE',0,NULL,'SupplierOwner'),
+              (4,'S002','SUPPLIER',1,'ACTIVE',0,NULL,'SupplierPeer'),
+              (5,'T005','INTERNAL',NULL,'ACTIVE',0,NULL,'StatusUser');
+            INSERT INTO permissions(id,code) VALUES
+              (4,'file:delete'),(5,'project:status'),(6,'project:submit'),(7,'project:view_all');
+            INSERT INTO roles(id,name,status,is_built_in) VALUES
+              (2,'只读','ACTIVE',0),(3,'供应商提交','ACTIVE',0),(4,'状态管理','ACTIVE',0);
+            INSERT INTO user_roles(user_id,role_id) VALUES(2,2),(3,3),(4,3),(5,4);
+            INSERT INTO role_permissions(role_id,permission_id) VALUES
+              (2,2),(3,1),(3,2),(3,6),(4,2),(4,5),(4,7);
+            UPDATE project_groups SET created_by=2 WHERE id=1;
+            """, ct);
+        var active = Guid.NewGuid().ToString("D");
+        var expired = Guid.NewGuid().ToString("D");
+        var merging = Guid.NewGuid().ToString("D");
+        var peerSession = Guid.NewGuid().ToString("D");
+        await scope.InsertSessionAsync(active, "UPLOADING", false, fileName: "live.bin");
+        await scope.InsertSessionAsync(expired, "UPLOADING", true, fileName: "old.bin");
+        await scope.InsertSessionAsync(merging, "MERGING", true, fileName: "merge.bin");
+        await scope.InsertSessionAsync(peerSession, "UPLOADING", false, fileName: "peer.bin");
+        await scope.ExecuteAsync($"UPDATE upload_sessions SET uploader_id=3 WHERE id='{peerSession}'", ct);
+        var part = FileStorage.ChunkPath(scope.StorageRoot, active, 0);
+        await File.WriteAllBytesAsync(part, [1], ct);
+
+        var listed = await scope.Upload.ListActiveAsync(FilesDatabaseScope.Context(), 1, ct);
+        Assert.Equal(3, listed.Total);
+        Assert.Equal(["live.bin", "merge.bin", "peer.bin"], listed.Items.Select(item => item.FileName).Order().ToArray());
+        Assert.DoesNotContain(listed.Items, item => item.FileName == "old.bin");
+        var live = Assert.Single(listed.Items, item => item.SessionId == active);
+        Assert.Equal(1, live.ReceivedChunks);
+        Assert.True(live.CanResume);
+        Assert.True(live.CanAbort);
+        Assert.False(Assert.Single(listed.Items, item => item.SessionId == merging).CanResume);
+        Assert.False(Assert.Single(listed.Items, item => item.SessionId == peerSession).CanAbort);
+
+        var denied = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.AbortAsync(
+            Actor(2, "T002", "INTERNAL", null), active, ct));
+        Assert.Equal(403, denied.Status);
+        Assert.Equal("UPLOADING", await scope.StatusAsync(active));
+        var supplierDenied = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.AbortAsync(
+            Actor(4, "S002", "SUPPLIER", 1), active, ct));
+        Assert.Equal(403, supplierDenied.Status);
+        var missing = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.AbortAsync(
+            FilesDatabaseScope.Context(), Guid.NewGuid().ToString("D"), ct));
+        Assert.Equal(404, missing.Status);
+
+        var notifier = new RecordingUploadNotifier();
+        var upload = new UploadService(scope.Database, scope.Options,
+            new AuditService(Array.Empty<IProjectAuditCapture>()), NullLogger<UploadService>.Instance, notifier);
+        await upload.AbortAsync(Actor(5, "T005", "INTERNAL", null), active, ct);
+        Assert.Equal("ABORTED", await scope.StatusAsync(active));
+        Assert.Equal([(1UL, "project")], notifier.Calls);
+        await upload.AbortAsync(Actor(5, "T005", "INTERNAL", null), active, ct);
+        Assert.Single(notifier.Calls);
+        await using var conn = await scope.Database.OpenAsync(ct);
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM audit_logs WHERE action='UPLOAD_ABORT' AND target_id=@Id", new { Id = active }));
+        using (var detail = System.Text.Json.JsonDocument.Parse(await conn.ExecuteScalarAsync<string>(
+            "SELECT detail FROM audit_logs WHERE action='UPLOAD_ABORT' AND target_id=@Id", new { Id = active }) ?? "{}"))
+            Assert.True(detail.RootElement.GetProperty("crossUser").GetBoolean());
+
+        await scope.Upload.AbortAsync(Actor(4, "S002", "SUPPLIER", 1), peerSession, ct);
+        Assert.Equal("ABORTED", await scope.StatusAsync(peerSession));
+    }
+
+    private static DefaultHttpContext Actor(ulong id, string employeeNo, string userType, ulong? supplierId)
+    {
+        var context = new DefaultHttpContext();
+        context.Items[typeof(CurrentUser)] = new CurrentUser(id, employeeNo, userType, supplierId);
+        return context;
+    }
+
+    private sealed class RecordingUploadNotifier : IStoredUploadNotifier
+    {
+        public List<(ulong ProjectId, string Kind)> Calls { get; } = [];
+        public Task PublishAsync(ulong projectId, string kind, CancellationToken ct = default)
+        {
+            Calls.Add((projectId, kind));
+            return Task.CompletedTask;
+        }
+    }
+
     [Fact(Timeout = 30_000)]
     public async Task MergeRejectsSubmittedMd5ThatDoesNotMatchUploadedContent()
     {
@@ -599,7 +691,10 @@ public sealed class FilesRecoveryTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
-        await scope.ExecuteAsync("UPDATE system_configs SET cfg_value='bin,step,xlsx' WHERE cfg_key='upload.allowed_exts'", ct);
+        await scope.ExecuteAsync("""
+            UPDATE system_configs SET cfg_value='bin,step,xlsx' WHERE cfg_key='upload.allowed_exts';
+            UPDATE files SET status='DELETED', deleted_at=UTC_TIMESTAMP(6) WHERE id=900;
+            """, ct);
         var request = UploadRequest("动作流程.xlsx", [3]);
         var fresh = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct));
         Assert.Equal(UploadMaterialRules.StepRequiredMessage, fresh.Message);
@@ -776,7 +871,8 @@ public sealed class FilesRecoveryTests
             AppDb database,
             FilesMaintenanceService maintenance,
             UploadService upload,
-            FileService files)
+            FileService files,
+            AppOptions options)
         {
             this.administration = administration;
             this.databaseName = databaseName;
@@ -785,6 +881,7 @@ public sealed class FilesRecoveryTests
             Maintenance = maintenance;
             Upload = upload;
             Files = files;
+            Options = options;
             StorageRoot = Path.Combine(disposableRoot, "storage");
         }
 
@@ -792,6 +889,7 @@ public sealed class FilesRecoveryTests
         public FilesMaintenanceService Maintenance { get; }
         public UploadService Upload { get; }
         public FileService Files { get; }
+        public AppOptions Options { get; }
         public string StorageRoot { get; }
 
         public static async Task<FilesDatabaseScope> CreateOrSkipAsync(
@@ -849,6 +947,10 @@ public sealed class FilesRecoveryTests
                             email VARCHAR(255) NULL, real_name VARCHAR(100) NOT NULL,
                             password_hash VARCHAR(255) NOT NULL DEFAULT '', department_id BIGINT UNSIGNED NULL,
                             last_login_at DATETIME(6) NULL, created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                        );
+                        CREATE TABLE suppliers(
+                            id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(128) NOT NULL,
+                            status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE'
                         );
                         CREATE TABLE roles(
                             id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(100) NOT NULL,
@@ -967,7 +1069,7 @@ public sealed class FilesRecoveryTests
                 var files = new FileService(database, options, audit, new BatchDownloadLimiter(),
                     new MediaGrantService(options), new DownloadGrantService(), identity);
                 return new FilesDatabaseScope(
-                    administration, databaseName, disposableRoot, database, maintenance, upload, files);
+                    administration, databaseName, disposableRoot, database, maintenance, upload, files, options);
             }
             catch
             {

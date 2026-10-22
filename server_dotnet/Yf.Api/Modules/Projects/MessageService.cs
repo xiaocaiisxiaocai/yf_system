@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
@@ -120,6 +121,7 @@ internal sealed class MessageService(
             throw ApiException.BadRequest($"单张图片超过大小上限 {perImageMaximum / 1024 / 1024} MiB");
         if (declaredTotal > 0) FileStorage.EnsureFreeSpace(options.StorageRoot, declaredTotal);
 
+        var clientMessageId = NormalizeClientMessageId(request.ClientMessageId);
         var stored = new List<MessageImageRow>();
         var committed = false;
         try
@@ -131,53 +133,81 @@ internal sealed class MessageService(
                     throw ApiException.BadRequest("单次留言图片合计不能超过 50 MiB");
             }
 
-            await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
+            try
             {
-                var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-                var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
-                await AccessService.RequirePermissionAsync(conn, tx, current, "message:create", ct);
-                await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
-                EnsureWritable(project.Status);
-                await using var db = EfDb.Use(conn, tx);
-                var databaseNow = await DatabaseUtcNowAsync(db, ct);
-                var entity = new Message
+                await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
                 {
-                    ProjectId = projectId,
-                    SenderId = current.Id,
-                    Content = content,
-                    Status = "NORMAL",
-                    CreatedAt = databaseNow,
-                };
-                db.Messages.Add(entity);
-                await db.SaveChangesAsync(ct);
-                var messageId = entity.Id;
-                db.MessageImages.AddRange(stored.Select(image => new MessageImage
-                {
-                    MessageId = messageId,
-                    OriginalName = image.OriginalName,
-                    StoredName = image.StoredName,
-                    Ext = image.Ext,
-                    SizeBytes = image.SizeBytes,
-                    MimeType = image.MimeType,
-                    StoragePath = image.StoragePath,
-                    CreatedAt = databaseNow,
-                }));
-                await db.SaveChangesAsync(ct);
-                var notificationContent = content.Length == 0 ? "[图片]" : content;
-                // One participant load serves both the e-mail recipients and the response's read state.
-                var participants = await ProjectNotificationService.ParticipantsAsync(conn, tx, project, ct);
-                await ProjectNotificationService.EnqueueMessageAsync(conn, tx, project, messageId, notificationContent, current,
-                    options.WebBaseUrl, audit, ct, participants);
-                await audit.WriteAsync(conn, tx, current.Id, "MESSAGE_CREATE", "message", messageId,
-                    new { projectId, imageCount = stored.Count }, ip, ct);
-                var message = await LoadMessageAsync(db, messageId, false, ct);
-                var persistedImages = await LoadImagesAsync(db, [messageId], ct);
-                var response = MessageJson(message, [], persistedImages,
-                    participants.Select(user => user.Id).ToHashSet(), current.Id);
-                await tx.CommitAsync(ct);
-                committed = true;
-                await PublishSafelyAsync(projectId, RealtimeChangeKinds.Messages);
-                return response;
+                    var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+                    var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
+                    await AccessService.RequirePermissionAsync(conn, tx, current, "message:create", ct);
+                    await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+                    await using var db = EfDb.Use(conn, tx);
+                    if (clientMessageId is not null)
+                    {
+                        var existingId = await db.Messages.AsNoTracking()
+                            .Where(message => message.ProjectId == projectId
+                                && message.SenderId == current.Id
+                                && message.ClientMessageId == clientMessageId)
+                            .Select(message => (ulong?)message.Id)
+                            .SingleOrDefaultAsync(ct);
+                        if (existingId is ulong messageId)
+                        {
+                            var replay = await ReplayResponseAsync(
+                                conn, tx, db, project, current, messageId, content, stored, ct);
+                            await tx.CommitAsync(ct);
+                            await CleanupUnreferencedAsync(conn, stored, CancellationToken.None);
+                            return replay;
+                        }
+                    }
+
+                    EnsureWritable(project.Status);
+                    var databaseNow = await DatabaseUtcNowAsync(db, ct);
+                    var entity = new Message
+                    {
+                        ProjectId = projectId,
+                        SenderId = current.Id,
+                        Content = content,
+                        ClientMessageId = clientMessageId,
+                        Status = "NORMAL",
+                        CreatedAt = databaseNow,
+                    };
+                    db.Messages.Add(entity);
+                    await db.SaveChangesAsync(ct);
+                    var createdId = entity.Id;
+                    db.MessageImages.AddRange(stored.Select(image => new MessageImage
+                    {
+                        MessageId = createdId,
+                        OriginalName = image.OriginalName,
+                        StoredName = image.StoredName,
+                        Ext = image.Ext,
+                        SizeBytes = image.SizeBytes,
+                        MimeType = image.MimeType,
+                        StoragePath = image.StoragePath,
+                        Sha256 = image.Sha256,
+                        CreatedAt = databaseNow,
+                    }));
+                    await db.SaveChangesAsync(ct);
+                    var notificationContent = content.Length == 0 ? "[图片]" : content;
+                    // One participant load serves both the e-mail recipients and the response's read state.
+                    var participants = await ProjectNotificationService.ParticipantsAsync(conn, tx, project, ct);
+                    await ProjectNotificationService.EnqueueMessageAsync(conn, tx, project, createdId, notificationContent, current,
+                        options.WebBaseUrl, audit, ct, participants);
+                    await audit.WriteAsync(conn, tx, current.Id, "MESSAGE_CREATE", "message", createdId,
+                        new { projectId, imageCount = stored.Count }, ip, ct);
+                    var message = await LoadMessageAsync(db, createdId, false, ct);
+                    var persistedImages = await LoadImagesAsync(db, [createdId], ct);
+                    var response = MessageJson(message, [], persistedImages,
+                        participants.Select(user => user.Id).ToHashSet(), current.Id);
+                    await tx.CommitAsync(ct);
+                    committed = true;
+                    await PublishSafelyAsync(projectId, RealtimeChangeKinds.Messages);
+                    return response;
+                }
+            }
+            catch (Exception error) when (IsClientMessageIdCollision(error))
+            {
+                await CleanupUnreferencedAsync(conn, stored, CancellationToken.None);
+                return await ReplayAfterCollisionAsync(conn, actor, projectId, clientMessageId!, content, stored, ct);
             }
         }
         catch
@@ -186,6 +216,81 @@ internal sealed class MessageService(
                 await CleanupUnreferencedAsync(conn, stored, CancellationToken.None);
             throw;
         }
+    }
+
+    internal static string? NormalizeClientMessageId(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var text = value.Trim();
+        if (!Guid.TryParseExact(text, "D", out var id))
+            throw ApiException.BadRequest("clientMessageId 必须为标准 UUID");
+        return id.ToString("D");
+    }
+
+    private async Task<MessageResponse> ReplayResponseAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        YfDbContext db,
+        ProjectRow project,
+        CurrentUser current,
+        ulong messageId,
+        string content,
+        IReadOnlyList<MessageImageRow> incoming,
+        CancellationToken ct)
+    {
+        var message = await LoadMessageAsync(db, messageId, false, ct);
+        var images = await LoadImagesAsync(db, [messageId], ct);
+        if (!string.Equals(message.Content, content, StringComparison.Ordinal) || !SameImages(incoming, images))
+            throw ApiException.Conflict("clientMessageId 已用于不同的留言");
+        var participants = await ProjectNotificationService.ParticipantsAsync(conn, tx, project, ct);
+        return MessageJson(message, [], images, participants.Select(user => user.Id).ToHashSet(), current.Id);
+    }
+
+    private async Task<MessageResponse> ReplayAfterCollisionAsync(
+        MySqlConnection conn,
+        CurrentUser actor,
+        ulong projectId,
+        string clientMessageId,
+        string content,
+        IReadOnlyList<MessageImageRow> incoming,
+        CancellationToken ct)
+    {
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "message:create", ct);
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+        await using var db = EfDb.Use(conn, tx);
+        var messageId = await db.Messages.AsNoTracking()
+            .Where(message => message.ProjectId == projectId
+                && message.SenderId == current.Id
+                && message.ClientMessageId == clientMessageId)
+            .Select(message => (ulong?)message.Id)
+            .SingleOrDefaultAsync(ct);
+        if (messageId is not ulong existingId)
+            throw ApiException.Conflict("数据已存在，请刷新后重试");
+        var response = await ReplayResponseAsync(conn, tx, db, project, current, existingId, content, incoming, ct);
+        await tx.CommitAsync(ct);
+        return response;
+    }
+
+    private static bool SameImages(IReadOnlyList<MessageImageRow> incoming, IReadOnlyList<MessageImageRow> existing)
+    {
+        if (incoming.Count != existing.Count) return false;
+        for (var index = 0; index < incoming.Count; index++)
+        {
+            if (!string.Equals(incoming[index].Sha256, existing[index].Sha256, StringComparison.Ordinal))
+                return false;
+        }
+        return true;
+    }
+
+    private static bool IsClientMessageIdCollision(Exception error)
+    {
+        var sql = error as MySqlException ?? (error as DbUpdateException)?.InnerException as MySqlException;
+        return sql is { Number: 1062 }
+            && (sql.Message.Contains("uk_messages_sender_client_id", StringComparison.OrdinalIgnoreCase)
+                || sql.Message.Contains("client_message_id", StringComparison.OrdinalIgnoreCase));
     }
 
     internal Task<MessageResponse> CreateAsync(
@@ -500,11 +605,13 @@ internal sealed class MessageService(
         ulong total = 0;
         var header = new byte[12];
         var headerLength = 0;
+        string? sha256 = null;
         try
         {
             await using var input = file.OpenReadStream();
             await using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             var buffer = new byte[64 * 1024];
             int read;
             while ((read = await input.ReadAsync(buffer, ct)) != 0)
@@ -518,8 +625,10 @@ internal sealed class MessageService(
                     buffer.AsSpan(0, copied).CopyTo(header.AsSpan(headerLength));
                     headerLength += copied;
                 }
+                hash.AppendData(buffer, 0, read);
                 await output.WriteAsync(buffer.AsMemory(0, read), ct);
             }
+            sha256 = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
             if (!HasExpectedSignature(extension, header.AsSpan(0, headerLength)))
                 throw ApiException.BadRequest("图片内容与扩展名不匹配或文件已损坏");
             await output.FlushAsync(ct);
@@ -544,6 +653,7 @@ internal sealed class MessageService(
             SizeBytes = total,
             MimeType = expectedMime,
             StoragePath = Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/'),
+            Sha256 = sha256,
             CreatedAt = now,
         };
     }
@@ -616,6 +726,7 @@ internal sealed class MessageService(
                 SizeBytes = image.SizeBytes,
                 MimeType = image.MimeType,
                 StoragePath = image.StoragePath,
+                Sha256 = image.Sha256,
                 CreatedAt = image.CreatedAt,
             })
             .ToArrayAsync(ct);

@@ -250,7 +250,7 @@ internal sealed partial class ProjectService
                 .SetProperty(item => item.ConfirmSide, nextConfirmSide)
                 .SetProperty(item => item.UpdatedAt, now), ct);
         if (changed == 0)
-            throw ApiException.Conflict("项目状态已被他人变更，请刷新后重试");
+            throw ApiException.VersionConflict("项目状态已被他人变更，请刷新后重试");
 
         var statusLog = new ProjectStatusLog
         {
@@ -326,7 +326,7 @@ internal sealed partial class ProjectService
     {
         if (latestSubmit.Id != expectedSubmissionId)
         {
-            throw ApiException.Conflict("验收申请已更新，请刷新项目后重新操作");
+            throw ApiException.VersionConflict("验收申请已更新，请刷新项目后重新操作");
         }
     }
 }

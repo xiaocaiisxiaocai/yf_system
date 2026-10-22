@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
@@ -14,7 +15,8 @@ public sealed partial class UploadService(
     AppDb db,
     AppOptions options,
     AuditService audit,
-    ILogger<UploadService> logger)
+    ILogger<UploadService> logger,
+    IStoredUploadNotifier? changes = null)
 {
     private const uint MinimumChunkSize = 256 * 1024;
     private const uint MaximumChunkSize = 64 * 1024 * 1024;
@@ -247,44 +249,139 @@ public sealed partial class UploadService(
         await tx.CommitAsync(ct);
     }
 
+    public async Task<ProjectUploadSessionListResponse> ListActiveAsync(
+        HttpContext context, ulong projectId, CancellationToken ct)
+    {
+        var actor = AccessService.GetCurrent(context);
+        await using var conn = await db.OpenAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
+        var project = await ProjectAccessService.RequireViewAsync(conn, tx, current, projectId, ct);
+        await using var ef = EfDb.Use(conn, tx);
+        var canUpload = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "file:upload", ct);
+        var canDelete = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "file:delete", ct);
+        var canStatus = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "project:status", ct);
+        var canSubmit = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "project:submit", ct);
+        var dbNow = await DbNowAsync(ef, ct);
+        var rows = await (
+            from session in ef.UploadSessions
+            join user in ef.Users on session.UploaderId equals user.Id
+            where session.ProjectId == projectId
+                && (session.Status == ProjectUploadSessionStatuses.Uploading
+                    || session.Status == ProjectUploadSessionStatuses.Merging)
+            orderby session.CreatedAt, session.Id
+            select new ActiveUploadRow(
+                session.Id,
+                session.FileName,
+                session.FileSize,
+                session.TotalChunks,
+                session.Status,
+                session.UploaderId,
+                user.RealName,
+                user.EmployeeNo,
+                user.UserType,
+                user.SupplierId,
+                session.CreatedAt,
+                session.ExpiresAt)).ToListAsync(ct);
+        await tx.CommitAsync(ct);
+
+        var blocking = rows.Where(row => UploadActivity.IsBlocking(row.Status, row.ExpiresAt, dbNow)).ToArray();
+        var items = new List<ProjectUploadSessionItemResponse>(Math.Min(blocking.Length, 200));
+        foreach (var row in blocking.Take(200))
+        {
+            ct.ThrowIfCancellationRequested();
+            items.Add(new ProjectUploadSessionItemResponse(
+                row.SessionId,
+                row.FileName,
+                row.FileSize,
+                CountReceivedChunks(row.SessionId),
+                checked((int)row.TotalChunks),
+                row.Status,
+                row.UploaderId,
+                row.UploaderName,
+                row.UploaderEmployeeNo,
+                row.UploaderUserType,
+                ProjectJson.Utc(row.CreatedAt),
+                ProjectJson.Utc(row.ExpiresAt),
+                current.Id == row.UploaderId
+                    && canUpload
+                    && project.Status == ProjectStatuses.InProgress
+                    && row.Status == ProjectUploadSessionStatuses.Uploading,
+                UploadActivity.CanAbort(
+                    current, project.Status, canUpload, canDelete, canStatus, canSubmit,
+                    row.UploaderId, row.UploaderUserType, row.UploaderSupplierId)));
+        }
+        return new ProjectUploadSessionListResponse(blocking.Length, items);
+    }
+
     public async Task AbortAsync(HttpContext context, string sessionId, CancellationToken ct)
     {
         var actor = AccessService.GetCurrent(context);
         await using var conn = await db.OpenAsync(ct);
         var initial = await LoadSessionAsync(conn, null, sessionId, false, ct);
-        if (initial.UploaderId != actor.Id) throw ApiException.Forbidden();
-        await ProjectAccessService.RequireViewAsync(conn, null, actor, initial.ProjectId, ct);
-        await AccessService.RequirePermissionAsync(conn, null, actor, "file:upload", ct);
 
         // Always take the merge lease, including when the initial snapshot still says
         // UPLOADING. This closes the race where another request changes it to MERGING
         // between the snapshot and the row lock below.
         await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(
-            conn, MergeLockName(conn, sessionId), 0, ct)
+            conn, MergeLockName(conn, initial.Id), 0, ct)
             ?? throw ApiException.Conflict("正在合并中，请稍候");
+        ulong projectId;
+        var aborted = false;
         await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
         {
             var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
             var session = await LoadSessionAsync(conn, tx, sessionId, true, ct);
-            if (session.UploaderId != current.Id) throw ApiException.Forbidden();
-            await ProjectAccessService.RequireViewAsync(conn, tx, current, session.ProjectId, ct);
-            await AccessService.RequirePermissionAsync(conn, tx, current, "file:upload", ct);
-            if (session.Status == "COMPLETED") throw ApiException.Conflict("会话已完成，不可放弃");
-            if (session.Status is not ("UPLOADING" or "MERGING" or "EXPIRED" or "ABORTED"))
-                throw ApiException.Conflict("会话已失效");
-            if (session.Status != "ABORTED")
+            var project = await ProjectAccessService.RequireViewAsync(conn, tx, current, session.ProjectId, ct);
+            await using (var ef = EfDb.Use(conn, tx))
             {
-                await using var ef = EfDb.Use(conn, tx);
-                var dbNow = await DbNowAsync(ef, ct);
-                await ef.UploadSessions.Where(item => item.Id == sessionId)
-                    .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Status, "ABORTED")
-                        .SetProperty(item => item.UpdatedAt, dbNow), ct);
-                await WriteUploadAbortAuditAsync(conn, tx, current, sessionId,
-                    ClientIp.Resolve(context, options), ct);
+                var canUpload = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "file:upload", ct);
+                var canDelete = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "file:delete", ct);
+                var canStatus = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "project:status", ct);
+                var canSubmit = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "project:submit", ct);
+                var uploader = await ef.Users.AsNoTracking()
+                    .Where(user => user.Id == session.UploaderId)
+                    .Select(user => new { user.UserType, user.SupplierId })
+                    .SingleAsync(ct);
+                if (!UploadActivity.CanAbort(
+                        current, project.Status, canUpload, canDelete, canStatus, canSubmit,
+                        session.UploaderId, uploader.UserType, uploader.SupplierId))
+                    throw ApiException.Forbidden();
+                if (session.Status == "COMPLETED") throw ApiException.Conflict("会话已完成，不可放弃");
+                if (session.Status is not ("UPLOADING" or "MERGING" or "EXPIRED" or "ABORTED"))
+                    throw ApiException.Conflict("会话已失效");
+                if (session.Status != "ABORTED")
+                {
+                    var dbNow = await DbNowAsync(ef, ct);
+                    await ef.UploadSessions.Where(item => item.Id == sessionId)
+                        .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Status, "ABORTED")
+                            .SetProperty(item => item.UpdatedAt, dbNow), ct);
+                    ef.AuditLogs.Add(new AuditLog
+                    {
+                        UserId = current.Id,
+                        EmployeeNo = current.EmployeeNo,
+                        Action = "UPLOAD_ABORT",
+                        TargetType = "upload_session",
+                        TargetId = session.Id,
+                        Detail = JsonSerializer.Serialize(new
+                        {
+                            projectId = session.ProjectId,
+                            uploaderId = session.UploaderId,
+                            fileName = session.FileName,
+                            crossUser = session.UploaderId != current.Id,
+                        }, JsonDefaults.Web),
+                        Ip = ClientIp.Resolve(context, options),
+                        CreatedAt = dbNow,
+                    });
+                    await ef.SaveChangesAsync(ct);
+                    aborted = true;
+                }
             }
+            projectId = session.ProjectId;
             await tx.CommitAsync(ct);
         }
         await TryCleanupSessionArtifactsAsync(sessionId, CancellationToken.None);
+        if (aborted) await PublishProjectChangedAsync(projectId);
     }
 
     private async Task<UploadInitResponse> InitResponseAsync(
@@ -442,23 +539,46 @@ public sealed partial class UploadService(
         ? $"{error.GetType().Name}:mysql-{mysql.Number}:0x{error.HResult:x8}"
         : $"{error.GetType().Name}:0x{error.HResult:x8}";
 
-    private static async Task WriteUploadAbortAuditAsync(MySqlConnection conn, MySqlTransaction tx,
-        CurrentUser actor, string sessionId, string ip, CancellationToken ct)
+    private int CountReceivedChunks(string sessionId)
     {
-        await using var context = EfDb.Use(conn, tx);
-        context.AuditLogs.Add(new AuditLog
+        var root = FileStorage.Root(options.StorageRoot);
+        string directory;
+        try { directory = FileStorage.SessionDirectory(root, sessionId); }
+        catch (InvalidOperationException) { return 0; }
+        if (!Directory.Exists(directory)) return 0;
+        var count = 0;
+        foreach (var path in Directory.EnumerateFiles(directory, "*.part"))
         {
-            UserId = actor.Id,
-            EmployeeNo = actor.EmployeeNo,
-            Action = "UPLOAD_ABORT",
-            TargetType = "upload_session",
-            TargetId = sessionId,
-            Detail = null,
-            Ip = ip,
-            CreatedAt = await DbNowAsync(context, ct)
-        });
-        await context.SaveChangesAsync(ct);
+            var name = Path.GetFileName(path);
+            if (name.EndsWith(".part", StringComparison.OrdinalIgnoreCase)) count++;
+        }
+        return count;
     }
+
+    private async Task PublishProjectChangedAsync(ulong projectId)
+    {
+        if (changes is null) return;
+        try { await changes.PublishAsync(projectId, "project", CancellationToken.None); }
+        catch (Exception error)
+        {
+            logger.LogWarning(error,
+                "Realtime project notification failed after aborting an upload for project {ProjectId}", projectId);
+        }
+    }
+
+    private sealed record ActiveUploadRow(
+        string SessionId,
+        string FileName,
+        ulong FileSize,
+        uint TotalChunks,
+        string Status,
+        ulong UploaderId,
+        string UploaderName,
+        string UploaderEmployeeNo,
+        string UploaderUserType,
+        ulong? UploaderSupplierId,
+        DateTime CreatedAt,
+        DateTime ExpiresAt);
 
     internal static Task<DateTime> DbNowAsync(YfDbContext context, CancellationToken ct) =>
         DbClock.UtcNowAsync(context, ct);

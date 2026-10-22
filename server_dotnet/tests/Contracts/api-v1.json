@@ -81,6 +81,7 @@
   "GET /api/v1/projects/{}/message-receipts",
   "GET /api/v1/projects/{}/messages",
   "GET /api/v1/projects/{}/summary",
+  "GET /api/v1/projects/{}/upload-sessions",
   "GET /api/v1/robot-part-supplier-options",
   "GET /api/v1/robot-parts",
   "GET /api/v1/supplier-options",

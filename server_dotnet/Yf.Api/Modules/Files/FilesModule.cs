@@ -1,4 +1,5 @@
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Modules.Files;
 
@@ -10,6 +11,8 @@ public static class FilesModule
         services.AddSingleton<MediaGrantService>();
         services.AddSingleton<DownloadGrantService>();
         services.AddScoped<FileService>();
+        services.AddSingleton<IStoredUploadNotifier>(provider =>
+            new UploadChangeNotifier(provider.GetRequiredService<IProjectRealtimePublisher>()));
         services.AddScoped<UploadService>();
         services.AddHostedService<FilesMaintenanceService>();
         return services;
@@ -22,6 +25,9 @@ public static class FilesModule
         api.MapGet("/projects/{projectId:long}/files", async (
             HttpContext context, ulong projectId, FileService service, CancellationToken ct) =>
             await service.ListAsync(context, projectId, ct));
+        api.MapGet("/projects/{projectId:long}/upload-sessions", async (
+            HttpContext context, ulong projectId, UploadService service, CancellationToken ct) =>
+            await service.ListActiveAsync(context, projectId, ct));
 
         api.MapPost("/uploads/init", async (
             HttpContext context, InitUploadRequest request, UploadService service, CancellationToken ct) =>
@@ -94,6 +100,12 @@ public static class FilesModule
 
         return endpoints;
     }
+}
+
+internal sealed class UploadChangeNotifier(IProjectRealtimePublisher publisher) : IStoredUploadNotifier
+{
+    public Task PublishAsync(ulong projectId, string kind, CancellationToken ct = default) =>
+        publisher.PublishAsync(projectId, kind, ct);
 }
 
 public sealed record InitUploadRequest(

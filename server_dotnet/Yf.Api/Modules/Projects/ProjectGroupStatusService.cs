@@ -55,7 +55,7 @@ internal sealed class ProjectGroupStatusService(AuditService audit)
                 .SetProperty(item => item.Status, next)
                 .SetProperty(item => item.CompletedAt, next == ProjectStatuses.Completed ? now : null)
                 .SetProperty(item => item.UpdatedAt, now), ct);
-        if (changed != 1) throw ApiException.Conflict("主项目状态已被他人变更，请刷新后重试");
+        if (changed != 1) throw ApiException.VersionConflict("主项目状态已被他人变更，请刷新后重试");
 
         db.ProjectGroupStatusLogs.Add(new ProjectGroupStatusLog
         {

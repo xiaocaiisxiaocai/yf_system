@@ -92,7 +92,10 @@ public sealed class OwnerAccessTests
         await AssertActiveResponsibilityBlocksChangeAsync(() => users.DeleteAsync(admin, OldOwnerId, ct));
         await AssertActiveResponsibilityBlocksChangeAsync(() => roles.AssignPermissionsAsync(admin, 9_001, [], ct));
 
-        await groups.UpdateAsync(conn, oldOwner, ProjectGroupId, UpdateRequest(), null, ct);
+        var groupUpdatedAt = await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
+            "SELECT updated_at FROM project_groups WHERE id=@Id",
+            new { Id = ProjectGroupId }, cancellationToken: ct));
+        await groups.UpdateAsync(conn, oldOwner, ProjectGroupId, UpdateRequest(groupUpdatedAt), null, ct);
 
         using (var detail = Json(await projects.DetailAsync(conn, oldOwner, ProjectId, ct)))
             Assert.Equal(OldOwnerId, detail.RootElement.GetProperty("responsibleUserId").GetUInt64());
@@ -237,7 +240,7 @@ public sealed class OwnerAccessTests
         VALUES(10001,'WO-OWNER',0),(10002,'WO-OWNERLESS',0),(10003,'WO-NO-LIST',0);
         """;
 
-    private static ProjectUpsertRequest UpdateRequest() => new()
+    private static ProjectUpsertRequest UpdateRequest(DateTime expectedUpdatedAt) => new()
     {
         Name = "负责人范围项目",
         Description = "范围测试",
@@ -249,6 +252,7 @@ public sealed class OwnerAccessTests
         RobotTypeId = 1006003,
         RobotOwnerName = "Robot 负责人",
         ExpectedCompletionDate = "2026-12-31",
+        ExpectedUpdatedAt = expectedUpdatedAt,
     };
 
     private static ProjectUpsertRequest CreateRequest() => new()
