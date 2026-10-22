@@ -248,7 +248,7 @@ async function initializePassword(browser, user) {
       const pendingReplayed = page.waitForResponse(response => (
         pathOf(response) === pendingPath && response.status() === 200
       ));
-      await page.getByRole('button', { name: '刷新', exact: true }).click();
+      await page.getByRole('button', { name: '刷新工作台', exact: true }).click();
       await Promise.all([summaryReplayed, pendingReplayed]);
       assert.equal(refreshRequests, 1, 'concurrent expired responses share one refresh request');
       assert.equal(attempts.get(summaryPath), 2, 'summary request is replayed once');

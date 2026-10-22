@@ -5,9 +5,11 @@ import {
 import { IconDown, IconLeft, IconMore, IconPlus } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
 import { isAxiosError } from 'axios'
-import http, { getApiErrorCode, type QuietRequestConfig } from '../../api/client'
+import http, { type QuietRequestConfig } from '../../api/client'
+import { isVersionConflict } from '../../api/versionConflict'
 import { createProjectCopyJob, unwrapCopyJob } from '../../api/copyJobs'
 import ProjectCopyJobsPanel from '../../components/project-copy-jobs/ProjectCopyJobsPanel'
+import { useCoalescedRefresh } from '../../hooks/useCoalescedRefresh'
 import { useProjectCopyJobs } from '../../hooks/useProjectCopyJobs'
 import { projectAccessLostStatus, useProjectAccessLost } from '../../hooks/useProjectAccessLost'
 import { useAuth } from '../../store/auth'
@@ -25,7 +27,6 @@ interface ChildFormValues { name?: string; description?: string }
 type OwnerOption = ApiResponses['GET /project-owner-options'][number]
 
 /** 实时信号的合并窗口：窗口内的多次信号只触发一次重拉。 */
-const SIGNAL_COALESCE_MS = 300
 
 function display(value?: string | null) { return value?.trim() || '-' }
 function suggestedCopyName(name: string) {
@@ -63,15 +64,11 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const [groupRefreshKey, setGroupRefreshKey] = useState(0)
   // 实时信号不直接作为请求依赖：成批到达时合并成一次重拉；请求进行中只记下“有新变更”，完成后再拉一次，
   // 不中止进行中的请求，避免连续事件让页面一直拿不到结果。
-  const [signalRefreshKey, setSignalRefreshKey] = useState(0)
-  const seenSignal = useRef(groupSignal)
-  const signalTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const fetchInFlight = useRef(false)
-  const signalDirty = useRef(false)
+  const { refreshKey: signalRefreshKey, begin: beginGroupFetch, end: endGroupFetch } = useCoalescedRefresh(groupSignal)
   const [copyJobsOpen, setCopyJobsOpen] = useState(false)
   const dockRef = useRef<SubprojectDockHandle>(null)
   const [editing, setEditing] = useState<ProjectSummary | null>(null)
-  /** 保存编辑时服务端报告子项目已被他人修改（409/40901）：提示核对，并改用刷新后的最新版本。 */
+  /** 保存编辑时服务端报告子项目版本冲突（409/40903）：提示核对，并改用刷新后的最新版本。 */
   const [editConflict, setEditConflict] = useState(false)
   const [childModalOpen, setChildModalOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -110,25 +107,10 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const refreshGroup = useCallback(() => setGroupRefreshKey((value) => value + 1), [])
 
   useEffect(() => {
-    if (groupSignal === seenSignal.current) return
-    seenSignal.current = groupSignal
-    if (signalTimer.current) return
-    signalTimer.current = setTimeout(() => {
-      signalTimer.current = undefined
-      if (fetchInFlight.current) signalDirty.current = true
-      else setSignalRefreshKey((value) => value + 1)
-    }, SIGNAL_COALESCE_MS)
-  }, [groupSignal])
-  useEffect(() => () => { if (signalTimer.current) clearTimeout(signalTimer.current) }, [])
-
-  useEffect(() => {
     if (!validId) return
     let active = true
     const controller = new AbortController()
-    fetchInFlight.current = true
-    // 本次请求会读到此前的全部变更：已记下的和尚在合并窗口里的信号都不必再单独重拉。
-    signalDirty.current = false
-    if (signalTimer.current) { clearTimeout(signalTimer.current); signalTimer.current = undefined }
+    beginGroupFetch()
     // 已加载后的 403/404 由本页统一提示并跳转，不再叠加拦截器的逐条错误提示。
     const quietClientError = everLoaded.current
     http.get<ApiResponses['GET /project-groups/{id}']>(`/project-groups/${groupId}`, { signal: controller.signal, quietNetworkError: true, quietClientError } as QuietRequestConfig)
@@ -148,14 +130,10 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       .finally(() => {
         if (!active) return
         setLoading(false)
-        fetchInFlight.current = false
-        if (signalDirty.current) {
-          signalDirty.current = false
-          setSignalRefreshKey((value) => value + 1)
-        }
+        endGroupFetch()
       })
     return () => { active = false; controller.abort() }
-  }, [groupId, groupRefreshKey, handleAccessLost, reloadKey, signalRefreshKey, validId])
+  }, [beginGroupFetch, endGroupFetch, groupId, groupRefreshKey, handleAccessLost, reloadKey, signalRefreshKey, validId])
 
   useEffect(() => {
     if (!canReadCopyJobs || copyJobs.unavailable) {
@@ -170,7 +148,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       setCopySource(null)
       return
     }
-    if (!copyJobs.ready || copyJobs.loading) return
+    if (!copyJobs.ready) return
     if (!copyJobsInitialized.current) {
       copyJobs.jobs.forEach((job) => {
         if (job.status === 'succeeded') knownSucceededCopyJobs.current.add(job.jobId)
@@ -193,7 +171,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     })
     // 新副本只影响子项目列表；刷新主项目即可，不重置正在显示的复制任务列表。
     if (newSuccess) refreshGroup()
-  }, [canReadCopyJobs, copyJobs.jobs, copyJobs.loading, copyJobs.ready, copyJobs.unavailable, refreshGroup])
+  }, [canReadCopyJobs, copyJobs.jobs, copyJobs.ready, copyJobs.unavailable, refreshGroup])
 
   const projects = data?.projects
   const projectMap = useMemo(() => new Map((projects ?? []).map((project) => [project.id, project])), [projects])
@@ -208,8 +186,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   const canCreateChild = Boolean(canWrite && hasPerm('project:create'))
   const canUpdateChild = Boolean(canWrite && hasPerm('project:update'))
   const canDeleteChild = Boolean(isInternal && hasPerm('project:delete'))
-  const copyReady = copyJobs.ready && !copyJobs.loading
-  const copyLoading = copyJobs.loading
+  const copyReady = copyJobs.ready
   // 面板中的管理按钮复用本页的弹窗、复制幂等键和防重状态；这些处理函数不依赖主项目数据，可在加载前定义。
   const openEdit = useCallback((project: ProjectSummary) => {
     setEditing(project); setEditConflict(false); form.setFieldsValue({ name: project.name, description: project.description }); setChildModalOpen(true)
@@ -232,7 +209,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     onGroupChanged: refreshGroup,
     renderManageActions: (project) => (
       <>
-        {canCreateChild && <Button size="mini" type="text" disabled={!copyReady} loading={copyLoading} onClick={() => openCopy(project)}>复制</Button>}
+        {canCreateChild && <Button size="mini" type="text" disabled={!copyReady} onClick={() => openCopy(project)}>复制</Button>}
         {canUpdateChild && ['DRAFT', 'IN_PROGRESS'].includes(project.status) && <Button size="mini" type="text" onClick={() => openEdit(project)}>编辑</Button>}
         {canDeleteChild && ['DRAFT', 'TERMINATED'].includes(project.status) && (
           <Popconfirm title={`确认删除子项目“${project.name}”？仅草稿或已终止且无文件、留言、上传和复制履历时可删除。`} onOk={() => remove(project)}>
@@ -241,7 +218,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
         )}
       </>
     ),
-  }), [canCreateChild, canDeleteChild, canUpdateChild, copyLoading, copyReady, openCopy, openEdit, projectMap, refreshGroup, remove])
+  }), [canCreateChild, canDeleteChild, canUpdateChild, copyReady, openCopy, openEdit, projectMap, refreshGroup, remove])
 
   if (!validId) return <div className="project-group-load-state"><Empty description="主项目地址无效" /><Button type="primary" onClick={() => navigate('/projects')}>返回项目列表</Button></div>
   if (loading && !data) return <div className="project-group-load-state"><Spin size={36} /></div>
@@ -257,7 +234,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       const values = await form.validate().catch(() => null) as ChildFormValues | null
       if (!values) return
       if (editing) {
-        // 带上打开弹窗时的版本：期间他人修改过则服务端返回 409，不静默覆盖。
+        // 带上打开弹窗时的版本：期间他人修改过则服务端返回 40903，不静默覆盖。
         await http.put<ApiResponses['PUT /projects/{id}']>(`/projects/${editing.id}`, { ...values, expectedUpdatedAt: editing.updatedAt }); Message.success('子项目已更新')
       } else {
         await http.post<ApiResponses['POST /project-groups/{id}/projects']>(`/project-groups/${groupId}/projects`, values); Message.success('子项目已创建并继承主项目资料')
@@ -265,12 +242,12 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
       setChildModalOpen(false); refreshGroup()
     } catch (error: unknown) {
       /* 请求错误由统一拦截器提示，保留弹窗内容供重试。 */
-      if (editing && getApiErrorCode(error) === 40901) { setEditConflict(true); refreshGroup() }
+      if (editing && isVersionConflict(error)) { setEditConflict(true); refreshGroup() }
     } finally { saveInFlight.current = false; setSaving(false) }
   }
   const submitCopy = async () => {
     if (!copySource || copyInFlight.current) return
-    if (!copyOutcomeUnknown && (!copyJobs.ready || copyJobs.loading)) return
+    if (!copyOutcomeUnknown && !copyJobs.ready) return
     copyInFlight.current = true; setCopying(true)
     let preserveIdempotencyKey = false
     try {
@@ -515,7 +492,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
         escToExit={!copying}
         cancelText={copyOutcomeUnknown ? '暂时关闭' : '取消'}
         okText={copying ? '提交任务中…' : copyOutcomeUnknown ? '确认并重试' : '创建复制任务'}
-        okButtonProps={{ disabled: !copyOutcomeUnknown && (!copyJobs.ready || copyJobs.loading) }}
+        okButtonProps={{ disabled: !copyOutcomeUnknown && !copyJobs.ready }}
         unmountOnExit
       >
         <Form form={copyForm} layout="vertical"><Form.Item label="新子项目名称" field="name" rules={[{ required: true, message: '请输入新子项目名称' }, textLengthRule('子项目名称', 128)]}><Input autoFocus disabled={copyOutcomeUnknown} placeholder="新子项目名称" /></Form.Item></Form>

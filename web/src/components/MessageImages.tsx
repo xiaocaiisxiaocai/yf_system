@@ -104,14 +104,19 @@ function LocalImageThumbnail({ file, onRemove, disabled }: {
   onRemove: () => void
   disabled?: boolean
 }) {
-  const [source] = useState(() => URL.createObjectURL(file))
+  const [source, setSource] = useState('')
 
+  // 在 effect 里创建并在清理时释放：StrictMode 的模拟卸载/重挂会重新创建，不会留下已释放的地址。
   useEffect(() => {
-    return () => URL.revokeObjectURL(source)
-  }, [source])
+    const url = URL.createObjectURL(file)
+    // The object URL is an external browser resource owned by this effect.
+    // eslint-disable-next-line react/set-state-in-effect
+    setSource(url)
+    return () => URL.revokeObjectURL(url)
+  }, [file])
 
   return <div className="message-image-draft" title={file.name}>
-    <img src={source} alt={file.name} />
+    {source && <img src={source} alt={file.name} />}
     <Button
       className="message-image-remove"
       type="primary"
@@ -173,13 +178,81 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MiB`
 }
 
-function RemoteImageThumbnail({ messageId, image, onOpen }: {
+// 缩图请求的是原图：同时只下载少量几张，离开视口后中止并释放，避免长留言历史占满内存。
+const MAX_THUMBNAIL_LOADS = 3
+let activeThumbnailLoads = 0
+const waitingThumbnailLoads: Array<() => void> = []
+
+function acquireThumbnailSlot(signal: AbortSignal): Promise<() => void> {
+  return new Promise((resolve, reject) => {
+    const grant = () => {
+      activeThumbnailLoads += 1
+      let released = false
+      resolve(() => {
+        if (released) return
+        released = true
+        activeThumbnailLoads -= 1
+        waitingThumbnailLoads.shift()?.()
+      })
+    }
+    if (activeThumbnailLoads < MAX_THUMBNAIL_LOADS) {
+      grant()
+      return
+    }
+    const onAbort = () => {
+      const index = waitingThumbnailLoads.indexOf(entry)
+      if (index >= 0) waitingThumbnailLoads.splice(index, 1)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+    const entry = () => {
+      signal.removeEventListener('abort', onAbort)
+      grant()
+    }
+    waitingThumbnailLoads.push(entry)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+function RemoteImageThumbnail({ messageId, image, pinned, onOpen }: {
   messageId: number
   image: MessageImageItem
+  /** 预览打开时保留该图的地址，即使缩图滚出视口也不释放。 */
+  pinned: boolean
   onOpen: (source: string) => void
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState(() => typeof IntersectionObserver === 'undefined')
+
+  useEffect(() => {
+    const element = rootRef.current
+    if (!element || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1]
+      if (entry) setVisible(entry.isIntersecting)
+    }, { rootMargin: '160px' })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+
+  return <div ref={rootRef} className="message-image-card">
+    {visible || pinned
+      ? <LoadedImageThumbnail messageId={messageId} image={image} onOpen={onOpen} />
+      : <button type="button" className="message-image-open" aria-label={`预览图片：${image.name}`} disabled>
+        <span className="message-image-loading" role="status"><Spin /></span>
+      </button>}
+    <div className="message-image-meta">
+      <span title={image.name}>{image.name}</span>
+      <small>{formatBytes(image.sizeBytes)}</small>
+    </div>
+  </div>
+}
+
+/** 挂载时下载原图，卸载时中止请求并释放地址。 */
+function LoadedImageThumbnail({ messageId, image, onOpen }: {
+  messageId: number
+  image: MessageImageItem
+  onOpen: (source: string) => void
+}) {
   const [source, setSource] = useState('')
   const [sourceAttempt, setSourceAttempt] = useState<number | null>(null)
   const [loadedAttempt, setLoadedAttempt] = useState<number | null>(null)
@@ -187,75 +260,57 @@ function RemoteImageThumbnail({ messageId, image, onOpen }: {
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
-    if (visible) return
-    const element = rootRef.current
-    if (!element || typeof IntersectionObserver === 'undefined') {
-      setVisible(true)
-      return
-    }
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        setVisible(true)
-        observer.disconnect()
-      }
-    }, { rootMargin: '160px' })
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [visible])
-
-  useEffect(() => {
-    if (!visible) return
     let active = true
     let objectUrl = ''
+    let release: (() => void) | undefined
     const controller = new AbortController()
-    void http.get<Blob>(`/messages/${messageId}/images/${image.id}`, {
-      responseType: 'blob',
-      signal: controller.signal,
-      quietNetworkError: true,
-    } as QuietRequestConfig).then((response) => {
-      if (!active) return
-      objectUrl = URL.createObjectURL(response.data)
-      setSource(objectUrl)
-      setSourceAttempt(attempt)
+    void acquireThumbnailSlot(controller.signal).then((releaseSlot) => {
+      release = releaseSlot
+      if (!active) { releaseSlot(); return undefined }
+      return http.get<Blob>(`/messages/${messageId}/images/${image.id}`, {
+        responseType: 'blob',
+        signal: controller.signal,
+        quietNetworkError: true,
+      } as QuietRequestConfig).then((response) => {
+        if (!active) return
+        objectUrl = URL.createObjectURL(response.data)
+        setSource(objectUrl)
+        setSourceAttempt(attempt)
+      })
     }).catch(() => {
       if (active) setFailedAttempt(attempt)
-    })
+    }).finally(() => release?.())
     return () => {
       active = false
       controller.abort()
+      release?.()
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [visible, messageId, image.id, attempt])
+  }, [messageId, image.id, attempt])
 
   const ready = sourceAttempt === attempt && loadedAttempt === attempt && !!source
   const failed = failedAttempt === attempt
 
-  return <div ref={rootRef} className="message-image-card">
-    {failed ? <Result
-      status="error"
-      title="加载失败"
-      extra={<Button size="mini" onClick={() => setAttempt((value) => value + 1)}>重试</Button>}
-    /> : <button
-      type="button"
-      className="message-image-open"
-      aria-label={`预览图片：${image.name}`}
-      disabled={!ready}
-      onClick={() => onOpen(source)}
-    >
-      {source && sourceAttempt === attempt && <img
-        src={source}
-        alt={image.name}
-        onContextMenu={(event) => event.preventDefault()}
-        onLoad={() => setLoadedAttempt(attempt)}
-        onError={() => setFailedAttempt(attempt)}
-      />}
-      {!ready && <span className="message-image-loading" role="status"><Spin /></span>}
-    </button>}
-    <div className="message-image-meta">
-      <span title={image.name}>{image.name}</span>
-      <small>{formatBytes(image.sizeBytes)}</small>
-    </div>
-  </div>
+  return failed ? <Result
+    status="error"
+    title="加载失败"
+    extra={<Button size="mini" onClick={() => setAttempt((value) => value + 1)}>重试</Button>}
+  /> : <button
+    type="button"
+    className="message-image-open"
+    aria-label={`预览图片：${image.name}`}
+    disabled={!ready}
+    onClick={() => onOpen(source)}
+  >
+    {source && sourceAttempt === attempt && <img
+      src={source}
+      alt={image.name}
+      onContextMenu={(event) => event.preventDefault()}
+      onLoad={() => setLoadedAttempt(attempt)}
+      onError={() => setFailedAttempt(attempt)}
+    />}
+    {!ready && <span className="message-image-loading" role="status"><Spin /></span>}
+  </button>
 }
 
 export function MessageImages({ messageId, images, watermarkEmployeeNo, watermarkRealName }: MessageImagesProps) {
@@ -270,6 +325,7 @@ export function MessageImages({ messageId, images, watermarkEmployeeNo, watermar
         key={image.id}
         messageId={messageId}
         image={image}
+        pinned={preview?.image.id === image.id}
         onOpen={(source) => setPreview({ image, source })}
       />)}
     </div>

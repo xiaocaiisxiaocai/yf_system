@@ -5,7 +5,7 @@ import { IconEmail, IconLock, IconSave } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import http, { withAuthLock } from '../api/client'
 import { useAuth, type UserBrief } from '../store/auth'
-import { passwordRule } from '../utils/password'
+import { confirmPasswordRule, passwordRule } from '../utils/password'
 import PasswordInput from '../components/PasswordInput'
 import type { ApiResponses } from '../api/types'
 
@@ -40,10 +40,6 @@ export default function Profile() {
 
   const changePassword = async (values: { oldPassword: string; newPassword: string; confirm: string }) => {
     if (submitting.current) return
-    if (values.newPassword !== values.confirm) {
-      Message.error('两次输入的新密码不一致')
-      return
-    }
     if (values.newPassword === values.oldPassword) {
       Message.error('新密码不能与当前密码相同')
       return
@@ -144,7 +140,7 @@ export default function Profile() {
               >
                 <PasswordInput prefix={<IconLock />} placeholder="6-20 位" autoComplete="new-password" disabled={busy} />
               </Form.Item>
-              <Form.Item label="确认新密码" field="confirm" rules={[{ required: true, message: '请再次输入新密码' }]}>
+              <Form.Item label="确认新密码" field="confirm" dependencies={['newPassword']} rules={[{ required: true, message: '请再次输入新密码' }, confirmPasswordRule(passwordForm)]}>
                 <PasswordInput prefix={<IconLock />} placeholder="请再次输入新密码" autoComplete="new-password" disabled={busy} />
               </Form.Item>
               <Button className="profile-submit" type="primary" htmlType="submit" loading={passwordLoading} disabled={busy}>

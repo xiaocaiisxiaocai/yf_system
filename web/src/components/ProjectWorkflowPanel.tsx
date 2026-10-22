@@ -3,19 +3,26 @@ import {
   Button, Form, Input, Message, Modal, Popconfirm, Space, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconCheckCircle, IconCloseCircle, IconPlayArrow, IconStop, IconUndo } from '@arco-design/web-react/icon'
-import http, { getApiErrorCode } from '../api/client'
+import http, { type QuietRequestConfig } from '../api/client'
+import { isVersionConflict } from '../api/versionConflict'
 import { type Project, PROJECT_STATUS } from '../api/types'
 import { useAuth } from '../store/auth'
 import type { ApiResponses } from '../api/types'
+import ActiveUploadSessions from './ActiveUploadSessions'
 
 interface Props {
   project: Project
   onChanged: () => void
   compact?: boolean
+  /** 提交或终止失败后通知父组件刷新文件区的活动上传列表。 */
+  onWriteFailed?: () => void
+  uploadRefresh?: number
 }
 
 /** 项目级流程操作；所有按钮只表达当前状态允许的命令，最终权限仍由后端校验。 */
-export default function ProjectWorkflowPanel({ project, onChanged, compact = false }: Props) {
+export default function ProjectWorkflowPanel({
+  project, onChanged, compact = false, onWriteFailed, uploadRefresh = 0,
+}: Props) {
   const { hasPerm, user } = useAuth()
   const [rejectOpen, setRejectOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -24,6 +31,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
   const withdrawSubmissionRef = useRef<number | null>(project.latestSubmissionId ?? null)
   const [rejectSubmissionId, setRejectSubmissionId] = useState<number | null>(null)
   const [rejectForm] = Form.useForm()
+  const [localUploadRefresh, setLocalUploadRefresh] = useState(0)
 
   const beginAction = () => {
     if (busyRef.current) return false
@@ -35,17 +43,10 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
     busyRef.current = false
     setBusy(false)
   }
-  const refreshAfterVersionConflict = (error: unknown, closeReject = false) => {
-    if (getApiErrorCode(error) !== 40901) return false
-    if (closeReject) {
-      rejectForm.resetFields()
-      setRejectSubmissionId(null)
-      setRejectOpen(false)
-    }
-    onChanged()
-    return true
+  const noteWriteFailure = () => {
+    setLocalUploadRefresh((value) => value + 1)
+    onWriteFailed?.()
   }
-
   const isInternal = user?.userType === 'INTERNAL'
   const isSupplier = user?.userType === 'SUPPLIER'
   const canStatus = isInternal && hasPerm('project:status')
@@ -61,8 +62,10 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
         ? (project.status === 'TERMINATED' ? '项目已重新开始' : '项目已开始')
         : '项目已终止')
       onChanged()
-    } catch {
-      // 响应拦截器已提示错误；这里只需恢复按钮，允许原地重试。
+    } catch (error) {
+      // 终止失败时刷新活动上传。只有 40903 才刷新项目；40901 保持当前画面以便重试。
+      if (status === 'TERMINATED') noteWriteFailure()
+      if (isVersionConflict(error)) onChanged()
     } finally {
       finishAction()
     }
@@ -74,6 +77,9 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
       await http.post<ApiResponses['POST /projects/{id}/submit']>(`/projects/${project.id}/submit`, { confirmSide: 'COMPANY' })
       Message.success('项目已提交公司验收')
       onChanged()
+    } catch (error) {
+      noteWriteFailure()
+      if (isVersionConflict(error)) onChanged()
     } finally {
       finishAction()
     }
@@ -91,7 +97,8 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
       Message.success('公司验收已通过')
       onChanged()
     } catch (error) {
-      if (!refreshAfterVersionConflict(error)) throw error
+      if (!isVersionConflict(error)) throw error
+      onChanged()
     } finally {
       finishAction()
     }
@@ -116,7 +123,23 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
       setRejectOpen(false)
       onChanged()
     } catch (error) {
-      if (!refreshAfterVersionConflict(error, true)) throw error
+      if (!isVersionConflict(error)) throw error
+      // 保留驳回原因：仍待验收则改用最新的申请编号；已不在待验收则关闭弹窗。
+      onChanged()
+      try {
+        const response = await http.get<ApiResponses['GET /projects/{id}']>(`/projects/${project.id}`, { quietClientError: true } as QuietRequestConfig)
+        const latest = response.data
+        if (latest.status === 'PENDING_CONFIRMATION' && latest.latestSubmissionId) {
+          setRejectSubmissionId(latest.latestSubmissionId)
+          Message.info('验收申请已更新，请确认原因后再次提交')
+          return
+        }
+      } catch {
+        // 读取失败时按已不可驳回处理。
+      }
+      rejectForm.resetFields()
+      setRejectSubmissionId(null)
+      setRejectOpen(false)
     } finally {
       finishAction()
     }
@@ -134,7 +157,8 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
       Message.success('已撤回验收申请')
       onChanged()
     } catch (error) {
-      if (!refreshAfterVersionConflict(error)) throw error
+      if (!isVersionConflict(error)) throw error
+      onChanged()
     } finally {
       finishAction()
     }
@@ -146,7 +170,14 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
     || (canSubmit && project.status === 'IN_PROGRESS')
     || (isPending && (canConfirm || canWithdraw))
 
-  if (compact && !showActions && !isPending && !(project.status === 'IN_PROGRESS' && project.rejectReason)) return null
+  const uploadHint = (
+    <ActiveUploadSessions
+      compact
+      projectId={project.id}
+      refreshToken={uploadRefresh + localUploadRefresh}
+    />
+  )
+  if (compact && !showActions && !isPending && !(project.status === 'IN_PROGRESS' && project.rejectReason)) return uploadHint
 
   return (
     <div className={`project-workflow${compact ? ' project-workflow--compact' : ''}`} aria-label="项目流程操作">
@@ -158,6 +189,7 @@ export default function ProjectWorkflowPanel({ project, onChanged, compact = fal
             {project.status === 'IN_PROGRESS' && project.rejectReason && (
               <Typography.Text type="secondary" title={project.rejectReason}>上次驳回：{project.rejectReason}</Typography.Text>
             )}
+            {uploadHint}
           </div>
         </div>
         {isPending && (

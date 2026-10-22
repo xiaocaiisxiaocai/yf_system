@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState } from 'react'
 import { Alert, Button, Card, Form, Input, InputNumber, Message, Select, Space, Spin, Switch, Table, Tabs, Typography } from '@arco-design/web-react'
 import { fmtTime } from '../../../api/types'
+import { isVersionConflict } from '../../../api/versionConflict'
+import { oemRequestError } from '../../api/requestError'
 import type { AuditRow, RetentionTemplate, SettingItem } from '../../api/types'
 import { useCan, useOem } from '../../OemContext'
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
@@ -30,24 +32,27 @@ export function RetentionPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const savingRef = useRef(false)
+  const beginRequest = useLatestRequest()
   const [form] = Form.useForm()
   const mode = Form.useWatch('mode', form) as RetentionTemplate['mode'] | undefined
 
   const load = useCallback(async () => {
+    const isLatest = beginRequest()
     setLoading(true)
     setError('')
     try {
       const rows = await api.retentionTemplates()
+      if (!isLatest()) return
       const active = rows.filter((row) => row.status === 'ACTIVE').sort((a, b) => a.id - b.id)[0] ?? null
       setCurrent(active)
       form.resetFields()
       form.setFieldsValue(active ?? { mode: 'KEEP' })
-    } catch {
-      setError('删除策略加载失败，请重试')
+    } catch (cause) {
+      if (isLatest()) setError(oemRequestError(cause, '删除策略加载失败，请重试'))
     } finally {
-      setLoading(false)
+      if (isLatest()) setLoading(false)
     }
-  }, [api, form])
+  }, [api, form, beginRequest])
   useLoadEffect(load)
 
   const save = async () => {
@@ -70,8 +75,14 @@ export function RetentionPage() {
       Message.success('统一策略已保存，仅影响之后提交的文件')
     } catch (cause) {
       // Form validation already marks the invalid field; API failures must keep the user's edits.
-      const response = (cause as { response?: { data?: { message?: string } } })?.response
-      if (response || cause instanceof Error) setError(response?.data?.message ?? '保存失败，请重试')
+      // 40903 只更新版本号。load() 会重置表单，不能用来刷新这次冲突。
+      if (isVersionConflict(cause) && current) {
+        const rows = await api.retentionTemplates().catch(() => null)
+        const active = rows?.filter((row) => row.status === 'ACTIVE').sort((a, b) => a.id - b.id)[0]
+        if (active && active.id === current.id) setCurrent((previous) => previous ? { ...previous, version: active.version } : previous)
+      }
+      const response = (cause as { response?: unknown })?.response
+      if (response || cause instanceof Error) setError(oemRequestError(cause, '保存失败，请重试'))
     } finally {
       savingRef.current = false
       setSaving(false)

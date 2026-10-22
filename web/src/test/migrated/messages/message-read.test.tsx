@@ -115,6 +115,22 @@ describe('留言可见后标记已读', () => {
     await waitFor(() => expect(messageMocks.post).toHaveBeenCalledTimes(1))
   })
 
+  it('an inactive panel does not mark messages read until it becomes active', async () => {
+    messageMocks.get.mockImplementation(async (url: string) => url === '/projects/1/messages'
+      ? messagePage([messageRow(7, { readByMe: false })])
+      : { data: { readers: [{ userId: 9 }], unread: [] } })
+    messageMocks.post.mockResolvedValue({ data: {} })
+    const view = renderMessagePanel({ active: false })
+    await screen.findByText('留言 7')
+    const observed = IntersectionObserverMock.instances.filter(instance => !instance.disconnected && instance.nodes.length > 0)
+    expect(observed).toHaveLength(0)
+    expect(messageMocks.post).not.toHaveBeenCalled()
+
+    view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" active />)
+    await intersectUnread()
+    await waitFor(() => expect(messageMocks.post).toHaveBeenCalledTimes(1))
+  })
+
   it('a late receipt from the previous project cannot overwrite the current project', async () => {
     const oldReceipt = deferred<{ data: { readers: Array<{ userId: number }>; unread: never[] } }>()
     messageMocks.get.mockImplementation(async (url: string) => {

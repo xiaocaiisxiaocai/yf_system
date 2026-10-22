@@ -90,14 +90,15 @@ export function useProjectCopyJobs(
   const requestRef = useRef<{ sequence: number; controller: AbortController } | null>(null)
   const sequenceRef = useRef(0)
   const upsertVersionRef = useRef(0)
+  const readyRef = useRef(false)
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (background = false) => {
     if (!enabled || requestRef.current) return
     const sequence = ++sequenceRef.current
     const upsertVersion = upsertVersionRef.current
     const controller = new AbortController()
     requestRef.current = { sequence, controller }
-    dispatch({ type: 'loading' })
+    if (!background && !readyRef.current) dispatch({ type: 'loading' })
     try {
       const response = await listProjectCopyJobs(groupId, controller.signal)
       if (controller.signal.aborted || sequence !== sequenceRef.current) return
@@ -106,11 +107,14 @@ export function useProjectCopyJobs(
       // POST upsert 后，忽略开始于旧快照的迟到列表；下一轮轮询再以服务端
       // 的完整结果为权威，避免旧响应覆盖刚接受的任务。
       if (upsertVersionRef.current !== upsertVersion) return
+      readyRef.current = true
       dispatch({ type: 'success', jobs: next })
     } catch (requestError) {
       if (controller.signal.aborted || sequence !== sequenceRef.current || isCopyJobAbort(requestError)) return
       if (upsertVersionRef.current !== upsertVersion) return
-      dispatch({ type: 'error', accessDenied: isCopyJobAccessError(requestError) })
+      const accessDenied = isCopyJobAccessError(requestError)
+      if (accessDenied) readyRef.current = false
+      dispatch({ type: 'error', accessDenied })
     } finally {
       if (sequence === sequenceRef.current) {
         requestRef.current = null
@@ -123,6 +127,7 @@ export function useProjectCopyJobs(
     requestRef.current?.controller.abort()
     requestRef.current = null
     upsertVersionRef.current = 0
+    readyRef.current = false
     dispatch({ type: 'reset', scopeKey, enabled })
     if (!enabled) return undefined
     void refresh()
@@ -139,8 +144,32 @@ export function useProjectCopyJobs(
   const active = jobs.some(isCopyJobActive)
   useEffect(() => {
     if (!ready || !active) return undefined
-    const timer = window.setInterval(() => { void refresh() }, COPY_JOB_POLL_INTERVAL_MS)
-    return () => window.clearInterval(timer)
+    let timer: number | undefined
+    const hidden = () => document.visibilityState === 'hidden'
+    const stopTimer = () => {
+      if (timer === undefined) return
+      window.clearInterval(timer)
+      timer = undefined
+    }
+    const arm = () => {
+      stopTimer()
+      if (hidden()) return
+      timer = window.setInterval(() => { void refresh(true) }, COPY_JOB_POLL_INTERVAL_MS)
+    }
+    const onVisibility = () => {
+      if (hidden()) {
+        stopTimer()
+        return
+      }
+      void refresh(true)
+      arm()
+    }
+    arm()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      stopTimer()
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [active, ready, refresh])
 
   const upsert = useCallback((job: ProjectCopyJob) => {

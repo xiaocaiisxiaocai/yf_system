@@ -4,7 +4,7 @@ import { IconLock, IconUser } from '@arco-design/web-react/icon'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import AuthShell from '../../../components/AuthShell'
 import PasswordInput from '../../../components/PasswordInput'
-import { passwordRule } from '../../../utils/password'
+import { confirmPasswordRule, passwordRule } from '../../../utils/password'
 import type { ApiResponses } from '../../api/types'
 import { bootPortalSession, portalHttp, portalLogin, PORTAL_BASE, usePortalAuth, usePortalSessionSync } from '../../api/portalSession'
 
@@ -52,14 +52,11 @@ export function PortalChangePasswordPage() {
   usePortalSessionSync()
   const navigate = useNavigate()
   const { booted, token, mustChangePassword } = usePortalAuth()
+  const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   useEffect(() => { void bootPortalSession() }, [])
 
   const submit = async (values: { oldPassword: string; newPassword: string; confirm: string }) => {
-    if (values.newPassword !== values.confirm) {
-      Message.error('两次输入的新密码不一致')
-      return
-    }
     setLoading(true)
     try {
       await portalHttp.put<ApiResponses['PUT /oem/auth/password']>('/oem/auth/password', { oldPassword: values.oldPassword, newPassword: values.newPassword })
@@ -84,14 +81,14 @@ export function PortalChangePasswordPage() {
 
   return (
     <AuthShell brand={OEM_BRAND} title={mustChangePassword ? '首次登录请修改密码' : '修改密码'}>
-      <Form className="auth-form" layout="vertical" onSubmit={submit}>
+      <Form className="auth-form" form={form} layout="vertical" onSubmit={submit}>
         <Form.Item field="oldPassword" label="当前密码" rules={[{ required: true, message: '请输入当前密码' }]}>
           <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入当前密码" aria-label="当前密码" autoComplete="current-password" disabled={loading} />
         </Form.Item>
         <Form.Item field="newPassword" label="新密码" rules={[{ required: true, message: '请输入新密码' }, passwordRule]}>
-          <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入新密码（6–20 位）" aria-label="新密码" autoComplete="new-password" disabled={loading} />
+          <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入新密码（6-20 位）" aria-label="新密码" autoComplete="new-password" disabled={loading} />
         </Form.Item>
-        <Form.Item field="confirm" label="确认新密码" rules={[{ required: true, message: '请再次输入新密码' }]}>
+        <Form.Item field="confirm" label="确认新密码" dependencies={['newPassword']} rules={[{ required: true, message: '请再次输入新密码' }, confirmPasswordRule(form)]}>
           <PasswordInput size="large" prefix={<IconLock />} placeholder="请再次输入新密码" aria-label="确认新密码" autoComplete="new-password" disabled={loading} />
         </Form.Item>
         <Button type="primary" size="large" long htmlType="submit" loading={loading}>保存</Button>

@@ -25,6 +25,26 @@ interface Filters {
 
 const EMPTY_FILTERS: Filters = { keyword: '', range: [] }
 
+/** Clipboard API 只在 HTTPS/localhost 可用；HTTP 部署时退回隐藏文本框 + execCommand。 */
+async function writeClipboardText(text: string) {
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  try {
+    textarea.select()
+    if (!document.execCommand('copy')) throw new Error('copy command rejected')
+  } finally {
+    textarea.remove()
+  }
+}
+
 function actionMeta(action: string) {
   return ACTIONS[action] || { label: action, categoryCode: '', categoryLabel: '其他', color: 'gray' }
 }
@@ -80,7 +100,7 @@ function AuditDetail({ row }: { row: AuditLogRow }) {
     || collections.removedMembers.length > 0
 
   const copyRaw = async () => {
-    const success = await copySafeDetail(row.detail, navigator.clipboard?.writeText?.bind(navigator.clipboard))
+    const success = await copySafeDetail(row.detail, writeClipboardText)
     if (success) {
       setCopied(true)
       Message.success('原始数据已复制')

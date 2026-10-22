@@ -45,7 +45,7 @@ const {assert,OUT,s,f,save,record,login,api,track}=require(process.env.YF_BROWSE
   await c.storageState({path:OUT+'/member.storage.private.json'});
  });
  await record('内部员工隐藏管理菜单且无权限直达不会泄露管理数据',async()=>{
-  assert.equal(await p.getByRole('menuitem',{name:'角色权限',exact:true}).count(),0);
+  assert.equal(await p.getByRole('menuitem',{name:'角色与权限',exact:true}).count(),0);
   await p.goto(s.base+'/rbac/roles');await p.waitForURL(s.base+'/');
   await api(c,'GET','/admin/roles',undefined,u.token,403);
  });

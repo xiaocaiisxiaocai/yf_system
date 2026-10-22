@@ -366,6 +366,7 @@ export function startCollaborationPolling(): () => void {
       void poller.refresh()
     }, EVENT_REFRESH_DELAY_MS + Math.floor(Math.random() * EVENT_REFRESH_JITTER_MS))
   }
+  let readySessionKey: string | null = null
   const stop = startProjectRealtime({
     getSession: () => { const session = currentPollSession(); return { ...session, key: session.key ?? '' } },
     getAccessToken: getRealtimeAccessToken,
@@ -375,7 +376,11 @@ export function startCollaborationPolling(): () => void {
       if (realtimeStatus !== 'connected') void poller.refresh()
     },
     onReady: () => {
-      useCollaboration.setState((state) => ({ reconnectRevision: state.reconnectRevision + 1 }))
+      const sessionKey = currentPollSession().key
+      if (sessionKey && sessionKey === readySessionKey) {
+        useCollaboration.setState((state) => ({ reconnectRevision: state.reconnectRevision + 1 }))
+      }
+      readySessionKey = sessionKey
       void poller.refresh()
     },
     onEvent: ({ projectId, kind }) => {

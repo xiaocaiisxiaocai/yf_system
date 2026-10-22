@@ -402,6 +402,42 @@ describe('auth client migration', () => {
     expect(loaded.harness.replays.every((item) => item._retried && item.headers.Authorization === 'Bearer new-token')).toBe(true)
   })
 
+  it('a refresh for a different user does not replay the original request', async () => {
+    const loaded = await loadClient()
+    seedSession(loaded.auth, 'old-token', 7, 4)
+    loaded.harness.axios.post.mockResolvedValue({ data: completeRefreshPayload('switched-token', 9) })
+    const config = loaded.harness.requestHandlers[0]({ url: '/projects', method: 'GET', headers: {} })
+    await expect(loaded.harness.responseFailures[0]({
+      config, response: { status: 401 }, message: 'expired',
+    })).rejects.toMatchObject({ response: { status: 401 } })
+    expect(loaded.harness.replays).toEqual([])
+    expect(loaded.harness.axios.post).toHaveBeenCalledOnce()
+    expect(loaded.auth.useAuth.getState()).toMatchObject({
+      token: 'switched-token',
+      user: { id: 9 },
+      generation: 5,
+    })
+  })
+
+  it('keeps an explicit logout bearer when the generation matches the session after logout', async () => {
+    const loaded = await loadClient()
+    seedSession(loaded.auth, 'captured-token', 7, 4)
+    loaded.auth.useAuth.getState().logout()
+    const generation = loaded.auth.useAuth.getState().generation
+    expect(generation).toBe(5)
+    const kept = loaded.harness.requestHandlers[0]({
+      url: '/auth/logout',
+      headers: { Authorization: 'Bearer captured-token' },
+      authGeneration: generation,
+    })
+    expect(kept.headers.Authorization).toBe('Bearer captured-token')
+    expect(() => loaded.harness.requestHandlers[0]({
+      url: '/auth/logout',
+      headers: { Authorization: 'Bearer captured-token' },
+      authGeneration: 4,
+    })).toThrow('登录状态已变化，请重新操作')
+  })
+
   it('an internal-client 401 cannot refresh, clear or redirect the OEM portal session', async () => {
     const loaded = await loadClient()
     seedSession(loaded.auth, 'internal-token', 7, 4)
@@ -520,6 +556,9 @@ describe('auth client migration', () => {
   it('preserves numeric API error codes and accepts only safe relative login return paths', async () => {
     const loaded = await loadClient()
     expect(loaded.client.getApiErrorCode({ isAxiosError: true, response: { data: { code: 40901 } } })).toBe(40901)
+    expect(loaded.client.isVersionConflict({ isAxiosError: true, response: { data: { code: 40903 } } })).toBe(true)
+    expect(loaded.client.isVersionConflict({ isAxiosError: true, response: { data: { code: 40901 } } })).toBe(false)
+    expect(loaded.client.isVersionConflict({ response: { data: { code: 40903 } } })).toBe(false)
     expect(loaded.client.isSafeLoginReturnPath('/projects/7?tab=messages')).toBe(true)
     expect(loaded.client.isSafeLoginReturnPath('//external.invalid')).toBe(false)
     expect(loaded.client.isSafeLoginReturnPath('/projects\\7')).toBe(false)

@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react'
+
 export interface ColumnLayoutSpec {
   key: string
   title: string
@@ -84,7 +86,7 @@ export function withColumnWidth(layout: ColumnLayout, specs: readonly ColumnLayo
   return { hidden: layout.hidden, widths }
 }
 
-/** 表格外框的可用寬度。表體在列總寬較小時會跟著列縮回去，不能拿它當容器寬度。 */
+/** 表格外框的可用宽度。表体在列总宽较小时会跟着列缩回去，不能拿它当容器宽度。 */
 export function measureTableWidth(host: HTMLElement | null) {
   if (!host) return 0
   const container = host.querySelector<HTMLElement>('.arco-table-container')
@@ -94,7 +96,7 @@ export function measureTableWidth(host: HTMLElement | null) {
   return Math.max(0, available - scrollbar)
 }
 
-/** 容器比各列寬度合計更寬時，指定列保持原寬，其餘列平分多出的寬度。 */
+/** 容器比各列宽度合计更宽时，指定列保持原宽，其余列平分多出的宽度。 */
 export function withFlexibleColumn<T extends { key: string; width: number }>(
   columns: readonly T[],
   containerWidth: number,
@@ -118,6 +120,45 @@ export function withFlexibleColumn<T extends { key: string; width: number }>(
   return columns.map((column) => {
     const extra = extras.get(column.key) ?? 0
     return extra > 0 ? { ...column, width: column.width + extra } : column
+  })
+}
+
+/** 正式环境里未知列没有有效宽度时使用，避免固定表格把该列压成不可见。 */
+export const UNKNOWN_COLUMN_FALLBACK_WIDTH = 160
+
+function finiteWidth(column: object) {
+  if ('width' in column && typeof column.width === 'number' && Number.isFinite(column.width)) return column.width
+  return undefined
+}
+
+/**
+ * 开发环境对不上列配置时抛错。正式环境记下同一句说明后降级：
+ * 未知列保留原字段，没有有效宽度时改用 UNKNOWN_COLUMN_FALLBACK_WIDTH；标题不一致时改用规格标题，隐藏规则不变。
+ */
+export function applyColumnLayout<T extends { key: string; title?: ReactNode }>(
+  columns: readonly T[],
+  specs: readonly ColumnLayoutSpec[],
+  layout: ColumnLayout,
+  fatal: boolean,
+): Array<T & { width: number }> {
+  return columns.flatMap((column): Array<T & { width: number }> => {
+    const spec = specs.find((item) => item.key === column.key)
+    if (!spec) {
+      const message = `缺少列配置：${column.key}`
+      if (fatal) throw new Error(message)
+      console.error(message)
+      return [Object.assign({}, column, { width: finiteWidth(column) ?? UNKNOWN_COLUMN_FALLBACK_WIDTH })]
+    }
+    if (typeof column.title === 'string' && column.title !== spec.title) {
+      const message = `列标题不一致：${column.key}`
+      if (fatal) throw new Error(message)
+      console.error(message)
+    }
+    if (!spec.locked && layout.hidden.includes(column.key)) return []
+    return [Object.assign({}, column, {
+      title: spec.title,
+      width: layout.widths[column.key] ?? spec.defaultWidth,
+    })]
   })
 }
 

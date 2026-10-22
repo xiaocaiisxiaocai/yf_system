@@ -1,11 +1,12 @@
 import { useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Card, Table, Tag } from '@arco-design/web-react'
+import { Alert, Button, Card, Table, Tag } from '@arco-design/web-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { fmtTime } from '../../api/types'
 import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
 import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
+import { oemRequestError } from '../api/requestError'
 import type { PendingTask } from '../api/types'
 import { useOem } from '../OemContext'
 
@@ -59,6 +60,11 @@ export default function ApprovalInboxPage() {
         onReset={table.reset}
       />
     )}>
+      {approvals.isError && (
+        <Alert type="error" style={{ marginBottom: 12 }}
+          content={oemRequestError(approvals.error, '待审批列表加载失败，请重试')}
+          action={<Button size="small" loading={approvals.isFetching} onClick={() => void approvals.refetch()}>重试</Button>} />
+      )}
       <ColumnResizeProvider actions={table.actions}>
         <div ref={tableHostRef} className={table.hostClassName}>
           <Table

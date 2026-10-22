@@ -55,7 +55,7 @@ describe('Dictionaries migrated behavior', () => {
     const dialog = await screen.findByRole('dialog')
     const name = within(dialog).getByPlaceholderText('优先级')
     await user.type(name, ' 紧急 ')
-    const save = within(dialog).getByRole('button', { name: '保存' })
+    const save = within(dialog).getByRole('button', { name: '创建优先级' })
 
     fireEvent.click(save)
     fireEvent.click(save)
@@ -88,7 +88,7 @@ describe('Dictionaries migrated behavior', () => {
     await user.click(document.querySelector<HTMLButtonElement>('.dictionary-add')!)
     const dialog = await screen.findByRole('dialog')
     await user.type(within(dialog).getByPlaceholderText('Robot 类型'), ' 六轴 ')
-    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+    await user.click(within(dialog).getByRole('button', { name: '创建Robot 类型' }))
     await waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/project-dictionaries', expect.objectContaining({
       type: 'ROBOT_TYPE',
       name: '六轴',

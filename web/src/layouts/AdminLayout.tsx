@@ -19,8 +19,9 @@ import {
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../store/auth'
-import http, { withAuthLock } from '../api/client'
+import http, { withAuthLock, type QuietRequestConfig } from '../api/client'
 import CollaborationNotifications from '../components/CollaborationNotifications'
+import RouteErrorBoundary from '../components/RouteErrorBoundary'
 import type { ApiResponses } from '../api/types'
 import { OemEntryButton } from '../oem/layouts/OemLayouts'
 import { OEM_UI_ENABLED } from '../features'
@@ -33,7 +34,7 @@ const MENU_ITEMS = [
   { code: 'supplier:list', path: '/suppliers', label: '供应商管理', icon: <IconUserGroup /> },
   { code: 'org:user', path: '/org/users', label: '用户管理', icon: <IconUser /> },
   { code: 'org:dept', path: '/org/depts', label: '组织架构', icon: <IconMindMapping /> },
-  { code: 'rbac:role', path: '/rbac/roles', label: '角色权限', icon: <IconSafe /> },
+  { code: 'rbac:role', path: '/rbac/roles', label: '角色与权限', icon: <IconSafe /> },
   { code: 'log:audit', path: '/logs', label: '操作日志', icon: <IconHistory /> },
   { code: 'system:config', path: '/system/config', label: '系统参数', icon: <IconSettings /> },
   { code: 'system:dict', path: '/system/dictionaries', label: '数据字典', icon: <IconBook /> },
@@ -75,16 +76,29 @@ export default function AdminLayout() {
       .map((m) => m.path)
       .slice(0, 1) || []
 
-  const doLogout = async () => {
-    await withAuthLock(async () => {
-    try {
-      await http.post<ApiResponses['POST /auth/logout']>('/auth/logout')
-    } catch {
-      /* 忽略 */
-    }
+  const doLogout = () => {
+    // 本地先退出。服务端登出同时认 refresh cookie（Path=/api/v1/auth，浏览器自动附带）
+    // 和 Authorization。cookie 读不到，访问令牌必须在清空 store 之前留下，并显式放进请求。
+    // authGeneration 用退出后的代际，避免请求拦截器把这次登出当成过期会话丢掉；
+    // 若期间已经重新登录，代际再变，则不再发送，免得清掉新的 refresh cookie。
+    const accessToken = useAuth.getState().token
     logout()
-    })
+    const generationAfterLogout = useAuth.getState().generation
     nav('/login')
+    void withAuthLock(async () => {
+      if (useAuth.getState().generation !== generationAfterLogout) return
+      try {
+        const config: QuietRequestConfig = {
+          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+          authGeneration: generationAfterLogout,
+        }
+        await http.post<ApiResponses['POST /auth/logout']>('/auth/logout', null, config)
+      } catch {
+        /* 服务端登出失败不阻止本地退出 */
+      }
+    }).catch(() => {
+      /* 锁失败也不影响已经完成的本地退出 */
+    })
   }
 
   const toggleSider = () => {
@@ -197,7 +211,9 @@ export default function AdminLayout() {
             content="当前账号尚未分配菜单权限。你仍可通过右上角账号菜单维护个人资料、修改密码或退出登录。"
             style={{ marginBottom: 16 }}
           />}
-          <Outlet />
+          <RouteErrorBoundary>
+            <Outlet />
+          </RouteErrorBoundary>
         </Content>
       </Layout>
       {hasMenus && <Drawer

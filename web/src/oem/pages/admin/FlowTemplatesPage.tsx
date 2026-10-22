@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Alert, Button, Card, Checkbox, Empty, Form, Input, Message, Modal, Select, Space, Switch, Tag, TreeSelect, Typography,
+  Alert, Button, Card, Checkbox, Empty, Form, Input, Message, Modal, Select, Space, Spin, Switch, Tag, TreeSelect, Typography,
 } from '@arco-design/web-react'
 import { IconDelete, IconPlus } from '@arco-design/web-react/icon'
+import { isVersionConflict } from '../../../api/versionConflict'
+import { oemRequestError } from '../../api/requestError'
 import type { DepartmentNode, FlowNode, FlowNodeInput, FlowTemplate, RoutingPreview } from '../../api/types'
 import { useOem } from '../../OemContext'
-import { useLoadEffect } from '../../useLoadEffect'
+import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 
 const SOURCES = [
   { value: 'SECTION_LEADER', label: '课别主管' },
@@ -23,8 +25,17 @@ interface Person { id: number; employeeNo: string | null; realName: string | nul
 
 function PeoplePicker({ value, onChange }: { value: Person[]; onChange: (next: Person[]) => void }) {
   const { api } = useOem()
+  const beginSearch = useLatestRequest()
   const [options, setOptions] = useState<Person[]>([])
-  const search = useCallback(async (keyword: string) => setOptions(await api.approverOptions(keyword)), [api])
+  const search = useCallback(async (keyword: string) => {
+    const isLatest = beginSearch()
+    try {
+      const next = await api.approverOptions(keyword)
+      if (isLatest()) setOptions(next)
+    } catch {
+      // The HTTP layer already reported the failure. Keep the options already shown.
+    }
+  }, [api, beginSearch])
   const loadInitial = useCallback(() => search(''), [search])
   useLoadEffect(loadInitial)
   const known = [...value, ...options.filter((option) => !value.some((item) => item.id === option.id))]
@@ -55,8 +66,10 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
   const [active, setActive] = useState((existing?.status ?? 'ACTIVE') === 'ACTIVE')
   const [nodes, setNodes] = useState<EditableNode[]>(existing ? existing.nodes.map((node) => ({ ...node, key: ++nodeKey })) : [blankNode()])
   const [scopes, setScopes] = useState<string[]>(existing?.scopes.map((scope) => String(scope.id)) ?? [])
+  const [version, setVersion] = useState(existing?.version ?? 0)
   const [tree, setTree] = useState<ReturnType<typeof toTree>>([])
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
 
   useEffect(() => { void api.departments().then((list) => setTree(toTree(list))) }, [api])
 
@@ -70,6 +83,8 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
   }))
 
   const save = async () => {
+    if (savingRef.current) return
+    savingRef.current = true
     setSaving(true)
     try {
       const departmentIds = scopes.map(Number)
@@ -77,18 +92,28 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
         await api.createFlowTemplate({ name, isDefault, nodes: inputs(), departmentIds })
       } else {
         await api.updateFlowTemplateDefinition(existing.id, {
-          name, status: active ? 'ACTIVE' : 'DISABLED', isDefault, nodes: inputs(), departmentIds, version: existing.version,
+          name, status: active ? 'ACTIVE' : 'DISABLED', isDefault, nodes: inputs(), departmentIds, version,
         })
       }
       Message.success('审批模板已保存，仅影响之后发送的传递单')
       onSaved()
+    } catch (error) {
+      // 40901 只保留编辑器。40903 改用最新版本号，名称、节点和组织选择不动。
+      if (existing && isVersionConflict(error)) {
+        const list = await api.flowTemplates().catch(() => null)
+        const fresh = list?.find((item) => item.id === existing.id)
+        if (fresh) setVersion(fresh.version)
+      }
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
 
   return (
-    <Modal title={existing ? `编辑审批模板：${existing.name}` : '新建审批模板'} visible style={{ width: 860 }} onCancel={onClose} onOk={save} confirmLoading={saving}>
+    <Modal title={existing ? `编辑审批模板：${existing.name}` : '新建审批模板'} visible style={{ width: 860 }}
+      confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving}
+      cancelButtonProps={{ disabled: saving }} onCancel={() => { if (!saving) onClose() }} onOk={save}>
       <Space direction="vertical" style={{ width: '100%' }} size={12}>
         <Space>
           <Input style={{ width: 280 }} placeholder="模板名称" value={name} onChange={setName} maxLength={64} />
@@ -142,14 +167,33 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
 
 function RoutingPreviewCard() {
   const { api } = useOem()
+  const beginSearch = useLatestRequest()
+  const beginPreview = useLatestRequest()
   const [users, setUsers] = useState<{ id: number; employeeNo: string; realName: string; departmentName: string | null }[]>([])
   const [result, setResult] = useState<RoutingPreview | null>(null)
-  const search = async (keyword: string) => setUsers(await api.internalUsers(keyword))
+  const search = async (keyword: string) => {
+    const isLatest = beginSearch()
+    try {
+      const next = await api.internalUsers(keyword)
+      if (isLatest()) setUsers(next)
+    } catch {
+      // Keep the previous options. The HTTP layer already reported the failure.
+    }
+  }
+  const preview = async (userId: number) => {
+    const isLatest = beginPreview()
+    try {
+      const next = await api.previewRouting(userId)
+      if (isLatest()) setResult(next)
+    } catch {
+      // Keep the previous preview. The HTTP layer already reported the failure.
+    }
+  }
   return (
     <Card title="审批路径预览" style={{ marginTop: 16 }}>
       <Select showSearch filterOption={false} style={{ width: 360 }} placeholder="选择一名员工，查看其发送时的审批路径"
         onSearch={(keyword) => void search(keyword)} onFocus={() => void search('')}
-        onChange={async (userId: number) => setResult(await api.previewRouting(userId))}
+        onChange={(userId: number) => void preview(userId)}
         options={users.map((user) => ({ value: user.id, label: `${user.realName}（${user.employeeNo}）${user.departmentName ? ' · ' + user.departmentName : ''}` }))} />
       {result && (result.ok ? (
         <div style={{ marginTop: 12 }}>
@@ -173,14 +217,31 @@ export default function FlowTemplatesPage() {
   const { api } = useOem()
   const [templates, setTemplates] = useState<FlowTemplate[]>([])
   const [editing, setEditing] = useState<FlowTemplate | 'new' | null>(null)
-  const load = useCallback(async () => setTemplates(await api.flowTemplates()), [api])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      setTemplates(await api.flowTemplates())
+    } catch (cause) {
+      setError(oemRequestError(cause, '审批模板加载失败，请重试'))
+    } finally {
+      setLoading(false)
+    }
+  }, [api])
   useLoadEffect(load)
 
   return (
     <div>
       <Card title="审批模板" extra={<Button type="primary" icon={<IconPlus />} onClick={() => setEditing('new')}>新建模板</Button>}>
         <Typography.Paragraph type="secondary">事业部、部门和课别主管统一在协作平台的“组织架构”中维护。</Typography.Paragraph>
-        {templates.length === 0 && <Empty />}
+        {error && (
+          <Alert type="error" style={{ marginBottom: 12 }} content={error}
+            action={<Button size="small" loading={loading} onClick={() => void load()}>重试</Button>} />
+        )}
+        <Spin loading={loading} style={{ display: 'block' }}>
+        {!loading && !error && templates.length === 0 && <Empty />}
         <Space direction="vertical" style={{ width: '100%' }}>
           {templates.map((template) => (
             <Card key={template.id} size="small" hoverable onClick={() => setEditing(template)} title={
@@ -188,13 +249,14 @@ export default function FlowTemplatesPage() {
                 {template.status !== 'ACTIVE' && <Tag>已停用</Tag>}</Space>
             }>
               <div>节点：{template.nodes.map((node) => `${node.name}${node.enabled ? '' : '（关闭）'}`).join(' → ')}</div>
-              <div>适用组织：{template.scopes.length ? template.scopes.map((scope) => scope.name).join('、') : '—'}</div>
+              <div>适用组织：{template.scopes.length ? template.scopes.map((scope) => scope.name).join('、') : '-'}</div>
               {template.nodes.some((node) => [...node.approvers, ...node.fallbacks].some((person) => !person.eligible)) && (
                 <Alert type="warning" style={{ marginTop: 8 }} content="有审批人已停用或失去 OEM 审批权限，相关发送会失败，请调整。" />
               )}
             </Card>
           ))}
         </Space>
+        </Spin>
       </Card>
       <RoutingPreviewCard />
       {editing && <TemplateEditor template={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void load() }} />}

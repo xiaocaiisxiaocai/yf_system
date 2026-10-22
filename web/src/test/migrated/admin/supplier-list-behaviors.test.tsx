@@ -344,9 +344,13 @@ describe('供应商与分页列表行为', () => {
     await openAccounts(user)
     const accountRow = (await screen.findByText('supplier-12')).closest('tr')!
     const disableAccount = within(accountRow).getByRole('button', { name: '禁用' })
-    fireEvent.click(disableAccount); fireEvent.click(disableAccount)
+    fireEvent.click(disableAccount)
+    const confirmAccount = await screen.findByRole('button', { name: '确定' })
+    fireEvent.click(confirmAccount)
+    fireEvent.click(confirmAccount)
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(2))
     accountPending.resolve({ data: {} })
+    expect(await screen.findByText('账号已禁用')).toBeInTheDocument()
   })
 
   it('deleting the only row on a controlled last page reloads the last page allowed by the response total', async () => {

@@ -6,6 +6,7 @@ import { fmtTime } from '../../api/types'
 import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
 import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
+import { oemRequestError } from '../api/requestError'
 import type { TransferSummary } from '../api/types'
 import { ApprovalTag, LifecycleTag } from '../components/StatusTags'
 import { useOem } from '../OemContext'
@@ -67,6 +68,11 @@ export default function BlockedRecoveryPage() {
         content="这里只显示尚未发布且审批已阻断的传递单。处置管理员可以改派未完成任务或终止传递，不能代替审批人通过，也不能读取附件内容。"
         style={{ marginBottom: 16 }}
       />
+      {blocked.isError && (
+        <Alert type="error" style={{ marginBottom: 12 }}
+          content={oemRequestError(blocked.error, '审批阻断列表加载失败，请重试')}
+          action={<Button size="small" loading={blocked.isFetching} onClick={() => void blocked.refetch()}>重试</Button>} />
+      )}
       <ColumnResizeProvider actions={table.actions}>
         <div ref={tableHostRef} className={table.hostClassName}>
           <Table

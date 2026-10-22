@@ -1,15 +1,17 @@
 import { textLengthRule } from '../../utils/textRules'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Space, Table, Tag, Tree, Typography,
+  Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Space, Table, Tag, Tooltip, Tree, Typography,
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../../api/client'
+import { isVersionConflict } from '../../api/versionConflict'
 import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import { type PageResp } from '../../api/types'
 import type { ApiResponses } from '../../api/types'
 import type { PermissionResponse } from '../../api/generated/api-types'
+import LoadError from '../../components/LoadError'
 
 interface Role {
   id: number
@@ -183,6 +185,9 @@ export default function RoleList() {
       }
       setEditOpen(false)
       load()
+    } catch (error) {
+      if (isVersionConflict(error)) load()
+      else throw error
     } finally {
       saveInFlight.current = false
       setSaving(false)
@@ -199,8 +204,9 @@ export default function RoleList() {
       Message.success('权限已保存')
       setPermTarget(null)
       load()
-    } catch {
+    } catch (error) {
       // 请求层已展示错误；保留抽屉和当前选择，允许用户直接重试。
+      if (isVersionConflict(error)) load()
     } finally {
       permissionSaveInFlight.current = false
       setSavingPerms(false)
@@ -209,6 +215,7 @@ export default function RoleList() {
 
   const toggle = async (r: Role) => {
     await http.put<ApiResponses['PUT /admin/roles/{id}/status']>(`/admin/roles/${r.id}/status`, { status: r.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
+    Message.success(r.status === 'ACTIVE' ? '角色已禁用' : '角色已启用')
     load()
   }
 
@@ -240,10 +247,7 @@ export default function RoleList() {
         </Button>
       </div>
       {loadError ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
-          <Typography.Text type="error">加载失败</Typography.Text>
-          <Button size="small" onClick={load}>重试</Button>
-        </div>
+        <LoadError onRetry={load} />
       ) : (
         <Table
           className="page-table"
@@ -256,13 +260,13 @@ export default function RoleList() {
             title: '名称',
             dataIndex: 'name',
             width: 190,
-            render: (v: string) => <span style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '20px' }}>{v}</span>,
+            render: (v: string) => <span className="table-cell-wrap">{v}</span>,
           },
           {
             title: '说明',
             dataIndex: 'description',
             width: 200,
-            render: (v?: string) => <span style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '20px' }}>{v || '-'}</span>,
+            render: (v?: string) => <span className="table-cell-wrap">{v || '-'}</span>,
           },
           { title: '权限点数', dataIndex: 'permissionIds', width: 96, align: 'center' as const, render: (v: number[]) => v.length },
           { title: '绑定用户', dataIndex: 'assignedUserCount', width: 96, align: 'center' as const },
@@ -309,21 +313,23 @@ export default function RoleList() {
               >
                 编辑
               </Button>,
-              r.canManage !== false && <Popconfirm
-                key="status"
-                title={
-                  r.status === 'ACTIVE'
-                    ? r.assignedUserCount > 0
-                      ? `该角色绑定 ${r.assignedUserCount} 个用户；启用用户未更换角色前不能禁用。`
-                      : '确认禁用该角色？'
-                    : '确认启用该角色？'
-                }
-                onOk={() => toggle(r)}
-              >
-                <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
-                  {r.status === 'ACTIVE' ? '禁用' : '启用'}
-                </Button>
-              </Popconfirm>,
+              r.canManage !== false && r.status === 'ACTIVE' && r.assignedUserCount > 0 ? (
+                <Tooltip key="status" content={`该角色绑定 ${r.assignedUserCount} 个用户；启用用户未更换角色前不能禁用。`}>
+                  <span>
+                    <Button size="mini" type="text" status="danger" disabled>禁用</Button>
+                  </span>
+                </Tooltip>
+              ) : r.canManage !== false && (
+                <Popconfirm
+                  key="status"
+                  title={r.status === 'ACTIVE' ? '确认禁用该角色？' : '确认启用该角色？'}
+                  onOk={() => toggle(r)}
+                >
+                  <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
+                    {r.status === 'ACTIVE' ? '禁用' : '启用'}
+                  </Button>
+                </Popconfirm>
+              ),
               canDelete && r.canManage !== false && !r.isBuiltIn && (
                 <Popconfirm key="delete" title="删除后不可恢复，仍绑定用户时无法删除。确认？" onOk={() => remove(r)}>
                   <Button size="mini" type="text" status="danger">删除</Button>

@@ -1,4 +1,4 @@
-import { Button, Card, Input, InputNumber, Select, Space, Table } from '@arco-design/web-react'
+import { Button, Card, Input, InputNumber, Space, Table } from '@arco-design/web-react'
 import type { Cfg } from './systemConfigModel'
 import { CONFIG_META, MB } from './systemConfigModel'
 
@@ -28,14 +28,6 @@ export function renderSystemConfigTable({
   const editor = (cfg: Cfg) => {
     const value = editing[cfg.key] ?? cfg.value
     const label = CONFIG_META[cfg.key]?.name || cfg.key
-    if (cfg.key === 'notify.enabled') {
-      return (
-        <Select aria-label={label} value={value} disabled={saving} onChange={(next) => onSetValue(cfg.key, String(next))}>
-          <Select.Option value="true">启用</Select.Option>
-          <Select.Option value="false">关闭</Select.Option>
-        </Select>
-      )
-    }
     if (cfg.key === 'upload.max_file_size' || cfg.key === 'upload.chunk_size') {
       const isChunkSize = cfg.key === 'upload.chunk_size'
       const numericValue = Number(value)

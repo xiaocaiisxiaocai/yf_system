@@ -6,12 +6,13 @@ import {
 import { IconDownload, IconEye, IconLeft } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
+import { isVersionConflict } from '../../api/versionConflict'
 import type { ApprovalInfo, ApprovalTask, TransferDetail, TransferFile } from '../api/types'
 import OemFilePreview from '../components/OemFilePreview'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
 import { oemPreviewKind } from '../components/oemPreview'
 import { ApprovalTag, LifecycleTag, PayloadTag, ValidationTag } from '../components/StatusTags'
-import { DIRECTION_LABEL } from '../components/statusLabels'
+import { DIRECTION_LABEL, transferClosedNotice } from '../components/statusLabels'
 import { useCan, useOem } from '../OemContext'
 import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
 import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
@@ -26,8 +27,6 @@ const OEM_TRANSFER_FILE_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'actions', title: '操作', defaultWidth: 200, minWidth: 120, maxWidth: 320, locked: true },
 ]
 
-const PREVIEWABLE = new Set(['pdf', 'png', 'jpg', 'jpeg'])
-
 const SOURCE_LABEL: Record<string, string> = {
   SECTION_LEADER: '课别主管', DEPARTMENT_LEADER: '部门主管', DIVISION_LEADER: '事业部主管', SPECIFIED_USERS: '指定人员',
 }
@@ -35,12 +34,12 @@ const TASK_LABEL: Record<string, string> = {
   WAITING: '等待', PENDING: '待审批', APPROVED: '已通过', REJECTED: '已驳回', NOT_NEEDED: '无需处理', SUPERSEDED: '已改派', CANCELLED: '已取消',
 }
 
-function promptText(title: string, placeholder: string): Promise<string | null> {
+function promptText(title: string, placeholder: string, initial = ''): Promise<string | null> {
   return new Promise((resolve) => {
-    let text = ''
+    let text = initial
     Modal.confirm({
       title,
-      content: <Input.TextArea autoFocus placeholder={placeholder} maxLength={512} onChange={(value) => { text = value }} />,
+      content: <Input.TextArea autoFocus defaultValue={initial} placeholder={placeholder} maxLength={512} onChange={(value) => { text = value }} />,
       onOk: () => {
         if (!text.trim()) {
           Message.warning('请填写原因')
@@ -65,7 +64,9 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
   const [target, setTarget] = useState<number | undefined>()
   const [reason, setReason] = useState('')
   const [deciding, setDeciding] = useState<'approve' | 'reject' | null>(null)
+  const [reassignSaving, setReassignSaving] = useState(false)
   const decidingRef = useRef(false)
+  const reassignLocked = useRef(false)
 
   const myTask = approval.nodes.flatMap((node) => node.tasks).find((task) => task.status === 'PENDING' && task.approverUserId === userId)
   const open = ['WAITING_FILES', 'IN_PROGRESS', 'APPROVAL_BLOCKED'].includes(approval.status)
@@ -84,32 +85,73 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
       setDeciding(null)
     }
   }
+  const refreshAggregate = async () => {
+    const latest = await api.transfer(detail.summary.id).catch(() => null)
+    if (latest) onChanged(latest)
+    return latest
+  }
   const approve = (task: ApprovalTask) => decide('approve', async () => {
-    onChanged(await api.approve(task.id, task.version))
+    try {
+      onChanged(await api.approve(task.id, task.version))
+    } catch (error) {
+      if (isVersionConflict(error)) await refreshAggregate()
+      throw error
+    }
     Message.success('已审批通过')
     return true
   })
   const reject = (task: ApprovalTask) => decide('reject', async () => {
-    const text = await promptText('驳回传递单', '请输入驳回原因（发送人将收到通知）')
-    if (!text) return false
-    onChanged(await api.reject(task.id, task.version, text))
-    Message.success('已驳回')
-    return true
+    let version = task.version
+    let draft = ''
+    for (;;) {
+      const text = await promptText('驳回传递单', '请输入驳回原因（发送人将收到通知）', draft)
+      if (!text) return false
+      draft = text
+      try {
+        onChanged(await api.reject(task.id, version, text))
+        Message.success('已驳回')
+        return true
+      } catch (error) {
+        if (!isVersionConflict(error)) throw error
+        const latest = await refreshAggregate()
+        const fresh = latest?.approval?.nodes.flatMap((node) => node.tasks).find((item) => item.id === task.id)
+        if (fresh) version = fresh.version
+      }
+    }
   })
   const searchCandidates = async (keyword: string) => setCandidates(await api.approverOptions(keyword))
   const submitReassign = async () => {
+    if (reassignLocked.current) return
     if (!reassigning || !target || !reason.trim()) {
       Message.warning('请选择新审批人并填写改派原因')
       return
     }
-    const next = await api.reassign(reassigning.id, target, reason.trim(), reassigning.version)
-    setReassigning(null)
-    Message.success('已改派')
-    if (recoveryScoped) {
-      navigate(`${base}/recovery`, { replace: true })
-      return
+    reassignLocked.current = true
+    setReassignSaving(true)
+    try {
+      const next = await api.reassign(reassigning.id, target, reason.trim(), reassigning.version)
+      setReassigning(null)
+      Message.success('已改派')
+      if (recoveryScoped) {
+        navigate(`${base}/recovery`, { replace: true })
+        return
+      }
+      onChanged(next)
+    } catch (error) {
+      // 40901 仍只保留对话框。40903 改用刷新后的任务版本，原因和目标审批人不动。
+      if (isVersionConflict(error) && reassigning) {
+        const taskId = reassigning.id
+        const latest = await api.transfer(detail.summary.id).catch(() => null)
+        if (latest) {
+          onChanged(latest)
+          const fresh = latest.approval?.nodes.flatMap((node) => node.tasks).find((item) => item.id === taskId)
+          if (fresh) setReassigning(fresh)
+        }
+      }
+    } finally {
+      reassignLocked.current = false
+      setReassignSaving(false)
     }
-    onChanged(next)
   }
 
   const current = approval.nodes.findIndex((node) => node.status === 'PENDING' || node.status === 'WAITING')
@@ -156,7 +198,10 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
           />
         ))}
       </Steps>
-      <Modal title="改派审批人" visible={Boolean(reassigning)} onCancel={() => setReassigning(null)} onOk={submitReassign} unmountOnExit>
+      <Modal title="改派审批人" visible={Boolean(reassigning)} confirmLoading={reassignSaving}
+        closable={!reassignSaving} maskClosable={!reassignSaving} escToExit={!reassignSaving}
+        cancelButtonProps={{ disabled: reassignSaving }}
+        onCancel={() => { if (!reassignSaving) setReassigning(null) }} onOk={submitReassign} unmountOnExit>
         <Space direction="vertical" style={{ width: '100%' }}>
           <Select showSearch placeholder="搜索具有 OEM 审批权限的员工" value={target} onChange={setTarget} filterOption={false}
             onSearch={(value) => void searchCandidates(value)}
@@ -176,7 +221,7 @@ function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }:
   onPreview: (file: TransferFile) => void
   onRemove: (file: TransferFile) => Promise<void>
 }) {
-  const { userId } = useOem()
+  const { userId, realm } = useOem()
   const tableHostRef = useRef<HTMLDivElement>(null)
   const columns = [
     { key: 'name', title: '文件名', dataIndex: 'originalName' },
@@ -207,7 +252,7 @@ function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }:
       render: (_: unknown, file: TransferFile) => (
         <Space>
           {file.downloadable && <Button size="small" icon={<IconDownload />} onClick={() => onDownload(file)}>下载</Button>}
-          {file.downloadable && PREVIEWABLE.has(file.ext) && file.sizeBytes <= 50 * 1024 * 1024 && (
+          {file.downloadable && oemPreviewKind(file.ext) && file.sizeBytes <= 50 * 1024 * 1024 && (
             <Button size="small" icon={<IconEye />} onClick={() => onPreview(file)}>预览</Button>
           )}
           {canEdit && (
@@ -217,7 +262,8 @@ function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }:
       ),
     },
   ]
-  const table = useAdjustableColumns('oem-transfer-files', userId, OEM_TRANSFER_FILE_COLUMNS, columns, 'name', tableHostRef)
+  const fileTableId = realm === 'oem' ? 'oem-portal-transfer-files' : 'oem-transfer-files'
+  const table = useAdjustableColumns(fileTableId, userId, OEM_TRANSFER_FILE_COLUMNS, columns, 'name', tableHostRef)
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
@@ -255,8 +301,10 @@ export default function TransferDetailPage() {
   const queryClient = useQueryClient()
   const uploader = useRef<OemUploaderHandle>(null)
   const sendLocked = useRef(false)
+  const cancelLocked = useRef(false)
   const [uploadBusy, setUploadBusy] = useState(false)
   const [sending, setSending] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const [previewing, setPreviewing] = useState<TransferFile | null>(null)
   const recoveryScoped = realm === 'internal' && can.recover && !permissions.has('oem:transfer_view')
   const detailKey = ['oem', ...queryScope, 'transfer', id] as const
@@ -300,18 +348,10 @@ export default function TransferDetailPage() {
 
   const handleNoLongerDraft = (next: TransferDetail) => {
     setDetail(next)
-    const status = next.summary.lifecycleStatus
-    if (status === 'DRAFT') return
-    const message = ({
-      SEALED: next.summary.direction === 'INTERNAL_TO_OEM' ? '传递单已提交，正在等待审批或文件处理' : '文件正在处理中',
-      RELEASED: '文件已发送',
-      REJECTED: '传递单已被驳回',
-      BLOCKED: '传递单因文件校验未通过而终止',
-      CANCELLED: '传递单已终止',
-      ABANDONED: '草稿已删除',
-    } as const)[status]
+    const message = transferClosedNotice(next.summary)
+    if (!message) return
     Message.info(message)
-    if (status === 'ABANDONED') navigate(`${base}/transfers`, { replace: true })
+    if (next.summary.lifecycleStatus === 'ABANDONED') navigate(`${base}/transfers`, { replace: true })
   }
 
   const send = async () => {
@@ -332,7 +372,10 @@ export default function TransferDetailPage() {
           : submitted.summary.direction === 'INTERNAL_TO_OEM' ? '已提交审批，审批完成后将自动发送' : '文件正在处理中')
       } catch (error) {
         const checked = await api.transfer(id)
-        if (checked.summary.lifecycleStatus === 'DRAFT') throw error
+        if (checked.summary.lifecycleStatus === 'DRAFT') {
+          if (isVersionConflict(error)) setDetail(checked)
+          throw error
+        }
         handleNoLongerDraft(checked)
       }
     } finally {
@@ -341,49 +384,60 @@ export default function TransferDetailPage() {
     }
   }
   const remove = async () => {
-    await api.deleteDraft(id, summary.version)
+    try {
+      await api.deleteDraft(id, summary.version)
+    } catch (error) {
+      if (isVersionConflict(error)) {
+        const latest = await api.transfer(id).catch(() => null)
+        if (latest) setDetail(latest)
+      }
+      throw error
+    }
     Message.success('草稿已删除')
     navigate(`${base}/transfers`)
   }
   const cancel = async () => {
-    const reason = await promptText('终止传递单', '请输入终止原因（发送人将收到通知）')
-    if (!reason) return
-    const next = await api.cancel(id, reason, summary.version)
-    Message.success('传递已终止')
-    if (recoveryScoped) {
-      navigate(`${base}/recovery`, { replace: true })
-      return
+    if (cancelLocked.current) return
+    cancelLocked.current = true
+    setCancelling(true)
+    let version = summary.version
+    let draft = ''
+    try {
+      for (;;) {
+        const reason = await promptText('终止传递单', '请输入终止原因（发送人将收到通知）', draft)
+        if (!reason) return
+        draft = reason
+        try {
+          const next = await api.cancel(id, reason, version)
+          Message.success('传递已终止')
+          if (recoveryScoped) {
+            navigate(`${base}/recovery`, { replace: true })
+            return
+          }
+          setDetail(next)
+          return
+        } catch (error) {
+          if (!isVersionConflict(error)) return
+          const latest = await api.transfer(id).catch(() => null)
+          if (latest) {
+            version = latest.summary.version
+            setDetail(latest)
+          }
+        }
+      }
+    } finally {
+      cancelLocked.current = false
+      setCancelling(false)
     }
-    setDetail(next)
   }
   const download = async (file: TransferFile) => {
     const session = await api.startDownload(file.id)
     // The grant cookie is path-scoped and HttpOnly; a plain navigation lets the browser stream the file to disk.
     window.location.href = session.url
   }
-  const preview = async (file: TransferFile) => {
-    // PDF and images open in-page with the viewer watermark, like collaboration previews.
-    if (oemPreviewKind(file.ext)) {
-      setPreviewing(file)
-      return
-    }
-    // Other formats: open the tab inside the click gesture so popup blockers allow it, then point it at the blob.
-    // 'noopener' would make window.open return null, so the opener link is cut by hand instead.
-    const target = window.open('', '_blank')
-    if (!target) {
-      Message.warning('浏览器阻止了新窗口，请允许本站弹出窗口后重试')
-      return
-    }
-    target.opener = null
-    try {
-      const blob = await api.previewBlob(file.id)
-      const url = URL.createObjectURL(blob)
-      target.location.href = url
-      setTimeout(() => URL.revokeObjectURL(url), 60_000)
-    } catch {
-      // The HTTP layer already reported the failure.
-      target.close()
-    }
+  const preview = (file: TransferFile) => {
+    // PDF and images open in-page with the viewer watermark. Other formats are not offered.
+    if (oemPreviewKind(file.ext)) setPreviewing(file)
   }
   const removeFile = async (file: TransferFile) => {
     await api.removeFile(file.id)
@@ -407,7 +461,7 @@ export default function TransferDetailPage() {
                 <Button status="danger">删除草稿</Button>
               </Popconfirm>
             )}
-            {can.recover && summary.lifecycleStatus === 'SEALED' && <Button status="warning" onClick={() => void cancel().catch(() => undefined)}>终止传递</Button>}
+            {can.recover && summary.lifecycleStatus === 'SEALED' && <Button status="warning" loading={cancelling} onClick={() => void cancel()}>终止传递</Button>}
           </Space>
         }
       >

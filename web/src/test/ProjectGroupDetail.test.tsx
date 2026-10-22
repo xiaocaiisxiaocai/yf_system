@@ -425,11 +425,11 @@ describe('子项目编辑并发', () => {
     })
   })
 
-  it('sends the loaded version and, on a 409 conflict, warns and retries with the refreshed version', async () => {
+  it('sends the loaded version and, on a 40903 conflict, warns and retries with the refreshed version', async () => {
     mocks.put.mockImplementationOnce(() => {
       // 他人已在此期间修改了子项目。
       row = { ...row, name: '他人改名', updatedAt: T2 }
-      return Promise.reject({ isAxiosError: true, response: { status: 409, data: { code: 40901, message: '子项目已被他人修改，请刷新后重试' } } })
+      return Promise.reject({ isAxiosError: true, response: { status: 409, data: { code: 40903, message: '子项目已被他人修改，请刷新后重试' } } })
     })
     mocks.put.mockResolvedValueOnce({ data: { ...row, name: '我的名称' } })
     const user = userEvent.setup()
@@ -450,6 +450,24 @@ describe('子项目编辑并发', () => {
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(2))
     expect(mocks.put.mock.calls[1]).toEqual(['/projects/9', expect.objectContaining({ name: '我的名称', expectedUpdatedAt: T2 })])
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('a 40901 conflict keeps the form and does not show the version warning', async () => {
+    mocks.put.mockRejectedValue({ isAxiosError: true, response: { status: 409, data: { code: 40901, message: '同名子项目已存在' } } })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '编辑' }))
+    const dialog = await screen.findByRole('dialog')
+    const name = within(dialog).getByPlaceholderText('子项目名称')
+    await user.clear(name)
+    await user.type(name, '我的名称')
+    await user.click(within(dialog).getByRole('button', { name: '保存子项目' }))
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
+    expect(within(dialog).queryByText(/已被他人修改/)).not.toBeInTheDocument()
+    expect(within(dialog).getByPlaceholderText('子项目名称')).toHaveValue('我的名称')
+    await user.click(within(dialog).getByRole('button', { name: '保存子项目' }))
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(2))
+    expect(mocks.put.mock.calls[1]).toEqual(['/projects/9', expect.objectContaining({ name: '我的名称', expectedUpdatedAt: T1 })])
   })
 })
 

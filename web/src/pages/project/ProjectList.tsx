@@ -3,8 +3,9 @@ import {
   Alert, Badge, Button, Card, DatePicker, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
+import { isVersionConflict } from '../../api/versionConflict'
 import { actionSlots } from '../../components/ActionSlots'
 import { ColumnResizeProvider, ColumnVisibilityPicker, ResizableHeaderCell } from '../../components/columnResize'
 import { columnLayoutStorageKey, measureTableWidth, withFlexibleColumn, type ColumnLayoutSpec } from '../../components/tableColumnLayout'
@@ -17,6 +18,7 @@ import { textLengthRule } from '../../utils/textRules'
 import { normalizeList } from '../../utils/listValues'
 import { useCollaboration } from '../../store/collaboration'
 import type { ApiResponses } from '../../api/types'
+import LoadError from '../../components/LoadError'
 
 interface SupplierOpt { id: number; name: string }
 interface ProjectGroupFormValues {
@@ -86,20 +88,53 @@ function expectOptionList<T>(value: unknown): T[] {
   return value as T[]
 }
 
+const DEFAULT_PAGE_SIZE = 10
+
+function parsePositiveIntParam(value: string | null) {
+  const parsed = value ? Number(value) : NaN
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined
+}
+
+function parsePageSizeParam(value: string | null) {
+  const parsed = parsePositiveIntParam(value)
+  return parsed && parsed <= 100 ? parsed : DEFAULT_PAGE_SIZE
+}
+
+function parseStatusParam(value: string | null) {
+  return value && value in PROJECT_STATUS ? value : undefined
+}
+
 export default function ProjectList() {
   const navigate = useNavigate()
   const revision = useCollaboration((state) => state.revision)
-  const syncStatus = useCollaboration((state) => state.status)
   const [data, setData] = useState<PageResp<ProjectGroup>>({ list: [], total: 0, page: 1, pageSize: 10 })
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
+  const [listStale, setListStale] = useState(false)
+  const loadedQueryKey = useRef<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
-  const [keyword, setKeyword] = useState('')
-  const [status, setStatus] = useState<string>()
-  const [supplierId, setSupplierId] = useState<number>()
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  // 筛选和分页放在地址栏里：进入主项目再返回时还原列表位置。用 replace，不在历史里逐页留痕。
+  const [searchParams, setSearchParams] = useSearchParams()
+  const keyword = searchParams.get('q') ?? ''
+  const status = parseStatusParam(searchParams.get('status'))
+  const supplierParam = parsePositiveIntParam(searchParams.get('supplier'))
+  const page = parsePositiveIntParam(searchParams.get('page')) ?? 1
+  const pageSize = parsePageSizeParam(searchParams.get('pageSize'))
+  /** 写入地址栏；返回条件是否真的变化（未变化时调用方需自行重新加载）。 */
+  const updateQuery = useCallback((changes: Record<string, string | number | undefined>) => {
+    const next = new URLSearchParams(searchParams)
+    Object.entries(changes).forEach(([key, value]) => {
+      const isDefault = (key === 'page' && value === 1) || (key === 'pageSize' && value === DEFAULT_PAGE_SIZE)
+      if (value === undefined || value === '' || isDefault) next.delete(key)
+      else next.set(key, String(value))
+    })
+    if (next.toString() === searchParams.toString()) return false
+    setSearchParams(next, { replace: true })
+    return true
+  }, [searchParams, setSearchParams])
+  const setPage = useCallback((value: number) => updateQuery({ page: value }), [updateQuery])
   const [modalOpen, setModalOpen] = useState(false)
+  const [editConflict, setEditConflict] = useState(false)
   const [saving, setSaving] = useState(false)
   const saveInFlight = useRef(false)
   const [editing, setEditing] = useState<ProjectGroup | null>(null)
@@ -147,6 +182,8 @@ export default function ProjectList() {
   }, [loadError])
   const isInternal = user?.userType === 'INTERNAL'
   const canDelete = isInternal && hasPerm('project:delete')
+  // 供应商账号看不到厂商筛选，地址栏里的 supplier 参数对其无效。
+  const supplierId = isInternal ? supplierParam : undefined
 
   const fetchGroups = useCallback(async () => {
     const response = await http.get<ApiResponses['GET /project-groups']>('/project-groups', {
@@ -156,20 +193,31 @@ export default function ProjectList() {
   }, [keyword, page, pageSize, status, supplierId])
 
   const load = useCallback(() => {
-    setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
+    setLoading(true); setLoadError(false); setListStale(false); setReloadKey((value) => value + 1)
   }, [])
+  // 条件变化时由地址栏驱动重新请求；条件相同（例如重复搜索同一关键字）才手动重新加载。
+  const applyQuery = (changes: Record<string, string | number | undefined>) => {
+    if (!updateQuery(changes)) { load(); return }
+    setLoading(true); setLoadError(false); setListStale(false)
+  }
 
   useEffect(() => {
     let active = true
+    const queryKey = `${page}|${pageSize}|${keyword}|${status ?? ''}|${supplierId ?? ''}`
+    const background = loadedQueryKey.current === queryKey
     fetchGroups().then((next) => {
       if (!active) return
-      setData(next); setLoadError(false)
+      loadedQueryKey.current = queryKey
+      setData(next); setLoadError(false); setListStale(false)
       const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || pageSize)))
       if (page > lastPage) setPage(lastPage)
-    }).catch(() => { if (active) setLoadError(true) })
-      .finally(() => { if (active) setLoading(false) })
+    }).catch(() => {
+      if (!active) return
+      if (background) setListStale(true)
+      else { setLoadError(true); setListStale(false) }
+    }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [fetchGroups, page, pageSize, reloadKey, revision, syncStatus])
+  }, [fetchGroups, keyword, page, pageSize, reloadKey, revision, setPage, status, supplierId])
 
   const loadSupplierOptions = useCallback(() => {
     const seq = ++supplierOptionsSeq.current
@@ -223,7 +271,7 @@ export default function ProjectList() {
   }
 
   const openCreate = () => {
-    setEditing(null); form.resetFields(); form.setFieldValue('subprojectNames', [])
+    setEditing(null); setEditConflict(false); form.resetFields(); form.setFieldValue('subprojectNames', [])
     setSelectedSupplierId(null); setSelectedRobotPartId(null); setRobotParts([])
     loadMetadataOptions(); setModalOpen(true)
   }
@@ -233,7 +281,7 @@ export default function ProjectList() {
       Message.info('存在待公司验收的子项目，验收处理完成后才能编辑主项目资料')
       return
     }
-    setEditing(group)
+    setEditing(group); setEditConflict(false)
     form.setFieldsValue({
       name: group.name, description: group.description, supplierId: group.supplierId, workOrderNos: group.workOrderNos,
       machineModel: group.machineModel ?? undefined, robotPartId: group.robotPartId ?? undefined,
@@ -313,13 +361,25 @@ export default function ProjectList() {
         subprojectNames: editing ? undefined : normalizeList(values.subprojectNames),
       }
       if (editing) {
-        await http.put<ApiResponses['PUT /project-groups/{id}']>(`/project-groups/${editing.id}`, payload)
+        await http.put<ApiResponses['PUT /project-groups/{id}']>(`/project-groups/${editing.id}`, { ...payload, expectedUpdatedAt: editing.updatedAt })
         Message.success('主项目资料已保存，并同步到未完成的子项目')
       } else {
         await http.post<ApiResponses['POST /project-groups']>('/project-groups', payload)
         Message.success('主项目及子项目已创建')
       }
-      setModalOpen(false); load()
+      setEditConflict(false); setModalOpen(false); load()
+    } catch (error) {
+      // 40901 只由拦截器提示。40903 保留弹窗和已填内容，等列表刷新后再改用最新 updatedAt。
+      if (!editing || !isVersionConflict(error)) throw error
+      load()
+      try {
+        const response = await http.get<ApiResponses['GET /project-groups/{id}']>(`/project-groups/${editing.id}`, { quietClientError: true } as QuietRequestConfig)
+        setEditing(response.data.group as ProjectGroup)
+        setEditConflict(true)
+      } catch {
+        setEditConflict(false); setModalOpen(false)
+        Message.info('主项目已不可编辑或已被删除，请刷新后查看')
+      }
     } finally { saveInFlight.current = false; setSaving(false) }
   }
 
@@ -364,11 +424,11 @@ export default function ProjectList() {
       <div className="page-heading"><div><h1>Robot仿真协作</h1><p>按主项目归集资料，各子项目独立协作与验收</p></div></div>
       <div className="page-toolbar responsive-toolbar">
         <Space wrap>
-          <Input.Search allowClear placeholder="主项目名称" style={{ width: 240 }} onSearch={(value) => { setPage(1); setKeyword(value); load() }} onClear={() => { setPage(1); setKeyword(''); load() }} />
-          <Select allowClear placeholder="状态" style={{ width: 130 }} value={status} onChange={(value) => { setPage(1); setStatus(value as string | undefined); load() }}>
+          <Input.Search allowClear placeholder="主项目名称" style={{ width: 240 }} defaultValue={keyword} onSearch={(value) => applyQuery({ q: value.trim(), page: 1 })} onClear={() => applyQuery({ q: undefined, page: 1 })} />
+          <Select allowClear placeholder="状态" style={{ width: 130 }} value={status} onChange={(value) => applyQuery({ status: value as string | undefined, page: 1 })}>
             {['DRAFT', 'IN_PROGRESS', 'COMPLETED', 'TERMINATED'].map((key) => <Select.Option key={key} value={key}>{PROJECT_STATUS[key]?.text ?? key}</Select.Option>)}
           </Select>
-          {isInternal && <Select allowClear showSearch placeholder="Robot 厂商" style={{ width: 180 }} value={supplierId} loading={supplierOptionsLoading} disabled={supplierOptionsError} onChange={(value) => { setPage(1); setSupplierId(value as number | undefined); load() }}>{suppliers.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select>}
+          {isInternal && <Select allowClear showSearch placeholder="Robot 厂商" style={{ width: 180 }} value={supplierId} loading={supplierOptionsLoading} disabled={supplierOptionsError} onChange={(value) => applyQuery({ supplier: value as number | undefined, page: 1 })}>{suppliers.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select>}
         </Space>
         <Space>
           <ColumnVisibilityPicker
@@ -383,12 +443,18 @@ export default function ProjectList() {
           {isInternal && hasPerm('project:create') && <Button type="primary" icon={<IconPlus />} onClick={openCreate}>新建主项目</Button>}
         </Space>
       </div>
-      {loadError ? <div className="page-load-error"><Typography.Text type="error">加载失败</Typography.Text><Button size="small" onClick={load}>重试</Button></div> :
+      {loadError ? <LoadError onRetry={load} /> :
+        <>
+        {listStale && <div role="status" style={{ marginBottom: 12 }}>
+          <Typography.Text type="warning">列表更新失败，当前显示上次获取的数据。</Typography.Text>
+          <Button type="text" size="small" onClick={load}>重新获取</Button>
+        </div>}
         <ColumnResizeProvider actions={columnLayout.actions}>
           <div ref={tableHostRef} className="page-table-host">
-            <Table className="page-table page-table--resizable" rowKey="id" loading={loading} columns={columns} components={tableComponents} data={data.list} scroll={{ x: columns.reduce((sum, column) => sum + column.width, 0), y: 'var(--page-table-scroll-y)' }} pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); load() } }} />
+            <Table className="page-table page-table--resizable" rowKey="id" loading={loading} columns={columns} components={tableComponents} data={data.list} scroll={{ x: columns.reduce((sum, column) => sum + column.width, 0), y: 'var(--page-table-scroll-y)' }} pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => applyQuery({ page: nextPage, pageSize: nextSize }) }} />
           </div>
-        </ColumnResizeProvider>}
+        </ColumnResizeProvider>
+        </>}
 
       <Modal className="form-dialog" style={{ width: 760 }} title={editing ? '编辑主项目' : '新建主项目'} visible={modalOpen} onOk={submit} onCancel={closeModal} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okButtonProps={{ disabled: submitOptionsBlocked }} okText={editing ? '保存并同步' : '创建主项目'} unmountOnExit>
         <Form className="form-grid" form={form} layout="vertical">
@@ -403,6 +469,9 @@ export default function ProjectList() {
             </>} />}
             {createOptionsNeedRefresh && <div><Button size="small" onClick={refreshCreateOptions} disabled={saving || supplierOptionsLoading || metadataOptionsLoading || robotPartsLoading}>刷新基础数据</Button></div>}
           </div>}
+          {editing && editConflict && (
+            <Alert className="form-grid-full" type="warning" content={`主项目已被他人修改，已刷新为最新数据（当前名称：${editing.name}）。请核对后再次保存，保存将覆盖为本弹窗中的内容。`} />
+          )}
           <Form.Item className="form-grid-full" label="主项目名称" field="name" rules={[{ required: true, message: '请输入主项目名称' }, textLengthRule('主项目名称', 128)]}><Input placeholder="主项目名称" /></Form.Item>
           {!editing && <Form.Item className="form-grid-full" label="子项目" field="subprojectNames" rules={[{ required: true, message: '请至少创建一个子项目' }, { validator: (value, callback) => listRule('子项目', SUBPROJECT_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入子项目名称后按回车，可一次创建多个" /></Form.Item>}
           <Form.Item className="form-grid-full" label="工令号" field="workOrderNos" rules={[{ required: true, message: '请至少填写一个工令号' }, { validator: (value, callback) => listRule('工令号', WORK_ORDER_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入工令号后按回车，可填写多个" /></Form.Item>

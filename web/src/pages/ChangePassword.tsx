@@ -6,7 +6,7 @@ import http, { withAuthLock } from '../api/client'
 import { useAuth } from '../store/auth'
 import AuthShell from '../components/AuthShell'
 import PasswordInput from '../components/PasswordInput'
-import { passwordRule } from '../utils/password'
+import { confirmPasswordRule, passwordRule } from '../utils/password'
 import type { ApiResponses } from '../api/types'
 
 export default function ChangePassword() {
@@ -38,10 +38,6 @@ export default function ChangePassword() {
   }
 
   const submit = async (v: { oldPassword: string; newPassword: string; confirm: string }) => {
-    if (v.newPassword !== v.confirm) {
-      Message.error('两次输入的新密码不一致')
-      return
-    }
     if (v.newPassword === v.oldPassword) {
       Message.error('新密码不能与当前密码相同')
       return
@@ -81,9 +77,9 @@ export default function ChangePassword() {
               passwordRule,
             ]}
           >
-            <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入新密码（6–20 位）" aria-label="新密码" autoComplete="new-password" disabled={loading} />
+            <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入新密码（6-20 位）" aria-label="新密码" autoComplete="new-password" disabled={loading} />
           </Form.Item>
-          <Form.Item label="确认新密码" field="confirm" rules={[{ required: true, message: '请再次输入新密码' }]}>
+          <Form.Item label="确认新密码" field="confirm" dependencies={['newPassword']} rules={[{ required: true, message: '请再次输入新密码' }, confirmPasswordRule(form)]}>
             <PasswordInput size="large" prefix={<IconLock />} placeholder="请再次输入新密码" aria-label="确认新密码" autoComplete="new-password" disabled={loading} />
           </Form.Item>
           <div className="auth-actions">

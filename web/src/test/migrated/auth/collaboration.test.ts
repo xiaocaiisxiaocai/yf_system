@@ -85,7 +85,7 @@ describe('collaboration migration', () => {
     live.onStatus('connected')
     live.onReady()
     await settle()
-    expect(useCollaboration.getState().reconnectRevision).toBe(1)
+    expect(useCollaboration.getState().reconnectRevision).toBe(0)
     const afterReady = mocks.get.mock.calls.length
     expect(afterReady).toBeGreaterThan(0)
 
@@ -106,12 +106,39 @@ describe('collaboration migration', () => {
     live.onStatus('connected')
     live.onReady()
     await settle()
-    expect(useCollaboration.getState().reconnectRevision).toBe(2)
+    expect(useCollaboration.getState().reconnectRevision).toBe(1)
     stop()
     expect(mocks.realtimeStop).toHaveBeenCalledOnce()
     expect(vi.getTimerCount()).toBe(0)
     expect(useCollaboration.getState().realtimeStatus).toBe('disconnected')
     await settle()
+  })
+
+  it('does not count the first ready of a session as a reconnect', async () => {
+    vi.useFakeTimers()
+    const stop = startCollaborationPolling()
+    await settle()
+    const live = mocks.realtimeOptions!
+    live.onReady()
+    await settle()
+    expect(useCollaboration.getState().reconnectRevision).toBe(0)
+    live.onReady()
+    await settle()
+    expect(useCollaboration.getState().reconnectRevision).toBe(1)
+
+    useAuth.setState((state) => ({
+      generation: 2,
+      user: state.user ? { ...state.user, id: 8 } : state.user,
+    }))
+    await settle()
+    expect(useCollaboration.getState().reconnectRevision).toBe(0)
+    live.onReady()
+    await settle()
+    expect(useCollaboration.getState().reconnectRevision).toBe(0)
+    live.onReady()
+    await settle()
+    expect(useCollaboration.getState().reconnectRevision).toBe(1)
+    stop()
   })
 
   it('summary refresh cannot restore stale account data after cancellation', async () => {

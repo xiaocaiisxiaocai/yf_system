@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Form, Input, Message, Popconfirm, Select, Space, Table, Tag, Typography,
+  Button, Card, Form, Input, Message, Popconfirm, Select, Space, Table, Tag,
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
+import { isVersionConflict } from '../../api/versionConflict'
 import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import { fmtTime } from '../../api/types'
@@ -12,6 +13,7 @@ import { SupplierAccountsDrawer } from './components/SupplierAccountsDrawer'
 import { SupplierEditModal } from './components/SupplierEditModal'
 import type { Supplier } from './components/supplierTypes'
 import { useSupplierListState } from './hooks/useSupplierListState'
+import LoadError from '../../components/LoadError'
 
 export default function SupplierList() {
   const canManageSuppliers = useAuth((state) => state.hasPerm('supplier:manage'))
@@ -54,6 +56,9 @@ export default function SupplierList() {
       }
       setEditOpen(false)
       load()
+    } catch (error) {
+      if (isVersionConflict(error)) load()
+      else throw error
     } finally {
       saveInFlight.current = false
       setSaving(false)
@@ -126,10 +131,7 @@ export default function SupplierList() {
         )}
       </div>
       {loadError ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
-          <Typography.Text type="error">加载失败</Typography.Text>
-          <Button size="small" onClick={load}>重试</Button>
-        </div>
+        <LoadError onRetry={load} />
       ) : (
         <Table
           className="page-table"

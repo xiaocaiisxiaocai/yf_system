@@ -3,7 +3,8 @@ import { Button, Message, Progress, Space, Typography } from '@arco-design/web-r
 import { IconClose, IconRefresh, IconUpload } from '@arco-design/web-react/icon'
 import { createChunkHasher, fileMd5, type ChunkHasher } from '../../api/file-hash'
 import { fmtSize } from '../../api/types'
-import { isQuietedError } from '../api/quietErrors'
+import { oemRequestError } from '../api/requestError'
+import { isQuietRequestError } from '../../api/quietRequest'
 import { useOem } from '../OemContext'
 
 type Phase = 'queued' | 'hashing' | 'uploading' | 'merging' | 'cancelling' | 'done' | 'failed'
@@ -94,8 +95,7 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function errorMessage(error: unknown): string {
-  const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
-  return message || (error instanceof Error ? error.message : '') || '上传失败，可重试同一文件并从断点续传'
+  return oemRequestError(error, '上传失败，可重试同一文件并从断点续传')
 }
 
 /**
@@ -239,7 +239,7 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
           }
           const message = errorMessage(error)
           // Quieted chunk requests left the user-facing report to us: one toast per failed item.
-          if (isQuietedError(error) && !unmounted.current) Message.error(`「${file.name}」${message}`)
+          if (isQuietRequestError(error) && !unmounted.current) Message.error(`「${file.name}」${message}`)
           patch(key, { phase: 'failed', error: message })
           return false
         }

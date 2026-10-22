@@ -4,6 +4,7 @@ import { Button, InputNumber, Result, Select, Spin } from '@arco-design/web-reac
 import http, { type QuietRequestConfig } from '../api/client'
 import viewerHtml from '../../generated/pptx-viewer.html?raw'
 import './PptxPreview.css'
+import { createPreviewDeadline } from './previewDeadline'
 
 type PreviewState = 'loading' | 'ready' | 'error'
 type ZoomValue = 'page' | 'fit' | string
@@ -40,14 +41,15 @@ function PptxDocument({ fileId, toolbarContainer, onRetry }: {
     let buffer: ArrayBuffer | undefined
     let sent = false
     const controller = new AbortController()
-    const timer = setTimeout(() => {
+    const deadline = createPreviewDeadline(() => {
+      controller.abort()
       if (active) {
-        setMessage('PPTX 渲染超时，请重试。')
+        setMessage('PPTX 加载或渲染超时，请重试。')
         setState('error')
       }
-    }, 60000)
+    })
     const fail = (text: string) => {
-      clearTimeout(timer)
+      deadline.clear()
       setMessage(text)
       setState('error')
     }
@@ -61,7 +63,7 @@ function PptxDocument({ fileId, toolbarContainer, onRetry }: {
           fail('PPTX 渲染器返回了无效结果，请重试。')
           return
         }
-        clearTimeout(timer)
+        deadline.clear()
         pageCountRef.current = Math.round(count)
         setPageCount(pageCountRef.current)
         setPageNumber(Math.round(page))
@@ -96,14 +98,16 @@ function PptxDocument({ fileId, toolbarContainer, onRetry }: {
       responseType: 'arraybuffer',
       signal: controller.signal,
       quietNetworkError: true,
+      timeout: 0,
+      onDownloadProgress: (event) => deadline.progress(event.loaded),
     } as QuietRequestConfig).then(response => {
-      if (active) { buffer = response.data; sendBuffer.current() }
+      if (active) { deadline.downloaded(); buffer = response.data; sendBuffer.current() }
     }).catch(() => {
       if (active) fail('PPTX 文件读取失败，请检查网络后重试。')
     })
     return () => {
       active = false
-      clearTimeout(timer)
+      deadline.clear()
       controller.abort()
       window.removeEventListener('message', receive)
       sendBuffer.current = () => {}

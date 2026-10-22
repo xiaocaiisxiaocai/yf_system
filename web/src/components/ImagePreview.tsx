@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Button, Result, Spin } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../api/client'
 import './ImagePreview.css'
+import { createPreviewDeadline, type PreviewDeadline } from './previewDeadline'
 import { wheelZoomFactor } from '../../vendor/preview-wheel.js'
 
 function ImageDocument({ fileId, contentUrl, sourceUrl, name, toolbarContainer }: {
@@ -11,7 +12,7 @@ function ImageDocument({ fileId, contentUrl, sourceUrl, name, toolbarContainer }
   const viewport = useRef<HTMLDivElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
   const zoomAnchor = useRef<{ x: number; y: number; fractionX: number; fractionY: number } | null>(null)
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const deadline = useRef<PreviewDeadline | undefined>(undefined)
   const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
   const [source, setSource] = useState(() => sourceUrl ?? '')
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -64,21 +65,26 @@ function ImageDocument({ fileId, contentUrl, sourceUrl, name, toolbarContainer }
     let active = true
     let objectUrl = ''
     const controller = sourceUrl ? undefined : new AbortController()
-    timer.current = setTimeout(() => {
+    const current = createPreviewDeadline(() => {
       active = false; controller?.abort(); setSource(''); setStatus('error')
-    }, 60000)
-    if (!sourceUrl) {
+    })
+    deadline.current = current
+    // 已有本地地址时没有下载阶段，直接按渲染时限计时。
+    if (sourceUrl) current.downloaded()
+    else {
       const requestUrl = contentUrl ?? `/files/${fileId}/content`
       void http.get<Blob>(requestUrl, {
         responseType: 'blob', signal: controller?.signal, quietNetworkError: true,
+        timeout: 0, onDownloadProgress: (event) => current.progress(event.loaded),
       } as QuietRequestConfig).then(response => {
         if (!active) return
+        current.downloaded()
         objectUrl = URL.createObjectURL(response.data)
         setSource(objectUrl)
-      }).catch(() => { if (active) { clearTimeout(timer.current); setStatus('error') } })
+      }).catch(() => { if (active) { current.clear(); setStatus('error') } })
     }
     return () => {
-      active = false; controller?.abort(); clearTimeout(timer.current)
+      active = false; controller?.abort(); current.clear()
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
   }, [fileId, contentUrl, sourceUrl, attempt])
@@ -125,10 +131,10 @@ function ImageDocument({ fileId, contentUrl, sourceUrl, name, toolbarContainer }
           style={{ width: natural.width ? natural.width * scale : undefined, height: natural.height ? natural.height * scale : undefined, visibility: status === 'ready' ? 'visible' : 'hidden' }}
           onLoad={event => {
             const image = event.currentTarget
-            clearTimeout(timer.current)
+            deadline.current?.clear()
             if (!image.naturalWidth || !image.naturalHeight) { setStatus('error'); return }
             setNatural({ width: image.naturalWidth, height: image.naturalHeight }); setStatus('ready')
-          }} onError={() => { clearTimeout(timer.current); setStatus('error') }} />
+          }} onError={() => { deadline.current?.clear(); setStatus('error') }} />
       </div>}
     </div>
     {status === 'loading' && <div className="image-preview-status" role="status"><Spin />正在加载图片…</div>}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Result, Spin } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../api/client'
 import viewerHtml from '../../generated/excel-viewer.html?raw'
+import { createPreviewDeadline } from './previewDeadline'
 
 function ExcelDocument({ fileId, ext }: { fileId: number; ext?: string }) {
   const frame = useRef<HTMLIFrameElement>(null)
@@ -17,11 +18,11 @@ function ExcelDocument({ fileId, ext }: { fileId: number; ext?: string }) {
     let buffer: ArrayBuffer | undefined
     let sent = false
     const controller = new AbortController()
-    const timer = setTimeout(() => { if (active) setState('error') }, 60000)
+    const deadline = createPreviewDeadline(() => { controller.abort(); if (active) setState('error') })
     const receive = (event: MessageEvent) => {
       if (!active || event.source !== frame.current?.contentWindow || event.data?.channel !== channel) return
-      if (event.data.type === 'excel:rendered') { clearTimeout(timer); setState('ready') }
-      if (event.data.type === 'excel:error') { clearTimeout(timer); setState('error') }
+      if (event.data.type === 'excel:rendered') { deadline.clear(); setState('ready') }
+      if (event.data.type === 'excel:error') { deadline.clear(); setState('error') }
     }
     window.addEventListener('message', receive)
     send.current = () => {
@@ -29,17 +30,20 @@ function ExcelDocument({ fileId, ext }: { fileId: number; ext?: string }) {
       const signature = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 4))
       const xls = signature[0] === 0xd0 && signature[1] === 0xcf
       const xlsx = signature[0] === 0x50 && signature[1] === 0x4b
-      if (!xls && !xlsx) { clearTimeout(timer); setState('error'); return }
+      if (!xls && !xlsx) { deadline.clear(); setState('error'); return }
       // 旧版 .xls（OLE2）与二进制 .xlsb（ZIP 内为 BIFF12，ExcelJS 会静默解析成空表）都先经 SheetJS 转成 xlsx。
       const convert = xls || ext?.toLowerCase() === 'xlsb'
       sent = true
       frame.current?.contentWindow?.postMessage({ type: 'excel:load', channel, buffer, xls: convert }, '*', [buffer])
       buffer = undefined
     }
-    void http.get<ArrayBuffer>(`/files/${fileId}/content`, { responseType: 'arraybuffer', signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
-      .then(response => { if (active) { buffer = response.data; send.current() } })
-      .catch(() => { if (active) { clearTimeout(timer); setState('error') } })
-    return () => { active = false; clearTimeout(timer); controller.abort(); window.removeEventListener('message', receive); send.current = () => {} }
+    void http.get<ArrayBuffer>(`/files/${fileId}/content`, {
+      responseType: 'arraybuffer', signal: controller.signal, quietNetworkError: true,
+      timeout: 0, onDownloadProgress: (event) => deadline.progress(event.loaded),
+    } as QuietRequestConfig)
+      .then(response => { if (active) { deadline.downloaded(); buffer = response.data; send.current() } })
+      .catch(() => { if (active) { deadline.clear(); setState('error') } })
+    return () => { active = false; deadline.clear(); controller.abort(); window.removeEventListener('message', receive); send.current = () => {} }
   }, [fileId, ext, channel, attempt])
 
   return <div className="excel-source-preview">

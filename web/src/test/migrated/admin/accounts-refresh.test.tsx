@@ -85,6 +85,11 @@ function accountStatusButton(employeeNo: string) {
   return within(row!).getByRole('button', { name: '禁用' })
 }
 
+async function confirmAccountDisable(user: ReturnType<typeof userEvent.setup>, employeeNo: string) {
+  await user.click(accountStatusButton(employeeNo))
+  fireEvent.click((await screen.findAllByRole('button', { name: '确定' })).at(-1)!)
+}
+
 describe('供应商账号刷新竞态', () => {
   beforeEach(() => {
     mocks.get.mockReset()
@@ -147,12 +152,8 @@ describe('供应商账号刷新竞态', () => {
       render(<SupplierList />)
       await openAccounts(user, 2)
 
-      await act(async () => {
-        await Promise.all([
-          user.click(accountStatusButton('a11')),
-          user.click(accountStatusButton('b12')),
-        ])
-      })
+      await confirmAccountDisable(user, 'a11')
+      await confirmAccountDisable(user, 'b12')
 
       await waitFor(() => {
         expect(mocks.put).toHaveBeenCalledTimes(2)

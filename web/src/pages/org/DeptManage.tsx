@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Card, Dropdown, Form, Input, InputNumber, Menu, Message, Modal, Spin, Tag, Tree, Typography } from '@arco-design/web-react'
 import { IconDown, IconPlus, IconRight, IconSearch } from '@arco-design/web-react/icon'
 import http from '../../api/client'
+import { isVersionConflict } from '../../api/versionConflict'
 import { useAuth } from '../../store/auth'
 import './DeptManage.css'
 import type { ApiResponses } from '../../api/types'
+import LoadError from '../../components/LoadError'
 
 type OrgKind = 'DIVISION' | 'DEPARTMENT' | 'SECTION'
 
@@ -151,7 +153,13 @@ export default function DeptManage() {
   const leaderRequestSequence = useRef(0)
   const leaderModalOpen = useRef(false)
   const leaderSaveInFlight = useRef(false)
+  const leaderSearchTimer = useRef<number | undefined>(undefined)
   const canManageLeader = useAuth((s) => s.hasPerm('dept:leader_manage'))
+  const clearLeaderSearchTimer = useCallback(() => {
+    if (leaderSearchTimer.current === undefined) return
+    window.clearTimeout(leaderSearchTimer.current)
+    leaderSearchTimer.current = undefined
+  }, [])
 
   const fetchTree = useCallback(async () => {
     const r = await http.get<ApiResponses['GET /departments']>('/departments')
@@ -189,13 +197,15 @@ export default function DeptManage() {
   useEffect(() => () => {
     leaderModalOpen.current = false
     leaderRequestSequence.current += 1
-  }, [])
+    clearLeaderSearchTimer()
+  }, [clearLeaderSearchTimer])
 
   useEffect(() => {
     if (canManageLeader) return
     leaderModalOpen.current = false
     leaderRequestSequence.current += 1
-  }, [canManageLeader])
+    clearLeaderSearchTimer()
+  }, [canManageLeader, clearLeaderSearchTimer])
 
   const fetchLeaderOptions = useCallback(async (search: string, session: number) => {
     const request = ++leaderRequestSequence.current
@@ -220,6 +230,15 @@ export default function DeptManage() {
     }
   }, [])
 
+  const scheduleLeaderSearch = useCallback((value: string) => {
+    clearLeaderSearchTimer()
+    const session = leaderModalSession.current
+    leaderSearchTimer.current = window.setTimeout(() => {
+      leaderSearchTimer.current = undefined
+      void fetchLeaderOptions(value, session)
+    }, 300)
+  }, [clearLeaderSearchTimer, fetchLeaderOptions])
+
   const openLeaderDialog = (target: DeptNode) => {
     const session = leaderModalSession.current + 1
     leaderModalSession.current = session
@@ -235,12 +254,14 @@ export default function DeptManage() {
     setLeaderOptions([])
     setLeaderOptionsError(false)
     setLeaderOpen(true)
+    clearLeaderSearchTimer()
     void fetchLeaderOptions('', session)
   }
 
   const closeLeaderDialog = () => {
     leaderModalOpen.current = false
     leaderRequestSequence.current += 1
+    clearLeaderSearchTimer()
     setLeaderOpen(false)
     setLeaderTarget(null)
     setLeaderKeyword('')
@@ -259,7 +280,8 @@ export default function DeptManage() {
       setSelected((current) => current?.id === target.id ? { ...current, leader: nextLeader } : current)
       Message.success(nextLeader ? '组织主管已更新' : '组织主管已清空')
       return true
-    } catch {
+    } catch (error) {
+      if (isVersionConflict(error)) load()
       Message.error('主管配置保存失败，请重试')
       return false
     } finally {
@@ -307,6 +329,9 @@ export default function DeptManage() {
       setEditOpen(false)
       form.resetFields()
       load()
+    } catch (error) {
+      if (isVersionConflict(error)) load()
+      else throw error
     } finally {
       saveInFlight.current = false
       setSaving(false)
@@ -314,7 +339,9 @@ export default function DeptManage() {
   }
 
   const toggle = async (d: DeptNode) => {
-    await http.put<ApiResponses['PUT /admin/departments/{id}/status']>(`/admin/departments/${d.id}/status`, { status: d.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
+    const disabling = d.status === 'ACTIVE'
+    await http.put<ApiResponses['PUT /admin/departments/{id}/status']>(`/admin/departments/${d.id}/status`, { status: disabling ? 'DISABLED' : 'ACTIVE' })
+    Message.success(`${ORG_KIND[nodeKind(d)].label}已${disabling ? '禁用' : '启用'}`)
     load()
   }
 
@@ -378,10 +405,7 @@ export default function DeptManage() {
           </div>
           <div className="org-view-tree-scroll">
             {loadError ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
-                <Typography.Text type="error">加载失败</Typography.Text>
-                <Button size="small" onClick={load}>重试</Button>
-              </div>
+              <LoadError onRetry={load} />
             ) : (
               <Spin loading={loading} style={{ width: '100%' }}>
                 {visibleTree.length ? <Tree
@@ -507,7 +531,7 @@ export default function DeptManage() {
               </section>
               {!selectedMeta.childLabel && <div className="org-view-leaf-info">
                 <h3>基本信息</h3>
-                <dl><div><dt>所属部门</dt><dd>{selectedParent?.name || '—'}</dd></div><div><dt>层级路径</dt><dd>{selectedPath}</dd></div></dl>
+                <dl><div><dt>所属部门</dt><dd>{selectedParent?.name || '-'}</dd></div><div><dt>层级路径</dt><dd>{selectedPath}</dd></div></dl>
               </div>}
             </>
           ) : (
@@ -592,7 +616,7 @@ export default function DeptManage() {
             value={leaderKeyword}
             onChange={(value) => {
               setLeaderKeyword(value)
-              void fetchLeaderOptions(value, leaderModalSession.current)
+              scheduleLeaderSearch(value)
             }}
           />
           <div className="org-view-leader-selection" aria-live="polite">
@@ -609,13 +633,25 @@ export default function DeptManage() {
               <Typography.Text type="error">候选人加载失败</Typography.Text>
               <Button size="small" onClick={() => void fetchLeaderOptions(leaderKeyword, leaderModalSession.current)}>重试</Button>
             </div>
-              : leaderOptions.length ? leaderOptions.map((option) => <button
+              : leaderOptions.length ? leaderOptions.map((option, index) => <button
                 type="button"
                 role="radio"
                 aria-checked={leaderDraft?.id === option.id}
+                // 单选组只有一个 Tab 停靠点：已选项，未选时为第一项；组内用方向键切换。
+                tabIndex={(leaderOptions.some((item) => item.id === leaderDraft?.id) ? leaderDraft?.id === option.id : index === 0) ? 0 : -1}
                 className={`org-view-leader-option${leaderDraft?.id === option.id ? ' is-selected' : ''}`}
                 key={option.id}
                 onClick={() => setLeaderDraft(option)}
+                onKeyDown={(event) => {
+                  const step = event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1
+                    : event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 0
+                  if (!step) return
+                  event.preventDefault()
+                  const nextIndex = (index + step + leaderOptions.length) % leaderOptions.length
+                  setLeaderDraft(leaderOptions[nextIndex])
+                  const buttons = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+                  buttons?.[nextIndex]?.focus()
+                }}
               >
                 <span><strong>{option.realName}</strong><small>{option.employeeNo}</small></span>
                 <small>{option.departmentName || '未归属组织'}</small>

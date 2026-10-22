@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  readColumnLayout, withColumnWidth, withHiddenColumns, writeColumnLayout,
+  applyColumnLayout, readColumnLayout, withColumnWidth, withHiddenColumns, writeColumnLayout,
   type ColumnLayout, type ColumnLayoutSpec,
 } from './tableColumnLayout'
 
@@ -97,15 +97,18 @@ export function useColumnLayout(storageKey: string, specs: readonly ColumnLayout
     commit({ hidden: [], widths: {} })
   }, [commit])
 
-  const actions = useMemo(() => ({ beginResize, setWidth, widthOf }), [beginResize, setWidth, widthOf])
+  const limitsOf = useCallback((key: string) => {
+    const spec = specsRef.current.find((item) => item.key === key)
+    const min = spec?.minWidth ?? 72
+    return { min, max: Math.max(min, spec?.maxWidth ?? 480) }
+  }, [])
 
-  const apply = <T extends { key: string; title?: ReactNode }>(columns: T[]) => columns.flatMap((column) => {
-    const spec = specs.find((item) => item.key === column.key)
-    if (!spec) throw new Error(`缺少列配置：${column.key}`)
-    if (typeof column.title === 'string' && column.title !== spec.title) throw new Error(`列标题不一致：${column.key}`)
-    if (!spec.locked && layout.hidden.includes(column.key)) return []
-    return [{ ...column, title: spec.title, width: layout.widths[column.key] ?? spec.defaultWidth }]
-  })
+  const actions = useMemo(() => ({ beginResize, setWidth, widthOf, limitsOf }), [beginResize, setWidth, widthOf, limitsOf])
+
+  const apply = <T extends { key: string; title?: ReactNode }>(
+    columns: readonly T[],
+  ): Array<T & { width: number }> =>
+    applyColumnLayout(columns, specs, layout, import.meta.env.DEV)
 
   return { apply, actions, hidden: layout.hidden, toggle, showAll, hideOptional, reset }
 }

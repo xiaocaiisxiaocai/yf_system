@@ -25,6 +25,7 @@ vi.mock('../../../api/file-hash', () => ({
 }))
 
 import ChunkUploader from '../../../components/ChunkUploader'
+import { hasActiveUpload } from '../../../components/uploadActivity'
 
 function uploadFile(name: string, size = 1) {
   return new File([new Uint8Array(size)], name, { type: 'application/octet-stream' })
@@ -135,6 +136,17 @@ describe('ChunkUploader DOM contracts', () => {
     await waitFor(() => expect(mocks.createChunkHasher).toHaveBeenCalledTimes(2))
     expect(sessionCalls('init')).toHaveLength(2)
     view.unmount()
+  })
+
+  it('keeps the leave guard while hashing and releases it when the uploader unmounts', async () => {
+    mocks.uploadFingerprint.mockReturnValue(new Promise<string>(() => undefined))
+    const view = renderUploader()
+    expect(hasActiveUpload()).toBe(false)
+    choose(uploadFile('hold.bin'))
+    fireEvent.click(startButton())
+    await waitFor(() => expect(hasActiveUpload()).toBe(true))
+    view.unmount()
+    expect(hasActiveUpload()).toBe(false)
   })
 
   it('reports whole-file hash progress while upload fingerprinting is pending', async () => {

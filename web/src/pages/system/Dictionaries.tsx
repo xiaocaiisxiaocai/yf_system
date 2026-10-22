@@ -5,6 +5,7 @@ import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import './Dictionaries.css'
 import type { ApiResponses, ProjectDictionaryOption, RobotPart } from '../../api/types'
+import LoadError from '../../components/LoadError'
 
 type DictionaryType = 'ROBOT_TYPE' | 'PRIORITY'
 type TabType = DictionaryType | 'ROBOT_PART'
@@ -168,8 +169,8 @@ export default function Dictionaries() {
       </Space>
       <Button className="dictionary-add" aria-label={`新增 ${label}`} type="primary" icon={<IconPlus />} disabled={!canCreate} onClick={() => startEdit()}>新增 {label}</Button>
     </div>
-    {error ? <Space style={{ padding: 24 }}><Typography.Text type="error">基础数据加载失败</Typography.Text><Button onClick={load}>重试</Button></Space> : <Table<ManagedItem> className="page-table" rowKey="id" loading={loading} data={rows} pagination={{ pageSize: 20, showTotal: true }} noDataElement={loading ? <span /> : emptyContent} scroll={{ x: type === 'ROBOT_PART' ? 950 : 600, y: 'var(--page-table-scroll-y)' }} columns={columns as TableColumnProps<ManagedItem>[]} />}
-    <Modal className="form-dialog" title={`${editing ? '编辑' : '新增'}${label}`} visible={open} onOk={save} onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okText="保存" cancelText="取消">
+    {error ? <LoadError message="基础数据加载失败" onRetry={load} /> : <Table<ManagedItem> className="page-table" rowKey="id" loading={loading} data={rows} pagination={{ pageSize: 20, showTotal: true, sizeCanChange: true }} noDataElement={loading ? <span /> : emptyContent} scroll={{ x: type === 'ROBOT_PART' ? 950 : 600, y: 'var(--page-table-scroll-y)' }} columns={columns as TableColumnProps<ManagedItem>[]} />}
+    <Modal className="form-dialog" title={`${editing ? '编辑' : '新增'}${label}`} visible={open} onOk={save} onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okText={`${editing ? '保存' : '创建'}${label}`} cancelText="取消">
       <Form form={form} layout="vertical" disabled={saving}>
         {type === 'ROBOT_PART' ? <>
           <Form.Item field="supplierId" label="Robot 厂商" rules={[{ required: true, message: '请选择 Robot 厂商' }]} help={editingPart?.inUse ? '已被项目引用，厂商、料号和型号不可修改。' : undefined}><Select placeholder="选择 Robot 厂商" showSearch disabled={!!editingPart?.inUse} options={suppliers.filter((item) => item.status === 'ACTIVE' || item.id === editingPart?.supplierId).map((item) => ({ label: `${item.name}${item.status === 'ACTIVE' ? '' : '（已停用）'}`, value: item.id }))} /></Form.Item>

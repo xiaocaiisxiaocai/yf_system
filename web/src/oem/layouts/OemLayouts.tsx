@@ -134,19 +134,25 @@ export function PortalLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   useEffect(() => { void bootPortalSession() }, [])
+  const permissions = useMemo(() => new Set<string>(), [])
+  const queryScope = useMemo(
+    () => ['portal', ...createPortalQueryScope({ account, generation })],
+    [account, generation],
+  )
+  const oemValue = useMemo(() => ({
+    api: portalApi,
+    realm: 'oem' as const,
+    base: PORTAL_BASE,
+    permissions,
+    userId: account?.id ?? null,
+    queryScope,
+  }), [permissions, account?.id, queryScope])
   if (!booted) return <Spin style={{ display: 'block', marginTop: 120 }} tip="正在恢复登录状态…" />
   if (!token) return <Navigate to={`${PORTAL_BASE}/login`} state={{ from: location.pathname }} replace />
   if (mustChangePassword) return <Navigate to={`${PORTAL_BASE}/change-password`} replace />
   return (
     <QueryClientProvider client={portalQueryClient}>
-      <OemProvider value={{
-        api: portalApi,
-        realm: 'oem',
-        base: PORTAL_BASE,
-        permissions: new Set(),
-        userId: account?.id ?? null,
-        queryScope: ['portal', ...createPortalQueryScope({ account, generation })],
-      }}>
+      <OemProvider value={oemValue}>
         <Shell title="OEM 文件传递" subtitle={account?.companyName} menu={[
           { path: `${PORTAL_BASE}/transfers`, label: '文件传递单', icon: <IconFile />, visible: true },
         ]} account={

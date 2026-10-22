@@ -4,6 +4,9 @@ import { Result, Spin } from '@arco-design/web-react'
 import { useAuth } from './store/auth'
 import { bootAuth, isOemPortalPath, isSafeLoginReturnPath } from './api/client'
 import { OEM_UI_ENABLED } from './features'
+import { decideAuthStorageSync } from './store/authStorageSync'
+import RouteErrorBoundary from './components/RouteErrorBoundary'
+import UploadLeaveGuard from './components/UploadLeaveGuard'
 
 const AdminLayout = lazy(() => import('./layouts/AdminLayout'))
 const Login = lazy(() => import('./pages/Login'))
@@ -101,24 +104,15 @@ export default function App() {
     if (portalRoute) return
     const onStorage = (e: StorageEvent) => {
       if (e.key !== 'yf-auth' || isOemPortalPath(location.pathname)) return
-      try {
-        const nextState = e.newValue ? JSON.parse(e.newValue)?.state ?? null : null
-        const nextUser = nextState?.user ?? null
-        const cur = useAuth.getState()
-        if (!nextUser && cur.user) {
-          cur.logout()
-          if (location.pathname !== '/login') location.href = '/login'
-        } else if (nextUser && cur.user && nextUser.id !== cur.user.id) {
-          location.reload()
-        } else if (
-          nextUser && cur.user &&
-          (JSON.stringify(nextState?.permissions ?? []) !== JSON.stringify(cur.permissions) ||
-            JSON.stringify(nextState?.menus ?? []) !== JSON.stringify(cur.menus))
-        ) {
-          location.reload()
-        }
-      } catch {
-        /* 存储内容异常时忽略 */
+      const action = decideAuthStorageSync(e.newValue, useAuth.getState())
+      if (action.type === 'logout') {
+        useAuth.getState().logout()
+        if (location.pathname !== '/login') location.href = '/login'
+      } else if (action.type === 'reload') {
+        location.reload()
+      } else if (action.type === 'apply') {
+        // 同一账号的权限变化直接生效（菜单、路由守卫和查询缓存范围随之更新），不重载页面。
+        useAuth.setState({ permissions: action.permissions, menus: action.menus, mustChangePassword: action.mustChangePassword })
       }
     }
     window.addEventListener('storage', onStorage)
@@ -135,6 +129,9 @@ export default function App() {
   }
 
   return (
+    <>
+    <UploadLeaveGuard />
+    <RouteErrorBoundary>
     <Suspense fallback={<PageLoader />}>
       <Routes>
         <Route path="/login" element={<LoginRoute />} />
@@ -186,5 +183,7 @@ export default function App() {
         <Route path="*" element={<NotFound />} />
       </Routes>
     </Suspense>
+    </RouteErrorBoundary>
+    </>
   )
 }

@@ -1187,6 +1187,28 @@ export interface ProjectSummaryResponse {
   latestSubmissionId: number | null
 }
 
+export interface ProjectUploadSessionItemResponse {
+  sessionId: string
+  fileName: string
+  fileSize: number
+  receivedChunks: number
+  totalChunks: number
+  status: string
+  uploaderId: number
+  uploaderName: string
+  uploaderEmployeeNo: string
+  uploaderUserType: string
+  createdAt: string
+  expiresAt: string
+  canResume: boolean
+  canAbort: boolean
+}
+
+export interface ProjectUploadSessionListResponse {
+  total: number
+  items: Array<ProjectUploadSessionItemResponse>
+}
+
 export interface ProjectUpsertRequest {
   name?: string | null
   description?: string | null
@@ -1199,6 +1221,7 @@ export interface ProjectUpsertRequest {
   robotTypeId?: number | null
   expectedCompletionDate?: string | null
   subprojectNames?: Array<string> | null
+  expectedUpdatedAt?: string | null
 }
 
 export interface ReassignTaskRequest {
@@ -1616,6 +1639,7 @@ export interface ApiResponses {
   "GET /projects/{id}/summary": ProjectSummaryResponse
   "POST /projects/{id}/withdraw": ProjectResponse
   "GET /projects/{projectId}/files": PageResponseOfFileListItem
+  "GET /projects/{projectId}/upload-sessions": ProjectUploadSessionListResponse
   "GET /robot-part-supplier-options": Array<RobotPartSupplierOption>
   "GET /robot-parts": Array<RobotPartResponse>
   "POST /robot-parts": RobotPartResponse

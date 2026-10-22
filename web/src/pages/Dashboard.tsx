@@ -159,17 +159,18 @@ export default function Dashboard() {
   const messageData = !dashboardAuthorizationError && messageQuery.data
     ? messageQuery.data
     : { list: [], total: 0, page: messagePage, pageSize: PAGE_SIZE }
-  const loading = summaryQuery.isFetching
+  const loading = summaryQuery.isPending
   const loadError = summaryQuery.isError && !summaryQuery.data
   const summaryRefreshError = summaryQuery.isRefetchError && !!summaryQuery.data
-  const pendingLoading = pendingQuery.isFetching
+  const pendingLoading = pendingQuery.isPending
   const pendingError = pendingQuery.isError && !pendingQuery.data
   const pendingRefreshError = pendingQuery.isRefetchError && !!pendingQuery.data
-  const messageLoading = messageQuery.isFetching
+  const messageLoading = messageQuery.isPending
   const messageError = messageQuery.isError && !messageQuery.data
   const messageRefreshError = messageQuery.isRefetchError && !!messageQuery.data
-  // 两个刷新按钮都会重拉概览、待验收和留言，加载态要覆盖全部三个请求。
-  const dashboardRefreshing = loading || pendingLoading || messageLoading
+  // 挡住内容的加载只用首次请求；背景刷新只让刷新按钮转圈。
+  // 刷新工作台会重拉概览、待验收和留言，加载态要覆盖全部三个请求。
+  const dashboardRefreshing = summaryQuery.isFetching || pendingQuery.isFetching || messageQuery.isFetching
   const refetchSummary = summaryQuery.refetch
   const refetchPending = pendingQuery.refetch
   const refetchMessages = messageQuery.refetch
@@ -302,7 +303,6 @@ export default function Dashboard() {
                 {pendingData.total > 0 && <Tag color="orange">{pendingData.total}</Tag>}
               </div>
             )}
-            extra={<Button size="small" loading={dashboardRefreshing} onClick={refreshDashboard}>刷新</Button>}
           >
             {pendingRefreshError && !pendingLoading && (
               <div className="dashboard-stale-notice" role="status">
@@ -437,7 +437,7 @@ export default function Dashboard() {
                         className={`dashboard-message-item${message.unread ? ' dashboard-message-item--unread' : ''}`}
                         role="link"
                         tabIndex={0}
-                        aria-label={`查看${projectLabel}的留言`}
+                        aria-label={`查看${projectLabel}的${message.unread ? '未读' : ''}留言`}
                         onClick={() => nav(target)}
                         onKeyDown={(event) => {
                           if (event.key === 'Enter' || event.key === ' ') {
@@ -455,7 +455,7 @@ export default function Dashboard() {
                         <List.Item.Meta
                           title={(
                             <span className="dashboard-message-title">
-                              {message.unread && <span className="dashboard-message-unread" aria-label="未读" title="未读" />}
+                              {message.unread && <span className="dashboard-message-unread" aria-hidden="true" title="未读" />}
                               <Tag color="arcoblue"><span className="dashboard-message-project" title={projectLabel}>{projectLabel}</span></Tag>
                               <span className="dashboard-message-sender" title={message.senderName || '未知用户'}>{message.senderName || '未知用户'}</span>
                             </span>
@@ -493,7 +493,6 @@ export default function Dashboard() {
             <h2 id="dashboard-overview-title">业务概览</h2>
             <span>主项目与子项目协作状态汇总</span>
           </div>
-          {loadError && data && <Typography.Text type="error">概览刷新失败，当前显示上次结果</Typography.Text>}
           {summaryRefreshError && data && (
             <span className="dashboard-overview-stale" role="status">
               更新暂时失败，显示上次数据

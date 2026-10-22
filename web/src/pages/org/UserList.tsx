@@ -15,6 +15,7 @@ import { type PageResp, fmtTime } from '../../api/types'
 import { passwordRule } from '../../utils/password'
 import type { ApiResponses } from '../../api/types'
 import type { DepartmentTreeNode as ApiDepartmentTreeNode } from '../../api/generated/api-types'
+import LoadError from '../../components/LoadError'
 
 interface UserRow {
   id: number
@@ -350,10 +351,7 @@ export default function UserList() {
         </div>
       )}
       {loadError ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
-          <Typography.Text type="error">加载失败</Typography.Text>
-          <Button size="small" onClick={() => { void usersQuery.refetch() }}>重试</Button>
-        </div>
+        <LoadError onRetry={() => { void usersQuery.refetch() }} />
       ) : (
         <Table
           className="page-table"
@@ -368,13 +366,13 @@ export default function UserList() {
             title: '组织',
             dataIndex: 'departmentName',
             width: 150,
-            render: (v?: string) => <span style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '20px' }}>{v || '-'}</span>,
+            render: (v?: string) => <span className="table-cell-wrap">{v || '-'}</span>,
           },
           {
             title: '角色',
             dataIndex: 'roleName',
             width: 180,
-            render: (v?: string) => (v ? <Tag size="small" style={{ height: 'auto', whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '20px' }}>{v}</Tag> : '-'),
+            render: (v?: string) => (v ? <Tag size="small" className="table-cell-wrap">{v}</Tag> : '-'),
           },
           { title: '邮箱', dataIndex: 'email', width: 130, ellipsis: true },
           {
@@ -411,7 +409,7 @@ export default function UserList() {
                 <Button key="reset-password" size="mini" type="text" onClick={() => openPasswordReset(r)}>
                   重置密码
                 </Button>,
-                r.employeeNo !== 'admin' && (
+                r.employeeNo !== 'admin' && r.id !== me?.id && (
                   <Popconfirm key="status" title={r.status === 'ACTIVE' ? '禁用后立即无法登录，确认？' : '确认启用？'} onOk={() => toggle(r)}>
                     <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
                       {r.status === 'ACTIVE' ? '禁用' : '启用'}
@@ -520,7 +518,7 @@ export default function UserList() {
           >
             <PasswordInput placeholder="6-20 位" />
           </Form.Item>
-          <div className="dialog-note">重置后将退出当前登录</div>
+          <div className="dialog-note">重置后，该用户的全部登录会话将立即退出</div>
         </Form>
       </Modal>
     </Card>

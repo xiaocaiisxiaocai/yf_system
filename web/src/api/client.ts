@@ -3,6 +3,7 @@ import type { AxiosError, AxiosRequestConfig } from 'axios'
 import { Message } from '@arco-design/web-react'
 import { useAuth, type AuthLoginResponse } from '../store/auth'
 import type { ApiErrorResponse } from './generated/api-types'
+import { isQuietRequestError } from './quietRequest'
 
 export const http = axios.create({ baseURL: '/api/v1', timeout: 60000 })
 
@@ -15,8 +16,10 @@ export type QuietRequestConfig = AxiosRequestConfig & {
   quietNetworkError?: boolean
   /** 调用方自行汇总展示业务拒绝（400/403/404/413/422）时抑制逐条提示；鉴权、会话冲突仍正常处理。 */
   quietClientError?: boolean
+  /** 发出请求时期望的登录代际。缺省时拦截器写入当前代际；与当前代际不一致则拒绝发送。 */
+  authGeneration?: number
 }
-type SessionConfig = QuietRequestConfig & { _retried?: boolean; authGeneration?: number }
+type SessionConfig = QuietRequestConfig & { _retried?: boolean }
 const isCurrentSession = (config?: SessionConfig) => !config || config.authGeneration === useAuth.getState().generation
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -166,6 +169,9 @@ async function tryRefresh(generation = useAuth.getState().generation): Promise<b
   if (useAuth.getState().generation !== generation) return false
   if (!refreshing || refreshingGeneration !== generation) {
     refreshingGeneration = generation
+    // 以发起刷新时的账号为准。同一次会话里资料接口可能先写回另一份用户快照，
+    // 不能把那次写回误判成换号。
+    const userIdAtStart = useAuth.getState().user?.id
     const pending = withAuthLock(async () => {
       if (useAuth.getState().generation !== generation) return false
       return axios
@@ -173,6 +179,11 @@ async function tryRefresh(generation = useAuth.getState().generation): Promise<b
       .then((r) => {
         if (useAuth.getState().generation !== generation) return false
         if (!isAuthLoginResponse(r.data)) throw new Error('刷新响应格式无效')
+        if (typeof userIdAtStart === 'number' && userIdAtStart !== r.data.user.id) {
+          // 刷新结果换成了另一个账号：按新登录处理，不重放原来的请求。
+          useAuth.getState().setLogin(r.data, true)
+          return false
+        }
         useAuth.getState().setLogin(r.data, false)
         return true
       })
@@ -204,6 +215,8 @@ export function getApiErrorCode(error: unknown): number | undefined {
   const code = error.response?.data?.code
   return typeof code === 'number' ? code : undefined
 }
+
+export { isVersionConflict } from './versionConflict'
 
 export function isSafeLoginReturnPath(value: unknown): value is string {
   return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//')
@@ -283,22 +296,14 @@ http.interceptors.response.use(
     const connectionMessage = error.code === 'ERR_NETWORK'
       ? '网络连接失败，请稍后重试'
       : error.code === 'ECONNABORTED' ? '请求超时，请稍后重试' : undefined
-    const baseMsg = error.response?.data?.message || connectionMessage || error.message || '网络错误'
+    // 没有服务端文案时（例如代理返回的 HTML 错误页）不展示 axios 的英文状态句。
+    const statusMessage = typeof status === 'number' ? `请求失败（${status}），请稍后重试` : undefined
+    const baseMsg = error.response?.data?.message || connectionMessage || statusMessage || '网络错误'
     // 服务端 500 附带请求编号，便于用户反馈时对照服务器日志与操作日志。
     const requestId = status === 500 ? error.response?.data?.requestId : undefined
     const msg = requestId ? `${baseMsg}（请求编号：${requestId}）` : baseMsg
-    const quietTransientError = cfg?.quietNetworkError === true && (
-      error.code === 'ERR_NETWORK'
-      || error.code === 'ECONNABORTED'
-      || status === 404
-      || status === 408
-      || status === 429
-      || (typeof status === 'number' && status >= 500)
-    )
-    const quietClientError = cfg?.quietClientError === true && typeof status === 'number'
-      && [400, 403, 404, 413, 422].includes(status)
     // 40303 由跳转承载
-    if (biz !== 40303 && !quietTransientError && !quietClientError) Message.error(msg)
+    if (biz !== 40303 && !isQuietRequestError(error)) Message.error(msg)
     return Promise.reject(error)
   }
 )

@@ -162,9 +162,11 @@ describe('FileTable DOM contracts', () => {
   it('file filtering clears a selection that is no longer visible', async () => {
     mocks.permissions.add('file:download')
     const initial = row(23, 'selected.pdf', 'pdf', 1)
-    mocks.get
-      .mockResolvedValueOnce(response([initial]))
-      .mockResolvedValue(response([]))
+    mocks.get.mockImplementation((url: string) => {
+      if (String(url).includes('upload-sessions')) return Promise.resolve({ data: { total: 0, items: [] } })
+      const shown = mocks.get.mock.calls.filter(([called]) => String(called).includes('/files')).length
+      return Promise.resolve(response(shown <= 1 ? [initial] : []))
+    })
     render(<FileTable projectId={1} projectStatus="IN_PROGRESS" />)
     await screen.findByText(initial.originalName)
     const rowCheckbox = tableRow(initial.originalName).getByRole('checkbox')
@@ -175,7 +177,7 @@ describe('FileTable DOM contracts', () => {
     await userEvent.type(search, 'different-file')
     fireEvent.keyDown(search, { key: 'Enter', code: 'Enter', keyCode: 13, charCode: 13, which: 13 })
 
-    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(mocks.get.mock.calls.filter(([url]) => String(url).includes('/files'))).toHaveLength(2))
     await waitFor(() => expect(screen.queryByRole('button', { name: '打包下载（1）' })).not.toBeInTheDocument())
   })
 
@@ -276,33 +278,41 @@ describe('FileTable DOM contracts', () => {
 
     expect(mocks.downloadFile).toHaveBeenCalledWith(7)
   })
-  it('aborts a superseded file list request when the list reloads or unmounts', async () => {
+  it('a realtime signal does not abort the in-flight list; it refetches once afterwards, and unmount aborts', async () => {
     const signals: AbortSignal[] = []
-    mocks.get.mockImplementation((_url: string, config: { signal: AbortSignal }) => {
+    const pending: Array<(value: unknown) => void> = []
+    mocks.get.mockImplementation((url: string, config: { signal: AbortSignal }) => {
+      if (String(url).includes('upload-sessions')) return Promise.resolve({ data: { total: 0, items: [] } })
       signals.push(config.signal)
-      return new Promise(() => undefined)
+      return new Promise((resolve) => { pending.push(resolve) })
     })
     const view = render(<FileTable projectId={1} projectStatus="IN_PROGRESS" />)
     await waitFor(() => expect(signals).toHaveLength(1))
     mocks.revision = 'next'
     view.rerender(<FileTable projectId={1} projectStatus="IN_PROGRESS" compact />)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(signals).toHaveLength(1)
+    expect(signals[0].aborted).toBe(false)
+    await act(async () => { pending[0](response([])) })
     await waitFor(() => expect(signals).toHaveLength(2))
-    expect(signals[0].aborted).toBe(true)
     view.unmount()
     expect(signals[1].aborted).toBe(true)
   })
 
   it('tells the company uploader when the subproject already has a C2S STEP file', async () => {
     mocks.permissions.add('file:upload')
-    mocks.get.mockImplementation((_url: string, config: { params: { keyword?: string } }) => Promise.resolve(response(
-      config.params.keyword === '.stp' ? [row(9, 'assembly.STP', 'STP', 10)] : [row(1, 'a.pdf', 'pdf', 10)],
-    )))
+    mocks.get.mockImplementation((url: string, config: { params?: { keyword?: string } }) => {
+      if (String(url).includes('upload-sessions')) return Promise.resolve({ data: { total: 0, items: [] } })
+      return Promise.resolve(response(
+        config?.params?.keyword === '.stp' ? [row(9, 'assembly.STP', 'STP', 10)] : [row(1, 'a.pdf', 'pdf', 10)],
+      ))
+    })
     render(<FileTable projectId={1} projectStatus="IN_PROGRESS" />)
     await screen.findByText('a.pdf')
     fireEvent.click(screen.getByRole('button', { name: '上传文件' }))
 
     await waitFor(() => expect(screen.getByTestId('chunk-uploader')).toHaveAttribute('data-has-company-step', 'true'))
-    const lookups = mocks.get.mock.calls.filter(([, config]) => ['.step', '.stp'].includes(config.params.keyword))
+    const lookups = mocks.get.mock.calls.filter(([, config]) => ['.step', '.stp'].includes(config?.params?.keyword))
     expect(lookups.map(([, config]) => config.params)).toEqual([
       { page: 1, pageSize: 100, direction: 'C2S', keyword: '.step' },
       { page: 1, pageSize: 100, direction: 'C2S', keyword: '.stp' },

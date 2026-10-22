@@ -10,6 +10,7 @@ import FileTable from '../../components/FileTable'
 import MessagePanel from '../../components/MessagePanel'
 import ProjectActivityPanel from '../../components/ProjectActivityPanel'
 import ProjectWorkflowPanel from '../../components/ProjectWorkflowPanel'
+import { useCoalescedRefresh } from '../../hooks/useCoalescedRefresh'
 import { useDisconnectedPoll } from '../../hooks/useDisconnectedPoll'
 import { useCollaboration } from '../../store/collaboration'
 import { SubprojectDockContext } from './subprojectDockContext'
@@ -38,10 +39,15 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
   const [summary, setSummary] = useState<Summary>({ unreadMessages: 0 })
   const [tab, setTab] = useState<PaneTab>('files')
   const [target, setTarget] = useState<{ tab: PaneTab; id: number } | null>(null)
+  const [uploadActivityRefresh, setUploadActivityRefresh] = useState(0)
+  const bumpUploadActivity = () => setUploadActivityRefresh((value) => value + 1)
   const liveMessages = useCollaboration((state) => state.messageRevisions?.[pid] ?? 0)
   const liveReceipts = useCollaboration((state) => state.receiptRevisions?.[pid] ?? 0)
   const liveActivity = useCollaboration((state) => state.activityRevisions?.[pid] ?? 0)
   const reconnected = useCollaboration((state) => state.reconnectRevision ?? 0)
+  // 实时信号合并后再重拉，请求进行中不被后续信号中止（见 useCoalescedRefresh）。
+  const { refreshKey: detailRefreshKey, begin: beginDetail, end: endDetail } = useCoalescedRefresh(`${liveActivity}|${reconnected}`)
+  const { refreshKey: summaryRefreshKey, begin: beginSummary, end: endSummary } = useCoalescedRefresh(`${liveActivity}|${liveMessages}|${reconnected}`)
   const realtimeConnected = useCollaboration((state) => state.realtimeStatus === 'connected')
   const projectSeq = useRef(0)
   const projectInFlight = useRef(0)
@@ -118,14 +124,17 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
 
   useEffect(() => {
     const controller = new AbortController()
+    let active = true
+    beginDetail()
     // The subproject detail is external server state, refetched on realtime or row changes.
     // eslint-disable-next-line react/set-state-in-effect
-    void loadProject(controller.signal)
+    void loadProject(controller.signal).finally(() => { if (active) endDetail() })
     return () => {
+      active = false
       projectSeq.current += 1
       controller.abort()
     }
-  }, [liveActivity, loadProject, reconnected])
+  }, [beginDetail, endDetail, detailRefreshKey, loadProject])
 
   // 主项目列表里的行比已加载的详情新（例如其他人改了状态）时才补拉一次；
   // 本面板自己触发的 refreshAll 会同时刷新详情和主项目，行更新到达时详情已是最新或仍在请求中，不再重复拉取。
@@ -144,13 +153,16 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
   useEffect(() => {
     if (project?.id !== pid) return
     // Summary is the external server state synchronized after the project becomes available.
+    let active = true
+    beginSummary()
     // eslint-disable-next-line react/set-state-in-effect
-    void loadSummary()
+    void loadSummary().finally(() => { if (active) endSummary() })
     return () => {
+      active = false
       summarySeq.current += 1
       summaryAbort.current?.abort()
     }
-  }, [liveActivity, liveMessages, loadSummary, pid, project?.id, reconnected])
+  }, [loadSummary, pid, project?.id, beginSummary, endSummary, summaryRefreshKey])
 
   const summaryRef = useRef(summary)
   useEffect(() => { summaryRef.current = summary })
@@ -221,7 +233,7 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
         {row.description?.trim()
           ? <Typography.Text className="subproject-pane-description" type="secondary" title={row.description}>{row.description.trim()}</Typography.Text>
           : <span className="subproject-pane-spacer" aria-hidden="true" />}
-        {project ? <ProjectWorkflowPanel compact project={project} onChanged={refreshAll} /> : !loadError && <Spin size={16} />}
+        {project ? <ProjectWorkflowPanel compact project={project} onChanged={refreshAll} uploadRefresh={uploadActivityRefresh} onWriteFailed={bumpUploadActivity} /> : !loadError && <Spin size={16} />}
         <div className="subproject-pane-actions">
           {renderManageActions(row)}
           <Button size="mini" type="text" icon={<IconLaunch />} title="在独立页面打开" aria-label={`在独立页面打开${row.name}`} onClick={() => navigate(`/projects/${pid}`)}>详情</Button>
@@ -241,6 +253,8 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
             projectStatus={status}
             targetId={filesTarget}
             compact
+            uploadRefresh={uploadActivityRefresh}
+            onUploadActivityChanged={bumpUploadActivity}
             onProjectChanged={refreshAll}
           />
         </Tabs.TabPane>

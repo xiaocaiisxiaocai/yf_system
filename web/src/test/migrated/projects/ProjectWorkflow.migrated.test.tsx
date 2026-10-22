@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deferred } from './testUtils'
 
 const mocks = vi.hoisted(() => ({
+  get: vi.fn(),
   post: vi.fn(),
   put: vi.fn(),
   auth: {
@@ -13,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../api/client', () => ({
-  default: { post: mocks.post, put: mocks.put },
+  default: { get: mocks.get, post: mocks.post, put: mocks.put },
   getApiErrorCode: (error: { response?: { data?: { code?: number } } }) => error?.response?.data?.code,
 }))
 
@@ -43,6 +44,7 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
   beforeEach(() => {
     mocks.auth.user = { id: 1, userType: 'INTERNAL' }
     mocks.auth.permissions = []
+    mocks.get.mockResolvedValue({ data: { total: 0, items: [] } })
     mocks.post.mockResolvedValue({ data: {} })
     mocks.put.mockResolvedValue({ data: {} })
   })
@@ -189,10 +191,30 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
     })
   })
 
-  it('a submission version conflict reloads once, closes rejection, and never retries the write', async () => {
+  it('a business conflict keeps the rejection dialog and does not reload the project', async () => {
     mocks.auth.permissions = ['project:confirm']
-    const conflict = { response: { data: { code: 40901 } } }
-    mocks.post.mockRejectedValue(conflict)
+    mocks.post.mockRejectedValue({ isAxiosError: true, response: { data: { code: 40901 } } })
+    const changed = vi.fn()
+    const user = userEvent.setup()
+    render(<ProjectWorkflowPanel project={pendingProject(71)} onChanged={changed} />)
+
+    await user.click(screen.getByRole('button', { name: '验收驳回' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByPlaceholderText('请填写驳回原因'), '版本已变化')
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认驳回' }))
+
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledOnce())
+    expect(changed).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(within(dialog).getByPlaceholderText('请填写驳回原因')).toHaveValue('版本已变化')
+  })
+
+  it('a submission version conflict reloads once, keeps the reason, and never retries the write', async () => {
+    mocks.auth.permissions = ['project:confirm']
+    mocks.post.mockRejectedValue({ isAxiosError: true, response: { data: { code: 40903 } } })
+    mocks.get.mockImplementation((url: string) => url === '/projects/17'
+      ? Promise.resolve({ data: { id: 17, status: 'PENDING_CONFIRMATION', latestSubmissionId: 72 } })
+      : Promise.resolve({ data: { total: 0, items: [] } }))
     const changed = vi.fn()
     const user = userEvent.setup()
     render(<ProjectWorkflowPanel project={pendingProject(71)} onChanged={changed} />)
@@ -204,6 +226,35 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
 
     await waitFor(() => expect(changed).toHaveBeenCalledOnce())
     expect(mocks.post).toHaveBeenCalledOnce()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(within(dialog).getByPlaceholderText('请填写驳回原因')).toHaveValue('版本已变化')
+
+    expect(await screen.findByText('验收申请已更新，请确认原因后再次提交')).toBeInTheDocument()
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '确认驳回' }))
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(2))
+    expect(mocks.post).toHaveBeenLastCalledWith('/projects/17/reject', {
+      reason: '版本已变化',
+      expectedSubmissionId: 72,
+    })
+  })
+
+  it('a submission version conflict closes the reject dialog once the project is no longer pending', async () => {
+    mocks.auth.permissions = ['project:confirm']
+    mocks.post.mockRejectedValue({ isAxiosError: true, response: { data: { code: 40903 } } })
+    mocks.get.mockImplementation((url: string) => url === '/projects/17'
+      ? Promise.resolve({ data: { id: 17, status: 'COMPLETED', latestSubmissionId: 71 } })
+      : Promise.resolve({ data: { total: 0, items: [] } }))
+    const changed = vi.fn()
+    const user = userEvent.setup()
+    render(<ProjectWorkflowPanel project={pendingProject(71)} onChanged={changed} />)
+
+    await user.click(screen.getByRole('button', { name: '验收驳回' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByPlaceholderText('请填写驳回原因'), '版本已变化')
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认驳回' }))
+
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce())
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(mocks.post).toHaveBeenCalledOnce()
   })
 })

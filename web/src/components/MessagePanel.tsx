@@ -21,6 +21,34 @@ import {
   useMessageSync,
 } from './message-panel/useMessageQueries'
 
+/** randomUUID 只在 HTTPS/localhost 可用；HTTP 部署时退回 getRandomValues（不要求安全上下文）生成 v4 UUID。 */
+function newClientMessageId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+function draftImageIdentity(files: readonly File[]) {
+  return files.map(file => `${file.name}\0${file.size}\0${file.lastModified}`).join('\n')
+}
+
+/** 同一份草稿（修剪后的文字 + 图片身份）重试时复用编号；内容一变就换新编号。 */
+function clientMessageIdFor(
+  slot: { current: { clientMessageId: string; text: string; imageIdentity: string } | null },
+  text: string,
+  files: readonly File[],
+) {
+  const imageIdentity = draftImageIdentity(files)
+  const current = slot.current
+  if (current && current.text === text && current.imageIdentity === imageIdentity) return current.clientMessageId
+  const clientMessageId = newClientMessageId()
+  slot.current = { clientMessageId, text, imageIdentity }
+  return clientMessageId
+}
+
 interface Props {
   projectId: number
   projectStatus: string
@@ -60,6 +88,7 @@ export default function MessagePanel({
   const locatedScope = useRef('')
   const markingRead = useRef(new Set<number>())
   const sendInFlight = useRef(false)
+  const sentDraft = useRef<{ clientMessageId: string; text: string; imageIdentity: string } | null>(null)
   const scrollAnchor = useRef<{ id: number; top: number; owner: Element } | null>(null)
 
   const feed = useMessageFeed({ scope, projectId, targetId, revision })
@@ -93,6 +122,7 @@ export default function MessagePanel({
   useEffect(() => {
     if (draftScope.current === draftScopeKey) return
     draftScope.current = draftScopeKey
+    sentDraft.current = null
     setContent('')
     setImages([])
   }, [draftScopeKey])
@@ -214,7 +244,8 @@ export default function MessagePanel({
 
   useEffect(() => {
     const root = listRef.current
-    if (!root || typeof IntersectionObserver === 'undefined') return
+    // 隐藏的标签页或面板不标记已读；不依赖隐藏面板的高度恰好为 0。
+    if (!active || !root || typeof IntersectionObserver === 'undefined') return
     const observer = new IntersectionObserver(
       entries => {
         const ids = entries
@@ -238,7 +269,7 @@ export default function MessagePanel({
     )
     root.querySelectorAll<HTMLElement>('[data-unread="true"] .message-read-marker').forEach(node => observer.observe(node))
     return () => observer.disconnect()
-  }, [visibleMessages, feedIdentity, feedKey, markReadLocally, applyReadCounts, commands.markRead, onRead])
+  }, [active, visibleMessages, feedIdentity, feedKey, markReadLocally, applyReadCounts, commands.markRead, onRead])
 
   const send = async () => {
     const draft = content
@@ -249,13 +280,15 @@ export default function MessagePanel({
     const addMessage = addConfirmedMessage
     const requestSyncRoot = sync.rootKey
     const requestDraftScope = draftScope.current
+    const clientMessageId = clientMessageIdFor(sentDraft, text, draftImages)
     sendInFlight.current = true
     setSending(true)
     try {
-      let body: FormData | { content: string } = { content: text }
+      let body: FormData | { content: string; clientMessageId: string } = { content: text, clientMessageId }
       if (draftImages.length) {
         const form = new FormData()
         form.append('content', text)
+        form.append('clientMessageId', clientMessageId)
         draftImages.forEach(file => form.append('images', file, file.name))
         body = form
       }
@@ -263,13 +296,14 @@ export default function MessagePanel({
       const syncWasFetching = queryClient.isFetching({ queryKey: requestSyncRoot }) > 0
       await cancelMessageQueries([requestFeedKey, requestSyncRoot])
       addMessage(message)
+      sentDraft.current = null
       if (draftScope.current === requestDraftScope) {
         setContent(current => current === draft ? '' : current)
         setImages(current => current.filter(file => !draftImages.includes(file)))
       }
       if (syncWasFetching) void queryClient.invalidateQueries({ queryKey: requestSyncRoot })
     } catch {
-      // 请求层已显示错误；保留草稿，允许用户重试。
+      // 请求层已显示错误。保留草稿和同一 clientMessageId，失败（含 40901 内容冲突）不自动换号重发。
     } finally {
       sendInFlight.current = false
       setSending(false)

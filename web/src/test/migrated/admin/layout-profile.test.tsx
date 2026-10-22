@@ -6,16 +6,10 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '../../../index.css'
 
-const mocks = vi.hoisted(() => ({
-  get: vi.fn(),
-  post: vi.fn(),
-  put: vi.fn(),
-  delete: vi.fn(),
-  logout: vi.fn(),
-  setUser: vi.fn(),
-  auth: {
+const mocks = vi.hoisted(() => {
+  const auth = {
     generation: 1,
-    token: 'test-token',
+    token: 'test-token' as string | null,
     menus: ['dashboard', 'project:list', 'supplier:list', 'org:user', 'org:dept', 'rbac:role', 'log:audit'],
     permissions: ['project:list', 'project:create', 'project:update', 'project:delete', 'supplier:manage', 'supplier:account', 'supplier:delete', 'user:delete', 'role:delete'],
     user: {
@@ -26,24 +20,42 @@ const mocks = vi.hoisted(() => ({
       userType: 'SUPPLIER',
       supplierId: 3,
     },
-  },
-}))
+  }
+  const logout = vi.fn()
+  const setUser = vi.fn()
+  const withAuthLock = vi.fn(async (operation: () => Promise<unknown>) => operation())
+  const authState = () => ({
+    ...auth,
+    hasPerm: (code: string) => auth.permissions.includes(code),
+    logout,
+    setUser,
+  })
+  return {
+    get: vi.fn(),
+    post: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
+    logout,
+    setUser,
+    withAuthLock,
+    auth,
+    authState,
+  }
+})
 
 vi.mock('../../../api/client', () => ({
   default: { get: mocks.get, post: mocks.post, put: mocks.put, delete: mocks.delete },
-  withAuthLock: async (operation: () => unknown) => operation(),
+  withAuthLock: (operation: () => Promise<unknown>) => mocks.withAuthLock(operation),
 }))
 
 vi.mock('../../../store/auth', () => ({
-  useAuth: (selector?: (state: unknown) => unknown) => {
-    const state = {
-      ...mocks.auth,
-      hasPerm: (code: string) => mocks.auth.permissions.includes(code),
-      logout: mocks.logout,
-      setUser: mocks.setUser,
-    }
-    return selector ? selector(state) : state
-  },
+  useAuth: Object.assign(
+    (selector?: (state: ReturnType<typeof mocks.authState>) => unknown) => {
+      const state = mocks.authState()
+      return selector ? selector(state) : state
+    },
+    { getState: () => mocks.authState() },
+  ),
 }))
 
 vi.mock('../../../components/CollaborationNotifications', () => ({
@@ -68,6 +80,7 @@ function renderLayout(initialEntry = '/') {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
+        <Route path="/login" element={<LocationProbe />} />
         <Route element={<><AdminLayout /><LocationProbe /></>}>
           <Route index element={<div>工作台内容</div>} />
           <Route path="profile" element={<div>资料路由内容</div>} />
@@ -92,6 +105,11 @@ function installApplicationStyles() {
 describe('管理员布局与个人资料', () => {
   beforeEach(() => {
     localStorage.clear()
+    mocks.auth.generation = 1
+    mocks.auth.token = 'test-token'
+    mocks.logout.mockReset()
+    mocks.withAuthLock.mockReset()
+    mocks.withAuthLock.mockImplementation(async (operation: () => Promise<unknown>) => operation())
     mocks.auth.menus = ['dashboard', 'project:list', 'supplier:list', 'org:user', 'org:dept', 'rbac:role', 'log:audit']
     mocks.auth.permissions = ['project:list', 'project:create', 'project:update', 'project:delete', 'supplier:manage', 'supplier:account', 'supplier:delete', 'user:delete', 'role:delete']
     mocks.auth.user = {
@@ -121,6 +139,73 @@ describe('管理员布局与个人资料', () => {
 
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/profile')
     expect(screen.queryByText('修改密码', { selector: '.arco-dropdown-menu-item' })).not.toBeInTheDocument()
+  })
+
+  async function chooseLogout(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole('button', { name: '账号菜单：供应商人员' }))
+    fireEvent.click((await screen.findAllByText('退出登录')).at(-1)!.closest('.arco-dropdown-menu-item')!)
+  }
+
+  it('sends server logout with the captured bearer after the local session is cleared', async () => {
+    const user = userEvent.setup()
+    mocks.logout.mockImplementation(() => {
+      mocks.auth.token = null
+      mocks.auth.generation += 1
+    })
+    renderLayout()
+    await chooseLogout(user)
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/auth/logout', null, expect.objectContaining({
+      headers: { Authorization: 'Bearer test-token' },
+      authGeneration: 2,
+    })))
+    expect(mocks.logout.mock.invocationCallOrder[0]).toBeLessThan(mocks.post.mock.invocationCallOrder[0])
+    expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/login')
+  })
+
+  it('leaves locally even when the auth lock or the server logout never succeeds', async () => {
+    const user = userEvent.setup()
+    mocks.logout.mockImplementation(() => {
+      mocks.auth.token = null
+      mocks.auth.generation += 1
+    })
+    mocks.withAuthLock.mockImplementation(() => new Promise(() => undefined))
+    const hanging = renderLayout()
+    await chooseLogout(user)
+    expect(mocks.logout).toHaveBeenCalledOnce()
+    expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/login')
+    expect(mocks.post).not.toHaveBeenCalled()
+    hanging.unmount()
+
+    mocks.withAuthLock.mockRejectedValue(new Error('lock'))
+    const rejected = renderLayout()
+    await chooseLogout(user)
+    expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/login')
+    expect(mocks.post).not.toHaveBeenCalled()
+    rejected.unmount()
+
+    mocks.withAuthLock.mockImplementation(async (operation: () => Promise<unknown>) => operation())
+    mocks.post.mockRejectedValueOnce(new Error('down'))
+    renderLayout()
+    await chooseLogout(user)
+    await waitFor(() => expect(mocks.post).toHaveBeenCalled())
+    expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/login')
+  })
+
+  it('does not send logout after another login replaces the signed-out generation', async () => {
+    const user = userEvent.setup()
+    mocks.logout.mockImplementation(() => {
+      mocks.auth.token = null
+      mocks.auth.generation += 1
+    })
+    mocks.withAuthLock.mockImplementation(async (operation: () => Promise<unknown>) => {
+      mocks.auth.generation += 1
+      return operation()
+    })
+    renderLayout()
+    await chooseLogout(user)
+    await waitFor(() => expect(mocks.withAuthLock).toHaveBeenCalled())
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/login')
   })
 
   it('personal profile submits only own email and keeps password change in the same page', async () => {

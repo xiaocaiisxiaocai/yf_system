@@ -96,6 +96,17 @@ describe('管理员表单契约', () => {
     mocks.delete.mockResolvedValue({ data: {} })
   })
 
+  it('a mismatched password confirmation is reported on the confirm field and sends nothing', async () => {
+    const user = userEvent.setup()
+    render(<MemoryRouter><ChangePassword /></MemoryRouter>)
+    await user.type(screen.getByLabelText('原密码', { selector: 'input' }), 'OldPass#2026')
+    await user.type(screen.getByLabelText('新密码', { selector: 'input' }), 'Tide#Lamp47')
+    await user.type(screen.getByLabelText('确认新密码', { selector: 'input' }), 'Tide#Lamp48')
+    fireEvent.submit(screen.getByLabelText('确认新密码', { selector: 'input' }).closest('form')!)
+    expect(await screen.findByText('两次输入的新密码不一致')).toBeVisible()
+    expect(mocks.put).not.toHaveBeenCalled()
+  })
+
   it('password contract counts Unicode scalars and is shared by every password-writing form', async () => {
     expect(PASSWORD_MIN_CHARS).toBe(6)
     expect(PASSWORD_MAX_CHARS).toBe(20)
@@ -113,7 +124,7 @@ describe('管理员表单契约', () => {
     }
 
     const changePassword = render(<MemoryRouter><ChangePassword /></MemoryRouter>)
-    expect(screen.getByPlaceholderText(/新密码（6–20 位）/)).toBeVisible()
+    expect(screen.getByPlaceholderText(/新密码（6-20 位）/)).toBeVisible()
     changePassword.unmount()
 
     const profile = render(<MemoryRouter><Profile /></MemoryRouter>)

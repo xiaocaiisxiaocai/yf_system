@@ -1,10 +1,11 @@
-import { Button, Spin, Tabs, Typography } from '@arco-design/web-react'
+import { Spin, Tabs } from '@arco-design/web-react'
 import { useNavigate } from 'react-router-dom'
 import http from '../../api/client'
 import { fmtTime } from '../../api/types'
 import { renderMailSettingsPanel } from './components/MailSettingsPanel'
 import { renderSystemConfigTable } from './components/SystemConfigTable'
 import { useSystemConfig } from './hooks/useSystemConfig'
+import LoadError from '../../components/LoadError'
 
 export default function SysConfig() {
   const navigate = useNavigate()
@@ -51,10 +52,7 @@ export default function SysConfig() {
     <div className="system-page">
       <div className="page-heading"><div><h1>系统参数</h1></div></div>
       {state.loadError ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>
-          <Typography.Text type="error">加载失败</Typography.Text>
-          <Button size="small" onClick={state.load}>重试</Button>
-        </div>
+        <LoadError onRetry={state.load} />
       ) : state.loading ? (
         <Spin loading style={{ width: '100%', minHeight: 120 }} />
       ) : (

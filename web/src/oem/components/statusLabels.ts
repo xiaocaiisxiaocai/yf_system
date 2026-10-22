@@ -48,3 +48,23 @@ export const DIRECTION_LABEL: Record<Direction, string> = {
 }
 
 export const LIFECYCLE_OPTIONS = Object.entries(LIFECYCLE).map(([value, [label]]) => ({ value, label }))
+
+/** Notice shown when a draft the user is still editing has already left DRAFT. */
+export function transferClosedNotice(summary: { lifecycleStatus: Lifecycle; direction: Direction }): string | null {
+  switch (summary.lifecycleStatus) {
+    case 'DRAFT':
+      return null
+    case 'SEALED':
+      return summary.direction === 'INTERNAL_TO_OEM' ? '传递单已提交，正在等待审批或文件处理' : '文件正在处理中'
+    case 'RELEASED':
+      return '文件已发送'
+    case 'REJECTED':
+      return '传递单已被驳回'
+    case 'BLOCKED':
+      return '传递单因文件校验未通过而终止'
+    case 'CANCELLED':
+      return '传递单已终止'
+    case 'ABANDONED':
+      return '草稿已删除'
+  }
+}

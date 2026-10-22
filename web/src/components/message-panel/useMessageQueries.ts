@@ -599,7 +599,7 @@ export function useMessageCommands() {
   return { send, remove, markRead }
 }
 
-export function startMessageSend(projectId: number, body: FormData | { content: string }) {
+export function startMessageSend(projectId: number, body: FormData | { content: string; clientMessageId: string }) {
   return http.post<Message>(`/projects/${projectId}/messages`, body)
 }
 

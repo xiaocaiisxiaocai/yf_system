@@ -6,7 +6,8 @@ import { Message } from '@arco-design/web-react'
 import { useEffect } from 'react'
 import { REFRESH_TIMEOUT_MS, type QuietRequestConfig } from '../../api/client'
 import { withPortalAuthLock } from './portalAuthLock'
-import { isQuietedError } from './quietErrors'
+import { isQuietRequestError } from '../../api/quietRequest'
+import { oemRequestError } from './requestError'
 import { createAppQueryClient } from '../../api/queryClient'
 import type { AccountBrief, ApiResponses } from './types'
 
@@ -166,6 +167,7 @@ portalHttp.interceptors.response.use(
     return response
   },
   async (error: AxiosError<{ code?: number; message?: string }>) => {
+    if (error.code === 'ERR_CANCELED') return Promise.reject(error)
     const config = error.config as PortalSessionConfig | undefined
     if (!isCurrentSession(config)) return Promise.reject(error)
     const status = error.response?.status
@@ -183,9 +185,9 @@ portalHttp.interceptors.response.use(
       if (location.pathname !== `${PORTAL_BASE}/change-password`) location.href = `${PORTAL_BASE}/change-password`
       return Promise.reject(error)
     }
-    const message = error.response?.data?.message
-      || (error.code === 'ERR_NETWORK' ? '网络连接失败，请稍后重试' : error.code === 'ECONNABORTED' ? '请求超时，请稍后重试' : error.message)
-    if (!isQuietedError(error)) Message.error(message || '网络错误')
+    if (!isQuietRequestError(error)) {
+      Message.error(oemRequestError(error, typeof status === 'number' ? `请求失败（${status}），请稍后重试` : '网络错误'))
+    }
     return Promise.reject(error)
   },
 )

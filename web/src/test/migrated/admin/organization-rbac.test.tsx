@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -137,6 +137,34 @@ describe('组织、角色与权限行为', () => {
     expect(screen.getByText('未找到匹配的组织')).toBeVisible()
   })
 
+  it('leader candidates form one tab stop and arrow keys move the selection', async () => {
+    mocks.permissions = ['dept:leader_manage']
+    mocks.departments = [{ id: 1, name: '事业一部', kind: 'DIVISION', sortNo: 1, status: 'ACTIVE', leader: null, children: [] }]
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/departments') return { data: mocks.departments }
+      if (url === '/admin/department-leader-options') return { data: [
+        { id: 31, employeeNo: 'E031', realName: '甲', departmentName: '一部' },
+        { id: 32, employeeNo: 'E032', realName: '乙', departmentName: '二部' },
+      ] }
+      return { data: page() }
+    })
+    const user = userEvent.setup()
+    render(<DeptManage />)
+    await user.click((await screen.findAllByText('事业一部'))[0])
+    await user.click(screen.getByRole('button', { name: '设置主管' }))
+    const first = await screen.findByRole('radio', { name: /甲.*E031/ })
+    const second = screen.getByRole('radio', { name: /乙.*E032/ })
+    expect(first).toHaveAttribute('tabindex', '0')
+    expect(second).toHaveAttribute('tabindex', '-1')
+    first.focus()
+    fireEvent.keyDown(first, { key: 'ArrowDown' })
+    expect(second).toHaveAttribute('aria-checked', 'true')
+    expect(second).toHaveFocus()
+    expect(second).toHaveAttribute('tabindex', '0')
+    fireEvent.keyDown(second, { key: 'ArrowDown' })
+    expect(first).toHaveAttribute('aria-checked', 'true')
+  })
+
   it('sets a department leader from the latest candidate query and updates the current tree data once', async () => {
     mocks.permissions = ['dept:leader_manage']
     mocks.departments = [{ id: 1, name: '事业一部', kind: 'DIVISION', sortNo: 1, status: 'ACTIVE', leader: null, children: [] }]
@@ -162,8 +190,24 @@ describe('组织、角色与权限行为', () => {
     await user.click(screen.getByRole('button', { name: '设置主管' }))
 
     const search = screen.getByRole('textbox', { name: '搜索主管候选' })
-    fireEvent.change(search, { target: { value: '旧' } })
-    fireEvent.change(search, { target: { value: '新' } })
+    const leaderCalls = () => mocks.get.mock.calls.filter(([url]) => url === '/admin/department-leader-options')
+    await waitFor(() => expect(leaderCalls().some((call) => !call[1]?.params?.keyword)).toBe(true))
+    const opened = leaderCalls().length
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(search, { target: { value: '旧' } })
+      await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+      expect(leaderCalls()).toHaveLength(opened + 1)
+      expect(leaderCalls().at(-1)?.[1]).toMatchObject({ params: { keyword: '旧' } })
+      fireEvent.change(search, { target: { value: '新' } })
+      await act(async () => { await vi.advanceTimersByTimeAsync(299) })
+      expect(leaderCalls()).toHaveLength(opened + 1)
+      await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+      expect(leaderCalls()).toHaveLength(opened + 2)
+      expect(leaderCalls().at(-1)?.[1]).toMatchObject({ params: { keyword: '新' } })
+    } finally {
+      vi.useRealTimers()
+    }
     latest.resolve({ data: [{ id: 22, employeeNo: 'E022', realName: '新主管', departmentName: '制造部' }] })
     expect(await screen.findByRole('radio', { name: /新主管.*E022.*制造部/ })).toBeVisible()
     stale.resolve({ data: [{ id: 21, employeeNo: 'E021', realName: '旧主管', departmentName: '旧部门' }] })
@@ -492,5 +536,59 @@ describe('组织、角色与权限行为', () => {
     const custom = screen.getByText('自定义角色').closest('tr')!
     expect(within(builtIn).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
     expect(within(custom).getByRole('button', { name: '删除' })).toBeVisible()
+  })
+
+  it('hides the current user status action and still offers it for another account', async () => {
+    mocks.permissions = ['user:manage']
+    mocks.user = { id: 9, employeeNo: 'e9', realName: '在职用户', userType: 'INTERNAL', isSystemAdmin: false }
+    mocks.users = [
+      {
+        id: 9, employeeNo: 'e9', realName: '在职用户', email: 'e9@example.invalid',
+        departmentId: 4, departmentName: '研发部', roleId: 7, roleName: '内部成员', status: 'ACTIVE', createdAt: '',
+      },
+      {
+        id: 10, employeeNo: 'e10', realName: '其他用户', email: 'e10@example.invalid',
+        departmentId: 4, departmentName: '研发部', roleId: 7, roleName: '内部成员', status: 'ACTIVE', createdAt: '',
+      },
+    ]
+    render(<UserList />)
+    const self = (await screen.findByText('在职用户')).closest('tr')!
+    const other = screen.getByText('其他用户').closest('tr')!
+    expect(within(self).queryByRole('button', { name: '禁用' })).not.toBeInTheDocument()
+    expect(within(other).getByRole('button', { name: '禁用' })).toBeVisible()
+  })
+
+  it('confirms disabling a division and reports which kind changed', async () => {
+    mocks.permissions = ['dept:manage']
+    mocks.departments = [{ id: 1, name: '事业一部', kind: 'DIVISION', sortNo: 1, status: 'ACTIVE', children: [] }]
+    const user = userEvent.setup()
+    render(<DeptManage />)
+    await user.click((await screen.findAllByText('事业一部'))[0])
+    fireEvent.click(moreTrigger())
+    const disableItem = await screen.findByText('禁用事业部')
+    fireEvent.click(disableItem.closest('.arco-dropdown-menu-item') ?? disableItem)
+    fireEvent.click(await screen.findByRole('button', { name: '确认禁用' }))
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/departments/1/status', { status: 'DISABLED' }))
+    expect(await screen.findByText('事业部已禁用')).toBeInTheDocument()
+  })
+
+  it('blocks disabling a role that still has users and confirms one that does not', async () => {
+    mocks.permissions = ['role:manage']
+    mocks.roles = [{ id: 3, name: '在用角色', isBuiltIn: false, status: 'ACTIVE', permissionIds: [], assignedUserCount: 2, canManage: true }]
+    render(<RoleList />)
+    const blocked = (await screen.findByText('在用角色')).closest('tr')!
+    const blockedButton = within(blocked).getByRole('button', { name: '禁用' })
+    expect(blockedButton).toBeDisabled()
+    fireEvent.mouseEnter(blockedButton.parentElement!)
+    expect(await screen.findByText('该角色绑定 2 个用户；启用用户未更换角色前不能禁用。')).toBeInTheDocument()
+    expect(mocks.put).not.toHaveBeenCalled()
+
+    mocks.roles = [{ id: 4, name: '空角色', isBuiltIn: false, status: 'ACTIVE', permissionIds: [], assignedUserCount: 0, canManage: true }]
+    render(<RoleList />)
+    const empty = (await screen.findByText('空角色')).closest('tr')!
+    fireEvent.click(within(empty).getByRole('button', { name: '禁用' }))
+    fireEvent.click(await screen.findByRole('button', { name: '确定' }))
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/roles/4/status', { status: 'DISABLED' }))
+    expect(await screen.findByText('角色已禁用')).toBeInTheDocument()
   })
 })

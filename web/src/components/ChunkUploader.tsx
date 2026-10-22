@@ -12,6 +12,7 @@ import {
 } from '../api/uploads'
 import { isStepFile } from '../utils/uploadMaterialRules'
 import UploadMaterialGuide, { type UploadDirection } from './UploadMaterialGuide'
+import { retainActiveUpload } from './uploadActivity'
 
 interface Props {
   projectId: number
@@ -241,6 +242,12 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
       attempts.clear()
     }
   }, [])
+
+  useEffect(() => {
+    const busy = entries.some((entry) => entry.phase === 'hashing' || entry.phase === 'uploading' || entry.phase === 'merging')
+    if (!busy) return undefined
+    return retainActiveUpload()
+  }, [entries])
 
   // 只有确认成功的文件可以计入整批完成；取消、清理或结果未知不等于交付成功。
   useEffect(() => {

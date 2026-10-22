@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -147,7 +147,7 @@ describe('工作台协作生产界面', () => {
       quietNetworkError: true,
     })
 
-    await user.click(screen.getByRole('link', { name: '查看设备验收的留言' }))
+    await user.click(screen.getByRole('link', { name: '查看设备验收的未读留言' }))
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/projects/8?tab=messages&target=37')
 
     await user.click(screen.getByRole('button', { name: '全部' }))
@@ -160,7 +160,13 @@ describe('工作台协作生产界面', () => {
   it('collaboration revisions refresh quietly and older replies cannot replace the latest dashboard snapshot', async () => {
     const refreshes: Array<{ url: string; config: Record<string, unknown>; request: ReturnType<typeof deferred<{ data: unknown }>> }> = []
     mocks.get.mockImplementation(async (url: string, config: Record<string, unknown> = {}) => {
-      if (mocks.collaboration.revision === 'initial') return { data: url === '/dashboard/summary' ? summary : emptyPage }
+      if (mocks.collaboration.revision === 'initial') {
+        if (url === '/dashboard/summary') return { data: summary }
+        if (url === '/dashboard/messages') {
+          return { data: { list: [{ id: 7, projectId: 3, content: '原留言', createdAt: '', unread: true }], total: 1, page: 1, pageSize: 10 } }
+        }
+        return { data: emptyPage }
+      }
       const request = deferred<{ data: unknown }>()
       refreshes.push({ url, config, request })
       return request.promise
@@ -172,6 +178,7 @@ describe('工作台协作生产界面', () => {
     view.rerender(dashboardView())
     await waitFor(() => expect(refreshes).toHaveLength(3))
     expect(screen.getByText('近30天未读留言')).toBeVisible()
+    expect(screen.getByText('原留言')).toBeVisible()
 
     mocks.collaboration.revision = 'revision-2'
     view.rerender(dashboardView())
@@ -331,9 +338,7 @@ describe('工作台协作生产界面', () => {
     await act(async () => pendingRequests[3].request.resolve({ data: { list: firstPage, total: 10, page: 1, pageSize: 10 } }))
     await waitFor(() => expect(screen.queryByLabelText('第 2 页')).not.toBeInTheDocument())
 
-    const pendingCard = screen.getByRole('heading', { name: '公司内部待验收子项目' }).closest('.arco-card')
-    expect(pendingCard).not.toBeNull()
-    await user.click(within(pendingCard as HTMLElement).getByRole('button', { name: '刷新' }))
+    await user.click(screen.getByRole('button', { name: '刷新工作台' }))
     await waitFor(() => expect(pendingRequests).toHaveLength(5))
     await act(async () => pendingRequests[4].request.resolve({ data: emptyPage }))
     expect(await screen.findByText('暂无内部待验收子项目')).toBeVisible()

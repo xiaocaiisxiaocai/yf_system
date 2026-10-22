@@ -262,7 +262,7 @@ describe('留言撰写、发送与分页', () => {
     expect(textbox()).toHaveValue(text)
     fireEvent.click(sendButton())
     await waitFor(() => expect(messageMocks.post).toHaveBeenCalledTimes(1))
-    expect(messageMocks.post.mock.calls[0][1]).toEqual({ content: text })
+    expect(messageMocks.post.mock.calls[0][1]).toEqual({ content: text, clientMessageId: expect.any(String) })
     await waitFor(() => expect(textbox()).toHaveValue(''))
   })
 
@@ -283,7 +283,10 @@ describe('留言撰写、发送与分页', () => {
     expect(sendButton()).not.toBeDisabled()
     fail = false
     await user.click(sendButton())
-    expect(messageMocks.post.mock.calls[1][1]).toEqual({ content: '保留重试的留言' })
+    expect(messageMocks.post.mock.calls[1][1]).toEqual({
+      content: '保留重试的留言',
+      clientMessageId: messageMocks.post.mock.calls[0][1].clientMessageId,
+    })
     expect(textbox()).toHaveValue('')
   })
 
@@ -308,12 +311,14 @@ describe('留言撰写、发送与分页', () => {
     const body = messageMocks.post.mock.calls[0][1] as FormData
     expect(body).toBeInstanceOf(FormData)
     expect(body.get('content')).toBe('')
+    expect(body.get('clientMessageId')).toEqual(expect.any(String))
     expect((body.get('images') as File).name).toBe('screenshot.png')
     expect(fileInput).toBeDisabled()
 
     await act(async () => first.reject(new Error('upload failed')))
     expect(screen.getByLabelText('已添加 1 张图片')).toBeVisible()
     fireEvent.click(sendButton())
+    expect((messageMocks.post.mock.calls[1][1] as FormData).get('clientMessageId')).toBe(body.get('clientMessageId'))
     await act(async () => second.resolve({
       data: messageRow(10, { content: '', images: [{ id: 2, name: 'screenshot.png', sizeBytes: 13, mimeType: 'image/png' }] }),
     }))

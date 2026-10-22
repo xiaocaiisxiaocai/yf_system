@@ -91,7 +91,7 @@ describe('留言修订同步与竞争', () => {
     expect(textbox()).toHaveValue('正在写的回复')
     expect(screen.queryByRole('button', { name: '查看最新留言' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /发送/ }))
-    expect(messageMocks.post.mock.calls[0][1]).toEqual({ content: '正在写的回复' })
+    expect(messageMocks.post.mock.calls[0][1]).toEqual({ content: '正在写的回复', clientMessageId: expect.any(String) })
     expect(textbox()).toHaveValue('')
   })
 

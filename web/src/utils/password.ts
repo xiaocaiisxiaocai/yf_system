@@ -1,4 +1,4 @@
-import type { RulesProps } from '@arco-design/web-react'
+import type { FormInstance, RulesProps } from '@arco-design/web-react'
 import policy from './password-policy.json'
 
 export const PASSWORD_MIN_CHARS = policy.minChars
@@ -44,4 +44,15 @@ export const passwordRule: RulesProps<string> = {
   validator(value: string | undefined, callback: (error?: string) => void) {
     callback(value ? validatePassword(value) : undefined)
   },
+}
+
+export const PASSWORD_MISMATCH_MESSAGE = '两次输入的新密码不一致'
+
+/** 确认密码与表单里的 newPassword 不一致时把错误标在确认框上；配合 Form.Item 的 dependencies={['newPassword']}。 */
+export function confirmPasswordRule(form: FormInstance): RulesProps<string> {
+  return {
+    validator(value: string | undefined, callback: (error?: string) => void) {
+      callback(value && value !== form.getFieldValue('newPassword') ? PASSWORD_MISMATCH_MESSAGE : undefined)
+    },
+  }
 }

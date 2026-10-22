@@ -135,7 +135,7 @@ async function choose(page, placeholder, optionName) {
         assert.equal(typeof manager.user.realName, 'string');
         await managerPage.waitForURL(s.base + '/');
         assert(manager.permissions.includes('project:view_all'), 'project manager fixture must have project:view_all');
-        for (const label of ['供应商管理', '用户管理', '组织架构', '角色权限', '操作日志', '系统参数']) {
+        for (const label of ['供应商管理', '用户管理', '组织架构', '角色与权限', '操作日志', '系统参数']) {
           assert.equal(await managerPage.getByRole('menuitem', { name: label, exact: true }).count(), 0,
             'project manager must not expose system menu ' + label);
         }
@@ -207,7 +207,7 @@ async function choose(page, placeholder, optionName) {
       await page.goto(s.base + '/');
       const message = page.locator('.dashboard-message-item').filter({ hasText: messageText });
       await message.waitFor();
-      await message.locator('[aria-label="未读"]').waitFor();
+      await message.locator('.dashboard-message-unread').waitFor();
       await message.focus();
       await page.keyboard.press('Enter');
       await page.waitForURL(url => url.pathname === '/projects/' + pendingProjects[0].id

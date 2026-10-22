@@ -5,10 +5,12 @@ import {
 import { IconDownload, IconEye, IconUpload, IconDelete, IconClose, IconQuestionCircle } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from '../store/auth'
-import { type FileItem, type PageResp, fmtSize, fmtTime } from '../api/types'
+import { type FileItem, type PageResp, PROJECT_STATUS, fmtSize, fmtTime } from '../api/types'
 import { actionSlots } from './ActionSlots'
+import ActiveUploadSessions from './ActiveUploadSessions'
 import ChunkUploader from './ChunkUploader'
 import PdfPreview from './PdfPreview'
+import { useCoalescedRefresh } from '../hooks/useCoalescedRefresh'
 import { useCollaboration } from '../store/collaboration'
 import type { ApiResponses } from '../api/types'
 import { downloadFile, downloadFiles } from '../api/download'
@@ -28,6 +30,9 @@ interface Props {
   onOpenCopyHistory?: () => void
   /** 供应商选择上传后提交验收时，用于刷新父组件的项目/流程状态。 */
   onProjectChanged?: () => void
+  /** 父组件在提交/终止失败或另一处取消上传后递增。 */
+  uploadRefresh?: number
+  onUploadActivityChanged?: () => void
   /** 主项目页的子项目面板较窄：收紧列宽、改用小号表格，说明文字收进提示。 */
   compact?: boolean
 }
@@ -79,13 +84,18 @@ function WatermarkedPreview({ employeeNo, realName, children }: { employeeNo?: s
   </div>
 }
 
-export default function FileTable({ projectId, projectStatus, targetId, onOpenCopyHistory, onProjectChanged, compact = false }: Props) {
+export default function FileTable({
+  projectId, projectStatus, targetId, onOpenCopyHistory, onProjectChanged, compact = false,
+  uploadRefresh = 0, onUploadActivityChanged,
+}: Props) {
   const w = compact ? 1 : 0
   const [previewToolbar, setPreviewToolbar] = useState<HTMLDivElement | null>(null)
   // 只响应本项目的实时信号；实时连接不可用时才退回全局轮询指纹（任何可见项目的变化都会改变它）。
   const liveActivity = useCollaboration((state) => state.activityRevisions?.[projectId] ?? 0)
   const reconnected = useCollaboration((state) => state.reconnectRevision ?? 0)
   const fallbackRevision = useCollaboration((state) => (state.realtimeStatus === 'connected' ? 'live' : state.revision))
+  // 实时信号合并后再重拉；信号不中止进行中的列表请求，翻页、筛选和卸载仍会中止。
+  const { refreshKey: liveRefreshKey, begin: beginLive, end: endLive } = useCoalescedRefresh(`${liveActivity}|${reconnected}|${fallbackRevision}`)
   const [data, setData] = useState<PageResp<FileItem>>({ list: [], total: 0, page: 1, pageSize: 10 })
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)
@@ -125,6 +135,7 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
     const seq = ++loadSeq.current
     let active = true
     const controller = new AbortController()
+    beginLive()
     fetchFiles(controller.signal)
       .then((next) => {
         if (active && seq === loadSeq.current) {
@@ -139,19 +150,24 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
         if (active && seq === loadSeq.current) setLoadError(true)
       })
       .finally(() => {
-        if (active && seq === loadSeq.current) setLoading(false)
+        if (!active) return
+        if (seq === loadSeq.current) setLoading(false)
+        endLive()
       })
     return () => {
       active = false
       controller.abort()
     }
-  }, [fetchFiles, page, pageSize, reloadKey, liveActivity, reconnected, fallbackRevision])
+  }, [fetchFiles, beginLive, endLive, liveRefreshKey, page, pageSize, reloadKey])
 
   useEffect(() => {
+    if (!uploadOpen || projectStatus === 'IN_PROGRESS') return
     // The upload dialog is owned by this component and must close when the project becomes read-only.
     // eslint-disable-next-line react/set-state-in-effect
-    if (projectStatus !== 'IN_PROGRESS') setUploadOpen(false)
-  }, [projectStatus])
+    setUploadOpen(false)
+    const statusText = PROJECT_STATUS[projectStatus]?.text
+    Message.info(`${statusText ? `项目已变为${statusText}` : '项目当前状态不可上传'}，已关闭上传窗口。未完成的上传可在项目恢复进行中后续传。`)
+  }, [projectStatus, uploadOpen])
 
   const startUpload = () => {
     if (projectStatus !== 'IN_PROGRESS') return
@@ -319,6 +335,12 @@ export default function FileTable({ projectId, projectStatus, targetId, onOpenCo
           {FILE_DIRECTION_HINT}
         </Typography.Text>
       )}
+      <ActiveUploadSessions
+        projectId={projectId}
+        refreshToken={uploadRefresh}
+        onResume={() => setUploadOpen(true)}
+        onChanged={onUploadActivityChanged}
+      />
 
       {loadError ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '24px 0' }}>

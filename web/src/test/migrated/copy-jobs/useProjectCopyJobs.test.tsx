@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProjectCopyJob } from '../../../api/types'
 
 const mocks = vi.hoisted(() => ({
@@ -39,9 +39,29 @@ const finishedJob: ProjectCopyJob = {
   completedAt: '2026-09-23T00:00:02Z',
 }
 
+const runningJob: ProjectCopyJob = {
+  ...finishedJob,
+  jobId: 6,
+  status: 'running',
+  completedAt: null,
+}
+
+async function flush() {
+  await act(async () => {
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+  })
+}
+
 describe('useProjectCopyJobs', () => {
+  const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState')
+
   beforeEach(() => {
     mocks.list.mockReset()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility)
   })
 
   it('aborts the current list request on unmount and generation change', async () => {
@@ -97,5 +117,38 @@ describe('useProjectCopyJobs', () => {
     rendered.rerender({ enabled: false })
     await waitFor(() => expect(rendered.result.current.jobs).toEqual([]))
     expect(mocks.list).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps copy actions ready while a running job polls and pauses while the page is hidden', async () => {
+    vi.useFakeTimers()
+    const second = deferred<{ data: { jobs: ProjectCopyJob[] } }>()
+    const third = deferred<{ data: { jobs: ProjectCopyJob[] } }>()
+    mocks.list
+      .mockResolvedValueOnce({ data: { jobs: [runningJob] } })
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValueOnce(third.promise)
+    const rendered = renderHook(() => useProjectCopyJobs(3, true, 0))
+    await flush()
+    expect(rendered.result.current.ready).toBe(true)
+    expect(rendered.result.current.loading).toBe(false)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    expect(mocks.list).toHaveBeenCalledTimes(2)
+    expect(rendered.result.current.ready).toBe(true)
+    expect(rendered.result.current.loading).toBe(false)
+    second.resolve({ data: { jobs: [runningJob] } })
+    await flush()
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(mocks.list).toHaveBeenCalledTimes(2)
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(mocks.list).toHaveBeenCalledTimes(3)
+    expect(rendered.result.current.loading).toBe(false)
+    expect(rendered.result.current.ready).toBe(true)
+    rendered.unmount()
   })
 })

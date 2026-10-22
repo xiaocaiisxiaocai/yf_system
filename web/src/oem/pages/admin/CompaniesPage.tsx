@@ -4,6 +4,7 @@ import {
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import { fmtTime } from '../../../api/types'
+import { oemRequestError } from '../../api/requestError'
 import type { Company, VendorAccount } from '../../api/types'
 import { useCan, useOem } from '../../OemContext'
 import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../../components/columnResize'
@@ -31,13 +32,6 @@ import { PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, passwordRule, validatePassword 
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 import './CompaniesPage.css'
 
-function serverErrorMessage(error: unknown, fallback: string): string {
-  const message = (error as { response?: { data?: { message?: unknown } } })?.response?.data?.message
-  if (typeof message === 'string' && message.trim()) return message
-  if (error instanceof Error && error.message.trim()) return error.message
-  return fallback
-}
-
 function EllipsisText({ value }: { value: string | null | undefined }) {
   const text = value || '-'
   return (
@@ -57,6 +51,8 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
   const { api, userId } = useOem()
   const can = useCan()
   const [rows, setRows] = useState<VendorAccount[]>([])
+  const [loadError, setLoadError] = useState('')
+  const [accountsLoading, setAccountsLoading] = useState(false)
   const [editing, setEditing] = useState<VendorAccount | 'new' | null>(null)
   const [saving, setSaving] = useState(false)
   const [actionError, setActionError] = useState('')
@@ -71,10 +67,21 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
     const requestId = ++accountsRequestId.current
     if (!company) {
       setRows([])
+      setLoadError('')
+      setAccountsLoading(false)
       return
     }
-    const nextRows = await api.accounts(company.id)
-    if (accountsRequestId.current === requestId) setRows(nextRows)
+    setAccountsLoading(true)
+    try {
+      const nextRows = await api.accounts(company.id)
+      if (accountsRequestId.current !== requestId) return
+      setRows(nextRows)
+      setLoadError('')
+    } catch (error) {
+      if (accountsRequestId.current === requestId) setLoadError(oemRequestError(error, '账号列表加载失败，请重试'))
+    } finally {
+      if (accountsRequestId.current === requestId) setAccountsLoading(false)
+    }
   }, [api, company])
   useLoadEffect(load)
 
@@ -123,7 +130,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
     try {
       await api.setAccountStatus(account.id, disabling ? 'DISABLED' : 'ACTIVE')
     } catch (error) {
-      setActionError(`${disabling ? '停用' : '启用'}失败：${serverErrorMessage(error, '操作失败，请稍后重试')}`)
+      setActionError(`${disabling ? '停用' : '启用'}失败：${oemRequestError(error, '操作失败，请稍后重试')}`)
       return
     }
     await load()
@@ -138,7 +145,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
     try {
       await api.deleteAccount(account.id)
     } catch (error) {
-      setActionError(`删除失败：${serverErrorMessage(error, '无法删除该账号，请稍后重试；如有业务历史请改为停用。')}`)
+      setActionError(`删除失败：${oemRequestError(error, '无法删除该账号，请稍后重试；如有业务历史请改为停用。')}`)
       return
     } finally {
       const remaining = new Set(deletingIdsRef.current)
@@ -219,6 +226,10 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
       footer={null}
       unmountOnExit
     >
+      {loadError && (
+        <Alert type="error" style={{ marginBottom: 12 }} content={loadError}
+          action={<Button size="small" loading={accountsLoading} onClick={() => void load()}>重试</Button>} />
+      )}
       {can.manageAccounts ? (
         <>
           <Space style={{ marginBottom: 12 }}>
@@ -308,7 +319,7 @@ export default function CompaniesPage() {
       setTotal(result.total)
       setListError('')
     } catch (error) {
-      if (isLatest()) setListError(serverErrorMessage(error, '厂商列表加载失败，请重试'))
+      if (isLatest()) setListError(oemRequestError(error, '厂商列表加载失败，请重试'))
       throw error
     } finally {
       if (isLatest()) setListLoading(false)
@@ -341,7 +352,7 @@ export default function CompaniesPage() {
     try {
       await api.setCompanyStatus(company.id, disabling ? 'DISABLED' : 'ACTIVE')
     } catch (error) {
-      setActionError(`${disabling ? '停用' : '启用'}失败：${serverErrorMessage(error, '操作失败，请稍后重试')}`)
+      setActionError(`${disabling ? '停用' : '启用'}失败：${oemRequestError(error, '操作失败，请稍后重试')}`)
       return
     }
     await load()
@@ -356,7 +367,7 @@ export default function CompaniesPage() {
     try {
       await api.deleteCompany(company.id)
     } catch (error) {
-      setActionError(`删除失败：${serverErrorMessage(error, '无法删除该厂商，请稍后重试；如有业务历史请改为停用。')}`)
+      setActionError(`删除失败：${oemRequestError(error, '无法删除该厂商，请稍后重试；如有业务历史请改为停用。')}`)
       return
     } finally {
       const remaining = new Set(deletingIdsRef.current)

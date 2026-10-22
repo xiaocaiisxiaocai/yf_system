@@ -4,10 +4,12 @@ import { Alert, Button, Card, Checkbox, Form, Input, Message, Modal, Radio, Sele
 import { IconUpload } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
+import { isVersionConflict } from '../../api/versionConflict'
+import { oemRequestError } from '../api/requestError'
 import type { CompanyOption, TransferSummary } from '../api/types'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
 import { ApprovalTag, LifecycleTag, ValidationTag } from '../components/StatusTags'
-import { DIRECTION_LABEL, LIFECYCLE_OPTIONS } from '../components/statusLabels'
+import { DIRECTION_LABEL, LIFECYCLE_OPTIONS, transferClosedNotice } from '../components/statusLabels'
 import { useCan, useOem } from '../OemContext'
 import { useLatestRequest, useLoadEffect } from '../useLoadEffect'
 import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
@@ -25,12 +27,6 @@ const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
 ]
 
 const NO_RECEIVING_ACCOUNT_REASON = '该厂商没有启用的登录账号，请先新增或启用账号后再发送'
-
-function requestError(error: unknown, fallback = '操作失败，请重试'): string {
-  return (error as { response?: { data?: { message?: string } } })?.response?.data?.message
-    || (error instanceof Error ? error.message : '')
-    || fallback
-}
 
 function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { api, realm, base, queryScope } = useOem()
@@ -61,7 +57,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       if (isLatest()) setCompanies(options)
       return options
     } catch (error) {
-      const message = requestError(error, '目标 OEM 厂商加载失败，请稍后重试')
+      const message = oemRequestError(error, '目标 OEM 厂商加载失败，请稍后重试')
       // Keep the previous options so the chosen vendor still shows its name, not a bare id.
       if (isLatest()) setCompanyOptionsError(message)
       throw new Error(message)
@@ -84,17 +80,10 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   }
 
   const leaveFinishedDraft = (current: Awaited<ReturnType<typeof api.transfer>>): boolean => {
-    const status = current.summary.lifecycleStatus
-    if (status === 'DRAFT') return false
+    const message = transferClosedNotice(current.summary)
+    if (!message) return false
     void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
-    const message = ({
-      SEALED: current.summary.direction === 'INTERNAL_TO_OEM' ? '传递单已提交，正在等待审批或文件处理' : '文件正在处理中',
-      RELEASED: '文件已发送',
-      REJECTED: '传递单已被驳回',
-      BLOCKED: '传递单因文件校验未通过而终止',
-      CANCELLED: '传递单已终止',
-      ABANDONED: '草稿已删除',
-    } as const)[status]
+    const status = current.summary.lifecycleStatus
     Message.info(message)
     onClose()
     navigate(status === 'ABANDONED' ? `${base}/transfers` : `${base}/transfers/${current.summary.id}`)
@@ -179,7 +168,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         throw error
       }
     } catch (error) {
-      setSubmitError(requestError(error))
+      setSubmitError(oemRequestError(error, '操作失败，请重试'))
     } finally {
       submitLocked.current = false
       setSaving(false)
@@ -194,13 +183,14 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
 
   /** Deletes a draft bound to an unavailable vendor so the sender can choose another one. */
   const discardDraft = async () => {
-    if (!draftId || submitLocked.current) return
+    const id = draftId
+    if (!id || submitLocked.current) return
     submitLocked.current = true
     setDiscarding(true)
     try {
-      const current = await api.transfer(draftId)
+      const current = await api.transfer(id)
       if (leaveFinishedDraft(current)) return
-      await api.deleteDraft(draftId, current.summary.version)
+      await api.deleteDraft(id, current.summary.version)
       void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
       // The deleted draft took its uploads with it: the local files start over on the next draft.
       uploader.current?.resetForNewDraft()
@@ -210,7 +200,11 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       form.resetFields(['oemCompanyId'])
       Message.success('草稿已删除，请重新选择厂商后提交')
     } catch (error) {
-      setSubmitError(`删除草稿失败：${requestError(error)}`)
+      if (isVersionConflict(error)) {
+        const checked = await api.transfer(id).catch(() => null)
+        if (checked && leaveFinishedDraft(checked)) return
+      }
+      setSubmitError(`删除草稿失败：${oemRequestError(error, '操作失败，请重试')}`)
     } finally {
       submitLocked.current = false
       setDiscarding(false)
@@ -377,7 +371,8 @@ export default function TransferListPage() {
     { key: 'files', title: '附件', render: (_: unknown, row: TransferSummary) => `${row.fileCount} 个 / ${fmtSize(row.totalBytes)}` },
     { key: 'sentAt', title: '提交时间', render: (_: unknown, row: TransferSummary) => (row.sentAt ? fmtTime(row.sentAt) : '-') },
   ], [base])
-  const table = useAdjustableColumns('oem-transfers', userId, OEM_TRANSFER_COLUMNS, transferColumns, 'title', tableHostRef)
+  const tableId = realm === 'oem' ? 'oem-portal-transfers' : 'oem-transfers'
+  const table = useAdjustableColumns(tableId, userId, OEM_TRANSFER_COLUMNS, transferColumns, 'title', tableHostRef)
 
   return (
     <Card
@@ -405,6 +400,11 @@ export default function TransferListPage() {
           onReset={table.reset}
         />
       </Space>
+      {transfers.isError && (
+        <Alert type="error" style={{ marginBottom: 12 }}
+          content={oemRequestError(transfers.error, '传递单列表加载失败，请重试')}
+          action={<Button size="small" loading={transfers.isFetching} onClick={() => void transfers.refetch()}>重试</Button>} />
+      )}
       <ColumnResizeProvider actions={table.actions}>
         <div ref={tableHostRef} className={table.hostClassName}>
           <Table

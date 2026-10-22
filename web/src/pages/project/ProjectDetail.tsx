@@ -19,6 +19,7 @@ import ProjectActivityPanel from '../../components/ProjectActivityPanel'
 import ProjectWorkflowPanel from '../../components/ProjectWorkflowPanel'
 import { useDisconnectedPoll } from '../../hooks/useDisconnectedPoll'
 import { projectAccessLostStatus, useProjectAccessLost } from '../../hooks/useProjectAccessLost'
+import { useCoalescedRefresh } from '../../hooks/useCoalescedRefresh'
 import { useCollaboration } from '../../store/collaboration'
 import { isAxiosError } from 'axios'
 import './ProjectDetail.css'
@@ -178,6 +179,10 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const liveReceipts = useCollaboration((state) => state.receiptRevisions?.[pid] ?? 0)
   const liveActivity = useCollaboration((state) => state.activityRevisions?.[pid] ?? 0)
   const reconnected = useCollaboration((state) => state.reconnectRevision ?? 0)
+  // 实时信号合并后再重拉，请求进行中不被后续信号中止（见 useCoalescedRefresh）。
+  const { refreshKey: detailRefreshKey, begin: beginDetail, end: endDetail } = useCoalescedRefresh(`${liveActivity}|${reconnected}`)
+  const { refreshKey: siblingsRefreshKey, begin: beginSiblings, end: endSiblings } = useCoalescedRefresh(`${liveActivity}|${reconnected}`)
+  const { refreshKey: summaryRefreshKey, begin: beginSummary, end: endSummary } = useCoalescedRefresh(`${liveActivity}|${liveMessages}|${reconnected}`)
   const realtimeConnected = useCollaboration((state) => state.realtimeStatus === 'connected')
   const projectSeq = useRef(0)
   const summarySeq = useRef(0)
@@ -191,6 +196,8 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const [loadErrorFor, setLoadErrorFor] = useState<number | null>(null)
   const [missingProjectFor, setMissingProjectFor] = useState<number | null>(null)
   const [siblings, setSiblings] = useState<ProjectSummary[]>([])
+  const [uploadActivityRefresh, setUploadActivityRefresh] = useState(0)
+  const bumpUploadActivity = () => setUploadActivityRefresh((value) => value + 1)
   // 曾成功展示过本项目后，刷新得到 403/404 说明权限已调整或项目已删除：提示后回到列表。
   const everLoaded = useRef(false)
   const handleAccessLost = useProjectAccessLost('子项目')
@@ -315,6 +322,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
     let active = true
     const controller = new AbortController()
     const seq = ++projectSeq.current
+    beginDetail()
     fetchProject(controller.signal)
       .then((next) => {
         if (!active || seq !== projectSeq.current) return
@@ -333,17 +341,19 @@ function ProjectDetailContent({ id }: { id?: string }) {
           if (status === 403 || status === 404) setProject(null)
         }
       })
+      .finally(() => { if (active) endDetail() })
     return () => {
       active = false
       if (projectSeq.current === seq) projectSeq.current += 1
       controller.abort()
     }
-  }, [fetchProject, handleAccessLost, liveActivity, pid, reconnected, validProjectId])
+  }, [beginDetail, endDetail, detailRefreshKey, fetchProject, handleAccessLost, pid, validProjectId])
 
   useEffect(() => {
     if (!currentGroupId) return
     let active = true
     const controller = new AbortController()
+    beginSiblings()
     http.get<ApiResponses['GET /project-groups/{id}']>(`/project-groups/${currentGroupId}`, { signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
       .then((response) => {
         if (!active) return
@@ -351,8 +361,9 @@ function ProjectDetailContent({ id }: { id?: string }) {
         setSiblings(Array.isArray(data.projects) ? data.projects : [])
       })
       .catch(() => { if (active) setSiblings([]) })
+      .finally(() => { if (active) endSiblings() })
     return () => { active = false; controller.abort() }
-  }, [currentGroupId, liveActivity, reconnected])
+  }, [currentGroupId, beginSiblings, endSiblings, siblingsRefreshKey])
 
   const switchProject = useCallback((nextId: number) => {
     if (nextId === pid) return
@@ -362,13 +373,16 @@ function ProjectDetailContent({ id }: { id?: string }) {
   useEffect(() => {
     if (project?.id !== pid) return
     // Summary is the external server state synchronized after the project becomes available.
+    let active = true
+    beginSummary()
     // eslint-disable-next-line react/set-state-in-effect
-    void loadSummary()
+    void loadSummary().finally(() => { if (active) endSummary() })
     return () => {
+      active = false
       summarySeq.current += 1
       summaryAbort.current?.abort()
     }
-  }, [liveActivity, liveMessages, loadSummary, pid, project?.id, reconnected])
+  }, [loadSummary, pid, project?.id, beginSummary, endSummary, summaryRefreshKey])
 
   useEffect(() => {
     if (!historyOpen || project?.id !== pid || !project.hasCopyHistory) return
@@ -522,6 +536,8 @@ function ProjectDetailContent({ id }: { id?: string }) {
         <ProjectWorkflowPanel
           compact
           project={project}
+          uploadRefresh={uploadActivityRefresh}
+          onWriteFailed={bumpUploadActivity}
           onChanged={() => {
             loadProject()
             loadSummary()
@@ -543,6 +559,8 @@ function ProjectDetailContent({ id }: { id?: string }) {
               projectId={pid}
               projectStatus={project.status}
               targetId={filesTargetId}
+              uploadRefresh={uploadActivityRefresh}
+              onUploadActivityChanged={bumpUploadActivity}
               onOpenCopyHistory={project.hasCopyHistory ? () => setHistoryOpen(true) : undefined}
               onProjectChanged={() => {
                 loadProject()

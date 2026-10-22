@@ -145,6 +145,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
     setTogglingAccountIds(activeIds)
     try {
       await http.put<ApiResponses['PUT /admin/supplier-accounts/{id}/status']>(`/admin/supplier-accounts/${account.id}/status`, { status: account.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
+      Message.success(account.status === 'ACTIVE' ? '账号已禁用' : '账号已启用')
       load()
     } catch {
       // 请求层已展示错误；保留当前账号快照并恢复按钮供用户重试。
@@ -276,17 +277,31 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
               <Button key="reset-password" size="mini" type="text" onClick={() => openPasswordReset(account)}>
                 重置密码
               </Button>,
-              <Button
-                key="status"
-                size="mini"
-                type="text"
-                status={account.status === 'ACTIVE' ? 'danger' : 'success'}
-                loading={togglingAccountIds.has(account.id)}
-                disabled={togglingAccountIds.has(account.id)}
-                onClick={() => toggle(account)}
-              >
-                {account.status === 'ACTIVE' ? '禁用' : '启用'}
-              </Button>,
+              account.status === 'ACTIVE' ? (
+                <Popconfirm key="status" title="禁用后该账号立即无法登录，确认禁用？" onOk={() => toggle(account)}>
+                  <Button
+                    size="mini"
+                    type="text"
+                    status="danger"
+                    loading={togglingAccountIds.has(account.id)}
+                    disabled={togglingAccountIds.has(account.id)}
+                  >
+                    禁用
+                  </Button>
+                </Popconfirm>
+              ) : (
+                <Button
+                  key="status"
+                  size="mini"
+                  type="text"
+                  status="success"
+                  loading={togglingAccountIds.has(account.id)}
+                  disabled={togglingAccountIds.has(account.id)}
+                  onClick={() => toggle(account)}
+                >
+                  启用
+                </Button>
+              ),
               canDelete && (
                 <Popconfirm key="delete" title="删除后不可恢复，确认删除该账号？" onOk={() => removeAccount(account)}>
                   <Button size="mini" type="text" status="danger">删除</Button>

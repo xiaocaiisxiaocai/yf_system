@@ -1,11 +1,10 @@
-import type { QuietRequestConfig } from '../../api/client'
+import type { QuietRequestConfig } from './client'
 
 /**
- * Whether the request opted out of the global error toast with the same `QuietRequestConfig`
- * flags (and the same rules) as the collaboration HTTP client. Callers that quiet a request
- * own reporting its final failure.
+ * 请求是否通过 QuietRequestConfig 关闭了全局错误提示。协作端与 OEM 门户共用这一套规则；
+ * 关闭提示的调用方自行负责展示最终失败。
  */
-export function isQuietedError(error: unknown): boolean {
+export function isQuietRequestError(error: unknown): boolean {
   const failure = error as { config?: QuietRequestConfig; code?: string; response?: { status?: number } } | null
   const config = failure?.config
   if (!config) return false

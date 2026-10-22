@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  columnLayoutStorageKey, measureTableWidth, normalizeColumnLayout, withFlexibleColumn, type ColumnLayoutSpec,
+  applyColumnLayout, columnLayoutStorageKey, measureTableWidth, normalizeColumnLayout, UNKNOWN_COLUMN_FALLBACK_WIDTH, withFlexibleColumn, type ColumnLayoutSpec,
 } from '../components/tableColumnLayout'
 
 const mocks = vi.hoisted(() => ({
@@ -93,6 +93,70 @@ describe('column layout storage', () => {
   })
 })
 
+describe('applyColumnLayout', () => {
+  it('throws in fatal mode when a column or its title does not match', () => {
+    expect(() => applyColumnLayout(
+      [{ key: 'name', title: '主项目名称' }, { key: 'mystery', title: '未知' }],
+      specs,
+      { hidden: [], widths: {} },
+      true,
+    )).toThrow('缺少列配置：mystery')
+    expect(() => applyColumnLayout(
+      [{ key: 'sectionName', title: '旧标题' }],
+      specs,
+      { hidden: [], widths: {} },
+      true,
+    )).toThrow('列标题不一致：sectionName')
+  })
+
+  it('degrades unknown columns and mismatched titles when fatal is off', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    expect(applyColumnLayout(
+      [
+        { key: 'name', title: '主项目名称', width: 10 },
+        { key: 'sectionName', title: '旧标题', width: 10 },
+        { key: 'mystery', title: '未知', width: 33 },
+      ],
+      specs,
+      { hidden: [], widths: { sectionName: 90 } },
+      false,
+    )).toEqual([
+      { key: 'name', title: '主项目名称', width: 120 },
+      { key: 'sectionName', title: '课别', width: 90 },
+      { key: 'mystery', title: '未知', width: 33 },
+    ])
+    expect(applyColumnLayout(
+      [{ key: 'sectionName', title: '课别', width: 10 }],
+      specs,
+      { hidden: ['sectionName'], widths: {} },
+      false,
+    )).toEqual([])
+    expect(error).toHaveBeenCalledWith('缺少列配置：mystery')
+    expect(error).toHaveBeenCalledWith('列标题不一致：sectionName')
+    error.mockRestore()
+  })
+
+  it('uses a visible fallback when an unknown column has no finite width', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    expect(applyColumnLayout(
+      [
+        { key: 'mystery', title: '未知' },
+        { key: 'blank', title: '空白', width: Number.NaN },
+      ],
+      specs,
+      { hidden: [], widths: {} },
+      false,
+    )).toEqual([
+      { key: 'mystery', title: '未知', width: UNKNOWN_COLUMN_FALLBACK_WIDTH },
+      { key: 'blank', title: '空白', width: UNKNOWN_COLUMN_FALLBACK_WIDTH },
+    ])
+    expect(UNKNOWN_COLUMN_FALLBACK_WIDTH).toBeGreaterThan(0)
+    expect(error).toHaveBeenCalledWith('缺少列配置：mystery')
+    expect(error).toHaveBeenCalledWith('缺少列配置：blank')
+    error.mockRestore()
+  })
+})
+
 describe('project list columns', () => {
   beforeEach(() => localStorage.clear())
 
@@ -124,7 +188,11 @@ describe('project list columns', () => {
 
   it('drags a column wider and double-click restores its default width', async () => {
     renderList()
-    const handle = await screen.findByRole('button', { name: '调整工令号列宽' })
+    const handle = await screen.findByRole('separator', { name: '调整工令号列宽' })
+    expect(handle).toHaveAttribute('aria-orientation', 'vertical')
+    expect(handle).toHaveAttribute('aria-valuenow', '96')
+    expect(handle).toHaveAttribute('aria-valuemin')
+    expect(handle).toHaveAttribute('aria-valuemax')
     fireEvent.pointerDown(handle, { button: 0, clientX: 40 })
     fireEvent.pointerMove(window, { clientX: 120 })
     fireEvent.pointerUp(window, { clientX: 120 })
@@ -149,7 +217,7 @@ describe('project list columns', () => {
 
   it('changes width from the keyboard', async () => {
     renderList()
-    const handle = await screen.findByRole('button', { name: '调整机型列宽' })
+    const handle = await screen.findByRole('separator', { name: '调整机型列宽' })
     handle.focus()
     fireEvent.keyDown(handle, { key: 'ArrowRight' })
     await waitFor(() => expect(savedLayout()?.widths.machineModel).toBe(96))
