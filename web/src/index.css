@@ -81,12 +81,10 @@ html, body, #root {
   backdrop-filter: blur(14px);
 }
 .auth-heading { margin: 0 0 20px; color: #17243a; font-size: 20px; font-weight: 600; line-height: 30px; text-align: center; }
-.auth-heading--with-description { margin-bottom: 4px; }
 .oem-setting-size { line-height: 32px; }
 .drawer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .oem-account { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .oem-account-avatar { flex: 0 0 auto; background: rgb(var(--primary-6)); }
-.auth-description { margin: 0 0 24px; color: var(--color-text-3); font-size: 13px; line-height: 20px; text-align: center; }
 .auth-form .arco-form-item { margin-bottom: 20px; }
 .auth-form .arco-form-label-item { margin-bottom: 6px; }
 .auth-form .arco-input-inner-wrapper { height: 50px; border-radius: 6px; background: #fff; border-color: #d9e1ec; box-shadow: 0 8px 24px rgba(27, 64, 114, .05); }

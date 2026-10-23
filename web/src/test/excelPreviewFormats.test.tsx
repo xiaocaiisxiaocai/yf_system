@@ -11,13 +11,13 @@ import ExcelPreview from '../components/ExcelPreview'
 const ZIP = [0x50, 0x4b, 3, 4]
 const OLE2 = [0xd0, 0xcf, 0x11, 0xe0]
 
-// .xls/.xlsx/.xlsm/.xlsb 同等可预览：OLE2 .xls 与二进制 .xlsb 需先经 SheetJS 转换，.xlsx/.xlsm 直接交给 ExcelJS。
+// .xls/.xlsx/.xlsm/.xlsb 同等可预览：OLE2 .xls、二进制 .xlsb 和启用宏的 .xlsm 需先经 SheetJS 转换，.xlsx 直接交给 ExcelJS。
 describe('Excel preview workbook formats', () => {
   beforeEach(() => mocks.get.mockReset())
 
   it.each([
     ['xlsx', ZIP, false],
-    ['xlsm', ZIP, false],
+    ['xlsm', ZIP, true],
     ['XLSB', ZIP, true],
     ['xls', OLE2, true],
     [undefined, ZIP, false],

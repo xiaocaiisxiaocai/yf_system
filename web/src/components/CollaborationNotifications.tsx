@@ -294,47 +294,47 @@ export default function CollaborationNotifications() {
                       key={item.id}
                     >
                       <div className="collaboration-notification-heading">
-                        <div className="collaboration-notification-tags">
-                          <Tag size="small" color={item.type === 'MESSAGE' ? 'arcoblue' : item.type === 'FILE' ? 'green' : 'orange'}>
-                            {TYPE_LABEL[item.type]}
-                          </Tag>
-                          <span>{actionLabel(item)}</span>
-                        </div>
-                        {!item.read && <span className="collaboration-unread-mark" aria-label="未查看" />}
+                        <Tag size="small" color={item.type === 'MESSAGE' ? 'arcoblue' : item.type === 'FILE' ? 'green' : 'orange'}
+                          title={actionLabel(item)}>
+                          {TYPE_LABEL[item.type]}
+                        </Tag>
+                        <Button
+                          className="collaboration-notification-title"
+                          type="text"
+                          disabled={marking.has(item.id)}
+                          aria-label={`查看通知：${item.title}`}
+                          onClick={() => { void openNotification(item) }}
+                        >
+                          {item.title}
+                        </Button>
+                        {!item.read && <span className="collaboration-unread-mark" role="img" aria-label="未查看" />}
                       </div>
-                      <Button
-                        className="collaboration-notification-title"
-                        type="text"
-                        disabled={marking.has(item.id)}
-                        aria-label={`查看通知：${item.title}`}
-                        onClick={() => { void openNotification(item) }}
-                      >
-                        {item.title}
-                      </Button>
                       {item.summary && (
-                        <Typography.Paragraph className="collaboration-notification-summary" ellipsis={{ rows: 3 }}>
+                        <Typography.Paragraph className="collaboration-notification-summary" ellipsis={{ rows: 2 }}>
                           {item.summary}
                         </Typography.Paragraph>
                       )}
-                      <div className="collaboration-notification-meta">
-                        <span>{item.actorName}</span>
-                        <span title={item.projectGroupName ? `${item.projectGroupName} / ${item.projectName}` : item.projectName}>
-                          {item.projectGroupName ? `${item.projectGroupName} / ${item.projectName}` : item.projectName}
-                        </span>
-                        <time dateTime={item.occurredAt}>{fmtTime(item.occurredAt)}</time>
+                      <div className="collaboration-notification-footer">
+                        <div className="collaboration-notification-meta">
+                          <span>{item.actorName}</span>
+                          <span title={item.projectGroupName ? `${item.projectGroupName} / ${item.projectName}` : item.projectName}>
+                            {item.projectGroupName ? `${item.projectGroupName} / ${item.projectName}` : item.projectName}
+                          </span>
+                          <time dateTime={item.occurredAt}>{fmtTime(item.occurredAt)}</time>
+                        </div>
+                        {!item.read && (
+                          <Button
+                            className="collaboration-mark-viewed"
+                            type="text"
+                            size="mini"
+                            loading={marking.has(item.id)}
+                            aria-label={`标记为已查看：${item.title}`}
+                            onClick={() => { void markViewed([item.id]) }}
+                          >
+                            标记为已查看
+                          </Button>
+                        )}
                       </div>
-                      {!item.read && (
-                        <Button
-                          className="collaboration-mark-viewed"
-                          type="text"
-                          size="mini"
-                          loading={marking.has(item.id)}
-                          aria-label={`标记为已查看：${item.title}`}
-                          onClick={() => { void markViewed([item.id]) }}
-                        >
-                          标记为已查看
-                        </Button>
-                      )}
                     </article>
                   ))}
                 </div>

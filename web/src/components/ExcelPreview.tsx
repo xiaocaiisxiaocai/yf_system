@@ -31,8 +31,9 @@ function ExcelDocument({ fileId, ext }: { fileId: number; ext?: string }) {
       const xls = signature[0] === 0xd0 && signature[1] === 0xcf
       const xlsx = signature[0] === 0x50 && signature[1] === 0x4b
       if (!xls && !xlsx) { deadline.clear(); setState('error'); return }
-      // 旧版 .xls（OLE2）与二进制 .xlsb（ZIP 内为 BIFF12，ExcelJS 会静默解析成空表）都先经 SheetJS 转成 xlsx。
-      const convert = xls || ext?.toLowerCase() === 'xlsb'
+      // 旧版 .xls（OLE2）、二进制 .xlsb（ZIP 内为 BIFF12，ExcelJS 会静默解析成空表）和启用宏的 .xlsm
+      // （工作簿声明为 macroEnabled，ExcelJS 找不到工作簿而报错）都先经 SheetJS 转成 xlsx。
+      const convert = xls || ['xlsb', 'xlsm'].includes(ext?.toLowerCase() ?? '')
       sent = true
       frame.current?.contentWindow?.postMessage({ type: 'excel:load', channel, buffer, xls: convert }, '*', [buffer])
       buffer = undefined

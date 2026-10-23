@@ -105,7 +105,7 @@
 
 .collaboration-notification {
   position: relative;
-  padding: 16px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--app-border);
   background: #fff;
 }
@@ -115,46 +115,44 @@
 }
 
 .collaboration-notification-heading,
-.collaboration-notification-tags,
+.collaboration-notification-footer,
 .collaboration-notification-meta {
   display: flex;
   align-items: center;
+  min-width: 0;
 }
 
 .collaboration-notification-heading {
-  justify-content: space-between;
   gap: 8px;
-  min-width: 0;
 }
 
-.collaboration-notification-tags {
-  gap: 8px;
-  min-width: 0;
-  color: var(--color-text-3);
-  font-size: 12px;
+.collaboration-notification-heading > .arco-tag {
+  flex: 0 0 auto;
 }
 
 .collaboration-unread-mark {
   width: 7px;
   height: 7px;
   flex: 0 0 7px;
+  margin-left: auto;
   border-radius: 50%;
   background: rgb(var(--primary-6));
 }
 
 .collaboration-notification-title.arco-btn {
   display: block;
-  max-width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   height: auto;
-  margin: 5px 0 0;
   padding: 0;
+  overflow: hidden;
   color: var(--color-text-1);
   font-size: 14px;
   font-weight: 600;
   line-height: 22px;
   text-align: left;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .collaboration-notification-title.arco-btn:hover {
@@ -163,17 +161,23 @@
 }
 
 .collaboration-notification-summary.arco-typography {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: var(--color-text-2);
   font-size: 13px;
   line-height: 20px;
   overflow-wrap: anywhere;
 }
 
+.collaboration-notification-footer {
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+
 .collaboration-notification-meta {
+  flex: 1 1 auto;
   flex-wrap: wrap;
-  gap: 4px 12px;
-  margin-top: 10px;
+  gap: 2px 12px;
   color: var(--color-text-3);
   font-size: 12px;
 }
@@ -187,7 +191,7 @@
 }
 
 .collaboration-mark-viewed.arco-btn {
-  margin-top: 8px;
+  flex: 0 0 auto;
   padding: 0;
 }
 

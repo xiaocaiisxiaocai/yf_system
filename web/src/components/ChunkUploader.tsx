@@ -189,8 +189,14 @@ function phaseLabel(phase: Phase, percent: number, waiting = false, awaitingStep
   }
 }
 
+const UPLOAD_DONE_MESSAGE_ID = 'chunk-upload-done'
+
 export default function ChunkUploader({ projectId, visible, onClose, onDone, onAllUploaded, onSubmitForAcceptance, direction, hasCompanyStep = false }: Props) {
   const [entries, setEntries] = useState<Entry[]>([])
+  // 同一批的完成提示合并成一条并原地更新，避免多文件上传时堆满页面。
+  const entriesRef = useRef<Entry[]>([])
+  useEffect(() => { entriesRef.current = entries }, [entries])
+  const completedRef = useRef(0)
   const attemptsRef = useRef<Map<string, Attempt>>(new Map())
   const fileInputRef = useRef<HTMLInputElement>(null)
   const batchNotifiedRef = useRef(false)
@@ -225,6 +231,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     batchStartedRef.current = false
     batchCancelledRef.current = false
     rejectionToastsRef.current.clear()
+    completedRef.current = 0
     setSubmitForAcceptance(false)
     setEntries([])
   }
@@ -293,7 +300,14 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
       if (attemptsRef.current.get(key) !== attempt || attempt.cancelled) return
       attempt.mergePending = false
       patchEntry(key, { phase: 'done', percent: 100 })
-      Message.success(`「${fileName}」上传完成`)
+      completedRef.current += 1
+      const total = entriesRef.current.length
+      Message.success({
+        id: UPLOAD_DONE_MESSAGE_ID,
+        content: total <= 1
+          ? `「${fileName}」上传完成`
+          : completedRef.current >= total ? `${total} 个文件已全部上传` : `已上传 ${completedRef.current}/${total} 个文件`,
+      })
       onDone()
     } catch (error) {
       if (attemptsRef.current.get(key) === attempt && !attempt.cancelled) {

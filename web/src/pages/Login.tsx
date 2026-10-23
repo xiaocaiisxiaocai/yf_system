@@ -61,7 +61,7 @@ export default function Login() {
   }, [])
 
   return (
-    <AuthShell title="账号登录" description="使用工号和密码登录供应商协作平台">
+    <AuthShell title="账号登录">
         <Form className="auth-form" form={form} layout="vertical" onSubmit={submit} autoComplete="on">
           <Form.Item field="employeeNo" rules={[{ required: true, message: '请输入工号' }]}>
             <Input size="large" prefix={<IconUser />} placeholder="请输入工号" aria-label="工号" autoComplete="username" autoFocus disabled={loading} />
