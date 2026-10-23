@@ -371,7 +371,7 @@ export default function DeptManage() {
     <Card className="page-card org-view-page">
       <div className="org-view-page-header page-heading">
         <div className="org-view-page-title">
-          <h1>组织架构</h1>
+          <h1 className="visually-hidden">组织架构</h1>
           <div className="org-view-summary" aria-label="组织统计">
             <span><b>{stats.division}</b> 个事业部</span>
             <span><b>{stats.department}</b> 个部门</span>

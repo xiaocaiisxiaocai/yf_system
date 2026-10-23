@@ -377,30 +377,32 @@ export default function TransferListPage() {
 
   return (
     <Card
-      title="文件传递单"
-      extra={can.createTransfer && <Button type="primary" icon={<IconUpload />} onClick={() => setCreating(true)}>发送文件</Button>}
+      title={<h1 className="visually-hidden">文件传递单</h1>}
     >
-      <Space wrap style={{ marginBottom: 16 }}>
-        {realm === 'internal' && (
-          <Radio.Group type="button" value={direction} onChange={(value) => { setDirection(value); setPage(1) }}>
-            <Radio value="">全部</Radio>
-            <Radio value="INTERNAL_TO_OEM">公司发出</Radio>
-            <Radio value="OEM_TO_INTERNAL">OEM 发来</Radio>
-          </Radio.Group>
-        )}
-        <Select allowClear placeholder="状态" style={{ width: 140 }} value={status} options={LIFECYCLE_OPTIONS}
-          onChange={(value) => { setStatus(value); setPage(1) }} />
-        <Input.Search allowClear placeholder="搜索传递记录" style={{ width: 220 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
-        <Checkbox checked={mine} onChange={(value) => { setMine(value); setPage(1) }}>只看我发送的</Checkbox>
-        <ColumnVisibilityPicker
-          specs={OEM_TRANSFER_COLUMNS}
-          hidden={table.hidden}
-          onToggle={table.toggle}
-          onShowAll={table.showAll}
-          onHideOptional={table.hideOptional}
-          onReset={table.reset}
-        />
-      </Space>
+      <div className="page-toolbar responsive-toolbar">
+        <Space wrap>
+          {realm === 'internal' && (
+            <Radio.Group type="button" value={direction} onChange={(value) => { setDirection(value); setPage(1) }}>
+              <Radio value="">全部</Radio>
+              <Radio value="INTERNAL_TO_OEM">公司发出</Radio>
+              <Radio value="OEM_TO_INTERNAL">OEM 发来</Radio>
+            </Radio.Group>
+          )}
+          <Select allowClear placeholder="状态" style={{ width: 140 }} value={status} options={LIFECYCLE_OPTIONS}
+            onChange={(value) => { setStatus(value); setPage(1) }} />
+          <Input.Search allowClear placeholder="搜索传递记录" style={{ width: 220 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
+          <Checkbox checked={mine} onChange={(value) => { setMine(value); setPage(1) }}>只看我发送的</Checkbox>
+          <ColumnVisibilityPicker
+            specs={OEM_TRANSFER_COLUMNS}
+            hidden={table.hidden}
+            onToggle={table.toggle}
+            onShowAll={table.showAll}
+            onHideOptional={table.hideOptional}
+            onReset={table.reset}
+          />
+        </Space>
+        {can.createTransfer && <Button type="primary" icon={<IconUpload />} onClick={() => setCreating(true)}>发送文件</Button>}
+      </div>
       {transfers.isError && (
         <Alert type="error" style={{ marginBottom: 12 }}
           content={oemRequestError(transfers.error, '传递单列表加载失败，请重试')}

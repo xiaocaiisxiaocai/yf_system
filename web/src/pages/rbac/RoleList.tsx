@@ -228,11 +228,7 @@ export default function RoleList() {
 
   return (
     <Card className="page-card page-card--table">
-      <div className="page-heading">
-        <div>
-          <h1>角色与权限</h1>
-        </div>
-      </div>
+      <h1 className="visually-hidden">角色与权限</h1>
       <div className="page-toolbar responsive-toolbar">
         <Typography.Text type="secondary">共 {data.total} 个角色</Typography.Text>
         <Button

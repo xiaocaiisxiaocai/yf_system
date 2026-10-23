@@ -192,7 +192,6 @@ html, body, #root {
 .page-card > .arco-card-body { padding: 0; }
 /* 个人资料沿用页面容器；账号概览与两项维护操作分层呈现。 */
 .profile-page { box-sizing: border-box; min-height: calc(100dvh - 88px); margin: 0; }
-.profile-heading { margin-bottom: 24px; }
 .profile-content { max-width: 1120px; }
 .profile-readonly-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 28px; padding: 16px 0; border: 1px solid var(--app-border); border-radius: 6px; background: var(--color-fill-1); }
 .profile-readonly-item { min-width: 0; padding: 0 20px; }
@@ -233,10 +232,10 @@ html, body, #root {
 .oem-shell .layout-content > .arco-card > .arco-card-header,
 .oem-shell .layout-content > div > .arco-card:not(.arco-card-size-small) > .arco-card-header {
   height: auto;
-  min-height: 40px;
-  margin-bottom: 16px;
-  padding: 0 0 16px;
-  border-color: var(--app-border);
+  min-height: 32px;
+  margin-bottom: 20px;
+  padding: 0;
+  border-bottom: 0;
 }
 .oem-shell .layout-content > .arco-card > .arco-card-body,
 .oem-shell .layout-content > div > .arco-card:not(.arco-card-size-small) > .arco-card-body { padding: 0; }
@@ -246,6 +245,12 @@ html, body, #root {
   font-size: 20px;
   font-weight: 600;
   line-height: 30px;
+}
+.oem-shell .layout-content .arco-card > .arco-card-header:has(> .arco-card-header-title > .visually-hidden):not(:has(> .arco-card-header-extra)) {
+  height: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
 }
 .oem-shell .layout-content > div > .arco-card:not(.arco-card-size-small):not(:first-child) > .arco-card-header .arco-card-header-title {
   font-size: 16px;
@@ -267,7 +272,6 @@ html, body, #root {
 }
 .page-card--table .responsive-toolbar,
 .page-card--table .page-heading,
-.page-card--table .audit-heading,
 .page-card--table .audit-filter-panel,
 .page-card--table .audit-result-bar {
   flex: 0 0 auto;
@@ -747,6 +751,11 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .file-table--compact .arco-table-th-item,
 .file-table--compact .arco-table-cell { padding-left: 8px; padding-right: 8px; }
 .file-table--compact .arco-table-pagination { margin-top: 8px; }
+/* 窗格高度由停靠区决定；空表只占一小块，不让大图标撑满视线。 */
+.file-table--compact .arco-table-no-data { padding: 12px 8px; line-height: normal; }
+.file-table--compact .arco-empty { padding: 0; }
+.file-table--compact .arco-empty-image { margin-bottom: 4px; font-size: 32px; line-height: 1; }
+.file-table--compact .arco-empty-description { font-size: 13px; }
 .file-table-hint-icon { color: var(--color-text-3); font-size: 16px; cursor: help; vertical-align: middle; }
 .visually-hidden { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .page-load-error { display: flex; align-items: center; gap: 8px; padding: 24px 0; }
@@ -772,14 +781,6 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .active-upload-tag { cursor: default; }
 
 /* 操作日志：高密度筛选 + 可扫描的结构化记录。 */
-.audit-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
-}
-.audit-heading > div { display: flex; flex-direction: column; gap: 3px; }
 .audit-filter-panel {
   display: grid;
   grid-template-columns: minmax(220px, 1.4fr) 140px minmax(220px, 1.2fr) 130px minmax(310px, 1.6fr) auto;
@@ -1001,7 +1002,6 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
   .dashboard-pending .arco-list-item { align-items: flex-start; flex-wrap: wrap; }
   .dashboard-pending .arco-list-item-main, .dashboard-pending .arco-list-item-extra-content { flex: 1 0 100%; width: 100%; min-width: 0; }
   .dashboard-pending .arco-list-item-extra-content { margin: 4px 0 0; }
-  .audit-heading { align-items: flex-start; }
   .audit-filter-panel { grid-template-columns: 1fr; }
   .audit-filter-panel > :nth-child(5) { grid-column: auto; }
 }

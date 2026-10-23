@@ -50,12 +50,7 @@ export default function SysConfig() {
 
   return (
     <Card className="page-card page-card--table system-page">
-      <div className="page-heading">
-        <div>
-          <h1>系统参数</h1>
-          <p>上传限制、SMTP 发信与邮件提醒设置，修改后需保存才会生效。</p>
-        </div>
-      </div>
+      <h1 className="visually-hidden">系统参数</h1>
       {state.loadError ? (
         <LoadError onRetry={state.load} />
       ) : state.loading ? (

@@ -270,11 +270,7 @@ export default function UserList() {
 
   return (
     <Card className="page-card page-card--table">
-      <div className="page-heading">
-        <div>
-          <h1>用户管理</h1>
-        </div>
-      </div>
+      <h1 className="visually-hidden">用户管理</h1>
       <div className="page-toolbar responsive-toolbar">
         <Space wrap>
           <Input.Search

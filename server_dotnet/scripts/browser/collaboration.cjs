@@ -135,7 +135,7 @@ async function chooseNotificationTab(drawer, name) {
     const supplierInput = () => supplierPage.getByPlaceholder('输入留言，Ctrl+Enter 发送', { exact: true });
     const adminInput = () => adminPage.getByPlaceholder('输入留言，Ctrl+Enter 发送', { exact: true });
     await adminPage.goto(s.base + '/');
-    await adminPage.getByRole('heading', { name: new RegExp('^工作台 · ') }).waitFor();
+    await adminPage.getByRole('heading', { name: '工作台', exact: true }).waitFor();
     await supplierPage.goto(s.base + `/projects/${project.id}?tab=messages`);
     await supplierInput().waitFor();
     const liveMessageText = '供应商即时留言-' + marker;
@@ -276,7 +276,7 @@ async function chooseNotificationTab(drawer, name) {
 
     await record('供应商提交后管理员工作台待确认区自动出现项目', async () => {
       await adminPage.goto(s.base + '/');
-      await adminPage.getByRole('heading', { name: new RegExp('^工作台 · ') }).waitFor();
+      await adminPage.getByRole('heading', { name: '工作台', exact: true }).waitFor();
       await adminPage.getByRole('heading', { name: '公司内部待验收子项目', exact: true }).waitFor();
       const beforePending = await json(adminContext, adminToken, 'GET',
         '/dashboard/pending-projects?page=1&pageSize=100');
@@ -337,7 +337,7 @@ async function chooseNotificationTab(drawer, name) {
       assert(pending.list.some(item => item.id === project.id), 'notification view must not finish pending confirmation');
       await closeNotifications(adminPage, drawer);
       await adminPage.reload();
-      await adminPage.getByRole('heading', { name: new RegExp('^工作台 · ') }).waitFor();
+      await adminPage.getByRole('heading', { name: '工作台', exact: true }).waitFor();
       const reopened = await openNotifications(adminPage);
       await chooseNotificationTab(reopened, '全部');
       const persisted = notificationRow(reopened, markedNotification.id);
@@ -418,7 +418,7 @@ async function chooseNotificationTab(drawer, name) {
       // Install the failure before navigation so a long-running realtime
       // session cannot consume the initial summary before the fault injection.
       await adminPage.goto(s.base + '/');
-      await adminPage.getByRole('heading', { name: new RegExp('^工作台 · ') }).waitFor();
+      await adminPage.getByRole('heading', { name: '工作台', exact: true }).waitFor();
       await failed;
       await adminPage.getByRole('status').filter({ hasText: '更新暂时中断' }).waitFor();
       const restored = waitResponse(adminPage, '/collaboration/summary');

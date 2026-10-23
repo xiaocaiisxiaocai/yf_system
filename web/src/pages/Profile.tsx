@@ -66,11 +66,7 @@ export default function Profile() {
 
   return (
     <Card className="page-card profile-page">
-      <div className="page-heading profile-heading">
-        <div>
-          <h1>个人资料</h1>
-        </div>
-      </div>
+      <h1 className="visually-hidden">个人资料</h1>
 
       <div className="profile-content">
         <div className="profile-readonly-grid" aria-label="账号信息">

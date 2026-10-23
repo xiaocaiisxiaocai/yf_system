@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  Button, Input, Message, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, Typography,
+  Button, Empty, Input, Message, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconUpload, IconDelete, IconClose, IconQuestionCircle } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
@@ -390,6 +390,7 @@ export default function FileTable({
             onChange: (keys) => setSelected(keys as number[]),
           } : undefined}
           size={compact ? 'small' : undefined}
+          noDataElement={compact ? <Empty description="暂无文件" /> : undefined}
           scroll={{ x: scrollX }}
           columns={columns}
           pagination={{

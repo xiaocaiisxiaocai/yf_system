@@ -161,7 +161,7 @@ export default function Dictionaries() {
 
   const editingPart = editing && isRobotPart(editing) ? editing : null
   return <Card className="page-card page-card--table dictionary-page">
-    <div className="page-heading"><div><h1>数据字典</h1><p>维护 Robot 类型、Robot 料号及对应型号和项目优先级</p></div></div>
+    <h1 className="visually-hidden">数据字典</h1>
     <Tabs className="dictionary-tabs" activeTab={type} onChange={(value) => { setType(value as TabType); setKeyword(''); setSupplierId(undefined); setOpen(false); setEditing(null) }}>{TYPES.map((item) => <Tabs.TabPane key={item.key} title={item.name} />)}</Tabs>
     <div className="page-toolbar responsive-toolbar dictionary-toolbar">
       <Space wrap>

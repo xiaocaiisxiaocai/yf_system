@@ -91,11 +91,7 @@ export default function SupplierList() {
 
   return (
     <Card className="page-card page-card--table">
-      <div className="page-heading">
-        <div>
-          <h1>供应商管理</h1>
-        </div>
-      </div>
+      <h1 className="visually-hidden">供应商管理</h1>
       <div className="page-toolbar responsive-toolbar">
         <Space>
           <Input.Search

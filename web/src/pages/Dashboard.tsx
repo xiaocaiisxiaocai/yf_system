@@ -281,13 +281,53 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard-collaboration">
-      <div className="page-heading dashboard-heading">
-        <div>
-          <h1>工作台{user ? ` · ${user.realName}` : ''}</h1>
-          <Typography.Text type="secondary">{isSupplier ? '跟进待公司验收与未读留言' : '优先处理公司内部验收与未读留言'}</Typography.Text>
+      <h1 className="visually-hidden">工作台</h1>
+
+      <section className="dashboard-overview" aria-labelledby="dashboard-overview-title">
+        <div className="dashboard-overview-heading">
+          <div>
+            <h2 id="dashboard-overview-title">业务概览</h2>
+            <span>主项目与子项目协作状态汇总</span>
+          </div>
+          <div className="dashboard-overview-actions">
+            {summaryRefreshError && data && (
+              <span className="dashboard-overview-stale" role="status">
+                更新暂时失败，显示上次数据
+                <Button size="mini" onClick={() => { void refetchSummary() }}>重试</Button>
+              </span>
+            )}
+            <Button size="small" icon={<IconRefresh />} loading={dashboardRefreshing} onClick={refreshDashboard}>刷新工作台</Button>
+          </div>
         </div>
-        <Button icon={<IconRefresh />} loading={dashboardRefreshing} onClick={refreshDashboard}>刷新工作台</Button>
-      </div>
+        {loading && !data ? (
+          <Spin loading className="dashboard-overview-loading" />
+        ) : loadError && !data ? (
+          <div className="dashboard-feedback dashboard-overview-error">
+            <Typography.Text type="error">加载失败</Typography.Text>
+            <Button size="small" onClick={() => { void refetchSummary() }}>重试</Button>
+          </div>
+        ) : (
+          <Grid.Row className="dashboard-stats" gutter={[12, 12]}>
+            {cards.map((card) => {
+              const content = (
+                <Card className="dashboard-stat-card">
+                  <Statistic title={card.title} value={card.value ?? '-'} />
+                  <span className="dashboard-stat-action">{card.action}<IconRight /></span>
+                </Card>
+              )
+              return (
+                <Grid.Col xs={12} xl={6} key={card.title}>
+                  {card.to ? (
+                    <Link className="dashboard-stat-link" to={card.to} aria-label={`${card.title}：${card.action}`}>{content}</Link>
+                  ) : (
+                    <a className="dashboard-stat-link" href={card.href} aria-label={`${card.title}：${card.action}`}>{content}</a>
+                  )}
+                </Grid.Col>
+              )
+            })}
+          </Grid.Row>
+        )}
+      </section>
 
       <Grid.Row className="dashboard-workbench" gutter={[16, 16]}>
         <Grid.Col xs={24} lg={12}>
@@ -486,49 +526,6 @@ export default function Dashboard() {
           </Card>
         </Grid.Col>
       </Grid.Row>
-
-      <section className="dashboard-overview" aria-labelledby="dashboard-overview-title">
-        <div className="dashboard-overview-heading">
-          <div>
-            <h2 id="dashboard-overview-title">业务概览</h2>
-            <span>主项目与子项目协作状态汇总</span>
-          </div>
-          {summaryRefreshError && data && (
-            <span className="dashboard-overview-stale" role="status">
-              更新暂时失败，显示上次数据
-              <Button size="mini" onClick={() => { void refetchSummary() }}>重试</Button>
-            </span>
-          )}
-        </div>
-        {loading && !data ? (
-          <Spin loading className="dashboard-overview-loading" />
-        ) : loadError && !data ? (
-          <div className="dashboard-feedback dashboard-overview-error">
-            <Typography.Text type="error">加载失败</Typography.Text>
-            <Button size="small" onClick={() => { void refetchSummary() }}>重试</Button>
-          </div>
-        ) : (
-          <Grid.Row className="dashboard-stats" gutter={[12, 12]}>
-            {cards.map((card) => {
-              const content = (
-                <Card className="dashboard-stat-card">
-                  <Statistic title={card.title} value={card.value ?? '-'} />
-                  <span className="dashboard-stat-action">{card.action}<IconRight /></span>
-                </Card>
-              )
-              return (
-                <Grid.Col xs={12} xl={6} key={card.title}>
-                  {card.to ? (
-                    <Link className="dashboard-stat-link" to={card.to} aria-label={`${card.title}：${card.action}`}>{content}</Link>
-                  ) : (
-                    <a className="dashboard-stat-link" href={card.href} aria-label={`${card.title}：${card.action}`}>{content}</a>
-                  )}
-                </Grid.Col>
-              )
-            })}
-          </Grid.Row>
-        )}
-      </section>
     </div>
   )
 }

@@ -90,7 +90,7 @@ export function RetentionPage() {
   }
 
   return (
-    <Card title="统一删除策略">
+    <Card title={<h1 className="visually-hidden">统一删除策略</h1>}>
       <Typography.Paragraph type="secondary">
         所有新提交的文件自动使用此策略，发送人无需选择。修改不影响已提交的文件。
       </Typography.Paragraph>
@@ -217,7 +217,7 @@ function SettingsForm({ group }: { group: 'file' | 'notify' }) {
 export function SettingsPage() {
   const can = useCan()
   return (
-    <Card title="文件策略与邮件提醒">
+    <Card title={<h1 className="visually-hidden">文件策略与邮件提醒</h1>}>
       <Tabs defaultActiveTab={can.manageFilePolicy ? 'file' : 'notify'}>
         {can.manageFilePolicy && <Tabs.TabPane key="file" title="文件与下载策略"><SettingsForm group="file" /></Tabs.TabPane>}
         {can.manageNotify && <Tabs.TabPane key="notify" title="邮件提醒"><SettingsForm group="notify" /></Tabs.TabPane>}
@@ -273,7 +273,7 @@ export function AuditPage() {
   const table = useAdjustableColumns('oem-audit', userId, OEM_AUDIT_COLUMNS, auditColumns, 'createdAt', tableHostRef)
 
   return (
-    <Card title="OEM 审计日志">
+    <Card title={<h1 className="visually-hidden">OEM 审计日志</h1>}>
       <Space style={{ marginBottom: 12 }}>
         <Input.Search allowClear placeholder="搜索账号、动作或内容" style={{ width: 280 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
         <ColumnVisibilityPicker

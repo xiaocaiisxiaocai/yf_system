@@ -1,6 +1,4 @@
 .dashboard-collaboration { min-width: 0; }
-.dashboard-heading { align-items: center; }
-.dashboard-heading h1 { margin-bottom: 4px; }
 .dashboard-workbench { align-items: stretch; }
 .dashboard-workbench > .arco-col { display: flex; min-width: 0; }
 
@@ -61,7 +59,7 @@
   background: rgb(var(--orange-1));
 }
 
-.dashboard-overview-stale { margin-left: auto; }
+.dashboard-overview-actions { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .dashboard-task-card .arco-list { border: 0; }
 .dashboard-task-card .arco-list-item { padding: 12px 4px; }
 .dashboard-task-card .arco-list-item:last-child { border-bottom: 0; }
@@ -102,7 +100,18 @@
   border-top: 1px solid var(--color-border-2);
 }
 
-.dashboard-overview { margin-top: 18px; }
+.dashboard-overview { margin-bottom: 18px; }
+
+/* 桌面宽度下工作卡片铺到视口底部，空状态居中，避免大屏下半页留白。 */
+@media (min-width: 992px) {
+  .dashboard-collaboration { display: flex; flex-direction: column; min-height: calc(100vh - 88px); }
+  .dashboard-workbench { flex: 1 0 auto; align-content: stretch; }
+  .dashboard-task-card { display: flex; flex-direction: column; }
+  .dashboard-task-card > .arco-card-body { display: flex; flex: 1 1 auto; flex-direction: column; }
+  .dashboard-task-card > .arco-card-body > .arco-empty,
+  .dashboard-task-card > .arco-card-body > .dashboard-card-loading,
+  .dashboard-task-card > .arco-card-body > .dashboard-feedback { margin: auto 0; }
+}
 .dashboard-overview-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
 .dashboard-overview-heading > div { display: flex; align-items: baseline; gap: 10px; }
 .dashboard-overview-loading { min-height: 110px; }
@@ -140,8 +149,6 @@
 }
 
 @media (max-width: 767px) {
-  .dashboard-heading { align-items: flex-start; }
-  .dashboard-heading > .arco-btn { margin-top: 4px; }
   .dashboard-task-card > .arco-card-header { align-items: flex-start; padding: 12px; }
   .dashboard-task-card > .arco-card-body { padding: 0 12px 12px; }
   .dashboard-messages > .arco-card-header { flex-wrap: wrap; }

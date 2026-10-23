@@ -422,7 +422,7 @@ export default function ProjectList() {
 
   return (
     <Card className="page-card page-card--table">
-      <div className="page-heading"><div><h1>Robot仿真协作</h1><p>按主项目归集资料，各子项目独立协作与验收</p></div></div>
+      <h1 className="visually-hidden">Robot仿真协作</h1>
       <div className="page-toolbar responsive-toolbar">
         <Space wrap>
           <Input.Search allowClear placeholder="主项目名称" style={{ width: 240 }} defaultValue={keyword} onSearch={(value) => applyQuery({ q: value.trim(), page: 1 })} onClear={() => applyQuery({ q: undefined, page: 1 })} />

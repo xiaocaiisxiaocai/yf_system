@@ -234,8 +234,11 @@ export default function FlowTemplatesPage() {
 
   return (
     <div>
-      <Card title="审批模板" extra={<Button type="primary" icon={<IconPlus />} onClick={() => setEditing('new')}>新建模板</Button>}>
-        <Typography.Paragraph type="secondary">事业部、部门和课别主管统一在协作平台的“组织架构”中维护。</Typography.Paragraph>
+      <Card title={<h1 className="visually-hidden">审批模板</h1>}>
+        <div className="page-toolbar responsive-toolbar">
+          <Typography.Text type="secondary">事业部、部门和课别主管统一在协作平台的“组织架构”中维护。</Typography.Text>
+          <Button type="primary" icon={<IconPlus />} onClick={() => setEditing('new')}>新建模板</Button>
+        </div>
         {error && (
           <Alert type="error" style={{ marginBottom: 12 }} content={error}
             action={<Button size="small" loading={loading} onClick={() => void load()}>重试</Button>} />

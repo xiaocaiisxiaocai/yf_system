@@ -53,7 +53,7 @@ export default function BlockedRecoveryPage() {
   const table = useAdjustableColumns('oem-approval-recovery', userId, OEM_RECOVERY_COLUMNS, recoveryColumns, 'title', tableHostRef)
 
   return (
-    <Card title="审批阻断处置" extra={(
+    <Card title={<h1 className="visually-hidden">审批阻断处置</h1>} extra={(
       <ColumnVisibilityPicker
         specs={OEM_RECOVERY_COLUMNS}
         hidden={table.hidden}

@@ -347,10 +347,8 @@ describe('工作台协作生产界面', () => {
   it('supplier dashboard uses company-acceptance wording while internal wording stays role-specific', async () => {
     mocks.auth.user = { id: 2, realName: '供应商用户', userType: 'SUPPLIER' }
     render(dashboardView())
-    expect(await screen.findByText('跟进待公司验收与未读留言')).toBeVisible()
-    expect(screen.getByRole('heading', { name: '待公司验收子项目' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '待公司验收子项目' })).toBeVisible()
     expect(await screen.findByText('暂无待公司验收子项目')).toBeVisible()
-    expect(screen.queryByText('优先处理公司内部验收与未读留言')).not.toBeInTheDocument()
   })
 
   it('dashboard without its menu permission stays local and does not call dashboard APIs', async () => {

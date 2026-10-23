@@ -245,10 +245,7 @@ export default function AuditLog() {
 
   return (
     <Card className="page-card page-card--table audit-page">
-      <div className="audit-heading page-heading">
-        <div><h1>操作日志</h1></div>
-        <Button icon={<IconRefresh />} onClick={() => { beginReload(); setReloadKey((value) => value + 1) }}>刷新</Button>
-      </div>
+      <h1 className="visually-hidden">操作日志</h1>
 
       <div className="audit-filter-panel">
         <Input allowClear value={draft.keyword} placeholder="搜索姓名、对象或详情" prefix={<IconSearch />} onChange={(value) => setDraft((state) => ({ ...state, keyword: value }))} onPressEnter={applyFilters} />
@@ -276,6 +273,7 @@ export default function AuditLog() {
           {data.total >= 10_001 ? '10000+ 条记录，请缩小筛选范围查看完整结果' : `共 ${data.total} 条记录`}
           {filters.keyword && !filters.range.length ? '；关键词默认搜索最近 30 天' : ''}
         </Typography.Text>
+        <Button size="small" icon={<IconRefresh />} onClick={() => { beginReload(); setReloadKey((value) => value + 1) }}>刷新</Button>
       </div>
 
       {loadError ? (

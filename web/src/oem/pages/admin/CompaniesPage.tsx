@@ -455,22 +455,23 @@ export default function CompaniesPage() {
   const companyTable = useAdjustableColumns('oem-companies', userId, OEM_COMPANY_COLUMNS, companyColumns, 'name', companyHostRef)
 
   return (
-    <Card title="OEM 厂商与账号" extra={(
-      <Space>
-        <ColumnVisibilityPicker
-          specs={OEM_COMPANY_COLUMNS}
-          hidden={companyTable.hidden}
-          onToggle={companyTable.toggle}
-          onShowAll={companyTable.showAll}
-          onHideOptional={companyTable.hideOptional}
-          onReset={companyTable.reset}
-        />
-        {can.manageCompanies && (
-          <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setEditing('new') }}>新增厂商</Button>
-        )}
-      </Space>
-    )}>
-      <Input.Search allowClear placeholder="搜索厂商名称" style={{ width: 260, marginBottom: 12 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
+    <Card title={<h1 className="visually-hidden">OEM 厂商与账号</h1>}>
+      <div className="page-toolbar responsive-toolbar">
+        <Input.Search allowClear placeholder="搜索厂商名称" style={{ width: 260 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
+        <Space>
+          <ColumnVisibilityPicker
+            specs={OEM_COMPANY_COLUMNS}
+            hidden={companyTable.hidden}
+            onToggle={companyTable.toggle}
+            onShowAll={companyTable.showAll}
+            onHideOptional={companyTable.hideOptional}
+            onReset={companyTable.reset}
+          />
+          {can.manageCompanies && (
+            <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setEditing('new') }}>新增厂商</Button>
+          )}
+        </Space>
+      </div>
       {actionError && <Typography.Text className="oem-delete-error" type="error" role="alert">{actionError}</Typography.Text>}
       {listError && (
         <Alert type="error" style={{ marginBottom: 12 }} content={`厂商列表加载失败：${listError}`}

@@ -50,7 +50,7 @@ export default function ApprovalInboxPage() {
   const table = useAdjustableColumns('oem-approvals', userId, OEM_APPROVAL_COLUMNS, approvalColumns, 'title', tableHostRef)
 
   return (
-    <Card title="待我审批" extra={(
+    <Card title={<h1 className="visually-hidden">待我审批</h1>} extra={(
       <ColumnVisibilityPicker
         specs={OEM_APPROVAL_COLUMNS}
         hidden={table.hidden}
