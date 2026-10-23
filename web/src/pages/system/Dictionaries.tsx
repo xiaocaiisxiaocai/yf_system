@@ -142,9 +142,9 @@ export default function Dictionaries() {
 
   const columns = type === 'ROBOT_PART'
     ? withColumnHeaders([
-      { title: 'Robot 厂商', dataIndex: 'supplierName', width: 160, ellipsis: true },
-      { title: 'Robot 料号', dataIndex: 'partNumber', width: 190, ellipsis: true },
-      { title: 'Robot 型号', dataIndex: 'model', width: 280, ellipsis: true, render: (value: string) => <Tooltip content={value}><span>{value}</span></Tooltip> },
+      { title: 'Robot 厂商', dataIndex: 'supplierName', width: 110, ellipsis: true },
+      { title: 'Robot 料号', dataIndex: 'partNumber', width: 170, ellipsis: true },
+      { title: 'Robot 型号', dataIndex: 'model', width: 400, ellipsis: true, render: (value: string) => <Tooltip content={value}><span>{value}</span></Tooltip> },
       { title: '排序号', dataIndex: 'sortNo', width: 90, align: 'center' as const },
       { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: RobotPart) => <Tag color={item.enabled ? 'green' : 'gray'}>{item.enabled ? '启用' : '停用'}</Tag> },
       { title: '操作', width: 140, render: (_: unknown, item: RobotPart) => <Space size={4}>

@@ -110,7 +110,7 @@ export function RetentionPage() {
           )}
           {mode === 'AFTER_FIRST_RECEIPT' && <Typography.Text type="warning">注意：无人下载的文件在此策略下不会自动删除。</Typography.Text>}
           {current && <Typography.Paragraph type="secondary">当前规则：{current.summary}</Typography.Paragraph>}
-          <Button type="primary" loading={saving} disabled={loading || (!current && Boolean(error))} onClick={() => void save()}>保存统一策略</Button>
+          <Button type="primary" style={{ alignSelf: 'flex-start' }} loading={saving} disabled={loading || (!current && Boolean(error))} onClick={() => void save()}>保存统一策略</Button>
         </Form>
       </Spin>
     </Card>

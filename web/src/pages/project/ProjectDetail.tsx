@@ -513,7 +513,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
           <dl className="project-group-summary-facts project-detail-facts">
             <div><dt>Robot 厂商</dt><dd title={project.supplierName || undefined}>{detailText(project.supplierName)}</dd></div>
             <div><dt>Robot 型号</dt><dd title={project.robotModelName || undefined}>{detailText(project.robotModelName)}</dd></div>
-            <div><dt>负责人</dt><dd>{responsibleLabel}</dd></div>
+            <div><dt>负责人</dt><dd title={typeof responsibleLabel === 'string' ? responsibleLabel : undefined}>{responsibleLabel}</dd></div>
             <div><dt>工令号</dt><dd title={project.workOrderNos?.join('、') || undefined}>{detailText(project.workOrderNos?.join('、'))}</dd></div>
             <div><dt>优先级</dt><dd>{detailText(project.priorityName)}</dd></div>
             <div><dt>需求完成时间</dt><dd>{detailText(project.expectedCompletionDate)}</dd></div>

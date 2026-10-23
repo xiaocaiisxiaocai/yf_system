@@ -489,7 +489,7 @@ export default function UserList() {
               </Select>
             </Form.Item>
           </div>
-          {!editing && <div className="dialog-note">首次登录需改密</div>}
+          {!editing && <div className="dialog-note">新用户首次登录时需要修改初始密码。</div>}
         <EnterSubmit /></Form>
       </Modal>
 

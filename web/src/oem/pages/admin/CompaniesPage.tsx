@@ -12,12 +12,12 @@ import { type ColumnLayoutSpec } from '../../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../../components/useAdjustableColumns'
 
 const OEM_ACCOUNT_COLUMNS: readonly ColumnLayoutSpec[] = [
-  { key: 'employeeNo', title: '登录账号', defaultWidth: 150, minWidth: 110, locked: true },
-  { key: 'realName', title: '姓名', defaultWidth: 110, minWidth: 80 },
-  { key: 'email', title: '邮箱', defaultWidth: 230, minWidth: 140 },
-  { key: 'status', title: '状态', defaultWidth: 190, minWidth: 120 },
-  { key: 'lastLoginAt', title: '最近登录', defaultWidth: 160, minWidth: 130 },
-  { key: 'actions', title: '操作', defaultWidth: 260, minWidth: 180, maxWidth: 360, locked: true },
+  { key: 'employeeNo', title: '登录账号', defaultWidth: 110, minWidth: 96, locked: true },
+  { key: 'realName', title: '姓名', defaultWidth: 90, minWidth: 72 },
+  { key: 'email', title: '邮箱', defaultWidth: 156, minWidth: 120 },
+  { key: 'status', title: '状态', defaultWidth: 136, minWidth: 112 },
+  { key: 'lastLoginAt', title: '最近登录', defaultWidth: 160, minWidth: 140 },
+  { key: 'actions', title: '操作', defaultWidth: 214, minWidth: 180, maxWidth: 360, locked: true },
 ]
 
 const OEM_COMPANY_COLUMNS: readonly ColumnLayoutSpec[] = [

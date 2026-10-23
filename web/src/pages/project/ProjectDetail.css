@@ -22,7 +22,8 @@
 .project-detail-heading .detail-actions { flex: 0 1 auto; justify-content: flex-end; min-width: 0; }
 .project-detail-heading .project-workflow--compact { margin: 0; padding: 0; border: 0; background: transparent; }
 .project-detail-facts-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.project-group-summary-facts.project-detail-facts { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+/* 按内容长度分配：型号和负责人较长，工令号和优先级较短。 */
+.project-group-summary-facts.project-detail-facts { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.7fr) minmax(0, 1.3fr) minmax(0, 0.8fr) minmax(0, 0.6fr) minmax(0, 0.9fr); }
 .project-group-summary-facts.project-detail-facts > div:first-child { padding-left: 0; border-left: 0; }
 .project-detail-summary-card .project-metadata { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--app-border); }
 .project-detail-summary-card .arco-descriptions-item-label,
