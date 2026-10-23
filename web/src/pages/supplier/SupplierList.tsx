@@ -140,7 +140,7 @@ export default function SupplierList() {
           data={data.list}
           scroll={{ x: 680, y: 'var(--page-table-scroll-y)' }}
           columns={[
-            { title: '名称', dataIndex: 'name', ellipsis: true },
+            { title: '名称', dataIndex: 'name', width: 240, ellipsis: true },
             {
               title: '状态',
               dataIndex: 'status',

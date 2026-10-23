@@ -10,6 +10,7 @@ import http, { type QuietRequestConfig } from '../../api/client'
 import { queryClient } from '../../api/queryClient'
 import type { ApiResponses, Message } from '../../api/types'
 import { loadReadCounts, type ReadCounts } from '../MessageReceipts'
+import { useCollaboration } from '../../store/collaboration'
 
 const PAGE_SIZE = 20
 const MAX_TARGET_LOCATE_PAGES = 10
@@ -595,6 +596,8 @@ export function useMessageCommands() {
       await http.post<ApiResponses['POST /messages/read']>('/messages/read', { ids })
       return ids
     },
+    // 服务端会同时把对应的留言通知记为已查看，立即刷新右上角通知数。
+    onSuccess: () => { useCollaboration.getState().refresh().catch(() => undefined) },
   }, queryClient)
   return { send, remove, markRead }
 }

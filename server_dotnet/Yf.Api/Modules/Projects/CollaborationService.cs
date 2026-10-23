@@ -44,6 +44,10 @@ internal sealed class CollaborationService
                          OR (pa.activity_type='MESSAGE' AND pa.action='CREATE')
                          OR (pa.activity_type='PROJECT' AND pa.action IN ('START','RESTART','SUBMIT','CONFIRM','REJECT','WITHDRAW','TERMINATE')))
                        AND (pa.activity_type<>'PROJECT' OR pa.action<>'SUBMIT' OR {canReceivePendingAcceptance})
+                       AND (pa.activity_type<>'FILE' OR pa.target_id IS NULL OR EXISTS (SELECT 1 FROM files f
+                         WHERE f.id=pa.target_id AND f.project_id=pa.project_id AND f.status={FileStatuses.Available}))
+                       AND (pa.activity_type<>'MESSAGE' OR pa.target_id IS NULL OR EXISTS (SELECT 1 FROM messages m
+                         WHERE m.id=pa.target_id AND m.project_id=pa.project_id AND m.status='NORMAL'))
                        AND pa.actor_id<>{current.Id} AND cr.activity_id IS NULL THEN 1 ELSE 0 END),0) AS UnreadCount
             FROM project_activities pa
             INNER JOIN projects p ON p.id=pa.project_id
@@ -94,12 +98,16 @@ internal sealed class CollaborationService
             let messageAvailable = activity.ActivityType == "MESSAGE" && activity.TargetId != null
                 && db.Messages.Any(message => message.Id == activity.TargetId
                     && message.ProjectId == activity.ProjectId && message.Status == "NORMAL")
+            // 文件或留言已删除的通知不再算未读，与概览计数一致。
+            let targetGone = activity.TargetId != null
+                && ((activity.ActivityType == "FILE" && !fileAvailable)
+                    || (activity.ActivityType == "MESSAGE" && !messageAvailable))
             select new
             {
                 Activity = activity,
                 ProjectName = project.Name,
                 ProjectGroupName = projectGroup.Name,
-                IsRead = isRead,
+                IsRead = isRead || targetGone,
                 FileAvailable = fileAvailable,
                 MessageAvailable = messageAvailable,
             };

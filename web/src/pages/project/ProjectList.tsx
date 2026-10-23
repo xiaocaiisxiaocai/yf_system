@@ -72,7 +72,7 @@ const PROJECT_LIST_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'supplierName', title: 'Robot 厂商', defaultWidth: 112, minWidth: 104 },
   { key: 'robotTypeName', title: 'Robot 类型', defaultWidth: 112, minWidth: 104 },
   { key: 'robotPartNumber', title: 'Robot 料号', defaultWidth: 128, minWidth: 104 },
-  { key: 'robotModelName', title: 'Robot 型号', defaultWidth: 120, minWidth: 104 },
+  { key: 'robotModelName', title: 'Robot 型号', defaultWidth: 168, minWidth: 104 },
   { key: 'responsibleUserName', title: '负责人', defaultWidth: 84, minWidth: 72 },
   { key: 'robotOwnerName', title: 'Robot 负责人', defaultWidth: 124, minWidth: 116 },
   { key: 'sectionName', title: '课别', defaultWidth: 72, minWidth: 64 },

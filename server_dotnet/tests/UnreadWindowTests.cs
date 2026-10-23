@@ -127,4 +127,50 @@ public sealed class UnreadWindowTests
             Assert.Equal((ulong)all.List.Count(item => !item.Read), expected);
         }
     }
+
+    /// <summary>
+    /// Reading a message also marks its "发表留言" notification as seen, and notifications whose file or
+    /// message was deleted no longer count as unread, so the header bell matches the dashboard.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ReadingMessagesAndDeletingTargetsClearTheirNotifications()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
+        await database.ExecuteAsync("""
+            UPDATE users SET must_change_password=0 WHERE id=1;
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password)
+              VALUES(2,'author','x','作者','','INTERNAL','ACTIVE',0);
+            INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'S','ACTIVE',1);
+            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id) VALUES(1,'通知主项目',100,'IN_PROGRESS',1,1);
+            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
+              VALUES(1,1,'通知子项目',100,'IN_PROGRESS',1,1);
+            INSERT INTO messages(id,project_id,sender_id,content,status,created_at) VALUES
+              (1,1,2,'将被阅读','NORMAL',UTC_TIMESTAMP()),
+              (2,1,2,'保持未读','NORMAL',UTC_TIMESTAMP()),
+              (3,1,2,'已删除','DELETED',UTC_TIMESTAMP());
+            INSERT INTO project_activities(id,project_id,activity_type,action,actor_id,actor_name,occurred_at,title,target_id,source_key) VALUES
+              (1,1,'MESSAGE','CREATE',2,'作者',UTC_TIMESTAMP(3),'留言1',1,'n1'),
+              (2,1,'MESSAGE','CREATE',2,'作者',UTC_TIMESTAMP(3),'留言2',2,'n2'),
+              (3,1,'MESSAGE','CREATE',2,'作者',UTC_TIMESTAMP(3),'已删留言',3,'n3'),
+              (4,1,'FILE','UPLOAD',2,'作者',UTC_TIMESTAMP(3),'已删文件',999,'n4');
+            """, null, ct);
+        var admin = new CurrentUser(1, "admin", "INTERNAL", null);
+        await using var conn = await database.Database.OpenAsync(ct);
+        var collaboration = new CollaborationService();
+
+        Assert.Equal(2UL, (await collaboration.SummaryAsync(conn, admin, ct)).UnreadCount);
+        var before = await collaboration.NotificationsAsync(conn, admin, 1, 20, false, ct);
+        Assert.Equal(2UL, before.UnreadCount);
+        Assert.Equal([3UL, 4UL], before.List.Where(item => item.Read).Select(item => item.Id).Order());
+
+        var messages = new MessageService(new AuditService([]), database.Options);
+        await messages.MarkReadAsync(conn, admin, new MarkMessagesReadRequest { Ids = [1] }, ct);
+
+        Assert.Equal(1UL, (await collaboration.SummaryAsync(conn, admin, ct)).UnreadCount);
+        var unread = await collaboration.NotificationsAsync(conn, admin, 1, 20, true, ct);
+        Assert.Equal(2UL, Assert.Single(unread.List).Id);
+        Assert.Equal(1UL, await database.ScalarAsync<ulong>(
+            "SELECT COUNT(*) FROM collaboration_reads WHERE activity_id=1 AND user_id=1", ct));
+    }
 }

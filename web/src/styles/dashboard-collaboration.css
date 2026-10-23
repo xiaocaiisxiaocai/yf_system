@@ -1,5 +1,5 @@
 .dashboard-collaboration { min-width: 0; }
-.dashboard-heading { align-items: flex-end; }
+.dashboard-heading { align-items: center; }
 .dashboard-heading h1 { margin-bottom: 4px; }
 .dashboard-workbench { align-items: stretch; }
 .dashboard-workbench > .arco-col { display: flex; min-width: 0; }

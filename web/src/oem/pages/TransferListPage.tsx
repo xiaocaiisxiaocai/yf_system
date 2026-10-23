@@ -18,11 +18,11 @@ import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 import EnterSubmit from '../../components/EnterSubmit'
 
 const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
-  { key: 'title', title: '文件', defaultWidth: 260, minWidth: 140, locked: true },
-  { key: 'direction', title: '方向', defaultWidth: 120, minWidth: 88 },
+  { key: 'title', title: '文件', defaultWidth: 240, minWidth: 140, locked: true },
+  { key: 'direction', title: '方向', defaultWidth: 96, minWidth: 88 },
   { key: 'companyName', title: '厂商', defaultWidth: 160, minWidth: 96 },
-  { key: 'sender', title: '发送人', defaultWidth: 120, minWidth: 88 },
-  { key: 'status', title: '状态', defaultWidth: 220, minWidth: 140 },
+  { key: 'sender', title: '发送人', defaultWidth: 104, minWidth: 88 },
+  { key: 'status', title: '状态', defaultWidth: 180, minWidth: 140 },
   { key: 'files', title: '附件', defaultWidth: 120, minWidth: 96 },
   { key: 'sentAt', title: '提交时间', defaultWidth: 170, minWidth: 140 },
 ]

@@ -375,7 +375,7 @@ export default function UserList() {
             width: 150,
             render: (v?: string) => (v ? <Tag size="small" className="table-cell-wrap">{v}</Tag> : '-'),
           },
-          { title: '邮箱', dataIndex: 'email', ellipsis: true, render: (v?: string) => v || '-' },
+          { title: '邮箱', dataIndex: 'email', width: 220, ellipsis: true, render: (v?: string) => v || '-' },
           {
             title: '状态',
             dataIndex: 'status',

@@ -346,6 +346,7 @@ internal sealed class MessageService(
             // Skip receipts that already exist, then insert the rest in one statement. The primary key is
             // the receipt contract; INSERT IGNORE keeps a concurrent acknowledgement of the same message idempotent.
             var groupIds = group.Select(message => message.Id).ToArray();
+            await MarkMessageNotificationsSeenAsync(db, current.Id, group.Key, groupIds, ct);
             var alreadyRead = (await db.MessageReads
                 .Where(read => read.UserId == current.Id && Enumerable.Contains(groupIds, read.MessageId))
                 .Select(read => read.MessageId).ToArrayAsync(ct)).ToHashSet();
@@ -367,6 +368,28 @@ internal sealed class MessageService(
         await tx.CommitAsync(ct);
         foreach (var projectId in changedProjects)
             await PublishSafelyAsync(projectId, RealtimeChangeKinds.Receipts);
+    }
+
+    /// <summary>
+    /// 读过留言即视为看过对应的“发表留言”协作通知，让右上角通知与留言未读保持一致。
+    /// 先做无锁的一致性读取再按主键 INSERT IGNORE，避免 INSERT ... SELECT 在项目动态索引上加间隙锁。
+    /// </summary>
+    private static async Task MarkMessageNotificationsSeenAsync(
+        YfDbContext db, ulong userId, ulong projectId, ulong[] messageIds, CancellationToken ct)
+    {
+        var activityIds = await db.ProjectActivities
+            .Where(activity => activity.ProjectId == projectId && activity.ActivityType == "MESSAGE"
+                && activity.Action == "CREATE" && activity.TargetId != null
+                && Enumerable.Contains(messageIds, activity.TargetId.Value)
+                && !db.CollaborationReads.Any(read => read.ActivityId == activity.Id && read.UserId == userId))
+            .Select(activity => activity.Id).Order().ToArrayAsync(ct);
+        if (activityIds.Length == 0) return;
+        var values = string.Join(",", activityIds.Select((_, index) => $"(@a{index},@u,UTC_TIMESTAMP(3))"));
+        var parameters = activityIds.Select((id, index) => (object)new MySqlParameter($"@a{index}", id))
+            .Append(new MySqlParameter("@u", userId)).ToArray();
+        // Only generated parameter placeholders are concatenated; every value is a MySqlParameter.
+        await db.Database.ExecuteSqlRawAsync(
+            "INSERT IGNORE INTO collaboration_reads(activity_id,user_id,read_at) VALUES " + values, parameters, ct);
     }
 
     internal async Task<MessageReadsResponse> ReadsAsync(
