@@ -50,8 +50,9 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         }
         var direction = request.Query["direction"].ToString();
         if (direction.Length > 0) query = query.Where(transfer => transfer.Direction == direction);
-        var status = request.Query["status"].ToString();
-        if (status.Length > 0) query = query.Where(transfer => transfer.LifecycleStatus == status);
+        // Comma-separated so the UI can filter by a group of lifecycle states (e.g. every "not sent" outcome).
+        var statuses = request.Query["status"].ToString().Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (statuses.Length > 0) query = query.Where(transfer => statuses.Contains(transfer.LifecycleStatus));
         if (approvalStatus is not null)
             query = query.Where(transfer => db.OemFlowInstances.Any(instance => instance.TransferId == transfer.Id
                 && instance.Status == approvalStatus));

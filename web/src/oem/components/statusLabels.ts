@@ -5,7 +5,7 @@ export type TagColor = 'gray' | 'green' | 'orange' | 'red' | 'arcoblue' | 'purpl
 
 export const LIFECYCLE: Record<Lifecycle, [string, TagColor]> = {
   DRAFT: ['草稿', 'gray'],
-  SEALED: ['待发送', 'arcoblue'],
+  SEALED: ['处理中', 'arcoblue'],
   RELEASED: ['已发送', 'green'],
   REJECTED: ['已驳回', 'red'],
   BLOCKED: ['文件阻断', 'red'],
@@ -47,7 +47,13 @@ export const DIRECTION_LABEL: Record<Direction, string> = {
   OEM_TO_INTERNAL: 'OEM → 公司',
 }
 
-export const LIFECYCLE_OPTIONS = Object.entries(LIFECYCLE).map(([value, [label]]) => ({ value, label }))
+/** List filter groups; a comma-separated value matches any of its lifecycle states. */
+export const LIFECYCLE_OPTIONS = [
+  { value: 'DRAFT', label: '草稿' },
+  { value: 'SEALED', label: '处理中' },
+  { value: 'RELEASED', label: '已发送' },
+  { value: 'REJECTED,BLOCKED,CANCELLED', label: '未发送' },
+]
 
 /** Notice shown when a draft the user is still editing has already left DRAFT. */
 export function transferClosedNotice(summary: { lifecycleStatus: Lifecycle; direction: Direction }): string | null {

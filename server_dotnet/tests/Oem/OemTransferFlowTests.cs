@@ -423,6 +423,12 @@ public sealed class OemTransferFlowTests
             new { reason = "业务取消", version = resumed["summary"]!["version"]!.GetValue<ulong>() }, ct).Ok();
         Assert.Equal("CANCELLED", Lifecycle(cancelled));
         await world.Admin.PostAsync($"/api/v1/oem/transfers/{id}/cancel", new { reason = "再次", version = Version(cancelled) }, ct).Status(HttpStatusCode.Conflict);
+
+        // A comma-separated status filter matches any of the listed lifecycle states ("未发送" group in the UI).
+        var notSent = (await world.Admin.GetAsync("/api/v1/oem/transfers?status=REJECTED,BLOCKED,CANCELLED", ct).Ok())["list"]!.AsArray();
+        Assert.Contains(notSent, item => item!.Id() == id);
+        var sentOrPending = (await world.Admin.GetAsync("/api/v1/oem/transfers?status=SEALED,RELEASED", ct).Ok())["list"]!.AsArray();
+        Assert.DoesNotContain(sentOrPending, item => item!.Id() == id);
     }
 
     [Fact(Timeout = 240_000)]
