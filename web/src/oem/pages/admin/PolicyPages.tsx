@@ -1,10 +1,10 @@
 import { useCallback, useRef, useState } from 'react'
-import { Alert, Button, Card, Form, Input, InputNumber, Message, Select, Space, Spin, Switch, Table, Tabs, Typography } from '@arco-design/web-react'
+import { Alert, Button, Card, Form, Input, InputNumber, Message, Select, Space, Spin, Switch, Table, Typography } from '@arco-design/web-react'
 import { fmtTime } from '../../../api/types'
 import { isVersionConflict } from '../../../api/versionConflict'
 import { oemRequestError } from '../../api/requestError'
 import type { AuditRow, RetentionTemplate, SettingItem } from '../../api/types'
-import { useCan, useOem } from '../../OemContext'
+import { useOem } from '../../OemContext'
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../../components/columnResize'
 import { type ColumnLayoutSpec } from '../../../components/tableColumnLayout'
@@ -137,7 +137,7 @@ function formatBytes(bytes: number) {
   return `${Number.isInteger(value) ? value : value.toFixed(2).replace(/\.?0+$/, '')} ${units[unit]}`
 }
 
-function SettingsForm({ group }: { group: 'file' | 'notify' }) {
+export function SettingsForm({ group }: { group: 'file' | 'notify' }) {
   const { api } = useOem()
   const [items, setItems] = useState<SettingItem[]>([])
   const [values, setValues] = useState<Record<string, string>>({})
@@ -214,18 +214,6 @@ function SettingsForm({ group }: { group: 'file' | 'notify' }) {
   )
 }
 
-export function SettingsPage() {
-  const can = useCan()
-  return (
-    <Card title={<h1 className="visually-hidden">文件策略与邮件提醒</h1>}>
-      <Tabs defaultActiveTab={can.manageFilePolicy ? 'file' : 'notify'}>
-        {can.manageFilePolicy && <Tabs.TabPane key="file" title="文件与下载策略"><SettingsForm group="file" /></Tabs.TabPane>}
-        {can.manageNotify && <Tabs.TabPane key="notify" title="邮件提醒"><SettingsForm group="notify" /></Tabs.TabPane>}
-      </Tabs>
-    </Card>
-  )
-}
-
 export function AuditPage() {
   const { api, userId } = useOem()
   const [rows, setRows] = useState<AuditRow[]>([])
@@ -273,7 +261,7 @@ export function AuditPage() {
   const table = useAdjustableColumns('oem-audit', userId, OEM_AUDIT_COLUMNS, auditColumns, 'createdAt', tableHostRef)
 
   return (
-    <Card title={<h1 className="visually-hidden">OEM 审计日志</h1>}>
+    <Card className="page-card page-card--table" title={<h1 className="visually-hidden">审计日志</h1>}>
       <Space style={{ marginBottom: 12 }}>
         <Input.Search allowClear placeholder="搜索账号、动作或内容" style={{ width: 280 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
         <ColumnVisibilityPicker
@@ -287,15 +275,15 @@ export function AuditPage() {
       </Space>
       {error && <Alert type="error" style={{ marginBottom: 12 }} content={error} action={<Button size="small" onClick={() => void load()}>重新加载</Button>} />}
       <ColumnResizeProvider actions={table.actions}>
-        <div ref={tableHostRef} className={table.hostClassName}>
+        <div ref={tableHostRef} className={`${table.hostClassName} page-table-host`}>
           <Table
-            className={table.tableClassName}
+            className={`page-table ${table.tableClassName}`}
             rowKey="id"
             loading={loading}
             data={rows}
             columns={table.columns}
             components={table.components}
-            scroll={{ x: table.scrollX }}
+            scroll={{ x: table.scrollX, y: 'var(--page-table-scroll-y)' }}
             pagination={{ current: page, total, pageSize: 20, onChange: setPage }}
           />
         </div>

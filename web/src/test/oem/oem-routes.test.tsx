@@ -194,6 +194,36 @@ describe('OEM 前端入口与路由', () => {
     expect(await screen.findByRole('status', { name: '当前地址' })).toHaveTextContent('/oem/approvals')
   })
 
+  it('旧的审批模板地址跳到合并后的设置页并选中对应标签', async () => {
+    setInternalSession(['oem:flow_template_manage', 'oem:retention_template_manage'])
+    vi.spyOn(http, 'get').mockResolvedValue({ data: [] } as never)
+    const client = createAppQueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/oem/admin/flow-templates']}><App /><CurrentLocation /></MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByRole('tab', { name: '审批模板' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: '删除策略' })).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: '邮件提醒' })).not.toBeInTheDocument()
+    expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/oem/admin/settings')
+  })
+
+  it('审批页按权限分别显示待我审批和阻断处置标签', async () => {
+    setInternalSession(['oem:flow_approve', 'oem:approval_recover'])
+    vi.spyOn(http, 'get').mockResolvedValue({ data: { list: [], total: 0, page: 1, pageSize: 20 } } as never)
+    const client = createAppQueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/oem/approvals']}><App /></MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByRole('tab', { name: '待我审批' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: '阻断处置' })).toBeInTheDocument()
+  })
+
   it('仅有审批权限的合法审批人可从待办进入传递单详情', async () => {
     setInternalSession(['oem:flow_approve'])
     vi.spyOn(http, 'get').mockImplementation(async (url) => {
@@ -309,7 +339,7 @@ describe('OEM 前端入口与路由', () => {
       reason: '审批人离职，终止旧传递', version: 4,
     }))
     expect(await screen.findByText('传递已终止')).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/oem/recovery'))
+    await waitFor(() => expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/oem/approvals'))
   })
 
   it('同时有传递查看和恢复权限的管理员终止后仍留在详情', async () => {

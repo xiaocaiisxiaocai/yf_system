@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Avatar, Button, Drawer, Dropdown, Layout, Menu, Result, Space, Spin } from '@arco-design/web-react'
 import {
-  IconBranch, IconCheckCircle, IconDown, IconFile, IconHistory, IconPoweroff, IconSafe, IconSettings,
-  IconMenu, IconStorage, IconUserGroup,
+  IconCheckCircle, IconDown, IconFile, IconHistory, IconPoweroff, IconSettings,
+  IconMenu, IconUserGroup,
 } from '@arco-design/web-react/icon'
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -14,14 +14,14 @@ import {
   bootPortalSession, createPortalQueryScope, portalHttp, portalLogout, portalQueryClient, PORTAL_BASE, usePortalAuth,
   usePortalSessionSync,
 } from '../api/portalSession'
-import { oemHome } from '../oemNavigation'
+import { OEM_SETTINGS_PERMISSIONS, oemHome } from '../oemNavigation'
 import { OemProvider } from '../OemContext'
 import AppRail, { type BusinessLine } from '../../layouts/AppRail'
 import './OemLayouts.css'
 
 const { Header, Sider, Content } = Layout
 
-interface MenuEntry { path: string; label: string; icon: ReactNode; visible: boolean }
+interface MenuEntry { path: string; label: string; icon: ReactNode; visible: boolean; admin?: boolean }
 
 function Shell({ title, subtitle, menu, account, line }: {
   title: string; subtitle?: string; menu: MenuEntry[]; account: ReactNode; line?: BusinessLine
@@ -37,7 +37,11 @@ function Shell({ title, subtitle, menu, account, line }: {
       navigate(key)
       if (closeAfterNavigate) setMobileMenuOpen(false)
     }} style={{ width: '100%' }}>
-      {items.map((item) => <Menu.Item key={item.path}>{item.icon}{item.label}</Menu.Item>)}
+      {items.flatMap((item, index) => [
+        // A thin rule separates daily work from administration; no heading text.
+        item.admin && index > 0 && !items[index - 1].admin && <div key="divider" className="oem-menu-divider" role="separator" />,
+        <Menu.Item key={item.path}>{item.icon}{item.label}</Menu.Item>,
+      ])}
     </Menu>
   )
   return (
@@ -93,13 +97,10 @@ export function OemInternalLayout() {
   if (user?.userType !== 'INTERNAL') return <Result status="403" title="OEM 内部入口仅供公司员工使用" />
   const menu: MenuEntry[] = [
     { path: '/oem/transfers', label: '文件传递单', icon: <IconFile />, visible: has('oem:transfer_create') || has('oem:transfer_view') },
-    { path: '/oem/approvals', label: '待我审批', icon: <IconCheckCircle />, visible: has('oem:flow_approve') },
-    { path: '/oem/recovery', label: '审批阻断处置', icon: <IconSafe />, visible: has('oem:approval_recover') },
-    { path: '/oem/admin/companies', label: '厂商与账号', icon: <IconUserGroup />, visible: has('oem:company_manage') || has('oem:account_manage') },
-    { path: '/oem/admin/flow-templates', label: '审批模板', icon: <IconBranch />, visible: has('oem:flow_template_manage') },
-    { path: '/oem/admin/retention', label: '删除策略', icon: <IconStorage />, visible: has('oem:retention_template_manage') },
-    { path: '/oem/admin/settings', label: '文件策略与提醒', icon: <IconSettings />, visible: has('oem:file_policy_manage') || has('oem:notify_manage') },
-    { path: '/oem/admin/audit', label: 'OEM 审计日志', icon: <IconHistory />, visible: has('oem:audit_view') },
+    { path: '/oem/approvals', label: '审批', icon: <IconCheckCircle />, visible: has('oem:flow_approve') || has('oem:approval_recover') },
+    { path: '/oem/admin/companies', label: '厂商与账号', icon: <IconUserGroup />, visible: has('oem:company_manage') || has('oem:account_manage'), admin: true },
+    { path: '/oem/admin/settings', label: '设置', icon: <IconSettings />, visible: OEM_SETTINGS_PERMISSIONS.some(has), admin: true },
+    { path: '/oem/admin/audit', label: '审计日志', icon: <IconHistory />, visible: has('oem:audit_view'), admin: true },
   ]
   if (!menu.some((item) => item.visible)) return <Result status="403" title="没有 ODM/OEM 文件传递权限" extra={<Button onClick={() => navigate('/')}>返回</Button>} />
   return (

@@ -50,7 +50,7 @@ export default function ApprovalInboxPage() {
   const table = useAdjustableColumns('oem-approvals', userId, OEM_APPROVAL_COLUMNS, approvalColumns, 'title', tableHostRef)
 
   return (
-    <Card title={<h1 className="visually-hidden">待我审批</h1>} extra={(
+    <Card className="page-card page-card--table" title={<h1 className="visually-hidden">待我审批</h1>} extra={(
       <ColumnVisibilityPicker
         specs={OEM_APPROVAL_COLUMNS}
         hidden={table.hidden}
@@ -66,15 +66,15 @@ export default function ApprovalInboxPage() {
           action={<Button size="small" loading={approvals.isFetching} onClick={() => void approvals.refetch()}>重试</Button>} />
       )}
       <ColumnResizeProvider actions={table.actions}>
-        <div ref={tableHostRef} className={table.hostClassName}>
+        <div ref={tableHostRef} className={`${table.hostClassName} page-table-host`}>
           <Table
-            className={table.tableClassName}
+            className={`page-table ${table.tableClassName}`}
             rowKey="taskId"
             loading={approvals.isPending || approvals.isFetching}
             data={rows}
             columns={table.columns}
             components={table.components}
-            scroll={{ x: table.scrollX }}
+            scroll={{ x: table.scrollX, y: 'var(--page-table-scroll-y)' }}
             pagination={{ current: page, total: approvals.data?.total ?? 0, pageSize: PAGE_SIZE, onChange: setPage }}
             onRow={(row) => ({ onClick: () => navigate(`${base}/transfers/${row.transferId}`), style: { cursor: 'pointer' } })}
           />

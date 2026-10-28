@@ -7,7 +7,7 @@ import { OemProvider } from '../../oem/OemContext'
 import type { OemApi } from '../../oem/api/OemApi'
 import type { SettingItem, TransferDetail } from '../../oem/api/types'
 import TransferDetailPage from '../../oem/pages/TransferDetailPage'
-import { SettingsPage } from '../../oem/pages/admin/PolicyPages'
+import { SettingsHub } from '../../oem/pages/OemHubs'
 
 function renderWithOem(element: React.ReactNode, api: Partial<OemApi>, permissions: string[] = []) {
   return render(
@@ -68,7 +68,7 @@ describe('OEM 文件校验界面', () => {
       updateSettings: vi.fn(),
     }
 
-    renderWithOem(<SettingsPage />, api, ['oem:file_policy_manage'])
+    renderWithOem(<MemoryRouter><SettingsHub /></MemoryRouter>, api, ['oem:file_policy_manage'])
 
     expect(await screen.findByLabelText('压缩包最大嵌套层级')).toHaveValue('5')
     expect(screen.getByText('按需设置文件类型、上传容量、压缩包结构及下载限制。')).toBeInTheDocument()

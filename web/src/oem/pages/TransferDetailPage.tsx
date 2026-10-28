@@ -133,7 +133,7 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
       setReassigning(null)
       Message.success('已改派')
       if (recoveryScoped) {
-        navigate(`${base}/recovery`, { replace: true })
+        navigate(`${base}/approvals?tab=blocked`, { replace: true })
         return
       }
       onChanged(next)
@@ -411,7 +411,7 @@ export default function TransferDetailPage() {
           const next = await api.cancel(id, reason, version)
           Message.success('传递已终止')
           if (recoveryScoped) {
-            navigate(`${base}/recovery`, { replace: true })
+            navigate(`${base}/approvals?tab=blocked`, { replace: true })
             return
           }
           setDetail(next)

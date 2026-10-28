@@ -377,6 +377,7 @@ export default function TransferListPage() {
 
   return (
     <Card
+      className="page-card page-card--table"
       title={<h1 className="visually-hidden">文件传递单</h1>}
     >
       <div className="page-toolbar responsive-toolbar">
@@ -409,11 +410,11 @@ export default function TransferListPage() {
           action={<Button size="small" loading={transfers.isFetching} onClick={() => void transfers.refetch()}>重试</Button>} />
       )}
       <ColumnResizeProvider actions={table.actions}>
-        <div ref={tableHostRef} className={table.hostClassName}>
+        <div ref={tableHostRef} className={`${table.hostClassName} page-table-host`}>
           <Table
-            className={table.tableClassName}
+            className={`page-table ${table.tableClassName}`}
             rowKey="id"
-            scroll={{ x: table.scrollX }}
+            scroll={{ x: table.scrollX, y: 'var(--page-table-scroll-y)' }}
             loading={transfers.isPending || transfers.isFetching}
             data={rows}
             columns={table.columns}

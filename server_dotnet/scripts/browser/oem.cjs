@@ -224,7 +224,7 @@ async function openReleasedFile(page, url, fileName) {
         return body.list.find(task => task.transferId === outboundId) ? body : null;
       });
       assert.ok(listed.total >= 1);
-      await page.getByText('待我审批', { exact: true }).first().waitFor();
+      await page.getByRole('heading', { name: '待我审批', exact: true }).waitFor({ state: 'attached' });
       await page.locator('.arco-pagination').waitFor();
       const row = page.getByRole('row').filter({ hasText: outboundName });
       await row.getByText(users.sender.realName + '（' + users.sender.username + '）', { exact: true }).waitFor();

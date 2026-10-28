@@ -53,7 +53,7 @@ export default function BlockedRecoveryPage() {
   const table = useAdjustableColumns('oem-approval-recovery', userId, OEM_RECOVERY_COLUMNS, recoveryColumns, 'title', tableHostRef)
 
   return (
-    <Card title={<h1 className="visually-hidden">审批阻断处置</h1>} extra={(
+    <Card className="page-card page-card--table" title={<h1 className="visually-hidden">审批阻断处置</h1>} extra={(
       <ColumnVisibilityPicker
         specs={OEM_RECOVERY_COLUMNS}
         hidden={table.hidden}
@@ -74,15 +74,15 @@ export default function BlockedRecoveryPage() {
           action={<Button size="small" loading={blocked.isFetching} onClick={() => void blocked.refetch()}>重试</Button>} />
       )}
       <ColumnResizeProvider actions={table.actions}>
-        <div ref={tableHostRef} className={table.hostClassName}>
+        <div ref={tableHostRef} className={`${table.hostClassName} page-table-host`}>
           <Table
-            className={table.tableClassName}
+            className={`page-table ${table.tableClassName}`}
             rowKey="id"
             loading={blocked.isPending || blocked.isFetching}
             data={rows}
             columns={table.columns}
             components={table.components}
-            scroll={{ x: table.scrollX }}
+            scroll={{ x: table.scrollX, y: 'var(--page-table-scroll-y)' }}
             pagination={{ current: page, total: blocked.data?.total ?? 0, pageSize: 20, onChange: setPage }}
           />
         </div>

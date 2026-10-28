@@ -455,7 +455,7 @@ export default function CompaniesPage() {
   const companyTable = useAdjustableColumns('oem-companies', userId, OEM_COMPANY_COLUMNS, companyColumns, 'name', companyHostRef)
 
   return (
-    <Card title={<h1 className="visually-hidden">OEM 厂商与账号</h1>}>
+    <Card className="page-card page-card--table" title={<h1 className="visually-hidden">OEM 厂商与账号</h1>}>
       <div className="page-toolbar responsive-toolbar">
         <Input.Search allowClear placeholder="搜索厂商名称" style={{ width: 260 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
         <Space>
@@ -478,15 +478,15 @@ export default function CompaniesPage() {
           action={<Button size="small" loading={listLoading} onClick={() => void load().catch(() => undefined)}>重试</Button>} />
       )}
       <ColumnResizeProvider actions={companyTable.actions}>
-        <div ref={companyHostRef} className={companyTable.hostClassName}>
+        <div ref={companyHostRef} className={`${companyTable.hostClassName} page-table-host`}>
           <Table
-            className={`oem-directory-table ${companyTable.tableClassName}`}
+            className={`page-table oem-directory-table ${companyTable.tableClassName}`}
             rowKey="id"
             loading={listLoading}
             data={rows}
             columns={companyTable.columns}
             components={companyTable.components}
-            scroll={{ x: companyTable.scrollX }}
+            scroll={{ x: companyTable.scrollX, y: 'var(--page-table-scroll-y)' }}
             pagination={{ current: page, total, pageSize: 20, onChange: setPage }}
           />
         </div>

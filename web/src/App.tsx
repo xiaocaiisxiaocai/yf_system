@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Result, Spin } from '@arco-design/web-react'
 import { useAuth } from './store/auth'
 import { bootAuth, isOemPortalPath, isSafeLoginReturnPath } from './api/client'
+import { OEM_SETTINGS_PERMISSIONS } from './oem/oemNavigation'
 import { OEM_UI_ENABLED } from './features'
 import { decideAuthStorageSync } from './store/authStorageSync'
 import RouteErrorBoundary from './components/RouteErrorBoundary'
@@ -31,12 +32,9 @@ const OemLanding = lazy(() => import('./oem/layouts/OemLayouts').then((m) => ({ 
 const PortalLayout = lazy(() => import('./oem/layouts/OemLayouts').then((m) => ({ default: m.PortalLayout })))
 const OemTransferList = lazy(() => import('./oem/pages/TransferListPage'))
 const OemTransferDetail = lazy(() => import('./oem/pages/TransferDetailPage'))
-const OemApprovals = lazy(() => import('./oem/pages/ApprovalInboxPage'))
-const OemRecovery = lazy(() => import('./oem/pages/BlockedRecoveryPage'))
+const OemApprovals = lazy(() => import('./oem/pages/OemHubs').then((m) => ({ default: m.ApprovalsHub })))
 const OemCompanies = lazy(() => import('./oem/pages/admin/CompaniesPage'))
-const OemFlowTemplates = lazy(() => import('./oem/pages/admin/FlowTemplatesPage'))
-const OemRetention = lazy(() => import('./oem/pages/admin/PolicyPages').then((m) => ({ default: m.RetentionPage })))
-const OemSettings = lazy(() => import('./oem/pages/admin/PolicyPages').then((m) => ({ default: m.SettingsPage })))
+const OemSettings = lazy(() => import('./oem/pages/OemHubs').then((m) => ({ default: m.SettingsHub })))
 const OemAudit = lazy(() => import('./oem/pages/admin/PolicyPages').then((m) => ({ default: m.AuditPage })))
 const PortalLogin = lazy(() => import('./oem/pages/portal/PortalAuthPages').then((m) => ({ default: m.PortalLoginPage })))
 const PortalChangePassword = lazy(() => import('./oem/pages/portal/PortalAuthPages').then((m) => ({ default: m.PortalChangePasswordPage })))
@@ -142,12 +140,12 @@ export default function App() {
             <Route index element={<OemLanding />} />
             <Route path="transfers" element={<Guard anyPermission={['oem:transfer_view', 'oem:transfer_create']}><OemTransferList /></Guard>} />
             <Route path="transfers/:id" element={<Guard anyPermission={['oem:transfer_view', 'oem:transfer_create', 'oem:flow_approve', 'oem:approval_recover']}><OemTransferDetail /></Guard>} />
-            <Route path="approvals" element={<Guard permission="oem:flow_approve"><OemApprovals /></Guard>} />
-            <Route path="recovery" element={<Guard permission="oem:approval_recover"><OemRecovery /></Guard>} />
+            <Route path="approvals" element={<Guard anyPermission={['oem:flow_approve', 'oem:approval_recover']}><OemApprovals /></Guard>} />
+            <Route path="recovery" element={<Navigate to="/oem/approvals?tab=blocked" replace />} />
             <Route path="admin/companies" element={<Guard anyPermission={['oem:company_manage', 'oem:account_manage']}><OemCompanies /></Guard>} />
-            <Route path="admin/flow-templates" element={<Guard permission="oem:flow_template_manage"><OemFlowTemplates /></Guard>} />
-            <Route path="admin/retention" element={<Guard permission="oem:retention_template_manage"><OemRetention /></Guard>} />
-            <Route path="admin/settings" element={<Guard anyPermission={['oem:file_policy_manage', 'oem:notify_manage']}><OemSettings /></Guard>} />
+            <Route path="admin/flow-templates" element={<Navigate to="/oem/admin/settings?tab=flow" replace />} />
+            <Route path="admin/retention" element={<Navigate to="/oem/admin/settings?tab=retention" replace />} />
+            <Route path="admin/settings" element={<Guard anyPermission={OEM_SETTINGS_PERMISSIONS}><OemSettings /></Guard>} />
             <Route path="admin/audit" element={<Guard permission="oem:audit_view"><OemAudit /></Guard>} />
           </Route>
           <Route path="/oem-portal/login" element={<PortalLogin />} />
