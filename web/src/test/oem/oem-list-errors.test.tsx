@@ -143,7 +143,7 @@ describe('OEM 列表加载失败', () => {
     expect(await screen.findByText('传递单列表加载失败，请重试')).toBeVisible()
   })
 
-  it('待审批与审批阻断列表失败可重试', async () => {
+  it('待审批与审批异常列表失败可重试', async () => {
     const user = userEvent.setup()
     const pendingApprovals = vi.fn()
       .mockRejectedValueOnce(serverDown())
@@ -162,7 +162,7 @@ describe('OEM 列表加载失败', () => {
       .mockRejectedValueOnce(serverDown())
       .mockResolvedValueOnce(page([blocked]))
     renderOem(<BlockedRecoveryPage />, { listTransfers }, ['oem:approval_recover'])
-    expect(await screen.findByText('审批阻断列表加载失败，请重试')).toBeVisible()
+    expect(await screen.findByText('审批异常列表加载失败，请重试')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '重试' }))
     expect(await screen.findByText('阻断的传递单')).toBeVisible()
   })

@@ -17,7 +17,7 @@ export const APPROVAL: Record<ApprovalStatus, [string, TagColor]> = {
   NOT_REQUIRED: ['无需审批', 'gray'],
   WAITING_FILES: ['等待文件校验', 'arcoblue'],
   PENDING: ['审批中', 'arcoblue'],
-  APPROVAL_BLOCKED: ['审批阻断', 'orange'],
+  APPROVAL_BLOCKED: ['审批异常', 'orange'],
   APPROVED: ['审批通过', 'green'],
   SKIPPED: ['按策略免审', 'purple'],
   REJECTED: ['审批驳回', 'red'],

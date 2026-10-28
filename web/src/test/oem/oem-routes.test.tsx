@@ -210,7 +210,7 @@ describe('OEM 前端入口与路由', () => {
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/oem/admin/settings')
   })
 
-  it('审批页按权限分别显示待我审批和阻断处置标签', async () => {
+  it('审批页按权限分别显示待我审批和审批异常标签', async () => {
     setInternalSession(['oem:flow_approve', 'oem:approval_recover'])
     vi.spyOn(http, 'get').mockResolvedValue({ data: { list: [], total: 0, page: 1, pageSize: 20 } } as never)
     const client = createAppQueryClient()
@@ -221,7 +221,7 @@ describe('OEM 前端入口与路由', () => {
     )
 
     expect(await screen.findByRole('tab', { name: '待我审批' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('tab', { name: '阻断处置' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: '审批异常' })).toBeInTheDocument()
   })
 
   it('仅有审批权限的合法审批人可从待办进入传递单详情', async () => {
@@ -259,7 +259,7 @@ describe('OEM 前端入口与路由', () => {
       </QueryClientProvider>,
     )
 
-    expect(await screen.findByText('这里只显示尚未发布且审批已阻断的传递单。处置管理员可以改派未完成任务或终止传递，不能代替审批人通过，也不能读取附件内容。')).toBeInTheDocument()
+    expect(await screen.findByText('这里只显示尚未发布且审批出现异常的传递单。处置管理员可以改派未完成任务或终止传递，不能代替审批人通过，也不能读取附件内容。')).toBeInTheDocument()
     await waitFor(() => expect(get).toHaveBeenCalledWith('/oem/transfers', expect.objectContaining({ params: expect.objectContaining({ approvalStatus: 'APPROVAL_BLOCKED' }) })))
     await user.click(screen.getByRole('button', { name: '处置' }))
     expect(await screen.findByRole('button', { name: '终止传递' })).toBeInTheDocument()
@@ -307,7 +307,7 @@ describe('OEM 前端入口与路由', () => {
     )
 
     await waitFor(() => expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/login'))
-    expect(screen.queryByText('审批阻断处置')).not.toBeInTheDocument()
+    expect(screen.queryByText('审批异常')).not.toBeInTheDocument()
   })
 
   it.each([

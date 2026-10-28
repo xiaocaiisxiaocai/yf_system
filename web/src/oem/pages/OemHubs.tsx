@@ -34,7 +34,7 @@ export function ApprovalsHub() {
   const can = useCan()
   return <TabHub tabs={[
     { key: 'inbox', title: '待我审批', visible: can.approve, render: () => <ApprovalInboxPage /> },
-    { key: 'blocked', title: '阻断处置', visible: can.recover, render: () => <BlockedRecoveryPage /> },
+    { key: 'blocked', title: '审批异常', visible: can.recover, render: () => <BlockedRecoveryPage /> },
   ]} />
 }
 

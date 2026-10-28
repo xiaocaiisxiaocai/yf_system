@@ -134,7 +134,7 @@ public sealed class OemApprovalService(
         else
         {
             var instance = await OemApprovalEngine.LockInstanceByTransferAsync(uow, transferId, ct)
-                ?? throw ApiException.Conflict("该传递单不属于审批阻断异常，不能执行恢复操作");
+                ?? throw ApiException.Conflict("该传递单不属于审批异常，不能执行恢复操作");
             EnsureRestrictedRecoveryScope(transfer, instance);
         }
         await progression.CloseAsync(uow, transfer, TransferLifecycle.Cancelled, reason, current, PurgeReasons.Cancelled, ct);
@@ -193,7 +193,7 @@ public sealed class OemApprovalService(
         if (transfer.Direction != TransferDirections.InternalToOem
             || transfer.LifecycleStatus != TransferLifecycle.Sealed
             || instance.Status != FlowInstanceStatuses.ApprovalBlocked)
-            throw ApiException.Conflict("该传递单不属于审批阻断异常，不能执行恢复操作");
+            throw ApiException.Conflict("该传递单不属于审批异常，不能执行恢复操作");
     }
 
     private static async Task<(OemTransfer Transfer, OemFlowInstance Instance, OemFlowTask Task)> LockAsync(OemUnitOfWork uow, ulong taskId, CancellationToken ct)

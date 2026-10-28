@@ -16,7 +16,7 @@ const OEM_RECOVERY_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'companyName', title: '目标厂商', defaultWidth: 180, minWidth: 110 },
   { key: 'sender', title: '发送人', defaultWidth: 160, minWidth: 110 },
   { key: 'status', title: '状态', defaultWidth: 180, minWidth: 120 },
-  { key: 'reason', title: '阻断原因', defaultWidth: 220, minWidth: 120 },
+  { key: 'reason', title: '异常原因', defaultWidth: 220, minWidth: 120 },
   { key: 'sentAt', title: '发送时间', defaultWidth: 170, minWidth: 140 },
   { key: 'actions', title: '操作', defaultWidth: 90, minWidth: 80, maxWidth: 160, locked: true },
 ]
@@ -43,7 +43,7 @@ export default function BlockedRecoveryPage() {
       key: 'status', title: '状态',
       render: (_: unknown, row: TransferSummary) => <Space size={4}><LifecycleTag value={row.lifecycleStatus} /><ApprovalTag value={row.approvalStatus} /></Space>,
     },
-    { key: 'reason', title: '阻断原因', dataIndex: 'approvalBlockedReason', ellipsis: true },
+    { key: 'reason', title: '异常原因', dataIndex: 'approvalBlockedReason', ellipsis: true },
     { key: 'sentAt', title: '发送时间', render: (_: unknown, row: TransferSummary) => row.sentAt ? fmtTime(row.sentAt) : '-' },
     {
       key: 'actions', title: '操作',
@@ -53,7 +53,7 @@ export default function BlockedRecoveryPage() {
   const table = useAdjustableColumns('oem-approval-recovery', userId, OEM_RECOVERY_COLUMNS, recoveryColumns, 'title', tableHostRef)
 
   return (
-    <Card className="page-card page-card--table" title={<h1 className="visually-hidden">审批阻断处置</h1>} extra={(
+    <Card className="page-card page-card--table" title={<h1 className="visually-hidden">审批异常</h1>} extra={(
       <ColumnVisibilityPicker
         specs={OEM_RECOVERY_COLUMNS}
         hidden={table.hidden}
@@ -65,12 +65,12 @@ export default function BlockedRecoveryPage() {
     )}>
       <Alert
         type="info"
-        content="这里只显示尚未发布且审批已阻断的传递单。处置管理员可以改派未完成任务或终止传递，不能代替审批人通过，也不能读取附件内容。"
+        content="这里只显示尚未发布且审批出现异常的传递单。处置管理员可以改派未完成任务或终止传递，不能代替审批人通过，也不能读取附件内容。"
         style={{ marginBottom: 16 }}
       />
       {blocked.isError && (
         <Alert type="error" style={{ marginBottom: 12 }}
-          content={oemRequestError(blocked.error, '审批阻断列表加载失败，请重试')}
+          content={oemRequestError(blocked.error, '审批异常列表加载失败，请重试')}
           action={<Button size="small" loading={blocked.isFetching} onClick={() => void blocked.refetch()}>重试</Button>} />
       )}
       <ColumnResizeProvider actions={table.actions}>

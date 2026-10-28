@@ -158,7 +158,7 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
   return (
     <Card title={`审批流程（${approval.templateName ?? '-'}）`} style={{ marginTop: 16 }}>
       {approval.status === 'APPROVAL_BLOCKED' && (
-        <Alert type="warning" style={{ marginBottom: 12 }} content={`审批阻断：${approval.blockedReason ?? ''}。需要具有异常处置权限的管理员改派审批人或终止传递。`} />
+        <Alert type="warning" style={{ marginBottom: 12 }} content={`审批异常：${approval.blockedReason ?? ''}。需要具有异常处置权限的管理员改派审批人或终止传递。`} />
       )}
       {myTask && (
         <Alert type="info" style={{ marginBottom: 12 }} content={
@@ -472,7 +472,7 @@ export default function TransferDetailPage() {
           <Alert type="info" style={{ marginBottom: 12 }} content="附件仍在上传，完成后才能提交。" />
         )}
         {summary.approvalBlockedReason && realm === 'internal' && (
-          <Alert type="warning" style={{ marginBottom: 12 }} content={`审批阻断：${summary.approvalBlockedReason}`} />
+          <Alert type="warning" style={{ marginBottom: 12 }} content={`审批异常：${summary.approvalBlockedReason}`} />
         )}
         {detail.closedReason && <Alert type="warning" style={{ marginBottom: 12 }} content={`结束原因：${detail.closedReason}`} />}
         <Descriptions column={2} data={[

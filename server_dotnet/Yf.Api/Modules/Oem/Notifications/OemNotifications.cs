@@ -136,7 +136,7 @@ public sealed class OemNotificationHandler(AppOptions options) : IOemEventHandle
                 audience.AddRange(await OemRecipients.InternalWithAllAsync(uow.Db, ct, OemPermissions.ApprovalRecover));
                 foreach (var person in audience.DistinctBy(item => (item.Realm, item.Id)))
                     await EnqueueAsync(uow, settings, OemMailEvents.ApprovalBlocked, $"oem:blocked:{transfer.Id}:{stamp}:{person.Realm}:{person.Id}", person, facts,
-                        $"审批阻断：{transfer.Title}", "文件传递单的审批因审批人不可用而暂停，需要具有异常处置权限的管理员改派或终止。", blocked.Reason, ct);
+                        $"审批异常：{transfer.Title}", "文件传递单的审批因审批人不可用而暂停，需要具有异常处置权限的管理员改派或终止。", blocked.Reason, ct);
                 break;
             case DraftFileValidationFailedEvent failed:
                 if (await OemRecipients.SenderAsync(uow.Db, transfer, ct) is { } draftSender)
