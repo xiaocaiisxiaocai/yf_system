@@ -7,6 +7,7 @@ import { isVersionConflict } from '../../../api/versionConflict'
 import { oemRequestError } from '../../api/requestError'
 import type { DepartmentNode, FlowNode, FlowNodeInput, FlowTemplate, RoutingPreview } from '../../api/types'
 import { useOem } from '../../OemContext'
+import { useHubSwitcher } from '../hubSwitcherContext'
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 
 const SOURCES = [
@@ -215,6 +216,7 @@ function RoutingPreviewCard() {
 
 export default function FlowTemplatesPage() {
   const { api } = useOem()
+  const switcher = useHubSwitcher()
   const [templates, setTemplates] = useState<FlowTemplate[]>([])
   const [editing, setEditing] = useState<FlowTemplate | 'new' | null>(null)
   const [loading, setLoading] = useState(true)
@@ -236,7 +238,10 @@ export default function FlowTemplatesPage() {
     <div>
       <Card title={<h1 className="visually-hidden">审批模板</h1>}>
         <div className="page-toolbar responsive-toolbar">
-          <Typography.Text type="secondary">事业部、部门和课别主管统一在协作平台的“组织架构”中维护。</Typography.Text>
+          <Space wrap>
+            {switcher}
+            <Typography.Text type="secondary">事业部、部门和课别主管统一在协作平台的“组织架构”中维护。</Typography.Text>
+          </Space>
           <Button type="primary" icon={<IconPlus />} onClick={() => setEditing('new')}>新建模板</Button>
         </div>
         {error && (

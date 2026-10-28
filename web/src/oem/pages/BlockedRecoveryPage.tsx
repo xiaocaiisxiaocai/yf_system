@@ -10,6 +10,7 @@ import { oemRequestError } from '../api/requestError'
 import type { TransferSummary } from '../api/types'
 import { ApprovalTag, LifecycleTag } from '../components/StatusTags'
 import { useOem } from '../OemContext'
+import { useHubSwitcher } from './hubSwitcherContext'
 
 const OEM_RECOVERY_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'title', title: '传递单', defaultWidth: 220, minWidth: 140, locked: true },
@@ -27,6 +28,7 @@ const OEM_RECOVERY_COLUMNS: readonly ColumnLayoutSpec[] = [
  */
 export default function BlockedRecoveryPage() {
   const { api, base, queryScope, userId } = useOem()
+  const switcher = useHubSwitcher()
   const navigate = useNavigate()
   const tableHostRef = useRef<HTMLDivElement>(null)
   const [page, setPage] = useState(1)
@@ -53,16 +55,20 @@ export default function BlockedRecoveryPage() {
   const table = useAdjustableColumns('oem-approval-recovery', userId, OEM_RECOVERY_COLUMNS, recoveryColumns, 'title', tableHostRef)
 
   return (
-    <Card className="page-card page-card--table" title={<h1 className="visually-hidden">审批异常</h1>} extra={(
-      <ColumnVisibilityPicker
-        specs={OEM_RECOVERY_COLUMNS}
-        hidden={table.hidden}
-        onToggle={table.toggle}
-        onShowAll={table.showAll}
-        onHideOptional={table.hideOptional}
-        onReset={table.reset}
-      />
-    )}>
+    <Card className="page-card page-card--table" title={<h1 className="visually-hidden">审批异常</h1>}>
+      <div className="page-toolbar responsive-toolbar">
+        <Space wrap>
+          {switcher}
+          <ColumnVisibilityPicker
+            specs={OEM_RECOVERY_COLUMNS}
+            hidden={table.hidden}
+            onToggle={table.toggle}
+            onShowAll={table.showAll}
+            onHideOptional={table.hideOptional}
+            onReset={table.reset}
+          />
+        </Space>
+      </div>
       <Alert
         type="info"
         content="这里只显示尚未发布且审批出现异常的传递单。处置管理员可以改派未完成任务或终止传递，不能代替审批人通过，也不能读取附件内容。"

@@ -204,13 +204,14 @@ describe('OEM 前端入口与路由', () => {
       </QueryClientProvider>,
     )
 
-    expect(await screen.findByRole('tab', { name: '审批模板' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('tab', { name: '删除策略' })).toBeInTheDocument()
-    expect(screen.queryByRole('tab', { name: '邮件提醒' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('radio', { name: '审批模板' })).toBeChecked()
+    expect(screen.getByRole('radio', { name: '删除策略' })).not.toBeChecked()
+    expect(screen.queryByRole('radio', { name: '邮件提醒' })).not.toBeInTheDocument()
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/oem/admin/settings')
   })
 
   it('审批页按权限分别显示待我审批和审批异常标签', async () => {
+    const user = userEvent.setup()
     setInternalSession(['oem:flow_approve', 'oem:approval_recover'])
     vi.spyOn(http, 'get').mockResolvedValue({ data: { list: [], total: 0, page: 1, pageSize: 20 } } as never)
     const client = createAppQueryClient()
@@ -220,8 +221,11 @@ describe('OEM 前端入口与路由', () => {
       </QueryClientProvider>,
     )
 
-    expect(await screen.findByRole('tab', { name: '待我审批' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('tab', { name: '审批异常' })).toBeInTheDocument()
+    expect(await screen.findByRole('radio', { name: '待我审批' })).toBeChecked()
+    expect(screen.getByRole('radio', { name: '审批异常' })).not.toBeChecked()
+    await user.click(screen.getByRole('radio', { name: '审批异常' }))
+    expect(await screen.findByText(/这里只显示尚未发布且审批出现异常的传递单/)).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: '审批异常' })).toBeChecked()
   })
 
   it('仅有审批权限的合法审批人可从待办进入传递单详情', async () => {

@@ -14,15 +14,3 @@
 }
 
 .oem-menu-divider { height: 1px; margin: 6px 8px 12px; background: rgb(255 255 255 / 10%); }
-/* 合并页面的标签条：与下方页面卡片同宽，作为页面内的二级切换。 */
-.oem-hub-tabs { height: 48px; margin-bottom: 12px; padding: 0 20px; overflow: hidden; border: 1px solid var(--app-border); border-radius: var(--app-radius); background: #fff; box-sizing: border-box; }
-.oem-hub-tabs .arco-tabs-header-nav::before { display: none; }
-.oem-hub-tabs .arco-tabs-header-title { padding: 0; font-size: 14px; line-height: 44px; }
-.oem-hub-tabs .arco-tabs-content { display: none; }
-/* 标签条占去 60px（48 + 间距 12），下方整页表格卡片相应缩短，表头和分页仍固定在可视区内。 */
-@media (min-width: 721px) and (min-height: 701px) {
-  .oem-hub-tabs ~ .page-card--table {
-    --page-table-scroll-y: max(180px, calc(100vh - 386px));
-    height: calc(100vh - 148px);
-  }
-}

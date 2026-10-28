@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Alert, Button, Card, Table, Tag } from '@arco-design/web-react'
+import { Alert, Button, Card, Space, Table, Tag } from '@arco-design/web-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { fmtTime } from '../../api/types'
 import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
@@ -9,6 +9,7 @@ import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 import { oemRequestError } from '../api/requestError'
 import type { PendingTask } from '../api/types'
 import { useOem } from '../OemContext'
+import { useHubSwitcher } from './hubSwitcherContext'
 
 const OEM_APPROVAL_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'title', title: '传递单', defaultWidth: 220, minWidth: 140, locked: true },
@@ -23,6 +24,7 @@ const PAGE_SIZE = 20
 
 export default function ApprovalInboxPage() {
   const { api, base, queryScope, userId } = useOem()
+  const switcher = useHubSwitcher()
   const navigate = useNavigate()
   const tableHostRef = useRef<HTMLDivElement>(null)
   const [page, setPage] = useState(1)
@@ -50,16 +52,20 @@ export default function ApprovalInboxPage() {
   const table = useAdjustableColumns('oem-approvals', userId, OEM_APPROVAL_COLUMNS, approvalColumns, 'title', tableHostRef)
 
   return (
-    <Card className="page-card page-card--table" title={<h1 className="visually-hidden">待我审批</h1>} extra={(
-      <ColumnVisibilityPicker
-        specs={OEM_APPROVAL_COLUMNS}
-        hidden={table.hidden}
-        onToggle={table.toggle}
-        onShowAll={table.showAll}
-        onHideOptional={table.hideOptional}
-        onReset={table.reset}
-      />
-    )}>
+    <Card className="page-card page-card--table" title={<h1 className="visually-hidden">待我审批</h1>}>
+      <div className="page-toolbar responsive-toolbar">
+        <Space wrap>
+          {switcher}
+          <ColumnVisibilityPicker
+            specs={OEM_APPROVAL_COLUMNS}
+            hidden={table.hidden}
+            onToggle={table.toggle}
+            onShowAll={table.showAll}
+            onHideOptional={table.hideOptional}
+            onReset={table.reset}
+          />
+        </Space>
+      </div>
       {approvals.isError && (
         <Alert type="error" style={{ marginBottom: 12 }}
           content={oemRequestError(approvals.error, '待审批列表加载失败，请重试')}

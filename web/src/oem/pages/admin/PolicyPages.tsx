@@ -5,6 +5,7 @@ import { isVersionConflict } from '../../../api/versionConflict'
 import { oemRequestError } from '../../api/requestError'
 import type { AuditRow, RetentionTemplate, SettingItem } from '../../api/types'
 import { useOem } from '../../OemContext'
+import { HubToolbar } from '../hubSwitcher'
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../../components/columnResize'
 import { type ColumnLayoutSpec } from '../../../components/tableColumnLayout'
@@ -91,6 +92,7 @@ export function RetentionPage() {
 
   return (
     <Card title={<h1 className="visually-hidden">统一删除策略</h1>}>
+      <HubToolbar />
       <Typography.Paragraph type="secondary">
         所有新提交的文件自动使用此策略，发送人无需选择。修改不影响已提交的文件。
       </Typography.Paragraph>
@@ -262,17 +264,19 @@ export function AuditPage() {
 
   return (
     <Card className="page-card page-card--table" title={<h1 className="visually-hidden">审计日志</h1>}>
-      <Space style={{ marginBottom: 12 }}>
-        <Input.Search allowClear placeholder="搜索账号、动作或内容" style={{ width: 280 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
-        <ColumnVisibilityPicker
-          specs={OEM_AUDIT_COLUMNS}
-          hidden={table.hidden}
-          onToggle={table.toggle}
-          onShowAll={table.showAll}
-          onHideOptional={table.hideOptional}
-          onReset={table.reset}
-        />
-      </Space>
+      <div className="page-toolbar responsive-toolbar">
+        <Space wrap>
+          <Input.Search allowClear placeholder="搜索账号、动作或内容" style={{ width: 280 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
+          <ColumnVisibilityPicker
+            specs={OEM_AUDIT_COLUMNS}
+            hidden={table.hidden}
+            onToggle={table.toggle}
+            onShowAll={table.showAll}
+            onHideOptional={table.hideOptional}
+            onReset={table.reset}
+          />
+        </Space>
+      </div>
       {error && <Alert type="error" style={{ marginBottom: 12 }} content={error} action={<Button size="small" onClick={() => void load()}>重新加载</Button>} />}
       <ColumnResizeProvider actions={table.actions}>
         <div ref={tableHostRef} className={`${table.hostClassName} page-table-host`}>
