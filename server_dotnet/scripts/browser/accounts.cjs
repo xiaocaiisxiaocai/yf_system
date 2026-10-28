@@ -212,7 +212,7 @@ function flattenDepartments(nodes, result = []) {
       await page.getByRole('button', { name: '新增用户', exact: true }).click();
       let modal = currentModal();
       await modal.getByRole('button', { name: '创建用户', exact: true }).click();
-      await modal.getByText('请输入工号', { exact: true }).waitFor();
+      await modal.getByText('请输入账号', { exact: true }).waitFor();
       await modal.getByText('请输入初始密码', { exact: true }).waitFor();
       await modal.getByText('请输入姓名', { exact: true }).waitFor();
       await modal.getByText('请输入邮箱', { exact: true }).waitFor();
@@ -245,7 +245,7 @@ function flattenDepartments(nodes, result = []) {
 
       const toolbar = page.locator('.page-toolbar');
       let filtered = await filteredList('/admin/users', { keyword: userNo }, async () => {
-        const input = toolbar.getByPlaceholder('工号 / 姓名 / 邮箱', { exact: true });
+        const input = toolbar.getByPlaceholder('账号 / 姓名 / 邮箱', { exact: true });
         await input.fill(userNo);
         await input.press('Enter');
       });
@@ -395,7 +395,7 @@ function flattenDepartments(nodes, result = []) {
       await drawer.getByRole('button', { name: '新增账号', exact: true }).click();
       let modal = currentModal();
       await modal.getByRole('button', { name: '创建账号', exact: true }).click();
-      await modal.getByText('请输入工号', { exact: true }).waitFor();
+      await modal.getByText('请输入账号', { exact: true }).waitFor();
       await modal.getByText('请输入初始密码', { exact: true }).waitFor();
       await modal.getByText('请输入姓名', { exact: true }).waitFor();
       await modal.getByText('请输入邮箱', { exact: true }).waitFor();

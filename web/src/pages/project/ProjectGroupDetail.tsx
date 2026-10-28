@@ -466,7 +466,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
               showSearch
               allowClear
               loading={ownerOptionsLoading}
-              placeholder="搜索姓名或工号"
+              placeholder="搜索姓名或账号"
               value={transferTarget}
               onChange={(value?: number) => setTransferTarget(value)}
               filterOption={(input, option) => String(option?.props?.children ?? '').toLowerCase().includes(input.trim().toLowerCase())}

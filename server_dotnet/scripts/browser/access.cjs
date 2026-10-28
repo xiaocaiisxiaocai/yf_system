@@ -234,7 +234,7 @@ async function createAccessUser(context, adminToken, permissions, departmentId, 
         && response.request().method() === 'GET'
         && response.status() === 200
       ));
-      const search = page.getByPlaceholder('工号 / 姓名 / 邮箱', { exact: true });
+      const search = page.getByPlaceholder('账号 / 姓名 / 邮箱', { exact: true });
       await search.fill(revocable.employeeNo);
       await search.press('Enter');
       await denied;

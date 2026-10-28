@@ -40,7 +40,7 @@ internal static class ProjectNotificationService
         var safeProjectName = SafeMailLine(project.Name, 100);
         var preview = SafeMailLine(content, 80);
         var suffix = content.EnumerateRunes().Count() > 80 ? "…" : string.Empty;
-        var entry = $"- 留言人：工号 {SafeMailLine(actor.EmployeeNo, 64)}\n  内容：{preview}{suffix}\n  {ProjectUrl(baseUrl, project.Id, "messages", messageId)}\n";
+        var entry = $"- 留言人：账号 {SafeMailLine(actor.EmployeeNo, 64)}\n  内容：{preview}{suffix}\n  {ProjectUrl(baseUrl, project.Id, "messages", messageId)}\n";
         var subject = $"[协作平台] 项目「{safeProjectName}」有新留言";
         var body = $"项目：{safeProjectName}\n以下留言请登录平台查看（本邮件由系统自动发送）：\n\n{entry}";
         await using var db = EfDb.Use(conn, tx);
@@ -172,7 +172,7 @@ internal static class ProjectNotificationService
             action == "WITHDRAW",
             action == "WITHDRAW" ? null : actor.Id,
             $"[协作平台] 项目「{project.Name}」{verb}",
-            $"项目：{project.Name}\n结果：{verb}{sideLine}\n操作人：工号 {actor.EmployeeNo}{reasonLine}\n\n请登录平台查看：{targetUrl}\n\n（本邮件由系统自动发送）",
+            $"项目：{project.Name}\n结果：{verb}{sideLine}\n操作人：账号 {actor.EmployeeNo}{reasonLine}\n\n请登录平台查看：{targetUrl}\n\n（本邮件由系统自动发送）",
             ct,
             audit);
     }
@@ -196,7 +196,7 @@ internal static class ProjectNotificationService
         var reviewers = await ProjectReviewerService.ListAsync(conn, tx, project, ct);
         var targetUrl = ProjectUrl(baseUrl, project.Id, "activity");
         var subject = $"[协作平台] 项目「{project.Name}」已提交验收";
-        var body = $"项目：{project.Name}\n结果：已提交验收\n确认方：公司\n操作人：工号 {submitter.EmployeeNo}\n\n请登录平台查看：{targetUrl}\n\n（本邮件由系统自动发送）";
+        var body = $"项目：{project.Name}\n结果：已提交验收\n确认方：公司\n操作人：账号 {submitter.EmployeeNo}\n\n请登录平台查看：{targetUrl}\n\n（本邮件由系统自动发送）";
         var seenRecipients = new HashSet<ulong>();
         await using var db = EfDb.Use(conn, tx);
         foreach (var reviewer in reviewers)

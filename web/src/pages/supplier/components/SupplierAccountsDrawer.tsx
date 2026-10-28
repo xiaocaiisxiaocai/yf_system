@@ -240,7 +240,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
         pagination={false}
         scroll={{ x: 840 }}
         columns={[
-          { title: '工号', dataIndex: 'employeeNo', width: 90, align: 'center' as const, ellipsis: true },
+          { title: '账号', dataIndex: 'employeeNo', width: 90, align: 'center' as const, ellipsis: true },
           { title: '姓名', dataIndex: 'realName', width: 80, align: 'center' as const, ellipsis: true },
           { title: '角色', dataIndex: 'roleName', width: 100, align: 'center' as const, ellipsis: true },
           { title: '邮箱', dataIndex: 'email', width: 150, ellipsis: true },
@@ -330,7 +330,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
           <div className="form-grid">
             {!editing && (
               <>
-                <Form.Item label="工号" field="employeeNo" rules={[{ required: true, message: '请输入工号' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
+                <Form.Item label="账号" field="employeeNo" rules={[{ required: true, message: '请输入账号' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
                   <Input autoFocus placeholder="3-32 位字母、数字或下划线" />
                 </Form.Item>
                 <Form.Item

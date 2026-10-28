@@ -119,7 +119,7 @@ describe('审计详情生产契约', () => {
     }
     expect(collectionChanges(permissionRow).addedPermissions[0]).toMatchObject({ title: '编辑项目', meta: 'project:edit · ID 8' })
     expect(detailSummary(permissionRow)).toBe('新增 1 项权限，移除 1 项权限')
-    expect(collectionChanges(memberRow).addedMembers[0]).toMatchObject({ title: '张工', meta: '工号 E011 · ID 11' })
+    expect(collectionChanges(memberRow).addedMembers[0]).toMatchObject({ title: '张工', meta: '账号 E011 · ID 11' })
     expect(detailSummary(memberRow)).toBe('新增 1 名成员，移除 1 名成员')
   })
 

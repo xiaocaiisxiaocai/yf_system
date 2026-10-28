@@ -71,7 +71,7 @@ export default function Profile() {
       <div className="profile-content">
         <div className="profile-readonly-grid" aria-label="账号信息">
           <div className="profile-readonly-item">
-            <span>工号</span>
+            <span>账号</span>
             <strong>{user?.employeeNo || '-'}</strong>
           </div>
           <div className="profile-readonly-item">

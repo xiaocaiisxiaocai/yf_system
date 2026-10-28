@@ -14,7 +14,7 @@ const {login}=require(process.env.YF_BROWSER_SUPPORT_DIR+'/ui-lib.cjs');
   const context=await browser.newContext({viewport:{width:1440,height:1000},acceptDownloads:true});
   page=await context.newPage();
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await check('管理员工号密码直登并进入首次改密',async()=>{
+  await check('管理员账号密码直登并进入首次改密',async()=>{
    initialLogin=await login(page,'admin',state.initialPassword);await page.waitForURL('**/change-password');
    await page.getByText('首次登录，请先修改初始密码',{exact:true}).waitFor();
   });

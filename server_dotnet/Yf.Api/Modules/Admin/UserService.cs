@@ -69,7 +69,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         await DepartmentService.EnsureActiveAsync(context, departmentId, ct);
         await EnsureRoleAssignableAsync(context, roleId, ct);
         var employeeNo = request.EmployeeNo.Trim();
-        if (await context.Users.AnyAsync(x => x.EmployeeNo == employeeNo, ct)) throw ApiException.Conflict("工号已存在");
+        if (await context.Users.AnyAsync(x => x.EmployeeNo == employeeNo, ct)) throw ApiException.Conflict("账号已存在");
         var user = new User
         {
             EmployeeNo = employeeNo, PasswordHash = passwordHash, RealName = request.RealName.Trim(),
@@ -86,7 +86,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             employeeNo = created.EmployeeNo, request.DepartmentId, roleId, created.RealName, created.Email,
             departmentName = department?.Name, roleName = role.Name, targetName = UserAuditName(created),
             changes = AuditChange.OnlyChanged(
-                new AuditChange("employeeNo", "工号", null, created.EmployeeNo), new AuditChange("realName", "姓名", null, created.RealName),
+                new AuditChange("employeeNo", "账号", null, created.EmployeeNo), new AuditChange("realName", "姓名", null, created.RealName),
                 new AuditChange("email", "邮箱", null, created.Email), new AuditChange("departmentId", "所属组织", null, DepartmentAuditJson(department)),
                 new AuditChange("roleId", "角色", null, RoleAuditJson(role)), new AuditChange("status", "状态", null, created.Status))
         }, null, ct);

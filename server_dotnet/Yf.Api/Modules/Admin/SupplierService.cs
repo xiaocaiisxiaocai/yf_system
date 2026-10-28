@@ -175,7 +175,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var supplier = await FindAsync(context, supplierId, ct) ?? throw ApiException.NotFound();
         if (supplier.Status != AccountStatuses.Active) throw ApiException.BadRequest("供应商已被禁用");
         var employeeNo = request.EmployeeNo.Trim();
-        if (await context.Users.AnyAsync(x => x.EmployeeNo == employeeNo, ct)) throw ApiException.Conflict("工号已存在");
+        if (await context.Users.AnyAsync(x => x.EmployeeNo == employeeNo, ct)) throw ApiException.Conflict("账号已存在");
         var roleId = request.RoleId ?? await FallbackSupplierRoleIdAsync(context, ct);
         var role = await EnsureSupplierRoleAssignableAsync(context, actor, roleId, ct);
         var user = new User
@@ -191,7 +191,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         {
             employeeNo = created.EmployeeNo, supplierId, roleId = role.Id, roleName = role.Name, supplierName = supplier.Name,
             created.RealName, created.Email, targetName = AccountAuditName(created),
-            changes = AuditChange.OnlyChanged(new AuditChange("employeeNo", "工号", null, created.EmployeeNo),
+            changes = AuditChange.OnlyChanged(new AuditChange("employeeNo", "账号", null, created.EmployeeNo),
                 new AuditChange("realName", "姓名", null, created.RealName), new AuditChange("email", "邮箱", null, created.Email),
                 new AuditChange("supplierId", "所属供应商", null, new { supplier.Id, supplier.Name }),
                 new AuditChange("roleId", "角色", null, new { role.Id, role.Name }), new AuditChange("status", "状态", null, created.Status))

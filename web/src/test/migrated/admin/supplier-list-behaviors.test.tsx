@@ -381,7 +381,7 @@ describe('重复搜索运行时注册用例', () => {
   const cases = [
     { title: 'pages/project/ProjectList.tsx: repeated identical searches finish and reload', api: '/project-groups', placeholder: '主项目名称', render: () => render(<MemoryRouter><ProjectList /></MemoryRouter>) },
     { title: 'pages/supplier/SupplierList.tsx: repeated identical searches finish and reload', api: '/admin/suppliers', placeholder: '供应商名称', render: () => render(<SupplierList />) },
-    { title: 'pages/org/UserList.tsx: repeated identical searches finish and reload', api: '/admin/users', placeholder: '工号 / 姓名 / 邮箱', render: () => render(<UserList />) },
+    { title: 'pages/org/UserList.tsx: repeated identical searches finish and reload', api: '/admin/users', placeholder: '账号 / 姓名 / 邮箱', render: () => render(<UserList />) },
     { title: 'components/FileTable.tsx: repeated identical searches finish and reload', api: '/projects/1/files', placeholder: '文件名', render: () => render(<FileTable projectId={1} projectStatus="IN_PROGRESS" />) },
   ]
 
@@ -437,7 +437,7 @@ describe('重复搜索运行时注册用例', () => {
     fireEvent.click(screen.getByLabelText('第 2 页'))
     await waitFor(() => expect(oldSignal).toBeInstanceOf(AbortSignal))
 
-    const search = screen.getByPlaceholderText('工号 / 姓名 / 邮箱')
+    const search = screen.getByPlaceholderText('账号 / 姓名 / 邮箱')
     await user.type(search, 'steel')
     fireEvent.click(search.closest('.arco-input-search')!.querySelector<HTMLElement>('.arco-icon-search')!)
     await waitFor(() => expect(oldSignal?.aborted).toBe(true))
@@ -467,7 +467,7 @@ describe('重复搜索运行时注册用例', () => {
     expect(queryClient.getQueriesData({ queryKey: ['admin-user-options'] }).some(([, data]) => data !== undefined)).toBe(true)
 
     denied = true
-    const search = screen.getByPlaceholderText('工号 / 姓名 / 邮箱')
+    const search = screen.getByPlaceholderText('账号 / 姓名 / 邮箱')
     fireEvent.click(search.closest('.arco-input-search')!.querySelector<HTMLElement>('.arco-icon-search')!)
 
     expect(await screen.findByText('当前会话无权读取用户管理数据，请重新登录或联系管理员确认权限。')).toBeVisible()
@@ -491,7 +491,7 @@ describe('重复搜索运行时注册用例', () => {
     render(<UserList />)
     expect(await screen.findByText('cached-user')).toBeVisible()
     fail = true
-    const search = screen.getByPlaceholderText('工号 / 姓名 / 邮箱')
+    const search = screen.getByPlaceholderText('账号 / 姓名 / 邮箱')
     fireEvent.click(search.closest('.arco-input-search')!.querySelector<HTMLElement>('.arco-icon-search')!)
     expect(await screen.findByText('加载失败')).toBeVisible()
     // 刷新失败只在表格上方提示，上次加载的行仍然可见。

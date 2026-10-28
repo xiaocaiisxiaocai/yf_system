@@ -240,7 +240,7 @@ export function actorIdentity(row: AuditLogRow): DisplayIdentity {
   const context = auditContext(row.detail)
   const snapshotName = cleanText(context?.actorName)
   const employeeNo = cleanText(row.employeeNo)
-  const identifier = [employeeNo ? `工号 ${employeeNo}` : undefined, row.userId != null ? `ID ${row.userId}` : undefined].filter(Boolean).join(' · ')
+  const identifier = [employeeNo ? `账号 ${employeeNo}` : undefined, row.userId != null ? `ID ${row.userId}` : undefined].filter(Boolean).join(' · ')
   if (snapshotName) return { name: snapshotName, identifier: identifier || '操作账号未记录', source: 'snapshot', sourceLabel: '操作时姓名' }
   const currentName = cleanText(row.actorName)
   if (currentName) {
@@ -248,8 +248,8 @@ export function actorIdentity(row: AuditLogRow): DisplayIdentity {
     const sourceLabel = source === 'snapshot' ? '操作时姓名' : source === 'current' ? '当前姓名（历史辅助）' : '姓名来源未知'
     return { name: currentName, identifier: identifier || '操作账号未记录', source, sourceLabel }
   }
-  if (employeeNo) return { name: employeeNo, identifier: row.userId != null ? `ID ${row.userId}` : '历史工号', source: 'unknown', sourceLabel: '未记录姓名' }
-  if (row.userId != null) return { name: `用户 #${row.userId}`, identifier: '姓名与工号未记录', source: 'unknown', sourceLabel: '未记录姓名' }
+  if (employeeNo) return { name: employeeNo, identifier: row.userId != null ? `ID ${row.userId}` : '历史账号', source: 'unknown', sourceLabel: '未记录姓名' }
+  if (row.userId != null) return { name: `用户 #${row.userId}`, identifier: '姓名与账号未记录', source: 'unknown', sourceLabel: '未记录姓名' }
   return { name: '系统', identifier: context?.source === 'SYSTEM' ? '系统任务' : '系统事件', source: 'system', sourceLabel: '非用户操作' }
 }
 
@@ -363,7 +363,7 @@ function memberItems(value: unknown): CollectionItem[] {
     const realName = cleanText(item.realName)
     const employeeNo = cleanText(item.employeeNo)
     if (!id && !realName && !employeeNo) return []
-    return [{ key: id || employeeNo || `${realName}-${index}`, title: realName || employeeNo || `成员 ID ${id}`, meta: [employeeNo && employeeNo !== realName ? `工号 ${employeeNo}` : undefined, id ? `ID ${id}` : undefined].filter(Boolean).join(' · ') }]
+    return [{ key: id || employeeNo || `${realName}-${index}`, title: realName || employeeNo || `成员 ID ${id}`, meta: [employeeNo && employeeNo !== realName ? `账号 ${employeeNo}` : undefined, id ? `ID ${id}` : undefined].filter(Boolean).join(' · ') }]
   })
 }
 
@@ -523,7 +523,7 @@ export function detailSummary(row: AuditLogRow): string {
 export function historicalNote(row: AuditLogRow): string | undefined {
   if (!row.detail) return row.targetType === 'project' ? '该历史项目日志未记录详情，无法还原当时的具体变化。' : '该历史日志未记录补充详情。'
   if (row.action === 'ROLE_ASSIGN_PERMS' && collectionChanges(row).permissionsAreIds) return '该历史日志只保存了权限 ID，名称和编码无法还原。'
-  if (row.action === 'PROJECT_MEMBERS' && collectionChanges(row).membersAreIds) return '该历史日志只保存了成员 ID，姓名和工号无法还原。'
+  if (row.action === 'PROJECT_MEMBERS' && collectionChanges(row).membersAreIds) return '该历史日志只保存了成员 ID，姓名和账号无法还原。'
   const changedFields = Array.isArray(row.detail.changedFields) ? row.detail.changedFields.length : 0
   if (changedFields && !displayChanges(row).length) return '该历史日志只保存了变更字段，未记录修改前后的值。'
   return undefined

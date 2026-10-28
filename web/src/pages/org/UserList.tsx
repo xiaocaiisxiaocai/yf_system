@@ -275,7 +275,7 @@ export default function UserList() {
         <Space wrap>
           <Input.Search
             allowClear
-            placeholder="工号 / 姓名 / 邮箱"
+            placeholder="账号 / 姓名 / 邮箱"
             style={{ width: 260 }}
             onSearch={(v) => {
               const sameQuery = page === 1 && keyword === v
@@ -357,7 +357,7 @@ export default function UserList() {
           data={data.list}
           scroll={{ x: 1060, y: 'var(--page-table-scroll-y)' }}
           columns={[
-          { title: '工号', dataIndex: 'employeeNo', width: 110, ellipsis: true },
+          { title: '账号', dataIndex: 'employeeNo', width: 110, ellipsis: true },
           { title: '姓名', dataIndex: 'realName', width: 110, ellipsis: true },
           {
             title: '组织',
@@ -453,7 +453,7 @@ export default function UserList() {
           <div className="form-grid">
             {!editing && (
               <>
-                <Form.Item label="工号" field="employeeNo" rules={[{ required: true, message: '请输入工号' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
+                <Form.Item label="账号" field="employeeNo" rules={[{ required: true, message: '请输入账号' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
                   <Input autoFocus placeholder="3-32 位字母、数字或下划线" />
                 </Form.Item>
                 <Form.Item

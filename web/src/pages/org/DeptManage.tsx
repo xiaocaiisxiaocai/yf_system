@@ -504,7 +504,7 @@ export default function DeptManage() {
                   {selected.leader ? (
                     <div className="org-view-leader-person">
                       <strong>{selected.leader.realName}</strong>
-                      <span>工号 {selected.leader.employeeNo}</span>
+                      <span>账号 {selected.leader.employeeNo}</span>
                       {!selected.leader.active && <Tag color="red" size="small">账号已停用</Tag>}
                     </div>
                   ) : <Typography.Text type="secondary">暂未配置主管</Typography.Text>}
@@ -613,7 +613,7 @@ export default function DeptManage() {
             allowClear
             prefix={<IconSearch />}
             aria-label="搜索主管候选"
-            placeholder="搜索姓名或工号"
+            placeholder="搜索姓名或账号"
             value={leaderKeyword}
             onChange={(value) => {
               setLeaderKeyword(value)
