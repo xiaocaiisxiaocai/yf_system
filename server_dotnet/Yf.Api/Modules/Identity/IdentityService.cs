@@ -18,9 +18,9 @@ public sealed class IdentityService(
     public async Task<(LoginResponse Response, string Refresh, DateTime RefreshExpiresAt)> LoginAsync(LoginRequest request, string clientIp, CancellationToken ct)
     {
         var employeeNo = request.EmployeeNo?.Trim() ?? "";
-        if (employeeNo.Length == 0 || string.IsNullOrEmpty(request.Password)) throw ApiException.BadRequest("工号和密码不能为空");
+        if (employeeNo.Length == 0 || string.IsNullOrEmpty(request.Password)) throw ApiException.BadRequest("账号和密码不能为空");
         if (employeeNo.EnumerateRunes().Count() > 64 || System.Text.Encoding.UTF8.GetByteCount(request.Password) > PasswordService.MaxPasswordBytes)
-            throw ApiException.BadRequest("工号或密码错误");
+            throw ApiException.BadRequest("账号或密码错误");
         if (!loginRateLimiter.AllowLogin(clientIp, employeeNo)) throw ApiException.TooManyRequests("请求过于频繁，请稍后再试");
 
         User? candidate;
@@ -39,7 +39,7 @@ public sealed class IdentityService(
             // before passing it to the shared non-owning audit context.
             await auditCtx.Database.OpenConnectionAsync(ct);
             await AuditBestEffortAsync(auditCtx.Database.Connection(), null, employeeNo, "LOGIN_FAILED", null, null, null, clientIp, ct);
-            throw ApiException.Unauthorized("工号或密码错误");
+            throw ApiException.Unauthorized("账号或密码错误");
         }
 
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -50,7 +50,7 @@ public sealed class IdentityService(
         {
             await tx.RollbackAsync(ct);
             await AuditBestEffortAsync(context.Database.Connection(), null, employeeNo, "LOGIN_FAILED", null, null, null, clientIp, ct);
-            throw ApiException.Unauthorized("工号或密码错误");
+            throw ApiException.Unauthorized("账号或密码错误");
         }
         // The account row lock keeps the credential recheck, status check and session issue
         // atomic with concurrent password resets and account-management changes. Failed
@@ -71,13 +71,13 @@ public sealed class IdentityService(
             await tx.CommitAsync(ct);
             await AuditBestEffortAsync(context.Database.Connection(), user.Id, employeeNo, "LOGIN_FAILED",
                 null, null, null, clientIp, ct);
-            throw ApiException.Unauthorized("工号或密码错误");
+            throw ApiException.Unauthorized("账号或密码错误");
         }
         if (user.Status != AccountStatuses.Active || !await IsSupplierActiveAsync(context, user, ct))
         {
             await tx.RollbackAsync(ct);
             await AuditBestEffortAsync(context.Database.Connection(), user.Id, employeeNo, "LOGIN_FAILED", null, null, null, clientIp, ct);
-            throw ApiException.Unauthorized("工号或密码错误");
+            throw ApiException.Unauthorized("账号或密码错误");
         }
         user.FailedLoginAttempts = 0;
         user.LockedUntil = null;

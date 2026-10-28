@@ -94,7 +94,7 @@ async function createAccessUser(context, adminToken, permissions, departmentId, 
     await page.waitForURL('**/login');
 
     await record('O01 受保护深链转到无验证码登录页', async () => {
-      await page.getByRole('textbox', { name: '工号', exact: true }).waitFor();
+      await page.getByRole('textbox', { name: '账号', exact: true }).waitFor();
       await page.getByRole('textbox', { name: '密码', exact: true }).waitFor();
       assert.equal(await page.getByRole('textbox', { name: '验证码', exact: true }).count(), 0);
       assert.equal(await page.getByRole('img', { name: '验证码', exact: true }).count(), 0);
@@ -106,7 +106,7 @@ async function createAccessUser(context, adminToken, permissions, departmentId, 
       if (new URL(request.url()).pathname === loginPath && request.method() === 'POST') loginRequests += 1;
     });
     await record('O02-O03 错误密码可恢复并返回合法同源深链', async () => {
-      const employee = page.getByRole('textbox', { name: '工号', exact: true });
+      const employee = page.getByRole('textbox', { name: '账号', exact: true });
       const password = page.getByRole('textbox', { name: '密码', exact: true });
       const wrongPassword = noMenu.password.slice(0, -1)
         + (noMenu.password.endsWith('X') ? 'Y' : 'X');
@@ -116,7 +116,7 @@ async function createAccessUser(context, adminToken, permissions, departmentId, 
       const failed = page.waitForResponse(isLogin);
       await page.getByRole('button', { name: '登录', exact: true }).click();
       assert.equal((await failed).status(), 401);
-      await page.getByText('工号或密码错误', { exact: true }).waitFor();
+      await page.getByText('账号或密码错误', { exact: true }).waitFor();
       assert.equal(new URL(page.url()).pathname, '/login');
       assert.equal(loginRequests, 1);
       assert.equal(await employee.inputValue(), noMenu.employeeNo);
@@ -167,7 +167,7 @@ async function createAccessUser(context, adminToken, permissions, departmentId, 
     const switchPage = await menuContext.newPage();
     track(switchPage, 'access-switch-tab');
     await switchPage.goto(s.base + '/login');
-    await switchPage.getByRole('textbox', { name: '工号', exact: true }).waitFor();
+    await switchPage.getByRole('textbox', { name: '账号', exact: true }).waitFor();
 
     page = await menuContext.newPage();
     track(page, 'access-menu-only');
@@ -196,7 +196,7 @@ async function createAccessUser(context, adminToken, permissions, departmentId, 
     });
 
     await record('O08 第二标签真实登录换号后两个标签不保留旧菜单', async () => {
-      await switchPage.getByRole('textbox', { name: '工号', exact: true }).fill(noMenu.employeeNo);
+      await switchPage.getByRole('textbox', { name: '账号', exact: true }).fill(noMenu.employeeNo);
       await switchPage.getByRole('textbox', { name: '密码', exact: true }).fill(noMenu.password);
       await reserveLoginBudget(noMenu.employeeNo);
       const switched = switchPage.waitForResponse(isLogin);

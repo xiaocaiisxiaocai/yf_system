@@ -231,7 +231,7 @@ public sealed class OemFoundationTests
     {
         var rejected = await client.PostAsync("/api/v1/auth/login", new { employeeNo, password }, ct)
             .Status(HttpStatusCode.Unauthorized, 40101);
-        Assert.Equal("工号或密码错误", rejected.Json!["message"]!.GetValue<string>());
+        Assert.Equal("账号或密码错误", rejected.Json!["message"]!.GetValue<string>());
     }
 
     private static async Task RejectOemLogin(ApiClient client, string employeeNo, string password, CancellationToken ct)

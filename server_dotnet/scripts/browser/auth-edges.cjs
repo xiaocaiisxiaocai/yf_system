@@ -103,8 +103,8 @@ async function initializePassword(browser, user) {
     page.on('request', countCaptcha);
     await page.goto(s.base + '/login');
 
-    await record('O01 登录页仅渲染工号密码且不请求验证码', async () => {
-      await page.getByRole('textbox', { name: '工号', exact: true }).waitFor();
+    await record('O01 登录页仅渲染账号密码且不请求验证码', async () => {
+      await page.getByRole('textbox', { name: '账号', exact: true }).waitFor();
       await page.getByRole('textbox', { name: '密码', exact: true }).waitFor();
       assert.equal(await page.getByRole('textbox', { name: '验证码', exact: true }).count(), 0);
       assert.equal(await page.getByRole('img', { name: '验证码', exact: true }).count(), 0);
@@ -120,13 +120,13 @@ async function initializePassword(browser, user) {
     page.on('request', countLogin);
     await record('O02 登录必填校验在客户端阻止空请求', async () => {
       await page.getByRole('button', { name: '登录', exact: true }).click();
-      await page.getByText('请输入工号', { exact: true }).waitFor();
+      await page.getByText('请输入账号', { exact: true }).waitFor();
       await page.getByText('请输入密码', { exact: true }).waitFor();
       assert.equal(loginRequests, 0, 'empty form must not send login request');
     });
 
     await record('O04-O05 密码键盘显隐保留焦点且网络失败后可重试', async () => {
-      const employee = page.getByRole('textbox', { name: '工号', exact: true });
+      const employee = page.getByRole('textbox', { name: '账号', exact: true });
       const password = page.getByRole('textbox', { name: '密码', exact: true });
       await employee.fill('admin');
       await password.fill(s.adminPassword);

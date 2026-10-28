@@ -13,7 +13,7 @@ async function record(name,fn){
 }
 async function login(p,user,password){
  if(p.url()!==s.base+'/login')await p.goto(s.base+'/login');
- await p.getByRole('textbox',{name:'工号',exact:true}).fill(user);
+ await p.getByRole('textbox',{name:'账号',exact:true}).fill(user);
  await p.getByRole('textbox',{name:'密码',exact:true}).fill(password);
  await reserveLoginBudget(user);
  const logged=p.waitForResponse(r=>r.url().endsWith('/api/v1/auth/login')&&r.request().method()==='POST');

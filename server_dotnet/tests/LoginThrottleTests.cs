@@ -415,7 +415,7 @@ public sealed class LoginThrottleTests
         {
             var error = await Assert.ThrowsAsync<ApiException>(() => LoginAsync(employeeNo, supplied, ip, ct));
             Assert.Equal(401, error.Status);
-            Assert.Equal("工号或密码错误", error.Message);
+            Assert.Equal("账号或密码错误", error.Message);
         }
 
         public async Task<State> StateAsync(CancellationToken ct)
