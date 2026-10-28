@@ -10,7 +10,7 @@ Run from `web/`. Requires Node 22.13+/24+.
 npm ci
 npm run dev      # vite dev server on 127.0.0.1:5173, proxies /api (incl. WebSocket) -> 127.0.0.1:8080
 npm run build    # tsc -b && vite build (predev/prebuild also (re)build the Excel/PPTX preview bundles)
-npm run lint     # oxlint
+npm run lint     # oxlint --deny-warnings (any warning fails)
 npm test         # vitest run (jsdom) over src/test/**/*.test.{ts,tsx}; pretest rebuilds the preview bundles
 npx vitest run src/test/migrated/previews/pdf-preview.test.tsx   # single test file
 npm run test:precompression   # node --test for the postbuild precompression script
@@ -23,6 +23,9 @@ The dev proxy points at port 8080 (`server_dotnet`). The backend README runs the
 ## Architecture
 
 - `src/api/client.ts` — the HTTP client (axios) talking to `/api/v1`; `src/api/types.ts` builds on `src/api/generated/api-types.ts`, generated from the backend OpenAPI contract (see Testing philosophy).
+- Auth refresh: `client.ts` single-flights token refresh within a tab and serializes refresh-cookie rotation across tabs with Web Locks (`navigator.locks`), falling back to a localStorage lease on plain-HTTP intranet origins — two tabs rotating the same cookie would trip the backend's replay revocation. Each realm has its own lock names (OEM portal: `src/oem/api/portalAuthLock.ts`). `src/store/authStorageSync.ts` applies other tabs' `yf-auth` changes (logout / reload / new permissions). 409/40903 is detected with `src/api/versionConflict.ts`.
+- Realtime: `src/services/projectRealtime.ts` owns the SignalR connection; `src/store/collaboration.ts` (zustand) turns push signals into per-project `messageRevisions`/`receiptRevisions`/`activityRevisions` and a `reconnectRevision` counter. Components feed those counters into `src/hooks/useCoalescedRefresh.ts` (300 ms window; a signal during an in-flight request causes exactly one refetch after it) and refetch over REST; `useDisconnectedPoll` polls only while the connection is down.
+- OEM UI lives in `src/oem/` (lazy-loaded from `App.tsx`): `/oem` reuses the internal collaboration session, `/oem-portal` is the vendor portal with its own isolated session.
 - Server state for Dashboard, user admin, messages and read receipts uses TanStack Query 5 (`src/api/queryClient.ts`); query keys include account, session generation and permission scope, and logout/permission changes cancel requests and clear the cache. Writes don't auto-retry.
 - Uploads (`src/api/uploads.ts`): per-chunk SHA-256 (`X-Chunk-SHA256` header) and whole-file MD5 are computed in Web Workers (`*.worker.ts`); the resume fingerprint is a quick name/size/mtime/head/tail hash, not an integrity check. Protocol details: `docs/开发阶段架构调整-2026-09-23.md`.
 - Previews: PDF uses local PDF.js 6.3.289 (`PdfPreview.tsx`/`pdfEngine.ts`), page-by-page, assets emitted by the `pdfAssets()` Vite plugin (`pdf-assets.ts`) into `dist/pdfjs/<version>/`. Excel/PPTX run in a sandboxed iframe: `scripts/build-{excel,pptx}-preview.mjs` bundle `web/vendor/vue-office-{excel,pptx}/viewer.js` (with npm `pptx-preview`/`exceljs`/`xlsx`) as an IIFE and inline it into `generated/{excel,pptx}-viewer.html`, which `ExcelPreview.tsx`/`PptxPreview.tsx` import `?raw`. `xlsx` comes from the SheetJS CDN tarball, not the npm registry.
