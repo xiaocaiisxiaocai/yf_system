@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using MySqlConnector;
 
 namespace Yf.Api.Infrastructure;
@@ -10,6 +11,11 @@ public sealed class AppOptions
     public bool AutoInitializeDatabase { get; set; }
     public string BootstrapPassword { get; set; } = "";
     public string WebBaseUrl { get; set; } = "http://127.0.0.1:5273";
+    /// <summary>
+    /// Extra browser origins (e.g. an intranet and an internet address of the same site) accepted for
+    /// login, CORS, WebSocket and download origin checks. WebBaseUrl stays the address used in email links.
+    /// </summary>
+    public string[] AdditionalWebOrigins { get; set; } = [];
     public bool CookieSecure { get; set; } = true;
     /// <summary>
     /// Explicit opt-in for CookieSecure=false outside Development when WebBaseUrl is a non-loopback HTTP origin
@@ -66,13 +72,16 @@ public sealed class AppOptions
             throw new InvalidOperationException("App:StorageRoot must be an absolute path to the existing independent storage directory.");
         if (Path.GetFullPath(StorageRoot).TrimEnd(Path.DirectorySeparatorChar) == Path.GetPathRoot(StorageRoot)?.TrimEnd(Path.DirectorySeparatorChar))
             throw new InvalidOperationException("App:StorageRoot cannot be a drive root.");
-        if (!Uri.TryCreate(WebBaseUrl, UriKind.Absolute, out var web)
-            || web.Scheme is not ("http" or "https")
-            || web.UserInfo.Length != 0
-            || web.AbsolutePath != "/"
-            || web.Query.Length != 0
-            || web.Fragment.Length != 0)
+        if (!IsOrigin(WebBaseUrl, out var web))
             throw new InvalidOperationException("App:WebBaseUrl must be an HTTP(S) origin.");
+        foreach (var extra in AdditionalWebOrigins)
+        {
+            if (!IsOrigin(extra, out var origin))
+                throw new InvalidOperationException("App:AdditionalWebOrigins entries must be HTTP(S) origins.");
+            // One CookieSecure setting serves every origin, so mixed schemes would break login on one of them.
+            if (origin.Scheme != web.Scheme)
+                throw new InvalidOperationException("App:AdditionalWebOrigins must use the same scheme as App:WebBaseUrl.");
+        }
         if (AccessTtlMinutes is < 1 or > 1440 || RefreshTtlDays is < 1 or > 365
             || AbsoluteSessionLifetimeDays is < 1 or > 365)
             throw new InvalidOperationException("Invalid token lifetime.");
@@ -102,6 +111,20 @@ public sealed class AppOptions
         }
     }
 
+    /// <summary>WebBaseUrl followed by AdditionalWebOrigins, normalized to scheme://host[:port].</summary>
+    public IReadOnlyList<string> AllowedWebOrigins =>
+        new[] { WebBaseUrl }.Concat(AdditionalWebOrigins)
+            .Select(value => new Uri(value).GetLeftPart(UriPartial.Authority))
+            .Distinct(StringComparer.Ordinal).ToArray();
+
+    private static bool IsOrigin(string value, [NotNullWhen(true)] out Uri? uri) =>
+        Uri.TryCreate(value, UriKind.Absolute, out uri)
+        && uri.Scheme is ("http" or "https")
+        && uri.UserInfo.Length == 0
+        && uri.AbsolutePath == "/"
+        && uri.Query.Length == 0
+        && uri.Fragment.Length == 0;
+
     /// <summary>
     /// Refuses non-secure auth cookies unless the site is a loopback/development setup or the operator
     /// explicitly opted in for a plain-HTTP private deployment. An HTTPS site always requires secure cookies.
@@ -113,9 +136,9 @@ public sealed class AppOptions
             throw new InvalidOperationException("App:WebBaseUrl must be an HTTP(S) origin.");
         if (web.Scheme == Uri.UriSchemeHttps)
             throw new InvalidOperationException("App:CookieSecure must be true when App:WebBaseUrl uses HTTPS.");
-        if (isDevelopment || web.IsLoopback || AllowInsecureCookies) return;
+        if (isDevelopment || AllowInsecureCookies || AllowedWebOrigins.All(origin => new Uri(origin).IsLoopback)) return;
         throw new InvalidOperationException(
-            "App:CookieSecure=false is only allowed in Development, for a loopback App:WebBaseUrl, or with App:AllowInsecureCookies=true.");
+            "App:CookieSecure=false is only allowed in Development, for loopback web origins, or with App:AllowInsecureCookies=true.");
     }
 
     public void ValidateStorageLocation(string applicationRoot)

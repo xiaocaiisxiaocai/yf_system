@@ -128,13 +128,12 @@ public static class ApiApplication
             .AddInterceptors(UtcDatabaseSession.Instance));
         builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule();
         builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
-            .WithOrigins(new Uri(options.WebBaseUrl).GetLeftPart(UriPartial.Authority))
+            .WithOrigins([.. options.AllowedWebOrigins])
             .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
         configure?.Invoke(builder);
         var app = builder.Build();
-        var allowedWebOrigin = new Uri(options.WebBaseUrl).GetLeftPart(UriPartial.Authority);
         var webSocketOptions = new WebSocketOptions();
-        webSocketOptions.AllowedOrigins.Add(allowedWebOrigin);
+        foreach (var origin in options.AllowedWebOrigins) webSocketOptions.AllowedOrigins.Add(origin);
         FileLogging.UseRequestLogging(app, fileLogger);
         app.UseWebSockets(webSocketOptions);
         app.UseMiddleware<ApiErrorMiddleware>();

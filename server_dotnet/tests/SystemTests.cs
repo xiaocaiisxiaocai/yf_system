@@ -171,6 +171,39 @@ public class SystemTests
     }
 
     [Theory]
+    [InlineData("http://192.168.7.102:3340", "http://183.238.37.108:8090", true)]
+    [InlineData("https://yf.example.invalid", "https://yf-lan.example.invalid:8443/", true)]
+    [InlineData("http://192.168.7.102:3340", "http://192.168.7.102:3340,http://183.238.37.108:8090", false)]
+    [InlineData("http://192.168.7.102:3340", "http://183.238.37.108:8090/portal", false)]
+    [InlineData("http://192.168.7.102:3340", "https://yf.example.invalid", false)]
+    [InlineData("http://192.168.7.102:3340", "", false)]
+    public void AdditionalWebOriginsMustBeOriginsWithTheSameScheme(string webBaseUrl, string extra, bool accepted)
+    {
+        var options = ValidOptions();
+        options.WebBaseUrl = webBaseUrl;
+        options.AdditionalWebOrigins = [extra];
+
+        if (accepted) options.Validate();
+        else Assert.Throws<InvalidOperationException>(() => options.Validate());
+    }
+
+    [Theory]
+    [InlineData("http://localhost:5180", false, true)]
+    [InlineData("http://192.168.7.102:3340", false, false)]
+    [InlineData("http://192.168.7.102:3340", true, true)]
+    public void InsecureCookiesConsiderEveryWebOrigin(string extra, bool allowInsecure, bool accepted)
+    {
+        var options = ValidOptions();
+        options.CookieSecure = false;
+        options.WebBaseUrl = "http://127.0.0.1:5273";
+        options.AdditionalWebOrigins = [extra];
+        options.AllowInsecureCookies = allowInsecure;
+
+        if (accepted) options.ValidateCookieSecurity(isDevelopment: false);
+        else Assert.Throws<InvalidOperationException>(() => options.ValidateCookieSecurity(isDevelopment: false));
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1001)]
     public void SessionCapMustBeBounded(int value)

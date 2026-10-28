@@ -56,7 +56,7 @@ public sealed class MediaPreviewSecurityTests
     public void DownloadOriginCheckRejectsExplicitCrossOriginRequestsButKeepsNonBrowserClients(
         string origin, string fetchSite, string configuredOrigin, bool expected)
     {
-        Assert.Equal(expected, FileService.IsSameOriginRequest(origin, fetchSite, configuredOrigin));
+        Assert.Equal(expected, FileService.IsSameOriginRequest(origin, fetchSite, [configuredOrigin]));
     }
 
     [Fact]

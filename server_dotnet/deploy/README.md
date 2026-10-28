@@ -73,6 +73,7 @@
 | `BatchDownloadMinBytesPerMinute` | 65536 | 批量 ZIP 下载任一 60 秒窗口内传输少于该字节数即中止 |
 | `BatchDownloadMaxDurationMinutes` | 120 | 单次批量 ZIP 下载的最长时长（5–1440 分钟） |
 | `MailPendingTtlDays` | 3 | 待发送邮件超过该天数仍未发出即取消（1–365） |
+| `AdditionalWebOrigins` | `[]` | 同一站点的其他访问地址（如内网与外网各一个），JSON 数组，每项只写 `协议://主机[:端口]`，协议须与 `WebBaseUrl` 相同；登录、CORS、实时连接和下载来源校验都接受这些地址。邮件中的链接仍只使用 `WebBaseUrl`，应填收件人都能打开的地址 |
 | `AllowInsecureCookies` | false | 仅用于非回环 HTTP 私有部署时允许 `CookieSecure=false`；HTTPS 站点下无效且被部署脚本拒绝 |
 | `OemStorageRoot` | 空 | OEM 专属本地根；必须与程序、配置、日志、协作 `StorageRoot` 和备份目录独立，空值表示未配置 OEM 文件入口 |
 

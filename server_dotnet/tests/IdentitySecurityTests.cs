@@ -177,12 +177,27 @@ public sealed class IdentitySecurityTests
     {
         var crossSite = new DefaultHttpContext();
         crossSite.Request.Headers["Sec-Fetch-Site"] = "cross-site";
-        Assert.False(IdentityModule.OriginAllowed(crossSite.Request, "https://yf.example.test"));
+        Assert.False(IdentityModule.OriginAllowed(crossSite.Request, ["https://yf.example.test"]));
 
         var sameOrigin = new DefaultHttpContext();
         sameOrigin.Request.Headers["Sec-Fetch-Site"] = "same-origin";
-        Assert.True(IdentityModule.OriginAllowed(sameOrigin.Request, "https://yf.example.test"));
-        Assert.True(IdentityModule.OriginAllowed(new DefaultHttpContext().Request, "https://yf.example.test"));
+        Assert.True(IdentityModule.OriginAllowed(sameOrigin.Request, ["https://yf.example.test"]));
+        Assert.True(IdentityModule.OriginAllowed(new DefaultHttpContext().Request, ["https://yf.example.test"]));
+    }
+
+    [Fact]
+    public void EveryConfiguredWebOriginIsAllowedAndOthersAreRejected()
+    {
+        var options = new AppOptions
+        {
+            WebBaseUrl = "http://192.168.7.102:3340/",
+            AdditionalWebOrigins = ["http://183.238.37.108:8090"]
+        };
+        Assert.Equal(["http://192.168.7.102:3340", "http://183.238.37.108:8090"], options.AllowedWebOrigins);
+        Assert.True(IdentityModule.OriginAllowed("http://192.168.7.102:3340", options.AllowedWebOrigins));
+        Assert.True(IdentityModule.OriginAllowed("http://183.238.37.108:8090", options.AllowedWebOrigins));
+        Assert.False(IdentityModule.OriginAllowed("http://183.238.37.108:3340", options.AllowedWebOrigins));
+        Assert.False(IdentityModule.OriginAllowed("https://evil.example", options.AllowedWebOrigins));
     }
 
     [Fact]

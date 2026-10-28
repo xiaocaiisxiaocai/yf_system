@@ -136,6 +136,21 @@ function Assert-PrivatePublishDefaults($Defaults, [switch]$AllowInsecure) {
     if ($origin.Scheme -eq 'http' -and $Defaults.App.CookieSecure) {
         throw 'HTTP publication requires CookieSecure=false for login cookies.'
     }
+    $extras = $Defaults.App.PSObject.Properties['AdditionalWebOrigins']
+    foreach ($extra in @(if ($extras -and $null -ne $extras.Value) { $extras.Value })) {
+        $extraOrigin = $null
+        if (![Uri]::TryCreate([string]$extra, [UriKind]::Absolute, [ref]$extraOrigin) -or
+            $extraOrigin.AbsolutePath -ne '/' -or $extraOrigin.Query -or $extraOrigin.Fragment -or $extraOrigin.UserInfo -or
+            $extraOrigin.Scheme -ne $origin.Scheme) {
+            throw 'App.AdditionalWebOrigins entries must be origins with the same scheme as App.WebBaseUrl.'
+        }
+    }
+}
+
+function Get-AdditionalWebOrigins($Settings) {
+    $property = $Settings.App.PSObject.Properties['AdditionalWebOrigins']
+    if (!$property -or $null -eq $property.Value) { return @() }
+    return @($property.Value | ForEach-Object { [string]$_ })
 }
 
 function Get-PayloadFiles([string]$Root, [string[]]$ExcludedNames) {
@@ -351,6 +366,7 @@ if (!$ExternalConfigurationTemplate) {
             $productionSettings.App.$name = [string]$override.Value
         }
     }
+    $productionSettings.App.AdditionalWebOrigins = @(Get-AdditionalWebOrigins $publishDefaults)
     if ($publishDefaults.App.PSObject.Properties['CookieSecure']) {
         $productionSettings.App.CookieSecure = [bool]$publishDefaults.App.CookieSecure
     }
@@ -358,10 +374,14 @@ if (!$ExternalConfigurationTemplate) {
     # WebBaseUrl or with an explicit App.AllowInsecureCookies opt-in. A private HTTP
     # package (only reachable via -AllowInsecurePrivateConfiguration) must carry that
     # opt-in or the site refuses to start; it is recorded in the manifest.
-    $packagedOrigin = $null
-    $needsInsecureCookies = !$productionSettings.App.CookieSecure -and
-        [Uri]::TryCreate([string]$productionSettings.App.WebBaseUrl, [UriKind]::Absolute, [ref]$packagedOrigin) -and
-        $packagedOrigin.Scheme -eq 'http' -and !$packagedOrigin.IsLoopback
+    $needsInsecureCookies = $false
+    if (!$productionSettings.App.CookieSecure) {
+        foreach ($candidate in @([string]$productionSettings.App.WebBaseUrl) + @(Get-AdditionalWebOrigins $productionSettings)) {
+            $packagedOrigin = $null
+            if ([Uri]::TryCreate($candidate, [UriKind]::Absolute, [ref]$packagedOrigin) -and
+                $packagedOrigin.Scheme -eq 'http' -and !$packagedOrigin.IsLoopback) { $needsInsecureCookies = $true }
+        }
+    }
     if ($needsInsecureCookies -and !$AllowInsecurePrivateConfiguration) {
         throw 'Insecure cookies for a non-loopback HTTP origin require -AllowInsecurePrivateConfiguration.'
     }
@@ -559,6 +579,7 @@ if ($packagedSettings.App.ConnectionString -ne $productionSettings.App.Connectio
     $packagedSettings.App.BootstrapPassword -ne $productionSettings.App.BootstrapPassword -or
     $packagedSettings.App.StorageRoot -ne $productionSettings.App.StorageRoot -or
     $packagedSettings.App.WebBaseUrl -ne $productionSettings.App.WebBaseUrl -or
+    ((Get-AdditionalWebOrigins $packagedSettings) -join ',') -ne ((Get-AdditionalWebOrigins $productionSettings) -join ',') -or
     $packagedSettings.App.OemStorageRoot -ne $productionSettings.App.OemStorageRoot) {
     throw 'Packaged appsettings.Production.json does not match the selected configuration mode.'
 }

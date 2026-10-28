@@ -19,14 +19,14 @@ public static class IdentityModule
         var auth = endpoints.MapGroup("/api/v1/auth");
         auth.MapPost("/login", async (LoginRequest request, HttpContext ctx, IdentityService service, AppOptions options, CancellationToken ct) =>
         {
-            if (!OriginAllowed(ctx.Request, options.WebBaseUrl)) throw ApiException.Forbidden();
+            if (!OriginAllowed(ctx.Request, options.AllowedWebOrigins)) throw ApiException.Forbidden();
             var result = await service.LoginAsync(request, ClientIp.Resolve(ctx, options), ct);
             SetRefreshCookie(ctx, result.Refresh, result.RefreshExpiresAt, options);
             return result.Response;
         });
         auth.MapPost("/refresh", async (HttpContext ctx, IdentityService service, AppOptions options, CancellationToken ct) =>
         {
-            if (!OriginAllowed(ctx.Request, options.WebBaseUrl)) throw ApiException.Forbidden();
+            if (!OriginAllowed(ctx.Request, options.AllowedWebOrigins)) throw ApiException.Forbidden();
             if (!ctx.Request.Cookies.TryGetValue(RefreshCookie, out var raw)) throw ApiException.Unauthorized("缺少登录凭证");
             var result = await service.RefreshAsync(raw, ClientIp.Resolve(ctx, options), ct);
             SetRefreshCookie(ctx, result.Refresh, result.RefreshExpiresAt, options);
@@ -34,7 +34,7 @@ public static class IdentityModule
         });
         auth.MapPost("/logout", async (HttpContext ctx, IdentityService service, AppOptions options, CancellationToken ct) =>
         {
-            if (!OriginAllowed(ctx.Request, options.WebBaseUrl)) throw ApiException.Forbidden();
+            if (!OriginAllowed(ctx.Request, options.AllowedWebOrigins)) throw ApiException.Forbidden();
             ctx.Request.Cookies.TryGetValue(RefreshCookie, out var refresh);
             await service.LogoutAsync(refresh, ctx.Request.Headers.Authorization.ToString(), ClientIp.Resolve(ctx, options), ct);
             ctx.Response.Cookies.Delete(RefreshCookie, new CookieOptions { HttpOnly = true, Path = "/api/v1/auth", Secure = options.CookieSecure, SameSite = SameSiteMode.Strict });
@@ -74,16 +74,16 @@ public static class IdentityModule
         return remaining <= TimeSpan.FromDays(refreshTtlDays) ? remaining : TimeSpan.FromDays(refreshTtlDays);
     }
 
-    internal static bool OriginAllowed(string origin, string configured)
+    internal static bool OriginAllowed(string origin, IReadOnlyCollection<string> allowedOrigins)
     {
         if (string.IsNullOrEmpty(origin)) return true;
-        return Uri.TryCreate(configured, UriKind.Absolute, out var uri) && origin == uri.GetLeftPart(UriPartial.Authority);
+        return allowedOrigins.Contains(origin, StringComparer.Ordinal);
     }
 
-    internal static bool OriginAllowed(HttpRequest request, string configured)
+    internal static bool OriginAllowed(HttpRequest request, IReadOnlyCollection<string> allowedOrigins)
     {
         var origin = request.Headers.Origin.ToString();
-        if (!string.IsNullOrEmpty(origin)) return OriginAllowed(origin, configured);
+        if (!string.IsNullOrEmpty(origin)) return OriginAllowed(origin, allowedOrigins);
         return !string.Equals(request.Headers["Sec-Fetch-Site"].ToString(), "cross-site", StringComparison.OrdinalIgnoreCase);
     }
 }

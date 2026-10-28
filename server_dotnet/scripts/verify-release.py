@@ -188,12 +188,22 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
             raise RuntimeError("Packaged WebBaseUrl is not the real site origin")
         if (origin.scheme == "http") == bool(settings.get("CookieSecure")):
             raise RuntimeError("Packaged CookieSecure does not match the site scheme")
+        extra_origins = settings.get("AdditionalWebOrigins", [])
+        if not isinstance(extra_origins, list) or not all(isinstance(value, str) for value in extra_origins):
+            raise RuntimeError("Packaged AdditionalWebOrigins must be a list of strings")
+        origins = [origin]
+        for value in extra_origins:
+            extra = urlparse(value)
+            if (extra.scheme != origin.scheme or not extra.hostname or extra.path not in ("", "/")
+                    or extra.params or extra.query or extra.fragment or extra.username):
+                raise RuntimeError("Packaged AdditionalWebOrigins must be origins with the WebBaseUrl scheme")
+            origins.append(extra)
         insecure_cookies = settings.get("AllowInsecureCookies", False)
         if not isinstance(insecure_cookies, bool):
             raise RuntimeError("Packaged AllowInsecureCookies must be a boolean")
-        loopback_http = origin.scheme == "http" and (
-            origin.hostname == "localhost" or origin.hostname == "::1" or origin.hostname.startswith("127."))
-        if insecure_cookies != (origin.scheme == "http" and not loopback_http):
+        all_loopback = all(
+            item.hostname == "localhost" or item.hostname == "::1" or item.hostname.startswith("127.") for item in origins)
+        if insecure_cookies != (origin.scheme == "http" and not all_loopback):
             raise RuntimeError("Packaged AllowInsecureCookies must be set only for a non-loopback HTTP origin")
         if not legacy_private_configuration and (
                 configuration.get("insecureCookies", False) is not insecure_cookies

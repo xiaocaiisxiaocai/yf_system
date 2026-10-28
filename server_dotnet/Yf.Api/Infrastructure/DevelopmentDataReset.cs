@@ -86,7 +86,7 @@ internal static class DevelopmentDataReset
     {
         options.Validate();
         var db = new MySqlConnectionStringBuilder(options.ConnectionString);
-        if (db.Server is not ("127.0.0.1" or "localhost" or "::1") || !new Uri(options.WebBaseUrl).IsLoopback)
+        if (db.Server is not ("127.0.0.1" or "localhost" or "::1") || !options.AllowedWebOrigins.All(origin => new Uri(origin).IsLoopback))
             throw new InvalidOperationException("Development reset requires a loopback database and loopback website.");
         if (string.IsNullOrWhiteSpace(db.Database)) throw new InvalidOperationException("Database name is required.");
         var root = Path.GetFullPath(options.StorageRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

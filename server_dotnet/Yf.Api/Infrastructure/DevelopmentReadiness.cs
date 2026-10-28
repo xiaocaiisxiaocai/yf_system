@@ -126,7 +126,7 @@ internal static class DevelopmentReadiness
             var database = new MySqlConnectionStringBuilder(options.ConnectionString);
             var databaseIsLoopback = database.Server.Equals("localhost", StringComparison.OrdinalIgnoreCase)
                 || IPAddress.TryParse(database.Server, out var address) && IPAddress.IsLoopback(address);
-            return databaseIsLoopback && new Uri(options.WebBaseUrl).IsLoopback;
+            return databaseIsLoopback && options.AllowedWebOrigins.All(origin => new Uri(origin).IsLoopback);
         }
         catch
         {

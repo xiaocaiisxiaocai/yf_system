@@ -535,15 +535,15 @@ public sealed class FileService(
     {
         var fetchSite = request.Headers["Sec-Fetch-Site"].ToString();
         var originText = request.Headers.Origin.ToString();
-        if (!IsSameOriginRequest(originText, fetchSite, options.WebBaseUrl))
+        if (!IsSameOriginRequest(originText, fetchSite, options.AllowedWebOrigins))
             throw ApiException.Forbidden("下载请求必须来自当前站点");
     }
 
-    internal static bool IsSameOriginRequest(string origin, string fetchSite, string configuredOrigin)
+    internal static bool IsSameOriginRequest(string origin, string fetchSite, IReadOnlyCollection<string> allowedOrigins)
     {
         if (fetchSite.Equals("cross-site", StringComparison.OrdinalIgnoreCase)) return false;
         if (!string.IsNullOrWhiteSpace(origin))
-            return IdentityModule.OriginAllowed(origin, configuredOrigin);
+            return IdentityModule.OriginAllowed(origin, allowedOrigins);
         return true;
     }
 
