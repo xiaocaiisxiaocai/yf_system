@@ -52,8 +52,8 @@
     "jsdom": "30.1.1",
     "oxlint": "^1.79.0",
     "typescript": "~6.0.2",
-    "vite": "^8.2.2",
-    "vitest": "5.0.1"
+    "vite": "^8.2.4",
+    "vitest": "5.0.5"
   },
   "yfDependencyPolicy": {
     "bundledPreviewRuntimeDependencies": ["dayjs", "exceljs", "lodash", "pako", "pptx-preview", "tinycolor2", "xlsx"],
