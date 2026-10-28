@@ -9,6 +9,6 @@
 .oem-account-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (max-width: 480px) {
-  .oem-shell .layout-logo > span, .oem-shell .oem-return-label { display: none; }
+  .oem-shell .layout-logo > span { display: none; }
   .oem-shell .layout-header-account { max-width: 60%; }
 }

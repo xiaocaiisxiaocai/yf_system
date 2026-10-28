@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Avatar, Button, Drawer, Dropdown, Layout, Menu, Result, Space, Spin } from '@arco-design/web-react'
 import {
-  IconApps, IconBranch, IconCheckCircle, IconDown, IconFile, IconHistory, IconLeft, IconPoweroff, IconSafe, IconSettings,
+  IconBranch, IconCheckCircle, IconDown, IconFile, IconHistory, IconPoweroff, IconSafe, IconSettings,
   IconMenu, IconStorage, IconUserGroup,
 } from '@arco-design/web-react/icon'
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
@@ -16,13 +16,16 @@ import {
 } from '../api/portalSession'
 import { oemHome } from '../oemNavigation'
 import { OemProvider } from '../OemContext'
+import AppRail, { type BusinessLine } from '../../layouts/AppRail'
 import './OemLayouts.css'
 
 const { Header, Sider, Content } = Layout
 
 interface MenuEntry { path: string; label: string; icon: ReactNode; visible: boolean }
 
-function Shell({ title, subtitle, menu, account }: { title: string; subtitle?: string; menu: MenuEntry[]; account: ReactNode }) {
+function Shell({ title, subtitle, menu, account, line }: {
+  title: string; subtitle?: string; menu: MenuEntry[]; account: ReactNode; line?: BusinessLine
+}) {
   const navigate = useNavigate()
   const location = useLocation()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -51,6 +54,7 @@ function Shell({ title, subtitle, menu, account }: { title: string; subtitle?: s
         <div className="layout-header-account">{account}</div>
       </Header>
       <Layout className="layout-main">
+        {line && <AppRail active={line} />}
         <Sider className="layout-sider" width={200} theme="dark">
           {menuContent()}
         </Sider>
@@ -60,6 +64,7 @@ function Shell({ title, subtitle, menu, account }: { title: string; subtitle?: s
         <div className="drawer-brand"><img className="drawer-logo" src="/saa-logo.svg" alt="SAA" /><span>{title}</span></div>
       )} placement="left" width={240} visible={mobileMenuOpen} footer={null} unmountOnExit focusLock autoFocus
         onCancel={() => setMobileMenuOpen(false)} afterClose={() => mobileMenuTrigger.current?.focus({ preventScroll: true })}>
+        {line && <AppRail active={line} variant="drawer" onNavigate={() => setMobileMenuOpen(false)} />}
         {menuContent(true)}
       </Drawer>}
     </Layout>
@@ -96,12 +101,11 @@ export function OemInternalLayout() {
     { path: '/oem/admin/settings', label: '文件策略与提醒', icon: <IconSettings />, visible: has('oem:file_policy_manage') || has('oem:notify_manage') },
     { path: '/oem/admin/audit', label: 'OEM 审计日志', icon: <IconHistory />, visible: has('oem:audit_view') },
   ]
-  if (!menu.some((item) => item.visible)) return <Result status="403" title="没有 OEM 文件传递权限" extra={<Button onClick={() => navigate('/')}>返回</Button>} />
+  if (!menu.some((item) => item.visible)) return <Result status="403" title="没有 ODM/OEM 文件传递权限" extra={<Button onClick={() => navigate('/')}>返回</Button>} />
   return (
     <OemProvider value={{ api: internalApi, realm: 'internal', base: '/oem', permissions: set, userId: user?.id ?? null, queryScope: ['internal', ...sessionScope] }}>
-      <Shell title="OEM 文件传递" menu={menu} account={
+      <Shell title="ODM/OEM 文件传递" menu={menu} line="oem" account={
         <Space>
-          <Button type="text" icon={<IconLeft />} aria-label="返回协作平台" title="返回协作平台" style={{ color: 'inherit' }} onClick={() => navigate('/')}><span className="oem-return-label">返回协作平台</span></Button>
           <span className="oem-account">
             <Avatar size={28} className="oem-account-avatar">{user?.realName?.slice(0, 1)}</Avatar>
             <span className="oem-account-name" title={user?.realName}>{user?.realName}</span>
@@ -109,22 +113,6 @@ export function OemInternalLayout() {
         </Space>
       } />
     </OemProvider>
-  )
-}
-
-/** Entry shown in the collaboration header only for staff holding any OEM permission. */
-export function OemEntryButton() {
-  const permissions = useAuth((state) => state.permissions)
-  const userType = useAuth((state) => state.user?.userType)
-  const navigate = useNavigate()
-  const first = oemHome(permissions)
-  if (userType !== 'INTERNAL' || !first) return null
-  // Collapses to its icon on narrow screens (see collaboration.css); the label stays accessible.
-  return (
-    <Button className="oem-entry-button" type="text" icon={<IconApps />} style={{ color: 'inherit' }}
-      aria-label="OEM 文件传递" title="OEM 文件传递" onClick={() => navigate(first)}>
-      <span className="oem-entry-label">OEM 文件传递</span>
-    </Button>
   )
 }
 
@@ -156,7 +144,7 @@ export function PortalLayout() {
   return (
     <QueryClientProvider client={portalQueryClient}>
       <OemProvider value={oemValue}>
-        <Shell title="OEM 文件传递" subtitle={account?.companyName} menu={[
+        <Shell title="ODM/OEM 文件传递" subtitle={account?.companyName} menu={[
           { path: `${PORTAL_BASE}/transfers`, label: '文件传递单', icon: <IconFile />, visible: true },
         ]} account={
           <Dropdown trigger="click" droplist={

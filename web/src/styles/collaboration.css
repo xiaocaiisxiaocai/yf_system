@@ -18,8 +18,6 @@
 
 @media (max-width: 480px) {
   .layout-header .layout-logo > span { display: none; }
-  .layout-header .oem-entry-button { padding: 0 8px; }
-  .layout-header .oem-entry-label { display: none; }
 }
 
 .collaboration-poll-status {

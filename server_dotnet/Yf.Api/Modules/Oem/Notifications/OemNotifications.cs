@@ -197,10 +197,10 @@ public sealed class OemNotificationHandler(AppOptions options) : IOemEventHandle
         if (!string.IsNullOrWhiteSpace(reason)) lines.Add($"说明：{reason}");
         // Vendors use their own portal; internal staff use the OEM section of the company site.
         var area = recipient.Realm == OemRealms.Oem ? "oem-portal" : "oem";
-        lines.AddRange([string.Empty, $"请登录 OEM 文件传递平台查看：{options.WebBaseUrl.TrimEnd('/')}/{area}/transfers/{transfer.Id}", string.Empty,
+        lines.AddRange([string.Empty, $"请登录 ODM/OEM 文件传递平台查看：{options.WebBaseUrl.TrimEnd('/')}/{area}/transfers/{transfer.Id}", string.Empty,
             "此邮件由系统自动发送，请勿直接回复。"]);
         var body = string.Join("\n", lines);
-        var fullSubject = Truncate("[OEM 文件传递] " + subject, 255);
+        var fullSubject = Truncate("[ODM/OEM 文件传递] " + subject, 255);
         var key = Truncate(dedupeKey, 128);
         // Idempotent enqueue (a documented raw-SQL boundary): a repeated event never mails twice.
         // Only a dedupe-key conflict is ignored; unlike INSERT IGNORE, truncation or other data

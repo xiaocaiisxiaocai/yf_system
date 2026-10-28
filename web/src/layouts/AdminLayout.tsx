@@ -23,8 +23,7 @@ import http, { withAuthLock, type QuietRequestConfig } from '../api/client'
 import CollaborationNotifications from '../components/CollaborationNotifications'
 import RouteErrorBoundary from '../components/RouteErrorBoundary'
 import type { ApiResponses } from '../api/types'
-import { OemEntryButton } from '../oem/layouts/OemLayouts'
-import { OEM_UI_ENABLED } from '../features'
+import AppRail from './AppRail'
 
 const { Sider, Header, Content } = Layout
 
@@ -152,7 +151,6 @@ export default function AdminLayout() {
           <span>供应商协作平台</span>
         </div>
         <div className="layout-header-account">
-          {OEM_UI_ENABLED && <OemEntryButton />}
           {canUseCollaboration && <CollaborationNotifications key={`${generation}:${user?.id}`} />}
           <Dropdown
             trigger="click"
@@ -185,6 +183,7 @@ export default function AdminLayout() {
         </div>
       </Header>
       <Layout className="layout-main">
+        <AppRail active="collaboration" />
         {hasMenus && <Sider
           className={`layout-sider${siderCollapsed ? ' layout-sider--collapsed' : ''}`}
           width={200}
@@ -231,6 +230,7 @@ export default function AdminLayout() {
         unmountOnExit
         onCancel={() => setMobileMenuOpen(false)}
       >
+        <AppRail active="collaboration" variant="drawer" onNavigate={() => setMobileMenuOpen(false)} />
         {menu(true)}
       </Drawer>}
     </Layout>

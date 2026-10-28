@@ -8,7 +8,7 @@ import { confirmPasswordRule, passwordRule } from '../../../utils/password'
 import type { ApiResponses } from '../../api/types'
 import { bootPortalSession, portalHttp, portalLogin, PORTAL_BASE, usePortalAuth, usePortalSessionSync } from '../../api/portalSession'
 
-const OEM_BRAND = 'OEM 文件传递'
+const OEM_BRAND = 'ODM/OEM 文件传递'
 
 export function PortalLoginPage() {
   usePortalSessionSync()
