@@ -14,3 +14,6 @@
 }
 
 .oem-menu-divider { height: 1px; margin: 6px 8px 12px; background: rgb(255 255 255 / 10%); }
+.oem-flow-nodes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.oem-flow-arrow { color: var(--color-text-3); }
+.oem-flow-node--skipped { color: var(--color-text-3); }

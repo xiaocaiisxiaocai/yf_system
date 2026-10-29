@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import {
   Alert, Button, Card, Checkbox, Empty, Form, Input, Message, Modal, Select, Space, Spin, Switch, Tag, Tooltip, TreeSelect, Typography,
 } from '@arco-design/web-react'
@@ -130,7 +130,8 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
         {nodes.map((node, index) => (
           <Card key={node.key} size="small" title={`节点 ${index + 1}`} extra={
             <Space>
-              <Switch size="small" checked={node.enabled} onChange={(enabled) => patch(node.key, { enabled })} />
+              <Switch checked={node.enabled} checkedText="启用" uncheckedText="跳过" aria-label={`节点 ${index + 1} 启用`}
+                onChange={(enabled) => patch(node.key, { enabled })} />
               <Tooltip content="删除节点"><Button size="mini" type="text" status="danger" icon={<IconDelete />} aria-label={`删除节点 ${index + 1}`} disabled={nodes.length === 1} onClick={() => setNodes((list) => list.filter((item) => item.key !== node.key))} /></Tooltip>
             </Space>
           }>
@@ -238,10 +239,7 @@ export default function FlowTemplatesPage() {
     <div>
       <Card title={<h1 className="visually-hidden">审批模板</h1>}>
         <div className="page-toolbar responsive-toolbar">
-          <Space wrap>
-            {switcher}
-            <Typography.Text type="secondary">事业部、部门和课别主管统一在协作平台的“组织架构”中维护。</Typography.Text>
-          </Space>
+          <Space wrap>{switcher}</Space>
           <Button type="primary" icon={<IconPlus />} onClick={() => setEditing('new')}>新建模板</Button>
         </div>
         {error && (
@@ -254,9 +252,19 @@ export default function FlowTemplatesPage() {
           {templates.map((template) => (
             <Card key={template.id} size="small" hoverable onClick={() => setEditing(template)} title={
               <Space>{template.name}{template.isDefault && <Tag color="arcoblue">默认</Tag>}
-                {template.status !== 'ACTIVE' && <Tag>已停用</Tag>}</Space>
+                {template.status === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag>已停用</Tag>}</Space>
             }>
-              <div>节点：{template.nodes.map((node) => `${node.name}${node.enabled ? '' : '（关闭）'}`).join(' → ')}</div>
+              <div className="oem-flow-nodes">
+                <span>节点：</span>
+                {template.nodes.map((node, index) => (
+                  <Fragment key={node.sortNo}>
+                    {index > 0 && <span className="oem-flow-arrow">→</span>}
+                    {node.enabled
+                      ? <Tag color="arcoblue">{node.name}</Tag>
+                      : <Tag className="oem-flow-node--skipped">{node.name} · 跳过</Tag>}
+                  </Fragment>
+                ))}
+              </div>
               <div>适用组织：{template.scopes.length ? template.scopes.map((scope) => scope.name).join('、') : '-'}</div>
               {template.nodes.some((node) => [...node.approvers, ...node.fallbacks].some((person) => !person.eligible)) && (
                 <Alert type="warning" style={{ marginTop: 8 }} content="有审批人已停用或失去 OEM 审批权限，相关发送会失败，请调整。" />
