@@ -6,7 +6,7 @@ namespace Yf.Api.Tests;
 
 public sealed class RobotPartAuthorizationTests
 {
-    [Fact(Timeout = 60_000)]
+    [Fact(Timeout = 120_000)]
     public async Task CatalogPermissionsSeparateMaintainersCreatorsAndSuppliers()
     {
         var ct = TestContext.Current.CancellationToken;

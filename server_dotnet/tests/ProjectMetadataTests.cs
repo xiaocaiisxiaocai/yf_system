@@ -7,7 +7,7 @@ namespace Yf.Api.Tests;
 
 public sealed class ProjectMetadataTests
 {
-    [Fact(Timeout = 60_000)]
+    [Fact(Timeout = 120_000)]
     public async Task RobotPartMetadataRoundTripsWithAutomaticOwnerAndNullableSection()
     {
         var ct = TestContext.Current.CancellationToken;

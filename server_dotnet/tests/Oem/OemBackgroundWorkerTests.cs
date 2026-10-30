@@ -89,23 +89,26 @@ public sealed class OemBackgroundWorkerTests
     public async Task ConsecutiveFailuresBackOffAndASuccessResetsTheInterval()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        // Fails four times, then succeeds: delays 40 + 80 + 160 + 320 ms before the 5th run,
-        // then the plain interval again.
-        var job = new FlakyJob(TimeSpan.FromMilliseconds(20), failures: 4);
-        using var worker = Create(job);
+        // Fails four times, then succeeds. The worker's requested delays are recorded instead of
+        // measured on the wall clock, so a loaded test host cannot make the check flaky.
+        var interval = TimeSpan.FromMilliseconds(20);
+        var job = new FlakyJob(interval, failures: 4);
+        var time = new RecordingTimeProvider();
+        using var worker = new OemBackgroundWorker([job], new AppOptions { WorkerEnabled = true },
+            NullLogger<OemBackgroundWorker>.Instance, time);
 
         await worker.StartAsync(timeout.Token);
         try
         {
             await job.RunReached(7).WaitAsync(timeout.Token);
-            var backedOff = job.TimeOf(5) - job.TimeOf(1);
-            Assert.True(backedOff >= TimeSpan.FromMilliseconds(550), $"5th run after {backedOff.TotalMilliseconds} ms; failures did not back off");
-            Assert.True(job.TimeOf(7) - job.TimeOf(5) < TimeSpan.FromMilliseconds(400), "the interval was not reset after a success");
         }
         finally
         {
             await worker.StopAsync(timeout.Token);
         }
+        Assert.Equal(
+            new[] { 40, 80, 160, 320, 20, 20 }.Select(ms => TimeSpan.FromMilliseconds(ms)),
+            time.Delays.Take(6));
     }
 
     [Fact]
@@ -198,19 +201,25 @@ public sealed class OemBackgroundWorkerTests
         }
     }
 
+    /// <summary>Records every delay the worker asks for and still runs it on the real clock.</summary>
+    private sealed class RecordingTimeProvider : TimeProvider
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<TimeSpan> delays = new();
+        public IReadOnlyCollection<TimeSpan> Delays => delays.ToArray();
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            if (dueTime != Timeout.InfiniteTimeSpan) delays.Enqueue(dueTime);
+            return System.CreateTimer(callback, state, dueTime, period);
+        }
+    }
+
     private sealed class FlakyJob(TimeSpan interval, int failures) : IOemBackgroundJob
     {
-        private readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
         private readonly Dictionary<int, TaskCompletionSource> reached = [];
         private int runCount;
         public string Name => "flaky";
         public TimeSpan Interval => interval;
-        private readonly List<TimeSpan> times = [];
-
-        public TimeSpan TimeOf(int run)
-        {
-            lock (reached) return times[run - 1];
-        }
 
         public Task RunReached(int run)
         {
@@ -228,7 +237,6 @@ public sealed class OemBackgroundWorkerTests
             var run = Interlocked.Increment(ref runCount);
             lock (reached)
             {
-                times.Add(clock.Elapsed);
                 if (reached.TryGetValue(run, out var source)) source.TrySetResult();
                 else reached[run] = CompletedSource();
             }

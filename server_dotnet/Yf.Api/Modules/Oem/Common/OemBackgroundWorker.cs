@@ -27,9 +27,11 @@ public sealed class DelegateOemJob(string name, TimeSpan interval, Func<Cancella
 /// exponential backoff (reset after a success) without affecting the others. Correctness never depends on this
 /// process being the only one: every job claims its rows with database leases.
 /// </summary>
-public sealed class OemBackgroundWorker(IEnumerable<IOemBackgroundJob> jobs, AppOptions options, ILogger<OemBackgroundWorker> logger) : BackgroundService
+public sealed class OemBackgroundWorker(IEnumerable<IOemBackgroundJob> jobs, AppOptions options, ILogger<OemBackgroundWorker> logger,
+    TimeProvider? timeProvider = null) : BackgroundService
 {
     private readonly IOemBackgroundJob[] jobs = jobs.ToArray();
+    private readonly TimeProvider time = timeProvider ?? TimeProvider.System;
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -62,7 +64,7 @@ public sealed class OemBackgroundWorker(IEnumerable<IOemBackgroundJob> jobs, App
                     job.Name, consecutiveFailures, RetryDelay(job.Interval, consecutiveFailures));
             }
 
-            try { await Task.Delay(RetryDelay(job.Interval, consecutiveFailures), stoppingToken); }
+            try { await Task.Delay(RetryDelay(job.Interval, consecutiveFailures), time, stoppingToken); }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
         }
     }
