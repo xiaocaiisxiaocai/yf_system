@@ -591,56 +591,63 @@ public sealed class FilesRecoveryTests
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task InternalUploadsRequireStepMaterial()
+    public async Task InternalUploadsRequireWorkbookAndStepOrArchiveMaterial()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
-        await using (var connection = await scope.Database.OpenAsync(ct))
+        await scope.ExecuteAsync("""
+            UPDATE system_configs SET cfg_value='bin,step,stp,zip,rar,7z,xlsx,xls,xlsm,xlsb' WHERE cfg_key='upload.allowed_exts';
+            UPDATE files SET status='DELETED', deleted_at=UTC_TIMESTAMP(6) WHERE id IN (900,901);
+            """, ct);
+
+        // 必需资料本身（Excel、STEP、压缩文件）可以先建立会话；其它文件要等两类资料都具备。
+        var notes = UploadRequest("notes.bin", [6]);
+        var none = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(FilesDatabaseScope.Context(), notes, ct));
+        Assert.Equal(UploadMaterialRules.MaterialRequiredMessage, none.Message);
+        var workbook = await scope.Upload.InitAsync(FilesDatabaseScope.Context(),
+            UploadRequest("CSLR-605 六軸雙工位放板機 2105931-1 動作流程.xlsx", [2]), ct);
+        var workbookOnly = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(FilesDatabaseScope.Context(), notes, ct));
+        Assert.Equal(UploadMaterialRules.MaterialRequiredMessage, workbookOnly.Message);
+
+        // 同一批次：Excel 与 STEP 或压缩文件的会话都建立后，其余资料即可并发初始化。
+        byte fill = 10;
+        foreach (var model in new[] { "CSLR-605 放板機2105931-1.STEP", "assembly.stp", "models.zip", "models.RAR", "models.7z" })
         {
-            await connection.ExecuteAsync(new CommandDefinition("""
-                UPDATE system_configs SET cfg_value='bin,step,stp,xlsx,xls,xlsm,xlsb' WHERE cfg_key='upload.allowed_exts';
-                UPDATE files SET status='DELETED', deleted_at=UTC_TIMESTAMP(6) WHERE id=900;
-                """, cancellationToken: ct));
+            var modelSession = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest(model, [fill++]), ct);
+            var accepted = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), notes, ct);
+            Assert.NotNull(accepted.SessionId);
+            await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), accepted.SessionId!, ct);
+            await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), modelSession.SessionId!, ct);
         }
 
-        var workbook = UploadRequest("CSLR-605 六軸雙工位放板機 2105931-1 動作流程.xlsx", [2]);
-        var noStep = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(FilesDatabaseScope.Context(), workbook, ct));
-        Assert.Equal(UploadMaterialRules.StepRequiredMessage, noStep.Message);
-        var plainWorkbook = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("动作流程.xlsx", [3]), ct));
-        Assert.Equal(UploadMaterialRules.StepRequiredMessage, plainWorkbook.Message);
+        // 只有 3D 资料、没有 Excel 时，其它文件仍被拒绝；各种 Excel 扩展名都计入。
+        var modelOnly = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("models.7z", [fill++]), ct);
+        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), workbook.SessionId!, ct);
+        var noWorkbook = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(FilesDatabaseScope.Context(), notes, ct));
+        Assert.Equal(UploadMaterialRules.MaterialRequiredMessage, noWorkbook.Message);
         foreach (var extension in new[] { "xls", "xlsm", "xlsb" })
         {
-            var rejected = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(
-                FilesDatabaseScope.Context(), UploadRequest($"动作流程.{extension}", [4]), ct));
-            Assert.Equal(UploadMaterialRules.StepRequiredMessage, rejected.Message);
+            var other = await scope.Upload.InitAsync(FilesDatabaseScope.Context(),
+                UploadRequest($"动作流程.{extension.ToUpperInvariant()}", [fill++]), ct);
+            var accepted = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), notes, ct);
+            await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), accepted.SessionId!, ct);
+            await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), other.SessionId!, ct);
         }
+        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), modelOnly.SessionId!, ct);
 
-        // 同一批次里 STEP 会话先建立后，其余资料即可并发初始化；STEP 会话中止后恢复限制。
-        var step = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("CSLR-605 放板機2105931-1.STEP", [5]), ct);
-        var accepted = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), workbook, ct);
-        Assert.NotNull(accepted.SessionId);
-        foreach (var extension in new[] { "xls", "xlsm", "xlsb" })
-            Assert.NotNull((await scope.Upload.InitAsync(FilesDatabaseScope.Context(),
-                UploadRequest($"CSLR-605 放板機 2105931-1 動作流程.{extension.ToUpperInvariant()}", [7]), ct)).SessionId);
-        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), step.SessionId!, ct);
-        await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("notes.bin", [6]), ct));
-
-        await using (var connection = await scope.Database.OpenAsync(ct))
-        {
-            await connection.ExecuteAsync(new CommandDefinition(
-                "UPDATE files SET status='AVAILABLE', deleted_at=NULL WHERE id=900", cancellationToken: ct));
-        }
-        Assert.NotNull((await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("notes.bin", [6]), ct)).SessionId);
+        // 已合并的 Excel 与 STEP 文件满足规则；只剩其中一类时仍拒绝。
+        await scope.ExecuteAsync("UPDATE files SET status='AVAILABLE', deleted_at=NULL WHERE id=900", ct);
+        await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(FilesDatabaseScope.Context(), notes, ct));
+        await scope.ExecuteAsync("UPDATE files SET status='AVAILABLE', deleted_at=NULL WHERE id=901", ct);
+        Assert.NotNull((await scope.Upload.InitAsync(FilesDatabaseScope.Context(), notes, ct)).SessionId);
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task MergeRechecksStepMaterialAndKeepsRejectedSessionResumable()
+    public async Task MergeRechecksMaterialAndKeepsRejectedSessionResumable()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
-        await scope.ExecuteAsync("UPDATE system_configs SET cfg_value='bin,step' WHERE cfg_key='upload.allowed_exts'", ct);
+        await scope.ExecuteAsync("UPDATE system_configs SET cfg_value='bin,step,xlsx' WHERE cfg_key='upload.allowed_exts'", ct);
         var payload = new byte[] { 42 };
         var initialized = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("notes.bin", payload), ct);
         using (var body = new MemoryStream(payload))
@@ -648,27 +655,27 @@ public sealed class FilesRecoveryTests
         await scope.Upload.SubmitMd5Async(FilesDatabaseScope.Context(), initialized.SessionId,
             new SubmitUploadMd5Request(Md5Hex(payload)), ct);
 
-        // The STEP file that satisfied the rule at init is gone by merge time.
-        await scope.ExecuteAsync("UPDATE files SET status='DELETED', deleted_at=UTC_TIMESTAMP(6) WHERE id=900", ct);
+        // The workbook that satisfied the rule at init is gone by merge time.
+        await scope.ExecuteAsync("UPDATE files SET status='DELETED', deleted_at=UTC_TIMESTAMP(6) WHERE id=901", ct);
         var rejected = await Assert.ThrowsAsync<ApiException>(() =>
             scope.Upload.MergeAsync(FilesDatabaseScope.Context(), initialized.SessionId, ct));
         Assert.Equal(400, rejected.Status);
-        Assert.Equal(UploadMaterialRules.StepRequiredMessage, rejected.Message);
+        Assert.Equal(UploadMaterialRules.MaterialRequiredMessage, rejected.Message);
         Assert.Equal("UPLOADING", await scope.StatusAsync(initialized.SessionId));
         Assert.Equal(payload, await File.ReadAllBytesAsync(
             FileStorage.ChunkPath(scope.StorageRoot, initialized.SessionId, 0), ct));
 
-        // An in-flight STEP session admits a same-batch file at init only: it may still be cancelled or
-        // expire, so merge keeps rejecting until a STEP file is actually available.
-        var step = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("assembly.step", [43]), ct);
+        // An in-flight workbook session admits a same-batch file at init only: it may still be cancelled or
+        // expire, so merge keeps rejecting until a workbook is actually available.
+        var workbook = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("动作流程.xlsx", [43]), ct);
         var stillRejected = await Assert.ThrowsAsync<ApiException>(() =>
             scope.Upload.MergeAsync(FilesDatabaseScope.Context(), initialized.SessionId, ct));
-        Assert.Equal(UploadMaterialRules.StepRequiredMessage, stillRejected.Message);
+        Assert.Equal(UploadMaterialRules.MaterialRequiredMessage, stillRejected.Message);
         Assert.Equal("UPLOADING", await scope.StatusAsync(initialized.SessionId));
-        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), step.SessionId!, ct);
+        await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), workbook.SessionId!, ct);
 
-        // Once a STEP file is available the same session merges.
-        await scope.ExecuteAsync("UPDATE files SET status='AVAILABLE', deleted_at=NULL WHERE id=900", ct);
+        // Once both kinds of material are available the same session merges.
+        await scope.ExecuteAsync("UPDATE files SET status='AVAILABLE', deleted_at=NULL WHERE id=901", ct);
         var merged = await scope.Upload.MergeAsync(FilesDatabaseScope.Context(), initialized.SessionId, ct);
         Assert.Equal(Sha256Hex(payload), merged.Sha256);
 
@@ -687,22 +694,46 @@ public sealed class FilesRecoveryTests
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task ResumingAnExistingWorkbookSessionSkipsTheNewSessionStepCheck()
+    public async Task RequiredMaterialMergesWithoutTheOtherMaterialKind()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        await scope.ExecuteAsync("""
+            UPDATE system_configs SET cfg_value='bin,step,7z,xlsx' WHERE cfg_key='upload.allowed_exts';
+            UPDATE files SET status='DELETED', deleted_at=UTC_TIMESTAMP(6) WHERE id IN (900,901);
+            """, ct);
+        // The same-batch rule is enforced by the upload dialog; the server lets each required file merge on its own.
+        byte fill = 50;
+        foreach (var name in new[] { "models.7z", "动作流程.xlsx" })
+        {
+            var payload = new[] { fill++ };
+            var session = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest(name, payload), ct);
+            using (var body = new MemoryStream(payload))
+                await scope.Upload.PutChunkAsync(FilesDatabaseScope.ChunkContext(payload), session.SessionId, 0, body, ct);
+            await scope.Upload.SubmitMd5Async(FilesDatabaseScope.Context(), session.SessionId,
+                new SubmitUploadMd5Request(Md5Hex(payload)), ct);
+            Assert.Equal(Sha256Hex(payload), (await scope.Upload.MergeAsync(FilesDatabaseScope.Context(), session.SessionId, ct)).Sha256);
+        }
+        Assert.NotNull((await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest("notes.bin", [9]), ct)).SessionId);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ResumingAnExistingSessionSkipsTheNewSessionMaterialCheck()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
         await scope.ExecuteAsync("""
             UPDATE system_configs SET cfg_value='bin,step,xlsx' WHERE cfg_key='upload.allowed_exts';
-            UPDATE files SET status='DELETED', deleted_at=UTC_TIMESTAMP(6) WHERE id=900;
+            UPDATE files SET status='DELETED', deleted_at=UTC_TIMESTAMP(6) WHERE id IN (900,901);
             """, ct);
-        var request = UploadRequest("动作流程.xlsx", [3]);
+        var request = UploadRequest("notes.bin", [3]);
         var fresh = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct));
-        Assert.Equal(UploadMaterialRules.StepRequiredMessage, fresh.Message);
+        Assert.Equal(UploadMaterialRules.MaterialRequiredMessage, fresh.Message);
 
-        // 续传已有会话，不再按新建会话检查 STEP。
+        // 续传已有会话，不再按新建会话检查资料。
         var sessionId = Guid.NewGuid().ToString("D");
         await scope.InsertSessionAsync(sessionId, "UPLOADING", expired: false,
-            fileName: "动作流程.xlsx", fingerprint: Sha256Hex([3]));
+            fileName: "notes.bin", fingerprint: Sha256Hex([3]));
         var resumed = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), request, ct);
         Assert.True(resumed.Resumed);
         Assert.Equal(sessionId, resumed.SessionId);
@@ -1048,15 +1079,18 @@ public sealed class FilesRecoveryTests
                         INSERT INTO project_groups(id) VALUES(1);
                         INSERT INTO projects(id,project_group_id,supplier_id,created_by,status,confirm_side,name,responsible_user_id)
                             VALUES(1,1,1,1,'IN_PROGRESS',NULL,'File Test',1);
-                        -- 内部账号发给供应商的非 STEP 文件要求子项目已有 STEP 3D 图；该记录只满足资料规则，
-                        -- 其 blob 不在磁盘上，回收测试不会触及仍被引用的可用文件。
+                        -- 内部账号发给供应商的其它文件要求子项目已有 STEP 3D 图与动作流程 Excel；这两条记录只满足
+                        -- 资料规则，其 blob 不在磁盘上，回收测试不会触及仍被引用的可用文件。
                         INSERT INTO file_blobs(id,sha256,size_bytes,storage_path,state,created_at)
-                            VALUES(900,REPEAT('f',64),1,'blobs/sha256/ff/fixture-step','READY',UTC_TIMESTAMP(6));
+                            VALUES(900,REPEAT('f',64),1,'blobs/sha256/ff/fixture-step','READY',UTC_TIMESTAMP(6)),
+                                  (901,REPEAT('e',64),1,'blobs/sha256/ee/fixture-xlsx','READY',UTC_TIMESTAMP(6));
                         INSERT INTO files
                             (id,project_id,uploader_id,blob_id,direction,original_name,stored_name,ext,size_bytes,
                              storage_path,status,created_at)
                             VALUES(900,1,1,900,'C2S','fixture-assembly.step','fixture-step','step',1,
-                                   'blobs/sha256/ff/fixture-step','AVAILABLE',UTC_TIMESTAMP(6));
+                                   'blobs/sha256/ff/fixture-step','AVAILABLE',UTC_TIMESTAMP(6)),
+                                  (901,1,1,901,'C2S','fixture-motion-flow.xlsx','fixture-xlsx','xlsx',1,
+                                   'blobs/sha256/ee/fixture-xlsx','AVAILABLE',UTC_TIMESTAMP(6));
                         """, cancellationToken: ct));
                 }
                 var maintenance = new FilesMaintenanceService(

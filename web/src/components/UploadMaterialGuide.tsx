@@ -16,11 +16,11 @@ export default function UploadMaterialGuide({ direction }: { direction: UploadDi
           content={(
             <ol className="upload-material-guide-list">
               <li>
-                <b>A. STEP 格式 3D 图（必需，至少 1 个 .step/.stp）</b>：机台与 ROBOT 相关总装图，有干涉风险的机构都要在总图内，
-                如载具对接机构、输送机构、空压盒和手臂会经过的机构等。
+                <b>A. STEP 格式 3D 图（必需，.step/.stp，文件多时可打包为 .zip/.rar/.7z）</b>：机台与 ROBOT 相关总装图，
+                有干涉风险的机构都要在总图内，如载具对接机构、输送机构、空压盒和手臂会经过的机构等。
               </li>
               <li>
-                <b>B. 动作流程说明 Excel</b>：注明具体使用的手臂规格，如 15KG、25KG。
+                <b>B. 动作流程说明 Excel（必需）</b>：注明具体使用的手臂规格，如 15KG、25KG。
               </li>
             </ol>
           )}

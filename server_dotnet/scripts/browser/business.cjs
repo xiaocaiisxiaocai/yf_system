@@ -210,14 +210,15 @@ async function preview(page, name, kind, label) {
     const pdf = OUT + '/valid-preview.pdf';
     const xlsx = OUT + '/vendor-response.xlsx';
     const step = OUT + '/assembly-3d.step';
+    const motionFlow = OUT + '/motion-flow.xlsx';
     for (const key of ['a', 'b']) {
       const vendor = key === 'a' ? vendorA : vendorB;
       const project = projects[key];
       await navigate(internal, '/projects/' + project.id);
       await internal.getByRole('tab', { name: '文件', exact: true }).waitFor();
-      await record(key + ' 内部负责人同批上传STEP与PDF，供应商实际预览及下载SHA一致', async () => {
-        // STEP 必须先于同批非 STEP 文件初始化（上传资料要求契约-2026-09-24），因此首个合并的是 STEP。
-        await upload(internal, project.id, [pdf, step]);
+      await record(key + ' 内部负责人同批上传STEP、动作流程Excel与PDF，供应商实际预览及下载SHA一致', async () => {
+        // Excel 与 STEP 必须先于同批其它文件初始化（上传资料要求契约-2026-09-24），因此首个合并的是必需资料。
+        await upload(internal, project.id, [pdf, step, motionFlow]);
         const uploaded = await json(creator.context, creator.token, 'GET',
           '/projects/' + project.id + '/files?keyword=valid-preview.pdf&page=1&pageSize=10');
         assert.equal(uploaded.total, 1);

@@ -16,7 +16,6 @@ import { useCollaboration } from '../store/collaboration'
 import type { ApiResponses } from '../api/types'
 import { downloadFile, downloadFiles } from '../api/download'
 import { PreviewWatermark } from './PreviewWatermark'
-import { isStepFile } from '../utils/uploadMaterialRules'
 
 // Excel 解析器仅在用户真正打开工作簿预览时按需加载
 const ExcelPreview = lazy(() => import('./ExcelPreview'))
@@ -56,25 +55,6 @@ const COMPACT_NAME_MIN_WIDTH = 120
 const COMPACT_NARROW_ACTIONS_WIDTH = 76
 
 const PDF_PREVIEW_MAX_BYTES = 50 * 1024 * 1024
-/** 文件列表接口单页上限；STEP 探测只看每个关键字的第一页。 */
-const STEP_LOOKUP_PAGE_SIZE = 100
-
-/**
- * 尽力判断子项目是否已有可用的公司发给供应商 STEP 文件，只用于隐藏上传弹窗里的提示。
- * 现有文件列表接口没有扩展名筛选，这里按文件名关键字 .step/.stp 各查第一页（最多 100 条）再按扩展名过滤；
- * 同名关键字文件极多时可能漏判，此时只是多显示一条提示，服务端在初始化与合并时仍会权威校验。
- */
-async function fetchHasCompanyStep(projectId: number, signal: AbortSignal): Promise<boolean> {
-  const pages = await Promise.all(['.step', '.stp'].map((keyword) =>
-    http.get<ApiResponses['GET /projects/{projectId}/files']>(`/projects/${projectId}/files`, {
-      params: { page: 1, pageSize: STEP_LOOKUP_PAGE_SIZE, direction: 'C2S', keyword },
-      signal,
-      quietNetworkError: true,
-    } as QuietRequestConfig)))
-  return pages.some((page) => (page.data as PageResp<FileItem>).list
-    .some((file) => file.direction === 'C2S' && isStepFile(file.originalName)))
-}
-
 /** 文档在浏览器解析；视频由授权接口按需分段播放。 */
 function previewKind(ext: string, sizeBytes = 0): 'excel' | 'pdf' | 'pptx' | 'video' | 'image' | 'none' {
   ext = ext.toLowerCase()
@@ -132,7 +112,6 @@ export default function FileTable({
   const [preview, setPreview] = useState<FileItem | null>(null)
   const [selected, setSelected] = useState<number[]>([])
   const [batchDownloading, setBatchDownloading] = useState(false)
-  const [hasCompanyStep, setHasCompanyStep] = useState(false)
   const { hasPerm, user } = useAuth()
 
   // 递增序号防止并发加载乱序：快速切换筛选时只允许最后一次请求落地
@@ -199,15 +178,6 @@ export default function FileTable({
   }
 
   const isSupplier = user?.userType === 'SUPPLIER'
-
-  useEffect(() => {
-    if (!uploadOpen || isSupplier) return
-    const controller = new AbortController()
-    fetchHasCompanyStep(projectId, controller.signal)
-      .then((found) => { if (!controller.signal.aborted) setHasCompanyStep(found) })
-      .catch(() => { if (!controller.signal.aborted) setHasCompanyStep(false) })
-    return () => controller.abort()
-  }, [isSupplier, projectId, uploadOpen])
 
   /** 供应商显式选择后，整批上传成功才提交验收。 */
   const submitAfterUpload = async () => {
@@ -415,7 +385,6 @@ export default function FileTable({
           onClose={() => setUploadOpen(false)}
           onDone={load}
           direction={isSupplier ? 'S2C' : 'C2S'}
-          hasCompanyStep={!isSupplier && hasCompanyStep}
           onSubmitForAcceptance={isSupplier && hasPerm('project:submit') && projectStatus === 'IN_PROGRESS' ? submitAfterUpload : undefined}
         />
       )}

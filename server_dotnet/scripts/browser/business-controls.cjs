@@ -95,7 +95,7 @@ async function choose(page, placeholder, optionName) {
     const defaults = await loadProjectDefaults(adminContext, adminToken, f.suppliers.a.id);
     const childControlSource = await createProjectGroup(
       adminContext, adminToken, f.suppliers.a.id, prefix + '-子项目控件', defaults);
-    const copiedFileName = prefix + '-复制源文件.zip';
+    const copiedFileName = prefix + '-复制源文件.pdf';
     const sourceOnlyMessage = '只属于复制源项目的留言-' + marker;
     await api(adminContext, 'PUT', '/projects/' + childControlSource.id + '/status',
       { status: 'IN_PROGRESS' }, adminToken);
@@ -378,7 +378,7 @@ async function choose(page, placeholder, optionName) {
       assert.equal(acceptedJob.projectGroupId, childControlSource.groupId);
       assert.equal(acceptedJob.targetName, copyName);
       assert(['pending', 'running', 'succeeded'].includes(acceptedJob.status));
-      assert.equal(acceptedJob.filesTotal, 2); // The internal-upload fixture also includes its required STEP.
+      assert.equal(acceptedJob.filesTotal, 3); // The internal-upload fixture also includes its required STEP and Excel.
       assert.equal(acceptedJob.result, null);
       const jobCard = page.locator('[data-copy-job-id="' + acceptedJob.jobId + '"]');
       await jobCard.waitFor();
@@ -386,10 +386,10 @@ async function choose(page, placeholder, optionName) {
       const copied = await waitForCopyJob(
         adminContext, adminToken, childControlSource.groupId, acceptedJob.jobId,
       );
-      assert.equal(copied.result.copyFileCount, 2);
+      assert.equal(copied.result.copyFileCount, 3);
       assert(Number.isSafeInteger(copied.result.projectId) && copied.result.projectId > 0);
       await jobCard.getByText('已完成', { exact: true }).waitFor();
-      await jobCard.getByText('已复制 2 个文件', { exact: true }).waitFor();
+      await jobCard.getByText('已复制 3 个文件', { exact: true }).waitFor();
       const jobsDrawer = page.locator('.project-copy-jobs-drawer');
       await jobsDrawer.locator('.arco-drawer-close-icon').click();
       await jobsDrawer.waitFor({ state: 'hidden' });
@@ -401,6 +401,7 @@ async function choose(page, placeholder, optionName) {
       await page.getByLabel('子项目工作区', { exact: true }).waitFor({ state: 'detached' });
       await page.getByRole('row').filter({ hasText: copiedFileName }).waitFor();
       await page.getByRole('row').filter({ hasText: 'fixture-assembly.step' }).waitFor();
+      await page.getByRole('row').filter({ hasText: 'fixture-motion-flow.xlsx' }).waitFor();
       await page.getByRole('button', { name: '查看复制履历', exact: true }).click();
       const history = page.locator('.project-copy-history-drawer');
       await history.getByRole('heading', { name: '复制来源', exact: true }).waitFor();

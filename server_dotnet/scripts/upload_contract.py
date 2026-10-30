@@ -36,13 +36,15 @@ def init_request(project_id, file_name, content, file_last_modified=FIXTURE_LAST
     }
 
 
-# 公司内部发给供应商的非 STEP 文件要求子项目已有 STEP 3D 图（上传资料要求契约-2026-09-24）。
-# 夹具默认不做任何补救：规则拒绝会原样抛出。只有显式传 ensure_step=True 的调用方（内部账号向
-# 可能还没有 STEP 的子项目上传非 STEP 夹具）才会在遇到该拒绝时先补传一个 STEP 文件再重试；
+# 公司内部发给供应商的其它文件要求子项目已有动作流程 Excel 与 STEP/压缩文件（上传资料要求契约-2026-09-24）。
+# 夹具默认不做任何补救：规则拒绝会原样抛出。只有显式传 ensure_step=True 的调用方（内部账号向可能还没有
+# 这些资料的子项目上传其它夹具）才会在遇到该拒绝时先补传一个 STEP 和一个 Excel 文件再重试；
 # 规则本身在 test_file_contracts.run_upload_material_checks 中显式验证。
-STEP_REQUIRED_MARKER = "至少需要一个 STEP 格式 3D 图"
+MATERIAL_REQUIRED_MARKER = "需要同时包含动作流程 Excel"
 COMPANY_STEP_FIXTURE_NAME = "fixture-assembly.step"
 COMPANY_STEP_FIXTURE_BYTES = b"ISO-10303-21; fixture assembly"
+COMPANY_WORKBOOK_FIXTURE_NAME = "fixture-motion-flow.xlsx"
+COMPANY_WORKBOOK_FIXTURE_BYTES = b"PK\x03\x04 fixture motion flow"
 
 
 def init_upload(client, project_id, file_name, content, file_last_modified=FIXTURE_LAST_MODIFIED,
@@ -51,9 +53,10 @@ def init_upload(client, project_id, file_name, content, file_last_modified=FIXTU
     try:
         return client.call("POST", "/api/v1/uploads/init", request)
     except AssertionError as error:
-        if not ensure_step or STEP_REQUIRED_MARKER not in str(error):
+        if not ensure_step or MATERIAL_REQUIRED_MARKER not in str(error):
             raise
     upload_bytes(client, project_id, COMPANY_STEP_FIXTURE_NAME, COMPANY_STEP_FIXTURE_BYTES)
+    upload_bytes(client, project_id, COMPANY_WORKBOOK_FIXTURE_NAME, COMPANY_WORKBOOK_FIXTURE_BYTES)
     return client.call("POST", "/api/v1/uploads/init", request)
 
 

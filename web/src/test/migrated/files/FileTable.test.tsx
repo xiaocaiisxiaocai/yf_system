@@ -31,8 +31,7 @@ vi.mock('../../../store/collaboration', () => ({
   }),
 }))
 vi.mock('../../../components/ChunkUploader', () => ({
-  default: ({ hasCompanyStep }: { hasCompanyStep?: boolean }) =>
-    <div data-testid="chunk-uploader" data-has-company-step={String(Boolean(hasCompanyStep))} />,
+  default: () => <div data-testid="chunk-uploader" />,
 }))
 vi.mock('../../../components/PdfPreview', () => ({ default: () => <div data-testid="pdf-preview" /> }))
 vi.mock('../../../components/ExcelPreview', () => ({ default: () => <div data-testid="excel-preview" /> }))
@@ -297,25 +296,5 @@ describe('FileTable DOM contracts', () => {
     await waitFor(() => expect(signals).toHaveLength(2))
     view.unmount()
     expect(signals[1].aborted).toBe(true)
-  })
-
-  it('tells the company uploader when the subproject already has a C2S STEP file', async () => {
-    mocks.permissions.add('file:upload')
-    mocks.get.mockImplementation((url: string, config: { params?: { keyword?: string } }) => {
-      if (String(url).includes('upload-sessions')) return Promise.resolve({ data: { total: 0, items: [] } })
-      return Promise.resolve(response(
-        config?.params?.keyword === '.stp' ? [row(9, 'assembly.STP', 'STP', 10)] : [row(1, 'a.pdf', 'pdf', 10)],
-      ))
-    })
-    render(<FileTable projectId={1} projectStatus="IN_PROGRESS" />)
-    await screen.findByText('a.pdf')
-    fireEvent.click(screen.getByRole('button', { name: '上传文件' }))
-
-    await waitFor(() => expect(screen.getByTestId('chunk-uploader')).toHaveAttribute('data-has-company-step', 'true'))
-    const lookups = mocks.get.mock.calls.filter(([, config]) => ['.step', '.stp'].includes(config?.params?.keyword))
-    expect(lookups.map(([, config]) => config.params)).toEqual([
-      { page: 1, pageSize: 100, direction: 'C2S', keyword: '.step' },
-      { page: 1, pageSize: 100, direction: 'C2S', keyword: '.stp' },
-    ])
   })
 })

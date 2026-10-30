@@ -20,6 +20,21 @@ public sealed class UploadMaterialRulesTests
     }
 
     [Theory]
+    [InlineData("assembly.STEP", true, false)]
+    [InlineData("assembly.step.zip", true, false)]
+    [InlineData("models.RAR", true, false)]
+    [InlineData("models.7z", true, false)]
+    [InlineData("动作流程.xlsb", false, true)]
+    [InlineData("说明.pdf", false, false)]
+    [InlineData("7z", false, false)]
+    public void ClassifiesRequiredMaterial(string name, bool model, bool spreadsheet)
+    {
+        Assert.Equal(model, UploadMaterialRules.IsModelMaterial(name));
+        Assert.Equal(spreadsheet, UploadMaterialRules.IsSpreadsheet(name));
+        Assert.Equal(model || spreadsheet, UploadMaterialRules.IsRequiredMaterial(name));
+    }
+
+    [Theory]
     [InlineData("动作流程.xls", "application/vnd.ms-excel")]
     [InlineData("动作流程.XLSX", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
     [InlineData("动作流程.xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12")]

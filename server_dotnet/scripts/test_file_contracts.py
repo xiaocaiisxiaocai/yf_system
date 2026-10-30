@@ -486,37 +486,34 @@ def run_upload_material_checks(client, conn, check, supplier_id):
     client.call("PUT", f"/api/v1/projects/{project_id}/status", {"status": "IN_PROGRESS"})
     pdf = b"%PDF-1.4\nupload material rules\n%%EOF\n"
     step = b"ISO-10303-21; upload material rules"
+    archive = b"7z\xbc\xaf\x27\x1c upload material archive"
     workbook_name = "CSLR-605 放板機 2105931-1 動作流程.xlsx"
     workbook = b"PK\x03\x04 upload material workbook"
 
-    missing_step = client.call(
+    missing = client.call(
         "POST", "/api/v1/uploads/init", init_request(project_id, "说明.pdf", pdf), expected=400)
-    plain_workbook = client.call(
-        "POST", "/api/v1/uploads/init", init_request(project_id, "动作流程.xlsx", workbook), expected=400)
-    check("company upload without any STEP 3D drawing is rejected before a session exists",
-          missing_step.get("code") == 40001 and "STEP" in missing_step["message"])
-    check("company Excel upload without STEP is rejected for the missing drawing, not the file name",
-          plain_workbook.get("code") == 40001 and "STEP" in plain_workbook["message"]
-          and "CSLR" not in plain_workbook["message"])
+    check("company upload without Excel and STEP/archive material is rejected before a session exists",
+          missing.get("code") == 40001 and "Excel" in missing["message"] and "压缩文件" in missing["message"])
 
-    step_session = client.call("POST", "/api/v1/uploads/init", init_request(project_id, "装配.step", step))
-    same_batch = client.call("POST", "/api/v1/uploads/init", init_request(project_id, workbook_name, workbook))
-    plain_after_step = client.call("POST", "/api/v1/uploads/init", init_request(project_id, "动作流程.xlsx", workbook))
-    check("an in-flight STEP session admits a same-batch workbook regardless of its name",
-          bool(step_session["sessionId"]) and bool(same_batch["sessionId"]) and bool(plain_after_step["sessionId"]))
-    _abort(client, plain_after_step["sessionId"])
-    for extension in ("xls", "xlsm", "xlsb"):
-        other = client.call("POST", "/api/v1/uploads/init",
-                            init_request(project_id, "动作流程." + extension, workbook))
-        check(f"company .{extension} workbook is accepted once a STEP session exists",
-              bool(other["sessionId"]))
-        _abort(client, other["sessionId"])
-    _abort(client, same_batch["sessionId"])
-    _abort(client, step_session["sessionId"])
+    workbook_session = client.call("POST", "/api/v1/uploads/init", init_request(project_id, workbook_name, workbook))
+    workbook_only = client.call(
+        "POST", "/api/v1/uploads/init", init_request(project_id, "说明.pdf", pdf), expected=400)
+    check("an in-flight workbook alone does not admit other company material",
+          bool(workbook_session["sessionId"]) and workbook_only.get("code") == 40001)
+    for model_name, model in (("装配.step", step), ("模型.7z", archive)):
+        model_session = client.call("POST", "/api/v1/uploads/init", init_request(project_id, model_name, model))
+        same_batch = client.call("POST", "/api/v1/uploads/init", init_request(project_id, "说明.pdf", pdf))
+        check(f"in-flight workbook and {model_name.rsplit('.', 1)[1]} sessions admit a same-batch file",
+              bool(model_session["sessionId"]) and bool(same_batch["sessionId"]))
+        _abort(client, same_batch["sessionId"])
+        _abort(client, model_session["sessionId"])
+    _abort(client, workbook_session["sessionId"])
     client.call("POST", "/api/v1/uploads/init", init_request(project_id, "说明.pdf", pdf), expected=400)
 
-    _upload_file(client, project_id, "装配.stp", step)
+    _upload_file(client, project_id, "模型.zip", archive)
+    client.call("POST", "/api/v1/uploads/init", init_request(project_id, "说明.pdf", pdf), expected=400)
+    _upload_file(client, project_id, "动作流程.xlsb", workbook)
     accepted = client.call("POST", "/api/v1/uploads/init", init_request(project_id, "说明.pdf", pdf))
     _abort(client, accepted["sessionId"])
-    check("an aborted STEP session no longer counts and an available STEP file admits other material",
+    check("aborted sessions no longer count and an available archive plus workbook admit other material",
           bool(accepted["sessionId"]))

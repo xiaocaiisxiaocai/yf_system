@@ -10,7 +10,7 @@ import {
   putUploadChunk,
   submitUploadMd5,
 } from '../api/uploads'
-import { isStepFile } from '../utils/uploadMaterialRules'
+import { hasRequiredMaterial, isRequiredMaterial } from '../utils/uploadMaterialRules'
 import UploadMaterialGuide, { type UploadDirection } from './UploadMaterialGuide'
 import { retainActiveUpload } from './uploadActivity'
 
@@ -25,11 +25,6 @@ interface Props {
   onSubmitForAcceptance?: () => Promise<void>
   /** 上传方向：C2S（公司发给供应商）校验资料要求，S2C（供应商发给公司）只展示资料示例。 */
   direction?: UploadDirection
-  /**
-   * 子项目已有可用的公司发给供应商 STEP 文件时为 true，用于隐藏“本批没有 STEP”提示。
-   * 仅是前端尽力判断（来自文件列表），服务端在初始化与合并时仍会权威校验。
-   */
-  hasCompanyStep?: boolean
 }
 
 type Phase =
@@ -59,18 +54,18 @@ interface Entry {
   percent: number
   /** 已开始但在等待并发名额，尚未计算校验值。 */
   waiting?: boolean
-  /** 等待同批 STEP 文件建立上传会话（公司发给供应商时，服务端要求先有 STEP）。 */
-  awaitingStep?: boolean
+  /** 等待同批必需资料（Excel、STEP/压缩文件）建立上传会话或完成合并（公司发给供应商时服务端要求先有这些资料）。 */
+  awaitingMaterial?: boolean
   /** 服务端业务规则拒绝（初始化或合并时的 4xx）的提示；此状态不可续传。 */
   rejectedMessage?: string
 }
 
 interface RunOptions {
-  /** 非 STEP 文件在此之后才初始化上传。 */
-  stepGate?: Promise<void>
-  /** 非 STEP 文件在此之后才请求合并：服务端合并时只认已合并的 STEP 文件，不认进行中的 STEP 会话。 */
+  /** 必需资料以外的文件在此之后才初始化上传。 */
+  materialGate?: Promise<void>
+  /** 必需资料以外的文件在此之后才请求合并：服务端合并时只认已合并的资料文件，不认进行中的会话。 */
   mergeGate?: Promise<void>
-  /** STEP 文件的上传会话建立后调用，放行同批其它文件。 */
+  /** 必需资料的上传会话建立后调用。 */
   onInitialized?: () => void
 }
 
@@ -167,15 +162,15 @@ function businessRejectionMessage(error: unknown, stage: 'init' | 'merge'): stri
   return typeof message === 'string' && message.trim() ? message : '服务端拒绝了该文件'
 }
 
-function phaseLabel(phase: Phase, percent: number, waiting = false, awaitingStep = false): string {
+function phaseLabel(phase: Phase, percent: number, waiting = false, awaitingMaterial = false): string {
   switch (phase) {
     case 'queued':
-      if (awaitingStep) return '等待同批 STEP 文件开始上传'
+      if (awaitingMaterial) return '等待同批 Excel 与 STEP/压缩文件开始上传'
       return waiting ? '排队中，前面的文件完成后自动开始' : '待上传'
     case 'interrupted': return '上传中断，可点击重新上传从断点续传'
     case 'hashing': return `正在校验文件内容 ${percent}%`
     case 'uploading':
-      if (awaitingStep) return '等待同批 STEP 文件上传完成'
+      if (awaitingMaterial) return '等待同批 Excel 与 STEP/压缩文件上传完成'
       return `分片上传中 ${percent}%（中断后可续传）`
     case 'merging': return '服务端合并校验中…'
     case 'merge-uncertain': return '结果待确认，重试不会重复上传'
@@ -191,7 +186,7 @@ function phaseLabel(phase: Phase, percent: number, waiting = false, awaitingStep
 
 const UPLOAD_DONE_MESSAGE_ID = 'chunk-upload-done'
 
-export default function ChunkUploader({ projectId, visible, onClose, onDone, onAllUploaded, onSubmitForAcceptance, direction, hasCompanyStep = false }: Props) {
+export default function ChunkUploader({ projectId, visible, onClose, onDone, onAllUploaded, onSubmitForAcceptance, direction }: Props) {
   const [entries, setEntries] = useState<Entry[]>([])
   // 同一批的完成提示合并成一条并原地更新，避免多文件上传时堆满页面。
   const entriesRef = useRef<Entry[]>([])
@@ -217,8 +212,9 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
   const companyRules = direction === 'C2S'
   const pending = entries.filter((e) => e.phase === 'queued' || e.phase === 'interrupted')
   const hasQueued = pending.length > 0
-  const missingStepInBatch = companyRules && !hasCompanyStep && hasQueued
-    && !entries.some((e) => isStepFile(e.file.name) && e.phase !== 'cancelled' && e.phase !== 'rejected')
+  // 公司发给供应商：本批（不含已取消或被拒绝的文件）必须同时有动作流程 Excel 与 STEP 或压缩文件才能上传。
+  const missingMaterial = companyRules && hasQueued && !hasRequiredMaterial(entries
+    .filter((e) => e.phase !== 'cancelled' && e.phase !== 'rejected').map((e) => e.file.name))
   const canAddMore = !locking && entries.every((e) => e.phase === 'queued' || e.phase === 'interrupted' || e.phase === 'rejected')
 
   const patchEntry = (key: string, patch: Partial<Entry>) =>
@@ -283,7 +279,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
   }, [entries])
 
   const reject = (key: string, message: string) => {
-    patchEntry(key, { phase: 'rejected', rejectedMessage: message, waiting: false, awaitingStep: false })
+    patchEntry(key, { phase: 'rejected', rejectedMessage: message, waiting: false, awaitingMaterial: false })
     if (rejectionToastsRef.current.has(message)) return
     rejectionToastsRef.current.add(message)
     Message.error(message)
@@ -313,7 +309,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
       if (attemptsRef.current.get(key) === attempt && !attempt.cancelled) {
         const rejection = businessRejectionMessage(error, 'merge')
         if (rejection !== undefined) {
-          // 合并时服务端复核业务规则（如 STEP 要求）失败：终态拒绝，不提供重试确认。
+          // 合并时服务端复核业务规则（如资料要求）失败：终态拒绝，不提供重试确认。
           attempt.mergePending = false
           reject(key, rejection)
         } else if (isDefinitiveIntegrityFailure(error)) {
@@ -342,10 +338,10 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     let release: Release | undefined
     let chunkHasher: ReturnType<typeof createChunkHasher> | undefined
     try {
-      if (options.stepGate) {
-        patchEntry(key, { awaitingStep: true })
-        await waitForGate(options.stepGate, attempt.controller.signal)
-        patchEntry(key, { awaitingStep: false })
+      if (options.materialGate) {
+        patchEntry(key, { awaitingMaterial: true })
+        await waitForGate(options.materialGate, attempt.controller.signal)
+        patchEntry(key, { awaitingMaterial: false })
         if (!isCurrent()) return
       }
       release = await uploadSlots.acquire(attempt.controller.signal, () => patchEntry(key, { waiting: true }))
@@ -448,12 +444,12 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
       await submitUploadMd5(sid, digest)
       if (!isCurrent()) return
       if (options.mergeGate) {
-        // 等待期间释放并发名额，避免排队中的同批 STEP 拿不到名额而互相等待。
+        // 等待期间释放并发名额，避免排队中的同批资料文件拿不到名额而互相等待。
         release?.()
         release = undefined
-        patchEntry(key, { awaitingStep: true })
+        patchEntry(key, { awaitingMaterial: true })
         await waitForGate(options.mergeGate, attempt.controller.signal)
-        patchEntry(key, { awaitingStep: false })
+        patchEntry(key, { awaitingMaterial: false })
         if (!isCurrent()) return
       }
       await confirmMerge(key, attempt, file.name)
@@ -465,33 +461,37 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     } finally {
       chunkHasher?.dispose()
       release?.()
-      patchEntry(key, { waiting: false, awaitingStep: false })
+      patchEntry(key, { waiting: false, awaitingMaterial: false })
       attempt.running = false
       attempt.finish()
     }
   }
 
   const startAll = async () => {
-    if (closingRef.current || locking) return
+    if (closingRef.current || locking || missingMaterial) return
     batchStartedRef.current = true
     rejectionToastsRef.current.clear()
     const runnable = entries.filter((entry) => entry.phase === 'queued' || entry.phase === 'interrupted')
-    const steps = companyRules ? runnable.filter((entry) => isStepFile(entry.file.name)) : []
-    if (steps.length === 0 || steps.length === runnable.length) {
+    const materials = companyRules ? runnable.filter((entry) => isRequiredMaterial(entry.file.name)) : []
+    if (materials.length === 0 || materials.length === runnable.length) {
       await Promise.all(runnable.map((entry) => runEntry(entry.key, entry.file)))
       return
     }
-    // 服务端要求公司发给供应商的其它文件初始化时已有 STEP 文件或正在上传的 STEP 会话，合并时已有
-    // 合并完成的 STEP 文件：同批 STEP 先建立会话，其余文件随后开始上传，并在同批 STEP 全部结束后
-    // 再合并；STEP 全部失败时也放行，由服务端给出明确提示。
-    let openGate!: () => void
-    const stepGate = new Promise<void>((resolve) => { openGate = resolve })
-    const stepRuns = steps.map((entry) => runEntry(entry.key, entry.file, { onInitialized: openGate }))
-    const mergeGate = Promise.allSettled(stepRuns).then(() => openGate())
+    // 服务端要求公司发给供应商的其它文件初始化时已有 Excel 与 STEP/压缩文件（可用文件或正在上传的会话），
+    // 合并时已有合并完成的这两类文件：同批资料文件全部建立会话（或已结束）后其余文件才开始上传，并在同批资料
+    // 文件全部结束后再合并；资料文件失败时也放行，由服务端给出明确提示。
+    const materialRuns = materials.map((entry) => {
+      let initialized!: () => void
+      const ready = new Promise<void>((resolve) => { initialized = resolve })
+      const run = runEntry(entry.key, entry.file, { onInitialized: initialized }).finally(initialized)
+      return { ready, run }
+    })
+    const materialGate = Promise.all(materialRuns.map((item) => item.ready)).then(() => undefined)
+    const mergeGate = Promise.allSettled(materialRuns.map((item) => item.run)).then(() => undefined)
     await Promise.all([
-      ...stepRuns,
-      ...runnable.filter((entry) => !isStepFile(entry.file.name))
-        .map((entry) => runEntry(entry.key, entry.file, { stepGate, mergeGate })),
+      ...materialRuns.map((item) => item.run),
+      ...runnable.filter((entry) => !isRequiredMaterial(entry.file.name))
+        .map((entry) => runEntry(entry.key, entry.file, { materialGate, mergeGate })),
     ])
   }
 
@@ -636,7 +636,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
         ) : (
           <>
             <Button onClick={closeAll}>关闭</Button>
-            <Button type="primary" aria-label="上传所选文件" disabled={!hasQueued} onClick={startAll} icon={<IconUpload />}>
+            <Button type="primary" aria-label="上传所选文件" disabled={!hasQueued || missingMaterial} onClick={startAll} icon={<IconUpload />}>
               上传所选文件{hasQueued ? `（${pending.length}）` : ''}
             </Button>
           </>
@@ -675,9 +675,9 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
           onChange={setSubmitForAcceptance}>全部上传成功后提交验收</Checkbox>
       </div>}
       <div aria-live="polite">
-        {missingStepInBatch && (
+        {missingMaterial && (
           <Alert type="warning" style={{ marginTop: 12 }}
-            content="本批没有 STEP 文件。若本子项目还没有上传过 STEP 3D 图，其它文件会被拒绝，请一并选择 .step/.stp 文件。" />
+            content="本批需要同时包含动作流程 Excel 和 STEP 3D 图（.step/.stp）或压缩文件（.zip/.rar/.7z）。" />
         )}
       </div>
       {totalCount > 0 && (
@@ -725,7 +725,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
                 />
               )}
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {phaseLabel(entry.phase, entry.percent, entry.waiting, entry.awaitingStep)}
+                {phaseLabel(entry.phase, entry.percent, entry.waiting, entry.awaitingMaterial)}
               </Typography.Text>
               <div aria-live="polite">
                 {entryError && (

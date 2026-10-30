@@ -241,16 +241,16 @@ try:
                     cursor.execute('SELECT status FROM projects WHERE id=%s', (project['id'],))
                     assert cursor.fetchone()[0] == 'COMPLETED'
                     cursor.execute('SELECT COUNT(*) FROM files WHERE project_id=%s', (project['id'],))
-                    assert cursor.fetchone()[0] == 3
+                    assert cursor.fetchone()[0] == 4
                     cursor.execute('SELECT COUNT(*) FROM messages WHERE project_id=%s', (project['id'],))
                     assert cursor.fetchone()[0] == 2
-                persisted.append({'projectId': project['id'], 'status': 'COMPLETED', 'files': 3, 'messages': 2})
+                persisted.append({'projectId': project['id'], 'status': 'COMPLETED', 'files': 4, 'messages': 2})
             zip_integrity = None
             if 'final' in args.steps:
                 with zipfile.ZipFile(output / 'browser-batch.zip') as archive:
                     assert archive.testzip() is None
-                    assert len(archive.infolist()) == 3
-                    for name in ('valid-preview.pdf', 'vendor-response.xlsx', 'assembly-3d.step'):
+                    assert len(archive.infolist()) == 4
+                    for name in ('valid-preview.pdf', 'vendor-response.xlsx', 'assembly-3d.step', 'motion-flow.xlsx'):
                         assert hashlib.sha256(archive.read(name)).digest() == hashlib.sha256((output / name).read_bytes()).digest()
                 zip_integrity = True
             assert before == sources(), 'Source changed during browser validation; rerun affected evidence.'

@@ -91,9 +91,9 @@ public sealed partial class UploadService(
                 await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, request.ProjectId, ct);
                 await using var ef = EfDb.Use(conn, tx);
                 var dbNow = await DbNowAsync(ef, ct);
-                if (current.IsInternal && !UploadMaterialRules.IsStepFile(request.FileName)
-                    && !await HasCompanyStepMaterialAsync(ef, request.ProjectId, dbNow, includeActiveSessions: true, ct))
-                    throw ApiException.BadRequest(UploadMaterialRules.StepRequiredMessage);
+                if (current.IsInternal && !UploadMaterialRules.IsRequiredMaterial(request.FileName)
+                    && !await HasCompanyMaterialAsync(ef, request.ProjectId, dbNow, includeActiveSessions: true, ct))
+                    throw ApiException.BadRequest(UploadMaterialRules.MaterialRequiredMessage);
                 await EnsureUploadQuotaAsync(ef, current.Id, request.FileSize, dbNow, ct);
                 ef.UploadSessions.Add(new UploadSession
                 {
@@ -452,16 +452,20 @@ public sealed partial class UploadService(
         ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / (1024L * 1024 * 1024)} GiB")
         : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024 * 1024):0.##} GiB");
 
-    // 公司发给供应商的非 STEP 文件，需要本子项目已有可用的 C2S STEP 文件。新建会话时（includeActiveSessions）
-    // 内部账号正在上传/合并的 STEP 会话也计入，支持同一批次并发上传（STEP 会话先创建即可）；合并写入时只认
-    // 已合并、未删除的 STEP 文件，因为进行中的 STEP 会话随后可能被取消或过期。恢复已有会话不重复校验。
-    internal static async Task<bool> HasCompanyStepMaterialAsync(
+    // 公司发给供应商的其它文件（非 Excel/STEP/压缩文件），需要本子项目已有可用的 C2S 动作流程 Excel 与 3D 资料
+    // （STEP 或压缩文件）。新建会话时（includeActiveSessions）内部账号正在上传/合并的这两类会话也计入，支持同一
+    // 批次并发上传（必需资料的会话先创建即可）；合并写入时只认已合并、未删除的文件，因为进行中的会话随后可能被
+    // 取消或过期。恢复已有会话不重复校验。
+    internal static async Task<bool> HasCompanyMaterialAsync(
         YfDbContext ef, ulong projectId, DateTime dbNow, bool includeActiveSessions, CancellationToken ct)
     {
-        var extensions = UploadMaterialRules.StepFileExtensions.ToArray();
-        if (await ef.Files.AnyAsync(file => file.ProjectId == projectId && file.Direction == "C2S"
-                && file.Status == FileStatuses.Available && Enumerable.Contains(extensions, file.Ext), ct))
-            return true;
+        var models = UploadMaterialRules.ModelFileExtensions.ToArray();
+        var sheets = UploadMaterialRules.SpreadsheetFileExtensions.ToArray();
+        var available = ef.Files.Where(file => file.ProjectId == projectId && file.Direction == "C2S"
+            && file.Status == FileStatuses.Available);
+        var hasModel = await available.AnyAsync(file => Enumerable.Contains(models, file.Ext), ct);
+        var hasSheet = await available.AnyAsync(file => Enumerable.Contains(sheets, file.Ext), ct);
+        if (hasModel && hasSheet) return true;
         if (!includeActiveSessions) return false;
         var active = new[] { "UPLOADING", "MERGING" };
         var sessionNames = await (
@@ -470,7 +474,8 @@ public sealed partial class UploadService(
             where session.ProjectId == projectId && user.UserType == UserTypes.Internal
                 && session.ExpiresAt > dbNow && Enumerable.Contains(active, session.Status)
             select session.FileName).ToListAsync(ct);
-        return sessionNames.Any(UploadMaterialRules.IsStepFile);
+        return (hasModel || sessionNames.Any(UploadMaterialRules.IsModelMaterial))
+            && (hasSheet || sessionNames.Any(UploadMaterialRules.IsSpreadsheet));
     }
 
     // A name without a dot has no extension; it must not be mistaken for one (a file named "pdf").

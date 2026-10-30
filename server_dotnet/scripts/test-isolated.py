@@ -562,7 +562,7 @@ try:
             client.call("PUT", f"/api/v1/projects/{pid}/status", {"status": "IN_PROGRESS"})
             check("supplier/project creation and project start", True)
             pdf = b"%PDF-1.4\n" + b"test data\n" * 40000 + b"%%EOF\n"
-            # Internal (company-to-supplier) upload on a fresh subproject: opt in to the STEP prerequisite fixture.
+            # Internal (company-to-supplier) upload on a fresh subproject: opt in to the Excel + STEP prerequisite fixtures.
             upload = init_upload(client, pid, "regression.pdf", pdf, ensure_step=True)
             session = upload["sessionId"]
             size = upload["chunkSize"]

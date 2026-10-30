@@ -28,6 +28,7 @@ public class SystemTests
     [InlineData("upload.allowed_exts", "pdf,../exe")]
     [InlineData("upload.allowed_exts", "pdf,xlsx")]
     [InlineData("upload.allowed_exts", "stpx,steps")]
+    [InlineData("upload.allowed_exts", "pdf,step,zip")]
     [InlineData("security.management_lock", "anything")]
     [InlineData("SECURITY.MANAGEMENT_LOCK", "anything")]
     [InlineData(" security.management_lock ", "anything")]
@@ -38,7 +39,11 @@ public class SystemTests
 
     [Fact]
     public void ExtensionsAreNormalizedAndDeduplicated()
-        => Assert.Equal("jpg,pdf,stp", SystemService.NormalizeConfig("upload.allowed_exts", " PDF,jpg,pdf,STP "));
+        => Assert.Equal("jpg,pdf,stp,xlsx", SystemService.NormalizeConfig("upload.allowed_exts", " PDF,jpg,pdf,STP,XLSX "));
+
+    [Fact]
+    public void ArchiveSatisfiesTheModelMaterialExtension()
+        => Assert.Equal("7z,xls", SystemService.NormalizeConfig("upload.allowed_exts", "xls,7z"));
 
     [Theory]
     [InlineData("notify.enabled")]

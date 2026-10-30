@@ -55,7 +55,7 @@ function installDefaultHttp() {
   mocks.blobSha256.mockResolvedValue('c'.repeat(64))
 }
 
-function renderUploader(offerSubmit = false, direction?: 'C2S' | 'S2C', hasCompanyStep?: boolean) {
+function renderUploader(offerSubmit = false, direction?: 'C2S' | 'S2C') {
   const callbacks = {
     onClose: vi.fn<() => void>(),
     onDone: vi.fn<() => void>(),
@@ -70,7 +70,6 @@ function renderUploader(offerSubmit = false, direction?: 'C2S' | 'S2C', hasCompa
     onAllUploaded={callbacks.onAllUploaded}
     onSubmitForAcceptance={offerSubmit ? callbacks.onSubmitForAcceptance : undefined}
     direction={direction}
-    hasCompanyStep={hasCompanyStep}
   />)
   return { ...view, callbacks }
 }
@@ -729,28 +728,28 @@ describe('ChunkUploader upload material rules', () => {
     installDefaultHttp()
   })
 
-  it('initializes a same-batch STEP file before other company-to-supplier files', async () => {
-    let releaseStep!: () => void
+  it('initializes same-batch Excel and STEP/archive files before other company-to-supplier files', async () => {
+    let releaseArchive!: () => void
     mocks.post.mockImplementation((url: string, body?: { fileName?: string }) => {
       if (url !== '/uploads/init') return Promise.resolve({ data: { id: 99 } })
       const response = initResponse(body?.fileName ?? 'session')
-      if (body?.fileName !== 'assembly.step') return Promise.resolve(response)
-      return new Promise((resolve) => { releaseStep = () => resolve(response) })
+      if (body?.fileName !== '模型.7z') return Promise.resolve(response)
+      return new Promise((resolve) => { releaseArchive = () => resolve(response) })
     })
     renderUploader(false, 'C2S')
-    choose(uploadFile('说明.pdf'), uploadFile('assembly.step'))
+    choose(uploadFile('说明.pdf'), uploadFile('动作流程.xlsx'), uploadFile('模型.7z'))
     fireEvent.click(startButton())
 
-    expect(await screen.findByText('等待同批 STEP 文件开始上传')).toBeVisible()
-    await waitFor(() => expect(sessionCalls('init')).toHaveLength(1))
-    expect(sessionCalls('init')[0][1]).toMatchObject({ fileName: 'assembly.step' })
-    releaseStep()
-    await waitFor(() => expect(sessionCalls('merge')).toHaveLength(2))
-    expect(sessionCalls('init').map(([, body]) => (body as { fileName: string }).fileName))
-      .toEqual(['assembly.step', '说明.pdf'])
+    expect(await screen.findByText('等待同批 Excel 与 STEP/压缩文件开始上传')).toBeVisible()
+    await waitFor(() => expect(sessionCalls('init')).toHaveLength(2))
+    expect(sessionCalls('init').map(([, body]) => (body as { fileName: string }).fileName).sort())
+      .toEqual(['动作流程.xlsx', '模型.7z'].sort())
+    releaseArchive()
+    await waitFor(() => expect(sessionCalls('merge')).toHaveLength(3))
+    expect(sessionCalls('init')[2][1]).toMatchObject({ fileName: '说明.pdf' })
   })
 
-  it('merges same-batch company files only after the STEP file has been merged', async () => {
+  it('merges same-batch company files only after the Excel and STEP/archive files have been merged', async () => {
     let releaseStepMerge!: () => void
     mocks.post.mockImplementation((url: string, body?: { fileName?: string }) => {
       if (url === '/uploads/init') return Promise.resolve(initResponse(body?.fileName ?? 'session'))
@@ -760,74 +759,73 @@ describe('ChunkUploader upload material rules', () => {
       return Promise.resolve({ data: { id: 99 } })
     })
     renderUploader(false, 'C2S')
-    choose(uploadFile('说明.pdf'), uploadFile('assembly.step'))
+    choose(uploadFile('说明.pdf'), uploadFile('assembly.step'), uploadFile('动作流程.xlsm'))
     fireEvent.click(startButton())
 
-    expect(await screen.findByText('等待同批 STEP 文件上传完成')).toBeVisible()
-    await waitFor(() => expect(sessionCalls('merge')).toHaveLength(1))
-    expect(String(sessionCalls('merge')[0][0])).toContain('assembly.step')
-    releaseStepMerge()
+    expect(await screen.findByText('等待同批 Excel 与 STEP/压缩文件上传完成')).toBeVisible()
     await waitFor(() => expect(sessionCalls('merge')).toHaveLength(2))
-    expect(String(sessionCalls('merge')[1][0])).toContain('说明.pdf')
+    expect(sessionCalls('merge').map(([url]) => String(url)).some((url) => url.includes('说明.pdf'))).toBe(false)
+    releaseStepMerge()
+    await waitFor(() => expect(sessionCalls('merge')).toHaveLength(3))
+    expect(String(sessionCalls('merge')[2][0])).toContain('说明.pdf')
   })
 
-  it('lets a company Excel file through and warns when the batch has no STEP', () => {
+  it('blocks a company batch until it has both an Excel file and a STEP or archive file', () => {
     renderUploader(false, 'C2S')
     expect(screen.getByText('发给供应商的资料要求')).toBeVisible()
-    expect(screen.queryByText(/CSLR-XXX XXX机 210XXX-X 动作流程/)).toBeNull()
     const examples = screen.getByRole('group', { name: '资料要求示例' })
     expect(Array.from(examples.querySelectorAll('img')).map((image) => image.getAttribute('alt')))
       .toEqual(['A. STEP 格式 3D 总装图示例', 'B. 动作流程说明 Excel 示例'])
-    choose(uploadFile('动作流程.xlsx'))
 
+    choose(uploadFile('动作流程.xlsx'))
+    expect(startButton()).toBeDisabled()
+    expect(screen.getByText(/本批需要同时包含动作流程 Excel/)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '移除「动作流程.xlsx」' }))
+
+    choose(uploadFile('assembly.stp'), uploadFile('说明.pdf'))
+    expect(startButton()).toBeDisabled()
+    expect(screen.getByText(/本批需要同时包含动作流程 Excel/)).toBeVisible()
+
+    choose(uploadFile('CSLR-605 放板機 2105931-1 動作流程.xlsx'))
     expect(startButton()).toBeEnabled()
-    expect(screen.queryByText(/Excel 需按/)).toBeNull()
-    expect(screen.getByText(/本批没有 STEP 文件/)).toBeVisible()
+    expect(screen.queryByText(/本批需要同时包含动作流程 Excel/)).toBeNull()
   })
 
-  it('accepts a traditional-Chinese motion-flow workbook name for company uploads', () => {
+  it('accepts an archive in place of STEP files for a company batch', () => {
     renderUploader(false, 'C2S')
-    choose(uploadFile('CSLR-605 放板機 2105931-1 動作流程.xlsx'), uploadFile('assembly.stp'))
+    choose(uploadFile('CSU-424R 模擬.7z'), uploadFile('CSU-424R 模擬資料.xlsx'))
 
     expect(startButton()).toBeEnabled()
-    expect(screen.queryByText(/本批没有 STEP 文件/)).toBeNull()
-    expect(screen.queryByText(/Excel 需按/)).toBeNull()
+    expect(screen.queryByText(/本批需要同时包含动作流程 Excel/)).toBeNull()
   })
 
   it('shows supplier examples without restricting supplier-to-company files', async () => {
     renderUploader(false, 'S2C')
     const examples = screen.getByRole('group', { name: '上传资料示例' })
     expect(examples.querySelectorAll('img')).toHaveLength(2)
-    choose(uploadFile('动作流程.xlsx'))
-
-    expect(startButton()).toBeEnabled()
-    expect(screen.queryByText(/本批没有 STEP 文件/)).toBeNull()
-    fireEvent.click(startButton())
-    await screen.findByText('已完成')
-  })
-  it('hides the missing-STEP warning when the subproject already has a company STEP file', () => {
-    renderUploader(false, 'C2S', true)
     choose(uploadFile('说明.pdf'))
 
     expect(startButton()).toBeEnabled()
-    expect(screen.queryByText(/本批没有 STEP 文件/)).toBeNull()
+    expect(screen.queryByText(/本批需要同时包含动作流程 Excel/)).toBeNull()
+    fireEvent.click(startButton())
+    await screen.findByText('已完成')
   })
 
   it('business rejections at init become a terminal state with one aggregated toast', async () => {
-    const stepMessage = '发给供应商的资料至少需要一个 STEP 格式 3D 图（.step/.stp），请先上传或与本批文件一起上传 STEP 文件'
+    const materialMessage = '发给供应商的资料需要同时包含动作流程 Excel 和 STEP 格式 3D 图（.step/.stp）或压缩文件（.zip/.rar/.7z），请与本批文件一起上传'
     const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
     mocks.post.mockImplementation((url: string) => {
-      if (url === '/uploads/init') return Promise.reject({ response: { status: 400, data: { code: 40001, message: stepMessage } } })
+      if (url === '/uploads/init') return Promise.reject({ response: { status: 400, data: { code: 40001, message: materialMessage } } })
       return Promise.resolve({ data: { id: 99 } })
     })
-    renderUploader(false, 'C2S')
+    renderUploader()
     choose(uploadFile('说明.pdf'), uploadFile('图纸.pdf'))
     fireEvent.click(startButton())
 
-    await waitFor(() => expect(screen.getAllByText(stepMessage)).toHaveLength(2))
+    await waitFor(() => expect(screen.getAllByText(materialMessage)).toHaveLength(2))
     expect(sessionCalls('init')).toHaveLength(2)
     expect(sessionCalls('init').every(([, , config]) => (config as { quietClientError?: boolean }).quietClientError)).toBe(true)
-    expect(toast.mock.calls.filter(([message]) => message === stepMessage)).toHaveLength(1)
+    expect(toast.mock.calls.filter(([message]) => message === materialMessage)).toHaveLength(1)
     expect(within(screen.getByRole('dialog')).queryByText(/上传中断/)).toBeNull()
     expect(screen.getAllByText('服务端拒绝，未上传')).toHaveLength(2)
     expect(startButton()).toBeDisabled()
@@ -841,18 +839,18 @@ describe('ChunkUploader upload material rules', () => {
   })
 
   it('a merge-time business rejection is terminal instead of awaiting confirmation', async () => {
-    const stepMessage = '发给供应商的资料至少需要一个 STEP 格式 3D 图（.step/.stp），请先上传或与本批文件一起上传 STEP 文件'
+    const materialMessage = '发给供应商的资料需要同时包含动作流程 Excel 和 STEP 格式 3D 图（.step/.stp）或压缩文件（.zip/.rar/.7z），请与本批文件一起上传'
     const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
     mocks.post.mockImplementation((url: string, body?: { fileName?: string }) => {
       if (url === '/uploads/init') return Promise.resolve(initResponse(body?.fileName ?? 'session'))
-      if (String(url).endsWith('/merge')) return Promise.reject({ response: { status: 400, data: { message: stepMessage } } })
+      if (String(url).endsWith('/merge')) return Promise.reject({ response: { status: 400, data: { message: materialMessage } } })
       return Promise.resolve({ data: {} })
     })
-    const { callbacks } = renderUploader(false, 'C2S', true)
+    const { callbacks } = renderUploader()
     choose(uploadFile('说明.pdf'))
     fireEvent.click(startButton())
 
-    expect(await screen.findByText(stepMessage)).toBeVisible()
+    expect(await screen.findByText(materialMessage)).toBeVisible()
     expect(sessionCalls('merge')).toHaveLength(1)
     expect(screen.queryByRole('button', { name: '重试确认' })).toBeNull()
     const row = screen.getByRole('group', { name: '说明.pdf' })

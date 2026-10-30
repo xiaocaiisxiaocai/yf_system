@@ -12,7 +12,7 @@ const XLSX = require(process.env.YF_PROJECT_ROOT + '/web/node_modules/xlsx');
 const {
   assert, OUT, s, f, record, login, api, projectMetadata, track,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
-const { uploadFixture } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/upload-contract.cjs');
+const { companyBatchWorkbook, isCompanionChunk, uploadFixture } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/upload-contract.cjs');
 
 const apiPath = path => '/api/v1' + path;
 const pathOf = value => new URL(value.url()).pathname;
@@ -276,6 +276,10 @@ async function assertInsideViewport(locator, page, label) {
       const released = new Promise(resolve => { releaseChunk = resolve; });
       const reached = new Promise(resolve => { reachChunk = resolve; });
       const heldChunk = async route => {
+        if (isCompanionChunk(route.request())) {
+          await route.continue();
+          return;
+        }
         reachChunk(pathOf(route.request()));
         await released;
         await route.continue().catch(() => undefined);
@@ -284,11 +288,11 @@ async function assertInsideViewport(locator, page, label) {
       let sessionId;
       try {
         const dialog = await openUpload();
-        await dialog.getByLabel('选择上传文件').setInputFiles({
-          name, mimeType: 'application/zip', buffer: bytes,
-        });
+        await dialog.getByLabel('选择上传文件').setInputFiles([
+          { name, mimeType: 'application/zip', buffer: bytes }, companyBatchWorkbook(name),
+        ]);
         const initialized = page.waitForResponse(response =>
-          pathOf(response) === '/api/v1/uploads/init'
+          pathOf(response) === '/api/v1/uploads/init' && response.request().postDataJSON()?.fileName === name
           && response.request().method() === 'POST' && response.status() === 200);
         await dialog.getByRole('button', { name: '上传所选文件', exact: true }).click();
         sessionId = (await (await initialized).json()).sessionId;
@@ -296,6 +300,8 @@ async function assertInsideViewport(locator, page, label) {
         const heldPath = await reached;
         assert(heldPath.startsWith(apiPath(`/uploads/${sessionId}/chunks/`)));
 
+        // 同批 Excel 不受拦截，先完成上传，关闭时只剩被测文件需要取消。
+        await dialog.getByText('已完成', { exact: true }).waitFor();
         const abortPath = apiPath(`/uploads/${sessionId}`);
         await page.route('**' + abortPath, route => route.fulfill({
           status: 503,
@@ -341,7 +347,7 @@ async function assertInsideViewport(locator, page, label) {
       // upload is reported interrupted and the manual resume path is exercised.
       const failFirstChunk = async route => {
         // Pin the failure to one chunk: sibling chunks upload concurrently and must succeed.
-        if (failedAttempts >= 3 || (failedChunkPath && pathOf(route.request()) !== failedChunkPath)) {
+        if (isCompanionChunk(route.request()) || failedAttempts >= 3 || (failedChunkPath && pathOf(route.request()) !== failedChunkPath)) {
           await route.continue();
           return;
         }
@@ -357,11 +363,11 @@ async function assertInsideViewport(locator, page, label) {
       await page.route('**/api/v1/uploads/*/chunks/*', failFirstChunk);
       try {
         const dialog = await openUpload();
-        await dialog.getByLabel('选择上传文件').setInputFiles({
-          name, mimeType: 'application/zip', buffer: bytes,
-        });
+        await dialog.getByLabel('选择上传文件').setInputFiles([
+          { name, mimeType: 'application/zip', buffer: bytes }, companyBatchWorkbook(name),
+        ]);
         const firstInitReady = page.waitForResponse(response =>
-          pathOf(response) === '/api/v1/uploads/init'
+          pathOf(response) === '/api/v1/uploads/init' && response.request().postDataJSON()?.fileName === name
           && response.request().method() === 'POST' && response.status() === 200);
         await dialog.getByRole('button', { name: '上传所选文件', exact: true }).click();
         const firstInit = await (await firstInitReady).json();
@@ -375,7 +381,7 @@ async function assertInsideViewport(locator, page, label) {
           pathOf(response) === '/api/v1/uploads/init'
           && response.request().method() === 'POST' && response.status() === 200);
         const mergeReady = page.waitForResponse(response =>
-          /^\/api\/v1\/uploads\/[^/]+\/merge$/.test(pathOf(response))
+          pathOf(response) === apiPath(`/uploads/${firstInit.sessionId}/merge`)
           && response.request().method() === 'POST');
         const refreshedList = page.waitForResponse(response =>
           pathOf(response) === apiPath(`/projects/${project.id}/files`)
@@ -399,7 +405,7 @@ async function assertInsideViewport(locator, page, label) {
     });
 
     await record('一次选择多个文件后全部持久化且弹窗关闭', async () => {
-      const names = [prefix + '-batch-a.zip', prefix + '-batch-b.zip'];
+      const names = [prefix + '-batch-a.zip', prefix + '-batch-b.xlsx'];
       const dialog = await openUpload();
       await dialog.getByLabel('选择上传文件').setInputFiles(names.map(name => ({
         name, mimeType: 'application/zip', buffer: Buffer.from(name + suffix),

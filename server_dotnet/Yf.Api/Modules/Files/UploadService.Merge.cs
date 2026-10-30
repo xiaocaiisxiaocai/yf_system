@@ -43,7 +43,7 @@ public sealed partial class UploadService
         FileStorage.EnsureFreeSpace(options.StorageRoot, session.FileSize);
         // Fail fast before hashing; the session stays UPLOADING and can be merged again or cancelled.
         await using (var precheck = EfDb.Use(conn))
-            await EnsureStepMaterialForMergeAsync(precheck, actor, session, ct);
+            await EnsureMaterialForMergeAsync(precheck, actor, session, ct);
         session = await ClaimMergeAsync(conn, actor, session, ct);
         var lease = session.UpdatedAt;
         try
@@ -103,7 +103,7 @@ public sealed partial class UploadService
             // Authoritative re-check inside the write transaction, after the project row lock taken by
             // RequireFileUploadAsync. A rejection resets the merge lease to
             // UPLOADING (MergeAsync catch), so the uploaded chunks stay resumable and cancellable.
-            await EnsureStepMaterialForMergeAsync(ef, current, session, ct);
+            await EnsureMaterialForMergeAsync(ef, current, session, ct);
             var now = await DbNowAsync(ef, ct);
             // The per-SHA lease stays owned through COMMIT. Publication is immutable and
             // may safely outlive an unknown COMMIT outcome; it is never rollback-cleaned.
@@ -157,17 +157,18 @@ public sealed partial class UploadService
     }
 
     /// <summary>
-    /// An internal account's non-STEP file needs an available (merged, non-deleted) C2S STEP file in the
-    /// subproject before it is merged. An in-flight STEP session only admits a same-batch file at init: it may
-    /// still be cancelled or expire, so merge never counts it. Clients merge same-batch files after the STEP.
+    /// An internal account's file other than the required material (Excel, STEP or archive) needs an available
+    /// (merged, non-deleted) C2S workbook and STEP/archive in the subproject before it is merged. In-flight
+    /// material sessions only admit a same-batch file at init: they may still be cancelled or expire, so merge
+    /// never counts them. Clients merge same-batch files after the required material.
     /// </summary>
-    private static async Task EnsureStepMaterialForMergeAsync(
+    private static async Task EnsureMaterialForMergeAsync(
         YfDbContext ef, CurrentUser uploader, UploadSessionRow session, CancellationToken ct)
     {
-        if (!uploader.IsInternal || UploadMaterialRules.IsStepFile(session.FileName)) return;
+        if (!uploader.IsInternal || UploadMaterialRules.IsRequiredMaterial(session.FileName)) return;
         var dbNow = await DbNowAsync(ef, ct);
-        if (!await HasCompanyStepMaterialAsync(ef, session.ProjectId, dbNow, includeActiveSessions: false, ct))
-            throw ApiException.BadRequest(UploadMaterialRules.StepRequiredMessage);
+        if (!await HasCompanyMaterialAsync(ef, session.ProjectId, dbNow, includeActiveSessions: false, ct))
+            throw ApiException.BadRequest(UploadMaterialRules.MaterialRequiredMessage);
     }
 
     private async Task<UploadSessionRow> ClaimMergeAsync(

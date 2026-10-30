@@ -2,7 +2,9 @@ const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const XLSX = require(process.env.YF_PROJECT_ROOT + '/web/node_modules/xlsx');
 const { fs, assert, OUT, s, f, record, login, api, projectMetadata, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
-const { uploadFixture: uploadApi } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/upload-contract.cjs');
+const {
+  companyBatchWorkbook, isCompanionChunk, uploadFixture: uploadApi,
+} = require(process.env.YF_BROWSER_SUPPORT_DIR + '/upload-contract.cjs');
 
 const fileListPath = projectId => '/api/v1/projects/' + projectId + '/files';
 
@@ -89,7 +91,7 @@ async function assertExcelGrid(dialog, expectedRows) {
     const c2sNames = [];
     const s2cNames = [];
     for (let index = 0; index < 7; index++) {
-      // 内部发给供应商须先有 STEP 3D 图（上传资料要求契约-2026-09-24），首个 C2S 夹具用 STEP 保持计数不变。
+      // STEP 与压缩文件本身属于必需资料（上传资料要求契约-2026-09-24），C2S 夹具不会触发补传，计数保持不变。
       const name = prefix + '-c2s-' + String(index).padStart(2, '0') + (index === 0 ? '.step' : '.zip');
       const bytes = Buffer.from('C2S|' + suffix + '|' + index);
       await uploadApi(internalApi, f.users.manager.token, project.id, name, bytes);
@@ -261,11 +263,10 @@ async function assertExcelGrid(dialog, expectedRows) {
       });
       await page.getByRole('button', { name: '上传文件', exact: true }).click();
       const dialog = page.getByRole('dialog');
-      await dialog.getByLabel('选择上传文件').setInputFiles({
-        name: interruptedName,
-        mimeType: 'application/zip',
-        buffer: interruptedBytes,
-      });
+      await dialog.getByLabel('选择上传文件').setInputFiles([
+        { name: interruptedName, mimeType: 'application/zip', buffer: interruptedBytes },
+        companyBatchWorkbook(interruptedName),
+      ]);
 
       let failedChunkPath;
       // The uploader retries transient chunk failures (3 attempts in total), so the reset must
@@ -275,6 +276,10 @@ async function assertExcelGrid(dialog, expectedRows) {
       let firstChunkCommitted;
       const committedChunk = new Promise(resolve => { firstChunkCommitted = resolve; });
       await page.route('**/api/v1/uploads/*/chunks/*', async route => {
+        if (isCompanionChunk(route.request())) {
+          await route.continue();
+          return;
+        }
         const chunkPath = new URL(route.request().url()).pathname;
         const index = Number(chunkPath.split('/').at(-1));
         if (index === 0 && !committed) {
@@ -298,6 +303,7 @@ async function assertExcelGrid(dialog, expectedRows) {
 
       const firstInitReady = page.waitForResponse(response =>
         new URL(response.url()).pathname === '/api/v1/uploads/init'
+        && response.request().postDataJSON()?.fileName === interruptedName
         && response.request().method() === 'POST' && response.status() === 200);
       await dialog.getByRole('button', { name: '上传所选文件', exact: true }).click();
       const firstInit = await (await firstInitReady).json();

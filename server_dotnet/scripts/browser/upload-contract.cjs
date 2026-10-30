@@ -24,13 +24,15 @@ function fileFingerprint(fileName, bytes, fileLastModified = FIXTURE_LAST_MODIFI
   return sha256(Buffer.from(canonical, 'utf8'));
 }
 
-// 公司内部发给供应商的非 STEP 文件要求子项目已有 STEP 3D 图（上传资料要求契约-2026-09-24）。
-// 夹具默认不做任何补救：规则拒绝会原样抛出。只有显式传 { ensureStep: true } 的调用方（内部账号向可能
-// 还没有 STEP 的子项目上传非 STEP 夹具）才会在遇到该拒绝时先补传一个 STEP 文件再重试；
+// 公司内部发给供应商的其它文件要求子项目已有动作流程 Excel 与 STEP/压缩文件（上传资料要求契约-2026-09-24）。
+// 夹具默认不做任何补救：规则拒绝会原样抛出。只有显式传 { ensureStep: true } 的调用方（内部账号向可能还没有
+// 这些资料的子项目上传其它夹具）才会在遇到该拒绝时先补传一个 STEP 和一个 Excel 文件再重试；
 // 规则本身由 HTTP 契约与浏览器业务流程显式验证。
-const STEP_REQUIRED_MARKER = '至少需要一个 STEP 格式 3D 图';
+const MATERIAL_REQUIRED_MARKER = '需要同时包含动作流程 Excel';
 const COMPANY_STEP_FIXTURE_NAME = 'fixture-assembly.step';
 const COMPANY_STEP_FIXTURE_BYTES = Buffer.from('ISO-10303-21; fixture assembly');
+const COMPANY_WORKBOOK_FIXTURE_NAME = 'fixture-motion-flow.xlsx';
+const COMPANY_WORKBOOK_FIXTURE_BYTES = Buffer.from('fixture motion flow workbook');
 
 async function initUpload(
   context, token, projectId, fileName, bytes, fileLastModified = FIXTURE_LAST_MODIFIED, { ensureStep = false } = {},
@@ -45,10 +47,27 @@ async function initUpload(
   try {
     return (await request()).json();
   } catch (error) {
-    if (!ensureStep || !String(error && error.message).includes(STEP_REQUIRED_MARKER)) throw error;
+    if (!ensureStep || !String(error && error.message).includes(MATERIAL_REQUIRED_MARKER)) throw error;
   }
   await uploadFixture(context, token, projectId, COMPANY_STEP_FIXTURE_NAME, COMPANY_STEP_FIXTURE_BYTES);
+  await uploadFixture(context, token, projectId, COMPANY_WORKBOOK_FIXTURE_NAME, COMPANY_WORKBOOK_FIXTURE_BYTES);
   return (await request()).json();
+}
+
+// 上传窗口要求公司发给供应商的每一批同时有 Excel 与 STEP/压缩文件。只测上传机制的单个 .zip 场景附带这个
+// 小 Excel；它的分片远小于被测文件的分片，路由拦截用 isCompanionChunk 放行它，只控制被测文件。
+const COMPANION_CHUNK_MAX_BYTES = 512;
+
+function companyBatchWorkbook(name) {
+  return {
+    name: name.replace(/\.zip$/, '') + '-动作流程.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    buffer: Buffer.from('company batch workbook|' + name),
+  };
+}
+
+function isCompanionChunk(request) {
+  return (request.postDataBuffer()?.length ?? 0) <= COMPANION_CHUNK_MAX_BYTES;
 }
 
 async function putChunk(context, token, sessionId, index, chunk, label = '') {
@@ -95,6 +114,8 @@ async function uploadFixture(context, token, projectId, fileName, bytes, { ensur
 
 module.exports = {
   FIXTURE_LAST_MODIFIED,
+  companyBatchWorkbook,
+  isCompanionChunk,
   fileFingerprint,
   initUpload,
   putChunk,
