@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="MailKit" Version="4.18.0" />
+    <PackageReference Include="MailKit" Version="4.18.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.20" />
     <!-- Pinned so Pomelo's transitive Relational dependency stays on the same EF patch. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.20" />
