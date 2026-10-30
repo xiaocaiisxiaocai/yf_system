@@ -276,6 +276,26 @@ async function preview(page, name, kind, label) {
       }
     });
 
+    await record('负责人确认或退回回传资料后供应商才能提交验收', async () => {
+      const project = projects.a;
+      await navigate(vendorA, '/projects/' + project.id);
+      await vendorA.getByText('资料待确认', { exact: true }).waitFor();
+      assert(await vendorA.getByRole('button', { name: '提交公司验收', exact: true }).isDisabled());
+      assert.equal(await vendorA.getByRole('button', { name: '资料确认 OK', exact: true }).count(), 0);
+      await navigate(internal, '/projects/' + project.id);
+      await internal.getByRole('button', { name: '退回资料', exact: true }).click();
+      await internal.getByPlaceholder('请说明需要厂商补充或修改的资料').fill('自动验收：请补充动作流程');
+      await action(internal, '/projects/' + project.id + '/materials/return', 'POST',
+        () => internal.getByRole('button', { name: '确认退回', exact: true }).click());
+      await internal.getByText('资料已退回', { exact: true }).waitFor();
+      await navigate(vendorA, '/projects/' + project.id);
+      await vendorA.getByText('退回原因：自动验收：请补充动作流程', { exact: true }).waitFor();
+      assert(await vendorA.getByRole('button', { name: '提交公司验收', exact: true }).isDisabled());
+      await navigate(internal, '/projects/' + project.id);
+      await confirm(internal, '资料确认 OK', '/projects/' + project.id + '/materials/approve');
+      await internal.getByText('资料已确认 OK', { exact: true }).waitFor();
+    });
+
     await record('供应商提交并自行撤回、内部驳回、重新提交并内部验收完成', async () => {
       const project = projects.a;
       await navigate(vendorA, '/projects/' + project.id);
@@ -293,6 +313,9 @@ async function preview(page, name, kind, label) {
       }, 403);
       await navigate(vendorA, '/projects/' + project.id);
       await confirm(vendorA, '撤回', '/projects/' + project.id + '/withdraw');
+      await navigate(internal, '/projects/' + project.id);
+      await confirm(internal, '资料确认 OK', '/projects/' + project.id + '/materials/approve');
+      await navigate(vendorA, '/projects/' + project.id);
       await confirm(vendorA, '提交公司验收', '/projects/' + project.id + '/submit');
       await navigate(internal, '/projects/' + project.id);
       await internal.getByRole('button', { name: '验收驳回', exact: true }).click();
@@ -300,6 +323,7 @@ async function preview(page, name, kind, label) {
       await action(internal, '/projects/' + project.id + '/reject', 'POST',
         () => internal.getByRole('button', { name: '确认驳回', exact: true }).click());
       await internal.getByText('上次驳回：自动验收：请补充确认', { exact: true }).waitFor();
+      await confirm(internal, '资料确认 OK', '/projects/' + project.id + '/materials/approve');
       await navigate(vendorA, '/projects/' + project.id);
       await confirm(vendorA, '提交公司验收', '/projects/' + project.id + '/submit');
       await navigate(internal, '/projects/' + project.id);
@@ -312,6 +336,8 @@ async function preview(page, name, kind, label) {
 
     await record('供应商提交、公司确认完成及公司项目动态', async () => {
       const project = projects.b;
+      await navigate(internal, '/projects/' + project.id);
+      await confirm(internal, '资料确认 OK', '/projects/' + project.id + '/materials/approve');
       await navigate(vendorB, '/projects/' + project.id);
       const submitted = await confirm(vendorB, '提交公司验收', '/projects/' + project.id + '/submit');
       assert.equal(submitted.confirmSide, 'COMPANY');

@@ -10,7 +10,7 @@ namespace Yf.Api.Modules.Projects;
 internal sealed class CollaborationService
 {
     private static readonly string[] MeaningfulProjectActions =
-        ["START", "RESTART", "SUBMIT", "CONFIRM", "REJECT", "WITHDRAW", "TERMINATE"];
+        ["START", "RESTART", "SUBMIT", "CONFIRM", "REJECT", "WITHDRAW", "TERMINATE", "MATERIAL_APPROVE", "MATERIAL_RETURN"];
 
     internal async Task<CollaborationSummaryResponse> SummaryAsync(
         MySqlConnection conn,
@@ -42,7 +42,7 @@ internal sealed class CollaborationService
                    COALESCE(SUM(CASE WHEN
                        ((pa.activity_type='FILE' AND pa.action='UPLOAD')
                          OR (pa.activity_type='MESSAGE' AND pa.action='CREATE')
-                         OR (pa.activity_type='PROJECT' AND pa.action IN ('START','RESTART','SUBMIT','CONFIRM','REJECT','WITHDRAW','TERMINATE')))
+                         OR (pa.activity_type='PROJECT' AND pa.action IN ('START','RESTART','SUBMIT','CONFIRM','REJECT','WITHDRAW','TERMINATE','MATERIAL_APPROVE','MATERIAL_RETURN')))
                        AND (pa.activity_type<>'PROJECT' OR pa.action<>'SUBMIT' OR {canReceivePendingAcceptance})
                        AND (pa.activity_type<>'FILE' OR pa.target_id IS NULL OR EXISTS (SELECT 1 FROM files f
                          WHERE f.id=pa.target_id AND f.project_id=pa.project_id AND f.status={FileStatuses.Available}))

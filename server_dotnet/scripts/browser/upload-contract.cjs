@@ -112,13 +112,30 @@ async function uploadFixture(context, token, projectId, fileName, bytes, { ensur
   return { ...merged, sessionId: initialized.sessionId };
 }
 
+// Submission needs supplier-returned material confirmed by the project's responsible user.
+async function approveMaterial(reviewerContext, reviewerToken, projectId) {
+  const project = await (await api(reviewerContext, 'GET', '/projects/' + projectId, undefined, reviewerToken)).json();
+  return (await api(reviewerContext, 'POST', '/projects/' + projectId + '/materials/approve', {
+    expectedSupplierFileId: project.latestSupplierFileId,
+  }, reviewerToken)).json();
+}
+
+async function returnApprovedMaterial(supplierContext, supplierToken, reviewerContext, reviewerToken, projectId, fileName) {
+  const file = await uploadFixture(
+    supplierContext, supplierToken, projectId, fileName, Buffer.from('supplier returned material|' + fileName));
+  await approveMaterial(reviewerContext, reviewerToken, projectId);
+  return file;
+}
+
 module.exports = {
   FIXTURE_LAST_MODIFIED,
+  approveMaterial,
   companyBatchWorkbook,
   isCompanionChunk,
   fileFingerprint,
   initUpload,
   putChunk,
+  returnApprovedMaterial,
   sha256,
   uploadFixture,
 };

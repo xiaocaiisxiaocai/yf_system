@@ -11,6 +11,7 @@ from upload_contract import init_request
 
 from test_business_acceptance import (
     _activate_user,
+    _approve_materials,
     _create_project_group,
     _download_matches,
     _password,
@@ -21,7 +22,8 @@ from test_business_acceptance import (
 def _project_snapshot(conn, project_id):
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT status,confirm_side,name,description FROM projects WHERE id=%s",
+            "SELECT status,confirm_side,name,description,material_review_status,"
+            "material_review_file_id,material_review_reason FROM projects WHERE id=%s",
             (project_id,),
         )
         project = cursor.fetchone()
@@ -312,6 +314,7 @@ def run_workflow_acceptance(client, Client, conn, check):
     _upload_chunks(
         supplier_client, no_reviewer_project["id"],
         "no-reviewer-boundary.pdf", b"no-reviewer-boundary")
+    _approve_materials(internal_client, no_reviewer_project["id"])
     with conn.cursor() as cursor:
         cursor.execute(
             "SELECT rp.role_id,rp.permission_id FROM role_permissions rp "
@@ -350,6 +353,58 @@ def run_workflow_acceptance(client, Client, conn, check):
         "supplier explicit supplier-side project submission",
         "POST", f"/api/v1/projects/{project_id}/submit",
         {"confirmSide": "SUPPLIER"}, expected=400)
+    unreviewed = _expect_atomic_rejection(
+        check, conn, supplier_client, project_id,
+        "supplier submission before the responsible user confirms the returned material",
+        "POST", f"/api/v1/projects/{project_id}/submit", {})
+    _check_equal(
+        check,
+        "unconfirmed material submission returns the actionable business error",
+        (unreviewed["code"], unreviewed["message"]),
+        (40901, "回传资料尚未经公司负责人确认 OK，不能提交验收"),
+    )
+    material_detail = internal_client.call("GET", f"/api/v1/projects/{project_id}")
+    _check_equal(
+        check,
+        "supplier upload leaves the material pending the responsible user's review",
+        (material_detail["materialReviewStatus"], material_detail["latestSupplierFileId"]),
+        ("PENDING", file_id),
+    )
+    material_path = f"/api/v1/projects/{project_id}/materials"
+    _expect_atomic_rejection(
+        check, conn, supplier_client, project_id, "supplier material approval",
+        "POST", material_path + "/approve", {"expectedSupplierFileId": file_id}, expected=403)
+    _expect_atomic_rejection(
+        check, conn, client, project_id, "non-responsible internal material approval",
+        "POST", material_path + "/approve", {"expectedSupplierFileId": file_id}, expected=403)
+    stale_material = _expect_atomic_rejection(
+        check, conn, internal_client, project_id, "material approval against an older supplier file",
+        "POST", material_path + "/approve", {"expectedSupplierFileId": file_id - 1})
+    _expect_atomic_rejection(
+        check, conn, internal_client, project_id, "material return without a reason",
+        "POST", material_path + "/return", {"expectedSupplierFileId": file_id}, expected=400)
+    returned_material = internal_client.call("POST", material_path + "/return", {
+        "expectedSupplierFileId": file_id,
+        "reason": "缺少动作流程表",
+    })
+    returned_submission = _expect_atomic_rejection(
+        check, conn, supplier_client, project_id, "supplier submission of returned material",
+        "POST", f"/api/v1/projects/{project_id}/submit", {})
+    approved_material = internal_client.call("POST", material_path + "/approve", {
+        "expectedSupplierFileId": file_id,
+    })
+    check(
+        "responsible user returns then approves the material with supplier notifications",
+        stale_material["code"] == 40903
+        and (returned_material["materialReviewStatus"], returned_material["materialReviewReason"])
+        == ("RETURNED", "缺少动作流程表")
+        and returned_submission["message"] == "回传资料已被公司负责人退回，请补充资料并待确认 OK 后再提交验收"
+        and (approved_material["materialReviewStatus"], approved_material["materialReviewReason"])
+        == ("APPROVED", None)
+        and _event_count(conn, project_id, "PROJECT_MATERIAL_RETURNED", supplier_user["id"]) == 1
+        and _event_count(conn, project_id, "PROJECT_MATERIAL_APPROVED", supplier_user["id"]) == 1
+        and {"PROJECT_MATERIAL_RETURN", "PROJECT_MATERIAL_APPROVE"}.issubset(_audit_actions(conn, project_id)),
+    )
     submitted_for_reject = supplier_client.call(
         "POST", f"/api/v1/projects/{project_id}/submit", {})
     reject_submission_id = _submission_id(submitted_for_reject)
@@ -445,6 +500,13 @@ def run_workflow_acceptance(client, Client, conn, check):
             "reason": "公司验收驳回",
             "expectedSubmissionId": reject_submission_id,
         })
+    _check_equal(
+        check,
+        "rejection requires the material to be confirmed again",
+        internal_client.call("GET", f"/api/v1/projects/{project_id}")["materialReviewStatus"],
+        "PENDING",
+    )
+    _approve_materials(internal_client, project_id)
     submitted_for_withdraw = supplier_client.call(
         "POST", f"/api/v1/projects/{project_id}/submit", {"confirmSide": "COMPANY"})
     withdraw_submission_id = _submission_id(submitted_for_withdraw)
@@ -467,6 +529,7 @@ def run_workflow_acceptance(client, Client, conn, check):
         client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
             "permissionIds": original_supplier_permission_ids,
         })
+    _approve_materials(internal_client, project_id)
     submitted_for_confirm = supplier_client.call(
         "POST", f"/api/v1/projects/{project_id}/submit", {})
     confirm_submission_id = _submission_id(submitted_for_confirm)

@@ -2501,6 +2501,106 @@
         }
       }
     },
+    "/api/v1/projects/{id}/materials/approve": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectMaterialReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/materials/return": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectMaterialReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/withdraw": {
       "post": {
         "tags": [
@@ -8278,6 +8378,7 @@
           "fileUploaded",
           "messageCreated",
           "projectConfirmed",
+          "projectMaterialReviewed",
           "projectRejected",
           "projectSubmitted",
           "projectWithdrawn"
@@ -8300,6 +8401,9 @@
             "type": "boolean"
           },
           "projectWithdrawn": {
+            "type": "boolean"
+          },
+          "projectMaterialReviewed": {
             "type": "boolean"
           }
         },
@@ -10963,7 +11067,10 @@
           "id",
           "latestSubmissionId",
           "latestSubmitterId",
+          "latestSupplierFileId",
           "machineModel",
+          "materialReviewReason",
+          "materialReviewStatus",
           "name",
           "priorityId",
           "priorityName",
@@ -11105,6 +11212,19 @@
           },
           "expectedCompletionDate": {
             "type": "string",
+            "nullable": true
+          },
+          "materialReviewStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "materialReviewReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "latestSupplierFileId": {
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "hasCopyHistory": {
@@ -11427,6 +11547,25 @@
         },
         "additionalProperties": false
       },
+      "ProjectMaterialReviewRequest": {
+        "required": [
+          "expectedSupplierFileId",
+          "reason"
+        ],
+        "type": "object",
+        "properties": {
+          "expectedSupplierFileId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "ProjectOwnerOption": {
         "required": [
           "employeeNo",
@@ -11490,7 +11629,10 @@
           "hasCopyHistory",
           "id",
           "latestSubmissionId",
+          "latestSupplierFileId",
           "machineModel",
+          "materialReviewReason",
+          "materialReviewStatus",
           "name",
           "priorityId",
           "priorityName",
@@ -11631,6 +11773,19 @@
           },
           "expectedCompletionDate": {
             "type": "string",
+            "nullable": true
+          },
+          "materialReviewStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "materialReviewReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "latestSupplierFileId": {
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "hasCopyHistory": {

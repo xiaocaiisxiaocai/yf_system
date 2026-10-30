@@ -23,6 +23,8 @@ public sealed class ProjectActivityAuditContractTests
             [("project", "PROJECT_REJECT")] = ("PROJECT", "REJECT", "驳回项目验收"),
             [("project", "PROJECT_WITHDRAW")] = ("PROJECT", "WITHDRAW", "撤回项目验收"),
             [("project", "PROJECT_TERMINATE")] = ("PROJECT", "TERMINATE", "终止项目"),
+            [("project", "PROJECT_MATERIAL_APPROVE")] = ("PROJECT", "MATERIAL_APPROVE", "确认回传资料 OK"),
+            [("project", "PROJECT_MATERIAL_RETURN")] = ("PROJECT", "MATERIAL_RETURN", "退回回传资料"),
             [("file", "FILE_UPLOAD")] = ("FILE", "UPLOAD", "上传文件"),
             [("file", "FILE_DELETE")] = ("FILE", "DELETE", "删除文件"),
             [("message", "MESSAGE_CREATE")] = ("MESSAGE", "CREATE", "发表留言"),

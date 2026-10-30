@@ -623,15 +623,27 @@ try:
             supplier_groups = supplier_client.call("GET", "/api/v1/project-groups")
             check("supplier account sees its supplier enterprise groups",
                   any(item["id"] == project["projectGroupId"] for item in supplier_groups["list"]))
+            supplier_return = b"%PDF-1.4\nsupplier returned material\n%%EOF\n"
+            returned_upload = init_upload(supplier_client, pid, "supplier-return.pdf", supplier_return)
+            put_chunk(supplier_client, returned_upload["sessionId"], 0, supplier_return)
+            submit_md5(supplier_client, returned_upload["sessionId"], supplier_return)
+            returned_file = supplier_client.call("POST", f"/api/v1/uploads/{returned_upload['sessionId']}/merge")
+            supplier_client.call("POST", f"/api/v1/projects/{pid}/submit", {}, expected=409)
+            approve_materials = lambda: client.call("POST", f"/api/v1/projects/{pid}/materials/approve", {
+                "expectedSupplierFileId": returned_file["id"],
+            })
+            approve_materials()
             first_submission = supplier_client.call("POST", f"/api/v1/projects/{pid}/submit", {})
             supplier_client.call("POST", f"/api/v1/projects/{pid}/withdraw", {
                 "expectedSubmissionId": first_submission["latestSubmissionId"],
             })
+            approve_materials()
             supplier_submission = supplier_client.call("POST", f"/api/v1/projects/{pid}/submit", {})
             client.call("POST", f"/api/v1/projects/{pid}/reject", {
                 "reason": "回归测试驳回",
                 "expectedSubmissionId": supplier_submission["latestSubmissionId"],
             })
+            approve_materials()
             final_submission = supplier_client.call(
                 "POST", f"/api/v1/projects/{pid}/submit", {"confirmSide": "COMPANY"})
             completed_project = client.call("POST", f"/api/v1/projects/{pid}/confirm", {

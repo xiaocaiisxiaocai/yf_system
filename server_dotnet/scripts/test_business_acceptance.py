@@ -193,6 +193,14 @@ def _exchange_messages(internal_client, supplier_client, project_id, internal_id
     return internal_message["id"], supplier_message["id"]
 
 
+def _approve_materials(reviewer_client, project_id):
+    """The responsible user confirms the latest supplier material so the supplier may submit."""
+    project = reviewer_client.call("GET", f"/api/v1/projects/{project_id}")
+    return reviewer_client.call("POST", f"/api/v1/projects/{project_id}/materials/approve", {
+        "expectedSupplierFileId": project["latestSupplierFileId"],
+    })
+
+
 def _create_started_project(creator_client, admin_client, conn, supplier_id, name):
     _, project = _create_project_group(
         creator_client, admin_client, conn, supplier_id, name)
@@ -558,6 +566,8 @@ def run_business_acceptance(client, Client, conn, check):
         and foreign_write_state_after == foreign_write_state_before,
     )
 
+    _approve_materials(internal_client, project_a)
+    _approve_materials(internal_client, project_b)
     project_a_submission = supplier_a_client.call(
         "POST", f"/api/v1/projects/{project_a}/submit", {})
     client.call("POST", f"/api/v1/projects/{project_a}/confirm", {
@@ -585,8 +595,8 @@ def run_business_acceptance(client, Client, conn, check):
         and project_b_detail["status"] == "COMPLETED"
         and activities_a["summary"]["status"] == "COMPLETED"
         and activities_b["summary"]["status"] == "COMPLETED"
-        and {"START", "SUBMIT", "CONFIRM", "UPLOAD", "CREATE"}.issubset(actions_a)
-        and {"START", "SUBMIT", "CONFIRM", "UPLOAD", "CREATE"}.issubset(actions_b),
+        and {"START", "MATERIAL_APPROVE", "SUBMIT", "CONFIRM", "UPLOAD", "CREATE"}.issubset(actions_a)
+        and {"START", "MATERIAL_APPROVE", "SUBMIT", "CONFIRM", "UPLOAD", "CREATE"}.issubset(actions_b),
     )
 
     # Verify audit visibility through the API after the target rows have been

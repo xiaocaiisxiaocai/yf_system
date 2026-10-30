@@ -16,7 +16,8 @@ public sealed class EmailNotificationPolicyTests
             ProjectSubmittedEnabled: true,
             ProjectConfirmedEnabled: true,
             ProjectRejectedEnabled: true,
-            ProjectWithdrawnEnabled: true);
+            ProjectWithdrawnEnabled: true,
+            ProjectMaterialReviewedEnabled: true);
 
         Assert.False(policy.Allows("MESSAGE_CREATED", "INTERNAL"));
         Assert.True(policy.Allows("MESSAGE_CREATED", "SUPPLIER"));
@@ -34,11 +35,32 @@ public sealed class EmailNotificationPolicyTests
             ProjectSubmittedEnabled: true,
             ProjectConfirmedEnabled: true,
             ProjectRejectedEnabled: true,
-            ProjectWithdrawnEnabled: true);
+            ProjectWithdrawnEnabled: true,
+            ProjectMaterialReviewedEnabled: true);
 
         Assert.False(policy.Allows("MESSAGE_CREATED", "SUPPLIER"));
         Assert.True(policy.Allows("FILE_UPLOADED", "SUPPLIER"));
         Assert.True(policy.Allows("TEST_NOTIFICATION", null));
+    }
+
+    [Fact]
+    public void MaterialReviewSwitchCoversApprovedAndReturnedMail()
+    {
+        var policy = new EmailNotificationPolicy(
+            GlobalEnabled: true,
+            InternalEnabled: true,
+            SupplierEnabled: true,
+            MessageCreatedEnabled: true,
+            FileUploadedEnabled: true,
+            ProjectSubmittedEnabled: true,
+            ProjectConfirmedEnabled: true,
+            ProjectRejectedEnabled: true,
+            ProjectWithdrawnEnabled: true,
+            ProjectMaterialReviewedEnabled: false);
+
+        Assert.False(policy.Allows("PROJECT_MATERIAL_APPROVED", "SUPPLIER"));
+        Assert.False(policy.Allows("PROJECT_MATERIAL_RETURNED", "SUPPLIER"));
+        Assert.True(policy.Allows("PROJECT_REJECTED", "SUPPLIER"));
     }
 
     [Fact]
@@ -53,7 +75,8 @@ public sealed class EmailNotificationPolicyTests
             ProjectSubmittedEnabled: true,
             ProjectConfirmedEnabled: true,
             ProjectRejectedEnabled: true,
-            ProjectWithdrawnEnabled: true);
+            ProjectWithdrawnEnabled: true,
+            ProjectMaterialReviewedEnabled: true);
 
         Assert.False(policy.Allows("MESSAGE_CREATED", "INTERNAL"));
         Assert.False(policy.Allows("TEST_NOTIFICATION", null));

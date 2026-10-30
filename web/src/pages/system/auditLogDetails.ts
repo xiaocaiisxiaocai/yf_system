@@ -85,6 +85,8 @@ export const ACTIONS: Record<string, ActionMeta> = {
   PROJECT_CONFIRM: action('验收通过', 'PROJECT', '项目协作', 'green'),
   PROJECT_REJECT: action('验收驳回', 'PROJECT', '项目协作', 'red'),
   PROJECT_WITHDRAW: action('撤回验收申请', 'PROJECT', '项目协作', 'orange'),
+  PROJECT_MATERIAL_APPROVE: action('确认回传资料 OK', 'PROJECT', '项目协作', 'green'),
+  PROJECT_MATERIAL_RETURN: action('退回回传资料', 'PROJECT', '项目协作', 'orange'),
   PROJECT_ACCEPTANCE_MIGRATE: action('转交公司内部验收', 'PROJECT', '项目协作', 'arcoblue'),
   PROJECT_ACCEPTANCE_NOTIFICATIONS_MIGRATE: action('更新内部验收通知', 'PROJECT', '项目协作', 'arcoblue'),
   PROJECT_TERMINATE: action('终止项目', 'PROJECT', '项目协作', 'red'),
@@ -436,8 +438,9 @@ export function detailNotes(row: AuditLogRow): DetailNote[] {
     const label = row.action === 'PROJECT_REJECT' ? '驳回原因'
       : row.action === 'PROJECT_TERMINATE' ? '终止原因'
         : row.action === 'PROJECT_WITHDRAW' ? '撤回原因'
-          : row.action === 'PROJECT_RESTART' ? '重新开始说明'
-            : '操作说明'
+          : row.action === 'PROJECT_MATERIAL_RETURN' ? '退回原因'
+            : row.action === 'PROJECT_RESTART' ? '重新开始说明'
+              : '操作说明'
     notes.push({ label, value: reason, tone: row.action === 'PROJECT_REJECT' || row.action === 'PROJECT_TERMINATE' ? 'danger' : 'normal' })
   }
   const error = cleanText(detail.error)

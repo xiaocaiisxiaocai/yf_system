@@ -118,14 +118,67 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
 
   it('only suppliers can submit a project for company acceptance', async () => {
     mocks.auth.permissions = ['project:submit']
-    const { rerender } = render(<ProjectWorkflowPanel project={{ id: 1, status: 'IN_PROGRESS' } as never} onChanged={() => undefined} />)
+    const approved = { id: 1, status: 'IN_PROGRESS', materialReviewStatus: 'APPROVED', latestSupplierFileId: 5 } as never
+    const { rerender } = render(<ProjectWorkflowPanel project={approved} onChanged={() => undefined} />)
     expect(screen.queryByRole('button', { name: '提交公司验收' })).not.toBeInTheDocument()
 
     mocks.auth.user = { id: 2, userType: 'SUPPLIER' }
-    rerender(<ProjectWorkflowPanel project={{ id: 1, status: 'IN_PROGRESS' } as never} onChanged={() => undefined} />)
+    rerender(<ProjectWorkflowPanel project={approved} onChanged={() => undefined} />)
     await userEvent.click(screen.getByRole('button', { name: '提交公司验收' }))
     await confirmPopover()
     expect(mocks.post).toHaveBeenLastCalledWith('/projects/1/submit', { confirmSide: 'COMPANY' })
+  })
+
+  it.each([
+    ['NO_MATERIAL', '待回传资料'],
+    ['PENDING', '资料待确认'],
+    ['RETURNED', '资料已退回'],
+  ])('supplier submission stays disabled while the material review is %s', (materialReviewStatus, tag) => {
+    mocks.auth.user = { id: 2, userType: 'SUPPLIER' }
+    mocks.auth.permissions = ['project:submit']
+    render(<ProjectWorkflowPanel
+      project={{ id: 1, status: 'IN_PROGRESS', materialReviewStatus, materialReviewReason: materialReviewStatus === 'RETURNED' ? '缺少动作流程表' : null } as never}
+      onChanged={() => undefined}
+    />)
+    expect(screen.getByRole('button', { name: '提交公司验收' })).toBeDisabled()
+    expect(screen.getByText(tag)).toBeInTheDocument()
+    if (materialReviewStatus === 'RETURNED') expect(screen.getByText('退回原因：缺少动作流程表')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '资料确认 OK' })).not.toBeInTheDocument()
+  })
+
+  it('only the responsible user reviews the returned material, against the file version shown', async () => {
+    const changed = vi.fn()
+    const user = userEvent.setup()
+    const project = (latestSupplierFileId: number, materialReviewStatus = 'PENDING', responsibleUserId = 1) => ({
+      id: 17, status: 'IN_PROGRESS', responsibleUserId, materialReviewStatus, latestSupplierFileId,
+    }) as never
+    const { rerender } = render(<ProjectWorkflowPanel project={project(5, 'PENDING', 9)} onChanged={changed} />)
+    expect(screen.queryByRole('button', { name: '资料确认 OK' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '退回资料' })).not.toBeInTheDocument()
+
+    rerender(<ProjectWorkflowPanel project={project(5)} onChanged={changed} />)
+    await user.click(screen.getByRole('button', { name: '资料确认 OK' }))
+    rerender(<ProjectWorkflowPanel project={project(6)} onChanged={changed} />)
+    await confirmPopover()
+    expect(mocks.post).toHaveBeenLastCalledWith('/projects/17/materials/approve', { expectedSupplierFileId: 5 })
+
+    await user.click(screen.getByRole('button', { name: '退回资料' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: '确认退回' }))
+    expect(await within(dialog).findByText('请填写退回原因')).toBeInTheDocument()
+    await user.type(within(dialog).getByPlaceholderText('请说明需要厂商补充或修改的资料'), '缺少 STEP')
+    await user.click(within(dialog).getByRole('button', { name: '确认退回' }))
+    await waitFor(() => expect(mocks.post).toHaveBeenLastCalledWith('/projects/17/materials/return', {
+      reason: '缺少 STEP',
+      expectedSupplierFileId: 6,
+    }))
+
+    rerender(<ProjectWorkflowPanel project={project(6, 'APPROVED')} onChanged={changed} />)
+    expect(screen.queryByRole('button', { name: '资料确认 OK' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '退回资料' })).toBeInTheDocument()
+    rerender(<ProjectWorkflowPanel project={project(6, 'RETURNED')} onChanged={changed} />)
+    expect(screen.getByRole('button', { name: '资料确认 OK' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '退回资料' })).not.toBeInTheDocument()
   })
 
   it('project rejection discards a cancelled reason but retains it after a failed submit', async () => {

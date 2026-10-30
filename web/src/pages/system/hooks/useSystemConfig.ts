@@ -162,6 +162,7 @@ export function useSystemConfig(http: HttpClient) {
       { key: 'notify.event.project_confirmed', value: String(notificationDraft.events.projectConfirmed) },
       { key: 'notify.event.project_rejected', value: String(notificationDraft.events.projectRejected) },
       { key: 'notify.event.project_withdrawn', value: String(notificationDraft.events.projectWithdrawn) },
+      { key: 'notify.event.project_material_reviewed', value: String(notificationDraft.events.projectMaterialReviewed) },
     ]
     try {
       await http.put<ApiResponses['PUT /admin/system/configs']>('/admin/system/configs', { items })

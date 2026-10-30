@@ -272,6 +272,13 @@ async function chooseNotificationTab(drawer, name) {
       const stored = await json(adminContext, adminToken, 'GET',
         `/projects/${project.id}/files?keyword=${encodeURIComponent(uploadName)}&page=1&pageSize=10`);
       assert.equal(stored.total, 1);
+      // The supplier can submit only after the responsible user confirms the returned material.
+      await supplierPage.getByText('资料待确认', { exact: true }).waitFor();
+      assert(await supplierPage.getByRole('button', { name: '提交公司验收', exact: true }).isDisabled());
+      await json(adminContext, adminToken, 'POST', `/projects/${project.id}/materials/approve`, {
+        expectedSupplierFileId: stored.list[0].id,
+      });
+      await supplierPage.getByText('资料已确认 OK', { exact: true }).waitFor();
     });
 
     await record('供应商提交后管理员工作台待确认区自动出现项目', async () => {

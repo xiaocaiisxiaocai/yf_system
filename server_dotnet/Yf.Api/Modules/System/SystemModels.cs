@@ -27,7 +27,8 @@ public sealed record NotificationEventsResponse(
     bool ProjectSubmitted,
     bool ProjectConfirmed,
     bool ProjectRejected,
-    bool ProjectWithdrawn);
+    bool ProjectWithdrawn,
+    bool ProjectMaterialReviewed);
 
 public sealed record NotificationPolicyResponse(
     bool GlobalEnabled,

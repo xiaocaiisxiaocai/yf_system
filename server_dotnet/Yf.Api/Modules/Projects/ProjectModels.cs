@@ -145,6 +145,17 @@ public sealed class ProjectGroupTransferRequest
     public ulong? ResponsibleUserId { get; init; }
 }
 
+public sealed class ProjectMaterialReviewRequest
+{
+    /// <summary>The latestSupplierFileId the reviewer saw; a newer supplier upload fails with 409 / 40903.</summary>
+    [JsonPropertyName("expectedSupplierFileId")]
+    public ulong? ExpectedSupplierFileId { get; init; }
+
+    /// <summary>Required when returning the material.</summary>
+    [JsonPropertyName("reason")]
+    public string? Reason { get; init; }
+}
+
 public sealed class ProjectDecisionRequest
 {
     [JsonPropertyName("expectedSubmissionId")]
@@ -206,6 +217,11 @@ internal sealed class ProjectRow
     public ulong? RobotTypeId { get; init; }
     public string? RobotTypeName { get; init; }
     public DateTime? ExpectedCompletionDate { get; init; }
+    public string? MaterialReviewStatus { get; init; }
+    public ulong? MaterialReviewFileId { get; init; }
+    public string? MaterialReviewReason { get; init; }
+    /// <summary>Latest available supplier-to-company file id; only loaded while the subproject is in progress.</summary>
+    public ulong? LatestSupplierFileId { get; init; }
     public bool HasCopyHistory { get; set; }
     public ulong UnreadMessages { get; set; }
     public ulong? CopySourceProjectId { get; set; }
@@ -381,6 +397,10 @@ internal static class ProjectJson
         RobotTypeId = row.RobotTypeId,
         RobotTypeName = row.RobotTypeName,
         ExpectedCompletionDate = row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+        MaterialReviewStatus = ProjectWorkflowRules.EffectiveMaterialReview(row),
+        MaterialReviewReason = ProjectWorkflowRules.EffectiveMaterialReview(row) == MaterialReviewStatuses.Returned
+            ? row.MaterialReviewReason : null,
+        LatestSupplierFileId = row.LatestSupplierFileId,
         HasCopyHistory = row.HasCopyHistory,
         UnreadMessages = row.UnreadMessages,
         CopySource = row.CopySourceProjectId is { } sourceProjectId && row.CopySourceProjectName is { } sourceProjectName

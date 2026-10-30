@@ -55,6 +55,7 @@ public class SystemTests
     [InlineData("notify.event.project_confirmed")]
     [InlineData("notify.event.project_rejected")]
     [InlineData("notify.event.project_withdrawn")]
+    [InlineData("notify.event.project_material_reviewed")]
     public void NotificationConfigValuesAreCanonicalBooleans(string key)
     {
         Assert.Equal("true", SystemService.NormalizeConfig(key, "1"));

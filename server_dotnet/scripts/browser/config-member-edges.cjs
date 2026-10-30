@@ -15,6 +15,7 @@ const notificationConfigKeys = new Set([
   'notify.event.message_created', 'notify.event.file_uploaded',
   'notify.event.project_submitted', 'notify.event.project_confirmed',
   'notify.event.project_rejected', 'notify.event.project_withdrawn',
+  'notify.event.project_material_reviewed',
 ]);
 const pathOf = response => new URL(response.url()).pathname;
 const normalizeExtensions = value => Array.from(new Set(String(value).split(',')

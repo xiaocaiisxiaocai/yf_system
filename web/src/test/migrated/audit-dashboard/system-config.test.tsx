@@ -21,6 +21,7 @@ const notificationPolicy = {
     projectConfirmed: true,
     projectRejected: true,
     projectWithdrawn: true,
+    projectMaterialReviewed: true,
   },
 }
 

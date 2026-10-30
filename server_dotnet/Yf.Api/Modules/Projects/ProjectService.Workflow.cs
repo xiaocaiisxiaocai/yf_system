@@ -90,15 +90,20 @@ internal sealed partial class ProjectService
         {
             throw ApiException.Conflict("只有进行中的项目可以提交验收");
         }
-        await using var db = EfDb.Use(conn, tx);
-        if (!await db.Files.AnyAsync(
-                file => file.ProjectId == projectId && file.Status == FileStatuses.Available, ct))
-        {
-            throw ApiException.Conflict("项目至少上传一个可用文件后才能提交验收");
-        }
         if (await CountActiveUploadsAsync(conn, tx, projectId, ct) > 0)
         {
             throw ApiException.Conflict("项目仍有活动上传会话，不能提交验收");
+        }
+        switch (ProjectWorkflowRules.EffectiveMaterialReview(project))
+        {
+            case MaterialReviewStatuses.Approved:
+                break;
+            case MaterialReviewStatuses.NoMaterial:
+                throw ApiException.Conflict("请先上传回传资料，待公司负责人确认 OK 后再提交验收");
+            case MaterialReviewStatuses.Returned:
+                throw ApiException.Conflict("回传资料已被公司负责人退回，请补充资料并待确认 OK 后再提交验收");
+            default:
+                throw ApiException.Conflict("回传资料尚未经公司负责人确认 OK，不能提交验收");
         }
         var reviewers = await ProjectReviewerService.ListAsync(conn, tx, project, ct);
         if (reviewers.Count == 0)
@@ -248,6 +253,11 @@ internal sealed partial class ProjectService
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(item => item.Status, to)
                 .SetProperty(item => item.ConfirmSide, nextConfirmSide)
+                // Every transition ends the current material review; rejected, withdrawn or restarted
+                // subprojects need the responsible user to confirm the material again.
+                .SetProperty(item => item.MaterialReviewStatus, (string?)null)
+                .SetProperty(item => item.MaterialReviewFileId, (ulong?)null)
+                .SetProperty(item => item.MaterialReviewReason, (string?)null)
                 .SetProperty(item => item.UpdatedAt, now), ct);
         if (changed == 0)
             throw ApiException.VersionConflict("项目状态已被他人变更，请刷新后重试");

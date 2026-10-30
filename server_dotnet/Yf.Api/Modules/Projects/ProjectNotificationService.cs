@@ -177,6 +177,37 @@ internal static class ProjectNotificationService
             audit);
     }
 
+    /// <summary>Tells the supplier side that the responsible user approved or returned its returned material.</summary>
+    internal static Task EnqueueMaterialReviewAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        ProjectRow project,
+        string decision,
+        string? reason,
+        CurrentUser actor,
+        string baseUrl,
+        AuditService audit,
+        CancellationToken ct)
+    {
+        var approved = decision == MaterialReviewStatuses.Approved;
+        var verb = approved ? "回传资料已确认 OK，可以提交验收" : "回传资料已被退回";
+        var reasonLine = reason is null ? string.Empty : $"\n退回原因：{reason}";
+        return EnqueueAsync(
+            conn,
+            tx,
+            project,
+            approved ? "PROJECT_MATERIAL_APPROVED" : "PROJECT_MATERIAL_RETURNED",
+            "SUPPLIER",
+            ["project:list"],
+            [],
+            false,
+            actor.Id,
+            $"[协作平台] 项目「{project.Name}」{verb}",
+            $"项目：{project.Name}\n结果：{verb}\n操作人：账号 {actor.EmployeeNo}{reasonLine}\n\n请登录平台查看：{ProjectUrl(baseUrl, project.Id, "activity")}\n\n（本邮件由系统自动发送）",
+            ct,
+            audit);
+    }
+
     internal static async Task EnqueuePendingAcceptanceAsync(
         MySqlConnection conn,
         MySqlTransaction tx,

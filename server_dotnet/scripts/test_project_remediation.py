@@ -12,6 +12,7 @@ from file_blob_fixture import insert_blob_file
 from test_background_copy_contracts import submit_and_wait_copy
 
 from test_business_acceptance import (
+    _approve_materials,
     _create_project_group,
     _create_started_project,
     _ensure_project_metadata,
@@ -115,11 +116,11 @@ def _new_project(creator_client, admin_client, conn, supplier_id, name):
         name + "-" + secrets.token_hex(5))
 
 
-def _insert_file(conn, storage_root, project_id, uploader_id):
+def _insert_file(conn, storage_root, project_id, uploader_id, direction="C2S"):
     token = secrets.token_hex(8)
     return insert_blob_file(
         conn, storage_root, project_id, uploader_id,
-        token + ".pdf", "pdf", "application/pdf", content=b"x",
+        token + ".pdf", "pdf", "application/pdf", content=b"x", direction=direction,
     )["file_id"]
 
 
@@ -441,7 +442,9 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
     # entered PENDING_CONFIRMATION.
     deleted_project = _new_project(
         old_client, client, conn, supplier["id"], "并发删除文件")
-    deleted_file = _insert_file(conn, storage_root, deleted_project, old_user["id"])
+    deleted_file = _insert_file(
+        conn, storage_root, deleted_project, supplier_user["id"], direction="S2C")
+    _approve_materials(old_client, deleted_project)
     conn.begin()
     try:
         with conn.cursor() as cursor:
@@ -462,13 +465,14 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
         conn.rollback()
         raise
     _finish(worker, result)
-    check("project submit sees concurrent deletion of final available file",
+    check("project submit sees concurrent deletion of the approved supplier file",
           _assert_no_submit_side_effect(conn, deleted_project))
 
     # The same interleaving must observe a newly committed active upload.
     upload_project = _new_project(
         old_client, client, conn, supplier["id"], "并发活动上传")
-    _insert_file(conn, storage_root, upload_project, old_user["id"])
+    _insert_file(conn, storage_root, upload_project, supplier_user["id"], direction="S2C")
+    _approve_materials(old_client, upload_project)
     upload_id = str(__import__("uuid").uuid4())
     conn.begin()
     try:
@@ -501,7 +505,8 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
     # only after waiting for the project lock.
     withdraw_project = _new_project(
         old_client, client, conn, supplier["id"], "并发旧提交者撤回")
-    _insert_file(conn, storage_root, withdraw_project, old_user["id"])
+    _insert_file(conn, storage_root, withdraw_project, supplier_user["id"], direction="S2C")
+    _approve_materials(old_client, withdraw_project)
     old_submission = supplier_client.call(
         "POST", f"/api/v1/projects/{withdraw_project}/submit", {})
     reviewer_client.call("POST", f"/api/v1/projects/{withdraw_project}/reject", {
@@ -544,7 +549,8 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
     # result notification even when the reviewer is selected by global scope.
     notice_project = _new_project(
         old_client, client, conn, supplier["id"], "供应商提交结果通知")
-    _insert_file(conn, storage_root, notice_project, new_user["id"])
+    _insert_file(conn, storage_root, notice_project, supplier_user["id"], direction="S2C")
+    _approve_materials(old_client, notice_project)
     view_all_client.call("POST", f"/api/v1/projects/{notice_project}/submit", {}, expected=403)
     notice_submission = supplier_client.call(
         "POST", f"/api/v1/projects/{notice_project}/submit", {})

@@ -812,6 +812,20 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(128)")
                         .HasColumnName("machine_model");
 
+                    b.Property<ulong?>("MaterialReviewFileId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("material_review_file_id");
+
+                    b.Property<string>("MaterialReviewReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("material_review_reason");
+
+                    b.Property<string>("MaterialReviewStatus")
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("material_review_status");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(128)

@@ -130,6 +130,12 @@ public record ProjectResponse
     public string? RobotTypeName { get; init; }
     /// <summary>yyyy-MM-dd</summary>
     public string? ExpectedCompletionDate { get; init; }
+    /// <summary>Supplier material review while in progress: NO_MATERIAL, PENDING, APPROVED or RETURNED; otherwise null.</summary>
+    public string? MaterialReviewStatus { get; init; }
+    /// <summary>Return reason while the material review is RETURNED.</summary>
+    public string? MaterialReviewReason { get; init; }
+    /// <summary>Latest available supplier-to-company file id while in progress; echoed as expectedSupplierFileId.</summary>
+    public ulong? LatestSupplierFileId { get; init; }
     public bool HasCopyHistory { get; init; }
     public ulong UnreadMessages { get; init; }
     public ProjectCopySourceRef? CopySource { get; init; }

@@ -94,9 +94,9 @@ public sealed class ProjectGroupTests
         await conn.ExecuteAsync(new CommandDefinition(
             """
             INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status)
-            VALUES(@First,@ActorId,'C2S','a.txt','group-a.txt','txt',1,'files/group-a.txt','AVAILABLE'),
+            VALUES(@First,@SupplierId,'S2C','a.txt','group-a.txt','txt',1,'files/group-a.txt','AVAILABLE'),
                   (@Second,@ActorId,'C2S','b.txt','group-b.txt','txt',1,'files/group-b.txt','AVAILABLE')
-            """, new { First = children[0].Id, Second = children[1].Id, ActorId = actor.Id }));
+            """, new { First = children[0].Id, Second = children[1].Id, ActorId = actor.Id, SupplierId = 8302UL }));
         Assert.Equal(["a.txt"], (await conn.QueryAsync<string>(new CommandDefinition(
             "SELECT original_name FROM files WHERE project_id=@ProjectId", new { ProjectId = children[0].Id }))).ToArray());
         Assert.Equal(["b.txt"], (await conn.QueryAsync<string>(new CommandDefinition(
@@ -129,6 +129,55 @@ public sealed class ProjectGroupTests
                    1048576,1,'tmp/expired','UPLOADING',UTC_TIMESTAMP()-INTERVAL 1 MINUTE,UTC_TIMESTAMP(),UTC_TIMESTAMP())
             """, new { ProjectId = children[0].Id, UploaderId = supplier.Id, Fingerprint = new string('b', 64) },
             cancellationToken: ct));
+        var supplierFileId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+            "SELECT id FROM files WHERE project_id=@ProjectId AND direction='S2C'", new { ProjectId = children[0].Id }));
+        await AssertMaterialReviewAsync(projects, conn, actor, children[0].Id, "PENDING", supplierFileId, ct);
+        var unreviewed = await Assert.ThrowsAsync<ApiException>(() => projects.SubmitAsync(
+            conn, supplier, children[0].Id, new ProjectSubmitRequest(), null, ct));
+        Assert.Equal((409, 40901), (unreviewed.Status, unreviewed.Code));
+        Assert.Equal("回传资料尚未经公司负责人确认 OK，不能提交验收", unreviewed.Message);
+        var supplierApproval = await Assert.ThrowsAsync<ApiException>(() => projects.ApproveMaterialsAsync(
+            conn, supplier, children[0].Id, new ProjectMaterialReviewRequest { ExpectedSupplierFileId = supplierFileId }, null, ct));
+        Assert.Equal(403, supplierApproval.Status);
+        var staleApproval = await Assert.ThrowsAsync<ApiException>(() => projects.ApproveMaterialsAsync(
+            conn, actor, children[0].Id, new ProjectMaterialReviewRequest { ExpectedSupplierFileId = supplierFileId + 1000 }, null, ct));
+        Assert.Equal((409, 40903), (staleApproval.Status, staleApproval.Code));
+        var emptyReason = await Assert.ThrowsAsync<ApiException>(() => projects.ReturnMaterialsAsync(
+            conn, actor, children[0].Id, new ProjectMaterialReviewRequest { ExpectedSupplierFileId = supplierFileId, Reason = " " }, null, ct));
+        Assert.Equal(400, emptyReason.Status);
+
+        using (var returned = Json(await projects.ReturnMaterialsAsync(conn, actor, children[0].Id,
+                   new ProjectMaterialReviewRequest { ExpectedSupplierFileId = supplierFileId, Reason = "缺少动作流程表" }, null, ct)))
+        {
+            Assert.Equal("RETURNED", returned.RootElement.GetProperty("materialReviewStatus").GetString());
+            Assert.Equal("缺少动作流程表", returned.RootElement.GetProperty("materialReviewReason").GetString());
+        }
+        var returnedSubmission = await Assert.ThrowsAsync<ApiException>(() => projects.SubmitAsync(
+            conn, supplier, children[0].Id, new ProjectSubmitRequest(), null, ct));
+        Assert.Equal("回传资料已被公司负责人退回，请补充资料并待确认 OK 后再提交验收", returnedSubmission.Message);
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM email_outbox WHERE project_id=@ProjectId AND event_type='PROJECT_MATERIAL_RETURNED' AND recipient_user_id=8302",
+            new { ProjectId = children[0].Id })));
+
+        await projects.ApproveMaterialsAsync(conn, actor, children[0].Id,
+            new ProjectMaterialReviewRequest { ExpectedSupplierFileId = supplierFileId }, null, ct);
+        await AssertMaterialReviewAsync(projects, conn, actor, children[0].Id, "APPROVED", supplierFileId, ct);
+        // A new supplier upload invalidates the approval until the responsible user confirms again.
+        await conn.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status)
+            VALUES(@ProjectId,8302,'S2C','a2.txt','group-a2.txt','txt',1,'files/group-a2.txt','AVAILABLE')
+            """, new { ProjectId = children[0].Id }));
+        var newerFileId = await conn.ExecuteScalarAsync<ulong>("SELECT LAST_INSERT_ID()");
+        await AssertMaterialReviewAsync(projects, conn, actor, children[0].Id, "PENDING", newerFileId, ct);
+        await Assert.ThrowsAsync<ApiException>(() => projects.SubmitAsync(
+            conn, supplier, children[0].Id, new ProjectSubmitRequest(), null, ct));
+        await projects.ApproveMaterialsAsync(conn, actor, children[0].Id,
+            new ProjectMaterialReviewRequest { ExpectedSupplierFileId = newerFileId }, null, ct);
+        Assert.Equal(2, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM email_outbox WHERE project_id=@ProjectId AND event_type='PROJECT_MATERIAL_APPROVED' AND recipient_user_id=8302",
+            new { ProjectId = children[0].Id })));
+
         using (var submitted = Json(await projects.SubmitAsync(
                    conn, supplier, children[0].Id, new ProjectSubmitRequest(), null, ct)))
         {
@@ -144,6 +193,8 @@ public sealed class ProjectGroupTests
             await projects.WithdrawAsync(conn, supplier, children[0].Id,
                 new ProjectDecisionRequest { ExpectedSubmissionId = submissionId }, null, ct);
         }
+        // Withdrawing (like rejecting) ends the review: the material must be confirmed again.
+        await AssertMaterialReviewAsync(projects, conn, actor, children[0].Id, "PENDING", newerFileId, ct);
 
         var submissions = new List<(ulong ProjectId, ulong SubmissionId)>();
         foreach (var child in children)
@@ -184,6 +235,15 @@ public sealed class ProjectGroupTests
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
             "SELECT COUNT(*) FROM project_group_status_logs WHERE project_group_id=@GroupId AND action='AUTO_COMPLETE'",
             new { GroupId = groupId })));
+    }
+
+    private static async Task AssertMaterialReviewAsync(
+        ProjectService projects, MySqlConnector.MySqlConnection conn, CurrentUser viewer, ulong projectId,
+        string expectedStatus, ulong expectedLatestSupplierFileId, CancellationToken ct)
+    {
+        using var detail = Json(await projects.DetailAsync(conn, viewer, projectId, ct));
+        Assert.Equal(expectedStatus, detail.RootElement.GetProperty("materialReviewStatus").GetString());
+        Assert.Equal(expectedLatestSupplierFileId, detail.RootElement.GetProperty("latestSupplierFileId").GetUInt64());
     }
 
     [Fact(Timeout = 90_000)]

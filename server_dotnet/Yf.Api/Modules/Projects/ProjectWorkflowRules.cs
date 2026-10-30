@@ -73,6 +73,32 @@ internal static class ProjectWorkflowRules
             throw ApiException.Forbidden("项目验收仅允许供应商用户撤回");
     }
 
+    /// <summary>
+    /// A stored review only counts while it covers the latest available supplier file, so a new supplier
+    /// upload (or removal of the reviewed file) sends the material back to PENDING without extra writes.
+    /// </summary>
+    internal static string? EffectiveMaterialReview(ProjectRow row) =>
+        EffectiveMaterialReview(row.Status, row.MaterialReviewStatus, row.MaterialReviewFileId, row.LatestSupplierFileId);
+
+    internal static string? EffectiveMaterialReview(
+        string projectStatus, string? reviewStatus, ulong? reviewFileId, ulong? latestSupplierFileId)
+    {
+        if (projectStatus != ProjectStatuses.InProgress) return null;
+        if (latestSupplierFileId is null) return MaterialReviewStatuses.NoMaterial;
+        return reviewStatus is MaterialReviewStatuses.Approved or MaterialReviewStatuses.Returned
+            && reviewFileId == latestSupplierFileId
+            ? reviewStatus
+            : MaterialReviewStatuses.Pending;
+    }
+
     internal static bool CanReceivePendingAcceptance(CurrentUser actor, bool hasConfirmPermission) =>
         actor.IsInternal && hasConfirmPermission;
+}
+
+internal static class MaterialReviewStatuses
+{
+    internal const string NoMaterial = "NO_MATERIAL";
+    internal const string Pending = "PENDING";
+    internal const string Approved = "APPROVED";
+    internal const string Returned = "RETURNED";
 }

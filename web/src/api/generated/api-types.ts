@@ -374,6 +374,7 @@ export interface NotificationEventsResponse {
   projectConfirmed: boolean
   projectRejected: boolean
   projectWithdrawn: boolean
+  projectMaterialReviewed: boolean
 }
 
 export interface NotificationPolicyResponse {
@@ -1051,6 +1052,9 @@ export interface ProjectDetailResponse {
   robotTypeId: number | null
   robotTypeName: string | null
   expectedCompletionDate: string | null
+  materialReviewStatus: string | null
+  materialReviewReason: string | null
+  latestSupplierFileId: number | null
   hasCopyHistory: boolean
   unreadMessages: number
   copySource: ProjectCopySourceRef | null
@@ -1123,6 +1127,11 @@ export interface ProjectGroupTransferRequest {
   responsibleUserId?: number | null
 }
 
+export interface ProjectMaterialReviewRequest {
+  expectedSupplierFileId?: number | null
+  reason?: string | null
+}
+
 export interface ProjectOwnerOption {
   id: number
   employeeNo: string
@@ -1165,6 +1174,9 @@ export interface ProjectResponse {
   robotTypeId: number | null
   robotTypeName: string | null
   expectedCompletionDate: string | null
+  materialReviewStatus: string | null
+  materialReviewReason: string | null
+  latestSupplierFileId: number | null
   hasCopyHistory: boolean
   unreadMessages: number
   copySource: ProjectCopySourceRef | null
@@ -1630,6 +1642,8 @@ export interface ApiResponses {
   "POST /projects/{id}/confirm": ProjectResponse
   "POST /projects/{id}/copy": ProjectCopyJobResponse
   "GET /projects/{id}/copy-history": ProjectCopyHistoryResponse
+  "POST /projects/{id}/materials/approve": ProjectResponse
+  "POST /projects/{id}/materials/return": ProjectResponse
   "GET /projects/{id}/message-receipts": Array<MessageReceiptResponse>
   "GET /projects/{id}/messages": PageResponseOfMessageResponse
   "POST /projects/{id}/messages": MessageResponse

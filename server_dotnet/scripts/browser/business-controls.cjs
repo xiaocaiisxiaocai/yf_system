@@ -6,7 +6,9 @@ const crypto = require('node:crypto');
 const {
   assert, OUT, s, f, record, login, api, projectMetadata, action, track,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
-const { uploadFixture: uploadBytes } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/upload-contract.cjs');
+const {
+  approveMaterial, returnApprovedMaterial, uploadFixture: uploadBytes,
+} = require(process.env.YF_BROWSER_SUPPORT_DIR + '/upload-contract.cjs');
 
 const apiPath = value => new URL(value.url()).pathname;
 
@@ -104,7 +106,7 @@ async function choose(page, placeholder, optionName) {
       { content: sourceOnlyMessage }, adminToken);
 
     // API-only fixture setup: 11 pending projects make the dashboard paginator real.
-    // Every project gets a valid available file because submit requires one.
+    // Every project gets supplier-returned material confirmed by its responsible user because submit requires it.
     for (let index = 0; index < 11; index += 1) {
       const project = await createProjectGroup(
         adminContext, adminToken, f.suppliers.a.id,
@@ -113,6 +115,8 @@ async function choose(page, placeholder, optionName) {
       await uploadBytes(
         adminContext, adminToken, project.id, prefix + '-' + index + '.zip', tinyFile, { ensureStep: true },
       );
+      await returnApprovedMaterial(
+        supplierContext, supplierToken, adminContext, adminToken, project.id, prefix + '-' + index + '-回传.pdf');
       if (index === 0) {
         await api(supplierContext, 'POST', '/projects/' + project.id + '/messages', {
           content: messageText,
@@ -259,6 +263,7 @@ async function choose(page, placeholder, optionName) {
         await api(supplierContext, 'POST', '/projects/' + flowProject.id + '/withdraw', {
           expectedSubmissionId: staleSubmissionId,
         }, supplierToken);
+        await approveMaterial(adminContext, adminToken, flowProject.id);
         resubmitted = await (await api(supplierContext, 'POST', '/projects/' + flowProject.id + '/submit', {
           confirmSide: 'COMPANY',
         }, supplierToken)).json();

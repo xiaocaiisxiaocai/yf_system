@@ -89,6 +89,10 @@ public static class ProjectsModule
             WithDb(context, (conn, actor, ip, ct) => service.ConfirmAsync(conn, actor, id, request, ip, ct)));
         api.MapPost("/projects/{id:long}/reject", (HttpContext context, ulong id, ProjectRejectRequest request, ProjectService service) =>
             WithDb(context, (conn, actor, ip, ct) => service.RejectAsync(conn, actor, id, request, ip, ct)));
+        api.MapPost("/projects/{id:long}/materials/approve", (HttpContext context, ulong id, ProjectMaterialReviewRequest request, ProjectService service) =>
+            WithDb(context, (conn, actor, ip, ct) => service.ApproveMaterialsAsync(conn, actor, id, request, ip, ct)));
+        api.MapPost("/projects/{id:long}/materials/return", (HttpContext context, ulong id, ProjectMaterialReviewRequest request, ProjectService service) =>
+            WithDb(context, (conn, actor, ip, ct) => service.ReturnMaterialsAsync(conn, actor, id, request, ip, ct)));
         api.MapPost("/projects/{id:long}/withdraw", (HttpContext context, ulong id, ProjectDecisionRequest request, ProjectService service) =>
             WithDb(context, (conn, actor, ip, ct) => service.WithdrawAsync(conn, actor, id, request, ip, ct)));
         api.MapGet("/projects/{id:long}/summary", (HttpContext context, ulong id, ProjectService service) =>

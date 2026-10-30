@@ -64,6 +64,14 @@ internal static class ProjectQueries
             RobotTypeName = robotType.Name,
             ExpectedCompletionDate = project.ExpectedCompletionDate.HasValue
                 ? project.ExpectedCompletionDate.GetValueOrDefault().ToDateTime(TimeOnly.MinValue) : null,
+            MaterialReviewStatus = project.MaterialReviewStatus,
+            MaterialReviewFileId = project.MaterialReviewFileId,
+            MaterialReviewReason = project.MaterialReviewReason,
+            LatestSupplierFileId = project.Status == ProjectStatuses.InProgress
+                ? db.Files.Where(file => file.ProjectId == project.Id && file.Status == FileStatuses.Available
+                        && file.Direction == "S2C")
+                    .Select(file => (ulong?)file.Id).Max()
+                : null,
             HasCopyHistory = db.ProjectCopies.Any(copy => copy.SourceProjectId == project.Id)
                 || db.ProjectCopies.Any(copy => copy.TargetProjectId == project.Id),
         };

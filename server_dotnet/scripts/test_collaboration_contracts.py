@@ -7,7 +7,7 @@ the additive collaboration-read migration; no date or activity-id cutoff exists.
 
 import secrets
 
-from test_business_acceptance import _create_started_project, _upload_chunks
+from test_business_acceptance import _approve_materials, _create_started_project, _upload_chunks
 
 
 def _password():
@@ -379,6 +379,19 @@ def run_collaboration_checks(admin, Client, conn, check):
 
     file_id, _, _ = _upload_chunks(
         first, project_id, "协作链接.pdf", b"collaboration-link", ensure_step=True)
+    _upload_chunks(first_supplier_client, project_id, "协作回传.pdf", b"collaboration-return")
+    supplier_before_approval = first_supplier_client.call("GET", "/api/v1/collaboration/summary")
+    _approve_materials(first, project_id)
+    supplier_after_approval = first_supplier_client.call("GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=true")
+    check(
+        "material approval is a collaboration notification for the supplier",
+        first_supplier_client.call("GET", "/api/v1/collaboration/summary")["unreadCount"]
+        == supplier_before_approval["unreadCount"] + 1
+        and any(
+            item["type"] == "PROJECT" and item["action"] == "MATERIAL_APPROVE"
+            for item in supplier_after_approval["list"]
+        ),
+    )
     supplier_before_submit = first_supplier_client.call("GET", "/api/v1/collaboration/summary")
     supplier_notifications_before = first_supplier_client.call(
         "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false")

@@ -11,6 +11,14 @@ import type { ApiResponses } from '../api/types'
 import ActiveUploadSessions from './ActiveUploadSessions'
 
 type WorkflowAction = 'start' | 'terminate' | 'submit' | 'confirm' | 'reject' | 'withdraw'
+  | 'materialApprove' | 'materialReturn'
+
+const MATERIAL_REVIEW: Record<string, { text: string; color: string }> = {
+  NO_MATERIAL: { text: '待回传资料', color: 'gray' },
+  PENDING: { text: '资料待确认', color: 'orange' },
+  APPROVED: { text: '资料已确认 OK', color: 'green' },
+  RETURNED: { text: '资料已退回', color: 'red' },
+}
 
 interface Props {
   project: Project
@@ -35,6 +43,9 @@ export default function ProjectWorkflowPanel({
   const withdrawSubmissionRef = useRef<number | null>(project.latestSubmissionId ?? null)
   const [rejectSubmissionId, setRejectSubmissionId] = useState<number | null>(null)
   const [rejectForm] = Form.useForm()
+  const materialFileRef = useRef<number | null>(project.latestSupplierFileId ?? null)
+  const [returnFileId, setReturnFileId] = useState<number | null>(null)
+  const [returnForm] = Form.useForm()
   const [localUploadRefresh, setLocalUploadRefresh] = useState(0)
 
   const beginAction = (action: WorkflowAction) => {
@@ -62,6 +73,11 @@ export default function ProjectWorkflowPanel({
   const canSubmit = isSupplier && hasPerm('project:submit')
   const canConfirm = isInternal && hasPerm('project:confirm') && project.confirmSide === 'COMPANY'
   const canWithdraw = isSupplier && hasPerm('project:withdraw') && project.latestSubmitterId === user?.id
+  const isInProgress = project.status === 'IN_PROGRESS'
+  const materialReview = isInProgress ? project.materialReviewStatus ?? null : null
+  const canReviewMaterial = isInternal && project.responsibleUserId === user?.id && isInProgress
+  const canApproveMaterial = canReviewMaterial && (materialReview === 'PENDING' || materialReview === 'RETURNED')
+  const canReturnMaterial = canReviewMaterial && (materialReview === 'PENDING' || materialReview === 'APPROVED')
 
   const changeStatus = async (status: 'IN_PROGRESS' | 'TERMINATED') => {
     if (!beginAction(status === 'TERMINATED' ? 'terminate' : 'start')) return
@@ -89,6 +105,57 @@ export default function ProjectWorkflowPanel({
     } catch (error) {
       noteWriteFailure()
       if (isVersionConflict(error)) onChanged()
+    } finally {
+      finishAction()
+    }
+  }
+
+  const approveMaterial = async () => {
+    const expectedSupplierFileId = materialFileRef.current
+    if (!expectedSupplierFileId) {
+      Message.error('回传资料版本缺失，请刷新项目后重试')
+      return
+    }
+    if (!beginAction('materialApprove')) return
+    try {
+      await http.post<ApiResponses['POST /projects/{id}/materials/approve']>(`/projects/${project.id}/materials/approve`, { expectedSupplierFileId })
+      Message.success('已确认回传资料 OK')
+      onChanged()
+    } catch (error) {
+      if (!isVersionConflict(error)) throw error
+      onChanged()
+    } finally {
+      finishAction()
+    }
+  }
+
+  const closeReturn = () => {
+    returnForm.resetFields()
+    setReturnFileId(null)
+  }
+
+  const returnMaterial = async () => {
+    if (!returnFileId) {
+      Message.error('回传资料版本缺失，请关闭弹窗并刷新项目后重试')
+      return
+    }
+    if (!beginAction('materialReturn')) return
+    try {
+      const values = await returnForm.validate().catch(() => null)
+      if (!values) return
+      await http.post<ApiResponses['POST /projects/{id}/materials/return']>(`/projects/${project.id}/materials/return`, {
+        reason: values.reason.trim(),
+        expectedSupplierFileId: returnFileId,
+      })
+      Message.success('回传资料已退回')
+      closeReturn()
+      onChanged()
+    } catch (error) {
+      if (!isVersionConflict(error)) throw error
+      // 厂商期间又回传了资料：关闭弹窗并刷新，由负责人查看新资料后重新决定。
+      Message.info('厂商回传资料已更新，请查看新资料后再操作')
+      closeReturn()
+      onChanged()
     } finally {
       finishAction()
     }
@@ -176,8 +243,10 @@ export default function ProjectWorkflowPanel({
   const status = PROJECT_STATUS[project.status]
   const isPending = project.status === 'PENDING_CONFIRMATION'
   const showActions = (canStatus && ['DRAFT', 'IN_PROGRESS', 'TERMINATED'].includes(project.status))
-    || (canSubmit && project.status === 'IN_PROGRESS')
+    || (canSubmit && isInProgress)
+    || canApproveMaterial || canReturnMaterial
     || (isPending && (canConfirm || canWithdraw))
+  const materialTag = materialReview ? MATERIAL_REVIEW[materialReview] : undefined
 
   const uploadHint = (
     <ActiveUploadSessions
@@ -186,7 +255,7 @@ export default function ProjectWorkflowPanel({
       refreshToken={uploadRefresh + localUploadRefresh}
     />
   )
-  if (compact && !showActions && !isPending && !(project.status === 'IN_PROGRESS' && project.rejectReason)) return uploadHint
+  if (compact && !showActions && !isPending && !materialTag && !(isInProgress && project.rejectReason)) return uploadHint
 
   return (
     <div className={`project-workflow${compact ? ' project-workflow--compact' : ''}`} aria-label="项目流程操作">
@@ -195,7 +264,11 @@ export default function ProjectWorkflowPanel({
           {!compact && <Typography.Text type="secondary">项目流程</Typography.Text>}
           <div className="project-workflow-status">
             {!compact && <Tag color={status?.color}>{status?.text || project.status}</Tag>}
-            {project.status === 'IN_PROGRESS' && project.rejectReason && (
+            {materialTag && <Tag color={materialTag.color}>{materialTag.text}</Tag>}
+            {materialReview === 'RETURNED' && project.materialReviewReason && (
+              <Typography.Text type="secondary" title={project.materialReviewReason}>退回原因：{project.materialReviewReason}</Typography.Text>
+            )}
+            {isInProgress && project.rejectReason && (
               <Typography.Text type="secondary" title={project.rejectReason}>上次驳回：{project.rejectReason}</Typography.Text>
             )}
             {uploadHint}
@@ -220,14 +293,37 @@ export default function ProjectWorkflowPanel({
               重新开始
             </Button>
           )}
-          {canSubmit && project.status === 'IN_PROGRESS' && (
+          {canApproveMaterial && (
+            <Popconfirm
+              title="确认厂商回传资料 OK？确认后厂商可提交公司验收。"
+              onVisibleChange={(visible) => {
+                if (visible) materialFileRef.current = project.latestSupplierFileId ?? null
+              }}
+              onOk={approveMaterial}
+            >
+              <Button type="primary" status="success" icon={<IconCheckCircle />} {...actionProps('materialApprove')}>资料确认 OK</Button>
+            </Popconfirm>
+          )}
+          {canReturnMaterial && (
+            <Button
+              status="warning"
+              icon={<IconCloseCircle />}
+              {...actionProps('materialReturn')}
+              onClick={() => setReturnFileId(project.latestSupplierFileId ?? null)}
+            >
+              退回资料
+            </Button>
+          )}
+          {canSubmit && isInProgress && (materialReview === 'APPROVED' ? (
             <Popconfirm
               title="提交公司验收？"
               onOk={submitConfirmation}
             >
               <Button type="primary" {...actionProps('submit')}>提交公司验收</Button>
             </Popconfirm>
-          )}
+          ) : (
+            <Button type="primary" disabled size={compact ? 'small' : undefined}>提交公司验收</Button>
+          ))}
           {canStatus && project.status === 'IN_PROGRESS' && (
             <Popconfirm title="终止项目后需要重新开始才能继续，确认终止？" onOk={() => changeStatus('TERMINATED')}>
               <Button status="danger" icon={<IconStop />} {...actionProps('terminate')}>终止</Button>
@@ -294,6 +390,31 @@ export default function ProjectWorkflowPanel({
         <Form form={rejectForm} layout="vertical">
           <Form.Item label="驳回原因（必填）" field="reason" rules={[{ required: true, message: '请填写驳回原因' }]}>
             <Input.TextArea rows={4} maxLength={500} showWordLimit wordLimitPosition="outside" placeholder="请填写驳回原因" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        className="form-dialog"
+        title="退回回传资料"
+        visible={returnFileId !== null}
+        confirmLoading={busy}
+        closable={!busy}
+        maskClosable={!busy}
+        escToExit={!busy}
+        cancelButtonProps={{ disabled: busy }}
+        onOk={returnMaterial}
+        onCancel={() => {
+          if (busyRef.current) return
+          closeReturn()
+        }}
+        okText="确认退回"
+        cancelText="取消"
+        okButtonProps={{ status: 'warning' }}
+      >
+        <Form form={returnForm} layout="vertical">
+          <Form.Item label="退回原因（必填）" field="reason" rules={[{ required: true, message: '请填写退回原因' }]}>
+            <Input.TextArea rows={4} maxLength={500} showWordLimit wordLimitPosition="outside" placeholder="请说明需要厂商补充或修改的资料" />
           </Form.Item>
         </Form>
       </Modal>

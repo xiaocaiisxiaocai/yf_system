@@ -1,6 +1,6 @@
 export const MB = 1024 * 1024
 
-export type NotificationEventKey = 'messageCreated' | 'fileUploaded' | 'projectSubmitted' | 'projectConfirmed' | 'projectRejected' | 'projectWithdrawn'
+export type NotificationEventKey = 'messageCreated' | 'fileUploaded' | 'projectSubmitted' | 'projectConfirmed' | 'projectRejected' | 'projectWithdrawn' | 'projectMaterialReviewed'
 
 export interface NotificationPolicy {
   globalEnabled: boolean
@@ -20,6 +20,7 @@ export const EMPTY_NOTIFICATION_POLICY: NotificationPolicy = {
     projectConfirmed: true,
     projectRejected: true,
     projectWithdrawn: true,
+    projectMaterialReviewed: true,
   },
 }
 
@@ -33,6 +34,7 @@ export const NOTIFICATION_CONFIG_KEYS = new Set([
   'notify.event.project_confirmed',
   'notify.event.project_rejected',
   'notify.event.project_withdrawn',
+  'notify.event.project_material_reviewed',
 ])
 
 export const NOTIFICATION_EVENT_ITEMS: Array<{ key: NotificationEventKey; title: string; description: string }> = [
@@ -42,6 +44,7 @@ export const NOTIFICATION_EVENT_ITEMS: Array<{ key: NotificationEventKey; title:
   { key: 'projectConfirmed', title: '验收通过', description: '验收完成时提醒最近提交人' },
   { key: 'projectRejected', title: '验收驳回', description: '验收被驳回时提醒最近提交人' },
   { key: 'projectWithdrawn', title: '撤回验收', description: '验收申请撤回时提醒相关参与人' },
+  { key: 'projectMaterialReviewed', title: '资料确认', description: '负责人确认或退回回传资料时提醒供应商' },
 ]
 
 export interface SmtpSettings {
@@ -147,6 +150,7 @@ export function normalizeNotificationPolicy(value: unknown): NotificationPolicy 
       projectConfirmed: events.projectConfirmed !== false,
       projectRejected: events.projectRejected !== false,
       projectWithdrawn: events.projectWithdrawn !== false,
+      projectMaterialReviewed: events.projectMaterialReviewed !== false,
     },
   }
 }

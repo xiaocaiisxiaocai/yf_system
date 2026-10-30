@@ -323,6 +323,9 @@ async function createGroup(context, token, supplierId, name, defaults) {
         if (status === 'PENDING_CONFIRMATION' || status === 'COMPLETED') {
           const upload = await uploadFixture(context, f.users.a.token, item.id, '状态验证.pdf', pdf);
           assert(upload.id || upload.fileId, 'status fixture file merge');
+          await json('POST', '/projects/' + item.id + '/materials/approve', {
+            expectedSupplierFileId: upload.id || upload.fileId,
+          });
           const submission = await (await api(
             context, 'POST', '/projects/' + item.id + '/submit', {}, f.users.a.token)).json();
           assert(Number.isInteger(submission.latestSubmissionId) && submission.latestSubmissionId > 0);

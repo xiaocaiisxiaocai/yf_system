@@ -25,6 +25,8 @@ internal sealed class ProjectActivityService(
             [("project", "PROJECT_REJECT")] = new("PROJECT", "REJECT", "驳回项目验收"),
             [("project", "PROJECT_WITHDRAW")] = new("PROJECT", "WITHDRAW", "撤回项目验收"),
             [("project", "PROJECT_TERMINATE")] = new("PROJECT", "TERMINATE", "终止项目"),
+            [("project", "PROJECT_MATERIAL_APPROVE")] = new("PROJECT", "MATERIAL_APPROVE", "确认回传资料 OK"),
+            [("project", "PROJECT_MATERIAL_RETURN")] = new("PROJECT", "MATERIAL_RETURN", "退回回传资料"),
             [("file", "FILE_UPLOAD")] = new("FILE", "UPLOAD", "上传文件"),
             [("file", "FILE_DELETE")] = new("FILE", "DELETE", "删除文件"),
             [("message", "MESSAGE_CREATE")] = new("MESSAGE", "CREATE", "发表留言"),

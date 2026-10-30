@@ -18,7 +18,8 @@ internal sealed record EmailNotificationPolicy(
     bool ProjectSubmittedEnabled,
     bool ProjectConfirmedEnabled,
     bool ProjectRejectedEnabled,
-    bool ProjectWithdrawnEnabled)
+    bool ProjectWithdrawnEnabled,
+    bool ProjectMaterialReviewedEnabled)
 {
     internal const string DisabledReason = "邮件提醒规则已关闭，通知已取消";
     internal const string DisabledAuditReason = "NOTIFICATION_POLICY_DISABLED";
@@ -31,6 +32,7 @@ internal sealed record EmailNotificationPolicy(
     internal const string ProjectConfirmedKey = "notify.event.project_confirmed";
     internal const string ProjectRejectedKey = "notify.event.project_rejected";
     internal const string ProjectWithdrawnKey = "notify.event.project_withdrawn";
+    internal const string ProjectMaterialReviewedKey = "notify.event.project_material_reviewed";
 
     internal static readonly string[] Keys =
     [
@@ -43,6 +45,7 @@ internal sealed record EmailNotificationPolicy(
         ProjectConfirmedKey,
         ProjectRejectedKey,
         ProjectWithdrawnKey,
+        ProjectMaterialReviewedKey,
     ];
 
     internal static async Task<EmailNotificationPolicy> LoadAsync(
@@ -63,7 +66,8 @@ internal sealed record EmailNotificationPolicy(
             Read(values, ProjectSubmittedKey),
             Read(values, ProjectConfirmedKey),
             Read(values, ProjectRejectedKey),
-            Read(values, ProjectWithdrawnKey));
+            Read(values, ProjectWithdrawnKey),
+            Read(values, ProjectMaterialReviewedKey));
     }
 
     private static bool Read(IReadOnlyDictionary<string, string?> values, string key)
@@ -91,6 +95,7 @@ internal sealed record EmailNotificationPolicy(
         "PROJECT_CONFIRMED" => ProjectConfirmedEnabled,
         "PROJECT_REJECTED" => ProjectRejectedEnabled,
         "PROJECT_WITHDRAWN" => ProjectWithdrawnEnabled,
+        "PROJECT_MATERIAL_APPROVED" or "PROJECT_MATERIAL_RETURNED" => ProjectMaterialReviewedEnabled,
         // Test/system mails and future event types retain the existing global
         // switch until an explicit event switch is introduced for them.
         _ => true,
@@ -119,5 +124,6 @@ internal sealed record EmailNotificationPolicy(
             ProjectSubmittedEnabled,
             ProjectConfirmedEnabled,
             ProjectRejectedEnabled,
-            ProjectWithdrawnEnabled));
+            ProjectWithdrawnEnabled,
+            ProjectMaterialReviewedEnabled));
 }

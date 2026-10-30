@@ -38,6 +38,7 @@ def insert_blob_file(
     *,
     content=None,
     size=None,
+    direction="C2S",
 ):
     if (content is None) == (size is None):
         raise ValueError("provide exactly one of content or size")
@@ -69,8 +70,8 @@ def insert_blob_file(
         cursor.execute(
             "INSERT INTO files(blob_id,project_id,uploader_id,direction,original_name,stored_name,ext,"
             "size_bytes,mime_type,sha256,storage_path,status,deleted_at,created_at) "
-            "VALUES(%s,%s,%s,'C2S',%s,%s,%s,%s,%s,%s,%s,'AVAILABLE',NULL,UTC_TIMESTAMP(3))",
-            (blob_id, project_id, uploader_id, original_name, stored_name, extension,
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'AVAILABLE',NULL,UTC_TIMESTAMP(3))",
+            (blob_id, project_id, uploader_id, direction, original_name, stored_name, extension,
              physical_size, mime_type, digest, relative_path),
         )
         return {

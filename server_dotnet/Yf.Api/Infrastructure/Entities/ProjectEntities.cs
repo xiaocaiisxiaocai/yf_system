@@ -68,6 +68,11 @@ public sealed class Project
     public ulong? PriorityId { get; set; }
     public ulong? RobotTypeId { get; set; }
     public DateOnly? ExpectedCompletionDate { get; set; }
+    /// <summary>APPROVED or RETURNED by the responsible user; only valid while it still matches the latest supplier file.</summary>
+    public string? MaterialReviewStatus { get; set; }
+    /// <summary>Latest available S2C file id the review covered.</summary>
+    public ulong? MaterialReviewFileId { get; set; }
+    public string? MaterialReviewReason { get; set; }
 }
 
 public sealed class ProjectWorkOrder
@@ -261,6 +266,9 @@ public sealed class ProjectConfig : IEntityTypeConfiguration<Project>
         b.Property(x => x.PriorityId).HasColumnName("priority_id");
         b.Property(x => x.RobotTypeId).HasColumnName("robot_type_id");
         b.Property(x => x.ExpectedCompletionDate).HasColumnName("expected_completion_date").HasColumnType("date");
+        b.Property(x => x.MaterialReviewStatus).HasColumnName("material_review_status").HasMaxLength(16);
+        b.Property(x => x.MaterialReviewFileId).HasColumnName("material_review_file_id");
+        b.Property(x => x.MaterialReviewReason).HasColumnName("material_review_reason").HasMaxLength(500);
         b.HasIndex(x => x.Name).IsUnique().HasDatabaseName("uk_projects_name");
         b.HasIndex(x => x.SupplierId).HasDatabaseName("idx_projects_supplier");
         b.HasIndex(x => x.Status).HasDatabaseName("idx_projects_status");
