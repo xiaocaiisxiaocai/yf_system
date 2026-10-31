@@ -334,6 +334,7 @@ export default function TransferListPage() {
   const can = useCan()
   const navigate = useNavigate()
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [direction, setDirection] = useState('')
   const [status, setStatus] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
@@ -342,8 +343,8 @@ export default function TransferListPage() {
   const tableHostRef = useRef<HTMLDivElement>(null)
 
   const transfers = useQuery({
-    queryKey: ['oem', ...queryScope, 'transfers', { page, direction, status, keyword, mine }],
-    queryFn: () => api.listTransfers({ page, pageSize: 20, direction: direction || undefined, status, keyword: keyword || undefined, mine }),
+    queryKey: ['oem', ...queryScope, 'transfers', { page, pageSize, direction, status, keyword, mine }],
+    queryFn: () => api.listTransfers({ page, pageSize, direction: direction || undefined, status, keyword: keyword || undefined, mine }),
   })
   const rows: TransferSummary[] = transfers.data?.list ?? []
   const total = transfers.data?.total ?? 0
@@ -420,7 +421,7 @@ export default function TransferListPage() {
             columns={table.columns}
             components={table.components}
             onRow={(row) => ({ onClick: () => navigate(`${base}/transfers/${row.id}`), style: { cursor: 'pointer' } })}
-            pagination={{ current: page, total, pageSize: 20, onChange: setPage }}
+            pagination={{ current: page, total, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
           />
         </div>
       </ColumnResizeProvider>

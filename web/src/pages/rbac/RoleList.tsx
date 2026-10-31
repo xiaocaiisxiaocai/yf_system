@@ -36,6 +36,7 @@ export default function RoleList() {
   const [loadError, setLoadError] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [perms, setPerms] = useState<Perm[]>([])
   const [permsLoading, setPermsLoading] = useState(true)
   const [permsError, setPermsError] = useState(false)
@@ -52,9 +53,9 @@ export default function RoleList() {
   const [form] = Form.useForm()
 
   const fetchRoles = useCallback(async () => {
-    const r = await http.get<ApiResponses['GET /admin/roles']>('/admin/roles', { params: { page, pageSize: 20 } })
+    const r = await http.get<ApiResponses['GET /admin/roles']>('/admin/roles', { params: { page, pageSize } })
     return r.data as PageResp<Role>
-  }, [page])
+  }, [page, pageSize])
 
   const load = useCallback(() => {
     setLoading(true)
@@ -230,7 +231,7 @@ export default function RoleList() {
     <Card className="page-card page-card--table">
       <h1 className="visually-hidden">角色与权限</h1>
       <div className="page-toolbar responsive-toolbar">
-        <Typography.Text type="secondary">共 {data.total} 个角色</Typography.Text>
+        <span />
         <Button
           type="primary"
           icon={<IconPlus />}
@@ -337,12 +338,14 @@ export default function RoleList() {
           pagination={{
             total: data.total,
             current: page,
-            pageSize: 20,
+            pageSize,
             showTotal: true,
-            onChange: (nextPage) => {
+            sizeCanChange: true,
+            onChange: (nextPage, nextSize) => {
               setLoading(true)
               setLoadError(false)
               setPage(nextPage)
+              setPageSize(nextSize)
             },
           }}
         />

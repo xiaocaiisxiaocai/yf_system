@@ -28,9 +28,10 @@ export default function ApprovalInboxPage() {
   const navigate = useNavigate()
   const tableHostRef = useRef<HTMLDivElement>(null)
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(PAGE_SIZE)
   const approvals = useQuery({
-    queryKey: ['oem', ...queryScope, 'pending-approvals', page],
-    queryFn: () => api.pendingApprovals({ page, pageSize: PAGE_SIZE }),
+    queryKey: ['oem', ...queryScope, 'pending-approvals', page, pageSize],
+    queryFn: () => api.pendingApprovals({ page, pageSize }),
   })
   const rows: PendingTask[] = approvals.data?.list ?? []
   const approvalColumns = useMemo(() => [
@@ -81,7 +82,7 @@ export default function ApprovalInboxPage() {
             columns={table.columns}
             components={table.components}
             scroll={{ x: table.scrollX, y: 'var(--page-table-scroll-y)' }}
-            pagination={{ current: page, total: approvals.data?.total ?? 0, pageSize: PAGE_SIZE, onChange: setPage }}
+            pagination={{ current: page, total: approvals.data?.total ?? 0, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
             onRow={(row) => ({ onClick: () => navigate(`${base}/transfers/${row.transferId}`), style: { cursor: 'pointer' } })}
           />
         </div>

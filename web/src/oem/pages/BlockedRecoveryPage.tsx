@@ -32,9 +32,10 @@ export default function BlockedRecoveryPage() {
   const navigate = useNavigate()
   const tableHostRef = useRef<HTMLDivElement>(null)
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const blocked = useQuery({
-    queryKey: ['oem', ...queryScope, 'approval-recovery', page],
-    queryFn: () => api.listTransfers({ page, pageSize: 20, approvalStatus: 'APPROVAL_BLOCKED' }),
+    queryKey: ['oem', ...queryScope, 'approval-recovery', page, pageSize],
+    queryFn: () => api.listTransfers({ page, pageSize, approvalStatus: 'APPROVAL_BLOCKED' }),
   })
   const rows: TransferSummary[] = blocked.data?.list ?? []
   const recoveryColumns = useMemo(() => [
@@ -89,7 +90,7 @@ export default function BlockedRecoveryPage() {
             columns={table.columns}
             components={table.components}
             scroll={{ x: table.scrollX, y: 'var(--page-table-scroll-y)' }}
-            pagination={{ current: page, total: blocked.data?.total ?? 0, pageSize: 20, onChange: setPage }}
+            pagination={{ current: page, total: blocked.data?.total ?? 0, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
           />
         </div>
       </ColumnResizeProvider>

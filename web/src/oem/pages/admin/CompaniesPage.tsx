@@ -300,6 +300,7 @@ export default function CompaniesPage() {
   const [rows, setRows] = useState<Company[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
   const [editing, setEditing] = useState<Company | 'new' | null>(null)
   const [saving, setSaving] = useState(false)
@@ -319,7 +320,7 @@ export default function CompaniesPage() {
     const isLatest = beginRequest()
     setListLoading(true)
     try {
-      const result = await api.companies({ page, pageSize: 20, keyword: keyword || undefined })
+      const result = await api.companies({ page, pageSize, keyword: keyword || undefined })
       if (!isLatest()) return
       setRows(result.list)
       setTotal(result.total)
@@ -330,7 +331,7 @@ export default function CompaniesPage() {
     } finally {
       if (isLatest()) setListLoading(false)
     }
-  }, [api, page, keyword, can.manageCompanies, can.manageAccounts, beginRequest])
+  }, [api, page, pageSize, keyword, can.manageCompanies, can.manageAccounts, beginRequest])
   useLoadEffect(load)
 
   const save = async () => {
@@ -487,7 +488,7 @@ export default function CompaniesPage() {
             columns={companyTable.columns}
             components={companyTable.components}
             scroll={{ x: companyTable.scrollX, y: 'var(--page-table-scroll-y)' }}
-            pagination={{ current: page, total, pageSize: 20, onChange: setPage }}
+            pagination={{ current: page, total, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
           />
         </div>
       </ColumnResizeProvider>
