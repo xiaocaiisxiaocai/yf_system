@@ -166,7 +166,7 @@ export class OemApi {
     ? this.put<'PUT /oem/file-policies', SettingItem[]>('/oem/file-policies', { items } satisfies Api.OemSettingsUpdate)
     : this.put<'PUT /oem/notify-policies', SettingItem[]>('/oem/notify-policies', { items } satisfies Api.OemSettingsUpdate)
 
-  auditLogs = (params: { page: number; pageSize: number; keyword?: string; action?: string }) =>
+  auditLogs = (params: { page: number; pageSize: number; keyword?: string; action?: string; start?: string; end?: string }) =>
     this.get<'GET /oem/audit-logs', Page<AuditRow>>('/oem/audit-logs', params)
 
   // Shared organisation data used by approval-template scopes.

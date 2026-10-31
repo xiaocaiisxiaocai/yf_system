@@ -1,23 +1,15 @@
 import { useCallback, useRef, useState } from 'react'
-import { Alert, Button, Card, Form, Input, InputNumber, Message, Select, Space, Spin, Switch, Table, Typography } from '@arco-design/web-react'
-import { fmtTime } from '../../../api/types'
+import { Alert, Button, Card, DatePicker, Form, Input, InputNumber, Message, Select, Space, Spin, Switch, Typography } from '@arco-design/web-react'
+import { IconSearch } from '@arco-design/web-react/icon'
 import { isVersionConflict } from '../../../api/versionConflict'
 import { oemRequestError } from '../../api/requestError'
-import type { AuditRow, RetentionTemplate, SettingItem } from '../../api/types'
+import type { RetentionTemplate, SettingItem } from '../../api/types'
 import { useOem } from '../../OemContext'
 import { HubToolbar } from '../hubSwitcher'
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
-import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../../components/columnResize'
-import { type ColumnLayoutSpec } from '../../../components/tableColumnLayout'
-import { useAdjustableColumns } from '../../../components/useAdjustableColumns'
-
-const OEM_AUDIT_COLUMNS: readonly ColumnLayoutSpec[] = [
-  { key: 'createdAt', title: '时间', defaultWidth: 170, minWidth: 140, locked: true },
-  { key: 'action', title: '动作', defaultWidth: 230, minWidth: 120 },
-  { key: 'actor', title: '操作人', defaultWidth: 180, minWidth: 110 },
-  { key: 'target', title: '对象', defaultWidth: 160, minWidth: 100 },
-  { key: 'detail', title: '详情', defaultWidth: 280, minWidth: 160 },
-]
+import { AuditDetailDrawer, AuditLoadError, AuditResultBar, AuditTable } from '../../../components/AuditLogParts'
+import type { AuditLogRow } from '../../../pages/system/auditLogDetails'
+import { OEM_ACTION_GROUPS, OEM_AUDIT_PRESENTER, toAuditLogRow } from './oemAuditDetails'
 
 const MODES = [
   { value: 'KEEP', label: '不自动删除' },
@@ -216,82 +208,84 @@ export function SettingsForm({ group }: { group: 'file' | 'notify' }) {
   )
 }
 
+interface AuditFilters {
+  keyword: string
+  action?: string
+  range: string[]
+}
+
+const EMPTY_AUDIT_FILTERS: AuditFilters = { keyword: '', range: [] }
+
 export function AuditPage() {
-  const { api, userId } = useOem()
-  const [rows, setRows] = useState<AuditRow[]>([])
+  const { api } = useOem()
+  const [draft, setDraft] = useState<AuditFilters>(EMPTY_AUDIT_FILTERS)
+  const [filters, setFilters] = useState<AuditFilters>(EMPTY_AUDIT_FILTERS)
+  const [rows, setRows] = useState<AuditLogRow[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [keyword, setKeyword] = useState('')
+  const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const tableHostRef = useRef<HTMLDivElement>(null)
+  const [loadError, setLoadError] = useState(false)
+  const [selected, setSelected] = useState<AuditLogRow | null>(null)
   const beginRequest = useLatestRequest()
   const load = useCallback(async () => {
     const isLatest = beginRequest()
     setLoading(true)
-    setError('')
+    setLoadError(false)
     try {
-      const result = await api.auditLogs({ page, pageSize: 20, keyword: keyword || undefined })
+      const result = await api.auditLogs({
+        page,
+        pageSize,
+        keyword: filters.keyword || undefined,
+        action: filters.action,
+        start: filters.range[0] ? new Date(filters.range[0].replace(' ', 'T')).toISOString() : undefined,
+        end: filters.range[1] ? new Date(filters.range[1].replace(' ', 'T')).toISOString() : undefined,
+      })
       if (!isLatest()) return
-      setRows(result.list)
+      setRows(result.list.map(toAuditLogRow))
       setTotal(result.total)
     } catch {
-      if (isLatest()) setError('审计日志加载失败，请重试')
+      if (isLatest()) setLoadError(true)
     } finally {
       if (isLatest()) setLoading(false)
     }
-  }, [api, page, keyword, beginRequest])
+  }, [api, page, pageSize, filters, beginRequest])
   useLoadEffect(load)
-  const auditColumns = [
-    { key: 'createdAt', title: '时间', render: (_: unknown, row: AuditRow) => fmtTime(row.createdAt) },
-    { key: 'action', title: '动作', dataIndex: 'action' },
-    {
-      key: 'actor', title: '操作人',
-      render: (_: unknown, row: AuditRow) => row.actorRealm === 'system' ? '系统'
-        : `${row.employeeNo ?? '-'}${row.actorRealm === 'oem' ? '（OEM）' : ''}`,
-    },
-    { key: 'target', title: '对象', render: (_: unknown, row: AuditRow) => (row.targetType ? `${row.targetType} #${row.targetId ?? ''}` : '-') },
-    {
-      key: 'detail', title: '详情',
-      render: (_: unknown, row: AuditRow) => {
-        const detail = { ...(row.detail ?? {}) }
-        delete (detail as Record<string, unknown>).auditContext
-        return <Typography.Text ellipsis={{ showTooltip: true }} style={{ maxWidth: 420 }}>{JSON.stringify(detail)}</Typography.Text>
-      },
-    },
-  ]
-  const table = useAdjustableColumns('oem-audit', userId, OEM_AUDIT_COLUMNS, auditColumns, 'createdAt', tableHostRef)
+
+  const applyFilters = () => { setPage(1); setFilters({ ...draft }) }
+  const resetFilters = () => { setDraft(EMPTY_AUDIT_FILTERS); setFilters(EMPTY_AUDIT_FILTERS); setPage(1) }
 
   return (
-    <Card className="page-card page-card--table" title={<h1 className="visually-hidden">审计日志</h1>}>
-      <div className="page-toolbar responsive-toolbar">
-        <Space wrap>
-          <Input.Search allowClear placeholder="搜索账号、动作或内容" style={{ width: 280 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
-          <ColumnVisibilityPicker
-            specs={OEM_AUDIT_COLUMNS}
-            hidden={table.hidden}
-            onToggle={table.toggle}
-            onShowAll={table.showAll}
-            onHideOptional={table.hideOptional}
-            onReset={table.reset}
-          />
-        </Space>
+    <Card className="page-card page-card--table audit-page" title={<h1 className="visually-hidden">审计日志</h1>}>
+      <div className="audit-filter-panel audit-filter-panel--compact">
+        <Input allowClear value={draft.keyword} placeholder="搜索账号或详情" prefix={<IconSearch />} onChange={(value) => setDraft((state) => ({ ...state, keyword: value }))} onPressEnter={applyFilters} />
+        <Select allowClear showSearch value={draft.action} placeholder="具体操作" onChange={(value) => setDraft((state) => ({ ...state, action: value as string | undefined }))}>
+          {OEM_ACTION_GROUPS.map((group) => (
+            <Select.OptGroup key={group.code} label={group.label}>
+              {group.options.map(([value, meta]) => <Select.Option key={value} value={value}>{meta.label}</Select.Option>)}
+            </Select.OptGroup>
+          ))}
+        </Select>
+        <DatePicker.RangePicker showTime value={draft.range} onChange={(value) => setDraft((state) => ({ ...state, range: (value as string[]) || [] }))} />
+        <Space><Button type="primary" onClick={applyFilters}>查询</Button><Button onClick={resetFilters}>重置</Button></Space>
       </div>
-      {error && <Alert type="error" style={{ marginBottom: 12 }} content={error} action={<Button size="small" onClick={() => void load()}>重新加载</Button>} />}
-      <ColumnResizeProvider actions={table.actions}>
-        <div ref={tableHostRef} className={`${table.hostClassName} page-table-host`}>
-          <Table
-            className={`page-table ${table.tableClassName}`}
-            rowKey="id"
-            loading={loading}
-            data={rows}
-            columns={table.columns}
-            components={table.components}
-            scroll={{ x: table.scrollX, y: 'var(--page-table-scroll-y)' }}
-            pagination={{ current: page, total, pageSize: 20, onChange: setPage }}
-          />
-        </div>
-      </ColumnResizeProvider>
+
+      <AuditResultBar total={total} onRefresh={() => void load()} />
+
+      {loadError ? <AuditLoadError onRetry={() => void load()} /> : (
+        <AuditTable
+          presenter={OEM_AUDIT_PRESENTER}
+          rows={rows}
+          loading={loading}
+          total={total}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) }}
+          onView={setSelected}
+        />
+      )}
+
+      <AuditDetailDrawer title="审计日志详情" row={selected} presenter={OEM_AUDIT_PRESENTER} onClose={() => setSelected(null)} />
     </Card>
   )
 }

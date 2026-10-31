@@ -49,6 +49,8 @@ export interface AuditLogRow {
   detail?: AuditDetail | null
   ip?: string | null
   createdAt: string
+  /** 仅 OEM 审计日志：internal / oem / system。 */
+  actorRealm?: string | null
 }
 
 export interface ActionMeta {
@@ -265,12 +267,12 @@ function legacyTargetName(row: AuditLogRow): string | undefined {
     ?? cleanText(detail.projectName)
 }
 
-export function targetIdentity(row: AuditLogRow): DisplayIdentity {
+export function targetIdentity(row: AuditLogRow, targetLabels: Record<string, string> = TARGET_LABELS): DisplayIdentity {
   const context = auditContext(row.detail)
   const snapshotName = cleanText(context?.targetName)
   const hasTarget = Boolean(row.targetType || row.targetId || snapshotName || cleanText(row.targetName) || legacyTargetName(row))
   if (!hasTarget) return { name: '无特定对象', identifier: '本次操作未关联业务对象', source: 'unknown', sourceLabel: '无对象' }
-  const typeLabel = row.targetType ? TARGET_LABELS[row.targetType] || row.targetType : '操作对象'
+  const typeLabel = row.targetType ? targetLabels[row.targetType] || row.targetType : '操作对象'
   const identifier = row.targetId ? `${typeLabel} · ID ${row.targetId}` : typeLabel
   if (snapshotName) return { name: snapshotName, identifier, source: 'snapshot', sourceLabel: '操作时名称' }
   const topName = cleanText(row.targetName)
@@ -453,7 +455,7 @@ export function detailNotes(row: AuditLogRow): DetailNote[] {
   return notes
 }
 
-function formatByteSize(value: unknown): string {
+export function formatByteSize(value: unknown): string {
   const bytes = Number(value)
   if (!Number.isFinite(bytes) || bytes < 0) return formatAuditValue(value)
   if (bytes < 1024) return `${bytes} B`

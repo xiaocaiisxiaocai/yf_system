@@ -307,6 +307,11 @@ html, body, #root {
 .page-table .arco-table-pagination {
   flex: 0 0 auto;
 }
+/* 卡片定高时表体铺满分页上方的剩余空间：Arco 把 scroll.y 写成行内 max-height，
+   只按估算值截断会在最后一行和分页之间留下空白。窄屏与矮屏卡片改为自适应高度，仍沿用 scroll.y。 */
+@media (min-width: 721px) and (min-height: 701px) {
+  .page-card--table .page-table .arco-table-body { max-height: none !important; }
+}
 /* 可调整列宽的表按像素锁列宽。表格宽度由各列合计决定，不使用 Arco 的 min-width:100%，
    否则容器多出来的宽度会按比例分给每一列。主项目名称保持设定宽度，其余列平分剩余宽度。 */
 .page-table-host {
@@ -804,35 +809,17 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
   background: var(--color-fill-1);
 }
 .audit-result-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 2px 8px; }
-.audit-actor { display: flex; align-items: center; justify-content: center; gap: 8px; min-width: 0; }
-.audit-actor > span:last-child,
-.audit-action,
-.audit-target { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
-.audit-actor b,
-.audit-action small,
-.audit-target span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.audit-action > .arco-tag {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.audit-actor small,
-.audit-action small,
-.audit-target small { color: var(--app-text-muted); font-size: 12px; line-height: 18px; }
-.audit-avatar {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  color: rgb(var(--primary-6));
-  background: rgb(var(--primary-1));
-  font-size: 12px;
-  font-weight: 600;
-}
+.audit-filter-panel--compact { grid-template-columns: minmax(240px, 1.4fr) minmax(220px, 1.2fr) minmax(310px, 1.6fr) auto; }
+/* 日志表的双行单元格：主文本与次要说明同一中线，各行高度一致，不再用头像把文字推离列中心。 */
+.audit-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-width: 0; min-height: 44px; }
+.audit-cell > b,
+.audit-cell > span,
+.audit-cell > small,
+.audit-cell > .arco-tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-cell > b { font-weight: 600; line-height: 22px; }
+.audit-cell > span { line-height: 22px; }
+.audit-cell > small { color: var(--app-text-muted); font-size: 12px; line-height: 18px; }
+.audit-table .arco-typography.audit-summary { display: block; margin: 0; }
 .audit-detail-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .audit-json {
   max-height: 360px;
@@ -851,10 +838,12 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 @media (max-width: 1500px) {
   .audit-filter-panel { grid-template-columns: minmax(220px, 1fr) 140px minmax(220px, 1fr) 130px; }
   .audit-filter-panel > :nth-child(5) { grid-column: span 2; }
+  .audit-filter-panel--compact { grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) minmax(300px, 1.4fr) auto; }
 }
 
 @media (max-width: 1200px) {
-  .audit-filter-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .audit-filter-panel,
+  .audit-filter-panel--compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .audit-filter-panel > :nth-child(5) { grid-column: auto; }
 }
 
