@@ -466,6 +466,8 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .section-heading > .arco-typography-secondary { font-size: 13px; }
 .responsive-toolbar { flex-wrap: wrap; row-gap: 12px; }
 .responsive-toolbar .arco-space { flex-wrap: wrap; row-gap: 8px; }
+/* Arco 换行 Space 给每项写行内 margin-bottom，单行时会把工具栏撑高 8px、让右侧按钮下沉；换行间距已由 row-gap 负责。 */
+.responsive-toolbar .arco-space-wrap > .arco-space-item { margin-bottom: 0 !important; }
 .responsive-toolbar > .arco-space-item { min-width: 0; max-width: 100%; }
 .responsive-toolbar .arco-input-search,
 .responsive-toolbar .arco-select { max-width: 100%; }
