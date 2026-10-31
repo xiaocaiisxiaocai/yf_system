@@ -158,11 +158,16 @@ export function useSystemConfig(http: HttpClient) {
       { key: 'notify.supplier.enabled', value: String(notificationDraft.supplierEnabled) },
       { key: 'notify.event.message_created', value: String(notificationDraft.events.messageCreated) },
       { key: 'notify.event.file_uploaded', value: String(notificationDraft.events.fileUploaded) },
-      { key: 'notify.event.project_submitted', value: String(notificationDraft.events.projectSubmitted) },
-      { key: 'notify.event.project_confirmed', value: String(notificationDraft.events.projectConfirmed) },
-      { key: 'notify.event.project_rejected', value: String(notificationDraft.events.projectRejected) },
-      { key: 'notify.event.project_withdrawn', value: String(notificationDraft.events.projectWithdrawn) },
+      { key: 'notify.event.project_started', value: String(notificationDraft.events.projectStarted) },
+      { key: 'notify.event.project_terminated', value: String(notificationDraft.events.projectTerminated) },
+      { key: 'notify.event.project_restarted', value: String(notificationDraft.events.projectRestarted) },
+      { key: 'notify.event.project_reopened', value: String(notificationDraft.events.projectReopened) },
       { key: 'notify.event.project_material_reviewed', value: String(notificationDraft.events.projectMaterialReviewed) },
+      { key: 'notify.event.project_due_soon', value: String(notificationDraft.events.projectDueSoon) },
+      { key: 'notify.event.project_overdue', value: String(notificationDraft.events.projectOverdue) },
+      { key: 'notify.due.internal.enabled', value: String(notificationDraft.due.internalEnabled) },
+      { key: 'notify.due.supplier.enabled', value: String(notificationDraft.due.supplierEnabled) },
+      { key: 'notify.due.remind_days_before', value: String(notificationDraft.due.remindDaysBefore) },
     ]
     try {
       await http.put<ApiResponses['PUT /admin/system/configs']>('/admin/system/configs', { items })

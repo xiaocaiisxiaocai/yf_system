@@ -46,7 +46,7 @@ public sealed class UnreadWindowTests
 
         Assert.Equal(1UL, await MessageService.UnreadCountAsync(conn, null, 1, 1, ct));
         var groups = new ProjectGroupService(new AuditService([]), null!);
-        Assert.Equal(1UL, Assert.Single((await groups.ListAsync(conn, admin, 1, 20, null, null, null, ct)).List).UnreadMessages);
+        Assert.Equal(1UL, Assert.Single((await groups.ListAsync(conn, admin, 1, 20, null, null, null, null, false, ct)).List).UnreadMessages);
         var detail = await groups.DetailAsync(conn, admin, 1, ct);
         Assert.Equal(1UL, detail.Group.UnreadMessages);
         Assert.Equal(1UL, Assert.Single(detail.Projects).UnreadMessages);

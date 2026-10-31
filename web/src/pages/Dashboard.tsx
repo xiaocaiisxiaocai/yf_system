@@ -5,7 +5,7 @@ import { IconRight, IconRefresh } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../api/client'
 import { createSessionQueryScope, queryClient } from '../api/queryClient'
-import { type MaterialReviewStatus, fmtTime } from '../api/types'
+import { MATERIAL_REVIEW, type MaterialReviewStatus, fmtTime } from '../api/types'
 import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../store/auth'
 import { useCollaboration } from '../store/collaboration'
@@ -61,12 +61,6 @@ interface MessagePage {
 }
 
 const PAGE_SIZE = 10
-
-const TASK_TAG: Record<MaterialReviewStatus, { text: string; color: string }> = {
-  NO_MATERIAL: { text: '待回传资料', color: 'gray' },
-  PENDING: { text: '资料待确认', color: 'orange' },
-  RETURNED: { text: '资料已退回', color: 'red' },
-}
 
 function isAuthorizationError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
@@ -405,7 +399,7 @@ export default function Dashboard() {
                                   {project.name}
                                 </Link>
                               )}
-                              description={<Tag color={TASK_TAG[project.materialReviewStatus]?.color}>{TASK_TAG[project.materialReviewStatus]?.text ?? project.materialReviewStatus}</Tag>}
+                              description={<Tag color={MATERIAL_REVIEW[project.materialReviewStatus]?.color}>{MATERIAL_REVIEW[project.materialReviewStatus]?.text ?? project.materialReviewStatus}</Tag>}
                             />
                           </List.Item>
                         )}

@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261031120322_RetireAcceptanceWorkflow";
+    private const string Latest = "20261031125128_AddProjectNotificationsAndDueReminders";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -74,7 +74,8 @@ public sealed class MigrationRoundTripTests
         // AddProjectRobotOwnerName + SeedArmCatalogAndRobotTypes (Down keeps the catalog, Up skips existing rows) + AddProjectRobotType
         // + AllowMacroAndBinaryExcelUploads (Down keeps the whitelist) + AddOemApprovalTaskActivatedAt + AddMessageClientId
         // + AddProjectMaterialReview (Down keeps its notification switch row) + AddSupplierContactsAndSignatures
-        // + RetireAcceptanceWorkflow (Down brings back only projects.confirm_side, not the retired permission codes).
+        // + RetireAcceptanceWorkflow (Down brings back only projects.confirm_side, not the retired permission codes)
+        // + AddProjectNotificationsAndDueReminders (Down drops only the reminder columns, keeping the config rows).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
@@ -89,6 +90,7 @@ public sealed class MigrationRoundTripTests
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("table|supplier_contacts", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|messages|signer_name|", StringComparison.Ordinal));
         Assert.Contains(rolledBack, line => line.StartsWith("column|projects|confirm_side|", StringComparison.Ordinal));
+        Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|projects|overdue_notified_for|", StringComparison.Ordinal));
         Assert.Equal(latestData, await ReferenceDataAsync(database, ct));
         await migrator.MigrateAsync(cancellationToken: ct);
         Assert.Equal(latestSchema, await SchemaAsync(database, ct));

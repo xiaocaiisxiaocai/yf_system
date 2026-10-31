@@ -542,7 +542,7 @@ internal sealed class MessageService(
         AccessService.RequireInternal(current);
         await AccessService.RequirePermissionAsync(conn, tx, current, "message:delete_any", ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, message.ProjectId, false, ct);
-        EnsureWritable(project.Status);
+        EnsureWritable(project.Status, posting: false);
         if (message.Status != "NORMAL")
         {
             throw ApiException.NotFound();
@@ -815,8 +815,15 @@ internal sealed class MessageService(
             readRows.Any(read => read.UserId == viewerId));
     }
 
-    private static void EnsureWritable(string status)
+    internal const string DraftMessageMessage = "项目尚未开始，暂不能留言";
+
+    private static void EnsureWritable(string status, bool posting = true)
     {
+        // Drafts carry no material yet, so neither side talks about them before START.
+        if (posting && status == ProjectStatuses.Draft)
+        {
+            throw ApiException.Conflict(DraftMessageMessage);
+        }
         if (status is ProjectStatuses.Completed or ProjectStatuses.Terminated)
         {
             throw ApiException.Conflict("项目当前不可留言");

@@ -320,6 +320,33 @@ describe('ProjectList migrated behavior', () => {
     expect(within(row).getByText('资料待确认 1')).toBeInTheDocument()
   })
 
+  it('filters by material state and overdue through the address bar and marks overdue main projects', async () => {
+    const seen: Array<Record<string, unknown>> = []
+    const overdueGroup = {
+      id: 4, name: '逾期主项目', supplierId: 8, status: 'IN_PROGRESS', workOrderNos: [], unreadMessages: 0,
+      subprojectCount: 1, completedCount: 0, materialPendingCount: 0, terminatedCount: 0, expectedCompletionDate: '2000-01-01',
+    }
+    const doneGroup = { ...overdueGroup, id: 5, name: '已完成主项目', status: 'COMPLETED' }
+    mocks.get.mockImplementation((url: string, config?: { params?: Record<string, unknown> }) => {
+      if (url === '/project-groups') {
+        seen.push(config?.params ?? {})
+        return Promise.resolve({ data: page([overdueGroup, doneGroup]) })
+      }
+      if (url === '/supplier-options') return Promise.resolve({ data: suppliers })
+      return Promise.resolve({ data: [] })
+    })
+    render(<MemoryRouter initialEntries={['/projects?material=RETURNED']}><ProjectList /><LocationProbe /></MemoryRouter>)
+    const row = await screen.findByRole('row', { name: /逾期主项目/ })
+    expect(within(row).getByText(/^逾期 \d+ 天$/)).toBeInTheDocument()
+    expect(within(screen.getByRole('row', { name: /已完成主项目/ })).queryByText(/逾期/)).not.toBeInTheDocument()
+    expect(seen.at(-1)).toMatchObject({ materialState: 'RETURNED' })
+    expect(seen.at(-1)?.overdue).toBeUndefined()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '仅看逾期' }))
+    await waitFor(() => expect(seen.at(-1)).toMatchObject({ materialState: 'RETURNED', overdue: true }))
+    expect(locationProbe.search).toContain('overdue=1')
+  })
+
   it('project creation explains missing prerequisites and refreshes without discarding entered data', async () => {
     let ready = false
     mocks.get.mockImplementation((url: string, config?: GetConfig) => {

@@ -25,10 +25,13 @@ internal sealed class ProjectGroupService(
         string? keyword,
         string? status,
         ulong? supplierId,
+        string? materialState,
+        bool overdue,
         CancellationToken ct)
     {
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
         status = NormalizeGroupStatus(status);
+        materialState = NormalizeMaterialState(materialState);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await using var db = EfDb.Use(conn, tx);
@@ -41,6 +44,18 @@ internal sealed class ProjectGroupService(
         }
         if (status is not null) query = query.Where(group => group.Status == status);
         if (supplierId is not null) query = query.Where(group => group.SupplierId == supplierId.Value);
+        if (materialState is not null)
+        {
+            // A main project matches when one of its in-progress subprojects is in that material state.
+            var matching = ProjectQueries.InProgressMaterial(db).Where(row => row.State == materialState);
+            query = query.Where(group => matching.Any(row => row.ProjectGroupId == group.Id));
+        }
+        if (overdue)
+        {
+            var today = BusinessCalendar.Today(await DbClock.UtcNowAsync(db, ct, 0));
+            query = query.Where(group => (group.Status == ProjectStatuses.Draft || group.Status == ProjectStatuses.InProgress)
+                && group.ExpectedCompletionDate != null && group.ExpectedCompletionDate < today);
+        }
         var total = (ulong)await query.LongCountAsync(ct);
         var offset = (actualPage - 1) * size;
         var rows = await GroupRows(db, query).OrderByDescending(group => group.Id)
@@ -798,6 +813,15 @@ internal sealed class ProjectGroupService(
         if (value is not (ProjectStatuses.Draft or ProjectStatuses.InProgress
             or ProjectStatuses.Completed or ProjectStatuses.Terminated))
             throw ApiException.BadRequest("主项目状态不正确");
+        return value;
+    }
+
+    internal static string? NormalizeMaterialState(string? state)
+    {
+        if (string.IsNullOrWhiteSpace(state)) return null;
+        var value = state.Trim();
+        if (value is not (MaterialReviewStatuses.NoMaterial or MaterialReviewStatuses.Pending or MaterialReviewStatuses.Returned))
+            throw ApiException.BadRequest("资料状态不正确");
         return value;
     }
 

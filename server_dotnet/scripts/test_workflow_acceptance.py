@@ -251,11 +251,13 @@ def run_workflow_acceptance(client, Client, conn, check):
             (project_id,),
         )
         management_history = list(cursor.fetchall())
+        # Each management transition mails the supplier side only (one switch per event).
         cursor.execute(
-            "SELECT COUNT(*) FROM email_outbox WHERE project_id=%s",
+            "SELECT o.event_type,u.user_type FROM email_outbox o "
+            "LEFT JOIN users u ON u.id=o.recipient_user_id WHERE o.project_id=%s",
             (project_id,),
         )
-        management_outbox = cursor.fetchone()[0]
+        management_outbox = list(cursor.fetchall())
     project_audits = _audit_actions(conn, project_id)
     check(
         "terminate and restart persist exact state history and audit",
@@ -269,7 +271,9 @@ def run_workflow_acceptance(client, Client, conn, check):
             ("RESTART", "TERMINATED", "IN_PROGRESS"),
         ]
         and {"PROJECT_START", "PROJECT_TERMINATE", "PROJECT_RESTART"}.issubset(project_audits)
-        and management_outbox == 0,
+        and {event for event, _ in management_outbox}
+        == {"PROJECT_STARTED", "PROJECT_TERMINATED", "PROJECT_RESTARTED"}
+        and all(user_type == "SUPPLIER" for _, user_type in management_outbox),
     )
 
     payload = (b"workflow-completed-read-boundary\n" * 12000) + b"EOF"

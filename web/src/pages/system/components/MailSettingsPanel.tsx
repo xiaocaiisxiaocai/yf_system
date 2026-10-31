@@ -1,6 +1,7 @@
 import { Button, Card, Input, InputNumber, Select, Space, Switch, Table, Tag, Typography } from '@arco-design/web-react'
 import PasswordInput from '../../../components/PasswordInput'
 import {
+  DUE_REMIND_DAYS,
   MAIL_ACTION_LABELS,
   NOTIFICATION_EVENT_ITEMS,
   type MailRecent,
@@ -113,7 +114,7 @@ export function renderMailSettingsPanel({
             <div className="system-notification-panel">
               <div className="system-notification-panel-title">通知对象</div>
               <div className="system-notification-row">
-                <div><Typography.Text>内部员工</Typography.Text><Typography.Text type="secondary">公司内部负责人和验收人员</Typography.Text></div>
+                <div><Typography.Text>内部员工</Typography.Text><Typography.Text type="secondary">公司内部项目负责人</Typography.Text></div>
                 <Switch aria-label="内部员工邮件通知" checked={notificationDraft.internalEnabled} disabled={notificationSaving} onChange={(checked) => onNotificationDraftChange((current) => ({ ...current, internalEnabled: checked }))} />
               </div>
               <div className="system-notification-row">
@@ -129,6 +130,35 @@ export function renderMailSettingsPanel({
                   <Switch aria-label={`${item.title}邮件提醒`} checked={notificationDraft.events[item.key]} disabled={notificationSaving} onChange={(checked) => onNotificationDraftChange((current) => ({ ...current, events: { ...current.events, [item.key]: checked } }))} />
                 </div>
               ))}
+            </div>
+            <div className="system-notification-panel">
+              <div className="system-notification-panel-title">到期提醒</div>
+              <div className="system-notification-row">
+                <div><Typography.Text>提前天数</Typography.Text><Typography.Text type="secondary">需求完成时间前几天发送即将到期提醒</Typography.Text></div>
+                <InputNumber
+                  aria-label="到期提前提醒天数"
+                  size="small"
+                  style={{ width: 96 }}
+                  min={DUE_REMIND_DAYS.min}
+                  max={DUE_REMIND_DAYS.max}
+                  precision={0}
+                  suffix="天"
+                  value={notificationDraft.due.remindDaysBefore}
+                  disabled={notificationSaving}
+                  onChange={(value) => onNotificationDraftChange((current) => ({
+                    ...current,
+                    due: { ...current.due, remindDaysBefore: typeof value === 'number' ? value : DUE_REMIND_DAYS.fallback },
+                  }))}
+                />
+              </div>
+              <div className="system-notification-row">
+                <div><Typography.Text>负责人</Typography.Text><Typography.Text type="secondary">子项目负责人</Typography.Text></div>
+                <Switch aria-label="到期提醒发给负责人" checked={notificationDraft.due.internalEnabled} disabled={notificationSaving} onChange={(checked) => onNotificationDraftChange((current) => ({ ...current, due: { ...current.due, internalEnabled: checked } }))} />
+              </div>
+              <div className="system-notification-row">
+                <div><Typography.Text>厂商</Typography.Text><Typography.Text type="secondary">厂商全部启用联络人</Typography.Text></div>
+                <Switch aria-label="到期提醒发给厂商" checked={notificationDraft.due.supplierEnabled} disabled={notificationSaving} onChange={(checked) => onNotificationDraftChange((current) => ({ ...current, due: { ...current.due, supplierEnabled: checked } }))} />
+              </div>
             </div>
           </div>
           <Space wrap>

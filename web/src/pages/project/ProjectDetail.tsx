@@ -17,6 +17,7 @@ import {
 import FileTable from '../../components/FileTable'
 import MessagePanel from '../../components/MessagePanel'
 import ProjectActivityPanel from '../../components/ProjectActivityPanel'
+import OverdueTag from '../../components/OverdueTag'
 import ProjectWorkflowPanel from '../../components/ProjectWorkflowPanel'
 import { useDisconnectedPoll } from '../../hooks/useDisconnectedPoll'
 import { projectAccessLostStatus, useProjectAccessLost } from '../../hooks/useProjectAccessLost'
@@ -475,6 +476,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
                 <Tag color={PROJECT_STATUS[project.status]?.color}>
                   {PROJECT_STATUS[project.status]?.text || project.status}
                 </Tag>
+                <OverdueTag date={project.expectedCompletionDate} status={project.status} />
               </div>
             </div>
           </div>

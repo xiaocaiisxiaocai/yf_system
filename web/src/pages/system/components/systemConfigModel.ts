@@ -1,12 +1,23 @@
 export const MB = 1024 * 1024
 
-export type NotificationEventKey = 'messageCreated' | 'fileUploaded' | 'projectSubmitted' | 'projectConfirmed' | 'projectRejected' | 'projectWithdrawn' | 'projectMaterialReviewed'
+export type NotificationEventKey =
+  | 'messageCreated' | 'fileUploaded' | 'projectStarted' | 'projectTerminated' | 'projectRestarted'
+  | 'projectReopened' | 'projectMaterialReviewed' | 'projectDueSoon' | 'projectOverdue'
+
+export interface NotificationDuePolicy {
+  internalEnabled: boolean
+  supplierEnabled: boolean
+  remindDaysBefore: number
+}
+
+export const DUE_REMIND_DAYS = { min: 1, max: 30, fallback: 3 }
 
 export interface NotificationPolicy {
   globalEnabled: boolean
   internalEnabled: boolean
   supplierEnabled: boolean
   events: Record<NotificationEventKey, boolean>
+  due: NotificationDuePolicy
 }
 
 export const EMPTY_NOTIFICATION_POLICY: NotificationPolicy = {
@@ -16,12 +27,15 @@ export const EMPTY_NOTIFICATION_POLICY: NotificationPolicy = {
   events: {
     messageCreated: true,
     fileUploaded: true,
-    projectSubmitted: true,
-    projectConfirmed: true,
-    projectRejected: true,
-    projectWithdrawn: true,
+    projectStarted: true,
+    projectTerminated: true,
+    projectRestarted: true,
+    projectReopened: true,
     projectMaterialReviewed: true,
+    projectDueSoon: true,
+    projectOverdue: true,
   },
+  due: { internalEnabled: true, supplierEnabled: true, remindDaysBefore: DUE_REMIND_DAYS.fallback },
 }
 
 export const NOTIFICATION_CONFIG_KEYS = new Set([
@@ -30,21 +44,28 @@ export const NOTIFICATION_CONFIG_KEYS = new Set([
   'notify.supplier.enabled',
   'notify.event.message_created',
   'notify.event.file_uploaded',
-  'notify.event.project_submitted',
-  'notify.event.project_confirmed',
-  'notify.event.project_rejected',
-  'notify.event.project_withdrawn',
+  'notify.event.project_started',
+  'notify.event.project_terminated',
+  'notify.event.project_restarted',
+  'notify.event.project_reopened',
   'notify.event.project_material_reviewed',
+  'notify.event.project_due_soon',
+  'notify.event.project_overdue',
+  'notify.due.internal.enabled',
+  'notify.due.supplier.enabled',
+  'notify.due.remind_days_before',
 ])
 
 export const NOTIFICATION_EVENT_ITEMS: Array<{ key: NotificationEventKey; title: string; description: string }> = [
   { key: 'messageCreated', title: '新留言', description: '对方在项目中发表留言时提醒' },
   { key: 'fileUploaded', title: '新文件', description: '对方在项目中上传文件时提醒' },
-  { key: 'projectSubmitted', title: '提交验收', description: '供应商提交验收申请时提醒内部员工' },
-  { key: 'projectConfirmed', title: '验收通过', description: '验收完成时提醒最近提交人' },
-  { key: 'projectRejected', title: '验收驳回', description: '验收被驳回时提醒最近提交人' },
-  { key: 'projectWithdrawn', title: '撤回验收', description: '验收申请撤回时提醒相关参与人' },
+  { key: 'projectStarted', title: '开始子项目', description: '子项目开始时提醒供应商' },
+  { key: 'projectTerminated', title: '终止子项目', description: '子项目终止时提醒供应商' },
+  { key: 'projectRestarted', title: '重新开始子项目', description: '已终止子项目重新开始时提醒供应商' },
+  { key: 'projectReopened', title: '重开子项目', description: '已完成子项目重开返工时提醒供应商' },
   { key: 'projectMaterialReviewed', title: '资料确认', description: '负责人确认或退回回传资料时提醒供应商' },
+  { key: 'projectDueSoon', title: '即将到期', description: '需求完成时间前按提前天数提醒一次' },
+  { key: 'projectOverdue', title: '已逾期', description: '超过需求完成时间后提醒一次' },
 ]
 
 export interface SmtpSettings {
@@ -139,6 +160,9 @@ export function normalizeNotificationPolicy(value: unknown): NotificationPolicy 
   const events = raw.events && typeof raw.events === 'object' && !Array.isArray(raw.events)
     ? raw.events as Partial<Record<NotificationEventKey, boolean>>
     : {}
+  const due = raw.due && typeof raw.due === 'object' && !Array.isArray(raw.due)
+    ? raw.due as Partial<NotificationDuePolicy>
+    : {}
   return {
     globalEnabled: raw.globalEnabled !== false,
     internalEnabled: raw.internalEnabled !== false,
@@ -146,11 +170,21 @@ export function normalizeNotificationPolicy(value: unknown): NotificationPolicy 
     events: {
       messageCreated: events.messageCreated !== false,
       fileUploaded: events.fileUploaded !== false,
-      projectSubmitted: events.projectSubmitted !== false,
-      projectConfirmed: events.projectConfirmed !== false,
-      projectRejected: events.projectRejected !== false,
-      projectWithdrawn: events.projectWithdrawn !== false,
+      projectStarted: events.projectStarted !== false,
+      projectTerminated: events.projectTerminated !== false,
+      projectRestarted: events.projectRestarted !== false,
+      projectReopened: events.projectReopened !== false,
       projectMaterialReviewed: events.projectMaterialReviewed !== false,
+      projectDueSoon: events.projectDueSoon !== false,
+      projectOverdue: events.projectOverdue !== false,
+    },
+    due: {
+      internalEnabled: due.internalEnabled !== false,
+      supplierEnabled: due.supplierEnabled !== false,
+      remindDaysBefore: Number.isInteger(due.remindDaysBefore)
+        && due.remindDaysBefore! >= DUE_REMIND_DAYS.min && due.remindDaysBefore! <= DUE_REMIND_DAYS.max
+        ? due.remindDaysBefore!
+        : DUE_REMIND_DAYS.fallback,
     },
   }
 }

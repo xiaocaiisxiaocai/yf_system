@@ -116,6 +116,8 @@ def run_recent_route_contracts(admin, Client, conn, check):
     check("robot-part supplier options require dict management permission",
           any(item["id"] == supplier["id"] for item in supplier_options))
 
+    # Drafts reject messages; the receipt contract below needs a started project.
+    admin.call("PUT", f"/api/v1/projects/{project_id}/status", {"status": "IN_PROGRESS"})
     message = actor.call("POST", f"/api/v1/projects/{project_id}/messages", {
         "content": "路由合同消息-" + suffix,
     })

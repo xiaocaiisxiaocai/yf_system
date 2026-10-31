@@ -440,9 +440,15 @@
 }
 
 .project-group-section-heading,
-.project-group-progress {
+.project-group-progress,
+.project-due-cell {
   display: flex;
   align-items: center;
+}
+
+.project-due-cell {
+  justify-content: center;
+  gap: 4px;
 }
 
 .project-group-section-heading {
@@ -456,10 +462,6 @@
   font-size: 16px;
 }
 
-.project-group-progress {
-  display: flex;
-  align-items: center;
-}
 
 .project-group-section-heading {
   justify-content: space-between;

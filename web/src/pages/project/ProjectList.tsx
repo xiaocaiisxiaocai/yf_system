@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Badge, Button, Card, DatePicker, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
+  Alert, Badge, Button, Card, Checkbox, DatePicker, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -12,7 +12,7 @@ import { columnLayoutStorageKey, measureTableWidth, withFlexibleColumn, type Col
 import { useColumnLayout } from '../../components/useColumnLayout'
 import { useAuth } from '../../store/auth'
 import {
-  type PageResp, type ProjectDictionaryOption, type ProjectGroup, type RobotPart, type SupplierContactOption, PROJECT_STATUS,
+  type PageResp, type ProjectDictionaryOption, type ProjectGroup, type RobotPart, type SupplierContactOption, MATERIAL_REVIEW, PROJECT_STATUS,
 } from '../../api/types'
 import { textLengthRule } from '../../utils/textRules'
 import { normalizeList } from '../../utils/listValues'
@@ -20,6 +20,7 @@ import { useCollaboration } from '../../store/collaboration'
 import type { ApiResponses } from '../../api/types'
 import LoadError from '../../components/LoadError'
 import EnterSubmit from '../../components/EnterSubmit'
+import OverdueTag from '../../components/OverdueTag'
 
 interface SupplierOpt { id: number; name: string }
 interface ProjectGroupFormValues {
@@ -106,6 +107,10 @@ function parseStatusParam(value: string | null) {
   return value && value in PROJECT_STATUS ? value : undefined
 }
 
+function parseMaterialParam(value: string | null) {
+  return value && value in MATERIAL_REVIEW ? value : undefined
+}
+
 export default function ProjectList() {
   const navigate = useNavigate()
   const revision = useCollaboration((state) => state.revision)
@@ -120,6 +125,8 @@ export default function ProjectList() {
   const keyword = searchParams.get('q') ?? ''
   const status = parseStatusParam(searchParams.get('status'))
   const supplierParam = parsePositiveIntParam(searchParams.get('supplier'))
+  const materialState = parseMaterialParam(searchParams.get('material'))
+  const overdue = searchParams.get('overdue') === '1'
   const page = parsePositiveIntParam(searchParams.get('page')) ?? 1
   const pageSize = parsePageSizeParam(searchParams.get('pageSize'))
   /** 写入地址栏；返回条件是否真的变化（未变化时调用方需自行重新加载）。 */
@@ -193,10 +200,11 @@ export default function ProjectList() {
 
   const fetchGroups = useCallback(async () => {
     const response = await http.get<ApiResponses['GET /project-groups']>('/project-groups', {
-      params: { page, pageSize, keyword: keyword || undefined, status, supplierId }, quietNetworkError: true,
+      params: { page, pageSize, keyword: keyword || undefined, status, supplierId, materialState, overdue: overdue || undefined },
+      quietNetworkError: true,
     } as QuietRequestConfig)
     return response.data as PageResp<ProjectGroup>
-  }, [keyword, page, pageSize, status, supplierId])
+  }, [keyword, materialState, overdue, page, pageSize, status, supplierId])
 
   const load = useCallback(() => {
     setLoading(true); setLoadError(false); setListStale(false); setReloadKey((value) => value + 1)
@@ -209,7 +217,7 @@ export default function ProjectList() {
 
   useEffect(() => {
     let active = true
-    const queryKey = `${page}|${pageSize}|${keyword}|${status ?? ''}|${supplierId ?? ''}`
+    const queryKey = `${page}|${pageSize}|${keyword}|${status ?? ''}|${supplierId ?? ''}|${materialState ?? ''}|${overdue}`
     const background = loadedQueryKey.current === queryKey
     fetchGroups().then((next) => {
       if (!active) return
@@ -223,7 +231,7 @@ export default function ProjectList() {
       else { setLoadError(true); setListStale(false) }
     }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [fetchGroups, keyword, page, pageSize, reloadKey, revision, setPage, status, supplierId])
+  }, [fetchGroups, keyword, materialState, overdue, page, pageSize, reloadKey, revision, setPage, status, supplierId])
 
   const loadSupplierOptions = useCallback(() => {
     const seq = ++supplierOptionsSeq.current
@@ -420,7 +428,9 @@ export default function ProjectList() {
     { key: 'robotOwnerName', title: 'Robot 负责人', dataIndex: 'robotOwnerName', ellipsis: true, render: cellText },
     { key: 'sectionName', title: '课别', dataIndex: 'sectionName', ellipsis: true, render: cellText },
     { key: 'priorityName', title: '优先级', dataIndex: 'priorityName', align: 'center' as const, render: cellText },
-    { key: 'expectedCompletionDate', title: '需求完成时间', dataIndex: 'expectedCompletionDate', align: 'center' as const, render: cellText },
+    { key: 'expectedCompletionDate', title: '需求完成时间', dataIndex: 'expectedCompletionDate', align: 'center' as const, render: (value: string | null | undefined, row: ProjectGroup) => (
+      <span className="project-due-cell">{displayText(value)}<OverdueTag date={value} status={row.status} /></span>
+    ) },
     { key: 'progress', title: '子项目进度', align: 'center' as const, render: (_: unknown, row: ProjectGroup) => (
       <div className="project-group-progress" title={`已完成 ${row.completedCount} / ${row.subprojectCount}`}>
         <span>{row.completedCount}/{row.subprojectCount}</span>
@@ -446,6 +456,10 @@ export default function ProjectList() {
           <Select allowClear placeholder="状态" style={{ width: 130 }} value={status} onChange={(value) => applyQuery({ status: value as string | undefined, page: 1 })}>
             {['DRAFT', 'IN_PROGRESS', 'COMPLETED', 'TERMINATED'].map((key) => <Select.Option key={key} value={key}>{PROJECT_STATUS[key]?.text ?? key}</Select.Option>)}
           </Select>
+          <Select allowClear placeholder="资料状态" style={{ width: 130 }} value={materialState} onChange={(value) => applyQuery({ material: value as string | undefined, page: 1 })}>
+            {(['NO_MATERIAL', 'PENDING', 'RETURNED'] as const).map((key) => <Select.Option key={key} value={key}>{MATERIAL_REVIEW[key].text}</Select.Option>)}
+          </Select>
+          <Checkbox checked={overdue} onChange={(checked) => applyQuery({ overdue: checked ? 1 : undefined, page: 1 })}>仅看逾期</Checkbox>
           {isInternal && <Select allowClear showSearch placeholder="Robot 厂商" style={{ width: 180 }} value={supplierId} loading={supplierOptionsLoading} disabled={supplierOptionsError} onChange={(value) => applyQuery({ supplier: value as number | undefined, page: 1 })}>{suppliers.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select>}
         </Space>
         <Space>

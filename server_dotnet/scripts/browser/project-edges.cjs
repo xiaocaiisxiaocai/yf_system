@@ -85,7 +85,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
       });
       const state = await choose(0, '草稿', { keyword: prefix, status: 'DRAFT', page: 1 });
       assert.equal(state.total, 13); assert(state.list.every(item => item.status === 'DRAFT'));
-      const supplier = await choose(1, f.suppliers.b.name, {
+      const supplier = await choose(2, f.suppliers.b.name, {
         keyword: prefix, supplierId: f.suppliers.b.id, status: 'DRAFT', page: 1,
       });
       assert.equal(supplier.total, 1); assert.equal(supplier.list[0].id, groups[11].groupId);

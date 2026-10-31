@@ -84,6 +84,26 @@ export const PROJECT_STATUS: Record<ProjectStatus, ProjectStatusView> & Partial<
   TERMINATED: { text: '已终止', color: 'red' },
 }
 
+export const MATERIAL_REVIEW: Record<MaterialReviewStatus, ProjectStatusView> = {
+  NO_MATERIAL: { text: '待回传资料', color: 'gray' },
+  PENDING: { text: '资料待确认', color: 'orange' },
+  RETURNED: { text: '资料已退回', color: 'red' },
+}
+
+/**
+ * 未完成（草稿/进行中）且需求完成时间（yyyy-MM-dd）早于今天时返回逾期天数，否则 null。
+ * 按浏览器本地日期计算；后端筛选按中国标准时间（UTC+8）。
+ */
+export function overdueDays(expectedCompletionDate?: string | null, status?: string | null, now = new Date()): number | null {
+  if (!expectedCompletionDate || (status !== 'DRAFT' && status !== 'IN_PROGRESS')) return null
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(expectedCompletionDate)
+  if (!match) return null
+  const due = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+  const days = Math.round((today - due) / 86_400_000)
+  return days > 0 ? days : null
+}
+
 export function fmtSize(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`

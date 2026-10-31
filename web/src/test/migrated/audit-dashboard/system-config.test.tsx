@@ -17,12 +17,15 @@ const notificationPolicy = {
   events: {
     messageCreated: true,
     fileUploaded: true,
-    projectSubmitted: true,
-    projectConfirmed: true,
-    projectRejected: true,
-    projectWithdrawn: true,
+    projectStarted: true,
+    projectTerminated: true,
+    projectRestarted: true,
+    projectReopened: true,
     projectMaterialReviewed: true,
+    projectDueSoon: true,
+    projectOverdue: true,
   },
+  due: { internalEnabled: true, supplierEnabled: true, remindDaysBefore: 3 },
 }
 
 const baseMail = {
@@ -250,5 +253,37 @@ describe('系统参数与 SMTP 生产界面', () => {
     expect(notification).not.toBeChecked()
     expect(screen.getByRole('button', { name: '保存邮件提醒' })).toBeDisabled()
     expect(warning).toHaveBeenCalledWith('邮件提醒设置已保存，但状态刷新失败，请稍后刷新页面')
+  })
+
+  it('email rules save the status-change switches and the due reminder settings', async () => {
+    const writes: Array<Array<{ key: string; value: string }>> = []
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/configs')) return { data: [] }
+      if (url.endsWith('/mail-settings')) return { data: baseSmtp }
+      return { data: baseMail }
+    })
+    mocks.put.mockImplementation(async (_url: string, body: { items: Array<{ key: string; value: string }> }) => {
+      writes.push(body.items)
+      return { data: {} }
+    })
+    const user = userEvent.setup()
+    renderConfig()
+    await openSmtp(user)
+
+    expect(screen.queryByRole('switch', { name: '提交验收邮件提醒' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('switch', { name: '终止子项目邮件提醒' }))
+    await user.click(screen.getByRole('switch', { name: '到期提醒发给厂商' }))
+    const days = screen.getByRole('spinbutton', { name: '到期提前提醒天数' })
+    await user.clear(days)
+    await user.type(days, '7')
+    fireEvent.blur(days)
+    await user.click(screen.getByRole('button', { name: '保存邮件提醒' }))
+
+    await waitFor(() => expect(writes).toHaveLength(1))
+    expect(writes[0]).toContainEqual({ key: 'notify.event.project_terminated', value: 'false' })
+    expect(writes[0]).toContainEqual({ key: 'notify.event.project_started', value: 'true' })
+    expect(writes[0]).toContainEqual({ key: 'notify.due.supplier.enabled', value: 'false' })
+    expect(writes[0]).toContainEqual({ key: 'notify.due.remind_days_before', value: '7' })
+    expect(writes[0].some((item) => item.key === 'notify.event.project_submitted')).toBe(false)
   })
 })

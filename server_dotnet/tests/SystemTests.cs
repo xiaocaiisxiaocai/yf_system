@@ -51,10 +51,14 @@ public class SystemTests
     [InlineData("notify.supplier.enabled")]
     [InlineData("notify.event.message_created")]
     [InlineData("notify.event.file_uploaded")]
-    [InlineData("notify.event.project_submitted")]
-    [InlineData("notify.event.project_confirmed")]
-    [InlineData("notify.event.project_rejected")]
-    [InlineData("notify.event.project_withdrawn")]
+    [InlineData("notify.event.project_started")]
+    [InlineData("notify.event.project_terminated")]
+    [InlineData("notify.event.project_restarted")]
+    [InlineData("notify.event.project_reopened")]
+    [InlineData("notify.event.project_due_soon")]
+    [InlineData("notify.event.project_overdue")]
+    [InlineData("notify.due.internal.enabled")]
+    [InlineData("notify.due.supplier.enabled")]
     [InlineData("notify.event.project_material_reviewed")]
     public void NotificationConfigValuesAreCanonicalBooleans(string key)
     {
@@ -62,6 +66,15 @@ public class SystemTests
         Assert.Equal("false", SystemService.NormalizeConfig(key, "0"));
         Assert.Equal("true", SystemService.NormalizeConfig(key, "TrUe"));
         Assert.Equal("false", SystemService.NormalizeConfig(key, "false"));
+    }
+
+    [Fact]
+    public void DueRemindDaysMustBeBetweenOneAndThirty()
+    {
+        Assert.Equal("7", SystemService.NormalizeConfig("notify.due.remind_days_before", " 07 "));
+        Assert.Throws<ApiException>(() => SystemService.NormalizeConfig("notify.due.remind_days_before", "0"));
+        Assert.Throws<ApiException>(() => SystemService.NormalizeConfig("notify.due.remind_days_before", "31"));
+        Assert.Throws<ApiException>(() => SystemService.NormalizeConfig("notify.due.remind_days_before", "true"));
     }
 
     [Fact]

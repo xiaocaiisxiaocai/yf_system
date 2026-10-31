@@ -5,18 +5,12 @@ import {
 import { IconCheckCircle, IconCloseCircle, IconPlayArrow, IconStop, IconUndo } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
 import { isVersionConflict } from '../api/versionConflict'
-import { type MaterialReviewStatus, type Project, PROJECT_STATUS } from '../api/types'
+import { MATERIAL_REVIEW, type Project, PROJECT_STATUS } from '../api/types'
 import { useAuth } from '../store/auth'
 import type { ApiResponses } from '../api/types'
 import ActiveUploadSessions from './ActiveUploadSessions'
 
 type WorkflowAction = 'start' | 'terminate' | 'materialApprove' | 'materialReturn' | 'reopen'
-
-const MATERIAL_REVIEW: Record<MaterialReviewStatus, { text: string; color: string }> = {
-  NO_MATERIAL: { text: '待回传资料', color: 'gray' },
-  PENDING: { text: '资料待确认', color: 'orange' },
-  RETURNED: { text: '资料已退回', color: 'red' },
-}
 
 /** 确认时涵盖的厂商回传资料：确认对话框打开时读取，帮助负责人核对看到的是哪一批。 */
 interface ApprovalScope {

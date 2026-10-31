@@ -51,7 +51,7 @@ const pathOf=r=>new URL(r.url()).pathname;
   await setSwitch('内部员工邮件通知',originalNotificationPolicy.internalEnabled);
   await setSwitch('新留言邮件提醒',originalNotificationPolicy.events.messageCreated);
   await setSwitch('外部企业邮件通知',originalNotificationPolicy.supplierEnabled);
-  const eventLabels={新文件:'fileUploaded',提交验收:'projectSubmitted',验收通过:'projectConfirmed',验收驳回:'projectRejected',撤回验收:'projectWithdrawn',资料确认:'projectMaterialReviewed'};
+  const eventLabels={新文件:'fileUploaded',开始子项目:'projectStarted',终止子项目:'projectTerminated',重新开始子项目:'projectRestarted',重开子项目:'projectReopened',资料确认:'projectMaterialReviewed',即将到期:'projectDueSoon',已逾期:'projectOverdue'};
   for(const [label,key] of Object.entries(eventLabels))await setSwitch(`${label}邮件提醒`,originalNotificationPolicy.events[key]);
   await action(p,'/admin/system/configs','PUT',()=>p.getByRole('button',{name:'保存邮件提醒',exact:true}).click());
   const restoredPolicy=(await mailStatus()).notificationPolicy;

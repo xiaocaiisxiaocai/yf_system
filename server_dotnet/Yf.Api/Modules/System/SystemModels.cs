@@ -24,17 +24,23 @@ public sealed record AuditLogResponse(
 public sealed record NotificationEventsResponse(
     bool MessageCreated,
     bool FileUploaded,
-    bool ProjectSubmitted,
-    bool ProjectConfirmed,
-    bool ProjectRejected,
-    bool ProjectWithdrawn,
-    bool ProjectMaterialReviewed);
+    bool ProjectStarted,
+    bool ProjectTerminated,
+    bool ProjectRestarted,
+    bool ProjectReopened,
+    bool ProjectMaterialReviewed,
+    bool ProjectDueSoon,
+    bool ProjectOverdue);
+
+/// <summary>Who receives due-soon / overdue reminders and how many days ahead the first one goes out.</summary>
+public sealed record NotificationDueResponse(bool InternalEnabled, bool SupplierEnabled, int RemindDaysBefore);
 
 public sealed record NotificationPolicyResponse(
     bool GlobalEnabled,
     bool InternalEnabled,
     bool SupplierEnabled,
-    NotificationEventsResponse Events);
+    NotificationEventsResponse Events,
+    NotificationDueResponse Due);
 
 public sealed record MailQueueCounts(ulong Pending, ulong Sending, ulong Sent, ulong Failed, ulong Cancelled);
 

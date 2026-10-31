@@ -80,6 +80,8 @@ public sealed class SystemService(AppDb db, AuditService audit)
         {
             "upload.max_file_size" => (1048576, 21474836480),
             "upload.chunk_size" => (262144, 67108864),
+            EmailNotificationPolicy.DueRemindDaysBeforeKey => (EmailNotificationPolicy.MinimumDueRemindDaysBefore,
+                EmailNotificationPolicy.MaximumDueRemindDaysBefore),
             _ => null
         };
         if (range is { } bounds)
@@ -134,7 +136,8 @@ public sealed class SystemService(AppDb db, AuditService audit)
             if (previous != item.Value)
             {
                 var safe = EmailNotificationPolicy.Keys.Contains(item.Key, StringComparer.Ordinal)
-                    || item.Key is "upload.max_file_size" or "upload.chunk_size" or "upload.allowed_exts";
+                    || item.Key is "upload.max_file_size" or "upload.chunk_size" or "upload.allowed_exts"
+                        or EmailNotificationPolicy.DueRemindDaysBeforeKey;
                 changes.Add(new AuditChange(item.Key, ConfigLabel(item.Key), safe ? previous : "未展示", safe ? item.Value : "已更新"));
             }
             config.CfgValue = item.Value;
@@ -228,11 +231,16 @@ public sealed class SystemService(AppDb db, AuditService audit)
         "notify.supplier.enabled" => "外部企业邮件通知",
         "notify.event.message_created" => "新留言邮件提醒",
         "notify.event.file_uploaded" => "新文件邮件提醒",
-        "notify.event.project_submitted" => "提交验收邮件提醒",
-        "notify.event.project_confirmed" => "验收通过邮件提醒",
-        "notify.event.project_rejected" => "验收驳回邮件提醒",
-        "notify.event.project_withdrawn" => "撤回验收邮件提醒",
+        "notify.event.project_started" => "开始子项目邮件提醒",
+        "notify.event.project_terminated" => "终止子项目邮件提醒",
+        "notify.event.project_restarted" => "重新开始子项目邮件提醒",
+        "notify.event.project_reopened" => "重开子项目邮件提醒",
         "notify.event.project_material_reviewed" => "资料确认邮件提醒",
+        "notify.event.project_due_soon" => "即将到期邮件提醒",
+        "notify.event.project_overdue" => "已逾期邮件提醒",
+        "notify.due.internal.enabled" => "到期提醒发给负责人",
+        "notify.due.supplier.enabled" => "到期提醒发给厂商",
+        "notify.due.remind_days_before" => "到期提前提醒天数",
         "upload.max_file_size" => "单文件大小上限",
         "upload.chunk_size" => "上传分片大小",
         "upload.allowed_exts" => "允许的文件类型",

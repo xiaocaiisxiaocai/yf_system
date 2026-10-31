@@ -299,7 +299,7 @@ public sealed class OwnerAccessTests
         CurrentUser actor,
         CancellationToken ct)
     {
-        using var json = Json(await service.ListAsync(conn, actor, 1, 100, null, null, null, ct));
+        using var json = Json(await service.ListAsync(conn, actor, 1, 100, null, null, null, null, false, ct));
         return json.RootElement.GetProperty("list").EnumerateArray()
             .Select(item => item.GetProperty("id").GetUInt64()).ToArray();
     }

@@ -13,9 +13,10 @@ const configLabels = {
 const notificationConfigKeys = new Set([
   'notify.enabled', 'notify.internal.enabled', 'notify.supplier.enabled',
   'notify.event.message_created', 'notify.event.file_uploaded',
-  'notify.event.project_submitted', 'notify.event.project_confirmed',
-  'notify.event.project_rejected', 'notify.event.project_withdrawn',
-  'notify.event.project_material_reviewed',
+  'notify.event.project_started', 'notify.event.project_terminated',
+  'notify.event.project_restarted', 'notify.event.project_reopened',
+  'notify.event.project_material_reviewed', 'notify.event.project_due_soon', 'notify.event.project_overdue',
+  'notify.due.internal.enabled', 'notify.due.supplier.enabled', 'notify.due.remind_days_before',
 ]);
 const pathOf = response => new URL(response.url()).pathname;
 const normalizeExtensions = value => Array.from(new Set(String(value).split(',')

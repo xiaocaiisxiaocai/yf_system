@@ -24,6 +24,7 @@ import './ProjectDetail.css'
 import type { ApiResponses } from '../../api/types'
 import EnterSubmit from '../../components/EnterSubmit'
 import LoadError from '../../components/LoadError'
+import OverdueTag from '../../components/OverdueTag'
 
 interface ChildFormValues { name?: string; description?: string }
 type OwnerOption = ApiResponses['GET /project-owner-options'][number]
@@ -341,6 +342,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
             <Button className="project-group-back" size="small" shape="circle" icon={<IconLeft />} title="返回项目列表" aria-label="返回项目列表" onClick={() => navigate('/projects')} />
             <h1 title={group.name}>{group.name}</h1>
             <Tag color={PROJECT_STATUS[group.status]?.color}>{PROJECT_STATUS[group.status]?.text}</Tag>
+            <OverdueTag date={group.expectedCompletionDate} status={group.status} />
           </div>
           <dl className="project-group-summary-facts">
             {[

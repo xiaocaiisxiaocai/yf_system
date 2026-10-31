@@ -109,6 +109,78 @@ internal static class ProjectNotificationService
             audit);
     }
 
+    /// <summary>Tells the supplier side that the subproject was started, terminated, restarted or reopened.</summary>
+    internal static Task EnqueueStatusChangeAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        ProjectRow project,
+        string action,
+        string? reason,
+        CurrentUser actor,
+        string baseUrl,
+        AuditService audit,
+        CancellationToken ct)
+    {
+        var (eventType, verb, hint) = action switch
+        {
+            "START" => ("PROJECT_STARTED", "已开始", "请查看项目资料并按要求回传。"),
+            "TERMINATE" => ("PROJECT_TERMINATED", "已终止", "子项目已停止协作，无需继续回传资料。"),
+            "RESTART" => ("PROJECT_RESTARTED", "已重新开始", "请查看项目资料并按要求回传。"),
+            "REOPEN" => ("PROJECT_REOPENED", "已重开", "负责人要求返工，请按重开原因补充回传资料。"),
+            _ => throw new InvalidOperationException($"未知项目状态通知动作: {action}"),
+        };
+        var safeProjectName = SafeMailLine(project.Name, 100);
+        var reasonLine = reason is null ? string.Empty : $"\n重开原因：{reason}";
+        return EnqueueAsync(
+            conn,
+            tx,
+            project,
+            eventType,
+            "SUPPLIER",
+            ["project:list"],
+            [],
+            false,
+            actor.Id,
+            $"[协作平台] 项目「{safeProjectName}」{verb}",
+            $"项目：{safeProjectName}\n状态：子项目{verb}\n操作人：账号 {actor.EmployeeNo}{reasonLine}\n{hint}\n\n请登录平台查看：{ProjectUrl(baseUrl, project.Id, "activity")}\n\n（本邮件由系统自动发送）",
+            ct,
+            audit);
+    }
+
+    /// <summary>
+    /// Due-soon / overdue reminder for an in-progress subproject: the responsible user and the supplier side, each
+    /// further gated by its own due switch in <see cref="EmailNotificationPolicy"/>.
+    /// </summary>
+    internal static Task EnqueueDueReminderAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        ProjectRow project,
+        bool overdue,
+        DateOnly dueDate,
+        int days,
+        string baseUrl,
+        AuditService audit,
+        CancellationToken ct)
+    {
+        var safeProjectName = SafeMailLine(project.Name, 100);
+        var state = overdue ? $"已逾期 {days} 天" : days == 0 ? "今天到期" : $"将在 {days} 天后到期";
+        var date = dueDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        return EnqueueAsync(
+            conn,
+            tx,
+            project,
+            overdue ? EmailNotificationPolicy.ProjectOverdueEvent : EmailNotificationPolicy.ProjectDueSoonEvent,
+            "SUPPLIER",
+            ["project:list"],
+            project.ResponsibleUserId is { } responsibleUserId ? [responsibleUserId] : [],
+            true,
+            null,
+            $"[协作平台] 项目「{safeProjectName}」{state}",
+            $"项目：{safeProjectName}\n需求完成时间：{date}\n状态：{state}\n\n请登录平台查看：{ProjectUrl(baseUrl, project.Id, "activity")}\n\n（本邮件由系统自动发送）",
+            ct,
+            audit);
+    }
+
     internal static async Task<IReadOnlyList<UserRow>> ParticipantsAsync(
         MySqlConnection conn,
         MySqlTransaction? tx,

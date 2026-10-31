@@ -138,6 +138,17 @@ describe('留言撰写、发送与分页', () => {
     expect(renderedMessageIds(container)).toEqual([2, 1])
   })
 
+  it('draft projects explain that messages open after the project starts', async () => {
+    setMessagePermissions('message:create')
+    messageMocks.get.mockResolvedValue(messagePage([]))
+    const view = renderMessagePanel({ projectStatus: 'DRAFT' })
+    expect(await screen.findByText('项目尚未开始，暂不能留言')).toBeVisible()
+    expect(screen.queryByPlaceholderText('输入留言，Ctrl+Enter 发送')).not.toBeInTheDocument()
+    view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" />)
+    expect(await screen.findByPlaceholderText('输入留言，Ctrl+Enter 发送')).toBeVisible()
+    expect(screen.queryByText('项目尚未开始，暂不能留言')).not.toBeInTheDocument()
+  })
+
   it('completed and terminated projects hide message delete controls', async () => {
     setMessagePermissions('message:delete_any')
     messageMocks.get.mockResolvedValue(messagePage([messageRow(1, { content: '历史留言' })]))

@@ -16,6 +16,8 @@ public static class ProjectsModule
         services.AddSingleton<ProjectCopyWakeSignal>();
         services.AddSingleton<ProjectCopyWorker>();
         services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<ProjectCopyWorker>());
+        services.AddSingleton<ProjectDueReminderService>();
+        services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<ProjectDueReminderService>());
         services.AddScoped<ProjectDictionaryService>();
         services.AddScoped<RobotPartService>();
         services.AddScoped<MessageService>();
@@ -45,6 +47,8 @@ public static class ProjectsModule
                 QueryString(context, "keyword"),
                 QueryString(context, "status"),
                 QueryNullableUlong(context, "supplierId"),
+                QueryString(context, "materialState"),
+                QueryBool(context, "overdue", false),
                 ct)));
         api.MapPost("/project-groups", (HttpContext context, ProjectUpsertRequest request, ProjectGroupService service) =>
             WithDb(context, (conn, actor, ip, ct) => service.CreateAsync(conn, actor, request, ip, ct)));

@@ -44,6 +44,7 @@ public sealed class SchemaShapeTests
         "20261030063545_AddProjectMaterialReview",
         "20261030084731_AddSupplierContactsAndSignatures",
         "20261031120322_RetireAcceptanceWorkflow",
+        "20261031125128_AddProjectNotificationsAndDueReminders",
     ];
 
     [Fact]
@@ -322,7 +323,7 @@ public sealed class SchemaShapeTests
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='log:delete'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE id BETWEEN 100 AND 113"));
             Assert.Equal(16, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='oem' OR code LIKE 'oem:%' OR code='dept:leader_manage'"));
-            Assert.Equal(43, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
+            Assert.Equal(48, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
             Assert.Equal(28, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.%'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.scan.%'"));
             Assert.Equal(19, await conn.ExecuteScalarAsync<int>(

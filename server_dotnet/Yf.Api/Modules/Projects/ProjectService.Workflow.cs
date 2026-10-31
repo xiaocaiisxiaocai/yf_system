@@ -38,6 +38,8 @@ internal sealed partial class ProjectService
             throw ApiException.Conflict("项目仍有活动上传会话，不能终止");
         }
         await ApplyTransitionAsync(conn, tx, current, project, to, action, null, ip, ct);
+        await ProjectNotificationService.EnqueueStatusChangeAsync(
+            conn, tx, project, action, null, current, options.WebBaseUrl, audit, ct);
         var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
         return result;
@@ -122,6 +124,8 @@ internal sealed partial class ProjectService
                     .SetProperty(item => item.MaterialReviewFileId, latestSupplierFileId)
                     .SetProperty(item => item.MaterialReviewReason, reason), ct);
         }
+        await ProjectNotificationService.EnqueueStatusChangeAsync(
+            conn, tx, project, "REOPEN", reason, current, options.WebBaseUrl, audit, ct);
         var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
         return result;

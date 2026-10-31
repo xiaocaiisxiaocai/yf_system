@@ -369,14 +369,22 @@ export interface MissingEmailAccount {
   status: string
 }
 
+export interface NotificationDueResponse {
+  internalEnabled: boolean
+  supplierEnabled: boolean
+  remindDaysBefore: number
+}
+
 export interface NotificationEventsResponse {
   messageCreated: boolean
   fileUploaded: boolean
-  projectSubmitted: boolean
-  projectConfirmed: boolean
-  projectRejected: boolean
-  projectWithdrawn: boolean
+  projectStarted: boolean
+  projectTerminated: boolean
+  projectRestarted: boolean
+  projectReopened: boolean
   projectMaterialReviewed: boolean
+  projectDueSoon: boolean
+  projectOverdue: boolean
 }
 
 export interface NotificationPolicyResponse {
@@ -384,6 +392,7 @@ export interface NotificationPolicyResponse {
   internalEnabled: boolean
   supplierEnabled: boolean
   events: NotificationEventsResponse
+  due: NotificationDueResponse
 }
 
 export interface OemAccountBrief {

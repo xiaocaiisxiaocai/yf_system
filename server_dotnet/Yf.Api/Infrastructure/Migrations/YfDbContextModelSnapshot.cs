@@ -817,6 +817,10 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(1024)")
                         .HasColumnName("description");
 
+                    b.Property<DateOnly?>("DueSoonNotifiedFor")
+                        .HasColumnType("date")
+                        .HasColumnName("due_soon_notified_for");
+
                     b.Property<DateOnly?>("ExpectedCompletionDate")
                         .HasColumnType("date")
                         .HasColumnName("expected_completion_date");
@@ -850,6 +854,10 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("varchar(128)")
                         .HasColumnName("name");
+
+                    b.Property<DateOnly?>("OverdueNotifiedFor")
+                        .HasColumnType("date")
+                        .HasColumnName("overdue_notified_for");
 
                     b.Property<ulong?>("PriorityId")
                         .HasColumnType("bigint unsigned")

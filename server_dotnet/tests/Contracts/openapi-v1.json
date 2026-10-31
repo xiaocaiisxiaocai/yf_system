@@ -8467,15 +8467,38 @@
         },
         "additionalProperties": false
       },
+      "NotificationDueResponse": {
+        "required": [
+          "internalEnabled",
+          "remindDaysBefore",
+          "supplierEnabled"
+        ],
+        "type": "object",
+        "properties": {
+          "internalEnabled": {
+            "type": "boolean"
+          },
+          "supplierEnabled": {
+            "type": "boolean"
+          },
+          "remindDaysBefore": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
       "NotificationEventsResponse": {
         "required": [
           "fileUploaded",
           "messageCreated",
-          "projectConfirmed",
+          "projectDueSoon",
           "projectMaterialReviewed",
-          "projectRejected",
-          "projectSubmitted",
-          "projectWithdrawn"
+          "projectOverdue",
+          "projectReopened",
+          "projectRestarted",
+          "projectStarted",
+          "projectTerminated"
         ],
         "type": "object",
         "properties": {
@@ -8485,19 +8508,25 @@
           "fileUploaded": {
             "type": "boolean"
           },
-          "projectSubmitted": {
+          "projectStarted": {
             "type": "boolean"
           },
-          "projectConfirmed": {
+          "projectTerminated": {
             "type": "boolean"
           },
-          "projectRejected": {
+          "projectRestarted": {
             "type": "boolean"
           },
-          "projectWithdrawn": {
+          "projectReopened": {
             "type": "boolean"
           },
           "projectMaterialReviewed": {
+            "type": "boolean"
+          },
+          "projectDueSoon": {
+            "type": "boolean"
+          },
+          "projectOverdue": {
             "type": "boolean"
           }
         },
@@ -8505,6 +8534,7 @@
       },
       "NotificationPolicyResponse": {
         "required": [
+          "due",
           "events",
           "globalEnabled",
           "internalEnabled",
@@ -8523,6 +8553,9 @@
           },
           "events": {
             "$ref": "#/components/schemas/NotificationEventsResponse"
+          },
+          "due": {
+            "$ref": "#/components/schemas/NotificationDueResponse"
           }
         },
         "additionalProperties": false
