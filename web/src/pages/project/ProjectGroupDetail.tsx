@@ -353,10 +353,10 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
               <div key={label}><dt>{label}</dt><dd title={value}>{value}</dd></div>
             ))}
             <div className="project-group-summary-progress">
-              <dt>验收进度</dt>
+              <dt>完成进度</dt>
               <dd>
                 <strong>{group.completedCount}/{group.subprojectCount}</strong>
-                {group.pendingCount > 0 && <Tag size="small" color="orange">待验收 {group.pendingCount}</Tag>}
+                {group.materialPendingCount > 0 && <Tag size="small" color="orange">资料待确认 {group.materialPendingCount}</Tag>}
                 {group.terminatedCount > 0 && <Tag size="small" color="red">已终止 {group.terminatedCount}</Tag>}
               </dd>
             </div>
@@ -378,9 +378,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
                 if (key === 'transfer') openTransfer()
                 else if (key === 'reset-layout') dockRef.current?.resetLayout()
               }}>
-                {canTransfer && <Menu.Item key="transfer" disabled={group.pendingCount > 0}>
-                  {group.pendingCount > 0 ? '变更负责人（存在待验收子项目）' : '变更负责人'}
-                </Menu.Item>}
+                {canTransfer && <Menu.Item key="transfer">变更负责人</Menu.Item>}
                 {data.projects.length > 1 && <Menu.Item key="reset-layout">重置面板布局</Menu.Item>}
               </Menu>}
             >

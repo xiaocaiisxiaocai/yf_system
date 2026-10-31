@@ -45,7 +45,7 @@ public sealed record DashboardMessage(
 public sealed record DashboardSummaryResponse(
     ulong ProjectCount,
     ulong ActiveProjectCount,
-    ulong PendingConfirmations,
+    ulong PendingTasks,
     ulong UnreadMessages,
     IReadOnlyList<DashboardMessage> RecentMessages);
 
@@ -54,9 +54,8 @@ public sealed record DashboardPendingProject(
     string Name,
     ulong ProjectGroupId,
     string ProjectGroupName,
-    string Status,
-    // COMPANY | SUPPLIER
-    string ConfirmSide,
+    // NO_MATERIAL | PENDING | RETURNED
+    string MaterialReviewStatus,
     DateTime UpdatedAt);
 
 public sealed record MessageImageResponse(ulong Id, string Name, ulong SizeBytes, string MimeType);
@@ -94,7 +93,7 @@ public sealed record ProjectActivityItem(
     ulong? TargetId,
     bool TargetAvailable);
 
-public sealed record ProjectActivitySummary(string Status, bool PendingConfirmation, string? ConfirmSide, DateTime? LastActivityAt);
+public sealed record ProjectActivitySummary(string Status, DateTime? LastActivityAt);
 
 public sealed record ProjectActivityPage(IReadOnlyList<ProjectActivityItem> List, string? NextCursor, ProjectActivitySummary Summary);
 
@@ -111,8 +110,6 @@ public record ProjectResponse
     public ulong SupplierId { get; init; }
     public string? SupplierName { get; init; }
     public string Status { get; init; } = string.Empty;
-    public string? ConfirmSide { get; init; }
-    public ulong? LatestSubmissionId { get; init; }
     public ulong CreatedBy { get; init; }
     public string? CreatedByName { get; init; }
     public IReadOnlyList<string> WorkOrderNos { get; init; } = [];
@@ -132,7 +129,7 @@ public record ProjectResponse
     public string? RobotTypeName { get; init; }
     /// <summary>yyyy-MM-dd</summary>
     public string? ExpectedCompletionDate { get; init; }
-    /// <summary>Supplier material review while in progress: NO_MATERIAL, PENDING, APPROVED or RETURNED; otherwise null.</summary>
+    /// <summary>Supplier material review while in progress: NO_MATERIAL, PENDING or RETURNED; otherwise null.</summary>
     public string? MaterialReviewStatus { get; init; }
     /// <summary>Return reason while the material review is RETURNED.</summary>
     public string? MaterialReviewReason { get; init; }
@@ -143,14 +140,6 @@ public record ProjectResponse
     public ProjectCopySourceRef? CopySource { get; init; }
     public DateTime CreatedAt { get; init; }
     public DateTime UpdatedAt { get; init; }
-}
-
-/// <summary>GET /projects/{id}: the subproject plus the latest rejection reason and submitter.</summary>
-public sealed record ProjectDetailResponse : ProjectResponse
-{
-    public ProjectDetailResponse(ProjectResponse project) : base(project) { }
-    public string? RejectReason { get; init; }
-    public ulong? LatestSubmitterId { get; init; }
 }
 
 public sealed record ProjectGroupResponse(
@@ -187,14 +176,13 @@ public sealed record ProjectGroupResponse(
     DateTime UpdatedAt,
     ulong SubprojectCount,
     ulong CompletedCount,
-    ulong PendingCount,
+    ulong MaterialPendingCount,
     ulong TerminatedCount,
     ulong UnreadMessages);
 
 public sealed record ProjectGroupDetailResponse(ProjectGroupResponse Group, IReadOnlyList<ProjectResponse> Projects);
 
-public sealed record ProjectSummaryResponse(
-    ulong UnreadMessages, string ActivityRevision, bool PendingConfirmation, ulong? LatestSubmissionId);
+public sealed record ProjectSummaryResponse(ulong UnreadMessages, string ActivityRevision);
 
 public sealed record SupplierOption(ulong Id, string Name);
 

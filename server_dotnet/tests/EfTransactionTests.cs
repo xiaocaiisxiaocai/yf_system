@@ -65,25 +65,25 @@ public sealed class EfTransactionTests
         context.Add(group);
         await context.SaveChangesAsync(ct);
         var project = new Project { Name = "EF投影子项目", ProjectGroupId = group.Id, SupplierId = supplier.Id, CreatedBy = user.Id,
-            Status = "PENDING_CONFIRMATION", ConfirmSide = "COMPANY", ExpectedCompletionDate = new DateOnly(2030, 1, 2) };
+            Status = "IN_PROGRESS", ExpectedCompletionDate = new DateOnly(2030, 1, 2) };
         context.Add(project);
-        await context.SaveChangesAsync(ct);
-        var submit = new ProjectStatusLog { ProjectId = project.Id, OperatorId = user.Id, Action = "SUBMIT", ToStatus = "PENDING_CONFIRMATION" };
-        context.Add(submit);
         await context.SaveChangesAsync(ct);
         var row = await ProjectQueries.Rows(context).SingleAsync(p => p.Id == project.Id, ct);
         Assert.Equal(group.Name, row.ProjectGroupName);
         Assert.Equal(supplier.Name, row.SupplierName);
         Assert.Equal(user.RealName, row.CreatedByName);
         Assert.Equal(new DateTime(2030, 1, 2), row.ExpectedCompletionDate);
-        Assert.Equal(submit.Id, row.LatestSubmissionId);
+        Assert.Null(row.LatestSupplierFileId);
         Assert.Null(row.ResponsibleUserName);
         Assert.False(row.HasCopyHistory);
+        var material = await ProjectQueries.InProgressMaterial(context).SingleAsync(m => m.ProjectId == project.Id, ct);
+        Assert.Equal(group.Id, material.ProjectGroupId);
+        Assert.Equal(MaterialReviewStatuses.NoMaterial, material.State);
         await context.Projects.Where(p => p.Id == project.Id)
-            .ExecuteUpdateAsync(s => s.SetProperty(p => p.Status, "IN_PROGRESS").SetProperty(p => p.ExpectedCompletionDate, (DateOnly?)null), ct);
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.Status, "COMPLETED").SetProperty(p => p.ExpectedCompletionDate, (DateOnly?)null), ct);
         row = await ProjectQueries.Rows(context).SingleAsync(p => p.Id == project.Id, ct);
-        Assert.Null(row.LatestSubmissionId);
         Assert.Null(row.ExpectedCompletionDate);
+        Assert.False(await ProjectQueries.InProgressMaterial(context).AnyAsync(m => m.ProjectId == project.Id, ct));
         await transaction.RollbackAsync(ct);
     }
 }

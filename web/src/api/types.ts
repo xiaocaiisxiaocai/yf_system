@@ -8,25 +8,21 @@ export type PageResp<T> = Omit<Api.PageResponseOfAuditLogResponse, 'list'> & { l
  * 以下业务类型由后端 OpenAPI 生成的 ./generated/api-types 推导（npm run generate:api-types），
  * 只在生成类型之上收窄状态等枚举字段；后端字段改名或删除时，前端使用处会在编译期报错。
  */
-export type ProjectStatus = 'DRAFT' | 'IN_PROGRESS' | 'PENDING_CONFIRMATION' | 'COMPLETED' | 'TERMINATED'
+export type ProjectStatus = 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED' | 'TERMINATED'
 
-/** 新申请固定 COMPANY；SUPPLIER 仅用于读取升级前保留的历史数据。 */
-export type ConfirmSide = 'COMPANY' | 'SUPPLIER'
+/** 进行中子项目的厂商回传资料状态；确认 OK 即完成子项目，因此没有“已确认”状态。 */
+export type MaterialReviewStatus = 'NO_MATERIAL' | 'PENDING' | 'RETURNED'
 
-type WithProjectEnums<T> = Omit<T, 'status' | 'confirmSide'> & {
+type WithProjectEnums<T> = Omit<T, 'status' | 'materialReviewStatus'> & {
   status: ProjectStatus
-  /** 当前内部验收方；待验收时固定为 COMPANY，项目回到进行中后由后端清空。 */
-  confirmSide: ConfirmSide | null
+  materialReviewStatus: MaterialReviewStatus | null
 }
 
-/**
- * 子项目的摘要字段（后端 ProjectResponse），用于主项目详情的子项目列表、复制结果等批量场景。
- * 不包含 rejectReason / latestSubmitterId —— 只有 GET /projects/{id} 详情接口才会附带。
- */
+/** 子项目（后端 ProjectResponse），列表、详情、复制结果等场景共用。 */
 export type ProjectSummary = WithProjectEnums<Api.ProjectResponse>
 
-/** 子项目详情，仅 GET /projects/{id} 返回；比 ProjectSummary 多两个单独查询的字段。 */
-export type Project = WithProjectEnums<Api.ProjectDetailResponse>
+/** 子项目详情（GET /projects/{id}），字段与 ProjectSummary 相同。 */
+export type Project = ProjectSummary
 
 export type ProjectGroup = Omit<Api.ProjectGroupResponse, 'status'> & {
   status: 'DRAFT' | 'IN_PROGRESS' | 'COMPLETED' | 'TERMINATED'
@@ -84,7 +80,6 @@ type ProjectStatusView = { text: string; color: string }
 export const PROJECT_STATUS: Record<ProjectStatus, ProjectStatusView> & Partial<Record<string, ProjectStatusView>> = {
   DRAFT: { text: '草稿', color: 'gray' },
   IN_PROGRESS: { text: '进行中', color: 'arcoblue' },
-  PENDING_CONFIRMATION: { text: '待内部验收', color: 'orange' },
   COMPLETED: { text: '已完成', color: 'green' },
   TERMINATED: { text: '已终止', color: 'red' },
 }

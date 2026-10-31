@@ -42,30 +42,19 @@ internal sealed class DashboardService
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
-        var canReceivePendingAcceptance = ProjectWorkflowRules.CanReceivePendingAcceptance(
-            current,
-            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct))
-            && await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:list", ct);
-        if (current.IsInternal && !canReceivePendingAcceptance)
-        {
-            await tx.CommitAsync(ct);
-            return ProjectJson.Page(Array.Empty<DashboardPendingProject>(), 0, actualPage, size);
-        }
-
         await using var db = EfDb.Use(conn, tx);
         var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
         var query =
-            from project in visibleProjects
+            from task in PendingTasks(db, current, visibleProjects)
+            join project in db.Projects on task.ProjectId equals project.Id
             join projectGroup in db.ProjectGroups on project.ProjectGroupId equals projectGroup.Id
-            where project.Status == ProjectStatuses.PendingConfirmation
-                && project.ConfirmSide == ProjectWorkflowRules.InternalAcceptanceSide
             select new
             {
                 project.Id,
                 project.Name,
                 project.ProjectGroupId,
                 ProjectGroupName = projectGroup.Name,
-                project.ConfirmSide,
+                task.State,
                 project.UpdatedAt,
             };
         var total = (ulong)await query.LongCountAsync(ct);
@@ -74,8 +63,7 @@ internal sealed class DashboardService
             .Page((actualPage - 1) * size, size)
             .ToArrayAsync(ct);
         var list = rows.Select(row => new DashboardPendingProject(
-            row.Id, row.Name, row.ProjectGroupId, row.ProjectGroupName, ProjectStatuses.PendingConfirmation,
-            row.ConfirmSide == "COMPANY" ? "COMPANY" : "SUPPLIER", ProjectJson.Utc(row.UpdatedAt))).ToArray();
+            row.Id, row.Name, row.ProjectGroupId, row.ProjectGroupName, row.State, ProjectJson.Utc(row.UpdatedAt))).ToArray();
         await tx.CommitAsync(ct);
         return ProjectJson.Page(list, total, actualPage, size);
     }
@@ -85,10 +73,6 @@ internal sealed class DashboardService
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
-        var canConfirm = ProjectWorkflowRules.CanReceivePendingAcceptance(
-            current,
-            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct))
-            && await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:list", ct);
 
         await using var db = EfDb.Use(conn, tx);
         var visibleGroups = await ProjectGroupAccessService.VisibleQueryAsync(db, current, ct);
@@ -96,19 +80,30 @@ internal sealed class DashboardService
         var projectCount = (ulong)await visibleGroups.LongCountAsync(ct);
         var activeProjectCount = (ulong)await visibleGroups.LongCountAsync(
             group => group.Status == ProjectStatuses.InProgress, ct);
-        var pendingConfirmations = current.IsInternal && !canConfirm
-            ? 0UL
-            : (ulong)await visibleProjects.LongCountAsync(project =>
-                project.Status == ProjectStatuses.PendingConfirmation
-                && project.ConfirmSide == ProjectWorkflowRules.InternalAcceptanceSide, ct);
+        var pendingTasks = (ulong)await PendingTasks(db, current, visibleProjects).LongCountAsync(ct);
 
         var cutoff = await UnreadWindow.CutoffAsync(db, ct);
         var messages = VisibleMessages(db, visibleProjects, cutoff);
         var messageResult = await LoadMessagePageAsync(
             db, messages, Unread(db, messages, current.Id, cutoff), 0, 5, current.Id, cutoff, ct);
         await tx.CommitAsync(ct);
-        return new DashboardSummaryResponse(projectCount, activeProjectCount, pendingConfirmations,
+        return new DashboardSummaryResponse(projectCount, activeProjectCount, pendingTasks,
             messageResult.Count, messageResult.List);
+    }
+
+    /// <summary>
+    /// In-progress subprojects waiting on the current user: for the responsible user, supplier material to
+    /// review (only they may approve it); for a supplier account, material that was returned or not yet sent.
+    /// </summary>
+    private static IQueryable<MaterialStateRow> PendingTasks(
+        YfDbContext db, CurrentUser current, IQueryable<Project> visibleProjects)
+    {
+        var visibleIds = visibleProjects.Select(project => project.Id);
+        var material = ProjectQueries.InProgressMaterial(db).Where(row => visibleIds.Contains(row.ProjectId));
+        var userId = current.Id;
+        return current.IsInternal
+            ? material.Where(row => row.ResponsibleUserId == userId && row.State == MaterialReviewStatuses.Pending)
+            : material.Where(row => row.State == MaterialReviewStatuses.Returned || row.State == MaterialReviewStatuses.NoMaterial);
     }
 
     /// <summary>

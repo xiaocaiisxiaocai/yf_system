@@ -264,7 +264,6 @@ public sealed partial class UploadService(
         var canUpload = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "file:upload", ct);
         var canDelete = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "file:delete", ct);
         var canStatus = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "project:status", ct);
-        var canSubmit = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "project:submit", ct);
         var dbNow = await DbNowAsync(ef, ct);
         var rows = await (
             from session in ef.UploadSessions
@@ -311,7 +310,7 @@ public sealed partial class UploadService(
                     && project.Status == ProjectStatuses.InProgress
                     && row.Status == ProjectUploadSessionStatuses.Uploading,
                 UploadActivity.CanAbort(
-                    current, project.Status, canUpload, canDelete, canStatus, canSubmit,
+                    current, project.Status, canUpload, canDelete, canStatus,
                     row.UploaderId, row.UploaderUserType, row.UploaderSupplierId)));
         }
         return new ProjectUploadSessionListResponse(blocking.Length, items);
@@ -341,13 +340,12 @@ public sealed partial class UploadService(
                 var canUpload = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "file:upload", ct);
                 var canDelete = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "file:delete", ct);
                 var canStatus = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "project:status", ct);
-                var canSubmit = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "project:submit", ct);
                 var uploader = await ef.Users.AsNoTracking()
                     .Where(user => user.Id == session.UploaderId)
                     .Select(user => new { user.UserType, user.SupplierId })
                     .SingleAsync(ct);
                 if (!UploadActivity.CanAbort(
-                        current, project.Status, canUpload, canDelete, canStatus, canSubmit,
+                        current, project.Status, canUpload, canDelete, canStatus,
                         session.UploaderId, uploader.UserType, uploader.SupplierId))
                     throw ApiException.Forbidden();
                 if (session.Status == "COMPLETED") throw ApiException.Conflict("会话已完成，不可放弃");

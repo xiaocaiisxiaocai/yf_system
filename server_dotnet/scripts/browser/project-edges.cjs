@@ -310,12 +310,12 @@ async function createGroup(context, token, supplierId, name, defaults) {
       page.expectedServerErrors.clear();
     });
 
-    await record('五种子项目状态汇总为四种主项目状态，供应商提交且内部确认', async () => {
+    await record('子项目状态汇总为四种主项目状态，负责人确认资料即完成', async () => {
       assert(f.users.a.uiFirstChanged, 'run users before project-edges');
       const statusPrefix = '状态主项目-' + crypto.randomBytes(5).toString('hex');
       const pdf = require('node:fs').readFileSync(OUT + '/valid-preview.pdf');
       const statuses = {};
-      for (const status of ['DRAFT', 'IN_PROGRESS', 'PENDING_CONFIRMATION', 'COMPLETED', 'TERMINATED']) {
+      for (const status of ['DRAFT', 'IN_PROGRESS', 'MATERIAL_PENDING', 'COMPLETED', 'TERMINATED']) {
         const item = await createGroup(context, auth.accessToken, f.suppliers.a.id, statusPrefix + '-' + status, defaults);
         statuses[status] = item;
         if (status === 'DRAFT') continue;
@@ -324,18 +324,15 @@ async function createGroup(context, token, supplierId, name, defaults) {
           await json('PUT', '/projects/' + item.id + '/status', { status });
           continue;
         }
-        if (status === 'PENDING_CONFIRMATION' || status === 'COMPLETED') {
+        if (status === 'MATERIAL_PENDING' || status === 'COMPLETED') {
           const upload = await uploadFixture(context, f.users.a.token, item.id, '状态验证.pdf', pdf);
           assert(upload.id || upload.fileId, 'status fixture file merge');
-          await json('POST', '/projects/' + item.id + '/materials/approve', {
-            expectedSupplierFileId: upload.id || upload.fileId,
-          });
-          const submission = await (await api(
-            context, 'POST', '/projects/' + item.id + '/submit', {}, f.users.a.token)).json();
-          assert(Number.isInteger(submission.latestSubmissionId) && submission.latestSubmissionId > 0);
-          if (status === 'COMPLETED') await json('POST', '/projects/' + item.id + '/confirm', {
-            expectedSubmissionId: submission.latestSubmissionId,
-          });
+          if (status === 'COMPLETED') {
+            const approved = await json('POST', '/projects/' + item.id + '/materials/approve', {
+              expectedSupplierFileId: upload.id || upload.fileId,
+            });
+            assert.equal(approved.status, 'COMPLETED');
+          }
         }
       }
       await page.goto(s.base + '/projects');
@@ -343,7 +340,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
       await search(statusPrefix);
       const groupedStatuses = [
         ['DRAFT', '草稿', [statuses.DRAFT.groupId]],
-        ['IN_PROGRESS', '进行中', [statuses.IN_PROGRESS.groupId, statuses.PENDING_CONFIRMATION.groupId]],
+        ['IN_PROGRESS', '进行中', [statuses.IN_PROGRESS.groupId, statuses.MATERIAL_PENDING.groupId]],
         ['COMPLETED', '已完成', [statuses.COMPLETED.groupId]],
         ['TERMINATED', '已终止', [statuses.TERMINATED.groupId]],
       ];
@@ -356,10 +353,10 @@ async function createGroup(context, token, supplierId, name, defaults) {
         assert.deepEqual(new Set(data.list.map(item => item.id)), new Set(expectedIds));
         assert(data.list.every(item => item.status === status));
       }
-      const pendingGroup = await json('GET', '/project-groups/' + statuses.PENDING_CONFIRMATION.groupId);
+      const pendingGroup = await json('GET', '/project-groups/' + statuses.MATERIAL_PENDING.groupId);
       assert.equal(pendingGroup.group.status, 'IN_PROGRESS');
-      assert.equal(pendingGroup.group.pendingCount, 1);
-      assert.equal(pendingGroup.projects[0].status, 'PENDING_CONFIRMATION');
+      assert.equal(pendingGroup.group.materialPendingCount, 1);
+      assert.equal(pendingGroup.projects[0].materialReviewStatus, 'PENDING');
       const active = statuses.IN_PROGRESS;
       const activeGroup = await json('GET', '/project-groups/' + active.groupId);
       await json('PUT', '/project-groups/' + active.groupId, {

@@ -5,7 +5,7 @@ import { IconRight, IconRefresh } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../api/client'
 import { createSessionQueryScope, queryClient } from '../api/queryClient'
-import { fmtTime } from '../api/types'
+import { type MaterialReviewStatus, fmtTime } from '../api/types'
 import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../store/auth'
 import { useCollaboration } from '../store/collaboration'
@@ -26,7 +26,7 @@ interface DashboardMessage {
 interface Summary {
   projectCount: number
   activeProjectCount: number
-  pendingConfirmations: number
+  pendingTasks: number
   unreadMessages: number
   recentMessages: DashboardMessage[]
 }
@@ -36,8 +36,7 @@ interface PendingProject {
   name: string
   projectGroupId?: number
   projectGroupName?: string
-  status: 'PENDING_CONFIRMATION'
-  confirmSide: 'COMPANY'
+  materialReviewStatus: MaterialReviewStatus
   updatedAt: string
 }
 
@@ -62,6 +61,12 @@ interface MessagePage {
 }
 
 const PAGE_SIZE = 10
+
+const TASK_TAG: Record<MaterialReviewStatus, { text: string; color: string }> = {
+  NO_MATERIAL: { text: '待回传资料', color: 'gray' },
+  PENDING: { text: '资料待确认', color: 'orange' },
+  RETURNED: { text: '资料已退回', color: 'red' },
+}
 
 function isAuthorizationError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
@@ -99,22 +104,20 @@ export default function Dashboard() {
   const nav = useNavigate()
   const dashboardQueryKey = useMemo(() => ['dashboard', sessionScope] as const, [sessionScope])
   const isSupplier = user?.userType === 'SUPPLIER'
-  const acceptanceCopy = isSupplier ? {
-    cardTitle: '待公司验收子项目',
-    cardAction: '查看待公司验收',
-    heading: '待公司验收子项目',
-    headingEmpty: '已提交并等待公司处理的验收',
-    error: '待公司验收子项目加载失败',
-    empty: '暂无待公司验收子项目',
-    status: '待公司验收',
+  const taskCopy = isSupplier ? {
+    cardTitle: '待回传资料子项目',
+    cardAction: '查看待回传',
+    heading: '待回传资料子项目',
+    headingEmpty: '尚未回传或被退回的资料',
+    error: '待回传资料子项目加载失败',
+    empty: '暂无待回传资料的子项目',
   } : {
-    cardTitle: '待内部验收子项目',
-    cardAction: '查看待验收',
-    heading: '公司内部待验收子项目',
-    headingEmpty: '需要处理的内部验收',
-    error: '内部待验收子项目加载失败',
-    empty: '暂无内部待验收子项目',
-    status: '待公司内部验收',
+    cardTitle: '资料待确认子项目',
+    cardAction: '查看待确认',
+    heading: '资料待确认子项目',
+    headingEmpty: '厂商已回传、等待你确认的资料',
+    error: '资料待确认子项目加载失败',
+    empty: '暂无待确认的资料',
   }
 
   const summaryQuery = useQuery({
@@ -169,7 +172,7 @@ export default function Dashboard() {
   const messageError = messageQuery.isError && !messageQuery.data
   const messageRefreshError = messageQuery.isRefetchError && !!messageQuery.data
   // 挡住内容的加载只用首次请求；背景刷新只让刷新按钮转圈。
-  // 刷新工作台会重拉概览、待验收和留言，加载态要覆盖全部三个请求。
+  // 刷新工作台会重拉概览、待办和留言，加载态要覆盖全部三个请求。
   const dashboardRefreshing = summaryQuery.isFetching || pendingQuery.isFetching || messageQuery.isFetching
   const refetchSummary = summaryQuery.refetch
   const refetchPending = pendingQuery.refetch
@@ -251,7 +254,7 @@ export default function Dashboard() {
   const cards = [
     { title: '可见主项目', value: data?.projectCount, to: '/projects', action: '查看主项目' },
     { title: '进行中主项目', value: data?.activeProjectCount, to: '/projects', action: '查看主项目' },
-    { title: acceptanceCopy.cardTitle, value: data?.pendingConfirmations, href: '#dashboard-pending', action: acceptanceCopy.cardAction },
+    { title: taskCopy.cardTitle, value: data?.pendingTasks, href: '#dashboard-pending', action: taskCopy.cardAction },
     { title: '近30天未读留言', value: data?.unreadMessages, href: '#dashboard-messages', action: '查看留言' },
   ]
 
@@ -337,8 +340,8 @@ export default function Dashboard() {
             title={(
               <div className="dashboard-section-title">
                 <div>
-                  <h2>{acceptanceCopy.heading}</h2>
-                  <span>{pendingData.total > 0 ? `共 ${pendingData.total} 项` : acceptanceCopy.headingEmpty}</span>
+                  <h2>{taskCopy.heading}</h2>
+                  <span>{pendingData.total > 0 ? `共 ${pendingData.total} 项` : taskCopy.headingEmpty}</span>
                 </div>
                 {pendingData.total > 0 && <Tag color="orange">{pendingData.total}</Tag>}
               </div>
@@ -354,7 +357,7 @@ export default function Dashboard() {
               <Spin loading className="dashboard-card-loading" />
             ) : pendingError ? (
               <div className="dashboard-feedback">
-                <Typography.Text type="error">{acceptanceCopy.error}</Typography.Text>
+                <Typography.Text type="error">{taskCopy.error}</Typography.Text>
                 <Button size="small" onClick={() => { void refetchPending() }}>重试</Button>
               </div>
             ) : pendingData.list.length > 0 ? (
@@ -402,7 +405,7 @@ export default function Dashboard() {
                                   {project.name}
                                 </Link>
                               )}
-                              description={<Tag color="orange">{acceptanceCopy.status}</Tag>}
+                              description={<Tag color={TASK_TAG[project.materialReviewStatus]?.color}>{TASK_TAG[project.materialReviewStatus]?.text ?? project.materialReviewStatus}</Tag>}
                             />
                           </List.Item>
                         )}
@@ -425,7 +428,7 @@ export default function Dashboard() {
                 )}
               </>
             ) : (
-              <Empty description={acceptanceCopy.empty} />
+              <Empty description={taskCopy.empty} />
             )}
           </Card>
         </Grid.Col>

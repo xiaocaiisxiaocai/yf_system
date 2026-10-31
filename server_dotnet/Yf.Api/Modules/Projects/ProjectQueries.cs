@@ -39,11 +39,6 @@ internal static class ProjectQueries
             SupplierId = project.SupplierId,
             SupplierName = supplier.Name,
             Status = project.Status,
-            ConfirmSide = project.ConfirmSide,
-            LatestSubmissionId = project.Status == ProjectStatuses.PendingConfirmation
-                ? db.ProjectStatusLogs.Where(log => log.ProjectId == project.Id && log.Action == "SUBMIT")
-                    .Select(l => (ulong?)l.Id).Max()
-                : null,
             CreatedBy = project.CreatedBy,
             CreatedByName = creator.RealName,
             CreatedAt = project.CreatedAt,
@@ -75,4 +70,37 @@ internal static class ProjectQueries
             HasCopyHistory = db.ProjectCopies.Any(copy => copy.SourceProjectId == project.Id)
                 || db.ProjectCopies.Any(copy => copy.TargetProjectId == project.Id),
         };
+
+    /// <summary>
+    /// Effective material review state of every in-progress subproject, computed in SQL with the same rule as
+    /// <see cref="ProjectWorkflowRules.EffectiveMaterialReview(ProjectRow)"/>. Callers apply their own scope.
+    /// </summary>
+    internal static IQueryable<MaterialStateRow> InProgressMaterial(YfDbContext db) =>
+        from project in db.Projects.AsNoTracking()
+        where project.Status == ProjectStatuses.InProgress
+        let latestSupplierFileId = db.Files
+            .Where(file => file.ProjectId == project.Id && file.Status == FileStatuses.Available && file.Direction == "S2C")
+            .Max(file => (ulong?)file.Id)
+        select new MaterialStateRow
+        {
+            ProjectId = project.Id,
+            ProjectGroupId = project.ProjectGroupId,
+            ResponsibleUserId = project.ResponsibleUserId,
+            SupplierId = project.SupplierId,
+            State = latestSupplierFileId == null
+                ? MaterialReviewStatuses.NoMaterial
+                : project.MaterialReviewStatus == MaterialReviewStatuses.Returned
+                    && project.MaterialReviewFileId == latestSupplierFileId
+                    ? MaterialReviewStatuses.Returned
+                    : MaterialReviewStatuses.Pending,
+        };
+}
+
+internal sealed class MaterialStateRow
+{
+    public ulong ProjectId { get; init; }
+    public ulong ProjectGroupId { get; init; }
+    public ulong? ResponsibleUserId { get; init; }
+    public ulong SupplierId { get; init; }
+    public string State { get; init; } = string.Empty;
 }

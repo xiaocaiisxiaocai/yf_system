@@ -87,7 +87,7 @@ public sealed class ProjectsWorkflowTests
     }
 
     [Theory]
-    [InlineData("PENDING_CONFIRMATION", "IN_PROGRESS")]
+    [InlineData("IN_PROGRESS", "IN_PROGRESS")]
     [InlineData("COMPLETED", "TERMINATED")]
     public void IllegalManagementTransitionsPreserveTheBusinessError(string from, string requested)
     {
@@ -130,7 +130,6 @@ public sealed class ProjectsWorkflowTests
 
     [Theory]
     [InlineData("IN_PROGRESS")]
-    [InlineData("PENDING_CONFIRMATION")]
     [InlineData("COMPLETED")]
     public void ActiveAndCompletedProjectsCannotBeDeleted(string status)
     {
@@ -139,90 +138,29 @@ public sealed class ProjectsWorkflowTests
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("COMPANY")]
-    [InlineData(" COMPANY ")]
-    public void SubmissionConfirmationSideDefaultsToCompany(string? requestedSide)
+    [InlineData("IN_PROGRESS", null, null, null, "NO_MATERIAL")]
+    [InlineData("IN_PROGRESS", null, null, 5UL, "PENDING")]
+    [InlineData("IN_PROGRESS", "RETURNED", 5UL, 5UL, "RETURNED")]
+    [InlineData("IN_PROGRESS", "RETURNED", 4UL, 5UL, "PENDING")]
+    [InlineData("IN_PROGRESS", "APPROVED", 5UL, 5UL, "PENDING")]
+    [InlineData("DRAFT", null, null, 5UL, null)]
+    [InlineData("COMPLETED", "RETURNED", 5UL, 5UL, null)]
+    public void MaterialReviewIsReturnedOnlyWhileItCoversTheLatestSupplierFile(
+        string status, string? stored, ulong? reviewFileId, ulong? latestSupplierFileId, string? expected)
     {
-        Assert.Equal("COMPANY", ProjectWorkflowRules.NormalizeConfirmSide(requestedSide));
-    }
-
-    [Theory]
-    [InlineData("SUPPLIER")]
-    [InlineData("")]
-    [InlineData("company")]
-    public void NonCompanyConfirmationRequestsAreRejectedClearly(string requestedSide)
-    {
-        var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.NormalizeConfirmSide(requestedSide));
-
-        Assert.Equal(400, error.Status);
-        Assert.Equal("项目验收仅支持公司内部确认，confirmSide 必须为 COMPANY", error.Message);
-    }
-
-    [Fact]
-    public void OnlyInternalUsersCanConfirmOrRejectAndReceivePendingAcceptance()
-    {
-        var internalUser = new CurrentUser(1, "internal", "INTERNAL", null);
-        var supplierUser = new CurrentUser(2, "supplier", "SUPPLIER", 10);
-
-        ProjectWorkflowRules.RequireInternalDecisionActor(internalUser);
-        Assert.True(ProjectWorkflowRules.CanReceivePendingAcceptance(internalUser, hasConfirmPermission: true));
-        Assert.False(ProjectWorkflowRules.CanReceivePendingAcceptance(internalUser, hasConfirmPermission: false));
-        Assert.False(ProjectWorkflowRules.CanReceivePendingAcceptance(supplierUser, hasConfirmPermission: true));
-        var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.RequireInternalDecisionActor(supplierUser));
-        Assert.Equal(403, error.Status);
-        Assert.Equal("项目验收确认和驳回仅限公司内部用户", error.Message);
-    }
-
-    [Fact]
-    public void OnlySupplierUsersCanSubmitForAcceptance()
-    {
-        var supplierUser = new CurrentUser(2, "supplier", "SUPPLIER", 10);
-        var internalUser = new CurrentUser(1, "internal", "INTERNAL", null);
-
-        ProjectWorkflowRules.RequireSupplierSubmitter(supplierUser);
-        var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.RequireSupplierSubmitter(internalUser));
-
-        Assert.Equal(403, error.Status);
-        Assert.Equal("项目验收仅允许供应商用户提交", error.Message);
-    }
-
-    [Fact]
-    public void OnlySupplierUsersCanWithdrawAcceptance()
-    {
-        var supplierUser = new CurrentUser(2, "supplier", "SUPPLIER", 10);
-        var internalUser = new CurrentUser(1, "internal", "INTERNAL", null);
-
-        ProjectWorkflowRules.RequireSupplierWithdrawer(supplierUser);
-        var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.RequireSupplierWithdrawer(internalUser));
-        Assert.Equal(403, error.Status);
-        Assert.Equal("项目验收仅允许供应商用户撤回", error.Message);
+        Assert.Equal(expected, ProjectWorkflowRules.EffectiveMaterialReview(status, stored, reviewFileId, latestSupplierFileId));
     }
 
     [Theory]
     [InlineData(null)]
     [InlineData(0UL)]
-    public void WorkflowDecisionRequiresASubmissionVersion(ulong? expectedSubmissionId)
+    public void MaterialReviewRequiresTheSeenSupplierFile(ulong? expectedSupplierFileId)
     {
         var error = Assert.Throws<ApiException>(() =>
-            ProjectService.RequireExpectedSubmissionId(expectedSubmissionId));
+            ProjectService.RequireExpectedSupplierFileId(expectedSupplierFileId));
 
         Assert.Equal(400, error.Status);
-        Assert.Equal("expectedSubmissionId 必须为当前待验收提交版本", error.Message);
-    }
-
-    [Fact]
-    public void WorkflowDecisionRejectsAStaleSubmissionVersion()
-    {
-        var latest = new ProjectStatusLogRow { Id = 102, ProjectId = 7, Action = "SUBMIT" };
-
-        var error = Assert.Throws<ApiException>(() =>
-            ProjectService.EnsureExpectedSubmission(latest, 101));
-
-        Assert.Equal(409, error.Status);
-        Assert.Equal(40903, error.Code);
-        Assert.Equal("验收申请已更新，请刷新项目后重新操作", error.Message);
-        ProjectService.EnsureExpectedSubmission(latest, 102);
+        Assert.Equal("expectedSupplierFileId 必须为当前最新的厂商回传文件", error.Message);
     }
 
     [Fact]
@@ -245,16 +183,16 @@ public sealed class ProjectsWorkflowTests
         var statusUser = new CurrentUser(3, "status", UserTypes.Internal, null);
         var peer = new CurrentUser(4, "peer", UserTypes.Supplier, 9);
         var otherSupplier = new CurrentUser(5, "other", UserTypes.Supplier, 8);
-        Assert.True(UploadActivity.CanAbort(owner, ProjectStatuses.Draft, true, false, false, false, 1, UserTypes.Internal, null));
-        Assert.False(UploadActivity.CanAbort(owner, ProjectStatuses.InProgress, false, true, true, false, 1, UserTypes.Internal, null));
-        Assert.False(UploadActivity.CanAbort(reader, ProjectStatuses.InProgress, true, false, false, false, 1, UserTypes.Internal, null));
-        Assert.True(UploadActivity.CanAbort(statusUser, ProjectStatuses.InProgress, false, false, true, false, 1, UserTypes.Internal, null));
-        Assert.True(UploadActivity.CanAbort(statusUser, ProjectStatuses.InProgress, false, true, false, false, 1, UserTypes.Supplier, 9));
-        Assert.False(UploadActivity.CanAbort(statusUser, ProjectStatuses.PendingConfirmation, false, true, true, false, 1, UserTypes.Internal, null));
-        Assert.True(UploadActivity.CanAbort(peer, ProjectStatuses.PendingConfirmation, true, false, false, true, 6, UserTypes.Supplier, 9));
-        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, true, false, false, true, 1, UserTypes.Internal, null));
-        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, true, false, false, false, 6, UserTypes.Supplier, 9));
-        Assert.False(UploadActivity.CanAbort(otherSupplier, ProjectStatuses.InProgress, true, false, false, true, 6, UserTypes.Supplier, 9));
+        Assert.True(UploadActivity.CanAbort(owner, ProjectStatuses.Draft, true, false, false, 1, UserTypes.Internal, null));
+        Assert.False(UploadActivity.CanAbort(owner, ProjectStatuses.InProgress, false, true, true, 1, UserTypes.Internal, null));
+        Assert.False(UploadActivity.CanAbort(reader, ProjectStatuses.InProgress, true, false, false, 1, UserTypes.Internal, null));
+        Assert.True(UploadActivity.CanAbort(statusUser, ProjectStatuses.InProgress, false, false, true, 1, UserTypes.Internal, null));
+        Assert.True(UploadActivity.CanAbort(statusUser, ProjectStatuses.InProgress, false, true, false, 1, UserTypes.Supplier, 9));
+        Assert.False(UploadActivity.CanAbort(statusUser, ProjectStatuses.Completed, false, true, true, 1, UserTypes.Internal, null));
+        Assert.True(UploadActivity.CanAbort(peer, ProjectStatuses.Completed, true, false, false, 6, UserTypes.Supplier, 9));
+        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, true, false, false, 1, UserTypes.Internal, null));
+        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, false, false, false, 6, UserTypes.Supplier, 9));
+        Assert.False(UploadActivity.CanAbort(otherSupplier, ProjectStatuses.InProgress, true, false, false, 6, UserTypes.Supplier, 9));
         Assert.NotEqual(default, now);
     }
 }

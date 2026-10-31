@@ -11,7 +11,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
     internal static FrozenSet<string> SupplierPermissionCodes { get; } = new[]
     {
         "dashboard", "project:list", "file:upload", "file:download", "file:preview",
-        "message:create", "project:submit", "project:withdraw"
+        "message:create"
     }.ToFrozenSet(StringComparer.Ordinal);
 
     // Supplier-only workflow actions: internal accounts can never exercise them, so they are left out of

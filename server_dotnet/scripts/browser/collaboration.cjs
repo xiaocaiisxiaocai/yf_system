@@ -272,38 +272,46 @@ async function chooseNotificationTab(drawer, name) {
       const stored = await json(adminContext, adminToken, 'GET',
         `/projects/${project.id}/files?keyword=${encodeURIComponent(uploadName)}&page=1&pageSize=10`);
       assert.equal(stored.total, 1);
-      // The supplier can submit only after the responsible user confirms the returned material.
+      // The returned material now waits for the responsible user; the supplier has no workflow command.
       await supplierPage.getByText('资料待确认', { exact: true }).waitFor();
-      assert(await supplierPage.getByRole('button', { name: '提交公司验收', exact: true }).isDisabled());
-      await json(adminContext, adminToken, 'POST', `/projects/${project.id}/materials/approve`, {
+      assert.equal(await supplierPage.getByRole('button', { name: '资料确认 OK', exact: true }).count(), 0);
+      await json(adminContext, adminToken, 'POST', `/projects/${project.id}/materials/return`, {
         expectedSupplierFileId: stored.list[0].id,
+        reason: '协作验收：请补充多视角动作视频',
       });
-      await supplierPage.getByText('资料已确认 OK', { exact: true }).waitFor();
+      await supplierPage.getByText('资料已退回', { exact: true }).waitFor();
     });
 
-    await record('供应商提交后管理员工作台待确认区自动出现项目', async () => {
+    await record('供应商补传资料后管理员工作台待确认区自动出现项目', async () => {
       await adminPage.goto(s.base + '/');
       await adminPage.getByRole('heading', { name: '工作台', exact: true }).waitFor();
-      await adminPage.getByRole('heading', { name: '公司内部待验收子项目', exact: true }).waitFor();
+      await adminPage.getByRole('heading', { name: '资料待确认子项目', exact: true }).waitFor();
       const beforePending = await json(adminContext, adminToken, 'GET',
         '/dashboard/pending-projects?page=1&pageSize=100');
-      assert(!beforePending.list.some(item => item.id === project.id));
+      assert(!beforePending.list.some(item => item.id === project.id), 'returned material is not the owner\'s task');
       const pendingReload = waitPendingProject(adminPage, project.id);
-      const submit = action(supplierPage, `/projects/${project.id}/submit`, 'POST', async () => {
-        await supplierPage.getByRole('button', { name: '提交公司验收', exact: true }).click();
-        await supplierPage.locator('.arco-popconfirm:visible').getByRole('button', { name: '确定', exact: true }).click();
+      await supplierPage.getByRole('tab', { name: '文件', exact: true }).click();
+      await supplierPage.getByRole('button', { name: '上传文件', exact: true }).click();
+      const dialog = supplierPage.getByRole('dialog', { name: '上传文件' });
+      await dialog.getByLabel('选择上传文件').setInputFiles({
+        name: '供应商补传-' + marker + '.pdf',
+        mimeType: 'application/pdf',
+        buffer: fs.readFileSync(OUT + '/valid-preview.pdf'),
       });
-      const submitted = await submit;
-      assert(Number.isInteger(submitted.latestSubmissionId) && submitted.latestSubmissionId > 0);
+      const merged = supplierPage.waitForResponse(response =>
+        /^\/api\/v1\/uploads\/[^/]+\/merge$/.test(pathOf(response))
+        && response.request().method() === 'POST' && response.status() === 200);
+      await dialog.getByRole('button', { name: '上传所选文件', exact: true }).click();
+      await merged;
+      await dialog.waitFor({ state: 'hidden' });
       const pending = await pendingReload;
-      assert(pending.list.some(item => item.id === project.id));
+      assert(pending.list.some(item => item.id === project.id && item.materialReviewStatus === 'PENDING'));
       const projectLabel = project.projectGroupName
         ? `${project.projectGroupName} / ${projectName}` : projectName;
       await adminPage.getByRole('link', { name: projectLabel, exact: true }).waitFor();
-      await supplierPage.getByText('待内部验收', { exact: true }).first().waitFor();
-      await supplierPage.getByText('验收方：公司', { exact: true }).waitFor();
-      assert.equal(await supplierPage.getByRole('button', { name: '验收通过', exact: true }).count(), 0);
-      assert.equal(await supplierPage.getByRole('button', { name: '验收驳回', exact: true }).count(), 0);
+      await supplierPage.getByText('资料待确认', { exact: true }).first().waitFor();
+      assert.equal(await supplierPage.getByRole('button', { name: '资料确认 OK', exact: true }).count(), 0);
+      assert.equal(await supplierPage.getByRole('button', { name: '退回资料', exact: true }).count(), 0);
     });
 
     let markedNotification;
@@ -341,7 +349,7 @@ async function chooseNotificationTab(drawer, name) {
       assert((await listDashboardMessages(adminContext, adminToken, true))
         .some(item => item.id === markedNotification.targetId), 'notification view must not mark message content read');
       const pending = await json(adminContext, adminToken, 'GET', '/dashboard/pending-projects?page=1&pageSize=100');
-      assert(pending.list.some(item => item.id === project.id), 'notification view must not finish pending confirmation');
+      assert(pending.list.some(item => item.id === project.id), 'notification view must not finish the material review');
       await closeNotifications(adminPage, drawer);
       await adminPage.reload();
       await adminPage.getByRole('heading', { name: '工作台', exact: true }).waitFor();
@@ -367,11 +375,13 @@ async function chooseNotificationTab(drawer, name) {
       await adminInput().waitFor();
     });
 
-    await record('管理员确认后供应商项目状态无需刷新自动变为已完成', async () => {
+    await record('负责人确认资料后供应商项目状态无需刷新自动变为已完成', async () => {
       const supplierReload = waitResponse(supplierPage, `/projects/${project.id}`);
-      await adminPage.getByRole('button', { name: '验收通过', exact: true }).click();
-      await action(adminPage, `/projects/${project.id}/confirm`, 'POST',
-        () => adminPage.locator('.arco-popconfirm:visible').getByRole('button', { name: '确定', exact: true }).click());
+      await adminPage.getByRole('button', { name: '资料确认 OK', exact: true }).click();
+      const approval = adminPage.getByRole('dialog', { name: '资料确认 OK' });
+      await approval.getByText('厂商回传文件', { exact: false }).waitFor();
+      await action(adminPage, `/projects/${project.id}/materials/approve`, 'POST',
+        () => approval.getByRole('button', { name: '确认并完成', exact: true }).click());
       await supplierReload;
       await supplierPage.getByText('已完成', { exact: true }).first().waitFor();
       assert.equal((await json(adminContext, adminToken, 'GET', `/projects/${project.id}`)).status, 'COMPLETED');

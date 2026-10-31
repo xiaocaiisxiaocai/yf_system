@@ -233,7 +233,7 @@ def _exchange_messages(internal_client, supplier_client, project_id, internal_id
 
 
 def _approve_materials(reviewer_client, project_id):
-    """The responsible user confirms the latest supplier material so the supplier may submit."""
+    """The responsible user confirms the latest supplier material, which completes the subproject."""
     project = reviewer_client.call("GET", f"/api/v1/projects/{project_id}")
     return reviewer_client.call("POST", f"/api/v1/projects/{project_id}/materials/approve", {
         "expectedSupplierFileId": project["latestSupplierFileId"],
@@ -605,19 +605,11 @@ def run_business_acceptance(client, Client, conn, check):
         and foreign_write_state_after == foreign_write_state_before,
     )
 
-    _approve_materials(internal_client, project_a)
-    _approve_materials(internal_client, project_b)
-    project_a_submission = supplier_a_client.call(
-        "POST", f"/api/v1/projects/{project_a}/submit", {})
-    client.call("POST", f"/api/v1/projects/{project_a}/confirm", {
-        "expectedSubmissionId": project_a_submission["latestSubmissionId"],
-    })
-    project_b_submission = supplier_b_client.call("POST", f"/api/v1/projects/{project_b}/submit", {
-        "confirmSide": "COMPANY",
-    })
-    internal_client.call("POST", f"/api/v1/projects/{project_b}/confirm", {
-        "expectedSubmissionId": project_b_submission["latestSubmissionId"],
-    })
+    supplier_a_client.call("POST", f"/api/v1/projects/{project_a}/materials/approve", {
+        "expectedSupplierFileId": file_a_supplier,
+    }, expected=403)
+    project_a_approval = _approve_materials(internal_client, project_a)
+    project_b_approval = _approve_materials(internal_client, project_b)
     project_a_detail = internal_client.call("GET", f"/api/v1/projects/{project_a}")
     project_b_detail = internal_client.call("GET", f"/api/v1/projects/{project_b}")
     activities_a = internal_client.call("GET", f"/api/v1/projects/{project_a}/activities?pageSize=50")
@@ -625,17 +617,16 @@ def run_business_acceptance(client, Client, conn, check):
     actions_a = {item["action"] for item in activities_a["list"]}
     actions_b = {item["action"] for item in activities_b["list"]}
     check(
-        "two supplier submissions complete through internal acceptance",
-        project_a_submission["confirmSide"] == "COMPANY"
-        and project_b_submission["confirmSide"] == "COMPANY"
-        and isinstance(project_a_submission["latestSubmissionId"], int)
-        and isinstance(project_b_submission["latestSubmissionId"], int)
+        "two supplier deliveries complete when the responsible user approves the material",
+        project_a_approval["status"] == "COMPLETED"
+        and project_b_approval["status"] == "COMPLETED"
         and project_a_detail["status"] == "COMPLETED"
         and project_b_detail["status"] == "COMPLETED"
         and activities_a["summary"]["status"] == "COMPLETED"
         and activities_b["summary"]["status"] == "COMPLETED"
-        and {"START", "MATERIAL_APPROVE", "SUBMIT", "CONFIRM", "UPLOAD", "CREATE"}.issubset(actions_a)
-        and {"START", "MATERIAL_APPROVE", "SUBMIT", "CONFIRM", "UPLOAD", "CREATE"}.issubset(actions_b),
+        and {"START", "MATERIAL_APPROVE", "UPLOAD", "CREATE"}.issubset(actions_a)
+        and {"START", "MATERIAL_APPROVE", "UPLOAD", "CREATE"}.issubset(actions_b)
+        and not {"SUBMIT", "CONFIRM"} & (actions_a | actions_b),
     )
 
     # Verify audit visibility through the API after the target rows have been
@@ -655,7 +646,7 @@ def run_business_acceptance(client, Client, conn, check):
         and {"SUPPLIER_ACCOUNT_CREATE", "SUPPLIER_ACCOUNT_UPDATE", "SUPPLIER_ACCOUNT_STATUS",
              "SUPPLIER_ACCOUNT_RESET_PASSWORD", "SUPPLIER_ACCOUNT_DELETE"}.issubset(
             _audit_actions(client, "user", disposable_account_id))
-        and {"PROJECT_CREATE", "PROJECT_START", "PROJECT_SUBMIT", "PROJECT_CONFIRM"}.issubset(
+        and {"PROJECT_CREATE", "PROJECT_START", "PROJECT_MATERIAL_APPROVE"}.issubset(
             _audit_actions(client, "project", project_a))
         and {"FILE_UPLOAD", "FILE_DOWNLOAD"}.issubset(_audit_actions(client, "file", file_a_company))
         and {"MESSAGE_CREATE"}.issubset(_audit_actions(client, "message", message_a[0])),
@@ -682,24 +673,19 @@ def run_business_acceptance(client, Client, conn, check):
         "disabled mail worker leaves complete tenant-scoped notification outbox",
         len(outbox) > 0
         and all(
-            retries == 0
-            and (status == "CANCELLED" if event_type == "PROJECT_SUBMITTED" else status == "PENDING")
+            retries == 0 and status == "PENDING" and event_type != "PROJECT_SUBMITTED"
             for _, event_type, _, status, retries in outbox
         )
         and {("FILE_UPLOADED", account_a["id"]),
              ("FILE_UPLOADED", internal_user["id"]),
              ("MESSAGE_CREATED", account_a["id"]),
              ("MESSAGE_CREATED", internal_user["id"]),
-             ("PROJECT_SUBMITTED", internal_user["id"]),
-             ("PROJECT_SUBMITTED", admin_user_id),
-             ("PROJECT_CONFIRMED", account_a["id"])}.issubset(rows_a)
+             ("PROJECT_MATERIAL_APPROVED", account_a["id"])}.issubset(rows_a)
         and {("FILE_UPLOADED", account_b["id"]),
              ("FILE_UPLOADED", internal_user["id"]),
              ("MESSAGE_CREATED", account_b["id"]),
              ("MESSAGE_CREATED", internal_user["id"]),
-             ("PROJECT_SUBMITTED", internal_user["id"]),
-             ("PROJECT_SUBMITTED", admin_user_id),
-             ("PROJECT_CONFIRMED", account_b["id"])}.issubset(rows_b)
+             ("PROJECT_MATERIAL_APPROVED", account_b["id"])}.issubset(rows_b)
         and all(recipient_id != account_b["id"] for _, recipient_id in rows_a)
         and all(recipient_id != account_a["id"] for _, recipient_id in rows_b),
     )

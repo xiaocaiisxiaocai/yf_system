@@ -557,7 +557,7 @@ try:
             _, project = _create_project_group(
                 client, client, conn, sid, ".NET 隔离项目")
             pid = project["id"]
-            # Starting requires an enabled supplier account that can submit.
+            # Starting requires an enabled supplier account that can upload files.
             flow_password = "Yf9!" + secrets.token_urlsafe(9)
             changed_flow_password = "Yf9!" + secrets.token_urlsafe(9)
             flow_user = client.call("POST", f"/api/v1/admin/suppliers/{sid}/accounts", {"employeeNo": "workflow_supplier", "password": flow_password, "realName": "验收供应商", "email": "workflow@example.invalid"})
@@ -630,38 +630,40 @@ try:
             put_chunk(supplier_client, returned_upload["sessionId"], 0, supplier_return)
             submit_md5(supplier_client, returned_upload["sessionId"], supplier_return)
             returned_file = supplier_client.call("POST", f"/api/v1/uploads/{returned_upload['sessionId']}/merge")
-            supplier_client.call("POST", f"/api/v1/projects/{pid}/submit", {}, expected=409)
-            approve_materials = lambda: client.call("POST", f"/api/v1/projects/{pid}/materials/approve", {
-                "expectedSupplierFileId": returned_file["id"],
-            })
-            approve_materials()
-            first_submission = supplier_client.call("POST", f"/api/v1/projects/{pid}/submit", {})
-            supplier_client.call("POST", f"/api/v1/projects/{pid}/withdraw", {
-                "expectedSubmissionId": first_submission["latestSubmissionId"],
-            })
-            approve_materials()
-            supplier_submission = supplier_client.call("POST", f"/api/v1/projects/{pid}/submit", {})
-            client.call("POST", f"/api/v1/projects/{pid}/reject", {
-                "reason": "回归测试驳回",
-                "expectedSubmissionId": supplier_submission["latestSubmissionId"],
-            })
-            approve_materials()
-            final_submission = supplier_client.call(
-                "POST", f"/api/v1/projects/{pid}/submit", {"confirmSide": "COMPANY"})
-            completed_project = client.call("POST", f"/api/v1/projects/{pid}/confirm", {
-                "expectedSubmissionId": final_submission["latestSubmissionId"],
-            })
+            def supplier_returns(name, data):
+                upload_session = init_upload(supplier_client, pid, name, data)
+                put_chunk(supplier_client, upload_session["sessionId"], 0, data)
+                submit_md5(supplier_client, upload_session["sessionId"], data)
+                return supplier_client.call("POST", f"/api/v1/uploads/{upload_session['sessionId']}/merge")
+
+            review_path = f"/api/v1/projects/{pid}/materials"
+            supplier_client.call("POST", f"{review_path}/approve", {"expectedSupplierFileId": returned_file["id"]}, expected=403)
+            returned = client.call("POST", f"{review_path}/return", {
+                "reason": "回归测试退回", "expectedSupplierFileId": returned_file["id"]})
+            client.call("POST", f"{review_path}/return", {
+                "reason": "重复退回", "expectedSupplierFileId": returned_file["id"]}, expected=409)
+            second_file = supplier_returns("supplier-return-2.pdf", b"%PDF-1.4\nsupplier second material\n%%EOF\n")
+            refreshed = client.call("GET", f"/api/v1/projects/{pid}")
+            stale = client.call("POST", f"{review_path}/approve", {"expectedSupplierFileId": returned_file["id"]}, expected=409)
+            completed_project = client.call("POST", f"{review_path}/approve", {"expectedSupplierFileId": second_file["id"]})
+            reopened = client.call("POST", f"/api/v1/projects/{pid}/reopen", {
+                "expectedUpdatedAt": completed_project["updatedAt"], "reason": "回归测试重开"})
+            completed_again = client.call("POST", f"{review_path}/approve", {"expectedSupplierFileId": second_file["id"]})
             check(
-                "supplier submit withdraw resubmit and internal acceptance workflow",
-                first_submission["confirmSide"] == "COMPANY"
-                and supplier_submission["confirmSide"] == "COMPANY"
-                and final_submission["confirmSide"] == "COMPANY"
-                and all(
-                    isinstance(item["latestSubmissionId"], int)
-                    for item in (first_submission, supplier_submission, final_submission)
-                )
+                "material return, stale approval, approval completes, reopen and re-approval workflow",
+                returned["materialReviewStatus"] == "RETURNED"
+                and returned["materialReviewReason"] == "回归测试退回"
+                and refreshed["materialReviewStatus"] == "PENDING"
+                and refreshed["latestSupplierFileId"] == second_file["id"]
+                and stale["code"] == 40903
                 and completed_project["status"] == "COMPLETED"
-                and completed_project["latestSubmissionId"] is None,
+                and completed_project["materialReviewStatus"] is None
+                and reopened["status"] == "IN_PROGRESS"
+                and reopened["materialReviewStatus"] == "RETURNED"
+                and reopened["materialReviewReason"] == "回归测试重开"
+                and completed_again["status"] == "COMPLETED"
+                and "confirmSide" not in completed_again
+                and "latestSubmissionId" not in completed_again,
             )
             client.call("DELETE", f"/api/v1/files/{fid}", expected=409)
             check("completed project file mutation denied", True)

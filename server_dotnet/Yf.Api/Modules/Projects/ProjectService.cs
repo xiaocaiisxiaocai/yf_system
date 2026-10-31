@@ -19,21 +19,13 @@ internal sealed partial class ProjectService(
         LoggerMessage.Define<ulong>(LogLevel.Warning, new EventId(1, "ProjectDeletionRealtimePublishFailed"),
             "Realtime publish failed after project deletion commit for project {ProjectId}");
 
-    internal async Task<ProjectDetailResponse> DetailAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
+    internal async Task<ProjectResponse> DetailAsync(MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
         await using var db = EfDb.Use(conn, tx);
-        var statusDetails = await db.Projects.Where(item => item.Id == projectId).Select(_ => new
-        {
-            RejectReason = db.ProjectStatusLogs
-                .Where(log => log.ProjectId == projectId && log.Action == "REJECT")
-                .OrderByDescending(log => log.Id).Select(log => log.Reason).FirstOrDefault(),
-            LatestSubmitterId = db.ProjectStatusLogs.Where(log => log.Id == project.LatestSubmissionId)
-                .Select(log => (ulong?)log.OperatorId).FirstOrDefault(),
-        }).SingleAsync(ct);
         var sourceCopy = await (
             from copy in db.ProjectCopies
             join source in db.Projects on copy.SourceProjectId equals source.Id
@@ -55,14 +47,10 @@ internal sealed partial class ProjectService(
             }
         }
         var unreadMessages = await MessageService.UnreadCountAsync(conn, tx, current.Id, projectId, ct);
-        var result = new ProjectDetailResponse(ProjectJson.Project(project) with
+        var result = ProjectJson.Project(project) with
         {
             UnreadMessages = unreadMessages,
             CopySource = copySource,
-        })
-        {
-            RejectReason = statusDetails.RejectReason,
-            LatestSubmitterId = statusDetails.LatestSubmitterId,
         };
         await tx.CommitAsync(ct);
         return result;
@@ -131,24 +119,10 @@ internal sealed partial class ProjectService(
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
-        var project = await ProjectAccessService.RequireViewForValidatedActorAsync(
-            conn, tx, current, projectId, false, ct);
-        await using var db = EfDb.Use(conn, tx);
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
         var unread = await MessageService.UnreadCountAsync(conn, tx, current.Id, projectId, ct);
         var activityRevision = await ProjectActivityService.RevisionAsync(conn, tx, projectId, ct);
-        var canConfirm = ProjectWorkflowRules.CanReceivePendingAcceptance(
-            current,
-            await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:confirm", ct));
-        var latestSubmissionId = project.Status == ProjectStatuses.PendingConfirmation
-            ? (await LatestSubmissionAsync(conn, tx, projectId, ct)).Id
-            : (ulong?)null;
-        var result = new ProjectSummaryResponse(
-            unread,
-            activityRevision,
-            canConfirm
-                && project.Status == ProjectStatuses.PendingConfirmation
-                && project.ConfirmSide == ProjectWorkflowRules.InternalAcceptanceSide,
-            latestSubmissionId);
+        var result = new ProjectSummaryResponse(unread, activityRevision);
         await tx.CommitAsync(ct);
         return result;
     }
@@ -553,14 +527,15 @@ internal sealed partial class ProjectService(
     }
 
     private static async Task<ulong> CountActiveUploadsAsync(
-        MySqlConnection conn, MySqlTransaction tx, ulong projectId, CancellationToken ct)
+        MySqlConnection conn, MySqlTransaction tx, ulong projectId, bool supplierOnly, CancellationToken ct)
     {
         await using var db = EfDb.Use(conn, tx);
         var dbNow = await DbClock.UtcNowAsync(db, ct);
         var rows = await db.UploadSessions
             .Where(upload => upload.ProjectId == projectId
                 && (upload.Status == ProjectUploadSessionStatuses.Uploading
-                    || upload.Status == ProjectUploadSessionStatuses.Merging))
+                    || upload.Status == ProjectUploadSessionStatuses.Merging)
+                && (!supplierOnly || db.Users.Any(user => user.Id == upload.UploaderId && user.UserType == UserTypes.Supplier)))
             .Select(upload => new { upload.Status, upload.ExpiresAt })
             .ToListAsync(ct);
         return checked((ulong)rows.Count(upload => UploadActivity.IsBlocking(upload.Status, upload.ExpiresAt, dbNow)));

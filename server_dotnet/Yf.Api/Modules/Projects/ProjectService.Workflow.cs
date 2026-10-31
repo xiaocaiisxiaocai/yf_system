@@ -1,5 +1,3 @@
-using System.Text;
-using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
@@ -7,7 +5,8 @@ using Yf.Api.Infrastructure.Entities;
 
 namespace Yf.Api.Modules.Projects;
 
-// Subproject workflow transitions (start, submit, confirm, reject, withdraw, terminate, restart). See 主项目与子项目协作契约.
+// Subproject workflow transitions (start, terminate, restart, reopen); material approval completes a subproject
+// in ProjectService.MaterialReview.cs. See Robot仿真协作流程调整方案.
 internal sealed partial class ProjectService
 {
     internal async Task<ProjectResponse> SetStatusAsync(
@@ -32,13 +31,13 @@ internal sealed partial class ProjectService
         var (to, action) = ProjectWorkflowRules.ManagementTransition(project.Status, requested);
         if (action is "START" or "RESTART")
         {
-            await EnsureSupplierCanSubmitAsync(conn, tx, project.SupplierId, ct);
+            await EnsureSupplierCanCollaborateAsync(conn, tx, project.SupplierId, ct);
         }
-        if (action == "TERMINATE" && await CountActiveUploadsAsync(conn, tx, projectId, ct) > 0)
+        if (action == "TERMINATE" && await CountActiveUploadsAsync(conn, tx, projectId, false, ct) > 0)
         {
             throw ApiException.Conflict("项目仍有活动上传会话，不能终止");
         }
-        await ApplyTransitionAsync(conn, tx, current, project, to, action, null, null, ip, ct);
+        await ApplyTransitionAsync(conn, tx, current, project, to, action, null, ip, ct);
         var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
         return result;
@@ -46,14 +45,14 @@ internal sealed partial class ProjectService
 
     internal const string SupplierDisabledStartMessage = "项目所属厂商已停用，请先启用厂商后再开始项目";
     internal const string SupplierWithoutActiveUserStartMessage = "项目所属厂商尚未添加启用的用户，请先添加或启用厂商用户后再开始项目";
-    internal const string SupplierWithoutSubmitterStartMessage =
-        "项目所属厂商的启用用户都没有提交验收权限，请先为厂商用户分配包含“提交项目验收”权限的角色后再开始项目";
+    internal const string SupplierWithoutUploaderStartMessage =
+        "项目所属厂商的启用用户都没有上传文件权限，请先为厂商用户分配包含“上传文件”权限的角色后再开始项目";
 
     /// <summary>
     /// START/RESTART hands the subproject to the supplier, so the supplier company must be active and at least one
-    /// of its active supplier accounts must effectively hold <c>project:submit</c> (through an active role).
+    /// of its active supplier accounts must effectively hold <c>file:upload</c> (through an active role) to return material.
     /// </summary>
-    private static async Task EnsureSupplierCanSubmitAsync(MySqlConnection conn, MySqlTransaction tx, ulong supplierId, CancellationToken ct)
+    private static async Task EnsureSupplierCanCollaborateAsync(MySqlConnection conn, MySqlTransaction tx, ulong supplierId, CancellationToken ct)
     {
         await using var db = EfDb.Use(conn, tx);
         if (!await db.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == AccountStatuses.Active, ct))
@@ -66,153 +65,63 @@ internal sealed partial class ProjectService
         {
             throw ApiException.Conflict(SupplierWithoutActiveUserStartMessage);
         }
-        var submitters = AccessService.UsersWithPermission(db, "project:submit");
-        if (!await activeUsers.AnyAsync(user => submitters.Contains(user.Id), ct))
+        var uploaders = AccessService.UsersWithPermission(db, "file:upload");
+        if (!await activeUsers.AnyAsync(user => uploaders.Contains(user.Id), ct))
         {
-            throw ApiException.Conflict(SupplierWithoutSubmitterStartMessage);
+            throw ApiException.Conflict(SupplierWithoutUploaderStartMessage);
         }
     }
 
-    internal async Task<ProjectResponse> SubmitAsync(
+    /// <summary>
+    /// Reopens a completed subproject as an after-the-fact return: it goes back to IN_PROGRESS with the latest
+    /// supplier material marked RETURNED, and follows the main project's current public data again.
+    /// </summary>
+    internal async Task<ProjectResponse> ReopenAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong projectId,
-        ProjectSubmitRequest request,
+        ProjectReopenRequest request,
         string? ip,
         CancellationToken ct)
     {
-        ProjectWorkflowRules.RequireSupplierSubmitter(actor);
-        var side = ProjectWorkflowRules.NormalizeConfirmSide(request.ConfirmSide);
+        if (!actor.IsInternal)
+        {
+            throw ApiException.Forbidden("重开子项目仅限项目负责人");
+        }
+        if (request.ExpectedUpdatedAt is not { } expectedUpdatedAt)
+        {
+            throw ApiException.BadRequest("expectedUpdatedAt 必须为当前子项目的 updatedAt");
+        }
+        var reason = ValidateReviewReason(request.Reason, "重开原因");
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var (project, current) = await LockWorkflowProjectAsync(conn, tx, actor, projectId, "project:submit", ct);
-        ProjectWorkflowRules.RequireSupplierSubmitter(current);
-        if (project.Status != ProjectStatuses.InProgress)
+        var (project, current) = await LockWorkflowProjectAsync(conn, tx, actor, projectId, "project:list", ct);
+        if (project.ResponsibleUserId != current.Id)
         {
-            throw ApiException.Conflict("只有进行中的项目可以提交验收");
+            throw ApiException.Forbidden("重开子项目仅限项目负责人");
         }
-        if (await CountActiveUploadsAsync(conn, tx, projectId, ct) > 0)
+        if (ProjectJson.Utc(project.UpdatedAt) != ProjectJson.Utc(expectedUpdatedAt))
         {
-            throw ApiException.Conflict("项目仍有活动上传会话，不能提交验收");
+            throw ApiException.VersionConflict(SubprojectChangedMessage);
         }
-        switch (ProjectWorkflowRules.EffectiveMaterialReview(project))
+        if (project.Status != ProjectStatuses.Completed)
         {
-            case MaterialReviewStatuses.Approved:
-                break;
-            case MaterialReviewStatuses.NoMaterial:
-                throw ApiException.Conflict("请先上传回传资料，待公司负责人确认 OK 后再提交验收");
-            case MaterialReviewStatuses.Returned:
-                throw ApiException.Conflict("回传资料已被公司负责人退回，请补充资料并待确认 OK 后再提交验收");
-            default:
-                throw ApiException.Conflict("回传资料尚未经公司负责人确认 OK，不能提交验收");
+            throw ApiException.Conflict("只有已完成的子项目可以重开");
         }
-        var reviewers = await ProjectReviewerService.ListAsync(conn, tx, project, ct);
-        if (reviewers.Count == 0)
-        {
-            throw ApiException.Conflict("项目没有可执行验收的公司内部用户，请为项目负责人配置验收权限，或配置具备全局查看权限的验收人员");
-        }
-        var submissionId = await ApplyTransitionAsync(
-            conn, tx, current, project, ProjectStatuses.PendingConfirmation, "SUBMIT", side, null, ip, ct);
-        await ProjectNotificationService.EnqueueWorkflowAsync(conn, tx, project, "SUBMIT", side, null, null, current, options.WebBaseUrl, audit, ct);
-        var submitted = await LoadProjectAsync(conn, tx, projectId, false, ct);
-        if (submitted.LatestSubmissionId != submissionId)
-        {
-            throw new InvalidOperationException("待确认项目的提交版本与状态历史不一致");
-        }
-        var result = ProjectJson.Project(submitted);
-        await tx.CommitAsync(ct);
-        return result;
-    }
 
-    internal Task<ProjectResponse> ConfirmAsync(
-        MySqlConnection conn,
-        CurrentUser actor,
-        ulong projectId,
-        ProjectDecisionRequest request,
-        string? ip,
-        CancellationToken ct) =>
-        DecideAsync(conn, actor, projectId, "CONFIRM", RequireExpectedSubmissionId(request.ExpectedSubmissionId), null, ip, ct);
-
-    internal async Task<ProjectResponse> RejectAsync(
-        MySqlConnection conn,
-        CurrentUser actor,
-        ulong projectId,
-        ProjectRejectRequest request,
-        string? ip,
-        CancellationToken ct)
-    {
-        var expectedSubmissionId = RequireExpectedSubmissionId(request.ExpectedSubmissionId);
-        ProjectWorkflowRules.RequireInternalDecisionActor(actor);
-        var reason = (request.Reason ?? string.Empty).Trim();
-        if (reason.Length == 0)
+        await ApplyTransitionAsync(conn, tx, current, project, ProjectStatuses.InProgress, "REOPEN", reason, ip, ct);
+        await using var db = EfDb.Use(conn, tx);
+        await ProjectGroupService.SyncSubprojectFromGroupAsync(db, project.ProjectGroupId, projectId, ct);
+        var latestSupplierFileId = await db.Files
+            .Where(file => file.ProjectId == projectId && file.Status == FileStatuses.Available && file.Direction == "S2C")
+            .MaxAsync(file => (ulong?)file.Id, ct);
+        if (latestSupplierFileId is not null)
         {
-            throw ApiException.BadRequest("驳回原因不能为空");
+            await db.Projects.Where(item => item.Id == projectId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.MaterialReviewStatus, MaterialReviewStatuses.Returned)
+                    .SetProperty(item => item.MaterialReviewFileId, latestSupplierFileId)
+                    .SetProperty(item => item.MaterialReviewReason, reason), ct);
         }
-        if (RuneCount(reason) > 500)
-        {
-            throw ApiException.BadRequest("驳回原因过长（最多 500 字）");
-        }
-        return await DecideAsync(conn, actor, projectId, "REJECT", expectedSubmissionId, reason, ip, ct);
-    }
-
-    internal async Task<ProjectResponse> WithdrawAsync(
-        MySqlConnection conn,
-        CurrentUser actor,
-        ulong projectId,
-        ProjectDecisionRequest request,
-        string? ip,
-        CancellationToken ct)
-    {
-        ProjectWorkflowRules.RequireSupplierWithdrawer(actor);
-        var expectedSubmissionId = RequireExpectedSubmissionId(request.ExpectedSubmissionId);
-        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var (project, current) = await LockWorkflowProjectAsync(conn, tx, actor, projectId, "project:withdraw", ct);
-        ProjectWorkflowRules.RequireSupplierWithdrawer(current);
-        if (project.Status != ProjectStatuses.PendingConfirmation)
-        {
-            throw ApiException.Conflict("项目当前不在待确认状态");
-        }
-        var latestSubmit = await LatestSubmissionAsync(conn, tx, projectId, ct);
-        EnsureExpectedSubmission(latestSubmit, expectedSubmissionId);
-        if (latestSubmit.OperatorId != current.Id)
-        {
-            throw ApiException.Forbidden();
-        }
-        await ApplyTransitionAsync(conn, tx, current, project, ProjectStatuses.InProgress, "WITHDRAW", project.ConfirmSide, null, ip, ct);
-        await ProjectNotificationService.EnqueueWorkflowAsync(conn, tx, project, "WITHDRAW", project.ConfirmSide, null, latestSubmit.OperatorId, current, options.WebBaseUrl, audit, ct);
-        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
-        await tx.CommitAsync(ct);
-        return result;
-    }
-
-    private async Task<ProjectResponse> DecideAsync(
-        MySqlConnection conn,
-        CurrentUser actor,
-        ulong projectId,
-        string action,
-        ulong expectedSubmissionId,
-        string? reason,
-        string? ip,
-        CancellationToken ct)
-    {
-        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-        ProjectWorkflowRules.RequireInternalDecisionActor(current);
-        var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
-        await AccessService.RequirePermissionAsync(conn, tx, current, "project:confirm", ct);
-        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
-        if (project.Status != ProjectStatuses.PendingConfirmation)
-        {
-            throw ApiException.Conflict("项目当前不在待确认状态");
-        }
-        if (project.ConfirmSide != ProjectWorkflowRules.InternalAcceptanceSide)
-        {
-            throw new InvalidOperationException("待确认项目的确认方必须为公司内部");
-        }
-        var latestSubmit = await LatestSubmissionAsync(conn, tx, projectId, ct);
-        EnsureExpectedSubmission(latestSubmit, expectedSubmissionId);
-        var to = action == "CONFIRM" ? ProjectStatuses.Completed : ProjectStatuses.InProgress;
-        await ApplyTransitionAsync(conn, tx, current, project, to, action, project.ConfirmSide, reason, ip, ct);
-        await ProjectNotificationService.EnqueueWorkflowAsync(conn, tx, project, action, project.ConfirmSide, reason, latestSubmit.OperatorId, current, options.WebBaseUrl, audit, ct);
         var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
         return result;
@@ -240,21 +149,19 @@ internal sealed partial class ProjectService
         ProjectRow project,
         string to,
         string action,
-        string? historyConfirmSide,
         string? reason,
         string? ip,
-        CancellationToken ct)
+        CancellationToken ct,
+        ulong? supplierFileId = null)
     {
-        var nextConfirmSide = action == "SUBMIT" ? historyConfirmSide : null;
         await using var db = EfDb.Use(conn, tx);
         var now = await DatabaseUtcNowAsync(db, ct);
         var changed = await db.Projects
             .Where(item => item.Id == project.Id && item.Status == project.Status)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(item => item.Status, to)
-                .SetProperty(item => item.ConfirmSide, nextConfirmSide)
-                // Every transition ends the current material review; rejected, withdrawn or restarted
-                // subprojects need the responsible user to confirm the material again.
+                // Every transition ends the current material review; restarted or reopened subprojects
+                // need the responsible user to review the material again.
                 .SetProperty(item => item.MaterialReviewStatus, (string?)null)
                 .SetProperty(item => item.MaterialReviewFileId, (ulong?)null)
                 .SetProperty(item => item.MaterialReviewReason, (string?)null)
@@ -269,7 +176,6 @@ internal sealed partial class ProjectService
             ToStatus = to,
             Action = action,
             OperatorId = actor.Id,
-            ConfirmSide = historyConfirmSide,
             Reason = reason,
             CreatedAt = now,
         };
@@ -279,64 +185,33 @@ internal sealed partial class ProjectService
         var auditAction = action switch
         {
             "START" => "PROJECT_START",
-            "SUBMIT" => "PROJECT_SUBMIT",
-            "CONFIRM" => "PROJECT_CONFIRM",
-            "REJECT" => "PROJECT_REJECT",
-            "WITHDRAW" => "PROJECT_WITHDRAW",
+            "MATERIAL_APPROVE" => "PROJECT_MATERIAL_APPROVE",
+            "REOPEN" => "PROJECT_REOPEN",
             "TERMINATE" => "PROJECT_TERMINATE",
             "RESTART" => "PROJECT_RESTART",
             _ => throw new InvalidOperationException($"未知项目流程动作: {action}"),
         };
-        await audit.WriteAsync(conn, tx, actor.Id, auditAction, "project", project.Id, new
-        {
-            from = project.Status,
-            to,
-            action,
-            confirmSide = historyConfirmSide,
-            reason,
-            statusLogId,
-        }, ip, ct);
+        object details = supplierFileId is null
+            ? new { from = project.Status, to, action, reason, statusLogId }
+            : new { from = project.Status, to, action, reason, statusLogId, supplierFileId };
+        await audit.WriteAsync(conn, tx, actor.Id, auditAction, "project", project.Id, details, ip, ct);
         await groupStatus.RecalculateAsync(
             conn, tx, project.ProjectGroupId, actor.Id, project.Id, ct, groupAlreadyLocked: true,
-            allowCompletion: action == "CONFIRM");
+            allowCompletion: action == "MATERIAL_APPROVE");
         return statusLogId;
     }
 
-    private static async Task<ProjectStatusLogRow> LatestSubmissionAsync(
-        MySqlConnection conn,
-        MySqlTransaction? tx,
-        ulong projectId,
-        CancellationToken ct)
+    private static string ValidateReviewReason(string? value, string label)
     {
-        await using var db = EfDb.Use(conn, tx);
-        var row = await db.ProjectStatusLogs
-            .Where(log => log.ProjectId == projectId && log.Action == "SUBMIT")
-            .OrderByDescending(log => log.Id)
-            .Select(log => new ProjectStatusLogRow
-            {
-                Id = log.Id,
-                ProjectId = log.ProjectId,
-                OperatorId = log.OperatorId,
-                Action = log.Action,
-            })
-            .FirstOrDefaultAsync(ct);
-        return row ?? throw new InvalidOperationException("待确认项目缺少提交历史");
-    }
-
-    internal static ulong RequireExpectedSubmissionId(ulong? expectedSubmissionId)
-    {
-        if (expectedSubmissionId is null or 0)
+        var reason = (value ?? string.Empty).Trim();
+        if (reason.Length == 0)
         {
-            throw ApiException.BadRequest("expectedSubmissionId 必须为当前待验收提交版本");
+            throw ApiException.BadRequest($"{label}不能为空");
         }
-        return expectedSubmissionId.Value;
-    }
-
-    internal static void EnsureExpectedSubmission(ProjectStatusLogRow latestSubmit, ulong expectedSubmissionId)
-    {
-        if (latestSubmit.Id != expectedSubmissionId)
+        if (RuneCount(reason) > 500)
         {
-            throw ApiException.VersionConflict("验收申请已更新，请刷新项目后重新操作");
+            throw ApiException.BadRequest($"{label}过长（最多 500 字）");
         }
+        return reason;
     }
 }

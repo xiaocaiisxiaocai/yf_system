@@ -4,21 +4,11 @@ using Yf.Api.Infrastructure;
 
 namespace Yf.Api.Modules.Projects;
 
-// Responsible-user review of the supplier's returned material before the supplier may submit for acceptance.
-// See 主项目与子项目协作契约 (资料确认).
+// Responsible-user review of the supplier's returned material: approval completes the subproject, a return sends
+// it back to the supplier. See Robot仿真协作流程调整方案.
 internal sealed partial class ProjectService
 {
-    internal Task<ProjectResponse> ApproveMaterialsAsync(
-        MySqlConnection conn,
-        CurrentUser actor,
-        ulong projectId,
-        ProjectMaterialReviewRequest request,
-        string? ip,
-        CancellationToken ct) =>
-        ReviewMaterialsAsync(conn, actor, projectId, MaterialReviewStatuses.Approved,
-            RequireExpectedSupplierFileId(request.ExpectedSupplierFileId), null, ip, ct);
-
-    internal Task<ProjectResponse> ReturnMaterialsAsync(
+    internal async Task<ProjectResponse> ApproveMaterialsAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong projectId,
@@ -27,34 +17,65 @@ internal sealed partial class ProjectService
         CancellationToken ct)
     {
         var expectedSupplierFileId = RequireExpectedSupplierFileId(request.ExpectedSupplierFileId);
-        var reason = (request.Reason ?? string.Empty).Trim();
-        if (reason.Length == 0)
-        {
-            throw ApiException.BadRequest("退回原因不能为空");
-        }
-        if (RuneCount(reason) > 500)
-        {
-            throw ApiException.BadRequest("退回原因过长（最多 500 字）");
-        }
-        return ReviewMaterialsAsync(conn, actor, projectId, MaterialReviewStatuses.Returned,
-            expectedSupplierFileId, reason, ip, ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var (project, current, latestSupplierFileId) =
+            await LockMaterialReviewAsync(conn, tx, actor, projectId, expectedSupplierFileId, ct);
+        await ApplyTransitionAsync(conn, tx, current, project, ProjectStatuses.Completed, "MATERIAL_APPROVE", null, ip, ct,
+            supplierFileId: latestSupplierFileId);
+        await ProjectNotificationService.EnqueueMaterialReviewAsync(
+            conn, tx, project, approved: true, null, current, options.WebBaseUrl, audit, ct);
+        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
+        await tx.CommitAsync(ct);
+        return result;
     }
 
-    private async Task<ProjectResponse> ReviewMaterialsAsync(
+    internal async Task<ProjectResponse> ReturnMaterialsAsync(
         MySqlConnection conn,
         CurrentUser actor,
         ulong projectId,
-        string decision,
-        ulong expectedSupplierFileId,
-        string? reason,
+        ProjectMaterialReviewRequest request,
         string? ip,
+        CancellationToken ct)
+    {
+        var expectedSupplierFileId = RequireExpectedSupplierFileId(request.ExpectedSupplierFileId);
+        var reason = ValidateReviewReason(request.Reason, "退回原因");
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var (project, current, latestSupplierFileId) =
+            await LockMaterialReviewAsync(conn, tx, actor, projectId, expectedSupplierFileId, ct);
+        if (ProjectWorkflowRules.EffectiveMaterialReview(project) == MaterialReviewStatuses.Returned)
+        {
+            throw ApiException.Conflict("资料已退回");
+        }
+
+        await using var db = EfDb.Use(conn, tx);
+        var now = await DatabaseUtcNowAsync(db, ct);
+        await db.Projects.Where(item => item.Id == projectId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.MaterialReviewStatus, MaterialReviewStatuses.Returned)
+                .SetProperty(item => item.MaterialReviewFileId, latestSupplierFileId)
+                .SetProperty(item => item.MaterialReviewReason, reason)
+                .SetProperty(item => item.UpdatedAt, now), ct);
+        await audit.WriteAsync(conn, tx, current.Id, "PROJECT_MATERIAL_RETURN",
+            "project", projectId, new { supplierFileId = latestSupplierFileId, reason }, ip, ct);
+        await ProjectNotificationService.EnqueueMaterialReviewAsync(
+            conn, tx, project, approved: false, reason, current, options.WebBaseUrl, audit, ct);
+        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
+        await tx.CommitAsync(ct);
+        return result;
+    }
+
+    private async Task<(ProjectRow Project, CurrentUser Current, ulong LatestSupplierFileId)> LockMaterialReviewAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        CurrentUser actor,
+        ulong projectId,
+        ulong expectedSupplierFileId,
         CancellationToken ct)
     {
         if (!actor.IsInternal)
         {
             throw ApiException.Forbidden("资料确认仅限项目负责人");
         }
-        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         // The project row lock serializes with upload merges, so the latest supplier file read below is stable.
         var (project, current) = await LockWorkflowProjectAsync(conn, tx, actor, projectId, "project:list", ct);
         if (project.ResponsibleUserId != current.Id)
@@ -73,31 +94,12 @@ internal sealed partial class ProjectService
         {
             throw ApiException.VersionConflict("厂商回传资料已更新，请刷新后重新确认");
         }
-        if (ProjectWorkflowRules.EffectiveMaterialReview(project) == decision)
+        // Only the supplier's own uploads matter: reviewing while it still sends material would cover unseen files.
+        if (await CountActiveUploadsAsync(conn, tx, projectId, true, ct) > 0)
         {
-            throw ApiException.Conflict(decision == MaterialReviewStatuses.Approved ? "资料已确认 OK" : "资料已退回");
+            throw ApiException.Conflict("厂商仍有上传中的资料，请等待上传完成后再确认");
         }
-        if (await CountActiveUploadsAsync(conn, tx, projectId, ct) > 0)
-        {
-            throw ApiException.Conflict("项目仍有活动上传会话，请等待上传完成后再确认资料");
-        }
-
-        await using var db = EfDb.Use(conn, tx);
-        var now = await DatabaseUtcNowAsync(db, ct);
-        await db.Projects.Where(item => item.Id == projectId)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(item => item.MaterialReviewStatus, decision)
-                .SetProperty(item => item.MaterialReviewFileId, latestSupplierFileId)
-                .SetProperty(item => item.MaterialReviewReason, reason)
-                .SetProperty(item => item.UpdatedAt, now), ct);
-        await audit.WriteAsync(conn, tx, current.Id,
-            decision == MaterialReviewStatuses.Approved ? "PROJECT_MATERIAL_APPROVE" : "PROJECT_MATERIAL_RETURN",
-            "project", projectId, new { supplierFileId = latestSupplierFileId, reason }, ip, ct);
-        await ProjectNotificationService.EnqueueMaterialReviewAsync(
-            conn, tx, project, decision, reason, current, options.WebBaseUrl, audit, ct);
-        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
-        await tx.CommitAsync(ct);
-        return result;
+        return (project, current, latestSupplierFileId);
     }
 
     internal static ulong RequireExpectedSupplierFileId(ulong? expectedSupplierFileId)

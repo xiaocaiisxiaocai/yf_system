@@ -10,7 +10,7 @@ namespace Yf.Api.Modules.Projects;
 internal sealed class CollaborationService
 {
     private static readonly string[] MeaningfulProjectActions =
-        ["START", "RESTART", "SUBMIT", "CONFIRM", "REJECT", "WITHDRAW", "TERMINATE", "MATERIAL_APPROVE", "MATERIAL_RETURN"];
+        ["START", "RESTART", "TERMINATE", "REOPEN", "MATERIAL_APPROVE", "MATERIAL_RETURN"];
 
     internal async Task<CollaborationSummaryResponse> SummaryAsync(
         MySqlConnection conn,
@@ -20,9 +20,6 @@ internal sealed class CollaborationService
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
-        var canReceivePendingAcceptance = ProjectWorkflowRules.CanReceivePendingAcceptance(
-            current,
-            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
         if (!current.IsInternal && current.SupplierId is null) throw ApiException.OutOfScope();
         await using var db = EfDb.Use(conn, tx);
         var canViewAll = current.IsInternal
@@ -42,8 +39,7 @@ internal sealed class CollaborationService
                    COALESCE(SUM(CASE WHEN
                        ((pa.activity_type='FILE' AND pa.action='UPLOAD')
                          OR (pa.activity_type='MESSAGE' AND pa.action='CREATE')
-                         OR (pa.activity_type='PROJECT' AND pa.action IN ('START','RESTART','SUBMIT','CONFIRM','REJECT','WITHDRAW','TERMINATE','MATERIAL_APPROVE','MATERIAL_RETURN')))
-                       AND (pa.activity_type<>'PROJECT' OR pa.action<>'SUBMIT' OR {canReceivePendingAcceptance})
+                         OR (pa.activity_type='PROJECT' AND pa.action IN ('START','RESTART','TERMINATE','REOPEN','MATERIAL_APPROVE','MATERIAL_RETURN')))
                        AND (pa.activity_type<>'FILE' OR pa.target_id IS NULL OR EXISTS (SELECT 1 FROM files f
                          WHERE f.id=pa.target_id AND f.project_id=pa.project_id AND f.status={FileStatuses.Available}))
                        AND (pa.activity_type<>'MESSAGE' OR pa.target_id IS NULL OR EXISTS (SELECT 1 FROM messages m
@@ -73,9 +69,6 @@ internal sealed class CollaborationService
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
-        var canReceivePendingAcceptance = ProjectWorkflowRules.CanReceivePendingAcceptance(
-            current,
-            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
         await using var db = EfDb.Use(conn, tx);
         var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
         var cutoff = await UnreadWindow.CutoffAsync(db, ct);
@@ -83,8 +76,7 @@ internal sealed class CollaborationService
         // the audit/history tables but is not part of this hot collaboration feed.
         var activities = MeaningfulActivities(
             db.ProjectActivities.Where(activity => activity.OccurredAt >= cutoff),
-            current.Id,
-            canReceivePendingAcceptance);
+            current.Id);
         // Join the visible projects once: the same join supplies both the scope check and the project name.
         var query =
             from activity in activities
@@ -162,9 +154,6 @@ internal sealed class CollaborationService
             return;
         }
 
-        var canReceivePendingAcceptance = ProjectWorkflowRules.CanReceivePendingAcceptance(
-            current,
-            await ProjectAccessService.HasPermissionAsync(conn, tx, current.Id, "project:confirm", ct));
         await using var db = EfDb.Use(conn, tx);
 
         // Marking read only writes the caller's own receipt rows, so no activity or project row is
@@ -172,7 +161,7 @@ internal sealed class CollaborationService
         // (activity_id,user_id) primary key makes a concurrent duplicate a no-op via INSERT IGNORE.
         var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
         var validated = await VisibleMeaningfulActivities(
-                db, visibleProjects, current.Id, canReceivePendingAcceptance)
+                db, visibleProjects, current.Id)
             .Where(activity => Enumerable.Contains(ids, activity.Id))
             .Select(activity => activity.Id)
             .ToArrayAsync(ct);
@@ -198,28 +187,23 @@ internal sealed class CollaborationService
     private static IQueryable<ProjectActivity> VisibleMeaningfulActivities(
         YfDbContext db,
         IQueryable<Yf.Api.Infrastructure.Entities.Project> visibleProjects,
-        ulong userId,
-        bool canReceivePendingAcceptance) =>
+        ulong userId) =>
         MeaningfulActivities(
             from activity in db.ProjectActivities
             join project in visibleProjects on activity.ProjectId equals project.Id
             select activity,
-            userId,
-            canReceivePendingAcceptance);
+            userId);
 
     /// <summary>Activities that count as collaboration notifications for <paramref name="userId"/>; scope is applied by the caller.</summary>
     private static IQueryable<ProjectActivity> MeaningfulActivities(
         IQueryable<ProjectActivity> source,
-        ulong userId,
-        bool canReceivePendingAcceptance) =>
+        ulong userId) =>
         from activity in source
         where activity.ActorId != null && activity.ActorId != userId
             && ((activity.ActivityType == "FILE" && activity.Action == "UPLOAD")
                 || (activity.ActivityType == "MESSAGE" && activity.Action == "CREATE")
                 || (activity.ActivityType == "PROJECT"
                     && Enumerable.Contains(MeaningfulProjectActions, activity.Action)))
-            && (activity.ActivityType != "PROJECT" || activity.Action != "SUBMIT"
-                || canReceivePendingAcceptance)
         select activity;
 
     private static string Revision(ulong userId, CollaborationFingerprintRow row)

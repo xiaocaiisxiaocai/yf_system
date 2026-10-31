@@ -125,25 +125,20 @@ public sealed class ProjectStatusRequest
     public string? Status { get; init; }
 }
 
-public sealed class ProjectSubmitRequest
-{
-    [JsonPropertyName("confirmSide")]
-    public string? ConfirmSide { get; init; }
-}
-
-public sealed class ProjectRejectRequest
-{
-    [JsonPropertyName("reason")]
-    public string? Reason { get; init; }
-
-    [JsonPropertyName("expectedSubmissionId")]
-    public ulong? ExpectedSubmissionId { get; init; }
-}
-
 public sealed class ProjectGroupTransferRequest
 {
     [JsonPropertyName("responsibleUserId")]
     public ulong? ResponsibleUserId { get; init; }
+}
+
+public sealed class ProjectReopenRequest
+{
+    /// <summary>The updatedAt the responsible user saw; a newer change fails with 409 / 40903.</summary>
+    [JsonPropertyName("expectedUpdatedAt")]
+    public DateTime? ExpectedUpdatedAt { get; init; }
+
+    [JsonPropertyName("reason")]
+    public string? Reason { get; init; }
 }
 
 public sealed class ProjectMaterialReviewRequest
@@ -155,12 +150,6 @@ public sealed class ProjectMaterialReviewRequest
     /// <summary>Required when returning the material.</summary>
     [JsonPropertyName("reason")]
     public string? Reason { get; init; }
-}
-
-public sealed class ProjectDecisionRequest
-{
-    [JsonPropertyName("expectedSubmissionId")]
-    public ulong? ExpectedSubmissionId { get; init; }
 }
 
 public sealed class MessageCreateRequest
@@ -201,8 +190,6 @@ internal sealed class ProjectRow
     public string? Description { get; init; }
     public ulong SupplierId { get; init; }
     public string Status { get; init; } = string.Empty;
-    public string? ConfirmSide { get; init; }
-    public ulong? LatestSubmissionId { get; init; }
     public ulong CreatedBy { get; init; }
     public DateTime CreatedAt { get; init; }
     public DateTime UpdatedAt { get; init; }
@@ -269,7 +256,7 @@ internal sealed class ProjectGroupRow
     public DateTime UpdatedAt { get; init; }
     public ulong SubprojectCount { get; init; }
     public ulong CompletedCount { get; init; }
-    public ulong PendingCount { get; init; }
+    public ulong MaterialPendingCount { get; init; }
     public ulong TerminatedCount { get; init; }
     public ulong UnreadMessages { get; set; }
 }
@@ -285,19 +272,6 @@ internal sealed class UserRow
     public ulong? DepartmentId { get; init; }
     public string Status { get; init; } = string.Empty;
     public string? DepartmentName { get; init; }
-}
-
-internal sealed class ProjectStatusLogRow
-{
-    public ulong Id { get; init; }
-    public ulong ProjectId { get; init; }
-    public string? FromStatus { get; init; }
-    public string ToStatus { get; init; } = string.Empty;
-    public string Action { get; init; } = string.Empty;
-    public ulong OperatorId { get; init; }
-    public string? ConfirmSide { get; init; }
-    public string? Reason { get; init; }
-    public DateTime CreatedAt { get; init; }
 }
 
 internal sealed class MessageRow
@@ -388,8 +362,6 @@ internal static class ProjectJson
         SupplierId = row.SupplierId,
         SupplierName = row.SupplierName,
         Status = row.Status,
-        ConfirmSide = row.ConfirmSide,
-        LatestSubmissionId = row.LatestSubmissionId,
         CreatedBy = row.CreatedBy,
         CreatedByName = row.CreatedByName,
         WorkOrderNos = row.WorkOrderNos,
@@ -452,7 +424,7 @@ internal static class ProjectJson
         Utc(row.UpdatedAt),
         row.SubprojectCount,
         row.CompletedCount,
-        row.PendingCount,
+        row.MaterialPendingCount,
         row.TerminatedCount,
         row.UnreadMessages);
 

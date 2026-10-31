@@ -151,15 +151,9 @@ public sealed class OwnerAccessTests
         await AssertBadRequestAsync(() => groups.TransferAsync(conn, admin, ProjectGroupId,
             new ProjectGroupTransferRequest(), null, ct));
 
-        await conn.ExecuteAsync(new CommandDefinition(
-            "UPDATE projects SET status='PENDING_CONFIRMATION',confirm_side='COMPANY' WHERE id=@Id",
-            new { Id = ProjectId }, cancellationToken: ct));
-        var pending = await Assert.ThrowsAsync<ApiException>(() => groups.TransferAsync(conn, admin, ProjectGroupId,
-            new ProjectGroupTransferRequest { ResponsibleUserId = NewOwnerId }, null, ct));
-        Assert.Equal(409, pending.Status);
         // Ended subprojects move too: access follows the owner.
         await conn.ExecuteAsync(new CommandDefinition(
-            "UPDATE projects SET status='COMPLETED',confirm_side=NULL WHERE id=@Id",
+            "UPDATE projects SET status='COMPLETED' WHERE id=@Id",
             new { Id = ProjectId }, cancellationToken: ct));
 
         using (var transferred = Json(await groups.TransferAsync(conn, admin, ProjectGroupId,

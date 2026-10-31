@@ -43,6 +43,7 @@ public sealed class SchemaShapeTests
         "20261022085527_AddMessageClientId",
         "20261030063545_AddProjectMaterialReview",
         "20261030084731_AddSupplierContactsAndSignatures",
+        "20261031120322_RetireAcceptanceWorkflow",
     ];
 
     [Fact]
@@ -315,8 +316,9 @@ public sealed class SchemaShapeTests
             Assert.False(await TableExistsAsync(conn, "seaql_migrations", ct));
             Assert.Equal("admin", await conn.ExecuteScalarAsync<string>("SELECT employee_no FROM users"));
             Assert.Equal("系统管理员", await conn.ExecuteScalarAsync<string>("SELECT name FROM roles"));
-            Assert.Equal(53, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
-            Assert.Equal(53, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(50, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
+            Assert.Equal(50, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code IN ('project:submit','project:confirm','project:withdraw')"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='log:delete'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE id BETWEEN 100 AND 113"));
             Assert.Equal(16, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='oem' OR code LIKE 'oem:%' OR code='dept:leader_manage'"));
@@ -687,9 +689,9 @@ public sealed class SchemaShapeTests
 
             var grants = new Dictionary<ulong, string[]>
             {
-                [2] = ["dashboard", "project:list", "project:create", "project:update", "project:status", "project:view_all", "file:upload", "file:download", "file:preview", "message:create", "project:submit", "project:confirm", "project:withdraw"],
-                [3] = ["dashboard", "project:list", "file:upload", "file:download", "file:preview", "message:create", "project:submit", "project:confirm"],
-                [4] = ["dashboard", "project:list", "file:upload", "file:download", "file:preview", "message:create", "project:submit", "project:withdraw"],
+                [2] = ["dashboard", "project:list", "project:create", "project:update", "project:status", "project:view_all", "file:upload", "file:download", "file:preview", "message:create"],
+                [3] = ["dashboard", "project:list", "file:upload", "file:download", "file:preview", "message:create"],
+                [4] = ["dashboard", "project:list", "file:upload", "file:download", "file:preview", "message:create"],
             };
             var permissions = await db.Permissions.AsNoTracking().ToDictionaryAsync(item => item.Code, ct);
             db.RolePermissions.AddRange(grants.SelectMany(role => role.Value.Select(code =>

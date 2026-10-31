@@ -155,7 +155,7 @@ public sealed class MailDeliveryTests
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task LegacyProjectSubmissionWithoutVersionedRecipientIsCancelledBeforeSmtp()
+    public async Task RetiredProjectSubmissionMailIsCancelledBeforeSmtp()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
@@ -487,30 +487,6 @@ public sealed class MailDeliveryTests
             "SELECT last_error FROM email_outbox WHERE id=1", cancellationToken: ct)));
         Assert.Contains("RECIPIENT_ADDRESS_STALE", await check.ExecuteScalarAsync<string>(new CommandDefinition(
             "SELECT detail FROM audit_logs WHERE action='EMAIL_CANCELLED_STALE' AND target_id='1'", cancellationToken: ct)));
-    }
-
-    [Fact(Timeout = 30_000)]
-    public async Task WorkflowCancellationDoesNotOverwriteAnInFlightSmtpLease()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
-        await using var conn = await scope.Database.OpenAsync(ct);
-        await conn.ExecuteAsync(new CommandDefinition(
-            "UPDATE email_outbox SET event_type='PROJECT_SUBMITTED',project_id=7,status='SENDING',next_attempt_at=UTC_TIMESTAMP()+INTERVAL 10 MINUTE WHERE id=1",
-            cancellationToken: ct));
-        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
-
-        var changed = await ProjectNotificationService.CancelPendingAcceptanceAsync(
-            conn,
-            tx,
-            7,
-            ProjectNotificationService.SupersededAcceptanceMailReason,
-            ct);
-        await tx.CommitAsync(ct);
-
-        Assert.Equal(0, changed);
-        Assert.Equal("SENDING", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
-            "SELECT status FROM email_outbox WHERE id=1", cancellationToken: ct)));
     }
 
     [Fact(Timeout = 60_000)]

@@ -11,7 +11,6 @@ public sealed record ProjectAccess(
     ulong SupplierId,
     ulong CreatedBy,
     string Status,
-    string? ConfirmSide,
     ulong? ResponsibleUserId = null);
 
 public static class ProjectAccessService
@@ -137,20 +136,20 @@ public static class ProjectAccessService
                 throw ApiException.NotFound();
             var locked = await db.Database.SqlQuery<LockedProjectAccess>($"""
                 SELECT id AS Id,project_group_id AS ProjectGroupId,supplier_id AS SupplierId,
-                       created_by AS CreatedBy,status AS Status,confirm_side AS ConfirmSide,
+                       created_by AS CreatedBy,status AS Status,
                        responsible_user_id AS ResponsibleUserId
                 FROM projects WHERE id={projectId} FOR UPDATE
                 """).SingleOrDefaultAsync(ct);
             if (locked is null) throw ApiException.NotFound();
             return await AuthorizeAsync(db, current, new ProjectAccess(
                 locked.Id, locked.ProjectGroupId, locked.SupplierId, locked.CreatedBy,
-                locked.Status, locked.ConfirmSide, locked.ResponsibleUserId), ct);
+                locked.Status, locked.ResponsibleUserId), ct);
         }
         else
         {
             var row = await db.Projects.Where(item => item.Id == projectId).Select(item => new ProjectAccess(
                 item.Id, (ulong?)item.ProjectGroupId, item.SupplierId, item.CreatedBy, item.Status,
-                item.ConfirmSide, item.ResponsibleUserId)).SingleOrDefaultAsync(ct);
+                item.ResponsibleUserId)).SingleOrDefaultAsync(ct);
             if (row is null) throw ApiException.NotFound();
             return await AuthorizeAsync(db, current, row, ct);
         }
@@ -180,7 +179,6 @@ public static class ProjectAccessService
         public ulong SupplierId { get; init; }
         public ulong CreatedBy { get; init; }
         public string Status { get; init; } = "";
-        public string? ConfirmSide { get; init; }
         public ulong? ResponsibleUserId { get; init; }
     }
 }
@@ -189,7 +187,6 @@ internal static class ProjectStatuses
 {
     internal const string Draft = "DRAFT";
     internal const string InProgress = "IN_PROGRESS";
-    internal const string PendingConfirmation = "PENDING_CONFIRMATION";
     internal const string Completed = "COMPLETED";
     internal const string Terminated = "TERMINATED";
 }
@@ -201,7 +198,7 @@ internal static class ProjectUploadSessionStatuses
 }
 
 /// <summary>
-/// Which upload sessions still block submit, terminate, and copy, and who may abort one.
+/// Which upload sessions still block material review, terminate, and copy, and who may abort one.
 /// Expired <c>UPLOADING</c> rows do not block; <c>MERGING</c> always does.
 /// </summary>
 internal static class UploadActivity
@@ -216,7 +213,6 @@ internal static class UploadActivity
         bool canUpload,
         bool canDeleteFiles,
         bool canChangeStatus,
-        bool canSubmit,
         ulong uploaderId,
         string uploaderUserType,
         ulong? uploaderSupplierId)
@@ -228,7 +224,6 @@ internal static class UploadActivity
             && actor.SupplierId is ulong supplierId
             && uploaderUserType == UserTypes.Supplier
             && uploaderSupplierId == supplierId
-            && canUpload
-            && canSubmit;
+            && canUpload;
     }
 }

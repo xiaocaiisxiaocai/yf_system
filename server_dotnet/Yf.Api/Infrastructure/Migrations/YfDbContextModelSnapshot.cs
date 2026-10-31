@@ -802,11 +802,6 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
 
-                    b.Property<string>("ConfirmSide")
-                        .HasMaxLength(16)
-                        .HasColumnType("varchar(16)")
-                        .HasColumnName("confirm_side");
-
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime(3)")

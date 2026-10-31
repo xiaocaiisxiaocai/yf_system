@@ -120,11 +120,10 @@ async function approveMaterial(reviewerContext, reviewerToken, projectId) {
   }, reviewerToken)).json();
 }
 
-async function returnApprovedMaterial(supplierContext, supplierToken, reviewerContext, reviewerToken, projectId, fileName) {
-  const file = await uploadFixture(
+// Supplier-returned (S2C) material; it waits for the responsible user, whose approval completes the subproject.
+async function returnSupplierMaterial(supplierContext, supplierToken, projectId, fileName) {
+  return uploadFixture(
     supplierContext, supplierToken, projectId, fileName, Buffer.from('supplier returned material|' + fileName));
-  await approveMaterial(reviewerContext, reviewerToken, projectId);
-  return file;
 }
 
 module.exports = {
@@ -135,7 +134,7 @@ module.exports = {
   fileFingerprint,
   initUpload,
   putChunk,
-  returnApprovedMaterial,
+  returnSupplierMaterial,
   sha256,
   uploadFixture,
 };

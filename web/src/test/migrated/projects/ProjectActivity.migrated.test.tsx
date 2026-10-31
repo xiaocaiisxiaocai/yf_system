@@ -31,8 +31,6 @@ function response(list: unknown[], nextCursor: string | null = null, status = 'I
       nextCursor,
       summary: {
         status,
-        pendingConfirmation: status === 'IN_PROGRESS',
-        confirmSide: status === 'IN_PROGRESS' ? 'COMPANY' : null,
         lastActivityAt: '2026-09-09T00:00:01Z',
       },
     },
@@ -83,18 +81,18 @@ describe('ProjectActivityPanel migrated behavior', () => {
     await waitFor(() => expect(document.querySelector('[data-activity-id="4"]')).toBeInTheDocument())
   })
 
-  it('completed legacy supplier acceptance remains readable without appearing as pending internal acceptance', async () => {
+  it('retired acceptance activities stay readable in the history of a completed subproject', async () => {
     mocks.get.mockResolvedValue({
       data: {
         list: [row(6, 'PROJECT', { action: 'CONFIRM' })],
         nextCursor: null,
-        summary: { status: 'COMPLETED', pendingConfirmation: false, confirmSide: 'SUPPLIER', lastActivityAt: null },
+        summary: { status: 'COMPLETED', lastActivityAt: null },
       },
     })
     render(<ProjectActivityPanel projectId={1} />)
 
     expect(await screen.findByText('验收通过')).toBeInTheDocument()
-    expect(screen.getByText('无待验收申请')).toBeInTheDocument()
+    expect(screen.getByText('已完成')).toBeInTheDocument()
     expect(screen.queryByText('项目动态加载失败')).not.toBeInTheDocument()
   })
 

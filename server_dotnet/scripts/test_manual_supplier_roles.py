@@ -41,13 +41,12 @@ def run_manual_supplier_role_checks(admin, conn, check):
     check('supplier account permission can read suppliers and manage accounts without supplier mutation authority',
           any(row['id'] == supplier['id'] for row in visible_suppliers['list']))
 
-    # Submit/withdraw are supplier-only, so an internal operator may grant them without holding them;
-    # every other code in the supplier role must still be within the operator's own permissions.
-    workflow_role = _role(admin, ['dashboard', 'project:list', 'file:upload', 'file:download', 'message:create',
-                                  'project:submit', 'project:withdraw'])
-    beyond_operator = _role(admin, ['dashboard', 'project:list', 'file:preview', 'project:submit'])
+    # No supplier-only code is exempt any more: every code in the supplier role must be within the
+    # operator's own permissions (file:preview is the one the operator lacks).
+    workflow_role = _role(admin, ['dashboard', 'project:list', 'file:upload', 'file:download', 'message:create'])
+    beyond_operator = _role(admin, ['dashboard', 'project:list', 'file:preview'])
     operator_options = {role['id'] for role in account_operator.call('GET', '/api/v1/admin/supplier-role-options')}
-    check('supplier role options ignore supplier-only codes but keep the delegation ceiling',
+    check('supplier role options keep the delegation ceiling',
           workflow_role in operator_options and beyond_operator not in operator_options)
 
     def operator_create(role_id, expected=200):
@@ -61,12 +60,11 @@ def run_manual_supplier_role_checks(admin, conn, check):
     permission_ids = {item['code']: item['id'] for item in account_operator.call('GET', '/api/v1/permissions')}
     account_operator.call('PUT', f'/api/v1/admin/roles/{workflow_role}/permissions', {
         'permissionIds': [permission_ids[code] for code in (
-            'dashboard', 'project:list', 'file:upload', 'file:download', 'message:create',
-            'project:submit', 'project:withdraw')],
+            'dashboard', 'project:list', 'file:upload', 'file:download', 'message:create')],
     })
     account_operator.call('PUT', f"/api/v1/admin/supplier-accounts/{delegated['id']}/status", {'status': 'DISABLED'})
     reenabled = account_operator.call('PUT', f"/api/v1/admin/supplier-accounts/{delegated['id']}/status", {'status': 'ACTIVE'})
-    check('supplier account operator can create and re-enable accounts holding submit/withdraw',
+    check('supplier account operator can create and re-enable accounts within its own permissions',
           delegated['roleId'] == workflow_role and reenabled['status'] == 'ACTIVE')
 
     protected_password = _password()

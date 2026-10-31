@@ -83,10 +83,6 @@ public sealed class MessageReceiptTests
         var project = new ProjectRow { Id = 1001, SupplierId = 100, ResponsibleUserId = 101 };
         var participants = await ProjectNotificationService.ParticipantsAsync(conn, null, project, ct);
         Assert.Equal([101UL, 201UL, 202UL], participants.Select(user => user.Id).ToArray());
-        var reviewers = await ProjectReviewerService.ListAsync(conn, null, project, ct);
-        Assert.Contains(reviewers, user => user.Id == 101);
-        Assert.Contains(reviewers, user => user.Id == 104);
-        Assert.DoesNotContain(reviewers, user => user.Id == 103);
         await using (var authorizationTx = await AppDb.BeginTransactionAsync(conn, ct))
         {
             Assert.True(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, authorizationTx, 1001, 101, ct));

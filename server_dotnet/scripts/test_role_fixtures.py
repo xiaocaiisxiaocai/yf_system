@@ -8,20 +8,19 @@ initialization result.
 
 ADMIN_ROLE_NAME = "系统管理员"
 LEGACY_TEST_ROLE_NAMES = ("项目管理员", "内部成员", "供应商人员")
-TEST_ROLE_DENIED_GRANTS = {"供应商人员": {"project:confirm"}}
+TEST_ROLE_DENIED_GRANTS = {}
 TEST_ROLES = {
     "项目管理员": {"id": 2, "codes": (
         "dashboard", "project:list", "project:create", "project:update", "project:status",
         "project:view_all", "file:upload", "file:download", "file:preview", "message:create",
-        "project:submit", "project:confirm", "project:withdraw",
     )},
     "内部成员": {"id": 3, "codes": (
         "dashboard", "project:list", "file:upload", "file:download", "file:preview",
-        "message:create", "project:submit", "project:confirm",
+        "message:create",
     )},
     "供应商人员": {"id": 4, "codes": (
         "dashboard", "project:list", "file:upload", "file:download", "file:preview",
-        "message:create", "project:submit", "project:withdraw",
+        "message:create",
     )},
 }
 

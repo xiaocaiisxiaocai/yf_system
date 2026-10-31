@@ -206,7 +206,7 @@ async function initializePassword(browser, user) {
         await pendingCard.getByRole('link', { name: firstLabel, exact: true }).first().waitFor();
       } else {
         assert.equal(initialPending.total, 0, 'empty first pending page must report zero total');
-        await pendingCard.getByText('暂无内部待验收子项目', { exact: true }).waitFor();
+        await pendingCard.getByText('暂无待确认的资料', { exact: true }).waitFor();
       }
       const payload = loginRequest.postDataJSON();
       assert.equal(payload.employeeNo, 'admin');

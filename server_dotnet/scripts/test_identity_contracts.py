@@ -205,8 +205,9 @@ def run_identity_checks(client, Client, conn, check):
           limited_roles[limited_role_manager["id"]]["canManage"] is True
           and limited_roles[admin_role["id"]]["canManage"] is False
           and limited_permissions["role:manage"]["grantable"] is True
-          and limited_permissions["project:confirm"]["grantable"] is False
-          and limited_permissions["project:confirm"]["supplierAssignable"] is False)
+          and limited_permissions["project:view_all"]["grantable"] is False
+          and limited_permissions["project:view_all"]["supplierAssignable"] is False
+          and not {"project:submit", "project:confirm", "project:withdraw"} & set(limited_permissions))
     delegated_role = client.call("POST", "/api/v1/admin/roles", {
         "name": "委派用户管理员-" + secrets.token_hex(4), "description": "isolated identity contract"
     })

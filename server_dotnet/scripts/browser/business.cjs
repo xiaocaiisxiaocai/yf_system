@@ -51,7 +51,17 @@ async function confirm(page, label, url) {
     () => page.locator('.arco-popconfirm:visible').last()
       .getByRole('button', { name: '确定', exact: true }).click(),
   );
-  if (url.endsWith('/submit')) assert(Number.isInteger(result.latestSubmissionId) && result.latestSubmissionId > 0);
+  return result;
+}
+
+// Material approval completes the subproject, so it goes through a dialog instead of a popconfirm.
+async function approveMaterial(page, projectId) {
+  await page.getByRole('button', { name: '资料确认 OK', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '资料确认 OK' });
+  await dialog.getByText('厂商回传文件', { exact: false }).waitFor();
+  const result = await action(page, '/projects/' + projectId + '/materials/approve', 'POST',
+    () => dialog.getByRole('button', { name: '确认并完成', exact: true }).click());
+  assert.equal(result.status, 'COMPLETED');
   return result;
 }
 
@@ -280,12 +290,13 @@ async function preview(page, name, kind, label) {
       }
     });
 
-    await record('负责人确认或退回回传资料后供应商才能提交验收', async () => {
+    await record('负责人退回资料、确认 OK 即完成，重开后再次确认', async () => {
       const project = projects.a;
       await navigate(vendorA, '/projects/' + project.id);
       await vendorA.getByText('资料待确认', { exact: true }).waitFor();
-      assert(await vendorA.getByRole('button', { name: '提交公司验收', exact: true }).isDisabled());
-      assert.equal(await vendorA.getByRole('button', { name: '资料确认 OK', exact: true }).count(), 0);
+      for (const name of ['资料确认 OK', '退回资料', '重开', '提交公司验收']) {
+        assert.equal(await vendorA.getByRole('button', { name, exact: true }).count(), 0);
+      }
       await navigate(internal, '/projects/' + project.id);
       await internal.getByRole('button', { name: '退回资料', exact: true }).click();
       await internal.getByPlaceholder('请说明需要厂商补充或修改的资料').fill('自动验收：请补充动作流程');
@@ -294,65 +305,38 @@ async function preview(page, name, kind, label) {
       await internal.getByText('资料已退回', { exact: true }).waitFor();
       await navigate(vendorA, '/projects/' + project.id);
       await vendorA.getByText('退回原因：自动验收：请补充动作流程', { exact: true }).waitFor();
-      assert(await vendorA.getByRole('button', { name: '提交公司验收', exact: true }).isDisabled());
-      await navigate(internal, '/projects/' + project.id);
-      await confirm(internal, '资料确认 OK', '/projects/' + project.id + '/materials/approve');
-      await internal.getByText('资料已确认 OK', { exact: true }).waitFor();
-    });
 
-    await record('供应商提交并自行撤回、内部驳回、重新提交并内部验收完成', async () => {
-      const project = projects.a;
-      await navigate(vendorA, '/projects/' + project.id);
-      const submitted = await confirm(vendorA, '提交公司验收', '/projects/' + project.id + '/submit');
-      assert.equal(submitted.confirmSide, 'COMPANY');
-      await vendorA.getByText('验收方：公司', { exact: true }).waitFor();
-      assert.equal(await vendorA.getByRole('button', { name: '验收通过', exact: true }).count(), 0);
-      assert.equal(await vendorA.getByRole('button', { name: '验收驳回', exact: true }).count(), 0);
       await navigate(internal, '/projects/' + project.id);
-      await internal.getByText('验收方：公司', { exact: true }).waitFor();
-      assert.equal(await internal.getByRole('button', { name: '撤回', exact: true }).count(), 0);
-      const internalSession = creator;
-      await json(internalSession.context, internalSession.token, 'POST', '/projects/' + project.id + '/withdraw', {
-        expectedSubmissionId: submitted.latestSubmissionId,
-      }, 403);
+      await approveMaterial(internal, project.id);
+      await internal.getByText('已完成', { exact: true }).first().waitFor();
+
+      // Reopening is an after-the-fact return: the supplier sees the reason and the owner confirms again.
+      await internal.getByRole('button', { name: '重开', exact: true }).click();
+      await internal.getByPlaceholder('请说明需要厂商返工的内容').fill('自动验收：需要返工');
+      const reopened = await action(internal, '/projects/' + project.id + '/reopen', 'POST',
+        () => internal.getByRole('button', { name: '确认重开', exact: true }).click());
+      assert.equal(reopened.status, 'IN_PROGRESS');
+      assert.equal(reopened.materialReviewStatus, 'RETURNED');
       await navigate(vendorA, '/projects/' + project.id);
-      await confirm(vendorA, '撤回', '/projects/' + project.id + '/withdraw');
+      await vendorA.getByText('退回原因：自动验收：需要返工', { exact: true }).waitFor();
       await navigate(internal, '/projects/' + project.id);
-      await confirm(internal, '资料确认 OK', '/projects/' + project.id + '/materials/approve');
-      await navigate(vendorA, '/projects/' + project.id);
-      await confirm(vendorA, '提交公司验收', '/projects/' + project.id + '/submit');
-      await navigate(internal, '/projects/' + project.id);
-      await internal.getByRole('button', { name: '验收驳回', exact: true }).click();
-      await internal.getByPlaceholder('请填写驳回原因').fill('自动验收：请补充确认');
-      await action(internal, '/projects/' + project.id + '/reject', 'POST',
-        () => internal.getByRole('button', { name: '确认驳回', exact: true }).click());
-      await internal.getByText('上次驳回：自动验收：请补充确认', { exact: true }).waitFor();
-      await confirm(internal, '资料确认 OK', '/projects/' + project.id + '/materials/approve');
-      await navigate(vendorA, '/projects/' + project.id);
-      await confirm(vendorA, '提交公司验收', '/projects/' + project.id + '/submit');
-      await navigate(internal, '/projects/' + project.id);
-      await confirm(internal, '验收通过', '/projects/' + project.id + '/confirm');
+      await approveMaterial(internal, project.id);
       await internal.getByText('已完成', { exact: true }).first().waitFor();
       const done = await json(admin.context, admin.token, 'GET', '/projects/' + project.id);
       assert.equal(done.status, 'COMPLETED');
       await internal.screenshot({ path: OUT + '/a-completed.png', fullPage: true });
     });
 
-    await record('供应商提交、公司确认完成及公司项目动态', async () => {
+    await record('负责人确认资料完成子项目及公司项目动态', async () => {
       const project = projects.b;
-      await navigate(internal, '/projects/' + project.id);
-      await confirm(internal, '资料确认 OK', '/projects/' + project.id + '/materials/approve');
       await navigate(vendorB, '/projects/' + project.id);
-      const submitted = await confirm(vendorB, '提交公司验收', '/projects/' + project.id + '/submit');
-      assert.equal(submitted.confirmSide, 'COMPANY');
-      await vendorB.getByText('验收方：公司', { exact: true }).waitFor();
-      assert.equal(await vendorB.getByRole('button', { name: '验收通过', exact: true }).count(), 0);
-      assert.equal(await vendorB.getByRole('button', { name: '验收驳回', exact: true }).count(), 0);
+      await vendorB.getByText('资料待确认', { exact: true }).waitFor();
+      assert.equal(await vendorB.getByRole('button', { name: '资料确认 OK', exact: true }).count(), 0);
       await navigate(internal, '/projects/' + project.id);
-      await confirm(internal, '验收通过', '/projects/' + project.id + '/confirm');
+      await approveMaterial(internal, project.id);
       await internal.getByText('已完成', { exact: true }).first().waitFor();
       await internal.getByRole('tab', { name: '项目动态', exact: true }).click();
-      await internal.getByText('验收通过', { exact: false }).first().waitFor();
+      await internal.getByText('确认资料 OK 并完成', { exact: false }).first().waitFor();
       await internal.screenshot({ path: OUT + '/b-completed-activity.png', fullPage: true });
     });
 

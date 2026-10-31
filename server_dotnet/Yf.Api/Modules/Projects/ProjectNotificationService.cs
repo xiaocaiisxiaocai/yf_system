@@ -8,7 +8,6 @@ namespace Yf.Api.Modules.Projects;
 
 internal static class ProjectNotificationService
 {
-    internal const string SupersededAcceptanceMailReason = "验收申请已失效或收件人已无验收权限，通知已取消";
     internal const string StaleProjectMailReason = "收件人已无项目访问权限，通知已取消";
 
     /// <summary>Message e-mails for one recipient and subproject are merged within this window.</summary>
@@ -80,117 +79,19 @@ internal static class ProjectNotificationService
     private static string SafeMailLine(string value, int maximumRunes) =>
         Yf.Api.Modules.Files.UploadService.SafeMailLine(value, maximumRunes);
 
-    internal static async Task EnqueueWorkflowAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        ProjectRow project,
-        string action,
-        string? confirmSide,
-        string? reason,
-        ulong? latestSubmitterId,
-        CurrentUser actor,
-        string baseUrl,
-        AuditService audit,
-        CancellationToken ct)
-    {
-        var (eventType, verb) = action switch
-        {
-            "SUBMIT" => ("PROJECT_SUBMITTED", "已提交验收"),
-            "CONFIRM" => ("PROJECT_CONFIRMED", "已确认完成"),
-            "REJECT" => ("PROJECT_REJECTED", "已驳回"),
-            "WITHDRAW" => ("PROJECT_WITHDRAWN", "已撤回验收"),
-            _ => (string.Empty, string.Empty),
-        };
-        if (eventType.Length == 0)
-        {
-            return;
-        }
-        if (action == "SUBMIT" && confirmSide != ProjectWorkflowRules.InternalAcceptanceSide)
-        {
-            throw new InvalidOperationException("项目提交通知的确认方必须为公司内部");
-        }
-
-        var latestSubmissionId = action is "SUBMIT" or "CONFIRM" or "REJECT" or "WITHDRAW"
-            ? await LatestSubmissionIdAsync(conn, tx, project.Id, ct)
-            : null;
-        if (action == "SUBMIT")
-        {
-            await EnqueuePendingAcceptanceAsync(
-                conn,
-                tx,
-                project,
-                latestSubmissionId ?? throw new InvalidOperationException("项目提交通知缺少提交记录"),
-                actor,
-                baseUrl,
-                audit,
-                ct);
-            return;
-        }
-        if (action is "CONFIRM" or "REJECT" or "WITHDRAW")
-        {
-            await CancelPendingAcceptanceAsync(conn, tx, project.Id, SupersededAcceptanceMailReason, ct);
-        }
-
-        var sideLine = confirmSide switch
-        {
-            "COMPANY" => "\n确认方：公司",
-            "SUPPLIER" => "\n确认方：供应商",
-            _ => string.Empty,
-        };
-        var reasonLine = reason is null ? string.Empty : $"\n驳回原因：{reason}";
-        var targetUsers = latestSubmitterId is null ? Array.Empty<ulong>() : [latestSubmitterId.Value];
-        var targetSide = action switch
-        {
-            "SUBMIT" => ProjectWorkflowRules.InternalAcceptanceSide,
-            "WITHDRAW" => confirmSide,
-            _ => null,
-        };
-        if (action == "SUBMIT" && targetSide is null)
-        {
-            throw new InvalidOperationException("项目提交通知缺少确认方");
-        }
-        if (action is "CONFIRM" or "REJECT" or "WITHDRAW" && latestSubmitterId is null)
-        {
-            throw new InvalidOperationException("项目结果通知缺少最近提交者");
-        }
-
-        IReadOnlyCollection<string> requiredSidePermissions = action switch
-        {
-            "SUBMIT" => ["project:list", "project:confirm"],
-            "WITHDRAW" => ["project:list"],
-            _ => [],
-        };
-        var targetUrl = ProjectUrl(baseUrl, project.Id, "activity");
-        await EnqueueAsync(
-            conn,
-            tx,
-            project,
-            eventType,
-            targetSide,
-            requiredSidePermissions,
-            targetUsers,
-            action == "WITHDRAW",
-            action == "WITHDRAW" ? null : actor.Id,
-            $"[协作平台] 项目「{project.Name}」{verb}",
-            $"项目：{project.Name}\n结果：{verb}{sideLine}\n操作人：账号 {actor.EmployeeNo}{reasonLine}\n\n请登录平台查看：{targetUrl}\n\n（本邮件由系统自动发送）",
-            ct,
-            audit);
-    }
-
-    /// <summary>Tells the supplier side that the responsible user approved or returned its returned material.</summary>
+    /// <summary>Tells the supplier side that the responsible user approved (completing the subproject) or returned its material.</summary>
     internal static Task EnqueueMaterialReviewAsync(
         MySqlConnection conn,
         MySqlTransaction tx,
         ProjectRow project,
-        string decision,
+        bool approved,
         string? reason,
         CurrentUser actor,
         string baseUrl,
         AuditService audit,
         CancellationToken ct)
     {
-        var approved = decision == MaterialReviewStatuses.Approved;
-        var verb = approved ? "回传资料已确认 OK，可以提交验收" : "回传资料已被退回";
+        var verb = approved ? "回传资料已确认 OK，子项目已完成" : "回传资料已被退回";
         var reasonLine = reason is null ? string.Empty : $"\n退回原因：{reason}";
         return EnqueueAsync(
             conn,
@@ -206,137 +107,6 @@ internal static class ProjectNotificationService
             $"项目：{project.Name}\n结果：{verb}\n操作人：账号 {actor.EmployeeNo}{reasonLine}\n\n请登录平台查看：{ProjectUrl(baseUrl, project.Id, "activity")}\n\n（本邮件由系统自动发送）",
             ct,
             audit);
-    }
-
-    internal static async Task EnqueuePendingAcceptanceAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        ProjectRow project,
-        ulong latestSubmissionId,
-        CurrentUser submitter,
-        string baseUrl,
-        AuditService audit,
-        CancellationToken ct)
-    {
-        var policy = await EmailNotificationPolicy.LoadAsync(conn, tx, ct);
-        if (!policy.Allows("PROJECT_SUBMITTED", UserTypes.Internal))
-        {
-            return;
-        }
-
-        var reviewers = await ProjectReviewerService.ListAsync(conn, tx, project, ct);
-        var targetUrl = ProjectUrl(baseUrl, project.Id, "activity");
-        var subject = $"[协作平台] 项目「{project.Name}」已提交验收";
-        var body = $"项目：{project.Name}\n结果：已提交验收\n确认方：公司\n操作人：账号 {submitter.EmployeeNo}\n\n请登录平台查看：{targetUrl}\n\n（本邮件由系统自动发送）";
-        var seenRecipients = new HashSet<ulong>();
-        await using var db = EfDb.Use(conn, tx);
-        foreach (var reviewer in reviewers)
-        {
-            if (reviewer.Id == submitter.Id)
-            {
-                continue;
-            }
-            if (string.IsNullOrWhiteSpace(reviewer.Email))
-            {
-                await WriteMissingEmailAuditAsync(conn, tx, audit, "PROJECT_SUBMITTED", reviewer, ct);
-                continue;
-            }
-            if (!seenRecipients.Add(reviewer.Id)) continue;
-
-            // This upsert is intentionally atomic: a cancelled request may be re-submitted
-            // while another process observes the same unique dedupe key.
-            await db.Database.ExecuteSqlInterpolatedAsync($$"""
-                INSERT INTO email_outbox
-                    (event_type,project_id,dedupe_key,recipient_user_id,recipient_email,
-                     subject,body,status,retry_count,next_attempt_at,last_error,sent_at,created_at)
-                VALUES
-                    ('PROJECT_SUBMITTED',{{project.Id}},{{AcceptanceDedupeKey(project.Id, latestSubmissionId, reviewer.Id)}},
-                     {{reviewer.Id}},{{reviewer.Email}},{{subject}},{{body}},'PENDING',0,NULL,NULL,NULL,UTC_TIMESTAMP(3))
-                ON DUPLICATE KEY UPDATE
-                    event_type=IF(sent_at IS NULL AND status='CANCELLED',VALUES(event_type),event_type),
-                    project_id=IF(sent_at IS NULL AND status='CANCELLED',VALUES(project_id),project_id),
-                    recipient_user_id=IF(sent_at IS NULL AND status='CANCELLED',VALUES(recipient_user_id),recipient_user_id),
-                    recipient_email=IF(sent_at IS NULL AND status='CANCELLED',VALUES(recipient_email),recipient_email),
-                    subject=IF(sent_at IS NULL AND status='CANCELLED',VALUES(subject),subject),
-                    body=IF(sent_at IS NULL AND status='CANCELLED',VALUES(body),body),
-                    retry_count=IF(sent_at IS NULL AND status='CANCELLED',0,retry_count),
-                    next_attempt_at=IF(sent_at IS NULL AND status='CANCELLED',NULL,next_attempt_at),
-                    last_error=IF(sent_at IS NULL AND status='CANCELLED',NULL,last_error),
-                    status=IF(sent_at IS NULL AND status='CANCELLED','PENDING',status)
-                """, ct);
-        }
-    }
-
-    internal static string AcceptanceDedupeKey(ulong projectId, ulong submissionId, ulong recipientId) =>
-        $"project-acceptance:{projectId}:{submissionId}:{recipientId}";
-
-    internal static bool TryParseAcceptanceDedupeKey(
-        string? value,
-        out ulong projectId,
-        out ulong submissionId,
-        out ulong recipientId)
-    {
-        projectId = 0;
-        submissionId = 0;
-        recipientId = 0;
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-        var parts = value.Split(':');
-        return parts.Length == 4
-            && parts[0] == "project-acceptance"
-            && ulong.TryParse(parts[1], out projectId)
-            && ulong.TryParse(parts[2], out submissionId)
-            && ulong.TryParse(parts[3], out recipientId);
-    }
-
-    internal static async Task<bool> IsCurrentPendingAcceptanceAsync(
-        MySqlConnection conn,
-        MySqlTransaction? tx,
-        ulong projectId,
-        ulong submissionId,
-        ulong recipientId,
-        CancellationToken ct)
-    {
-        await using var db = EfDb.Use(conn, tx);
-        var project = await ProjectQueries.Rows(db)
-            .SingleOrDefaultAsync(row => row.Id == projectId, ct);
-        if (project is null
-            || project.Status != ProjectStatuses.PendingConfirmation
-            || project.ConfirmSide != ProjectWorkflowRules.InternalAcceptanceSide)
-        {
-            return false;
-        }
-        if (project.LatestSubmissionId != submissionId)
-        {
-            return false;
-        }
-        var reviewers = await ProjectReviewerService.ListAsync(conn, tx, project, ct);
-        return reviewers.Any(reviewer => reviewer.Id == recipientId);
-    }
-
-    internal static async Task<int> CancelPendingAcceptanceAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        ulong projectId,
-        string reason,
-        CancellationToken ct)
-    {
-        // A SENDING row may already have crossed the SMTP side-effect boundary.
-        // Its worker must record the accepted/failure result; an expired lease is
-        // re-claimed later and cancelled by the worker's current-request check.
-        await using var db = EfDb.Use(conn, tx);
-        var cancellableStatuses = new[] { MailStatuses.Pending, MailStatuses.Failed };
-        return await db.EmailOutbox
-            .Where(mail => mail.ProjectId == projectId
-                && mail.EventType == "PROJECT_SUBMITTED"
-                && mail.SentAt == null
-                && Enumerable.Contains(cancellableStatuses, mail.Status))
-            .ExecuteUpdateAsync(update => update
-                .SetProperty(mail => mail.Status, MailStatuses.Cancelled)
-                .SetProperty(mail => mail.NextAttemptAt, (DateTime?)null)
-                .SetProperty(mail => mail.LastError, reason), ct);
     }
 
     internal static async Task<IReadOnlyList<UserRow>> ParticipantsAsync(
@@ -652,19 +422,6 @@ internal static class ProjectNotificationService
             },
             null,
             ct);
-
-    private static async Task<ulong?> LatestSubmissionIdAsync(
-        MySqlConnection conn,
-        MySqlTransaction? tx,
-        ulong projectId,
-        CancellationToken ct)
-    {
-        await using var db = EfDb.Use(conn, tx);
-        return await db.ProjectStatusLogs
-            .Where(log => log.ProjectId == projectId && log.Action == "SUBMIT")
-            .Select(log => (ulong?)log.Id)
-            .MaxAsync(ct);
-    }
 
     private static string SideUserType(string side) => side == "SUPPLIER" ? UserTypes.Supplier : UserTypes.Internal;
 

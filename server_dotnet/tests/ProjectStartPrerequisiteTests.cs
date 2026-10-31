@@ -12,7 +12,7 @@ public sealed class ProjectStartPrerequisiteTests
         "项目所属厂商尚未添加启用的用户，请先添加或启用厂商用户后再开始项目";
 
     [Fact(Timeout = 90_000)]
-    public async Task StartAndRestartRequireAnActiveSupplierWithAnActiveSubmitter()
+    public async Task StartAndRestartRequireAnActiveSupplierWithAnActiveUploader()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync(
@@ -82,23 +82,23 @@ public sealed class ProjectStartPrerequisiteTests
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
             VALUES(9712,'active-project-supplier','unused','启用厂商用户','active-supplier@example.test','SUPPLIER',9701,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
             """, cancellationToken: ct));
-        // An active account that cannot submit for acceptance does not qualify (no role / inactive role).
+        // An active account that cannot upload files does not qualify (no role / inactive role).
         await AssertStartRejectedWithoutSideEffectsAsync(conn, projects, actor, projectIds[0], ct,
-            ProjectService.SupplierWithoutSubmitterStartMessage);
+            ProjectService.SupplierWithoutUploaderStartMessage);
         await conn.ExecuteAsync(new CommandDefinition("""
             INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at)
-            VALUES(9720,'无提交权限的厂商角色',0,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            VALUES(9720,'无上传权限的厂商角色',0,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO role_permissions(role_id,permission_id)
             SELECT 9720,id FROM permissions WHERE code IN ('dashboard','project:list','file:download');
             INSERT INTO user_roles(user_id,role_id) VALUES(9712,9720);
             """, cancellationToken: ct));
         await AssertStartRejectedWithoutSideEffectsAsync(conn, projects, actor, projectIds[0], ct,
-            ProjectService.SupplierWithoutSubmitterStartMessage);
+            ProjectService.SupplierWithoutUploaderStartMessage);
         await conn.ExecuteAsync(new CommandDefinition(
             "UPDATE roles SET status='DISABLED' WHERE id=4; UPDATE user_roles SET role_id=4 WHERE user_id=9712",
             cancellationToken: ct));
         await AssertStartRejectedWithoutSideEffectsAsync(conn, projects, actor, projectIds[0], ct,
-            ProjectService.SupplierWithoutSubmitterStartMessage);
+            ProjectService.SupplierWithoutUploaderStartMessage);
         await conn.ExecuteAsync(new CommandDefinition(
             "UPDATE roles SET status='ACTIVE' WHERE id=4", cancellationToken: ct));
         // A disabled supplier company blocks start even with a qualifying account, with its own message.

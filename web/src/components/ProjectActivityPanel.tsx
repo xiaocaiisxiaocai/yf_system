@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Empty, Select, Spin, Tag, Timeline, Typography } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../api/client'
-import { type ConfirmSide, PROJECT_STATUS, fmtTime } from '../api/types'
+import { PROJECT_STATUS, fmtTime } from '../api/types'
 import type { ApiResponses } from '../api/types'
 
 type ActivityType = 'PROJECT' | 'FILE' | 'MESSAGE'
@@ -20,8 +20,6 @@ export interface ProjectActivity {
 
 interface ActivitySummary {
   status: string
-  pendingConfirmation: boolean
-  confirmSide: ConfirmSide | null
   lastActivityAt: string | null
 }
 
@@ -40,8 +38,6 @@ interface Props {
 
 const EMPTY_SUMMARY: ActivitySummary = {
   status: '',
-  pendingConfirmation: false,
-  confirmSide: null,
   lastActivityAt: null,
 }
 
@@ -108,8 +104,7 @@ function parseResponse(value: unknown): ActivityResponse {
   if (parsedList.some((item) => item === null)) throw new Error('项目动态条目格式错误')
   const list = parsedList.filter((item): item is ProjectActivity => item !== null)
   const rawSummary = value.summary
-  if (typeof rawSummary.status !== 'string' || typeof rawSummary.pendingConfirmation !== 'boolean'
-    || (rawSummary.confirmSide !== null && rawSummary.confirmSide !== 'COMPANY' && rawSummary.confirmSide !== 'SUPPLIER')
+  if (typeof rawSummary.status !== 'string'
     || (rawSummary.lastActivityAt !== null && typeof rawSummary.lastActivityAt !== 'string')) {
     throw new Error('项目动态概览格式错误')
   }
@@ -118,8 +113,6 @@ function parseResponse(value: unknown): ActivityResponse {
     nextCursor: value.nextCursor && value.nextCursor.length > 0 ? value.nextCursor : null,
     summary: {
       status: rawSummary.status,
-      pendingConfirmation: rawSummary.pendingConfirmation,
-      confirmSide: rawSummary.confirmSide as ConfirmSide | null,
       lastActivityAt: rawSummary.lastActivityAt,
     },
   }
@@ -285,12 +278,6 @@ export default function ProjectActivityPanel({ projectId, active = true, onNavig
         <div className="project-activity-summary-item">
           <span className="project-activity-summary-label">当前状态</span>
           <strong className="project-activity-summary-value">{statusText}</strong>
-        </div>
-        <div className="project-activity-summary-item">
-          <span className="project-activity-summary-label">内部验收</span>
-          <strong className="project-activity-summary-value">
-            {summary.pendingConfirmation ? '待公司内部验收' : '无待验收申请'}
-          </strong>
         </div>
         <div className="project-activity-summary-item">
           <span className="project-activity-summary-label">最近动态</span>

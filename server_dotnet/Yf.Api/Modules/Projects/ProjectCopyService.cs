@@ -304,7 +304,6 @@ internal sealed class ProjectCopyService(
                 Description = currentSource.Description,
                 SupplierId = currentGroup.SupplierId,
                 Status = ProjectStatuses.Draft,
-                ConfirmSide = null,
                 CreatedBy = current.Id,
                 CreatedAt = createdAt,
                 UpdatedAt = createdAt,
@@ -773,7 +772,7 @@ internal sealed class ProjectCopyService(
     private static bool SameProjectSnapshot(ProjectRow a, ProjectRow b) => a.Id == b.Id
         && a.ProjectGroupId == b.ProjectGroupId && a.Name == b.Name
         && a.Description == b.Description && a.SupplierId == b.SupplierId && a.Status == b.Status
-        && a.ConfirmSide == b.ConfirmSide && a.UpdatedAt == b.UpdatedAt && a.MachineModel == b.MachineModel
+        && a.UpdatedAt == b.UpdatedAt && a.MachineModel == b.MachineModel
         && a.RobotPartId == b.RobotPartId
         && a.ResponsibleUserId == b.ResponsibleUserId && a.SectionId == b.SectionId && a.PriorityId == b.PriorityId
         && a.RobotTypeId == b.RobotTypeId && a.RobotOwnerName == b.RobotOwnerName

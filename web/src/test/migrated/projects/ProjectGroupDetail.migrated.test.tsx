@@ -46,7 +46,7 @@ const group = {
   workOrderNos: [],
   subprojectCount: 1,
   completedCount: 0,
-  pendingCount: 0,
+  materialPendingCount: 0,
   terminatedCount: 0,
 }
 

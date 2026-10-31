@@ -4,8 +4,6 @@ namespace Yf.Api.Modules.Projects;
 
 internal static class ProjectWorkflowRules
 {
-    internal const string InternalAcceptanceSide = "COMPANY";
-
     internal static (string To, string Action) ManagementTransition(string from, string requested) =>
         (from, requested) switch
         {
@@ -37,45 +35,10 @@ internal static class ProjectWorkflowRules
         }
     }
 
-    internal static string NormalizeConfirmSide(string? value)
-    {
-        if (value is null)
-        {
-            return InternalAcceptanceSide;
-        }
-
-        return value.Trim() switch
-        {
-            InternalAcceptanceSide => InternalAcceptanceSide,
-            _ => throw ApiException.BadRequest("项目验收仅支持公司内部确认，confirmSide 必须为 COMPANY"),
-        };
-    }
-
-    internal static void RequireInternalDecisionActor(CurrentUser actor)
-    {
-        if (!actor.IsInternal)
-        {
-            throw ApiException.Forbidden("项目验收确认和驳回仅限公司内部用户");
-        }
-    }
-
-    internal static void RequireSupplierSubmitter(CurrentUser actor)
-    {
-        if (actor.UserType != UserTypes.Supplier)
-        {
-            throw ApiException.Forbidden("项目验收仅允许供应商用户提交");
-        }
-    }
-
-    internal static void RequireSupplierWithdrawer(CurrentUser actor)
-    {
-        if (actor.UserType != UserTypes.Supplier)
-            throw ApiException.Forbidden("项目验收仅允许供应商用户撤回");
-    }
-
     /// <summary>
-    /// A stored review only counts while it covers the latest available supplier file, so a new supplier
-    /// upload (or removal of the reviewed file) sends the material back to PENDING without extra writes.
+    /// A stored return only counts while it covers the latest available supplier file, so a new supplier
+    /// upload (or removal of the returned file) sends the material back to PENDING without extra writes.
+    /// Approval completes the subproject, so it never appears as an in-progress review state.
     /// </summary>
     internal static string? EffectiveMaterialReview(ProjectRow row) =>
         EffectiveMaterialReview(row.Status, row.MaterialReviewStatus, row.MaterialReviewFileId, row.LatestSupplierFileId);
@@ -85,20 +48,15 @@ internal static class ProjectWorkflowRules
     {
         if (projectStatus != ProjectStatuses.InProgress) return null;
         if (latestSupplierFileId is null) return MaterialReviewStatuses.NoMaterial;
-        return reviewStatus is MaterialReviewStatuses.Approved or MaterialReviewStatuses.Returned
-            && reviewFileId == latestSupplierFileId
-            ? reviewStatus
+        return reviewStatus == MaterialReviewStatuses.Returned && reviewFileId == latestSupplierFileId
+            ? MaterialReviewStatuses.Returned
             : MaterialReviewStatuses.Pending;
     }
-
-    internal static bool CanReceivePendingAcceptance(CurrentUser actor, bool hasConfirmPermission) =>
-        actor.IsInternal && hasConfirmPermission;
 }
 
 internal static class MaterialReviewStatuses
 {
     internal const string NoMaterial = "NO_MATERIAL";
     internal const string Pending = "PENDING";
-    internal const string Approved = "APPROVED";
     internal const string Returned = "RETURNED";
 }

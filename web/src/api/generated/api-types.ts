@@ -97,15 +97,14 @@ export interface DashboardPendingProject {
   name: string
   projectGroupId: number
   projectGroupName: string
-  status: string
-  confirmSide: string
+  materialReviewStatus: string
   updatedAt: string
 }
 
 export interface DashboardSummaryResponse {
   projectCount: number
   activeProjectCount: number
-  pendingConfirmations: number
+  pendingTasks: number
   unreadMessages: number
   recentMessages: Array<DashboardMessage>
 }
@@ -965,8 +964,6 @@ export interface ProjectActivityPage {
 
 export interface ProjectActivitySummary {
   status: string
-  pendingConfirmation: boolean
-  confirmSide: string | null
   lastActivityAt: string | null
 }
 
@@ -1020,51 +1017,6 @@ export interface ProjectCopyRequest {
 export interface ProjectCopySourceRef {
   projectId: number
   name: string
-}
-
-export interface ProjectDecisionRequest {
-  expectedSubmissionId?: number | null
-}
-
-export interface ProjectDetailResponse {
-  id: number
-  projectGroupId: number
-  projectGroupName: string
-  name: string
-  description: string | null
-  supplierId: number
-  supplierName: string | null
-  status: string
-  confirmSide: string | null
-  latestSubmissionId: number | null
-  createdBy: number
-  createdByName: string | null
-  workOrderNos: Array<string>
-  machineModel: string | null
-  robotPartId: number | null
-  robotPartNumber: string | null
-  robotModelName: string | null
-  responsibleUserId: number | null
-  responsibleUserEmployeeNo: string | null
-  responsibleUserName: string | null
-  robotOwnerName: string | null
-  sectionId: number | null
-  sectionName: string | null
-  priorityId: number | null
-  priorityName: string | null
-  robotTypeId: number | null
-  robotTypeName: string | null
-  expectedCompletionDate: string | null
-  materialReviewStatus: string | null
-  materialReviewReason: string | null
-  latestSupplierFileId: number | null
-  hasCopyHistory: boolean
-  unreadMessages: number
-  copySource: ProjectCopySourceRef | null
-  createdAt: string
-  updatedAt: string
-  rejectReason: string | null
-  latestSubmitterId: number | null
 }
 
 export interface ProjectDictionaryResponse {
@@ -1122,7 +1074,7 @@ export interface ProjectGroupResponse {
   updatedAt: string
   subprojectCount: number
   completedCount: number
-  pendingCount: number
+  materialPendingCount: number
   terminatedCount: number
   unreadMessages: number
 }
@@ -1144,9 +1096,9 @@ export interface ProjectOwnerOption {
   sectionName: string | null
 }
 
-export interface ProjectRejectRequest {
+export interface ProjectReopenRequest {
+  expectedUpdatedAt?: string | null
   reason?: string | null
-  expectedSubmissionId?: number | null
 }
 
 export interface ProjectResponse {
@@ -1158,8 +1110,6 @@ export interface ProjectResponse {
   supplierId: number
   supplierName: string | null
   status: string
-  confirmSide: string | null
-  latestSubmissionId: number | null
   createdBy: number
   createdByName: string | null
   workOrderNos: Array<string>
@@ -1192,15 +1142,9 @@ export interface ProjectStatusRequest {
   status?: string | null
 }
 
-export interface ProjectSubmitRequest {
-  confirmSide?: string | null
-}
-
 export interface ProjectSummaryResponse {
   unreadMessages: number
   activityRevision: string
-  pendingConfirmation: boolean
-  latestSubmissionId: number | null
 }
 
 export interface ProjectUploadSessionItemResponse {
@@ -1666,10 +1610,9 @@ export interface ApiResponses {
   "PUT /project-groups/{id}/responsible": ProjectGroupResponse
   "GET /project-owner-options": Array<ProjectOwnerOption>
   "DELETE /projects/{id}": EmptyResponse
-  "GET /projects/{id}": ProjectDetailResponse
+  "GET /projects/{id}": ProjectResponse
   "PUT /projects/{id}": ProjectResponse
   "GET /projects/{id}/activities": ProjectActivityPage
-  "POST /projects/{id}/confirm": ProjectResponse
   "POST /projects/{id}/copy": ProjectCopyJobResponse
   "GET /projects/{id}/copy-history": ProjectCopyHistoryResponse
   "POST /projects/{id}/materials/approve": ProjectResponse
@@ -1677,11 +1620,9 @@ export interface ApiResponses {
   "GET /projects/{id}/message-receipts": Array<MessageReceiptResponse>
   "GET /projects/{id}/messages": PageResponseOfMessageResponse
   "POST /projects/{id}/messages": MessageResponse
-  "POST /projects/{id}/reject": ProjectResponse
+  "POST /projects/{id}/reopen": ProjectResponse
   "PUT /projects/{id}/status": ProjectResponse
-  "POST /projects/{id}/submit": ProjectResponse
   "GET /projects/{id}/summary": ProjectSummaryResponse
-  "POST /projects/{id}/withdraw": ProjectResponse
   "GET /projects/{projectId}/files": PageResponseOfFileListItem
   "GET /projects/{projectId}/upload-sessions": ProjectUploadSessionListResponse
   "GET /robot-part-supplier-options": Array<RobotPartSupplierOption>

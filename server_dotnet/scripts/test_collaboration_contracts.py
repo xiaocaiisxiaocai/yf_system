@@ -249,7 +249,7 @@ def run_collaboration_checks(admin, Client, conn, check):
     section_id = _section(admin, secrets.token_hex(5))
     role_id = _role(admin, [
         "project:list", "project:create", "dashboard",
-        "message:create", "file:upload", "project:submit",
+        "message:create", "file:upload",
     ])
     first_user, first = _internal(admin, Client, conn, role_id, "协作甲", section_id)
     second_user, second = _internal(admin, Client, conn, role_id, "协作乙", section_id)
@@ -381,6 +381,10 @@ def run_collaboration_checks(admin, Client, conn, check):
         first, project_id, "协作链接.pdf", b"collaboration-link", ensure_step=True)
     _upload_chunks(first_supplier_client, project_id, "协作回传.pdf", b"collaboration-return")
     supplier_before_approval = first_supplier_client.call("GET", "/api/v1/collaboration/summary")
+    reviewer_before_approval = first.call("GET", "/api/v1/collaboration/summary")
+    outsider_before_approval = second.call("GET", "/api/v1/collaboration/summary")
+    outsider_notifications_before = second.call(
+        "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false")
     _approve_materials(first, project_id)
     supplier_after_approval = first_supplier_client.call("GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=true")
     check(
@@ -392,38 +396,19 @@ def run_collaboration_checks(admin, Client, conn, check):
             for item in supplier_after_approval["list"]
         ),
     )
-    supplier_before_submit = first_supplier_client.call("GET", "/api/v1/collaboration/summary")
-    supplier_notifications_before = first_supplier_client.call(
-        "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false")
-    internal_nonconfirmer_before = second.call("GET", "/api/v1/collaboration/summary")
-    internal_nonconfirmer_notifications_before = second.call(
-        "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false")
-    first_supplier_client.call("POST", f"/api/v1/projects/{project_id}/submit", {})
-    supplier_after_submit = first_supplier_client.call("GET", "/api/v1/collaboration/summary")
-    supplier_notifications_after = first_supplier_client.call(
-        "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false")
-    internal_nonconfirmer_after = second.call("GET", "/api/v1/collaboration/summary")
-    internal_nonconfirmer_notifications_after = second.call(
+    reviewer_after_approval = first.call("GET", "/api/v1/collaboration/summary")
+    outsider_after_approval = second.call("GET", "/api/v1/collaboration/summary")
+    outsider_notifications_after = second.call(
         "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false")
     check(
-        "non-confirmers observe submission revision without receiving internal acceptance notifications",
-        supplier_after_submit["latestId"] > supplier_before_submit["latestId"]
-        and supplier_after_submit["revision"] != supplier_before_submit["revision"]
-        and supplier_after_submit["unreadCount"] == supplier_before_submit["unreadCount"]
-        and supplier_notifications_after["total"] == supplier_notifications_before["total"]
-        and all(
-            item["type"] != "PROJECT" or item["action"] != "SUBMIT"
-            for item in supplier_notifications_after["list"]
-        )
-        and internal_nonconfirmer_after["latestId"] == internal_nonconfirmer_before["latestId"]
-        and internal_nonconfirmer_after["revision"] == internal_nonconfirmer_before["revision"]
-        and internal_nonconfirmer_after["unreadCount"] == internal_nonconfirmer_before["unreadCount"]
-        and internal_nonconfirmer_notifications_after["total"]
-        == internal_nonconfirmer_notifications_before["total"]
-        and all(
-            item["type"] != "PROJECT" or item["action"] != "SUBMIT"
-            for item in internal_nonconfirmer_notifications_after["list"]
-        ),
+        "the approver observes the revision without notifying itself and invisible users see nothing",
+        reviewer_after_approval["latestId"] > reviewer_before_approval["latestId"]
+        and reviewer_after_approval["revision"] != reviewer_before_approval["revision"]
+        and reviewer_after_approval["unreadCount"] == reviewer_before_approval["unreadCount"]
+        and outsider_after_approval["latestId"] == outsider_before_approval["latestId"]
+        and outsider_after_approval["revision"] == outsider_before_approval["revision"]
+        and outsider_after_approval["unreadCount"] == outsider_before_approval["unreadCount"]
+        and outsider_notifications_after["total"] == outsider_notifications_before["total"],
     )
     with conn.cursor() as cursor:
         cursor.execute(
@@ -436,5 +421,6 @@ def run_collaboration_checks(admin, Client, conn, check):
               for event, body in outbox)
           and any(event == "FILE_UPLOADED" and f"/projects/{project_id}?tab=files&target={file_id}" in body
                   for event, body in outbox)
-          and any(event == "PROJECT_SUBMITTED" and f"/projects/{project_id}?tab=activity" in body
-                  for event, body in outbox))
+          and any(event == "PROJECT_MATERIAL_APPROVED" and f"/projects/{project_id}?tab=activity" in body
+                  for event, body in outbox)
+          and not any(event == "PROJECT_SUBMITTED" for event, _ in outbox))

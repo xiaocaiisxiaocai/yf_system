@@ -295,10 +295,6 @@ export default function ProjectList() {
   }
 
   const openEdit = (group: ProjectGroup) => {
-    if (group.pendingCount > 0) {
-      Message.info('存在待公司验收的子项目，验收处理完成后才能编辑主项目资料')
-      return
-    }
     setEditing(group); setEditConflict(false)
     form.setFieldsValue({
       name: group.name, description: group.description, supplierId: group.supplierId, workOrderNos: group.workOrderNos,
@@ -426,20 +422,17 @@ export default function ProjectList() {
     { key: 'priorityName', title: '优先级', dataIndex: 'priorityName', align: 'center' as const, render: cellText },
     { key: 'expectedCompletionDate', title: '需求完成时间', dataIndex: 'expectedCompletionDate', align: 'center' as const, render: cellText },
     { key: 'progress', title: '子项目进度', align: 'center' as const, render: (_: unknown, row: ProjectGroup) => (
-      <div className="project-group-progress" title={`已验收 ${row.completedCount} / ${row.subprojectCount}`}>
+      <div className="project-group-progress" title={`已完成 ${row.completedCount} / ${row.subprojectCount}`}>
         <span>{row.completedCount}/{row.subprojectCount}</span>
-        {row.pendingCount > 0 && <Tag size="small" color="orange">待验收 {row.pendingCount}</Tag>}
+        {row.materialPendingCount > 0 && <Tag size="small" color="orange">资料待确认 {row.materialPendingCount}</Tag>}
       </div>
     ) },
     { key: 'status', title: '状态', dataIndex: 'status', align: 'center' as const, render: (value: string) => <Tag color={PROJECT_STATUS[value]?.color}>{PROJECT_STATUS[value]?.text || value}</Tag> },
     { key: 'unreadMessages', title: '未读留言', dataIndex: 'unreadMessages', align: 'center' as const, render: (value: number) => value > 0 ? <Badge count={value} /> : '-' },
     { key: 'actions', title: '操作', render: (_: unknown, row: ProjectGroup) => actionSlots([
       <Button key="enter" size="mini" type="text" onClick={() => navigate(`/project-groups/${row.id}`)}>进入</Button>,
-      isInternal && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(row.status) && (row.pendingCount > 0 ? (
-        <Tooltip key="edit" content={`有 ${row.pendingCount} 个子项目待公司验收，暂不能编辑主项目资料`}>
-          <span><Button size="mini" type="text" disabled>编辑</Button></span>
-        </Tooltip>
-      ) : <Button key="edit" size="mini" type="text" onClick={() => openEdit(row)}>编辑</Button>),
+      isInternal && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(row.status)
+        && <Button key="edit" size="mini" type="text" onClick={() => openEdit(row)}>编辑</Button>,
       canDelete && row.subprojectCount === 0 && <Popconfirm key="delete" title={`确认删除空主项目“${row.name}”？`} onOk={() => remove(row)}><Button size="mini" type="text" status="danger">删除</Button></Popconfirm>,
     ], 'project-group') },
   ]), tableWidth, 'name')

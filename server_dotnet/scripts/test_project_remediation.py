@@ -254,16 +254,16 @@ def _finish(worker, result):
     return result.get("value")
 
 
-def _assert_no_submit_side_effect(conn, project_id):
+def _assert_no_approval_side_effect(conn, project_id):
     with conn.cursor() as cursor:
-        cursor.execute("SELECT status,confirm_side FROM projects WHERE id=%s", (project_id,))
+        cursor.execute("SELECT status,material_review_status FROM projects WHERE id=%s", (project_id,))
         state = cursor.fetchone()
         cursor.execute(
-            "SELECT COUNT(*) FROM project_status_logs WHERE project_id=%s AND action='SUBMIT'",
+            "SELECT COUNT(*) FROM project_status_logs WHERE project_id=%s AND action='MATERIAL_APPROVE'",
             (project_id,),
         )
-        submits = cursor.fetchone()[0]
-    return state == ("IN_PROGRESS", None) and submits == 0
+        approvals = cursor.fetchone()[0]
+    return state == ("IN_PROGRESS", None) and approvals == 0
 
 
 def run_project_remediation_checks(client, Client, conn, check, storage_root):
@@ -424,27 +424,28 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
     check("project menu revocation blocks existing internal users and supplier participants", True)
 
     role_id = _new_role(
-        client, ["project:list", "project:create", "project:withdraw"])
-    view_all_role_id = _new_role(client, ["project:list", "project:view_all", "project:submit"])
-    reviewer_role_id = _new_role(
-        client, ["dashboard", "project:list", "project:view_all", "project:confirm"])
+        client, ["dashboard", "project:list", "project:create"])
+    view_all_role_id = _new_role(client, ["dashboard", "project:list", "project:view_all"])
     old_user, old_client = _new_internal(client, Client, conn, role_id, "旧内部用户", section_id)
-    new_user, _ = _new_internal(client, Client, conn, role_id, "新内部用户", section_id)
     view_all_user, view_all_client = _new_internal(
         client, Client, conn, view_all_role_id, "全局查看用户", section_id)
-    reviewer_user, reviewer_client = _new_internal(
-        client, Client, conn, reviewer_role_id, "全局验收用户", section_id)
-    new_supplier_user, new_supplier_client = _new_supplier_account(
+    new_supplier_user, _ = _new_supplier_account(
         client, Client, conn, supplier["id"], "项目并发供应商新账号")
 
-    # A submit waiting behind the project's row lock must see a just-committed
-    # deletion of the final file. Under the former RR snapshot it incorrectly
-    # entered PENDING_CONFIRMATION.
+    def approve_in_thread(project_id, supplier_file_id, expected):
+        approve_client = Client(client.base)
+        approve_client.token = old_client.token
+        return _request_in_thread(
+            approve_client, "POST", f"/api/v1/projects/{project_id}/materials/approve",
+            {"expectedSupplierFileId": supplier_file_id}, expected,
+        )
+
+    # An approval waiting behind the project's row lock must see a just-committed
+    # deletion of the reviewed supplier file instead of completing on a stale snapshot.
     deleted_project = _new_project(
         old_client, client, conn, supplier["id"], "并发删除文件")
     deleted_file = _insert_file(
         conn, storage_root, deleted_project, supplier_user["id"], direction="S2C")
-    _approve_materials(old_client, deleted_project)
     conn.begin()
     try:
         with conn.cursor() as cursor:
@@ -453,26 +454,20 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
                 "UPDATE files SET status='DELETED',deleted_at=UTC_TIMESTAMP(3) WHERE id=%s",
                 (deleted_file,),
             )
-        submit_client = Client(client.base)
-        submit_client.token = supplier_client.token
-        worker, result = _request_in_thread(
-            submit_client, "POST", f"/api/v1/projects/{deleted_project}/submit",
-            {}, 409,
-        )
+        worker, result = approve_in_thread(deleted_project, deleted_file, 409)
         _wait_for_project_lock(conn, worker, deleted_project)
         conn.commit()
     except BaseException:
         conn.rollback()
         raise
     _finish(worker, result)
-    check("project submit sees concurrent deletion of the approved supplier file",
-          _assert_no_submit_side_effect(conn, deleted_project))
+    check("material approval sees concurrent deletion of the reviewed supplier file",
+          _assert_no_approval_side_effect(conn, deleted_project))
 
-    # The same interleaving must observe a newly committed active upload.
+    # The same interleaving must observe a newly committed supplier upload session.
     upload_project = _new_project(
         old_client, client, conn, supplier["id"], "并发活动上传")
-    _insert_file(conn, storage_root, upload_project, supplier_user["id"], direction="S2C")
-    _approve_materials(old_client, upload_project)
+    upload_file = _insert_file(conn, storage_root, upload_project, supplier_user["id"], direction="S2C")
     upload_id = str(__import__("uuid").uuid4())
     conn.begin()
     try:
@@ -484,99 +479,69 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
                 "total_chunks,temp_dir,status,result_file_id,expires_at,created_at,updated_at) "
                 "VALUES(%s,%s,%s,'active.pdf',1,1700000000000,%s,NULL,262144,1,%s,'UPLOADING',NULL,"
                 "DATE_ADD(UTC_TIMESTAMP(3),INTERVAL 1 HOUR),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))",
-                (upload_id, upload_project, old_user["id"], "0" * 64, "owned/" + upload_id),
+                (upload_id, upload_project, supplier_user["id"], "0" * 64, "owned/" + upload_id),
             )
-        submit_client = Client(client.base)
-        submit_client.token = supplier_client.token
-        worker, result = _request_in_thread(
-            submit_client, "POST", f"/api/v1/projects/{upload_project}/submit",
-            {}, 409,
-        )
+        worker, result = approve_in_thread(upload_project, upload_file, 409)
         _wait_for_project_lock(conn, worker, upload_project)
         conn.commit()
     except BaseException:
         conn.rollback()
         raise
     _finish(worker, result)
-    check("project submit sees concurrent creation of active upload",
-          _assert_no_submit_side_effect(conn, upload_project))
+    check("material approval sees concurrent creation of a supplier upload",
+          _assert_no_approval_side_effect(conn, upload_project))
 
-    # A previous submitter must not withdraw a newer submit that becomes visible
-    # only after waiting for the project lock.
-    withdraw_project = _new_project(
-        old_client, client, conn, supplier["id"], "并发旧提交者撤回")
-    _insert_file(conn, storage_root, withdraw_project, supplier_user["id"], direction="S2C")
-    _approve_materials(old_client, withdraw_project)
-    old_submission = supplier_client.call(
-        "POST", f"/api/v1/projects/{withdraw_project}/submit", {})
-    reviewer_client.call("POST", f"/api/v1/projects/{withdraw_project}/reject", {
-        "reason": "建立旧提交历史",
-        "expectedSubmissionId": old_submission["latestSubmissionId"],
-    })
+    # A supplier file committed while the approval waits makes the reviewer's version stale.
+    newer_project = _new_project(
+        old_client, client, conn, supplier["id"], "并发新回传资料")
+    seen_file = _insert_file(conn, storage_root, newer_project, supplier_user["id"], direction="S2C")
     conn.begin()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT id FROM projects WHERE id=%s FOR UPDATE", (withdraw_project,))
-            cursor.execute(
-                "UPDATE projects SET status='PENDING_CONFIRMATION',confirm_side='COMPANY',"
-                "updated_at=UTC_TIMESTAMP(3) WHERE id=%s",
-                (withdraw_project,),
-            )
-            cursor.execute(
-                "INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,"
-                "confirm_side,reason,created_at) VALUES(%s,'IN_PROGRESS','PENDING_CONFIRMATION','SUBMIT',"
-                "%s,'COMPANY',NULL,UTC_TIMESTAMP(3))",
-                (withdraw_project, new_supplier_user["id"]),
-            )
-            current_submission_id = cursor.lastrowid
-        worker, result = _request_in_thread(
-            supplier_client, "POST", f"/api/v1/projects/{withdraw_project}/withdraw",
-            {"expectedSubmissionId": current_submission_id}, 403,
-        )
-        _wait_for_project_lock(conn, worker, withdraw_project)
+            cursor.execute("SELECT id FROM projects WHERE id=%s FOR UPDATE", (newer_project,))
+        _insert_file(conn, storage_root, newer_project, new_supplier_user["id"], direction="S2C")
+        worker, result = approve_in_thread(newer_project, seen_file, 409)
+        _wait_for_project_lock(conn, worker, newer_project)
         conn.commit()
     except BaseException:
         conn.rollback()
         raise
-    _finish(worker, result)
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT status,confirm_side FROM projects WHERE id=%s", (withdraw_project,))
-        withdraw_state = cursor.fetchone()
-    check("previous submitter cannot withdraw a newer concurrent submission",
-          withdraw_state == ("PENDING_CONFIRMATION", "COMPANY"))
+    stale = _finish(worker, result)
+    check("material approval refuses a supplier file committed while it waited",
+          stale["code"] == 40903 and _assert_no_approval_side_effect(conn, newer_project))
 
-    # A view_all user cannot submit; the supplier submitter still receives the
-    # result notification even when the reviewer is selected by global scope.
+    # Only the responsible user reviews material: a global viewer neither approves nor gets the task,
+    # and approval notifies every supplier account that can see the subproject.
     notice_project = _new_project(
-        old_client, client, conn, supplier["id"], "供应商提交结果通知")
-    _insert_file(conn, storage_root, notice_project, supplier_user["id"], direction="S2C")
-    _approve_materials(old_client, notice_project)
-    view_all_client.call("POST", f"/api/v1/projects/{notice_project}/submit", {}, expected=403)
-    notice_submission = supplier_client.call(
-        "POST", f"/api/v1/projects/{notice_project}/submit", {})
-    reviewer_pending = reviewer_client.call(
-        "GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100")
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT recipient_user_id FROM email_outbox WHERE project_id=%s "
-            "AND event_type='PROJECT_SUBMITTED' ORDER BY id",
-            (notice_project,),
-        )
-        submission_recipients = [row[0] for row in cursor.fetchall()]
+        old_client, client, conn, supplier["id"], "资料确认结果通知")
+    notice_file = _insert_file(conn, storage_root, notice_project, supplier_user["id"], direction="S2C")
+    view_all_client.call("POST", f"/api/v1/projects/{notice_project}/materials/approve", {
+        "expectedSupplierFileId": notice_file,
+    }, expected=403)
+    owner_pending = old_client.call("GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100")
+    viewer_pending = view_all_client.call("GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100")
     check(
-        "supplier submission reaches the active global reviewer and dashboard task",
-        reviewer_user["id"] in submission_recipients
-        and any(item["id"] == notice_project for item in reviewer_pending["list"]),
+        "material review is a dashboard task for the responsible user only",
+        any(item["id"] == notice_project and item["materialReviewStatus"] == "PENDING"
+            for item in owner_pending["list"])
+        and all(item["id"] != notice_project for item in viewer_pending["list"]),
     )
-    client.call("POST", f"/api/v1/projects/{notice_project}/confirm", {
-        "expectedSubmissionId": notice_submission["latestSubmissionId"],
+    approved = old_client.call("POST", f"/api/v1/projects/{notice_project}/materials/approve", {
+        "expectedSupplierFileId": notice_file,
     })
     with conn.cursor() as cursor:
         cursor.execute(
             "SELECT recipient_user_id FROM email_outbox WHERE project_id=%s "
-            "AND event_type='PROJECT_CONFIRMED' ORDER BY id",
+            "AND event_type='PROJECT_MATERIAL_APPROVED' ORDER BY id",
             (notice_project,),
         )
-        recipients = [row[0] for row in cursor.fetchall()]
-    check("supplier submitter receives project result notification",
-          recipients == [supplier_user["id"]])
+        recipients = sorted(row[0] for row in cursor.fetchall())
+        cursor.execute(
+            "SELECT COUNT(*) FROM email_outbox WHERE project_id=%s AND event_type='PROJECT_SUBMITTED'",
+            (notice_project,),
+        )
+        submitted_mail = cursor.fetchone()[0]
+    check("material approval completes the subproject and notifies the supplier accounts",
+          approved["status"] == "COMPLETED"
+          and recipients == sorted([supplier_user["id"], new_supplier_user["id"]])
+          and submitted_mail == 0)

@@ -63,7 +63,6 @@ public sealed class Project
     public string? Description { get; set; }
     public ulong SupplierId { get; set; }
     public string Status { get; set; } = null!;
-    public string? ConfirmSide { get; set; }
     public ulong CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -76,7 +75,7 @@ public sealed class Project
     public ulong? PriorityId { get; set; }
     public ulong? RobotTypeId { get; set; }
     public DateOnly? ExpectedCompletionDate { get; set; }
-    /// <summary>APPROVED or RETURNED by the responsible user; only valid while it still matches the latest supplier file.</summary>
+    /// <summary>RETURNED by the responsible user; only valid while it still matches the latest supplier file.</summary>
     public string? MaterialReviewStatus { get; set; }
     /// <summary>Latest available S2C file id the review covered.</summary>
     public ulong? MaterialReviewFileId { get; set; }
@@ -277,7 +276,6 @@ public sealed class ProjectConfig : IEntityTypeConfiguration<Project>
         b.Property(x => x.Description).HasColumnName("description").HasMaxLength(1024);
         b.Property(x => x.SupplierId).HasColumnName("supplier_id");
         b.Property(x => x.Status).HasColumnName("status").HasMaxLength(24).IsRequired().HasDefaultValue("DRAFT");
-        b.Property(x => x.ConfirmSide).HasColumnName("confirm_side").HasMaxLength(16);
         b.Property(x => x.CreatedBy).HasColumnName("created_by");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)").ValueGeneratedOnAddOrUpdate();

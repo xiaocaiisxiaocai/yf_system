@@ -402,25 +402,25 @@ public sealed class MailService
                             && string.Equals(currentRecipient.Email.Trim(), mail.RecipientEmail.Trim(), StringComparison.OrdinalIgnoreCase)
                             && MailboxAddress.TryParse(currentRecipient.Email, out _));
                 var notificationAllowed = currentPolicy.Allows(mail.EventType, currentRecipientType);
-                var recipientAuthorized = notificationAllowed && recipientAddressValid && (mail.EventType == "PROJECT_SUBMITTED"
-                    ? await IsCurrentPendingAcceptanceAsync(claimConnection, claimTransaction, mail, ct)
-                    : mail.ProjectId is null || mail.RecipientUserId is null
-                        ? mail.ProjectId is null && mail.RecipientUserId is null
-                        : await ProjectNotificationService.IsCurrentProjectRecipientAsync(
-                            claimConnection,
-                            claimTransaction,
-                            mail.ProjectId.Value,
-                            mail.RecipientUserId.Value,
-                            ct));
+                // Acceptance submission mail predates the single-gate flow; any row left in flight is stale.
+                var retiredEvent = mail.EventType == RetiredAcceptanceEvent;
+                var recipientAuthorized = !retiredEvent && notificationAllowed && recipientAddressValid && (mail.ProjectId is null || mail.RecipientUserId is null
+                    ? mail.ProjectId is null && mail.RecipientUserId is null
+                    : await ProjectNotificationService.IsCurrentProjectRecipientAsync(
+                        claimConnection,
+                        claimTransaction,
+                        mail.ProjectId.Value,
+                        mail.RecipientUserId.Value,
+                        ct));
                 if (!recipientAuthorized)
                 {
                     var policyDisabled = !notificationAllowed;
-                    var reason = policyDisabled
+                    var reason = retiredEvent
+                        ? "验收流程已退役，通知已取消"
+                        : policyDisabled
                         ? EmailNotificationPolicy.DisabledReason
                         : !recipientAddressValid
                             ? "收件账号或地址已失效"
-                        : mail.EventType == "PROJECT_SUBMITTED"
-                            ? ProjectNotificationService.SupersededAcceptanceMailReason
                             : ProjectNotificationService.StaleProjectMailReason;
                     var cancelled = await claimContext.EmailOutbox.Where(item =>
                             item.Id == mail.Id
@@ -445,12 +445,12 @@ public sealed class MailService
                             {
                                 eventType = mail.EventType,
                                 status = MailStatuses.Cancelled,
-                                reason = policyDisabled
+                                reason = retiredEvent
+                                    ? "PROJECT_ACCEPTANCE_RETIRED"
+                                    : policyDisabled
                                     ? EmailNotificationPolicy.DisabledAuditReason
                                     : !recipientAddressValid
                                     ? "RECIPIENT_ADDRESS_STALE"
-                                    : mail.EventType == "PROJECT_SUBMITTED"
-                                    ? "PROJECT_ACCEPTANCE_STALE"
                                     : "PROJECT_RECIPIENT_UNAUTHORIZED",
                             },
                             null,
@@ -544,6 +544,7 @@ public sealed class MailService
 
     private const string CoalescedFileEvent = "FILE_UPLOADED";
     private const string CoalescedMessageEvent = "MESSAGE_CREATED";
+    private const string RetiredAcceptanceEvent = "PROJECT_SUBMITTED";
 
     internal enum SmtpFailureKind
     {
@@ -779,33 +780,6 @@ public sealed class MailService
     }
 
     private sealed class DisabledMailRow { public ulong Id { get; init; } public string EventType { get; init; } = ""; }
-    private static async Task<bool> IsCurrentPendingAcceptanceAsync(
-        MySqlConnection conn,
-        MySqlTransaction tx,
-        MailRow mail,
-        CancellationToken ct)
-    {
-        if (mail.ProjectId is null
-            || mail.RecipientUserId is null
-            || !ProjectNotificationService.TryParseAcceptanceDedupeKey(
-                mail.DedupeKey,
-                out var projectId,
-                out var submissionId,
-                out var recipientId)
-            || projectId != mail.ProjectId.Value
-            || recipientId != mail.RecipientUserId.Value)
-        {
-            return false;
-        }
-        return await ProjectNotificationService.IsCurrentPendingAcceptanceAsync(
-            conn,
-            tx,
-            projectId,
-            submissionId,
-            recipientId,
-            ct);
-    }
-
     private static Task<DateTime> DatabaseUtcNowAsync(YfDbContext context, CancellationToken ct) =>
         DbClock.UtcNowAsync(context, ct, 0);
 

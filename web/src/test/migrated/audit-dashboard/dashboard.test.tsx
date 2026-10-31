@@ -31,7 +31,7 @@ import { queryClient } from '../../../api/queryClient'
 const summary = {
   projectCount: 3,
   activeProjectCount: 2,
-  pendingConfirmations: 1,
+  pendingTasks: 1,
   unreadMessages: 12,
   recentMessages: [],
 }
@@ -306,7 +306,7 @@ describe('工作台协作生产界面', () => {
   it('dashboard pending projects can retry, navigate, refresh, and recover from an expired last page', async () => {
     const pendingRequests: Array<{ params: Record<string, unknown>; request: ReturnType<typeof deferred<{ data: unknown }>> }> = []
     mocks.get.mockImplementation(async (url: string, config: { params?: Record<string, unknown> } = {}) => {
-      if (url === '/dashboard/summary') return { data: { ...summary, pendingConfirmations: 11 } }
+      if (url === '/dashboard/summary') return { data: { ...summary, pendingTasks: 11 } }
       if (url === '/dashboard/messages') return { data: emptyPage }
       if (url === '/dashboard/pending-projects') {
         const request = deferred<{ data: unknown }>()
@@ -321,13 +321,14 @@ describe('工作台协作生产界面', () => {
     expect(pendingRequests[0].params).toEqual({ page: 1, pageSize: 10 })
 
     await act(async () => pendingRequests[0].request.reject(new Error('pending projects unavailable')))
-    expect(await screen.findByText('内部待验收子项目加载失败')).toBeVisible()
+    expect(await screen.findByText('资料待确认子项目加载失败')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '重试' }))
     await waitFor(() => expect(pendingRequests).toHaveLength(2))
 
-    const firstPage = [{ id: 11, name: '待确认项目 A', projectGroupId: 2, projectGroupName: '主项目 A', status: 'PENDING_CONFIRMATION', confirmSide: 'COMPANY', updatedAt: '2026-09-10T01:00:00Z' }]
+    const firstPage = [{ id: 11, name: '待确认项目 A', projectGroupId: 2, projectGroupName: '主项目 A', materialReviewStatus: 'PENDING', updatedAt: '2026-09-10T01:00:00Z' }]
     await act(async () => pendingRequests[1].request.resolve({ data: { list: firstPage, total: 11, page: 1, pageSize: 10 } }))
     expect(await screen.findByRole('link', { name: '主项目 A / 待确认项目 A' })).toHaveAttribute('href', '/projects/11')
+    expect(screen.getByText('资料待确认')).toBeVisible()
 
     await user.click(screen.getByLabelText('第 2 页'))
     await waitFor(() => expect(pendingRequests).toHaveLength(3))
@@ -341,14 +342,14 @@ describe('工作台协作生产界面', () => {
     await user.click(screen.getByRole('button', { name: '刷新工作台' }))
     await waitFor(() => expect(pendingRequests).toHaveLength(5))
     await act(async () => pendingRequests[4].request.resolve({ data: emptyPage }))
-    expect(await screen.findByText('暂无内部待验收子项目')).toBeVisible()
+    expect(await screen.findByText('暂无待确认的资料')).toBeVisible()
   })
 
-  it('supplier dashboard uses company-acceptance wording while internal wording stays role-specific', async () => {
+  it('supplier dashboard lists material to send back while internal wording stays role-specific', async () => {
     mocks.auth.user = { id: 2, realName: '供应商用户', userType: 'SUPPLIER' }
     render(dashboardView())
-    expect(await screen.findByRole('heading', { name: '待公司验收子项目' })).toBeVisible()
-    expect(await screen.findByText('暂无待公司验收子项目')).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '待回传资料子项目' })).toBeVisible()
+    expect(await screen.findByText('暂无待回传资料的子项目')).toBeVisible()
   })
 
   it('dashboard without its menu permission stays local and does not call dashboard APIs', async () => {

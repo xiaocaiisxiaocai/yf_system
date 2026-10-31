@@ -7,7 +7,7 @@ const {
   assert, OUT, s, f, record, login, api, projectMetadata, action, track,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 const {
-  approveMaterial, returnApprovedMaterial, uploadFixture: uploadBytes,
+  returnSupplierMaterial, uploadFixture: uploadBytes,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/upload-contract.cjs');
 
 const apiPath = value => new URL(value.url()).pathname;
@@ -105,8 +105,8 @@ async function choose(page, placeholder, optionName) {
     await api(adminContext, 'POST', '/projects/' + childControlSource.id + '/messages',
       { content: sourceOnlyMessage }, adminToken);
 
-    // API-only fixture setup: 11 pending projects make the dashboard paginator real.
-    // Every project gets supplier-returned material confirmed by its responsible user because submit requires it.
+    // API-only fixture setup: 11 subprojects with supplier-returned material awaiting the responsible user (admin)
+    // make the dashboard paginator real.
     for (let index = 0; index < 11; index += 1) {
       const project = await createProjectGroup(
         adminContext, adminToken, f.suppliers.a.id,
@@ -115,18 +115,12 @@ async function choose(page, placeholder, optionName) {
       await uploadBytes(
         adminContext, adminToken, project.id, prefix + '-' + index + '.zip', tinyFile, { ensureStep: true },
       );
-      await returnApprovedMaterial(
-        supplierContext, supplierToken, adminContext, adminToken, project.id, prefix + '-' + index + '-回传.pdf');
+      await returnSupplierMaterial(supplierContext, supplierToken, project.id, prefix + '-' + index + '-回传.pdf');
       if (index === 0) {
         await api(supplierContext, 'POST', '/projects/' + project.id + '/messages', {
           content: messageText,
         }, supplierToken);
       }
-      const submitted = await (await api(supplierContext, 'POST', '/projects/' + project.id + '/submit', {
-        confirmSide: 'COMPANY',
-      }, supplierToken)).json();
-      assert(Number.isInteger(submitted.latestSubmissionId) && submitted.latestSubmissionId > 0);
-      project.latestSubmissionId = submitted.latestSubmissionId;
       pendingProjects.push(project);
     }
 
@@ -175,9 +169,9 @@ async function choose(page, placeholder, optionName) {
       await page.goto(s.base + '/');
       const summary = await (await summaryPromise).json();
       const pendingFirst = await (await pendingFirstPromise).json();
-      assert(summary.pendingConfirmations >= 11);
+      assert(summary.pendingTasks >= 11);
       assert(summary.unreadMessages >= 1);
-      for (const [title, value] of [['待内部验收子项目', summary.pendingConfirmations], ['未读留言', summary.unreadMessages]]) {
+      for (const [title, value] of [['资料待确认子项目', summary.pendingTasks], ['未读留言', summary.unreadMessages]]) {
         const card = page.locator('.dashboard-stat-card').filter({ hasText: title });
         await card.getByText(String(value), { exact: true }).waitFor();
       }
@@ -220,111 +214,102 @@ async function choose(page, placeholder, optionName) {
     });
 
     const flowProject = pendingProjects[0];
-    const rejectPath = '/api/v1/projects/' + flowProject.id + '/reject';
-    await record('驳回必填校验和取消草稿不产生写入', async () => {
-      let rejectWrites = 0;
-      const countReject = request => {
-        if (apiPath(request) === rejectPath && request.method() === 'POST') rejectWrites += 1;
+    const returnPath = '/api/v1/projects/' + flowProject.id + '/materials/return';
+    const approvePath = '/api/v1/projects/' + flowProject.id + '/materials/approve';
+    await record('退回资料必填校验和取消草稿不产生写入', async () => {
+      let returnWrites = 0;
+      const countReturn = request => {
+        if (apiPath(request) === returnPath && request.method() === 'POST') returnWrites += 1;
       };
-      page.on('request', countReject);
+      page.on('request', countReturn);
       await page.goto(s.base + '/projects/' + flowProject.id);
-      await page.getByRole('button', { name: '验收驳回', exact: true }).click();
+      await page.getByRole('button', { name: '退回资料', exact: true }).click();
       let dialog = page.getByRole('dialog');
-      await dialog.getByRole('button', { name: '确认驳回', exact: true }).click();
-      await dialog.getByText('请填写驳回原因', { exact: true }).waitFor();
-      assert.equal(rejectWrites, 0);
-      await dialog.getByPlaceholder('请填写驳回原因', { exact: true }).fill('应在取消后丢弃');
+      await dialog.getByRole('button', { name: '确认退回', exact: true }).click();
+      await dialog.getByText('请填写退回原因', { exact: true }).waitFor();
+      assert.equal(returnWrites, 0);
+      await dialog.getByPlaceholder('请说明需要厂商补充或修改的资料', { exact: true }).fill('应在取消后丢弃');
       await dialog.getByRole('button', { name: '取消', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' });
-      await page.getByRole('button', { name: '验收驳回', exact: true }).click();
+      await page.getByRole('button', { name: '退回资料', exact: true }).click();
       dialog = page.getByRole('dialog');
-      assert.equal(await dialog.getByPlaceholder('请填写驳回原因', { exact: true }).inputValue(), '');
+      assert.equal(await dialog.getByPlaceholder('请说明需要厂商补充或修改的资料', { exact: true }).inputValue(), '');
       await dialog.getByRole('button', { name: '取消', exact: true }).click();
-      assert.equal(rejectWrites, 0);
-      page.off('request', countReject);
+      assert.equal(returnWrites, 0);
+      page.off('request', countReturn);
     });
 
-    await record('浏览器保留旧提交版本时驳回409且不会误验收新提交', async () => {
+    await record('浏览器保留旧回传版本时确认409且不会误完成新资料', async () => {
       await page.goto(s.base + '/projects/' + flowProject.id);
-      await page.getByRole('button', { name: '验收驳回', exact: true }).waitFor();
-      const staleSubmissionId = flowProject.latestSubmissionId;
+      await page.getByRole('button', { name: '资料确认 OK', exact: true }).waitFor();
       const staleDetail = await (await api(
         adminContext, 'GET', '/projects/' + flowProject.id, undefined, adminToken)).json();
+      const staleSupplierFileId = staleDetail.latestSupplierFileId;
       const detailPath = '/api/v1/projects/' + flowProject.id;
       const keepStaleDetail = route => route.request().method() === 'GET'
         ? route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(staleDetail) })
         : route.continue();
       await page.route('**' + detailPath, keepStaleDetail);
-      let resubmitted;
       try {
-        await api(adminContext, 'POST', '/projects/' + flowProject.id + '/withdraw', {
-          expectedSubmissionId: staleSubmissionId,
-        }, adminToken, 403);
-        await api(supplierContext, 'POST', '/projects/' + flowProject.id + '/withdraw', {
-          expectedSubmissionId: staleSubmissionId,
-        }, supplierToken);
-        await approveMaterial(adminContext, adminToken, flowProject.id);
-        resubmitted = await (await api(supplierContext, 'POST', '/projects/' + flowProject.id + '/submit', {
-          confirmSide: 'COMPANY',
-        }, supplierToken)).json();
-        assert(resubmitted.latestSubmissionId > staleSubmissionId);
-        await page.getByRole('button', { name: '验收驳回', exact: true }).click();
-        const dialog = page.getByRole('dialog');
-        await dialog.getByPlaceholder('请填写驳回原因', { exact: true }).fill('浏览器陈旧版本不得生效');
-        const conflict = page.waitForResponse(response => apiPath(response) === rejectPath
+        await returnSupplierMaterial(supplierContext, supplierToken, flowProject.id, prefix + '-新回传.pdf');
+        await page.getByRole('button', { name: '资料确认 OK', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: '资料确认 OK' });
+        await dialog.getByText('厂商回传文件', { exact: false }).waitFor();
+        const conflict = page.waitForResponse(response => apiPath(response) === approvePath
           && response.request().method() === 'POST' && response.status() === 409);
-        await dialog.getByRole('button', { name: '确认驳回', exact: true }).click();
+        await dialog.getByRole('button', { name: '确认并完成', exact: true }).click();
         const response = await conflict;
-        assert.equal(response.request().postDataJSON().expectedSubmissionId, staleSubmissionId);
+        assert.equal(response.request().postDataJSON().expectedSupplierFileId, staleSupplierFileId);
       } finally {
         await page.unroute('**' + detailPath, keepStaleDetail);
       }
       const persisted = await (await api(
         adminContext, 'GET', '/projects/' + flowProject.id, undefined, adminToken)).json();
-      assert.equal(persisted.status, 'PENDING_CONFIRMATION');
-      assert.equal(persisted.latestSubmissionId, resubmitted.latestSubmissionId);
-      flowProject.latestSubmissionId = resubmitted.latestSubmissionId;
+      assert.equal(persisted.status, 'IN_PROGRESS');
+      assert.equal(persisted.materialReviewStatus, 'PENDING');
+      assert(persisted.latestSupplierFileId > staleSupplierFileId);
       await page.reload();
-      await page.getByRole('button', { name: '验收驳回', exact: true }).waitFor();
+      await page.getByRole('button', { name: '资料确认 OK', exact: true }).waitFor();
     });
 
-    await record('驳回503保留草稿并可单次重试成功', async () => {
-      const reason = '驳回失败后保留并重试-' + marker;
-      page.expectedServerErrors = new Set([rejectPath]);
-      await page.route('**' + rejectPath, route => route.fulfill({
+    await record('退回资料503保留草稿并可单次重试成功', async () => {
+      const reason = '退回失败后保留并重试-' + marker;
+      page.expectedServerErrors = new Set([returnPath]);
+      await page.route('**' + returnPath, route => route.fulfill({
         status: 503,
         contentType: 'application/json',
-        body: JSON.stringify({ code: 50301, message: '驳回测试暂时不可用' }),
+        body: JSON.stringify({ code: 50301, message: '退回测试暂时不可用' }),
       }), { times: 1 });
-      await page.getByRole('button', { name: '验收驳回', exact: true }).click();
+      await page.getByRole('button', { name: '退回资料', exact: true }).click();
       const dialog = page.getByRole('dialog');
-      const reasonInput = dialog.getByPlaceholder('请填写驳回原因', { exact: true });
+      const reasonInput = dialog.getByPlaceholder('请说明需要厂商补充或修改的资料', { exact: true });
       await reasonInput.fill(reason);
-      const failed = page.waitForResponse(response => apiPath(response) === rejectPath && response.status() === 503);
-      await dialog.getByRole('button', { name: '确认驳回', exact: true }).click();
+      const failed = page.waitForResponse(response => apiPath(response) === returnPath && response.status() === 503);
+      await dialog.getByRole('button', { name: '确认退回', exact: true }).click();
       await failed;
       assert.equal(await dialog.isVisible(), true);
       assert.equal(await reasonInput.inputValue(), reason);
-      const rejected = await action(page, '/projects/' + flowProject.id + '/reject', 'POST', () => (
-        dialog.getByRole('button', { name: '确认驳回', exact: true }).click()
+      const returned = await action(page, '/projects/' + flowProject.id + '/materials/return', 'POST', () => (
+        dialog.getByRole('button', { name: '确认退回', exact: true }).click()
       ));
-      assert.equal(rejected.status, 'IN_PROGRESS');
+      assert.equal(returned.materialReviewStatus, 'RETURNED');
       const persisted = await (await api(adminContext, 'GET', '/projects/' + flowProject.id, undefined, adminToken)).json();
-      assert.equal(persisted.status, 'IN_PROGRESS');
-      assert.equal(persisted.rejectReason, reason);
+      assert.equal(persisted.materialReviewStatus, 'RETURNED');
+      assert.equal(persisted.materialReviewReason, reason);
       page.expectedServerErrors.clear();
     });
 
-    await record('主项目详情显示服务端创建者并在子项目待验收时冻结公共资料', async () => {
+    await record('主项目详情显示服务端创建者且子项目资料待确认时仍可编辑公共资料', async () => {
       const pendingProject = pendingProjects[1];
       const group = await (await api(
         adminContext, 'GET', '/project-groups/' + pendingProject.groupId,
         undefined, adminToken)).json();
       assert.equal(group.group.responsibleUserId, admin.user.id);
-      assert(group.projects.some(item => item.id === pendingProject.id && item.status === 'PENDING_CONFIRMATION'));
+      assert.equal(group.group.materialPendingCount, 1);
+      assert(group.projects.some(item => item.id === pendingProject.id && item.materialReviewStatus === 'PENDING'));
       await api(adminContext, 'PUT', '/project-groups/' + pendingProject.groupId, {
         name: group.group.name,
-        description: group.group.description,
+        description: '资料待确认时编辑-' + marker,
         supplierId: group.group.supplierId,
         workOrderNos: group.group.workOrderNos,
         machineModel: group.group.machineModel,
@@ -334,7 +319,7 @@ async function choose(page, placeholder, optionName) {
         robotOwnerContactIds: group.group.robotOwnerContactIds,
         expectedCompletionDate: group.group.expectedCompletionDate,
         expectedUpdatedAt: group.group.updatedAt,
-      }, adminToken, 409);
+      }, adminToken);
     });
 
     await record('子项目通过页面新增编辑复制删除且复制件含文件不含留言并显示履历', async () => {
@@ -459,7 +444,7 @@ async function choose(page, placeholder, optionName) {
     await record('审计具体动作对象日期组合筛选匹配服务端结果', async () => {
       await page.goto(s.base + '/logs');
       await page.getByRole('button', { name: '查询', exact: true }).waitFor();
-      await choose(page, '具体操作', '提交验收');
+      await choose(page, '具体操作', '开始项目');
       await choose(page, '对象类型', '子项目');
       const rangeInputs = page.locator('.audit-filter-panel .arco-picker input');
       assert.equal(await rangeInputs.count(), 2);
@@ -474,7 +459,7 @@ async function choose(page, placeholder, optionName) {
       const filtered = page.waitForResponse(response => {
         const url = new URL(response.url());
         return url.pathname === '/api/v1/admin/audit-logs'
-          && url.searchParams.get('action') === 'PROJECT_SUBMIT'
+          && url.searchParams.get('action') === 'PROJECT_START'
           && url.searchParams.get('targetType') === 'project'
           && !!url.searchParams.get('start') && !!url.searchParams.get('end')
           && response.status() === 200;
@@ -482,12 +467,12 @@ async function choose(page, placeholder, optionName) {
       await page.getByRole('button', { name: '查询', exact: true }).click();
       const result = await (await filtered).json();
       assert(result.total >= 11);
-      assert(result.list.every(item => item.action === 'PROJECT_SUBMIT' && item.targetType === 'project'));
-      const row = page.getByRole('row').filter({ hasText: 'PROJECT_SUBMIT' }).first();
-      await row.getByText('提交验收', { exact: true }).waitFor();
+      assert(result.list.every(item => item.action === 'PROJECT_START' && item.targetType === 'project'));
+      const row = page.getByRole('row').filter({ hasText: 'PROJECT_START' }).first();
+      await row.getByText('开始项目', { exact: true }).waitFor();
       await row.getByRole('button', { name: '查看', exact: true }).click();
       const drawer = page.locator('.audit-detail-drawer');
-      await drawer.getByText('PROJECT_SUBMIT', { exact: true }).waitFor();
+      await drawer.getByText('PROJECT_START', { exact: true }).waitFor();
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
     });
 

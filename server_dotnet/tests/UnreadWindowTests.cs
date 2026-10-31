@@ -77,8 +77,9 @@ public sealed class UnreadWindowTests
             var b = projectId * 10;
             activities.Add($"({b + 1},{projectId},'FILE','UPLOAD',2,'作者',DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 DAY),'文件','s{b + 1}')");
             activities.Add($"({b + 2},{projectId},'MESSAGE','CREATE',30,'供应商',DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 DAY),'留言','s{b + 2}')");
+            // Retired acceptance actions stay in history but no longer count as notifications.
             activities.Add($"({b + 3},{projectId},'PROJECT','SUBMIT',30,'供应商',DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 DAY),'提交','s{b + 3}')");
-            activities.Add($"({b + 4},{projectId},'PROJECT','CONFIRM',2,'作者',DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 DAY),'确认','s{b + 4}')");
+            activities.Add($"({b + 4},{projectId},'PROJECT','MATERIAL_APPROVE',2,'作者',DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 DAY),'确认','s{b + 4}')");
             activities.Add($"({b + 5},{projectId},'PROJECT','UPDATE',2,'作者',DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 DAY),'编辑','s{b + 5}')");
             activities.Add($"({b + 6},{projectId},'FILE','UPLOAD',NULL,'系统',DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 DAY),'系统','s{b + 6}')");
             activities.Add($"({b + 7},{projectId},'MESSAGE','CREATE',2,'作者',DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 40 DAY),'旧留言','s{b + 7}')");
@@ -111,8 +112,8 @@ public sealed class UnreadWindowTests
         var collaboration = new CollaborationService();
         foreach (var (actor, expected) in new[]
         {
-            (new CurrentUser(1, "admin", "INTERNAL", null), 13UL),
-            (new CurrentUser(20, "owner-confirm", "INTERNAL", null), 3UL),
+            (new CurrentUser(1, "admin", "INTERNAL", null), 10UL),
+            (new CurrentUser(20, "owner-confirm", "INTERNAL", null), 2UL),
             (new CurrentUser(21, "owner-list", "INTERNAL", null), 3UL),
             (new CurrentUser(30, "supplier-user", "SUPPLIER", 100), 5UL),
         })

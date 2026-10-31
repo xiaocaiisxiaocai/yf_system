@@ -8,7 +8,7 @@ namespace Yf.Api.Tests;
 public sealed class ProjectGroupTests
 {
     [Fact(Timeout = 90_000)]
-    public async Task SubprojectsInheritMainDataAndLastConfirmationCompletesMainProject()
+    public async Task SubprojectsInheritMainDataAndLastMaterialApprovalCompletesMainProject()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_groups", ct);
@@ -103,40 +103,25 @@ public sealed class ProjectGroupTests
         Assert.Equal(["b.txt"], (await conn.QueryAsync<string>(new CommandDefinition(
             "SELECT original_name FROM files WHERE project_id=@ProjectId", new { ProjectId = children[1].Id }))).ToArray());
 
-        var internalSubmission = await Assert.ThrowsAsync<ApiException>(() => projects.SubmitAsync(
-            conn, actor, children[0].Id, new ProjectSubmitRequest(), null, ct));
-        Assert.Equal(403, internalSubmission.Status);
         var supplier = new CurrentUser(8302, "group-supplier", "SUPPLIER", 8101);
-        await conn.ExecuteAsync(new CommandDefinition("""
-            INSERT INTO upload_sessions
-                (id,project_id,uploader_id,file_name,file_size,file_last_modified,file_fingerprint,
-                 chunk_size,total_chunks,temp_dir,status,expires_at,created_at,updated_at)
-            VALUES('11111111-1111-4111-8111-111111111111',@ProjectId,@UploaderId,'merging.bin',1,1,@Fingerprint,
-                   1048576,1,'tmp/merging','MERGING',UTC_TIMESTAMP()-INTERVAL 1 MINUTE,UTC_TIMESTAMP(),UTC_TIMESTAMP())
-            """, new { ProjectId = children[0].Id, UploaderId = supplier.Id, Fingerprint = new string('a', 64) },
-            cancellationToken: ct));
-        var blockedByMerge = await Assert.ThrowsAsync<ApiException>(() => projects.SubmitAsync(
-            conn, supplier, children[0].Id, new ProjectSubmitRequest(), null, ct));
-        Assert.Equal(409, blockedByMerge.Status);
-        Assert.Equal(40901, blockedByMerge.Code);
-        Assert.Equal("项目仍有活动上传会话，不能提交验收", blockedByMerge.Message);
-        await conn.ExecuteAsync(new CommandDefinition(
-            "DELETE FROM upload_sessions WHERE id='11111111-1111-4111-8111-111111111111'", cancellationToken: ct));
-        await conn.ExecuteAsync(new CommandDefinition("""
-            INSERT INTO upload_sessions
-                (id,project_id,uploader_id,file_name,file_size,file_last_modified,file_fingerprint,
-                 chunk_size,total_chunks,temp_dir,status,expires_at,created_at,updated_at)
-            VALUES('22222222-2222-4222-8222-222222222222',@ProjectId,@UploaderId,'expired.bin',1,1,@Fingerprint,
-                   1048576,1,'tmp/expired','UPLOADING',UTC_TIMESTAMP()-INTERVAL 1 MINUTE,UTC_TIMESTAMP(),UTC_TIMESTAMP())
-            """, new { ProjectId = children[0].Id, UploaderId = supplier.Id, Fingerprint = new string('b', 64) },
-            cancellationToken: ct));
         var supplierFileId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
             "SELECT id FROM files WHERE project_id=@ProjectId AND direction='S2C'", new { ProjectId = children[0].Id }));
+        // A supplier upload still merging blocks the review: approving would cover material the reviewer has not seen.
+        await InsertUploadSessionAsync(conn, "11111111-1111-4111-8111-111111111111", children[0].Id, supplier.Id,
+            "MERGING", "UTC_TIMESTAMP()-INTERVAL 1 MINUTE", ct);
+        var blockedByMerge = await Assert.ThrowsAsync<ApiException>(() => projects.ApproveMaterialsAsync(
+            conn, actor, children[0].Id, new ProjectMaterialReviewRequest { ExpectedSupplierFileId = supplierFileId }, null, ct));
+        Assert.Equal((409, 40901), (blockedByMerge.Status, blockedByMerge.Code));
+        Assert.Equal("厂商仍有上传中的资料，请等待上传完成后再确认", blockedByMerge.Message);
+        await conn.ExecuteAsync(new CommandDefinition(
+            "DELETE FROM upload_sessions WHERE id='11111111-1111-4111-8111-111111111111'", cancellationToken: ct));
+        // The company's own upload and an expired supplier session do not block it.
+        await InsertUploadSessionAsync(conn, "22222222-2222-4222-8222-222222222222", children[0].Id, supplier.Id,
+            "UPLOADING", "UTC_TIMESTAMP()-INTERVAL 1 MINUTE", ct);
+        await InsertUploadSessionAsync(conn, "33333333-3333-4333-8333-333333333333", children[0].Id, actor.Id,
+            "MERGING", "UTC_TIMESTAMP()+INTERVAL 1 HOUR", ct);
+
         await AssertMaterialReviewAsync(projects, conn, actor, children[0].Id, "PENDING", supplierFileId, ct);
-        var unreviewed = await Assert.ThrowsAsync<ApiException>(() => projects.SubmitAsync(
-            conn, supplier, children[0].Id, new ProjectSubmitRequest(), null, ct));
-        Assert.Equal((409, 40901), (unreviewed.Status, unreviewed.Code));
-        Assert.Equal("回传资料尚未经公司负责人确认 OK，不能提交验收", unreviewed.Message);
         var supplierApproval = await Assert.ThrowsAsync<ApiException>(() => projects.ApproveMaterialsAsync(
             conn, supplier, children[0].Id, new ProjectMaterialReviewRequest { ExpectedSupplierFileId = supplierFileId }, null, ct));
         Assert.Equal(403, supplierApproval.Status);
@@ -153,17 +138,20 @@ public sealed class ProjectGroupTests
             Assert.Equal("RETURNED", returned.RootElement.GetProperty("materialReviewStatus").GetString());
             Assert.Equal("缺少动作流程表", returned.RootElement.GetProperty("materialReviewReason").GetString());
         }
-        var returnedSubmission = await Assert.ThrowsAsync<ApiException>(() => projects.SubmitAsync(
-            conn, supplier, children[0].Id, new ProjectSubmitRequest(), null, ct));
-        Assert.Equal("回传资料已被公司负责人退回，请补充资料并待确认 OK 后再提交验收", returnedSubmission.Message);
+        var returnedAgain = await Assert.ThrowsAsync<ApiException>(() => projects.ReturnMaterialsAsync(conn, actor, children[0].Id,
+            new ProjectMaterialReviewRequest { ExpectedSupplierFileId = supplierFileId, Reason = "再次退回" }, null, ct));
+        Assert.Equal((409, 40901), (returnedAgain.Status, returnedAgain.Code));
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
             "SELECT COUNT(*) FROM email_outbox WHERE project_id=@ProjectId AND event_type='PROJECT_MATERIAL_RETURNED' AND recipient_user_id=8302",
             new { ProjectId = children[0].Id })));
+        await conn.ExecuteAsync(new CommandDefinition(
+            "DELETE FROM upload_sessions WHERE id='33333333-3333-4333-8333-333333333333'", cancellationToken: ct));
 
-        await projects.ApproveMaterialsAsync(conn, actor, children[0].Id,
-            new ProjectMaterialReviewRequest { ExpectedSupplierFileId = supplierFileId }, null, ct);
-        await AssertMaterialReviewAsync(projects, conn, actor, children[0].Id, "APPROVED", supplierFileId, ct);
-        // A new supplier upload invalidates the approval until the responsible user confirms again.
+        // Dashboard tasks: the supplier sees the returned and the not-yet-sent subprojects; the owner has nothing to review.
+        await AssertPendingTasksAsync(conn, supplier, ["NO_MATERIAL", "RETURNED"], ct);
+        await AssertPendingTasksAsync(conn, actor, [], ct);
+
+        // A new supplier upload sends the returned material back to review.
         await conn.ExecuteAsync(new CommandDefinition(
             """
             INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status)
@@ -171,63 +159,66 @@ public sealed class ProjectGroupTests
             """, new { ProjectId = children[0].Id }));
         var newerFileId = await conn.ExecuteScalarAsync<ulong>("SELECT LAST_INSERT_ID()");
         await AssertMaterialReviewAsync(projects, conn, actor, children[0].Id, "PENDING", newerFileId, ct);
-        await Assert.ThrowsAsync<ApiException>(() => projects.SubmitAsync(
-            conn, supplier, children[0].Id, new ProjectSubmitRequest(), null, ct));
-        await projects.ApproveMaterialsAsync(conn, actor, children[0].Id,
-            new ProjectMaterialReviewRequest { ExpectedSupplierFileId = newerFileId }, null, ct);
-        Assert.Equal(2, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM email_outbox WHERE project_id=@ProjectId AND event_type='PROJECT_MATERIAL_APPROVED' AND recipient_user_id=8302",
-            new { ProjectId = children[0].Id })));
+        await AssertPendingTasksAsync(conn, actor, ["PENDING"], ct);
+        using (var groupList = Json(await groups.DetailAsync(conn, actor, groupId, ct)))
+            Assert.Equal(1, groupList.RootElement.GetProperty("group").GetProperty("materialPendingCount").GetInt32());
 
-        using (var submitted = Json(await projects.SubmitAsync(
-                   conn, supplier, children[0].Id, new ProjectSubmitRequest(), null, ct)))
+        // Approval completes the subproject; the main project stays in progress while B is open.
+        using (var approved = Json(await projects.ApproveMaterialsAsync(conn, actor, children[0].Id,
+                   new ProjectMaterialReviewRequest { ExpectedSupplierFileId = newerFileId }, null, ct)))
         {
-            var submissionId = submitted.RootElement.GetProperty("latestSubmissionId").GetUInt64();
-            Assert.Equal(ProjectStatuses.PendingConfirmation,
-                submitted.RootElement.GetProperty("status").GetString());
-            var internalWithdrawal = await Assert.ThrowsAsync<ApiException>(() => projects.WithdrawAsync(
-                conn, actor, children[0].Id,
-                new ProjectDecisionRequest { ExpectedSubmissionId = submissionId }, null, ct));
-            Assert.Equal(403, internalWithdrawal.Status);
-            Assert.Equal(ProjectStatuses.PendingConfirmation, await conn.ExecuteScalarAsync<string>(new CommandDefinition(
-                "SELECT status FROM projects WHERE id=@ProjectId", new { ProjectId = children[0].Id })));
-            await projects.WithdrawAsync(conn, supplier, children[0].Id,
-                new ProjectDecisionRequest { ExpectedSubmissionId = submissionId }, null, ct);
+            Assert.Equal(ProjectStatuses.Completed, approved.RootElement.GetProperty("status").GetString());
+            Assert.Equal(JsonValueKind.Null, approved.RootElement.GetProperty("materialReviewStatus").ValueKind);
         }
-        // Withdrawing (like rejecting) ends the review: the material must be confirmed again.
-        await AssertMaterialReviewAsync(projects, conn, actor, children[0].Id, "PENDING", newerFileId, ct);
-
-        var submissions = new List<(ulong ProjectId, ulong SubmissionId)>();
-        foreach (var child in children)
-        {
-            await conn.ExecuteAsync(new CommandDefinition(
-                "UPDATE projects SET status='PENDING_CONFIRMATION',confirm_side='COMPANY' WHERE id=@ProjectId",
-                new { ProjectId = child.Id }));
-            await conn.ExecuteAsync(new CommandDefinition(
-                """
-                INSERT INTO project_status_logs(project_id,from_status,to_status,action,operator_id,confirm_side,created_at)
-                VALUES(@ProjectId,'IN_PROGRESS','PENDING_CONFIRMATION','SUBMIT',@ActorId,'COMPANY',UTC_TIMESTAMP(3))
-                """, new { ProjectId = child.Id, ActorId = supplier.Id }));
-            submissions.Add((child.Id, await conn.ExecuteScalarAsync<ulong>("SELECT LAST_INSERT_ID()")));
-        }
-        await using (var sync = await AppDb.BeginTransactionAsync(conn, ct))
-        {
-            await groupStatus.RecalculateAsync(conn, sync, groupId, actor.Id, null, ct);
-            await sync.CommitAsync(ct);
-        }
-
-        using (var supplierDashboard = Json(await new DashboardService().SummaryAsync(conn, supplier, ct)))
-            Assert.Equal(2, supplierDashboard.RootElement.GetProperty("pendingConfirmations").GetInt32());
-        using (var supplierPending = Json(await new DashboardService().PendingProjectsAsync(conn, supplier, 1, 20, ct)))
-            Assert.Equal(2, supplierPending.RootElement.GetProperty("total").GetInt32());
-
-        await projects.ConfirmAsync(conn, actor, submissions[0].ProjectId,
-            new ProjectDecisionRequest { ExpectedSubmissionId = submissions[0].SubmissionId }, null, ct);
         Assert.Equal(ProjectStatuses.InProgress, await conn.ExecuteScalarAsync<string>(new CommandDefinition(
             "SELECT status FROM project_groups WHERE id=@GroupId", new { GroupId = groupId })));
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM email_outbox WHERE project_id=@ProjectId AND event_type='PROJECT_MATERIAL_APPROVED' AND recipient_user_id=8302",
+            new { ProjectId = children[0].Id })));
+        Assert.Equal("MATERIAL_APPROVE", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT action FROM project_status_logs WHERE project_id=@ProjectId ORDER BY id DESC LIMIT 1",
+            new { ProjectId = children[0].Id })));
 
-        await projects.ConfirmAsync(conn, actor, submissions[1].ProjectId,
-            new ProjectDecisionRequest { ExpectedSubmissionId = submissions[1].SubmissionId }, null, ct);
+        // Reopening is an after-the-fact return by the owner: it needs the seen version and a reason, and the
+        // subproject follows the main project's current data again.
+        await conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE project_groups SET machine_model='机型-R' WHERE id=@GroupId", new { GroupId = groupId }));
+        var completedAt = await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
+            "SELECT updated_at FROM projects WHERE id=@ProjectId", new { ProjectId = children[0].Id }));
+        var staleReopen = await Assert.ThrowsAsync<ApiException>(() => projects.ReopenAsync(conn, actor, children[0].Id,
+            new ProjectReopenRequest { ExpectedUpdatedAt = completedAt.AddSeconds(-5), Reason = "动作不对" }, null, ct));
+        Assert.Equal((409, 40903), (staleReopen.Status, staleReopen.Code));
+        var reasonlessReopen = await Assert.ThrowsAsync<ApiException>(() => projects.ReopenAsync(conn, actor, children[0].Id,
+            new ProjectReopenRequest { ExpectedUpdatedAt = completedAt, Reason = "" }, null, ct));
+        Assert.Equal(400, reasonlessReopen.Status);
+        var supplierReopen = await Assert.ThrowsAsync<ApiException>(() => projects.ReopenAsync(conn, supplier, children[0].Id,
+            new ProjectReopenRequest { ExpectedUpdatedAt = completedAt, Reason = "动作不对" }, null, ct));
+        Assert.Equal(403, supplierReopen.Status);
+        using (var reopened = Json(await projects.ReopenAsync(conn, actor, children[0].Id,
+                   new ProjectReopenRequest { ExpectedUpdatedAt = completedAt, Reason = "动作不对" }, null, ct)))
+        {
+            Assert.Equal(ProjectStatuses.InProgress, reopened.RootElement.GetProperty("status").GetString());
+            Assert.Equal("RETURNED", reopened.RootElement.GetProperty("materialReviewStatus").GetString());
+            Assert.Equal("动作不对", reopened.RootElement.GetProperty("materialReviewReason").GetString());
+            Assert.Equal("机型-R", reopened.RootElement.GetProperty("machineModel").GetString());
+        }
+        var reopenedAt = await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
+            "SELECT updated_at FROM projects WHERE id=@ProjectId", new { ProjectId = children[0].Id }));
+        var reopenNotInProgress = await Assert.ThrowsAsync<ApiException>(() => projects.ReopenAsync(conn, actor, children[0].Id,
+            new ProjectReopenRequest { ExpectedUpdatedAt = reopenedAt, Reason = "再开" }, null, ct));
+        Assert.Equal((409, 40901), (reopenNotInProgress.Status, reopenNotInProgress.Code));
+
+        // Approving both subprojects completes the main project exactly once.
+        await projects.ApproveMaterialsAsync(conn, actor, children[0].Id,
+            new ProjectMaterialReviewRequest { ExpectedSupplierFileId = newerFileId }, null, ct);
+        await conn.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status)
+            VALUES(@ProjectId,8302,'S2C','b2.txt','group-b2.txt','txt',1,'files/group-b2.txt','AVAILABLE')
+            """, new { ProjectId = children[1].Id }));
+        var secondFileId = await conn.ExecuteScalarAsync<ulong>("SELECT LAST_INSERT_ID()");
+        await projects.ApproveMaterialsAsync(conn, actor, children[1].Id,
+            new ProjectMaterialReviewRequest { ExpectedSupplierFileId = secondFileId }, null, ct);
         var final = await conn.QuerySingleAsync<GroupState>(new CommandDefinition(
             "SELECT status AS Status,completed_at AS CompletedAt FROM project_groups WHERE id=@GroupId",
             new { GroupId = groupId }));
@@ -236,6 +227,28 @@ public sealed class ProjectGroupTests
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
             "SELECT COUNT(*) FROM project_group_status_logs WHERE project_group_id=@GroupId AND action='AUTO_COMPLETE'",
             new { GroupId = groupId })));
+    }
+
+    private static Task InsertUploadSessionAsync(
+        MySqlConnector.MySqlConnection conn, string id, ulong projectId, ulong uploaderId, string status,
+        string expiresAtSql, CancellationToken ct) =>
+        conn.ExecuteAsync(new CommandDefinition($"""
+            INSERT INTO upload_sessions
+                (id,project_id,uploader_id,file_name,file_size,file_last_modified,file_fingerprint,
+                 chunk_size,total_chunks,temp_dir,status,expires_at,created_at,updated_at)
+            VALUES(@Id,@ProjectId,@UploaderId,'session.bin',1,1,@Fingerprint,
+                   1048576,1,CONCAT('tmp/',@Id),@Status,{expiresAtSql},UTC_TIMESTAMP(),UTC_TIMESTAMP())
+            """, new { Id = id, ProjectId = projectId, UploaderId = uploaderId, Status = status, Fingerprint = new string(id[0], 64) },
+            cancellationToken: ct));
+
+    private static async Task AssertPendingTasksAsync(
+        MySqlConnector.MySqlConnection conn, CurrentUser viewer, string[] expectedStates, CancellationToken ct)
+    {
+        using var summary = Json(await new DashboardService().SummaryAsync(conn, viewer, ct));
+        Assert.Equal(expectedStates.Length, summary.RootElement.GetProperty("pendingTasks").GetInt32());
+        using var pending = Json(await new DashboardService().PendingProjectsAsync(conn, viewer, 1, 20, ct));
+        Assert.Equal(expectedStates, pending.RootElement.GetProperty("list").EnumerateArray()
+            .Select(item => item.GetProperty("materialReviewStatus").GetString()!).Order(StringComparer.Ordinal).ToArray());
     }
 
     private static async Task AssertMaterialReviewAsync(

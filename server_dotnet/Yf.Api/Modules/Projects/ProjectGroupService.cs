@@ -201,9 +201,6 @@ internal sealed class ProjectGroupService(
         if (access.SupplierId != request.SupplierId)
             throw ApiException.BadRequest("主项目创建后不可更换供应商");
         await using var db = EfDb.Use(conn, tx);
-        if (await db.Projects.AnyAsync(project => project.ProjectGroupId == groupId
-                && project.Status == ProjectStatuses.PendingConfirmation, ct))
-            throw ApiException.Conflict("存在待验收子项目，暂不能修改主项目资料");
         var before = await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false);
         if (ProjectJson.Utc(before.UpdatedAt) != ProjectJson.Utc(expectedUpdatedAt))
             throw ApiException.VersionConflict("主项目已被他人修改，请刷新后重试");
@@ -349,10 +346,6 @@ internal sealed class ProjectGroupService(
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:transfer", ct);
         if (access.ResponsibleUserId == targetId) throw ApiException.BadRequest("新负责人与当前负责人相同");
         await using var db = EfDb.Use(conn, tx);
-        // Reviewers and pending-acceptance mail are derived from the owner, so keep them stable during acceptance.
-        if (await db.Projects.AnyAsync(project => project.ProjectGroupId == groupId
-                && project.Status == ProjectStatuses.PendingConfirmation, ct))
-            throw ApiException.Conflict("存在待验收子项目，暂不能变更负责人");
         var owner = await ProjectService.EligibleOwners(db).Where(row => row.Id == targetId).SingleOrDefaultAsync(ct)
             ?? throw ApiException.BadRequest("新负责人必须是启用且拥有项目列表权限的公司内部账号");
         var before = await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false);
@@ -511,7 +504,6 @@ internal sealed class ProjectGroupService(
         Description = description,
         SupplierId = supplierId,
         Status = ProjectStatuses.Draft,
-        ConfirmSide = null,
         CreatedBy = actorId,
         MachineModel = metadata.MachineModel,
         RobotPartId = metadata.RobotPartId,
@@ -560,9 +552,12 @@ internal sealed class ProjectGroupService(
                          ProjectGroupId = perGroup.Key,
                          Total = (long?)perGroup.LongCount(),
                          Completed = (long?)perGroup.LongCount(project => project.Status == ProjectStatuses.Completed),
-                         Pending = (long?)perGroup.LongCount(project => project.Status == ProjectStatuses.PendingConfirmation),
                          Terminated = (long?)perGroup.LongCount(project => project.Status == ProjectStatuses.Terminated),
                      };
+        var materialPending = from material in ProjectQueries.InProgressMaterial(db)
+                              where material.State == MaterialReviewStatuses.Pending
+                              group material by material.ProjectGroupId into perGroup
+                              select new { ProjectGroupId = perGroup.Key, Count = (long?)perGroup.LongCount() };
         return
             from mainProject in query
             join supplierValue in db.Suppliers on mainProject.SupplierId equals supplierValue.Id into suppliers
@@ -582,6 +577,8 @@ internal sealed class ProjectGroupService(
             from robotType in robotTypes.DefaultIfEmpty()
             join countValue in counts on mainProject.Id equals countValue.ProjectGroupId into countRows
             from count in countRows.DefaultIfEmpty()
+            join materialValue in materialPending on mainProject.Id equals materialValue.ProjectGroupId into materialRows
+            from material in materialRows.DefaultIfEmpty()
             select new ProjectGroupRow
             {
                 Id = mainProject.Id,
@@ -614,7 +611,7 @@ internal sealed class ProjectGroupService(
                 UpdatedAt = mainProject.UpdatedAt,
                 SubprojectCount = (ulong)(count.Total ?? 0),
                 CompletedCount = (ulong)(count.Completed ?? 0),
-                PendingCount = (ulong)(count.Pending ?? 0),
+                MaterialPendingCount = (ulong)(material.Count ?? 0),
                 TerminatedCount = (ulong)(count.Terminated ?? 0),
             };
     }
@@ -701,6 +698,32 @@ internal sealed class ProjectGroupService(
             project.WorkOrderNos = workOrderLookup.GetValueOrDefault(project.Id) ?? [];
             project.UnreadMessages = unreadLookup.GetValueOrDefault(project.Id);
         }
+    }
+
+    /// <summary>
+    /// Copies the main project's current public data onto one subproject, as a main-project edit does for
+    /// every unfinished subproject. Used when a completed subproject is reopened and stops keeping its snapshot.
+    /// </summary>
+    internal static async Task SyncSubprojectFromGroupAsync(
+        YfDbContext db, ulong groupId, ulong projectId, CancellationToken ct)
+    {
+        var group = await db.ProjectGroups.AsNoTracking().SingleAsync(item => item.Id == groupId, ct);
+        await db.Projects.Where(project => project.Id == projectId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(project => project.MachineModel, group.MachineModel)
+                .SetProperty(project => project.RobotPartId, group.RobotPartId)
+                .SetProperty(project => project.LegacyRobotModelName, group.LegacyRobotModelName)
+                .SetProperty(project => project.PriorityId, group.PriorityId)
+                .SetProperty(project => project.RobotTypeId, group.RobotTypeId)
+                .SetProperty(project => project.RobotOwnerName, group.RobotOwnerName)
+                .SetProperty(project => project.ExpectedCompletionDate, group.ExpectedCompletionDate), ct);
+        var workOrderNos = await db.ProjectGroupWorkOrders.Where(order => order.ProjectGroupId == groupId)
+            .OrderBy(order => order.SortNo).ThenBy(order => order.Id)
+            .Select(order => order.WorkOrderNo).ToArrayAsync(ct);
+        await db.ProjectWorkOrders.Where(order => order.ProjectId == projectId).ExecuteDeleteAsync(ct);
+        db.ProjectWorkOrders.AddRange(workOrderNos.Select((value, index) =>
+            new ProjectWorkOrder { ProjectId = projectId, WorkOrderNo = value, SortNo = index }));
+        await db.SaveChangesAsync(ct);
     }
 
     private static async Task ReplaceGroupWorkOrdersAsync(

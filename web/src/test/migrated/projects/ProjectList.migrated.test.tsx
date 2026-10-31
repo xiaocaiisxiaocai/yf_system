@@ -192,7 +192,7 @@ describe('ProjectList migrated behavior', () => {
       responsibleUserId: 5, responsibleUserEmployeeNo: '0004', responsibleUserName: '旧负责人', sectionId: null, sectionName: null,
       priorityId: 14, priorityName: '普通', robotTypeId: null, robotTypeName: null, expectedCompletionDate: '2026-09-30',
       updatedAt: '2026-09-01T00:00:00.000000Z',
-      subprojectCount: 0, completedCount: 0, pendingCount: 0, terminatedCount: 0, unreadMessages: 0,
+      subprojectCount: 0, completedCount: 0, materialPendingCount: 0, terminatedCount: 0, unreadMessages: 0,
     }
     mocks.get.mockImplementation((url: string, config?: GetConfig) => {
       if (url === '/project-groups') return Promise.resolve({ data: page([historical]) })
@@ -233,7 +233,7 @@ describe('ProjectList migrated behavior', () => {
       responsibleUserId: 5, responsibleUserEmployeeNo: '0004', responsibleUserName: '旧负责人', sectionId: null, sectionName: null,
       priorityId: 14, priorityName: '普通', robotTypeId: 21, robotTypeName: '六轴', robotOwnerName: '张三',
       robotOwnerContactIds: [31], expectedCompletionDate: '2026-09-30', updatedAt,
-      subprojectCount: 0, completedCount: 0, pendingCount: 0, terminatedCount: 0, unreadMessages: 0,
+      subprojectCount: 0, completedCount: 0, materialPendingCount: 0, terminatedCount: 0, unreadMessages: 0,
     }
   }
 
@@ -304,10 +304,10 @@ describe('ProjectList migrated behavior', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
-  it('main projects with pending child acceptance expose a disabled edit action and reason', async () => {
+  it('main projects with material awaiting review stay editable and show the pending count', async () => {
     const pendingGroup = {
-      id: 3, name: '待验收主项目', supplierId: 8, status: 'IN_PROGRESS', workOrderNos: [], unreadMessages: 0,
-      subprojectCount: 2, completedCount: 0, pendingCount: 1, terminatedCount: 0,
+      id: 3, name: '资料待确认主项目', supplierId: 8, status: 'IN_PROGRESS', workOrderNos: [], unreadMessages: 0,
+      subprojectCount: 2, completedCount: 0, materialPendingCount: 1, terminatedCount: 0,
     }
     mocks.get.mockImplementation((url: string) => {
       if (url === '/project-groups') return Promise.resolve({ data: page([pendingGroup]) })
@@ -315,10 +315,9 @@ describe('ProjectList migrated behavior', () => {
       return Promise.resolve({ data: [] })
     })
     renderList()
-    const row = await screen.findByRole('row', { name: /待验收主项目/ })
-    expect(within(row).getByRole('button', { name: '编辑' })).toBeDisabled()
-    fireEvent.mouseEnter(within(row).getByRole('button', { name: '编辑' }).parentElement!)
-    expect(await screen.findByText(/有 1 个子项目待公司验收/)).toBeInTheDocument()
+    const row = await screen.findByRole('row', { name: /资料待确认主项目/ })
+    expect(within(row).getByRole('button', { name: '编辑' })).toBeEnabled()
+    expect(within(row).getByText('资料待确认 1')).toBeInTheDocument()
   })
 
   it('project creation explains missing prerequisites and refreshes without discarding entered data', async () => {
@@ -397,7 +396,7 @@ describe('ProjectList migrated behavior', () => {
 
     const historical = {
       id: 3, name: '历史项目', supplierId: 8, supplierName: '历史厂商', status: 'DRAFT',
-      workOrderNos: ['WO-OLD'], unreadMessages: 0, subprojectCount: 0, completedCount: 0, pendingCount: 0, terminatedCount: 0,
+      workOrderNos: ['WO-OLD'], unreadMessages: 0, subprojectCount: 0, completedCount: 0, materialPendingCount: 0, terminatedCount: 0,
     }
     let failList = false
     mocks.get.mockImplementation((url: string, config?: GetConfig) => {

@@ -22,7 +22,7 @@ from test_business_acceptance import (
 def _project_snapshot(conn, project_id):
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT status,confirm_side,name,description,material_review_status,"
+            "SELECT status,name,description,material_review_status,"
             "material_review_file_id,material_review_reason FROM projects WHERE id=%s",
             (project_id,),
         )
@@ -86,27 +86,13 @@ def _event_count(conn, project_id, event_type, recipient_id):
         return cursor.fetchone()[0]
 
 
-def _acceptance_notification_rows(conn, project_id, recipient_id):
+def _event_total(conn, project_id, event_type):
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT dedupe_key,status,retry_count,sent_at,last_error FROM email_outbox "
-            "WHERE project_id=%s AND event_type='PROJECT_SUBMITTED' "
-            "AND recipient_user_id=%s ORDER BY id",
-            (project_id, recipient_id),
+            "SELECT COUNT(*) FROM email_outbox WHERE project_id=%s AND event_type=%s",
+            (project_id, event_type),
         )
-        return cursor.fetchall()
-
-
-def _acceptance_notifications(conn, project_id):
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT eo.dedupe_key,eo.recipient_user_id,u.user_type,eo.status,"
-            "eo.retry_count,eo.sent_at,eo.last_error FROM email_outbox eo "
-            "JOIN users u ON u.id=eo.recipient_user_id "
-            "WHERE eo.project_id=%s AND eo.event_type='PROJECT_SUBMITTED' ORDER BY eo.id",
-            (project_id,),
-        )
-        return cursor.fetchall()
+        return cursor.fetchone()[0]
 
 
 def _check_equal(check, label, actual, expected):
@@ -134,11 +120,14 @@ def _create_owner_section(client, suffix):
     return section["id"]
 
 
-def _submission_id(project):
-    value = project.get("latestSubmissionId")
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise AssertionError(f"pending project response has invalid latestSubmissionId: {value!r}")
-    return value
+def _status_history(conn, project_id):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT action,operator_id,reason,from_status,to_status "
+            "FROM project_status_logs WHERE project_id=%s ORDER BY id",
+            (project_id,),
+        )
+        return list(cursor.fetchall())
 
 
 def _audit_actions(conn, project_id):
@@ -154,23 +143,14 @@ def run_workflow_acceptance(client, Client, conn, check):
     suffix = secrets.token_hex(5)
     owner_section_id = _create_owner_section(client, suffix)
     permissions = client.call("GET", "/api/v1/permissions")
-    withdraw_permission_id = next(
-        permission["id"] for permission in permissions
-        if permission["code"] == "project:withdraw")
-    confirm_permission_id = next(
-        permission["id"] for permission in permissions
-        if permission["code"] == "project:confirm")
-    dashboard_permission_id = next(
-        permission["id"] for permission in permissions
-        if permission["code"] == "dashboard")
+    permission_ids = {permission["code"]: permission["id"] for permission in permissions}
     supplier_role = next(
         role for role in client.call("GET", "/api/v1/admin/roles?pageSize=100")["list"]
         if role["name"] == "供应商人员")
-    original_supplier_permission_ids = list(supplier_role["permissionIds"])
     check(
-        "default supplier role excludes confirmation and grants explicit withdrawal",
-        confirm_permission_id not in original_supplier_permission_ids
-        and withdraw_permission_id in original_supplier_permission_ids,
+        "the acceptance permissions are retired and the default supplier role can return material",
+        not {"project:submit", "project:confirm", "project:withdraw"} & set(permission_ids)
+        and permission_ids["file:upload"] in supplier_role["permissionIds"],
     )
     supplier = client.call("POST", "/api/v1/admin/suppliers", {
         "name": "工作流完整验收供应商-" + suffix,
@@ -206,27 +186,27 @@ def run_workflow_acceptance(client, Client, conn, check):
         client, Client, check, internal_employee, internal_initial,
         internal_user["id"], "workflow project owner")
 
-    confirm_only_role = client.call("POST", "/api/v1/admin/roles", {
-        "name": "仅确认无项目菜单-" + suffix,
+    menuless_role = client.call("POST", "/api/v1/admin/roles", {
+        "name": "全局查看无项目菜单-" + suffix,
         "description": "verifies notification recipients can actually open the project",
     })
-    client.call("PUT", f"/api/v1/admin/roles/{confirm_only_role['id']}/permissions", {
-        "permissionIds": [dashboard_permission_id, confirm_permission_id],
+    client.call("PUT", f"/api/v1/admin/roles/{menuless_role['id']}/permissions", {
+        "permissionIds": [permission_ids["dashboard"], permission_ids["project:view_all"]],
     })
-    confirm_only_employee = "wf_confirm_only_" + suffix
-    confirm_only_initial = _password()
-    confirm_only_user = client.call("POST", "/api/v1/admin/users", {
-        "employeeNo": confirm_only_employee,
-        "password": confirm_only_initial,
-        "realName": "仅确认无项目菜单用户",
-        "email": confirm_only_employee + "@example.invalid",
+    menuless_employee = "wf_menuless_" + suffix
+    menuless_initial = _password()
+    menuless_user = client.call("POST", "/api/v1/admin/users", {
+        "employeeNo": menuless_employee,
+        "password": menuless_initial,
+        "realName": "全局查看无项目菜单用户",
+        "email": menuless_employee + "@example.invalid",
         "departmentId": owner_section_id,
-        "roleId": confirm_only_role["id"],
+        "roleId": menuless_role["id"],
     })
-    confirm_only_client = _activate_user(
-        client, Client, check, confirm_only_employee, confirm_only_initial,
-        confirm_only_user["id"], "workflow confirm-only member")
-    confirm_only_client.call("GET", "/api/v1/project-groups", expected=403)
+    menuless_client = _activate_user(
+        client, Client, check, menuless_employee, menuless_initial,
+        menuless_user["id"], "workflow menu-less member")
+    menuless_client.call("GET", "/api/v1/project-groups", expected=403)
 
     group, created = _create_project_group(
         internal_client, client, conn, supplier["id"],
@@ -248,7 +228,8 @@ def run_workflow_acceptance(client, Client, conn, check):
     check(
         "project creation persists an auditable DRAFT without notifications",
         created["status"] == "DRAFT"
-        and created["confirmSide"] is None
+        and "confirmSide" not in created
+        and "latestSubmissionId" not in created
         and draft_history == [("CREATE", None, "DRAFT")]
         and _audit_actions(conn, project_id) == ["PROJECT_CREATE"]
         and draft_outbox == 0,
@@ -257,8 +238,6 @@ def run_workflow_acceptance(client, Client, conn, check):
     started = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
         "status": "IN_PROGRESS",
     })
-    outbox_before_management = _event_count(
-        conn, project_id, "PROJECT_SUBMITTED", internal_user["id"])
     terminated = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
         "status": "TERMINATED",
     })
@@ -290,7 +269,7 @@ def run_workflow_acceptance(client, Client, conn, check):
             ("RESTART", "TERMINATED", "IN_PROGRESS"),
         ]
         and {"PROJECT_START", "PROJECT_TERMINATE", "PROJECT_RESTART"}.issubset(project_audits)
-        and management_outbox == outbox_before_management == 0,
+        and management_outbox == 0,
     )
 
     payload = (b"workflow-completed-read-boundary\n" * 12000) + b"EOF"
@@ -299,70 +278,19 @@ def run_workflow_acceptance(client, Client, conn, check):
     check(
         "file upload notifies the current owner but not an internal user without project:list",
         _event_count(conn, project_id, "FILE_UPLOADED", internal_user["id"]) == 1
-        and _event_count(conn, project_id, "FILE_UPLOADED", confirm_only_user["id"]) == 0,
+        and _event_count(conn, project_id, "FILE_UPLOADED", menuless_user["id"]) == 0,
     )
     message = supplier_client.call(
         "POST", f"/api/v1/projects/{project_id}/messages",
         {"content": "完成前创建，完成后仍应可读但不可删除"})
 
-    _, no_reviewer_project = _create_project_group(
-        internal_client, client, conn, supplier["id"],
-        "无内部验收人项目-" + suffix)
-    client.call("PUT", f"/api/v1/projects/{no_reviewer_project['id']}/status", {
-        "status": "IN_PROGRESS",
-    })
-    _upload_chunks(
-        supplier_client, no_reviewer_project["id"],
-        "no-reviewer-boundary.pdf", b"no-reviewer-boundary")
-    _approve_materials(internal_client, no_reviewer_project["id"])
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT rp.role_id,rp.permission_id FROM role_permissions rp "
-            "JOIN permissions p ON p.id=rp.permission_id WHERE p.code='project:confirm'"
-        )
-        confirmation_grants = cursor.fetchall()
-        cursor.execute(
-            "DELETE rp FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id "
-            "WHERE p.code='project:confirm'"
-        )
-    try:
-        no_reviewer = _expect_atomic_rejection(
-            check, conn, supplier_client, no_reviewer_project["id"],
-            "submission without an eligible internal reviewer",
-            "POST", f"/api/v1/projects/{no_reviewer_project['id']}/submit", {}, expected=409)
-    finally:
-        with conn.cursor() as cursor:
-            cursor.executemany(
-                "INSERT IGNORE INTO role_permissions(role_id,permission_id) VALUES(%s,%s)",
-                confirmation_grants,
-            )
-    _check_equal(
-        check,
-        "submission without a reviewer returns the actionable business error",
-        no_reviewer["message"],
-        "项目没有可执行验收的公司内部用户，请为项目负责人配置验收权限，或配置具备全局查看权限的验收人员",
-    )
+    for retired in ("submit", "withdraw", "confirm", "reject"):
+        _expect_atomic_rejection(
+            check, conn, supplier_client if retired in ("submit", "withdraw") else internal_client,
+            project_id, f"retired {retired} endpoint",
+            "POST", f"/api/v1/projects/{project_id}/{retired}",
+            {"confirmSide": "COMPANY", "expectedSubmissionId": 1, "reason": "已退役"}, expected=404)
 
-    _expect_atomic_rejection(
-        check, conn, internal_client, project_id,
-        "internal submission is rejected by the supplier-only submission boundary",
-        "POST", f"/api/v1/projects/{project_id}/submit",
-        {"confirmSide": "COMPANY"}, expected=403)
-    _expect_atomic_rejection(
-        check, conn, supplier_client, project_id,
-        "supplier explicit supplier-side project submission",
-        "POST", f"/api/v1/projects/{project_id}/submit",
-        {"confirmSide": "SUPPLIER"}, expected=400)
-    unreviewed = _expect_atomic_rejection(
-        check, conn, supplier_client, project_id,
-        "supplier submission before the responsible user confirms the returned material",
-        "POST", f"/api/v1/projects/{project_id}/submit", {})
-    _check_equal(
-        check,
-        "unconfirmed material submission returns the actionable business error",
-        (unreviewed["code"], unreviewed["message"]),
-        (40901, "回传资料尚未经公司负责人确认 OK，不能提交验收"),
-    )
     material_detail = internal_client.call("GET", f"/api/v1/projects/{project_id}")
     _check_equal(
         check,
@@ -370,6 +298,27 @@ def run_workflow_acceptance(client, Client, conn, check):
         (material_detail["materialReviewStatus"], material_detail["latestSupplierFileId"]),
         ("PENDING", file_id),
     )
+    owner_pending = internal_client.call("GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100")
+    owner_summary = internal_client.call("GET", "/api/v1/dashboard/summary")
+    supplier_pending = supplier_client.call("GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100")
+    pending_group = supplier_client.call("GET", f"/api/v1/project-groups/{group_id}")
+    pending_list = internal_client.call("GET", "/api/v1/project-groups?page=1&pageSize=100")
+    pending_group_item = next(item for item in pending_list["list"] if item["id"] == group_id)
+    check(
+        "pending material is the owner's dashboard task and the main project's pending count",
+        any(item["id"] == project_id and item["materialReviewStatus"] == "PENDING"
+            for item in owner_pending["list"])
+        and owner_summary["pendingTasks"] >= 1
+        and all(item["id"] != project_id for item in supplier_pending["list"])
+        and pending_group["group"]["materialPendingCount"] == 1
+        and pending_group_item["materialPendingCount"] == 1,
+    )
+    menuless_client.call("GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100", expected=403)
+    check("dashboard tasks require project:list", True)
+    summary = supplier_client.call("GET", f"/api/v1/projects/{project_id}/summary")
+    _check_equal(check, "project summary exposes only unread and activity revision",
+                 sorted(summary), ["activityRevision", "unreadMessages"])
+
     material_path = f"/api/v1/projects/{project_id}/materials"
     _expect_atomic_rejection(
         check, conn, supplier_client, project_id, "supplier material approval",
@@ -387,298 +336,121 @@ def run_workflow_acceptance(client, Client, conn, check):
         "expectedSupplierFileId": file_id,
         "reason": "缺少动作流程表",
     })
-    returned_submission = _expect_atomic_rejection(
-        check, conn, supplier_client, project_id, "supplier submission of returned material",
-        "POST", f"/api/v1/projects/{project_id}/submit", {})
-    approved_material = internal_client.call("POST", material_path + "/approve", {
-        "expectedSupplierFileId": file_id,
-    })
+    returned_again = _expect_atomic_rejection(
+        check, conn, internal_client, project_id, "returning already returned material",
+        "POST", material_path + "/return", {"expectedSupplierFileId": file_id, "reason": "再次退回"})
+    supplier_returned_tasks = supplier_client.call(
+        "GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100")
     check(
-        "responsible user returns then approves the material with supplier notifications",
+        "responsible user returns the material with a supplier task and notification",
         stale_material["code"] == 40903
         and (returned_material["materialReviewStatus"], returned_material["materialReviewReason"])
         == ("RETURNED", "缺少动作流程表")
-        and returned_submission["message"] == "回传资料已被公司负责人退回，请补充资料并待确认 OK 后再提交验收"
-        and (approved_material["materialReviewStatus"], approved_material["materialReviewReason"])
-        == ("APPROVED", None)
-        and _event_count(conn, project_id, "PROJECT_MATERIAL_RETURNED", supplier_user["id"]) == 1
-        and _event_count(conn, project_id, "PROJECT_MATERIAL_APPROVED", supplier_user["id"]) == 1
-        and {"PROJECT_MATERIAL_RETURN", "PROJECT_MATERIAL_APPROVE"}.issubset(_audit_actions(conn, project_id)),
+        and returned_again["code"] == 40901
+        and any(item["id"] == project_id and item["materialReviewStatus"] == "RETURNED"
+                for item in supplier_returned_tasks["list"])
+        and _event_count(conn, project_id, "PROJECT_MATERIAL_RETURNED", supplier_user["id"]) == 1,
     )
-    submitted_for_reject = supplier_client.call(
-        "POST", f"/api/v1/projects/{project_id}/submit", {})
-    reject_submission_id = _submission_id(submitted_for_reject)
-    pending_detail = supplier_client.call("GET", f"/api/v1/projects/{project_id}")
-    pending_summary = supplier_client.call("GET", f"/api/v1/projects/{project_id}/summary")
-    pending_group_detail = supplier_client.call("GET", f"/api/v1/project-groups/{group_id}")
-    pending_list = supplier_client.call("GET", "/api/v1/project-groups?page=1&pageSize=100")
-    pending_group_item = next(item for item in pending_list["list"] if item["id"] == group_id)
-    pending_group_project = next(
-        item for item in pending_group_detail["projects"] if item["id"] == project_id)
+
+    second_file, _, _ = _upload_chunks(
+        supplier_client, project_id, "workflow-second.pdf", b"workflow-second-material")
     _check_equal(
         check,
-        "pending submission version is consistent across subproject detail summary and group detail",
-        (
-            submitted_for_reject["latestSubmissionId"],
-            pending_detail["latestSubmissionId"],
-            pending_summary["latestSubmissionId"],
-            pending_group_project["latestSubmissionId"],
-        ),
-        (reject_submission_id,) * 4,
-    )
-    check("group list exposes the pending subproject's main project", pending_group_item["id"] == group_id)
-    confirm_only_pending = confirm_only_client.call(
-        "GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100")
-    _check_equal(
-        check,
-        "dashboard excludes confirm-only users without project:list",
-        (confirm_only_pending["total"], confirm_only_pending["list"]),
-        (0, []),
-    )
-    stale_submission_id = reject_submission_id - 1
-    _expect_atomic_rejection(
-        check, conn, internal_client, project_id,
-        "confirmation without expected submission version",
-        "POST", f"/api/v1/projects/{project_id}/confirm", {}, expected=400)
-    _expect_atomic_rejection(
-        check, conn, internal_client, project_id,
-        "rejection without expected submission version",
-        "POST", f"/api/v1/projects/{project_id}/reject",
-        {"reason": "缺少版本"}, expected=400)
-    _expect_atomic_rejection(
-        check, conn, supplier_client, project_id,
-        "withdrawal without expected submission version",
-        "POST", f"/api/v1/projects/{project_id}/withdraw", {}, expected=400)
-    stale_confirm = _expect_atomic_rejection(
-        check, conn, internal_client, project_id,
-        "confirmation with stale submission version",
-        "POST", f"/api/v1/projects/{project_id}/confirm",
-        {"expectedSubmissionId": stale_submission_id}, expected=409)
-    stale_reject = _expect_atomic_rejection(
-        check, conn, internal_client, project_id,
-        "rejection with stale submission version",
-        "POST", f"/api/v1/projects/{project_id}/reject",
-        {"reason": "陈旧版本", "expectedSubmissionId": stale_submission_id}, expected=409)
-    stale_withdraw = _expect_atomic_rejection(
-        check, conn, supplier_client, project_id,
-        "withdrawal with stale submission version",
-        "POST", f"/api/v1/projects/{project_id}/withdraw",
-        {"expectedSubmissionId": stale_submission_id}, expected=409)
-    check("stale workflow decisions use the version-conflict code",
-          stale_confirm["code"] == 40903
-          and stale_reject["code"] == 40903
-          and stale_withdraw["code"] == 40903)
-    _expect_atomic_rejection(
-        check, conn, client, project_id,
-        "internal administrator withdrawal with the current submission version",
-        "POST", f"/api/v1/projects/{project_id}/withdraw",
-        {"expectedSubmissionId": reject_submission_id}, expected=403)
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "INSERT INTO role_permissions(role_id,permission_id) VALUES(%s,%s)",
-            (supplier_role["id"], confirm_permission_id),
-        )
-    try:
-        _expect_atomic_rejection(
-            check, conn, supplier_client, project_id,
-            "supplier confirmation with a legacy project:confirm grant",
-            "POST", f"/api/v1/projects/{project_id}/confirm",
-            {"expectedSubmissionId": reject_submission_id}, expected=403)
-        _expect_atomic_rejection(
-            check, conn, supplier_client, project_id,
-            "supplier rejection with a legacy project:confirm grant",
-            "POST", f"/api/v1/projects/{project_id}/reject",
-            {"reason": "供应商不得验收", "expectedSubmissionId": reject_submission_id}, expected=403)
-    finally:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "DELETE FROM role_permissions WHERE role_id=%s AND permission_id=%s",
-                (supplier_role["id"], confirm_permission_id),
-            )
-    rejected = internal_client.call(
-        "POST", f"/api/v1/projects/{project_id}/reject", {
-            "reason": "公司验收驳回",
-            "expectedSubmissionId": reject_submission_id,
-        })
-    _check_equal(
-        check,
-        "rejection requires the material to be confirmed again",
+        "a new supplier file sends returned material back to review",
         internal_client.call("GET", f"/api/v1/projects/{project_id}")["materialReviewStatus"],
         "PENDING",
     )
-    _approve_materials(internal_client, project_id)
-    submitted_for_withdraw = supplier_client.call(
-        "POST", f"/api/v1/projects/{project_id}/submit", {"confirmSide": "COMPANY"})
-    withdraw_submission_id = _submission_id(submitted_for_withdraw)
-    client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
-        "permissionIds": [permission_id for permission_id in original_supplier_permission_ids
-                          if permission_id != withdraw_permission_id],
+    completed_once = internal_client.call("POST", material_path + "/approve", {
+        "expectedSupplierFileId": second_file,
     })
-    _expect_atomic_rejection(
-        check, conn, supplier_client, project_id, "supplier withdrawal without explicit permission",
-        "POST", f"/api/v1/projects/{project_id}/withdraw",
-        {"expectedSubmissionId": withdraw_submission_id}, expected=403)
-    client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
-        "permissionIds": original_supplier_permission_ids,
-    })
-    try:
-        withdrawn = supplier_client.call("POST", f"/api/v1/projects/{project_id}/withdraw", {
-            "expectedSubmissionId": withdraw_submission_id,
-        })
-    finally:
-        client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
-            "permissionIds": original_supplier_permission_ids,
-        })
-    _approve_materials(internal_client, project_id)
-    submitted_for_confirm = supplier_client.call(
-        "POST", f"/api/v1/projects/{project_id}/submit", {})
-    confirm_submission_id = _submission_id(submitted_for_confirm)
-    completed = internal_client.call("POST", f"/api/v1/projects/{project_id}/confirm", {
-        "expectedSubmissionId": confirm_submission_id,
-    })
+    group_after_approval = internal_client.call("GET", f"/api/v1/project-groups/{group_id}")["group"]
 
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT action,operator_id,confirm_side,reason,from_status,to_status "
-            "FROM project_status_logs WHERE project_id=%s ORDER BY id",
-            (project_id,),
-        )
-        history = list(cursor.fetchall())
-    workflow_tail = history[-6:]
-    project_audits = _audit_actions(conn, project_id)
-    _check_equal(
-        check,
-        "workflow responses persist company-only acceptance states",
-        (
-            (submitted_for_reject["status"], submitted_for_reject["confirmSide"],
-             submitted_for_reject["latestSubmissionId"]),
-            (rejected["status"], rejected["confirmSide"], rejected["latestSubmissionId"]),
-            (submitted_for_withdraw["status"], submitted_for_withdraw["confirmSide"],
-             submitted_for_withdraw["latestSubmissionId"]),
-            (withdrawn["status"], withdrawn["confirmSide"], withdrawn["latestSubmissionId"]),
-            (submitted_for_confirm["status"], submitted_for_confirm["confirmSide"],
-             submitted_for_confirm["latestSubmissionId"]),
-            (completed["status"], completed["confirmSide"], completed["latestSubmissionId"]),
-        ),
-        (
-            ("PENDING_CONFIRMATION", "COMPANY", reject_submission_id),
-            ("IN_PROGRESS", None, None),
-            ("PENDING_CONFIRMATION", "COMPANY", withdraw_submission_id),
-            ("IN_PROGRESS", None, None),
-            ("PENDING_CONFIRMATION", "COMPANY", confirm_submission_id),
-            ("COMPLETED", None, None),
-        ),
+    reopen_path = f"/api/v1/projects/{project_id}/reopen"
+    reopen_body = {"expectedUpdatedAt": completed_once["updatedAt"], "reason": "动作节拍需要返工"}
+    _expect_atomic_rejection(
+        check, conn, supplier_client, project_id, "supplier reopen", "POST", reopen_path, reopen_body,
+        expected=403)
+    _expect_atomic_rejection(
+        check, conn, client, project_id, "non-responsible internal reopen", "POST", reopen_path, reopen_body,
+        expected=403)
+    _expect_atomic_rejection(
+        check, conn, internal_client, project_id, "reopen without a reason", "POST", reopen_path,
+        {"expectedUpdatedAt": completed_once["updatedAt"]}, expected=400)
+    stale_reopen = _expect_atomic_rejection(
+        check, conn, internal_client, project_id, "reopen against an older version", "POST", reopen_path,
+        {"expectedUpdatedAt": completed_once["createdAt"], "reason": "陈旧版本"})
+    reopened = internal_client.call("POST", reopen_path, reopen_body)
+    group_after_reopen = internal_client.call("GET", f"/api/v1/project-groups/{group_id}")["group"]
+    completed = internal_client.call("POST", material_path + "/approve", {
+        "expectedSupplierFileId": second_file,
+    })
+    group_after_completion = internal_client.call("GET", f"/api/v1/project-groups/{group_id}")["group"]
+    check(
+        "approval completes, reopening returns the material, and approval completes again",
+        completed_once["status"] == "COMPLETED"
+        and completed_once["materialReviewStatus"] is None
+        and group_after_approval["status"] == "COMPLETED"
+        and stale_reopen["code"] == 40903
+        and (reopened["status"], reopened["materialReviewStatus"], reopened["materialReviewReason"])
+        == ("IN_PROGRESS", "RETURNED", "动作节拍需要返工")
+        and group_after_reopen["status"] == "IN_PROGRESS"
+        and completed["status"] == "COMPLETED"
+        and group_after_completion["status"] == "COMPLETED",
     )
     _check_equal(
         check,
-        "workflow status history records the actual supplier and internal actors",
-        workflow_tail,
+        "workflow status history records the responsible user's approvals and reopen",
+        _status_history(conn, project_id)[-3:],
         [
-            ("SUBMIT", supplier_user["id"], "COMPANY", None,
-             "IN_PROGRESS", "PENDING_CONFIRMATION"),
-            ("REJECT", internal_user["id"], "COMPANY", "公司验收驳回",
-             "PENDING_CONFIRMATION", "IN_PROGRESS"),
-            ("SUBMIT", supplier_user["id"], "COMPANY", None,
-             "IN_PROGRESS", "PENDING_CONFIRMATION"),
-            ("WITHDRAW", supplier_user["id"], "COMPANY", None,
-             "PENDING_CONFIRMATION", "IN_PROGRESS"),
-            ("SUBMIT", supplier_user["id"], "COMPANY", None,
-             "IN_PROGRESS", "PENDING_CONFIRMATION"),
-            ("CONFIRM", internal_user["id"], "COMPANY", None,
-             "PENDING_CONFIRMATION", "COMPLETED"),
+            ("MATERIAL_APPROVE", internal_user["id"], None, "IN_PROGRESS", "COMPLETED"),
+            ("REOPEN", internal_user["id"], "动作节拍需要返工", "COMPLETED", "IN_PROGRESS"),
+            ("MATERIAL_APPROVE", internal_user["id"], None, "IN_PROGRESS", "COMPLETED"),
         ],
     )
+    project_audits = _audit_actions(conn, project_id)
     _check_equal(
         check,
         "workflow audit actions persist once per accepted transition",
         {
             action: project_audits.count(action)
-            for action in ("PROJECT_SUBMIT", "PROJECT_REJECT", "PROJECT_WITHDRAW", "PROJECT_CONFIRM")
+            for action in ("PROJECT_MATERIAL_RETURN", "PROJECT_MATERIAL_APPROVE", "PROJECT_REOPEN",
+                           "PROJECT_SUBMIT", "PROJECT_CONFIRM", "PROJECT_REJECT", "PROJECT_WITHDRAW")
         },
         {
-            "PROJECT_SUBMIT": 3,
-            "PROJECT_REJECT": 1,
-            "PROJECT_WITHDRAW": 1,
-            "PROJECT_CONFIRM": 1,
+            "PROJECT_MATERIAL_RETURN": 1,
+            "PROJECT_MATERIAL_APPROVE": 2,
+            "PROJECT_REOPEN": 1,
+            "PROJECT_SUBMIT": 0,
+            "PROJECT_CONFIRM": 0,
+            "PROJECT_REJECT": 0,
+            "PROJECT_WITHDRAW": 0,
         },
     )
-    acceptance_notifications = _acceptance_notifications(conn, project_id)
-    parsed_acceptance_keys = [row[0].split(":") for row in acceptance_notifications]
-    acceptance_summary = {
-        "versions": sorted({int(parts[2]) for parts in parsed_acceptance_keys}),
-        "recipientTypes": sorted({row[2] for row in acceptance_notifications}),
-        "statuses": sorted({row[3] for row in acceptance_notifications}),
-        "retryCounts": sorted({row[4] for row in acceptance_notifications}),
-        "hasSentTimestamp": any(row[5] is not None for row in acceptance_notifications),
-        "cancelReasons": sorted({row[6] for row in acceptance_notifications}),
-        "dedupeKeysMatch": all(
-            len(parts) == 4
-            and parts[0] == "project-acceptance"
-            and int(parts[1]) == project_id
-            and int(parts[3]) == row[1]
-            for parts, row in zip(parsed_acceptance_keys, acceptance_notifications)
-        ),
-    }
     _check_equal(
         check,
-        "workflow notifications target only eligible recipients and latest submitters",
+        "workflow notifications target only eligible recipients",
         {
             "message_internal": _event_count(
                 conn, project_id, "MESSAGE_CREATED", internal_user["id"]),
-            "message_confirm_only": _event_count(
-                conn, project_id, "MESSAGE_CREATED", confirm_only_user["id"]),
-            "submitted_internal": _acceptance_notification_rows(
-                conn, project_id, internal_user["id"]),
-            "submitted_confirm_only": _acceptance_notification_rows(
-                conn, project_id, confirm_only_user["id"]),
-            "submitted_supplier": _acceptance_notification_rows(
-                conn, project_id, supplier_user["id"]),
-            "submitted_summary": acceptance_summary,
-            "rejected_supplier": _event_count(
-                conn, project_id, "PROJECT_REJECTED", supplier_user["id"]),
-            "withdrawn_internal": _event_count(
-                conn, project_id, "PROJECT_WITHDRAWN", internal_user["id"]),
-            "withdrawn_confirm_only": _event_count(
-                conn, project_id, "PROJECT_WITHDRAWN", confirm_only_user["id"]),
-            "withdrawn_supplier": _event_count(
-                conn, project_id, "PROJECT_WITHDRAWN", supplier_user["id"]),
-            "confirmed_supplier": _event_count(
-                conn, project_id, "PROJECT_CONFIRMED", supplier_user["id"]),
+            "message_menuless": _event_count(
+                conn, project_id, "MESSAGE_CREATED", menuless_user["id"]),
+            "returned_supplier": _event_count(
+                conn, project_id, "PROJECT_MATERIAL_RETURNED", supplier_user["id"]),
+            "approved_supplier": _event_count(
+                conn, project_id, "PROJECT_MATERIAL_APPROVED", supplier_user["id"]),
+            "approved_internal": _event_count(
+                conn, project_id, "PROJECT_MATERIAL_APPROVED", internal_user["id"]),
+            "retired_events": sum(
+                _event_total(conn, project_id, event)
+                for event in ("PROJECT_SUBMITTED", "PROJECT_CONFIRMED", "PROJECT_REJECTED", "PROJECT_WITHDRAWN")),
         },
         {
             "message_internal": 1,
-            "message_confirm_only": 0,
-            "submitted_internal": (
-                (f"project-acceptance:{project_id}:{reject_submission_id}:{internal_user['id']}",
-                 "CANCELLED", 0, None,
-                 "验收申请已失效或收件人已无验收权限，通知已取消"),
-                (f"project-acceptance:{project_id}:{withdraw_submission_id}:{internal_user['id']}",
-                 "CANCELLED", 0, None,
-                 "验收申请已失效或收件人已无验收权限，通知已取消"),
-                (f"project-acceptance:{project_id}:{confirm_submission_id}:{internal_user['id']}",
-                 "CANCELLED", 0, None,
-                 "验收申请已失效或收件人已无验收权限，通知已取消"),
-            ),
-            "submitted_confirm_only": (),
-            "submitted_supplier": (),
-            "submitted_summary": {
-                "versions": sorted([
-                    reject_submission_id,
-                    withdraw_submission_id,
-                    confirm_submission_id,
-                ]),
-                "recipientTypes": ["INTERNAL"],
-                "statuses": ["CANCELLED"],
-                "retryCounts": [0],
-                "hasSentTimestamp": False,
-                "cancelReasons": ["验收申请已失效或收件人已无验收权限，通知已取消"],
-                "dedupeKeysMatch": True,
-            },
-            "rejected_supplier": 1,
-            "withdrawn_internal": 1,
-            "withdrawn_confirm_only": 0,
-            "withdrawn_supplier": 1,
-            "confirmed_supplier": 1,
+            "message_menuless": 0,
+            "returned_supplier": 1,
+            "approved_supplier": 2,
+            "approved_internal": 0,
+            "retired_events": 0,
         },
     )
 
@@ -717,8 +489,9 @@ def run_workflow_acceptance(client, Client, conn, check):
             "supplierId": supplier["id"],
         })
     _expect_atomic_rejection(
-        check, conn, supplier_client, project_id, "completed project resubmit",
-        "POST", f"/api/v1/projects/{project_id}/submit", {"confirmSide": "COMPANY"})
+        check, conn, internal_client, project_id, "completed material return",
+        "POST", f"/api/v1/projects/{project_id}/materials/return",
+        {"expectedSupplierFileId": second_file, "reason": "已完成"})
     _expect_atomic_rejection(
         check, conn, client, project_id, "completed project delete",
         # ProjectWorkflowRules rejects deletion as an invalid request (400).
