@@ -15,7 +15,9 @@ type Expand = (pattern: string, options?: { max: number, maxLength: number }) =>
 function loadExpansion(directory: string, version: string): Expand {
   const installed = require(resolve(directory, 'package.json'))
   expect(installed.version).toBe(version)
-  return require(resolve(directory)) as Expand
+  // brace-expansion 5 exports a named `expand`; older majors export the function itself.
+  const module = require(resolve(directory)) as Expand | { expand: Expand }
+  return typeof module === 'function' ? module : module.expand
 }
 
 test('the dependency security regression covers the installed brace-expansion copies', () => {

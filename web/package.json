@@ -57,11 +57,14 @@
   },
   "yfDependencyPolicy": {
     "bundledPreviewRuntimeDependencies": ["dayjs", "exceljs", "lodash", "pako", "pptx-preview", "tinycolor2", "xlsx"],
-    "reason": "These packages are imported by the vendored Excel/PPTX viewer sources and bundled into production preview assets."
+    "reason": "These packages are imported by the vendored Excel/PPTX viewer sources and bundled into production preview assets.",
+    "exceljsOverrides": "The viewer imports the prebuilt exceljs/dist bundle, so exceljs' Node-only archiver/unzipper chain never ships. glob and minimatch are pinned to patched releases for npm audit; archiver's glob.sync still works, while rimraf 2 (fstream) loses glob-pattern deletes, which nothing here uses."
   },
   "overrides": {
     "exceljs": {
-      "uuid": "11.1.1"
+      "uuid": "11.1.1",
+      "glob": "14.0.3",
+      "minimatch": "11.0.3"
     },
     "pptx-preview": {
       "uuid": "11.1.1"
