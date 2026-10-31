@@ -68,7 +68,7 @@ public static class SystemModule
 public sealed record ConfigItem(string Key, string? Value);
 public sealed record ConfigBatch(ConfigItem[] Items);
 
-public sealed class SystemService(AppDb db, AuditService audit)
+public sealed class SystemService(AppDb db, AuditService audit, AppOptions? options = null)
 {
     // 10,001 is a sentinel: clients display it as "10000+", never as an exact total.
     internal const int MaximumReportedAuditTotal = 10_001;
@@ -102,6 +102,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
             "upload.chunk_size" => (262144, 67108864),
             EmailNotificationPolicy.DueRemindDaysBeforeKey => (EmailNotificationPolicy.MinimumDueRemindDaysBefore,
                 EmailNotificationPolicy.MaximumDueRemindDaysBefore),
+            _ when RuntimeSettings.Find(key) is { } setting => (setting.Minimum, setting.Maximum),
             _ => null
         };
         if (range is { } bounds)
@@ -157,7 +158,8 @@ public sealed class SystemService(AppDb db, AuditService audit)
             {
                 var safe = EmailNotificationPolicy.Keys.Contains(item.Key, StringComparer.Ordinal)
                     || item.Key is "upload.max_file_size" or "upload.chunk_size" or "upload.allowed_exts"
-                        or EmailNotificationPolicy.DueRemindDaysBeforeKey;
+                        or EmailNotificationPolicy.DueRemindDaysBeforeKey
+                    || RuntimeSettings.Find(item.Key) is not null;
                 changes.Add(new AuditChange(item.Key, ConfigLabel(item.Key), safe ? previous : "未展示", safe ? item.Value : "已更新"));
             }
             config.CfgValue = item.Value;
@@ -166,6 +168,9 @@ public sealed class SystemService(AppDb db, AuditService audit)
         await context.SaveChangesAsync(ct);
         await audit.WriteAsync(conn, tx, actor.Id, "CONFIG_UPDATE", "system_config", null, new { keys = normalized.Select(x => x.Key), changes }, null, ct);
         await tx.CommitAsync(ct);
+        // Retention and upload-quota settings take effect at once: their consumers read the in-memory options.
+        if (options is not null)
+            foreach (var item in normalized) RuntimeSettings.Apply(options, item.Key, item.Value);
     }
 
     public async Task<PageResponse<AuditLogResponse>> ListLogsAsync(HttpRequest request, CancellationToken ct)
@@ -261,6 +266,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
         "notify.due.internal.enabled" => "到期提醒发给负责人",
         "notify.due.supplier.enabled" => "到期提醒发给厂商",
         "notify.due.remind_days_before" => "到期提前提醒天数",
+        _ when RuntimeSettings.Find(key) is { } setting => setting.Label,
         "upload.max_file_size" => "单文件大小上限",
         "upload.chunk_size" => "上传分片大小",
         "upload.allowed_exts" => "允许的文件类型",

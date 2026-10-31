@@ -121,6 +121,8 @@ public static class ApiApplication
         await EfDatabaseLifecycle.PrepareStartupAsync(options);
         // The effective storage paths live in storage_locations (system settings); the configured ones only seed it.
         await StorageLocationBootstrap.ApplyAsync(options, builder.Environment.ContentRootPath, seed: true);
+        // Retention and upload quotas are maintained on the system settings page; the configured values only seed them.
+        await RuntimeSettings.ApplyAsync(options, seed: true);
         if (convertFileBlobs)
         {
             if (options.StorageFallbackRoot is not null)

@@ -1,6 +1,6 @@
 import { Button, Card, Input, InputNumber, Space, Table } from '@arco-design/web-react'
 import type { Cfg } from './systemConfigModel'
-import { CONFIG_META, MB } from './systemConfigModel'
+import { CONFIG_META } from './systemConfigModel'
 
 interface SystemConfigTableProps {
   configs: Cfg[]
@@ -28,22 +28,23 @@ export function renderSystemConfigTable({
   const editor = (cfg: Cfg) => {
     const value = editing[cfg.key] ?? cfg.value
     const label = CONFIG_META[cfg.key]?.name || cfg.key
-    if (cfg.key === 'upload.max_file_size' || cfg.key === 'upload.chunk_size') {
-      const isChunkSize = cfg.key === 'upload.chunk_size'
+    const numeric = CONFIG_META[cfg.key]?.numeric
+    if (numeric) {
+      const scale = numeric.scale ?? 1
       const numericValue = Number(value)
       return (
         <InputNumber
           aria-label={label}
-          min={isChunkSize ? 0.25 : 1}
-          max={isChunkSize ? 64 : 20 * 1024}
-          precision={isChunkSize ? 2 : 0}
-          step={isChunkSize ? 0.25 : 1}
-          suffix="MB"
-          value={Number.isFinite(numericValue) ? numericValue / MB : undefined}
+          min={numeric.min}
+          max={numeric.max}
+          precision={numeric.precision ?? 0}
+          step={numeric.step ?? 1}
+          suffix={numeric.unit}
+          value={value !== '' && Number.isFinite(numericValue) ? numericValue / scale : undefined}
           disabled={saving}
           onChange={(next) => {
             if (typeof next === 'number' && Number.isFinite(next)) {
-              onSetValue(cfg.key, String(Math.round(next * MB)))
+              onSetValue(cfg.key, String(Math.round(next * scale)))
             } else {
               onSetValue(cfg.key, '')
             }
@@ -57,7 +58,7 @@ export function renderSystemConfigTable({
   return (
     <Card
       className="page-card system-config-card"
-      title="上传限制"
+      title="上传限制与数据保留"
       extra={
         <Space size={8}>
           {dirty.length > 0 && <span className="system-config-dirty">已修改 {dirty.length} 项</span>}

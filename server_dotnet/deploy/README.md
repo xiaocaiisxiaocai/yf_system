@@ -70,6 +70,21 @@
 - `maintain-iis.ps1` 用 `mysql.exe` 读取数据库中的生效路径进行备份、授权和检查；存储迁移未完成时拒绝维护。Restore 导入数据库后把 `storage_locations` 改为本次恢复配置中的目录。
 - 恢复到路径不同的服务器、未经 Restore 脚本时，在站点停止状态下执行 `dotnet .\Yf.Api.dll --set-storage-path <COLLAB|OEM|LOG> <已存在的绝对路径>`：只改数据库记录，不移动文件。
 
+### 改为页面配置的参数与升级时的迁移（2026-10-31）
+
+以下参数改由页面维护，外部配置文件中的同名值只在数据库第一次缺少该项时作为初始值写入：
+
+| 页面 | 参数（配置文件中的名称） | 数据库键 |
+|---|---|---|
+| 系统参数 → 存储位置 | `StorageRoot`、`OemStorageRoot`、`LogDirectory` | `storage_locations` 表 |
+| 系统参数 → 系统参数 | `AuditRetentionDays`、`MailRetentionDays`、`MailPendingTtlDays`、`UploadSessionRetentionDays` | `retention.audit_days`、`retention.mail_days`、`retention.mail_pending_days`、`retention.upload_session_days` |
+| 系统参数 → 系统参数 | `UploadMaxActiveSessionsPerUser`、`UploadMaxPendingBytesPerUser` | `upload.max_active_sessions_per_user`、`upload.max_pending_bytes_per_user` |
+
+- **升级已有站点**：照常用 `maintain-iis.ps1 -Action Upgrade -MigrateDatabase` 升级，不需要手工搬移。新版本第一次启动时，用当前外部配置文件中的值（未填写的项取程序默认值）补齐上述数据库记录，原有自定义值原样出现在页面上。升级前请确认配置文件中的这些值就是现网正在使用的值。
+- **之后**：只在页面修改，保存后立即生效（日志目录、存储位置见上节）。配置文件中的同名项保留也无妨，但不再生效；与页面值不一致时启动日志会列出这些参数作为提醒。需要以配置文件为准时，改页面即可，不要直接改数据库。
+- **新安装**：模板 `appsettings.example.json` 中的值就是页面的初始值。
+- **恢复**：Restore 恢复的是备份时数据库中的页面设定；存储位置会改为本次恢复配置中的目录（见上节）。
+
 ### 其他运行配置
 
 以下 `App` 键均有安全默认值（见 `appsettings.example.json`），一般无需修改；超出范围时应用拒绝启动：

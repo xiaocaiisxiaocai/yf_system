@@ -286,4 +286,40 @@ describe('系统参数与 SMTP 生产界面', () => {
     expect(writes[0]).toContainEqual({ key: 'notify.due.remind_days_before', value: '7' })
     expect(writes[0].some((item) => item.key === 'notify.event.project_submitted')).toBe(false)
   })
+
+  it('retention and upload quota parameters are edited in days, items and GB but saved in stored units', async () => {
+    const writes: Array<Array<{ key: string; value: string }>> = []
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/configs')) {
+        return { data: [
+          { key: 'retention.audit_days', value: '30', description: '操作日志保留天数', updatedAt: '2026-10-31T00:00:00Z' },
+          { key: 'upload.max_pending_bytes_per_user', value: String(20 * 1024 ** 3), description: '每人未完成上传总量', updatedAt: '2026-10-31T00:00:00Z' },
+        ] }
+      }
+      if (url.endsWith('/mail-settings')) return { data: baseSmtp }
+      return { data: baseMail }
+    })
+    mocks.put.mockImplementation(async (_url: string, body: { items: Array<{ key: string; value: string }> }) => {
+      writes.push(body.items)
+      return { data: {} }
+    })
+    const user = userEvent.setup()
+    renderConfig()
+
+    const days = await screen.findByRole('spinbutton', { name: '操作日志保留天数' })
+    const quota = screen.getByRole('spinbutton', { name: '每人未完成上传总量' })
+    expect(days).toHaveValue('30')
+    expect(quota).toHaveValue('20')
+    await user.clear(days)
+    await user.type(days, '90')
+    fireEvent.blur(days)
+    await user.clear(quota)
+    await user.type(quota, '2')
+    fireEvent.blur(quota)
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(writes).toHaveLength(1))
+    expect(writes[0]).toContainEqual({ key: 'retention.audit_days', value: '90' })
+    expect(writes[0]).toContainEqual({ key: 'upload.max_pending_bytes_per_user', value: String(2 * 1024 ** 3) })
+  })
 })

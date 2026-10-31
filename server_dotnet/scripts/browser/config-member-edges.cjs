@@ -9,6 +9,21 @@ const configLabels = {
   'upload.allowed_exts': '允许上传类型',
   'upload.chunk_size': '上传分片大小',
   'upload.max_file_size': '单文件大小上限',
+  'upload.max_active_sessions_per_user': '每人同时上传数',
+  'upload.max_pending_bytes_per_user': '每人未完成上传总量',
+  'retention.audit_days': '操作日志保留天数',
+  'retention.mail_days': '邮件记录保留天数',
+  'retention.mail_pending_days': '待发送邮件有效天数',
+  'retention.upload_session_days': '上传记录保留天数',
+};
+// Whole-number parameters edited in a unit (days, items, GB): the stored value is the shown value times scale.
+const numericConfigs = {
+  'upload.max_active_sessions_per_user': { scale: 1, max: 1000 },
+  'upload.max_pending_bytes_per_user': { scale: 1024 * MB, max: 16 * 1024 },
+  'retention.audit_days': { scale: 1, max: 3650 },
+  'retention.mail_days': { scale: 1, max: 3650 },
+  'retention.mail_pending_days': { scale: 1, max: 365 },
+  'retention.upload_session_days': { scale: 1, max: 3650 },
 };
 const notificationConfigKeys = new Set([
   'notify.enabled', 'notify.internal.enabled', 'notify.supplier.enabled',
@@ -70,6 +85,12 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
         const display = currentMb >= 20 * 1024 ? currentMb - 1 : currentMb + 1;
         return [key, { input: String(display), persisted: String(Math.round(display * MB)) }];
       }
+      if (numericConfigs[key]) {
+        const { scale, max } = numericConfigs[key];
+        const current = Number(value) / scale;
+        const display = current >= max ? current - 1 : current + 1;
+        return [key, { input: String(display), persisted: String(display * scale) }];
+      }
       if (key === 'upload.allowed_exts') {
         const input = value + ',' + extToken;
         return [key, { input, persisted: normalizeExtensions(input) }];
@@ -82,6 +103,8 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
       const editor = page.getByLabel(label, { exact: true });
       if (key === 'upload.chunk_size' || key === 'upload.max_file_size') {
         await editor.fill(String(Number(apiValue) / MB));
+      } else if (numericConfigs[key]) {
+        await editor.fill(String(Number(apiValue) / numericConfigs[key].scale));
       } else {
         await editor.fill(apiValue);
       }
