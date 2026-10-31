@@ -112,6 +112,10 @@ export const CONFIG_META: Record<string, { name: string; description: string; hi
   'retention.mail_days': { name: '邮件记录保留天数', description: '已发送、失败或取消的邮件记录保留天数', numeric: { min: 1, max: 3650, unit: '天' } },
   'retention.mail_pending_days': { name: '待发送邮件有效天数', description: '超过天数仍未发出的邮件自动取消', numeric: { min: 1, max: 365, unit: '天' } },
   'retention.upload_session_days': { name: '上传记录保留天数', description: '已结束的上传会话记录及其临时目录保留天数', numeric: { min: 30, max: 3650, unit: '天' } },
+  'maintenance.blob_verify_bytes_per_cycle': { name: '每轮完整性检查量', description: '后台每轮重新校验文件内容的数据量上限', numeric: { min: 64, max: 1024 * 1024, unit: 'MB', scale: MB } },
+  'storage.migration_bytes_per_second': { name: '存储迁移速度上限', description: '在线迁移存储位置时的复制速度上限', numeric: { min: 1, max: 10 * 1024, unit: 'MB/秒', scale: MB } },
+  'download.batch_min_bytes_per_minute': { name: '批量下载最低速度', description: '批量下载持续低于该速度时中止', numeric: { min: 1, max: 1024 * 1024, unit: 'KB/分钟', scale: 1024 } },
+  'download.batch_max_duration_minutes': { name: '批量下载最长时间', description: '单次批量下载允许的最长时间', numeric: { min: 5, max: 1440, unit: '分钟' } },
 }
 
 export interface Cfg {

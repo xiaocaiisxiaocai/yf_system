@@ -65,7 +65,7 @@
 `App.StorageRoot`、`App.OemStorageRoot`、`App.LogDirectory` 只在数据库第一次启动时写入 `storage_locations` 作为初始值；之后以“系统参数 → 存储位置”页面为准（权限点 `storage:manage`，默认授予系统管理员），配置文件里的值不再生效（不一致时启动日志给出提示）。详见 [存储路径页面配置与在线迁移方案](../docs/存储路径页面配置与在线迁移方案-2026-10-31.md)。
 
 - 更换路径前，管理员须先创建新目录（或其父目录）并给 `IIS AppPool\<应用池名>` 修改权限；页面会以网站账号写入探测文件，失败即拒绝。程序不会修改 ACL，迁移完成后请按上文为新目录设置同样的显式 ACL（下次 Upgrade/Restore 会检查）。
-- 协作 / OEM 存储在线迁移不停服：新内容立即写入新目录，读取兼容旧目录；后台按 `App:StorageMigrationBytesPerSecond`（默认 50 MiB/s）复制并逐个校验 SHA-256，等旧目录中开始的上传结束后，再校验一次并删除旧目录中已迁移的文件（内容不一致或无法删除的文件保留并在页面提示）。迁移期间文件垃圾回收、孤儿扫描、blob 校验和 OEM 核对暂停，完成后自动恢复。
+- 协作 / OEM 存储在线迁移不停服：新内容立即写入新目录，读取兼容旧目录；后台按“系统参数 → 存储迁移速度上限”（默认 50 MB/秒）复制并逐个校验 SHA-256，等旧目录中开始的上传结束后，再校验一次并删除旧目录中已迁移的文件（内容不一致或无法删除的文件保留并在页面提示）。迁移期间文件垃圾回收、孤儿扫描、blob 校验和 OEM 核对暂停，完成后自动恢复。
 - 日志目录切换立即生效，旧日志文件随后移动到新目录。首次设置 OEM 存储需重启站点后生效。
 - `maintain-iis.ps1` 用 `mysql.exe` 读取数据库中的生效路径进行备份、授权和检查；存储迁移未完成时拒绝维护。Restore 导入数据库后把 `storage_locations` 改为本次恢复配置中的目录。
 - 恢复到路径不同的服务器、未经 Restore 脚本时，在站点停止状态下执行 `dotnet .\Yf.Api.dll --set-storage-path <COLLAB|OEM|LOG> <已存在的绝对路径>`：只改数据库记录，不移动文件。
@@ -79,6 +79,7 @@
 | 系统参数 → 存储位置 | `StorageRoot`、`OemStorageRoot`、`LogDirectory` | `storage_locations` 表 |
 | 系统参数 → 系统参数 | `AuditRetentionDays`、`MailRetentionDays`、`MailPendingTtlDays`、`UploadSessionRetentionDays` | `retention.audit_days`、`retention.mail_days`、`retention.mail_pending_days`、`retention.upload_session_days` |
 | 系统参数 → 系统参数 | `UploadMaxActiveSessionsPerUser`、`UploadMaxPendingBytesPerUser` | `upload.max_active_sessions_per_user`、`upload.max_pending_bytes_per_user` |
+| 系统参数 → 系统参数 | `BlobVerifyBytesPerCycle`、`StorageMigrationBytesPerSecond`、`BatchDownloadMinBytesPerMinute`、`BatchDownloadMaxDurationMinutes` | `maintenance.blob_verify_bytes_per_cycle`、`storage.migration_bytes_per_second`、`download.batch_min_bytes_per_minute`、`download.batch_max_duration_minutes` |
 
 - **升级已有站点**：照常用 `maintain-iis.ps1 -Action Upgrade -MigrateDatabase` 升级，不需要手工搬移。新版本第一次启动时，用当前外部配置文件中的值（未填写的项取程序默认值）补齐上述数据库记录，原有自定义值原样出现在页面上。升级前请确认配置文件中的这些值就是现网正在使用的值。
 - **之后**：只在页面修改，保存后立即生效（日志目录、存储位置见上节）。配置文件中的同名项保留也无妨，但不再生效；与页面值不一致时启动日志会列出这些参数作为提醒。需要以配置文件为准时，改页面即可，不要直接改数据库。

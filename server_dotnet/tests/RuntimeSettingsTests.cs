@@ -14,6 +14,10 @@ public sealed class RuntimeSettingsTests
     [InlineData("retention.upload_session_days", "29", "3651")]
     [InlineData("upload.max_active_sessions_per_user", "0", "1001")]
     [InlineData("upload.max_pending_bytes_per_user", "1073741823", "17592186044417")]
+    [InlineData("maintenance.blob_verify_bytes_per_cycle", "67108863", "1099511627777")]
+    [InlineData("storage.migration_bytes_per_second", "1048575", "10737418241")]
+    [InlineData("download.batch_min_bytes_per_minute", "0", "1073741825")]
+    [InlineData("download.batch_max_duration_minutes", "4", "1441")]
     public void ValuesMustStayInsideTheirRange(string key, string below, string above)
     {
         Assert.Throws<ApiException>(() => SystemService.NormalizeConfig(key, below));
@@ -58,6 +62,13 @@ public sealed class RuntimeSettingsTests
         ]), new CurrentUser(adminId, "admin", "INTERNAL", null), ct);
         Assert.Equal(90, options.AuditRetentionDays);
         Assert.Equal(2147483648L, options.UploadMaxPendingBytesPerUser);
+        await service.UpdateConfigsAsync(new ConfigBatch(
+        [
+            new ConfigItem("storage.migration_bytes_per_second", "104857600"),
+            new ConfigItem("download.batch_max_duration_minutes", "30"),
+        ]), new CurrentUser(adminId, "admin", "INTERNAL", null), ct);
+        Assert.Equal(104857600L, options.StorageMigrationBytesPerSecond);
+        Assert.Equal(30, options.BatchDownloadMaxDurationMinutes);
 
         var listed = await service.ListConfigsAsync(ct);
         Assert.Equal("操作日志保留天数", listed.Single(item => item.Key == "retention.audit_days").Description);

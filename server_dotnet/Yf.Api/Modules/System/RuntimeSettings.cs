@@ -6,7 +6,7 @@ using Yf.Api.Infrastructure.Entities;
 namespace Yf.Api.Modules.SystemManagement;
 
 /// <summary>
-/// Data-retention and upload-quota settings maintained on the system settings page (system_configs). The configured
+/// Data-retention, upload-quota, background-job and batch-download settings maintained on the system settings page (system_configs). The configured
 /// App values only seed a missing row on first start; afterwards the page wins. Every consumer reads the in-memory
 /// <see cref="AppOptions"/>, which is refreshed at startup and right after a committed change (single instance).
 /// </summary>
@@ -32,6 +32,16 @@ internal static class RuntimeSettings
             options => options.UploadMaxActiveSessionsPerUser, (options, value) => options.UploadMaxActiveSessionsPerUser = (int)value),
         new("upload.max_pending_bytes_per_user", "每人未完成上传总量", "每个账号未完成上传的文件总大小上限（字节）", GiB, 16L * 1024 * GiB,
             options => options.UploadMaxPendingBytesPerUser, (options, value) => options.UploadMaxPendingBytesPerUser = value),
+        new("maintenance.blob_verify_bytes_per_cycle", "每轮完整性检查量", "后台每轮重新校验文件内容 SHA-256 的数据量上限（字节）",
+            64L * 1024 * 1024, 1024 * GiB,
+            options => options.BlobVerifyBytesPerCycle, (options, value) => options.BlobVerifyBytesPerCycle = value),
+        new("storage.migration_bytes_per_second", "存储迁移速度上限", "在线迁移存储位置时的复制速度上限（字节/秒）",
+            1024L * 1024, 10 * GiB,
+            options => options.StorageMigrationBytesPerSecond, (options, value) => options.StorageMigrationBytesPerSecond = value),
+        new("download.batch_min_bytes_per_minute", "批量下载最低速度", "批量下载持续低于该速度（字节/分钟）时中止", 1, GiB,
+            options => options.BatchDownloadMinBytesPerMinute, (options, value) => options.BatchDownloadMinBytesPerMinute = value),
+        new("download.batch_max_duration_minutes", "批量下载最长时间", "单次批量下载允许的最长分钟数", 5, 1440,
+            options => options.BatchDownloadMaxDurationMinutes, (options, value) => options.BatchDownloadMaxDurationMinutes = (int)value),
     ];
 
     internal static Setting? Find(string key) => All.FirstOrDefault(setting => setting.Key == key);

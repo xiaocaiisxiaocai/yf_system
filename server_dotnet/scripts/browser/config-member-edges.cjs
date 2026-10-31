@@ -15,6 +15,10 @@ const configLabels = {
   'retention.mail_days': '邮件记录保留天数',
   'retention.mail_pending_days': '待发送邮件有效天数',
   'retention.upload_session_days': '上传记录保留天数',
+  'maintenance.blob_verify_bytes_per_cycle': '每轮完整性检查量',
+  'storage.migration_bytes_per_second': '存储迁移速度上限',
+  'download.batch_min_bytes_per_minute': '批量下载最低速度',
+  'download.batch_max_duration_minutes': '批量下载最长时间',
 };
 // Whole-number parameters edited in a unit (days, items, GB): the stored value is the shown value times scale.
 const numericConfigs = {
@@ -24,6 +28,10 @@ const numericConfigs = {
   'retention.mail_days': { scale: 1, max: 3650 },
   'retention.mail_pending_days': { scale: 1, max: 365 },
   'retention.upload_session_days': { scale: 1, max: 3650 },
+  'maintenance.blob_verify_bytes_per_cycle': { scale: MB, max: 1024 * 1024 },
+  'storage.migration_bytes_per_second': { scale: MB, max: 10 * 1024 },
+  'download.batch_min_bytes_per_minute': { scale: 1024, max: 1024 * 1024 },
+  'download.batch_max_duration_minutes': { scale: 1, max: 1440 },
 };
 const notificationConfigKeys = new Set([
   'notify.enabled', 'notify.internal.enabled', 'notify.supplier.enabled',
