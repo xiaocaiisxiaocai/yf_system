@@ -31,6 +31,17 @@
   padding: 4px 8px 8px;
 }
 
+.message-composer-signer {
+  flex: 0 1 180px;
+  width: 180px;
+  min-width: 120px;
+  margin-left: auto;
+}
+
+.message-composer-signer + .message-composer-send {
+  margin-left: 0;
+}
+
 .message-composer-send {
   flex: 0 0 auto;
   margin-left: auto;

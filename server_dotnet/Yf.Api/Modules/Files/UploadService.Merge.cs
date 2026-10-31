@@ -110,9 +110,13 @@ public sealed partial class UploadService
             var blob = await FileBlobStore.ResolveForReferenceAsync(ef, root,
                 new FileBlobStore.PreparedBlob(hash.Sha256, hash.Bytes, mergeTemp),
                 expectedBlobId: null, now, ct);
+            var signature = await ef.UploadSessions.Where(item => item.Id == session.Id)
+                .Select(item => new { item.SignerContactId, item.SignerName }).SingleAsync(ct);
             var file = new FileRecord
             {
                 ProjectId = session.ProjectId,
+                SignerContactId = signature.SignerContactId,
+                SignerName = signature.SignerName,
                 BlobId = blob.Id,
                 UploaderId = current.Id,
                 Direction = direction,
@@ -292,6 +296,20 @@ public sealed partial class UploadService
             }).ToArrayAsync(ct);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var createdAt = await DbNowAsync(context, ct);
+        var contacts = uploader.UserType == UserTypes.Supplier
+            ? []
+            : await ProjectNotificationService.ActiveContactEmailsAsync(context, project.SupplierId, ct);
+        if (contacts.Length > 0)
+        {
+            // The supplier has contacts: every active contact receives the summary instead of the account address.
+            var anchors = recipients.Where(recipient => policy.Allows("FILE_UPLOADED", recipient.UserType))
+                .Select(recipient => recipient.Id);
+            foreach (var target in ProjectNotificationService.ContactTargets(anchors, contacts))
+                await EnqueueFileSummaryForRecipientAsync(
+                    conn, tx, projectId, project.Name, fileId, fileName, direction, uploader.EmployeeNo,
+                    target.UserId, target.Email, options.WebBaseUrl, createdAt, ct, target.ContactId);
+            return;
+        }
         foreach (var recipient in recipients)
         {
             if (!policy.Allows("FILE_UPLOADED", recipient.UserType)) continue;
@@ -322,7 +340,8 @@ public sealed partial class UploadService
         string recipientEmail,
         string webBaseUrl,
         DateTime createdAt,
-        CancellationToken ct)
+        CancellationToken ct,
+        ulong? contactId = null)
     {
         if (direction is not ("C2S" or "S2C"))
             throw new InvalidOperationException("文件通知方向无效");
@@ -340,7 +359,8 @@ public sealed partial class UploadService
         var entry = $"- {safeFileName}\n  {targetUrl.AbsoluteUri}\n  上传人：账号 {safeEmployeeNo}\n";
         var body = $"项目：{safeProjectName}\n方向：{directionText}\n以下文件请登录平台查看并下载（邮件不含附件）：\n\n{entry}";
         var subject = $"[协作平台] 项目「{safeProjectName}」文件上传摘要";
-        var dedupeKey = FileSummaryDedupeKey(projectId, recipientUserId, direction);
+        var dedupeKey = FileSummaryDedupeKey(projectId, recipientUserId, direction)
+            + (contactId is null ? string.Empty : $":c{contactId}");
         var nextAttemptAt = createdAt.AddMinutes(FileSummaryDelayMinutes);
 
         await using var context = EfDb.Use(conn, tx);

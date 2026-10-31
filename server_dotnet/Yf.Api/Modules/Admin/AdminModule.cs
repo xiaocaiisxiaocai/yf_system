@@ -8,7 +8,8 @@ public static class AdminModule
         .AddSingleton<DepartmentService>()
         .AddSingleton<UserService>()
         .AddSingleton<RoleService>()
-        .AddSingleton<SupplierService>();
+        .AddSingleton<SupplierService>()
+        .AddSingleton<SupplierContactService>();
 
     public static IEndpointRouteBuilder MapAdminModule(this IEndpointRouteBuilder endpoints)
     {
@@ -46,6 +47,10 @@ public static class AdminModule
         admin.MapPut("/suppliers/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, SupplierService s, CancellationToken ct) => s.SetStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
         admin.MapDelete("/suppliers/{id:long}", async (ulong id, HttpContext c, SupplierService s, CancellationToken ct) => { await s.DeleteAsync(AccessService.GetCurrent(c), id, ct); return EmptyResponse.Instance; });
         admin.MapGet("/suppliers/{id:long}/accounts", (ulong id, HttpContext c, SupplierService s, CancellationToken ct) => s.AccountsAsync(AccessService.GetCurrent(c), id, ct));
+        admin.MapGet("/suppliers/{id:long}/contacts", (ulong id, HttpContext c, SupplierContactService s, CancellationToken ct) => s.ListAsync(AccessService.GetCurrent(c), id, ct));
+        admin.MapPost("/suppliers/{id:long}/contacts", (ulong id, SupplierContactUpsert r, HttpContext c, SupplierContactService s, CancellationToken ct) => s.CreateAsync(AccessService.GetCurrent(c), id, r, ct));
+        admin.MapPut("/supplier-contacts/{id:long}", (ulong id, SupplierContactUpsert r, HttpContext c, SupplierContactService s, CancellationToken ct) => s.UpdateAsync(AccessService.GetCurrent(c), id, r, ct));
+        admin.MapPut("/supplier-contacts/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, SupplierContactService s, CancellationToken ct) => s.SetStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
         admin.MapGet("/supplier-role-options", (HttpContext c, SupplierService s, CancellationToken ct) => s.RoleOptionsAsync(AccessService.GetCurrent(c), c.Request.Query["keyword"], ct));
         admin.MapPost("/suppliers/{id:long}/accounts", (ulong id, SupplierAccountCreate r, HttpContext c, SupplierService s, CancellationToken ct) => s.CreateAccountAsync(AccessService.GetCurrent(c), id, r, ct));
         admin.MapPut("/supplier-accounts/{id:long}", (ulong id, SupplierAccountUpdate r, HttpContext c, SupplierService s, CancellationToken ct) => s.UpdateAccountAsync(AccessService.GetCurrent(c), id, r, ct));

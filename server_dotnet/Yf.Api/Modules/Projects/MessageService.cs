@@ -46,6 +46,8 @@ internal sealed class MessageService(
                 CreatedAt = message.CreatedAt,
                 SenderName = sender.RealName,
                 SenderType = sender.UserType,
+                SignerContactId = message.SignerContactId,
+                SignerName = message.SignerName,
             };
         if (targetId is not null) query = query.Where(message => message.Id == targetId.Value);
         var total = checked((ulong)await query.LongCountAsync(ct));
@@ -153,7 +155,7 @@ internal sealed class MessageService(
                         if (existingId is ulong messageId)
                         {
                             var replay = await ReplayResponseAsync(
-                                conn, tx, db, project, current, messageId, content, stored, ct);
+                                conn, tx, db, project, current, messageId, content, request.SignerName, stored, ct);
                             await tx.CommitAsync(ct);
                             await CleanupUnreferencedAsync(conn, stored, CancellationToken.None);
                             return replay;
@@ -161,6 +163,7 @@ internal sealed class MessageService(
                     }
 
                     EnsureWritable(project.Status);
+                    var signature = await SupplierContacts.ResolveSignatureAsync(db, current, request.SignerName, ct);
                     var databaseNow = await DatabaseUtcNowAsync(db, ct);
                     var entity = new Message
                     {
@@ -168,6 +171,8 @@ internal sealed class MessageService(
                         SenderId = current.Id,
                         Content = content,
                         ClientMessageId = clientMessageId,
+                        SignerContactId = signature.ContactId,
+                        SignerName = signature.Name,
                         Status = "NORMAL",
                         CreatedAt = databaseNow,
                     };
@@ -207,7 +212,8 @@ internal sealed class MessageService(
             catch (Exception error) when (IsClientMessageIdCollision(error))
             {
                 await CleanupUnreferencedAsync(conn, stored, CancellationToken.None);
-                return await ReplayAfterCollisionAsync(conn, actor, projectId, clientMessageId!, content, stored, ct);
+                return await ReplayAfterCollisionAsync(
+                    conn, actor, projectId, clientMessageId!, content, request.SignerName, stored, ct);
             }
         }
         catch
@@ -235,12 +241,15 @@ internal sealed class MessageService(
         CurrentUser current,
         ulong messageId,
         string content,
+        string? signerName,
         IReadOnlyList<MessageImageRow> incoming,
         CancellationToken ct)
     {
         var message = await LoadMessageAsync(db, messageId, false, ct);
         var images = await LoadImagesAsync(db, [messageId], ct);
-        if (!string.Equals(message.Content, content, StringComparison.Ordinal) || !SameImages(incoming, images))
+        if (!string.Equals(message.Content, content, StringComparison.Ordinal) || !SameImages(incoming, images)
+            || !string.Equals(current.IsInternal ? null : SupplierContacts.NormalizeSignerName(signerName),
+                message.SignerName, StringComparison.OrdinalIgnoreCase))
             throw ApiException.Conflict("clientMessageId 已用于不同的留言");
         var participants = await ProjectNotificationService.ParticipantsAsync(conn, tx, project, ct);
         return MessageJson(message, [], images, participants.Select(user => user.Id).ToHashSet(), current.Id);
@@ -252,6 +261,7 @@ internal sealed class MessageService(
         ulong projectId,
         string clientMessageId,
         string content,
+        string? signerName,
         IReadOnlyList<MessageImageRow> incoming,
         CancellationToken ct)
     {
@@ -269,7 +279,8 @@ internal sealed class MessageService(
             .SingleOrDefaultAsync(ct);
         if (messageId is not ulong existingId)
             throw ApiException.Conflict("数据已存在，请刷新后重试");
-        var response = await ReplayResponseAsync(conn, tx, db, project, current, existingId, content, incoming, ct);
+        var response = await ReplayResponseAsync(
+            conn, tx, db, project, current, existingId, content, signerName, incoming, ct);
         await tx.CommitAsync(ct);
         return response;
     }
@@ -589,7 +600,8 @@ internal sealed class MessageService(
             counts.ReadCount,
             counts.TotalCount,
             counts.ReadByMe,
-            images.Select(image => new MessageImageResponse(image.Id, image.OriginalName, image.SizeBytes, image.MimeType)).ToArray());
+            images.Select(image => new MessageImageResponse(image.Id, image.OriginalName, image.SizeBytes, image.MimeType)).ToArray(),
+            message.SignerName);
     }
 
     private async Task<MessageImageRow> StoreImageAsync(
@@ -877,6 +889,8 @@ internal sealed class MessageService(
                 CreatedAt = message.CreatedAt,
                 SenderName = sender.RealName,
                 SenderType = sender.UserType,
+                SignerContactId = message.SignerContactId,
+                SignerName = message.SignerName,
             };
         if (requireNormal) query = query.Where(message => message.Status == "NORMAL");
         return await query.SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();

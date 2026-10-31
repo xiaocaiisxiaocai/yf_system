@@ -15,6 +15,7 @@ import {
   messageKeys,
   refreshReadCounts,
   startMessageSend,
+  type MessageSendBody,
   useMessageCommands,
   useMessageFeed,
   useMessageReceiptDetail,
@@ -111,6 +112,9 @@ export default function MessagePanel({
   const draftScope = useRef(draftScopeKey)
 
   const canWrite = hasPerm('message:create') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
+  const signsMessages = user?.userType === 'SUPPLIER'
+  // 签名每条留言都要重新输入，发送成功后清空，不记住上一次的姓名。
+  const [signerName, setSignerName] = useState('')
   const canDelete = hasPerm('message:delete_any') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
   const loading = feedQuery.isPending || feedQuery.isFetchingNextPage
   const loadError = feedQuery.isError && !feedQuery.data
@@ -281,15 +285,18 @@ export default function MessagePanel({
     const addMessage = addConfirmedMessage
     const requestSyncRoot = sync.rootKey
     const requestDraftScope = draftScope.current
-    const clientMessageId = clientMessageIdFor(sentDraft, text, draftImages)
+    const signature = signsMessages ? signerName.trim() : ''
+    // 签名也是留言内容的一部分：换了签名就换新的 clientMessageId，避免与上次失败的请求冲突。
+    const clientMessageId = clientMessageIdFor(sentDraft, `${signature}\u0000${text}`, draftImages)
     sendInFlight.current = true
     setSending(true)
     try {
-      let body: FormData | { content: string; clientMessageId: string } = { content: text, clientMessageId }
+      let body: FormData | MessageSendBody = { content: text, clientMessageId, signerName: signature || undefined }
       if (draftImages.length) {
         const form = new FormData()
         form.append('content', text)
         form.append('clientMessageId', clientMessageId)
+        if (signature) form.append('signerName', signature)
         draftImages.forEach(file => form.append('images', file, file.name))
         body = form
       }
@@ -300,6 +307,7 @@ export default function MessagePanel({
       sentDraft.current = null
       if (draftScope.current === requestDraftScope) {
         setContent(current => current === draft ? '' : current)
+        setSignerName(current => current.trim() === signature ? '' : current)
         setImages(current => current.filter(file => !draftImages.includes(file)))
       }
       if (syncWasFetching) void queryClient.invalidateQueries({ queryKey: requestSyncRoot })
@@ -366,6 +374,8 @@ export default function MessagePanel({
           onContentChange={value => setContent(Array.from(value).slice(0, 4000).join(''))}
           onImagesChange={setImages}
           onSend={() => void send()}
+          signerName={signerName}
+          onSignerNameChange={signsMessages ? (value => setSignerName(Array.from(value).slice(0, 32).join(''))) : undefined}
           pasteMessageImages={pasteMessageImages}
           ImageComposer={MessageImageComposer}
         />

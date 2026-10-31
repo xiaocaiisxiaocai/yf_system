@@ -26,6 +26,14 @@ public sealed class ProjectGroup
     public DateTime UpdatedAt { get; set; }
 }
 
+/// <summary>Robot owners selected on a main project; <c>robot_owner_name</c> keeps the joined-name snapshot.</summary>
+public sealed class ProjectGroupRobotOwner
+{
+    public ulong ProjectGroupId { get; set; }
+    public ulong ContactId { get; set; }
+    public int SortNo { get; set; }
+}
+
 public sealed class ProjectGroupWorkOrder
 {
     public ulong Id { get; set; }
@@ -173,7 +181,7 @@ public sealed class ProjectGroupConfig : IEntityTypeConfiguration<ProjectGroup>
         b.Property(x => x.RobotPartId).HasColumnName("robot_part_id");
         b.Property(x => x.LegacyRobotModelName).HasColumnName("legacy_robot_model_name").HasMaxLength(512);
         b.Property(x => x.ResponsibleUserId).HasColumnName("responsible_user_id");
-        b.Property(x => x.RobotOwnerName).HasColumnName("robot_owner_name").HasMaxLength(64);
+        b.Property(x => x.RobotOwnerName).HasColumnName("robot_owner_name").HasMaxLength(512);
         b.Property(x => x.SectionId).HasColumnName("section_id");
         b.Property(x => x.PriorityId).HasColumnName("priority_id");
         b.Property(x => x.RobotTypeId).HasColumnName("robot_type_id");
@@ -198,6 +206,22 @@ public sealed class ProjectGroupConfig : IEntityTypeConfiguration<ProjectGroup>
         b.HasOne<RobotPart>().WithMany().HasForeignKey(x => x.RobotPartId).HasConstraintName("fk_project_groups_robot_part").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<Department>().WithMany().HasForeignKey(x => x.SectionId).HasConstraintName("fk_project_groups_section").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<Supplier>().WithMany().HasForeignKey(x => x.SupplierId).HasConstraintName("fk_project_groups_supplier").OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class ProjectGroupRobotOwnerConfig : IEntityTypeConfiguration<ProjectGroupRobotOwner>
+{
+    public void Configure(EntityTypeBuilder<ProjectGroupRobotOwner> b)
+    {
+        b.ToTable("project_group_robot_owners");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => new { x.ProjectGroupId, x.ContactId });
+        b.Property(x => x.ProjectGroupId).HasColumnName("project_group_id");
+        b.Property(x => x.ContactId).HasColumnName("contact_id");
+        b.Property(x => x.SortNo).HasColumnName("sort_no").HasDefaultValue(0);
+        b.HasIndex(x => x.ContactId).HasDatabaseName("idx_project_group_robot_owners_contact");
+        b.HasOne<ProjectGroup>().WithMany().HasForeignKey(x => x.ProjectGroupId).HasConstraintName("fk_project_group_robot_owners_group").OnDelete(DeleteBehavior.Cascade);
+        b.HasOne<SupplierContact>().WithMany().HasForeignKey(x => x.ContactId).HasConstraintName("fk_project_group_robot_owners_contact").OnDelete(DeleteBehavior.Restrict);
     }
 }
 
@@ -261,7 +285,7 @@ public sealed class ProjectConfig : IEntityTypeConfiguration<Project>
         b.Property(x => x.RobotPartId).HasColumnName("robot_part_id");
         b.Property(x => x.LegacyRobotModelName).HasColumnName("legacy_robot_model_name").HasMaxLength(512);
         b.Property(x => x.ResponsibleUserId).HasColumnName("responsible_user_id");
-        b.Property(x => x.RobotOwnerName).HasColumnName("robot_owner_name").HasMaxLength(64);
+        b.Property(x => x.RobotOwnerName).HasColumnName("robot_owner_name").HasMaxLength(512);
         b.Property(x => x.SectionId).HasColumnName("section_id");
         b.Property(x => x.PriorityId).HasColumnName("priority_id");
         b.Property(x => x.RobotTypeId).HasColumnName("robot_type_id");

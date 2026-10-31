@@ -255,7 +255,6 @@ function SubprojectPaneContent({ projectId: pid, panelApi }: { projectId: number
             compact
             uploadRefresh={uploadActivityRefresh}
             onUploadActivityChanged={bumpUploadActivity}
-            onProjectChanged={refreshAll}
           />
         </Tabs.TabPane>
         <Tabs.TabPane key="messages" title={unread > 0 ? <span>留言 <Badge count={unread} dot={false} /></span> : '留言'}>

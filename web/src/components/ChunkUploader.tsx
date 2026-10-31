@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
-import { Alert, Button, Checkbox, Modal, Progress, Typography, Message, Space } from '@arco-design/web-react'
+import { Alert, Button, Input, Modal, Progress, Typography, Message, Space } from '@arco-design/web-react'
 import { IconUpload, IconClose } from '@arco-design/web-react/icon'
 import { fmtSize } from '../api/types'
 import { createChunkHasher, fileMd5, uploadFingerprint } from '../api/file-hash'
@@ -22,7 +22,8 @@ interface Props {
   onDone: () => void
   /** 整批文件全部确认上传成功、且没有取消或移除时触发一次。 */
   onAllUploaded?: () => void
-  onSubmitForAcceptance?: () => Promise<void>
+  /** 供应商共用账号上传时显示签名框（提供人姓名）；每次打开对话框都是空的，需要重新输入。 */
+  requireSignature?: boolean
   /** 上传方向：C2S（公司发给供应商）校验资料要求，S2C（供应商发给公司）只展示资料示例。 */
   direction?: UploadDirection
 }
@@ -186,7 +187,11 @@ function phaseLabel(phase: Phase, percent: number, waiting = false, awaitingMate
 
 const UPLOAD_DONE_MESSAGE_ID = 'chunk-upload-done'
 
-export default function ChunkUploader({ projectId, visible, onClose, onDone, onAllUploaded, onSubmitForAcceptance, direction }: Props) {
+export default function ChunkUploader({ projectId, visible, onClose, onDone, onAllUploaded, requireSignature, direction }: Props) {
+  const [signerName, setSignerName] = useState('')
+  // 初始化在异步流程里读取签名，用 ref 取到点击上传时的最新值。
+  const signerRef = useRef(signerName)
+  useEffect(() => { signerRef.current = signerName }, [signerName])
   const [entries, setEntries] = useState<Entry[]>([])
   // 同一批的完成提示合并成一条并原地更新，避免多文件上传时堆满页面。
   const entriesRef = useRef<Entry[]>([])
@@ -204,7 +209,6 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
   const [closing, setClosing] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const dragDepth = useRef(0)
-  const [submitForAcceptance, setSubmitForAcceptance] = useState(false)
   const uploadSlots = useRef(createUploadSlots(MAX_CONCURRENT_FILES)).current
   const chunkUploadSlots = useRef(createUploadSlots(MAX_CONCURRENT_CHUNKS)).current
 
@@ -228,7 +232,6 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     batchCancelledRef.current = false
     rejectionToastsRef.current.clear()
     completedRef.current = 0
-    setSubmitForAcceptance(false)
     setEntries([])
   }
 
@@ -258,20 +261,6 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     if (entries.every((e) => e.phase === 'done')) {
       batchNotifiedRef.current = true
       if (!batchCancelledRef.current) onAllUploaded?.()
-      if (!batchCancelledRef.current && submitForAcceptance && onSubmitForAcceptance) {
-        closingRef.current = true
-        setClosing(true)
-        void onSubmitForAcceptance().catch(() => {
-          Message.warning('文件已上传，但提交验收失败，请重试提交验收')
-        }).finally(() => {
-          closingRef.current = false
-          if (!mountedRef.current) return
-          setClosing(false)
-          resetAll()
-          onClose()
-        })
-        return
-      }
       resetAll()
       onClose()
     }
@@ -371,6 +360,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
         fileSize: file.size,
         fileLastModified: file.lastModified,
         fileFingerprint: fingerprint,
+        signerName: signerRef.current?.trim() || null,
       }, { quietClientError: true }).catch((error: unknown) => {
         const rejection = businessRejectionMessage(error, 'init')
         if (rejection === undefined) throw error
@@ -670,9 +660,9 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
         </Button>
         <span className="upload-dropzone-hint">{canAddMore ? '或将文件拖到此处' : '上传进行中，暂不能添加文件'}</span>
       </div>
-      {onSubmitForAcceptance && <div style={{ marginTop: 12 }}>
-        <Checkbox checked={submitForAcceptance} disabled={!canAddMore}
-          onChange={setSubmitForAcceptance}>全部上传成功后提交验收</Checkbox>
+      {requireSignature && <div style={{ marginTop: 12 }}>
+        <Input aria-label="签名" placeholder="签名（提供人姓名）" value={signerName} maxLength={32}
+          disabled={!canAddMore} onChange={setSignerName} style={{ maxWidth: 240 }} />
       </div>}
       <div aria-live="polite">
         {missingMaterial && (

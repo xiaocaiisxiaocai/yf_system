@@ -10,6 +10,9 @@ public sealed class Message
     public ulong SenderId { get; set; }
     public string Content { get; set; } = null!;
     public string? ClientMessageId { get; set; }
+    /// <summary>Supplier contact who signed the message; null for internal senders.</summary>
+    public ulong? SignerContactId { get; set; }
+    public string? SignerName { get; set; }
     public string Status { get; set; } = null!;
     public ulong? DeletedBy { get; set; }
     public DateTime? DeletedAt { get; set; }
@@ -48,6 +51,10 @@ public sealed class MessageConfig : IEntityTypeConfiguration<Message>
         b.Property(x => x.SenderId).HasColumnName("sender_id");
         b.Property(x => x.Content).HasColumnName("content").HasColumnType("text").IsRequired();
         b.Property(x => x.ClientMessageId).HasColumnName("client_message_id").HasMaxLength(36);
+        b.Property(x => x.SignerContactId).HasColumnName("signer_contact_id");
+        b.Property(x => x.SignerName).HasColumnName("signer_name").HasMaxLength(32);
+        b.HasIndex(x => x.SignerContactId).HasDatabaseName("fk_msg_signer_contact");
+        b.HasOne<SupplierContact>().WithMany().HasForeignKey(x => x.SignerContactId).HasConstraintName("fk_msg_signer_contact").OnDelete(DeleteBehavior.Restrict);
         b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue("NORMAL");
         b.Property(x => x.DeletedBy).HasColumnName("deleted_by");
         b.Property(x => x.DeletedAt).HasColumnName("deleted_at").HasColumnType("datetime(3)");

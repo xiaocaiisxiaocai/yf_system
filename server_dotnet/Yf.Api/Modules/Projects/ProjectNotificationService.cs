@@ -48,7 +48,7 @@ internal static class ProjectNotificationService
         var nextAttemptAt = createdAt.AddMinutes(MessageSummaryDelayMinutes);
         foreach (var recipient in recipients)
         {
-            var dedupeKey = MessageSummaryDedupeKey(project.Id, recipient.Id);
+            var dedupeKey = MessageSummaryDedupeKey(project.Id, recipient.UserId, recipient.ContactId);
             // Same window protocol as the file summary: only an untouched, delayed PENDING row keeps the
             // key; claimed, retried, sent or oversized rows release it so a new window starts.
             await db.Database.ExecuteSqlInterpolatedAsync($$"""
@@ -63,7 +63,7 @@ internal static class ProjectNotificationService
                     (event_type,project_id,dedupe_key,recipient_user_id,recipient_email,
                      subject,body,status,retry_count,next_attempt_at,last_error,sent_at,created_at)
                 VALUES
-                    ('MESSAGE_CREATED',{{project.Id}},{{dedupeKey}},{{recipient.Id}},{{recipient.Email}},
+                    ('MESSAGE_CREATED',{{project.Id}},{{dedupeKey}},{{recipient.UserId}},{{recipient.Email}},
                      {{subject}},{{body}},'PENDING',0,{{nextAttemptAt}},NULL,NULL,{{createdAt}})
                 ON DUPLICATE KEY UPDATE
                     recipient_email=IF(status='PENDING' AND retry_count=0 AND sent_at IS NULL AND next_attempt_at IS NOT NULL,
@@ -74,8 +74,8 @@ internal static class ProjectNotificationService
         }
     }
 
-    internal static string MessageSummaryDedupeKey(ulong projectId, ulong recipientUserId) =>
-        $"message-summary:{projectId}:{recipientUserId}";
+    internal static string MessageSummaryDedupeKey(ulong projectId, ulong recipientUserId, ulong? contactId = null) =>
+        $"message-summary:{projectId}:{recipientUserId}" + (contactId is null ? string.Empty : $":c{contactId}");
 
     private static string SafeMailLine(string value, int maximumRunes) =>
         Yf.Api.Modules.Files.UploadService.SafeMailLine(value, maximumRunes);
@@ -401,7 +401,7 @@ internal static class ProjectNotificationService
         {
             EventType = eventType,
             ProjectId = project.Id,
-            RecipientUserId = recipient.Id,
+            RecipientUserId = recipient.UserId,
             RecipientEmail = recipient.Email,
             Subject = subject,
             Body = body,
@@ -417,7 +417,7 @@ internal static class ProjectNotificationService
     /// caller in the same transaction) plus explicit users, filtered by policy, side, side permissions
     /// (one bulk grant query) and e-mail presence (missing addresses are audited when an audit is given).
     /// </summary>
-    private static async Task<IReadOnlyList<UserRow>> SelectRecipientsAsync(
+    private static async Task<IReadOnlyList<MailTarget>> SelectRecipientsAsync(
         MySqlConnection conn,
         MySqlTransaction tx,
         ProjectRow project,
@@ -496,11 +496,19 @@ internal static class ProjectNotificationService
             requiredSidePermissions, ct);
 
         var seenRecipients = new HashSet<ulong>();
-        var selected = new List<UserRow>();
+        var selected = new List<MailTarget>();
+        await using var contactsDb = EfDb.Use(conn, tx);
+        var contacts = await ActiveContactEmailsAsync(contactsDb, project.SupplierId, ct);
+        var supplierAnchors = new List<UserRow>();
         foreach (var (recipient, needsSidePermissions) in candidates)
         {
             if (needsSidePermissions && !sidePermitted.Contains(recipient.Id))
             {
+                continue;
+            }
+            if (recipient.UserType == UserTypes.Supplier && contacts.Length > 0)
+            {
+                supplierAnchors.Add(recipient);
                 continue;
             }
             if (string.IsNullOrWhiteSpace(recipient.Email))
@@ -516,9 +524,37 @@ internal static class ProjectNotificationService
             {
                 continue;
             }
-            selected.Add(recipient);
+            selected.Add(new MailTarget(recipient.Id, recipient.Email, null));
         }
+        selected.AddRange(ContactTargets(supplierAnchors.Select(user => user.Id), contacts));
         return selected;
+    }
+
+    /// <summary>One queued mail: the account it is checked against and the address it goes to.</summary>
+    internal sealed record MailTarget(ulong UserId, string Email, ulong? ContactId);
+
+    /// <summary>Active contacts of a supplier, in display order; supplier mail goes to each of them.</summary>
+    internal static Task<(ulong Id, string Email)[]> ActiveContactEmailsAsync(
+        YfDbContext db, ulong supplierId, CancellationToken ct) =>
+        db.SupplierContacts.AsNoTracking()
+            .Where(contact => contact.SupplierId == supplierId && contact.Status == AccountStatuses.Active)
+            .OrderBy(contact => contact.SortNo).ThenBy(contact => contact.Id)
+            .Select(contact => new ValueTuple<ulong, string>(contact.Id, contact.Email))
+            .ToArrayAsync(ct);
+
+    /// <summary>
+    /// A supplier that has contacts is mailed at every active contact instead of its account addresses. Each row is
+    /// anchored to the lowest eligible supplier account so the sender still re-checks that account's project access
+    /// and the contact's status before sending. With no eligible account, nothing is queued.
+    /// </summary>
+    internal static IEnumerable<MailTarget> ContactTargets(
+        IEnumerable<ulong> eligibleSupplierAccountIds, IReadOnlyList<(ulong Id, string Email)> contacts)
+    {
+        var anchor = eligibleSupplierAccountIds.Select(id => (ulong?)id).Min();
+        if (anchor is null) yield break;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, email) in contacts)
+            if (seen.Add(email.Trim())) yield return new MailTarget(anchor.Value, email.Trim(), id);
     }
 
     internal static async Task<bool> IsCurrentProjectRecipientAsync(

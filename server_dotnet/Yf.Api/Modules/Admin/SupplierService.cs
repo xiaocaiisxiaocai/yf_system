@@ -120,6 +120,8 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         if (accounts > 0) throw ApiException.BadRequest($"该供应商仍有 {accounts} 个账号，请先逐个处理账号");
         await audit.WriteAsync(connection, dbTransaction, actor.Id, "SUPPLIER_DELETE", "supplier", id,
             new { row.Name, accountCount = 0, targetName = row.Name, changes = Array.Empty<AuditChange>() }, null, ct);
+        // Contacts are only referenced from projects, messages and files, which block deletion above.
+        await context.SupplierContacts.Where(x => x.SupplierId == id).ExecuteDeleteAsync(ct);
         await context.Suppliers.Where(x => x.Id == id).ExecuteDeleteAsync(ct); await transaction.CommitAsync(ct);
     }
 

@@ -97,6 +97,11 @@ internal sealed class ProjectGroupService(
             SectionId = await ProjectService.ResolveActorSectionAsync(db, current.Id, ct),
         };
         metadata = await ProjectService.ValidateMetadataAsync(conn, tx, metadata, null, request.SupplierId, ct);
+        metadata = metadata with
+        {
+            RobotOwnerName = await RobotOwners.ResolveSnapshotAsync(
+                db, request.SupplierId, metadata.RobotOwnerContactIds, [], ct),
+        };
 
         var group = new ProjectGroup
         {
@@ -121,6 +126,7 @@ internal sealed class ProjectGroupService(
         { throw ApiException.Conflict("主项目名称已存在"); }
 
         await ReplaceGroupWorkOrdersAsync(db, group.Id, metadata.WorkOrderNos, ct);
+        await RobotOwners.ReplaceAsync(db, group.Id, metadata.RobotOwnerContactIds, ct);
         var children = childNames.Select(childName => NewChild(
             group.Id, childName, null, request.SupplierId, current.Id, metadata)).ToArray();
         db.Projects.AddRange(children);
@@ -157,6 +163,7 @@ internal sealed class ProjectGroupService(
             metadata.RobotPartId,
             metadata.ResponsibleUserId,
             metadata.RobotOwnerName,
+            metadata.RobotOwnerContactIds,
             metadata.SectionId,
             metadata.PriorityId,
             metadata.RobotTypeId,
@@ -211,7 +218,10 @@ internal sealed class ProjectGroupService(
         {
             ResponsibleUserId = before.ResponsibleUserId,
             SectionId = before.SectionId,
+            RobotOwnerName = await RobotOwners.ResolveSnapshotAsync(
+                db, access.SupplierId, metadata.RobotOwnerContactIds, before.RobotOwnerContactIds, ct),
         };
+        var robotOwnersChanged = !before.RobotOwnerContactIds.SequenceEqual(metadata.RobotOwnerContactIds);
 
         var workOrdersChanged = !before.WorkOrderNos.SequenceEqual(metadata.WorkOrderNos, StringComparer.Ordinal);
         var inheritedMetadataChanged = before.MachineModel != metadata.MachineModel
@@ -223,6 +233,7 @@ internal sealed class ProjectGroupService(
         var groupChanged = before.Name != name
             || before.Description != request.Description
             || workOrdersChanged
+            || robotOwnersChanged
             || inheritedMetadataChanged;
         if (!groupChanged)
         {
@@ -250,6 +261,7 @@ internal sealed class ProjectGroupService(
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
         { throw ApiException.Conflict("主项目名称已存在"); }
 
+        if (robotOwnersChanged) await RobotOwners.ReplaceAsync(db, groupId, metadata.RobotOwnerContactIds, ct);
         var childIds = inheritedMetadataChanged || workOrdersChanged
             ? await db.Projects.Where(project => project.ProjectGroupId == groupId
                     && project.Status != ProjectStatuses.Completed)
@@ -304,6 +316,7 @@ internal sealed class ProjectGroupService(
                 new("priorityId", "优先级", before.PriorityId, metadata.PriorityId),
                 new("robotTypeId", "Robot 类型", before.RobotTypeId, metadata.RobotTypeId),
                 new("robotOwnerName", "Robot 负责人", before.RobotOwnerName, metadata.RobotOwnerName),
+                new("robotOwnerContactIds", "Robot 负责人联络人", before.RobotOwnerContactIds, metadata.RobotOwnerContactIds),
                 new("expectedCompletionDate", "预计完成日期",
                     DateValue(before.ExpectedCompletionDate), DateValue(metadata.ExpectedCompletionDate))),
         })).ToArray();
@@ -657,6 +670,8 @@ internal sealed class ProjectGroupService(
         var lookup = rows.GroupBy(row => row.ProjectGroupId)
             .ToDictionary(group => group.Key, group => group.Select(row => row.WorkOrderNo).ToArray());
         foreach (var group in groups) group.WorkOrderNos = lookup.GetValueOrDefault(group.Id) ?? [];
+        var owners = await RobotOwners.LoadAsync(db, ids, ct);
+        foreach (var group in groups) group.RobotOwnerContactIds = owners.GetValueOrDefault(group.Id) ?? [];
     }
 
     private static async Task LoadProjectExtrasAsync(
@@ -750,7 +765,8 @@ internal sealed class ProjectGroupService(
         group.SectionId,
         group.PriorityId,
         group.RobotTypeId,
-        group.ExpectedCompletionDate);
+        group.ExpectedCompletionDate,
+        group.RobotOwnerContactIds);
 
     internal static string? NormalizeGroupStatus(string? status)
     {

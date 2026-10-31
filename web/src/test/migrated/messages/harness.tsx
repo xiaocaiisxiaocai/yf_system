@@ -21,6 +21,7 @@ import MessagePanel from '../../../components/MessagePanel'
 
 export interface MessageFixture {
   id: number
+  signerName?: string | null
   projectId: number
   senderId: number
   senderName: string

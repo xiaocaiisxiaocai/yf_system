@@ -13,6 +13,9 @@ public sealed class FileRecord
     public ulong ProjectId { get; set; }
     public ulong UploaderId { get; set; }
     public string Direction { get; set; } = null!;
+    /// <summary>Supplier contact who provided the file; null for internal uploads.</summary>
+    public ulong? SignerContactId { get; set; }
+    public string? SignerName { get; set; }
     public string OriginalName { get; set; } = null!;
     public string StoredName { get; set; } = null!;
     public string Ext { get; set; } = null!;
@@ -40,6 +43,8 @@ public sealed class UploadSession
     public string TempDir { get; set; } = null!;
     public string Status { get; set; } = null!;
     public ulong? ResultFileId { get; set; }
+    public ulong? SignerContactId { get; set; }
+    public string? SignerName { get; set; }
     public DateTime ExpiresAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -82,6 +87,10 @@ public sealed class FileRecordConfig : IEntityTypeConfiguration<FileRecord>
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.HasIndex(x => x.StoredName).IsUnique().HasDatabaseName("stored_name");
         b.HasIndex(x => x.UploaderId).HasDatabaseName("fk_files_uploader");
+        b.Property(x => x.SignerContactId).HasColumnName("signer_contact_id");
+        b.Property(x => x.SignerName).HasColumnName("signer_name").HasMaxLength(32);
+        b.HasIndex(x => x.SignerContactId).HasDatabaseName("fk_files_signer_contact");
+        b.HasOne<SupplierContact>().WithMany().HasForeignKey(x => x.SignerContactId).HasConstraintName("fk_files_signer_contact").OnDelete(DeleteBehavior.Restrict);
         // Serves the file list: WHERE project_id=? AND status=? ORDER BY id DESC; also backs fk_files_project.
         b.HasIndex(x => new { x.ProjectId, x.Status, x.Id }).HasDatabaseName("idx_files_project_status");
         b.HasIndex(x => new { x.Status, x.DeletedAt }).HasDatabaseName("idx_files_status_deleted_at");
@@ -118,6 +127,10 @@ public sealed class UploadSessionConfig : IEntityTypeConfiguration<UploadSession
         // Keep the database's ON UPDATE behavior while still sending that explicit value on insert.
         updatedAt.Metadata.SetBeforeSaveBehavior(PropertySaveBehavior.Save);
         b.HasIndex(x => x.UploaderId).HasDatabaseName("idx_us_uploader");
+        b.Property(x => x.SignerContactId).HasColumnName("signer_contact_id");
+        b.Property(x => x.SignerName).HasColumnName("signer_name").HasMaxLength(32);
+        b.HasIndex(x => x.SignerContactId).HasDatabaseName("fk_us_signer_contact");
+        b.HasOne<SupplierContact>().WithMany().HasForeignKey(x => x.SignerContactId).HasConstraintName("fk_us_signer_contact").OnDelete(DeleteBehavior.Restrict);
         b.HasIndex(x => new { x.ProjectId, x.UploaderId, x.FileFingerprint, x.Status, x.ExpiresAt })
             .HasDatabaseName("idx_us_resume");
         b.HasIndex(x => new { x.Status, x.ExpiresAt }).HasDatabaseName("idx_us_status_exp");

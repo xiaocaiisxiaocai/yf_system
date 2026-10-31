@@ -45,11 +45,11 @@ def _activate_user(admin_client, Client, check, employee_no, initial_password, u
     return actor
 
 
-def _upload_chunks(actor, project_id, file_name, content, *, ensure_step=False):
+def _upload_chunks(actor, project_id, file_name, content, *, ensure_step=False, signer_name=None):
     """ensure_step=True: an internal actor uploading non-STEP material to a subproject that may not
     have a STEP 3D drawing yet first gets the fixture STEP file (上传资料要求契约-2026-09-24)."""
     initialized, state, merged = upload_bytes(
-        actor, project_id, file_name, content, ensure_step=ensure_step)
+        actor, project_id, file_name, content, ensure_step=ensure_step, signer_name=signer_name)
     return merged["id"], initialized["totalChunks"], state["uploadedChunks"]
 
 
@@ -58,8 +58,42 @@ def _download_matches(actor, file_id, expected):
     return hashlib.sha256(downloaded).digest() == hashlib.sha256(expected).digest()
 
 
+ROBOT_OWNER_FIXTURE_NAME = "隔离回归 Robot 负责人"
+
+
+def _robot_owner_contact_id(conn, supplier_id):
+    """The supplier's fixture contact used as Robot owner.
+
+    It is kept DISABLED except while a main project is created (see _create_project_group): a supplier with an
+    active contact must sign its messages and uploads and has its mail sent to contacts, which the shared
+    suites do not exercise. A contact that is already selected may stay selected after it is disabled.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO supplier_contacts(supplier_id,name,email,status,sort_no) "
+            "SELECT %s,%s,%s,'DISABLED',0 FROM DUAL WHERE NOT EXISTS "
+            "(SELECT 1 FROM supplier_contacts WHERE supplier_id=%s AND name=%s)",
+            (supplier_id, ROBOT_OWNER_FIXTURE_NAME, f"robot-owner-{supplier_id}@example.invalid",
+             supplier_id, ROBOT_OWNER_FIXTURE_NAME),
+        )
+        cursor.execute(
+            "SELECT id FROM supplier_contacts WHERE supplier_id=%s AND name=%s",
+            (supplier_id, ROBOT_OWNER_FIXTURE_NAME),
+        )
+        return cursor.fetchone()[0]
+
+
+def _set_robot_owner_contact_status(conn, supplier_id, status):
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "UPDATE supplier_contacts SET status=%s WHERE supplier_id=%s AND name=%s",
+            (status, supplier_id, ROBOT_OWNER_FIXTURE_NAME),
+        )
+
+
 def _project_metadata(conn, supplier_id):
     """Return valid robot-part project metadata for an isolated fixture."""
+    robot_owner_contact_id = _robot_owner_contact_id(conn, supplier_id)
     with conn.cursor() as cursor:
         cursor.execute(
             "SELECT id FROM robot_parts "
@@ -85,7 +119,7 @@ def _project_metadata(conn, supplier_id):
         "robotPartId": robot_part[0],
         "priorityId": priority[0],
         "robotTypeId": robot_type[0],
-        "robotOwnerName": "隔离回归 Robot 负责人",
+        "robotOwnerContactIds": [robot_owner_contact_id],
         "expectedCompletionDate": "2099-12-31",
     }
 
@@ -136,14 +170,19 @@ def _create_project_group(creator_client, admin_client, conn, supplier_id, name)
         **metadata,
         "subprojectNames": [child_name],
     }
-    group = creator_client.call("POST", "/api/v1/project-groups", payload)
+    _set_robot_owner_contact_status(conn, supplier_id, "ACTIVE")
+    try:
+        group = creator_client.call("POST", "/api/v1/project-groups", payload)
+    finally:
+        _set_robot_owner_contact_status(conn, supplier_id, "DISABLED")
     detail = creator_client.call("GET", f"/api/v1/project-groups/{group['id']}")
     current = detail.get("group") or {}
     if (
         current.get("robotPartId") != metadata["robotPartId"]
         or not current.get("robotPartNumber")
         or not current.get("robotModelName")
-        or current.get("robotOwnerName") != metadata["robotOwnerName"]
+        or current.get("robotOwnerName") != ROBOT_OWNER_FIXTURE_NAME
+        or current.get("robotOwnerContactIds") != metadata["robotOwnerContactIds"]
         or "robotVendorId" in current
         or "robotVendorName" in current
         or "robotModelId" in current

@@ -11,6 +11,7 @@ internal static class FileRowMapping
         OriginalName = file.OriginalName, StoredName = file.StoredName, Ext = file.Ext, SizeBytes = file.SizeBytes,
         MimeType = file.MimeType, Sha256 = file.Sha256, StoragePath = file.StoragePath, Status = file.Status,
         DeletedAt = file.DeletedAt, CreatedAt = file.CreatedAt,
+        SignerContactId = file.SignerContactId, SignerName = file.SignerName,
     };
 
     private static readonly Func<FileRecord, FileRow> MapRecord = Projection.Compile();

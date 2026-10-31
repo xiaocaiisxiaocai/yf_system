@@ -113,7 +113,10 @@ public sealed record InitUploadRequest(
     string FileName,
     ulong FileSize,
     long FileLastModified,
-    string FileFingerprint);
+    string FileFingerprint,
+    // Typed signature naming the supplier contact who provides the file; required for supplier uploaders whose
+    // company has an active contact and must match one. A resumed session keeps the signature it was created with.
+    string? SignerName = null);
 
 public sealed record SubmitUploadMd5Request(string FileMd5);
 
@@ -136,6 +139,8 @@ internal sealed class FileRow
     public string Status { get; set; } = "";
     public DateTime? DeletedAt { get; set; }
     public DateTime CreatedAt { get; set; }
+    public ulong? SignerContactId { get; set; }
+    public string? SignerName { get; set; }
 }
 
 internal sealed class UploadSessionRow

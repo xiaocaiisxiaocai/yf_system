@@ -184,6 +184,9 @@ async function createGroup(context, token, supplierId, name, defaults) {
       const empty = route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
       await page.route('**/api/v1/project-dictionaries?*', empty);
       await page.route('**/api/v1/robot-parts?*', empty);
+      // Fixture contacts stay disabled; this step is about dictionaries, so present one enabled contact.
+      const contact = route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ id: 1, name: '浏览器 Robot 负责人', enabled: true }]) });
+      await page.route('**/api/v1/supplier-contacts?*', contact);
       await page.getByRole('button', { name: '新建主项目', exact: true }).click();
       const dialog = page.getByRole('dialog');
       // Robot parts are loaded per supplier, so the missing-part guidance only appears after one is chosen.
@@ -204,6 +207,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
       assert.equal(await dialog.getByRole('textbox', { name: '主项目名称', exact: true }).inputValue(), '字典恢复草稿');
       await dialog.getByRole('button', { name: '取消', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' });
+      await page.unroute('**/api/v1/supplier-contacts?*', contact);
       await search(flow.groupName);
     });
 
@@ -219,7 +223,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
         robotPartId: detail.group.robotPartId,
         priorityId: detail.group.priorityId,
         robotTypeId: detail.group.robotTypeId,
-        robotOwnerName: detail.group.robotOwnerName,
+        robotOwnerContactIds: detail.group.robotOwnerContactIds,
         expectedCompletionDate: detail.group.expectedCompletionDate,
         expectedUpdatedAt: detail.group.updatedAt,
       });

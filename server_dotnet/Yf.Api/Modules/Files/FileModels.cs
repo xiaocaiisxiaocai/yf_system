@@ -27,7 +27,9 @@ public sealed record FileListItem(
     DateTime CreatedAt,
     string? UploaderName,
     bool IsCopiedReference,
-    bool CanDelete);
+    bool CanDelete,
+    // Supplier contact who provided the file; null for internal or unsigned uploads.
+    string? SignerName);
 
 public sealed record UploadInitResponse(
     string SessionId,

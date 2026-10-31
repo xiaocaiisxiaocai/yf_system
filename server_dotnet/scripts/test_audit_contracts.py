@@ -214,7 +214,7 @@ def run_audit_checks(client, conn, check):
         "robotPartId": current_group["robotPartId"],
         "priorityId": current_group["priorityId"],
         "robotTypeId": current_group["robotTypeId"],
-        "robotOwnerName": current_group["robotOwnerName"],
+        "robotOwnerContactIds": current_group["robotOwnerContactIds"],
         "expectedCompletionDate": current_group["expectedCompletionDate"],
         "expectedUpdatedAt": current_group["updatedAt"],
     })

@@ -17,7 +17,7 @@ internal static class DevelopmentDataReset
         "collaboration_reads", "message_reads", "message_images", "email_outbox", "project_activities",
         "file_copy_refs", "project_copy_jobs", "project_copies",
         "project_group_status_logs", "project_status_logs", "upload_sessions", "files", "file_blobs", "messages", "projects",
-        "project_group_work_orders", "project_groups", "robot_parts", "refresh_tokens",
+        "project_group_robot_owners", "project_group_work_orders", "project_groups", "robot_parts", "supplier_contacts", "refresh_tokens",
         "user_roles", "role_permissions", "departments", "audit_logs"
     ];
 
@@ -58,6 +58,8 @@ internal static class DevelopmentDataReset
             ["project_group_work_orders"] = (db, ct) => db.ProjectGroupWorkOrders.LongCountAsync(ct),
             ["project_groups"] = (db, ct) => db.ProjectGroups.LongCountAsync(ct),
             ["robot_parts"] = (db, ct) => db.RobotParts.LongCountAsync(ct),
+            ["supplier_contacts"] = (db, ct) => db.SupplierContacts.LongCountAsync(ct),
+            ["project_group_robot_owners"] = (db, ct) => db.ProjectGroupRobotOwners.LongCountAsync(ct),
             ["refresh_tokens"] = (db, ct) => db.RefreshTokens.LongCountAsync(ct),
             ["user_roles"] = (db, ct) => db.UserRoles.LongCountAsync(ct),
             ["role_permissions"] = (db, ct) => db.RolePermissions.LongCountAsync(ct),
@@ -295,9 +297,11 @@ internal static class DevelopmentDataReset
         await db.FileBlobs.ExecuteDeleteAsync(ct);
         await db.Messages.ExecuteDeleteAsync(ct);
         await db.Projects.ExecuteDeleteAsync(ct);
+        await db.ProjectGroupRobotOwners.ExecuteDeleteAsync(ct);
         await db.ProjectGroupWorkOrders.ExecuteDeleteAsync(ct);
         await db.ProjectGroups.ExecuteDeleteAsync(ct);
         await db.RobotParts.ExecuteDeleteAsync(ct);
+        await db.SupplierContacts.ExecuteDeleteAsync(ct);
         await db.RefreshTokens.ExecuteDeleteAsync(ct);
         await db.UserRoles.ExecuteDeleteAsync(ct);
         await db.RolePermissions.ExecuteDeleteAsync(ct);

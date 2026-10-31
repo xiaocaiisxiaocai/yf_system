@@ -1453,6 +1453,197 @@
         }
       }
     },
+    "/api/v1/admin/suppliers/{id}/contacts": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SupplierContactResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupplierContactUpsert"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupplierContactResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/supplier-contacts/{id}": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupplierContactUpsert"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupplierContactResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/supplier-contacts/{id}/status": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupplierContactResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/supplier-role-options": {
       "get": {
         "tags": [
@@ -3470,6 +3661,48 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RobotPartResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/supplier-contacts": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "supplierId",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SupplierContactOption"
+                  }
                 }
               }
             }
@@ -7596,6 +7829,7 @@
           "originalName",
           "projectId",
           "sha256",
+          "signerName",
           "sizeBytes",
           "uploaderId",
           "uploaderName"
@@ -7648,6 +7882,10 @@
           },
           "canDelete": {
             "type": "boolean"
+          },
+          "signerName": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -7903,7 +8141,8 @@
           "fileLastModified",
           "fileName",
           "fileSize",
-          "projectId"
+          "projectId",
+          "signerName"
         ],
         "type": "object",
         "properties": {
@@ -7924,6 +8163,10 @@
           },
           "fileFingerprint": {
             "type": "string"
+          },
+          "signerName": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -8291,6 +8534,7 @@
           "senderId",
           "senderName",
           "senderType",
+          "signerName",
           "status",
           "totalCount"
         ],
@@ -8340,6 +8584,10 @@
             "items": {
               "$ref": "#/components/schemas/MessageImageResponse"
             }
+          },
+          "signerName": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -11378,6 +11626,7 @@
           "responsibleUserId",
           "responsibleUserName",
           "robotModelName",
+          "robotOwnerContactIds",
           "robotOwnerName",
           "robotPartId",
           "robotPartNumber",
@@ -11465,6 +11714,13 @@
           "robotOwnerName": {
             "type": "string",
             "nullable": true
+          },
+          "robotOwnerContactIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
           },
           "sectionId": {
             "type": "integer",
@@ -11965,7 +12221,7 @@
           "machineModel",
           "name",
           "priorityId",
-          "robotOwnerName",
+          "robotOwnerContactIds",
           "robotPartId",
           "robotTypeId",
           "subprojectNames",
@@ -12007,8 +12263,12 @@
             "format": "int64",
             "nullable": true
           },
-          "robotOwnerName": {
-            "type": "string",
+          "robotOwnerContactIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
             "nullable": true
           },
           "robotTypeId": {
@@ -12567,6 +12827,89 @@
           },
           "email": {
             "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "SupplierContactOption": {
+        "required": [
+          "enabled",
+          "id",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SupplierContactResponse": {
+        "required": [
+          "createdAt",
+          "email",
+          "id",
+          "name",
+          "sortNo",
+          "status",
+          "supplierId"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "supplierId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "sortNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SupplierContactUpsert": {
+        "required": [
+          "email",
+          "name",
+          "sortNo"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "sortNo": {
+            "type": "integer",
+            "format": "int32",
             "nullable": true
           }
         },

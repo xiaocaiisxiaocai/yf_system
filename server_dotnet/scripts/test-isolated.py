@@ -38,6 +38,7 @@ from test_collaboration_contracts import run_collaboration_checks
 from test_business_acceptance import _create_project_group, run_business_acceptance
 from test_workflow_acceptance import run_workflow_acceptance
 from test_manual_supplier_roles import run_manual_supplier_role_checks
+from test_supplier_contacts import run_supplier_contact_checks
 from upload_contract import init_upload, put_chunk, submit_md5
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -539,6 +540,7 @@ try:
             if not FILES_ONLY:
                 run_identity_checks(client, Client, conn, check)
                 run_project_remediation_checks(client, Client, conn, check, storage)
+                run_supplier_contact_checks(client, Client, conn, check)
                 run_collaboration_checks(client, Client, conn, check)
                 for path in ("/dashboard/summary", "/dashboard/pending-projects", "/departments", "/permissions", "/supplier-options", "/robot-parts?enabledOnly=true", "/admin/users", "/admin/roles", "/admin/suppliers", "/admin/user-role-options", "/admin/system/configs", "/admin/system/mail-status", "/admin/audit-logs"):
                     client.call("GET", "/api/v1" + path)

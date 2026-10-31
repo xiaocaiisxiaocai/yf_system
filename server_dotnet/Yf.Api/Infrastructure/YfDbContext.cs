@@ -19,6 +19,7 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
 
     public DbSet<Department> Departments => Set<Department>();
     public DbSet<Supplier> Suppliers => Set<Supplier>();
+    public DbSet<SupplierContact> SupplierContacts => Set<SupplierContact>();
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<Permission> Permissions => Set<Permission>();
     public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
@@ -26,6 +27,7 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
 
     public DbSet<ProjectGroup> ProjectGroups => Set<ProjectGroup>();
     public DbSet<ProjectGroupWorkOrder> ProjectGroupWorkOrders => Set<ProjectGroupWorkOrder>();
+    public DbSet<ProjectGroupRobotOwner> ProjectGroupRobotOwners => Set<ProjectGroupRobotOwner>();
     public DbSet<ProjectGroupStatusLog> ProjectGroupStatusLogs => Set<ProjectGroupStatusLog>();
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<ProjectWorkOrder> ProjectWorkOrders => Set<ProjectWorkOrder>();

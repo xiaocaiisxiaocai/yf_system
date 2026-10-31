@@ -2,7 +2,7 @@ const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const {
-  fs, assert, OUT, s, f, save, record, login, api, navigate, action, track,
+  fs, assert, OUT, s, f, save, record, login, api, navigate, action, track, withRobotOwnerFixture,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
 const sha = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -160,32 +160,36 @@ async function preview(page, name, kind, label) {
 
     for (const key of ['a', 'b']) {
       await record(key + ' 主项目及子项目通过页面创建、启动并显示负责人', async () => {
-        await navigate(creatorPage, '/projects');
-        await creatorPage.getByRole('button', { name: '新建主项目', exact: true }).click();
-        const modal = creatorPage.getByRole('dialog');
-        const groupName = '自动验收' + key + '主项目-' + Date.now();
-        const childName = groupName + ' 子项目';
-        await modal.getByPlaceholder('主项目名称', { exact: true }).fill(groupName);
-        await addToken(modal, '输入子项目名称后按回车，可一次创建多个', childName);
-        await addToken(modal, '输入工令号后按回车，可填写多个', 'WO-' + crypto.randomBytes(4).toString('hex'));
-        await modal.getByPlaceholder('请输入机型', { exact: true }).fill('自动验收机型');
-        await modal.getByPlaceholder('请输入 Robot 负责人', { exact: true }).fill('自动验收 Robot 负责人');
-        await choose(creatorPage, modal, '选择 Robot 厂商', f.suppliers[key].name);
-        await choose(creatorPage, modal, '选择 Robot 类型', robotTypes[0].name);
-        await choose(creatorPage, modal, '选择 Robot 料号', f.robotParts[key].partNumber);
-        await waitForFieldValue(
-          modal.locator('.arco-form-item').filter({ hasText: 'Robot 型号（自动带出）' }).locator('textarea'),
-          f.robotParts[key].model);
-        await choose(creatorPage, modal, '选择优先级', priorities[0].name);
-        const date = modal.getByPlaceholder('选择需求完成时间', { exact: true });
-        await date.fill('2099-12-31');
-        await date.press('Enter');
-        const group = await action(
-          creatorPage,
-          '/project-groups',
-          'POST',
-          () => modal.getByRole('button', { name: '创建主项目', exact: true }).click(),
-        );
+        const { groupName, childName, group } = await withRobotOwnerFixture(admin.context, admin.token, f.suppliers[key].id, async (contact) => {
+          await navigate(creatorPage, '/projects');
+          await creatorPage.getByRole('button', { name: '新建主项目', exact: true }).click();
+          const modal = creatorPage.getByRole('dialog');
+          const groupName = '自动验收' + key + '主项目-' + Date.now();
+          const childName = groupName + ' 子项目';
+          await modal.getByPlaceholder('主项目名称', { exact: true }).fill(groupName);
+          await addToken(modal, '输入子项目名称后按回车，可一次创建多个', childName);
+          await addToken(modal, '输入工令号后按回车，可填写多个', 'WO-' + crypto.randomBytes(4).toString('hex'));
+          await modal.getByPlaceholder('请输入机型', { exact: true }).fill('自动验收机型');
+          await choose(creatorPage, modal, '选择 Robot 厂商', f.suppliers[key].name);
+          // Robot 负责人从该厂商的联络人中多选。
+          await choose(creatorPage, modal, '选择该厂商的联络人，可多选', contact.name);
+          await choose(creatorPage, modal, '选择 Robot 类型', robotTypes[0].name);
+          await choose(creatorPage, modal, '选择 Robot 料号', f.robotParts[key].partNumber);
+          await waitForFieldValue(
+            modal.locator('.arco-form-item').filter({ hasText: 'Robot 型号（自动带出）' }).locator('textarea'),
+            f.robotParts[key].model);
+          await choose(creatorPage, modal, '选择优先级', priorities[0].name);
+          const date = modal.getByPlaceholder('选择需求完成时间', { exact: true });
+          await date.fill('2099-12-31');
+          await date.press('Enter');
+          const created = await action(
+            creatorPage,
+            '/project-groups',
+            'POST',
+            () => modal.getByRole('button', { name: '创建主项目', exact: true }).click(),
+          );
+          return { groupName, childName, group: created };
+        });
         const detail = await json(creator.context, creator.token, 'GET', '/project-groups/' + group.id);
         assert.equal(detail.projects.length, 1);
         const project = detail.projects[0];

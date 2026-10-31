@@ -33,6 +33,23 @@ public sealed class Supplier
     public DateTime UpdatedAt { get; set; }
 }
 
+/// <summary>
+/// A named person behind a (possibly shared) supplier login. Maintained internally; never deleted, only
+/// disabled, so signatures and Robot-owner selections keep pointing at a real row.
+/// </summary>
+public sealed class SupplierContact
+{
+    public ulong Id { get; set; }
+    public ulong SupplierId { get; set; }
+    public string Name { get; set; } = null!;
+    public string Email { get; set; } = null!;
+    public string Status { get; set; } = null!;
+    public int SortNo { get; set; }
+    public ulong? CreatedBy { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
 public sealed class Role
 {
     public ulong Id { get; set; }
@@ -103,6 +120,27 @@ public sealed class SupplierConfig : IEntityTypeConfiguration<Supplier>
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP").ValueGeneratedOnAddOrUpdate();
         b.HasIndex(x => x.Name).IsUnique().HasDatabaseName("uk_suppliers_name");
+    }
+}
+
+public sealed class SupplierContactConfig : IEntityTypeConfiguration<SupplierContact>
+{
+    public void Configure(EntityTypeBuilder<SupplierContact> b)
+    {
+        b.ToTable("supplier_contacts");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.SupplierId).HasColumnName("supplier_id");
+        b.Property(x => x.Name).HasColumnName("name").HasMaxLength(32).IsRequired();
+        b.Property(x => x.Email).HasColumnName("email").HasMaxLength(128).IsRequired();
+        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue(AccountStatuses.Active);
+        b.Property(x => x.SortNo).HasColumnName("sort_no").HasDefaultValue(0);
+        b.Property(x => x.CreatedBy).HasColumnName("created_by");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+        b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)").ValueGeneratedOnAddOrUpdate();
+        b.HasIndex(x => new { x.SupplierId, x.Name }).IsUnique().HasDatabaseName("uk_supplier_contacts_supplier_name");
+        b.HasIndex(x => new { x.SupplierId, x.Status, x.SortNo, x.Id }).HasDatabaseName("idx_supplier_contacts_supplier_status");
+        b.HasOne<Supplier>().WithMany().HasForeignKey(x => x.SupplierId).HasConstraintName("fk_supplier_contacts_supplier").OnDelete(DeleteBehavior.Restrict);
     }
 }
 

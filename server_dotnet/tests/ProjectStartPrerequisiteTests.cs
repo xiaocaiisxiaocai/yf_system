@@ -23,6 +23,7 @@ public sealed class ProjectStartPrerequisiteTests
             INSERT INTO suppliers(id,name,status,created_at,updated_at)
             VALUES(9701,'项目所属厂商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
                   (9702,'其他厂商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO supplier_contacts(id,supplier_id,name,email,status) SELECT id+10000000,id,'Robot 负责人',CONCAT('contact',id,'@example.test'),'ACTIVE' FROM suppliers WHERE id NOT IN (SELECT supplier_id FROM supplier_contacts);
             INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
             VALUES(9703,NULL,'项目负责人课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
@@ -50,7 +51,7 @@ public sealed class ProjectStartPrerequisiteTests
             RobotPartId = 9705,
             PriorityId = 9706,
             RobotTypeId = 1009706,
-            RobotOwnerName = "Robot 负责人",
+            RobotOwnerContactIds = [10009701],
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["开始条件子项目", "终止重启子项目"],
         }, null, ct);

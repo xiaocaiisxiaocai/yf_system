@@ -1,8 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  Button, Empty, Input, Message, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, Typography,
+  Button, Empty, Input, Message, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip,
 } from '@arco-design/web-react'
-import { IconDownload, IconEye, IconUpload, IconDelete, IconClose, IconQuestionCircle } from '@arco-design/web-react/icon'
+import { IconDownload, IconEye, IconUpload, IconDelete, IconClose } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from '../store/auth'
 import { type FileItem, type PageResp, PROJECT_STATUS, fmtSize, fmtTime } from '../api/types'
@@ -33,8 +33,6 @@ interface Props {
   projectStatus: string
   targetId?: number
   onOpenCopyHistory?: () => void
-  /** 供应商选择上传后提交验收时，用于刷新父组件的项目/流程状态。 */
-  onProjectChanged?: () => void
   /** 父组件在提交/终止失败或另一处取消上传后递增。 */
   uploadRefresh?: number
   onUploadActivityChanged?: () => void
@@ -42,7 +40,6 @@ interface Props {
   compact?: boolean
 }
 
-const FILE_DIRECTION_HINT = '文件方向按上传账号自动记录；文件当前不统计已读状态。'
 // 每列宽度：[常规, 紧凑]；紧凑模式的横向滚动宽度由列宽求和，避免列之间出现大段空白。
 const COLUMN_WIDTHS = {
   name: [200, 170], direction: [130, 116], size: [90, 72], uploader: [90, 76], createdAt: [180, 150], actions: [140, 108],
@@ -77,7 +74,7 @@ function WatermarkedPreview({ employeeNo, realName, children }: { employeeNo?: s
 }
 
 export default function FileTable({
-  projectId, projectStatus, targetId, onOpenCopyHistory, onProjectChanged, compact = false,
+  projectId, projectStatus, targetId, onOpenCopyHistory, compact = false,
   uploadRefresh = 0, onUploadActivityChanged,
 }: Props) {
   const w = compact ? 1 : 0
@@ -179,19 +176,6 @@ export default function FileTable({
 
   const isSupplier = user?.userType === 'SUPPLIER'
 
-  /** 供应商显式选择后，整批上传成功才提交验收。 */
-  const submitAfterUpload = async () => {
-    if (!isSupplier || !hasPerm('project:submit') || projectStatus !== 'IN_PROGRESS') return
-    try {
-      await http.post<ApiResponses['POST /projects/{id}/submit']>(`/projects/${projectId}/submit`, { confirmSide: 'COMPANY' },
-        { quietNetworkError: true } as QuietRequestConfig)
-      Message.success('文件已全部上传，已提交验收')
-      onProjectChanged?.()
-    } catch {
-      Message.warning('文件已上传，提交验收未成功，请刷新状态后重试提交验收')
-      onProjectChanged?.()
-    }
-  }
 
   const batchDownload = async () => {
     if (batchDownloadInFlight.current) return
@@ -252,7 +236,11 @@ export default function FileTable({
       },
     },
     { title: '大小', dataIndex: 'sizeBytes', width: COLUMN_WIDTHS.size[w], align: 'center' as const, render: fmtSize },
-    { title: '上传人', dataIndex: 'uploaderName', width: COLUMN_WIDTHS.uploader[w], align: 'center' as const, ellipsis: true },
+    {
+      title: '上传人', dataIndex: 'uploaderName', width: COLUMN_WIDTHS.uploader[w], align: 'center' as const, ellipsis: true,
+      // 供应商共用账号上传时显示签名的提供人，括号内为登录账号。
+      render: (name: string | null, file: FileItem) => file.signerName ? `${file.signerName}（${name ?? ''}）` : name,
+    },
     { title: '上传时间', dataIndex: 'createdAt', width: COLUMN_WIDTHS.createdAt[w], align: 'center' as const, render: fmtTime },
     {
       title: '操作', width: compactNarrow ? COMPACT_NARROW_ACTIONS_WIDTH : COLUMN_WIDTHS.actions[w], fixed: compactMedium ? undefined : 'right' as const,
@@ -317,11 +305,6 @@ export default function FileTable({
               setKeyword('')
             }}
           />
-          {compact && (
-            <Tooltip content={FILE_DIRECTION_HINT}>
-              <IconQuestionCircle className="file-table-hint-icon" aria-label={FILE_DIRECTION_HINT} />
-            </Tooltip>
-          )}
         </Space>
         <Space>
           {selected.length > 0 && hasPerm('file:download') && (
@@ -336,11 +319,6 @@ export default function FileTable({
           )}
         </Space>
       </Space>
-      {!compact && (
-        <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-          {FILE_DIRECTION_HINT}
-        </Typography.Text>
-      )}
       <ActiveUploadSessions
         projectId={projectId}
         refreshToken={uploadRefresh}
@@ -385,7 +363,7 @@ export default function FileTable({
           onClose={() => setUploadOpen(false)}
           onDone={load}
           direction={isSupplier ? 'S2C' : 'C2S'}
-          onSubmitForAcceptance={isSupplier && hasPerm('project:submit') && projectStatus === 'IN_PROGRESS' ? submitAfterUpload : undefined}
+          requireSignature={isSupplier}
         />
       )}
       <Modal

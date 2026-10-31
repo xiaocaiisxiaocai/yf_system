@@ -193,6 +193,7 @@ export interface FileListItem {
   uploaderName: string | null
   isCopiedReference: boolean
   canDelete: boolean
+  signerName: string | null
 }
 
 export interface FileResponse {
@@ -257,6 +258,7 @@ export interface InitUploadRequest {
   fileSize: number
   fileLastModified: number
   fileFingerprint: string
+  signerName?: string | null
 }
 
 export interface LoginRequest {
@@ -357,6 +359,7 @@ export interface MessageResponse {
   totalCount: number
   readByMe: boolean
   images: Array<MessageImageResponse>
+  signerName: string | null
 }
 
 export interface MissingEmailAccount {
@@ -1106,6 +1109,7 @@ export interface ProjectGroupResponse {
   responsibleUserEmployeeNo: string | null
   responsibleUserName: string | null
   robotOwnerName: string | null
+  robotOwnerContactIds: Array<number>
   sectionId: number | null
   sectionName: string | null
   priorityId: number | null
@@ -1229,7 +1233,7 @@ export interface ProjectUpsertRequest {
   machineModel?: string | null
   robotPartId?: number | null
   priorityId?: number | null
-  robotOwnerName?: string | null
+  robotOwnerContactIds?: Array<number> | null
   robotTypeId?: number | null
   expectedCompletionDate?: string | null
   subprojectNames?: Array<string> | null
@@ -1375,6 +1379,28 @@ export interface SupplierAccountUpdate {
   email?: string | null
 }
 
+export interface SupplierContactOption {
+  id: number
+  name: string
+  enabled: boolean
+}
+
+export interface SupplierContactResponse {
+  id: number
+  supplierId: number
+  name: string
+  email: string
+  status: string
+  sortNo: number
+  createdAt: string
+}
+
+export interface SupplierContactUpsert {
+  name: string
+  email: string
+  sortNo?: number | null
+}
+
 export interface SupplierOption {
   id: number
   name: string
@@ -1510,6 +1536,8 @@ export interface ApiResponses {
   "PUT /admin/supplier-accounts/{id}": SupplierAccountResponse
   "PUT /admin/supplier-accounts/{id}/password": EmptyResponse
   "PUT /admin/supplier-accounts/{id}/status": SupplierAccountResponse
+  "PUT /admin/supplier-contacts/{id}": SupplierContactResponse
+  "PUT /admin/supplier-contacts/{id}/status": SupplierContactResponse
   "GET /admin/supplier-role-options": Array<RoleOption>
   "GET /admin/suppliers": PageResponseOfSupplierResponse
   "POST /admin/suppliers": SupplierResponse
@@ -1518,6 +1546,8 @@ export interface ApiResponses {
   "PUT /admin/suppliers/{id}": SupplierResponse
   "GET /admin/suppliers/{id}/accounts": Array<SupplierAccountResponse>
   "POST /admin/suppliers/{id}/accounts": SupplierAccountResponse
+  "GET /admin/suppliers/{id}/contacts": Array<SupplierContactResponse>
+  "POST /admin/suppliers/{id}/contacts": SupplierContactResponse
   "PUT /admin/suppliers/{id}/status": SupplierResponse
   "GET /admin/system/configs": Array<SystemConfigResponse>
   "PUT /admin/system/configs": EmptyResponse
@@ -1659,6 +1689,7 @@ export interface ApiResponses {
   "POST /robot-parts": RobotPartResponse
   "DELETE /robot-parts/{id}": EmptyResponse
   "PUT /robot-parts/{id}": RobotPartResponse
+  "GET /supplier-contacts": Array<SupplierContactOption>
   "GET /supplier-options": Array<SupplierOption>
   "POST /uploads/init": UploadInitResponse
   "DELETE /uploads/{sessionId}": EmptyResponse

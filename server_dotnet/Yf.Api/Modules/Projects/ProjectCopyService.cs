@@ -370,6 +370,8 @@ internal sealed class ProjectCopyService(
                 BlobId = resolvedBlobs[item.Blob.Sha256].Id,
                 UploaderId = item.Source.UploaderId,
                 Direction = item.Source.Direction,
+                SignerContactId = item.Source.SignerContactId,
+                SignerName = item.Source.SignerName,
                 OriginalName = item.Source.OriginalName,
                 StoredName = item.StoredName,
                 Ext = item.Source.Ext,
@@ -742,7 +744,8 @@ internal sealed class ProjectCopyService(
             .FromSqlInterpolated($"SELECT * FROM files WHERE project_id={projectId} ORDER BY id FOR UPDATE")
             .AsNoTracking().ToArrayAsync(ct);
         return files.Select(file => new CopyFileRow(file.Id, file.UploaderId, file.Direction, file.OriginalName,
-            file.Ext, file.SizeBytes, file.MimeType, file.Sha256, file.StoragePath, file.Status, file.BlobId)).ToArray();
+            file.Ext, file.SizeBytes, file.MimeType, file.Sha256, file.StoragePath, file.Status, file.BlobId,
+            file.SignerContactId, file.SignerName)).ToArray();
     }
 
     private static async Task<CopyFileRow[]> LoadFilesAsync(
@@ -751,7 +754,8 @@ internal sealed class ProjectCopyService(
         var files = await db.Files.AsNoTracking().Where(file => file.ProjectId == projectId)
             .OrderBy(file => file.Id).ToArrayAsync(ct);
         return files.Select(file => new CopyFileRow(file.Id, file.UploaderId, file.Direction, file.OriginalName,
-            file.Ext, file.SizeBytes, file.MimeType, file.Sha256, file.StoragePath, file.Status, file.BlobId)).ToArray();
+            file.Ext, file.SizeBytes, file.MimeType, file.Sha256, file.StoragePath, file.Status, file.BlobId,
+            file.SignerContactId, file.SignerName)).ToArray();
     }
 
     private static async Task<ulong> ActiveUploadCountAsync(YfDbContext db, ulong projectId, CancellationToken ct)
@@ -1094,7 +1098,8 @@ internal sealed class ProjectCopyService(
 
     private sealed record PreparedCopy(CopyFileRow Source, string StoredName, FileBlobStore.PreparedBlob Blob);
     private sealed record CopyFileRow(ulong Id, ulong UploaderId, string Direction, string OriginalName, string Ext,
-        ulong SizeBytes, string? MimeType, string? Sha256, string StoragePath, string Status, ulong? BlobId);
+        ulong SizeBytes, string? MimeType, string? Sha256, string StoragePath, string Status, ulong? BlobId,
+        ulong? SignerContactId, string? SignerName);
     private sealed class CopyHistoryRow
     {
         public ulong CopyId { get; init; }

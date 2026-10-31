@@ -31,6 +31,10 @@ const suppliers = [{ id: 8, name: '厂商甲' }, { id: 9, name: '厂商乙' }]
 const priorities = [{ id: 14, type: 'PRIORITY', name: '普通', enabled: true, sortNo: 10, parentId: null, parentName: null, inUse: false }]
 const robotTypes = [{ id: 21, type: 'ROBOT_TYPE', name: '六轴', enabled: true, sortNo: 10, parentId: null, parentName: null, inUse: false }]
 type GetConfig = { params?: { supplierId?: number; type?: string } }
+const contactsBySupplier: Record<number, unknown[]> = {
+  8: [{ id: 31, name: '张三', enabled: true }, { id: 32, name: '李四', enabled: true }],
+  9: [{ id: 41, name: '张三', enabled: true }, { id: 42, name: '王五', enabled: false }],
+}
 
 function dictionaryOptions(config?: GetConfig, ready = true) {
   if (!ready) return []
@@ -59,6 +63,14 @@ async function selectById(id: string, name: string) {
   fireEvent.click(options.at(-1)!)
 }
 
+/** 多选的 Robot 负责人：多选模式下 role=option 是外层包装，点击内部的选项元素才会选中。 */
+async function selectOwner(name: string) {
+  fireEvent.click(document.getElementById('robotOwnerContactIds_input')!)
+  const option = (await screen.findAllByRole('option', { name })).at(-1)!
+  fireEvent.click(option.querySelector('.arco-select-option') ?? option)
+  await waitFor(() => expect(document.querySelector('#robotOwnerContactIds_input .arco-input-tag-tag')).toHaveTextContent(name))
+}
+
 async function enterCreatedOption(id: string, value: string) {
   const control = document.getElementById(id)!
   fireEvent.click(control)
@@ -71,6 +83,7 @@ function successfulGet(url: string, config?: GetConfig) {
   if (url === '/project-groups') return Promise.resolve({ data: page() })
   if (url === '/supplier-options') return Promise.resolve({ data: suppliers })
   if (url === '/project-dictionaries') return Promise.resolve({ data: dictionaryOptions(config) })
+  if (url === '/supplier-contacts') return Promise.resolve({ data: contactsBySupplier[config?.params?.supplierId ?? 0] ?? [] })
   if (url === '/robot-parts') {
     const supplierId = config?.params?.supplierId
     return Promise.resolve({ data: [{
@@ -119,7 +132,6 @@ describe('ProjectList migrated behavior', () => {
     await enterCreatedOption('subprojectNames_input', '子项目-A')
     await enterCreatedOption('workOrderNos_input', 'WO-1')
     await user.type(within(dialog).getByPlaceholderText('请输入机型'), 'M1')
-    await user.type(within(dialog).getByPlaceholderText('请输入 Robot 负责人'), ' 张三 ')
 
     await selectById('supplierId_input', '厂商甲')
     await selectById('supplierId_input', '厂商乙')
@@ -127,6 +139,12 @@ describe('ProjectList migrated behavior', () => {
     await waitFor(() => expect(document.getElementById('robotPartId_input')).not.toHaveAttribute('aria-disabled', 'true'))
     await selectById('robotPartId_input', 'B-202')
     expect(within(dialog).getByPlaceholderText('所选料号未设置型号')).toHaveValue('乙厂商完整长型号')
+    // Robot 负责人只能从所选厂商的启用联络人中选择。
+    await waitFor(() => expect(document.getElementById('robotOwnerContactIds_input')).not.toHaveAttribute('aria-disabled', 'true'))
+    fireEvent.click(document.getElementById('robotOwnerContactIds_input')!)
+    expect(await screen.findByRole('option', { name: '张三' })).toBeVisible()
+    expect(screen.queryByRole('option', { name: /王五/ })).not.toBeInTheDocument()
+    await selectOwner('张三')
 
     pending.get(8)!.resolve({ data: [{ id: 101, supplierId: 8, supplierName: '厂商甲', partNumber: 'A-101', model: '旧响应型号', enabled: true, inUse: false, sortNo: 1 }] })
     fireEvent.click(document.getElementById('robotPartId_input')!)
@@ -159,7 +177,7 @@ describe('ProjectList migrated behavior', () => {
       robotPartId: 202,
       priorityId: 14,
       robotTypeId: 21,
-      robotOwnerName: '张三',
+      robotOwnerContactIds: [41],
       expectedCompletionDate: '2026-09-30',
       subprojectNames: ['子项目-A'],
     })
@@ -181,6 +199,7 @@ describe('ProjectList migrated behavior', () => {
       if (url === '/supplier-options') return Promise.resolve({ data: [{ id: 8, name: '历史厂商' }] })
       if (url === '/project-dictionaries') return Promise.resolve({ data: dictionaryOptions(config) })
       if (url === '/robot-parts') return Promise.reject(new Error('catalog temporarily unavailable'))
+      if (url === '/supplier-contacts') return Promise.resolve({ data: contactsBySupplier[8] })
       throw new Error(`unexpected GET ${url}`)
     })
     const user = userEvent.setup()
@@ -194,14 +213,14 @@ describe('ProjectList migrated behavior', () => {
     // Projects created before Robot 类型 existed have none; it is required, so saving asks for it first.
     await user.click(within(dialog).getByRole('button', { name: '保存并同步' }))
     expect(await within(dialog).findByText('请选择 Robot 类型')).toBeInTheDocument()
-    expect(within(dialog).getByText('请填写 Robot 负责人')).toBeInTheDocument()
+    expect(within(dialog).getByText('请选择 Robot 负责人')).toBeInTheDocument()
     expect(mocks.put).not.toHaveBeenCalled()
     await selectById('robotTypeId_input', '六轴')
-    await user.type(within(dialog).getByPlaceholderText('请输入 Robot 负责人'), '李四')
+    await selectOwner('李四')
     await user.click(within(dialog).getByRole('button', { name: '保存并同步' }))
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
     expect(mocks.put.mock.calls[0][1]).toEqual(expect.objectContaining({
-      robotPartId: null, supplierId: 8, robotTypeId: 21, robotOwnerName: '李四', expectedUpdatedAt: '2026-09-01T00:00:00.000000Z',
+      robotPartId: null, supplierId: 8, robotTypeId: 21, robotOwnerContactIds: [32], expectedUpdatedAt: '2026-09-01T00:00:00.000000Z',
     }))
     expect(mocks.put.mock.calls[0][1]).not.toHaveProperty('responsibleUserId')
     expect(await screen.findByText('主项目资料已保存，并同步到未完成的子项目')).toBeInTheDocument()
@@ -213,7 +232,7 @@ describe('ProjectList migrated behavior', () => {
       workOrderNos: ['WO-1'], machineModel: 'M1', robotPartId: 101, robotPartNumber: 'A-101', robotModelName: '甲厂商型号',
       responsibleUserId: 5, responsibleUserEmployeeNo: '0004', responsibleUserName: '旧负责人', sectionId: null, sectionName: null,
       priorityId: 14, priorityName: '普通', robotTypeId: 21, robotTypeName: '六轴', robotOwnerName: '张三',
-      expectedCompletionDate: '2026-09-30', updatedAt,
+      robotOwnerContactIds: [31], expectedCompletionDate: '2026-09-30', updatedAt,
       subprojectCount: 0, completedCount: 0, pendingCount: 0, terminatedCount: 0, unreadMessages: 0,
     }
   }

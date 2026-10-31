@@ -10,6 +10,7 @@ import { useAuth } from '../../store/auth'
 import { fmtTime } from '../../api/types'
 import type { ApiResponses } from '../../api/types'
 import { SupplierAccountsDrawer } from './components/SupplierAccountsDrawer'
+import { SupplierContactsDrawer } from './components/SupplierContactsDrawer'
 import { SupplierEditModal } from './components/SupplierEditModal'
 import type { Supplier } from './components/supplierTypes'
 import { useSupplierListState } from './hooks/useSupplierListState'
@@ -27,6 +28,7 @@ export default function SupplierList() {
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<Supplier | null>(null)
   const [accTarget, setAccTarget] = useState<Supplier | null>(null)
+  const [contactTarget, setContactTarget] = useState<Supplier | null>(null)
   const accountTrigger = useRef<HTMLButtonElement | null>(null)
   const saveInFlight = useRef(false)
   const togglingSupplierIdsRef = useRef(new Set<number>())
@@ -134,7 +136,7 @@ export default function SupplierList() {
           rowKey="id"
           loading={loading}
           data={data.list}
-          scroll={{ x: 680, y: 'var(--page-table-scroll-y)' }}
+          scroll={{ x: 740, y: 'var(--page-table-scroll-y)' }}
           columns={[
             { title: '名称', dataIndex: 'name', width: 240, ellipsis: true },
             {
@@ -147,7 +149,7 @@ export default function SupplierList() {
             { title: '创建时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
             {
               title: '操作',
-              width: 240,
+              width: 300,
               fixed: 'right' as const,
               render: (_: unknown, supplier: Supplier) => actionSlots([
                 canManageAccounts && <Button key="accounts" size="mini" type="text" onClick={(event) => {
@@ -155,6 +157,9 @@ export default function SupplierList() {
                   setAccTarget(supplier)
                 }}>
                   账号管理
+                </Button>,
+                canManageSuppliers && <Button key="contacts" size="mini" type="text" onClick={() => setContactTarget(supplier)}>
+                  联络人
                 </Button>,
                 canManageSuppliers && <Button
                   key="edit"
@@ -216,6 +221,7 @@ export default function SupplierList() {
       />
 
       {canManageAccounts && <SupplierAccountsDrawer key={accTarget?.id} supplier={accTarget} onClose={() => setAccTarget(null)} />}
+      {canManageSuppliers && <SupplierContactsDrawer key={contactTarget?.id} supplier={contactTarget} onClose={() => setContactTarget(null)} />}
     </Card>
   )
 }

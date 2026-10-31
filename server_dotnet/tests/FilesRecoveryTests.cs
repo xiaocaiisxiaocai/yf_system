@@ -1011,6 +1011,13 @@ public sealed class FilesRecoveryTests
                             created_at DATETIME(6) NOT NULL,
                             actor_realm VARCHAR(16) NULL, actor_account_id BIGINT UNSIGNED NULL
                         );
+                        CREATE TABLE supplier_contacts(
+                            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, supplier_id BIGINT UNSIGNED NOT NULL,
+                            name VARCHAR(32) NOT NULL, email VARCHAR(128) NOT NULL, status VARCHAR(16) NOT NULL,
+                            sort_no INT NOT NULL DEFAULT 0, created_by BIGINT UNSIGNED NULL,
+                            created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+                            updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                        );
                         CREATE TABLE upload_sessions(
                             id VARCHAR(36) PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL,
                             uploader_id BIGINT UNSIGNED NOT NULL, file_name VARCHAR(255) NOT NULL,
@@ -1019,6 +1026,7 @@ public sealed class FilesRecoveryTests
                             chunk_size INT UNSIGNED NOT NULL, total_chunks INT UNSIGNED NOT NULL,
                             temp_dir VARCHAR(512) NOT NULL, status VARCHAR(16) NOT NULL,
                             result_file_id BIGINT UNSIGNED NULL, expires_at DATETIME NOT NULL,
+                            signer_contact_id BIGINT UNSIGNED NULL, signer_name VARCHAR(32) NULL,
                             created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
                         );
                         CREATE TABLE file_blobs(
@@ -1042,6 +1050,7 @@ public sealed class FilesRecoveryTests
                             size_bytes BIGINT UNSIGNED NOT NULL, mime_type VARCHAR(255) NULL,
                             sha256 VARCHAR(64) NULL, storage_path VARCHAR(1024) NOT NULL,
                             status VARCHAR(20) NOT NULL, deleted_at DATETIME(6) NULL,
+                            signer_contact_id BIGINT UNSIGNED NULL, signer_name VARCHAR(32) NULL,
                             created_at DATETIME(6) NOT NULL,
                             KEY idx_files_blob(blob_id),
                             CONSTRAINT fk_files_blob FOREIGN KEY(blob_id) REFERENCES file_blobs(id) ON DELETE RESTRICT

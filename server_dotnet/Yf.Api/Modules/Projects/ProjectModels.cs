@@ -27,8 +27,9 @@ public sealed class ProjectUpsertRequest
     [JsonPropertyName("priorityId")]
     public ulong? PriorityId { get; init; }
 
-    [JsonPropertyName("robotOwnerName")]
-    public string? RobotOwnerName { get; init; }
+    /// <summary>Supplier contacts (1–10) of the selected supplier; the joined names become robotOwnerName.</summary>
+    [JsonPropertyName("robotOwnerContactIds")]
+    public ulong[]? RobotOwnerContactIds { get; init; }
 
     [JsonPropertyName("robotTypeId")]
     public ulong? RobotTypeId { get; init; }
@@ -170,6 +171,13 @@ public sealed class MessageCreateRequest
     /// <summary>Optional idempotency key. A replay of the same sender, project, and payload returns the original message.</summary>
     [JsonPropertyName("clientMessageId")]
     public string? ClientMessageId { get; init; }
+
+    /// <summary>
+    /// Typed signature: the name of the supplier contact providing the message. Required for supplier senders
+    /// whose company has an active contact, and must match one of those contacts.
+    /// </summary>
+    [JsonPropertyName("signerName")]
+    public string? SignerName { get; init; }
 }
 
 public sealed class MarkMessagesReadRequest
@@ -248,6 +256,7 @@ internal sealed class ProjectGroupRow
     public string? ResponsibleUserEmployeeNo { get; init; }
     public string? ResponsibleUserName { get; init; }
     public string? RobotOwnerName { get; init; }
+    public ulong[] RobotOwnerContactIds { get; set; } = [];
     public ulong? SectionId { get; init; }
     public string? SectionName { get; init; }
     public ulong? PriorityId { get; init; }
@@ -301,6 +310,8 @@ internal sealed class MessageRow
     public DateTime CreatedAt { get; init; }
     public string SenderName { get; init; } = string.Empty;
     public string SenderType { get; init; } = string.Empty;
+    public ulong? SignerContactId { get; init; }
+    public string? SignerName { get; init; }
 }
 
 internal sealed class MessageReadRow
@@ -428,6 +439,7 @@ internal static class ProjectJson
         row.ResponsibleUserEmployeeNo,
         row.ResponsibleUserName,
         row.RobotOwnerName,
+        row.RobotOwnerContactIds,
         row.SectionId,
         row.SectionName,
         row.PriorityId,

@@ -1,5 +1,4 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Message } from '@arco-design/web-react'
 
@@ -55,12 +54,11 @@ function installDefaultHttp() {
   mocks.blobSha256.mockResolvedValue('c'.repeat(64))
 }
 
-function renderUploader(offerSubmit = false, direction?: 'C2S' | 'S2C') {
+function renderUploader(_unused = false, direction?: 'C2S' | 'S2C') {
   const callbacks = {
     onClose: vi.fn<() => void>(),
     onDone: vi.fn<() => void>(),
     onAllUploaded: vi.fn<() => void>(),
-    onSubmitForAcceptance: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   }
   const view = render(<ChunkUploader
     projectId={1}
@@ -68,7 +66,6 @@ function renderUploader(offerSubmit = false, direction?: 'C2S' | 'S2C') {
     onClose={callbacks.onClose}
     onDone={callbacks.onDone}
     onAllUploaded={callbacks.onAllUploaded}
-    onSubmitForAcceptance={offerSubmit ? callbacks.onSubmitForAcceptance : undefined}
     direction={direction}
   />)
   return { ...view, callbacks }
@@ -236,19 +233,17 @@ describe('ChunkUploader DOM contracts', () => {
     await waitFor(() => expect(callbacks.onClose).toHaveBeenCalledOnce())
   })
 
-  it('one completed file plus one cancelled file never reports batch success or submits acceptance', async () => {
+  it('one completed file plus one cancelled file never reports batch success', async () => {
     mocks.put.mockImplementation((url: string, blob: Blob, options: { signal: AbortSignal }) =>
       url.includes('/a/') ? Promise.resolve({ data: {} }) : abortedUpload(url, blob, options))
     const { callbacks } = renderUploader(true)
     choose(uploadFile('a'), uploadFile('b'))
-    await userEvent.click(screen.getByRole('checkbox', { name: '全部上传成功后提交验收' }))
     fireEvent.click(startButton())
     await waitFor(() => expect(callbacks.onDone).toHaveBeenCalledOnce())
 
     fireEvent.click(await screen.findByRole('button', { name: '取消' }))
     await waitFor(() => expect(mocks.delete).toHaveBeenCalledWith('/uploads/b'))
     expect(callbacks.onAllUploaded).not.toHaveBeenCalled()
-    expect(callbacks.onSubmitForAcceptance).not.toHaveBeenCalled()
     expect(callbacks.onClose).not.toHaveBeenCalled()
   })
 
@@ -258,7 +253,6 @@ describe('ChunkUploader DOM contracts', () => {
       : Promise.resolve({ data: {} }))
     const { callbacks } = renderUploader(true)
     choose(uploadFile('a'), uploadFile('b'))
-    await userEvent.click(screen.getByRole('checkbox', { name: '全部上传成功后提交验收' }))
     fireEvent.click(startButton())
     await waitFor(() => expect(callbacks.onDone).toHaveBeenCalledOnce())
     await screen.findByText(/上传中断/)
@@ -266,10 +260,9 @@ describe('ChunkUploader DOM contracts', () => {
     fireEvent.click(screen.getByRole('button', { name: '移除「b」' }))
     await waitFor(() => expect(mocks.delete).toHaveBeenCalledWith('/uploads/b'))
     expect(callbacks.onAllUploaded).not.toHaveBeenCalled()
-    expect(callbacks.onSubmitForAcceptance).not.toHaveBeenCalled()
   })
 
-  it('closing an uncertain merge neither aborts the session nor submits acceptance', async () => {
+  it('closing an uncertain merge does not abort the session', async () => {
     mocks.post.mockImplementation((url: string, body?: { fileName?: string }) => {
       if (url === '/uploads/init') return Promise.resolve(initResponse(body?.fileName ?? 'a'))
       if (url.endsWith('/md5')) return Promise.resolve({ data: {} })
@@ -277,7 +270,6 @@ describe('ChunkUploader DOM contracts', () => {
     })
     const { callbacks } = renderUploader(true)
     choose(uploadFile('a'))
-    await userEvent.click(screen.getByRole('checkbox', { name: '全部上传成功后提交验收' }))
     fireEvent.click(startButton())
     await screen.findByRole('button', { name: '重试确认' })
 
@@ -285,29 +277,35 @@ describe('ChunkUploader DOM contracts', () => {
     await waitFor(() => expect(callbacks.onClose).toHaveBeenCalledOnce())
     expect(mocks.delete).not.toHaveBeenCalled()
     expect(callbacks.onAllUploaded).not.toHaveBeenCalled()
-    expect(callbacks.onSubmitForAcceptance).not.toHaveBeenCalled()
   })
 
-  for (const optIn of [false, true]) {
-    it(`a fully successful batch submits acceptance only with explicit opt-in (${optIn})`, async () => {
-      let releaseSecond!: () => void
-      const secondChunk = new Promise<void>((resolve) => { releaseSecond = resolve })
-      mocks.put.mockImplementation((url: string) => url.includes('/b/') ? secondChunk : Promise.resolve({ data: {} }))
-      const { callbacks } = renderUploader(true)
-      choose(uploadFile('a'), uploadFile('b'))
-      const checkbox = screen.getByRole('checkbox', { name: '全部上传成功后提交验收' })
-      expect(checkbox).not.toBeChecked()
-      if (optIn) await userEvent.click(checkbox)
-      fireEvent.click(startButton())
+  it('a fully successful batch reports success once and closes the dialog', async () => {
+    let releaseSecond!: () => void
+    const secondChunk = new Promise<void>((resolve) => { releaseSecond = resolve })
+    mocks.put.mockImplementation((url: string) => url.includes('/b/') ? secondChunk : Promise.resolve({ data: {} }))
+    const { callbacks } = renderUploader()
+    choose(uploadFile('a'), uploadFile('b'))
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    fireEvent.click(startButton())
 
-      await waitFor(() => expect(callbacks.onDone).toHaveBeenCalledOnce())
-      await act(async () => releaseSecond())
-      await waitFor(() => expect(callbacks.onClose).toHaveBeenCalledOnce())
-      expect(callbacks.onDone).toHaveBeenCalledTimes(2)
-      expect(callbacks.onAllUploaded).toHaveBeenCalledOnce()
-      expect(callbacks.onSubmitForAcceptance).toHaveBeenCalledTimes(optIn ? 1 : 0)
-    })
-  }
+    await waitFor(() => expect(callbacks.onDone).toHaveBeenCalledOnce())
+    await act(async () => releaseSecond())
+    await waitFor(() => expect(callbacks.onClose).toHaveBeenCalledOnce())
+    expect(callbacks.onDone).toHaveBeenCalledTimes(2)
+    expect(callbacks.onAllUploaded).toHaveBeenCalledOnce()
+  })
+
+  it('a supplier signature is sent with every upload init', async () => {
+    mocks.put.mockResolvedValue({ data: {} })
+    render(<ChunkUploader projectId={1} visible onClose={() => undefined} onDone={() => undefined} requireSignature />)
+    const signature = screen.getByRole('textbox', { name: '签名' })
+    expect(signature).toHaveValue('')
+    fireEvent.change(signature, { target: { value: ' 张三 ' } })
+    choose(uploadFile('a'))
+    fireEvent.click(startButton())
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/uploads/init',
+      expect.objectContaining({ fileName: 'a', signerName: '张三' }), expect.anything()))
+  })
 
   it('duplicate close and start requests cannot overlap pending cancellation', async () => {
     mocks.put.mockImplementation(abortedUpload)

@@ -17,7 +17,9 @@ async function login(p,user,password){
  await p.getByRole('textbox',{name:'密码',exact:true}).fill(password);
  await reserveLoginBudget(user);
  const logged=p.waitForResponse(r=>r.url().endsWith('/api/v1/auth/login')&&r.request().method()==='POST');
- await p.getByRole('button',{name:'登录',exact:true}).click();const result=await logged;assert.equal(result.status(),200);return result.json();
+ await p.getByRole('button',{name:'登录',exact:true}).click();const result=await logged;assert.equal(result.status(),200);const body=await result.json();
+ if(user==='admin')fixtureAdmin={c:p.context(),token:body.accessToken};
+ return body;
 }
 async function reserveLoginBudget(user,count=1){
  assert.ok(Number.isInteger(count)&&count>0&&count<=10,'login budget count');
@@ -44,8 +46,36 @@ async function reserveLoginBudget(user,count=1){
   return;
  }
 }
+// Robot owners must be supplier contacts. The fixture contact stays DISABLED (so suppliers keep sending unsigned
+// messages/uploads and mail still goes to their accounts) and is enabled only around the POST that selects it.
+const ROBOT_OWNER_FIXTURE='浏览器 Robot 负责人';
+const robotOwnerFixtureIds=new Set();
+// Contact maintenance needs supplier:manage; use the admin session when the script signed in as admin.
+let fixtureAdmin=null;
+async function rawStatus(c,token,contactId,status){
+ if(fixtureAdmin)({c,token}=fixtureAdmin);
+ const r=await c.request.fetch(s.base+'/api/v1/admin/supplier-contacts/'+contactId+'/status',{method:'PUT',data:{status},headers:{Origin:s.base,Authorization:'Bearer '+token}});
+ assert.equal(r.status(),200,'toggle Robot owner fixture contact');
+}
+async function robotOwnerContact(c,token,supplierId){
+ if(fixtureAdmin)({c,token}=fixtureAdmin);
+ const contacts=await(await api(c,'GET','/admin/suppliers/'+supplierId+'/contacts',undefined,token)).json();
+ let contact=contacts.find(item=>item.name===ROBOT_OWNER_FIXTURE);
+ if(!contact){contact=await(await api(c,'POST','/admin/suppliers/'+supplierId+'/contacts',{name:ROBOT_OWNER_FIXTURE,email:'robot-owner-'+supplierId+'@example.invalid'},token)).json();await rawStatus(c,token,contact.id,'DISABLED');}
+ robotOwnerFixtureIds.add(contact.id);
+ return contact;
+}
+async function withRobotOwnerFixture(c,token,supplierId,fn){
+ const contact=await robotOwnerContact(c,token,supplierId);
+ await rawStatus(c,token,contact.id,'ACTIVE');
+ try{return await fn(contact);}finally{await rawStatus(c,token,contact.id,'DISABLED');}
+}
 async function api(c,method,url,data,token,expected=200){
- const r=await c.request.fetch(s.base+'/api/v1'+url,{method,data,headers:{Origin:s.base,Authorization:'Bearer '+token}});
+ const fixtureOwner=method==='POST'&&url==='/project-groups'&&(data?.robotOwnerContactIds??[]).find(id=>robotOwnerFixtureIds.has(id));
+ if(fixtureOwner)await rawStatus(c,token,fixtureOwner,'ACTIVE');
+ let r;
+ try{r=await c.request.fetch(s.base+'/api/v1'+url,{method,data,headers:{Origin:s.base,Authorization:'Bearer '+token}});}
+ finally{if(fixtureOwner)await rawStatus(c,token,fixtureOwner,'DISABLED');}
  if(r.status()!==expected){
   const body=await r.json().catch(()=>({}));
   const message=String(body.message||'non-JSON error').replace(/Bearer\s+\S+/gi,'Bearer [redacted]').replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'[redacted-token]').slice(0,400);
@@ -61,7 +91,7 @@ async function projectMetadata(c,token,supplierId){
  // A fresh database has no robot types (unlike priorities they are not seeded); create one on demand.
  let robotTypes=await(await api(c,'GET','/project-dictionaries?type=ROBOT_TYPE&enabledOnly=true',undefined,token)).json();
  if(robotTypes.length===0)robotTypes=[await(await api(c,'POST','/project-dictionaries',{type:'ROBOT_TYPE',name:'浏览器验收 Robot 类型',parentId:null,sortNo:10,enabled:true},token)).json()];
- return {robotPartId:parts[0].id,priorityId:priorities[0].id,robotTypeId:robotTypes[0].id,robotOwnerName:'浏览器 Robot 负责人',expectedCompletionDate:'2099-12-31'};
+ return {robotPartId:parts[0].id,priorityId:priorities[0].id,robotTypeId:robotTypes[0].id,robotOwnerContactIds:[(await robotOwnerContact(c,token,supplierId)).id],expectedCompletionDate:'2099-12-31'};
 }
 async function navigate(p,url){await p.goto(s.base+url);await p.getByText('收起导航',{exact:true}).waitFor();}
 async function action(p,suffix,method,fn,expectedStatus=200){const [r]=await Promise.all([p.waitForResponse(r=>new URL(r.url()).pathname.endsWith(suffix)&&r.request().method()===method),Promise.resolve().then(fn)]);assert.equal(r.status(),expectedStatus,suffix);return r.json();}
@@ -93,4 +123,4 @@ function track(p,label){
   if(r.status()>=500&&!p.expectedServerErrors?.has(entry.path))fs.appendFileSync(OUT+'/http-errors.jsonl',JSON.stringify(entry)+'\n');
  });
 }
-module.exports={fs,path,assert,OUT,s,f,save,record,login,reserveLoginBudget,api,projectMetadata,navigate,action,track};
+module.exports={fs,path,assert,OUT,s,f,save,record,login,reserveLoginBudget,api,projectMetadata,withRobotOwnerFixture,navigate,action,track};

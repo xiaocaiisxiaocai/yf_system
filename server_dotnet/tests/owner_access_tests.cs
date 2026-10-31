@@ -190,6 +190,7 @@ public sealed class OwnerAccessTests
         VALUES
           (8001,'负责人测试供应商','ACTIVE',1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
           (8002,'其他供应商','ACTIVE',1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+        INSERT INTO supplier_contacts(id,supplier_id,name,email,status) SELECT id+10000000,id,'Robot 负责人',CONCAT('contact',id,'@example.test'),'ACTIVE' FROM suppliers WHERE id NOT IN (SELECT supplier_id FROM supplier_contacts);
         INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
         VALUES(7001,NULL,'负责人测试课','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (7002,NULL,'负责人调岗课','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
@@ -250,7 +251,7 @@ public sealed class OwnerAccessTests
         RobotPartId = 6_002,
         PriorityId = 6_003,
         RobotTypeId = 1006003,
-        RobotOwnerName = "Robot 负责人",
+        RobotOwnerContactIds = [10008001],
         ExpectedCompletionDate = "2026-12-31",
         ExpectedUpdatedAt = expectedUpdatedAt,
     };
@@ -265,7 +266,7 @@ public sealed class OwnerAccessTests
         RobotPartId = 6_002,
         PriorityId = 6_003,
         RobotTypeId = 1006003,
-        RobotOwnerName = "Robot 负责人",
+        RobotOwnerContactIds = [10008001],
         ExpectedCompletionDate = "2027-01-31",
         SubprojectNames = ["创建后子项目"],
     };

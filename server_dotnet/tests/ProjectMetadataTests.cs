@@ -18,6 +18,7 @@ public sealed class ProjectMetadataTests
             INSERT INTO suppliers(id,name,status,created_at,updated_at)
             VALUES(8001,'测试供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
                   (8002,'其他供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO supplier_contacts(id,supplier_id,name,email,status) SELECT id+10000000,id,'Robot 负责人',CONCAT('contact',id,'@example.test'),'ACTIVE' FROM suppliers WHERE id NOT IN (SELECT supplier_id FROM supplier_contacts);
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
             VALUES(9001,'metadata-admin','test','项目管理员','admin@example.test','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO user_roles(user_id,role_id) VALUES(9001,1);
@@ -99,11 +100,11 @@ public sealed class ProjectMetadataTests
             RobotPartId = partId,
             PriorityId = priorityId,
             RobotTypeId = robotTypeId,
-            RobotOwnerName = "Robot 负责人",
+            RobotOwnerContactIds = [10008001],
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["必填校验子项目"],
         };
-        foreach (var field in new[] { "workOrderNos", "machineModel", "robotPartId", "priorityId", "robotTypeId", "robotOwnerName", "expectedCompletionDate" })
+        foreach (var field in new[] { "workOrderNos", "machineModel", "robotPartId", "priorityId", "robotTypeId", "robotOwnerContactIds", "expectedCompletionDate" })
         {
             var node = JsonSerializer.SerializeToNode(complete)!;
             node[field] = null;
@@ -135,7 +136,7 @@ public sealed class ProjectMetadataTests
             RobotPartId = partId,
             PriorityId = priorityId,
             RobotTypeId = robotTypeId,
-            RobotOwnerName = "Robot 负责人",
+            RobotOwnerContactIds = [10008001],
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["元数据子项目"],
         }, null, ct);
@@ -189,7 +190,7 @@ public sealed class ProjectMetadataTests
             RobotPartId = partId,
             PriorityId = priorityId,
             RobotTypeId = robotTypeId,
-            RobotOwnerName = "Robot 负责人",
+            RobotOwnerContactIds = [10008001],
             ExpectedCompletionDate = "2026-12-31",
             ExpectedUpdatedAt = created.UpdatedAt,
         }, null, ct);
@@ -262,7 +263,7 @@ public sealed class ProjectMetadataTests
         RobotPartId = robotPartId ?? source.RobotPartId,
         PriorityId = source.PriorityId,
         RobotTypeId = robotTypeId ?? source.RobotTypeId,
-        RobotOwnerName = source.RobotOwnerName,
+        RobotOwnerContactIds = source.RobotOwnerContactIds,
         ExpectedCompletionDate = source.ExpectedCompletionDate,
         SubprojectNames = source.SubprojectNames,
     };

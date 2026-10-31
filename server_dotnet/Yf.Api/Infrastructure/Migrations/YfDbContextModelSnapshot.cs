@@ -496,6 +496,15 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(64)")
                         .HasColumnName("sha256");
 
+                    b.Property<ulong?>("SignerContactId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("signer_contact_id");
+
+                    b.Property<string>("SignerName")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("signer_name");
+
                     b.Property<ulong>("SizeBytes")
                         .HasColumnType("bigint unsigned")
                         .HasColumnName("size_bytes");
@@ -528,6 +537,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.HasIndex("BlobId")
                         .HasDatabaseName("idx_files_blob");
+
+                    b.HasIndex("SignerContactId")
+                        .HasDatabaseName("fk_files_signer_contact");
 
                     b.HasIndex("StoredName")
                         .IsUnique()
@@ -588,6 +600,15 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("bigint unsigned")
                         .HasColumnName("sender_id");
 
+                    b.Property<ulong?>("SignerContactId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("signer_contact_id");
+
+                    b.Property<string>("SignerName")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("signer_name");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
@@ -603,6 +624,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.HasIndex("SenderId")
                         .HasDatabaseName("fk_msg_sender");
+
+                    b.HasIndex("SignerContactId")
+                        .HasDatabaseName("fk_msg_signer_contact");
 
                     b.HasIndex("ProjectId", "CreatedAt")
                         .HasDatabaseName("idx_msg_project_time");
@@ -845,8 +869,8 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnName("responsible_user_id");
 
                     b.Property<string>("RobotOwnerName")
-                        .HasMaxLength(64)
-                        .HasColumnType("varchar(64)")
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
                         .HasColumnName("robot_owner_name");
 
                     b.Property<ulong?>("RobotPartId")
@@ -1352,8 +1376,8 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnName("responsible_user_id");
 
                     b.Property<string>("RobotOwnerName")
-                        .HasMaxLength(64)
-                        .HasColumnType("varchar(64)")
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
                         .HasColumnName("robot_owner_name");
 
                     b.Property<ulong?>("RobotPartId")
@@ -1422,6 +1446,32 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasDatabaseName("idx_project_groups_supplier");
 
                     b.ToTable("project_groups", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectGroupRobotOwner", b =>
+                {
+                    b.Property<ulong>("ProjectGroupId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("project_group_id");
+
+                    b.Property<ulong>("ContactId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("contact_id");
+
+                    b.Property<int>("SortNo")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("sort_no");
+
+                    b.HasKey("ProjectGroupId", "ContactId");
+
+                    b.HasIndex("ContactId")
+                        .HasDatabaseName("idx_project_group_robot_owners_contact");
+
+                    b.ToTable("project_group_robot_owners", (string)null);
 
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
@@ -1920,6 +1970,77 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.SupplierContact", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    b.Property<ulong?>("CreatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("email");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("name");
+
+                    b.Property<int>("SortNo")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("sort_no");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("ACTIVE")
+                        .HasColumnName("status");
+
+                    b.Property<ulong>("SupplierId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("supplier_id");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlComputedColumn(b.Property<DateTime>("UpdatedAt"));
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SupplierId", "Name")
+                        .IsUnique()
+                        .HasDatabaseName("uk_supplier_contacts_supplier_name");
+
+                    b.HasIndex("SupplierId", "Status", "SortNo", "Id")
+                        .HasDatabaseName("idx_supplier_contacts_supplier_status");
+
+                    b.ToTable("supplier_contacts", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.SystemConfig", b =>
                 {
                     b.Property<string>("CfgKey")
@@ -2006,6 +2127,15 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("bigint unsigned")
                         .HasColumnName("result_file_id");
 
+                    b.Property<ulong?>("SignerContactId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("signer_contact_id");
+
+                    b.Property<string>("SignerName")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("signer_name");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
@@ -2040,6 +2170,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.HasIndex("ResultFileId")
                         .HasDatabaseName("idx_upload_result_file");
+
+                    b.HasIndex("SignerContactId")
+                        .HasDatabaseName("fk_us_signer_contact");
 
                     b.HasIndex("UploaderId")
                         .HasDatabaseName("idx_us_uploader");
@@ -3759,6 +3892,12 @@ namespace Yf.Api.Infrastructure.Migrations
                         .IsRequired()
                         .HasConstraintName("fk_files_project");
 
+                    b.HasOne("Yf.Api.Infrastructure.Entities.SupplierContact", null)
+                        .WithMany()
+                        .HasForeignKey("SignerContactId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_files_signer_contact");
+
                     b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("UploaderId")
@@ -3782,6 +3921,12 @@ namespace Yf.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_msg_sender");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.SupplierContact", null)
+                        .WithMany()
+                        .HasForeignKey("SignerContactId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_msg_signer_contact");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.MessageImage", b =>
@@ -3984,6 +4129,23 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasConstraintName("fk_project_groups_supplier");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectGroupRobotOwner", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.SupplierContact", null)
+                        .WithMany()
+                        .HasForeignKey("ContactId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_project_group_robot_owners_contact");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.ProjectGroup", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectGroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_project_group_robot_owners_group");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectGroupStatusLog", b =>
                 {
                     b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
@@ -4081,6 +4243,16 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasConstraintName("fk_rp_role");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.SupplierContact", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.Supplier", null)
+                        .WithMany()
+                        .HasForeignKey("SupplierId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_supplier_contacts_supplier");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.UploadSession", b =>
                 {
                     b.HasOne("Yf.Api.Infrastructure.Entities.Project", null)
@@ -4089,6 +4261,12 @@ namespace Yf.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_us_project");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.SupplierContact", null)
+                        .WithMany()
+                        .HasForeignKey("SignerContactId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_us_signer_contact");
 
                     b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
                         .WithMany()

@@ -95,6 +95,7 @@ public sealed partial class UploadService(
                     && !await HasCompanyMaterialAsync(ef, request.ProjectId, dbNow, includeActiveSessions: true, ct))
                     throw ApiException.BadRequest(UploadMaterialRules.MaterialRequiredMessage);
                 await EnsureUploadQuotaAsync(ef, current.Id, request.FileSize, dbNow, ct);
+                var signature = await SupplierContacts.ResolveSignatureAsync(ef, current, request.SignerName, ct);
                 ef.UploadSessions.Add(new UploadSession
                 {
                     Id = sessionId,
@@ -109,6 +110,8 @@ public sealed partial class UploadService(
                     TotalChunks = totalChunks,
                     TempDir = tempDir,
                     Status = "UPLOADING",
+                    SignerContactId = signature.ContactId,
+                    SignerName = signature.Name,
                     ExpiresAt = dbNow.AddHours(24),
                     CreatedAt = dbNow,
                     UpdatedAt = dbNow

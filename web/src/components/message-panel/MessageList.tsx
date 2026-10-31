@@ -90,6 +90,7 @@ const MessageRow = memo(function MessageRow({
           <Typography.Text type="secondary" className="message-row-time">{fmtTime(m.createdAt)}</Typography.Text>
         </Space>
         <div className="message-row-content">{m.content}</div>
+        {m.signerName && <div className="message-row-signature">— {m.signerName}</div>}
         {!!m.images?.length && <MessageImages messageId={m.id} images={m.images} watermarkEmployeeNo={watermarkEmployeeNo} watermarkRealName={watermarkRealName} />}
         <div className="message-read-marker" aria-hidden="true" />
         <div className="message-row-actions">

@@ -49,11 +49,13 @@ public sealed class FileService(
             Sha256 = file.Sha256, CreatedAt = file.CreatedAt,
             UploaderName = ef.Users.Where(user => user.Id == file.UploaderId).Select(user => user.RealName).FirstOrDefault(),
             IsCopiedReference = ef.FileCopyRefs.Any(reference => reference.TargetFileId == file.Id),
+            SignerName = file.SignerName,
         }).Page(offset, size).ToArrayAsync(ct);
         var canDelete = await ProjectAccessService.CanDeleteFilesAsync(conn, tx, actor, project.Status, ct);
         var list = rows.Select(row => new FileListItem(
             row.Id, row.ProjectId, row.UploaderId, row.Direction, row.OriginalName, row.Ext, row.SizeBytes,
-            row.MimeType, row.Sha256, row.CreatedAt, row.UploaderName, row.IsCopiedReference, canDelete)).ToArray();
+            row.MimeType, row.Sha256, row.CreatedAt, row.UploaderName, row.IsCopiedReference, canDelete,
+            row.SignerName)).ToArray();
         await tx.CommitAsync(ct);
         return new(list, total, page, size);
     }
@@ -648,6 +650,7 @@ public sealed class FileService(
         public DateTime CreatedAt { get; set; }
         public string? UploaderName { get; set; }
         public bool IsCopiedReference { get; set; }
+        public string? SignerName { get; set; }
     }
 
     private sealed class MediaActorRow

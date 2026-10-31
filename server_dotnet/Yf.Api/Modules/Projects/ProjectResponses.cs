@@ -73,7 +73,9 @@ public sealed record MessageResponse(
     int ReadCount,
     int TotalCount,
     bool ReadByMe,
-    IReadOnlyList<MessageImageResponse> Images);
+    IReadOnlyList<MessageImageResponse> Images,
+    // Supplier contact the message is signed by; null for internal or unsigned messages.
+    string? SignerName);
 
 public sealed record MessageReader(ulong UserId, string RealName, string UserType, DateTime? ReadAt);
 
@@ -168,7 +170,10 @@ public sealed record ProjectGroupResponse(
     ulong? ResponsibleUserId,
     string? ResponsibleUserEmployeeNo,
     string? ResponsibleUserName,
+    // Joined names of the selected supplier contacts (snapshot).
     string? RobotOwnerName,
+    // Supplier contacts selected as Robot owners; empty for main projects not yet re-saved since the change.
+    IReadOnlyList<ulong> RobotOwnerContactIds,
     ulong? SectionId,
     string? SectionName,
     ulong? PriorityId,

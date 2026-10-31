@@ -33,6 +33,7 @@ public sealed record SupplierAccountCreate(
     [property: JsonRequired] string Email,
     ulong? RoleId = null);
 public sealed record SupplierAccountUpdate(string? RealName, string? Email);
+public sealed record SupplierContactUpsert([property: JsonRequired] string Name, [property: JsonRequired] string Email, int? SortNo = null);
 public sealed record DepartmentLeaderRequest(ulong? LeaderUserId);
 
 internal sealed class AdminUserRow
@@ -137,6 +138,8 @@ public sealed record UserResponse(
     IReadOnlyList<string> RoleNames);
 
 public sealed record SupplierResponse(ulong Id, string Name, string? Remark, string Status, DateTime CreatedAt);
+
+public sealed record SupplierContactResponse(ulong Id, ulong SupplierId, string Name, string Email, string Status, int SortNo, DateTime CreatedAt);
 
 public sealed record SupplierAccountResponse(
     ulong Id,

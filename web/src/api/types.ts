@@ -72,6 +72,10 @@ export type ProjectDictionaryOption = Omit<Api.ProjectDictionaryResponse, 'type'
 
 export type RobotPart = Api.RobotPartResponse
 
+export type SupplierContactOption = Api.SupplierContactOption
+
+export type SupplierContact = Omit<Api.SupplierContactResponse, 'status'> & { status: 'ACTIVE' | 'DISABLED' }
+
 export type FileItem = Omit<Api.FileListItem, 'direction'> & { direction: 'C2S' | 'S2C' }
 
 export type Message = Omit<Api.MessageResponse, 'senderType'> & { senderType: 'INTERNAL' | 'SUPPLIER' }

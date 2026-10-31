@@ -21,6 +21,7 @@ public sealed class ProjectGroupTests
         await database.ExecuteAsync("""
             INSERT INTO suppliers(id,name,status,created_at,updated_at)
             VALUES(8101,'主项目供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO supplier_contacts(id,supplier_id,name,email,status) SELECT id+10000000,id,'Robot 负责人',CONCAT('contact',id,'@example.test'),'ACTIVE' FROM suppliers WHERE id NOT IN (SELECT supplier_id FROM supplier_contacts);
             INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
             VALUES(8201,NULL,'主项目课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
@@ -50,7 +51,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8402,
             PriorityId = 8403,
             RobotTypeId = 1008403,
-            RobotOwnerName = "Robot 负责人",
+            RobotOwnerContactIds = [10008101],
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["子项目-A", "子项目-B"],
         }, null, ct));
@@ -256,6 +257,7 @@ public sealed class ProjectGroupTests
         await database.ExecuteAsync("""
             INSERT INTO suppliers(id,name,status,created_at,updated_at)
             VALUES(8501,'冻结测试供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO supplier_contacts(id,supplier_id,name,email,status) SELECT id+10000000,id,'Robot 负责人',CONCAT('contact',id,'@example.test'),'ACTIVE' FROM suppliers WHERE id NOT IN (SELECT supplier_id FROM supplier_contacts);
             INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
             VALUES(8502,NULL,'冻结测试课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
                   (8508,NULL,'新负责人课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
@@ -284,7 +286,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8505,
             PriorityId = 8506,
             RobotTypeId = 1008506,
-            RobotOwnerName = "Robot 负责人",
+            RobotOwnerContactIds = [10008501],
             ExpectedCompletionDate = "2026-12-01",
             SubprojectNames = ["已完成子项目", "活动子项目"],
         }, null, ct));
@@ -314,7 +316,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8505,
             PriorityId = 8506,
             RobotTypeId = 1008506,
-            RobotOwnerName = "Robot 负责人",
+            RobotOwnerContactIds = [10008501],
             ExpectedCompletionDate = "2027-01-01",
             ExpectedUpdatedAt = groupUpdatedAt,
         }, null, ct);
@@ -352,7 +354,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8505,
             PriorityId = 8506,
             RobotTypeId = 1008506,
-            RobotOwnerName = "Robot 负责人",
+            RobotOwnerContactIds = [10008501],
             ExpectedCompletionDate = "2027-01-01",
             ExpectedUpdatedAt = renamed.UpdatedAt,
         }, null, ct);
@@ -373,6 +375,7 @@ public sealed class ProjectGroupTests
         await database.ExecuteAsync("""
             INSERT INTO suppliers(id,name,status,created_at,updated_at)
             VALUES(8601,'编辑并发供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO supplier_contacts(id,supplier_id,name,email,status) SELECT id+10000000,id,'Robot 负责人',CONCAT('contact',id,'@example.test'),'ACTIVE' FROM suppliers WHERE id NOT IN (SELECT supplier_id FROM supplier_contacts);
             INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
             VALUES(8602,NULL,'编辑并发课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
@@ -399,7 +402,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8605,
             PriorityId = 8606,
             RobotTypeId = 1008606,
-            RobotOwnerName = "Robot 负责人",
+            RobotOwnerContactIds = [10008601],
             ExpectedCompletionDate = "2026-12-01",
             SubprojectNames = ["编辑并发子项目"],
         }, null, ct));
@@ -414,7 +417,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8605,
             PriorityId = 8606,
             RobotTypeId = 1008606,
-            RobotOwnerName = "Robot 负责人",
+            RobotOwnerContactIds = [10008601],
             ExpectedCompletionDate = "2026-12-01",
         };
         var missingVersion = await Assert.ThrowsAsync<ApiException>(() =>
@@ -431,7 +434,7 @@ public sealed class ProjectGroupTests
                 RobotPartId = groupUpdate.RobotPartId,
                 PriorityId = groupUpdate.PriorityId,
                 RobotTypeId = groupUpdate.RobotTypeId,
-                RobotOwnerName = groupUpdate.RobotOwnerName,
+                RobotOwnerContactIds = groupUpdate.RobotOwnerContactIds,
                 ExpectedCompletionDate = groupUpdate.ExpectedCompletionDate,
                 ExpectedUpdatedAt = groupUpdatedAt.AddMinutes(-5),
             }, null, ct));
@@ -449,7 +452,7 @@ public sealed class ProjectGroupTests
             RobotPartId = groupUpdate.RobotPartId,
             PriorityId = groupUpdate.PriorityId,
             RobotTypeId = groupUpdate.RobotTypeId,
-            RobotOwnerName = groupUpdate.RobotOwnerName,
+            RobotOwnerContactIds = groupUpdate.RobotOwnerContactIds,
             ExpectedCompletionDate = groupUpdate.ExpectedCompletionDate,
             ExpectedUpdatedAt = groupUpdatedAt,
         }, null, ct);
@@ -493,6 +496,7 @@ public sealed class ProjectGroupTests
         await database.ExecuteAsync("""
             INSERT INTO suppliers(id,name,status,created_at,updated_at)
             VALUES(8701,'删除主项目供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO supplier_contacts(id,supplier_id,name,email,status) SELECT id+10000000,id,'Robot 负责人',CONCAT('contact',id,'@example.test'),'ACTIVE' FROM suppliers WHERE id NOT IN (SELECT supplier_id FROM supplier_contacts);
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password,failed_login_attempts,created_at,updated_at)
             VALUES(8702,'group-delete-owner','unused','删除主项目负责人','group-delete@example.test','INTERNAL','ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO user_roles(user_id,role_id) VALUES(8702,1);
@@ -536,6 +540,7 @@ public sealed class ProjectGroupTests
         await database.ExecuteAsync("""
             INSERT INTO suppliers(id,name,status,created_at,updated_at)
             VALUES(8801,'删除完成测试供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO supplier_contacts(id,supplier_id,name,email,status) SELECT id+10000000,id,'Robot 负责人',CONCAT('contact',id,'@example.test'),'ACTIVE' FROM suppliers WHERE id NOT IN (SELECT supplier_id FROM supplier_contacts);
             INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
             VALUES(8802,NULL,'删除完成测试课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
@@ -563,7 +568,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8804,
             PriorityId = 8805,
             RobotTypeId = 1008805,
-            RobotOwnerName = "Robot 负责人",
+            RobotOwnerContactIds = [10008801],
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["已验收子项目", "待删除子项目"],
         }, null, ct));
@@ -606,6 +611,7 @@ public sealed class ProjectGroupTests
         await database.ExecuteAsync("""
             INSERT INTO suppliers(id,name,status,created_at,updated_at)
             VALUES(8901,'实时主项目供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO supplier_contacts(id,supplier_id,name,email,status) SELECT id+10000000,id,'Robot 负责人',CONCAT('contact',id,'@example.test'),'ACTIVE' FROM suppliers WHERE id NOT IN (SELECT supplier_id FROM supplier_contacts);
             INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
             VALUES(8902,NULL,'实时主项目课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
@@ -635,7 +641,7 @@ public sealed class ProjectGroupTests
             RobotPartId = 8904,
             PriorityId = 8905,
             RobotTypeId = 1008905,
-            RobotOwnerName = "Robot 负责人",
+            RobotOwnerContactIds = [10008901],
             ExpectedCompletionDate = "2026-12-31",
             SubprojectNames = ["实时子项目一", "实时子项目二"],
         };
@@ -658,7 +664,7 @@ public sealed class ProjectGroupTests
             RobotPartId = request.RobotPartId,
             PriorityId = request.PriorityId,
             RobotTypeId = request.RobotTypeId,
-            RobotOwnerName = request.RobotOwnerName,
+            RobotOwnerContactIds = request.RobotOwnerContactIds,
             ExpectedCompletionDate = request.ExpectedCompletionDate,
             ExpectedUpdatedAt = groupUpdatedAt,
         }, null, ct);

@@ -381,16 +381,26 @@ public sealed class MailService
                 var currentRecipient = mail.RecipientUserId is { } recipientId
                     ? await claimContext.Users
                         .Where(user => user.Id == recipientId && user.Status == AccountStatuses.Active)
-                        .Select(user => new CurrentRecipient { UserType = user.UserType, Email = user.Email })
+                        .Select(user => new CurrentRecipient
+                        {
+                            UserType = user.UserType,
+                            Email = user.Email,
+                            // Supplier mail may go to an active contact of the account's supplier instead.
+                            ContactAddress = user.UserType == UserTypes.Supplier && claimContext.SupplierContacts.Any(contact =>
+                                contact.SupplierId == user.SupplierId && contact.Status == AccountStatuses.Active
+                                && contact.Email == mail.RecipientEmail),
+                        })
                         .SingleOrDefaultAsync(ct)
                     : null;
                 var currentRecipientType = currentRecipient?.UserType ?? mail.RecipientUserType;
                 var recipientAddressValid = mail.RecipientUserId is null
                     ? MailboxAddress.TryParse(mail.RecipientEmail, out _)
                     : currentRecipient is not null
-                      && !string.IsNullOrWhiteSpace(currentRecipient.Email)
-                      && string.Equals(currentRecipient.Email.Trim(), mail.RecipientEmail.Trim(), StringComparison.OrdinalIgnoreCase)
-                      && MailboxAddress.TryParse(currentRecipient.Email, out _);
+                      && (currentRecipient.ContactAddress
+                          ? MailboxAddress.TryParse(mail.RecipientEmail, out _)
+                          : !string.IsNullOrWhiteSpace(currentRecipient.Email)
+                            && string.Equals(currentRecipient.Email.Trim(), mail.RecipientEmail.Trim(), StringComparison.OrdinalIgnoreCase)
+                            && MailboxAddress.TryParse(currentRecipient.Email, out _));
                 var notificationAllowed = currentPolicy.Allows(mail.EventType, currentRecipientType);
                 var recipientAuthorized = notificationAllowed && recipientAddressValid && (mail.EventType == "PROJECT_SUBMITTED"
                     ? await IsCurrentPendingAcceptanceAsync(claimConnection, claimTransaction, mail, ct)
@@ -859,6 +869,7 @@ public sealed class MailService
     {
         public string UserType { get; init; } = "";
         public string Email { get; init; } = "";
+        public bool ContactAddress { get; init; }
     }
 }
 

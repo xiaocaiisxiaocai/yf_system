@@ -1012,6 +1012,12 @@ public sealed class MailDeliveryTests
                         id BIGINT UNSIGNED PRIMARY KEY,
                         status VARCHAR(16) NOT NULL
                     );
+                    CREATE TABLE supplier_contacts(
+                        id BIGINT UNSIGNED PRIMARY KEY,
+                        supplier_id BIGINT UNSIGNED NOT NULL,
+                        email VARCHAR(128) NOT NULL,
+                        status VARCHAR(16) NOT NULL
+                    );
                     CREATE TABLE project_groups(
                         id BIGINT UNSIGNED PRIMARY KEY,
                         created_by BIGINT UNSIGNED NOT NULL DEFAULT 0

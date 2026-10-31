@@ -48,8 +48,10 @@ COMPANY_WORKBOOK_FIXTURE_BYTES = b"PK\x03\x04 fixture motion flow"
 
 
 def init_upload(client, project_id, file_name, content, file_last_modified=FIXTURE_LAST_MODIFIED,
-                *, ensure_step=False):
+                *, ensure_step=False, signer_name=None):
     request = init_request(project_id, file_name, content, file_last_modified)
+    if signer_name is not None:
+        request["signerName"] = signer_name
     try:
         return client.call("POST", "/api/v1/uploads/init", request)
     except AssertionError as error:
@@ -83,8 +85,9 @@ def submit_md5(client, session_id, content, digest=None, expected=200):
     )
 
 
-def upload_bytes(client, project_id, file_name, content, *, ensure_step=False):
-    initialized = init_upload(client, project_id, file_name, content, ensure_step=ensure_step)
+def upload_bytes(client, project_id, file_name, content, *, ensure_step=False, signer_name=None):
+    initialized = init_upload(client, project_id, file_name, content, ensure_step=ensure_step,
+                              signer_name=signer_name)
     chunk_size = initialized["chunkSize"]
     for index in range(initialized["totalChunks"]):
         put_chunk(

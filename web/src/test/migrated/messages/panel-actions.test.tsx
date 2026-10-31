@@ -329,4 +329,26 @@ describe('留言撰写、发送与分页', () => {
     view.rerender(<MessagePanel projectId={2} projectStatus="IN_PROGRESS" />)
     await waitFor(() => expect(screen.queryByLabelText('已添加 1 张图片')).not.toBeInTheDocument())
   })
+
+  it('supplier accounts send a typed signature and messages show who provided them', async () => {
+    const previousUser = messageMocks.user
+    messageMocks.user = { id: 21, employeeNo: 'shared', realName: '共用账号', userType: 'SUPPLIER' }
+    try {
+      setMessagePermissions('message:create')
+      messageMocks.get.mockResolvedValue(messagePage([messageRow(5, { senderType: 'SUPPLIER', signerName: '李四', content: '李四提供' })]))
+      messageMocks.post.mockImplementation(async (_url: string, body: { content: string; signerName?: string }) => ({
+        data: messageRow(6, { content: body.content, senderId: 21, senderType: 'SUPPLIER', signerName: body.signerName ?? null }),
+      }))
+      renderMessagePanel()
+      expect(await screen.findByText('— 李四')).toBeInTheDocument()
+      fireEvent.change(screen.getByRole('textbox', { name: '签名' }), { target: { value: ' 张三 ' } })
+      fireEvent.change(textbox(), { target: { value: '张三的说明' } })
+      fireEvent.click(sendButton())
+      await waitFor(() => expect(messageMocks.post).toHaveBeenCalledTimes(1))
+      expect(messageMocks.post.mock.calls[0][1]).toEqual({ content: '张三的说明', clientMessageId: expect.any(String), signerName: '张三' })
+      expect(await screen.findByText('— 张三')).toBeInTheDocument()
+    } finally {
+      messageMocks.user = previousUser
+    }
+  })
 })

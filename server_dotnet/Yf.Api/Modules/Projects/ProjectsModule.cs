@@ -148,10 +148,13 @@ public static class ProjectsModule
                     throw ApiException.BadRequest("content 表单字段只能出现一次");
                 if (form.TryGetValue("clientMessageId", out var clientMessageIds) && clientMessageIds.Count > 1)
                     throw ApiException.BadRequest("clientMessageId 表单字段只能出现一次");
+                if (form.TryGetValue("signerName", out var signerNames) && signerNames.Count > 1)
+                    throw ApiException.BadRequest("signerName 表单字段只能出现一次");
                 request = new MessageCreateRequest
                 {
                     Content = contents.Count == 0 ? null : contents[0],
                     ClientMessageId = clientMessageIds.Count == 0 ? null : clientMessageIds[0],
+                    SignerName = signerNames.Count == 0 ? null : signerNames[0],
                 };
                 images = form.Files.ToArray();
             }
@@ -245,6 +248,9 @@ public static class ProjectsModule
         api.MapGet("/robot-parts", (HttpContext context, RobotPartService service) =>
             WithDb(context, (conn, actor, _, ct) => service.ListAsync(conn, actor,
                 QueryNullableUlong(context, "supplierId"), QueryBool(context, "enabledOnly", true), ct)));
+        // Binding supplierId keeps this a typed endpoint (a lone HttpContext lambda would map as a RequestDelegate).
+        api.MapGet("/supplier-contacts", (HttpContext context, ulong? supplierId) =>
+            WithDb(context, (conn, actor, _, ct) => SupplierContacts.OptionsAsync(conn, actor, supplierId, ct)));
         api.MapGet("/robot-part-supplier-options", (HttpContext context, RobotPartService service) =>
             WithDb(context, (conn, actor, _, ct) => service.SupplierOptionsAsync(conn, actor, ct)));
         api.MapPost("/robot-parts", (HttpContext context, RobotPartUpsertRequest request, RobotPartService service) =>

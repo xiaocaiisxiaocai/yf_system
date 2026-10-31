@@ -602,7 +602,9 @@ export function useMessageCommands() {
   return { send, remove, markRead }
 }
 
-export function startMessageSend(projectId: number, body: FormData | { content: string; clientMessageId: string }) {
+export interface MessageSendBody { content: string; clientMessageId: string; signerName?: string }
+
+export function startMessageSend(projectId: number, body: FormData | MessageSendBody) {
   return http.post<Message>(`/projects/${projectId}/messages`, body)
 }
 

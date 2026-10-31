@@ -331,7 +331,7 @@ async function choose(page, placeholder, optionName) {
         robotPartId: group.group.robotPartId,
         priorityId: group.group.priorityId,
         robotTypeId: group.group.robotTypeId,
-        robotOwnerName: group.group.robotOwnerName,
+        robotOwnerContactIds: group.group.robotOwnerContactIds,
         expectedCompletionDate: group.group.expectedCompletionDate,
         expectedUpdatedAt: group.group.updatedAt,
       }, adminToken, 409);
