@@ -41,17 +41,65 @@ $webRoot = Join-Path $projectRoot 'web'
 $healthUrl = "http://127.0.0.1:$BackendPort/health"
 $frontendUrl = "http://127.0.0.1:$FrontendPort/"
 
-function Get-ListenerOwner([int]$Port) {
-    $owners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue |
+function Test-PortAccepting([int]$Port) {
+    $client = New-Object Net.Sockets.TcpClient
+    try {
+        $connect = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
+        if (!$connect.AsyncWaitHandle.WaitOne(1000)) { return $false }
+        $client.EndConnect($connect)
+        return $true
+    } catch { return $false } finally { $client.Close() }
+}
+
+function Test-CommandLineContains($Process, [string]$Text) {
+    return ([string]$Process.CommandLine).IndexOf($Text, [StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
+# This repository's own servers, matched by command line; used only when Windows hides the listener's owner.
+$isProjectBackend = {
+    param($Process)
+    $Process.Name -eq 'dotnet.exe' -and (Test-CommandLineContains $Process 'Yf.Api.dll') -and
+        (Test-CommandLineContains $Process $projectRoot)
+}
+$isProjectFrontend = {
+    param($Process)
+    $Process.Name -eq 'node.exe' -and (Test-CommandLineContains $Process (Join-Path $webRoot 'node_modules')) -and
+        (Test-CommandLineContains $Process 'vite') -and (Test-CommandLineContains $Process "--port $FrontendPort")
+}
+
+function Get-ListenerOwner([int]$Port, [scriptblock]$IsProjectProcess) {
+    # Some Windows builds report a listening socket with State 0 instead of Listen, so -State Listen would
+    # miss it; a listener is also recognisable by its unspecified remote endpoint.
+    $owners = @(Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
+        Where-Object { $_.State -eq 'Listen' -or ($_.RemotePort -eq 0 -and $_.RemoteAddress -in @('0.0.0.0', '::')) } |
         Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique)
     if ($owners.Count -eq 0) { return $null }
-    if ($owners.Count -gt 1) { throw "Port $Port has more than one listener; stop them manually." }
-    return Get-CimInstance Win32_Process -Filter "ProcessId=$($owners[0])"
+    $known = @($owners | Where-Object { $_ -gt 0 })
+    if ($known.Count -gt 1) { throw "Port $Port has more than one listener; stop them manually." }
+    if ($known.Count -eq 1) { return Get-CimInstance Win32_Process -Filter "ProcessId=$($known[0])" }
+    # Windows sometimes reports a listener with owner pid 0 (a closing socket, or an owner this session
+    # cannot see). A port that refuses connections is free; otherwise claim it only for a single process
+    # that is unmistakably this repository's server.
+    if (!(Test-PortAccepting $Port)) { return $null }
+    $candidates = @(Get-CimInstance Win32_Process -Filter "Name='dotnet.exe' OR Name='node.exe'" |
+        Where-Object { & $IsProjectProcess $_ })
+    if ($candidates.Count -eq 1) { return $candidates[0] }
+    throw "Port $Port is in use but Windows did not report its owner, and $($candidates.Count) project processes match; stop it manually."
 }
 
 function Stop-Owner($Process) {
     Stop-Process -Id $Process.ProcessId -Force
     Wait-Process -Id $Process.ProcessId -Timeout 15 -ErrorAction SilentlyContinue
+}
+
+# A server left on the port would answer the readiness probe in place of the new one, so never start
+# while anything still accepts connections there.
+function Assert-PortFree([int]$Port) {
+    for ($i = 0; $i -lt 30; $i++) {
+        if (!(Test-PortAccepting $Port)) { return }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "Port $Port is still accepting connections; stop the process holding it and retry."
 }
 
 function Wait-Until([scriptblock]$Probe, $Process, [int]$Seconds) {
@@ -126,13 +174,13 @@ $StorageRoot = [IO.Path]::GetFullPath($StorageRoot)
 if (!(Test-Path -LiteralPath $StorageRoot -PathType Container)) { throw "Storage root not found: $StorageRoot" }
 
 # --- Check current listeners before touching anything ---
-$backendOwner = Get-ListenerOwner $BackendPort
+$backendOwner = Get-ListenerOwner $BackendPort $isProjectBackend
 if ($backendOwner -and ($backendOwner.Name -ne 'dotnet.exe' -or $backendOwner.CommandLine -notmatch 'Yf\.Api\.dll')) {
     throw "Port $BackendPort is owned by an unexpected process (pid $($backendOwner.ProcessId))."
 }
 $frontendOwner = $null
 if (!$SkipFrontend) {
-    $frontendOwner = Get-ListenerOwner $FrontendPort
+    $frontendOwner = Get-ListenerOwner $FrontendPort $isProjectFrontend
     if ($frontendOwner -and ($frontendOwner.Name -ne 'node.exe' -or
             !$frontendOwner.CommandLine.Contains((Join-Path $webRoot 'node_modules')) -or
             $frontendOwner.CommandLine -notmatch 'vite')) {
@@ -194,6 +242,7 @@ if ($buildExit -ne 0 -or !(Test-Path -LiteralPath $apiDll -PathType Leaf)) {
     throw "Build failed; the running backend was not stopped. See $runRoot\build.log"
 }
 if ($backendOwner) { Write-Host "Stopping backend pid $($backendOwner.ProcessId)"; Stop-Owner $backendOwner }
+Assert-PortFree $BackendPort
 
 $env:App__ConnectionString = $builder.ConnectionString
 $env:App__StorageRoot = $StorageRoot
@@ -217,18 +266,19 @@ try {
 
 $backendReady = Wait-Until { $h = Invoke-RestMethod $healthUrl -TimeoutSec 2; $h.status -eq 'ok' -and $h.db -eq 'up' } $backend 45
 if (!$backendReady) { throw "Backend not healthy; see $runRoot\backend.*.log" }
-$backendPid = (Get-ListenerOwner $BackendPort).ProcessId
+$backendPid = (Get-ListenerOwner $BackendPort $isProjectBackend).ProcessId
 Write-Host "Backend ready: pid $backendPid, $healthUrl"
 
 # --- Frontend: restart Vite dev server (predev regenerates preview bundles) ---
 $frontendPid = $null
 if (!$SkipFrontend) {
     if ($frontendOwner) { Write-Host "Stopping Vite pid $($frontendOwner.ProcessId)"; Stop-Owner $frontendOwner }
+    Assert-PortFree $FrontendPort
     $frontend = Start-DetachedLogged $webRoot "npm run dev -- --host 127.0.0.1 --port $FrontendPort --strictPort" `
         (Join-Path $runRoot 'frontend.stdout.log') (Join-Path $runRoot 'frontend.stderr.log')
     $frontendReady = Wait-Until { (Invoke-WebRequest $frontendUrl -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } $frontend 90
     if (!$frontendReady) { throw "Frontend not ready; see $runRoot\frontend.*.log" }
-    $frontendPid = (Get-ListenerOwner $FrontendPort).ProcessId
+    $frontendPid = (Get-ListenerOwner $FrontendPort $isProjectFrontend).ProcessId
     Write-Host "Frontend ready: pid $frontendPid, $frontendUrl"
 }
 
