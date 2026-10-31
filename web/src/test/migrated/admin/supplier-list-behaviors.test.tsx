@@ -114,7 +114,7 @@ describe('供应商与分页列表行为', () => {
 
     view = render(<FileTable projectId={9} projectStatus="IN_PROGRESS" />)
     expect(await screen.findByText('复制件')).toBeVisible()
-    expect(screen.getByText(/文件当前不统计已读状态/)).toBeVisible()
+    expect(screen.queryByText(/文件当前不统计已读状态/)).not.toBeInTheDocument()
     view.unmount()
   })
 

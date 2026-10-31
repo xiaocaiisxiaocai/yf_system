@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Badge, Button, Card, Descriptions, Drawer, Empty, Spin, Table, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
+import { Badge, Button, Card, Drawer, Empty, Spin, Table, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
 import { IconDown, IconLeft, IconUp } from '@arco-design/web-react/icon'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
@@ -522,21 +522,20 @@ function ProjectDetailContent({ id }: { id?: string }) {
             {metadataOpen ? '收起资料' : '全部资料'}{metadataOpen ? <IconUp /> : <IconDown />}
           </Button>
         </div>
-        {metadataOpen && <Descriptions
-          className="project-metadata"
-          size="small"
-          column={{ xs: 1, sm: 2, md: 3, lg: 4 }}
-          data={[
-            // 上方摘要已显示厂商、型号、负责人、工令号、优先级和需求完成时间，这里只列其余资料。
-            { label: '机型', value: detailText(project.machineModel) },
-            { label: 'Robot 类型', value: detailText(project.robotTypeName) },
-            { label: 'Robot 料号', value: detailText(project.robotPartNumber) },
-            { label: 'Robot 负责人', value: detailText(project.robotOwnerName) },
-            { label: '课别', value: detailText(project.sectionName) },
-            { label: '创建人', value: project.createdByName || '-' },
-            { label: '更新时间', value: fmtTime(project.updatedAt) },
-          ]}
-        />}
+        {metadataOpen && <dl className="project-group-extra-facts project-detail-extra-facts">
+          {/* 上方摘要已显示厂商、型号、负责人、工令号、优先级和需求完成时间，这里只列其余资料。 */}
+          {[
+            ['机型', detailText(project.machineModel)],
+            ['Robot 类型', detailText(project.robotTypeName)],
+            ['Robot 料号', detailText(project.robotPartNumber)],
+            ['Robot 负责人', detailText(project.robotOwnerName)],
+            ['课别', detailText(project.sectionName)],
+            ['创建人', project.createdByName || '-'],
+            ['更新时间', fmtTime(project.updatedAt)],
+          ].map(([label, value]) => (
+            <div key={label}><dt>{label}</dt><dd title={value}>{value}</dd></div>
+          ))}
+        </dl>}
         {project.hasCopyHistory && (
           <div className="project-copy-reference-bar">
             <div>
@@ -581,10 +580,6 @@ function ProjectDetailContent({ id }: { id?: string }) {
               uploadRefresh={uploadActivityRefresh}
               onUploadActivityChanged={bumpUploadActivity}
               onOpenCopyHistory={project.hasCopyHistory ? () => setHistoryOpen(true) : undefined}
-              onProjectChanged={() => {
-                loadProject()
-                loadSummary()
-              }}
             />
           </Tabs.TabPane>
           <Tabs.TabPane

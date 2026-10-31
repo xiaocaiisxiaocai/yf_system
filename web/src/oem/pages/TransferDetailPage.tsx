@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { actionSlots } from '../../components/ActionSlots'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert, Button, Card, Descriptions, Empty, Input, Message, Modal, Popconfirm, Result, Select, Space, Spin, Steps, Table, Tag, Typography,
@@ -249,17 +250,15 @@ function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }:
     },
     {
       key: 'actions', title: '操作',
-      render: (_: unknown, file: TransferFile) => (
-        <Space>
-          {file.downloadable && <Button size="small" icon={<IconDownload />} onClick={() => onDownload(file)}>下载</Button>}
-          {file.downloadable && oemPreviewKind(file.ext) && file.sizeBytes <= 50 * 1024 * 1024 && (
-            <Button size="small" icon={<IconEye />} onClick={() => onPreview(file)}>预览</Button>
-          )}
-          {canEdit && (
-            <Popconfirm title="移除该附件？" onOk={() => onRemove(file)}><Button size="small" status="danger">移除</Button></Popconfirm>
-          )}
-        </Space>
-      ),
+      render: (_: unknown, file: TransferFile) => actionSlots([
+        file.downloadable && <Button key="download" size="small" icon={<IconDownload />} onClick={() => onDownload(file)}>下载</Button>,
+        file.downloadable && oemPreviewKind(file.ext) && file.sizeBytes <= 50 * 1024 * 1024 && (
+          <Button key="preview" size="small" icon={<IconEye />} onClick={() => onPreview(file)}>预览</Button>
+        ),
+        canEdit && (
+          <Popconfirm key="remove" title="移除该附件？" onOk={() => onRemove(file)}><Button size="small" status="danger">移除</Button></Popconfirm>
+        ),
+      ], 'oem-file'),
     },
   ]
   const fileTableId = realm === 'oem' ? 'oem-portal-transfer-files' : 'oem-transfer-files'

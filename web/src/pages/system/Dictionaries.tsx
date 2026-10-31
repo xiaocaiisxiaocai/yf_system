@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { actionSlots } from '../../components/ActionSlots'
 import { Button, Card, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
@@ -147,16 +148,19 @@ export default function Dictionaries() {
       { title: 'Robot 型号', dataIndex: 'model', width: 400, ellipsis: true, render: (value: string) => <Tooltip content={value}><span>{value}</span></Tooltip> },
       { title: '排序号', dataIndex: 'sortNo', width: 90, align: 'center' as const },
       { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: RobotPart) => <Tag color={item.enabled ? 'green' : 'gray'}>{item.enabled ? '启用' : '停用'}</Tag> },
-      { title: '操作', width: 140, render: (_: unknown, item: RobotPart) => <Space size={4}>
-        <Button type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button>
-        {item.inUse ? <Tooltip content="已被项目引用，不能删除"><span><Button type="text" size="mini" status="danger" disabled>删除</Button></span></Tooltip> : <Popconfirm title={`删除 Robot 料号“${item.partNumber}”？`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm>}
-      </Space> },
+      { title: '操作', width: 140, align: 'center' as const, render: (_: unknown, item: RobotPart) => actionSlots([
+        <Button key="edit" type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button>,
+        item.inUse ? <Tooltip key="delete" content="已被项目引用，不能删除"><span><Button type="text" size="mini" status="danger" disabled>删除</Button></span></Tooltip> : <Popconfirm key="delete" title={`删除 Robot 料号“${item.partNumber}”？`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm>,
+      ], 'single') },
     ])
     : withColumnHeaders([
       { title: '名称', dataIndex: 'name', width: 280, ellipsis: true },
       { title: '排序号', dataIndex: 'sortNo', width: 90, align: 'center' as const },
       { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: ProjectDictionaryOption) => <Tag color={item.enabled ? 'green' : 'gray'}>{item.enabled ? '启用' : '停用'}</Tag> },
-      { title: '操作', width: 140, render: (_: unknown, item: ProjectDictionaryOption) => <Space size={4}><Button type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button><Popconfirm title={`删除“${item.name}”？已被引用的条目不能删除。`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm></Space> },
+      { title: '操作', width: 140, align: 'center' as const, render: (_: unknown, item: ProjectDictionaryOption) => actionSlots([
+        <Button key="edit" type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button>,
+        <Popconfirm key="delete" title={`删除“${item.name}”？已被引用的条目不能删除。`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm>,
+      ], 'single') },
     ])
 
   const editingPart = editing && isRobotPart(editing) ? editing : null

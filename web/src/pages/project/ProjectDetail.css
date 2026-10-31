@@ -272,13 +272,14 @@
   gap: 8px 24px;
 }
 
+/* 名称区不随中间资料一起压缩（只在超过 320px 时省略），空间不足时由资料列让出。 */
 .project-group-summary-name {
   display: flex;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  max-width: 300px;
+  max-width: 320px;
 }
 
 .project-group-back {
@@ -400,9 +401,42 @@
   border-top: 1px solid var(--color-neutral-3);
 }
 
-/* 末行去掉描述列表自带的下内边距，上下留白由卡片内边距决定，保持对称。 */
-.project-group-extra-info .arco-descriptions-row:last-child > td {
-  padding-bottom: 0;
+/* 展开资料与标题行同一套样式：小标签在上、数值在下，按固定列宽对齐成网格。 */
+.project-group-extra-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px 24px;
+  margin: 0;
+}
+
+.project-group-extra-facts > div {
+  min-width: 0;
+}
+
+.project-group-extra-facts dt {
+  color: var(--color-text-3);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.project-group-extra-facts dd {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--color-text-1);
+  font-size: 14px;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-detail-extra-facts {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--app-border);
+}
+
+.project-group-extra-info .project-summary-description {
+  margin-top: 10px;
 }
 
 .project-group-section-heading,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, Card, Descriptions, Drawer, Dropdown, Empty, Form, Input, Menu, Message, Modal, Popconfirm, Select, Space, Spin, Tag, Typography,
+  Alert, Button, Card, Drawer, Dropdown, Empty, Form, Input, Menu, Message, Modal, Popconfirm, Select, Space, Spin, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconDown, IconLeft, IconMore, IconPlus } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -390,12 +390,19 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
         </div>
         {summaryExpanded && <div id="project-group-extra-info" className="project-group-extra-info">
           {/* Robot 厂商、Robot 类型、负责人、Robot 负责人、需求完成时间和验收进度已在标题行展示，这里不再重复。 */}
-          <Descriptions className="project-metadata" tableLayout="fixed" labelStyle={{ width: 96 }} column={{ xs: 1, sm: 2, md: 3 }} data={[
-            { label: '工令号', value: display(group.workOrderNos?.join('、')) }, { label: '机型', value: display(group.machineModel) },
-            { label: '课别', value: display(group.sectionName) }, { label: 'Robot 料号', value: display(group.robotPartNumber) },
-            { label: 'Robot 型号', value: display(group.robotModelName) }, { label: '优先级', value: display(group.priorityName) },
-            ...(group.completedAt ? [{ label: '自动验收时间', value: fmtTime(group.completedAt) }] : []),
-          ]} />
+          <dl className="project-group-extra-facts">
+            {[
+              ['工令号', display(group.workOrderNos?.join('、'))],
+              ['机型', display(group.machineModel)],
+              ['Robot 料号', display(group.robotPartNumber)],
+              ['Robot 型号', display(group.robotModelName)],
+              ['课别', display(group.sectionName)],
+              ['优先级', display(group.priorityName)],
+              ...(group.completedAt ? [['自动验收时间', fmtTime(group.completedAt)]] : []),
+            ].map(([label, value]) => (
+              <div key={label}><dt>{label}</dt><dd title={value}>{value}</dd></div>
+            ))}
+          </dl>
           {group.description && <div className="project-summary-description"><span className="project-summary-description-label">主项目说明</span><Typography.Text>{group.description}</Typography.Text></div>}
         </div>}
       </Card>
@@ -460,13 +467,14 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
         unmountOnExit
       >
         <Form layout="vertical">
-          <Form.Item label="当前负责人"><Typography.Text>{responsible}</Typography.Text></Form.Item>
+          <Form.Item label="当前负责人"><Input readOnly value={responsible} /></Form.Item>
           <Form.Item label="新负责人" required>
             <Select
               showSearch
               allowClear
               loading={ownerOptionsLoading}
               placeholder="搜索姓名或账号"
+              notFoundContent={ownerOptionsLoading ? undefined : <div className="select-empty-note">没有可选的内部账号（需启用且拥有“项目列表”权限）</div>}
               value={transferTarget}
               onChange={(value?: number) => setTransferTarget(value)}
               filterOption={(input, option) => String(option?.props?.children ?? '').toLowerCase().includes(input.trim().toLowerCase())}
@@ -479,7 +487,6 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
             </Select>
           </Form.Item>
         </Form>
-        <div className="dialog-note">负责人和课别会同步到全部子项目。原负责人如不是主项目创建人且没有查看全部项目权限，将不再能访问该主项目。存在待验收子项目时不能变更。</div>
       </Modal>
 
       <Modal

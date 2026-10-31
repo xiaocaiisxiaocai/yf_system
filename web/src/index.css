@@ -708,17 +708,19 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .system-config-description > small { color: var(--app-text-muted); font-size: 12px; }
 .system-config-row--dirty > td { background: #f2f7ff !important; }
 
-/* 表格操作随表格内容居中；权限或状态隐藏的操作不占位。 */
+/* 表格操作随表格内容居中。每个操作位固定宽度，某行没有的操作也保留空位，
+   使各行同一操作上下对齐（所有使用 actionSlots 的表格）。 */
 .action-slots {
   display: flex;
   width: 100%;
   min-width: 0;
   justify-content: center;
   align-items: center;
-  column-gap: 8px;
+  column-gap: 4px;
 }
 .action-slot {
-  flex: 0 0 auto;
+  flex: 0 0 var(--action-slot-width, 32px);
+  width: var(--action-slot-width, 32px);
   min-width: 0;
   height: 24px;
   display: inline-flex;
@@ -727,11 +729,19 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 }
 .action-slot > .arco-btn {
   min-width: 0;
-  padding-left: 4px;
-  padding-right: 4px;
+  padding-left: 2px;
+  padding-right: 2px;
 }
 .action-slot > .arco-select { width: 100%; }
-.action-slot--empty { display: none; }
+.action-slot--empty { visibility: hidden; }
+/* 文字较长或带图标的操作位。 */
+.action-slots--user > .action-slot:nth-child(2),
+.action-slots--account > .action-slot:nth-child(2),
+.action-slots--role > .action-slot:nth-child(1),
+.action-slots--supplier > .action-slot:nth-child(1) { --action-slot-width: 56px; }
+.action-slots--supplier > .action-slot:nth-child(2) { --action-slot-width: 44px; }
+.action-slots--file > .action-slot { --action-slot-width: 52px; }
+.action-slots--oem-file > .action-slot { --action-slot-width: 72px; }
 
 /* 带预览按钮的文件名单元格：文本占据剩余空间，按钮始终不被长文件名挤走。 */
 .file-name-cell {
@@ -1208,3 +1218,6 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 @media (max-width: 720px) {
   .app-rail--rail { display: none; }
 }
+
+/* 下拉为空时说明原因（例如没有符合条件的负责人）。 */
+.select-empty-note { padding: 12px; color: var(--color-text-3); font-size: 12px; text-align: center; }
