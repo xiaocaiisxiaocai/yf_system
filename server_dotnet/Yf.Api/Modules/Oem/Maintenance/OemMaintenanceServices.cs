@@ -116,10 +116,14 @@ public sealed class OemPurgeService(
         {
             try
             {
-                var path = storage.Absolute(relative);
-                // Delete is already idempotent for an absent file. File.Exists would
-                // also return false on access errors and incorrectly acknowledge a purge.
-                File.Delete(path);
+                // Every root: during a storage migration the content may exist in both.
+                foreach (var path in storage.AbsoluteEverywhere(relative))
+                {
+                    // Delete is already idempotent for an absent file. File.Exists would
+                    // also return false on access errors and incorrectly acknowledge a purge.
+                    try { File.Delete(path); }
+                    catch (DirectoryNotFoundException) { /* The containing directory is already absent. */ }
+                }
             }
             catch (DirectoryNotFoundException) { /* The containing directory is already absent. */ }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -238,7 +242,8 @@ public sealed class OemReconcileService(
 
     public async Task<int> RunOnceAsync(CancellationToken ct)
     {
-        if (!storage.IsConfigured) return 0;
+        // Reconcile walks the content areas and moves or deletes files; it waits for a storage migration to finish.
+        if (!storage.IsConfigured || storage.Migrating) return 0;
         bool restoring;
         await using (var read = await OemUnitOfWork.ReadAsync(dbFactory, ct))
             restoring = (await OemSettings.LoadAsync(read.Db, ct)).ReconcileRequired;
@@ -552,7 +557,7 @@ public sealed class OemReconcileService(
                 var sha256 = Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(stream, ct));
                 if (!sha256.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)) return false;
             }
-            var target = storage.Absolute(file.StoragePath);
+            var target = storage.AbsoluteBeside(file.StoragePath, source);
             storage.EnsureParent(target, ct);
             File.Move(source, target, overwrite: false);
             return true;

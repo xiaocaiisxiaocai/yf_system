@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261031125128_AddProjectNotificationsAndDueReminders";
+    private const string Latest = "20261031152544_AddStorageLocations";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -75,7 +75,8 @@ public sealed class MigrationRoundTripTests
         // + AllowMacroAndBinaryExcelUploads (Down keeps the whitelist) + AddOemApprovalTaskActivatedAt + AddMessageClientId
         // + AddProjectMaterialReview (Down keeps its notification switch row) + AddSupplierContactsAndSignatures
         // + RetireAcceptanceWorkflow (Down brings back only projects.confirm_side, not the retired permission codes)
-        // + AddProjectNotificationsAndDueReminders (Down drops only the reminder columns, keeping the config rows).
+        // + AddProjectNotificationsAndDueReminders (Down drops only the reminder columns, keeping the config rows)
+        // + AddStorageLocations (Down drops storage_locations, keeping the storage:manage permission and grants).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);

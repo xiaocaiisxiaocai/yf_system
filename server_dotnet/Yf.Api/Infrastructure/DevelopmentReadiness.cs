@@ -42,6 +42,8 @@ internal static class DevelopmentReadiness
         {
             await using var connection = await new AppDb(options).OpenAsync(cancellationToken);
             await EfDatabaseLifecycle.ValidateReadyAsync(connection, cancellationToken);
+            // Probe the storage paths the site will actually use (system settings), not only the configured seeds.
+            await Yf.Api.Modules.SystemManagement.StorageLocationBootstrap.ApplyAsync(options, applicationRoot, seed: false, cancellationToken);
             await Yf.Api.Modules.Files.FileBlobBackfill.ValidateInvariantAsync(connection,
                 Path.GetFullPath(options.StorageRoot), cancellationToken);
             if (string.IsNullOrWhiteSpace(options.OemStorageRoot))

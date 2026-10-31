@@ -28,6 +28,18 @@ internal static class FileBlobStore
         FileStorage.EnsureLexicallyWithin(root,
             Path.Combine(root, RelativePath(sha256).Replace('/', Path.DirectorySeparatorChar)), allowRoot: false);
 
+    /// <summary>
+    /// The resolved root whose canonical file for <paramref name="sha256"/> exists: during a storage migration a blob
+    /// may still sit only in the old root. Falls back to the primary root when neither has it.
+    /// </summary>
+    internal static string RootHolding(string primary, string? fallback, string sha256)
+    {
+        var root = FileStorage.Root(primary);
+        if (fallback is null || File.Exists(AbsolutePath(root, sha256))) return root;
+        var old = FileStorage.Root(fallback);
+        return File.Exists(AbsolutePath(old, sha256)) ? old : root;
+    }
+
     internal static string LockName(MySqlConnection connection, string sha256) =>
         MySqlNamedLock.Name("file-blob", connection.Database, NormalizeSha256(sha256));
 

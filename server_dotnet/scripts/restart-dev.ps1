@@ -23,7 +23,7 @@ param(
     [string]$ConfigPath,
     # Overrides the database in the config's connection string.
     [string]$DatabaseName,
-    # Overrides App.StorageRoot from the config.
+    # Overrides App.StorageRoot from the config and repoints the database's collaboration storage location to it.
     [string]$StorageRoot,
     [string]$MysqlDumpPath,
     [switch]$SkipBackup,
@@ -260,6 +260,12 @@ Push-Location $apiRoot
 try {
     $migrationExit = Invoke-NativeLogged (Get-Command dotnet).Source @($apiDll, '--migrate-database') (Join-Path $runRoot 'migration.log')
     if ($migrationExit -ne 0) { throw "Migration failed; see $runRoot\migration.log" }
+    # Storage paths live in the database (system settings); an explicit -StorageRoot repoints the dev database.
+    # On a database that has never started there is nothing to repoint yet: the first start seeds it from App__StorageRoot.
+    if ($PSBoundParameters.ContainsKey('StorageRoot')) {
+        $pathExit = Invoke-NativeLogged (Get-Command dotnet).Source @($apiDll, '--set-storage-path', 'COLLAB', $StorageRoot) (Join-Path $runRoot 'storage-path.log')
+        if ($pathExit -ne 0) { Write-Warning "Storage path not repointed (first start or unfinished migration); see $runRoot\storage-path.log" }
+    }
     $backend = Start-DetachedLogged $apiRoot ('"' + (Get-Command dotnet).Source + '" "' + $apiDll + '"') `
         (Join-Path $runRoot 'backend.stdout.log') (Join-Path $runRoot 'backend.stderr.log')
 } finally { Pop-Location }

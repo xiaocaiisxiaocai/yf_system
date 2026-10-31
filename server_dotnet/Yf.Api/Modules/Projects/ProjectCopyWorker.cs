@@ -221,6 +221,8 @@ internal sealed class ProjectCopyWorker(
     /// </summary>
     internal async Task<int> ScavengeOwnedDirectoriesAsync(CancellationToken ct)
     {
+        // A storage migration copies staging directories too; scavenging resumes once it finishes.
+        if (options.StorageFallbackRoot is not null) return 0;
         var root = FileStorage.Root(options.StorageRoot);
         var jobsRoot = Path.Combine(root, "copy-jobs");
         if (!Directory.Exists(jobsRoot)) return 0;
@@ -310,11 +312,14 @@ internal sealed class ProjectCopyWorker(
 
     private void CleanupExecutionDirectory(ClaimedJob claim, CancellationToken ct)
     {
-        var root = FileStorage.Root(options.StorageRoot);
-        var directory = FileStorage.EnsureLexicallyWithin(root,
-            Path.Combine(root, "copy-jobs", claim.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), claim.Token),
-            allowRoot: false);
-        FileStorage.DeleteDirectoryTree(root, directory, ct);
+        foreach (var configured in FileStorage.Roots(options.StorageRoot, options.StorageFallbackRoot))
+        {
+            var root = FileStorage.Root(configured);
+            var directory = FileStorage.EnsureLexicallyWithin(root,
+                Path.Combine(root, "copy-jobs", claim.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), claim.Token),
+                allowRoot: false);
+            FileStorage.DeleteDirectoryTree(root, directory, ct);
+        }
     }
 
     private sealed record ClaimedJob(ulong Id, string Token, ulong WorkerEpoch);

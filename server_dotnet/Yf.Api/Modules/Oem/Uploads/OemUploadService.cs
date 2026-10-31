@@ -248,7 +248,7 @@ public sealed partial class OemUploadService(
         var committed = false;
         try
         {
-            var root = storage.Root();
+            var root = storage.RootOf(directory);
             var chunks = new List<string>((int)session.TotalChunks);
             for (uint i = 0; i < session.TotalChunks; i++)
                 chunks.Add(FileStorage.ResolveExistingFile(root, storage.ChunkPath(sessionId, i), ct));
@@ -259,7 +259,8 @@ public sealed partial class OemUploadService(
 
             var storedName = OemStorage.NewStoredName();
             var relative = OemStorage.QuarantineRelative(storedName);
-            var target = storage.Absolute(relative);
+            // Same root as the session so the final move is a rename (a session may predate a storage migration).
+            var target = storage.AbsoluteBeside(relative, directory);
             storage.EnsureParent(target, ct);
             ulong fileId;
             await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))

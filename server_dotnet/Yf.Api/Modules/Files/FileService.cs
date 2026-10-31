@@ -72,8 +72,7 @@ public sealed class FileService(
         string path;
         try
         {
-            path = FileStorage.ResolveExistingFile(options.StorageRoot,
-                Path.Combine(options.StorageRoot, row.StoragePath), ct);
+            path = FileStorage.ResolveStoredFile(options.StorageRoot, options.StorageFallbackRoot, row.StoragePath, ct);
         }
         catch (FileNotFoundException) { throw ApiException.NotFound(); }
         var physicalSize = (ulong)new FileInfo(path).Length;
@@ -236,8 +235,7 @@ public sealed class FileService(
         string path;
         try
         {
-            path = FileStorage.ResolveExistingFile(options.StorageRoot,
-                Path.Combine(options.StorageRoot, row.StoragePath), ct);
+            path = FileStorage.ResolveStoredFile(options.StorageRoot, options.StorageFallbackRoot, row.StoragePath, ct);
         }
         catch (FileNotFoundException) { throw ApiException.NotFound(); }
 
@@ -567,8 +565,7 @@ public sealed class FileService(
     {
         try
         {
-            return FileStorage.ResolveExistingFile(options.StorageRoot,
-                Path.Combine(options.StorageRoot, row.StoragePath), ct);
+            return FileStorage.ResolveStoredFile(options.StorageRoot, options.StorageFallbackRoot, row.StoragePath, ct);
         }
         catch (FileNotFoundException) { throw ApiException.NotFound(); }
     }

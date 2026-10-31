@@ -95,6 +95,8 @@ if (!(Test-Path -LiteralPath (Join-Path $currentRoot 'Yf.Api.dll'))) { throw 'Th
 $configNodes=@($currentXml.SelectNodes('//aspNetCore/environmentVariables/environmentVariable[@name="YF_CONFIG_PATH"]'))
 if ($configNodes.Count -ne 1) { throw 'Exactly one external YF_CONFIG_PATH is required in the current IIS deployment.' }
 $currentConfig=Read-YfMaintenanceConfig $configNodes[0].GetAttribute('value')
+# Back up, grant and check the storage paths the site actually uses (system settings), not only the configured seeds.
+Resolve-YfEffectiveStorage $currentConfig $MySql
 Assert-YfPublishedConfig $currentRoot -AllowConfigPath
 Assert-YfEffectiveConfiguration $SiteName $pool $currentConfig.Path $currentConfig.Origin
 if ($currentConfig.Origin -notlike 'https://*' -or $currentConfig.Config.App.CookieSecure -ne $true) { throw 'Maintenance requires a production HTTPS origin and secure cookies.' }

@@ -123,8 +123,8 @@ public sealed partial class UploadService
     {
         try
         {
-            FileStorage.DeleteDirectoryTree(options.StorageRoot,
-                FileStorage.SessionDirectory(FileStorage.Root(options.StorageRoot), sessionId), ct);
+            foreach (var root in FileStorage.Roots(options.StorageRoot, options.StorageFallbackRoot))
+                FileStorage.DeleteDirectoryTree(root, FileStorage.SessionDirectory(FileStorage.Root(root), sessionId), ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception error)

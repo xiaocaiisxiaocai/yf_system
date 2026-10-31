@@ -52,6 +52,8 @@ public sealed class AppOptions
     public long UploadMaxPendingBytesPerUser { get; set; } = 20L * 1024 * 1024 * 1024;
     /// <summary>Maximum bytes the files maintenance worker re-hashes per cycle while verifying referenced blobs.</summary>
     public long BlobVerifyBytesPerCycle { get; set; } = 2L * 1024 * 1024 * 1024;
+    /// <summary>Copy throughput cap of an online storage migration, so it never crowds out live transfers.</summary>
+    public long StorageMigrationBytesPerSecond { get; set; } = 50L * 1024 * 1024;
     /// <summary>A batch ZIP download that delivers fewer bytes than this within any 60-second window is aborted.</summary>
     public long BatchDownloadMinBytesPerMinute { get; set; } = 64 * 1024;
     /// <summary>A batch ZIP download still running after this many minutes is aborted.</summary>
@@ -59,6 +61,16 @@ public sealed class AppOptions
     public SmtpOptions Smtp { get; set; } = new();
     /// <summary>Independent local OEM content root, excluded from collaboration backups. Empty disables file transfer.</summary>
     public string OemStorageRoot { get; set; } = "";
+
+    // Runtime-only: the effective paths come from storage_locations (system settings page) at startup and change
+    // during a storage migration. The configured StorageRoot / OemStorageRoot / LogDirectory only seed that table.
+    // The non-public setters keep configuration binding from ever setting the fallback roots.
+
+    /// <summary>Old collaboration root still serving reads while a storage migration runs; null otherwise.</summary>
+    public string? StorageFallbackRoot { get; internal set; }
+
+    /// <summary>Old OEM root still serving reads while a storage migration runs; null otherwise.</summary>
+    public string? OemStorageFallbackRoot { get; internal set; }
 
     public void Validate()
     {
@@ -97,6 +109,8 @@ public sealed class AppOptions
             throw new InvalidOperationException("App:UploadMaxPendingBytesPerUser must be between 1 GiB and 16 TiB.");
         if (BlobVerifyBytesPerCycle is < 64L * 1024 * 1024 or > 1024L * 1024 * 1024 * 1024)
             throw new InvalidOperationException("App:BlobVerifyBytesPerCycle must be between 64 MiB and 1 TiB.");
+        if (StorageMigrationBytesPerSecond is < 1024L * 1024 or > 10L * 1024 * 1024 * 1024)
+            throw new InvalidOperationException("App:StorageMigrationBytesPerSecond must be between 1 MiB and 10 GiB.");
         if (BatchDownloadMinBytesPerMinute is < 1 or > 1024L * 1024 * 1024)
             throw new InvalidOperationException("App:BatchDownloadMinBytesPerMinute must be between 1 byte and 1 GiB.");
         if (BatchDownloadMaxDurationMinutes is < 5 or > 1440)
@@ -169,11 +183,11 @@ public sealed class AppOptions
         }
     }
 
-    private static bool Overlaps(string left, string right, StringComparison comparison) =>
+    internal static bool Overlaps(string left, string right, StringComparison comparison) =>
         left.Equals(right, comparison) || left.StartsWith(right + Path.DirectorySeparatorChar, comparison)
         || right.StartsWith(left + Path.DirectorySeparatorChar, comparison);
 
-    private static string ResolveComparisonPath(string path, int remainingLinks = 64)
+    internal static string ResolveComparisonPath(string path, int remainingLinks = 64)
     {
         var full = Path.GetFullPath(path);
         var root = Path.GetPathRoot(full)

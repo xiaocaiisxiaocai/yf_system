@@ -69,6 +69,7 @@ internal static class BootstrapSeedCatalog
         (213, "dept:leader_manage", "维护组织主管", "ACTION", 5, 62),
         (214, "oem:company_delete", "删除 OEM 厂商", "ACTION", 200, 63),
         (215, "oem:account_delete", "删除 OEM 账号", "ACTION", 200, 64),
+        (216, "storage:manage", "存储位置管理", "ACTION", 8, 65),
     ];
 
     private static readonly (string Key, string Value, string Description)[] Configs =

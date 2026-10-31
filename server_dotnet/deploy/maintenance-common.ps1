@@ -418,9 +418,66 @@ function Assert-YfDeploymentReadiness([string]$ApplicationRoot,$Config,[string]$
     Test-YfAspNetRuntime $ApplicationRoot
 }
 function Get-YfLogDirectory($Config) {
+    # The effective log directory comes from storage_locations once Resolve-YfEffectiveStorage ran.
+    if ($Config.PSObject.Properties['EffectiveLogDirectory']) { return [string]$Config.EffectiveLogDirectory }
     $app = $Config.Config.App
     if (!$app.PSObject.Properties['LogDirectory'] -or [string]::IsNullOrWhiteSpace([string]$app.LogDirectory)) { return '' }
     return Get-YfFullPath ([string]$app.LogDirectory)
+}
+function ConvertTo-YfSqlHexText([string]$Value) {
+    # Paths travel as hex so no quoting reaches the mysql command line.
+    $hex = -join ([Text.Encoding]::UTF8.GetBytes($Value) | ForEach-Object { $_.ToString('X2') })
+    if ($hex.Length -eq 0) { return "''" }
+    return "CONVERT(UNHEX('$hex') USING utf8mb4)"
+}
+function Invoke-YfStorageLocationQuery($Config,[string]$MySql,[string]$Sql,[string]$Name) {
+    $scratch = Join-Path ([IO.Path]::GetTempPath()) ('yf-storage-'+[guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $scratch | Out-Null
+    Protect-YfDirectory $scratch
+    $defaults = $null
+    try {
+        $defaults = Write-YfMySqlDefaults $Config $scratch
+        $table = Invoke-YfNativeCapture $MySql @("--defaults-file=$defaults",'--batch','--skip-column-names',"--database=$($Config.Database)","--execute=SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='storage_locations'") (Join-Path $scratch "$Name-probe.stderr.log")
+        if ($table.ExitCode -ne 0 -or @($table.Output).Count -ne 1) { throw 'Unable to read the storage locations from the database.' }
+        if (([string]@($table.Output)[0]).Trim() -ne '1') { return $null }
+        $result = Invoke-YfNativeCapture $MySql @("--defaults-file=$defaults",'--batch','--skip-column-names',"--database=$($Config.Database)","--execute=$Sql") (Join-Path $scratch "$Name.stderr.log")
+        if ($result.ExitCode -ne 0) { throw 'Unable to read or update the storage locations in the database.' }
+        return ,@($result.Output)
+    } finally {
+        if ($defaults -and (Test-Path -LiteralPath $defaults -PathType Leaf)) { Remove-Item -LiteralPath $defaults -Force }
+        foreach ($file in Get-ChildItem -LiteralPath $scratch -File) { Remove-Item -LiteralPath $file.FullName -Force }
+        Remove-Item -LiteralPath $scratch -Force
+    }
+}
+function Resolve-YfEffectiveStorage($Config,[string]$MySql) {
+    # Storage paths are maintained on the system settings page (storage_locations); the configuration file only
+    # seeds them on first start. Maintenance must back up and grant the paths the site actually uses.
+    Get-Command $MySql -ErrorAction Stop | Out-Null
+    $rows = Invoke-YfStorageLocationQuery $Config $MySql "SELECT kind,HEX(path),HEX(COALESCE(previous_path,'')) FROM storage_locations" 'storage-read'
+    if ($null -eq $rows) { return }
+    foreach ($line in $rows) {
+        $parts = ([string]$line).Trim() -split "`t"
+        if ($parts.Count -lt 1 -or !$parts[0]) { continue }
+        $decode = { param($hex) if (!$hex) { return '' } [Text.Encoding]::UTF8.GetString([byte[]]($hex -split '(..)' | Where-Object { $_ } | ForEach-Object { [Convert]::ToByte($_,16) })) }
+        $path = & $decode ($(if ($parts.Count -gt 1) { $parts[1] } else { '' }))
+        $previous = & $decode ($(if ($parts.Count -gt 2) { $parts[2] } else { '' }))
+        if ($previous) { throw 'A storage migration is unfinished; wait for it to complete (system settings -> storage) before maintenance.' }
+        switch ($parts[0]) {
+            'COLLAB' { $Config.Storage = Get-YfFullPath $path; Assert-YfNoLinks $Config.Storage }
+            'OEM' { $Config.OemStorage = $(if ($path) { Get-YfFullPath $path } else { $null }) }
+            'LOG' { $Config | Add-Member -NotePropertyName EffectiveLogDirectory -NotePropertyValue $(if ($path) { Get-YfFullPath $path } else { '' }) -Force }
+        }
+    }
+}
+function Set-YfRestoredStorageLocations($Config,[string]$MySql) {
+    # A restored database still names the source server's paths: point it at this restore's directories.
+    $log = Get-YfLogDirectory $Config
+    $oem = $(if ($Config.OemStorage) { [string]$Config.OemStorage } else { '' })
+    $assign = "previous_path=NULL,pending_path=NULL,status='IDLE',phase=NULL,last_error=NULL"
+    $sql = "UPDATE storage_locations SET path=$(ConvertTo-YfSqlHexText $Config.Storage),$assign WHERE kind='COLLAB';" +
+        "UPDATE storage_locations SET path=$(ConvertTo-YfSqlHexText $oem),$assign WHERE kind='OEM';" +
+        "UPDATE storage_locations SET path=$(ConvertTo-YfSqlHexText $log),$assign WHERE kind='LOG';"
+    Invoke-YfStorageLocationQuery $Config $MySql $sql 'storage-restore' | Out-Null
 }
 function Protect-YfConfigurationFile([string]$Path, $ReadIdentity) {
     if (!(Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'Configuration file is missing.' }
@@ -727,6 +784,7 @@ function Restore-YfBackup([string]$BackupRoot,$Config,[string]$NewApplicationRoo
         } elseif ($ReuseOemStorage) {
             throw 'The backup predates the OEM schema; ReuseOemStorage cannot be reconciled against it.'
         }
+        Set-YfRestoredStorageLocations $Config $MySql
         Copy-YfTree (Join-Path $BackupRoot 'storage') $Config.Storage
         Copy-YfTree (Join-Path $BackupRoot 'application') $NewApplicationRoot
     } finally {

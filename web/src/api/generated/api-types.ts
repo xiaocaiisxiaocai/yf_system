@@ -1291,6 +1291,34 @@ export interface StatusRequest {
   status: string
 }
 
+export interface StorageLocationResponse {
+  kind: string
+  label: string
+  path: string
+  previousPath: string | null
+  pendingPath: string | null
+  status: string
+  phase: string | null
+  totalFiles: number
+  totalBytes: number
+  copiedFiles: number
+  copiedBytes: number
+  deletedFiles: number
+  skippedFiles: number
+  lastError: string | null
+  startedAt: string | null
+  completedAt: string | null
+  freeBytes: number | null
+}
+
+export interface StorageLocationsResponse {
+  items: Array<StorageLocationResponse>
+}
+
+export interface StorageMigrationRequest {
+  path?: string | null
+}
+
 export interface SubmitUploadMd5Request {
   fileMd5: string
 }
@@ -1485,6 +1513,10 @@ export interface ApiResponses {
   "PUT /admin/roles/{id}": RoleResponse
   "PUT /admin/roles/{id}/permissions": EmptyResponse
   "PUT /admin/roles/{id}/status": RoleResponse
+  "GET /admin/storage-locations": StorageLocationsResponse
+  "POST /admin/storage-locations/{kind}/cancel": StorageLocationResponse
+  "POST /admin/storage-locations/{kind}/migrate": StorageLocationResponse
+  "POST /admin/storage-locations/{kind}/retry": StorageLocationResponse
   "DELETE /admin/supplier-accounts/{id}": EmptyResponse
   "PUT /admin/supplier-accounts/{id}": SupplierAccountResponse
   "PUT /admin/supplier-accounts/{id}/password": EmptyResponse

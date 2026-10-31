@@ -64,7 +64,8 @@ public sealed partial class UploadService
     {
         var extension = ExtensionOf(session.FileName);
         var storedName = $"{Guid.NewGuid():D}.{extension}";
-        var root = FileStorage.Root(options.StorageRoot);
+        // A session started before a storage migration merges in its old root; the migration copies the blob.
+        var root = FileStorage.SessionRoot(options.StorageRoot, options.StorageFallbackRoot, session.Id);
         var mergeTemp = FileStorage.EnsureLexicallyWithin(root,
             Path.Combine(FileStorage.SessionDirectory(root, session.Id), $"{storedName}.tmp"), false);
         TryDeleteFile(mergeTemp, "merge-staging-before-start");

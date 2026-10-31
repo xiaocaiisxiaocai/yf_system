@@ -219,7 +219,6 @@ internal sealed class ProjectCopyService(
         var availableFiles = snapshot.Files.Where(file => file.Status == FileStatuses.Available).ToArray();
         var totalBytes = TotalBytes(availableFiles);
 
-        var root = FileStorage.Root(options.StorageRoot);
         var prepared = new List<PreparedCopy>(availableFiles.Length);
         var committed = false;
         var commitOutcomeUnknown = false;
@@ -292,7 +291,8 @@ internal sealed class ProjectCopyService(
                 if (expectedIds.Length > 1)
                     throw ApiException.Conflict("相同内容关联了不同 blob 记录，无法复制");
                 var reference = group.First();
-                var blob = await FileBlobStore.ResolveForReferenceAsync(db, root, reference.Blob,
+                var blob = await FileBlobStore.ResolveForReferenceAsync(db,
+                    FileBlobStore.RootHolding(options.StorageRoot, options.StorageFallbackRoot, reference.Blob.Sha256), reference.Blob,
                     expectedIds.Length == 0 ? null : expectedIds[0], createdAt, ct);
                 resolvedBlobs.Add(group.Key, blob);
             }
@@ -475,7 +475,7 @@ internal sealed class ProjectCopyService(
             var progressInterval = Stopwatch.StartNew();
             foreach (var sourceFile in availableFiles)
             {
-                prepared.Add(PrepareBlobReference(root, sourceFile, ct));
+                prepared.Add(PrepareBlobReference(options.StorageRoot, options.StorageFallbackRoot, sourceFile, ct));
                 completedBytes = checked(completedBytes + sourceFile.SizeBytes);
                 if (activeJobId is not ulong currentJobId
                     || prepared.Count != availableFiles.Length && prepared.Count % 10 != 0
@@ -602,7 +602,7 @@ internal sealed class ProjectCopyService(
     }
 
     private static PreparedCopy PrepareBlobReference(
-        string root, CopyFileRow sourceFile, CancellationToken ct)
+        string primaryRoot, string? fallbackRoot, CopyFileRow sourceFile, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(sourceFile.Sha256) || sourceFile.Sha256.Length != 64)
             throw ApiException.Conflict($"源文件“{sourceFile.OriginalName}”缺少完整性校验值，无法复制");
@@ -613,7 +613,8 @@ internal sealed class ProjectCopyService(
         try
         {
             sha256 = FileBlobStore.NormalizeSha256(sourceFile.Sha256);
-            FileBlobStore.VerifyBoundPhysicalFile(root, sourceFile.StoragePath, sha256,
+            FileBlobStore.VerifyBoundPhysicalFile(FileBlobStore.RootHolding(primaryRoot, fallbackRoot, sha256),
+                sourceFile.StoragePath, sha256,
                 sourceFile.SizeBytes, ct);
         }
         catch (InvalidOperationException)
@@ -957,11 +958,14 @@ internal sealed class ProjectCopyService(
 
     private void CleanupExecutionDirectory(ulong jobId, string executionToken, CancellationToken ct)
     {
-        var root = FileStorage.Root(options.StorageRoot);
-        var directory = FileStorage.EnsureLexicallyWithin(root,
-            Path.Combine(root, "copy-jobs", jobId.ToString(System.Globalization.CultureInfo.InvariantCulture), executionToken),
-            allowRoot: false);
-        FileStorage.DeleteDirectoryTree(root, directory, ct);
+        foreach (var configured in FileStorage.Roots(options.StorageRoot, options.StorageFallbackRoot))
+        {
+            var root = FileStorage.Root(configured);
+            var directory = FileStorage.EnsureLexicallyWithin(root,
+                Path.Combine(root, "copy-jobs", jobId.ToString(System.Globalization.CultureInfo.InvariantCulture), executionToken),
+                allowRoot: false);
+            FileStorage.DeleteDirectoryTree(root, directory, ct);
+        }
     }
 
     private async Task<bool> ResolveUnknownOutcomeAsync(

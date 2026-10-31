@@ -26,9 +26,20 @@ public static class ApiApplication
         var checkDevelopmentReadiness = args.Contains("--check-development-readiness", StringComparer.Ordinal);
         var convertFileBlobs = args.Contains("--convert-file-blobs", StringComparer.Ordinal);
         var removeLegacyContent = args.Contains("--remove-legacy-content", StringComparer.Ordinal);
+        // --set-storage-path <COLLAB|OEM|LOG> <absolute path>: offline repoint after a restore onto another server.
+        var setStoragePathIndex = Array.IndexOf(args, "--set-storage-path");
+        var setStoragePath = setStoragePathIndex >= 0;
+        string[]? storagePathArguments = null;
+        if (setStoragePath)
+        {
+            if (setStoragePathIndex + 2 >= args.Length)
+                throw new ArgumentException("--set-storage-path requires a kind (COLLAB, OEM or LOG) and an absolute path.");
+            storagePathArguments = [args[setStoragePathIndex + 1], args[setStoragePathIndex + 2]];
+            args = args.Where((_, index) => index < setStoragePathIndex || index > setStoragePathIndex + 2).ToArray();
+        }
         if (removeLegacyContent && !convertFileBlobs)
             throw new ArgumentException("--remove-legacy-content is only valid together with --convert-file-blobs.");
-        if (new[] { initializeDatabase, migrateDatabase, inspectDevelopment, resetDevelopment, checkDevelopmentReadiness, convertFileBlobs, oemMarkRestored }.Count(value => value) > 1)
+        if (new[] { initializeDatabase, migrateDatabase, inspectDevelopment, resetDevelopment, checkDevelopmentReadiness, convertFileBlobs, oemMarkRestored, setStoragePath }.Count(value => value) > 1)
         {
             if (checkDevelopmentReadiness)
             {
@@ -70,6 +81,10 @@ public static class ApiApplication
         options.ValidateStorageLocation(builder.Environment.ContentRootPath);
         if (inspectDevelopment || resetDevelopment)
         {
+            // Reset/inspect act on the effective storage paths when the database already manages them.
+            await StorageLocationBootstrap.ApplyAsync(options, builder.Environment.ContentRootPath, seed: false);
+            if (options.StorageFallbackRoot is not null || options.OemStorageFallbackRoot is not null)
+                throw new InvalidOperationException("A storage migration is unfinished; complete or cancel it first.");
             var result = resetDevelopment
                 ? await DevelopmentDataReset.ResetAsync(options, builder.Configuration["confirm-database"], builder.Configuration["confirm-storage-root"])
                 : await DevelopmentDataReset.InspectAsync(options);
@@ -89,6 +104,13 @@ public static class ApiApplication
             await EfDatabaseLifecycle.MigrateAsync(new AppDb(options));
             return null;
         }
+        if (setStoragePath)
+        {
+            await EfDatabaseLifecycle.ValidateReadyAsync(new AppDb(options));
+            await StorageLocationBootstrap.SetPathOfflineAsync(options, storagePathArguments![0], storagePathArguments[1]);
+            Console.WriteLine("Storage path updated; files were not moved.");
+            return null;
+        }
         if (oemMarkRestored)
         {
             await EfDatabaseLifecycle.ValidateReadyAsync(new AppDb(options));
@@ -97,8 +119,12 @@ public static class ApiApplication
             return null;
         }
         await EfDatabaseLifecycle.PrepareStartupAsync(options);
+        // The effective storage paths live in storage_locations (system settings); the configured ones only seed it.
+        await StorageLocationBootstrap.ApplyAsync(options, builder.Environment.ContentRootPath, seed: true);
         if (convertFileBlobs)
         {
+            if (options.StorageFallbackRoot is not null)
+                throw new InvalidOperationException("A storage migration is unfinished; complete or cancel it first.");
             // One-shot maintenance step, run while the site is stopped: copying and hashing every legacy
             // file can take far longer than the IIS startup limit, so normal startup only validates.
             var converted = await FileBlobBackfill.RunAsync(new AppDb(options), options.StorageRoot);

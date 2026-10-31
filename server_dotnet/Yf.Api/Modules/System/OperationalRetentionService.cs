@@ -23,6 +23,7 @@ public sealed class OperationalRetentionService(
             cutoff = (await DbClock.UtcNowAsync(clock, ct, 3)).AddDays(-options.UploadSessionRetentionDays);
 
         long deleted = 0;
+        if (options.StorageFallbackRoot is not null) return deleted;
         DateTime? cursorUpdatedAt = null;
         string? cursorId = null;
         var storageRoot = FileStorage.Root(options.StorageRoot);
@@ -39,7 +40,10 @@ public sealed class OperationalRetentionService(
                 {
                     var expectedDirectory = FileStorage.SessionDirectory(storageRoot, candidate.Id);
                     var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-                    if (!Path.GetFullPath(candidate.TempDir).Equals(expectedDirectory, comparison))
+                    // temp_dir is absolute; rows written before a storage migration still name the old root.
+                    var recorded = Path.GetFullPath(candidate.TempDir);
+                    if (!Path.GetFileName(recorded).Equals(candidate.Id, comparison)
+                        || !Path.GetFileName(Path.GetDirectoryName(recorded) ?? "").Equals("tmp", comparison))
                         throw new InvalidOperationException("Upload session temp_dir does not match its canonical session directory.");
                     FileStorage.DeleteDirectoryTree(storageRoot, expectedDirectory, ct);
                     await using var context = EfDb.Use(conn);

@@ -516,8 +516,8 @@ internal sealed class MessageService(
             .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         try
         {
-            var path = FileStorage.ResolveExistingFile(
-                options.StorageRoot, Path.Combine(options.StorageRoot, image.StoragePath), ct);
+            var path = FileStorage.ResolveStoredFile(
+                options.StorageRoot, options.StorageFallbackRoot, image.StoragePath, ct);
             return new(path, image.OriginalName, image.MimeType, image.SizeBytes);
         }
         catch (FileNotFoundException)
@@ -719,10 +719,15 @@ internal sealed class MessageService(
                     candidate => candidate.StoredName == image.StoredName, ct);
                 if (!referenced)
                 {
-                    var candidate = FileStorage.EnsureLexicallyWithin(options.StorageRoot,
-                        Path.Combine(options.StorageRoot, image.StoragePath), false);
-                    var path = FileStorage.ResolveExistingFile(options.StorageRoot, candidate, ct);
-                    TryDelete(path);
+                    foreach (var root in FileStorage.Roots(options.StorageRoot, options.StorageFallbackRoot))
+                    {
+                        try
+                        {
+                            var candidate = FileStorage.EnsureLexicallyWithin(root, Path.Combine(root, image.StoragePath), false);
+                            TryDelete(FileStorage.ResolveExistingFile(root, candidate, ct));
+                        }
+                        catch (FileNotFoundException) { }
+                    }
                 }
             }
             catch (FileNotFoundException) { }

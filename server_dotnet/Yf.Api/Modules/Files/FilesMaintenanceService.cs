@@ -49,6 +49,9 @@ public sealed class FilesMaintenanceService(
     {
         await RecoverAbandonedMergesAsync(ct);
         await ExpireUploadsAsync(ct);
+        // During a storage migration, physical deletion, orphan scans and blob verification wait: they would race
+        // the copy or judge a file missing that still sits in the old root. Soft-deleted content is retained anyway.
+        if (options.StorageFallbackRoot is not null) return;
         await ResumePendingBlobGarbageCollectionAsync(ct);
         await PurgeDeletedFilesAsync(ct);
         await VerifyReferencedBlobFilesAsync(ct);
@@ -104,8 +107,8 @@ public sealed class FilesMaintenanceService(
                 }
                 if (expired)
                 {
-                    FileStorage.DeleteDirectoryTree(options.StorageRoot,
-                        FileStorage.SessionDirectory(FileStorage.Root(options.StorageRoot), candidate.Id), ct);
+                    foreach (var root in FileStorage.Roots(options.StorageRoot, options.StorageFallbackRoot))
+                        FileStorage.DeleteDirectoryTree(root, FileStorage.SessionDirectory(FileStorage.Root(root), candidate.Id), ct);
                 }
             }
             catch (Exception error)
@@ -118,7 +121,6 @@ public sealed class FilesMaintenanceService(
     private async Task ExpireUploadsAsync(CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
-        var root = FileStorage.Root(options.StorageRoot);
         ExpiredUpload[] expired;
         await using (var context = EfDb.Use(conn))
         {
@@ -140,10 +142,13 @@ public sealed class FilesMaintenanceService(
                 await tx.CommitAsync(ct);
             }
             if (claimed != 1) continue;
-            var directory = FileStorage.SessionDirectory(root, session.Id);
             try
             {
-                FileStorage.DeleteDirectoryTree(root, directory, ct);
+                foreach (var configured in FileStorage.Roots(options.StorageRoot, options.StorageFallbackRoot))
+                {
+                    var root = FileStorage.Root(configured);
+                    FileStorage.DeleteDirectoryTree(root, FileStorage.SessionDirectory(root, session.Id), ct);
+                }
             }
             catch (Exception error) { logger.LogWarning(error, "清理过期上传目录失败 {SessionId}", session.Id); }
         }

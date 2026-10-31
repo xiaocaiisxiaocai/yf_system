@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Mvc;
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
@@ -11,7 +12,9 @@ public static class SystemModule
 {
     public static IServiceCollection AddSystemModule(this IServiceCollection services)
         => services.AddSingleton<SystemService>().AddSingleton<SmtpSettingsService>().AddSingleton<MailService>().AddHostedService<MailWorker>()
-            .AddHostedService<AuditRetentionService>().AddHostedService<OperationalRetentionService>();
+            .AddHostedService<AuditRetentionService>().AddHostedService<OperationalRetentionService>()
+            .AddSingleton<StorageMigrationSignal>().AddSingleton<StorageLocationService>().AddSingleton<StorageMigrationWorker>()
+            .AddSingleton<IHostedService>(provider => provider.GetRequiredService<StorageMigrationWorker>());
 
     public static IEndpointRouteBuilder MapSystemModule(this IEndpointRouteBuilder endpoints)
     {
@@ -41,6 +44,23 @@ public static class SystemModule
             return await next(context);
         });
         logs.MapGet("", (HttpContext ctx, SystemService service, CancellationToken ct) => service.ListLogsAsync(ctx.Request, ct));
+        var storage = endpoints.MapGroup("/api/v1/admin/storage-locations");
+        storage.AddEndpointFilter(async (context, next) =>
+        {
+            var db = context.HttpContext.RequestServices.GetRequiredService<AppDb>();
+            AccessService.RequireInternal(AccessService.GetCurrent(context.HttpContext));
+            await using (var conn = await db.OpenAsync(context.HttpContext.RequestAborted))
+                await AccessService.RequirePermissionAsync(conn, null, AccessService.GetCurrent(context.HttpContext),
+                    StorageLocationService.Permission, context.HttpContext.RequestAborted);
+            return await next(context);
+        });
+        storage.MapGet("", ([FromServices] StorageLocationService service, CancellationToken ct) => service.ListAsync(ct));
+        storage.MapPost("/{kind}/migrate", (string kind, StorageMigrationRequest body, HttpContext ctx, [FromServices] StorageLocationService service, CancellationToken ct) =>
+            service.MigrateAsync(AccessService.GetCurrent(ctx), kind, body, ClientIp.Resolve(ctx, ctx.RequestServices.GetRequiredService<AppOptions>()), ct));
+        storage.MapPost("/{kind}/cancel", (string kind, HttpContext ctx, [FromServices] StorageLocationService service, CancellationToken ct) =>
+            service.CancelAsync(AccessService.GetCurrent(ctx), kind, ClientIp.Resolve(ctx, ctx.RequestServices.GetRequiredService<AppOptions>()), ct));
+        storage.MapPost("/{kind}/retry", (string kind, HttpContext ctx, [FromServices] StorageLocationService service, CancellationToken ct) =>
+            service.RetryAsync(AccessService.GetCurrent(ctx), kind, ClientIp.Resolve(ctx, ctx.RequestServices.GetRequiredService<AppOptions>()), ct));
         return endpoints;
     }
 }
@@ -255,7 +275,7 @@ public sealed class SystemService(AppDb db, AuditService audit)
         ["MESSAGE"] = "MESSAGE_CREATE MESSAGE_DELETE MESSAGE_READ".Split(' '),
         ["ORG"] = "USER_CREATE USER_UPDATE USER_STATUS USER_RESET_PASSWORD USER_ASSIGN_ROLE USER_ASSIGN_ROLES DEPT_CREATE DEPT_UPDATE DEPT_STATUS DEPT_DELETE USER_DELETE ROLE_CREATE ROLE_UPDATE ROLE_STATUS ROLE_ASSIGN_PERMS ROLE_DELETE".Split(' '),
         ["SUPPLIER"] = "SUPPLIER_CREATE SUPPLIER_UPDATE SUPPLIER_STATUS SUPPLIER_DELETE SUPPLIER_ACCOUNT_CREATE SUPPLIER_ACCOUNT_UPDATE SUPPLIER_ACCOUNT_STATUS SUPPLIER_ACCOUNT_RESET_PASSWORD SUPPLIER_ACCOUNT_DELETE SUPPLIER_CONTACT_CREATE SUPPLIER_CONTACT_UPDATE SUPPLIER_CONTACT_STATUS".Split(' '),
-        ["SYSTEM"] = "CONFIG_UPDATE PROJECT_DICTIONARY_CREATE PROJECT_DICTIONARY_UPDATE PROJECT_DICTIONARY_DELETE ROBOT_PART_CREATE ROBOT_PART_UPDATE ROBOT_PART_DELETE AUDIT_LOG_DELETE AUDIT_LOG_RETENTION EMAIL_SENT EMAIL_FAILED EMAIL_RETRY EMAIL_SKIPPED_MISSING_EMAIL EMAIL_CANCELLED_STALE".Split(' ')
+        ["SYSTEM"] = "CONFIG_UPDATE STORAGE_PATH_SET STORAGE_MIGRATION_START STORAGE_MIGRATION_CANCEL STORAGE_MIGRATION_RETRY STORAGE_MIGRATION_COMPLETE STORAGE_MIGRATION_FAILED PROJECT_DICTIONARY_CREATE PROJECT_DICTIONARY_UPDATE PROJECT_DICTIONARY_DELETE ROBOT_PART_CREATE ROBOT_PART_UPDATE ROBOT_PART_DELETE AUDIT_LOG_DELETE AUDIT_LOG_RETENTION EMAIL_SENT EMAIL_FAILED EMAIL_RETRY EMAIL_SKIPPED_MISSING_EMAIL EMAIL_CANCELLED_STALE".Split(' ')
     };
 }
 

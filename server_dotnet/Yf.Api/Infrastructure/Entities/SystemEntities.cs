@@ -127,3 +127,57 @@ public sealed class SystemConfigConfig : IEntityTypeConfiguration<SystemConfig>
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime").HasDefaultValueSql("CURRENT_TIMESTAMP").ValueGeneratedOnAddOrUpdate();
     }
 }
+
+/// <summary>
+/// Runtime storage location of one kind (COLLAB / OEM / LOG), maintained from the system settings page. Path is
+/// where new content goes; during a migration PreviousPath is the old location that still serves reads until every
+/// file has been copied, verified and removed from it. See 存储路径页面配置与在线迁移方案.
+/// </summary>
+public sealed class StorageLocation
+{
+    public string Kind { get; set; } = null!;
+    public string Path { get; set; } = null!;
+    public string? PreviousPath { get; set; }
+    /// <summary>Path stored for a kind that only takes effect after a restart (first OEM path).</summary>
+    public string? PendingPath { get; set; }
+    public string Status { get; set; } = null!;
+    public string? Phase { get; set; }
+    public long TotalFiles { get; set; }
+    public long TotalBytes { get; set; }
+    public long CopiedFiles { get; set; }
+    public long CopiedBytes { get; set; }
+    public long DeletedFiles { get; set; }
+    public long SkippedFiles { get; set; }
+    public string? LastError { get; set; }
+    public ulong? RequestedBy { get; set; }
+    public DateTime? StartedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+public sealed class StorageLocationConfig : IEntityTypeConfiguration<StorageLocation>
+{
+    public void Configure(EntityTypeBuilder<StorageLocation> b)
+    {
+        b.ToTable("storage_locations");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => x.Kind);
+        b.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(16);
+        b.Property(x => x.Path).HasColumnName("path").HasMaxLength(500).IsRequired();
+        b.Property(x => x.PreviousPath).HasColumnName("previous_path").HasMaxLength(500);
+        b.Property(x => x.PendingPath).HasColumnName("pending_path").HasMaxLength(500);
+        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired();
+        b.Property(x => x.Phase).HasColumnName("phase").HasMaxLength(16);
+        b.Property(x => x.TotalFiles).HasColumnName("total_files");
+        b.Property(x => x.TotalBytes).HasColumnName("total_bytes");
+        b.Property(x => x.CopiedFiles).HasColumnName("copied_files");
+        b.Property(x => x.CopiedBytes).HasColumnName("copied_bytes");
+        b.Property(x => x.DeletedFiles).HasColumnName("deleted_files");
+        b.Property(x => x.SkippedFiles).HasColumnName("skipped_files");
+        b.Property(x => x.LastError).HasColumnName("last_error").HasMaxLength(1000);
+        b.Property(x => x.RequestedBy).HasColumnName("requested_by");
+        b.Property(x => x.StartedAt).HasColumnName("started_at").HasColumnType("datetime(3)");
+        b.Property(x => x.CompletedAt).HasColumnName("completed_at").HasColumnType("datetime(3)");
+        b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)");
+    }
+}

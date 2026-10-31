@@ -1916,6 +1916,92 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.StorageLocation", b =>
+                {
+                    b.Property<string>("Kind")
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("kind");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("completed_at");
+
+                    b.Property<long>("CopiedBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("copied_bytes");
+
+                    b.Property<long>("CopiedFiles")
+                        .HasColumnType("bigint")
+                        .HasColumnName("copied_files");
+
+                    b.Property<long>("DeletedFiles")
+                        .HasColumnType("bigint")
+                        .HasColumnName("deleted_files");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)")
+                        .HasColumnName("last_error");
+
+                    b.Property<string>("Path")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("path");
+
+                    b.Property<string>("PendingPath")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("pending_path");
+
+                    b.Property<string>("Phase")
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("phase");
+
+                    b.Property<string>("PreviousPath")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("previous_path");
+
+                    b.Property<ulong?>("RequestedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("requested_by");
+
+                    b.Property<long>("SkippedFiles")
+                        .HasColumnType("bigint")
+                        .HasColumnName("skipped_files");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("status");
+
+                    b.Property<long>("TotalBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("total_bytes");
+
+                    b.Property<long>("TotalFiles")
+                        .HasColumnType("bigint")
+                        .HasColumnName("total_files");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Kind");
+
+                    b.ToTable("storage_locations", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.Supplier", b =>
                 {
                     b.Property<ulong>("Id")

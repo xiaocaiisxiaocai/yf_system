@@ -23,6 +23,38 @@ internal static class FileStorage
         });
     }
 
+    /// <summary>
+    /// Roots content may currently live in: the primary root (where new content goes), then the old root of a
+    /// running storage migration. See 存储路径页面配置与在线迁移方案.
+    /// </summary>
+    public static IReadOnlyList<string> Roots(string primary, string? fallback) =>
+        fallback is null ? [primary] : [primary, fallback];
+
+    /// <summary>Resolves a stored relative path in the primary root, falling back to a migration's old root.</summary>
+    public static string ResolveStoredFile(string primary, string? fallback, string relative, CancellationToken ct)
+    {
+        if (fallback is not null)
+        {
+            try { return ResolveExistingFile(primary, Path.Combine(primary, relative), ct); }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+            return ResolveExistingFile(fallback, Path.Combine(fallback, relative), ct);
+        }
+        return ResolveExistingFile(primary, Path.Combine(primary, relative), ct);
+    }
+
+    /// <summary>
+    /// The resolved root that holds an upload session: a session started before a storage migration keeps working
+    /// (chunks, merge, blob) in the old root until it ends; new sessions use the primary root.
+    /// </summary>
+    public static string SessionRoot(string primary, string? fallback, string sessionId)
+    {
+        var root = Root(primary);
+        if (fallback is null || Directory.Exists(SessionDirectory(root, sessionId))) return root;
+        var old = Root(fallback);
+        return Directory.Exists(SessionDirectory(old, sessionId)) ? old : root;
+    }
+
     public static string SessionDirectory(string root, string sessionId)
     {
         ValidateSessionId(sessionId);

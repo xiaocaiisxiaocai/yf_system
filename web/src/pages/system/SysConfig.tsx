@@ -6,10 +6,13 @@ import { renderMailSettingsPanel } from './components/MailSettingsPanel'
 import { renderSystemConfigTable } from './components/SystemConfigTable'
 import { useSystemConfig } from './hooks/useSystemConfig'
 import LoadError from '../../components/LoadError'
+import { useAuth } from '../../store/auth'
+import StorageLocationsPanel from './components/StorageLocationsPanel'
 
 export default function SysConfig() {
   const navigate = useNavigate()
   const state = useSystemConfig(http)
+  const canManageStorage = useAuth().hasPerm('storage:manage')
 
   const systemPanel = renderSystemConfigTable({
     configs: state.configs,
@@ -64,6 +67,11 @@ export default function SysConfig() {
             <Tabs.TabPane key="smtp" title="SMTP 配置">
               {smtpPanel}
             </Tabs.TabPane>
+            {canManageStorage && (
+              <Tabs.TabPane key="storage" title="存储位置">
+                <StorageLocationsPanel />
+              </Tabs.TabPane>
+            )}
           </Tabs>
         </>
       )}

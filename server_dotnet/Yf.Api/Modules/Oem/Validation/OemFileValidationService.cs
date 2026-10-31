@@ -407,7 +407,8 @@ public sealed class OemPromotionService(
         try
         {
             var source = storage.Absolute(claim.SourcePath);
-            var target = storage.Absolute(claim.TargetPath);
+            // Promotion stays inside the root that holds the quarantined file, so it remains an atomic rename.
+            var target = File.Exists(source) ? storage.AbsoluteBeside(claim.TargetPath, source) : storage.Absolute(claim.TargetPath);
             var sourceExists = File.Exists(source);
             var targetExists = File.Exists(target);
             var renamed = false;

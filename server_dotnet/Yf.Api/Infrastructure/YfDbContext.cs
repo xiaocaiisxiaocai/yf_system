@@ -52,6 +52,7 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<EmailOutbox> EmailOutbox => Set<EmailOutbox>();
     public DbSet<SystemConfig> SystemConfigs => Set<SystemConfig>();
+    public DbSet<StorageLocation> StorageLocations => Set<StorageLocation>();
 
     // OEM business line (independent from the supplier collaboration tables above).
     public DbSet<OemCompany> OemCompanies => Set<OemCompany>();

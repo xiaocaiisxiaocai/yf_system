@@ -186,9 +186,8 @@ public sealed partial class UploadService(
             : initial.ChunkSize;
         if (context.Request.ContentLength is long contentLength && (ulong)contentLength != expected)
             throw ApiException.BadRequest($"分片大小不符：期望 {expected}，实际 {contentLength}");
-        FileStorage.EnsureFreeSpace(options.StorageRoot, expected);
-
-        var root = FileStorage.Root(options.StorageRoot);
+        var root = FileStorage.SessionRoot(options.StorageRoot, options.StorageFallbackRoot, sessionId);
+        FileStorage.EnsureFreeSpace(root, expected);
         var directory = FileStorage.SessionDirectory(root, sessionId);
         directory = FileStorage.CreateDirectoryWithin(root, directory, ct);
         var path = FileStorage.EnsureLexicallyWithin(root, Path.Combine(directory, $"{index}.part"), false);
@@ -393,7 +392,7 @@ public sealed partial class UploadService(
     private async Task<List<UploadedChunkDigestResponse>> UploadedChunksAsync(
         UploadSessionRow session, bool repairMetadata, CancellationToken ct)
     {
-        var root = FileStorage.Root(options.StorageRoot);
+        var root = FileStorage.SessionRoot(options.StorageRoot, options.StorageFallbackRoot, session.Id);
         var result = new List<UploadedChunkDigestResponse>();
         for (uint index = 0; index < session.TotalChunks; index++)
         {
@@ -547,7 +546,7 @@ public sealed partial class UploadService(
 
     private int CountReceivedChunks(string sessionId)
     {
-        var root = FileStorage.Root(options.StorageRoot);
+        var root = FileStorage.SessionRoot(options.StorageRoot, options.StorageFallbackRoot, sessionId);
         string directory;
         try { directory = FileStorage.SessionDirectory(root, sessionId); }
         catch (InvalidOperationException) { return 0; }
