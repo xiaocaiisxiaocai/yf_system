@@ -3,7 +3,7 @@ import { hasActiveUpload, subscribeUploadActivity } from './uploadActivity'
 
 export const UPLOAD_LEAVE_MESSAGE = '文件仍在上传，离开后服务端上传会话会保留，提交或终止可能被拒绝。'
 
-/** 应用使用 BrowserRouter，不能用 useBlocker。这里只拦浏览器离开。 */
+/** 拦浏览器层面的离开（刷新、关闭标签页）；站内路由切换由 UploadNavigationGuard 确认。 */
 export default function UploadLeaveGuard() {
   const [active, setActive] = useState(hasActiveUpload)
 

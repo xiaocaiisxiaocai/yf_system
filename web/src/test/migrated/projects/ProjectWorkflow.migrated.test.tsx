@@ -71,16 +71,16 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
     const { rerender } = render(<ProjectWorkflowPanel project={{ id: 1, status: 'DRAFT' } as never} onChanged={changed} />)
 
     await user.click(screen.getByRole('button', { name: '开始' }))
-    expect(mocks.put).toHaveBeenLastCalledWith('/projects/1/status', { status: 'IN_PROGRESS' })
+    expect(mocks.put).toHaveBeenLastCalledWith('/projects/1/status', { status: 'IN_PROGRESS', expectedStatus: 'DRAFT' })
 
     rerender(<ProjectWorkflowPanel project={{ id: 1, status: 'IN_PROGRESS' } as never} onChanged={changed} />)
     await user.click(screen.getByRole('button', { name: '终止' }))
     await confirmPopover()
-    expect(mocks.put).toHaveBeenLastCalledWith('/projects/1/status', { status: 'TERMINATED' })
+    expect(mocks.put).toHaveBeenLastCalledWith('/projects/1/status', { status: 'TERMINATED', expectedStatus: 'IN_PROGRESS' })
 
     rerender(<ProjectWorkflowPanel project={{ id: 1, status: 'TERMINATED' } as never} onChanged={changed} />)
     await user.click(screen.getByRole('button', { name: '重新开始' }))
-    expect(mocks.put).toHaveBeenLastCalledWith('/projects/1/status', { status: 'IN_PROGRESS' })
+    expect(mocks.put).toHaveBeenLastCalledWith('/projects/1/status', { status: 'IN_PROGRESS', expectedStatus: 'TERMINATED' })
 
     rerender(<ProjectWorkflowPanel project={{ id: 1, status: 'COMPLETED' } as never} onChanged={changed} />)
     expect(screen.queryByRole('button', { name: /开始|终止/ })).not.toBeInTheDocument()
@@ -106,6 +106,19 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
     await userEvent.click(screen.getByRole('button', { name: label }))
     await waitFor(() => expect(changed).toHaveBeenCalledTimes(1))
     expect(mocks.put).toHaveBeenCalledTimes(2)
+  })
+
+  it('a status change on a stale page is rejected by version, refreshes once and is not replayed', async () => {
+    mocks.auth.permissions = ['project:status']
+    mocks.put.mockRejectedValue({ isAxiosError: true, response: { data: { code: 40903 } } })
+    const changed = vi.fn()
+    render(<ProjectWorkflowPanel project={{ id: 17, status: 'DRAFT' } as never} onChanged={changed} />)
+
+    await userEvent.click(screen.getByRole('button', { name: '开始' }))
+
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce())
+    expect(mocks.put).toHaveBeenCalledOnce()
+    expect(mocks.put).toHaveBeenCalledWith('/projects/17/status', { status: 'IN_PROGRESS', expectedStatus: 'DRAFT' })
   })
 
   it.each([
@@ -255,11 +268,13 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
     expect(within(dialog).getByPlaceholderText('请说明需要厂商返工的内容')).toHaveValue('需要返工')
   })
 
-  it('a version conflict closes the reopen dialog and reloads once without retrying', async () => {
-    mocks.post.mockRejectedValue({ isAxiosError: true, response: { data: { code: 40903 } } })
+  it('a version conflict keeps the reopen dialog and reason, rebases to the refreshed version and needs a new confirmation', async () => {
+    mocks.post
+      .mockRejectedValueOnce({ isAxiosError: true, response: { data: { code: 40903 } } })
+      .mockResolvedValueOnce({ data: {} })
     const changed = vi.fn()
     const user = userEvent.setup()
-    render(<ProjectWorkflowPanel project={completedProject()} onChanged={changed} />)
+    const { rerender } = render(<ProjectWorkflowPanel project={completedProject('2026-10-31T08:00:00.000Z')} onChanged={changed} />)
 
     await user.click(screen.getByRole('button', { name: '重开' }))
     const dialog = await screen.findByRole('dialog')
@@ -267,6 +282,63 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '确认重开' }))
 
     await waitFor(() => expect(changed).toHaveBeenCalledOnce())
+    // 不关闭、不清空原因，也不自动重放。
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(within(dialog).getByPlaceholderText('请说明需要厂商返工的内容')).toHaveValue('需要返工')
+    expect(mocks.post).toHaveBeenCalledOnce()
+
+    // 刷新后的项目到达：期望版本换成新基线，由负责人再次点击确认。
+    rerender(<ProjectWorkflowPanel project={completedProject('2026-10-31T09:30:00.000Z')} onChanged={changed} />)
+    expect(mocks.post).toHaveBeenCalledOnce()
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: '确认重开' })).not.toHaveClass('arco-btn-loading'))
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认重开' }))
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(2))
+    expect(mocks.post).toHaveBeenLastCalledWith('/projects/17/reopen', {
+      reason: '需要返工',
+      expectedUpdatedAt: '2026-10-31T09:30:00.000Z',
+    })
+  })
+
+  it('a version conflict on return keeps the dialog and reason, then rebases to the newer supplier file', async () => {
+    mocks.post
+      .mockRejectedValueOnce({ isAxiosError: true, response: { data: { code: 40903 } } })
+      .mockResolvedValueOnce({ data: {} })
+    const changed = vi.fn()
+    const user = userEvent.setup()
+    const { rerender } = render(<ProjectWorkflowPanel project={reviewProject(5)} onChanged={changed} />)
+
+    await user.click(screen.getByRole('button', { name: '退回资料' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByPlaceholderText('请说明需要厂商补充或修改的资料'), '缺少 STEP')
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认退回' }))
+
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce())
+    expect(mocks.post).toHaveBeenCalledOnce()
+    expect(mocks.post).toHaveBeenLastCalledWith('/projects/17/materials/return', { reason: '缺少 STEP', expectedSupplierFileId: 5 })
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(within(dialog).getByPlaceholderText('请说明需要厂商补充或修改的资料')).toHaveValue('缺少 STEP')
+
+    rerender(<ProjectWorkflowPanel project={reviewProject(8)} onChanged={changed} />)
+    expect(mocks.post).toHaveBeenCalledOnce()
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: '确认退回' })).not.toHaveClass('arco-btn-loading'))
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认退回' }))
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(2))
+    expect(mocks.post).toHaveBeenLastCalledWith('/projects/17/materials/return', { reason: '缺少 STEP', expectedSupplierFileId: 8 })
+  })
+
+  it('a conflict whose refreshed project no longer allows the command closes the dialog', async () => {
+    mocks.post.mockRejectedValueOnce({ isAxiosError: true, response: { data: { code: 40903 } } })
+    const changed = vi.fn()
+    const user = userEvent.setup()
+    const { rerender } = render(<ProjectWorkflowPanel project={reviewProject(5)} onChanged={changed} />)
+
+    await user.click(screen.getByRole('button', { name: '退回资料' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByPlaceholderText('请说明需要厂商补充或修改的资料'), '缺少 STEP')
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认退回' }))
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce())
+
+    rerender(<ProjectWorkflowPanel project={reviewProject(5, 'NO_MATERIAL')} onChanged={changed} />)
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(mocks.post).toHaveBeenCalledOnce()
   })

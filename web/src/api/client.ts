@@ -7,7 +7,7 @@ import { isQuietRequestError } from './quietRequest'
 
 export const http = axios.create({ baseURL: '/api/v1', timeout: 60000 })
 
-let refreshing: Promise<boolean> | null = null
+let refreshing: Promise<RefreshOutcome> | null = null
 let refreshingGeneration: number | undefined
 type ProfileRefresh = { generation: number; token: string; promise: Promise<void> }
 let refreshingProfile: ProfileRefresh | null = null
@@ -164,31 +164,47 @@ async function refreshProfileAfterForbidden(): Promise<void> {
   await promise
 }
 
+/**
+ * ok: 已换到新令牌。rejected: 服务端明确拒绝（refresh cookie 失效、响应不符合契约），会话已结束。
+ * unavailable: 网络、超时、429、5xx 或本地锁协调失败（也包括会话已被替换而放弃本次刷新）；
+ * refresh cookie 仍可能有效，调用方保留本地登录态，不得据此登出。
+ */
+type RefreshOutcome = 'ok' | 'rejected' | 'unavailable'
+
+const REFRESH_UNAVAILABLE_MESSAGE = '网络错误，暂时无法恢复登录状态，请稍后重试'
+
+function classifyRefreshFailure(error: unknown): RefreshOutcome {
+  if (!axios.isAxiosError(error)) return 'unavailable'
+  const status = error.response?.status
+  if (status === undefined || status === 408 || status === 425 || status === 429 || status >= 500) return 'unavailable'
+  return 'rejected'
+}
+
 /** 单飞刷新：并发 401 共享同一次请求 */
-async function tryRefresh(generation = useAuth.getState().generation): Promise<boolean> {
-  if (useAuth.getState().generation !== generation) return false
+async function tryRefresh(generation = useAuth.getState().generation): Promise<RefreshOutcome> {
+  if (useAuth.getState().generation !== generation) return 'unavailable'
   if (!refreshing || refreshingGeneration !== generation) {
     refreshingGeneration = generation
     // 以发起刷新时的账号为准。同一次会话里资料接口可能先写回另一份用户快照，
     // 不能把那次写回误判成换号。
     const userIdAtStart = useAuth.getState().user?.id
-    const pending = withAuthLock(async () => {
-      if (useAuth.getState().generation !== generation) return false
+    const pending = withAuthLock(async (): Promise<RefreshOutcome> => {
+      if (useAuth.getState().generation !== generation) return 'unavailable'
       return axios
       .post<unknown>('/api/v1/auth/refresh', null, { withCredentials: true, timeout: REFRESH_TIMEOUT_MS })
-      .then((r) => {
-        if (useAuth.getState().generation !== generation) return false
-        if (!isAuthLoginResponse(r.data)) throw new Error('刷新响应格式无效')
+      .then((r): RefreshOutcome => {
+        if (useAuth.getState().generation !== generation) return 'unavailable'
+        if (!isAuthLoginResponse(r.data)) return 'rejected'
         if (typeof userIdAtStart === 'number' && userIdAtStart !== r.data.user.id) {
           // 刷新结果换成了另一个账号：按新登录处理，不重放原来的请求。
           useAuth.getState().setLogin(r.data, true)
-          return false
+          return 'unavailable'
         }
         useAuth.getState().setLogin(r.data, false)
-        return true
+        return 'ok'
       })
     })
-      .catch(() => false)
+      .catch(classifyRefreshFailure)
       .finally(() => {
         setTimeout(() => { if (refreshing === pending) refreshing = null }, 0)
       })
@@ -203,7 +219,7 @@ export async function getRealtimeAccessToken(forceRefresh = false): Promise<stri
   if (!before.token) return ''
   if (forceRefresh || tokenExpiresSoon(before.token)) {
     const refreshed = await tryRefresh(before.generation)
-    if (!refreshed) throw new Error('实时协作登录状态刷新失败')
+    if (refreshed !== 'ok') throw new Error('实时协作登录状态刷新失败')
   }
   const after = useAuth.getState()
   if (after.generation !== before.generation || !after.token) throw new Error('实时协作会话已变化')
@@ -240,10 +256,11 @@ export async function bootAuth(): Promise<void> {
   const generation = s.generation
   if (s.booted) return
   if (s.user && !s.token) {
-    const ok = await tryRefresh()
-    if (!ok && useAuth.getState().generation === generation) {
-      // refresh cookie 已失效，清空持久化用户态
-      s.logout()
+    const outcome = await tryRefresh()
+    if (useAuth.getState().generation === generation) {
+      // 只有服务端明确拒绝才清空持久化用户态；网络或服务暂时不可用时保留，恢复后重新打开即可静默登录。
+      if (outcome === 'rejected') s.logout()
+      else if (outcome === 'unavailable') Message.error(REFRESH_UNAVAILABLE_MESSAGE)
     }
   }
   useAuth.getState().setBooted(true)
@@ -273,10 +290,15 @@ http.interceptors.response.use(
     // Re-read the pathname after every await because the user may enter the portal while refresh is pending.
     if (status === 401 && !isOemPortalPath(location.pathname) && cfg && !cfg._retried && !cfg.url?.includes('/auth/')) {
       cfg._retried = true
-      const refreshed = await tryRefresh(cfg.authGeneration)
+      const outcome = await tryRefresh(cfg.authGeneration)
       if (!isCurrentSession(cfg)) return Promise.reject(error)
       if (isOemPortalPath(location.pathname)) return Promise.reject(error)
-      if (refreshed) return http(cfg)
+      if (outcome === 'ok') return http(cfg)
+      if (outcome === 'unavailable') {
+        // 刷新请求没有得到服务端的明确答复，会话未必失效：保留登录态，只让这次请求失败。
+        Message.error(REFRESH_UNAVAILABLE_MESSAGE)
+        return Promise.reject(error)
+      }
     }
     if (status === 401 && !isOemPortalPath(location.pathname)) {
       useAuth.getState().logout()
@@ -291,7 +313,8 @@ http.interceptors.response.use(
       location.href = '/change-password'
     }
     if (status === 403 && biz !== 40303 && !cfg?.url?.includes('/auth/profile')) {
-      await refreshProfileAfterForbidden()
+      // 资料刷新放到后台（内部已去重并吞掉失败）：调用方立即拿到原始 403，不被最长 60 秒的资料请求拖住。
+      void refreshProfileAfterForbidden()
     }
     const connectionMessage = error.code === 'ERR_NETWORK'
       ? '网络连接失败，请稍后重试'

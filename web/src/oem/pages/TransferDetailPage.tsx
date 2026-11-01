@@ -6,6 +6,7 @@ import {
 } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconLeft } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
+import { startOemDownload } from '../../api/download'
 import { fmtSize, fmtTime } from '../../api/types'
 import { isVersionConflict } from '../../api/versionConflict'
 import type { ApprovalInfo, ApprovalTask, TransferDetail, TransferFile } from '../api/types'
@@ -431,14 +432,14 @@ export default function TransferDetailPage() {
   }
   const download = async (file: TransferFile) => {
     const session = await api.startDownload(file.id)
-    // Only follow a download URL on this site; anything else would carry the user off-origin.
-    const target = new URL(session.url, window.location.origin)
-    if (target.origin !== window.location.origin) {
+    // 授权 cookie 限定路径且 HttpOnly，由隐藏 iframe 导航下载：成功交给浏览器下载管理器，
+    // 失败（授权过期、文件已清理、4xx/5xx）只提示原因，不会把整个标签页带到服务端 JSON 错误页。
+    // 只接受本站、本文件自己的下载路径。
+    try {
+      startOemDownload(session.url, file.id)
+    } catch {
       Message.error('下载地址无效，请刷新后重试')
-      return
     }
-    // The grant cookie is path-scoped and HttpOnly; a plain navigation lets the browser stream the file to disk.
-    window.location.href = target.href
   }
   const preview = (file: TransferFile) => {
     // PDF and images open in-page with the viewer watermark. Other formats are not offered.
@@ -483,7 +484,7 @@ export default function TransferDetailPage() {
         <Descriptions column={2} data={[
           { label: '方向', value: DIRECTION_LABEL[summary.direction] },
           { label: 'OEM 厂商', value: summary.companyName },
-          { label: '发送人', value: `${summary.sender.realName}（${summary.sender.employeeNo}）` },
+          { label: '发送人', value: summary.sender.employeeNo ? `${summary.sender.realName}（${summary.sender.employeeNo}）` : summary.sender.realName },
           { label: '删除策略', value: detail.retention.summary ?? '-' },
           { label: '提交时间', value: summary.sentAt ? fmtTime(summary.sentAt) : '-' },
           { label: '发送时间', value: summary.releasedAt ? fmtTime(summary.releasedAt) : '-' },

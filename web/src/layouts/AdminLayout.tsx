@@ -23,6 +23,7 @@ import http, { withAuthLock, type QuietRequestConfig } from '../api/client'
 import CollaborationNotifications from '../components/CollaborationNotifications'
 import RouteErrorBoundary from '../components/RouteErrorBoundary'
 import type { ApiResponses } from '../api/types'
+import { confirmUploadLeave } from '../components/uploadLeave'
 import AppRail from './AppRail'
 
 const { Sider, Header, Content } = Layout
@@ -158,7 +159,8 @@ export default function AdminLayout() {
               <Menu
                 onClickMenuItem={(k) => {
                   if (k === 'profile') nav('/profile')
-                  if (k === 'logout') doLogout()
+                  // 退出会清掉会话，进行中的上传无法继续：先确认，再退出。
+                  if (k === 'logout') confirmUploadLeave(doLogout)
                 }}
               >
                 <Menu.Item key="profile">

@@ -4,6 +4,9 @@ import { Button, InputNumber, Select, Spin } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../api/client'
 import { init } from '../../vendor/vue-office-pdf/src/main'
 import type { PdfPreviewInstance, PdfZoom } from '../../vendor/vue-office-pdf/src/main'
+import { createPreviewDeadline } from './previewDeadline'
+
+const LOAD_FAILED_MESSAGE = 'PDF 加载失败，文件可能损坏或网络暂时不可用，请重试。'
 
 function PreviewError({ message, onRetry }: { message: string; onRetry: () => void }) {
   return <div className="pdf-preview-status" role="alert">
@@ -42,6 +45,10 @@ function PdfDocument({ fileId, loadContent, onRetry, toolbarContainer }: {
     let active = true
     let viewer: PdfPreviewInstance | null = null
     const controller = new AbortController()
+    // 协作域 PDF：下载按“无进度”计时、渲染另计时，并关掉 HTTP 客户端 60 秒整体超时，大文件慢网也能加载完。
+    const deadline = loadContent
+      ? undefined
+      : createPreviewDeadline(() => { controller.abort(); if (active) setError(LOAD_FAILED_MESSAGE) })
 
     async function load() {
       try {
@@ -52,10 +59,13 @@ function PdfDocument({ fileId, loadContent, onRetry, toolbarContainer }: {
               responseType: 'arraybuffer',
               signal: controller.signal,
               quietNetworkError: true,
+              timeout: 0,
+              onDownloadProgress: event => deadline?.progress(event.loaded),
             } as QuietRequestConfig).then(response => response.data),
           import('./pdfEngine'),
         ])
         if (!active) return
+        deadline?.downloaded()
         viewer = init(previewContainer, {
           openPdf: engine.openPdf,
           onDocumentLoaded: total => {
@@ -78,11 +88,13 @@ function PdfDocument({ fileId, loadContent, onRetry, toolbarContainer }: {
         })
         viewerRef.current = viewer
         await viewer.preview(new Uint8Array(data))
+        deadline?.clear()
       } catch (cause) {
+        deadline?.clear()
         if (active) {
           setError(cause instanceof Error && cause.name === 'PasswordException'
             ? '此 PDF 受密码保护，暂不支持在线预览。'
-            : 'PDF 加载失败，文件可能损坏或网络暂时不可用，请重试。')
+            : LOAD_FAILED_MESSAGE)
         }
       }
     }
@@ -90,6 +102,7 @@ function PdfDocument({ fileId, loadContent, onRetry, toolbarContainer }: {
     void load()
     return () => {
       active = false
+      deadline?.clear()
       controller.abort()
       if (viewerRef.current === viewer) viewerRef.current = null
       void viewer?.destroy()

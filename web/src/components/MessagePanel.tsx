@@ -108,7 +108,8 @@ export default function MessagePanel({
   } = feed
   const feedIdentity = JSON.stringify(feedKey)
   const currentFeedIdentity = useRef(feedIdentity)
-  const draftScopeKey = JSON.stringify([scope, projectId])
+  // 草稿只跟账号和登录代际走：权限、菜单变化（scope 的签名部分）不应清掉正在输入的内容。
+  const draftScopeKey = JSON.stringify([user?.id ?? null, generation, projectId])
   const draftScope = useRef(draftScopeKey)
 
   const canWrite = hasPerm('message:create') && projectStatus !== 'DRAFT' && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
@@ -130,6 +131,7 @@ export default function MessagePanel({
     sentDraft.current = null
     setContent('')
     setImages([])
+    setSignerName('')
   }, [draftScopeKey])
 
   useEffect(() => {

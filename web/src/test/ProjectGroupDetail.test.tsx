@@ -406,6 +406,54 @@ describe('主项目刷新范围', () => {
   })
 })
 
+describe('负责人转交并发', () => {
+  beforeEach(() => {
+    resetSharedMocks()
+    mocks.perms = ['project:transfer']
+    mocks.get.mockReset()
+    mocks.put.mockReset()
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/project-groups/3') return Promise.resolve({ data: { ...detail, group: { ...detail.group, responsibleUserId: 5, responsibleUserName: '原负责人' } } })
+      if (url === '/project-owner-options') return Promise.resolve({ data: [{ id: 21, realName: '新负责人', employeeNo: 'E21', sectionName: null }] })
+      const pane = subprojectGet(url)
+      if (pane) return pane
+      throw new Error(`unexpected GET ${url}`)
+    })
+  })
+
+  async function submitTransfer(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole('button', { name: '更多操作' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: '变更负责人' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('combobox'))
+    fireEvent.click(await screen.findByText('新负责人（E21）'))
+    const loadsBeforeSubmit = mocks.get.mock.calls.filter(([url]) => url === '/project-groups/3').length
+    await user.click(within(dialog).getByRole('button', { name: '确认变更' }))
+    return { dialog, loadsBeforeSubmit }
+  }
+
+  it('sends the responsible user shown on the page as the expected value', async () => {
+    mocks.put.mockResolvedValue({ data: {} })
+    renderPage()
+    await submitTransfer(userEvent.setup())
+
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
+    expect(mocks.put).toHaveBeenCalledWith('/project-groups/3/responsible', { responsibleUserId: 21, expectedResponsibleUserId: 5 })
+  })
+
+  it('a 40903 conflict refreshes the group, keeps the dialog and does not replay the transfer', async () => {
+    mocks.put.mockRejectedValue({ isAxiosError: true, response: { status: 409, data: { code: 40903, message: '负责人已被他人变更，请刷新后重试' } } })
+    renderPage()
+    const groupLoads = () => mocks.get.mock.calls.filter(([url]) => url === '/project-groups/3').length
+    const { dialog, loadsBeforeSubmit } = await submitTransfer(userEvent.setup())
+
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(groupLoads()).toBe(loadsBeforeSubmit + 1))
+    expect(screen.getByRole('dialog')).toBe(dialog)
+    expect(mocks.put).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('子项目编辑并发', () => {
   const T1 = '2026-09-09T00:00:00.123456Z'
   const T2 = '2026-09-09T00:05:00.654321Z'

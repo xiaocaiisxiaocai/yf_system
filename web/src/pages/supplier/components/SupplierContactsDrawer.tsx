@@ -66,6 +66,8 @@ export function SupplierContactsDrawer({ supplier, onClose }: SupplierContactsDr
       }
       setEditOpen(false)
       void load()
+    } catch {
+      // 请求层已提示错误；保留对话框和输入，便于修正后重试。
     } finally {
       saveInFlight.current = false
       setSaving(false)
@@ -81,6 +83,8 @@ export function SupplierContactsDrawer({ supplier, onClose }: SupplierContactsDr
       })
       Message.success(contact.status === 'ACTIVE' ? '联络人已停用' : '联络人已启用')
       void load()
+    } catch {
+      // 请求层已提示错误；按钮在 finally 中恢复，可再次操作。
     } finally {
       setTogglingIds((current) => {
         const next = new Set(current)

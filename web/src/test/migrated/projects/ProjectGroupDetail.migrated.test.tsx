@@ -75,7 +75,7 @@ describe('ProjectGroupDetail migrated behavior', () => {
     start.click()
     start.click()
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
-    expect(mocks.put).toHaveBeenCalledWith('/projects/9/status', { status: 'IN_PROGRESS' })
+    expect(mocks.put).toHaveBeenCalledWith('/projects/9/status', { status: 'IN_PROGRESS', expectedStatus: 'DRAFT' })
     pending.resolve({ data: {} })
     // 面板内的流程操作完成后同时刷新子项目与主项目进度。
     const groupReads = () => mocks.get.mock.calls.filter(([url]) => url === '/project-groups/3').length

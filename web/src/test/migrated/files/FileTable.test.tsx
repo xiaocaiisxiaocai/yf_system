@@ -297,4 +297,34 @@ describe('FileTable DOM contracts', () => {
     view.unmount()
     expect(signals[1].aborted).toBe(true)
   })
+
+  it('a phone-width full page drops secondary columns so direction and actions fit without horizontal scrolling', async () => {
+    const original = globalThis.ResizeObserver
+    class WidthObserver implements ResizeObserver {
+      private readonly callback: ResizeObserverCallback
+      constructor(callback: ResizeObserverCallback) { this.callback = callback }
+      observe(target: Element) {
+        this.callback([{ target, contentRect: { width: 346 } } as ResizeObserverEntry], this)
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', WidthObserver)
+    try {
+      mocks.permissions.add('file:download')
+      const view = await renderTable([row(1, '图纸.pdf', 'pdf', 1024, { direction: 'S2C' })])
+
+      const headers = Array.from(view.container.querySelectorAll('th')).map(cell => cell.textContent)
+      expect(headers).toEqual(expect.arrayContaining(['文件名', '方向', '操作']))
+      expect(headers).not.toContain('大小')
+      expect(headers).not.toContain('上传人')
+      expect(headers).not.toContain('上传时间')
+      expect(view.container.querySelector('.file-table')).toHaveClass('file-table--narrow')
+      expect(view.container.querySelector('.file-table')).not.toHaveClass('file-table--compact')
+      expect(tableRow('图纸.pdf').getByText('供→公')).toBeInTheDocument()
+      expect(tableRow('图纸.pdf').getByRole('button', { name: '下载文件' })).toBeInTheDocument()
+    } finally {
+      vi.stubGlobal('ResizeObserver', original)
+    }
+  })
 })

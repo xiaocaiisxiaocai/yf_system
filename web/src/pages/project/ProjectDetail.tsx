@@ -19,6 +19,7 @@ import MessagePanel from '../../components/MessagePanel'
 import ProjectActivityPanel from '../../components/ProjectActivityPanel'
 import OverdueTag from '../../components/OverdueTag'
 import ProjectWorkflowPanel from '../../components/ProjectWorkflowPanel'
+import { confirmUploadLeave } from '../../components/uploadLeave'
 import { useDisconnectedPoll } from '../../hooks/useDisconnectedPoll'
 import { projectAccessLostStatus, useProjectAccessLost } from '../../hooks/useProjectAccessLost'
 import { useCoalescedRefresh } from '../../hooks/useCoalescedRefresh'
@@ -370,7 +371,8 @@ function ProjectDetailContent({ id }: { id?: string }) {
 
   const switchProject = useCallback((nextId: number) => {
     if (nextId === pid) return
-    navigate(tab === 'files' ? `/projects/${nextId}` : `/projects/${nextId}?tab=${tab}`, { replace: true })
+    // 切换子项目会卸载当前上传器；replace 不经路由层的离开确认，这里显式确认。
+    confirmUploadLeave(() => navigate(tab === 'files' ? `/projects/${nextId}` : `/projects/${nextId}?tab=${tab}`, { replace: true }))
   }, [navigate, pid, tab])
 
   useEffect(() => {

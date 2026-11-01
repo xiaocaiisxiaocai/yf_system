@@ -216,6 +216,38 @@ describe('OEM 门户 HTTP 拦截器', () => {
     expect(usePortalAuth.getState()).toMatchObject({ token: null, account: null, booted: true, generation: 5 })
   })
 
+  it('刷新请求本身网络中断或服务端 5xx：保留会话，不退出也不跳转', async () => {
+    const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
+    const post = vi.spyOn(axios, 'post').mockRejectedValue(new AxiosError('Network Error', 'ERR_NETWORK'))
+    const adapter: AxiosAdapter = async (config) => { throw httpError(config, 401, { message: '登录已过期' }) }
+
+    await expect(portalHttp.get('/oem/transfers', { adapter })).rejects.toBeTruthy()
+
+    expect(usePortalAuth.getState()).toMatchObject({ token: 'old-token', account: { id: 31 }, generation: 4 })
+    expect(window.location.pathname).toBe('/oem-portal/transfers')
+    expect(toast).toHaveBeenCalledOnce()
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    post.mockImplementation(async (url) => { throw httpError({ url, headers: {} } as InternalAxiosRequestConfig, 503, {}) })
+    await expect(portalHttp.get('/oem/transfers', { adapter })).rejects.toBeTruthy()
+    expect(usePortalAuth.getState()).toMatchObject({ token: 'old-token', account: { id: 31 }, generation: 4 })
+  })
+
+  it('启动恢复时刷新请求网络中断不退出，刷新被拒才退出', async () => {
+    vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
+    const post = vi.spyOn(axios, 'post').mockRejectedValue(new AxiosError('Network Error', 'ERR_NETWORK'))
+    usePortalAuth.setState({ token: null, account: { id: 31 } as PortalAccount, booted: false, generation: 4 })
+
+    await bootPortalSession()
+    expect(usePortalAuth.getState()).toMatchObject({ token: null, booted: true, generation: 4, account: { id: 31 } })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    post.mockImplementation(async (url) => { throw httpError({ url, headers: {} } as InternalAxiosRequestConfig, 401, {}) })
+    usePortalAuth.setState({ booted: false })
+    await bootPortalSession()
+    expect(usePortalAuth.getState()).toMatchObject({ token: null, account: null, booted: true, generation: 5 })
+  })
+
   it('40303 进入修改密码且不弹出错误', async () => {
     const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
     // location.href 是不可配置的实例属性；jsdom 也不实现跨文档导航。拦截真正执行赋值的 Location 实现。

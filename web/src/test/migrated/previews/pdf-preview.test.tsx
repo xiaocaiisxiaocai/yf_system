@@ -168,6 +168,37 @@ describe('PDF preview component', () => {
     expect(screen.queryByRole('group', { name: 'PDF 阅读控制' })).not.toBeInTheDocument()
   })
 
+  it('collaboration PDF requests drop the 60s HTTP timeout and renew the stall deadline on progress', async () => {
+    configureViewer()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const request = deferred<{ data: ArrayBuffer }>()
+      let signal: AbortSignal | undefined
+      let onProgress: ((event: { loaded: number }) => void) | undefined
+      mocks.get.mockImplementation((_url, options) => {
+        signal = options.signal
+        onProgress = options.onDownloadProgress
+        return request.promise
+      })
+      render(<PdfPreview fileId={31} />)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(mocks.get).toHaveBeenCalledWith('/files/31/content', expect.objectContaining({
+        timeout: 0, onDownloadProgress: expect.any(Function),
+      }))
+
+      await vi.advanceTimersByTimeAsync(50_000)
+      onProgress?.({ loaded: 1024 })
+      await vi.advanceTimersByTimeAsync(50_000)
+      expect(signal?.aborted).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(10_001)
+      expect(signal?.aborted).toBe(true)
+      expect(screen.getByRole('alert')).toHaveTextContent('PDF 加载失败')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('load and page errors stay visible and retry creates a fresh owned viewer', async () => {
     const loadingViewers = configureViewer({ failPreview: true })
     const user = userEvent.setup()

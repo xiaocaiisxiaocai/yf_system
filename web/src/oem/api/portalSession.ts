@@ -111,6 +111,17 @@ type RefreshOutcome = 'ok' | 'denied' | 'unavailable'
 const isAuthFailure = (error: unknown) =>
   axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)
 
+/**
+ * A refresh request that got no definite answer (network, timeout, 429, 5xx) or failed to take the
+ * cross-tab lock says nothing about the cookie, so it must not end the session.
+ */
+function classifyRefreshFailure(error: unknown): RefreshOutcome {
+  if (!axios.isAxiosError(error)) return 'unavailable'
+  const status = error.response?.status
+  if (status === undefined || status === 408 || status === 425 || status === 429 || status >= 500) return 'unavailable'
+  return 'denied'
+}
+
 async function refreshSession(generation = usePortalAuth.getState().generation): Promise<RefreshOutcome> {
   if (usePortalAuth.getState().generation !== generation) return 'denied'
   if (!refreshing || refreshingGeneration !== generation) {
@@ -119,7 +130,7 @@ async function refreshSession(generation = usePortalAuth.getState().generation):
       if (usePortalAuth.getState().generation !== generation) return 'denied'
       const response = await axios.post<ApiResponses['POST /oem/auth/refresh']>('/api/v1/oem/auth/refresh', null, { withCredentials: true, timeout: REFRESH_TIMEOUT_MS })
       const token = response.data?.accessToken
-      if (typeof token !== 'string' || token.length === 0) throw new Error('OEM 刷新响应格式无效')
+      if (typeof token !== 'string' || token.length === 0) return 'denied'
       let me: { data?: ApiResponses['GET /oem/auth/me'] }
       try {
         me = await axios.get<ApiResponses['GET /oem/auth/me']>('/api/v1/oem/auth/me', { headers: { Authorization: `Bearer ${token}` }, timeout: REFRESH_TIMEOUT_MS })
@@ -139,7 +150,7 @@ async function refreshSession(generation = usePortalAuth.getState().generation):
       usePortalAuth.getState().setLogin(token, me.data.account, me.data.mustChangePassword, false)
       return 'ok'
     })
-    .catch((): RefreshOutcome => 'denied')
+    .catch(classifyRefreshFailure)
     .finally(() => setTimeout(() => { if (refreshing === pending) refreshing = null }, 0))
     refreshing = pending
   }

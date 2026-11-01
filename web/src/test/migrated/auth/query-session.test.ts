@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { MutationObserver } from '@tanstack/react-query'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { bindQuerySessionLifecycle, createAppQueryClient, createSessionQueryScope } from '../../../api/queryClient'
 import { useAuth } from '../../../store/auth'
 
@@ -43,5 +44,25 @@ describe('server query session boundary', () => {
     expect(createSessionQueryScope(original)).toEqual(createSessionQueryScope({ ...original, permissions: ['a', 'b'] }))
     expect(createSessionQueryScope(original)).not.toEqual(createSessionQueryScope({ ...original, user: { id: 2 } }))
     expect(createSessionQueryScope(original)).not.toEqual(createSessionQueryScope({ ...original, generation: 5 }))
+  })
+})
+
+describe('write requests are never auto-replayed', () => {
+  it('a rejected mutation (e.g. 409/40902 lock wait) runs its function exactly once', async () => {
+    vi.useFakeTimers()
+    try {
+      const client = createAppQueryClient()
+      const lockWait = Object.assign(new Error('lock wait'), { response: { status: 409, data: { code: 40902 } } })
+      const mutationFn = vi.fn().mockRejectedValue(lockWait)
+      const observer = new MutationObserver(client, { mutationFn })
+
+      await expect(observer.mutate({ id: 1 })).rejects.toBe(lockWait)
+      await vi.advanceTimersByTimeAsync(60_000)
+
+      expect(mutationFn).toHaveBeenCalledOnce()
+      client.clear()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

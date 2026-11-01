@@ -82,14 +82,15 @@ export default function FileTable({
   const [hostWidth, setHostWidth] = useState(0)
   useLayoutEffect(() => {
     const host = hostRef.current
-    if (!compact || !host || typeof ResizeObserver === 'undefined') return undefined
+    if (!host || typeof ResizeObserver === 'undefined') return undefined
     const observer = new ResizeObserver(([entry]) => setHostWidth(Math.round(entry.contentRect.width)))
     observer.observe(host)
     return () => observer.disconnect()
-  }, [compact])
-  // 宽度未知（首帧或测试环境）时按完整列处理。
-  const compactMedium = compact && hostWidth > 0 && hostWidth < COMPACT_MEDIUM_WIDTH
-  const compactNarrow = compact && hostWidth > 0 && hostWidth < COMPACT_NARROW_WIDTH
+  }, [])
+  // 按表格实际可用宽度取舍列：主项目页的窄面板和手机宽度的整页都走同一套规则，
+  // 避免“方向”被切一半、“操作”要横向滚动才出现。宽度未知（首帧或测试环境）时按完整列处理。
+  const compactMedium = hostWidth > 0 && hostWidth < COMPACT_MEDIUM_WIDTH
+  const compactNarrow = hostWidth > 0 && hostWidth < COMPACT_NARROW_WIDTH
   const [previewToolbar, setPreviewToolbar] = useState<HTMLDivElement | null>(null)
   // 只响应本项目的实时信号；实时连接不可用时才退回全局轮询指纹（任何可见项目的变化都会改变它）。
   const liveActivity = useCollaboration((state) => state.activityRevisions?.[projectId] ?? 0)
@@ -272,7 +273,7 @@ export default function FileTable({
       : 960
 
   return (
-    <div ref={hostRef} className={compact ? 'file-table file-table--compact' : 'file-table'}>
+    <div ref={hostRef} className={`file-table${compact ? ' file-table--compact' : ''}${compactNarrow ? ' file-table--narrow' : ''}`}>
       <Space className="responsive-toolbar" size={compact ? 8 : undefined} style={{ marginBottom: compact ? 8 : 12, width: '100%', justifyContent: 'space-between' }}>
         <Space>
           <Select

@@ -85,6 +85,37 @@ describe('留言撰写、发送与分页', () => {
     await waitFor(() => expect(textbox()).toHaveValue(''))
   })
 
+  it('a permission change keeps the typed draft, while a new login generation clears draft and signature', async () => {
+    const previousUser = messageMocks.user
+    const previousGeneration = messageMocks.generation
+    messageMocks.user = { id: 21, employeeNo: 'shared', realName: '共用账号', userType: 'SUPPLIER' }
+    try {
+      setMessagePermissions('message:create')
+      messageMocks.get.mockResolvedValue(messagePage([]))
+      const view = renderMessagePanel()
+      await screen.findByText('暂无留言')
+      fireEvent.change(screen.getByRole('textbox', { name: '签名' }), { target: { value: '张三' } })
+      fireEvent.change(textbox(), { target: { value: '正在输入的草稿' } })
+
+      // 管理员调整了权限：账号与登录代际不变，草稿和签名保留。
+      setMessagePermissions('message:create', 'message:delete_any')
+      view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" />)
+      await screen.findByText('暂无留言')
+      expect(textbox()).toHaveValue('正在输入的草稿')
+      expect(screen.getByRole('textbox', { name: '签名' })).toHaveValue('张三')
+
+      // 换账号（登录代际变化）：草稿与签名一并清空。
+      messageMocks.user = { id: 22, employeeNo: 'other', realName: '另一账号', userType: 'SUPPLIER' }
+      messageMocks.generation += 1
+      view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" />)
+      await waitFor(() => expect(textbox()).toHaveValue(''))
+      expect(screen.getByRole('textbox', { name: '签名' })).toHaveValue('')
+    } finally {
+      messageMocks.user = previousUser
+      messageMocks.generation = previousGeneration
+    }
+  })
+
   it('confirmed message response appears immediately without refetching or dropping loaded history', async () => {
     setMessagePermissions('message:create')
     const rows = [messageRow(3), messageRow(2), messageRow(1)]
@@ -299,6 +330,30 @@ describe('留言撰写、发送与分页', () => {
       clientMessageId: messageMocks.post.mock.calls[0][1].clientMessageId,
     })
     expect(textbox()).toHaveValue('')
+  })
+
+  it('a 40902 lock-wait failure keeps the draft and the same clientMessageId and is not resent automatically', async () => {
+    setMessagePermissions('message:create')
+    messageMocks.get.mockResolvedValue(messagePage([]))
+    messageMocks.post
+      .mockRejectedValueOnce({ isAxiosError: true, response: { status: 409, data: { code: 40902, message: '系统繁忙，请稍后重试' } } })
+      .mockResolvedValueOnce({ data: messageRow(1, { content: '需要保留的草稿' }) })
+    renderMessagePanel()
+    await screen.findByText('暂无留言')
+    fireEvent.change(textbox(), { target: { value: '需要保留的草稿' } })
+    fireEvent.click(sendButton())
+    await waitFor(() => expect(messageMocks.post).toHaveBeenCalledTimes(1))
+
+    // 失败后不自动重放，草稿保留，发送按钮恢复可用。
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    expect(messageMocks.post).toHaveBeenCalledTimes(1)
+    expect(textbox()).toHaveValue('需要保留的草稿')
+    await waitFor(() => expect(sendButton()).not.toBeDisabled())
+
+    // 用户再次点击才重发，沿用同一 clientMessageId。
+    fireEvent.click(sendButton())
+    await waitFor(() => expect(messageMocks.post).toHaveBeenCalledTimes(2))
+    expect(messageMocks.post.mock.calls[1][1].clientMessageId).toBe(messageMocks.post.mock.calls[0][1].clientMessageId)
   })
 
   it('message images submit atomically, retain failed drafts and suppress duplicate sends', async () => {

@@ -27,10 +27,10 @@ function readError(frame: HTMLIFrameElement): string | null {
   }
 }
 
-function startNativeDownload(path: string) {
+function startFrameDownload(path: string, allowedPath: RegExp) {
   const target = new URL(path, window.location.origin)
   if (target.origin !== window.location.origin
-      || !NATIVE_PATH.test(target.pathname)
+      || !allowedPath.test(target.pathname)
       || target.search.length > 0
       || target.hash.length > 0) {
     throw new Error('服务端返回了无效的下载地址')
@@ -55,6 +55,16 @@ function startNativeDownload(path: string) {
   timer = setTimeout(dispose, FRAME_LIFETIME_MS)
   document.body.appendChild(frame)
   frame.src = target.href
+}
+
+function startNativeDownload(path: string) {
+  startFrameDownload(path, NATIVE_PATH)
+}
+
+/** OEM 下载授权只可能指向这个文件自己的下载路径；其余地址一律拒绝。 */
+export function startOemDownload(path: string, fileId: number | string) {
+  if (!/^[1-9]\d*$/.test(String(fileId))) throw new Error('服务端返回了无效的下载地址')
+  startFrameDownload(path, new RegExp(`^/api/v1/oem/files/${fileId}/download$`))
 }
 
 export async function downloadFile(id: number): Promise<void> {

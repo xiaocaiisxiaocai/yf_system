@@ -604,8 +604,13 @@ export function useMessageCommands() {
 
 export interface MessageSendBody { content: string; clientMessageId: string; signerName?: string }
 
+/** 带图留言的上传可能明显超过默认 60 秒；放宽到 10 分钟仍有上限，避免发送状态永远不结束。clientMessageId 不变，重发保持幂等。 */
+export const MESSAGE_IMAGE_SEND_TIMEOUT_MS = 10 * 60_000
+
 export function startMessageSend(projectId: number, body: FormData | MessageSendBody) {
-  return http.post<Message>(`/projects/${projectId}/messages`, body)
+  return body instanceof FormData
+    ? http.post<Message>(`/projects/${projectId}/messages`, body, { timeout: MESSAGE_IMAGE_SEND_TIMEOUT_MS })
+    : http.post<Message>(`/projects/${projectId}/messages`, body)
 }
 
 export async function refreshReadCounts(feedKey: MessageFeedKey, ids: number[]) {

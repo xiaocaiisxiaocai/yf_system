@@ -8,6 +8,7 @@ import { OEM_UI_ENABLED } from './features'
 import { decideAuthStorageSync } from './store/authStorageSync'
 import RouteErrorBoundary from './components/RouteErrorBoundary'
 import UploadLeaveGuard from './components/UploadLeaveGuard'
+import UploadNavigationGuard from './components/UploadNavigationGuard'
 
 const AdminLayout = lazy(() => import('./layouts/AdminLayout'))
 const Login = lazy(() => import('./pages/Login'))
@@ -129,6 +130,7 @@ export default function App() {
   return (
     <>
     <UploadLeaveGuard />
+    <UploadNavigationGuard>
     <RouteErrorBoundary>
     <Suspense fallback={<PageLoader />}>
       <Routes>
@@ -182,6 +184,7 @@ export default function App() {
       </Routes>
     </Suspense>
     </RouteErrorBoundary>
+    </UploadNavigationGuard>
     </>
   )
 }

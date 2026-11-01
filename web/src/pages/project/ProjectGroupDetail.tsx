@@ -306,13 +306,18 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
     if (!transferTarget || transferInFlight.current) return
     transferInFlight.current = true; setTransferring(true)
     try {
-      await http.put<ApiResponses['PUT /project-groups/{id}/responsible']>(`/project-groups/${groupId}/responsible`, { responsibleUserId: transferTarget })
+      // 以页面当前展示的负责人为期望值：别处已转交时服务端返回 40903，不覆盖他人的转交结果。
+      await http.put<ApiResponses['PUT /project-groups/{id}/responsible']>(`/project-groups/${groupId}/responsible`, {
+        responsibleUserId: transferTarget,
+        expectedResponsibleUserId: group.responsibleUserId,
+      })
       setTransferOpen(false)
       // 转交后仍可访问：主项目创建人或具备查看全部项目权限；否则回到列表，避免停留在无权页面。
       if (hasPerm('project:view_all') || data.group.createdBy === user?.id) { Message.success('负责人已变更'); load() }
       else { Message.success('负责人已变更，您已不再负责该主项目'); navigate('/projects') }
-    } catch {
-      /* 请求错误由统一拦截器提示，保留弹窗供重试。 */
+    } catch (error: unknown) {
+      /* 请求错误由统一拦截器提示，保留弹窗供重试；版本冲突时刷新负责人基线，不自动重放。 */
+      if (isVersionConflict(error)) load()
     } finally { transferInFlight.current = false; setTransferring(false) }
   }
 

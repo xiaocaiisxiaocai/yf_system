@@ -90,16 +90,19 @@ export const MATERIAL_REVIEW: Record<MaterialReviewStatus, ProjectStatusView> = 
   RETURNED: { text: '资料已退回', color: 'red' },
 }
 
+const BUSINESS_UTC_OFFSET_MS = 8 * 3_600_000
+
 /**
  * 未完成（草稿/进行中）且需求完成时间（yyyy-MM-dd）早于今天时返回逾期天数，否则 null。
- * 按浏览器本地日期计算；后端筛选按中国标准时间（UTC+8）。
+ * “今天”按后端业务日（中国标准时间 UTC+8，无夏令时）计算，不随浏览器时区变化。
  */
 export function overdueDays(expectedCompletionDate?: string | null, status?: string | null, now = new Date()): number | null {
   if (!expectedCompletionDate || (status !== 'DRAFT' && status !== 'IN_PROGRESS')) return null
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(expectedCompletionDate)
   if (!match) return null
   const due = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
-  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+  const business = new Date(now.getTime() + BUSINESS_UTC_OFFSET_MS)
+  const today = Date.UTC(business.getUTCFullYear(), business.getUTCMonth(), business.getUTCDate())
   const days = Math.round((today - due) / 86_400_000)
   return days > 0 ? days : null
 }

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Button, Form, Input, Message, Modal, Popconfirm, Space, Spin, Tag, Typography,
 } from '@arco-design/web-react'
@@ -45,6 +45,9 @@ export default function ProjectWorkflowPanel({
   const [reopenVersion, setReopenVersion] = useState<string | null>(null)
   const [reopenForm] = Form.useForm()
   const [localUploadRefresh, setLocalUploadRefresh] = useState(0)
+  // 40903 后对话框保持打开：记下冲突时的项目快照，等刷新后的新项目到达再把期望版本换成新基线。
+  const returnConflictFrom = useRef<Project | null>(null)
+  const reopenConflictFrom = useRef<Project | null>(null)
 
   const beginAction = (action: WorkflowAction) => {
     if (busyRef.current) return false
@@ -70,10 +73,43 @@ export default function ProjectWorkflowPanel({
   const canReturnMaterial = isOwner && materialReview === 'PENDING'
   const canReopen = isOwner && project.status === 'COMPLETED'
 
+  useEffect(() => {
+    const returnFrom = returnConflictFrom.current
+    if (returnFrom && returnFrom !== project) {
+      returnConflictFrom.current = null
+      if (canReturnMaterial && project.latestSupplierFileId) {
+        // 以刷新后的资料版本为新基线；原因文字保留，由负责人重新确认后再次提交。
+        // oxlint-disable-next-line react/set-state-in-effect
+        setReturnFileId(project.latestSupplierFileId)
+      } else {
+        // 项目已不允许退回（状态或资料已变），继续停留没有意义。
+        returnForm.resetFields()
+        // oxlint-disable-next-line react/set-state-in-effect
+        setReturnFileId(null)
+      }
+    }
+    const reopenFrom = reopenConflictFrom.current
+    if (reopenFrom && reopenFrom !== project) {
+      reopenConflictFrom.current = null
+      if (canReopen) {
+        // oxlint-disable-next-line react/set-state-in-effect
+        setReopenVersion(project.updatedAt)
+      } else {
+        reopenForm.resetFields()
+        // oxlint-disable-next-line react/set-state-in-effect
+        setReopenVersion(null)
+      }
+    }
+  }, [project, canReturnMaterial, canReopen, returnForm, reopenForm])
+
   const changeStatus = async (status: 'IN_PROGRESS' | 'TERMINATED') => {
     if (!beginAction(status === 'TERMINATED' ? 'terminate' : 'start')) return
     try {
-      await http.put<ApiResponses['PUT /projects/{id}/status']>(`/projects/${project.id}/status`, { status })
+      await http.put<ApiResponses['PUT /projects/{id}/status']>(`/projects/${project.id}/status`, {
+        status,
+        // 以页面当前展示的状态为期望值：别处已改变状态时由后端以 40903 拒绝，而不是按过期画面执行。
+        expectedStatus: project.status,
+      })
       Message.success(status === 'IN_PROGRESS'
         ? (project.status === 'TERMINATED' ? '项目已重新开始' : '项目已开始')
         : '项目已终止')
@@ -165,9 +201,9 @@ export default function ProjectWorkflowPanel({
       onChanged()
     } catch (error) {
       if (!isVersionConflict(error)) return
-      // 厂商期间又回传了资料：关闭弹窗并刷新，由负责人查看新资料后重新决定。
-      Message.info('厂商回传资料已更新，请查看新资料后再操作')
-      closeReturn()
+      // 厂商期间又回传了资料：保留弹窗和已填原因，刷新项目基线后由负责人查看新资料并重新确认。
+      Message.info('厂商回传资料已更新，请查看新资料后再确认退回')
+      returnConflictFrom.current = project
       onChanged()
     } finally {
       finishAction()
@@ -194,8 +230,9 @@ export default function ProjectWorkflowPanel({
       onChanged()
     } catch (error) {
       if (!isVersionConflict(error)) return
-      Message.info('子项目已被他人修改，请刷新后再操作')
-      closeReopen()
+      // 保留弹窗和已填原因，刷新项目基线后由负责人重新确认再提交。
+      Message.info('子项目已被他人修改，请确认最新状态后再重开')
+      reopenConflictFrom.current = project
       onChanged()
     } finally {
       finishAction()

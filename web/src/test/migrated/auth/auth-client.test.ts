@@ -118,6 +118,9 @@ function rejected(error: unknown) {
   return Promise.resolve(error)
 }
 
+/** 403 的资料刷新在后台进行：等后台请求落定后再断言资料写回的结果。 */
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
 async function forbidden(loaded: Awaited<ReturnType<typeof loadClient>>, url = '/projects') {
   const config = loaded.harness.requestHandlers[0]({ url, headers: {} })
   return loaded.harness.responseFailures[0]({
@@ -180,6 +183,50 @@ describe('auth client migration', () => {
     expect(loaded.auth.useAuth.getState()).toMatchObject({ token: null, user: null, generation: 5 })
   })
 
+  it('boot refresh keeps the persisted session when the refresh request gets no definite answer', async () => {
+    const unavailable = [
+      { isAxiosError: true, message: 'Network Error', code: 'ERR_NETWORK' },
+      { isAxiosError: true, response: { status: 429 } },
+      { isAxiosError: true, response: { status: 502 } },
+      new Error('登录状态协调超时，请稍后重试'),
+    ]
+    for (const failure of unavailable) {
+      const loaded = await loadClient()
+      seedBoot(loaded.auth)
+      loaded.harness.axios.post.mockRejectedValue(failure)
+      await loaded.client.bootAuth()
+      expect(loaded.auth.useAuth.getState()).toMatchObject({ token: null, user: { id: 7 }, booted: true, generation: 4 })
+      expect(loaded.harness.errors).toEqual(['网络错误，暂时无法恢复登录状态，请稍后重试'])
+    }
+  })
+
+  it('boot refresh ends the session when the server rejects the refresh cookie', async () => {
+    for (const status of [401, 403]) {
+      const loaded = await loadClient()
+      seedBoot(loaded.auth)
+      loaded.harness.axios.post.mockRejectedValue({ isAxiosError: true, response: { status } })
+      await loaded.client.bootAuth()
+      expect(loaded.auth.useAuth.getState()).toMatchObject({ token: null, user: null, booted: true, generation: 5 })
+      expect(loaded.harness.errors).toEqual([])
+    }
+  })
+
+  it('a 401 whose refresh gets no definite answer fails that request without signing the user out', async () => {
+    const loaded = await loadClient()
+    seedSession(loaded.auth, 'old-token', 7, 2)
+    window.history.replaceState({}, '', '/projects/1')
+    loaded.harness.axios.post.mockRejectedValue({ isAxiosError: true, message: 'timeout', code: 'ECONNABORTED' })
+    const config = loaded.harness.requestHandlers[0]({ url: '/projects/1', method: 'GET', headers: {} })
+    const error = { config, response: { status: 401, data: { message: 'expired' } }, message: 'expired' }
+
+    await expect(loaded.harness.responseFailures[0](error)).rejects.toBe(error)
+
+    expect(loaded.harness.replays).toEqual([])
+    expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'old-token', user: { id: 7 }, generation: 2 })
+    expect(window.location.pathname).toBe('/projects/1')
+    expect(loaded.harness.errors).toEqual(['网络错误，暂时无法恢复登录状态，请稍后重试'])
+  })
+
   it('a late refresh response cannot restore a session after logout', async () => {
     const loaded = await loadClient()
     seedBoot(loaded.auth)
@@ -209,11 +256,30 @@ describe('auth client migration', () => {
     expect(loaded.harness.axios.get).toHaveBeenCalledTimes(2)
     oldProfile.resolve(profileResponse(1))
     await oldError
+    await settle()
     expect(loaded.auth.useAuth.getState().token).toBe('token-B')
     expect(loaded.auth.useAuth.getState().user?.id).toBe(9)
     newProfile.resolve(profileResponse(2))
     await newError
+    await settle()
     expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'token-B', user: { id: 2 }, generation: 2 })
+  })
+
+  it('a 403 reaches the caller at once while the profile refresh runs in the background', async () => {
+    const loaded = await loadClient()
+    seedSession(loaded.auth)
+    const profile = deferred<ReturnType<typeof profileResponse>>()
+    loaded.harness.axios.get.mockReturnValue(profile.promise)
+    const config = loaded.harness.requestHandlers[0]({ url: '/projects', headers: {} })
+    const error = { config, response: { status: 403, data: { message: 'forbidden' } }, message: 'forbidden' }
+
+    await expect(loaded.harness.responseFailures[0](error)).rejects.toBe(error)
+
+    expect(loaded.harness.axios.get).toHaveBeenCalledOnce()
+    expect(loaded.auth.useAuth.getState().user?.id).toBe(7)
+    profile.resolve(profileResponse(3))
+    await settle()
+    expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'token-A', user: { id: 3 } })
   })
 
   it('same-session concurrent 403 responses share one profile request', async () => {
@@ -226,6 +292,7 @@ describe('auth client migration', () => {
     expect(loaded.harness.axios.get).toHaveBeenCalledOnce()
     profile.resolve(profileResponse(3))
     await Promise.all([first, second])
+    await settle()
     expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'token-A', user: { id: 3 }, generation: 1 })
   })
 
@@ -245,6 +312,7 @@ describe('auth client migration', () => {
     expect(loaded.harness.axios.get).toHaveBeenCalledTimes(2)
     newProfile.resolve(profileResponse(2))
     await Promise.all([current, concurrent])
+    await settle()
     expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'token-B', user: { id: 2 }, generation: 2 })
   })
 
@@ -508,6 +576,7 @@ describe('auth client migration', () => {
     if (profileFirst) {
       profile.resolve(profileResponse(8))
       await denied
+      await settle()
       refresh.resolve({ data: completeRefreshPayload('new-token', 1) })
       await expired
     } else {
@@ -515,6 +584,7 @@ describe('auth client migration', () => {
       await expired
       profile.resolve(profileResponse(8))
       await denied
+      await settle()
     }
 
     expect(loaded.auth.useAuth.getState()).toMatchObject({
@@ -540,6 +610,25 @@ describe('auth client migration', () => {
 
   it('permission profile and token refresh preserve one session (profile first: false)', async () => {
     await verifyProfileAndTokenRefreshRace(false)
+  })
+
+  it('a 409/40902 lock-wait failure is shown once and never replayed, refreshed or turned into a logout', async () => {
+    const loaded = await loadClient()
+    seedSession(loaded.auth, 'token-A', 7, 1)
+    const config = loaded.harness.requestHandlers[0]({ url: '/projects/1/messages', method: 'POST', headers: {} })
+    const error = {
+      config,
+      response: { status: 409, data: { code: 40902, message: '系统繁忙，请稍后重试' } },
+      message: 'conflict',
+    }
+
+    await expect(loaded.harness.responseFailures[0](error)).rejects.toBe(error)
+
+    expect(loaded.harness.replays).toEqual([])
+    expect(loaded.harness.axios.post).not.toHaveBeenCalled()
+    expect(loaded.harness.axios.get).not.toHaveBeenCalled()
+    expect(loaded.harness.errors).toEqual(['系统繁忙，请稍后重试'])
+    expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'token-A', user: { id: 7 }, generation: 1 })
   })
 
   it('the shared client no longer hides obsolete 428 responses', async () => {

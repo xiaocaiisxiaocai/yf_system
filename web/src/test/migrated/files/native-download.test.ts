@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({ post: vi.fn(), error: vi.fn() }))
 vi.mock('../../../api/client', () => ({ default: { post: mocks.post } }))
 vi.mock('@arco-design/web-react', () => ({ Message: { error: mocks.error } }))
 
-import { downloadFile, downloadFiles } from '../../../api/download'
+import { downloadFile, downloadFiles, startOemDownload } from '../../../api/download'
 
 const handle = '0123456789abcdef0123456789abcdef'
 const frames = () => Array.from(document.querySelectorAll<HTMLIFrameElement>('iframe.native-download-frame'))
@@ -91,5 +91,45 @@ describe('native authenticated downloads', () => {
 
     expect(mocks.post).toHaveBeenNthCalledWith(1, '/files/batch-download-grant', { ids: [7, 9] })
     expect(frames()).toHaveLength(1)
+  })
+
+  describe('OEM 下载授权', () => {
+    it('只接受该文件自己的下载路径，并经隐藏 iframe 下载而不是整页导航', () => {
+      startOemDownload('/api/v1/oem/files/301/download', 301)
+
+      const [frame] = frames()
+      expect(frame.src).toBe(`${window.location.origin}/api/v1/oem/files/301/download`)
+      expect(frame.hidden).toBe(true)
+    })
+
+    it('OEM 下载失败的 JSON 错误页只提示原因，不跳转页面', () => {
+      startOemDownload('/api/v1/oem/files/301/download', 301)
+      const [frame] = frames()
+      const before = window.location.href
+
+      failWith(frame, JSON.stringify({ code: 40401, message: '文件已被清理' }))
+
+      expect(mocks.error).toHaveBeenCalledWith('文件已被清理')
+      expect(frame.isConnected).toBe(false)
+      expect(window.location.href).toBe(before)
+    })
+
+    it.each([
+      ['https://attacker.invalid/api/v1/oem/files/301/download'],
+      ['/api/v1/oem/files/302/download'],
+      ['/api/v1/oem/files/301/download?x=1'],
+      ['/api/v1/oem/files/301/download#frag'],
+      ['/api/v1/oem/files/301/download/extra'],
+      ['/api/v1/files/301/native-download/' + handle],
+      ['//attacker.invalid/api/v1/oem/files/301/download'],
+    ])('拒绝不符合期望形态的地址 %s', (url) => {
+      expect(() => startOemDownload(url, 301)).toThrow('服务端返回了无效的下载地址')
+      expect(frames()).toHaveLength(0)
+    })
+
+    it('拒绝非法的文件编号', () => {
+      expect(() => startOemDownload('/api/v1/oem/files/0/download', 0)).toThrow('服务端返回了无效的下载地址')
+      expect(() => startOemDownload('/api/v1/oem/files/1.*/download', '1.*')).toThrow('服务端返回了无效的下载地址')
+    })
   })
 })
