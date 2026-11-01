@@ -75,6 +75,8 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
             .FromSqlInterpolated($"SELECT * FROM departments WHERE id = {id} FOR UPDATE")
             .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         LeaderView? leader = null;
+        // Leaders receive OEM approval nodes; appointing oneself would route approvals to the appointer.
+        if (leaderUserId == actor.Id) throw ApiException.BadRequest("不能把自己设为部门主管");
         if (leaderUserId is ulong userId)
         {
             leader = await context.Users.AsNoTracking().Where(user => user.Id == userId)

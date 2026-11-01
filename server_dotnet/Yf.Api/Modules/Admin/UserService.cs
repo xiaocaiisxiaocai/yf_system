@@ -193,6 +193,8 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
 
     public async Task ResetPasswordAsync(CurrentUser actor, ulong id, string password, CancellationToken ct)
     {
+        // Changing one's own password must prove the old one (self-service); a stolen access token must not skip that.
+        if (id == actor.Id) throw ApiException.BadRequest("不能重置自己的密码，请在个人设置中修改密码");
         PasswordService.Validate(password);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await ManagementAuthorization.PrecheckAsync(context, actor, "user:manage", ct);

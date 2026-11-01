@@ -34,6 +34,9 @@ public sealed class AdminLifecycleTests
         var departmentError = await Assert.ThrowsAsync<ApiException>(
             () => users.SetStatusAsync(actor, 7002, "ACTIVE", ct));
         Assert.Equal("组织已被禁用", departmentError.Message);
+        // Resetting one's own password would skip the old-password check of self-service change.
+        var selfReset = await Assert.ThrowsAsync<ApiException>(() => users.ResetPasswordAsync(actor, actor.Id, "New#2026pass", ct));
+        Assert.Equal(400, selfReset.Status);
 
         await using var conn = await database.Database.OpenAsync(ct);
         Assert.Equal("DISABLED", await conn.QuerySingleAsync<string>(

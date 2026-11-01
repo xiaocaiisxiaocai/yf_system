@@ -159,6 +159,8 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var term = string.IsNullOrWhiteSpace(keyword) ? null : keyword.Trim();
         var query = context.Roles.AsNoTracking().Where(role => role.Status == AccountStatuses.Active
             && !(role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator)
+            && !context.UserRoles.Any(ur => ur.RoleId == role.Id
+                && context.Users.Any(user => user.Id == ur.UserId && user.UserType == UserTypes.Internal))
             && !context.RolePermissions.Where(rp => rp.RoleId == role.Id)
                 .Join(context.Permissions, rp => rp.PermissionId, p => p.Id, (_, p) => p.Code)
                 .Any(code => !Enumerable.Contains(allowed, code))
@@ -316,6 +318,10 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var role = await context.Roles.AsNoTracking().SingleOrDefaultAsync(x => x.Id == roleId, ct) ?? throw ApiException.BadRequest($"角色不存在: {roleId}");
         if (role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator) throw ApiException.BadRequest("系统管理员角色不能绑定供应商账号");
         if (role.Status != AccountStatuses.Active) throw ApiException.BadRequest("不能绑定已禁用的角色");
+        // A supplier binding confines the role to supplier permissions; a role internal staff hold must not be frozen that way.
+        if (await context.UserRoles.AnyAsync(x => x.RoleId == roleId
+                && context.Users.Any(user => user.Id == x.UserId && user.UserType == UserTypes.Internal), ct))
+            throw ApiException.BadRequest("该角色已分配给公司内部账号，不能绑定供应商账号");
         var codes = await context.RolePermissions.Where(x => x.RoleId == roleId)
             .Join(context.Permissions, x => x.PermissionId, x => x.Id, (_, permission) => permission.Code).ToArrayAsync(ct);
         if (!RoleService.IsSupplierAccountPermissionSetAllowed(codes)) throw ApiException.BadRequest("供应商账号角色只能包含供应商自有项目所需权限");

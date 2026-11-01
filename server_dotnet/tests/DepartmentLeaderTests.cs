@@ -77,6 +77,10 @@ public sealed class DepartmentLeaderTests
         await manager.PutAsync(
             $"/api/v1/admin/departments/{org.Section}/leader", new { leaderUserId = supplierId }, ct)
             .Status(HttpStatusCode.BadRequest);
+        // Appointing oneself would route OEM leader approvals to the appointer.
+        await manager.PutAsync(
+            $"/api/v1/admin/departments/{org.Section}/leader", new { leaderUserId = managerId }, ct)
+            .Status(HttpStatusCode.BadRequest);
 
         await manager.PutAsync(
             $"/api/v1/admin/departments/{org.Section}/leader", new { leaderUserId = candidateId }, ct).Ok();
