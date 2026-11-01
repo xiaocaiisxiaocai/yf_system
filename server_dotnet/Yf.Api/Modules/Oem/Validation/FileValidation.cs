@@ -42,7 +42,7 @@ public sealed record ValidationTarget(string Path, string Sha256, ulong Size);
 /// the content signature agrees with the extension, and enforces archive structure and
 /// expansion limits. It does not perform or claim malware detection.
 /// </summary>
-public sealed class OemFileValidationPipeline
+public sealed class OemFileValidationPipeline(ILogger<OemFileValidationPipeline>? logger = null)
 {
     public async Task<ValidationResult> RunAsync(
         ValidationTarget target,
@@ -59,7 +59,7 @@ public sealed class OemFileValidationPipeline
             return ValidationResult.Invalid(signature.Reason ?? "文件内容与扩展名不符");
 
         ArchiveVerdict archive;
-        try { archive = await ArchiveInspector.InspectAsync(target.Path, extension, limits, workDirectory, ct); }
+        try { archive = await ArchiveInspector.InspectAsync(target.Path, extension, limits, workDirectory, ct, logger); }
         catch (InvalidDataException) { archive = new ArchiveVerdict(ArchiveOutcome.Corrupt, "压缩包内容无效"); }
         catch (Exception error) when (IsContentFault(error))
         {

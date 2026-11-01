@@ -144,6 +144,41 @@ public sealed class OemContentRulesTests
         finally { Directory.Delete(work, recursive: true); }
     }
 
+    [Fact]
+    public void SevenZipCoderPropertiesDecodeDecoderMemoryRequirements()
+    {
+        Assert.Equal(0x12345678L, ArchiveInspector.SevenZipDecoderMemoryBytes("LZMA", [0, 0x78, 0x56, 0x34, 0x12]));
+        Assert.Equal(4096L, ArchiveInspector.SevenZipDecoderMemoryBytes("LZMA2", [0]));
+        Assert.Equal(6144L, ArchiveInspector.SevenZipDecoderMemoryBytes("LZMA2", [1]));
+        Assert.Equal(ArchiveInspector.MaxDecoderDictionaryBytes, ArchiveInspector.SevenZipDecoderMemoryBytes("LZMA2", [32]));
+        Assert.True(ArchiveInspector.SevenZipDecoderMemoryBytes("LZMA2", [33]) > ArchiveInspector.MaxDecoderDictionaryBytes);
+        Assert.Equal((long)uint.MaxValue, ArchiveInspector.SevenZipDecoderMemoryBytes("LZMA2", [40]));
+        Assert.Equal(4_194_304L, ArchiveInspector.SevenZipDecoderMemoryBytes("PPMd", [6, 0, 0, 64, 0]));
+        Assert.Null(ArchiveInspector.SevenZipDecoderMemoryBytes("LZMA", [0, 1]));
+        Assert.Null(ArchiveInspector.SevenZipDecoderMemoryBytes("PPMd", [1]));
+        Assert.Null(ArchiveInspector.SevenZipDecoderMemoryBytes("LZMA2", [41]));
+    }
+
+    [Fact]
+    public async Task SevenZipCoderPropertiesAreReadableFromTheArchiveDatabase()
+    {
+        var work = Directory.CreateTempSubdirectory("oem-7z-dictionary-").FullName;
+        try
+        {
+            var path = Path.Combine(work, "fixture.7z");
+            File.WriteAllBytes(path, OemInspectionTests.SevenZip(("a.txt", Content)));
+            await using var archive = await SharpCompress.Archives.ArchiveFactory.OpenAsyncArchive(
+                path, SharpCompress.Readers.ReaderOptions.ForFilePath, TestContext.Current.CancellationToken);
+            await using var reader = await archive.ExtractAllEntriesAsync();
+
+            // If this fails after a SharpCompress upgrade, the production fallback skips
+            // this optimization and the archive must remain bounded by ordinary limits.
+            Assert.True(ArchiveInspector.TrySevenZipMaxDictionaryBytes(archive, out var dictionaryBytes));
+            Assert.InRange(dictionaryBytes, 1L, ArchiveInspector.MaxDecoderDictionaryBytes);
+        }
+        finally { Directory.Delete(work, recursive: true); }
+    }
+
     [Theory]
     [InlineData("invoice\u202Egpj.exe")]
     [InlineData("a\u2066b.pdf")]

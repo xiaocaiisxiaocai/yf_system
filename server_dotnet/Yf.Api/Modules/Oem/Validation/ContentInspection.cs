@@ -1,5 +1,8 @@
 using System.Buffers.Binary;
+using System.Collections;
+using System.Collections.Concurrent;
 using System.IO.Compression;
+using System.Reflection;
 using System.Xml;
 using SharpCompress.Archives;
 using SharpCompress.Common;
@@ -137,7 +140,9 @@ public sealed class ArchiveWorkspaceException(Exception inner) : Exception("OEM 
 /// </summary>
 public static class ArchiveInspector
 {
-    public static async Task<ArchiveVerdict> InspectAsync(string path, string extension, ArchiveLimits limits, string workDirectory, CancellationToken ct)
+    private static readonly ConcurrentDictionary<string, byte> SevenZipReflectionWarnings = new(StringComparer.Ordinal);
+
+    public static async Task<ArchiveVerdict> InspectAsync(string path, string extension, ArchiveLimits limits, string workDirectory, CancellationToken ct, ILogger? logger = null)
     {
         var ext = extension.TrimStart('.').ToLowerInvariant();
         var head = new byte[64];
@@ -149,11 +154,11 @@ public static class ArchiveInspector
         var ooxml = OoxmlPackage.For(ext);
         return detected switch
         {
-            "zip" when ext == "zip" => await InspectZipAsync(path, limits, depth: 1, workDirectory, new Budget(limits), null, ct),
+            "zip" when ext == "zip" => await InspectZipAsync(path, limits, depth: 1, workDirectory, new Budget(limits), null, ct, logger),
             // OOXML containers: encrypted entries or zip bombs are refused. The only nesting allowed is an
             // embedded Office package (a chart's workbook) under */embeddings/, inspected as one more level.
-            "zip" => await InspectZipAsync(path, limits with { MaxDepth = 2 }, depth: 1, workDirectory, new Budget(limits), ooxml, ct),
-            "rar" or "7z" => await InspectSharpArchiveAsync(path, detected, limits, depth: 1, workDirectory, new Budget(limits), ct),
+            "zip" => await InspectZipAsync(path, limits with { MaxDepth = 2 }, depth: 1, workDirectory, new Budget(limits), ooxml, ct, logger),
+            "rar" or "7z" => await InspectSharpArchiveAsync(path, detected, limits, depth: 1, workDirectory, new Budget(limits), ct, logger),
             _ => await ContainsEmbeddedArchiveAsync(path, ct)
                 ? new ArchiveVerdict(ArchiveOutcome.Forbidden, "文件中夹带了压缩包数据，禁止传递")
                 : ArchiveVerdict.NotArchive,
@@ -356,12 +361,7 @@ public static class ArchiveInspector
     /// </summary>
     internal const long MaxDecoderDictionaryBytes = 256L * 1024 * 1024;
 
-    /// <summary>
-    /// The window size a RAR entry header declares, or null when it cannot be read. SharpCompress 0.50.4 keeps it
-    /// on an internal header type, so it is read reflectively; a library change that removes it only disables the
-    /// check (the test suite asserts it still resolves for the pinned version). 7z coder properties are not
-    /// reachable through the library at all, so 7z dictionaries are bounded only by the existing memory handling.
-    /// </summary>
+    /// <summary>The window size a RAR entry header declares, or null when it cannot be read.</summary>
     internal static long? RarWindowSize(IEntry entry)
     {
         try
@@ -380,6 +380,93 @@ public static class ArchiveInspector
                 if (type.GetProperty(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
                         | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly) is { } property)
                     return property.GetValue(instance);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Decodes a declared 7z decoder memory requirement for the two supported dictionary coders.
+    /// Returns null for unknown coders or malformed coder properties.
+    /// </summary>
+    internal static long? SevenZipDecoderMemoryBytes(string coder, ReadOnlySpan<byte> properties)
+    {
+        if (coder.Equals("LZMA", StringComparison.OrdinalIgnoreCase))
+        {
+            if (properties.Length < 5) return null;
+            return BinaryPrimitives.ReadUInt32LittleEndian(properties[1..5]);
+        }
+
+        if (coder.Equals("PPMd", StringComparison.OrdinalIgnoreCase))
+        {
+            if (properties.Length < 5) return null;
+            return BinaryPrimitives.ReadUInt32LittleEndian(properties[1..5]);
+        }
+
+        if (!coder.Equals("LZMA2", StringComparison.OrdinalIgnoreCase) || properties.IsEmpty)
+            return null;
+        var value = properties[0];
+        if (value > 40) return null;
+        if (value == 40) return uint.MaxValue;
+        return (long)(2 | (value & 1)) << (value / 2 + 11);
+    }
+
+    /// <summary>
+    /// Reads the 7z coder properties from SharpCompress's internal archive database.
+    /// The test suite guards these reflected members against SharpCompress upgrades.
+    /// </summary>
+    internal static bool TrySevenZipMaxDictionaryBytes(object archive, out long maximum)
+    {
+        maximum = 0;
+        try
+        {
+            var database = ReadMember(archive, "_database");
+            var folders = database is null ? null : ReadMember(database, "_folders") as IEnumerable;
+            if (folders is null) return false;
+
+            foreach (var folder in folders)
+            {
+                if (folder is null) return false;
+                var coders = ReadMember(folder, "_coders") as IEnumerable;
+                if (coders is null) return false;
+                foreach (var coder in coders)
+                {
+                    if (coder is null) return false;
+                    var method = ReadMember(coder, "_methodId");
+                    var methodIdObject = method is null ? null : ReadMember(method, "_id");
+                    if (methodIdObject is null) return false;
+                    var methodId = Convert.ToUInt64(methodIdObject, System.Globalization.CultureInfo.InvariantCulture);
+                    string? name = methodId switch
+                    {
+                        0x030101UL => "LZMA",
+                        0x21UL => "LZMA2",
+                        0x030401UL => "PPMd",
+                        _ => null,
+                    };
+                    if (name is null) continue;
+
+                    if (ReadMember(coder, "_props") is not byte[] properties) return false;
+                    var size = SevenZipDecoderMemoryBytes(name, properties);
+                    if (size is null) return false;
+                    maximum = Math.Max(maximum, size.Value);
+                }
+            }
+            return true;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException and not StackOverflowException)
+        {
+            maximum = 0;
+            return false;
+        }
+
+        static object? ReadMember(object instance, string name)
+        {
+            for (var type = instance.GetType(); type is not null; type = type.BaseType)
+            {
+                var field = type.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+                if (field is not null) return field.GetValue(instance);
+                var property = type.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+                if (property is not null) return property.GetValue(instance);
+            }
             return null;
         }
     }
@@ -507,7 +594,8 @@ public static class ArchiveInspector
         string workDirectory,
         Budget budget,
         OoxmlPackage? ooxml,
-        CancellationToken ct)
+        CancellationToken ct,
+        ILogger? logger)
     {
         if (depth > limits.MaxDepth) return new(ArchiveOutcome.LimitExceeded, "压缩包嵌套层级超出限制");
         var remaining = Math.Max(0, limits.MaxEntries - budget.Entries);
@@ -557,7 +645,7 @@ public static class ArchiveInspector
                 {
                     await using var input = entry.Open();
                     var verdict = await InspectEntryAsync(input, entry.FullName, entry.Length,
-                        nestedAllowed: ooxml is null || IsEmbeddedOfficePart(entry.FullName), limits, depth, workDirectory, budget, ct);
+                        nestedAllowed: ooxml is null || IsEmbeddedOfficePart(entry.FullName), limits, depth, workDirectory, budget, ct, logger);
                     if (verdict.Outcome is not ArchiveOutcome.Accepted) return verdict;
                 }
                 catch (ArchiveLimitException ex) { return new(ArchiveOutcome.LimitExceeded, ex.Message); }
@@ -638,13 +726,14 @@ public static class ArchiveInspector
         int depth,
         string workDirectory,
         Budget budget,
-        CancellationToken ct)
+        CancellationToken ct,
+        ILogger? logger)
     {
         if (depth > limits.MaxDepth) return new(ArchiveOutcome.LimitExceeded, "压缩包嵌套层级超出限制");
         try
         {
             if (detectedType == "rar")
-                return await InspectRarArchiveAsync(path, limits, depth, workDirectory, budget, ct);
+                return await InspectRarArchiveAsync(path, limits, depth, workDirectory, budget, ct, logger);
 
             await using var archive = await ArchiveFactory.OpenAsyncArchive(path, ReaderOptions.ForFilePath, ct);
             if (archive.Type != ArchiveType.SevenZip)
@@ -662,6 +751,17 @@ public static class ArchiveInspector
             // preceding data outside the actual-byte budget.
             await using (var reader = await archive.ExtractAllEntriesAsync())
             {
+                if (!TrySevenZipMaxDictionaryBytes(archive, out var maxDictionaryBytes))
+                {
+                    var archiveType = archive.GetType().FullName ?? archive.GetType().Name;
+                    if (logger is not null && SevenZipReflectionWarnings.TryAdd(archiveType, 0))
+                        logger.LogWarning("Could not read 7z coder properties from SharpCompress type {ArchiveType}; dictionary-size validation is skipped.", archiveType);
+                }
+                else if (maxDictionaryBytes > MaxDecoderDictionaryBytes)
+                {
+                    return OversizedDictionary;
+                }
+
                 while (await reader.MoveToNextEntryAsync(ct))
                 {
                     var entry = reader.Entry;
@@ -684,7 +784,7 @@ public static class ArchiveInspector
                         continue;
                     }
                     await using var input = await reader.OpenEntryStreamAsync(ct);
-                    var verdict = await InspectEntryAsync(input, entry.Key, entry.Size, nestedAllowed: true, limits, depth, workDirectory, budget, ct);
+                    var verdict = await InspectEntryAsync(input, entry.Key, entry.Size, nestedAllowed: true, limits, depth, workDirectory, budget, ct, logger);
                     if (verdict.Outcome is not ArchiveOutcome.Accepted) return verdict;
                 }
             }
@@ -706,7 +806,8 @@ public static class ArchiveInspector
         int depth,
         string workDirectory,
         Budget budget,
-        CancellationToken ct)
+        CancellationToken ct,
+        ILogger? logger)
     {
         ct.ThrowIfCancellationRequested();
         // SharpCompress 0.50.4's asynchronous RAR metadata methods use separate
@@ -731,7 +832,7 @@ public static class ArchiveInspector
             using var reader = archive.ExtractAllEntries();
             while (reader.MoveToNextEntry())
             {
-                var verdict = await InspectRarEntryAsync(reader.Entry, reader.OpenEntryStream, names, limits, depth, workDirectory, budget, ct);
+                var verdict = await InspectRarEntryAsync(reader.Entry, reader.OpenEntryStream, names, limits, depth, workDirectory, budget, ct, logger);
                 if (verdict is not null) return verdict;
                 archiveExpanded += reader.Entry.Size;
             }
@@ -740,7 +841,7 @@ public static class ArchiveInspector
         {
             foreach (var entry in archive.Entries)
             {
-                var verdict = await InspectRarEntryAsync(entry, entry.OpenEntryStream, names, limits, depth, workDirectory, budget, ct);
+                var verdict = await InspectRarEntryAsync(entry, entry.OpenEntryStream, names, limits, depth, workDirectory, budget, ct, logger);
                 if (verdict is not null) return verdict;
                 archiveExpanded += entry.Size;
             }
@@ -763,7 +864,8 @@ public static class ArchiveInspector
         int depth,
         string workDirectory,
         Budget budget,
-        CancellationToken ct)
+        CancellationToken ct,
+        ILogger? logger)
     {
         ct.ThrowIfCancellationRequested();
         if (entry.IsEncrypted) return new(ArchiveOutcome.Encrypted, "不允许传递加密的压缩包");
@@ -778,7 +880,7 @@ public static class ArchiveInspector
         if (entry.IsDirectory)
             return entry.Size != 0 ? new(ArchiveOutcome.Corrupt, "压缩包目录条目不能包含文件内容") : null;
         await using var input = open();
-        var verdict = await InspectEntryAsync(input, entry.Key, entry.Size, nestedAllowed: true, limits, depth, workDirectory, budget, ct);
+        var verdict = await InspectEntryAsync(input, entry.Key, entry.Size, nestedAllowed: true, limits, depth, workDirectory, budget, ct, logger);
         return verdict.Outcome is ArchiveOutcome.Accepted ? null : verdict;
     }
 
@@ -814,7 +916,8 @@ public static class ArchiveInspector
         int depth,
         string workDirectory,
         Budget budget,
-        CancellationToken ct)
+        CancellationToken ct,
+        ILogger? logger)
     {
         var buffer = new byte[64 * 1024];
         var total = 0L;
@@ -871,8 +974,8 @@ public static class ArchiveInspector
             if (total != declaredLength)
                 return new(ArchiveOutcome.Corrupt, "压缩包条目实际大小与记录不符");
             return detected == "zip"
-                ? await InspectZipAsync(temp, limits, depth + 1, workDirectory, budget, null, ct)
-                : await InspectSharpArchiveAsync(temp, detected, limits, depth + 1, workDirectory, budget, ct);
+                ? await InspectZipAsync(temp, limits, depth + 1, workDirectory, budget, null, ct, logger)
+                : await InspectSharpArchiveAsync(temp, detected, limits, depth + 1, workDirectory, budget, ct, logger);
         }
         finally { TryDelete(temp); }
     }
