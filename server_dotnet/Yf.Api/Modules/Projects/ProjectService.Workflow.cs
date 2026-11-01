@@ -39,11 +39,32 @@ internal sealed partial class ProjectService
             throw ApiException.Conflict("项目仍有活动上传会话，不能终止");
         }
         await ApplyTransitionAsync(conn, tx, current, project, to, action, null, ip, ct);
+        if (action is "START" or "RESTART")
+        {
+            await StartMaterialRoundAsync(conn, tx, projectId, ct);
+        }
         await ProjectNotificationService.EnqueueStatusChangeAsync(
             conn, tx, project, action, null, current, options.WebBaseUrl, audit, ct);
         var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
         return result;
+    }
+
+    /// <summary>
+    /// Starts a new material round: supplier files already on the subproject (copied from the source, or returned
+    /// before it was terminated) stay downloadable but are not this round's material, so only a new upload can be
+    /// approved. Reopen keeps the round, since it re-reviews the material the round already produced.
+    /// </summary>
+    private static async Task StartMaterialRoundAsync(MySqlConnection conn, MySqlTransaction tx, ulong projectId, CancellationToken ct)
+    {
+        await using var db = EfDb.Use(conn, tx);
+        var floor = await db.Files.Where(file => file.ProjectId == projectId && file.Direction == "S2C")
+            .MaxAsync(file => (ulong?)file.Id, ct);
+        await db.Projects.Where(item => item.Id == projectId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.MaterialFileFloor, floor)
+                // The transition already stamped updated_at; keep that value instead of ON UPDATE.
+                .SetProperty(item => item.UpdatedAt, item => item.UpdatedAt), ct);
     }
 
     internal const string ResponsibleUserUnavailableStartMessage = "主项目负责人已停用或没有项目列表权限，请先转交主项目后再开始项目";
@@ -129,8 +150,10 @@ internal sealed partial class ProjectService
         await ApplyTransitionAsync(conn, tx, current, project, ProjectStatuses.InProgress, "REOPEN", reason, ip, ct);
         await using var db = EfDb.Use(conn, tx);
         await ProjectGroupService.SyncSubprojectFromGroupAsync(db, project.ProjectGroupId, projectId, ct);
+        var floor = await db.Projects.Where(item => item.Id == projectId).Select(item => item.MaterialFileFloor).SingleAsync(ct);
         var latestSupplierFileId = await db.Files
-            .Where(file => file.ProjectId == projectId && file.Status == FileStatuses.Available && file.Direction == "S2C")
+            .Where(file => file.ProjectId == projectId && file.Status == FileStatuses.Available && file.Direction == "S2C"
+                && (floor == null || file.Id > floor))
             .MaxAsync(file => (ulong?)file.Id, ct);
         if (latestSupplierFileId is not null)
         {

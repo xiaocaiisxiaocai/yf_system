@@ -46,6 +46,7 @@ public sealed class SchemaShapeTests
         "20261031120322_RetireAcceptanceWorkflow",
         "20261031125128_AddProjectNotificationsAndDueReminders",
         "20261031152544_AddStorageLocations",
+        "20261101004904_AddProjectMaterialRound",
     ];
 
     [Fact]

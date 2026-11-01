@@ -64,7 +64,8 @@ internal static class ProjectQueries
             MaterialReviewReason = project.MaterialReviewReason,
             LatestSupplierFileId = project.Status == ProjectStatuses.InProgress
                 ? db.Files.Where(file => file.ProjectId == project.Id && file.Status == FileStatuses.Available
-                        && file.Direction == "S2C")
+                        && file.Direction == "S2C"
+                        && (project.MaterialFileFloor == null || file.Id > project.MaterialFileFloor))
                     .Select(file => (ulong?)file.Id).Max()
                 : null,
             HasCopyHistory = db.ProjectCopies.Any(copy => copy.SourceProjectId == project.Id)
@@ -79,7 +80,8 @@ internal static class ProjectQueries
         from project in db.Projects.AsNoTracking()
         where project.Status == ProjectStatuses.InProgress
         let latestSupplierFileId = db.Files
-            .Where(file => file.ProjectId == project.Id && file.Status == FileStatuses.Available && file.Direction == "S2C")
+            .Where(file => file.ProjectId == project.Id && file.Status == FileStatuses.Available && file.Direction == "S2C"
+                && (project.MaterialFileFloor == null || file.Id > project.MaterialFileFloor))
             .Max(file => (ulong?)file.Id)
         select new MaterialStateRow
         {

@@ -165,12 +165,32 @@ public sealed class ProjectStartPrerequisiteTests
             UPDATE projects SET responsible_user_id=9704 WHERE project_group_id=@GroupId;
             """, new { GroupId = group.Id }, cancellationToken: ct));
 
+        // Material returned in an earlier round stays on the subproject but is not this round's material.
+        await conn.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status)
+            VALUES(@ProjectId,9714,'S2C','old.txt','round-old.txt','txt',1,'files/round-old.txt','AVAILABLE')
+            """, new { ProjectId = projectIds[1] }, cancellationToken: ct));
+        var oldFileId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT LAST_INSERT_ID()", cancellationToken: ct));
         var restarted = await SetStatusAsync(
             projects, conn, actor, projectIds[1], ProjectStatuses.InProgress, ct);
         Assert.Equal(ProjectStatuses.InProgress, restarted.Status);
         Assert.Equal(ProjectStatuses.InProgress, await conn.ExecuteScalarAsync<string>(new CommandDefinition(
             "SELECT status FROM project_groups WHERE id=@GroupId",
             new { GroupId = group.Id }, cancellationToken: ct)));
+        Assert.Equal(MaterialReviewStatuses.NoMaterial, restarted.MaterialReviewStatus);
+        Assert.Null(restarted.LatestSupplierFileId);
+        var oldRound = await Assert.ThrowsAsync<ApiException>(() => projects.ApproveMaterialsAsync(conn, actor, projectIds[1],
+            new ProjectMaterialReviewRequest { ExpectedSupplierFileId = oldFileId }, null, ct));
+        Assert.Equal(409, oldRound.Status);
+
+        await conn.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status)
+            VALUES(@ProjectId,9714,'S2C','new.txt','round-new.txt','txt',1,'files/round-new.txt','AVAILABLE')
+            """, new { ProjectId = projectIds[1] }, cancellationToken: ct));
+        var newFileId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("SELECT LAST_INSERT_ID()", cancellationToken: ct));
+        var detail = await projects.DetailAsync(conn, actor, projectIds[1], ct);
+        Assert.Equal(MaterialReviewStatuses.Pending, detail.MaterialReviewStatus);
+        Assert.Equal(newFileId, detail.LatestSupplierFileId);
     }
 
     private static async Task AssertStartRejectedWithoutSideEffectsAsync(

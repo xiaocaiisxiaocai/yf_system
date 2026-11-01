@@ -835,6 +835,10 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(128)")
                         .HasColumnName("machine_model");
 
+                    b.Property<ulong?>("MaterialFileFloor")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("material_file_floor");
+
                     b.Property<ulong?>("MaterialReviewFileId")
                         .HasColumnType("bigint unsigned")
                         .HasColumnName("material_review_file_id");

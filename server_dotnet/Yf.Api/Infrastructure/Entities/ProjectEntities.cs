@@ -84,6 +84,8 @@ public sealed class Project
     public DateOnly? DueSoonNotifiedFor { get; set; }
     /// <summary>Due date the overdue reminder was sent for.</summary>
     public DateOnly? OverdueNotifiedFor { get; set; }
+    /// <summary>Highest S2C file id when the subproject last started or restarted; only newer supplier files are this round's material.</summary>
+    public ulong? MaterialFileFloor { get; set; }
 }
 
 public sealed class ProjectWorkOrder
@@ -297,6 +299,7 @@ public sealed class ProjectConfig : IEntityTypeConfiguration<Project>
         b.Property(x => x.MaterialReviewReason).HasColumnName("material_review_reason").HasMaxLength(500);
         b.Property(x => x.DueSoonNotifiedFor).HasColumnName("due_soon_notified_for").HasColumnType("date");
         b.Property(x => x.OverdueNotifiedFor).HasColumnName("overdue_notified_for").HasColumnType("date");
+        b.Property(x => x.MaterialFileFloor).HasColumnName("material_file_floor");
         b.HasIndex(x => x.Name).IsUnique().HasDatabaseName("uk_projects_name");
         b.HasIndex(x => x.SupplierId).HasDatabaseName("idx_projects_supplier");
         b.HasIndex(x => x.Status).HasDatabaseName("idx_projects_status");

@@ -118,9 +118,9 @@ public sealed class DataQueryPlanEvidenceTests
             SELECT p.id,p.name,p.project_group_id,g.name,p.updated_at
             FROM projects p JOIN project_groups g ON p.project_group_id=g.id
             WHERE p.status='IN_PROGRESS' AND p.responsible_user_id=1
-              AND (SELECT MAX(f.id) FROM files f WHERE f.project_id=p.id AND f.status='AVAILABLE' AND f.direction='S2C') IS NOT NULL
+              AND (SELECT MAX(f.id) FROM files f WHERE f.project_id=p.id AND f.status='AVAILABLE' AND f.direction='S2C' AND (p.material_file_floor IS NULL OR f.id>p.material_file_floor)) IS NOT NULL
               AND NOT (p.material_review_status='RETURNED' AND p.material_review_file_id <=>
-                (SELECT MAX(f.id) FROM files f WHERE f.project_id=p.id AND f.status='AVAILABLE' AND f.direction='S2C'))
+                (SELECT MAX(f.id) FROM files f WHERE f.project_id=p.id AND f.status='AVAILABLE' AND f.direction='S2C' AND (p.material_file_floor IS NULL OR f.id>p.material_file_floor)))
             ORDER BY p.updated_at DESC,p.id DESC LIMIT 20
             """;
         plans["materialPendingCurrent"] = await ExplainAsync(connection, materialPendingSql, ct);
