@@ -28,6 +28,7 @@ public sealed class StorageLocationTests
             Assert.Equal(400, Assert.Throws<ApiException>(() => Validate(Path.Combine(app, "storage"))).Status);
             Assert.Equal(400, Assert.Throws<ApiException>(() => Validate(Path.Combine(current, "nested"))).Status);
             Assert.Equal(400, Assert.Throws<ApiException>(() => Validate(sandbox)).Status);
+            Assert.Equal(400, Assert.Throws<ApiException>(() => Validate(Path.Combine(sandbox, "bad:stream"))).Status);
             var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
             if (windows.Length > 0) Assert.Equal(400, Assert.Throws<ApiException>(() => Validate(Path.Combine(windows, "yf"))).Status);
 

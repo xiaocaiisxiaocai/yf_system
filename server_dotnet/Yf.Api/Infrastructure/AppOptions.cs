@@ -207,7 +207,29 @@ public sealed class AppOptions
                 ?? throw new InvalidOperationException("无法解析存储目录链接。");
             resolved = ResolveComparisonPath(target.FullName, remainingLinks - 1);
         }
-        return Path.GetFullPath(resolved).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        resolved = Path.GetFullPath(resolved);
+        if (OperatingSystem.IsWindows()) resolved = WindowsCanonical(resolved);
+        return resolved.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    /// <summary>
+    /// Rewrites the nearest existing ancestor to the path Windows reports for it (resolving <c>subst</c> drives and
+    /// 8.3 short names) and keeps the not-yet-created remainder.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static string WindowsCanonical(string full)
+    {
+        var existing = full.TrimEnd(Path.DirectorySeparatorChar);
+        var remainder = new Stack<string>();
+        while (!Directory.Exists(existing) && !File.Exists(existing))
+        {
+            var parent = Path.GetDirectoryName(existing);
+            if (parent is null) return full;
+            remainder.Push(Path.GetFileName(existing));
+            existing = parent;
+        }
+        var final = WindowsFinalPath.TryGet(existing);
+        return final is null ? full : Path.Combine([final, .. remainder]);
     }
 }
 

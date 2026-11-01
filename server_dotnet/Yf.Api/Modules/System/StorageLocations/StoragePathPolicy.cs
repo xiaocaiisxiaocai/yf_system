@@ -23,6 +23,11 @@ internal static class StoragePathPolicy
         if (!Path.IsPathFullyQualified(value) || value.IndexOfAny(Path.GetInvalidPathChars()) >= 0
             || value.Split('/', '\\').Any(part => part is "." or ".."))
             throw ApiException.BadRequest("请填写完整的本机绝对路径，例如 D:\\YfData\\storage");
+        // Folder names cannot hold ':' (an alternate data stream) or other reserved characters; without this check
+        // the later directory calls fail with NotSupportedException and surface as 500.
+        var root = Path.GetPathRoot(value) ?? "";
+        if (value[root.Length..].Split('/', '\\').Any(part => part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0))
+            throw ApiException.BadRequest("目录名包含不允许的字符（例如 : * ? \" < > |）");
         var full = Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (full.Length == 0 || string.Equals(full + Path.DirectorySeparatorChar, Path.GetPathRoot(full), PathComparison)
             || string.Equals(full, Path.GetPathRoot(full)?.TrimEnd(Path.DirectorySeparatorChar), PathComparison))
