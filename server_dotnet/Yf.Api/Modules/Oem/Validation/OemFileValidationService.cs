@@ -440,6 +440,11 @@ public sealed class OemPromotionService(
                 failure = renamed && sourceJustValidated
                     ? ValidateTargetSize(target, claim.SizeBytes)
                     : await ValidateTargetAsync(target, claim.SizeBytes, claim.FileSha256, ct);
+            // A storage migration may already have copied the quarantined file into the other root;
+            // that copy now has no owner and would linger until the row is purged.
+            if (failure is null && !lost && storage.Migrating)
+                foreach (var stale in storage.AbsoluteEverywhere(claim.SourcePath).Where(File.Exists))
+                    try { File.Delete(stale); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

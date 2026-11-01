@@ -50,7 +50,9 @@ internal static class FileStorage
     public static string SessionRoot(string primary, string? fallback, string sessionId)
     {
         var root = Root(primary);
-        if (fallback is null || Directory.Exists(SessionDirectory(root, sessionId))) return root;
+        if (fallback is null) return root;
+        // The old root wins while it still holds the session: a copy appearing in the new root must not
+        // move an in-flight upload away from the chunks it already wrote.
         var old = Root(fallback);
         return Directory.Exists(SessionDirectory(old, sessionId)) ? old : root;
     }

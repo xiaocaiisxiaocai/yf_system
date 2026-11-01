@@ -182,13 +182,17 @@ public sealed class StorageMigrationWorker(
         {
             ct.ThrowIfCancellationRequested();
             if (file.Name.EndsWith(TemporarySuffix, StringComparison.Ordinal)) continue;
+            // Upload chunks stay with their session in the old root (FileStorage.SessionRoot); copying them
+            // would only leave stale chunks in the new root.
+            if (InSessionArea(migration, file.FullName)) continue;
             var destination = Destination(migration, file.FullName);
             try
             {
                 var length = file.Length;
                 if (File.Exists(destination))
                 {
-                    if (await SameContentAsync(file.FullName, destination, ct)) progress.CopiedFiles++;
+                    // Copies were verified when written; the delete pass re-hashes before removing the original.
+                    if (new FileInfo(destination).Length == length) progress.CopiedFiles++;
                     else progress.SkippedFiles++;
                 }
                 else
@@ -225,6 +229,14 @@ public sealed class StorageMigrationWorker(
                 TryDelete(file.FullName); // Our own leftovers from an interrupted copy into a cancelled target.
                 continue;
             }
+            if (InSessionArea(migration, file.FullName))
+            {
+                // This pass runs once no session that began in the old root is still active: what is left are
+                // chunks of expired or finished uploads, which nothing can resume.
+                TryDelete(file.FullName);
+                progress.DeletedFiles++;
+                continue;
+            }
             var destination = Destination(migration, file.FullName);
             try
             {
@@ -248,6 +260,14 @@ public sealed class StorageMigrationWorker(
         progress.SkippedFiles = kept.Count;
         await SaveAsync(migration, progress, StoragePhases.Deleting, ct);
         return kept;
+    }
+
+    private static bool InSessionArea(Migration migration, string sourcePath)
+    {
+        if (migration.Kind is not (StorageKinds.Collaboration or StorageKinds.Oem)) return false;
+        var area = migration.Kind == StorageKinds.Oem ? "uploads" : "tmp";
+        var relative = Path.GetRelativePath(migration.Source, sourcePath);
+        return relative.StartsWith(area + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Destination(Migration migration, string sourcePath)
@@ -312,15 +332,16 @@ public sealed class StorageMigrationWorker(
         return Convert.ToHexString(hash.GetHashAndReset());
     }
 
-    private static async Task<bool> SameContentAsync(string left, string right, CancellationToken ct) =>
+    private async Task<bool> SameContentAsync(string left, string right, CancellationToken ct) =>
         new FileInfo(left).Length == new FileInfo(right).Length
         && (await DigestAsync(left, ct)).Equals(await DigestAsync(right, ct), StringComparison.Ordinal);
 
-    private static async Task<string> DigestAsync(string path, CancellationToken ct)
+    /// <summary>Hashes a file at the migration's byte rate, like the copy itself.</summary>
+    private async Task<string> DigestAsync(string path, CancellationToken ct)
     {
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
             BufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        return Convert.ToHexString(await SHA256.HashDataAsync(stream, ct));
+        return await CopyHashingAsync(stream, Stream.Null, ct);
     }
 
     /// <summary>Upload sessions still active whose directory sits in the old root (they keep writing there).</summary>

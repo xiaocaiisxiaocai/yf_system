@@ -93,7 +93,7 @@ public sealed class StorageLocationTests
             var blob = await WriteAsync(oldRoot, Path.Combine("blobs", "sha256", "ab", "cd", "abcd.bin"), 300_000, ct);
             var image = await WriteAsync(oldRoot, Path.Combine("message-images", "2026", "a.png"), 1_000, ct);
             var sessionId = Guid.NewGuid().ToString("D");
-            var chunk = await WriteAsync(oldRoot, Path.Combine("tmp", sessionId, "0.part"), 4_096, ct);
+            await WriteAsync(oldRoot, Path.Combine("tmp", sessionId, "0.part"), 4_096, ct);
             await database.ExecuteAsync($"""
                 SET FOREIGN_KEY_CHECKS=0;
                 INSERT INTO upload_sessions(id,project_id,uploader_id,file_name,file_size,chunk_size,total_chunks,temp_dir,status,expires_at,created_at,updated_at)
@@ -118,6 +118,12 @@ public sealed class StorageLocationTests
             Assert.True(await worker.RunOnceAsync(ct));
             Assert.Equal("WAITING", (await ReadAsync(service, "COLLAB", ct)).Phase);
             Assert.Equal(blob, await DigestAsync(Path.Combine(newRoot, "blobs", "sha256", "ab", "cd", "abcd.bin"), ct));
+            // Chunks stay with their session: copying them would move the upload to the new root mid-way.
+            Assert.False(Directory.Exists(Path.Combine(newRoot, "tmp", sessionId)));
+            Assert.Equal(oldRoot, FileStorage.SessionRoot(options.StorageRoot, options.StorageFallbackRoot, sessionId));
+            Directory.CreateDirectory(Path.Combine(newRoot, "tmp", sessionId));
+            Assert.Equal(oldRoot, FileStorage.SessionRoot(options.StorageRoot, options.StorageFallbackRoot, sessionId));
+            Directory.Delete(Path.Combine(newRoot, "tmp", sessionId));
             // The upload that started in the old root is still active: nothing is deleted yet.
             Assert.True(await worker.RunOnceAsync(ct));
             Assert.Equal("WAITING", (await ReadAsync(service, "COLLAB", ct)).Phase);
@@ -133,7 +139,8 @@ public sealed class StorageLocationTests
             Assert.Null(options.StorageFallbackRoot);
             Assert.Empty(Directory.EnumerateFiles(oldRoot, "*", SearchOption.AllDirectories));
             Assert.Equal(image, await DigestAsync(Path.Combine(newRoot, "message-images", "2026", "a.png"), ct));
-            Assert.Equal(chunk, await DigestAsync(Path.Combine(newRoot, "tmp", sessionId, "0.part"), ct));
+            // The finished session's chunk is deleted, not carried over.
+            Assert.False(File.Exists(Path.Combine(newRoot, "tmp", sessionId, "0.part")));
             await using var conn = await database.Database.OpenAsync(ct);
             Assert.Equal(["STORAGE_MIGRATION_START", "STORAGE_MIGRATION_COMPLETE"], (await conn.QueryAsync<string>(new CommandDefinition(
                 "SELECT action FROM audit_logs WHERE action LIKE 'STORAGE_%' ORDER BY id", cancellationToken: ct))).ToArray());

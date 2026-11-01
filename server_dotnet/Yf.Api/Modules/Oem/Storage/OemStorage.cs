@@ -46,11 +46,14 @@ public sealed class OemStorage(AppOptions options)
         return FileStorage.Root(configured);
     }
 
-    /// <summary>The root holding an existing upload session directory; new sessions use the primary root.</summary>
+    /// <summary>
+    /// The root holding an existing upload session directory; new sessions use the primary root. The old root is
+    /// checked first, so a copy in the new root never moves an in-flight upload away from its chunks.
+    /// </summary>
     private string SessionRoot(string sessionId)
     {
         var roots = Roots();
-        return roots.FirstOrDefault(root => Directory.Exists(Path.Combine(root, UploadsArea, sessionId))) ?? roots[0];
+        return roots.Reverse().FirstOrDefault(root => Directory.Exists(Path.Combine(root, UploadsArea, sessionId))) ?? roots[0];
     }
 
     public string SessionDirectory(string sessionId, bool create, CancellationToken ct)
