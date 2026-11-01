@@ -39,7 +39,9 @@ internal static class ProjectNotificationService
         var safeProjectName = SafeMailLine(project.Name, 100);
         var preview = SafeMailLine(content, 80);
         var suffix = content.EnumerateRunes().Count() > 80 ? "…" : string.Empty;
-        var entry = $"- 留言人：账号 {SafeMailLine(actor.EmployeeNo, 64)}\n  内容：{preview}{suffix}\n  {ProjectUrl(baseUrl, project.Id, "messages", messageId)}\n";
+        // A company sender's employee number is internal data, and its recipients are the supplier side.
+        var sender = actor.IsInternal ? string.Empty : $"留言人：账号 {SafeMailLine(actor.EmployeeNo, 64)}\n  ";
+        var entry = $"- {sender}内容：{preview}{suffix}\n  {ProjectUrl(baseUrl, project.Id, "messages", messageId)}\n";
         var subject = $"[协作平台] 项目「{safeProjectName}」有新留言";
         var body = $"项目：{safeProjectName}\n以下留言请登录平台查看（本邮件由系统自动发送）：\n\n{entry}";
         await using var db = EfDb.Use(conn, tx);
@@ -92,7 +94,9 @@ internal static class ProjectNotificationService
         CancellationToken ct)
     {
         var verb = approved ? "回传资料已确认 OK，子项目已完成" : "回传资料已被退回";
-        var reasonLine = reason is null ? string.Empty : $"\n退回原因：{reason}";
+        // The name and the free-text reason are user input: one line each, so neither can add header-like lines.
+        var safeProjectName = SafeMailLine(project.Name, 100);
+        var reasonLine = reason is null ? string.Empty : $"\n退回原因：{SafeMailLine(reason, 500)}";
         return EnqueueAsync(
             conn,
             tx,
@@ -103,8 +107,8 @@ internal static class ProjectNotificationService
             [],
             false,
             actor.Id,
-            $"[协作平台] 项目「{project.Name}」{verb}",
-            $"项目：{project.Name}\n结果：{verb}\n操作人：账号 {actor.EmployeeNo}{reasonLine}\n\n请登录平台查看：{ProjectUrl(baseUrl, project.Id, "activity")}\n\n（本邮件由系统自动发送）",
+            $"[协作平台] 项目「{safeProjectName}」{verb}",
+            $"项目：{safeProjectName}\n结果：{verb}{reasonLine}\n\n请登录平台查看：{ProjectUrl(baseUrl, project.Id, "activity")}\n\n（本邮件由系统自动发送）",
             ct,
             audit);
     }
@@ -130,7 +134,7 @@ internal static class ProjectNotificationService
             _ => throw new InvalidOperationException($"未知项目状态通知动作: {action}"),
         };
         var safeProjectName = SafeMailLine(project.Name, 100);
-        var reasonLine = reason is null ? string.Empty : $"\n重开原因：{reason}";
+        var reasonLine = reason is null ? string.Empty : $"\n重开原因：{SafeMailLine(reason, 500)}";
         return EnqueueAsync(
             conn,
             tx,
@@ -142,7 +146,7 @@ internal static class ProjectNotificationService
             false,
             actor.Id,
             $"[协作平台] 项目「{safeProjectName}」{verb}",
-            $"项目：{safeProjectName}\n状态：子项目{verb}\n操作人：账号 {actor.EmployeeNo}{reasonLine}\n{hint}\n\n请登录平台查看：{ProjectUrl(baseUrl, project.Id, "activity")}\n\n（本邮件由系统自动发送）",
+            $"项目：{safeProjectName}\n状态：子项目{verb}{reasonLine}\n{hint}\n\n请登录平台查看：{ProjectUrl(baseUrl, project.Id, "activity")}\n\n（本邮件由系统自动发送）",
             ct,
             audit);
     }

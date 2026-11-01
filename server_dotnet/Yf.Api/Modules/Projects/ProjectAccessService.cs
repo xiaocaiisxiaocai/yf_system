@@ -129,34 +129,31 @@ public static class ProjectAccessService
     {
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         await using var db = EfDb.Use(conn, tx);
-        if (forUpdate)
-        {
-            var groupId = await db.Projects.Where(item => item.Id == projectId)
-                .Select(item => (ulong?)item.ProjectGroupId).SingleOrDefaultAsync(ct);
-            if (groupId is null) throw ApiException.NotFound();
-            if (await db.Database.SqlQuery<ulong>(
-                    $"SELECT id AS Value FROM project_groups WHERE id={groupId.Value} FOR UPDATE")
-                    .SingleOrDefaultAsync(ct) == 0)
-                throw ApiException.NotFound();
-            var locked = await db.Database.SqlQuery<LockedProjectAccess>($"""
-                SELECT id AS Id,project_group_id AS ProjectGroupId,supplier_id AS SupplierId,
-                       created_by AS CreatedBy,status AS Status,
-                       responsible_user_id AS ResponsibleUserId
-                FROM projects WHERE id={projectId} FOR UPDATE
-                """).SingleOrDefaultAsync(ct);
-            if (locked is null) throw ApiException.NotFound();
-            return await AuthorizeAsync(db, current, new ProjectAccess(
-                locked.Id, locked.ProjectGroupId, locked.SupplierId, locked.CreatedBy,
-                locked.Status, locked.ResponsibleUserId), ct);
-        }
-        else
-        {
-            var row = await db.Projects.Where(item => item.Id == projectId).Select(item => new ProjectAccess(
-                item.Id, (ulong?)item.ProjectGroupId, item.SupplierId, item.CreatedBy, item.Status,
-                item.ResponsibleUserId)).SingleOrDefaultAsync(ct);
-            if (row is null) throw ApiException.NotFound();
-            return await AuthorizeAsync(db, current, row, ct);
-        }
+        var row = await db.Projects.Where(item => item.Id == projectId).Select(item => new ProjectAccess(
+            item.Id, (ulong?)item.ProjectGroupId, item.SupplierId, item.CreatedBy, item.Status,
+            item.ResponsibleUserId)).SingleOrDefaultAsync(ct);
+        if (row is null) throw ApiException.NotFound();
+        // Scope is checked on an unlocked read first: a caller outside the project's scope must not be
+        // able to queue behind, or hold, the row locks of a project it cannot see.
+        var visible = await AuthorizeAsync(db, current, row, ct);
+        if (!forUpdate) return visible;
+
+        if (row.ProjectGroupId is not ulong groupId) throw ApiException.NotFound();
+        if (await db.Database.SqlQuery<ulong>(
+                $"SELECT id AS Value FROM project_groups WHERE id={groupId} FOR UPDATE")
+                .SingleOrDefaultAsync(ct) == 0)
+            throw ApiException.NotFound();
+        var locked = await db.Database.SqlQuery<LockedProjectAccess>($"""
+            SELECT id AS Id,project_group_id AS ProjectGroupId,supplier_id AS SupplierId,
+                   created_by AS CreatedBy,status AS Status,
+                   responsible_user_id AS ResponsibleUserId
+            FROM projects WHERE id={projectId} FOR UPDATE
+            """).SingleOrDefaultAsync(ct);
+        if (locked is null) throw ApiException.NotFound();
+        // Ownership can change between the unlocked read and the lock, so authorise the locked values again.
+        return await AuthorizeAsync(db, current, new ProjectAccess(
+            locked.Id, locked.ProjectGroupId, locked.SupplierId, locked.CreatedBy,
+            locked.Status, locked.ResponsibleUserId), ct);
     }
 
     private static async Task<ProjectAccess> AuthorizeAsync(

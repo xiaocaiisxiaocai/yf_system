@@ -123,12 +123,26 @@ public sealed class ProjectStatusRequest
 {
     [JsonPropertyName("status")]
     public string? Status { get; init; }
+
+    /// <summary>
+    /// Optional guard: the status the caller saw. When given and the locked subproject has another status the
+    /// change fails with 409 / 40903; null skips the check.
+    /// </summary>
+    [JsonPropertyName("expectedStatus")]
+    public string? ExpectedStatus { get; init; }
 }
 
 public sealed class ProjectGroupTransferRequest
 {
     [JsonPropertyName("responsibleUserId")]
     public ulong? ResponsibleUserId { get; init; }
+
+    /// <summary>
+    /// Optional guard: the responsible user the caller saw. When given and the locked main project has another
+    /// one the transfer fails with 409 / 40903; null skips the check.
+    /// </summary>
+    [JsonPropertyName("expectedResponsibleUserId")]
+    public ulong? ExpectedResponsibleUserId { get; init; }
 }
 
 public sealed class ProjectReopenRequest
@@ -351,8 +365,11 @@ internal static class ProjectJson
         _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
     };
 
-    /// <summary>Common subproject fields shared by list, workflow and write endpoints.</summary>
-    internal static ProjectResponse Project(ProjectRow row) => new()
+    /// <summary>
+    /// Common subproject fields shared by list, workflow and write endpoints. The responsible user's employee
+    /// number is internal data: supplier-side readers pass <paramref name="includeEmployeeNo"/> false and keep the name.
+    /// </summary>
+    internal static ProjectResponse Project(ProjectRow row, bool includeEmployeeNo = true) => new()
     {
         Id = row.Id,
         ProjectGroupId = row.ProjectGroupId,
@@ -370,7 +387,7 @@ internal static class ProjectJson
         RobotPartNumber = row.RobotPartNumber,
         RobotModelName = row.RobotModelName,
         ResponsibleUserId = row.ResponsibleUserId,
-        ResponsibleUserEmployeeNo = row.ResponsibleUserEmployeeNo,
+        ResponsibleUserEmployeeNo = includeEmployeeNo ? row.ResponsibleUserEmployeeNo : null,
         ResponsibleUserName = row.ResponsibleUserName,
         RobotOwnerName = row.RobotOwnerName,
         SectionId = row.SectionId,
@@ -393,7 +410,7 @@ internal static class ProjectJson
         UpdatedAt = Utc(row.UpdatedAt),
     };
 
-    internal static ProjectGroupResponse ProjectGroup(ProjectGroupRow row) => new(
+    internal static ProjectGroupResponse ProjectGroup(ProjectGroupRow row, bool includeEmployeeNo = true) => new(
         row.Id,
         row.Name,
         row.Description,
@@ -408,7 +425,7 @@ internal static class ProjectJson
         row.RobotPartNumber,
         row.RobotModelName,
         row.ResponsibleUserId,
-        row.ResponsibleUserEmployeeNo,
+        includeEmployeeNo ? row.ResponsibleUserEmployeeNo : null,
         row.ResponsibleUserName,
         row.RobotOwnerName,
         row.RobotOwnerContactIds,

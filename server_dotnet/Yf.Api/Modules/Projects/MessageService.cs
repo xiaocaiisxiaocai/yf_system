@@ -140,9 +140,7 @@ internal sealed class MessageService(
                 await using (var tx = await AppDb.BeginTransactionAsync(conn, ct))
                 {
                     var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-                    var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
-                    await AccessService.RequirePermissionAsync(conn, tx, current, "message:create", ct);
-                    await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+                    var project = await LockAuthorizedProjectAsync(conn, tx, current, projectId, ct);
                     await using var db = EfDb.Use(conn, tx);
                     if (clientMessageId is not null)
                     {
@@ -276,9 +274,7 @@ internal sealed class MessageService(
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-        var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
-        await AccessService.RequirePermissionAsync(conn, tx, current, "message:create", ct);
-        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+        var project = await LockAuthorizedProjectAsync(conn, tx, current, projectId, ct);
         await using var db = EfDb.Use(conn, tx);
         var messageId = await db.Messages.AsNoTracking()
             .Where(message => message.ProjectId == projectId
@@ -292,6 +288,20 @@ internal sealed class MessageService(
             conn, tx, db, project, current, existingId, content, signerName, incoming, ct);
         await tx.CommitAsync(ct);
         return response;
+    }
+
+    /// <summary>
+    /// Permission and scope are authorized on an unlocked read before the project row is locked, so a caller outside
+    /// the project's scope cannot queue behind, or hold, its lock; scope is authorized again on the locked values.
+    /// </summary>
+    private static async Task<ProjectRow> LockAuthorizedProjectAsync(
+        MySqlConnection conn, MySqlTransaction tx, CurrentUser current, ulong projectId, CancellationToken ct)
+    {
+        await AccessService.RequirePermissionAsync(conn, tx, current, "message:create", ct);
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+        var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+        return project;
     }
 
     private static bool SameImages(IReadOnlyList<MessageImageRow> incoming, IReadOnlyList<MessageImageRow> existing)
@@ -546,10 +556,12 @@ internal sealed class MessageService(
         var initial = await LoadMessageAsync(conn, null, messageId, false, false, ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-        var project = await LoadProjectAsync(conn, tx, initial.ProjectId, true, ct);
-        var message = await LoadMessageAsync(conn, tx, messageId, true, false, ct);
         AccessService.RequireInternal(current);
         await AccessService.RequirePermissionAsync(conn, tx, current, "message:delete_any", ct);
+        // Scope is authorized before the project and message rows are locked, then again on the locked values.
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, initial.ProjectId, false, ct);
+        var project = await LoadProjectAsync(conn, tx, initial.ProjectId, true, ct);
+        var message = await LoadMessageAsync(conn, tx, messageId, true, false, ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, message.ProjectId, false, ct);
         EnsureWritable(project.Status, posting: false);
         if (message.Status != "NORMAL")

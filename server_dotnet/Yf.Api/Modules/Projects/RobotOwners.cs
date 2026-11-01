@@ -79,20 +79,30 @@ internal static class RobotOwners
             .Where(groupId => db.ProjectGroups.Any(group => group.Id == groupId && group.Status != ProjectStatuses.Completed))
             .ToArrayAsync(ct);
         foreach (var groupId in groupIds)
-        {
-            var names = await (from owner in db.ProjectGroupRobotOwners
-                               join contact in db.SupplierContacts on owner.ContactId equals contact.Id
-                               where owner.ProjectGroupId == groupId
-                               orderby owner.SortNo, owner.ContactId
-                               select contact.Name).ToArrayAsync(ct);
-            var snapshot = string.Join(Separator, names);
-            await db.ProjectGroups.Where(group => group.Id == groupId)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(group => group.RobotOwnerName, snapshot)
-                    // Assigning the column explicitly suppresses its ON UPDATE CURRENT_TIMESTAMP.
-                    .SetProperty(group => group.UpdatedAt, group => group.UpdatedAt), ct);
-            await db.Projects.Where(project => project.ProjectGroupId == groupId && project.Status != ProjectStatuses.Completed)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(project => project.RobotOwnerName, snapshot)
-                    .SetProperty(project => project.UpdatedAt, project => project.UpdatedAt), ct);
-        }
+            await RebuildSnapshotAsync(db, groupId, ct);
+    }
+
+    /// <summary>
+    /// Rewrites one main project's snapshot from the current contact names and copies it to its unfinished
+    /// subprojects. A group without selected contacts (kept from before the contact model) keeps its old name.
+    /// Also used when a reopened subproject brings a frozen, completed main project back to work, so the names
+    /// that were skipped while it was completed are caught up in the same transaction.
+    /// </summary>
+    internal static async Task RebuildSnapshotAsync(YfDbContext db, ulong groupId, CancellationToken ct)
+    {
+        var names = await (from owner in db.ProjectGroupRobotOwners
+                           join contact in db.SupplierContacts on owner.ContactId equals contact.Id
+                           where owner.ProjectGroupId == groupId
+                           orderby owner.SortNo, owner.ContactId
+                           select contact.Name).ToArrayAsync(ct);
+        if (names.Length == 0) return;
+        var snapshot = string.Join(Separator, names);
+        await db.ProjectGroups.Where(group => group.Id == groupId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(group => group.RobotOwnerName, snapshot)
+                // Assigning the column explicitly suppresses its ON UPDATE CURRENT_TIMESTAMP.
+                .SetProperty(group => group.UpdatedAt, group => group.UpdatedAt), ct);
+        await db.Projects.Where(project => project.ProjectGroupId == groupId && project.Status != ProjectStatuses.Completed)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(project => project.RobotOwnerName, snapshot)
+                .SetProperty(project => project.UpdatedAt, project => project.UpdatedAt), ct);
     }
 }

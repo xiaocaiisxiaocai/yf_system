@@ -63,7 +63,8 @@ internal sealed class ProjectGroupService(
         await LoadWorkOrdersAsync(db, rows, ct);
         await LoadGroupUnreadAsync(db, rows, current.Id, ct);
         await tx.CommitAsync(ct);
-        return ProjectJson.Page(rows.Select(ProjectJson.ProjectGroup).ToArray(), total, actualPage, size);
+        return ProjectJson.Page(
+            rows.Select(row => ProjectJson.ProjectGroup(row, current.IsInternal)).ToArray(), total, actualPage, size);
     }
 
     internal async Task<ProjectGroupDetailResponse> DetailAsync(
@@ -81,7 +82,9 @@ internal sealed class ProjectGroupService(
             .OrderBy(project => project.Id).ToArrayAsync(ct);
         await LoadProjectExtrasAsync(db, projects, current.Id, ct);
         await tx.CommitAsync(ct);
-        return new ProjectGroupDetailResponse(ProjectJson.ProjectGroup(group), projects.Select(ProjectJson.Project).ToArray());
+        return new ProjectGroupDetailResponse(
+            ProjectJson.ProjectGroup(group, current.IsInternal),
+            projects.Select(project => ProjectJson.Project(project, current.IsInternal)).ToArray());
     }
 
     internal async Task<ProjectGroupResponse> CreateAsync(
@@ -359,6 +362,9 @@ internal sealed class ProjectGroupService(
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         var access = await ProjectGroupAccessService.RequireViewAsync(conn, tx, current, groupId, true, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:transfer", ct);
+        // Optional guard against the locked row: a caller that decided from a stale owner must refresh.
+        if (request.ExpectedResponsibleUserId is ulong expectedOwnerId && access.ResponsibleUserId != expectedOwnerId)
+            throw ApiException.VersionConflict("主项目负责人已被他人变更，请刷新后重试");
         if (access.ResponsibleUserId == targetId) throw ApiException.BadRequest("新负责人与当前负责人相同");
         await using var db = EfDb.Use(conn, tx);
         var owner = await ProjectService.EligibleOwners(db).Where(row => row.Id == targetId).SingleOrDefaultAsync(ct)

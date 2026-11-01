@@ -47,7 +47,7 @@ internal sealed partial class ProjectService(
             }
         }
         var unreadMessages = await MessageService.UnreadCountAsync(conn, tx, current.Id, projectId, ct);
-        var result = ProjectJson.Project(project) with
+        var result = ProjectJson.Project(project, current.IsInternal) with
         {
             UnreadMessages = unreadMessages,
             CopySource = copySource,
@@ -71,14 +71,16 @@ internal sealed partial class ProjectService(
         ValidateDescription(request.Description);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockBusinessAsync(conn, tx, ct);
-        var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:update", ct);
-        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+        // Scope is authorized before any row lock; the locked values are authorized again inside.
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, true, ct);
+        var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
+        if (request.ExpectedUpdatedAt is not { } expectedUpdatedAt)
+            throw ApiException.BadRequest("expectedUpdatedAt 必须为当前子项目的 updatedAt");
         // Optimistic concurrency against the row locked above: an editor that loaded an older version must
         // refresh instead of silently overwriting someone else's change.
-        if (request.ExpectedUpdatedAt is { } expectedUpdatedAt
-            && ProjectJson.Utc(project.UpdatedAt) != ProjectJson.Utc(expectedUpdatedAt))
+        if (ProjectJson.Utc(project.UpdatedAt) != ProjectJson.Utc(expectedUpdatedAt))
             throw ApiException.VersionConflict(SubprojectChangedMessage);
         if (project.Status is not (ProjectStatuses.Draft or ProjectStatuses.InProgress))
             throw ApiException.Conflict("子项目当前状态不可编辑");
@@ -188,10 +190,10 @@ internal sealed partial class ProjectService(
         await using var blobLeases = await Files.FileBlobStore.AcquireAsync(conn, copiedBlobShas, ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockBusinessAsync(conn, tx, ct);
-        var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:delete", ct);
-        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, true, ct);
+        var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
         ProjectWorkflowRules.EnsureDeletable(project.Status);
         await using var db = EfDb.Use(conn, tx);
         if (await db.ProjectCopyJobs.AnyAsync(job => job.SourceProjectId == projectId

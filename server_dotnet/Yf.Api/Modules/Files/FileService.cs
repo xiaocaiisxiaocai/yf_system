@@ -28,8 +28,13 @@ public sealed class FileService(
         await using var conn = await db.OpenAsync(ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var project = await ProjectAccessService.RequireViewAsync(conn, tx, actor, projectId, ct);
-        await using var ef = EfDb.Use(conn, tx);
         var (page, size, offset) = QueryValues.Page(context.Request);
+        if (HidesDraftFiles(actor, project.Status))
+        {
+            await tx.CommitAsync(ct);
+            return new(Array.Empty<FileListItem>(), 0, page, size);
+        }
+        await using var ef = EfDb.Use(conn, tx);
         var direction = context.Request.Query["direction"].ToString();
         var keyword = context.Request.Query["keyword"].ToString().Trim();
         var targetId = QueryValues.OptionalUInt64(context.Request, "targetId");
@@ -557,9 +562,18 @@ public sealed class FileService(
     private static async Task RequireViewOrNotFoundAsync(
         MySqlConnection conn, MySqlTransaction? tx, CurrentUser actor, ulong projectId, CancellationToken ct)
     {
-        try { await ProjectAccessService.RequireViewAsync(conn, tx, actor, projectId, ct); }
+        ProjectAccess project;
+        try { project = await ProjectAccessService.RequireViewAsync(conn, tx, actor, projectId, ct); }
         catch (ApiException error) when (error.Status == StatusCodes.Status403Forbidden) { throw ApiException.NotFound(); }
+        if (HidesDraftFiles(actor, project.Status)) throw ApiException.NotFound();
     }
+
+    /// <summary>
+    /// A draft subproject passes no material to the supplier ("草稿不传递资料"): files carried in by a copy stay
+    /// internal until START. Every list, download, preview, media, grant and batch path funnels through here.
+    /// </summary>
+    private static bool HidesDraftFiles(CurrentUser actor, string projectStatus) =>
+        !actor.IsInternal && projectStatus == ProjectStatuses.Draft;
 
     private string ResolveExisting(FileRow row, CancellationToken ct)
     {

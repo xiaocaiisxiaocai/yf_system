@@ -238,9 +238,16 @@ public sealed partial class UploadService(
         await using var conn = await db.OpenAsync(ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        // Lock order is main project, subproject, then session (the order merge, claim and init use), so a
+        // concurrent /md5 and /merge on one session cannot deadlock. The project is therefore locked and
+        // authorized from an unlocked read of the session first; the session row is locked afterwards.
+        var initial = await LoadSessionAsync(conn, tx, sessionId, false, ct);
+        if (initial.UploaderId != current.Id) throw ApiException.Forbidden();
+        await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, initial.ProjectId, ct);
         var session = await LoadSessionAsync(conn, tx, sessionId, true, ct);
         if (session.UploaderId != current.Id) throw ApiException.Forbidden();
-        await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, session.ProjectId, ct);
+        if (session.ProjectId != initial.ProjectId)
+            throw ApiException.Conflict("上传会话所属项目已变化，请重新查询");
         if (session.Status != "UPLOADING") throw ApiException.Conflict("会话不可提交完整性摘要");
         if (session.IsExpired) throw ApiException.Conflict("上传会话已过期，请重新发起");
         await using var ef = EfDb.Use(conn, tx);
@@ -301,7 +308,8 @@ public sealed partial class UploadService(
                 row.Status,
                 row.UploaderId,
                 row.UploaderName,
-                row.UploaderEmployeeNo,
+                // A company employee number is internal data: suppliers see the name only.
+                current.IsInternal || row.UploaderUserType == UserTypes.Supplier ? row.UploaderEmployeeNo : string.Empty,
                 row.UploaderUserType,
                 ProjectJson.Utc(row.CreatedAt),
                 ProjectJson.Utc(row.ExpiresAt),

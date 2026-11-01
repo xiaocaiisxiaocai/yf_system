@@ -349,7 +349,8 @@ public sealed partial class UploadService
 
         var safeProjectName = SafeMailLine(projectName, 100);
         var safeFileName = SafeMailLine(fileName, 240);
-        var safeEmployeeNo = SafeMailLine(uploaderEmployeeNo, 64);
+        // Company -> supplier summaries must not carry the company uploader's employee number.
+        var uploaderLine = direction == "C2S" ? string.Empty : $"  上传人：账号 {SafeMailLine(uploaderEmployeeNo, 64)}\n";
         var target = $"{webBaseUrl.Trim().TrimEnd('/')}/projects/{projectId}?tab=files&target={fileId}";
         if (!Uri.TryCreate(target, UriKind.Absolute, out var targetUrl)
             || !targetUrl.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
@@ -357,7 +358,7 @@ public sealed partial class UploadService
             throw new InvalidOperationException("邮件文件链接配置无效");
 
         var directionText = direction == "C2S" ? "公司 → 供应商" : "供应商 → 公司";
-        var entry = $"- {safeFileName}\n  {targetUrl.AbsoluteUri}\n  上传人：账号 {safeEmployeeNo}\n";
+        var entry = $"- {safeFileName}\n  {targetUrl.AbsoluteUri}\n{uploaderLine}";
         var body = $"项目：{safeProjectName}\n方向：{directionText}\n以下文件请登录平台查看并下载（邮件不含附件）：\n\n{entry}";
         var subject = $"[协作平台] 项目「{safeProjectName}」文件上传摘要";
         var dedupeKey = FileSummaryDedupeKey(projectId, recipientUserId, direction)

@@ -13,6 +13,7 @@ public sealed class FilesMaintenanceService(
     private Task? loop;
     private ulong verifyAfterBlobId;
     private string? orphanScanAfterPath;
+    private string? orphanImageScanAfterPath;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -64,6 +65,8 @@ public sealed class FilesMaintenanceService(
         await PurgeOrphanBlobFilesAsync(ct);
         if (Migrating) return;
         await PurgeDeletedMessageImagesAsync(ct);
+        if (Migrating) return;
+        await PurgeOrphanMessageImagesAsync(ct);
         if (Migrating) return;
         PurgeTemporaryArchives(ct);
         if (Migrating) return;
@@ -444,6 +447,64 @@ public sealed class FilesMaintenanceService(
                 {
                     logger.LogWarning(error, "拒绝或无法清理已删除留言图片 {ImageId}", candidate.Id);
                 }
+            }
+        }
+    }
+
+    internal string? OrphanImageScanCursor => orphanImageScanAfterPath;
+
+    /// <summary>
+    /// A message image is written to disk before its message commits, so a crash in between leaves a file no row
+    /// points at. Removes images under <c>message-images</c> that no <c>message_images</c> row references and that
+    /// are older than a 24 hour grace period (an upload whose transaction is still open is never that old).
+    /// Scans in keyset batches like <see cref="PurgeOrphanBlobFilesAsync"/>, and does nothing during a storage
+    /// migration, when the files may still sit in the old root and the rows' paths are resolved there.
+    /// </summary>
+    internal async Task PurgeOrphanMessageImagesAsync(CancellationToken ct)
+    {
+        if (Migrating) return;
+        var root = FileStorage.Root(options.StorageRoot);
+        var imageRoot = Path.Combine(root, "message-images");
+        if (!Directory.Exists(imageRoot)) return;
+        if ((File.GetAttributes(imageRoot) & FileAttributes.ReparsePoint) != 0)
+        {
+            logger.LogWarning("跳过留言图片根目录符号链接");
+            return;
+        }
+        var cutoff = DateTime.UtcNow.AddHours(-24);
+        var scan = EnumerateRegularFiles(imageRoot, ct);
+        if (orphanImageScanAfterPath is not null)
+        {
+            var after = ScanKey(orphanImageScanAfterPath);
+            scan = scan.SkipWhile(path => string.CompareOrdinal(ScanKey(path), after) <= 0);
+        }
+        var candidates = scan.Take(100).ToArray();
+        if (candidates.Length == 0)
+        {
+            orphanImageScanAfterPath = null;
+            return;
+        }
+        orphanImageScanAfterPath = candidates[^1];
+
+        await using var conn = await db.OpenAsync(ct);
+        foreach (var path in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (Migrating) return;
+            try
+            {
+                if (File.GetLastWriteTimeUtc(path) >= cutoff) continue;
+                var storagePath = Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
+                await using var context = EfDb.Use(conn);
+                if (await context.MessageImages.AnyAsync(image => image.StoragePath == storagePath, ct)) continue;
+                // Re-resolve through the symlink-refusing path check and re-read the age right before deleting.
+                var resolved = MessageImageCleanupPath(options.StorageRoot, storagePath, ct);
+                if (File.GetLastWriteTimeUtc(resolved) >= cutoff) continue;
+                File.Delete(resolved);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                logger.LogWarning(error, "清理孤儿留言图片失败 {Path}", path);
             }
         }
     }

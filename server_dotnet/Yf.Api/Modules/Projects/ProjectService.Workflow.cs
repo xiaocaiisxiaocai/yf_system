@@ -9,6 +9,8 @@ namespace Yf.Api.Modules.Projects;
 // in ProjectService.MaterialReview.cs. See Robot仿真协作流程调整方案.
 internal sealed partial class ProjectService
 {
+    internal const string StatusChangedMessage = "项目状态已被他人变更，请刷新后重试";
+
     internal async Task<ProjectResponse> SetStatusAsync(
         MySqlConnection conn,
         CurrentUser actor,
@@ -23,10 +25,14 @@ internal sealed partial class ProjectService
         }
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockBusinessAsync(conn, tx, ct);
-        var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:status", ct);
-        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+        // Scope is authorized before any row lock; the locked values are authorized again inside.
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, true, ct);
+        var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
+        // Optional guard: a caller that decided from a stale status must refresh instead of acting on a newer one.
+        if (request.ExpectedStatus is { } expectedStatus && expectedStatus != project.Status)
+            throw ApiException.VersionConflict(StatusChangedMessage);
         var requested = request.Status ?? string.Empty;
         var (to, action) = ProjectWorkflowRules.ManagementTransition(project.Status, requested);
         if (action is "START" or "RESTART")
@@ -154,6 +160,9 @@ internal sealed partial class ProjectService
 
         await ApplyTransitionAsync(conn, tx, current, project, ProjectStatuses.InProgress, "REOPEN", reason, ip, ct);
         await using var db = EfDb.Use(conn, tx);
+        // A completed main project was frozen while contacts were renamed; it is open again now, so rebuild its
+        // Robot owner snapshot before the subproject copies the group's data.
+        await RobotOwners.RebuildSnapshotAsync(db, project.ProjectGroupId, ct);
         await ProjectGroupService.SyncSubprojectFromGroupAsync(db, project.ProjectGroupId, projectId, ct);
         var floor = await db.Projects.Where(item => item.Id == projectId).Select(item => item.MaterialFileFloor).SingleAsync(ct);
         var latestSupplierFileId = await db.Files
@@ -184,9 +193,10 @@ internal sealed partial class ProjectService
         CancellationToken ct)
     {
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-        var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, permission, ct);
-        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+        // Scope is authorized before any row lock; the locked values are authorized again inside.
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, true, ct);
+        var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
         return (project, current);
     }
 
@@ -215,7 +225,7 @@ internal sealed partial class ProjectService
                 .SetProperty(item => item.MaterialReviewReason, (string?)null)
                 .SetProperty(item => item.UpdatedAt, now), ct);
         if (changed == 0)
-            throw ApiException.VersionConflict("项目状态已被他人变更，请刷新后重试");
+            throw ApiException.VersionConflict(StatusChangedMessage);
 
         var statusLog = new ProjectStatusLog
         {

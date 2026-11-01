@@ -45,6 +45,12 @@ internal static class ProjectGroupAccessService
         await using var db = EfDb.Use(conn, tx);
         if (forUpdate)
         {
+            // Scope is checked on an unlocked read first: a caller outside the main project's scope must not be
+            // able to queue behind, or hold, its row lock. The locked values are authorized again below.
+            var unlocked = await db.ProjectGroups.Where(group => group.Id == groupId).Select(group => new ProjectGroupAccess(
+                group.Id, group.SupplierId, group.CreatedBy, group.Status, group.ResponsibleUserId)).SingleOrDefaultAsync(ct)
+                ?? throw ApiException.NotFound();
+            await AuthorizeAsync(db, current, unlocked, ct);
             var locked = await db.Database.SqlQuery<LockedGroupAccess>($"""
                 SELECT id AS Id,supplier_id AS SupplierId,created_by AS CreatedBy,status AS Status,
                        responsible_user_id AS ResponsibleUserId
