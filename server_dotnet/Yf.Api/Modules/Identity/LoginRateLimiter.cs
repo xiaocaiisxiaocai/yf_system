@@ -109,6 +109,12 @@ public sealed class LoginRateLimiter
 
     internal const int MaximumPasswordChangeAttempts = 5;
 
+    /// <summary>
+    /// Counts one attempt for <paramref name="key"/>. At capacity a new key evicts the least-used
+    /// window (oldest first) instead of being refused: refusing would let anyone who fills the table
+    /// with throwaway keys lock every other user out, while evicting a low count only forgets a source
+    /// that was nowhere near its limit. Sources already over a limit keep the highest counts and stay tracked.
+    /// </summary>
     private static bool Allow(ConcurrentDictionary<string, Window> rates, object sync, string key, int limit)
     {
         lock (sync)
@@ -118,7 +124,8 @@ public sealed class LoginRateLimiter
             {
                 foreach (var expired in rates.Where(x => now - x.Value.Start >= WindowDuration))
                     rates.TryRemove(expired.Key, out _);
-                if (rates.Count >= MaximumKeysPerPurpose) return false;
+                if (rates.Count >= MaximumKeysPerPurpose)
+                    rates.TryRemove(rates.MinBy(x => (x.Value.Count, x.Value.Start)).Key, out _);
             }
             var window = rates.AddOrUpdate(key, _ => new(now, 1),
                 (_, old) => now - old.Start >= WindowDuration ? new(now, 1) : old with { Count = old.Count + 1 });

@@ -107,7 +107,7 @@ public sealed class IdentitySecurityTests
     }
 
     [Fact]
-    public void LoginRateLimiterGroupsIpv6ByPrefixAndFailsClosedAtCapacity()
+    public void LoginRateLimiterGroupsIpv6ByPrefixAndCannotBeFloodedShut()
     {
         Assert.Equal(LoginRateLimiter.NormalizeIp("2001:db8:1:2::1"),
             LoginRateLimiter.NormalizeIp("2001:db8:1:2:ffff:ffff:ffff:ffff"));
@@ -116,13 +116,18 @@ public sealed class IdentitySecurityTests
         Assert.Equal("192.0.2.10", LoginRateLimiter.NormalizeIp("::ffff:192.0.2.10"));
 
         var limiter = new LoginRateLimiter();
+        // One source goes over its IP+account budget before the table fills up.
+        for (var attempt = 0; attempt < 11; attempt++) limiter.AllowLogin("192.0.2.77", "guessed-user");
+        Assert.False(limiter.AllowLogin("192.0.2.77", "guessed-user"));
         for (var index = 0; index < LoginRateLimiter.MaximumKeysPerPurpose; index++)
         {
             var address = $"2001:db8:{index >> 16:x}:{index & 0xffff:x}::1";
             Assert.True(limiter.AllowLogin(address, "capacity-user"));
         }
-        Assert.False(limiter.AllowLogin("2001:db8:ffff:ffff::1", "new-key"));
+        // A full table still admits a newcomer, and the over-limit source stays blocked.
+        Assert.True(limiter.AllowLogin("2001:db8:ffff:ffff::1", "new-key"));
         Assert.True(limiter.AllowLogin("2001:db8:0:0::2", "capacity-user"));
+        Assert.False(limiter.AllowLogin("192.0.2.77", "guessed-user"));
     }
 
     [Fact]
