@@ -2,6 +2,7 @@ using System.Text.Json;
 using Dapper;
 using Microsoft.Extensions.Logging.Abstractions;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
@@ -64,6 +65,86 @@ public sealed class ProjectNotificationTests
             "SELECT body FROM email_outbox WHERE project_id=@ProjectId AND event_type='PROJECT_REOPENED'",
             new { ProjectId = children[0] }, cancellationToken: ct)));
         _ = groups;
+    }
+
+    [Fact(Timeout = 90_000)]
+    public async Task SupplierMailNeutralisesInjectedLinesAndNeverCarriesTheCompanyEmployeeNumber()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_mail_safety", ct);
+        var (_, projects, audit, actor, supplier, children) = await SeedAsync(database, ct);
+        await using var conn = await database.Database.OpenAsync(ct);
+        var messages = new MessageService(audit, new AppOptions());
+        var project = children[0];
+        await conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE projects SET name=@Name WHERE id=@Id",
+            new { Name = "危险名称\r\n项目：伪造\n结果：伪造", Id = project }, cancellationToken: ct));
+
+        await Start(projects, conn, actor, project, ct);
+        await messages.CreateAsync(conn, actor, project, new MessageCreateRequest { Content = "公司发给厂商的留言" }, null, ct);
+        await conn.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status)
+            VALUES(@ProjectId,@SupplierId,'S2C','a.txt','safety-a.txt','txt',1,'files/safety-a.txt','AVAILABLE')
+            """, new { ProjectId = project, SupplierId = supplier.Id }, cancellationToken: ct));
+        var firstFileId = await conn.ExecuteScalarAsync<ulong>("SELECT LAST_INSERT_ID()");
+        await projects.ReturnMaterialsAsync(conn, actor, project, new ProjectMaterialReviewRequest
+        {
+            ExpectedSupplierFileId = firstFileId,
+            Reason = "第一行\r\n状态：伪造\n第三行",
+        }, null, ct);
+        await conn.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status)
+            VALUES(@ProjectId,@SupplierId,'S2C','b.txt','safety-b.txt','txt',1,'files/safety-b.txt','AVAILABLE')
+            """, new { ProjectId = project, SupplierId = supplier.Id }, cancellationToken: ct));
+        var secondFileId = await conn.ExecuteScalarAsync<ulong>("SELECT LAST_INSERT_ID()");
+        await projects.ApproveMaterialsAsync(conn, actor, project,
+            new ProjectMaterialReviewRequest { ExpectedSupplierFileId = secondFileId }, null, ct);
+
+        foreach (var eventType in new[] { "PROJECT_STARTED", "PROJECT_MATERIAL_RETURNED", "PROJECT_MATERIAL_APPROVED", "MESSAGE_CREATED" })
+        {
+            var mail = await conn.QueryFirstAsync<MailRow>(new CommandDefinition(
+                "SELECT subject AS Subject,body AS Body FROM email_outbox WHERE project_id=@ProjectId AND event_type=@EventType AND recipient_user_id=@UserId ORDER BY id LIMIT 1",
+                new { ProjectId = project, EventType = eventType, UserId = supplier.Id }, cancellationToken: ct));
+            Assert.DoesNotContain('\n', mail.Subject);
+            Assert.DoesNotContain('\r', mail.Subject);
+            // Supplier-facing mail never names the company employee, and injected text cannot start a new header line.
+            Assert.DoesNotContain(actor.EmployeeNo, mail.Body, StringComparison.Ordinal);
+            Assert.DoesNotContain("操作人", mail.Body, StringComparison.Ordinal);
+            Assert.DoesNotContain("\n项目：伪造", mail.Body, StringComparison.Ordinal);
+            Assert.DoesNotContain("\n结果：伪造", mail.Body, StringComparison.Ordinal);
+            Assert.DoesNotContain("\n状态：伪造", mail.Body, StringComparison.Ordinal);
+            Assert.DoesNotContain('\r', mail.Body);
+        }
+        var returned = await conn.QueryFirstAsync<MailRow>(new CommandDefinition(
+            "SELECT subject AS Subject,body AS Body FROM email_outbox WHERE project_id=@ProjectId AND event_type='PROJECT_MATERIAL_RETURNED' AND recipient_user_id=@UserId LIMIT 1",
+            new { ProjectId = project, UserId = supplier.Id }, cancellationToken: ct));
+        Assert.Contains("退回原因：第一行 状态：伪造 第三行", returned.Body, StringComparison.Ordinal);
+        Assert.Contains("危险名称 项目：伪造 结果：伪造", returned.Subject, StringComparison.Ordinal);
+
+        // A company file summary to the supplier omits the uploader; the supplier's own upload to the company keeps it.
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        await UploadService.EnqueueFileSummaryForRecipientAsync(conn, tx, project, "摘要项目", 1, "c.txt", "C2S",
+            "company-employee-no", supplier.Id, "supplier@example.test", "http://localhost", DateTime.UtcNow, ct);
+        await UploadService.EnqueueFileSummaryForRecipientAsync(conn, tx, project, "摘要项目", 2, "d.txt", "S2C",
+            "supplier-employee-no", actor.Id, "owner@example.test", "http://localhost", DateTime.UtcNow, ct);
+        await tx.CommitAsync(ct);
+        var toSupplier = await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT body FROM email_outbox WHERE project_id=@ProjectId AND event_type='FILE_UPLOADED' AND recipient_user_id=@UserId",
+            new { ProjectId = project, UserId = supplier.Id }, cancellationToken: ct));
+        Assert.DoesNotContain("company-employee-no", toSupplier, StringComparison.Ordinal);
+        Assert.DoesNotContain("上传人", toSupplier, StringComparison.Ordinal);
+        var toCompany = await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT body FROM email_outbox WHERE project_id=@ProjectId AND event_type='FILE_UPLOADED' AND recipient_user_id=@UserId",
+            new { ProjectId = project, UserId = actor.Id }, cancellationToken: ct));
+        Assert.Contains("上传人：账号 supplier-employee-no", toCompany, StringComparison.Ordinal);
+    }
+
+    private sealed class MailRow
+    {
+        public string Subject { get; init; } = string.Empty;
+        public string Body { get; init; } = string.Empty;
     }
 
     [Fact(Timeout = 90_000)]
@@ -196,9 +277,16 @@ public sealed class ProjectNotificationTests
     private static Task Start(ProjectService projects, MySqlConnector.MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct) =>
         projects.SetStatusAsync(conn, actor, projectId, new ProjectStatusRequest { Status = ProjectStatuses.InProgress }, null, ct);
 
-    private static Task SetDueAsync(MySqlConnector.MySqlConnection conn, ulong projectId, int daysFromToday, CancellationToken ct) =>
-        SqlAsync(conn,
-            $"UPDATE projects SET expected_completion_date=DATE(UTC_TIMESTAMP()+INTERVAL 8 HOUR)+INTERVAL {daysFromToday} DAY WHERE id={projectId}", ct);
+    // The business "today" is derived from the wall clock through an independent offset conversion (not the
+    // implementation's formula); the exact 16:00 UTC rollover is pinned by BusinessCalendarTests.
+    private static Task SetDueAsync(MySqlConnector.MySqlConnection conn, ulong projectId, int daysFromToday, CancellationToken ct)
+    {
+        var chinaToday = DateOnly.FromDateTime(DateTimeOffset.UtcNow.ToOffset(TimeSpan.FromHours(8)).DateTime);
+        return conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE projects SET expected_completion_date=@Due WHERE id=@ProjectId",
+            new { Due = chinaToday.AddDays(daysFromToday).ToDateTime(TimeOnly.MinValue), ProjectId = projectId },
+            cancellationToken: ct));
+    }
 
     private static Task SqlAsync(MySqlConnector.MySqlConnection conn, string sql, CancellationToken ct) =>
         conn.ExecuteAsync(new CommandDefinition(sql, cancellationToken: ct));

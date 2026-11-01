@@ -493,10 +493,13 @@ public sealed class ProjectGroupTests
         Assert.Equal("第一次编辑", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
             "SELECT name FROM projects WHERE id=@Id", new { Id = projectId }, cancellationToken: ct)));
 
-        // Without the field (older clients) the edit still applies.
-        var unchecked_ = await projects.UpdateSubprojectAsync(conn, actor, projectId,
-            new SubprojectUpdateRequest { Name = "无版本编辑" }, null, ct);
-        Assert.Equal("无版本编辑", unchecked_.Name);
+        // Like the main project, the version is required: a missing expectedUpdatedAt is a 400 and changes nothing.
+        var unversioned = await Assert.ThrowsAsync<ApiException>(() => projects.UpdateSubprojectAsync(conn, actor, projectId,
+            new SubprojectUpdateRequest { Name = "无版本编辑" }, null, ct));
+        Assert.Equal(400, unversioned.Status);
+        Assert.Equal("expectedUpdatedAt 必须为当前子项目的 updatedAt", unversioned.Message);
+        Assert.Equal("第一次编辑", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT name FROM projects WHERE id=@Id", new { Id = projectId }, cancellationToken: ct)));
     }
 
     [Fact(Timeout = 90_000)]
@@ -705,6 +708,177 @@ public sealed class ProjectGroupTests
         await projects.DeleteAsync(conn, newOwner, ids[1], null, ct);
         Assert.Equal([ids[1], ids[0]], publisher.Calls.Select(call => call.ProjectId).ToArray());
         Assert.All(publisher.Calls, call => Assert.Equal(RealtimeChangeKinds.Project, call.Kind));
+    }
+
+    [Fact(Timeout = 90_000)]
+    public async Task StatusChangeAndTransferHonorTheOptionalExpectedVersion()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_expected_version", ct);
+        var (groups, projects, conn, groupId, childId) = await SeedOpenGroupAsync(database, "期望版本", 9300, ct);
+        await using var lifetime = conn;
+        var actor = new CurrentUser(9303, "expected-owner", "INTERNAL", null);
+
+        // The caller saw IN_PROGRESS, the locked subproject is still a DRAFT: nothing changes.
+        var staleStatus = await Assert.ThrowsAsync<ApiException>(() => projects.SetStatusAsync(conn, actor, childId,
+            new ProjectStatusRequest { Status = ProjectStatuses.InProgress, ExpectedStatus = ProjectStatuses.InProgress }, null, ct));
+        Assert.Equal((409, 40903), (staleStatus.Status, staleStatus.Code));
+        Assert.Equal(ProjectService.StatusChangedMessage, staleStatus.Message);
+        Assert.Equal(ProjectStatuses.Draft, await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT status FROM projects WHERE id=@Id", new { Id = childId }, cancellationToken: ct)));
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM project_status_logs WHERE project_id=@Id AND action='START'",
+            new { Id = childId }, cancellationToken: ct)));
+
+        var started = await projects.SetStatusAsync(conn, actor, childId,
+            new ProjectStatusRequest { Status = ProjectStatuses.InProgress, ExpectedStatus = ProjectStatuses.Draft }, null, ct);
+        Assert.Equal(ProjectStatuses.InProgress, started.Status);
+
+        // Without expectedStatus the request behaves as before.
+        var terminated = await projects.SetStatusAsync(conn, actor, childId,
+            new ProjectStatusRequest { Status = ProjectStatuses.Terminated }, null, ct);
+        Assert.Equal(ProjectStatuses.Terminated, terminated.Status);
+
+        // Transfer: the caller believes the owner is 9304, but it is 9303.
+        var staleOwner = await Assert.ThrowsAsync<ApiException>(() => groups.TransferAsync(conn, actor, groupId,
+            new ProjectGroupTransferRequest { ResponsibleUserId = 9304, ExpectedResponsibleUserId = 9304 }, null, ct));
+        Assert.Equal((409, 40903), (staleOwner.Status, staleOwner.Code));
+        Assert.Equal(9303UL, await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+            "SELECT responsible_user_id FROM project_groups WHERE id=@Id", new { Id = groupId }, cancellationToken: ct)));
+        var transferred = await groups.TransferAsync(conn, actor, groupId,
+            new ProjectGroupTransferRequest { ResponsibleUserId = 9304, ExpectedResponsibleUserId = 9303 }, null, ct);
+        Assert.Equal(9304UL, transferred.ResponsibleUserId);
+    }
+
+    [Fact(Timeout = 90_000)]
+    public async Task ReopeningRebuildsTheRobotOwnerSnapshotThatWasFrozenWhileTheMainProjectWasCompleted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_reopen_snapshot", ct);
+        var (_, projects, conn, groupId, childId) = await SeedOpenGroupAsync(database, "快照重开", 9400, ct);
+        await using var lifetime = conn;
+        var actor = new CurrentUser(9403, "expected-owner", "INTERNAL", null);
+        const ulong contactId = 10009400;
+
+        await projects.SetStatusAsync(conn, actor, childId,
+            new ProjectStatusRequest { Status = ProjectStatuses.InProgress }, null, ct);
+        await conn.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO files(project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status)
+            VALUES(@ProjectId,9405,'S2C','snap.txt','snapshot-a.txt','txt',1,'files/snapshot-a.txt','AVAILABLE')
+            """, new { ProjectId = childId }, cancellationToken: ct));
+        var fileId = await conn.ExecuteScalarAsync<ulong>("SELECT LAST_INSERT_ID()");
+        await projects.ApproveMaterialsAsync(conn, actor, childId,
+            new ProjectMaterialReviewRequest { ExpectedSupplierFileId = fileId }, null, ct);
+        Assert.Equal(ProjectStatuses.Completed, await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT status FROM project_groups WHERE id=@Id", new { Id = groupId }, cancellationToken: ct)));
+
+        // A rename while the main project is completed leaves its frozen snapshot alone.
+        await conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE supplier_contacts SET name='改名后的负责人' WHERE id=@Id", new { Id = contactId }, cancellationToken: ct));
+        await using (var db = EfDb.Use(conn))
+            await RobotOwners.RefreshSnapshotsAsync(db, contactId, ct);
+        Assert.Equal("Robot 负责人", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT robot_owner_name FROM project_groups WHERE id=@Id", new { Id = groupId }, cancellationToken: ct)));
+
+        var completedAt = await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
+            "SELECT updated_at FROM projects WHERE id=@Id", new { Id = childId }, cancellationToken: ct));
+        var reopened = await projects.ReopenAsync(conn, actor, childId,
+            new ProjectReopenRequest { ExpectedUpdatedAt = completedAt, Reason = "补充资料" }, null, ct);
+
+        // The main project is open again, so the reopened subproject and the main project show the current name.
+        Assert.Equal("改名后的负责人", reopened.RobotOwnerName);
+        Assert.Equal(ProjectStatuses.InProgress, await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT status FROM project_groups WHERE id=@Id", new { Id = groupId }, cancellationToken: ct)));
+        Assert.Equal("改名后的负责人", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT robot_owner_name FROM project_groups WHERE id=@Id", new { Id = groupId }, cancellationToken: ct)));
+        Assert.Equal("改名后的负责人", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT robot_owner_name FROM projects WHERE id=@Id", new { Id = childId }, cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 90_000)]
+    public async Task SuppliersDoNotReceiveTheResponsibleUsersEmployeeNumber()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_employee_no", ct);
+        var (groups, projects, conn, groupId, childId) = await SeedOpenGroupAsync(database, "工号隐藏", 9500, ct);
+        await using var lifetime = conn;
+        var owner = new CurrentUser(9503, "expected-owner", "INTERNAL", null);
+        var supplier = new CurrentUser(9505, "expected-supplier", "SUPPLIER", 9501);
+
+        using (var internalDetail = Json(await projects.DetailAsync(conn, owner, childId, ct)))
+            Assert.Equal("expected-owner", internalDetail.RootElement.GetProperty("responsibleUserEmployeeNo").GetString());
+        using (var supplierDetail = Json(await projects.DetailAsync(conn, supplier, childId, ct)))
+        {
+            Assert.Equal(JsonValueKind.Null, supplierDetail.RootElement.GetProperty("responsibleUserEmployeeNo").ValueKind);
+            Assert.Equal("通知负责人", supplierDetail.RootElement.GetProperty("responsibleUserName").GetString());
+        }
+        using (var supplierGroup = Json(await groups.DetailAsync(conn, supplier, groupId, ct)))
+        {
+            Assert.Equal(JsonValueKind.Null,
+                supplierGroup.RootElement.GetProperty("group").GetProperty("responsibleUserEmployeeNo").ValueKind);
+            Assert.All(supplierGroup.RootElement.GetProperty("projects").EnumerateArray(), project =>
+                Assert.Equal(JsonValueKind.Null, project.GetProperty("responsibleUserEmployeeNo").ValueKind));
+        }
+        using (var supplierList = Json(await groups.ListAsync(conn, supplier, 1, 20, null, null, null, null, false, ct)))
+            Assert.All(supplierList.RootElement.GetProperty("list").EnumerateArray(), group =>
+                Assert.Equal(JsonValueKind.Null, group.GetProperty("responsibleUserEmployeeNo").ValueKind));
+        using (var internalList = Json(await groups.ListAsync(conn, owner, 1, 20, null, null, null, null, false, ct)))
+            Assert.Equal("expected-owner", Assert.Single(internalList.RootElement.GetProperty("list").EnumerateArray())
+                .GetProperty("responsibleUserEmployeeNo").GetString());
+    }
+
+    /// <summary>
+    /// A supplier with an uploader account (id base+5), two internal owners (base+3, base+4), and one main project with
+    /// one DRAFT subproject owned by base+3. The caller owns the returned connection.
+    /// </summary>
+    private static async Task<(ProjectGroupService Groups, ProjectService Projects, MySqlConnector.MySqlConnection Conn,
+        ulong GroupId, ulong ChildId)> SeedOpenGroupAsync(
+        SchemaShapeTests.SchemaDatabaseScope database, string label, ulong baseId, CancellationToken ct)
+    {
+        await database.InitializeBusinessFixtureAsync(ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await database.ExecuteAsync($"""
+            INSERT INTO suppliers(id,name,status,created_at,updated_at)
+            VALUES({baseId + 1},'{label}供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO supplier_contacts(id,supplier_id,name,email,status)
+            VALUES({10_000_000 + baseId},{baseId + 1},'Robot 负责人','contact{baseId}@example.test','ACTIVE');
+            INSERT INTO departments(id,parent_id,name,kind,created_at,updated_at)
+            VALUES({baseId + 2},NULL,'{label}课别','SECTION',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES({baseId + 3},'expected-owner','unused','通知负责人','owner{baseId}@example.test','INTERNAL',NULL,{baseId + 2},'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  ({baseId + 4},'expected-other','unused','通知新负责人','other{baseId}@example.test','INTERNAL',NULL,{baseId + 2},'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  ({baseId + 5},'expected-supplier','unused','通知厂商','supplier{baseId}@example.test','SUPPLIER',{baseId + 1},NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES({baseId + 3},1),({baseId + 4},1),({baseId + 5},4);
+            INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
+            VALUES({baseId + 6},{baseId + 1},'EXPECTED-PART-{baseId}','期望型号',1,'ACTIVE');
+            INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
+            VALUES({baseId + 7},'PRIORITY','期望优先级',NULL,1,'ACTIVE'),
+                  ({1_000_000 + baseId + 7},'ROBOT_TYPE','期望优先级-Robot类型',NULL,1,'ACTIVE');
+            """, ct);
+        var actor = new CurrentUser(baseId + 3, "expected-owner", "INTERNAL", null);
+        var audit = new AuditService([]);
+        var groupStatus = new ProjectGroupStatusService(audit);
+        var groups = new ProjectGroupService(audit, groupStatus);
+        var projects = new ProjectService(audit, new AppOptions(), groupStatus);
+        var conn = await database.Database.OpenAsync(ct);
+        using var created = Json(await groups.CreateAsync(conn, actor, new ProjectUpsertRequest
+        {
+            Name = label + "主项目",
+            SupplierId = baseId + 1,
+            WorkOrderNos = [$"WO-{baseId}"],
+            MachineModel = "期望机型",
+            RobotPartId = baseId + 6,
+            PriorityId = baseId + 7,
+            RobotTypeId = 1_000_000 + baseId + 7,
+            RobotOwnerContactIds = [10_000_000 + baseId],
+            ExpectedCompletionDate = "2099-12-31",
+            SubprojectNames = [label + "子项目"],
+        }, null, ct));
+        var groupId = created.RootElement.GetProperty("id").GetUInt64();
+        var childId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+            "SELECT id FROM projects WHERE project_group_id=@GroupId", new { GroupId = groupId }, cancellationToken: ct));
+        return (groups, projects, conn, groupId, childId);
     }
 
     private sealed class RecordingPublisher : IProjectRealtimePublisher

@@ -105,6 +105,83 @@ public class SystemTests
         Assert.Equal("127.0.0.1", ClientIp.Resolve(context, options));
     }
 
+    [Theory]
+    [InlineData("127.0.0.1", "203.0.113.7", "127.0.0.1")]
+    [InlineData("::1", "203.0.113.7", "::1")]
+    [InlineData("::ffff:127.0.0.1", "203.0.113.7", "::ffff:127.0.0.1")]
+    [InlineData("192.0.2.10", "203.0.113.7", "192.0.2.10")]
+    public void ForwardedAddressIsIgnoredWhenLoopbackProxyIsNotTrusted(string peer, string forwarded, string expected)
+    {
+        var context = ContextFor(peer, forwarded);
+
+        Assert.Equal(expected, ClientIp.Resolve(context, new AppOptions { TrustLoopbackProxy = false }));
+    }
+
+    [Theory]
+    [InlineData("127.0.0.1", "203.0.113.7", "203.0.113.7")]
+    [InlineData("::1", "203.0.113.7", "203.0.113.7")]
+    [InlineData("::ffff:127.0.0.1", "203.0.113.7", "203.0.113.7")]
+    [InlineData("127.0.0.1", "2001:db8::7", "2001:db8::7")]
+    [InlineData("::1", "2001:db8::7", "2001:db8::7")]
+    public void LoopbackProxyForwardsAValidCanonicalAddress(string peer, string forwarded, string expected)
+    {
+        var context = ContextFor(peer, forwarded);
+
+        Assert.Equal(expected, ClientIp.Resolve(context, new AppOptions { TrustLoopbackProxy = true }));
+    }
+
+    [Theory]
+    [InlineData("not-an-ip")]
+    [InlineData("999.1.1.1")]
+    [InlineData("203.0.113.7:8080")]
+    [InlineData("203.0.113.7, 198.51.100.8")]
+    [InlineData("203.000.113.007")]
+    [InlineData("2001:DB8::7")]
+    [InlineData(" 203.0.113.7")]
+    [InlineData("")]
+    public void InvalidOrNonCanonicalForwardedValueFallsBackToThePeerAddress(string forwarded)
+    {
+        var context = ContextFor("127.0.0.1", forwarded);
+
+        Assert.Equal("127.0.0.1", ClientIp.Resolve(context, new AppOptions { TrustLoopbackProxy = true }));
+    }
+
+    [Fact]
+    public void MultipleForwardedForHeadersAreNotTrusted()
+    {
+        var context = ContextFor("127.0.0.1", null);
+        context.Request.Headers["X-Forwarded-For"] = new[] { "203.0.113.7", "198.51.100.8" };
+
+        Assert.Equal("127.0.0.1", ClientIp.Resolve(context, new AppOptions { TrustLoopbackProxy = true }));
+    }
+
+    [Fact]
+    public void MissingForwardedHeaderOrUnknownPeerFallsBackSafely()
+    {
+        var options = new AppOptions { TrustLoopbackProxy = true };
+        Assert.Equal("127.0.0.1", ClientIp.Resolve(ContextFor("127.0.0.1", null), options));
+
+        var noPeer = new DefaultHttpContext();
+        noPeer.Request.Headers["X-Forwarded-For"] = "203.0.113.7";
+        Assert.Equal("unknown", ClientIp.Resolve(noPeer, options));
+    }
+
+    [Fact]
+    public void NonLoopbackIpv6PeerIsReportedAsIs()
+    {
+        var context = ContextFor("2001:db8::10", "203.0.113.7");
+
+        Assert.Equal("2001:db8::10", ClientIp.Resolve(context, new AppOptions { TrustLoopbackProxy = true }));
+    }
+
+    private static DefaultHttpContext ContextFor(string peer, string? forwarded)
+    {
+        var context = new DefaultHttpContext();
+        context.Connection.RemoteIpAddress = IPAddress.Parse(peer);
+        if (forwarded is not null) context.Request.Headers["X-Forwarded-For"] = forwarded;
+        return context;
+    }
+
     [Fact]
     public void MailDiagnosticsDoNotExposeCredentials()
     {

@@ -224,7 +224,11 @@ public sealed class MessageReceiptTests
             """, transaction: claim, cancellationToken: ct)));
         var racing = Task.Run(() => service.CreateAsync(conn, supplier, 1001,
             new MessageCreateRequest { Content = "第四条" }, null, null, ct), ct);
-        await Task.Delay(500, ct);
+        // Release the claim only once the merge's UPDATE is queued behind it (or has already finished); the worker's
+        // own connection is idle after its UPDATE, so any session still running that statement is the merge.
+        await LockWaitProbe.WaitForRunningStatementAsync(
+            database.Options.ConnectionString, "UPDATE email_outbox", ct, racing);
+        Assert.False(racing.IsCompleted, "The merge must wait for the uncommitted worker claim.");
         await claim.CommitAsync(ct);
         var fourth = await racing;
         var rows = (await conn.QueryAsync<(string Status, string? DedupeKey, string Body)>(new CommandDefinition(
@@ -271,22 +275,7 @@ public sealed class MessageReceiptTests
 
         public static async Task<LocalDatabaseScope> CreateOrSkipAsync(string purpose, CancellationToken ct)
         {
-            var raw = Environment.GetEnvironmentVariable("YF_TEST_DATABASE_URL");
-            if (string.IsNullOrWhiteSpace(raw)) Assert.Skip("YF_TEST_DATABASE_URL is not set");
-            if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || uri.Scheme != "mysql")
-                throw new InvalidOperationException("YF_TEST_DATABASE_URL must be a mysql:// URL");
-            if (uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
-                throw new InvalidOperationException("Message receipt tests only allow local MySQL");
-            var credentials = uri.UserInfo.Split(':', 2);
-            var administrationOptions = new MySqlConnectionStringBuilder
-            {
-                Server = uri.Host,
-                Port = (uint)(uri.IsDefaultPort ? 3306 : uri.Port),
-                UserID = Uri.UnescapeDataString(credentials[0]),
-                Password = credentials.Length == 2 ? Uri.UnescapeDataString(credentials[1]) : string.Empty,
-                DateTimeKind = MySqlDateTimeKind.Utc,
-                SslMode = MySqlSslMode.None
-            };
+            var administrationOptions = LocalMySqlTestServer.AdministrationOrSkip("Message receipt tests");
             var administration = new MySqlConnection(administrationOptions.ConnectionString);
             await administration.OpenAsync(ct);
             var databaseName = $"yf_t_{Guid.NewGuid():N}";

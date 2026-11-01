@@ -235,6 +235,18 @@ def run_workflow_acceptance(client, Client, conn, check):
         and draft_outbox == 0,
     )
 
+    # The optional expectedStatus guard rejects a stale caller (409 / 40903) without changing anything, and a
+    # draft passes no material to the supplier: its file list is empty.
+    stale_status = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
+        "status": "IN_PROGRESS", "expectedStatus": "IN_PROGRESS",
+    }, expected=409)
+    draft_supplier_files = supplier_client.call(
+        "GET", f"/api/v1/projects/{project_id}/files?pageSize=100")
+    check(
+        "stale expectedStatus is a 40903 conflict and drafts list no files to suppliers",
+        stale_status["code"] == 40903 and draft_supplier_files["total"] == 0,
+    )
+
     started = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
         "status": "IN_PROGRESS",
     })
@@ -491,6 +503,7 @@ def run_workflow_acceptance(client, Client, conn, check):
             "name": created["name"],
             "description": "不可编辑",
             "supplierId": supplier["id"],
+            "expectedUpdatedAt": detail["updatedAt"],
         })
     _expect_atomic_rejection(
         check, conn, internal_client, project_id, "completed material return",

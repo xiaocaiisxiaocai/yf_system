@@ -166,6 +166,34 @@ public sealed class IdentitySecurityTests
     }
 
     [Fact]
+    public void IpAccountLoginBucketKeysKnownAccountsByIdSoCollationVariantsShareOneBucket()
+    {
+        var limiter = new LoginRateLimiter();
+        // The database collation treats "tárget" as the account "target" (accent-insensitive), text normalization does not.
+        var spellings = new[] { "target", "TARGET", "tárget", "Tárget" };
+        Assert.All(Enumerable.Range(0, 10), attempt => Assert.True(limiter.AllowLoginAccount(
+            IdentityRealms.Internal, "192.0.2.1", 42, spellings[attempt % spellings.Length])));
+        Assert.False(limiter.AllowLoginAccount(IdentityRealms.Internal, "192.0.2.1", 42, "TÁRGET"));
+        // Another source address, account or realm has its own bucket.
+        Assert.True(limiter.AllowLoginAccount(IdentityRealms.Internal, "192.0.2.2", 42, "target"));
+        Assert.True(limiter.AllowLoginAccount(IdentityRealms.Internal, "192.0.2.1", 43, "target"));
+        Assert.True(limiter.AllowLoginAccount("oem", "192.0.2.1", 42, "target"));
+
+        // An unknown name is still keyed by its normalized text, so it is limited the same way as a known one.
+        Assert.All(Enumerable.Range(0, 10), _ =>
+            Assert.True(limiter.AllowLoginAccount(IdentityRealms.Internal, "192.0.2.1", null, "ghost")));
+        Assert.False(limiter.AllowLoginAccount(IdentityRealms.Internal, "192.0.2.1", null, " Ghost "));
+        Assert.True(limiter.AllowLoginAccount(IdentityRealms.Internal, "192.0.2.1", null, "other-ghost"));
+
+        // The per-source budget is separate from the account buckets.
+        var source = new LoginRateLimiter();
+        Assert.All(Enumerable.Range(1, 60), _ => Assert.True(source.AllowLoginSource("198.51.100.1")));
+        Assert.False(source.AllowLoginSource("198.51.100.1"));
+        Assert.True(source.AllowLoginSource("198.51.100.2"));
+        Assert.True(source.AllowLoginAccount(IdentityRealms.Internal, "198.51.100.1", 42, "target"));
+    }
+
+    [Fact]
     public void RefreshCookieLifetimeCannotOutliveTheRefreshRowOrConfiguredTtl()
     {
         var now = new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero);
@@ -342,6 +370,35 @@ public sealed class IdentitySecurityTests
         Assert.ThrowsAny<Exception>(() => service.ParseAccess(Sign(header, Body("oem", TokenService.AudienceFor(IdentityRealms.Internal)), oemKey)));
 
         Assert.Equal("oem", service.ParseAccess(Sign(header, Body("oem", TokenService.AudienceFor("oem")), oemKey)).Realm);
+    }
+
+    [Fact]
+    public void UnverifiedRealmClaimsAreRejectedWithoutBeingRetainedByTheService()
+    {
+        const string secret = "identity-test-secret-with-at-least-32-bytes";
+        var service = new TokenService(new AppOptions { JwtSecret = secret, AccessTtlMinutes = 30 });
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var header = Base64UrlEncoder.Encode("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
+
+        for (var i = 0; i < 200; i++)
+        {
+            var realm = "anonymous-realm-" + i + new string('x', 512);
+            var body = Base64UrlEncoder.Encode(JsonSerializer.Serialize(new Dictionary<string, object>
+            {
+                ["iss"] = TokenService.Issuer, ["aud"] = TokenService.AudienceFor(realm), ["rlm"] = realm,
+                ["sub"] = "API001", ["uid"] = 42, ["sid"] = "s", ["iat"] = now, ["exp"] = now + 1800
+            }));
+            Assert.ThrowsAny<Exception>(() => service.ParseAccess(Sign(header, body, new byte[32])));
+        }
+
+        // Anonymous callers choose the realm string, so nothing keyed by it may live on the service.
+        var retained = typeof(TokenService)
+            .GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+                | System.Reflection.BindingFlags.Public)
+            .Where(field => field.FieldType.IsGenericType
+                && field.FieldType.GetGenericTypeDefinition().Name.Contains("Dictionary", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Empty(retained);
     }
 
     private static string Sign(string header, string body, byte[] key)

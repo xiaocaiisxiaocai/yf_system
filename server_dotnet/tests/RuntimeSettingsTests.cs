@@ -62,6 +62,15 @@ public sealed class RuntimeSettingsTests
         ]), new CurrentUser(adminId, "admin", "INTERNAL", null), ct);
         Assert.Equal(90, options.AuditRetentionDays);
         Assert.Equal(2147483648L, options.UploadMaxPendingBytesPerUser);
+        // Lowering the audit retention is itself audited, with the previous and the new value.
+        await using (var audit = await database.Database.OpenAsync(ct))
+        {
+            var detail = await audit.ExecuteScalarAsync<string>(new CommandDefinition(
+                "SELECT detail FROM audit_logs WHERE action='CONFIG_UPDATE' ORDER BY id DESC LIMIT 1", cancellationToken: ct));
+            Assert.Contains("retention.audit_days", detail);
+            Assert.Contains("200", detail);
+            Assert.Contains("90", detail);
+        }
         await service.UpdateConfigsAsync(new ConfigBatch(
         [
             new ConfigItem("storage.migration_bytes_per_second", "104857600"),

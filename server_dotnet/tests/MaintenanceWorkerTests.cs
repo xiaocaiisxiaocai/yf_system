@@ -50,6 +50,52 @@ public sealed class MaintenanceWorkerTests
     }
 
     [Fact(Timeout = 120_000)]
+    public async Task AuditRetentionKeepsOemRowsAtLeastThirtyDaysEvenWhenTheSettingIsLowered()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
+        await database.ExecuteAsync("DELETE FROM audit_logs", null, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO audit_logs(action,target_type,target_id,detail,created_at,actor_realm) VALUES
+            ('LOGIN',NULL,NULL,'{}',DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 10 DAY),NULL),
+            ('PROJECT_UPDATE','project','1','{}',DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 10 DAY),NULL),
+            ('LOGIN',NULL,NULL,'{}',DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 10 DAY),'oem'),
+            ('OEM_TRANSFER_CREATE',NULL,NULL,'{}',DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 10 DAY),NULL),
+            ('OEM_TRANSFER_CREATE',NULL,NULL,'{}',DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 31 DAY),NULL),
+            ('LOGIN',NULL,NULL,'{}',DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 31 DAY),'oem'),
+            ('LOGIN',NULL,NULL,'{}',DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 2 DAY),NULL)
+            """, null, ct);
+        var service = new AuditRetentionService(database.Database, database.Options, new AuditService([]),
+            NullLogger<AuditRetentionService>.Instance);
+
+        // A lowered setting applies to collaboration rows only; OEM rows have no setting of their own.
+        database.Options.AuditRetentionDays = 5;
+        Assert.Equal(4, await service.PurgeAsync(ct));
+
+        Assert.Equal(2L, await database.ScalarAsync<long>(
+            "SELECT COUNT(*) FROM audit_logs WHERE actor_realm='oem' OR action='OEM_TRANSFER_CREATE'", ct));
+        Assert.Equal(0L, await database.ScalarAsync<long>(
+            "SELECT COUNT(*) FROM audit_logs WHERE (actor_realm='oem' OR action='OEM_TRANSFER_CREATE') AND created_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 30 DAY)", ct));
+        Assert.Equal(1L, await database.ScalarAsync<long>(
+            "SELECT COUNT(*) FROM audit_logs WHERE action IN ('LOGIN','PROJECT_UPDATE') AND actor_realm IS NULL", ct));
+        Assert.Equal((5L, 30L, 2L), (
+            await database.ScalarAsync<long>($"SELECT CAST(JSON_EXTRACT(detail,'$.retentionDays') AS SIGNED) FROM audit_logs WHERE action='{AuditRetentionService.Action}'", ct),
+            await database.ScalarAsync<long>($"SELECT CAST(JSON_EXTRACT(detail,'$.oemRetentionDays') AS SIGNED) FROM audit_logs WHERE action='{AuditRetentionService.Action}'", ct),
+            await database.ScalarAsync<long>($"SELECT CAST(JSON_EXTRACT(detail,'$.oemDeleted') AS SIGNED) FROM audit_logs WHERE action='{AuditRetentionService.Action}'", ct)));
+
+        // A longer setting governs both scopes alike.
+        await database.ExecuteAsync("""
+            INSERT INTO audit_logs(action,target_type,target_id,detail,created_at,actor_realm) VALUES
+            ('LOGIN',NULL,NULL,'{}',DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 40 DAY),NULL),
+            ('LOGIN',NULL,NULL,'{}',DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 40 DAY),'oem')
+            """, null, ct);
+        database.Options.AuditRetentionDays = 90;
+        Assert.Equal(0, await service.PurgeAsync(ct));
+        database.Options.AuditRetentionDays = 35;
+        Assert.Equal(2, await service.PurgeAsync(ct));
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task SessionCleanupKeepsRotatedTokensUntilTheFamilyCannotBeReplayed()
     {
         var ct = TestContext.Current.CancellationToken;

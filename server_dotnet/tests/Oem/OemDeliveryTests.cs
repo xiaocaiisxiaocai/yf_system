@@ -315,7 +315,8 @@ public sealed class OemDeliveryTests
         await blocker.ExecuteScalarAsync<ulong>("SELECT id FROM oem_transfers WHERE id=@transferId FOR UPDATE", new { transferId }, tx);
 
         var expiry = host.Service<OemPurgeService>().ExpireDraftsAsync(host.Service<OemTransferService>(), ct);
-        await Task.Delay(200, ct);
+        // Condition-based: proceed once the expiry sweep is actually waiting on the transfer row lock.
+        await LockWaitProbe.WaitForLockWaitAsync(host.ConnectionString, ct, expiry);
         Assert.False(expiry.IsCompleted);
         await blocker.ExecuteAsync("UPDATE oem_transfers SET updated_at=UTC_TIMESTAMP(3) WHERE id=@transferId", new { transferId }, tx);
         await tx.CommitAsync(ct);

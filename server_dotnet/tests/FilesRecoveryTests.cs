@@ -347,6 +347,56 @@ public sealed class FilesRecoveryTests
         Assert.Equal("MERGING", await scope.StatusAsync(expiredMergingId));
     }
 
+    [Fact(Timeout = 60_000)]
+    public async Task Md5SubmissionLocksTheProjectBeforeTheSessionSoItCannotDeadlockWithMerge()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var sessionId = Guid.NewGuid().ToString("D");
+        await scope.InsertSessionAsync(sessionId, "UPLOADING", expired: false);
+        var md5 = Md5Hex([1]);
+
+        // Merge, claim and init lock the main project, the subproject and only then the session; hold the first
+        // two the way a merge does, and let /md5 queue behind them.
+        await using var holder = await scope.Database.OpenAsync(ct);
+        await using var holdTx = await holder.BeginTransactionAsync(ct);
+        await holder.QueryAsync<ulong>(new CommandDefinition(
+            "SELECT id FROM project_groups WHERE id=1 FOR UPDATE", transaction: holdTx, cancellationToken: ct));
+        await holder.QueryAsync<ulong>(new CommandDefinition(
+            "SELECT id FROM projects WHERE id=1 FOR UPDATE", transaction: holdTx, cancellationToken: ct));
+        var submit = scope.Upload.SubmitMd5Async(FilesDatabaseScope.Context(), sessionId,
+            new SubmitUploadMd5Request(md5), ct);
+        await Task.Delay(TimeSpan.FromSeconds(1.5), ct);
+        Assert.False(submit.IsCompleted);
+
+        // While queued on the project it must not hold the session row, or a merge that already owns the
+        // project and wants the session would deadlock with it.
+        await using (var probe = await scope.Database.OpenAsync(ct))
+        {
+            await probe.ExecuteAsync(new CommandDefinition("SET SESSION innodb_lock_wait_timeout=1", cancellationToken: ct));
+            await using var probeTx = await probe.BeginTransactionAsync(ct);
+            var locked = await probe.QuerySingleAsync<string>(new CommandDefinition(
+                "SELECT id FROM upload_sessions WHERE id=@Id FOR UPDATE",
+                new { Id = sessionId }, probeTx, cancellationToken: ct));
+            Assert.Equal(sessionId, locked);
+            await probeTx.RollbackAsync(ct);
+        }
+
+        await holdTx.CommitAsync(ct);
+        await submit.WaitAsync(TimeSpan.FromSeconds(20), ct);
+        Assert.Equal(md5, await scope.FileMd5Async(sessionId));
+
+        // Authorization and state rules are unchanged: only the uploader's own UPLOADING session accepts a digest.
+        var missing = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.SubmitMd5Async(
+            FilesDatabaseScope.Context(), Guid.NewGuid().ToString("D"), new SubmitUploadMd5Request(md5), ct));
+        Assert.Equal(404, missing.Status);
+        var completedId = Guid.NewGuid().ToString("D");
+        await scope.InsertSessionAsync(completedId, "COMPLETED", expired: false);
+        var completed = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.SubmitMd5Async(
+            FilesDatabaseScope.Context(), completedId, new SubmitUploadMd5Request(md5), ct));
+        Assert.Equal(409, completed.Status);
+    }
+
     [Fact(Timeout = 30_000)]
     public async Task Md5LessAbandonedMergeRequiresDigestThenCanBeAborted()
     {
@@ -875,6 +925,181 @@ public sealed class FilesRecoveryTests
         finally { try { Directory.Delete(root, recursive: true); } catch { } }
     }
 
+    [Fact(Timeout = 60_000)]
+    public async Task StorageMigrationPausesPhysicalCleanupAndTheCleanupResumesAfterwards()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var old = DateTime.UtcNow.AddHours(-25);
+
+        // One candidate for each physical step of the cycle: orphan blob scan, pending blob collection,
+        // stale batch archive and orphan upload directory.
+        var orphanContent = new byte[] { 71, 72, 73 };
+        var orphanPath = FileBlobStore.AbsolutePath(scope.StorageRoot, Sha256Hex(orphanContent));
+        Directory.CreateDirectory(Path.GetDirectoryName(orphanPath)!);
+        await File.WriteAllBytesAsync(orphanPath, orphanContent, ct);
+        File.SetLastWriteTimeUtc(orphanPath, old);
+
+        var pendingContent = new byte[] { 81, 82, 83, 84 };
+        var pendingPath = FileBlobStore.AbsolutePath(scope.StorageRoot, Sha256Hex(pendingContent));
+        Directory.CreateDirectory(Path.GetDirectoryName(pendingPath)!);
+        await File.WriteAllBytesAsync(pendingPath, pendingContent, ct);
+        await InsertBlobAsync(scope, pendingContent, Yf.Api.Infrastructure.Entities.FileBlobStates.GarbageCollectionPending, ct);
+
+        var temp = Path.Combine(scope.StorageRoot, "tmp");
+        var staleArchive = Path.Combine(temp, "yf_files_stale.zip");
+        var orphanSession = Path.Combine(temp, Guid.NewGuid().ToString("D"));
+        Directory.CreateDirectory(orphanSession);
+        await File.WriteAllBytesAsync(staleArchive, [1], ct);
+        await File.WriteAllBytesAsync(Path.Combine(orphanSession, "partial.bin"), [2], ct);
+        File.SetLastWriteTimeUtc(staleArchive, old);
+        Directory.SetLastWriteTimeUtc(orphanSession, old);
+
+        var previousRoot = Path.Combine(Path.GetDirectoryName(scope.StorageRoot)!, "previous-storage");
+        Directory.CreateDirectory(previousRoot);
+        scope.Options.StorageFallbackRoot = previousRoot;
+
+        await scope.Maintenance.RunGarbageCollectionAsync(ct);
+
+        // A migration is running: nothing was deleted and no scan cursor moved.
+        Assert.True(File.Exists(orphanPath));
+        Assert.True(File.Exists(pendingPath));
+        Assert.True(await BlobRowExistsAsync(scope, pendingContent, ct));
+        Assert.True(File.Exists(staleArchive));
+        Assert.True(Directory.Exists(orphanSession));
+        Assert.Equal(0UL, scope.Maintenance.VerifyCursor);
+        Assert.Null(scope.Maintenance.OrphanScanCursor);
+
+        scope.Options.StorageFallbackRoot = null;
+        await scope.Maintenance.RunGarbageCollectionAsync(ct);
+
+        // Without a fallback root the same cycle cleans everything.
+        Assert.False(File.Exists(orphanPath));
+        Assert.False(File.Exists(pendingPath));
+        Assert.False(await BlobRowExistsAsync(scope, pendingContent, ct));
+        Assert.False(File.Exists(staleArchive));
+        Assert.False(Directory.Exists(orphanSession));
+        Assert.NotEqual(0UL, scope.Maintenance.VerifyCursor);
+        Assert.NotNull(scope.Maintenance.OrphanScanCursor);
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task BlobDeletionStartedBeforeAMigrationRemovesCopiesFromEveryRoot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var content = new byte[] { 91, 92, 93, 94, 95 };
+        var sha = Sha256Hex(content);
+        var previousRoot = Path.Combine(Path.GetDirectoryName(scope.StorageRoot)!, "previous-storage");
+        var primaryPath = FileBlobStore.AbsolutePath(scope.StorageRoot, sha);
+        var previousPath = FileBlobStore.AbsolutePath(previousRoot, sha);
+        foreach (var path in new[] { primaryPath, previousPath })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllBytesAsync(path, content, ct);
+        }
+        await InsertBlobAsync(scope, content, Yf.Api.Infrastructure.Entities.FileBlobStates.GarbageCollectionPending, ct);
+
+        // Hold the blob lease so the cycle (which began while no migration was running) waits for it; then start
+        // the migration, as the settings page does, and let the cycle finish.
+        await using var owner = await scope.Database.OpenAsync(ct);
+        await using var lease = await MySqlNamedLock.TryAcquireAsync(owner, FileBlobStore.LockName(owner, sha), 0, ct);
+        Assert.NotNull(lease);
+        var cycle = Task.Run(() => scope.Maintenance.RunGarbageCollectionAsync(ct), ct);
+        await LockWaitProbe.WaitForNamedLockWaiterAsync(scope.Options.ConnectionString, ct, cycle);
+        Assert.False(cycle.IsCompleted, "The cycle must be waiting for the blob lease.");
+        scope.Options.StorageFallbackRoot = previousRoot;
+        await lease.DisposeAsync();
+        await cycle;
+
+        Assert.False(File.Exists(primaryPath));
+        Assert.False(File.Exists(previousPath));
+        Assert.False(await BlobRowExistsAsync(scope, content, ct));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ExpiredUploadCleanupStillRunsDuringMigrationInEveryRoot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var sessionId = Guid.NewGuid().ToString("D");
+        await scope.InsertSessionAsync(sessionId, "UPLOADING", expired: true);
+        var previousRoot = Path.Combine(Path.GetDirectoryName(scope.StorageRoot)!, "previous-storage");
+        var previousDirectory = FileStorage.SessionDirectory(previousRoot, sessionId);
+        Directory.CreateDirectory(previousDirectory);
+        await File.WriteAllBytesAsync(Path.Combine(previousDirectory, "0.part"), [1], ct);
+        scope.Options.StorageFallbackRoot = previousRoot;
+
+        await scope.Maintenance.RunGarbageCollectionAsync(ct);
+
+        Assert.Equal("EXPIRED", await scope.StatusAsync(sessionId));
+        Assert.False(Directory.Exists(FileStorage.SessionDirectory(scope.StorageRoot, sessionId)));
+        Assert.False(Directory.Exists(previousDirectory));
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task MergeRechecksFileUploadPermissionInsideItsWriteTransaction()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var payload = new byte[] { 61, 62 };
+        var session = await scope.Upload.InitAsync(
+            FilesDatabaseScope.Context(), UploadRequest("revoked-merge.bin", payload), ct);
+        using (var body = new MemoryStream(payload))
+            await scope.Upload.PutChunkAsync(FilesDatabaseScope.ChunkContext(payload), session.SessionId, 0, body, ct);
+        await scope.Upload.SubmitMd5Async(FilesDatabaseScope.Context(), session.SessionId,
+            new SubmitUploadMd5Request(Md5Hex(payload)), ct);
+
+        // An administrator revoking file:upload holds the management gate exclusively; the merge passes its early
+        // unlocked checks, then waits for the gate in its write transaction and must see the revocation.
+        await using var management = await scope.Database.OpenAsync(ct);
+        await using var managementTx = await AppDb.BeginTransactionAsync(management, ct);
+        await AccessService.LockManagementAsync(management, managementTx, ct);
+        var merge = Task.Run(() => scope.Upload.MergeAsync(FilesDatabaseScope.Context(), session.SessionId, ct), ct);
+        try
+        {
+            await LockWaitProbe.WaitForLockWaitAsync(scope.Options.ConnectionString, ct, merge);
+            Assert.False(merge.IsCompleted, "The merge must be waiting for the business gate.");
+            Assert.Equal(1, await management.ExecuteAsync(new CommandDefinition(
+                "DELETE FROM role_permissions WHERE role_id=1 AND permission_id=1",
+                transaction: managementTx, cancellationToken: ct)));
+            await managementTx.CommitAsync(ct);
+        }
+        catch
+        {
+            await managementTx.RollbackAsync(CancellationToken.None);
+            try { await merge; } catch { }
+            throw;
+        }
+
+        var denied = await Assert.ThrowsAsync<ApiException>(() => merge);
+
+        Assert.Equal((403, 40301), (denied.Status, denied.Code));
+        Assert.Equal("UPLOADING", await scope.StatusAsync(session.SessionId));
+        await using var verify = await scope.Database.OpenAsync(ct);
+        Assert.Equal(0, await verify.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM files WHERE original_name='revoked-merge.bin'", cancellationToken: ct)));
+    }
+
+    private static async Task InsertBlobAsync(FilesDatabaseScope scope, byte[] content, string state, CancellationToken ct)
+    {
+        var sha = Sha256Hex(content);
+        await using var connection = await scope.Database.OpenAsync(ct);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO file_blobs(sha256,size_bytes,storage_path,state,gc_started_at,created_at)
+            VALUES(@Sha,@Size,@Path,@State,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
+            """, new { Sha = sha, Size = (ulong)content.Length, Path = FileBlobStore.RelativePath(sha), State = state },
+            cancellationToken: ct));
+    }
+
+    private static async Task<bool> BlobRowExistsAsync(FilesDatabaseScope scope, byte[] content, CancellationToken ct)
+    {
+        await using var connection = await scope.Database.OpenAsync(ct);
+        return await connection.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT EXISTS(SELECT 1 FROM file_blobs WHERE sha256=@Sha)", new { Sha = Sha256Hex(content) },
+            cancellationToken: ct));
+    }
+
     private static InitUploadRequest UploadRequest(string fileName, byte[] content) =>
         new(1, fileName, (ulong)content.LongLength, 1_700_000_000_000, Sha256Hex(content));
 
@@ -927,24 +1152,7 @@ public sealed class FilesRecoveryTests
         public static async Task<FilesDatabaseScope> CreateOrSkipAsync(
             CancellationToken ct, Action<AppOptions>? configure = null)
         {
-            var raw = Environment.GetEnvironmentVariable("YF_TEST_DATABASE_URL");
-            if (string.IsNullOrWhiteSpace(raw)) Assert.Skip("YF_TEST_DATABASE_URL is not set");
-            if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || uri.Scheme != "mysql")
-                throw new InvalidOperationException("YF_TEST_DATABASE_URL must be a mysql:// URL");
-            if (uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
-                throw new InvalidOperationException("File recovery tests only allow local MySQL");
-
-            var adminOptions = new MySqlConnectionStringBuilder
-            {
-                Server = uri.Host,
-                Port = (uint)(uri.IsDefaultPort ? 3306 : uri.Port),
-                UserID = Uri.UnescapeDataString(uri.UserInfo.Split(':', 2)[0]),
-                Password = uri.UserInfo.Contains(':')
-                    ? Uri.UnescapeDataString(uri.UserInfo.Split(':', 2)[1])
-                    : string.Empty,
-                DateTimeKind = MySqlDateTimeKind.Utc,
-                SslMode = MySqlSslMode.None
-            };
+            var adminOptions = LocalMySqlTestServer.AdministrationOrSkip("File recovery tests");
             var administration = new MySqlConnection(adminOptions.ConnectionString);
             await administration.OpenAsync(ct);
             var databaseName = "yf_test_dotnet_files_" + Guid.NewGuid().ToString("N");
@@ -968,111 +1176,7 @@ public sealed class FilesRecoveryTests
                 var database = new AppDb(options);
                 await using (var connection = await database.OpenAsync(ct))
                 {
-                    await connection.ExecuteAsync(new CommandDefinition("""
-                        CREATE TABLE system_configs(
-                            cfg_key VARCHAR(100) PRIMARY KEY, cfg_value TEXT NOT NULL
-                        );
-                        CREATE TABLE users(
-                            id BIGINT UNSIGNED PRIMARY KEY, employee_no VARCHAR(50) NOT NULL,
-                            user_type VARCHAR(20) NOT NULL, supplier_id BIGINT UNSIGNED NULL,
-                            status VARCHAR(20) NOT NULL, must_change_password BOOLEAN NOT NULL,
-                            email VARCHAR(255) NULL, real_name VARCHAR(100) NOT NULL,
-                            password_hash VARCHAR(255) NOT NULL DEFAULT '', department_id BIGINT UNSIGNED NULL,
-                            last_login_at DATETIME(6) NULL, created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-                        );
-                        CREATE TABLE suppliers(
-                            id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(128) NOT NULL,
-                            status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE'
-                        );
-                        CREATE TABLE roles(
-                            id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(100) NOT NULL,
-                            status VARCHAR(20) NOT NULL, is_built_in BOOLEAN NOT NULL
-                        );
-                        CREATE TABLE permissions(
-                            id BIGINT UNSIGNED PRIMARY KEY,
-                            code VARCHAR(100) NOT NULL,
-                            type VARCHAR(16) NOT NULL DEFAULT 'BUTTON',
-                            sort_no INT NOT NULL DEFAULT 0
-                        );
-                        CREATE TABLE user_roles(user_id BIGINT UNSIGNED NOT NULL, role_id BIGINT UNSIGNED NOT NULL);
-                        CREATE TABLE role_permissions(role_id BIGINT UNSIGNED NOT NULL, permission_id BIGINT UNSIGNED NOT NULL);
-                        CREATE TABLE project_groups(id BIGINT UNSIGNED PRIMARY KEY, created_by BIGINT UNSIGNED NOT NULL DEFAULT 0);
-                        CREATE TABLE projects(
-                            id BIGINT UNSIGNED PRIMARY KEY, project_group_id BIGINT UNSIGNED NOT NULL,
-                            supplier_id BIGINT UNSIGNED NOT NULL,
-                            created_by BIGINT UNSIGNED NOT NULL, status VARCHAR(30) NOT NULL,
-                            confirm_side VARCHAR(20) NULL, name VARCHAR(100) NOT NULL,
-                            responsible_user_id BIGINT UNSIGNED NULL
-                        );
-                        CREATE TABLE audit_logs(
-                            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                            user_id BIGINT UNSIGNED NULL, employee_no VARCHAR(50) NULL,
-                            action VARCHAR(100) NOT NULL, target_type VARCHAR(100) NULL,
-                            target_id VARCHAR(100) NULL, detail JSON NULL, ip VARCHAR(100) NULL,
-                            created_at DATETIME(6) NOT NULL,
-                            actor_realm VARCHAR(16) NULL, actor_account_id BIGINT UNSIGNED NULL
-                        );
-                        CREATE TABLE supplier_contacts(
-                            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, supplier_id BIGINT UNSIGNED NOT NULL,
-                            name VARCHAR(32) NOT NULL, email VARCHAR(128) NOT NULL, status VARCHAR(16) NOT NULL,
-                            sort_no INT NOT NULL DEFAULT 0, created_by BIGINT UNSIGNED NULL,
-                            created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-                            updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
-                        );
-                        CREATE TABLE upload_sessions(
-                            id VARCHAR(36) PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL,
-                            uploader_id BIGINT UNSIGNED NOT NULL, file_name VARCHAR(255) NOT NULL,
-                            file_size BIGINT UNSIGNED NOT NULL, file_last_modified BIGINT NOT NULL,
-                            file_fingerprint VARCHAR(64) NOT NULL, file_md5 VARCHAR(32) NULL,
-                            chunk_size INT UNSIGNED NOT NULL, total_chunks INT UNSIGNED NOT NULL,
-                            temp_dir VARCHAR(512) NOT NULL, status VARCHAR(16) NOT NULL,
-                            result_file_id BIGINT UNSIGNED NULL, expires_at DATETIME NOT NULL,
-                            signer_contact_id BIGINT UNSIGNED NULL, signer_name VARCHAR(32) NULL,
-                            created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
-                        );
-                        CREATE TABLE file_blobs(
-                            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                            sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-                            size_bytes BIGINT UNSIGNED NOT NULL,
-                            storage_path VARCHAR(512) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-                            state VARCHAR(16) NOT NULL DEFAULT 'READY',
-                            gc_started_at DATETIME(6) NULL,
-                            created_at DATETIME(6) NOT NULL,
-                            UNIQUE KEY uk_file_blobs_sha256(sha256),
-                            UNIQUE KEY uk_file_blobs_storage_path(storage_path),
-                            KEY idx_file_blobs_state(state,id)
-                        );
-                        CREATE TABLE files(
-                            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                            project_id BIGINT UNSIGNED NOT NULL, uploader_id BIGINT UNSIGNED NOT NULL,
-                            blob_id BIGINT UNSIGNED NULL,
-                            direction VARCHAR(10) NOT NULL, original_name VARCHAR(255) NOT NULL,
-                            stored_name VARCHAR(255) NOT NULL, ext VARCHAR(32) NOT NULL,
-                            size_bytes BIGINT UNSIGNED NOT NULL, mime_type VARCHAR(255) NULL,
-                            sha256 VARCHAR(64) NULL, storage_path VARCHAR(1024) NOT NULL,
-                            status VARCHAR(20) NOT NULL, deleted_at DATETIME(6) NULL,
-                            signer_contact_id BIGINT UNSIGNED NULL, signer_name VARCHAR(32) NULL,
-                            created_at DATETIME(6) NOT NULL,
-                            KEY idx_files_blob(blob_id),
-                            CONSTRAINT fk_files_blob FOREIGN KEY(blob_id) REFERENCES file_blobs(id) ON DELETE RESTRICT
-                        );
-                        -- The maintenance entry point also sweeps soft-deleted message images.
-                        -- Keep these empty in file-recovery fixtures; image retention has dedicated tests.
-                        CREATE TABLE messages(
-                            id BIGINT UNSIGNED PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL,
-                            sender_id BIGINT UNSIGNED NOT NULL, content TEXT NOT NULL,
-                            status VARCHAR(16) NOT NULL, deleted_by BIGINT UNSIGNED NULL,
-                            deleted_at DATETIME NULL, created_at DATETIME NOT NULL
-                        );
-                        CREATE TABLE message_images(
-                            id BIGINT UNSIGNED PRIMARY KEY, message_id BIGINT UNSIGNED NOT NULL,
-                            original_name VARCHAR(255) NOT NULL, stored_name VARCHAR(64) NOT NULL,
-                            ext VARCHAR(8) NOT NULL, size_bytes BIGINT UNSIGNED NOT NULL,
-                            mime_type VARCHAR(32) NOT NULL, storage_path VARCHAR(512) NOT NULL,
-                            created_at DATETIME(3) NOT NULL,
-                            UNIQUE KEY uk_message_images_stored_name(stored_name),
-                            KEY idx_message_images_message(message_id,id)
-                        );
+                    await connection.ExecuteAsync(new CommandDefinition(HandwrittenTestSchemas.FilesRecovery + Environment.NewLine + """
                         INSERT INTO system_configs(cfg_key,cfg_value) VALUES
                             ('security.management_lock','1'),
                             ('upload.chunk_size','262144'),
@@ -1087,8 +1191,8 @@ public sealed class FilesRecoveryTests
                         INSERT INTO user_roles(user_id,role_id) VALUES(1,1);
                         INSERT INTO role_permissions(role_id,permission_id) VALUES(1,1),(1,2),(1,3);
                         INSERT INTO project_groups(id) VALUES(1);
-                        INSERT INTO projects(id,project_group_id,supplier_id,created_by,status,confirm_side,name,responsible_user_id)
-                            VALUES(1,1,1,1,'IN_PROGRESS',NULL,'File Test',1);
+                        INSERT INTO projects(id,project_group_id,supplier_id,created_by,status,name,responsible_user_id)
+                            VALUES(1,1,1,1,'IN_PROGRESS','File Test',1);
                         -- 内部账号发给供应商的其它文件要求子项目已有 STEP 3D 图与动作流程 Excel；这两条记录只满足
                         -- 资料规则，其 blob 不在磁盘上，回收测试不会触及仍被引用的可用文件。
                         INSERT INTO file_blobs(id,sha256,size_bytes,storage_path,state,created_at)

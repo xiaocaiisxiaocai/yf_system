@@ -12,20 +12,7 @@ public sealed class IdentityConnectionTests
     public async Task AuthenticationReleasesItsConnectionBeforeCallingDownstream()
     {
         var ct = TestContext.Current.CancellationToken;
-        var raw = Environment.GetEnvironmentVariable("YF_TEST_DATABASE_URL");
-        if (string.IsNullOrWhiteSpace(raw)) Assert.Skip("YF_TEST_DATABASE_URL is not set");
-        var uri = new Uri(raw);
-        if (uri.Scheme != "mysql" || uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
-            throw new InvalidOperationException("Authentication connection test requires local MySQL");
-        var credentials = uri.UserInfo.Split(':', 2);
-        var builder = new MySqlConnectionStringBuilder
-        {
-            Server = uri.Host,
-            Port = (uint)(uri.IsDefaultPort ? 3306 : uri.Port),
-            UserID = Uri.UnescapeDataString(credentials[0]),
-            Password = credentials.Length == 2 ? Uri.UnescapeDataString(credentials[1]) : "",
-            DateTimeKind = MySqlDateTimeKind.Utc
-        };
+        var builder = LocalMySqlTestServer.AdministrationOrSkip("Authentication connection test");
         await using var admin = new MySqlConnection(builder.ConnectionString);
         await admin.OpenAsync(ct);
         var schema = "yf_test_dotnet_auth_" + Guid.NewGuid().ToString("N");
@@ -42,19 +29,7 @@ public sealed class IdentityConnectionTests
             var db = new AppDb(options);
             await using (var seed = await db.OpenAsync(ct))
             {
-                await seed.ExecuteAsync(new CommandDefinition("""
-                    CREATE TABLE users(
-                        id BIGINT UNSIGNED PRIMARY KEY, employee_no VARCHAR(32) NOT NULL,
-                        user_type VARCHAR(16) NOT NULL, supplier_id BIGINT UNSIGNED NULL,
-                        status VARCHAR(16) NOT NULL, must_change_password BOOLEAN NOT NULL
-                    );
-                    CREATE TABLE suppliers(id BIGINT UNSIGNED PRIMARY KEY, status VARCHAR(16) NOT NULL);
-                    CREATE TABLE refresh_tokens(
-                        user_id BIGINT UNSIGNED NOT NULL, session_id VARCHAR(36) NOT NULL,
-                        revoked BOOLEAN NOT NULL, expires_at DATETIME NOT NULL,
-                        session_created_at DATETIME NOT NULL, session_expires_at DATETIME NOT NULL
-                    );
-                    CREATE TABLE system_configs(cfg_key VARCHAR(100) PRIMARY KEY, cfg_value TEXT NOT NULL);
+                await seed.ExecuteAsync(new CommandDefinition(HandwrittenTestSchemas.AuthenticationConnection + Environment.NewLine + """
                     INSERT INTO system_configs VALUES('security.identity_revision','0');
                     INSERT INTO users VALUES(1,'pool_test','INTERNAL',NULL,'ACTIVE',0);
                     INSERT INTO refresh_tokens

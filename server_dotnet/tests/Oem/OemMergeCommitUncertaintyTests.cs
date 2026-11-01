@@ -42,7 +42,7 @@ public sealed class OemMergeCommitUncertaintyTests
         var fault = new MergeCommitFault(afterCommit: commitLanded);
         var storage = host.Service<OemStorage>();
         var uploads = new OemUploadService(OemTestDbFactory.With(host, fault), host.Service<AppDb>(), storage,
-            host.Service<OemAuditWriter>(), NullLogger<OemUploadService>.Instance);
+            host.Service<OemAuditWriter>(), host.Service<Yf.Api.Modules.Oem.Delivery.OemDownloadRateLimiter>(), NullLogger<OemUploadService>.Instance);
         var actor = new InternalOemActor(new CurrentUser(world.SenderId, "zp_sender", UserTypes.Internal, null), "merge-fault");
 
         var error = await Assert.ThrowsAnyAsync<Exception>(() => uploads.MergeAsync(actor, sessionId, ct));

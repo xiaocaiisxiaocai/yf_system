@@ -26,33 +26,7 @@ public sealed class ConnectionLifecycleTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await LocalDatabaseScope.CreateOrSkipAsync("endpoint", ct);
-        await database.SeedAsync("""
-            CREATE TABLE roles(
-                id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(64) NOT NULL,
-                status VARCHAR(16) NOT NULL, is_built_in BOOLEAN NOT NULL
-            );
-            CREATE TABLE permissions(
-                id BIGINT UNSIGNED PRIMARY KEY,
-                code VARCHAR(64) NOT NULL,
-                type VARCHAR(16) NOT NULL DEFAULT 'BUTTON',
-                sort_no INT NOT NULL DEFAULT 0
-            );
-            CREATE TABLE role_permissions(role_id BIGINT UNSIGNED NOT NULL, permission_id BIGINT UNSIGNED NOT NULL);
-            CREATE TABLE user_roles(user_id BIGINT UNSIGNED NOT NULL, role_id BIGINT UNSIGNED NOT NULL);
-            CREATE TABLE users(id BIGINT UNSIGNED PRIMARY KEY, employee_no VARCHAR(64) NOT NULL, real_name VARCHAR(64) NOT NULL);
-            CREATE TABLE projects(id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(255) NOT NULL);
-            CREATE TABLE departments(id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(64) NOT NULL);
-            CREATE TABLE suppliers(id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(255) NOT NULL);
-            CREATE TABLE files(id BIGINT UNSIGNED PRIMARY KEY, original_name VARCHAR(255) NOT NULL);
-            CREATE TABLE system_configs(cfg_key VARCHAR(100) PRIMARY KEY, cfg_value TEXT NOT NULL);
-            CREATE TABLE audit_logs(
-                id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                user_id BIGINT UNSIGNED NULL, employee_no VARCHAR(64) NULL,
-                action VARCHAR(100) NOT NULL, target_type VARCHAR(100) NULL,
-                target_id VARCHAR(100) NULL, detail JSON NULL, ip VARCHAR(64) NULL,
-                created_at DATETIME(6) NOT NULL,
-                actor_realm VARCHAR(16) NULL, actor_account_id BIGINT UNSIGNED NULL
-            );
+        await database.SeedAsync(HandwrittenTestSchemas.EndpointFilter + Environment.NewLine + """
             INSERT INTO roles VALUES(1,'系统管理员','ACTIVE',1);
             INSERT INTO permissions(id,code) VALUES(1,'config:manage'),(2,'log:view');
             INSERT INTO role_permissions VALUES(1,1),(1,2);
@@ -241,22 +215,7 @@ public sealed class ConnectionLifecycleTests
 
         public static async Task<LocalDatabaseScope> CreateOrSkipAsync(string purpose, CancellationToken ct)
         {
-            var raw = Environment.GetEnvironmentVariable("YF_TEST_DATABASE_URL");
-            if (string.IsNullOrWhiteSpace(raw)) Assert.Skip("YF_TEST_DATABASE_URL is not set");
-            if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || uri.Scheme != "mysql")
-                throw new InvalidOperationException("YF_TEST_DATABASE_URL must be a mysql:// URL");
-            if (uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
-                throw new InvalidOperationException("Connection lifecycle tests only allow local MySQL");
-            var credentials = uri.UserInfo.Split(':', 2);
-            var administrationOptions = new MySqlConnectionStringBuilder
-            {
-                Server = uri.Host,
-                Port = (uint)(uri.IsDefaultPort ? 3306 : uri.Port),
-                UserID = Uri.UnescapeDataString(credentials[0]),
-                Password = credentials.Length == 2 ? Uri.UnescapeDataString(credentials[1]) : string.Empty,
-                DateTimeKind = MySqlDateTimeKind.Utc,
-                SslMode = MySqlSslMode.None
-            };
+            var administrationOptions = LocalMySqlTestServer.AdministrationOrSkip("Connection lifecycle tests");
             var administration = new MySqlConnection(administrationOptions.ConnectionString);
             await administration.OpenAsync(ct);
             var databaseName = $"yf_t_{Guid.NewGuid():N}";

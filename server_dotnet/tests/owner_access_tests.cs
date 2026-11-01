@@ -172,6 +172,103 @@ public sealed class OwnerAccessTests
             new { Id = ProjectGroupId.ToString(CultureInfo.InvariantCulture) }, cancellationToken: ct)));
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task SuppliersSeeNoFilesOfADraftSubprojectUntilItStarts()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await OwnerAccessDatabase.CreateOrSkipAsync(ct);
+        await database.InitializeAsync(ct);
+        await database.SeedAsync(SeedSql, ct);
+        await database.SeedAsync("""
+            INSERT INTO role_permissions(role_id,permission_id)
+            SELECT 9001,id FROM permissions WHERE code IN ('file:download','file:preview');
+            """, ct);
+        // A file carried into the draft by a copy: the draft passes no material to the supplier.
+        const string relative = "files/draft-visible.txt";
+        var path = Path.Combine(database.Options.StorageRoot, relative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "carried by a copy", ct);
+        await database.SeedAsync($"""
+            INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,mime_type,sha256,storage_path,status,created_at)
+            VALUES(7001,{ProjectId},{CreatorId},'S2C','copied.txt','draft-visible.txt','txt',17,'text/plain',REPEAT('a',64),'{relative}','AVAILABLE',UTC_TIMESTAMP(3));
+            """, ct);
+        var supplier = new CurrentUser(SupplierUserId, "owner-supplier", "SUPPLIER", 8_001);
+        var oldOwner = Internal(OldOwnerId, "owner-old");
+        var files = FileService(database, new AuditService([]));
+
+        Assert.Equal(0UL, Total(await files.ListAsync(Context(supplier), ProjectId, ct)));
+        Assert.Equal(1UL, Total(await files.ListAsync(Context(oldOwner), ProjectId, ct)));
+        foreach (var inline in new[] { false, true })
+        {
+            var hidden = await Assert.ThrowsAsync<ApiException>(() => files.StreamAsync(Context(supplier), 7001, inline, ct));
+            Assert.Equal(404, hidden.Status);
+        }
+        var hiddenBatch = await Assert.ThrowsAsync<ApiException>(() =>
+            files.BatchDownloadAsync(Context(supplier), new BatchDownloadRequest([7001UL]), ct));
+        Assert.Equal(404, hiddenBatch.Status);
+
+        // Once the subproject starts the same supplier sees and downloads the file.
+        await database.SeedAsync($"UPDATE projects SET status='IN_PROGRESS' WHERE id={ProjectId}", ct);
+        Assert.Equal(1UL, Total(await files.ListAsync(Context(supplier), ProjectId, ct)));
+        Assert.NotNull(await files.StreamAsync(Context(supplier), 7001, inline: false, ct));
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task OutOfScopeCallersAreRejectedBeforeAnyProjectRowLockIsRequested()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await OwnerAccessDatabase.CreateOrSkipAsync(ct);
+        await database.InitializeAsync(ct);
+        await database.SeedAsync(SeedSql, ct);
+        await database.SeedAsync("""
+            INSERT INTO role_permissions(role_id,permission_id)
+            SELECT 9001,id FROM permissions
+            WHERE code IN ('project:status','project:delete','project:transfer','message:create');
+            """, ct);
+        var audit = new AuditService([]);
+        var groupStatus = new ProjectGroupStatusService(audit);
+        var groups = new ProjectGroupService(audit, groupStatus);
+        var projects = new ProjectService(audit, database.Options, groupStatus);
+        var messages = new MessageService(audit, database.Options);
+        // Holds a permission-granted user's scope check out: neither the creator nor the owner of the project.
+        var outsider = Internal(OldMemberId, "owner-old-member");
+
+        // Another transaction owns the main project and subproject row locks, as a running workflow write would.
+        await using var holder = await database.Database.OpenAsync(ct);
+        await using var holdTx = await holder.BeginTransactionAsync(ct);
+        await holder.QueryAsync<ulong>(new CommandDefinition(
+            "SELECT id FROM project_groups WHERE id=@Id FOR UPDATE", new { Id = ProjectGroupId }, holdTx, cancellationToken: ct));
+        await holder.QueryAsync<ulong>(new CommandDefinition(
+            "SELECT id FROM projects WHERE id=@Id FOR UPDATE", new { Id = ProjectId }, holdTx, cancellationToken: ct));
+
+        await using var conn = await database.Database.OpenAsync(ct);
+        // Scope is authorized on an unlocked read first, so each call fails at once instead of queueing behind the lock.
+        await AssertRejectedWithoutWaitingAsync(() => projects.SetStatusAsync(conn, outsider, ProjectId,
+            new ProjectStatusRequest { Status = "IN_PROGRESS" }, null, ct));
+        await AssertRejectedWithoutWaitingAsync(() => projects.UpdateSubprojectAsync(conn, outsider, ProjectId,
+            new SubprojectUpdateRequest { Name = "越权编辑", ExpectedUpdatedAt = DateTime.UtcNow }, null, ct));
+        await AssertRejectedWithoutWaitingAsync(() => projects.DeleteAsync(conn, outsider, ProjectId, null, ct));
+        await AssertRejectedWithoutWaitingAsync(() => projects.ReopenAsync(conn, outsider, ProjectId,
+            new ProjectReopenRequest { ExpectedUpdatedAt = DateTime.UtcNow, Reason = "越权重开" }, null, ct));
+        await AssertRejectedWithoutWaitingAsync(() => projects.ApproveMaterialsAsync(conn, outsider, ProjectId,
+            new ProjectMaterialReviewRequest { ExpectedSupplierFileId = 1 }, null, ct));
+        await AssertRejectedWithoutWaitingAsync(() => groups.TransferAsync(conn, outsider, ProjectGroupId,
+            new ProjectGroupTransferRequest { ResponsibleUserId = NewOwnerId }, null, ct));
+        await AssertRejectedWithoutWaitingAsync(() => groups.CreateSubprojectAsync(conn, outsider, ProjectGroupId,
+            new SubprojectUpsertRequest { Name = "越权新增" }, null, ct));
+        await AssertRejectedWithoutWaitingAsync(() => messages.CreateAsync(conn, outsider, ProjectId,
+            new MessageCreateRequest { Content = "越权留言" }, null, ct));
+        await holdTx.CommitAsync(ct);
+    }
+
+    private static async Task AssertRejectedWithoutWaitingAsync(Func<Task> action)
+    {
+        // A call that queued behind the held lock would hit the timeout (TimeoutException) instead of a 403.
+        var error = await Assert.ThrowsAsync<ApiException>(() => action().WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(403, error.Status);
+        Assert.Equal(40302, error.Code);
+    }
+
     private static async Task AssertBadRequestAsync(Func<Task> action)
     {
         var error = await Assert.ThrowsAsync<ApiException>(action);
@@ -351,22 +448,7 @@ public sealed class OwnerAccessTests
 
         internal static async Task<OwnerAccessDatabase> CreateOrSkipAsync(CancellationToken ct)
         {
-            var raw = Environment.GetEnvironmentVariable("YF_TEST_DATABASE_URL");
-            if (string.IsNullOrWhiteSpace(raw)) Assert.Skip("YF_TEST_DATABASE_URL is not set");
-            if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || uri.Scheme != "mysql")
-                throw new InvalidOperationException("YF_TEST_DATABASE_URL must be a mysql:// URL");
-            if (uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
-                throw new InvalidOperationException("Owner access tests only allow local MySQL");
-            var credentials = uri.UserInfo.Split(':', 2);
-            var adminOptions = new MySqlConnectionStringBuilder
-            {
-                Server = uri.Host,
-                Port = (uint)(uri.IsDefaultPort ? 3306 : uri.Port),
-                UserID = Uri.UnescapeDataString(credentials[0]),
-                Password = credentials.Length == 2 ? Uri.UnescapeDataString(credentials[1]) : string.Empty,
-                DateTimeKind = MySqlDateTimeKind.Utc,
-                SslMode = MySqlSslMode.None,
-            };
+            var adminOptions = LocalMySqlTestServer.AdministrationOrSkip("Owner access tests");
             var administration = new MySqlConnection(adminOptions.ConnectionString);
             await administration.OpenAsync(ct);
             var databaseName = $"yf_t_{Guid.NewGuid():N}";

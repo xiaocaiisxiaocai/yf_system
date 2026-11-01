@@ -73,6 +73,59 @@ public sealed class MessageImageTests
         finally { System.IO.File.Delete(link); }
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task OrphanImagesAreRemovedOnlyWhenUnreferencedPastTheGracePeriodAndNeverDuringAMigration()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await LocalDatabaseScope.CreateOrSkipAsync("image_orphans", ct);
+        await database.InitializeAsync(ct);
+        await database.SeedAsync("""
+            INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'Orphan supplier','ACTIVE',1);
+            INSERT INTO project_groups(id,name,supplier_id,status,created_by) VALUES(5001,'Orphan group',100,'IN_PROGRESS',1);
+            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by) VALUES(1001,5001,'Orphan project',100,'IN_PROGRESS',1);
+            INSERT INTO messages(id,project_id,sender_id,content,status) VALUES(1,1001,1,'kept text','NORMAL');
+            INSERT INTO message_images(id,message_id,original_name,stored_name,ext,size_bytes,mime_type,storage_path)
+            VALUES(1,1,'image.png','orphan-referenced.png','png',4,'image/png','message-images/2026/10/referenced.png');
+            """, ct);
+        var root = database.Options.StorageRoot;
+        var directory = Directory.CreateDirectory(Path.Combine(root, "message-images", "2026", "10")).FullName;
+        var referenced = Path.Combine(directory, "referenced.png");
+        var orphan = Path.Combine(directory, "orphan.png");
+        var fresh = Path.Combine(directory, "fresh.png");
+        foreach (var path in new[] { referenced, orphan, fresh })
+            await System.IO.File.WriteAllTextAsync(path, "test", ct);
+        var old = DateTime.UtcNow.AddHours(-48);
+        System.IO.File.SetLastWriteTimeUtc(referenced, old);
+        System.IO.File.SetLastWriteTimeUtc(orphan, old);
+        System.IO.File.SetLastWriteTimeUtc(fresh, DateTime.UtcNow.AddHours(-1));
+
+        // A storage migration is running (the old root still serves reads): nothing is scanned or deleted.
+        var migrationRoot = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "yf-image-orphans-" + Guid.NewGuid().ToString("N"))).FullName;
+        try
+        {
+            using var service = new Yf.Api.Modules.Files.FilesMaintenanceService(database.Database, database.Options,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<Yf.Api.Modules.Files.FilesMaintenanceService>.Instance);
+            database.Options.StorageFallbackRoot = migrationRoot;
+            await service.PurgeOrphanMessageImagesAsync(ct);
+            Assert.True(System.IO.File.Exists(orphan));
+            Assert.Null(service.OrphanImageScanCursor);
+
+            database.Options.StorageFallbackRoot = null;
+            await service.PurgeOrphanMessageImagesAsync(ct);
+            // Only the unreferenced file past the 24 hour grace period goes; a referenced or recent one stays.
+            Assert.False(System.IO.File.Exists(orphan));
+            Assert.True(System.IO.File.Exists(referenced));
+            Assert.True(System.IO.File.Exists(fresh));
+            await using var conn = await database.Database.OpenAsync(ct);
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM message_images"));
+        }
+        finally
+        {
+            database.Options.StorageFallbackRoot = null;
+            try { Directory.Delete(migrationRoot, recursive: true); } catch { }
+        }
+    }
+
     [Theory]
     [InlineData("png", "89504e470d0a1a0a", true)]
     [InlineData("jpg", "ffd8ffe0", true)]
@@ -311,22 +364,7 @@ public sealed class MessageImageTests
 
         public static async Task<LocalDatabaseScope> CreateOrSkipAsync(string purpose, CancellationToken ct)
         {
-            var raw = Environment.GetEnvironmentVariable("YF_TEST_DATABASE_URL");
-            if (string.IsNullOrWhiteSpace(raw)) Assert.Skip("YF_TEST_DATABASE_URL is not set");
-            if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || uri.Scheme != "mysql")
-                throw new InvalidOperationException("YF_TEST_DATABASE_URL must be a mysql:// URL");
-            if (uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
-                throw new InvalidOperationException("Message image tests only allow local MySQL");
-            var credentials = uri.UserInfo.Split(':', 2);
-            var administrationOptions = new MySqlConnectionStringBuilder
-            {
-                Server = uri.Host,
-                Port = (uint)(uri.IsDefaultPort ? 3306 : uri.Port),
-                UserID = Uri.UnescapeDataString(credentials[0]),
-                Password = credentials.Length == 2 ? Uri.UnescapeDataString(credentials[1]) : string.Empty,
-                DateTimeKind = MySqlDateTimeKind.Utc,
-                SslMode = MySqlSslMode.None,
-            };
+            var administrationOptions = LocalMySqlTestServer.AdministrationOrSkip("Message image tests");
             var administration = new MySqlConnection(administrationOptions.ConnectionString);
             await administration.OpenAsync(ct);
             var databaseName = $"yf_t_{Guid.NewGuid():N}";

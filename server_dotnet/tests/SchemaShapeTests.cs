@@ -617,26 +617,11 @@ public sealed class SchemaShapeTests
             string databaseCollation = "utf8mb4_unicode_ci",
             bool createDatabase = true)
         {
-            var raw = Environment.GetEnvironmentVariable("YF_TEST_DATABASE_URL");
-            if (string.IsNullOrWhiteSpace(raw)) Assert.Skip("YF_TEST_DATABASE_URL is not set");
-            if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || uri.Scheme != "mysql")
-                throw new InvalidOperationException("YF_TEST_DATABASE_URL must be a mysql:// URL");
-            if (uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
-                throw new InvalidOperationException("Schema lifecycle tests only allow local MySQL");
+            var adminOptions = LocalMySqlTestServer.AdministrationOrSkip("Schema lifecycle tests");
             if (databaseCollation is not ("utf8mb4_unicode_ci" or "utf8mb4_general_ci"))
                 throw new InvalidOperationException("Unsupported test database collation");
-            var credentials = uri.UserInfo.Split(':', 2);
-            var adminOptions = new MySqlConnectionStringBuilder
-            {
-                Server = uri.Host,
-                Port = (uint)(uri.IsDefaultPort ? 3306 : uri.Port),
-                UserID = Uri.UnescapeDataString(credentials[0]),
-                Password = credentials.Length == 2 ? Uri.UnescapeDataString(credentials[1]) : string.Empty,
-                DateTimeKind = MySqlDateTimeKind.Utc,
-                SslMode = MySqlSslMode.None,
-                AllowUserVariables = true,
-                Pooling = false,
-            };
+            adminOptions.AllowUserVariables = true;
+            adminOptions.Pooling = false;
             var administration = new MySqlConnection(adminOptions.ConnectionString);
             await administration.OpenAsync(ct);
             // Pomelo appends its own migration-lock suffix to the schema name;

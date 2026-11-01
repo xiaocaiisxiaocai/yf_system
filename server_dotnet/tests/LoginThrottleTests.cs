@@ -306,6 +306,67 @@ public sealed class LoginThrottleTests
     }
 
     [Fact(Timeout = 120_000)]
+    public async Task SpellingsThatTheCollationTreatsAsOneAccountShareTheSourceAccountBucket()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await LoginDatabase.CreateAsync(ct);
+        var service = scope.Service(new LoginRateLimiter());
+        // The case- and accent-insensitive lookup resolves every spelling to the account "target"; the limiter
+        // must count them together, not as separate text keys with a budget each.
+        var spellings = new[] { "target", "TARGET", "tárget", "Tárget", "target " };
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            var wrong = await Assert.ThrowsAsync<ApiException>(() => service.LoginAsync(
+                new(spellings[attempt % spellings.Length], scope.Password + "wrong"), "192.0.2.77", ct));
+            Assert.Equal(401, wrong.Status);
+        }
+
+        var limited = await Assert.ThrowsAsync<ApiException>(() => service.LoginAsync(
+            new("TÁRGET", scope.Password), "192.0.2.77", ct));
+        Assert.Equal((429, 42902), (limited.Status, limited.Code));
+        // Another source address is unaffected, and the correct password signs in there.
+        Assert.Equal(1UL, (await service.LoginAsync(new("tárget", scope.Password), "192.0.2.78", ct)).Response.User.Id);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task SessionExpiryRecheckUsesTheDatabaseClock()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // DateTime.UtcNow inside the query expression is translated to the database function, not read locally.
+        using (var offline = new YfDbContext(new DbContextOptionsBuilder<YfDbContext>()
+                   .UseMySql("Server=127.0.0.1;Database=offline", new MySqlServerVersion(new Version(8, 0, 36))).Options))
+        {
+            var sql = offline.RefreshTokens
+                .Where(token => token.ExpiresAt > DateTime.UtcNow && token.SessionExpiresAt > DateTime.UtcNow)
+                .ToQueryString();
+            Assert.Contains("UTC_TIMESTAMP", sql);
+        }
+
+        await using var scope = await LoginDatabase.CreateAsync(ct);
+        var login = await scope.LoginWithRefreshAsync("target", scope.Password, "192.0.2.90", ct);
+        var state = await scope.RefreshStateAsync(login.Refresh, ct);
+        var actor = new CurrentUser(1, "target", UserTypes.Internal, null, state.SessionId);
+        await using var conn = await scope.OpenAsync(ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+
+        Assert.Equal(1UL, (await AccessService.RecheckActorAsync(conn, tx, actor, ct)).Id);
+        foreach (var column in new[] { "expires_at", "session_expires_at" })
+        {
+            // A deadline a few seconds behind the database clock rejects the session, one ahead of it keeps it.
+            await conn.ExecuteAsync(new CommandDefinition(
+                $"UPDATE refresh_tokens SET {column}=UTC_TIMESTAMP(6) - INTERVAL 3 SECOND WHERE session_id=@id",
+                new { id = state.SessionId }, tx, cancellationToken: ct));
+            var denied = await Assert.ThrowsAsync<ApiException>(() => AccessService.RecheckActorAsync(conn, tx, actor, ct));
+            Assert.Equal(40301, denied.Code);
+            await conn.ExecuteAsync(new CommandDefinition(
+                $"UPDATE refresh_tokens SET {column}=UTC_TIMESTAMP(6) + INTERVAL 1 HOUR WHERE session_id=@id",
+                new { id = state.SessionId }, tx, cancellationToken: ct));
+            Assert.Equal(1UL, (await AccessService.RecheckActorAsync(conn, tx, actor, ct)).Id);
+        }
+        await tx.RollbackAsync(ct);
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task LoginBeyondTheSessionCapRevokesTheOldestFamilies()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -457,19 +518,7 @@ public sealed class LoginThrottleTests
 
         public static async Task<LoginDatabase> CreateAsync(CancellationToken ct)
         {
-            var raw = Environment.GetEnvironmentVariable("YF_TEST_DATABASE_URL");
-            if (string.IsNullOrWhiteSpace(raw)) Assert.Skip("YF_TEST_DATABASE_URL is not set");
-            if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || uri.Scheme != "mysql" ||
-                uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
-                throw new InvalidOperationException("Login throttle tests require an explicitly configured local MySQL.");
-            var credentials = uri.UserInfo.Split(':', 2);
-            var builder = new MySqlConnectionStringBuilder
-            {
-                Server = uri.Host, Port = (uint)(uri.IsDefaultPort ? 3306 : uri.Port),
-                UserID = Uri.UnescapeDataString(credentials[0]),
-                Password = credentials.Length == 2 ? Uri.UnescapeDataString(credentials[1]) : "",
-                DateTimeKind = MySqlDateTimeKind.Utc
-            };
+            var builder = LocalMySqlTestServer.AdministrationOrSkip("Login throttle tests");
             var admin = new MySqlConnection(builder.ConnectionString);
             await admin.OpenAsync(ct);
             var name = "yf_t_" + Guid.NewGuid().ToString("N");

@@ -461,8 +461,8 @@ public sealed class MailDeliveryTests
                 VALUES(10,'old-owner','old-owner@example.invalid','INTERNAL',NULL,'ACTIVE'),
                       (11,'new-owner','new-owner@example.invalid','INTERNAL',NULL,'ACTIVE');
                 INSERT INTO user_roles(user_id,role_id) VALUES(10,10),(11,10);
-                INSERT INTO projects(id,project_group_id,supplier_id,created_by,responsible_user_id,status,confirm_side)
-                VALUES(7,1,100,10,11,'IN_PROGRESS',NULL);
+                INSERT INTO projects(id,project_group_id,supplier_id,created_by,responsible_user_id,status)
+                VALUES(7,1,100,10,11,'IN_PROGRESS');
                 UPDATE email_outbox
                 SET event_type='MESSAGE_CREATED',project_id=7,recipient_user_id=10,
                     recipient_email='old-owner@example.invalid'
@@ -497,8 +497,8 @@ public sealed class MailDeliveryTests
                 INSERT INTO users(id,employee_no,email,user_type,supplier_id,status)
                 VALUES(10,'owner','changed@example.invalid','INTERNAL',NULL,'ACTIVE');
                 INSERT INTO user_roles(user_id,role_id) VALUES(10,10);
-                INSERT INTO projects(id,project_group_id,supplier_id,created_by,responsible_user_id,status,confirm_side)
-                VALUES(7,1,100,10,10,'IN_PROGRESS',NULL);
+                INSERT INTO projects(id,project_group_id,supplier_id,created_by,responsible_user_id,status)
+                VALUES(7,1,100,10,10,'IN_PROGRESS');
                 UPDATE email_outbox
                 SET event_type='MESSAGE_CREATED',project_id=7,recipient_user_id=10
                 WHERE id=1;
@@ -601,6 +601,103 @@ public sealed class MailDeliveryTests
         await using (var connection = await scope.Database.OpenAsync(ct))
             Assert.Equal(3, await connection.ExecuteScalarAsync<int>(new CommandDefinition(
                 "SELECT COUNT(*) FROM email_outbox WHERE status='SENT' AND retry_count=0", cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task MessageThatKeepsBreakingTheConnectionIsFailedWhileOthersKeepFlowing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        const string poison = "recipient@example.invalid";
+        await scope.ExecuteAsync("""
+            INSERT INTO email_outbox(id,event_type,recipient_email,subject,body,status,retry_count)
+            VALUES(2,'TEST_NOTIFICATION','second@example.invalid','subject','body','PENDING',0),
+                  (3,'TEST_NOTIFICATION','third@example.invalid','subject','body','PENDING',0)
+            """, ct);
+        var clock = new ManualUtcClock(new DateTimeOffset(2026, 10, 31, 0, 0, 0, TimeSpan.Zero));
+        var delivery = new ScriptedDelivery(envelope =>
+            envelope.Recipient == poison ? new IOException("connection reset by peer") : null);
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]),
+            NullLogger<MailService>.Instance, delivery, clock);
+
+        // The poison message is always the first due row, so it is the only one tried while SMTP seems down.
+        Assert.Equal(0, await service.FlushAsync(ct));
+        var first = await scope.OutboxAsync(1, ct);
+        Assert.Equal(("PENDING", 0), (first.Status, first.RetryCount));
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await scope.ExecuteAsync("UPDATE email_outbox SET next_attempt_at=NULL WHERE id=1", ct);
+        Assert.Equal(0, await service.FlushAsync(ct));
+        // Nothing was delivered in between, so this could still be an outage: no retry is spent. The message waits
+        // longer than the breaker so that the messages behind it get their turn.
+        var second = await scope.OutboxAsync(1, ct);
+        Assert.Equal(("PENDING", 0), (second.Status, second.RetryCount));
+        Assert.Equal([poison, poison], delivery.Attempts);
+        Assert.InRange(await scope.ScalarAsync<long>(
+            "SELECT TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(),next_attempt_at) FROM email_outbox WHERE id=1", ct), 170, 180);
+
+        clock.Advance(TimeSpan.FromMinutes(3));
+        Assert.Equal(2, await service.FlushAsync(ct));
+        Assert.Equal(TimeSpan.Zero, service.CurrentBreakerDelay);
+        Assert.Equal(2L, await scope.ScalarAsync<long>("SELECT COUNT(*) FROM email_outbox WHERE status='SENT'", ct));
+
+        // SMTP is proven healthy, so each further failure of the same message counts.
+        await scope.ExecuteAsync("""
+            UPDATE email_outbox SET next_attempt_at=NULL WHERE id=1;
+            INSERT INTO email_outbox(id,event_type,recipient_email,subject,body,status,retry_count)
+            VALUES(4,'TEST_NOTIFICATION','fourth@example.invalid','subject','body','PENDING',0)
+            """, ct);
+        Assert.Equal(0, await service.FlushAsync(ct));
+        var third = await scope.OutboxAsync(1, ct);
+        Assert.Equal(("PENDING", 0), (third.Status, third.RetryCount));
+        clock.Advance(TimeSpan.FromMinutes(2));
+        Assert.Equal(1, await service.FlushAsync(ct));
+        Assert.Equal("SENT", (await scope.OutboxAsync(4, ct)).Status);
+
+        await scope.ExecuteAsync("""
+            UPDATE email_outbox SET next_attempt_at=NULL WHERE id=1;
+            INSERT INTO email_outbox(id,event_type,recipient_email,subject,body,status,retry_count)
+            VALUES(5,'TEST_NOTIFICATION','fifth@example.invalid','subject','body','PENDING',0)
+            """, ct);
+        // Third failure with deliveries in between: the message is failed, counts a retry, and does not stop the
+        // batch, so the message queued behind it is delivered in the same flush.
+        Assert.Equal(2, await service.FlushAsync(ct));
+        var failed = await scope.OutboxAsync(1, ct);
+        Assert.Equal(("FAILED", 1, MailService.PoisonedSendError), (failed.Status, failed.RetryCount, failed.LastError));
+        Assert.Null(failed.NextAttemptAt);
+        Assert.Equal("SENT", (await scope.OutboxAsync(5, ct)).Status);
+        Assert.Equal(TimeSpan.Zero, service.CurrentBreakerDelay);
+        Assert.Equal(4, delivery.Attempts.Count(recipient => recipient == poison));
+        Assert.Contains(MailService.PoisonedAuditReason, await scope.ScalarAsync<string>(
+            "SELECT detail FROM audit_logs WHERE action='EMAIL_FAILED' AND target_id='1'", ct));
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task RealSmtpOutageStillTripsTheBreakerAndNoMessageIsBlamedForIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await scope.ExecuteAsync("""
+            INSERT INTO email_outbox(id,event_type,recipient_email,subject,body,status,retry_count)
+            VALUES(2,'TEST_NOTIFICATION','second@example.invalid','subject','body','PENDING',0),
+                  (3,'TEST_NOTIFICATION','third@example.invalid','subject','body','PENDING',0)
+            """, ct);
+        var clock = new ManualUtcClock(new DateTimeOffset(2026, 10, 31, 0, 0, 0, TimeSpan.Zero));
+        var delivery = new ScriptedDelivery(_ => new IOException("connection reset by peer"));
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]),
+            NullLogger<MailService>.Instance, delivery, clock);
+
+        for (var round = 0; round < MailService.PoisonUnavailableAttempts + 3; round++)
+        {
+            clock.Advance(TimeSpan.FromMinutes(31));
+            await scope.ExecuteAsync("UPDATE email_outbox SET next_attempt_at=NULL", ct);
+            Assert.Equal(0, await service.FlushAsync(ct));
+        }
+
+        Assert.Equal(MailService.BreakerMaximumDelay, service.CurrentBreakerDelay);
+        Assert.Equal(MailService.PoisonUnavailableAttempts + 3, delivery.Attempts.Count);
+        Assert.Equal(3L, await scope.ScalarAsync<long>(
+            "SELECT COUNT(*) FROM email_outbox WHERE status='PENDING' AND retry_count=0", ct));
+        Assert.Equal(0L, await scope.ScalarAsync<long>("SELECT COUNT(*) FROM audit_logs WHERE action='EMAIL_FAILED'", ct));
     }
 
     [Fact(Timeout = 60_000)]
@@ -711,8 +808,8 @@ public sealed class MailDeliveryTests
                 VALUES(10,'supplier-user','supplier@example.invalid','SUPPLIER',100,'ACTIVE',0),
                       (11,'owner','owner@example.invalid','INTERNAL',NULL,'ACTIVE',1);
                 INSERT INTO user_roles(user_id,role_id) VALUES(10,10),(11,10);
-                INSERT INTO projects(id,project_group_id,supplier_id,created_by,responsible_user_id,status,confirm_side)
-                VALUES(7,1,100,11,11,'IN_PROGRESS',NULL);
+                INSERT INTO projects(id,project_group_id,supplier_id,created_by,responsible_user_id,status)
+                VALUES(7,1,100,11,11,'IN_PROGRESS');
                 UPDATE email_outbox
                 SET event_type='MESSAGE_CREATED',project_id=7,recipient_user_id=10,recipient_email='supplier@example.invalid'
                 WHERE id=1;
@@ -883,7 +980,7 @@ public sealed class MailDeliveryTests
         }
     }
 
-    private sealed class OutboxState
+    internal sealed class OutboxState
     {
         public string Status { get; init; } = string.Empty;
         public int RetryCount { get; init; }
@@ -902,25 +999,29 @@ public sealed class MailDeliveryTests
         public AppDb Database { get; } = database;
         public AppOptions Options { get; } = options;
 
+        public async Task ExecuteAsync(string sql, CancellationToken ct)
+        {
+            await using var connection = await Database.OpenAsync(ct);
+            await connection.ExecuteAsync(new CommandDefinition(sql, cancellationToken: ct));
+        }
+
+        public async Task<T> ScalarAsync<T>(string sql, CancellationToken ct)
+        {
+            await using var connection = await Database.OpenAsync(ct);
+            return (await connection.ExecuteScalarAsync<T>(new CommandDefinition(sql, cancellationToken: ct)))!;
+        }
+
+        public async Task<OutboxState> OutboxAsync(int id, CancellationToken ct)
+        {
+            await using var connection = await Database.OpenAsync(ct);
+            return await connection.QuerySingleAsync<OutboxState>(new CommandDefinition(
+                "SELECT status AS Status,retry_count AS RetryCount,next_attempt_at AS NextAttemptAt,sent_at AS SentAt,last_error AS LastError FROM email_outbox WHERE id=@id",
+                new { id }, cancellationToken: ct));
+        }
+
         public static async Task<MailDatabaseScope> CreateOrSkipAsync(CancellationToken ct)
         {
-            var raw = Environment.GetEnvironmentVariable("YF_TEST_DATABASE_URL");
-            if (string.IsNullOrWhiteSpace(raw)) Assert.Skip("YF_TEST_DATABASE_URL is not set");
-            if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || uri.Scheme != "mysql")
-                throw new InvalidOperationException("YF_TEST_DATABASE_URL must be a mysql:// URL");
-            if (uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
-                throw new InvalidOperationException("Mail delivery tests only allow local MySQL");
-
-            var credentials = uri.UserInfo.Split(':', 2);
-            var adminOptions = new MySqlConnectionStringBuilder
-            {
-                Server = uri.Host,
-                Port = (uint)(uri.IsDefaultPort ? 3306 : uri.Port),
-                UserID = Uri.UnescapeDataString(credentials[0]),
-                Password = credentials.Length == 2 ? Uri.UnescapeDataString(credentials[1]) : string.Empty,
-                DateTimeKind = MySqlDateTimeKind.Utc,
-                SslMode = MySqlSslMode.None
-            };
+            var adminOptions = LocalMySqlTestServer.AdministrationOrSkip("Mail delivery tests");
             var administration = new MySqlConnection(adminOptions.ConnectionString);
             await administration.OpenAsync(ct);
             var databaseName = "yf_test_dotnet_mail_" + Guid.NewGuid().ToString("N");
@@ -949,95 +1050,7 @@ public sealed class MailDeliveryTests
                 };
                 var database = new AppDb(applicationOptions);
                 await using var connection = await database.OpenAsync(ct);
-                await connection.ExecuteAsync(new CommandDefinition("""
-                    CREATE TABLE system_configs(
-                        cfg_key VARCHAR(100) PRIMARY KEY,
-                        cfg_value TEXT NOT NULL
-                    );
-                    CREATE TABLE email_outbox(
-                        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                        event_type VARCHAR(32) NOT NULL,
-                        project_id BIGINT UNSIGNED NULL,
-                        dedupe_key VARCHAR(128) NULL,
-                        recipient_user_id BIGINT UNSIGNED NULL,
-                        recipient_realm VARCHAR(16) NULL,
-                        recipient_account_id BIGINT UNSIGNED NULL,
-                        oem_transfer_id BIGINT UNSIGNED NULL,
-                        recipient_email VARCHAR(128) NOT NULL,
-                        subject VARCHAR(255) NOT NULL,
-                        body TEXT NOT NULL,
-                        status VARCHAR(16) NOT NULL,
-                        retry_count INT NOT NULL,
-                        next_attempt_at DATETIME(3) NULL,
-                        last_error VARCHAR(1024) NULL,
-                        sent_at DATETIME(6) NULL,
-                        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-                        UNIQUE KEY uk_outbox_dedupe_key(dedupe_key)
-                    );
-                    CREATE TABLE audit_logs(
-                        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                        user_id BIGINT UNSIGNED NULL,
-                        actor_realm VARCHAR(16) NULL,
-                        actor_account_id BIGINT UNSIGNED NULL,
-                        employee_no VARCHAR(64) NULL,
-                        action VARCHAR(100) NOT NULL,
-                        target_type VARCHAR(100) NULL,
-                        target_id VARCHAR(100) NULL,
-                        detail JSON NULL,
-                        ip VARCHAR(64) NULL,
-                        created_at DATETIME(6) NOT NULL
-                    );
-                    CREATE TABLE users(
-                        id BIGINT UNSIGNED PRIMARY KEY,
-                        employee_no VARCHAR(64) NOT NULL,
-                        real_name VARCHAR(64) NOT NULL DEFAULT '',
-                        email VARCHAR(128) NOT NULL DEFAULT '',
-                        user_type VARCHAR(16) NOT NULL,
-                        supplier_id BIGINT UNSIGNED NULL,
-                        status VARCHAR(16) NOT NULL,
-                        must_change_password TINYINT(1) NOT NULL DEFAULT 0
-                    );
-                    CREATE TABLE permissions(
-                        id BIGINT UNSIGNED PRIMARY KEY,
-                        code VARCHAR(100) NOT NULL,
-                        type VARCHAR(16) NOT NULL DEFAULT 'BUTTON',
-                        sort_no INT NOT NULL DEFAULT 0
-                    );
-                    CREATE TABLE roles(
-                        id BIGINT UNSIGNED PRIMARY KEY,
-                        status VARCHAR(16) NOT NULL
-                    );
-                    CREATE TABLE user_roles(
-                        user_id BIGINT UNSIGNED NOT NULL,
-                        role_id BIGINT UNSIGNED NOT NULL
-                    );
-                    CREATE TABLE role_permissions(
-                        role_id BIGINT UNSIGNED NOT NULL,
-                        permission_id BIGINT UNSIGNED NOT NULL
-                    );
-                    CREATE TABLE suppliers(
-                        id BIGINT UNSIGNED PRIMARY KEY,
-                        status VARCHAR(16) NOT NULL
-                    );
-                    CREATE TABLE supplier_contacts(
-                        id BIGINT UNSIGNED PRIMARY KEY,
-                        supplier_id BIGINT UNSIGNED NOT NULL,
-                        email VARCHAR(128) NOT NULL,
-                        status VARCHAR(16) NOT NULL
-                    );
-                    CREATE TABLE project_groups(
-                        id BIGINT UNSIGNED PRIMARY KEY,
-                        created_by BIGINT UNSIGNED NOT NULL DEFAULT 0
-                    );
-                    CREATE TABLE projects(
-                        id BIGINT UNSIGNED PRIMARY KEY,
-                        project_group_id BIGINT UNSIGNED NULL,
-                        supplier_id BIGINT UNSIGNED NOT NULL,
-                        created_by BIGINT UNSIGNED NOT NULL,
-                        responsible_user_id BIGINT UNSIGNED NULL,
-                        status VARCHAR(32) NOT NULL,
-                        confirm_side VARCHAR(16) NULL
-                    );
+                await connection.ExecuteAsync(new CommandDefinition(HandwrittenTestSchemas.MailDelivery + Environment.NewLine + """
                     INSERT INTO system_configs(cfg_key,cfg_value) VALUES('notify.enabled','true');
                     INSERT INTO email_outbox
                         (id,event_type,recipient_email,subject,body,status,retry_count,next_attempt_at,last_error,sent_at)

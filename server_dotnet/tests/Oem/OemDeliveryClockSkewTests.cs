@@ -120,8 +120,11 @@ public sealed class OemDeliveryClockSkewTests
         var lease = await conn.QuerySingleAsync<(DateTime HardDeadline, string Status)>(
             "SELECT hard_deadline, status FROM oem_download_leases WHERE session_id=@id", new { id = response.DownloadSessionId });
         Assert.True(lease.HardDeadline <= session.AbsoluteDeadline);
-        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM oem_download_ranges WHERE session_id=@id", new { id = response.DownloadSessionId }));
+        // Bytes flushed before the cut-off count as delivered, but never more than the client was sent.
+        var delivered = await conn.ExecuteScalarAsync<long>(
+            "SELECT CAST(COALESCE(SUM(end_offset-start_offset+1),0) AS SIGNED) FROM oem_download_ranges WHERE session_id=@id",
+            new { id = response.DownloadSessionId });
+        Assert.InRange(delivered, 0, written);
     }
 
     private sealed record Fixture(ulong FileId, byte[] Content, InternalOemActor Actor);

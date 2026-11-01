@@ -225,6 +225,167 @@ public sealed class StorageLocationTests
         finally { Directory.Delete(sandbox, true); }
     }
 
+    [Fact(Timeout = 60_000)]
+    public async Task RootAndFallbackSwapAsOnePairSoTheOldRootIsNeverUnreadable()
+    {
+        var first = Path.Combine(Path.GetTempPath(), "yf_swap_a");
+        var second = Path.Combine(Path.GetTempPath(), "yf_swap_b");
+        static Yf.Api.Infrastructure.Entities.StorageLocation Row(string kind, string path, string previous) =>
+            new() { Kind = kind, Path = path, PreviousPath = previous, Status = StorageStatuses.Migrating };
+        var options = new AppOptions();
+        StorageLocationState.Apply(options, Row(StorageKinds.Collaboration, second, first));
+        StorageLocationState.Apply(options, Row(StorageKinds.Oem, second, first));
+        Assert.Equal((second, first), (options.StorageRoot, options.StorageFallbackRoot));
+        Assert.Equal((second, first), (options.OemStorageRoot, options.OemStorageFallbackRoot));
+
+        // Cancelling swaps the two paths. While it is applied, a reader must always see the pair of one state
+        // (never both roots equal, which would hide the root that still holds the files).
+        using var stop = new CancellationTokenSource();
+        long mixed = 0;
+        var reader = Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                var pair = options.StorageRoots;
+                var oem = options.OemStorageRoots;
+                if (pair.Fallback is null || pair.Root == pair.Fallback || oem.Fallback is null || oem.Root == oem.Fallback)
+                    Interlocked.Increment(ref mixed);
+            }
+        });
+        for (var swap = 0; swap < 50_000; swap++)
+        {
+            var (root, previous) = swap % 2 == 0 ? (first, second) : (second, first);
+            StorageLocationState.Apply(options, Row(StorageKinds.Collaboration, root, previous));
+            StorageLocationState.Apply(options, Row(StorageKinds.Oem, root, previous));
+        }
+        stop.Cancel();
+        await reader;
+        Assert.Equal(0L, Interlocked.Read(ref mixed));
+
+        // Finishing a migration drops the fallback; a kind without a root has none either.
+        StorageLocationState.Apply(options, new Yf.Api.Infrastructure.Entities.StorageLocation
+        {
+            Kind = StorageKinds.Collaboration, Path = second, Status = StorageStatuses.Idle,
+        });
+        StorageLocationState.Apply(options, new Yf.Api.Infrastructure.Entities.StorageLocation
+        {
+            Kind = StorageKinds.Oem, Path = "", PreviousPath = first, Status = StorageStatuses.Migrating,
+        });
+        Assert.Equal(new StorageRootPair(second, null), options.StorageRoots);
+        Assert.Equal(new StorageRootPair("", null), options.OemStorageRoots);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task TargetValidationRunsBeforeTheExclusiveGateAndIsRecheckedUnderIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sandbox = Sandbox();
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("storage_gate", ct);
+        try
+        {
+            await database.InitializeAsync(ct);
+            var (app, oldRoot, newRoot) = Roots(sandbox);
+            var options = database.Options;
+            options.StorageRoot = oldRoot;
+            await StorageLocationBootstrap.ApplyAsync(options, app, seed: true, ct);
+            await WriteAsync(oldRoot, Path.Combine("blobs", "a.bin"), 1_000, ct);
+            var (service, _, admin) = await ServicesAsync(database, app, ct);
+
+            // Every safety check still happens before anything is written.
+            foreach (var bad in new[] { Path.Combine(app, "storage"), Path.Combine(oldRoot, "nested"), @"\\server\share\yf", "relative" })
+            {
+                var rejected = await Assert.ThrowsAsync<ApiException>(() => service.MigrateAsync(
+                    admin, "COLLAB", new StorageMigrationRequest { Path = bad }, null, ct));
+                Assert.Equal(400, rejected.Status);
+            }
+            var untouched = await ReadAsync(service, "COLLAB", ct);
+            Assert.Equal(("IDLE", oldRoot), (untouched.Status, untouched.Path));
+
+            // Another location changes between the validation and the gate: the stale validation is refused.
+            service.BeforeLocking = () => database.ExecuteAsync("UPDATE storage_locations SET path='changed' WHERE kind='LOG'", ct);
+            var stale = await Assert.ThrowsAsync<ApiException>(() => service.MigrateAsync(
+                admin, "COLLAB", new StorageMigrationRequest { Path = newRoot }, null, ct));
+            Assert.Equal((409, 40903), (stale.Status, stale.Code));
+            var afterStale = await ReadAsync(service, "COLLAB", ct);
+            Assert.Equal(("IDLE", oldRoot), (afterStale.Status, afterStale.Path));
+            await database.ExecuteAsync("UPDATE storage_locations SET path='' WHERE kind='LOG'", ct);
+
+            // The walk and the probe are over by the time the gate is requested: nothing holds it meanwhile.
+            var gateWasFree = false;
+            service.BeforeLocking = async () =>
+            {
+                await using var probe = await database.Database.OpenAsync(ct);
+                await probe.ExecuteAsync(new CommandDefinition("SET SESSION innodb_lock_wait_timeout=2", cancellationToken: ct));
+                await using var tx = await AppDb.BeginTransactionAsync(probe, ct);
+                await AccessService.LockManagementAsync(probe, tx, ct);
+                gateWasFree = true;
+                await tx.RollbackAsync(ct);
+            };
+            var started = await service.MigrateAsync(admin, "COLLAB", new StorageMigrationRequest { Path = newRoot }, null, ct);
+            Assert.True(gateWasFree);
+            Assert.Equal(("MIGRATING", oldRoot, newRoot), (started.Status, started.PreviousPath, started.Path));
+            Assert.Equal((newRoot, oldRoot), (options.StorageRoot, options.StorageFallbackRoot));
+            await using var conn = await database.Database.OpenAsync(ct);
+            Assert.Equal(["STORAGE_MIGRATION_START"], (await conn.QueryAsync<string>(new CommandDefinition(
+                "SELECT action FROM audit_logs WHERE action LIKE 'STORAGE_%' ORDER BY id", cancellationToken: ct))).ToArray());
+        }
+        finally { Directory.Delete(sandbox, true); }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task WaitingForUploadSessionsSleepsLongerAndDoesNotWalkTheTreeUntilTheyEnd()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sandbox = Sandbox();
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("storage_waiting", ct);
+        try
+        {
+            await database.InitializeAsync(ct);
+            var (app, oldRoot, newRoot) = Roots(sandbox);
+            var options = database.Options;
+            options.StorageRoot = oldRoot;
+            await StorageLocationBootstrap.ApplyAsync(options, app, seed: true, ct);
+            await WriteAsync(oldRoot, Path.Combine("blobs", "a.bin"), 5_000, ct);
+            var sessionId = Guid.NewGuid().ToString("D");
+            await WriteAsync(oldRoot, Path.Combine("tmp", sessionId, "0.part"), 1_024, ct);
+            await database.ExecuteAsync($"""
+                SET FOREIGN_KEY_CHECKS=0;
+                INSERT INTO upload_sessions(id,project_id,uploader_id,file_name,file_size,chunk_size,total_chunks,temp_dir,status,expires_at,created_at,updated_at)
+                SELECT '{sessionId}',0,id,'a.bin',1024,1024,1,'{Path.Combine(oldRoot, "tmp", sessionId).Replace("\\", "\\\\")}','UPLOADING',
+                       UTC_TIMESTAMP()+INTERVAL 1 HOUR,UTC_TIMESTAMP(),UTC_TIMESTAMP()
+                FROM users WHERE employee_no='admin';
+                SET FOREIGN_KEY_CHECKS=1;
+                """, ct);
+            var (service, worker, admin) = await ServicesAsync(database, app, ct);
+            await service.MigrateAsync(admin, "COLLAB", new StorageMigrationRequest { Path = newRoot }, null, ct);
+
+            Assert.True(await worker.RunOnceAsync(ct));
+            Assert.Equal("WAITING", (await ReadAsync(service, "COLLAB", ct)).Phase);
+
+            // A file that shows up in the old root while an upload is still running is not picked up yet: the
+            // cycle only asks the database about the sessions and the loop waits longer before asking again.
+            var late = await WriteAsync(oldRoot, Path.Combine("message-images", "late.png"), 2_000, ct);
+            Assert.True(await worker.RunOnceAsync(ct));
+            Assert.Equal(StorageMigrationWorker.SessionWaitInterval, worker.NextWait);
+            Assert.Equal("WAITING", (await ReadAsync(service, "COLLAB", ct)).Phase);
+            Assert.False(File.Exists(Path.Combine(newRoot, "message-images", "late.png")));
+
+            // Once the session ended the final copy pass and verification run, then the old files go.
+            await database.ExecuteAsync(
+                $"SET FOREIGN_KEY_CHECKS=0; UPDATE upload_sessions SET status='COMPLETED' WHERE id='{sessionId}'; SET FOREIGN_KEY_CHECKS=1;", ct);
+            for (var cycle = 0; cycle < 4 && (await ReadAsync(service, "COLLAB", ct)).Status != "IDLE"; cycle++)
+            {
+                Assert.True(await worker.RunOnceAsync(ct));
+                Assert.NotEqual(StorageMigrationWorker.SessionWaitInterval, worker.NextWait);
+            }
+            var done = await ReadAsync(service, "COLLAB", ct);
+            Assert.Equal(("IDLE", newRoot), (done.Status, done.Path));
+            Assert.Equal(late, await DigestAsync(Path.Combine(newRoot, "message-images", "late.png"), ct));
+            Assert.Empty(Directory.EnumerateFiles(oldRoot, "*", SearchOption.AllDirectories));
+        }
+        finally { Directory.Delete(sandbox, true); }
+    }
+
     private static async Task<(StorageLocationService Service, StorageMigrationWorker Worker, CurrentUser Admin)> ServicesAsync(
         SchemaShapeTests.SchemaDatabaseScope database, string app, CancellationToken ct, LogDirectorySink? sink = null)
     {

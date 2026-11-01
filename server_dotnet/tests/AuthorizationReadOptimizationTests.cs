@@ -48,8 +48,10 @@ public sealed class AuthorizationReadOptimizationTests
         {
             await AccessService.LockManagementAsync(management, managementTx, ct);
             var read = ReadProjectAsync(database, actor, ct);
-            var completed = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(3), ct));
-            if (completed != read)
+            // Condition-based instead of a wall-clock bound: either the read finishes, or the database reports
+            // that it is waiting on a lock held by the management gate (a real failure).
+            await LockWaitProbe.WaitForLockWaitAsync(database.Options.ConnectionString, ct, read);
+            if (!read.IsCompleted)
             {
                 await managementTx.RollbackAsync(ct);
                 await read;

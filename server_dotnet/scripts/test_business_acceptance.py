@@ -9,7 +9,7 @@ import hashlib
 import secrets
 import urllib.parse
 
-from upload_contract import init_request, upload_bytes
+from upload_contract import init_request, init_upload, put_chunk, submit_md5, upload_bytes
 
 
 def _password():
@@ -580,6 +580,43 @@ def run_business_acceptance(client, Client, conn, check):
     supplier_a_client.call("POST", f"/api/v1/projects/{project_b}/messages", {
         "content": "供应商甲不得写入供应商乙项目",
     }, expected=403)
+
+    # Another supplier cannot touch a supplier's upload session: every session endpoint is uploader-only
+    # (OutOfScope/Forbidden are both 403: session reads and writes answer 40301, abort answers 40302).
+    owned_bytes = b"supplier-a-owned-session-" + secrets.token_bytes(16)
+    owned_name = "owned-session-" + suffix + ".zip"
+    owned_session = init_upload(supplier_a_client, project_a, owned_name, owned_bytes)["sessionId"]
+    try:
+        put_chunk(supplier_a_client, owned_session, 0, owned_bytes)
+        submit_md5(supplier_a_client, owned_session, owned_bytes)
+        foreign_session_denials = [
+            supplier_b_client.call("GET", f"/api/v1/uploads/{owned_session}", expected=403),
+            put_chunk(supplier_b_client, owned_session, 0, owned_bytes, expected=403),
+            submit_md5(supplier_b_client, owned_session, owned_bytes, expected=403),
+            supplier_b_client.call("POST", f"/api/v1/uploads/{owned_session}/merge", expected=403),
+            supplier_b_client.call("DELETE", f"/api/v1/uploads/{owned_session}", expected=403),
+        ]
+        owner_session_state = supplier_a_client.call("GET", f"/api/v1/uploads/{owned_session}")
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM files WHERE project_id=%s AND original_name=%s",
+                           (project_a, owned_name))
+            foreign_merge_files = cursor.fetchone()[0]
+    finally:
+        # An active supplier session would block the material approval below.
+        supplier_a_client.call("DELETE", f"/api/v1/uploads/{owned_session}")
+    foreign_session_ok = (
+        all(item["code"] in (40301, 40302) for item in foreign_session_denials)
+        and owner_session_state["status"] == "UPLOADING"
+        and len(owner_session_state["uploadedChunks"]) == 1
+        and foreign_merge_files == 0
+    )
+    if not foreign_session_ok:
+        print("foreign upload session denials:", foreign_session_denials)
+        print("owner session state:", owner_session_state, "foreign merge files:", foreign_merge_files)
+    check(
+        "another supplier cannot read upload md5 merge or abort a supplier upload session",
+        foreign_session_ok,
+    )
 
     with conn.cursor() as cursor:
         cursor.execute(
